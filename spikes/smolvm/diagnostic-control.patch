@@ -1,0 +1,17 @@
+diff --git a/src/agent/fork.rs b/src/agent/fork.rs
+index f7b264c3..93c30356 100644
+--- a/src/agent/fork.rs
++++ b/src/agent/fork.rs
+@@ -1707,6 +1707,12 @@ pub(crate) fn prepare_forks_reusing(
+         (snapshot_dir, false)
+     };
+ 
++    // Diagnostic-only gate: leave the source running after capture, before any
++    // child is prepared or launched. Never enable in normal runtime builds.
++    if std::env::var_os("SMOLVM_DIAG_CHECKPOINT_PAUSE").is_some() {
++        tracing::warn!("SMOLVM_DIAG checkpoint complete; delaying child preparation 8 seconds");
++        std::thread::sleep(std::time::Duration::from_secs(8));
++    }
+     let retained_snapshot =
+         golden_rec
+             .pid

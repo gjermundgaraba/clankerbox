@@ -1,0 +1,11 @@
+ARG BASE
+FROM ${BASE}
+# Ubuntu snapshot fixes apt inputs as well as the base image's content digest.
+RUN printf 'deb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20260901T000000Z/ jammy main universe\ndeb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20260901T000000Z/ jammy-updates main universe\ndeb [check-valid-until=no] https://snapshot.ubuntu.com/ubuntu/20260901T000000Z/ jammy-security main universe\n' > /etc/apt/sources.list \
+    && rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 iproute2 gcc libc6-dev docker.io \
+    && dpkg-query -W > /usr/local/share/cube-spike-packages.txt \
+    && rm -rf /var/lib/apt/lists/*
+# Keep upstream tini/envd entrypoint. The sentinel starts once in the parent,
+# not in this stateful template and never during child restore.

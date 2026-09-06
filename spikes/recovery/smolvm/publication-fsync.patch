@@ -1,0 +1,15 @@
+diff --git a/crates/smolvm-pack/src/packer.rs b/crates/smolvm-pack/src/packer.rs
+--- a/crates/smolvm-pack/src/packer.rs
++++ b/crates/smolvm-pack/src/packer.rs
+@@ -210,6 +210,11 @@ impl Packer {
+         temp_path
+             .persist_noclobber(output)
+             .map_err(|error| error.error)?;
++        // Persist the newly published directory entry as well as file bytes.
++        // This does not promise portability across arbitrary storage hardware.
++        #[cfg(unix)]
++        File::open(parent)?.sync_all()?;
++
+         Ok(PackedInfo {
+             stub_size: 0,
+             assets_size,

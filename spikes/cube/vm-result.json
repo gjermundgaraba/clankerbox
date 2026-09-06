@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "execution_scope": "vm",
+  "status": "pass",
+  "checks": [
+    {
+      "name": "three_instances",
+      "status": "pass"
+    },
+    {
+      "name": "concurrent_instances_observed",
+      "status": "pass"
+    },
+    {
+      "name": "same_inherited_ram_marker",
+      "status": "pass"
+    },
+    {
+      "name": "same_guest_pid",
+      "status": "pass"
+    },
+    {
+      "name": "same_inherited_state",
+      "status": "pass"
+    },
+    {
+      "name": "child-a:same_process",
+      "status": "pass"
+    },
+    {
+      "name": "child-a:independent_ram",
+      "status": "pass"
+    },
+    {
+      "name": "child-a:independent_disk",
+      "status": "pass"
+    },
+    {
+      "name": "child-b:same_process",
+      "status": "pass"
+    },
+    {
+      "name": "child-b:independent_ram",
+      "status": "pass"
+    },
+    {
+      "name": "child-b:independent_disk",
+      "status": "pass"
+    },
+    {
+      "name": "parent:same_process",
+      "status": "pass"
+    },
+    {
+      "name": "parent:independent_ram",
+      "status": "pass"
+    },
+    {
+      "name": "parent:independent_disk",
+      "status": "pass"
+    },
+    {
+      "name": "independent_proxy_endpoints",
+      "status": "pass"
+    },
+    {
+      "name": "timeout_minus_one_no_deadline",
+      "status": "pass"
+    },
+    {
+      "name": "controller_restart_live_vmm_and_sentinel",
+      "status": "pass"
+    },
+    {
+      "name": "no_expiry_observation",
+      "status": "pass"
+    },
+    {
+      "name": "guest_docker_and_c_build",
+      "status": "pass"
+    },
+    {
+      "name": "sandbox_id_to_live_kvm_pid_start_mapping",
+      "status": "pass"
+    },
+    {
+      "name": "owned_host_cleanup_and_unchanged_host_network_mounts",
+      "status": "pass"
+    }
+  ],
+  "metrics": {
+    "snapshot_ms": 151.3686160000134,
+    "source_pause_ms": null,
+    "fork_to_exec_ms": null,
+    "host_rss_bytes": null,
+    "idle_ms": 360000
+  },
+  "evidence": {
+    "ram": "results/runtime/run-ready/evidence.json",
+    "restart": "results/runtime/run-ready/restart.json",
+    "workload": "results/runtime/run-ready/workload.json",
+    "cleanup": "results/host-rollback-checks.json"
+  },
+  "limitations": [
+    "Concurrency and VM provenance are supplied by the runtime harness; retain its logs.",
+    "source_pause_ms is unmeasured; snapshot RPC duration includes other work",
+    "No pre-resume egress quarantine proof; no real agent session proof; no host-reboot proof",
+    "Nested, contended outer VM; timings are not directly comparable with bare-metal runs.",
+    "Fork-to-exec timing was lost when the metadata check stopped before mutations; it remains null.",
+    "360-second no-traffic observation with timeout=-1 is finite; no indefinite-retention or host-reboot proof.",
+    "No uncached backing-disk rollback, crash-time RAM/disk coherence or fresh guest identity proof.",
+    "Outer cloud-init initially retained a floating apt source alongside the dated source; recorded and corrected inside outer VM."
+  ]
+}

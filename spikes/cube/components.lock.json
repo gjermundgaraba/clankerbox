@@ -1,0 +1,90 @@
+{
+  "release_version": "v0.7.0-amd64",
+  "built_at": "2026-08-28T07:53:19Z",
+  "built_by": "github-actions",
+  "git_commit": "d0081641c59822e4e5653b7462e914410b81910a",
+  "components": {
+    "cubemaster": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z",
+      "digest_sha256": "sha256:bb15cfc8d89c8490388b20ce67b063c74c70689a23f9939ce162969768ed3965"
+    },
+    "cubemastercli": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z",
+      "digest_sha256": "sha256:51d279ab45f478511b7674a83df4d5e5ce05695e5d63c3cb04c8c6138b0d2561"
+    },
+    "cubelet": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z",
+      "digest_sha256": "sha256:a70c4fdd87d1593391b8383df60555ccf6fd8d54c2257baec12e5f7241483da3"
+    },
+    "cubecli": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z",
+      "digest_sha256": "sha256:6d5740f55cff2ac0b8234c4f3ac17a39eb577e12f13e32d6aeed45a2d292b844"
+    },
+    "cube-api": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z",
+      "digest_sha256": "sha256:90521c04fdfc997662aded426d91eb3a87066f0d6df39e4dcd231e9b2eb76730"
+    },
+    "cubeops": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z",
+      "digest_sha256": "sha256:3c6812fa5aaf5142353c25886ed51f7494d1fa29612c1ff6d068a81073986fd7"
+    },
+    "cube-agent": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z",
+      "digest_sha256": "sha256:2f944ce67fccdd6be231e985f0185f5924a5a3584d69b167bec6baab7901cbae"
+    },
+    "containerd-shim-cube-rs": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z",
+      "digest_sha256": "sha256:4bda796396250a6d59bbd2224e15c4ebbd0489a71c6b1b71e4beb071febfb7e1"
+    },
+    "cube-runtime": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z",
+      "digest_sha256": "sha256:9a58bafc20be79b134d905025ae8a507ab4578e73785c92cfcdbad406d11149a"
+    },
+    "cube-egress": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z"
+    },
+    "cube-lifecycle-manager": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z"
+    },
+    "s3lvol": {
+      "version": "v0.7.0",
+      "commit": "d0081641c59822e4e5653b7462e914410b81910a",
+      "build_time": "2026-08-28T07:53:19Z",
+      "digest_sha256": "sha256:26bbd7e1302ba6ed82aff0b948d0a6d5dd71841807412d503bd1c81541bb43ab"
+    }
+  },
+  "guest_image": {
+    "version": "guest-image-260820-1",
+    "digest_sha256": "sha256:8262a7eb9cacf423ea9c03f6bf3ae8921b00684f4a18022fe11792b37ea69228",
+    "base_image": "cube-sandbox-guest-image:one-click",
+    "agent_version": "v0.7.0"
+  },
+  "kernel": {
+    "version": "sha256-3ea4a05e2b74",
+    "vmlinux_digest_sha256": "sha256:3ea4a05e2b74e1b4baaafb21875c9ce0dde8fdfc435723f6c39a98735a64a5a4",
+    "pvm_version": "sha256-f9ecd86a05dd",
+    "vmlinux_pvm_digest_sha256": "sha256:f9ecd86a05ddefc56dc6ae4b5c3448bb6c96c46ccc82fe344c5199560d7adb71"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "cocoon_commit": "23a05603479a7552213adfb5fa25f2de7b2dbaf9",
+  "firecracker_tag": "v1.16.1",
+  "firecracker_commit": "2038188f145fb81b8d098147a10e9d9f392fd22f",
+  "firecracker_x86_64_sha256": "382a02a869e4d6d5cb14c40577f9545e8458021ea8b0b2d3fc10ec14d9c242e6",
+  "image": "ghcr.io/cocoonstack/cocoon/ubuntu@sha256:0a8de2c70f52f6241f9ad95affb302ef0ca7d36853e6d628ee9a91c5808e4152",
+  "cocoon_agent": "v0.2.3",
+  "cni_plugins": "v1.9.1",
+  "erofs_deb": "https://archive.ubuntu.com/ubuntu/pool/universe/e/erofs-utils/erofs-utils_1.9.1-1_amd64.deb",
+  "erofs_deb_sha256": "e06b009c4e53e6cbb848ac98dd2d1862eaa3daa1a63e4e860e59f482acf616b5",
+  "cni_commit": "adc3e6b5b581638afbd194cf2e9319ecbb0151a1",
+  "libdeflate_deb": "https://archive.ubuntu.com/ubuntu/pool/main/libd/libdeflate/libdeflate0_1.23-2ubuntu1_amd64.deb",
+  "libdeflate_deb_sha256": "40ee517cffd3730405be6ae30826533bec0ddf8773bb7ac2cccd22a57acafc25"
+}

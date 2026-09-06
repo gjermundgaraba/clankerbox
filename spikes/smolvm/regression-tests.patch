@@ -1,0 +1,128 @@
+diff --git a/src/agent/manager.rs b/src/agent/manager.rs
+index 340eaee3..f72112be 100644
+--- a/src/agent/manager.rs
++++ b/src/agent/manager.rs
+@@ -538,6 +538,10 @@ pub fn read_egress_telemetry(name: &str) -> Option<u64> {
+ 
+ /// Cache root: `<cache_dir>/smolvm/vms/`.
+ pub fn vm_cache_root() -> PathBuf {
++    #[cfg(test)]
++    if let Some(root) = std::env::var_os("SMOLVM_TEST_VM_CACHE_ROOT") {
++        return PathBuf::from(root);
++    }
+     dirs::cache_dir()
+         .or_else(dirs::data_local_dir)
+         .unwrap_or_else(|| PathBuf::from("/tmp"))
+diff --git a/src/api/state.rs b/src/api/state.rs
+index 01870ca2..c9a7d94a 100644
+--- a/src/api/state.rs
++++ b/src/api/state.rs
+@@ -1952,7 +1952,7 @@ mod tests {
+     // ========================================================================
+ 
+     #[test]
+-    fn test_load_persisted_machines_removes_dead_records() {
++    fn test_load_persisted_machines_retains_dead_records() {
+         let (_dir, state) = temp_api_state();
+ 
+         // Insert a record with a PID that doesn't exist (dead process)
+@@ -1961,8 +1961,7 @@ mod tests {
+         record.state = RecordState::Running;
+         state.db.insert_vm("dead-machine", &record).unwrap();
+ 
+-        // Give it a data dir with a marker file — reconciliation must reclaim it,
+-        // not just the DB record (otherwise the disks leak across restarts).
++        // A crash is not permission to discard a persistent workspace.
+         let data_dir = crate::agent::vm_data_dir("dead-machine");
+         std::fs::create_dir_all(&data_dir).unwrap();
+         std::fs::write(data_dir.join("storage.raw"), b"x").unwrap();
+@@ -1970,25 +1969,19 @@ mod tests {
+         // Verify record exists before load
+         assert!(state.db.get_vm("dead-machine").unwrap().is_some());
+ 
+-        // Load should detect dead process and clean up DB record
++        // Exercise both startup cleanup callers, twice (normal restart).
+         let loaded = state.load_persisted_machines();
+-        assert!(loaded.is_empty(), "dead machine should not be loaded");
+-
+-        // DB record should be cleaned up
+-        assert!(
+-            state.db.get_vm("dead-machine").unwrap().is_none(),
+-            "dead machine DB record should be removed"
+-        );
+-
+-        // Data dir should be reclaimed too (no disk leak).
+-        assert!(
+-            !data_dir.exists(),
+-            "dead machine data dir should be removed, not leaked"
+-        );
+-
+-        // Name should be available for reuse
++        assert!(loaded.contains(&"dead-machine".to_string()));
++        state.reclaim_dangling_vm_dirs();
++        state.load_persisted_machines();
++        state.reclaim_dangling_vm_dirs();
++        let retained = state.db.get_vm("dead-machine").unwrap().unwrap();
++        assert_eq!(retained.state, RecordState::Stopped);
++        assert_eq!(retained.pid, None);
++        assert_eq!(retained.pid_start_time, None);
++        assert_eq!(std::fs::read(data_dir.join("storage.raw")).unwrap(), b"x");
+         let token = SmolvmDb::create_reservation_token();
+-        assert!(state.reserve_machine_name("dead-machine", &token).is_ok());
++        assert!(state.reserve_machine_name("dead-machine", &token).is_err());
+     }
+ 
+     #[test]
+@@ -2019,7 +2012,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn test_load_removes_fully_dead_fork_lineage() {
++    fn test_load_retains_fully_dead_fork_lineage() {
+         let (_dir, state) = temp_api_state();
+         let mut base = VmRecord::new("dead-tree-base".into(), 1, 512, vec![], vec![], false);
+         base.pid = Some(i32::MAX);
+@@ -2033,8 +2026,41 @@ mod tests {
+ 
+         state.load_persisted_machines();
+ 
+-        assert!(state.db.get_vm("dead-tree-base").unwrap().is_none());
+-        assert!(state.db.get_vm("dead-tree-child").unwrap().is_none());
++        assert_eq!(state.db.get_vm("dead-tree-base").unwrap().unwrap().state, RecordState::Stopped);
++        assert_eq!(state.db.get_vm("dead-tree-child").unwrap().unwrap().state, RecordState::Stopped);
++    }
++
++    #[test]
++    fn retention_ephemeral_cleanup_and_explicit_delete() {
++        let (_dir, state) = temp_api_state();
++        for (name, ephemeral) in [("retention-ephemeral", true), ("retention-delete", false)] {
++            let mut record = VmRecord::new(name.into(), 1, 512, vec![], vec![], false);
++            record.pid = Some(i32::MAX);
++            record.state = RecordState::Running;
++            record.ephemeral = ephemeral;
++            state.db.insert_vm(name, &record).unwrap();
++            std::fs::create_dir_all(crate::agent::vm_data_dir(name)).unwrap();
++        }
++        state.load_persisted_machines();
++        assert!(state.db.get_vm("retention-ephemeral").unwrap().is_none());
++        assert!(!crate::agent::vm_data_dir("retention-ephemeral").exists());
++        state.remove_machine("retention-delete").unwrap();
++        state.reclaim_dangling_vm_dirs();
++        assert!(state.db.get_vm("retention-delete").unwrap().is_none());
++        assert!(!crate::agent::vm_data_dir("retention-delete").exists());
++    }
++
++    #[test]
++    fn retention_sweep_protects_missing_ancestor_record() {
++        let (_dir, state) = temp_api_state();
++        let mut child = VmRecord::new("retention-orphan-child".into(), 1, 512, vec![], vec![], false);
++        child.golden = Some("retention-missing-base".into());
++        state.db.insert_vm(&child.name, &child).unwrap();
++        let base = crate::agent::vm_data_dir("retention-missing-base");
++        std::fs::create_dir_all(&base).unwrap();
++        std::fs::write(base.join("storage.raw"), b"backing").unwrap();
++        state.reclaim_dangling_vm_dirs();
++        assert_eq!(std::fs::read(base.join("storage.raw")).unwrap(), b"backing");
+     }
+ 
+     #[test]

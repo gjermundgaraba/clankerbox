@@ -1,0 +1,13 @@
+# Disposable upstream checkouts, binaries, images and test outputs.
+.work/
+bin/
+spikes/*/.work/
+spikes/*/.venv/
+spikes/*/results/
+spikes/recovery/*/.work/
+spikes/recovery/*/results/
+spikes/recovery/execute.lock
+__pycache__/
+*.pyc
+# Real-agent auth is provisioned outside the repository; never stage a guest cache.
+spikes/**/auth.json

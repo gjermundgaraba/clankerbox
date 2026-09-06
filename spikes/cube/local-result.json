@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "execution_scope": "local_process",
+  "status": "pass",
+  "checks": [
+    {
+      "name": "HTTP SDK and lifecycle fixture tests",
+      "status": "pass",
+      "detail": "11 tests, 0 failures, 0 errors"
+    }
+  ],
+  "metrics": {},
+  "evidence": {},
+  "limitations": [
+    "Loopback HTTP fixtures and mocked states; not VM or RAM-fork evidence."
+  ]
+}

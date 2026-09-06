@@ -1,0 +1,7 @@
+{
+  "publicDirectBlocked": true,
+  "hostDirectBlocked": true,
+  "alternateProxyHostPortBlocked": true,
+  "unlistedHostDenied": true,
+  "officialConnectAllowed": true
+}

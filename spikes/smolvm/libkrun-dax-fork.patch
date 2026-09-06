@@ -1,0 +1,130 @@
+diff --git a/src/vmm/src/builder.rs b/src/vmm/src/builder.rs
+index 244efa6..173a83e 100644
+--- a/src/vmm/src/builder.rs
++++ b/src/vmm/src/builder.rs
+@@ -2205,12 +2205,16 @@ pub fn create_guest_memory(
+         #[cfg(not(all(feature = "vhost-user", target_os = "linux")))]
+         unreachable!()
+     } else if memfd_backed_ram_enabled() {
+-        // Back ALL guest regions (RAM *and* device-SHM such as the virtiofs-DAX
+-        // rootfs window) with memfds so a fork clone can CoW-share every region.
+-        // Backing only the RAM regions left SHM windows anonymous → zeroed on the
+-        // clone → the guest's file-backed code vanished → triple fault.
+-        let _ = ram_region_count;
+-        let ranges = build_memfd_backed_ranges(&arch_mem_regions, arch_mem_regions.len())
++        // Device windows are not RAM generations: virtiofs replaces parts of
++        // its DAX aperture with MAP_FIXED file mappings. Rebasing that aperture
++        // from its original (empty) memfd would erase the live source's mapped
++        // executable pages. Restored FUSE workers replay their saved DAX maps.
++        let fork_backed_region_count = if cfg!(target_os = "linux") {
++            ram_region_count
++        } else {
++            arch_mem_regions.len()
++        };
++        let ranges = build_memfd_backed_ranges(&arch_mem_regions, fork_backed_region_count)
+             .map_err(|e| StartMicrovmError::GuestMemoryMmap(format!("memfd backing: {e}")))?;
+         GuestMemoryMmap::from_ranges_with_files(ranges)
+             .map_err(|e| StartMicrovmError::GuestMemoryMmap(format!("{e:?}")))?
+@@ -3370,6 +3374,46 @@ pub mod tests {
+     use super::*;
+     use crate::vmm_config::kernel_bundle::KernelBundle;
+ 
++    #[cfg(all(target_os = "linux", target_arch = "x86_64", not(feature = "tee"), not(feature = "aws-nitro")))]
++    #[test]
++    #[ignore = "run in a dedicated process with SMOLVM_FORKABLE=1; no KVM required"]
++    fn fork_continue_preserves_live_dax_file_mapping() {
++        use std::os::fd::AsRawFd;
++        use std::os::unix::fs::FileExt;
++        use vm_memory::{Bytes, GuestMemory};
++
++        assert!(memfd_backed_ram_enabled(), "set SMOLVM_FORKABLE=1 for this isolated regression");
++        let mut resources = VmResources::default();
++        resources.fs.push(crate::vmm_config::fs::FsDeviceConfig {
++            fs_id: "test-dax".into(), shared_dir: None, shm_size: Some(2 << 20),
++            read_only: true, virtual_entries: Vec::new(),
++        });
++        let (memory, _, shm, _) = create_guest_memory(32, &resources, &Payload::Empty, None).unwrap();
++        let dax = shm.fs_region(0).unwrap();
++        let mapped_file = create_guest_ram_memfd(4096).unwrap();
++        let elf = b"\x7fELF-live-file-mapping";
++        mapped_file.write_at(elf, 0).unwrap();
++        let addr = memory.get_host_address(dax.guest_addr).unwrap();
++        // Reproduce virtiofs setupmapping: this replaces the aperture's original
++        // backing without changing the GuestMemoryMmap metadata.
++        let mapped = unsafe {
++            libc::mmap(addr.cast(), dax.size, libc::PROT_READ,
++                       libc::MAP_SHARED | libc::MAP_FIXED, mapped_file.as_raw_fd(), 0)
++        };
++        assert_eq!(mapped, addr.cast());
++        crate::snapshot::rebase_guest_memory_private(&memory).unwrap();
++        let mut actual = vec![0; elf.len()];
++        memory.read_slice(&mut actual, dax.guest_addr).unwrap();
++        assert_eq!(actual, elf, "fork-continue must not replace source DAX bytes with the aperture's empty memfd");
++        assert!(crate::snapshot::guest_memory_backing_is_immutable(&memory).unwrap());
++        // A subsequent generation must not scan the device aperture beyond the
++        // file's EOF (which kills the copy worker with SIGBUS).
++        let (descs, _files) = crate::snapshot::start_forkable_generation_copy(&memory).unwrap().finish().unwrap();
++        assert_eq!(descs.iter().find(|desc| desc.gpa == dax.guest_addr.0).unwrap().fd, -1);
++        memory.read_slice(&mut actual, dax.guest_addr).unwrap();
++        assert_eq!(actual, elf);
++    }
++
+     #[cfg(target_os = "macos")]
+     #[test]
+     fn reaps_dead_pid_guest_ram_keeps_live_and_legacy() {
+diff --git a/src/vmm/src/lib.rs b/src/vmm/src/lib.rs
+index d274cce..dd907a5 100644
+--- a/src/vmm/src/lib.rs
++++ b/src/vmm/src/lib.rs
+@@ -1174,7 +1174,7 @@ impl Vmm {
+             };
+             let generation_copy = if needs_materialization && generation_guardian.is_none() {
+                 Some(
+-                    snapshot::start_fork_generation_copy(&self.guest_memory).map_err(|error| {
++                    snapshot::start_forkable_generation_copy(&self.guest_memory).map_err(|error| {
+                         Error::Snapshot(format!("start RAM generation worker: {error}"))
+                     })?,
+                 )
+diff --git a/src/vmm/src/snapshot.rs b/src/vmm/src/snapshot.rs
+index 28f3812..94c7aef 100644
+--- a/src/vmm/src/snapshot.rs
++++ b/src/vmm/src/snapshot.rs
+@@ -1159,6 +1159,18 @@ impl DeferredMemorySave {
+ /// generation. Call only at a fully quiesced snapshot boundary.
+ #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+ pub fn start_fork_generation_copy(parent: &GuestMemoryMmap) -> io::Result<ForkGenerationCopy> {
++    start_fork_generation_copy_inner(parent, false)
++}
++
++/// Materialize a forkable source, whose anonymous regions are device windows.
++/// Ordinary anonymous RAM callers retain the full-copy behavior above.
++#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
++pub fn start_forkable_generation_copy(parent: &GuestMemoryMmap) -> io::Result<ForkGenerationCopy> {
++    start_fork_generation_copy_inner(parent, true)
++}
++
++#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
++fn start_fork_generation_copy_inner(parent: &GuestMemoryMmap, skip_device_windows: bool) -> io::Result<ForkGenerationCopy> {
+     struct CopyRegion {
+         source: *const u8,
+         len: usize,
+@@ -1186,6 +1198,19 @@ pub fn start_fork_generation_copy(parent: &GuestMemoryMmap) -> io::Result<ForkGe
+     let mut descs = Vec::new();
+     let mut copies = Vec::new();
+     for region in parent.iter() {
++        // Device apertures are reconstructed by their devices. In particular,
++        // a DAX mapping can extend past a file's EOF; scanning that aperture as
++        // RAM raises SIGBUS in the materialization worker.
++        if skip_device_windows && region.file_offset().is_none() {
++            descs.push(MemfdRegionDesc {
++                gpa: region.start_addr().raw_value(),
++                len: region.len(),
++                fd: -1,
++                offset: 0,
++                path: String::new(),
++            });
++            continue;
++        }
+         let len = region.len() as usize;
+         let source = parent
+             .get_host_address(region.start_addr())

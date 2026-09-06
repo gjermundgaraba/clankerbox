@@ -1,0 +1,17 @@
+{
+  "run_scope": "cocoon-codex ca01 through ca04, 2026-09-05",
+  "cleanup": "pass",
+  "owned_vms": 0,
+  "owned_snapshots": 0,
+  "owned_bridges": [],
+  "owned_ag_namespaces": [],
+  "owned_cqagent_cgroups": [],
+  "guest_disks_ram_snapshots_and_guest_auth_copies_removed": true,
+  "run_directories": {
+    "ca01": {"runtime_dirs_present": [], "allocated_bytes": 20480},
+    "ca02": {"runtime_dirs_present": [], "allocated_bytes": 45056},
+    "ca03": {"runtime_dirs_present": [], "allocated_bytes": 139264},
+    "ca04": {"runtime_dirs_present": [], "allocated_bytes": 241664}
+  },
+  "retained_content": "Small sanitized evidence, command metadata, configuration, empty injection markers and test source. Root coordinator owns the separate private credential staging directory and its cleanup."
+}

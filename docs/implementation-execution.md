@@ -1,0 +1,342 @@
+# Lifecycle and connections implementation — execution record
+
+## Current product boundary
+
+Clankerbox provides machines, SSH transport, generic TCP forwarding and local URL
+mapping. Herdr is only an example external application. The `clankerbox herdr`
+launcher and its application-specific live test were removed after the owner
+corrected scope drift. No Herdr build, protocol version, Zig 0.15.2 exception or
+Herdr test result is a Clankerbox dependency or release gate. The external fork
+work below is retained as historical experiment evidence, not product scope.
+No Herdr installation was added to the reusable image recipes.
+
+## Authorization
+
+The owner approved implementing steps 2–3 end-to-end on September 6, 2026:
+helpers and disposable VMs on `clanker@203.0.113.10` and `user@mac-workstation`,
+dedicated controller VM/service and narrowly required private networking in
+`personal-cloud`. External Herdr experiments used isolated sessions but did not
+make Herdr part of the product. No host reboots, unrelated service/data changes,
+existing VM deletion, pushes or releases are authorized. Only newly created disposable resources are
+cleanup targets. Earlier spike execution grants remain closed.
+
+Networked fork preparation is deferred to the fork milestone at the owner's
+request; it is not a gate for retained lifecycle and connection implementation.
+
+## Initial inventory
+
+- Hetzner: 125 GiB RAM, approximately 123 GiB available; 804 GiB disk available.
+  Existing pinned recovery runtime/profile inputs remain. Passwordless sudo is
+  available; coding guests will not run as root on the host.
+- Mac: Tart 2.32.1, public cached Tahoe/Xcode image at the recorded digest,
+  approximately 231 GiB disk available, GUI user context available. Existing
+  `codex-macos-tahoe-xcodegen-base` is not a test target. General passwordless
+  sudo is unavailable. Softnet 0.19.0 is installed but admin execution may need
+  operator setup; do not weaken isolation silently.
+- Compute-node: existing VM110 apps and VM111 fugu-proxy. Approximately 18 GiB RAM
+  available; dedicated controller candidate VM112/IP .32 requires inventory
+  confirmation in the infrastructure workstream.
+
+## Implementation workstreams (historical)
+
+Bounded coding workers own Go lifecycle/helpers, Go connection client, Herdr URL
+delivery, and personal-cloud infrastructure separately. This thread owns image
+staging, integration, diff review and live acceptance. Worker success is not
+accepted as live product verification. No production agent credentials are used
+in disposable lifecycle/connection fixtures.
+
+## Implemented and verified
+
+- Go/SQLite API and durable operation journal, explicit create/start/stop/delete,
+  profile capabilities, per-machine SSH identity, restricted host control, and
+  systemd/launchd retained runtime supervision. Fork/checkpoint/backup APIs are
+  not part of this milestone.
+- CLI SSH/SCP configuration and pinned trust; shared per-machine forwarding owner,
+  TCP discovery, explicit VNC forwarding, stable local reservations, URL rewriting
+  and generic local URL opening.
+- Historical external experiment: the local Herdr fork delivers HTTP(S)
+  Ctrl-click URLs to the clicking client, not
+  the server host or other clients. Protocol 21 requires matching guest/client
+  builds. Focused Rust tests and Windows compile/lint passed; see that fork's
+  unreleased docs. No release was published.
+- `go test -race ./internal/... ./cmd/...` and `go vet ./internal/... ./cmd/...`
+  passed after integration fixes. The subsequent dependency upgrade isolates
+  historical fixtures with `spikes/go.mod`; product `go test -race ./...` and
+  `go vet ./...` now pass from the repository root too.
+- Fresh Linux live acceptance passed create, SSH bootstrap, dirty Git staging
+  and worktree changes, executable bits/symlink retention, stop/start, unchanged
+  SSH host identity and stopped-machine SSH rejection. Harness:
+  `tests/live_lifecycle.py`; initial private evidence `.work/linux-live-patched.json`.
+- SCP through generated OpenSSH configuration returned the same SHA-256 as the
+  source. Automatic HTTP forwarding passed a real loopback guest server,
+  two simultaneous consumers, one consumer exiting, listener disappearance and
+  reappearance on the same local address, and exact escaped URL path/query/fragment
+  preservation. Harness: `tests/live_connections.py`; private evidence
+  `.work/linux-connections.json`.
+- Historical external experiment: matching custom Mac/Linux Herdr builds attached
+  through Clankerbox to the unique
+  guest session `cb-accept-39883e6c`. A command submitted through its guest API
+  rendered `CLANKERBOX_HERDR_LIVE_OK` in the local client. The initial nested launch
+  was correctly rejected until inherited `HERDR_ENV` was cleared. The binary was
+  explicitly installed in the disposable guest; no published protocol-20 binary
+  was substituted. Browser Ctrl-click delivery still needs live acceptance;
+  successful URL mapping and routing unit tests alone do not prove that UI flow.
+
+### Runtime integration corrections
+
+The first Linux disposable remains failed evidence, not a passing run:
+`3170fea0cfbb72c9d7bb74d5d75b940b` (`.work/linux-live.json`). SSH bootstrap needed
+root ownership on the guest's SSH directories. Guest kernel poweroff left the
+host VMM alive. Native stop now requires a shutdown acknowledgement in the pinned
+smolvm fork instead of blindly terminating an unreachable VMM. Cold restart then
+exposed stale OverlayFS lower-file handles when the kernel enabled indexing by
+default. The guest agent now mounts the persistent root with
+`index=off,redirect_dir=off,metacopy=off`. The fresh disposable passed with these
+changes; the old overlay is not migrated or declared healthy.
+
+Source changes live in `/Users/example/ws/pers/not-mine/smolvm`:
+`src/agent/manager.rs`, `src/cli/vm_common.rs`, and
+`crates/smolvm-agent/src/main.rs`. The remote build is isolated at
+`/home/clanker/clankerbox/build/source`; earlier recovery inputs were not modified.
+The installed CLI SHA-256 is
+`e7dd531c872d09c5deb431eda743917571e144f3bee27a2bf58a320f7da50d70`;
+the static musl guest agent SHA-256 is
+`18a789b3d3404a489ab67b4c10ed7df86b705ec457e405356d335e9d3e16bccd`.
+The copied original `runtime/build.json` describes the base input, **not these
+replacement binaries**. Release packaging must publish a fresh complete manifest.
+
+## Deployment and remaining gates
+
+Dedicated personal-cloud VM112 (Ubuntu 24.04, `192.168.20.32`, 2 CPUs, 2 GiB RAM,
+20 GiB disk) runs `clankerbox.service` behind private verified HTTPS at
+`https://clankerbox.example.internal`. Profiles/machines API calls passed. Its
+source-restricted controller SSH key can invoke the Mac structured helper and is
+denied arbitrary `whoami` execution. Credentials remain outside this repository.
+
+The initial Linux runs above used the temporary loopback controller. After the
+owner updated the provider firewall, WireGuard handshakes and restricted SSH
+control passed. Deployed HTTPS lifecycle and automatic forwarding now pass too
+(`.work/linux-deployed-live.json`, `.work/linux-deployed-connections.json`).
+Ping is intentionally denied by the narrow WireGuard host firewall; it is not
+the connectivity acceptance criterion.
+
+1. Operator installation of Softnet 0.23.0 is now verified by the installed
+   binary's SHA-256 (`5982c8cde55cd039d4aa71add54356224b8b8a040df1a8786f16327b421f701d`)
+   and successful restricted sudo execution. The original 0.19.0 pin rejected
+   directional `in`/`out` rules; privileges were not broadened for the upgrade.
+   The first failed Mac disposable (`a553929930ea66828418dd2cc2789bf3`) was
+   explicitly restarted with Tart 2.36.0 after this correction. Its original
+   create operation reconciled without rewriting the journal. SSH, dirty Git
+   retention and SSH identity across stop/start then passed, and the API stopped
+   and deleted the disposable. Evidence: `.work/mac-deployed-live.json` and
+   `.work/mac-recovered-cleanup.log`. This recovery used the older seed image;
+   latest-image acceptance is separate.
+2. Latest-image Mac retained lifecycle, forwarding, authenticated VNC interaction
+   and guest egress probes now pass (see the final Mac image section below).
+   No home inbound port-forward is required.
+3. Resolve the documented toolchain exceptions before declaring the requested
+   all-latest upgrade complete.
+   No reboot, host-loss, real-agent credential or fork-preparation claim follows
+   from this retained lifecycle run.
+
+### Deployed-path follow-up fixes
+
+UDP queries from Hetzner to `1.1.1.1` time out even on the host; DNS-over-TCP to
+that server and UDP to the host's configured Hetzner resolver `185.12.64.1` work.
+The helper now accepts an optional numeric IPv4 `dns` upstream in its host config and
+passes it to smolvm at creation. Hetzner uses `"dns":"185.12.64.1"`; the guest
+still uses smolvm's gateway relay. This avoids opening more provider firewall
+ports or allowing arbitrary guest access to private hosts. A fresh guest reached
+GitHub over verified HTTPS with this setting (`.work/linux-deployed-dns.json`).
+
+Concurrent real SSH helper invocations also exposed an initialization race:
+nonblocking inventory initialization returned `host inventory busy`, producing
+intermittent HTTP 503s. Initialization now waits for its short exclusive lock;
+per-machine mutation locking is unchanged. The 16-concurrent-opener regression
+and full product race tests pass. Failed attempts remain recorded rather than
+rewritten as successful first runs.
+
+After deploying the initialization fix, 12 concurrent real controller inspections
+passed (the same probe previously returned `host inventory busy`). Smolvm's
+strict floor does not exclude host public IPs, so the dedicated nftables guard
+now rejects UID 1000 connections to non-loopback local IPv4/IPv6 addresses. It
+preserves the host helper's loopback relay and other users' networking. Live guest
+probes received refusal/reset and no SSH banner from the host's private/public
+addresses, while verified GitHub HTTPS and automatic forwarding still passed.
+The gateway can acknowledge guest TCP before establishing the host connection,
+so connection establishment alone is not sufficient evidence of host access.
+Rules were syntax-checked and installed in the existing dedicated guard service;
+Docker tables were not changed.
+
+### Latest-version upgrade, September 6
+
+The owner explicitly requested current versions rather than minimum compatible
+ones. The initial Softnet 0.19 pin and subsequent minimum 0.22 choice are
+superseded by **0.23.0**. Version discovery uses upstream stable releases, not
+prereleases. Core runtime upgrades are deployed on both platforms; the toolchain
+exceptions below remain explicit.
+
+| Component | Selected version | Current result |
+| --- | --- | --- |
+| Go | 1.27.1 | CLI, controller and both host helpers rebuilt; deployed helpers/controller updated after state backups |
+| Go SSH / SQLite dependencies | x/crypto 0.56.0 / modernc.org/sqlite 1.58.0 | Latest module update and tidy; product race tests and vet pass |
+| smolvm | 1.14.1 + retained-stop/OverlayFS patches | Native Linux build, matching static agent and release libraries deployed; live retained lifecycle passes |
+| Linux guest | Ubuntu Base 26.04.1, current signed distro updates | New `linux-dev-v2`; no pending package upgrades at build time |
+| Node / npm | 26.8.1 / bundled 11.19.0 | Verified official Node archive; versions confirmed inside the running guest |
+| Rust | 1.98.1 | smolvm built/tested |
+| Tart | 2.36.0 | Dedicated signature-verified binary deployed; retained lifecycle passes |
+| Softnet | 0.23.0 | Installed binary verified; directional isolation rules and restricted sudo work |
+| Mac image | macOS 26.6.2 / Xcode 26.6 (17F113) | `mac-xcode-v3`; verified Swift compile/run and retained lifecycle |
+| Zig | 0.16.0 | Used in the smolvm runtime build, not a Clankerbox service or guest runtime dependency |
+
+Dependency scope is explicit: smolvm's libkrun/libkrunfw and Rust crate locks are
+the matching upstream runtime bundle, not independently mixed latest libraries.
+Ubuntu system tools are current distro packages, not independently rebuilt
+upstream releases. In particular, the guest has Python **3.14.4** while upstream
+offers **3.14.7**. This is a remaining exception to a literal all-upstream-latest
+requirement, not a claim that every installed package is upstream-latest.
+The existing controller/host operating systems were not upgraded or rebooted.
+
+Latest Linux acceptance uses the deployed private TLS/WireGuard path. Create,
+dirty Git and SSH identity retention across stop/start, checksum-matched SCP, automatic HTTP forwarding,
+independent consumers, stable listener churn, escaped URLs and verified public
+HTTPS pass. Guest SSH probes to host public/private and controller addresses
+return refusal/reset without an SSH banner. Evidence:
+`.work/linux-latest-live-v2.json`, `.work/linux-latest-connections.json`, and
+`.work/linux-latest-network.txt`. The disposable was stopped and deleted after
+acceptance; older failed fixtures remain untouched. An earlier invocation supplied key text where
+the CLI requires a filename; it failed before creating a machine and remains
+separately recorded in `.work/linux-latest-live.json`.
+
+The new smolvm source is isolated in `.work/smolvm-v1.14.1`; the original checkout
+and unrelated dirty libkrun submodule remain intact. Native CLI SHA-256:
+`66c240d5318ecb46d1e81b0f098932baec432ce02d76dc4137f4be133076ceed`;
+static guest agent SHA-256:
+`c232121105422b88640b09802a9fca0601caf136d38f04f9b3f0e5d6c3bec0ca`.
+Remote `/home/clanker/clankerbox/versions/1.14.1` retains source pins, patch,
+build scripts, `SHA256SUMS`, library symlink manifest and focused test evidence.
+`images/finalize-linux.sh` joins that verified agent to the new bare Ubuntu image;
+no old Alpine libraries or spike agents are mixed in. Review corrected root's
+home from `/root/workspace` to `/root`, matching SSH bootstrap; workspace remains
+`/root/workspace`. Separate final manifests preserve the original package-build
+evidence. Deployment pins are retained in personal-cloud's
+`hosts/clankerbox-runtime/linux-host.json` and
+`hosts/clankerbox-controller/config.json`.
+
+Historical external experiment (not Clankerbox acceptance): Herdr's new Rust lint
+fixes preserve evaluation order and pixel conversion behavior. Its generated API
+schema now records protocol 21. The full check hit
+an agent-status subscription timeout; the same test also fails with the prior
+Rust 1.96.1 toolchain, so the Rust upgrade alone does not explain it. The initial
+workspace-CWD test failure passes with the inherited Herdr environment cleared.
+No test was disabled, and these narrower passing checks do not certify the full
+integration suite. Its Zig 0.15.2 requirement and agent-status timeout are not
+Clankerbox release blockers; no dependency-porting work is required for this product.
+
+### Final Mac image and acceptance
+
+The registry's `macos-tahoe-xcode:latest` digest
+`e0721ddeae3c7c037b764c1aebd0b2d245495c16622413f5a567d7110d18d863`
+contains macOS 26.6.2 but **Xcode 26.2**, despite its tag. Rather than presenting
+that as the latest toolchain, `images/finalize-mac.sh` clones it and copies the
+existing Apple-signed host Xcode 26.6 into a dedicated guest toolchain directory.
+The physical host installation is unchanged. Guest signature validation,
+license/first-launch preparation and Swift compile/run pass. The final seed is
+`seed-macos26.6.2-xcode26.6`; its ready marker is written only after clean shutdown.
+The old image's extra tools remain present but are not the selected Xcode.
+
+The official Node 26.8.1 ARM64 archive is checksum-verified; npm is 11.19.0.
+Homebrew Python is 3.14.7. The Mac SSH bootstrap explicitly sets the developer
+tool PATH so noninteractive SSH does not silently select Apple's older Python.
+Image provisioning sets public DNS because Softnet deliberately blocks the
+private DHCP resolver. This is the same guest DNS policy as machine bootstrap.
+
+After backing up host SQLite and controller state/configuration, the Mac helper
+and `mac-xcode-v3` were deployed. Personal-cloud retains both host and controller
+profile pins. A first controller-backup command failed on a privileged directory
+glob before changing its config; the service was restarted immediately, then
+the backup/switch was completed in a privileged shell with a restart exit trap.
+
+Final disposable `269a660e4adadb7221daf3cf50317879` passes retained dirty Git,
+executable/symlink state, SSH host identity, stopped-machine access rejection,
+automatic HTTP forwarding, exact URL preservation, independent consumers and
+listener disappearance/reappearance. Evidence: `.work/mac-final-live.json`,
+`.work/mac-final-connections.json`, `.work/mac-final-versions.txt`.
+The connection fixture now waits for its background HTTP server to answer before
+ending the startup SSH session and prints startup errors on failure; the earlier
+fire-and-forget fixture intermittently lost its server during Mac startup.
+
+Native Screen Sharing authenticated through the CLI's loopback VNC tunnel.
+A VNC mouse interaction dismissed Python's local-network permission prompt;
+VNC keyboard input then executed `echo CLANKERBOX_VNC_INPUT_OK` and the returned
+output was visually inspected in `.work/mac-vnc-final.jpg`. This uses the
+disposable image's guest login, not SSH password authentication, which remains
+disabled. Desktop credentials/permissions still follow the selected image;
+Clankerbox does not currently provision a separate VNC credential API.
+
+The now-removed application-specific fixture `tests/live_herdr.py` attached the
+matching protocol-21 Herdr client/server over the deployed SSH path and injected
+an SGR Ctrl-click into a real client PTY. The local Clankerbox opener mapped the
+guest URL and launched native Safari; its title, exact URL and page text
+confirmed `CLANKERBOX_BROWSER_OK`.
+Evidence: `.work/mac-final-herdr.json`. This is terminal-event injection, not a
+physical mouse click or evidence about terminal-emulator-owned hyperlink clicks.
+The fixture explicitly confirmed installation of the approved guest binary;
+earlier fixture attempts mistook that prompt for a ready terminal and failed.
+This is historical external-application evidence only. The full Herdr integration
+suite is outside Clankerbox acceptance.
+
+Checksum-matched SCP roundtrip evidence is `.work/mac-final-scp.txt`; guest probes
+to the host gateway, physical Mac and controller SSH addresses time out without
+an SSH banner (`.work/mac-final-network.txt`). Public certificate-verified HTTPS
+returns 200. These probes supplement, not replace, the configured isolation rules.
+
+The final disposable and its named Herdr session were stopped/deleted after
+acceptance (`.work/mac-final-cleanup.json`); the viewer/test browser tabs and
+local test forwarding process were closed. The three owned reusable Mac seeds
+are stopped. No unrelated VM or host service was removed. Product race tests,
+vet, both host-entry tests and the Mac image recipe's ShellCheck pass.
+
+## Using the client
+
+Create a private config with `url`, `token_file`, `identity_file` (or omit it to
+use the local SSH agent), and a short private `state_dir`. Token/key files must
+be mode 0600; state directories 0700. The deployed operator token is managed by
+personal-cloud, never copied into a guest. Global flags precede commands:
+
+```sh
+clankerbox --config CONFIG profiles
+clankerbox --config CONFIG create --name dev --profile linux-dev-v2 --host linux --key PUBLIC_KEY_FILE
+clankerbox --config CONFIG operation OPERATION_ID
+clankerbox --config CONFIG ssh dev
+clankerbox --config CONFIG connect dev
+clankerbox --config CONFIG ports dev
+clankerbox --config CONFIG url dev 'http://localhost:3000/path'
+clankerbox --config CONFIG vnc --viewer MAC_MACHINE
+```
+
+Mutations return an operation; poll it until succeeded, failed or unresolved.
+Connecting never implicitly starts a stopped machine. `connect` stays running
+while its forwards are needed; VNC holds its own consumer. `ssh-config install`
+adds explicit `cb.NAME` and `cb.ID` entries for ordinary SSH/SCP. Run independently
+installed applications against those SSH aliases or the published local port
+mappings. Application installation and session lifecycle belong to the caller.
+
+## Cleanup and harness follow-up
+
+The custom guest Herdr session was stopped and deleted, and its sole test outer
+pane was closed. The Linux machine used for forwarding/Herdr acceptance was
+stopped and deleted successfully through the API. Re-entering the lifecycle
+harness for cleanup exposed a fixture bug (creating an already-existing symlink),
+not a runtime regression. Its evidence retains the original successful retention
+event, that harness failure, and successful stop/delete. The fixture now replaces
+only its own test symlink on resume. A fresh full create/retention/stop/start/delete
+run passed and cleaned its machine; it is recorded separately at
+`.work/linux-live-final.json`.
+
+The first pre-fix Linux machine still has an unresolved start operation and is
+retained for explicit operator reconciliation; normal deletion correctly refuses
+to bypass it. Its runtime is observed running but guest SSH is unhealthy. It has
+only synthetic test data, not agent credentials. The temporary local controller
+and its journal remain available for investigating that failed fixture. No
+unrelated VM, session or user data was removed.
