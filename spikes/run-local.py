@@ -13,7 +13,7 @@ def main():
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
-    suites = ("acceptance", "real-agent", "control-path", "cocoon", "smolvm", "cube",
+    suites = ("acceptance", "real-agent", "control-path", "orchard-lifecycle", "cocoon", "smolvm", "cube",
               "storage-recovery", "tart-checkpoints", "latency",
               "recovery/shared", "recovery/cocoon", "recovery/smolvm")
     results = []

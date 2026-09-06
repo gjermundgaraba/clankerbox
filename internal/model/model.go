@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"regexp"
 	"slices"
 	"strings"
@@ -68,10 +67,9 @@ func (p *Profile) Validate() error {
 	if p.StorageGiB < 0 || p.OverlayGiB < 0 {
 		return errors.New("invalid disk sizes")
 	}
-	for _, c := range p.Capabilities {
-		if !slices.Contains(Capabilities, c) {
-			return fmt.Errorf("unimplemented capability %q", c)
-		}
+	// Capabilities describe implementation support, not a configurable allowlist.
+	if len(p.Capabilities) > 0 && !slices.Equal(p.Capabilities, Capabilities) {
+		return errors.New("capabilities are derived from runtime support; omit them from profile configuration")
 	}
 	p.Capabilities = slices.Clone(Capabilities)
 	return nil

@@ -28,6 +28,13 @@ func TestProfilesAndNames(t *testing.T) {
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
+	if err := p.Validate(); err != nil {
+		t.Fatal("canonical advertised capabilities must validate again:", err)
+	}
+	p.Capabilities = []string{"ssh"}
+	if err := p.Validate(); err == nil {
+		t.Fatal("silently expanded a configured capability subset")
+	}
 	p.Capabilities = append(p.Capabilities, "fork")
 	if err := p.Validate(); err == nil {
 		t.Fatal("advertised unimplemented fork")

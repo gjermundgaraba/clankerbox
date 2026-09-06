@@ -71,14 +71,28 @@ done
                           'independent_consumers': True, 'stable_listener_churn': True}))
     except Exception:
         # Keep guest startup errors visible before removing the disposable files.
-        print(run('ssh', machine, 'cat ' + directory + '/server.log'), file=sys.stderr)
+        try:
+            print(run('ssh', machine, 'cat ' + directory + '/server.log'), file=sys.stderr)
+        except subprocess.SubprocessError as error:
+            print('Could not read guest startup log:', error, file=sys.stderr)
         raise
     finally:
+        already_failed = sys.exception() is not None
         for consumer in consumers:
             if consumer.poll() is None:
                 consumer.send_signal(signal.SIGINT)
                 consumer.wait(timeout=15)
-        run('ssh', machine, 'sh -se', data=stop + f'rm -rf {directory}\n')
+        try:
+            run('ssh', machine, 'sh -se', data=f'''if test -s {directory}/server.pid; then
+  pid=$(cat {directory}/server.pid)
+  if kill -0 "$pid" 2>/dev/null; then kill "$pid"; fi
+fi
+rm -rf {directory}
+''')
+        except subprocess.SubprocessError as error:
+            if not already_failed:
+                raise
+            print('Guest cleanup failed after acceptance error:', error, file=sys.stderr)
 
 
 if __name__ == '__main__':
