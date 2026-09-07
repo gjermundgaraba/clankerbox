@@ -77,6 +77,7 @@ func Open(path string, cfg model.Config, transport Transport) (*Controller, erro
 	}
 	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
+ CREATE TABLE IF NOT EXISTS checkpoints (id TEXT PRIMARY KEY, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS machines (id TEXT PRIMARY KEY, name TEXT NOT NULL, deleted INTEGER NOT NULL, body BLOB NOT NULL);
  CREATE UNIQUE INDEX IF NOT EXISTS live_names ON machines(name) WHERE deleted=0;
  CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, idem TEXT NOT NULL UNIQUE, fingerprint TEXT NOT NULL, machine_id TEXT NOT NULL, status TEXT NOT NULL, body BLOB NOT NULL, request BLOB NOT NULL, next_attempt INTEGER NOT NULL DEFAULT 0);
@@ -344,12 +345,13 @@ func (c *Controller) Mutate(ctx context.Context, id, action, key string) (model.
 	if m.Deleted {
 		return o, problem(409, "prerequisite", "machine is deleted")
 	}
-	var active int
-	if err = tx.QueryRow("SELECT count(*) FROM operations WHERE machine_id=? AND status NOT IN ('succeeded','failed')", id).Scan(&active); err != nil {
+	if err = sourceIdle(tx, id); err != nil {
 		return o, err
 	}
-	if active != 0 {
-		return o, problem(409, "operation_pending", "retry the existing unresolved operation before another mutation")
+	if action == "delete" {
+		if err = machineDependencies(tx, m); err != nil {
+			return o, err
+		}
 	}
 	if m.ObservationStale || m.AcceptedGeneration != m.Generation {
 		return o, problem(409, "reconciliation_required", "host generation differs from controller; reconcile before mutating")
@@ -558,7 +560,11 @@ func (c *Controller) ProcessOne(ctx context.Context, hostID string) error {
 	var m model.Machine
 	found := false
 	for _, w := range candidates {
-		m, err = readMachine(c.db, w.req.MachineID)
+		if w.req.Action == "checkpoint-delete" {
+			m = model.Machine{ID: w.req.MachineID, Host: w.req.Host}
+		} else {
+			m, err = readMachine(c.db, w.req.MachineID)
+		}
 		if err != nil {
 			break
 		}
@@ -595,11 +601,18 @@ func (c *Controller) ProcessOne(ctx context.Context, hostID string) error {
 		} else if resp.Status != "succeeded" && resp.Status != "failed" && resp.Status != "unresolved" {
 			err = errors.New("invalid operation status")
 		} else if resp.Status == "succeeded" {
-			err = validateObservation(req.MachineID, resp.Observation)
-			if err == nil && resp.Observation.Generation != op.Generation {
+			if req.Action == "checkpoint-delete" {
+				err = validateCheckpointResponse(req, resp)
+			} else {
+				err = validateObservation(req.MachineID, resp.Observation)
+			}
+			if err == nil && req.Action != "checkpoint-delete" && resp.Observation.Generation != op.Generation {
 				err = errors.New("host returned wrong generation")
 			}
 		}
+	}
+	if err == nil && req.Action == "checkpoint-create" && resp.Status == "succeeded" {
+		err = validateCheckpointResponse(req, resp)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -608,7 +621,9 @@ func (c *Controller) ProcessOne(ctx context.Context, hostID string) error {
 		return txErr
 	}
 	defer tx.Rollback()
-	m, txErr = readMachine(tx, op.MachineID)
+	if req.Action != "checkpoint-delete" {
+		m, txErr = readMachine(tx, op.MachineID)
+	}
 	if txErr != nil {
 		return txErr
 	}
@@ -637,7 +652,23 @@ func (c *Controller) ProcessOne(ctx context.Context, hostID string) error {
 	if op.Status == "failed" && m.State == model.Stopped && !m.ObservationStale {
 		m.DesiredState = model.Stopped
 	}
-	if txErr = saveMachine(tx, m); txErr == nil {
+	if req.Checkpoint != nil && (req.Action == "checkpoint-create" || req.Action == "checkpoint-delete") {
+		cp := *req.Checkpoint
+		if op.Status == "succeeded" {
+			cp = *resp.Checkpoint
+		} else if req.Action == "checkpoint-create" {
+			cp.Status = op.Status
+		} else if op.Status == "failed" {
+			cp.Status = "published"
+		} else {
+			cp.Status = "deleting"
+		}
+		txErr = saveCheckpoint(tx, cp)
+	}
+	if txErr == nil && req.Action != "checkpoint-delete" {
+		txErr = saveMachine(tx, m)
+	}
+	if txErr == nil {
 		txErr = saveOperation(tx, op, next)
 	}
 	if txErr == nil {

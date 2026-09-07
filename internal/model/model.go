@@ -38,6 +38,18 @@ func Hash(v any) string {
 
 var Capabilities = []string{"create", "start", "stop", "delete", "ssh"}
 
+func RuntimeCapabilities(runtime, arch string) []string {
+	out := append([]string{}, Capabilities...)
+	out = append(out, "checkpoint", "restore")
+	if runtime == "smolvm" {
+		if arch == "amd64" {
+			return append(out, "fork", "live-fork", "ram-checkpoint")
+		}
+		return append(out, "ram-checkpoint")
+	}
+	return append(out, "fork", "disk-branch", "disk-checkpoint")
+}
+
 type Profile struct {
 	ID           string   `json:"id"`
 	OS           string   `json:"os"`
@@ -68,11 +80,18 @@ func (p *Profile) Validate() error {
 		return errors.New("invalid disk sizes")
 	}
 	// Capabilities describe implementation support, not a configurable allowlist.
-	if len(p.Capabilities) > 0 && !slices.Equal(p.Capabilities, Capabilities) {
+	if len(p.Capabilities) > 0 && !slices.Equal(p.Capabilities, Capabilities) && !slices.Equal(p.Capabilities, RuntimeCapabilities(p.Runtime, p.Arch)) {
 		return errors.New("capabilities are derived from runtime support; omit them from profile configuration")
 	}
-	p.Capabilities = slices.Clone(Capabilities)
+	p.Capabilities = RuntimeCapabilities(p.Runtime, p.Arch)
 	return nil
+}
+
+// SameProfile excludes derived discovery fields from the durable configuration pin.
+func SameProfile(a, b Profile) bool {
+	a.Capabilities = nil
+	b.Capabilities = nil
+	return Hash(a) == Hash(b)
 }
 
 type Host struct {
@@ -137,10 +156,13 @@ const (
 )
 
 type Machine struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Profile string `json:"profile"`
-	Host    string `json:"host"`
+	SourceMachineID string `json:"source_machine_id,omitempty"`
+	CheckpointID    string `json:"checkpoint_id,omitempty"`
+	StoreID         string `json:"store_id,omitempty"`
+	ID              string `json:"id"`
+	Name            string `json:"name"`
+	Profile         string `json:"profile"`
+	Host            string `json:"host"`
 	// ProfileSpec pins the configured version for durable capacity and dispatch.
 	ProfileSpec        Profile    `json:"profile_spec"`
 	State              State      `json:"state"`
@@ -205,28 +227,60 @@ func ValidateKeys(keys []string) ([]string, error) {
 	return out, nil
 }
 
+type ChildInput struct {
+	Name          string   `json:"name"`
+	SSHPublicKeys []string `json:"ssh_public_keys"`
+}
+
+func (in *ChildInput) Validate() error {
+	if !ValidName(in.Name) {
+		return errors.New("valid child name required")
+	}
+	keys, err := ValidateKeys(in.SSHPublicKeys)
+	in.SSHPublicKeys = keys
+	return err
+}
+
+// Checkpoint describes an owned artifact. Paths are private helper inventory.
+type Checkpoint struct {
+	ID               string    `json:"id"`
+	Kind             string    `json:"kind"`
+	SourceMachineID  string    `json:"source_machine_id"`
+	SourceGeneration int64     `json:"source_generation"`
+	Host             string    `json:"host"`
+	Profile          Profile   `json:"profile"`
+	CreatedAt        time.Time `json:"created_at"`
+	Status           string    `json:"status"` // pending, published, unresolved, failed, deleting, deleted
+	RuntimePin       string    `json:"runtime_pin,omitempty"`
+}
+
 type Operation struct {
-	ID         string    `json:"id"`
-	MachineID  string    `json:"machine_id"`
-	Action     string    `json:"action"`
-	Generation int64     `json:"generation"`
-	Status     string    `json:"status"` // pending, running, unresolved, succeeded, failed
-	Error      string    `json:"error,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	CheckpointID string    `json:"checkpoint_id,omitempty"`
+	ID           string    `json:"id"`
+	MachineID    string    `json:"machine_id"`
+	Action       string    `json:"action"`
+	Generation   int64     `json:"generation"`
+	Status       string    `json:"status"` // pending, running, unresolved, succeeded, failed
+	Error        string    `json:"error,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (o Operation) Done() bool { return o.Status == "succeeded" || o.Status == "failed" }
 
 // Request is private host control. Profile is checked against host configuration.
 type Request struct {
-	Action        string   `json:"action"`
-	OperationID   string   `json:"operation_id,omitempty"`
-	MachineID     string   `json:"machine_id"`
-	Generation    int64    `json:"generation,omitempty"`
-	Name          string   `json:"name,omitempty"`
-	Profile       Profile  `json:"profile,omitempty"`
-	SSHPublicKeys []string `json:"ssh_public_keys,omitempty"`
+	Host             string      `json:"host,omitempty"`
+	SourceMachineID  string      `json:"source_machine_id,omitempty"`
+	SourceGeneration int64       `json:"source_generation,omitempty"`
+	Checkpoint       *Checkpoint `json:"checkpoint,omitempty"`
+	Action           string      `json:"action"`
+	OperationID      string      `json:"operation_id,omitempty"`
+	MachineID        string      `json:"machine_id"`
+	Generation       int64       `json:"generation,omitempty"`
+	Name             string      `json:"name,omitempty"`
+	Profile          Profile     `json:"profile,omitempty"`
+	SSHPublicKeys    []string    `json:"ssh_public_keys,omitempty"`
 }
 type Observation struct {
 	MachineID  string    `json:"machine_id"`
@@ -240,6 +294,7 @@ type Observation struct {
 	ObservedAt time.Time `json:"observed_at"`
 }
 type Response struct {
+	Checkpoint  *Checkpoint  `json:"checkpoint,omitempty"`
 	OperationID string       `json:"operation_id,omitempty"`
 	Status      string       `json:"status"`
 	Error       string       `json:"error,omitempty"`

@@ -3,6 +3,7 @@ package model
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"slices"
 	"strings"
 	"testing"
 
@@ -48,5 +49,39 @@ func TestProfilesAndNames(t *testing.T) {
 		if !ValidID(NewID()) {
 			t.Fatal("invalid generated ID")
 		}
+	}
+}
+
+func TestCheckpointCapabilitiesAndLegacyProfilePin(t *testing.T) {
+	p := Profile{ID: "linux", Runtime: "smolvm", OS: "linux", Arch: "amd64", CPU: 2, RAMMiB: 2048, ImagePath: "/opt/rootfs"}
+	legacy := p
+	legacy.Capabilities = append([]string{}, Capabilities...)
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !SameProfile(legacy, p) {
+		t.Fatal("new discovery capability invalidated retained profile pin")
+	}
+	if !slices.Contains(p.Capabilities, "live-fork") || !slices.Contains(p.Capabilities, "ram-checkpoint") || slices.Contains(p.Capabilities, "disk-checkpoint") {
+		t.Fatal("wrong Linux capability", p.Capabilities)
+	}
+	p.Runtime = "tart"
+	p.OS = "macos"
+	p.Arch = "arm64"
+	p.Capabilities = nil
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(p.Capabilities, "live-fork") || slices.Contains(p.Capabilities, "ram-checkpoint") || !slices.Contains(p.Capabilities, "disk-checkpoint") {
+		t.Fatal("Mac emulates RAM", p.Capabilities)
+	}
+	p.Runtime = "smolvm"
+	p.OS = "linux"
+	p.Capabilities = nil
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if slices.Contains(p.Capabilities, "live-fork") || slices.Contains(p.Capabilities, "fork") {
+		t.Fatal("arm64 branch freezes source; cannot advertise concurrent fork")
 	}
 }

@@ -64,6 +64,8 @@ func requestKey(s string) (string, error) {
 const Usage = `usage: clankerbox [--config PATH] COMMAND
   profiles | hosts | machines | inspect NAME/ID | operation ID
   create --name NAME --profile PROFILE --host HOST --key PUBLIC_KEY_FILE [--idempotency-key KEY]
+  fork|restore --name CHILD --key PUBLIC_KEY_FILE [--idempotency-key KEY] SOURCE/CHECKPOINT_ID
+  checkpoint create SOURCE | checkpoint list | checkpoint inspect ID | checkpoint delete ID
   start|stop|delete [--idempotency-key KEY] NAME/ID
   ssh NAME/ID [command...] | proxy IMMUTABLE_ID | ssh-config install
   connect [--forward 127.0.0.1:PORT|[::1]:PORT] NAME/ID
@@ -150,6 +152,8 @@ func Run(ctx context.Context, args []string, streams Streams) error {
 			return e
 		}
 		return mutate(ctx, a, "/v1/machines", in, id, streams.Out)
+	case "fork", "restore", "checkpoint":
+		return deriveCLI(ctx, a, command, args, streams)
 	case "start", "stop", "delete":
 		f := flags(command, streams.Err)
 		idem := f.String("idempotency-key", "", "retry key")

@@ -340,3 +340,123 @@ to bypass it. Its runtime is observed running but guest SSH is unhealthy. It has
 only synthetic test data, not agent credentials. The temporary local controller
 and its journal remain available for investigating that failed fixture. No
 unrelated VM, session or user data was removed.
+
+## September 7: pragmatic milestone 4 and reconnect acceptance
+
+The owner approved finishing useful lifecycle/connection gaps and milestone 4
+without strict first-instruction network quarantine, generalized credential
+rotation, backup hooks or automatic recovery of ambiguous capture/restore stages.
+Such operations stay visible and require inspection; they are not blindly replayed.
+Herdr remains an external application, not a product dependency.
+
+The API and CLI now provide `fork`, `checkpoint create/list/inspect/delete` and
+`restore`. Forks and restores allocate separate machine identities, retained disks
+and SSH host keys. Connections are published only after guest preparation and a
+verified SSH handshake. Inherited applications may contact external services before
+that boundary, and replacing SSH keys does not sanitize captured RAM secrets.
+Checkpoints stay on the same host and pinned runtime/profile; there is no promise
+of migration to a different CPU/runtime or a silent cold-boot substitute.
+
+Linux live descendants share their native runtime store while owning separate
+machine records and disks. Ancestor deletion is conservatively refused while a
+descendant depends on that store; no cascading deletion or reference-graph garbage
+collector was added. Mac branches and checkpoints require a stopped source and
+use Tart's retained disk clones, not RAM continuation.
+
+```sh
+clankerbox --config CONFIG fork --name experiment --key PUBLIC_KEY_FILE SOURCE
+clankerbox --config CONFIG checkpoint create SOURCE
+clankerbox --config CONFIG checkpoint list
+clankerbox --config CONFIG checkpoint inspect CHECKPOINT_ID
+clankerbox --config CONFIG restore --name recovered --key PUBLIC_KEY_FILE CHECKPOINT_ID
+clankerbox --config CONFIG checkpoint delete CHECKPOINT_ID
+```
+
+Poll the returned operation before depending on a mutation's result. Checkpoint
+commands address immutable checkpoint IDs; restore creates a new machine rather
+than overwriting an existing workspace. A pre-upgrade Linux source needs an
+explicit stop/start to enable branchable supervision; capture does not secretly
+restart its workload.
+
+### Executed checks and review
+
+- Controller-restart reconnection passes on Linux and Mac. The CLI keeps its local
+  endpoint reservation, service access becomes unavailable during the outage, and
+  forwarding recovers without changing guest process identity or SSH host keys.
+  Evidence: `.work/linux-controller-reconnect.json` and
+  `.work/mac-controller-reconnect.json`.
+- Mac fork, independent disk writes, stable child identity across cold restart,
+  checkpoint capture, source deletion, two distinct restores, checkpoint deletion
+  and independent retained restarts all pass. Its disposable machines and
+  checkpoint were deleted through the API. Evidence:
+  `.work/mac-live-checkpoints-m4.json`.
+- Linux live branching preserved the synthetic RAM process token/PID and produced
+  independent disks and SSH identity. Parent cold restart exposed a native smolvm
+  status bug: a retained child from an earlier live generation caused a healthy
+  new execution to be reported as frozen. The fork's `src/agent/state_probe.rs`
+  now reuses the existing restart-blocking lineage rule, retaining the legacy
+  frozen guard. Native restart-guard and state-probe tests pass; read-only review
+  found no actionable issue. The patched binary was installed atomically and the
+  existing start operation reconciled successfully without another boot. Source
+  and child retained their separate disk contents. Evidence:
+  `.work/smolvm-state-build.log`, `.work/runtime-state-review.md`,
+  `.work/smolvm-state-install.txt` and `.work/linux-lineage-fix-verification.json`.
+  The complete fork-only harness then passed, including parent restart with a
+  retained descendant and ancestor-deletion refusal; its disposable source and
+  child were deleted through the API. Evidence: `.work/linux-live-fork-m4-fixed.json`.
+- Product race tests and vet pass, as do the separate historical spike suites.
+  Deslop/ponytail review findings were validated and fixed: a rejected capture now
+  settles its generation instead of stranding the source; a redundant SQL query
+  and membership helper were removed. Follow-up review found no actionable issue.
+  A separate reconnect-fixture finding was also fixed: outage verification checks
+  TCP reachability, rather than mistaking TCP TIME_WAIT for a retained listener.
+
+### Resolved infrastructure prerequisites and remaining limits
+
+Linux portable-checkpoint acceptance initially failed its prerequisite: native
+capture rejects custom DNS, and the default resolver at `1.1.1.1:53/UDP` was
+unreachable from this host. The owner updated the provider firewall; UDP DNS now
+returns NOERROR. The custom `dns` field was removed from the canonical Linux helper
+config in personal-cloud and deployed atomically with the previous file retained.
+Only new machines use the default; existing native DNS settings were not rewritten.
+A fresh disposable passed retained lifecycle and certificate-verified guest HTTPS
+to GitHub (200): `.work/linux-portable-lifecycle.json` and
+`.work/linux-portable-dns-https.txt`. No networking rewrite or runtime workaround
+was needed. The config review found no actionable issue.
+
+The full Linux fork/checkpoint/restore harness then passed over private HTTPS:
+live RAM process continuity, independent child disk/SSH identity, parent restart
+with a retained descendant, ancestor-deletion refusal, portable capture, source
+deletion, and two independent restores preserving the captured process token/PID
+and disk state. After independent writes, both restores survived checkpoint
+deletion and retained cold restart. All of this run's machines and its checkpoint
+were deleted through the API. Evidence: `.work/linux-live-checkpoints-m4.json`.
+
+This remains synthetic acceptance; a current real-agent portable-profile run,
+host reboot/power-loss, pressure, long retention and operational backup integration
+are not certified by it.
+
+During acceptance, private HTTPS ingress began returning “edge ingress has no
+route for this host.” The controller itself remains reachable by authorized SSH;
+an authenticated local relay allowed independent runtime acceptance to continue.
+After owner approval, the live Caddyfile was compared with the canonical config:
+the only difference was the missing Clankerbox admin-only route and deny handler.
+The existing validating deployment script installed that config and gracefully
+reloaded Caddy, retaining its prior-file rollback. Authenticated profile listing
+now succeeds over private HTTPS; missing API credentials return 401 and a
+non-admin ingress source returns 403. Both Caddy config variants validate.
+Evidence: `.work/Caddyfile.live-before`, `.work/ingress-restored-profiles.json`
+and `.work/ingress-restored-check.txt`. No unrelated routes or host firewall
+rules were changed.
+
+The pre-fix DNS recheck observed an outgoing UDP query on the host's physical interface
+and no reply; TCP DNS to Cloudflare and UDP DNS to Hetzner both worked. Host nftables
+does not block this destination. That is consistent with the provider's stateless
+firewall, but its live rules could not be inspected without Robot access.
+The owner's existing reply rule required TCP ACK and did not cover UDP. The
+additional incoming IPv4 rule accepts UDP from `1.1.1.1/32`, source port 53,
+to `203.0.113.10/32`; the requested range was `32768-60999` (the observed host
+ephemeral range), with the owner's existing `32768-65535` range also acceptable.
+If egress is filtered, outgoing UDP to `1.1.1.1:53` must also be permitted.
+Evidence: `.work/dns-provider-recheck.txt`; see
+[Hetzner's stateless firewall documentation](https://docs.hetzner.com/robot/dedicated-server/firewall).

@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -15,9 +16,12 @@ def main():
     parser.add_argument('--binary', required=True)
     parser.add_argument('--config', required=True)
     parser.add_argument('--lifecycle-result', required=True)
+    parser.add_argument('--restart-controller', metavar='SSH_TARGET',
+                        help='explicitly stop/start the dedicated controller service to test reconnect')
     args = parser.parse_args()
     evidence = json.loads(Path(args.lifecycle_result).read_text())
-    assert evidence['name'].startswith('accept-') and evidence['status'] == 'passed'
+    if not evidence['name'].startswith('accept-') or evidence['status'] != 'passed':
+        raise ValueError('a passed disposable lifecycle report is required')
     machine = evidence['machine_id']
     base = [str(Path(args.binary).resolve()), '--config', str(Path(args.config).resolve())]
 
@@ -67,8 +71,35 @@ done
         assert mapping(False) == address
         run('ssh', machine, 'sh -se', data=start)
         assert mapping(True) == address
+        if args.restart_controller:
+            process = 'ps -p "$(cat ' + directory + '/server.pid)" -o pid= -o lstart='
+            before = run('ssh', machine, process)
+            identity = json.loads(run('inspect', machine))['ssh_host_key']
+            controller = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+                          args.restart_controller, 'sudo', '-n', 'systemctl']
+            try:
+                subprocess.run(controller + ['stop', 'clankerbox'], check=True, timeout=45)
+                if mapping(False) != address:
+                    raise RuntimeError('outage changed the reserved local endpoint')
+                host, port = address.rsplit(':', 1)
+                # A failed bind alone could just be TIME_WAIT after listener
+                # closure. A successful TCP handshake proves it still listens.
+                with socket.create_connection((host, int(port)), timeout=5):
+                    pass
+            finally:
+                subprocess.run(controller + ['start', 'clankerbox'], check=True, timeout=45)
+            if mapping(True) != address:
+                raise RuntimeError('reconnect changed the local endpoint')
+            if run('ssh', machine, process) != before:
+                raise RuntimeError('guest server process changed during controller outage')
+            if json.loads(run('inspect', machine))['ssh_host_key'] != identity:
+                raise RuntimeError('SSH identity changed during controller outage')
+            with opener.open('http://' + address, timeout=10) as response:
+                if response.read() != b'connection-ok':
+                    raise RuntimeError('forwarded HTTP did not recover')
         print(json.dumps({'machine_id': machine, 'http': True, 'url_preserved': True,
-                          'independent_consumers': True, 'stable_listener_churn': True}))
+                          'independent_consumers': True, 'stable_listener_churn': True,
+                          'controller_reconnect': bool(args.restart_controller)}))
     except Exception:
         # Keep guest startup errors visible before removing the disposable files.
         try:

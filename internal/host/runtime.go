@@ -64,7 +64,7 @@ type NativeRuntime struct {
 }
 
 func (n *NativeRuntime) env(m Manifest) []string {
-	dir := machineDir(n.Config, m)
+	dir := storeDir(n.Config, m)
 	e := []string{"PATH=/usr/local/libexec/clankerbox:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C", "NO_COLOR=1"}
 	if m.Profile.Runtime == "tart" {
 		return append(e, "HOME="+n.Config.Root, "TART_HOME="+filepath.Join(n.Config.Root, "tart"), "TART_NO_AUTO_PRUNE=1")
@@ -98,7 +98,7 @@ func (n *NativeRuntime) Inspect(ctx context.Context, m Manifest) (RuntimeState, 
 		return RuntimeState{}, errors.New("invalid owned runtime name")
 	}
 	if m.Profile.Runtime == "smolvm" {
-		path := filepath.Join(machineDir(n.Config, m), "d", "smolvm", "server", "smolvm.db")
+		path := filepath.Join(storeDir(n.Config, m), "d", "smolvm", "server", "smolvm.db")
 		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 			return RuntimeState{State: model.Unknown}, nil
 		} else if err != nil {
@@ -238,7 +238,12 @@ func (n *NativeRuntime) jobContents(m Manifest) []byte {
 	for _, value := range env {
 		b.WriteString("Environment=\"" + value + "\"\n")
 	}
-	b.WriteString("ExecStart=" + n.Config.SmolvmPath + " machine start --name " + m.RuntimeName() + "\n")
+	b.WriteString("ExecStart=" + n.Config.SmolvmPath + " machine start --name " + m.RuntimeName() + " --branchable\n")
+	if m.PendingRAM {
+		for _, path := range n.pendingRAMFiles(m) {
+			b.WriteString("ExecStartPre=/usr/bin/test -s " + path + "\n")
+		}
+	}
 	return []byte(b.String())
 }
 func (n *NativeRuntime) Configure(ctx context.Context, m Manifest) error {
@@ -265,6 +270,9 @@ func (n *NativeRuntime) Start(ctx context.Context, m Manifest) error {
 			return err
 		}
 	} else {
+		if err := atomicWrite(n.job(m), n.jobContents(m), 0600); err != nil {
+			return err
+		}
 		if _, err := n.supervisor(ctx, m, "link", n.job(m)); err != nil {
 			return err
 		}
@@ -326,6 +334,11 @@ func (n *NativeRuntime) guest(ctx context.Context, m Manifest, script string) ([
 	if m.Profile.Runtime == "tart" {
 		path = n.Config.TartPath
 		args = []string{"exec", "-i", m.RuntimeName(), "/bin/bash", "-se"}
+		return n.Runner.Run(ctx, path, args, n.env(m), []byte(script))
+	}
+	if m.SourceMachineID != "" {
+		// Child bootstrap contains a private host key; keep it out of process argv.
+		args = []string{"machine", "exec", "--name", m.RuntimeName(), "-i", "--", "/bin/sh", "-se"}
 		return n.Runner.Run(ctx, path, args, n.env(m), []byte(script))
 	}
 	args = []string{"machine", "exec", "--name", m.RuntimeName(), "--", "/bin/sh", "-se", "-c", script}

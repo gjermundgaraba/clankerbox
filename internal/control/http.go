@@ -112,6 +112,42 @@ func (c *Controller) Handler(token []byte) (http.Handler, error) {
 			operationReply(w, o, err)
 		})
 	}
+
+	mux.HandleFunc("GET /v1/checkpoints", func(w http.ResponseWriter, r *http.Request) {
+		cp, err := c.Checkpoints()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, 200, cp)
+	})
+	mux.HandleFunc("GET /v1/checkpoints/{id}", func(w http.ResponseWriter, r *http.Request) {
+		cp, err := c.Checkpoint(r.PathValue("id"))
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, 200, cp)
+	})
+	for route, action := range map[string]string{"POST /v1/machines/{id}/fork": "fork", "POST /v1/machines/{id}/checkpoint": "checkpoint-create", "POST /v1/checkpoints/{id}/restore": "restore", "POST /v1/checkpoints/{id}/delete": "checkpoint-delete"} {
+		mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
+			var in model.ChildInput
+			child := action == "fork" || action == "restore"
+			var err error
+			if child {
+				err = decode(w, r, &in, false)
+			} else {
+				var empty struct{}
+				err = decode(w, r, &empty, true)
+			}
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			o, err := c.Derive(r.Context(), action, r.PathValue("id"), r.Header.Get("Idempotency-Key"), in)
+			operationReply(w, o, err)
+		})
+	}
 	mux.HandleFunc("GET /v1/machines/{id}/ssh", c.stream)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")

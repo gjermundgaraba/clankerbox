@@ -93,16 +93,22 @@ func (c *Config) Validate() error {
 }
 
 type Manifest struct {
-	ID         string        `json:"id"`
-	Name       string        `json:"name"`
-	Profile    model.Profile `json:"profile"`
-	Generation int64         `json:"generation"`
-	Prepared   bool          `json:"prepared"`
-	Deleted    bool          `json:"deleted"`
-	SSHUser    string        `json:"ssh_user,omitempty"`
-	SSHHostKey string        `json:"ssh_host_key,omitempty"`
-	Endpoint   string        `json:"endpoint,omitempty"`
-	Port       int           `json:"port,omitempty"`
+	PendingRAM      bool          `json:"-"`
+	StoreID         string        `json:"store_id,omitempty"`
+	SourceMachineID string        `json:"source_machine_id,omitempty"`
+	CheckpointID    string        `json:"checkpoint_id,omitempty"`
+	Branchable      bool          `json:"branchable,omitempty"`
+	SSHPrivateKey   string        `json:"ssh_private_key,omitempty"`
+	ID              string        `json:"id"`
+	Name            string        `json:"name"`
+	Profile         model.Profile `json:"profile"`
+	Generation      int64         `json:"generation"`
+	Prepared        bool          `json:"prepared"`
+	Deleted         bool          `json:"deleted"`
+	SSHUser         string        `json:"ssh_user,omitempty"`
+	SSHHostKey      string        `json:"ssh_host_key,omitempty"`
+	Endpoint        string        `json:"endpoint,omitempty"`
+	Port            int           `json:"port,omitempty"`
 }
 
 func (m Manifest) RuntimeName() string { return "cb-" + m.ID }
@@ -122,9 +128,10 @@ type Runtime interface {
 	Delete(context.Context, Manifest) error
 }
 type accepted struct {
-	Request  model.Request  `json:"request"`
-	Phase    string         `json:"phase"`
-	Response model.Response `json:"response"`
+	Checkpoint *ownedCheckpoint `json:"checkpoint,omitempty"`
+	Request    model.Request    `json:"request"`
+	Phase      string           `json:"phase"`
+	Response   model.Response   `json:"response"`
 }
 type Helper struct {
 	cfg     Config
@@ -181,7 +188,7 @@ func Open(cfg Config, rt Runtime) (*Helper, error) {
 	if err = os.Chmod(cfg.Root, 0700); err != nil {
 		return nil, err
 	}
-	for _, d := range []string{"machines", "jobs", "tart"} {
+	for _, d := range []string{"machines", "jobs", "tart", "checkpoints"} {
 		if err = os.MkdirAll(filepath.Join(cfg.Root, d), 0700); err != nil {
 			return nil, err
 		}
@@ -198,6 +205,7 @@ func Open(cfg Config, rt Runtime) (*Helper, error) {
 	}
 	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000;
+ CREATE TABLE IF NOT EXISTS checkpoints(id TEXT PRIMARY KEY, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS machines(id TEXT PRIMARY KEY, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, machine_id TEXT NOT NULL, generation INTEGER NOT NULL, body BLOB NOT NULL, UNIQUE(machine_id,generation));`)
 	if err != nil {
@@ -257,9 +265,15 @@ func (h *Helper) save(m Manifest, a accepted) error {
 	defer tx.Rollback()
 	mb, _ := json.Marshal(m)
 	ab, _ := json.Marshal(a)
-	_, err = tx.Exec("INSERT INTO machines(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body", m.ID, mb)
+	if a.Request.Action != "checkpoint-delete" {
+		_, err = tx.Exec("INSERT INTO machines(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body", m.ID, mb)
+	}
+	if err == nil && a.Checkpoint != nil {
+		b, _ := json.Marshal(a.Checkpoint)
+		_, err = tx.Exec("INSERT INTO checkpoints(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body", a.Checkpoint.ID, b)
+	}
 	if err == nil {
-		_, err = tx.Exec("INSERT INTO operations(id,fingerprint,machine_id,generation,body) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body", a.Request.OperationID, model.Hash(a.Request), m.ID, a.Request.Generation, ab)
+		_, err = tx.Exec("INSERT INTO operations(id,fingerprint,machine_id,generation,body) VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body", a.Request.OperationID, model.Hash(a.Request), a.Request.MachineID, a.Request.Generation, ab)
 	}
 	if err == nil {
 		err = tx.Commit()
@@ -269,7 +283,7 @@ func (h *Helper) save(m Manifest, a accepted) error {
 func (h *Helper) profile(p model.Profile) bool {
 	for _, local := range h.cfg.Profiles {
 		if local.ID == p.ID {
-			return model.Hash(local) == model.Hash(p)
+			return model.SameProfile(local, p)
 		}
 	}
 	return false
@@ -328,6 +342,11 @@ func (h *Helper) observation(ctx context.Context, m Manifest) (*model.Observatio
 	if state.Endpoint != "" {
 		obs.Endpoint = state.Endpoint
 	}
+	if !m.Prepared {
+		obs.Endpoint = ""
+		obs.SSHUser = ""
+		obs.SSHHostKey = ""
+	}
 	return obs, nil
 }
 func (h *Helper) Inspect(ctx context.Context, id string) model.Response {
@@ -358,7 +377,7 @@ func (h *Helper) Execute(ctx context.Context, req model.Request) model.Response 
 		return failure(req, errors.New("invalid operation identity"))
 	}
 	switch req.Action {
-	case "create", "start", "stop", "delete":
+	case "create", "start", "stop", "delete", "fork", "restore", "checkpoint-create", "checkpoint-delete":
 	default:
 		return failure(req, errors.New("unsupported action"))
 	}
@@ -390,8 +409,19 @@ func (h *Helper) Execute(ctx context.Context, req model.Request) model.Response 
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return failure(req, err)
 	}
+	if req.Action == "fork" || req.Action == "restore" || req.Action == "checkpoint-create" || req.Action == "checkpoint-delete" {
+		return h.executeDerived(ctx, req, a, len(raw) != 0)
+	}
 	m, merr := h.manifest(req.MachineID)
 	if len(raw) == 0 {
+		if err = h.resourceIdle(req.MachineID, false); err != nil {
+			return failure(req, err)
+		}
+		if req.Action == "delete" && merr == nil {
+			if err = h.machineDependencies(m); err != nil {
+				return failure(req, err)
+			}
+		}
 		if !model.ValidName(req.Name) || !h.profile(req.Profile) {
 			return failure(req, errors.New("unknown or changed pinned profile/name"))
 		}
@@ -423,7 +453,7 @@ func (h *Helper) Execute(ctx context.Context, req model.Request) model.Response 
 			if m.Generation+1 != req.Generation {
 				return failure(req, errors.New("generation conflict; controller reconciliation required"))
 			}
-			if m.Name != req.Name || model.Hash(m.Profile) != model.Hash(req.Profile) {
+			if m.Name != req.Name || !model.SameProfile(m.Profile, req.Profile) {
 				return failure(req, errors.New("immutable machine identity conflict"))
 			}
 			var last []byte
@@ -532,6 +562,7 @@ func (h *Helper) reconcile(ctx context.Context, m Manifest, a accepted) model.Re
 				return unresolved(err)
 			}
 			m.Prepared = true
+			m.Branchable = m.Profile.Runtime == "smolvm"
 			if err = persist("prepared"); err != nil {
 				return unresolved(err)
 			}
@@ -560,6 +591,7 @@ func (h *Helper) reconcile(ctx context.Context, m Manifest, a accepted) model.Re
 			if !state.Exists || state.State != model.Running {
 				return unresolved(errors.New("start is ambiguous; refusing another cold boot"))
 			}
+			m.Branchable = m.Profile.Runtime == "smolvm"
 			// Reinstall no identity: verify the retained key and restart sshd through trusted exec.
 			user, key, endpoint, e := h.runtime.Prepare(ctx, m, nil)
 			if e != nil {

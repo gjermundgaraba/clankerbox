@@ -4,13 +4,20 @@ API-first coding machines with retained workspaces, concurrent Linux RAM forks,
 and explicit recovery points. Applications use generic SSH and TCP connections;
 Clankerbox does not bundle or manage applications, agents, panes or sessions.
 
-Status as of **2026-09-06**: the Go/SQLite controller, host helpers and connection
+Status as of **2026-09-07**: the Go/SQLite controller, host helpers and connection
 CLI are implemented, with a private controller deployed for acceptance. Linux
 retained lifecycle, SSH/SCP and automatic forwarding have
 passed live checks; lifecycle and forwarding also pass through the deployed
 private control path. macOS retained lifecycle and forwarding now pass with
 Tart 2.36 / Softnet 0.23 and the macOS 26.6.2 / Xcode 26.6 profile. Native VNC
 desktop interaction and local URL mapping have also passed.
+Fork/checkpoint/restore APIs are implemented. Mac stopped-disk branching and two
+independent checkpoint restores, and Linux live forks with independent retained
+disks and SSH identities, pass live acceptance. Linux portable checkpoints also
+pass two independent RAM-continuing restores after source deletion, followed by
+checkpoint deletion and retained cold restarts. These are synthetic workload checks,
+not a new real-agent or host-reboot qualification.
+Controller-restart reconnection passes on both platforms without restarting guests.
 This is **not yet a completed release or production-qualified
 service**. See the [implementation execution record](docs/implementation-execution.md)
 for current evidence and remaining acceptance work; the spike reports below
@@ -155,9 +162,12 @@ for p95s, populated/dirty workloads, pins and pause-measurement limitations.
    snapshots are secret-bearing even if file backups exclude credential files.
 
 Retained lifecycle and connection live acceptance now pass on both platforms.
-Fork/checkpoint/restore APIs and operational failure acceptance remain unfinished.
-Networked fork preparation is deferred to the fork
-milestone, not a prerequisite for these steps.
+Fork/checkpoint/restore APIs are implemented, with the platform-specific acceptance
+limits recorded above and in the execution record. Broader operational failure
+acceptance remains unfinished. Fork preparation replaces SSH identity and gates
+published access, not the child's first network traffic or inherited application
+credentials; strict network quarantine and automatic ambiguous-operation recovery
+are deliberately deferred.
 
 ## Verification, cleanup and reproduction
 

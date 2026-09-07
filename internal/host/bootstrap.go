@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
+
+	"golang.org/x/crypto/ssh"
 	"strings"
 	"time"
 
@@ -70,12 +73,30 @@ PidFile /var/run/clankerbox-sshd.pid
 		// sshd's required ownership inside the guest, before validating config.
 		s.WriteString("mkdir -p /run/sshd\nchown 0:0 /run/sshd /root /etc/ssh\nchmod 0755 /run/sshd\n")
 	}
+	if create && m.SourceMachineID != "" {
+		if !model.ValidID(m.SourceMachineID) || m.SSHPrivateKey == "" {
+			return "", errors.New("persisted child identity required")
+		}
+		signer, err := ssh.ParsePrivateKey([]byte(m.SSHPrivateKey))
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) != m.SSHHostKey {
+			return "", errors.New("persisted child SSH identity mismatch")
+		}
+		private := base64.StdEncoding.EncodeToString([]byte(m.SSHPrivateKey))
+		s.WriteString("owner=$(cat /etc/clankerbox/owner)\ncase \"$owner\" in '" + m.SourceMachineID + "'|'" + m.ID + "') ;; *) exit 1 ;; esac\n")
+		s.WriteString("printf '%s' '" + private + "' | " + decode + " > /etc/clankerbox/ssh_host_ed25519_key\nchmod 600 /etc/clankerbox/ssh_host_ed25519_key\nprintf '%s\\n' '" + m.ID + "' > /etc/clankerbox/owner\nrm -f /etc/clankerbox/prepared\nsync\n")
+	}
 	if create {
 		s.WriteString("if [ ! -e /etc/clankerbox/owner ]; then\n  test ! -e /etc/clankerbox\n  mkdir -m 700 /etc/clankerbox\n  printf '%s\\n' '" + m.ID + "' > /etc/clankerbox/owner\n  sync\nfi\n")
 	}
 	s.WriteString("test \"$(cat /etc/clankerbox/owner)\" = '" + m.ID + "'\n")
 	if create {
-		s.WriteString("if [ ! -e /etc/clankerbox/ssh_host_ed25519_key ]; then\n  /usr/bin/ssh-keygen -q -t ed25519 -N '' -f /etc/clankerbox/ssh_host_ed25519_key\n  sync\nfi\n/usr/bin/ssh-keygen -y -f /etc/clankerbox/ssh_host_ed25519_key > /etc/clankerbox/ssh_host_ed25519_key.pub\n")
+		if m.SourceMachineID == "" {
+			s.WriteString("if [ ! -e /etc/clankerbox/ssh_host_ed25519_key ]; then\n  /usr/bin/ssh-keygen -q -t ed25519 -N '' -f /etc/clankerbox/ssh_host_ed25519_key\n  sync\nfi\n")
+		}
+		s.WriteString("/usr/bin/ssh-keygen -y -f /etc/clankerbox/ssh_host_ed25519_key > /etc/clankerbox/ssh_host_ed25519_key.pub\n")
 		s.WriteString("mkdir -p '" + home + "/.ssh'\nchmod 700 '" + home + "/.ssh'\nprintf '%s' '" + keyData + "' | " + decode + " > '" + home + "/.ssh/authorized_keys'\nchmod 600 '" + home + "/.ssh/authorized_keys'\nchown -R '" + user + "' '" + home + "/.ssh'\nprintf '%s' '" + cfgData + "' | " + decode + " > /etc/ssh/sshd_config\nchmod 600 /etc/ssh/sshd_config\n/usr/sbin/sshd -t\nsync\n")
 	} else {
 		s.WriteString("test -s /etc/clankerbox/ssh_host_ed25519_key\ntest -s /etc/clankerbox/prepared\n/usr/sbin/sshd -t\n")
@@ -130,5 +151,40 @@ func (n *NativeRuntime) Prepare(ctx context.Context, m Manifest, keys []string) 
 	if m.Profile.Runtime == "tart" {
 		user = "admin"
 	}
+	if m.SourceMachineID != "" && len(keys) != 0 {
+		if canonical[0] != m.SSHHostKey {
+			return "", "", "", errors.New("fresh host key was not installed")
+		}
+		if err = waitSSHIdentity(call, state.Endpoint, m.SSHHostKey); err != nil {
+			return "", "", "", err
+		}
+	}
 	return user, canonical[0], state.Endpoint, nil
+}
+
+// Readiness follows a handshake with the new daemon key, not merely writing it.
+// No guest login or application process is needed to verify the host identity.
+func waitSSHIdentity(ctx context.Context, endpoint, want string) error {
+	verified := errors.New("host identity verified")
+	for {
+		conn, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", endpoint)
+		if err == nil {
+			conn.SetDeadline(time.Now().Add(3 * time.Second))
+			_, _, _, err = ssh.NewClientConn(conn, endpoint, &ssh.ClientConfig{User: "clankerbox-identity-check", HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+				if strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))) == want {
+					return verified
+				}
+				return errors.New("inherited SSH host key still active")
+			}})
+			conn.Close()
+			if errors.Is(err, verified) {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("fresh SSH identity not ready: %w", ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 }

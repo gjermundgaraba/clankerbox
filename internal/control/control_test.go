@@ -70,7 +70,7 @@ func (t *testTransport) Call(ctx context.Context, h model.Host, r model.Request)
 	obs.Endpoint = "192.168.64.2:22"
 	obs.ObservedAt = time.Now().UTC()
 	switch r.Action {
-	case "create", "start":
+	case "create", "start", "fork", "restore":
 		obs.State = model.Running
 	case "stop":
 		obs.State = model.Stopped
@@ -80,6 +80,15 @@ func (t *testTransport) Call(ctx context.Context, h model.Host, r model.Request)
 	}
 	t.observations[r.MachineID] = obs
 	resp := model.Response{OperationID: r.OperationID, Status: "succeeded", Observation: &obs}
+	if r.Action == "checkpoint-create" || r.Action == "checkpoint-delete" {
+		cp := *r.Checkpoint
+		cp.Status = "published"
+		cp.RuntimePin = "test-runtime"
+		if r.Action == "checkpoint-delete" {
+			cp.Status = "deleted"
+		}
+		resp.Checkpoint = &cp
+	}
 	t.responses[r.OperationID] = resp
 	if t.lost {
 		t.lost = false
