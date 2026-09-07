@@ -1,6 +1,6 @@
 # Clankerbox release-one implementation plan
 
-Updated September 6, 2026 after product and connection-model discussion.
+Updated September 7, 2026 after the owner approved pragmatic fork preparation.
 This is an implementation plan, not a deployed service or a claim that all
 acceptance tests have passed. The [README](../README.md) records spike evidence
 and its limits. The [earlier plan](historical-build-plan.md) is historical.
@@ -41,13 +41,17 @@ directory containing any number of repositories. No separate workspace API,
 detachable volumes, shared writers or cross-OS moves.
 
 Create assigns a new machine identity. Fork/branch assigns a new machine,
-independent writable contents, SSH identity and operational backup ownership,
-with ancestry recorded. User-authorized login public keys may be reused; guest
-host private keys and per-machine infrastructure credentials must not be.
+independent writable contents and SSH identity, with ancestry recorded.
+User-authorized login public keys may be reused; guest SSH host keys are replaced
+before publishing the child's connection target. Generalized credential rotation
+and backup preparation hooks are deferred. Do not provision per-machine backup
+jobs or credentials into forkable guests until independent operational ownership
+is implemented outside the product API.
 Restore creates a new machine, never overwrites an existing disk. Intentional
 branching permits siblings; replacement recovery requires fencing or confirmation
-that the old owner is stopped. It must not silently reuse old credentials or
-retarget existing connections. User-friendly names resolve to immutable IDs;
+that the old owner is stopped. It must not reuse the old SSH identity or retarget
+existing connections. Application credentials can remain in captured state.
+User-friendly names resolve to immutable IDs;
 SSH trust and connection ownership use IDs, not reusable names alone.
 
 Deleting a machine does not implicitly delete descendants or checkpoints.
@@ -205,31 +209,25 @@ trusted identity bootstrap. The supported smolvm `ubuntu-bare-v1` uses its guest
 agent as init: do not inherit the old systemd-in-guest design unexamined. Prove
 the actual agent/tool workload on this profile, including required Docker use.
 
-Fork/restore preparation must establish fail-closed external network quarantine
-before the child's first execution (before boot for Mac branches). Readiness
-gating alone cannot stop inherited workers or connections. Permit only a narrow
-helper bootstrap/control channel while quarantined. Persist the child ID and
-preparation generation before launch; stop inherited infrastructure workers and
-restart mechanisms, terminate inherited SSH sessions/listeners, install fresh
-identity/credentials using non-cloned randomness, and restart required services.
-Reset supported inherited transports and discard blocked traffic, never buffer it
-for release. Persist verified preparation before activating normal networking
-and access for that exact execution. Interrupted/unknown preparation stays
-quarantined; stale acknowledgments cannot activate it.
+Fork/restore preparation persists the child identity before launch, installs fresh
+SSH host keys using host randomness, and publishes a connection target only after
+identity preparation succeeds. Reuse existing operation and manifest handling;
+interrupted or unknown preparation remains unresolved for explicit operator
+inspection, with no published connection target. Do not build automatic repair
+or a separate multi-stage preparation protocol.
 
-Prove the pinned network backend can gate and release traffic without changing
-captured device compatibility. Existing portable recovery tests used networking
-disabled; older real-agent relay gating does not certify this combined profile.
-Test the actual userspace gateway path, including IPv6, rather than assuming a
-bridge firewall covers it. A bounded idempotent operational preparation hook can
-reset backup ownership without introducing a backup subsystem. Investigate the
-smallest reliable sequence against real agents; no generic TCP repair or secret
-broker. RAM/disk checkpoints contain secrets despite file-backup exclusions.
-Protect artifacts as machine-secret material. Cloned application credentials and
-external side effects remain an explicit limitation, not a promise of sanitized
-RAM. Replacing credentials does not prove a root-capable child cannot recover
-ancestor secrets from RAM; stronger isolation would require keeping them outside
-the capture or external authorization. Account for retained disks, checkpoint dependencies and clone growth under
+For this owner-only version, inherited processes may run and contact external
+services before preparation completes. This is an accepted limitation, not a
+claim that readiness gating isolates traffic. No first-instruction network
+quarantine or guarantee against duplicated external effects is promised. Normal
+guest isolation from hosts/private networks remains required. Reconnect transports
+as needed; do not build generic TCP repair, application-specific reset machinery,
+a secret broker or backup hooks.
+
+RAM/disk checkpoints contain secrets despite file-backup exclusions. Protect
+artifacts as machine-secret material. Application credentials and ancestor secrets
+may remain recoverable from captured RAM; SSH key replacement does not sanitize
+it. Account for retained disks, checkpoint dependencies and clone growth under
 resource pressure, not just initial copy-on-write allocation.
 
 ## Deployment and operational backups
@@ -279,10 +277,12 @@ does not purge that history or wait for an integrated final-backup workflow.
    identity/disks and checkpoint restore without original processes. Mac stopped
    disk branches diverge. Test ancestor/checkpoint deletion dependencies,
    incompatible artifacts, interrupted capture and independent connection targets.
-   Delay preparation with inherited backup/network canaries: no child traffic
-   escapes and the parent continues. Interrupt every preparation boundary and
-   deliver stale acknowledgments; children remain quarantined. Restore the same
-   checkpoint twice and verify independent preparation and host keys.
+   Verify interrupted or uncertain preparation does not publish child access and
+   leaves a visible unresolved operation for manual inspection. Restore the same checkpoint twice
+   and verify independent disks, machine IDs and host keys. Early child traffic
+   and inherited application credentials remain documented limitations; strict
+   quarantine, generalized rotation and automatic interrupted-stage recovery are
+   deferred.
 5. **Private deployment and operational protection.** Authorized personal-cloud
    rollout; allowed/denied network paths, operational encrypted file backup/restore
    with dirty work, independent fork backup ownership and controller-DB recovery.
