@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"clankerbox/internal/model"
 	"clankerbox/internal/statefs"
@@ -93,12 +92,10 @@ func (n *NativeRuntime) Fork(ctx context.Context, source, child Manifest) error 
 	}
 	// The branch command's VMM remains in this ordinary systemd unit's cgroup.
 	// Replace only its future ExecStart once branch completion is acknowledged.
-	contents := string(n.jobContents(child))
-	start := "ExecStart=" + n.Config.SmolvmPath + " machine start --name " + child.RuntimeName() + " --branchable"
-	branch := "ExecStart=" + n.Config.SmolvmPath + " machine branch --from " + source.RuntimeName() + " --name " + child.RuntimeName() + " --port " + strconv.Itoa(
+	branch := n.Config.SmolvmPath + " machine branch --from " + source.RuntimeName() + " --name " + child.RuntimeName() + " --port " + strconv.Itoa(
 		child.Port,
 	) + ":22 --branchable"
-	if err = statefs.WritePrivate(n.job(child), []byte(strings.Replace(contents, start, branch, 1))); err != nil {
+	if err = statefs.WritePrivate(n.job(child), n.linuxJobContents(child, branch)); err != nil {
 		return err
 	}
 	for _, args := range [][]string{{"link", n.job(child)}, {"daemon-reload"}, {actionStart, n.label(child) + ".service"}} {

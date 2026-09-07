@@ -267,7 +267,11 @@ func (n *NativeRuntime) jobContents(m Manifest) []byte {
 		)
 		return []byte(b.String())
 	}
-	// start detaches the VMM, but systemd retains its cgroup. No enable/boot target,
+	return n.linuxJobContents(m, n.Config.SmolvmPath+" machine start --name "+m.RuntimeName()+" --branchable")
+}
+
+func (n *NativeRuntime) linuxJobContents(m Manifest, command string) []byte {
+	// The command detaches the VMM, but systemd retains its cgroup. No enable/boot target,
 	// no restart policy, and no timeout that could force-kill retained guests.
 	var b strings.Builder
 	b.WriteString(
@@ -278,7 +282,7 @@ func (n *NativeRuntime) jobContents(m Manifest) []byte {
 	for _, value := range env {
 		b.WriteString("Environment=\"" + value + "\"\n")
 	}
-	b.WriteString("ExecStart=" + n.Config.SmolvmPath + " machine start --name " + m.RuntimeName() + " --branchable\n")
+	b.WriteString("ExecStart=" + command + "\n")
 	if m.PendingRAM {
 		for _, path := range n.pendingRAMFiles(m) {
 			b.WriteString("ExecStartPre=/usr/bin/test -s " + path + "\n")

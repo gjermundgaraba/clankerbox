@@ -787,15 +787,8 @@ func (h *Helper) Connect(ctx context.Context, id string, in io.Reader, out io.Wr
 			resultErr = errors.Join(resultErr, closeErr)
 		}
 	}()
-	finished := make(chan struct{})
-	defer close(finished)
-	go func() {
-		select {
-		case <-ctx.Done():
-			_ = conn.Close()
-		case <-finished:
-		}
-	}()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 	if _, err = io.WriteString(out, "{\"ready\":true}\n"); err != nil {
 		return err
 	}
