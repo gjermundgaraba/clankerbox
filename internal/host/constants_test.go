@@ -1,0 +1,28 @@
+package host_test
+
+const (
+	runtimeTart            = "tart"
+	statusFailed           = "failed"
+	statusUnresolved       = "unresolved"
+	statusSucceeded        = "succeeded"
+	actionStart            = "start"
+	actionStop             = "stop"
+	actionDelete           = "delete"
+	actionCreate           = "create"
+	retainedDiskContents   = "dirty git + untracked + sqlite"
+	runtimeSmolvm          = "smolvm"
+	actionCapture          = "checkpoint-create"
+	actionDeleteCheckpoint = "checkpoint-delete"
+	checkpointDisk         = "disk"
+	checkpointRAM          = "ram"
+	actionFork             = "fork"
+	actionRestore          = "restore"
+	archAMD64              = "amd64"
+	osLinux                = "linux"
+	testSmolvmPath         = "/opt/smolvm/bin/smolvm"
+	testSmolvmLibrary      = "/opt/smolvm/lib"
+	smolvmMachineCommand   = "machine"
+	nameFlag               = "--name"
+	stateRunning           = "running"
+	stateStopped           = "stopped"
+)

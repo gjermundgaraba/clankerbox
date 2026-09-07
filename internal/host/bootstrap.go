@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"net"
 
-	"golang.org/x/crypto/ssh"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 
 	"clankerbox/internal/model"
 )
@@ -32,7 +33,7 @@ func bootstrapScript(m Manifest, keys []string) (string, error) {
 		keyData = base64.StdEncoding.EncodeToString([]byte(strings.Join(canonical, "\n") + "\n"))
 	}
 	user, home, decode := "root", "/root", "base64 -d"
-	if m.Profile.Runtime == "tart" {
+	if m.Profile.Runtime == runtimeTart {
 		user = "admin"
 		home = "/Users/admin"
 		decode = "/usr/bin/base64 -D"
@@ -61,74 +62,66 @@ StrictModes yes
 Subsystem sftp internal-sftp
 PidFile /var/run/clankerbox-sshd.pid
 `
-	if m.Profile.Runtime == "tart" {
+	if m.Profile.Runtime == runtimeTart {
 		// Noninteractive SSH does not read the image's Homebrew login profile.
 		config += "SetEnv PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\n"
 	}
 	cfgData := base64.StdEncoding.EncodeToString([]byte(config))
 	var s strings.Builder
 	s.WriteString("set -eu\numask 077\n")
-	if m.Profile.Runtime == "smolvm" {
+	if m.Profile.Runtime == runtimeSmolvm {
 		// The bare rootfs is staged by the unprivileged host account. Restore
 		// sshd's required ownership inside the guest, before validating config.
 		s.WriteString("mkdir -p /run/sshd\nchown 0:0 /run/sshd /root /etc/ssh\nchmod 0755 /run/sshd\n")
 	}
 	if create && m.SourceMachineID != "" {
-		if !model.ValidID(m.SourceMachineID) || m.SSHPrivateKey == "" {
-			return "", errors.New("persisted child identity required")
-		}
-		signer, err := ssh.ParsePrivateKey([]byte(m.SSHPrivateKey))
-		if err != nil {
+		if err := installChildIdentity(&s, m, decode); err != nil {
 			return "", err
 		}
-		if strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) != m.SSHHostKey {
-			return "", errors.New("persisted child SSH identity mismatch")
-		}
-		private := base64.StdEncoding.EncodeToString([]byte(m.SSHPrivateKey))
-		s.WriteString("owner=$(cat /etc/clankerbox/owner)\ncase \"$owner\" in '" + m.SourceMachineID + "'|'" + m.ID + "') ;; *) exit 1 ;; esac\n")
-		s.WriteString("printf '%s' '" + private + "' | " + decode + " > /etc/clankerbox/ssh_host_ed25519_key\nchmod 600 /etc/clankerbox/ssh_host_ed25519_key\nprintf '%s\\n' '" + m.ID + "' > /etc/clankerbox/owner\nrm -f /etc/clankerbox/prepared\nsync\n")
 	}
+
 	if create {
-		s.WriteString("if [ ! -e /etc/clankerbox/owner ]; then\n  test ! -e /etc/clankerbox\n  mkdir -m 700 /etc/clankerbox\n  printf '%s\\n' '" + m.ID + "' > /etc/clankerbox/owner\n  sync\nfi\n")
+		s.WriteString(
+			"if [ ! -e /etc/clankerbox/owner ]; then\n  test ! -e /etc/clankerbox\n  mkdir -m 700 /etc/clankerbox\n  printf '%s\\n' '" + m.ID + "' > /etc/clankerbox/owner\n  sync\nfi\n",
+		)
 	}
 	s.WriteString("test \"$(cat /etc/clankerbox/owner)\" = '" + m.ID + "'\n")
 	if create {
 		if m.SourceMachineID == "" {
-			s.WriteString("if [ ! -e /etc/clankerbox/ssh_host_ed25519_key ]; then\n  /usr/bin/ssh-keygen -q -t ed25519 -N '' -f /etc/clankerbox/ssh_host_ed25519_key\n  sync\nfi\n")
+			s.WriteString(
+				"if [ ! -e /etc/clankerbox/ssh_host_ed25519_key ]; then\n  /usr/bin/ssh-keygen -q -t ed25519 -N '' -f /etc/clankerbox/ssh_host_ed25519_key\n  sync\nfi\n",
+			)
 		}
-		s.WriteString("/usr/bin/ssh-keygen -y -f /etc/clankerbox/ssh_host_ed25519_key > /etc/clankerbox/ssh_host_ed25519_key.pub\n")
-		s.WriteString("mkdir -p '" + home + "/.ssh'\nchmod 700 '" + home + "/.ssh'\nprintf '%s' '" + keyData + "' | " + decode + " > '" + home + "/.ssh/authorized_keys'\nchmod 600 '" + home + "/.ssh/authorized_keys'\nchown -R '" + user + "' '" + home + "/.ssh'\nprintf '%s' '" + cfgData + "' | " + decode + " > /etc/ssh/sshd_config\nchmod 600 /etc/ssh/sshd_config\n/usr/sbin/sshd -t\nsync\n")
+		s.WriteString(
+			"/usr/bin/ssh-keygen -y -f /etc/clankerbox/ssh_host_ed25519_key > /etc/clankerbox/ssh_host_ed25519_key.pub\n",
+		)
+		s.WriteString(
+			"mkdir -p '" + home + "/.ssh'\nchmod 700 '" + home + "/.ssh'\nprintf '%s' '" + keyData + "' | " + decode + " > '" + home + "/.ssh/authorized_keys'\nchmod 600 '" + home + "/.ssh/authorized_keys'\nchown -R '" + user + "' '" + home + "/.ssh'\nprintf '%s' '" + cfgData + "' | " + decode + " > /etc/ssh/sshd_config\nchmod 600 /etc/ssh/sshd_config\n/usr/sbin/sshd -t\nsync\n",
+		)
 	} else {
-		s.WriteString("test -s /etc/clankerbox/ssh_host_ed25519_key\ntest -s /etc/clankerbox/prepared\n/usr/sbin/sshd -t\n")
+		s.WriteString(
+			"test -s /etc/clankerbox/ssh_host_ed25519_key\ntest -s /etc/clankerbox/prepared\n/usr/sbin/sshd -t\n",
+		)
 	}
-	if m.Profile.Runtime == "tart" {
-		// Private DHCP DNS servers are deliberately unreachable through Softnet.
-		// The supported Tart image names its primary network service Ethernet.
-		if create {
-			s.WriteString("/usr/sbin/networksetup -setdnsservers Ethernet 1.1.1.1 8.8.8.8\n")
-		}
-		s.WriteString("/bin/launchctl enable system/com.openssh.sshd\nif ! /bin/launchctl print system/com.openssh.sshd >/dev/null 2>&1; then\n  /bin/launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist\nfi\n")
-	} else {
-		// The supported bare profile has smolvm-agent as init, not guest systemd.
-		// sshd's daemon mode survives the short synchronous guest exec command.
-		s.WriteString("mkdir -p /run/sshd\nif [ -s /var/run/clankerbox-sshd.pid ] && kill -0 \"$(cat /var/run/clankerbox-sshd.pid)\" 2>/dev/null; then\n  kill -HUP \"$(cat /var/run/clankerbox-sshd.pid)\"\nelse\n  rm -f /var/run/clankerbox-sshd.pid\n  /usr/sbin/sshd -f /etc/ssh/sshd_config\nfi\n")
-	}
+	writeSSHDStart(&s, m.Profile.Runtime, create)
 	if create {
 		s.WriteString("printf '%s\\n' '" + m.ID + "' > /etc/clankerbox/prepared\nsync\n")
 	}
 	s.WriteString("/usr/bin/ssh-keygen -y -f /etc/clankerbox/ssh_host_ed25519_key\n")
 	script := s.String()
-	if m.Profile.Runtime == "tart" {
+	if m.Profile.Runtime == runtimeTart {
 		script = "sudo -n /bin/bash -se <<'CLANKERBOX_TRUSTED_BOOTSTRAP'\n" + script + "CLANKERBOX_TRUSTED_BOOTSTRAP\n"
 	}
 	return script, nil
 }
+
+// Prepare installs or verifies the guest SSH identity through trusted runtime execution.
 func (n *NativeRuntime) Prepare(ctx context.Context, m Manifest, keys []string) (string, string, string, error) {
 	script, err := bootstrapScript(m, keys)
 	if err != nil {
 		return "", "", "", err
 	}
-	call, cancel := context.WithTimeout(ctx, 90*time.Second)
+	call, cancel := context.WithTimeout(ctx, guestReadyTimeout)
 	defer cancel()
 	out, err := n.guest(call, m, script)
 	if err != nil {
@@ -148,7 +141,7 @@ func (n *NativeRuntime) Prepare(ctx context.Context, m Manifest, keys []string) 
 		return "", "", "", errors.New("guest stopped during preparation")
 	}
 	user := "root"
-	if m.Profile.Runtime == "tart" {
+	if m.Profile.Runtime == runtimeTart {
 		user = "admin"
 	}
 	if m.SourceMachineID != "" && len(keys) != 0 {
@@ -167,16 +160,25 @@ func (n *NativeRuntime) Prepare(ctx context.Context, m Manifest, keys []string) 
 func waitSSHIdentity(ctx context.Context, endpoint, want string) error {
 	verified := errors.New("host identity verified")
 	for {
-		conn, err := (&net.Dialer{Timeout: 3 * time.Second}).DialContext(ctx, "tcp", endpoint)
+		conn, err := (&net.Dialer{Timeout: identityAttemptTimeout}).DialContext(ctx, "tcp", endpoint)
 		if err == nil {
-			conn.SetDeadline(time.Now().Add(3 * time.Second))
-			_, _, _, err = ssh.NewClientConn(conn, endpoint, &ssh.ClientConfig{User: "clankerbox-identity-check", HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-				if strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))) == want {
-					return verified
-				}
-				return errors.New("inherited SSH host key still active")
-			}})
-			conn.Close()
+			if deadlineErr := conn.SetDeadline(time.Now().Add(identityAttemptTimeout)); deadlineErr != nil {
+				return errors.Join(deadlineErr, conn.Close())
+			}
+			_, _, _, err = ssh.NewClientConn(
+				conn,
+				endpoint,
+				&ssh.ClientConfig{
+					User: "clankerbox-identity-check",
+					HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+						if strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))) == want {
+							return verified
+						}
+						return errors.New("inherited SSH host key still active")
+					},
+				},
+			)
+			// NewClientConn closes the transport when the callback aborts the handshake.
 			if errors.Is(err, verified) {
 				return nil
 			}
@@ -184,7 +186,47 @@ func waitSSHIdentity(ctx context.Context, endpoint, want string) error {
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("fresh SSH identity not ready: %w", ctx.Err())
-		case <-time.After(100 * time.Millisecond):
+		case <-time.After(identityRetryInterval):
 		}
+	}
+}
+
+func installChildIdentity(s *strings.Builder, m Manifest, decode string) error {
+	if !model.ValidID(m.SourceMachineID) || m.SSHPrivateKey == "" {
+		return errors.New("persisted child identity required")
+	}
+	signer, err := ssh.ParsePrivateKey([]byte(m.SSHPrivateKey))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) != m.SSHHostKey {
+		return errors.New("persisted child SSH identity mismatch")
+	}
+	private := base64.StdEncoding.EncodeToString([]byte(m.SSHPrivateKey))
+	s.WriteString(
+		"owner=$(cat /etc/clankerbox/owner)\ncase \"$owner\" in '" + m.SourceMachineID + "'|'" + m.ID + "') ;; *) exit 1 ;; esac\n",
+	)
+	s.WriteString(
+		"printf '%s' '" + private + "' | " + decode + " > /etc/clankerbox/ssh_host_ed25519_key\nchmod 600 /etc/clankerbox/ssh_host_ed25519_key\nprintf '%s\\n' '" + m.ID + "' > /etc/clankerbox/owner\nrm -f /etc/clankerbox/prepared\nsync\n",
+	)
+	return nil
+}
+
+func writeSSHDStart(s *strings.Builder, runtime string, create bool) {
+	if runtime == runtimeTart {
+		// Private DHCP DNS servers are deliberately unreachable through Softnet.
+		// The supported Tart image names its primary network service Ethernet.
+		if create {
+			s.WriteString("/usr/sbin/networksetup -setdnsservers Ethernet 1.1.1.1 8.8.8.8\n")
+		}
+		s.WriteString(
+			"/bin/launchctl enable system/com.openssh.sshd\nif ! /bin/launchctl print system/com.openssh.sshd >/dev/null 2>&1; then\n  /bin/launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist\nfi\n",
+		)
+	} else {
+		// The supported bare profile has smolvm-agent as init, not guest systemd.
+		// sshd's daemon mode survives the short synchronous guest exec command.
+		s.WriteString(
+			"mkdir -p /run/sshd\nif [ -s /var/run/clankerbox-sshd.pid ] && kill -0 \"$(cat /var/run/clankerbox-sshd.pid)\" 2>/dev/null; then\n  kill -HUP \"$(cat /var/run/clankerbox-sshd.pid)\"\nelse\n  rm -f /var/run/clankerbox-sshd.pid\n  /usr/sbin/sshd -f /etc/ssh/sshd_config\nfi\n",
+		)
 	}
 }

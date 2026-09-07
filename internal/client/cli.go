@@ -16,11 +16,13 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"clankerbox/internal/model"
 )
 
+// Streams supplies the command input, output and diagnostic destinations.
 type Streams struct {
 	In  io.Reader
 	Out io.Writer
@@ -54,13 +56,14 @@ func requestKey(s string) (string, error) {
 		}
 		return s, nil
 	}
-	b := make([]byte, 16)
+	b := make([]byte, requestKeyBytes)
 	if _, e := rand.Read(b); e != nil {
 		return "", e
 	}
 	return hex.EncodeToString(b), nil
 }
 
+// Usage describes the supported CLI commands.
 const Usage = `usage: clankerbox [--config PATH] COMMAND
   profiles | hosts | machines | inspect NAME/ID | operation ID
   create --name NAME --profile PROFILE --host HOST --key PUBLIC_KEY_FILE [--idempotency-key KEY]
@@ -73,6 +76,7 @@ const Usage = `usage: clankerbox [--config PATH] COMMAND
   vnc [--viewer] NAME/ID
 `
 
+// Run executes one CLI command using the supplied streams and cancellation context.
 func Run(ctx context.Context, args []string, streams Streams) error {
 	global := flags("clankerbox", streams.Err)
 	path := global.String("config", DefaultConfigPath(), "client JSON config")
@@ -81,7 +85,7 @@ func Run(ctx context.Context, args []string, streams Streams) error {
 	}
 	args = global.Args()
 	if len(args) == 0 {
-		return errors.New(Usage)
+		return errors.New(strings.TrimSpace(Usage))
 	}
 	if args[0] == "help" {
 		_, e := io.WriteString(streams.Out, Usage)
@@ -97,234 +101,39 @@ func Run(ctx context.Context, args []string, streams Streams) error {
 	}
 	command := args[0]
 	args = args[1:]
+	runner := commandRunner{api: a, streams: streams}
 	switch command {
 	case "profiles", "hosts", "machines":
-		if len(args) != 0 {
-			return errors.New("unexpected arguments")
-		}
-		var out json.RawMessage
-		e = a.Do(ctx, "GET", "/v1/"+command, nil, "", &out)
-		if e != nil {
-			return e
-		}
-		return jsonOut(streams.Out, out)
-	case "inspect":
-		if e = oneArg(args); e != nil {
-			return e
-		}
-		m, e := a.Resolve(ctx, args[0])
-		if e != nil {
-			return e
-		}
-		return jsonOut(streams.Out, m)
+		return runner.listResources(ctx, command, args)
+	case inspectCommand:
+		return runner.inspectMachine(ctx, args)
 	case "operation":
-		if len(args) != 1 || !model.ValidID(args[0]) {
-			return errors.New("operation requires an immutable operation ID")
-		}
-		var out json.RawMessage
-		if e = a.Do(ctx, "GET", "/v1/operations/"+args[0], nil, "", &out); e != nil {
-			return e
-		}
-		return jsonOut(streams.Out, out)
-	case "create":
-		f := flags(command, streams.Err)
-		name := f.String("name", "", "machine name")
-		profile := f.String("profile", "", "profile ID")
-		host := f.String("host", "", "host ID")
-		key := f.String("key", "", "public key file")
-		idem := f.String("idempotency-key", "", "retry key")
-		if e = f.Parse(args); e != nil {
-			return e
-		}
-		if f.NArg() != 0 || *key == "" {
-			return errors.New("create requires --name, --profile, --host and --key")
-		}
-		b, e := os.ReadFile(*key)
-		if e != nil {
-			return e
-		}
-		in := model.CreateInput{Name: *name, Profile: *profile, Host: *host, SSHPublicKeys: []string{strings.TrimSpace(string(b))}}
-		if e = in.Validate(); e != nil {
-			return e
-		}
-		id, e := requestKey(*idem)
-		if e != nil {
-			return e
-		}
-		return mutate(ctx, a, "/v1/machines", in, id, streams.Out)
-	case "fork", "restore", "checkpoint":
+		return runner.inspectOperation(ctx, args)
+	case createCommand:
+		return runner.createMachine(ctx, command, args)
+	case forkCommand, "restore", checkpointCommand:
 		return deriveCLI(ctx, a, command, args, streams)
 	case "start", "stop", "delete":
-		f := flags(command, streams.Err)
-		idem := f.String("idempotency-key", "", "retry key")
-		if e = f.Parse(args); e != nil {
-			return e
-		}
-		if e = oneArg(f.Args()); e != nil {
-			return e
-		}
-		m, e := a.Resolve(ctx, f.Arg(0))
-		if e != nil {
-			return e
-		}
-		id, e := requestKey(*idem)
-		if e != nil {
-			return e
-		}
-		return mutate(ctx, a, "/v1/machines/"+m.ID+"/"+command, nil, id, streams.Out)
+		return runner.mutateMachine(ctx, command, args)
 	case "proxy":
-		if len(args) != 1 || !model.ValidID(args[0]) {
-			return errors.New("proxy requires an immutable machine ID")
-		}
-		conn, e := a.Upgrade(ctx, args[0])
-		if e != nil {
-			return e
-		}
-		defer conn.Close()
-		return proxyStdio(ctx, conn, streams.In, streams.Out)
+		return runner.proxyMachine(ctx, args)
 	case "ssh-config":
-		if len(args) != 1 || args[0] != "install" {
-			return errors.New("usage: ssh-config install")
-		}
-		binary, e := executable()
-		if e != nil {
-			return e
-		}
-		ms, e := a.Machines(ctx)
-		if e != nil {
-			return e
-		}
-		paths, e := InstallSSHConfig(c, binary, sshDirectory(), ms)
-		if e != nil {
-			return e
-		}
-		return jsonOut(streams.Out, map[string]any{"files": paths})
+		return runner.installSSH(ctx, args)
 	case "ssh":
-		if len(args) < 1 {
-			return errors.New("ssh requires a machine")
-		}
-		p, e := a.Pin(ctx, args[0])
-		if e != nil {
-			return e
-		}
-		if e = installPinned(ctx, a, p); e != nil {
-			return e
-		}
-		argv := append([]string{"-F", filepath.Join(c.StateDir, "ssh_config"), "cb." + p.ID}, args[1:]...)
-		return runCommand(ctx, streams, "ssh", argv...)
+		return runner.sshMachine(ctx, args)
 	case "_owner":
-		if len(args) != 1 {
-			return errors.New("invalid owner startup")
-		}
-		b, e := base64.RawURLEncoding.DecodeString(args[0])
-		if e != nil {
-			return e
-		}
-		var p Pin
-		if e = json.Unmarshal(b, &p); e != nil {
-			return e
-		}
-		return ServeOwner(ctx, c, p, SSHDialer(a), func(e error) {
-			message := ""
-			if e != nil {
-				message = e.Error()
-			}
-			jsonOut(streams.Out, map[string]string{"error": message})
-		})
+		return runner.serveOwner(ctx, args)
 	case "connect":
-		f := flags(command, streams.Err)
-		var explicit endpointFlags
-		f.Var(&explicit, "forward", "numeric guest loopback HOST:PORT (repeatable)")
-		if e = f.Parse(args); e != nil {
-			return e
-		}
-		if e = oneArg(f.Args()); e != nil {
-			return e
-		}
-		_, h, e := acquireName(ctx, a, f.Arg(0))
-		if e != nil {
-			return e
-		}
-		defer h.Close()
-		for _, ep := range explicit {
-			if _, e = h.Forward(ctx, ep); e != nil {
-				return e
-			}
-		}
-		return hold(ctx, h, streams.Out)
-	case "ports", "url", "open-url":
-		expected := 1
-		if command != "ports" {
-			expected = 2
-		}
-		if len(args) != expected {
-			return errors.New("invalid command arguments")
-		}
-		// External URLs need no mapping; validate first and launch without acquiring.
-		if command == "open-url" {
-			if raw, e := RewriteURL(args[1], nil, true); e == nil {
-				if e = openViewer(ctx, raw); e != nil {
-					return e
-				}
-				return jsonOut(streams.Out, map[string]string{"url": raw})
-			}
-		}
-		p, e := queryPin(ctx, a, args[0])
-		if e != nil {
-			return e
-		}
-		r, e := ExistingPorts(ctx, c, p)
-		if e != nil {
-			return e
-		}
-		if command == "ports" {
-			return jsonOut(streams.Out, r.Mappings)
-		}
-		raw, e := RewriteURL(args[1], r.Mappings, command == "open-url")
-		if e != nil {
-			return e
-		}
-		if command == "open-url" {
-			if e = openViewer(ctx, raw); e != nil {
-				return e
-			}
-		}
-		return jsonOut(streams.Out, map[string]string{"machine_id": p.ID, "url": raw})
+		return runner.connectMachine(ctx, command, args)
+	case portsCommand, urlCommand, openURLCommand:
+		return runner.queryForward(ctx, command, args)
 	case "vnc":
-		f := flags(command, streams.Err)
-		viewer := f.Bool("viewer", false, "launch the native viewer")
-		if e = f.Parse(args); e != nil {
-			return e
-		}
-		if e = oneArg(f.Args()); e != nil {
-			return e
-		}
-		_, h, e := acquireName(ctx, a, f.Arg(0))
-		if e != nil {
-			return e
-		}
-		defer h.Close()
-		ep := Endpoint{"127.0.0.1", 5900}
-		if _, e = h.Forward(ctx, ep); e != nil {
-			return e
-		}
-		m, e := awaitMapping(ctx, h, ep)
-		if e != nil {
-			return e
-		}
-		if e = jsonOut(streams.Out, m); e != nil {
-			return e
-		}
-		if *viewer {
-			if e = openViewer(ctx, "vnc://"+m.Local); e != nil {
-				return e
-			}
-		}
-		return hold(ctx, h, streams.Out)
+		return runner.vncMachine(ctx, command, args)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
 }
+
 func mutate(ctx context.Context, a *API, path string, in any, id string, w io.Writer) error {
 	var out json.RawMessage
 	if e := a.Do(ctx, "POST", path, in, id, &out); e != nil {
@@ -343,17 +152,17 @@ func (e *endpointFlags) Set(s string) error {
 	}
 	return err
 }
-func acquireName(ctx context.Context, a *API, name string) (Pin, *Handle, error) {
+func acquireName(ctx context.Context, a *API, name string) (*Handle, error) {
 	p, e := a.Pin(ctx, name)
 	if e != nil {
-		return p, nil, e
+		return nil, e
 	}
 	b, e := executable()
 	if e != nil {
-		return p, nil, e
+		return nil, e
 	}
 	h, e := Acquire(ctx, a.Config, p, b)
-	return p, h, e
+	return h, e
 }
 func queryPin(ctx context.Context, a *API, name string) (Pin, error) {
 	if model.ValidID(name) {
@@ -375,8 +184,8 @@ func installPinned(ctx context.Context, a *API, p Pin) error {
 	found := false
 	for _, m := range ms {
 		if m.ID == p.ID {
-			current, e := PinMachine(a.Config.URL, m)
-			if e != nil || current != p {
+			current, pinMachineErr := PinMachine(a.Config.URL, m)
+			if pinMachineErr != nil || current != p {
 				return errors.New("machine identity changed during SSH installation")
 			}
 			found = true
@@ -393,7 +202,7 @@ func installPinned(ctx context.Context, a *API, p Pin) error {
 	return e
 }
 func hold(ctx context.Context, h *Handle, w io.Writer) error {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(statusRefreshInterval)
 	defer ticker.Stop()
 	for {
 		r, e := h.Ports(ctx)
@@ -414,9 +223,9 @@ func hold(ctx context.Context, h *Handle, w io.Writer) error {
 	}
 }
 func awaitMapping(ctx context.Context, h *Handle, ep Endpoint) (Mapping, error) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, forwardReadyTimeout)
 	defer cancel()
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(forwardPollInterval)
 	defer ticker.Stop()
 	for {
 		r, e := h.Ports(ctx)
@@ -435,8 +244,9 @@ func awaitMapping(ctx context.Context, h *Handle, ep Endpoint) (Mapping, error) 
 		}
 	}
 }
-func runCommand(ctx context.Context, streams Streams, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
+func runSSH(ctx context.Context, streams Streams, args ...string) error {
+	//nolint:gosec // G204: Execute the fixed SSH program with separate arguments from the local CLI.
+	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stdin = streams.In
 	cmd.Stdout = streams.Out
 	cmd.Stderr = streams.Err
@@ -447,40 +257,320 @@ func openViewer(ctx context.Context, url string) error {
 	if runtime.GOOS == "darwin" {
 		command = "open"
 	}
+	//nolint:gosec // G204: The viewer is fixed per platform and receives a validated URL as a separate argument.
 	return exec.CommandContext(ctx, command, url).Run()
 }
-func proxyStdio(ctx context.Context, c net.Conn, in io.Reader, out io.Writer) error {
-	// In production stdin is an os.File; closing it releases a blocked read when
-	// the server disconnects. Proxy stdout carries raw bytes only.
-	stop := context.AfterFunc(ctx, func() {
-		c.Close()
+func proxyStdio(ctx context.Context, c net.Conn, in io.Reader, out io.Writer) (err error) {
+	closeInput := func() error {
 		if closer, ok := in.(io.Closer); ok {
-			closer.Close()
+			return closedStreamError(closer.Close())
 		}
-	})
-	defer stop()
+		return nil
+	}
+	cleanup := sync.OnceValue(func() error { return errors.Join(closeStream(c), closeInput()) })
+	stop := interruptOnCancel(ctx, cleanup)
+	defer func() { err = errors.Join(err, stop()) }()
 	upstream := make(chan error, 1)
 	go func() {
-		_, e := io.Copy(c, in)
+		_, copyErr := io.Copy(c, in)
+		var closeErr error
 		if cw, ok := c.(interface{ CloseWrite() error }); ok {
-			cw.CloseWrite()
+			closeErr = closedStreamError(cw.CloseWrite())
 		} else {
-			c.Close()
+			closeErr = closeStream(c)
 		}
-		upstream <- e
+		upstream <- errors.Join(closedStreamError(copyErr), closeErr)
 	}()
-	_, e := io.Copy(out, c)
-	c.Close()
-	if closer, ok := in.(io.Closer); ok {
-		closer.Close()
-	}
-	// Non-closable readers are used only by callers whose reads eventually finish.
-	<-upstream
-	if ctx.Err() != nil {
-		return nil
-	}
-	if errors.Is(e, net.ErrClosed) {
-		return nil
-	}
-	return e
+	_, copyErr := io.Copy(out, c)
+	closeErr := cleanup()
+	return errors.Join(closedStreamError(copyErr), closeErr, <-upstream)
 }
+
+const (
+	checkpointCommand = "checkpoint"
+	forkCommand       = "fork"
+	createCommand     = "create"
+	openURLCommand    = "open-url"
+	portsCommand      = "ports"
+)
+
+type commandRunner struct {
+	api     *API
+	streams Streams
+}
+
+func (runner commandRunner) listResources(ctx context.Context, command string, args []string) error {
+	var e error
+	if len(args) != 0 {
+		return errors.New("unexpected arguments")
+	}
+	var out json.RawMessage
+	e = runner.api.Do(ctx, "GET", "/v1/"+command, nil, "", &out)
+	if e != nil {
+		return e
+	}
+	return jsonOut(runner.streams.Out, out)
+}
+
+func (runner commandRunner) inspectMachine(ctx context.Context, args []string) error {
+	var e error
+	if e = oneArg(args); e != nil {
+		return e
+	}
+	m, resolveErr := runner.api.Resolve(ctx, args[0])
+	if resolveErr != nil {
+		return resolveErr
+	}
+	return jsonOut(runner.streams.Out, m)
+}
+
+func (runner commandRunner) inspectOperation(ctx context.Context, args []string) error {
+	var e error
+	if len(args) != 1 || !model.ValidID(args[0]) {
+		return errors.New("operation requires an immutable operation ID")
+	}
+	var out json.RawMessage
+	if e = runner.api.Do(ctx, "GET", "/v1/operations/"+args[0], nil, "", &out); e != nil {
+		return e
+	}
+	return jsonOut(runner.streams.Out, out)
+}
+
+func (runner commandRunner) createMachine(ctx context.Context, command string, args []string) error {
+	var e error
+	f := flags(command, runner.streams.Err)
+	name := f.String("name", "", "machine name")
+	profile := f.String("profile", "", "profile ID")
+	host := f.String("host", "", "host ID")
+	key := f.String("key", "", "public key file")
+	idem := f.String("idempotency-key", "", "retry key")
+	if e = f.Parse(args); e != nil {
+		return e
+	}
+	if f.NArg() != 0 || *key == "" {
+		return errors.New("create requires --name, --profile, --host and --key")
+	}
+	b, readFileErr := os.ReadFile(*key)
+	if readFileErr != nil {
+		return readFileErr
+	}
+	in := model.CreateInput{
+		Name:          *name,
+		Profile:       *profile,
+		Host:          *host,
+		SSHPublicKeys: []string{strings.TrimSpace(string(b))},
+	}
+	if readFileErr = in.Validate(); readFileErr != nil {
+		return readFileErr
+	}
+	id, readFileErr := requestKey(*idem)
+	if readFileErr != nil {
+		return readFileErr
+	}
+	return mutate(ctx, runner.api, "/v1/machines", in, id, runner.streams.Out)
+}
+
+func (runner commandRunner) mutateMachine(ctx context.Context, command string, args []string) error {
+	var e error
+	f := flags(command, runner.streams.Err)
+	idem := f.String("idempotency-key", "", "retry key")
+	if e = f.Parse(args); e != nil {
+		return e
+	}
+	if e = oneArg(f.Args()); e != nil {
+		return e
+	}
+	m, resolveErr2 := runner.api.Resolve(ctx, f.Arg(0))
+	if resolveErr2 != nil {
+		return resolveErr2
+	}
+	id, resolveErr2 := requestKey(*idem)
+	if resolveErr2 != nil {
+		return resolveErr2
+	}
+	return mutate(ctx, runner.api, "/v1/machines/"+m.ID+"/"+command, nil, id, runner.streams.Out)
+}
+
+func (runner commandRunner) proxyMachine(ctx context.Context, args []string) (err error) {
+	if len(args) != 1 || !model.ValidID(args[0]) {
+		return errors.New("proxy requires an immutable machine ID")
+	}
+	conn, upgradeErr := runner.api.Upgrade(ctx, args[0])
+	if upgradeErr != nil {
+		return upgradeErr
+	}
+	defer func() { err = errors.Join(err, closeStream(conn)) }()
+	return proxyStdio(ctx, conn, runner.streams.In, runner.streams.Out)
+}
+
+func (runner commandRunner) installSSH(ctx context.Context, args []string) error {
+	if len(args) != 1 || args[0] != "install" {
+		return errors.New("usage: ssh-config install")
+	}
+	binary, executableErr := executable()
+	if executableErr != nil {
+		return executableErr
+	}
+	ms, executableErr := runner.api.Machines(ctx)
+	if executableErr != nil {
+		return executableErr
+	}
+	paths, executableErr := InstallSSHConfig(runner.api.Config, binary, sshDirectory(), ms)
+	if executableErr != nil {
+		return executableErr
+	}
+	return jsonOut(runner.streams.Out, map[string]any{"files": paths})
+}
+
+func (runner commandRunner) sshMachine(ctx context.Context, args []string) error {
+	if len(args) < 1 {
+		return errors.New("ssh requires a machine")
+	}
+	p, pinErr := runner.api.Pin(ctx, args[0])
+	if pinErr != nil {
+		return pinErr
+	}
+	if pinErr = installPinned(ctx, runner.api, p); pinErr != nil {
+		return pinErr
+	}
+	argv := append([]string{"-F", filepath.Join(runner.api.Config.StateDir, "ssh_config"), "cb." + p.ID}, args[1:]...)
+	return runSSH(ctx, runner.streams, argv...)
+}
+
+func (runner commandRunner) serveOwner(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return errors.New("invalid owner startup")
+	}
+	b, decodeStringErr := base64.RawURLEncoding.DecodeString(args[0])
+	if decodeStringErr != nil {
+		return decodeStringErr
+	}
+	var p Pin
+	if decodeStringErr = json.Unmarshal(b, &p); decodeStringErr != nil {
+		return decodeStringErr
+	}
+	ownerCtx, cancelOwner := context.WithCancel(ctx)
+	defer cancelOwner()
+	var readinessErr error
+	ownerErr := ServeOwner(ownerCtx, runner.api.Config, p, SSHDialer(runner.api), func(startErr error) {
+		message := ""
+		if startErr != nil {
+			message = startErr.Error()
+		}
+		readinessErr = jsonOut(runner.streams.Out, map[string]string{"error": message})
+		if readinessErr != nil {
+			cancelOwner()
+		}
+	})
+	return errors.Join(ownerErr, readinessErr)
+}
+
+func (runner commandRunner) connectMachine(ctx context.Context, command string, args []string) (err error) {
+	var e error
+	f := flags(command, runner.streams.Err)
+	var explicit endpointFlags
+	f.Var(&explicit, "forward", "numeric guest loopback HOST:PORT (repeatable)")
+	if e = f.Parse(args); e != nil {
+		return e
+	}
+	if e = oneArg(f.Args()); e != nil {
+		return e
+	}
+	h, acquireNameErr := acquireName(ctx, runner.api, f.Arg(0))
+	if acquireNameErr != nil {
+		return acquireNameErr
+	}
+	defer func() { err = errors.Join(err, h.Close()) }()
+	for _, ep := range explicit {
+		if _, acquireNameErr = h.Forward(ctx, ep); acquireNameErr != nil {
+			return acquireNameErr
+		}
+	}
+	return hold(ctx, h, runner.streams.Out)
+}
+
+func (runner commandRunner) queryForward(ctx context.Context, command string, args []string) error {
+	expected := 1
+	if command != portsCommand {
+		expected = 2
+	}
+	if len(args) != expected {
+		return errors.New("invalid command arguments")
+	}
+	// External URLs need no mapping; validate first and launch without acquiring.
+	if command == openURLCommand {
+		if raw, rewriteURLErr := RewriteURL(args[1], nil, true); rewriteURLErr == nil {
+			if rewriteURLErr = openViewer(ctx, raw); rewriteURLErr != nil {
+				return rewriteURLErr
+			}
+			return jsonOut(runner.streams.Out, map[string]string{urlCommand: raw})
+		}
+	}
+	p, queryPinErr := queryPin(ctx, runner.api, args[0])
+	if queryPinErr != nil {
+		return queryPinErr
+	}
+	r, queryPinErr := ExistingPorts(ctx, runner.api.Config, p)
+	if queryPinErr != nil {
+		return queryPinErr
+	}
+	if command == portsCommand {
+		return jsonOut(runner.streams.Out, r.Mappings)
+	}
+	raw, queryPinErr := RewriteURL(args[1], r.Mappings, command == openURLCommand)
+	if queryPinErr != nil {
+		return queryPinErr
+	}
+	if command == openURLCommand {
+		if queryPinErr = openViewer(ctx, raw); queryPinErr != nil {
+			return queryPinErr
+		}
+	}
+	return jsonOut(runner.streams.Out, map[string]string{"machine_id": p.ID, urlCommand: raw})
+}
+
+func (runner commandRunner) vncMachine(ctx context.Context, command string, args []string) (err error) {
+	var e error
+	f := flags(command, runner.streams.Err)
+	viewer := f.Bool("viewer", false, "launch the native viewer")
+	if e = f.Parse(args); e != nil {
+		return e
+	}
+	if e = oneArg(f.Args()); e != nil {
+		return e
+	}
+	h, acquireNameErr2 := acquireName(ctx, runner.api, f.Arg(0))
+	if acquireNameErr2 != nil {
+		return acquireNameErr2
+	}
+	defer func() { err = errors.Join(err, h.Close()) }()
+	ep := Endpoint{ipv4Loopback, 5900}
+	if _, acquireNameErr2 = h.Forward(ctx, ep); acquireNameErr2 != nil {
+		return acquireNameErr2
+	}
+	m, acquireNameErr2 := awaitMapping(ctx, h, ep)
+	if acquireNameErr2 != nil {
+		return acquireNameErr2
+	}
+	if acquireNameErr2 = jsonOut(runner.streams.Out, m); acquireNameErr2 != nil {
+		return acquireNameErr2
+	}
+	if *viewer {
+		if acquireNameErr2 = openViewer(ctx, "vnc://"+m.Local); acquireNameErr2 != nil {
+			return acquireNameErr2
+		}
+	}
+	return hold(ctx, h, runner.streams.Out)
+}
+
+const (
+	requestKeyBytes       = 16
+	statusRefreshInterval = 2 * time.Second
+	forwardReadyTimeout   = 20 * time.Second
+	forwardPollInterval   = 100 * time.Millisecond
+)
+
+const (
+	inspectCommand = "inspect"
+	urlCommand     = "url"
+)

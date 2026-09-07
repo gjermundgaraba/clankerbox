@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"clankerbox/internal/statefs"
+
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -19,7 +21,7 @@ type sshSession struct{ client *ssh.Client }
 // SSHDialer authenticates locally and pins the supplied guest public key. It
 // does not resolve aliases or fetch replacement trust while reconnecting.
 func SSHDialer(a *API) DialSession {
-	return func(ctx context.Context, p Pin) (Session, error) {
+	return func(ctx context.Context, p Pin) (_ Session, err error) {
 		if e := p.Validate(); e != nil {
 			return nil, e
 		}
@@ -27,57 +29,58 @@ func SSHDialer(a *API) DialSession {
 			return nil, errors.New("pinned API URL mismatch")
 		}
 		pub, _, _, _, _ := ssh.ParseAuthorizedKey([]byte(p.HostKey))
-		var auth []ssh.AuthMethod
-		if a.Config.IdentityFile != "" {
-			b, e := readPrivate(a.Config.IdentityFile)
-			if e != nil {
-				return nil, e
-			}
-			signer, e := ssh.ParsePrivateKey(b)
-			if e != nil {
-				return nil, errors.New("cannot read private SSH identity; use ssh-agent for encrypted keys")
-			}
-			auth = append(auth, ssh.PublicKeys(signer))
-		} else {
-			socket := os.Getenv("SSH_AUTH_SOCK")
-			if socket == "" {
-				return nil, errors.New("identity_file or SSH_AUTH_SOCK is required")
-			}
-			d := net.Dialer{}
-			c, e := d.DialContext(ctx, "unix", socket)
-			if e != nil {
-				return nil, errors.New("cannot connect to local ssh-agent")
-			}
-			defer c.Close()
-			c.SetDeadline(time.Now().Add(10 * time.Second))
-			auth = append(auth, ssh.PublicKeysCallback(agent.NewClient(c).Signers))
+		auth, authErr := clientAuthentication(ctx, a.Config)
+		if authErr != nil {
+			return nil, authErr
 		}
+		defer func() { err = errors.Join(err, auth.Close()) }()
 		conn, e := a.Upgrade(ctx, p.ID)
 		if e != nil {
 			return nil, e
 		}
-		stop := context.AfterFunc(ctx, func() { conn.Close() })
-		defer stop()
-		conn.SetDeadline(time.Now().Add(15 * time.Second))
-		cc, chans, reqs, e := ssh.NewClientConn(conn, "cb."+p.ID, &ssh.ClientConfig{User: p.User, Auth: auth, HostKeyCallback: ssh.FixedHostKey(pub), Timeout: 15 * time.Second})
-		if e != nil {
-			conn.Close()
-			return nil, errors.New("guest SSH authentication or host-key verification failed")
+		stop := interruptOnCancel(ctx, func() error { return closeStream(conn) })
+		defer func() { err = errors.Join(err, stop()) }()
+		if e = conn.SetDeadline(time.Now().Add(sshHandshakeTimeout)); e != nil {
+			return nil, errors.Join(e, closeStream(conn))
 		}
-		conn.SetDeadline(time.Time{})
+		cc, chans, reqs, e := ssh.NewClientConn(
+			conn,
+			"cb."+p.ID,
+			&ssh.ClientConfig{
+				User:            p.User,
+				Auth:            auth.methods,
+				HostKeyCallback: ssh.FixedHostKey(pub),
+				Timeout:         sshHandshakeTimeout,
+			},
+		)
+		if e != nil {
+			return nil, errors.Join(
+				errors.New("guest SSH authentication or host-key verification failed"),
+				closeStream(conn),
+			)
+		}
+		if e = conn.SetDeadline(time.Time{}); e != nil {
+			return nil, errors.Join(e, closeStream(conn))
+		}
+		if e = errors.Join(stop(), ctx.Err(), auth.Close()); e != nil {
+			return nil, errors.Join(e, closeStream(conn))
+		}
 		return &sshSession{ssh.NewClient(cc, chans, reqs)}, nil
 	}
 }
-func (s *sshSession) Close() error { return s.client.Close() }
+func (s *sshSession) Close() error { return closeStream(s.client) }
 func (s *sshSession) Dial(ctx context.Context, ep Endpoint) (net.Conn, error) {
-	if e := ep.Validate(); e != nil {
-		return nil, e
+	if err := ep.Validate(); err != nil {
+		return nil, err
 	}
-	// x/crypto cannot cancel an outstanding channel-open without closing transport.
-	// Closing on timeout prevents orphaned channel-open goroutines.
-	stop := context.AfterFunc(ctx, func() { s.client.Close() })
-	defer stop()
-	return s.client.DialContext(ctx, "tcp", ep.Address())
+	// A canceled channel open must close the SSH transport to prevent orphaned work.
+	stop := interruptOnCancel(ctx, s.Close)
+	conn, err := s.client.DialContext(ctx, "tcp", ep.Address())
+	err = errors.Join(err, stop(), ctx.Err())
+	if err != nil && conn != nil {
+		return nil, errors.Join(err, closeStream(conn))
+	}
+	return conn, err
 }
 
 type limitedBuffer struct {
@@ -95,18 +98,18 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return b.b.Write(p)
 }
 func (b *limitedBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.b.String() }
-func (s *sshSession) Run(ctx context.Context, command string) (string, error) {
+func (s *sshSession) Run(ctx context.Context, command string) (_ string, err error) {
 	if command != LinuxDiscoveryCommand && command != MacDiscoveryCommand {
 		return "", errors.New("unsupported discovery command")
 	}
-	stop := context.AfterFunc(ctx, func() { s.client.Close() })
-	defer stop()
+	stop := interruptOnCancel(ctx, s.Close)
+	defer func() { err = errors.Join(err, stop()) }()
 	session, e := s.client.NewSession()
 	if e != nil {
 		return "", e
 	}
-	defer session.Close()
-	output := &limitedBuffer{limit: 1 << 20}
+	defer func() { err = errors.Join(err, closeStream(session)) }()
+	output := &limitedBuffer{limit: maxDiscoveryOutputBytes}
 	session.Stdout = output
 	session.Stderr = io.Discard
 	e = session.Run(command)
@@ -117,3 +120,52 @@ func (s *sshSession) Run(ctx context.Context, command string) (string, error) {
 	}
 	return output.String(), e
 }
+
+type sshAuthentication struct {
+	methods []ssh.AuthMethod
+	agent   net.Conn
+}
+
+func (auth sshAuthentication) Close() error {
+	if auth.agent == nil {
+		return nil
+	}
+	return closeStream(auth.agent)
+}
+
+func clientAuthentication(ctx context.Context, config Config) (sshAuthentication, error) {
+	var result sshAuthentication
+	if config.IdentityFile != "" {
+		b, e := statefs.ReadPrivate(config.IdentityFile)
+		if e != nil {
+			return sshAuthentication{}, e
+		}
+		signer, e := ssh.ParsePrivateKey(b)
+		if e != nil {
+			return sshAuthentication{}, errors.New("cannot read private SSH identity; use ssh-agent for encrypted keys")
+		}
+		result.methods = append(result.methods, ssh.PublicKeys(signer))
+		return result, nil
+	}
+	socket := os.Getenv("SSH_AUTH_SOCK")
+	if socket == "" {
+		return sshAuthentication{}, errors.New("identity_file or SSH_AUTH_SOCK is required")
+	}
+	d := net.Dialer{}
+	c, e := d.DialContext(ctx, "unix", socket)
+	if e != nil {
+		return sshAuthentication{}, errors.New("cannot connect to local ssh-agent")
+	}
+	result.agent = c
+	if e = c.SetDeadline(time.Now().Add(agentTimeout)); e != nil {
+		return sshAuthentication{}, errors.Join(e, closeStream(c))
+	}
+	result.methods = append(result.methods, ssh.PublicKeysCallback(agent.NewClient(c).Signers))
+	return result, nil
+}
+
+const (
+	sshHandshakeTimeout     = 15 * time.Second
+	maxDiscoveryOutputBytes = 1 << 20
+	agentTimeout            = 10 * time.Second
+)

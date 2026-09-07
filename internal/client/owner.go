@@ -10,6 +10,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"clankerbox/internal/statefs"
 )
 
 // Session implementations must finish Run/Dial when ctx is canceled and Close
@@ -19,6 +21,8 @@ type Session interface {
 	Dial(context.Context, Endpoint) (net.Conn, error)
 	Close() error
 }
+
+// DialSession establishes a session authenticated against the supplied immutable pin.
 type DialSession func(context.Context, Pin) (Session, error)
 
 type allocation struct {
@@ -61,22 +65,22 @@ func loadLedger(path string) (ledger, error) {
 	}
 	return l, nil
 }
-func bindLoopback(ep Endpoint) (net.Listener, error) {
+func bindLoopback(ctx context.Context, ep Endpoint) (net.Listener, error) {
 	network := "tcp4"
-	if ep.Host == "::1" {
+	if ep.Host == ipv6Loopback {
 		network = "tcp6"
 	}
-	return net.Listen(network, ep.Address())
+	return (&net.ListenConfig{}).Listen(ctx, network, ep.Address())
 }
-func reserve(dir string, p Pin, ep Endpoint) (net.Listener, string, error) {
+func reserve(ctx context.Context, dir string, p Pin, ep Endpoint) (_ net.Listener, _ string, err error) {
 	if e := ep.Validate(); e != nil {
 		return nil, "", e
 	}
-	lock, e := privateLock(filepath.Join(dir, "allocations.lock"), false)
+	lock, e := statefs.LockFile(filepath.Join(dir, "allocations.lock"), false)
 	if e != nil {
 		return nil, "", e
 	}
-	defer unlock(lock)
+	defer func() { err = errors.Join(err, lock.Close()) }()
 	path := filepath.Join(dir, "allocations.json")
 	l, e := loadLedger(path)
 	if e != nil {
@@ -90,38 +94,21 @@ func reserve(dir string, p Pin, ep Endpoint) (net.Listener, string, error) {
 				return nil, a.Local, errors.New("reserved machine identity changed")
 			}
 			local, _ := ParseEndpoint(a.Local)
-			ln, e := bindLoopback(local)
-			if e != nil {
+			ln, bindLoopbackErr := bindLoopback(ctx, local)
+			if bindLoopbackErr != nil {
 				return nil, a.Local, fmt.Errorf("reserved endpoint %s is occupied or unavailable", a.Local)
 			}
 			return ln, a.Local, nil
 		}
 	}
-	var ln net.Listener
-	if !used[ep.Address()] {
-		ln, _ = bindLoopback(ep)
-	}
-	if ln == nil {
-		for tries := 0; tries < 128; tries++ {
-			candidate, e := bindLoopback(Endpoint{ep.Host, 0})
-			if e != nil {
-				return nil, "", e
-			}
-			if !used[candidate.Addr().String()] {
-				ln = candidate
-				break
-			}
-			candidate.Close()
-		}
-	}
-	if ln == nil {
-		return nil, "", errors.New("cannot allocate an unreserved local endpoint")
+	ln, e := allocateLocal(ctx, ep, used)
+	if e != nil {
+		return nil, "", e
 	}
 	local := ln.Addr().String()
 	l.Entries = append(l.Entries, allocation{p, ep, local})
 	if e = writeJSONFile(path, l); e != nil {
-		ln.Close()
-		return nil, "", e
+		return nil, "", errors.Join(e, closeStream(ln))
 	}
 	return ln, local, nil
 }
@@ -132,6 +119,8 @@ type forward struct {
 	discovered bool
 	explicit   int
 }
+
+// Owner maintains stable local forwards across discovery changes and SSH reconnections.
 type Owner struct {
 	pin       Pin
 	dir       string
@@ -149,6 +138,8 @@ type Owner struct {
 	closeOnce sync.Once
 }
 
+// NewOwner restores durable reservations and starts forwarding for the pinned identity.
+// Cancellation or Close releases listeners. A nonpositive interval uses the default polling cadence.
 func NewOwner(ctx context.Context, p Pin, dir string, dial DialSession, interval time.Duration) (*Owner, error) {
 	if dial == nil {
 		return nil, errors.New("SSH dialer is required")
@@ -157,17 +148,26 @@ func NewOwner(ctx context.Context, p Pin, dir string, dial DialSession, interval
 		return nil, e
 	}
 	if interval <= 0 {
-		interval = 2 * time.Second
+		interval = defaultDiscoveryInterval
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	o := &Owner{pin: p, dir: dir, dial: dial, interval: interval, ctx: ctx, cancel: cancel, forwards: map[Endpoint]*forward{}, wake: make(chan struct{}, 1)}
-	lock, e := privateLock(filepath.Join(dir, "allocations.lock"), false)
+	o := &Owner{
+		pin:      p,
+		dir:      dir,
+		dial:     dial,
+		interval: interval,
+		ctx:      ctx,
+		cancel:   cancel,
+		forwards: map[Endpoint]*forward{},
+		wake:     make(chan struct{}, 1),
+	}
+	lock, e := statefs.LockFile(filepath.Join(dir, "allocations.lock"), false)
 	if e != nil {
 		cancel()
 		return nil, e
 	}
 	l, e := loadLedger(filepath.Join(dir, "allocations.json"))
-	unlock(lock)
+	e = errors.Join(e, lock.Close())
 	if e != nil {
 		cancel()
 		return nil, e
@@ -195,7 +195,7 @@ func (o *Owner) ensureLocked(ep Endpoint) *forward {
 	if f := o.forwards[ep]; f != nil {
 		return f
 	}
-	ln, local, e := reserve(o.dir, o.pin, ep)
+	ln, local, e := reserve(o.ctx, o.dir, o.pin, ep)
 	f := &forward{mapping: Mapping{MachineID: o.pin.ID, Guest: ep, Local: local}, listener: ln}
 	if e != nil {
 		f.mapping.Error = e.Error()
@@ -209,7 +209,9 @@ func (o *Owner) ensureLocked(ep Endpoint) *forward {
 	}
 	return f
 }
-func (o *Owner) Snapshot() []Mapping {
+
+// Status returns one independent, consistent view of the owner.
+func (o *Owner) Status() Status {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	out := make([]Mapping, 0, len(o.forwards))
@@ -217,9 +219,10 @@ func (o *Owner) Snapshot() []Mapping {
 		out = append(out, f.mapping)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Guest.Address() < out[j].Guest.Address() })
-	return out
+	return Status{Pin: o.pin, Mappings: out, ConnectionError: o.lastError}
 }
-func (o *Owner) Error() string { o.mu.Lock(); defer o.mu.Unlock(); return o.lastError }
+
+// AddExplicit retains an endpoint independently of discovery and returns an idempotent release function.
 func (o *Owner) AddExplicit(ep Endpoint) (func(), error) {
 	if e := ep.Validate(); e != nil {
 		return nil, e
@@ -244,7 +247,7 @@ func (o *Owner) AddExplicit(ep Endpoint) (func(), error) {
 			if f.explicit == 0 && !f.discovered {
 				f.mapping.Available = false
 				if f.listener != nil {
-					f.mapping.Error = "guest listener unavailable"
+					f.mapping.Error = listenerUnavailable
 				}
 			}
 			o.mu.Unlock()
@@ -266,7 +269,7 @@ func (o *Owner) run() {
 	defer o.wg.Done()
 	defer o.unavailable("owner stopped")
 	for o.ctx.Err() == nil {
-		ctx, cancel := context.WithTimeout(o.ctx, 15*time.Second)
+		ctx, cancel := context.WithTimeout(o.ctx, ownerDialTimeout)
 		s, e := o.dial(ctx, o.pin)
 		cancel()
 		if e != nil {
@@ -279,36 +282,18 @@ func (o *Owner) run() {
 		o.mu.Lock()
 		if o.closed {
 			o.mu.Unlock()
-			s.Close()
+			o.reportError(s.Close())
 			return
 		}
 		o.session = s
 		o.mu.Unlock()
-		for o.ctx.Err() == nil {
-			cmd, _ := DiscoveryCommand(o.pin.OS)
-			ctx, cancel := context.WithTimeout(o.ctx, 5*time.Second)
-			output, e := s.Run(ctx, cmd)
-			cancel()
-			if e != nil {
-				o.unavailable("SSH discovery unavailable")
-				break
-			}
-			endpoints, e := ParseListeners(o.pin.OS, output)
-			if e != nil {
-				o.unavailable("invalid SSH discovery output")
-				break
-			}
-			o.reconcile(s, endpoints)
-			if !o.pause() {
-				break
-			}
-		}
+		o.pollSession(s)
 		o.mu.Lock()
 		if o.session == s {
 			o.session = nil
 		}
 		o.mu.Unlock()
-		s.Close()
+		o.reportError(s.Close())
 		if o.ctx.Err() != nil {
 			return
 		}
@@ -330,10 +315,174 @@ func (o *Owner) pause() bool {
 	}
 }
 func (o *Owner) reconcile(s Session, endpoints []Endpoint) {
+	candidates := o.discoveryCandidates(endpoints)
+	// A numeric probe also disambiguates family-less '*' discovery records. Bound
+	// the whole round, so a large or unreachable listener set cannot stall shutdown.
+	ctx, cancel := context.WithTimeout(o.ctx, discoveryTimeout)
+	defer cancel()
+	for _, ep := range candidates {
+		conn, e := s.Dial(ctx, ep)
+		if e == nil {
+			o.reportError(closeStream(conn))
+		}
+		o.mu.Lock()
+		f := o.forwards[ep]
+		if !o.closed && o.session == s {
+			f.mapping.Available = e == nil && (f.discovered || f.explicit > 0)
+			if f.mapping.Available {
+				f.mapping.Error = ""
+			} else {
+				f.mapping.Error = listenerUnavailable
+			}
+		}
+		o.mu.Unlock()
+	}
+}
+func (o *Owner) accept(ep Endpoint, ln net.Listener) {
+	defer o.wg.Done()
+	for {
+		c, e := ln.Accept()
+		if e != nil {
+			return
+		}
+		o.mu.Lock()
+		f := o.forwards[ep]
+		s := o.session
+		available := !o.closed && f.mapping.Available && s != nil
+		o.mu.Unlock()
+		if !available {
+			o.reportError(closeStream(c))
+			continue
+		}
+		o.wg.Go(func() {
+			defer func() { o.reportError(closeStream(c)) }()
+			ctx, cancel := context.WithTimeout(o.ctx, guestDialTimeout)
+			remote, dialErr := s.Dial(ctx, ep)
+			cancel()
+			if dialErr != nil {
+				return
+			}
+			defer func() { o.reportError(closeStream(remote)) }()
+			o.reportError(bridge(o.ctx, c, remote))
+		})
+	}
+}
+
+// bridge copies both directions, retaining half-close semantics until both finish.
+func bridge(ctx context.Context, a, b net.Conn) (err error) {
+	closeBoth := func() error { return errors.Join(closeStream(a), closeStream(b)) }
+	stop := interruptOnCancel(ctx, closeBoth)
+	defer func() { err = errors.Join(err, stop()) }()
+	done := make(chan error)
+	copyTo := func(dst, src net.Conn) {
+		_, copyErr := io.Copy(dst, src)
+		if cw, ok := dst.(interface{ CloseWrite() error }); copyErr == nil && ok {
+			copyErr = closedStreamError(cw.CloseWrite())
+		} else {
+			copyErr = errors.Join(closedStreamError(copyErr), closeBoth())
+		}
+		done <- copyErr
+	}
+	go copyTo(a, b)
+	go copyTo(b, a)
+	return errors.Join(<-done, <-done)
+}
+
+func (o *Owner) reportError(err error) {
+	if err == nil {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.lastError = err.Error()
+}
+
+func (o *Owner) closeListeners() error {
+	var err error
+	for _, f := range o.forwards {
+		if f.listener != nil {
+			err = errors.Join(err, closeStream(f.listener))
+		}
+	}
+	return err
+}
+
+// Close stops discovery and forwarding, unblocks connections and waits for shutdown.
+// Shutdown failures remain available through Status.
+func (o *Owner) Close() {
+	o.closeOnce.Do(func() {
+		o.mu.Lock()
+		o.closed = true
+		o.cancel()
+		session := o.session
+		closeErr := o.closeListeners()
+		o.mu.Unlock()
+		if session != nil {
+			closeErr = errors.Join(closeErr, session.Close())
+		}
+		o.wg.Wait()
+		o.reportError(closeErr)
+	})
+}
+
+const (
+	listenerUnavailable = "guest listener unavailable"
+)
+
+func allocateLocal(ctx context.Context, ep Endpoint, used map[string]bool) (net.Listener, error) {
+	var ln net.Listener
+	if !used[ep.Address()] {
+		ln, _ = bindLoopback(ctx, ep)
+	}
+	if ln == nil {
+		for range 128 {
+			candidate, bindLoopbackErr2 := bindLoopback(ctx, Endpoint{ep.Host, 0})
+			if bindLoopbackErr2 != nil {
+				return nil, bindLoopbackErr2
+			}
+			if !used[candidate.Addr().String()] {
+				ln = candidate
+				break
+			}
+			if closeErr := closeStream(candidate); closeErr != nil {
+				return nil, closeErr
+			}
+		}
+	}
+	if ln == nil {
+		return nil, errors.New("cannot allocate an unreserved local endpoint")
+	}
+
+	return ln, nil
+}
+
+func (o *Owner) pollSession(s Session) {
+	for o.ctx.Err() == nil {
+		cmd, _ := DiscoveryCommand(o.pin.OS)
+		discoveryCtx, cancelDiscovery := context.WithTimeout(o.ctx, discoveryTimeout)
+		output, runErr := s.Run(discoveryCtx, cmd)
+		cancelDiscovery()
+		if runErr != nil {
+			o.unavailable("SSH discovery unavailable")
+			break
+		}
+		endpoints, runErr := ParseListeners(o.pin.OS, output)
+		if runErr != nil {
+			o.unavailable("invalid SSH discovery output")
+			break
+		}
+		o.reconcile(s, endpoints)
+		if !o.pause() {
+			break
+		}
+	}
+}
+
+func (o *Owner) discoveryCandidates(endpoints []Endpoint) []Endpoint {
 	o.mu.Lock()
 	if o.closed {
 		o.mu.Unlock()
-		return
+		return nil
 	}
 	o.lastError = ""
 	for _, f := range o.forwards {
@@ -353,102 +502,17 @@ func (o *Owner) reconcile(s Session, endpoints []Endpoint) {
 			candidates = append(candidates, ep)
 		} else {
 			f.mapping.Available = false
-			f.mapping.Error = "guest listener unavailable"
+			f.mapping.Error = listenerUnavailable
 		}
 	}
 	o.mu.Unlock()
-	// A numeric probe also disambiguates family-less '*' discovery records. Bound
-	// the whole round, so a large or unreachable listener set cannot stall shutdown.
-	ctx, cancel := context.WithTimeout(o.ctx, 5*time.Second)
-	defer cancel()
-	for _, ep := range candidates {
-		conn, e := s.Dial(ctx, ep)
-		if e == nil {
-			conn.Close()
-		}
-		o.mu.Lock()
-		f := o.forwards[ep]
-		if !o.closed && o.session == s {
-			f.mapping.Available = e == nil && (f.discovered || f.explicit > 0)
-			if f.mapping.Available {
-				f.mapping.Error = ""
-			} else {
-				f.mapping.Error = "guest listener unavailable"
-			}
-		}
-		o.mu.Unlock()
-	}
-}
-func (o *Owner) accept(ep Endpoint, ln net.Listener) {
-	defer o.wg.Done()
-	for {
-		c, e := ln.Accept()
-		if e != nil {
-			return
-		}
-		o.mu.Lock()
-		f := o.forwards[ep]
-		s := o.session
-		available := !o.closed && f.mapping.Available && s != nil
-		o.mu.Unlock()
-		if !available {
-			c.Close()
-			continue
-		}
-		o.wg.Add(1)
-		go func() {
-			defer o.wg.Done()
-			defer c.Close()
-			ctx, cancel := context.WithTimeout(o.ctx, 10*time.Second)
-			remote, e := s.Dial(ctx, ep)
-			cancel()
-			if e != nil {
-				return
-			}
-			defer remote.Close()
-			Bridge(o.ctx, c, remote)
-		}()
-	}
+
+	return candidates
 }
 
-// Bridge bounds both copies to the lifetime of ctx and closes active streams.
-func Bridge(ctx context.Context, a, b net.Conn) {
-	stop := context.AfterFunc(ctx, func() { a.Close(); b.Close() })
-	defer stop()
-	done := make(chan struct{}, 2)
-	copyTo := func(dst, src net.Conn) {
-		_, err := io.Copy(dst, src)
-		if cw, ok := dst.(interface{ CloseWrite() error }); err == nil && ok {
-			cw.CloseWrite()
-		} else {
-			a.Close()
-			b.Close()
-		}
-		done <- struct{}{}
-	}
-	go copyTo(a, b)
-	go copyTo(b, a)
-	<-done
-	<-done
-}
-func (o *Owner) closeListeners() {
-	for _, f := range o.forwards {
-		if f.listener != nil {
-			f.listener.Close()
-		}
-	}
-}
-func (o *Owner) Close() {
-	o.closeOnce.Do(func() {
-		o.mu.Lock()
-		o.closed = true
-		o.cancel()
-		s := o.session
-		o.closeListeners()
-		o.mu.Unlock()
-		if s != nil {
-			s.Close()
-		}
-		o.wg.Wait()
-	})
-}
+const (
+	defaultDiscoveryInterval = 2 * time.Second
+	ownerDialTimeout         = 15 * time.Second
+	discoveryTimeout         = 5 * time.Second
+	guestDialTimeout         = 10 * time.Second
+)

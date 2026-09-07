@@ -19,9 +19,12 @@ import (
 	"strings"
 	"time"
 
+	"clankerbox/internal/statefs"
+
 	"clankerbox/internal/model"
 )
 
+// Config locates the API, credentials and local private state.
 type Config struct {
 	URL          string `json:"url"`
 	TokenFile    string `json:"token_file"`
@@ -30,6 +33,7 @@ type Config struct {
 	Path         string `json:"-"`
 }
 
+// DefaultConfigPath returns the conventional per-user client configuration path.
 func DefaultConfigPath() string {
 	h, _ := os.UserHomeDir()
 	return filepath.Join(h, ".config/clankerbox/config.json")
@@ -47,13 +51,15 @@ func absolutePath(path, base string) (string, error) {
 	}
 	return filepath.Abs(path)
 }
+
+// LoadConfig validates the API origin and resolves file paths relative to the config file.
 func LoadConfig(path string) (Config, error) {
 	var c Config
 	path, e := absolutePath(path, ".")
 	if e != nil {
 		return c, e
 	}
-	b, e := os.ReadFile(path)
+	b, e := statefs.ReadRegular(path)
 	if e != nil {
 		return c, e
 	}
@@ -88,15 +94,17 @@ func LoadConfig(path string) (Config, error) {
 }
 func validateAPIURL(raw string) (*url.URL, error) {
 	u, e := url.Parse(raw)
-	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") || u.Opaque != "" {
+	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" ||
+		(u.Path != "" && u.Path != "/") ||
+		u.Opaque != "" {
 		return nil, errors.New("API URL must be an http(s) origin without credentials, query or path")
 	}
-	if u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname())) {
+	if u.Scheme != httpsScheme && (u.Scheme != "http" || !isLoopbackHost(u.Hostname())) {
 		return nil, errors.New("API requires verified HTTPS except on loopback")
 	}
 	if p := u.Port(); p != "" {
-		if _, e := parsePort(p); e != nil {
-			return nil, e
+		if _, parsePortErr := parsePort(p); parsePortErr != nil {
+			return nil, parsePortErr
 		}
 	}
 	u.Path = ""
@@ -111,35 +119,39 @@ func isLoopbackHost(h string) bool {
 	a, e := netip.ParseAddr(h)
 	return e == nil && a.Zone() == "" && a.IsLoopback()
 }
-func readPrivate(path string) ([]byte, error) {
-	info, e := os.Lstat(path)
-	if e != nil {
-		return nil, e
-	}
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 {
-		return nil, fmt.Errorf("%s must be a regular private file (mode 0600)", path)
-	}
-	return os.ReadFile(path)
-}
 
+// API authenticates requests to one validated origin without following redirects.
 type API struct {
 	Config Config
 	origin *url.URL
 	http   *http.Client
 }
 
+// NewAPI constructs a client with verified TLS and loopback-only plain HTTP.
 func NewAPI(c Config) (*API, error) {
 	u, e := validateAPIURL(c.URL)
 	if e != nil {
 		return nil, e
 	}
 	c.URL = u.String()
-	tr := http.DefaultTransport.(*http.Transport).Clone()
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return nil, errors.New("default HTTP transport must support cloning")
+	}
+	tr := base.Clone()
 	tr.Proxy = nil // Do not send private API credentials through ambient HTTP proxies.
-	return &API{Config: c, origin: u, http: &http.Client{Transport: tr, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+	return &API{
+		Config: c,
+		origin: u,
+		http: &http.Client{
+			Transport:     tr,
+			Timeout:       apiRequestTimeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+	}, nil
 }
 func (a *API) token() (string, error) {
-	b, e := readPrivate(a.Config.TokenFile)
+	b, e := statefs.ReadPrivate(a.Config.TokenFile)
 	if e != nil {
 		return "", e
 	}
@@ -149,7 +161,9 @@ func (a *API) token() (string, error) {
 	}
 	return t, nil
 }
-func (a *API) Do(ctx context.Context, method, path string, body any, idempotency string, out any) error {
+
+// Do sends an authenticated JSON request and decodes a successful response into out.
+func (a *API) Do(ctx context.Context, method, path string, body any, idempotency string, out any) (err error) {
 	var r io.Reader
 	if body != nil {
 		b, e := json.Marshal(body)
@@ -178,7 +192,7 @@ func (a *API) Do(ctx context.Context, method, path string, body any, idempotency
 	if e != nil {
 		return errors.New("API request failed (transport or TLS error)")
 	}
-	defer res.Body.Close()
+	defer func() { err = errors.Join(err, res.Body.Close()) }()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("API returned HTTP %d", res.StatusCode)
 	}
@@ -197,11 +211,15 @@ func (a *API) Do(ctx context.Context, method, path string, body any, idempotency
 	}
 	return nil
 }
+
+// Machines lists machines visible to the authenticated user.
 func (a *API) Machines(ctx context.Context) ([]model.Machine, error) {
 	var ms []model.Machine
 	e := a.Do(ctx, "GET", "/v1/machines", nil, "", &ms)
 	return ms, e
 }
+
+// Resolve resolves a current alias or verifies the requested immutable machine ID.
 func (a *API) Resolve(ctx context.Context, name string) (model.Machine, error) {
 	var m model.Machine
 	if model.ValidID(name) {
@@ -233,6 +251,7 @@ func (a *API) Resolve(ctx context.Context, name string) (model.Machine, error) {
 
 type bufferedConn struct {
 	net.Conn
+
 	reader *bufio.Reader
 }
 
@@ -245,7 +264,7 @@ func (c *bufferedConn) CloseWrite() error {
 }
 
 // Upgrade never follows redirects, and retains any SSH bytes buffered with the 101.
-func (a *API) Upgrade(ctx context.Context, id string) (net.Conn, error) {
+func (a *API) Upgrade(ctx context.Context, id string) (_ net.Conn, err error) {
 	if !model.ValidID(id) {
 		return nil, errors.New("proxy requires an immutable machine ID")
 	}
@@ -253,65 +272,91 @@ func (a *API) Upgrade(ctx context.Context, id string) (net.Conn, error) {
 	if e != nil {
 		return nil, e
 	}
-	host := a.origin.Hostname()
-	port := a.origin.Port()
-	if port == "" {
-		if a.origin.Scheme == "https" {
-			port = "443"
-		} else {
-			port = "80"
-		}
-	}
-	d := net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}
-	raw, e := d.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	raw, e := a.dialOrigin(ctx)
 	if e != nil {
-		return nil, errors.New("API upgrade dial failed")
+		return nil, e
 	}
 	good := false
 	defer func() {
 		if !good {
-			raw.Close()
+			err = errors.Join(err, closeStream(raw))
 		}
 	}()
-	stop := context.AfterFunc(ctx, func() { raw.Close() })
-	defer stop()
-	raw.SetDeadline(time.Now().Add(15 * time.Second))
-	var conn net.Conn = raw
-	if a.origin.Scheme == "https" {
-		t := tls.Client(raw, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+	stop := interruptOnCancel(ctx, func() error { return closeStream(raw) })
+	defer func() { err = errors.Join(err, stop()) }()
+	if e = raw.SetDeadline(time.Now().Add(apiUpgradeTimeout)); e != nil {
+		return nil, e
+	}
+	var conn = raw
+	if a.origin.Scheme == httpsScheme {
+		t := tls.Client(raw, &tls.Config{ServerName: a.origin.Hostname(), MinVersion: tls.VersionTLS12})
 		if e = t.HandshakeContext(ctx); e != nil {
 			return nil, errors.New("API TLS verification failed")
 		}
 		conn = t
 	}
-	req, _ := http.NewRequest("GET", a.Config.URL+"/v1/machines/"+id+"/ssh", nil)
+	req, e := http.NewRequestWithContext(ctx, http.MethodGet, a.Config.URL+"/v1/machines/"+id+"/ssh", nil)
+	if e != nil {
+		return nil, e
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "clankerbox-stream")
 	if e = req.Write(conn); e != nil {
 		return nil, errors.New("API upgrade write failed")
 	}
-	reader := bufio.NewReaderSize(conn, 32*1024)
+	reader := bufio.NewReaderSize(conn, upgradeBufferBytes)
 	res, e := http.ReadResponse(reader, req)
 	if e != nil {
 		return nil, errors.New("invalid API upgrade response")
 	}
-	if res.StatusCode != 101 {
-		res.Body.Close()
-		return nil, fmt.Errorf("API upgrade returned HTTP %d", res.StatusCode)
+	if res.StatusCode != http.StatusSwitchingProtocols {
+		return nil, errors.Join(fmt.Errorf("API upgrade returned HTTP %d", res.StatusCode), res.Body.Close())
 	}
-	if !strings.EqualFold(res.Header.Get("Upgrade"), "clankerbox-stream") || !headerToken(res.Header.Get("Connection"), "upgrade") {
+	if !strings.EqualFold(res.Header.Get("Upgrade"), "clankerbox-stream") ||
+		!headerToken(res.Header.Get("Connection"), "upgrade") {
 		return nil, errors.New("invalid API upgrade protocol")
 	}
-	conn.SetDeadline(time.Time{})
+	if e = conn.SetDeadline(time.Time{}); e != nil {
+		return nil, e
+	}
+	if e = errors.Join(stop(), ctx.Err()); e != nil {
+		return nil, e
+	}
 	good = true
 	return &bufferedConn{Conn: conn, reader: reader}, nil
 }
 func headerToken(s, token string) bool {
-	for _, v := range strings.Split(s, ",") {
+	for v := range strings.SplitSeq(s, ",") {
 		if strings.EqualFold(strings.TrimSpace(v), token) {
 			return true
 		}
 	}
 	return false
+}
+
+const (
+	apiRequestTimeout  = 30 * time.Second
+	apiUpgradeTimeout  = 15 * time.Second
+	upgradeBufferBytes = 32 * 1024
+)
+
+// dialOrigin resolves the origin’s default service port and opens its TCP transport.
+func (a *API) dialOrigin(ctx context.Context) (net.Conn, error) {
+	host := a.origin.Hostname()
+	port := a.origin.Port()
+	if port == "" {
+		if a.origin.Scheme == httpsScheme {
+			port = "443"
+		} else {
+			port = "80"
+		}
+	}
+	d := net.Dialer{Timeout: apiUpgradeTimeout, KeepAlive: apiRequestTimeout}
+	raw, e := d.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	if e != nil {
+		return nil, errors.New("API upgrade dial failed")
+	}
+
+	return raw, nil
 }

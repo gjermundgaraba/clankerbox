@@ -189,12 +189,19 @@ Run product checks from this repository (the historical spike fixture directorie
 are isolated by `spikes/go.mod` and are not packages in the product Go module):
 
 ```sh
-go test -race ./...
-go vet ./...
-go build -o bin/clankerbox ./cmd/clankerbox
-go build -o bin/clankerbox-server ./cmd/clankerbox-server
-go build -o bin/clankerbox-host ./cmd/clankerbox-host
+make build
+make test
+make lint
 ```
+
+`make test` enables the race detector. Lint uses golangci-lint **v2.13.2** and
+the [Maratori config](https://github.com/maratori/golangci-lint-config), with
+its exclusion presets and test/comment exclusions removed. `make lint-fix`
+applies supported formatting and lint fixes; it still fails for unresolved findings.
+
+The controller takes `--state-dir` and owns `controller.db` and `controller.lock`
+inside that private directory. See [module contracts and state cutover](docs/module-contracts.md)
+for the public testing boundaries, file-security requirements, and handling retained journals.
 
 Run the separate historical spike checks:
 

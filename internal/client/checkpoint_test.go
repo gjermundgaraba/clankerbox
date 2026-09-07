@@ -1,4 +1,4 @@
-package client
+package client_test
 
 import (
 	"bytes"
@@ -6,64 +6,48 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"clankerbox/internal/client"
+
 	"clankerbox/internal/model"
 )
 
-type checkpointRoundTrip func(*http.Request) (*http.Response, error)
-
-func (f checkpointRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 func TestCheckpointCLIThinMutationsAndDiscovery(t *testing.T) {
-	a := testAPI(t, "http://127.0.0.1:1")
+	t.Parallel()
 	pin := testPin(t)
 	key := filepath.Join(t.TempDir(), "login.pub")
 	if err := os.WriteFile(key, []byte(pin.HostKey+"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	var paths []string
-	a.http.Transport = checkpointRoundTrip(func(r *http.Request) (*http.Response, error) {
-		paths = append(paths, r.Method+" "+r.URL.Path)
-		var out any = []model.Checkpoint{}
-		if r.URL.Path == "/v1/machines" {
-			out = []model.Machine{machineFromPin(pin, "source")}
-		}
-		if r.Method == "POST" {
-			if r.Header.Get("Idempotency-Key") != "once" {
-				t.Fatal("lost idempotency key")
-			}
-			if strings.HasSuffix(r.URL.Path, "/fork") || strings.HasSuffix(r.URL.Path, "/restore") {
-				var in model.ChildInput
-				if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Name != "child" || len(in.SSHPublicKeys) != 1 || in.SSHPublicKeys[0] != pin.HostKey {
-					t.Fatal("child login key not passed independently", err)
-				}
-			}
-			out = model.Operation{ID: otherID, Status: "pending"}
-		}
-		b, err := json.Marshal(out)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(b)), Header: http.Header{}}, nil
-	})
+	server := httptest.NewServer(checkpointTestHandler(t, pin, func(path string) { paths = append(paths, path) }))
+	defer server.Close()
+	a := testAPI(t, server.URL)
+	writeConfig(t, a.Config)
 	for _, command := range []struct {
 		name string
 		args []string
 		path string
 	}{
-		{"fork", []string{"--name", "child", "--key", key, "--idempotency-key", "once", "source"}, "POST /v1/machines/" + testID + "/fork"},
-		{"restore", []string{"--name", "child", "--key", key, "--idempotency-key", "once", otherID}, "POST /v1/checkpoints/" + otherID + "/restore"},
-		{"checkpoint", []string{"create", "--idempotency-key", "once", "source"}, "POST /v1/machines/" + testID + "/checkpoint"},
-		{"checkpoint", []string{"delete", "--idempotency-key", "once", otherID}, "POST /v1/checkpoints/" + otherID + "/delete"},
-		{"checkpoint", []string{"list"}, "GET /v1/checkpoints"},
-		{"checkpoint", []string{"inspect", otherID}, "GET /v1/checkpoints/" + otherID},
+		{"fork", []string{nameFlag, childName, keyFlag, key, idempotencyFlag, checkpointRetryKey, "source"}, "POST /v1/machines/" + testID + "/fork"},
+		{"restore", []string{nameFlag, childName, keyFlag, key, idempotencyFlag, checkpointRetryKey, otherID}, "POST /v1/checkpoints/" + otherID + "/restore"},
+		{checkpointCommand, []string{"create", idempotencyFlag, checkpointRetryKey, "source"}, "POST /v1/machines/" + testID + "/checkpoint"},
+		{checkpointCommand, []string{deleteCommand, idempotencyFlag, checkpointRetryKey, otherID}, "POST /v1/checkpoints/" + otherID + "/delete"},
+		{checkpointCommand, []string{"list"}, "GET /v1/checkpoints"},
+		{checkpointCommand, []string{inspectCommand, otherID}, "GET /v1/checkpoints/" + otherID},
 	} {
 		paths = nil
 		var out bytes.Buffer
-		if err := deriveCLI(context.Background(), a, command.name, command.args, Streams{Out: &out, Err: io.Discard}); err != nil {
+		if err := client.Run(
+			context.Background(),
+			append([]string{configFlag, a.Config.Path, command.name}, command.args...),
+			client.Streams{Out: &out, Err: io.Discard},
+		); err != nil {
 			t.Fatal(command, err)
 		}
 		if len(paths) == 0 || paths[len(paths)-1] != command.path {
@@ -74,12 +58,46 @@ func TestCheckpointCLIThinMutationsAndDiscovery(t *testing.T) {
 		}
 	}
 	before := len(paths)
-	for _, args := range [][]string{{"inspect", "../../artifact"}, {"delete", "/tmp/artifact"}, {"list", "extra"}} {
-		if err := deriveCLI(context.Background(), a, "checkpoint", args, Streams{Out: io.Discard, Err: io.Discard}); err == nil {
+	for _, args := range [][]string{{inspectCommand, "../../artifact"}, {deleteCommand, "/tmp/artifact"}, {"list", "extra"}} {
+		if err := client.Run(
+			context.Background(),
+			append([]string{configFlag, a.Config.Path, checkpointCommand}, args...),
+			client.Streams{Out: io.Discard, Err: io.Discard},
+		); err == nil {
 			t.Fatal("accepted nonresource arguments", args)
 		}
 	}
 	if len(paths) != before {
 		t.Fatal("invalid checkpoint path reached server")
+	}
+}
+
+func checkpointTestHandler(t *testing.T, pin client.Pin, record func(string)) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		record(r.Method + " " + r.URL.Path)
+		var out any = []model.Checkpoint{}
+		if r.URL.Path == machinesPath {
+			out = []model.Machine{machineFromPin(pin, "source")}
+		}
+		if r.Method == http.MethodPost {
+			if r.Header.Get("Idempotency-Key") != checkpointRetryKey {
+				t.Error("lost idempotency key")
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/fork") || strings.HasSuffix(r.URL.Path, "/restore") {
+				var in model.ChildInput
+				if err := json.NewDecoder(r.Body).
+					Decode(&in); err != nil || in.Name != childName || len(in.SSHPublicKeys) != 1 ||
+					in.SSHPublicKeys[0] != pin.HostKey {
+					t.Error("child login key not passed independently", err)
+					return
+				}
+			}
+			out = model.Operation{ID: otherID, Status: "pending"}
+		}
+		if err := json.NewEncoder(w).Encode(out); err != nil {
+			t.Error(err)
+		}
 	}
 }

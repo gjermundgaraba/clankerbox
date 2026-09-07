@@ -1,4 +1,4 @@
-package model
+package model_test
 
 import (
 	"crypto/ed25519"
@@ -8,29 +8,50 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/ssh"
+
+	"clankerbox/internal/model"
+)
+
+const (
+	linuxOS       = "linux"
+	smolvmRuntime = "smolvm"
 )
 
 func TestKeys(t *testing.T) {
+	t.Parallel()
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
 	s, _ := ssh.NewPublicKey(pub)
 	key := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s)))
 	for _, bad := range []string{"", key + "\n", `command="touch /tmp/no" ` + key, "ssh-ed25519 invalid", key + "\n" + key} {
-		if _, err := ValidateKeys([]string{bad}); err == nil {
+		if _, err := model.ValidateKeys([]string{bad}); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
 	}
-	keys, err := ValidateKeys([]string{key + " comment", key})
+	keys, err := model.ValidateKeys([]string{key + " comment", key})
 	if err != nil || len(keys) != 1 || keys[0] != key {
 		t.Fatalf("normalization: %v %v", keys, err)
 	}
 }
 func TestProfilesAndNames(t *testing.T) {
-	p := Profile{ID: "ubuntu-bare-v1", OS: "linux", Arch: "amd64", Runtime: "smolvm", CPU: 2, RAMMiB: 2048, ImagePath: "/opt/profiles/ubuntu/agent-rootfs"}
+	t.Parallel()
+	p := model.Profile{
+		ID:        "ubuntu-bare-v1",
+		OS:        linuxOS,
+		Arch:      "amd64",
+		Runtime:   smolvmRuntime,
+		CPU:       2,
+		RAMMiB:    2048,
+		ImagePath: "/opt/profiles/ubuntu/agent-rootfs",
+	}
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	if err := p.Validate(); err != nil {
 		t.Fatal("canonical advertised capabilities must validate again:", err)
+	}
+	p.Capabilities = []string{"create", "start", "stop", "delete", "ssh"}
+	if err := p.Validate(); err == nil {
+		t.Fatal("accepted legacy baseline capabilities")
 	}
 	p.Capabilities = []string{"ssh"}
 	if err := p.Validate(); err == nil {
@@ -41,28 +62,37 @@ func TestProfilesAndNames(t *testing.T) {
 		t.Fatal("advertised unimplemented fork")
 	}
 	for _, s := range []string{"../a", "-option", "a;uname", "a b", ""} {
-		if ValidName(s) {
+		if model.ValidName(s) {
 			t.Fatalf("accepted alias %q", s)
 		}
 	}
-	for i := 0; i < 10; i++ {
-		if !ValidID(NewID()) {
+	for range 10 {
+		if !model.ValidID(model.NewID()) {
 			t.Fatal("invalid generated ID")
 		}
 	}
 }
 
-func TestCheckpointCapabilitiesAndLegacyProfilePin(t *testing.T) {
-	p := Profile{ID: "linux", Runtime: "smolvm", OS: "linux", Arch: "amd64", CPU: 2, RAMMiB: 2048, ImagePath: "/opt/rootfs"}
-	legacy := p
-	legacy.Capabilities = append([]string{}, Capabilities...)
+func TestCheckpointCapabilitiesAndDerivedProfilePin(t *testing.T) {
+	t.Parallel()
+	p := model.Profile{
+		ID:        linuxOS,
+		Runtime:   smolvmRuntime,
+		OS:        linuxOS,
+		Arch:      "amd64",
+		CPU:       2,
+		RAMMiB:    2048,
+		ImagePath: "/opt/rootfs",
+	}
+	configured := p
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if !SameProfile(legacy, p) {
+	if !model.SameProfile(configured, p) {
 		t.Fatal("new discovery capability invalidated retained profile pin")
 	}
-	if !slices.Contains(p.Capabilities, "live-fork") || !slices.Contains(p.Capabilities, "ram-checkpoint") || slices.Contains(p.Capabilities, "disk-checkpoint") {
+	if !slices.Contains(p.Capabilities, "live-fork") || !slices.Contains(p.Capabilities, "ram-checkpoint") ||
+		slices.Contains(p.Capabilities, "disk-checkpoint") {
 		t.Fatal("wrong Linux capability", p.Capabilities)
 	}
 	p.Runtime = "tart"
@@ -72,11 +102,12 @@ func TestCheckpointCapabilitiesAndLegacyProfilePin(t *testing.T) {
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(p.Capabilities, "live-fork") || slices.Contains(p.Capabilities, "ram-checkpoint") || !slices.Contains(p.Capabilities, "disk-checkpoint") {
+	if slices.Contains(p.Capabilities, "live-fork") || slices.Contains(p.Capabilities, "ram-checkpoint") ||
+		!slices.Contains(p.Capabilities, "disk-checkpoint") {
 		t.Fatal("Mac emulates RAM", p.Capabilities)
 	}
-	p.Runtime = "smolvm"
-	p.OS = "linux"
+	p.Runtime = smolvmRuntime
+	p.OS = linuxOS
 	p.Capabilities = nil
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)

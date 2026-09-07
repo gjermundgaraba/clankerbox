@@ -1,87 +1,72 @@
-package client
+package client_test
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"clankerbox/internal/client"
 
 	"clankerbox/internal/model"
 )
 
 func TestCLIHasNoApplicationLauncher(t *testing.T) {
+	t.Parallel()
 	a := testAPI(t, "http://127.0.0.1:1")
 	b, _ := json.Marshal(a.Config)
 	if err := os.WriteFile(a.Config.Path, b, 0600); err != nil {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	streams := Streams{In: strings.NewReader(""), Out: &out, Err: io.Discard}
-	if err := Run(context.Background(), []string{"help"}, streams); err != nil {
+	streams := client.Streams{In: strings.NewReader(""), Out: &out, Err: io.Discard}
+	if err := client.Run(context.Background(), []string{"help"}, streams); err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(out.String(), "herdr") {
 		t.Fatal("application launcher advertised in help")
 	}
-	err := Run(context.Background(), []string{"--config", a.Config.Path, "herdr", "dev"}, streams)
+	err := client.Run(context.Background(), []string{configFlag, a.Config.Path, "herdr", testMachineName}, streams)
 	if err == nil || err.Error() != `unknown command "herdr"` {
 		t.Fatalf("application command should be rejected without connecting: %v", err)
 	}
 }
 
 func TestCLIJSONCommandsAndIdempotency(t *testing.T) {
+	t.Parallel()
 	p := testPin(t)
 	var mu sync.Mutex
 	var requests []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+testToken {
-			t.Error("missing API auth")
-		}
+	server := httptest.NewServer(cliTestHandler(t, p, func(path string) {
 		mu.Lock()
-		requests = append(requests, r.Method+" "+r.URL.Path)
-		mu.Unlock()
-		switch {
-		case r.Method == "POST":
-			if r.Header.Get("Idempotency-Key") != "retry-123" {
-				t.Error("missing idempotency key")
-			}
-			if r.URL.Path == "/v1/machines" {
-				var in model.CreateInput
-				if e := json.NewDecoder(r.Body).Decode(&in); e != nil || in.Name != "dev" || len(in.SSHPublicKeys) != 1 {
-					t.Error("invalid create JSON")
-				}
-			}
-			w.WriteHeader(202)
-			json.NewEncoder(w).Encode(model.Operation{ID: otherID, MachineID: testID, Status: "pending"})
-		case r.URL.Path == "/v1/machines":
-			json.NewEncoder(w).Encode([]model.Machine{machineFromPin(p, "dev")})
-		case r.URL.Path == "/v1/machines/"+testID:
-			json.NewEncoder(w).Encode(machineFromPin(p, "dev"))
-		case r.URL.Path == "/v1/operations/"+otherID:
-			json.NewEncoder(w).Encode(model.Operation{ID: otherID, MachineID: testID})
-		default:
-			io.WriteString(w, "[]")
-		}
+		defer mu.Unlock()
+		requests = append(requests, path)
 	}))
 	defer server.Close()
 	a := testAPI(t, server.URL)
 	b, _ := json.Marshal(a.Config)
-	os.WriteFile(a.Config.Path, b, 0600)
+	checkError(t, os.WriteFile(a.Config.Path, b, 0600))
 	key := filepath.Join(t.TempDir(), "key.pub")
-	os.WriteFile(key, []byte(p.HostKey+"\n"), 0600)
-	for _, args := range [][]string{{"profiles"}, {"hosts"}, {"machines"}, {"inspect", "dev"}, {"operation", otherID}, {"create", "--name", "dev", "--profile", "linux", "--host", "host", "--key", key, "--idempotency-key", "retry-123"}, {"start", "--idempotency-key", "retry-123", "dev"}, {"stop", "--idempotency-key", "retry-123", testID}, {"delete", "--idempotency-key", "retry-123", testID}} {
+	checkError(t, os.WriteFile(key, []byte(p.HostKey+"\n"), 0600))
+	for _, args := range [][]string{{"profiles"}, {"hosts"}, {"machines"}, {inspectCommand, testMachineName}, {"operation", otherID}, {"create", nameFlag, testMachineName, "--profile", linuxOS, "--host", "host", keyFlag, key, idempotencyFlag, mutationRetryKey}, {"start", idempotencyFlag, mutationRetryKey, testMachineName}, {"stop", idempotencyFlag, mutationRetryKey, testID}, {deleteCommand, idempotencyFlag, mutationRetryKey, testID}} {
 		var out, stderr bytes.Buffer
-		e := Run(context.Background(), append([]string{"--config", a.Config.Path}, args...), Streams{In: strings.NewReader(""), Out: &out, Err: &stderr})
+		e := client.Run(
+			context.Background(),
+			append([]string{configFlag, a.Config.Path}, args...),
+			client.Streams{In: strings.NewReader(""), Out: &out, Err: &stderr},
+		)
 		if e != nil {
 			t.Fatalf("%v: %v", args, e)
 		}
@@ -108,30 +93,43 @@ func TestCLIJSONCommandsAndIdempotency(t *testing.T) {
 	}
 }
 func TestConfigRelativePathsAndFailureRetryKey(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, testToken, 503) }))
+	t.Parallel()
+	server := httptest.NewServer(
+		http.HandlerFunc(
+			func(w http.ResponseWriter, _ *http.Request) { http.Error(w, testToken, http.StatusServiceUnavailable) },
+		),
+	)
 	defer server.Close()
 	a := testAPI(t, server.URL)
-	c := Config{URL: server.URL + "/", TokenFile: "token", IdentityFile: "id", StateDir: "state"}
+	c := client.Config{URL: server.URL + "/", TokenFile: "token", IdentityFile: "id", StateDir: "state"}
 	b, _ := json.Marshal(c)
-	os.WriteFile(a.Config.Path, b, 0600)
-	got, e := LoadConfig(a.Config.Path)
+	checkError(t, os.WriteFile(a.Config.Path, b, 0600))
+	got, e := client.LoadConfig(a.Config.Path)
 	if e != nil {
 		t.Fatal(e)
 	}
-	if got.URL != server.URL || got.TokenFile != a.Config.TokenFile || got.StateDir != filepath.Join(filepath.Dir(a.Config.Path), "state") {
+	if got.URL != server.URL || got.TokenFile != a.Config.TokenFile ||
+		got.StateDir != filepath.Join(filepath.Dir(a.Config.Path), "state") {
 		t.Fatalf("paths not resolved: %+v", got)
 	}
-	e = mutate(context.Background(), a, "/v1/machines", nil, "retry-key", io.Discard)
-	if e == nil || !strings.Contains(e.Error(), "--idempotency-key retry-key") || strings.Contains(e.Error(), testToken) {
+	e = client.Run(
+		t.Context(),
+		[]string{configFlag, a.Config.Path, checkpointCommand, deleteCommand, idempotencyFlag, "retry-key", testID},
+		client.Streams{Out: io.Discard, Err: io.Discard},
+	)
+	if e == nil || !strings.Contains(e.Error(), "--idempotency-key retry-key") ||
+		strings.Contains(e.Error(), testToken) {
 		t.Fatalf("unsafe or unretryable error: %v", e)
 	}
 }
 func TestActualDetachedOwnerProcess(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("builds the CLI for subprocess lifecycle integration")
 	}
 	binary := filepath.Join(t.TempDir(), "clankerbox")
-	build := exec.Command("go", "build", "-mod=readonly", "-o", binary, "../../cmd/clankerbox")
+	//nolint:gosec // G204: Build the repository CLI into a test-owned temporary directory.
+	build := exec.CommandContext(t.Context(), "go", "build", "-mod=readonly", "-o", binary, "../../cmd/clankerbox")
 	if out, e := build.CombinedOutput(); e != nil {
 		t.Fatalf("build: %s %v", out, e)
 	}
@@ -144,24 +142,24 @@ func TestActualDetachedOwnerProcess(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	h1, e := Acquire(ctx, a.Config, p, binary)
+	h1, e := client.Acquire(ctx, a.Config, p, binary)
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer h1.Close()
-	h2, e := Acquire(ctx, a.Config, p, binary)
+	defer closeTestStream(t, h1)
+	h2, e := client.Acquire(ctx, a.Config, p, binary)
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer h2.Close()
+	defer closeTestStream(t, h2)
 	var local string
 	eventually(t, func() bool {
-		r, e := h2.Ports(ctx)
-		if e != nil {
+		r, portsErr := h2.Ports(ctx)
+		if portsErr != nil {
 			return false
 		}
 		for _, m := range r.Mappings {
-			if m.Guest == (Endpoint{"127.0.0.1", 3000}) && m.Available {
+			if m.Guest == (client.Endpoint{ipv4Loopback, 3000}) && m.Available {
 				local = m.Local
 				return true
 			}
@@ -169,45 +167,181 @@ func TestActualDetachedOwnerProcess(t *testing.T) {
 		return false
 	})
 	echoMapping(t, local)
-	h1.Close()
+	closeTestStream(t, h1)
 	if _, e = h2.Ports(ctx); e != nil {
 		t.Fatal("second handle lost owner")
 	}
 	echoMapping(t, local)
-	h2.Close()
-	socket, _ := SocketPath(a.Config.StateDir, p)
-	eventually(t, func() bool { _, e := os.Stat(socket); return os.IsNotExist(e) })
+	closeTestStream(t, h2)
+	socket, _ := client.SocketPath(a.Config.StateDir, p)
+	eventually(t, func() bool { _, statErr := os.Stat(socket); return errors.Is(statErr, os.ErrNotExist) })
 }
 func TestProxyStdioRawBytesAndHalfClose(t *testing.T) {
-	ln, e := net.Listen("tcp4", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer ln.Close()
-	serverDone := make(chan struct{})
-	go func() {
-		defer close(serverDone)
-		conn, e := ln.Accept()
-		if e != nil {
+	t.Parallel()
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		defer close(done)
+		conn, buffered, err := hijack(w)
+		if err != nil {
+			t.Error(err)
 			return
 		}
-		defer conn.Close()
-		b, _ := io.ReadAll(conn)
-		conn.Write(append([]byte("reply:"), b...))
-	}()
-	conn, e := net.Dial("tcp", ln.Addr().String())
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer conn.Close()
+		defer closeTestStream(t, conn)
+		if _, err = buffered.WriteString(
+			"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: clankerbox-stream\r\n\r\n",
+		); err != nil {
+			t.Error(err)
+			return
+		}
+		if err = buffered.Flush(); err != nil {
+			t.Error(err)
+			return
+		}
+		data, err := io.ReadAll(buffered)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if _, err = conn.Write(append([]byte("reply:"), data...)); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	a := testAPI(t, server.URL)
+	writeConfig(t, a.Config)
 	var out bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
-	if e = proxyStdio(ctx, conn, strings.NewReader("raw"), &out); e != nil {
-		t.Fatal(e)
+	if err := client.Run(
+		ctx,
+		[]string{configFlag, a.Config.Path, "proxy", testID},
+		client.Streams{In: strings.NewReader("raw"), Out: &out, Err: io.Discard},
+	); err != nil {
+		t.Fatal(err)
 	}
 	if out.String() != "reply:raw" {
 		t.Fatalf("stdio corrupted: %q", out.String())
 	}
-	<-serverDone
+	<-done
+}
+
+func cliTestHandler(t *testing.T, p client.Pin, record func(string)) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+testToken {
+			t.Error("missing API auth")
+		}
+		record(r.Method + " " + r.URL.Path)
+		switch {
+		case r.Method == http.MethodPost:
+			if r.Header.Get("Idempotency-Key") != mutationRetryKey {
+				t.Error("missing idempotency key")
+			}
+			if r.URL.Path == machinesPath {
+				var in model.CreateInput
+				if e := json.NewDecoder(r.Body).
+					Decode(&in); e != nil || in.Name != testMachineName ||
+					len(in.SSHPublicKeys) != 1 {
+					t.Error("invalid create JSON")
+				}
+			}
+			w.WriteHeader(http.StatusAccepted)
+			checkError(t, json.NewEncoder(w).Encode(model.Operation{ID: otherID, MachineID: testID, Status: "pending"}))
+		case r.URL.Path == machinesPath:
+			checkError(t, json.NewEncoder(w).Encode([]model.Machine{machineFromPin(p, testMachineName)}))
+		case r.URL.Path == "/v1/machines/"+testID:
+			checkError(t, json.NewEncoder(w).Encode(machineFromPin(p, testMachineName)))
+		case r.URL.Path == "/v1/operations/"+otherID:
+			checkError(t, json.NewEncoder(w).Encode(model.Operation{ID: otherID, MachineID: testID}))
+		default:
+			checkError(t, resultError(io.WriteString(w, "[]")))
+		}
+	}
+}
+
+// observedInput exposes stdin lifetime through the public Streams contract.
+type observedInput struct {
+	file    *os.File
+	reading chan struct{}
+	once    sync.Once
+	closes  atomic.Int32
+}
+
+func (in *observedInput) Read(p []byte) (int, error) {
+	in.once.Do(func() { close(in.reading) })
+	return in.file.Read(p)
+}
+
+func (in *observedInput) Close() error {
+	in.closes.Add(1)
+	return in.file.Close()
+}
+
+func TestProxyShutdownClosesBlockedFileInputOnce(t *testing.T) {
+	t.Parallel()
+	for _, cancelSession := range []bool{false, true} {
+		t.Run(strconv.FormatBool(cancelSession), func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			reader, writer, err := os.Pipe()
+			checkError(t, err)
+			defer func() { checkError(t, writer.Close()) }()
+			in := &observedInput{file: reader, reading: make(chan struct{})}
+			t.Cleanup(func() {
+				if in.closes.Load() == 0 {
+					checkError(t, reader.Close())
+				}
+			})
+			server := httptest.NewServer(proxyShutdownHandler(ctx, t, in.reading, func() {
+				if cancelSession {
+					cancel()
+				}
+			}))
+			defer server.Close()
+			a := testAPI(t, server.URL)
+			writeConfig(t, a.Config)
+			err = client.Run(ctx, []string{configFlag, a.Config.Path, "proxy", testID},
+				client.Streams{In: in, Out: io.Discard, Err: io.Discard})
+			if err != nil {
+				t.Fatalf("expected shutdown failed: %v", err)
+			}
+			if got := in.closes.Load(); got != 1 {
+				t.Fatalf("stdin closed %d times", got)
+			}
+		})
+	}
+}
+
+func proxyShutdownHandler(
+	ctx context.Context,
+	t *testing.T,
+	reading <-chan struct{},
+	shutdown func(),
+) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, _ *http.Request) {
+		conn, buffered, err := hijack(w)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer closeTestStream(t, conn)
+		if _, err = buffered.WriteString(
+			"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: clankerbox-stream\r\n\r\n",
+		); err != nil {
+			t.Error(err)
+			return
+		}
+		if err = buffered.Flush(); err != nil {
+			t.Error(err)
+			return
+		}
+		select {
+		case <-reading:
+			shutdown()
+		case <-ctx.Done():
+			t.Error("proxy never read stdin")
+		}
+	}
 }

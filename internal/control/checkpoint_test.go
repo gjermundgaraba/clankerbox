@@ -1,4 +1,4 @@
-package control
+package control_test
 
 import (
 	"context"
@@ -7,65 +7,17 @@ import (
 	"strings"
 	"testing"
 
+	"clankerbox/internal/control"
 	"clankerbox/internal/model"
 )
 
 func TestCheckpointIntentDuplicatesAndReservations(t *testing.T) {
+	t.Parallel()
 	c, tr, in, _ := setupControl(t)
-	defer c.Close()
+	defer closeTest(t, c)
 	ctx := context.Background()
-	source := mustCreate(t, c, in, "create")
 	child := model.ChildInput{Name: "child", SSHPublicKeys: []string{testPublicKey(t)}}
-	if _, err := c.Derive(ctx, "fork", source.MachineID, "running-mac", child); err == nil {
-		t.Fatal("branched running Mac")
-	}
-	mustMutate(t, c, source.MachineID, "stop", "stop")
-	fork, err := c.Derive(ctx, "fork", source.MachineID, "fork", child)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tr.unavailable = true
-	duplicate, err := c.Derive(ctx, "fork", source.MachineID, "fork", child)
-	if err != nil || duplicate.ID != fork.ID {
-		t.Fatalf("offline duplicate: %+v %v", duplicate, err)
-	}
-	tr.unavailable = false
-	changed := child
-	changed.Name = "different"
-	if _, err = c.Derive(ctx, "fork", source.MachineID, "fork", changed); err == nil {
-		t.Fatal("idempotency accepted changed input")
-	}
-	for _, action := range []string{"start", "delete"} {
-		_, err = c.Mutate(ctx, source.MachineID, action, action+"-conflict")
-		expectCode(t, err, "operation_pending")
-	}
-	_, err = c.Derive(ctx, "checkpoint-create", source.MachineID, "capture-conflict", model.ChildInput{})
-	expectCode(t, err, "operation_pending")
-	if err = c.ProcessOne(ctx, "mac"); err != nil {
-		t.Fatal(err)
-	}
-	m, err := c.Inspect(ctx, fork.MachineID)
-	if err != nil || m.SourceMachineID != source.MachineID || m.Host != in.Host || m.ID == source.MachineID {
-		t.Fatalf("child ancestry: %+v %v", m, err)
-	}
-	capture, err := c.Derive(ctx, "checkpoint-create", source.MachineID, "capture", model.ChildInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cp, err := c.Checkpoint(capture.CheckpointID)
-	if err != nil || cp.Status != "pending" || cp.Kind != "disk" {
-		t.Fatalf("intent: %+v %v", cp, err)
-	}
-	if _, err = c.Derive(ctx, "restore", cp.ID, "partial", child); err == nil {
-		t.Fatal("restored unpublished capture")
-	}
-	if err = c.ProcessOne(ctx, "mac"); err != nil {
-		t.Fatal(err)
-	}
-	cp, err = c.Checkpoint(cp.ID)
-	if err != nil || cp.Status != "published" || cp.RuntimePin == "" {
-		t.Fatalf("publication: %+v %v", cp, err)
-	}
+	source, fork, cp := captureAfterReservedFork(t, c, tr, in, child)
 	// Stop the first child to make space for two independent restores.
 	mustMutate(t, c, fork.MachineID, "stop", "stop-child")
 	mustMutate(t, c, source.MachineID, "delete", "delete-source")
@@ -78,30 +30,24 @@ func TestCheckpointIntentDuplicatesAndReservations(t *testing.T) {
 	expectCode(t, err, "operation_pending")
 	// Restore and deletion use the same reservation, including ambiguous responses.
 	tr.unavailable = true
-	if err = c.ProcessOne(ctx, "mac"); err != nil {
-		t.Fatal(err)
-	}
+	processHost(t, c, "mac")
 	_, err = c.Derive(ctx, "checkpoint-delete", cp.ID, "delete-unresolved", model.ChildInput{})
 	expectCode(t, err, "operation_pending")
 	tr.unavailable = false
 	if _, err = c.Derive(ctx, "restore", cp.ID, "restore", child); err != nil {
 		t.Fatal(err)
 	}
-	if err = c.ProcessOne(ctx, "mac"); err != nil {
-		t.Fatal(err)
-	}
+	processHost(t, c, "mac")
 	child.Name = "restored-2"
 	second, err := c.Derive(ctx, "restore", cp.ID, "restore-2", child)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = c.ProcessOne(ctx, "mac"); err != nil {
-		t.Fatal(err)
-	}
+	processHost(t, c, "mac")
 	if restore.MachineID == second.MachineID {
 		t.Fatal("reused restored identity")
 	}
-	m, err = c.Inspect(ctx, second.MachineID)
+	m, err := c.Inspect(ctx, second.MachineID)
 	if err != nil || m.CheckpointID != cp.ID || m.SourceMachineID != source.MachineID {
 		t.Fatalf("restore ancestry: %+v %v", m, err)
 	}
@@ -109,22 +55,17 @@ func TestCheckpointIntentDuplicatesAndReservations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = c.ProcessOne(ctx, "mac"); err != nil {
-		t.Fatal(err)
-	}
-	done, err := c.Operation(deletion.ID)
-	if err != nil || done.Status != "succeeded" {
+	processHost(t, c, "mac")
+	done, err := c.Operation(t.Context(), deletion.ID)
+	if err != nil || done.Status != succeededStatus {
 		t.Fatalf("delete: %+v %v", done, err)
 	}
-	cp, err = c.Checkpoint(cp.ID)
-	if err != nil || cp.Status != "deleted" {
-		t.Fatalf("tombstone: %+v %v", cp, err)
-	}
-
+	checkpointWithStatus(t, c, cp.ID, "deleted")
 }
 func TestCaptureMissingPublicationRemainsUnresolved(t *testing.T) {
+	t.Parallel()
 	c, tr, in, _ := setupControl(t)
-	defer c.Close()
+	defer closeTest(t, c)
 	ctx := context.Background()
 	source := mustCreate(t, c, in, "create")
 	mustMutate(t, c, source.MachineID, "stop", "stop")
@@ -134,24 +75,23 @@ func TestCaptureMissingPublicationRemainsUnresolved(t *testing.T) {
 	}
 	obs := tr.observations[source.MachineID]
 	obs.Generation = op.Generation
-	tr.responses[op.ID] = model.Response{OperationID: op.ID, Status: "succeeded", Observation: &obs}
-	if err = c.ProcessOne(ctx, "mac"); err != nil {
-		t.Fatal(err)
-	}
-	op, err = c.Operation(op.ID)
-	if err != nil || op.Status != "unresolved" {
+	tr.responses[op.ID] = model.Response{OperationID: op.ID, Status: succeededStatus, Observation: &obs}
+	processHost(t, c, "mac")
+	op, err = c.Operation(t.Context(), op.ID)
+	if err != nil || op.Status != unresolvedStatus {
 		t.Fatalf("partial capture succeeded: %+v %v", op, err)
 	}
-	cp, err := c.Checkpoint(op.CheckpointID)
-	if err != nil || cp.Status != "unresolved" {
+	cp, err := c.Checkpoint(t.Context(), op.CheckpointID)
+	if err != nil || cp.Status != unresolvedStatus {
 		t.Fatalf("partial artifact published: %+v %v", cp, err)
 	}
 	_, err = c.Mutate(ctx, source.MachineID, "delete", "delete")
 	expectCode(t, err, "operation_pending")
 }
 func TestCheckpointHTTPRejectsPathsAndReportsResources(t *testing.T) {
+	t.Parallel()
 	c, _, in, _ := setupControl(t)
-	defer c.Close()
+	defer closeTest(t, c)
 	source := mustCreate(t, c, in, "create")
 	mustMutate(t, c, source.MachineID, "stop", "stop")
 	token := strings.Repeat("x", 32)
@@ -160,7 +100,7 @@ func TestCheckpointHTTPRejectsPathsAndReportsResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := func(method, path, body string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(method, path, strings.NewReader(body))
+		r := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 		r.Header.Set("Authorization", "Bearer "+token)
 		r.Header.Set("Idempotency-Key", "http")
 		w := httptest.NewRecorder()
@@ -179,36 +119,138 @@ func TestCheckpointHTTPRejectsPathsAndReportsResources(t *testing.T) {
 		t.Fatal(err, w.Body.String())
 	}
 	for _, path := range []string{"/v1/checkpoints", "/v1/checkpoints/" + op.CheckpointID} {
-		if w := request("GET", path, ""); w.Code != 200 || !strings.Contains(w.Body.String(), op.CheckpointID) {
-			t.Fatal(w.Code, w.Body.String())
+		if response := request(
+			"GET",
+			path,
+			"",
+		); response.Code != 200 ||
+			!strings.Contains(response.Body.String(), op.CheckpointID) {
+			t.Fatal(response.Code, response.Body.String())
 		}
 	}
 }
 func TestLinuxControllerDependencyAndUnavailableSource(t *testing.T) {
-	c, tr, in, _ := setupControl(t)
-	defer c.Close()
-	ctx := context.Background()
+	t.Parallel()
+	cfg := config()
+	cfg.Profiles[0] = model.Profile{
+		ID:        "linux-v1",
+		Runtime:   "smolvm",
+		OS:        "linux",
+		Arch:      "amd64",
+		CPU:       2,
+		RAMMiB:    2048,
+		ImagePath: "/opt/rootfs",
+	}
+	cfg.Hosts[0].ProfileIDs = []string{cfg.Profiles[0].ID}
+	c, tr, in, _ := setupControlConfig(t, cfg)
+	defer closeTest(t, c)
+	ctx := t.Context()
 	source := mustCreate(t, c, in, "create")
 	tr.unavailable = true
 	_, err := c.Derive(ctx, "checkpoint-create", source.MachineID, "capture", model.ChildInput{})
 	expectCode(t, err, "host_unavailable")
 	tr.unavailable = false
-	mustMutate(t, c, source.MachineID, "stop", "stop")
-	m, err := readMachine(c.db, source.MachineID)
+	child, err := c.Derive(
+		ctx,
+		"fork",
+		source.MachineID,
+		"fork",
+		model.ChildInput{Name: "descendant", SSHPublicKeys: in.SSHPublicKeys},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.ProfileSpec.Runtime = "smolvm"
-	if err = saveMachine(c.db, m); err != nil {
+	if err = c.ProcessOne(ctx, in.Host); err != nil {
 		t.Fatal(err)
 	}
-	descendant := m
-	descendant.ID = model.NewID()
-	descendant.Name = "descendant"
-	descendant.StoreID = m.ID
-	if err = saveMachine(c.db, descendant); err != nil {
+	descendant, err := c.Inspect(ctx, child.MachineID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = c.Mutate(ctx, m.ID, "delete", "delete")
+	if descendant.StoreID != source.MachineID {
+		t.Fatalf("backing store: %q, want %q", descendant.StoreID, source.MachineID)
+	}
+	mustMutate(t, c, source.MachineID, "stop", "stop")
+	_, err = c.Mutate(ctx, source.MachineID, "delete", "delete")
 	expectCode(t, err, "dependency")
+}
+
+func checkpointWithStatus(t *testing.T, controller *control.Controller, id, status string) model.Checkpoint {
+	t.Helper()
+	cp, err := controller.Checkpoint(t.Context(), id)
+	if err != nil {
+		t.Fatalf("read checkpoint %s: %v", id, err)
+	}
+	if cp.Status != status {
+		t.Fatalf("checkpoint %s status %q, want %q", id, cp.Status, status)
+	}
+	return cp
+}
+
+func deriveOperation(
+	t *testing.T,
+	controller *control.Controller,
+	action, id, key string,
+	input model.ChildInput,
+) model.Operation {
+	t.Helper()
+	op, err := controller.Derive(t.Context(), action, id, key, input)
+	if err != nil {
+		t.Fatalf("derive %s from %s: %v", action, id, err)
+	}
+	return op
+}
+
+func captureAfterReservedFork(
+	t *testing.T,
+	c *control.Controller,
+	tr *testTransport,
+	in model.CreateInput,
+	child model.ChildInput,
+) (model.Operation, model.Operation, model.Checkpoint) {
+	t.Helper()
+	ctx := t.Context()
+	source := mustCreate(t, c, in, "create")
+	if _, err := c.Derive(ctx, "fork", source.MachineID, "running-mac", child); err == nil {
+		t.Fatal("branched running Mac")
+	}
+	mustMutate(t, c, source.MachineID, "stop", "stop")
+	fork := deriveOperation(t, c, "fork", source.MachineID, "fork", child)
+	tr.unavailable = true
+	duplicate, err := c.Derive(ctx, "fork", source.MachineID, "fork", child)
+	if err != nil || duplicate.ID != fork.ID {
+		t.Fatalf("offline duplicate: %+v %v", duplicate, err)
+	}
+	tr.unavailable = false
+	changed := child
+	changed.Name = "different"
+	if _, err = c.Derive(ctx, "fork", source.MachineID, "fork", changed); err == nil {
+		t.Fatal("idempotency accepted changed input")
+	}
+	for _, action := range []string{"start", "delete"} {
+		_, err = c.Mutate(ctx, source.MachineID, action, action+"-conflict")
+		expectCode(t, err, "operation_pending")
+	}
+	_, err = c.Derive(ctx, "checkpoint-create", source.MachineID, "capture-conflict", model.ChildInput{})
+	expectCode(t, err, "operation_pending")
+	processHost(t, c, "mac")
+	m, err := c.Inspect(ctx, fork.MachineID)
+	if err != nil || m.SourceMachineID != source.MachineID || m.Host != in.Host || m.ID == source.MachineID {
+		t.Fatalf("child ancestry: %+v %v", m, err)
+	}
+	capture := deriveOperation(t, c, "checkpoint-create", source.MachineID, "capture", model.ChildInput{})
+	cp := checkpointWithStatus(t, c, capture.CheckpointID, "pending")
+	if cp.Kind != "disk" {
+		t.Fatalf("intent: %+v %v", cp, err)
+	}
+	if _, err = c.Derive(ctx, "restore", cp.ID, "partial", child); err == nil {
+		t.Fatal("restored unpublished capture")
+	}
+	processHost(t, c, "mac")
+	cp = checkpointWithStatus(t, c, cp.ID, "published")
+	if cp.RuntimePin == "" {
+		t.Fatalf("publication: %+v %v", cp, err)
+	}
+
+	return source, fork, cp
 }

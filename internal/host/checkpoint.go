@@ -11,27 +11,26 @@ import (
 	"fmt"
 	"strings"
 
-	"clankerbox/internal/model"
 	"golang.org/x/crypto/ssh"
+
+	"clankerbox/internal/model"
 )
 
 // The artifact path is derived by the helper from ID, never received from callers.
 type ownedCheckpoint struct {
 	model.Checkpoint
+
 	Source Manifest `json:"source"`
 }
-type checkpointRuntime interface {
-	Prerequisite(context.Context, string, Manifest, *ownedCheckpoint) error
-	Fork(context.Context, Manifest, Manifest) error
-	Capture(context.Context, Manifest, ownedCheckpoint) error
-	Restore(context.Context, Manifest, ownedCheckpoint) error
-	DeleteCheckpoint(context.Context, ownedCheckpoint) error
+
+func (cp ownedCheckpoint) runtimeSpec() CheckpointSpec {
+	return CheckpointSpec{ID: cp.ID, Kind: cp.Kind, Profile: cp.Profile, SourcePort: cp.Source.Port}
 }
 
-func (h *Helper) checkpoint(id string) (ownedCheckpoint, error) {
+func (h *Helper) checkpoint(ctx context.Context, id string) (ownedCheckpoint, error) {
 	var cp ownedCheckpoint
 	var b []byte
-	err := h.db.QueryRow("SELECT body FROM checkpoints WHERE id=?", id).Scan(&b)
+	err := h.db.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).Scan(&b)
 	if err == nil {
 		err = json.Unmarshal(b, &cp)
 	}
@@ -43,12 +42,12 @@ func (h *Helper) runtimePin(p model.Profile) string {
 		Smolvm, Tart, Library, DNS string
 	}{p, h.cfg.SmolvmPath, h.cfg.TartPath, h.cfg.LibraryDir, h.cfg.DNS})
 }
-func (h *Helper) resourceIdle(id string, checkpoint bool) error {
-	rows, err := h.db.Query("SELECT body FROM operations")
+func (h *Helper) resourceIdle(ctx context.Context, id string, checkpoint bool) (resultErr error) {
+	rows, err := h.db.QueryContext(ctx, "SELECT body FROM operations")
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	for rows.Next() {
 		var b []byte
 		var a accepted
@@ -58,7 +57,7 @@ func (h *Helper) resourceIdle(id string, checkpoint bool) error {
 		if err = json.Unmarshal(b, &a); err != nil {
 			return err
 		}
-		if a.Response.Status == "succeeded" || a.Response.Status == "failed" {
+		if a.Response.Status == statusSucceeded || a.Response.Status == statusFailed {
 			continue
 		}
 		r := a.Request
@@ -72,15 +71,15 @@ func (h *Helper) resourceIdle(id string, checkpoint bool) error {
 	}
 	return rows.Err()
 }
-func (h *Helper) machineDependencies(m Manifest) error {
-	if m.Profile.Runtime != "smolvm" {
+func (h *Helper) machineDependencies(ctx context.Context, m Manifest) (resultErr error) {
+	if m.Profile.Runtime != runtimeSmolvm {
 		return nil
 	}
-	rows, err := h.db.Query("SELECT body FROM machines")
+	rows, err := h.db.QueryContext(ctx, "SELECT body FROM machines")
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	for rows.Next() {
 		var b []byte
 		var child Manifest
@@ -90,7 +89,8 @@ func (h *Helper) machineDependencies(m Manifest) error {
 		if err = json.Unmarshal(b, &child); err != nil {
 			return err
 		}
-		if !child.Deleted && child.ID != m.ID && (child.StoreID == m.ID || child.SourceMachineID == m.ID && child.CheckpointID == "") {
+		if !child.Deleted && child.ID != m.ID &&
+			(child.StoreID == m.ID || child.SourceMachineID == m.ID && child.CheckpointID == "") {
 			return errors.New("retained Linux descendants depend on this machine; deletion refused")
 		}
 	}
@@ -112,226 +112,364 @@ func freshIdentity() (string, string, error) {
 	return string(pem.EncodeToMemory(block)), strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), nil
 }
 func (h *Helper) executeDerived(ctx context.Context, req model.Request, a accepted, retry bool) model.Response {
-	rt, ok := h.runtime.(checkpointRuntime)
-	if !ok {
-		return failure(req, errors.New("unsupported: runtime does not implement checkpoints/branches"))
-	}
 	var m, source Manifest
 	var cp *ownedCheckpoint
 	var err error
 	if retry {
-		return model.Response{OperationID: req.OperationID, Status: "unresolved", Error: "interrupted " + a.Phase + "; explicit operator inspection required; no automatic replay"}
-	} else {
-		if !h.profile(req.Profile) {
-			return failure(req, errors.New("unknown or changed pinned profile"))
+		return model.Response{
+			OperationID: req.OperationID,
+			Status:      statusUnresolved,
+			Error:       "interrupted " + a.Phase + "; explicit operator inspection required; no automatic replay",
 		}
-		if req.Action == "fork" || req.Action == "checkpoint-create" {
-			if !model.ValidID(req.SourceMachineID) || req.SourceGeneration < 1 {
-				return failure(req, errors.New("invalid source identity/generation"))
-			}
-			source, err = h.manifest(req.SourceMachineID)
-			if err != nil {
-				return failure(req, err)
-			}
-			if err = h.resourceIdle(source.ID, false); err != nil {
-				return failure(req, err)
-			}
-			if source.Deleted || !source.Prepared || source.Generation != req.SourceGeneration || !model.SameProfile(source.Profile, req.Profile) {
-				return failure(req, errors.New("source identity/profile/generation conflict"))
-			}
-			state, e := h.runtime.Inspect(ctx, source)
-			if e != nil {
-				return failure(req, e)
-			}
-			want := model.Stopped
-			if source.Profile.Runtime == "smolvm" {
-				want = model.Running
-			}
-			if !state.Exists || state.State != want {
-				return failure(req, fmt.Errorf("prerequisite: source must be %s", want))
-			}
-		}
-		if req.Action == "restore" || req.Action == "checkpoint-delete" {
-			if req.Checkpoint == nil || !model.ValidID(req.Checkpoint.ID) {
-				return failure(req, errors.New("owned checkpoint ID required"))
-			}
-			value, e := h.checkpoint(req.Checkpoint.ID)
-			if e != nil {
-				return failure(req, e)
-			}
-			cp = &value
-			expected := *req.Checkpoint
-			expected.Status = cp.Status
-			if cp.Status != "published" || model.Hash(expected) != model.Hash(cp.Checkpoint) || cp.RuntimePin != h.runtimePin(req.Profile) {
-				return failure(req, errors.New("checkpoint is unpublished or incompatible with pinned host/runtime/profile"))
-			}
-			if err = h.resourceIdle(cp.ID, true); err != nil {
-				return failure(req, err)
-			}
-		}
-		if req.Action == "checkpoint-create" {
-			if req.MachineID != source.ID || req.Generation != source.Generation+1 || req.Name != source.Name || req.Checkpoint == nil {
-				return failure(req, errors.New("capture generation/identity conflict"))
-			}
-			value := *req.Checkpoint
-			kind := "disk"
-			if source.Profile.Runtime == "smolvm" {
-				kind = "ram"
-			}
-			if !model.ValidID(value.ID) || value.Kind != kind || value.SourceMachineID != source.ID || value.SourceGeneration != source.Generation || value.Status != "pending" || value.Host != req.Host || value.CreatedAt.IsZero() || !model.SameProfile(value.Profile, req.Profile) {
-				return failure(req, errors.New("invalid checkpoint identity"))
-			}
-			if _, e := h.checkpoint(value.ID); !errors.Is(e, sql.ErrNoRows) {
-				return failure(req, errors.New("checkpoint identity already owned"))
-			}
-			value.RuntimePin = h.runtimePin(req.Profile)
-			cp = &ownedCheckpoint{Checkpoint: value, Source: source}
-			m = source
-			m.Generation = req.Generation
-		} else if req.Action == "checkpoint-delete" {
-			if req.MachineID != cp.ID || req.Generation != 1 {
-				return failure(req, errors.New("checkpoint deletion identity conflict"))
-			}
-		} else {
-			if req.Generation != 1 || !model.ValidName(req.Name) {
-				return failure(req, errors.New("child requires a new generation-one identity/name"))
-			}
-			if _, e := h.manifest(req.MachineID); !errors.Is(e, sql.ErrNoRows) {
-				return failure(req, errors.New("child identity already owned"))
-			}
-			keys, e := model.ValidateKeys(req.SSHPublicKeys)
-			if e != nil || model.Hash(keys) != model.Hash(req.SSHPublicKeys) {
-				return failure(req, errors.New("canonical child login keys required"))
-			}
-			m = Manifest{ID: req.MachineID, Name: req.Name, Profile: req.Profile, Generation: 1, SourceMachineID: source.ID}
-			if cp != nil {
-				m.CheckpointID = cp.ID
-				m.SourceMachineID = cp.SourceMachineID
-			}
-			if req.Profile.Runtime == "smolvm" {
-				m.Port, err = h.port()
-				if err != nil {
-					return failure(req, err)
-				}
-				if req.Action == "fork" {
-					m.StoreID = source.StoreID
-					if m.StoreID == "" {
-						m.StoreID = source.ID
-					}
-				}
-			}
-			m.SSHPrivateKey, m.SSHHostKey, err = freshIdentity()
-			if err != nil {
-				return failure(req, err)
-			}
-		}
-		if source.Profile.Runtime == "smolvm" && !source.Branchable {
-			err = errors.New("prerequisite: Linux source must explicitly stop/start with --branchable")
-		} else {
-			err = rt.Prerequisite(ctx, req.Action, source, cp)
-		}
+	}
+	if !h.profile(req.Profile) {
+		return failure(req, errors.New("unknown or changed pinned profile"))
+	}
+	if req.Action == actionFork || req.Action == actionCapture {
+		source, err = h.derivedSource(ctx, req)
 		if err != nil {
-			if req.Action != "checkpoint-create" {
-				return failure(req, err)
-			}
-			cp.Status = "failed"
-			a = accepted{Request: req, Phase: "done", Checkpoint: cp, Response: failure(req, err)}
-			a.Response.Observation, _ = h.observation(ctx, m)
-			if err = h.save(m, a); err != nil {
-				return model.Response{OperationID: req.OperationID, Status: "unresolved", Error: err.Error()}
-			}
-			return a.Response
-		}
-		a = accepted{Request: req, Phase: "accepted", Response: model.Response{OperationID: req.OperationID, Status: "unresolved"}}
-		if req.Action == "checkpoint-create" || req.Action == "checkpoint-delete" {
-			a.Checkpoint = cp
-		}
-		if err = h.save(m, a); err != nil {
 			return failure(req, err)
 		}
 	}
+
+	if req.Action == actionRestore || req.Action == actionDeleteCheckpoint {
+		cp, err = h.derivedCheckpoint(ctx, req)
+		if err != nil {
+			return failure(req, err)
+		}
+	}
+
+	m, cp, err = h.derivedIdentity(ctx, req, source, cp)
+	if err != nil {
+		return failure(req, err)
+	}
+
+	if err = h.derivedPrerequisite(ctx, req, source, cp); err != nil {
+		return h.rejectDerivedPrerequisite(ctx, req, m, cp, err)
+	}
+
+	a = accepted{
+		Request:  req,
+		Phase:    phaseAccepted,
+		Response: model.Response{OperationID: req.OperationID, Status: statusUnresolved},
+	}
+	if req.Action == actionCapture || req.Action == actionDeleteCheckpoint {
+		a.Checkpoint = cp
+	}
+	if err = h.save(ctx, m, a); err != nil {
+		return failure(req, err)
+	}
+	return h.applyDerived(ctx, req, a, m, source, cp)
+}
+
+func (h *Helper) applyDerived(
+	ctx context.Context,
+	req model.Request,
+	a accepted,
+	m, source Manifest,
+	cp *ownedCheckpoint,
+) model.Response {
+	var err error
 	// Accepted means no side effects have started. Everything from here is a single
 	// attempt. Persisting executing before the first side effect prevents replay.
-	unresolved := func(e error) model.Response {
-		if req.Action == "fork" || req.Action == "restore" {
-			m.Prepared = false
-			m.Endpoint = ""
-			m.SSHUser = ""
-		}
-		a.Response = model.Response{OperationID: req.OperationID, Status: "unresolved", Error: e.Error()}
-		if a.Checkpoint != nil && req.Action == "checkpoint-create" {
-			a.Checkpoint.Status = "unresolved"
-		}
-		if saveErr := h.save(m, a); saveErr != nil {
-			a.Response.Error += "; journal: " + saveErr.Error()
-		}
-		return a.Response
-	}
+	unresolved := func(e error) model.Response { return h.unresolvedDerived(ctx, req, &m, &a, e) }
+
 	a.Phase = req.Action
-	if err = h.save(m, a); err != nil {
+	if err = h.save(ctx, m, a); err != nil {
 		return unresolved(err)
 	}
 	switch req.Action {
-	case "fork":
-		err = rt.Fork(ctx, source, m)
-	case "restore":
-		err = rt.Restore(ctx, m, *cp)
-	case "checkpoint-create":
-		err = rt.Capture(ctx, source, *cp)
-	case "checkpoint-delete":
-		err = rt.DeleteCheckpoint(ctx, *cp)
+	case actionFork:
+		err = h.runtime.Fork(ctx, source, m)
+	case actionRestore:
+		err = h.runtime.Restore(ctx, m, cp.runtimeSpec())
+	case actionCapture:
+		err = h.runtime.Capture(ctx, source, cp.runtimeSpec())
+	case actionDeleteCheckpoint:
+		err = h.runtime.DeleteCheckpoint(ctx, cp.runtimeSpec())
 	}
 	if err != nil {
 		return unresolved(err)
 	}
-	if req.Action == "fork" || req.Action == "restore" {
-		a.Phase = "preparation"
-		if err = h.save(m, a); err != nil {
+	if req.Action == actionFork || req.Action == actionRestore {
+		if err = h.prepareDerivedChild(ctx, req, &m, &a); err != nil {
 			return unresolved(err)
 		}
-		user, key, endpoint, prepareErr := h.runtime.Prepare(ctx, m, req.SSHPublicKeys)
-		if prepareErr != nil {
-			return unresolved(prepareErr)
-		}
-		if key != m.SSHHostKey {
-			return unresolved(errors.New("child did not acknowledge the persisted fresh SSH key"))
-		}
-		m.SSHUser, m.Endpoint = user, endpoint
-		m.Prepared = true
-		m.Branchable = m.Profile.Runtime == "smolvm"
 	} else {
 		cp.Status = "published"
-		if req.Action == "checkpoint-delete" {
+		if req.Action == actionDeleteCheckpoint {
 			cp.Status = "deleted"
 		}
 		a.Checkpoint = cp
 	}
-	a.Response = model.Response{OperationID: req.OperationID, Status: "succeeded"}
-	if req.Action != "checkpoint-delete" {
-		a.Response.Observation, err = h.observation(ctx, m)
+
+	a.Response = model.Response{OperationID: req.OperationID, Status: statusSucceeded}
+	if req.Action != actionDeleteCheckpoint {
+		a.Response.Observation, err = h.derivedObservation(ctx, req, m, cp)
 		if err != nil {
 			return unresolved(err)
 		}
-		if req.Action == "checkpoint-create" {
-			want := model.Stopped
-			if cp.Kind == "ram" {
-				want = model.Running
-			}
-			if a.Response.Observation.State != want {
-				return unresolved(errors.New("source state uncertain after capture; artifact retained but unpublished"))
-			}
-		}
-		if (req.Action == "fork" || req.Action == "restore") && a.Response.Observation.State != model.Running {
-			return unresolved(errors.New("child exited before preparation publication"))
-		}
 	}
+
 	if a.Checkpoint != nil {
 		value := a.Checkpoint.Checkpoint
 		a.Response.Checkpoint = &value
 	}
-	a.Phase = "done"
-	if err = h.save(m, a); err != nil {
+	a.Phase = phaseDone
+	if err = h.save(ctx, m, a); err != nil {
 		return unresolved(err)
 	}
 	return a.Response
+}
+
+func (h *Helper) derivedSource(ctx context.Context, req model.Request) (Manifest, error) {
+	if !model.ValidID(req.SourceMachineID) || req.SourceGeneration < 1 {
+		return Manifest{}, errors.New("invalid source identity/generation")
+	}
+	source, err := h.manifest(ctx, req.SourceMachineID)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if err = h.resourceIdle(ctx, source.ID, false); err != nil {
+		return Manifest{}, err
+	}
+	if source.Deleted || !source.Prepared || source.Generation != req.SourceGeneration ||
+		!model.SameProfile(source.Profile, req.Profile) {
+		return Manifest{}, errors.New("source identity/profile/generation conflict")
+	}
+	state, e := h.runtime.Inspect(ctx, source)
+	if e != nil {
+		return Manifest{}, e
+	}
+	want := model.Stopped
+	if source.Profile.Runtime == runtimeSmolvm {
+		want = model.Running
+	}
+	if !state.Exists || state.State != want {
+		return Manifest{}, fmt.Errorf("prerequisite: source must be %s", want)
+	}
+	return source, nil
+}
+
+func (h *Helper) derivedCheckpoint(ctx context.Context, req model.Request) (*ownedCheckpoint, error) {
+	if req.Checkpoint == nil || !model.ValidID(req.Checkpoint.ID) {
+		return nil, errors.New("owned checkpoint ID required")
+	}
+	value, e := h.checkpoint(ctx, req.Checkpoint.ID)
+	if e != nil {
+		return nil, e
+	}
+	cp := &value
+	expected := *req.Checkpoint
+	expected.Status = cp.Status
+	if cp.Status != "published" || model.Hash(expected) != model.Hash(cp.Checkpoint) ||
+		cp.RuntimePin != h.runtimePin(req.Profile) {
+		return nil, errors.New("checkpoint is unpublished or incompatible with pinned host/runtime/profile")
+	}
+	if err := h.resourceIdle(ctx, cp.ID, true); err != nil {
+		return nil, err
+	}
+	return cp, nil
+}
+
+func (h *Helper) captureIdentity(
+	ctx context.Context,
+	req model.Request,
+	source Manifest,
+) (Manifest, *ownedCheckpoint, error) {
+	if req.MachineID != source.ID || req.Generation != source.Generation+1 || req.Name != source.Name ||
+		req.Checkpoint == nil {
+		return Manifest{}, nil, errors.New("capture generation/identity conflict")
+	}
+	value := *req.Checkpoint
+	kind := checkpointDisk
+	if source.Profile.Runtime == runtimeSmolvm {
+		kind = checkpointRAM
+	}
+	if !model.ValidID(value.ID) || value.Kind != kind || value.SourceMachineID != source.ID ||
+		value.SourceGeneration != source.Generation ||
+		value.Status != "pending" ||
+		value.Host != req.Host ||
+		value.CreatedAt.IsZero() ||
+		!model.SameProfile(value.Profile, req.Profile) {
+		return Manifest{}, nil, errors.New("invalid checkpoint identity")
+	}
+	if _, e := h.checkpoint(ctx, value.ID); !errors.Is(e, sql.ErrNoRows) {
+		return Manifest{}, nil, errors.New("checkpoint identity already owned")
+	}
+	value.RuntimePin = h.runtimePin(req.Profile)
+	cp := &ownedCheckpoint{Checkpoint: value, Source: source}
+	m := source
+	m.Generation = req.Generation
+	return m, cp, nil
+}
+
+func (h *Helper) childIdentity(
+	ctx context.Context,
+	req model.Request,
+	source Manifest,
+	cp *ownedCheckpoint,
+) (Manifest, error) {
+	var err error
+
+	if req.Generation != 1 || !model.ValidName(req.Name) {
+		return Manifest{}, errors.New("child requires a new generation-one identity/name")
+	}
+	if _, e := h.manifest(ctx, req.MachineID); !errors.Is(e, sql.ErrNoRows) {
+		return Manifest{}, errors.New("child identity already owned")
+	}
+	keys, e := model.ValidateKeys(req.SSHPublicKeys)
+	if e != nil || model.Hash(keys) != model.Hash(req.SSHPublicKeys) {
+		return Manifest{}, errors.New("canonical child login keys required")
+	}
+	m := Manifest{
+		ID:              req.MachineID,
+		Name:            req.Name,
+		Profile:         req.Profile,
+		Generation:      1,
+		SourceMachineID: source.ID,
+	}
+	if cp != nil {
+		m.CheckpointID = cp.ID
+		m.SourceMachineID = cp.SourceMachineID
+	}
+	if req.Profile.Runtime == runtimeSmolvm {
+		m.Port, err = h.port(ctx)
+		if err != nil {
+			return Manifest{}, err
+		}
+		if req.Action == actionFork {
+			m.StoreID = source.StoreID
+			if m.StoreID == "" {
+				m.StoreID = source.ID
+			}
+		}
+	}
+	m.SSHPrivateKey, m.SSHHostKey, err = freshIdentity()
+	if err != nil {
+		return Manifest{}, err
+	}
+	return m, nil
+}
+
+func (h *Helper) prepareDerivedChild(ctx context.Context, req model.Request, m *Manifest, a *accepted) error {
+	a.Phase = "preparation"
+	if err := h.save(ctx, *m, *a); err != nil {
+		return err
+	}
+	user, key, endpoint, prepareErr := h.runtime.Prepare(ctx, *m, req.SSHPublicKeys)
+	if prepareErr != nil {
+		return prepareErr
+	}
+	if key != m.SSHHostKey {
+		return errors.New("child did not acknowledge the persisted fresh SSH key")
+	}
+	m.SSHUser, m.Endpoint = user, endpoint
+	m.Prepared = true
+	m.Branchable = m.Profile.Runtime == runtimeSmolvm
+	return nil
+}
+
+func (h *Helper) derivedObservation(
+	ctx context.Context,
+	req model.Request,
+	m Manifest,
+	cp *ownedCheckpoint,
+) (*model.Observation, error) {
+	obs, err := h.observation(ctx, m)
+	if err != nil {
+		return nil, err
+	}
+	if req.Action == actionCapture {
+		want := model.Stopped
+		if cp.Kind == checkpointRAM {
+			want = model.Running
+		}
+		if obs.State != want {
+			return nil, errors.New("source state uncertain after capture; artifact retained but unpublished")
+		}
+	}
+	if (req.Action == actionFork || req.Action == actionRestore) && obs.State != model.Running {
+		return nil, errors.New("child exited before preparation publication")
+	}
+	return obs, nil
+}
+
+func (h *Helper) derivedPrerequisite(
+	ctx context.Context,
+	req model.Request,
+	source Manifest,
+	cp *ownedCheckpoint,
+) error {
+	if source.Profile.Runtime == runtimeSmolvm && !source.Branchable {
+		return errors.New("prerequisite: Linux source must explicitly stop/start with --branchable")
+	}
+
+	var spec *CheckpointSpec
+	if cp != nil {
+		value := cp.runtimeSpec()
+		spec = &value
+	}
+	return h.runtime.Prerequisite(ctx, req.Action, source, spec)
+}
+
+func (h *Helper) rejectDerivedPrerequisite(
+	ctx context.Context,
+	req model.Request,
+	m Manifest,
+	cp *ownedCheckpoint,
+	err error,
+) model.Response {
+	if req.Action != actionCapture {
+		return failure(req, err)
+	}
+	cp.Status = statusFailed
+	a := accepted{Request: req, Phase: phaseDone, Checkpoint: cp, Response: failure(req, err)}
+	a.Response.Observation, _ = h.observation(ctx, m)
+	if err = h.save(ctx, m, a); err != nil {
+		return model.Response{OperationID: req.OperationID, Status: statusUnresolved, Error: err.Error()}
+	}
+	return a.Response
+}
+
+func (h *Helper) unresolvedDerived(
+	ctx context.Context,
+	req model.Request,
+	m *Manifest,
+	a *accepted,
+	e error,
+) model.Response {
+	if req.Action == actionFork || req.Action == actionRestore {
+		m.Prepared = false
+		m.Endpoint = ""
+		m.SSHUser = ""
+	}
+	a.Response = model.Response{OperationID: req.OperationID, Status: statusUnresolved, Error: e.Error()}
+	if a.Checkpoint != nil && req.Action == actionCapture {
+		a.Checkpoint.Status = statusUnresolved
+	}
+	if saveErr := h.save(ctx, *m, *a); saveErr != nil {
+		a.Response.Error += "; journal: " + saveErr.Error()
+	}
+	return a.Response
+}
+
+func (h *Helper) derivedIdentity(
+	ctx context.Context,
+	req model.Request,
+	source Manifest,
+	cp *ownedCheckpoint,
+) (Manifest, *ownedCheckpoint, error) {
+	switch req.Action {
+	case actionCapture:
+		return h.captureIdentity(ctx, req, source)
+	case actionDeleteCheckpoint:
+		if req.MachineID != cp.ID || req.Generation != 1 {
+			return Manifest{}, nil, errors.New("checkpoint deletion identity conflict")
+		}
+		return Manifest{}, cp, nil
+	default:
+		m, err := h.childIdentity(ctx, req, source, cp)
+		return m, cp, err
+	}
 }

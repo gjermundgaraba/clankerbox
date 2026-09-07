@@ -1,4 +1,4 @@
-package host
+package host_test
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"clankerbox/internal/host"
 
 	"clankerbox/internal/model"
 )
@@ -35,33 +37,30 @@ func (r *recordingRunner) Run(_ context.Context, path string, args, env []string
 	return nil, nil
 }
 func TestNativeTartArgumentsPrivateEnvironmentAndSupervisor(t *testing.T) {
+	t.Parallel()
 	h, cfg, _, req := setup(t)
-	defer h.Close()
+	defer closeHelper(t, h)
 	_ = cfg.Validate()
 	runner := &recordingRunner{}
-	n := &NativeRuntime{Config: cfg, Runner: runner}
-	m := Manifest{ID: req.MachineID, Profile: req.Profile}
-	if err := n.Create(context.Background(), m); err != nil {
-		t.Fatal(err)
-	}
-	if err := n.Configure(context.Background(), m); err != nil {
-		t.Fatal(err)
-	}
+	n := &host.NativeRuntime{Config: cfg, Runner: runner}
+	m := host.Manifest{ID: req.MachineID, Profile: req.Profile}
+	requireNoError(t, n.Create(context.Background(), m))
+	requireNoError(t, n.Configure(context.Background(), m))
 	if !slices.Equal(runner.calls[0].args, []string{"clone", "seed", m.RuntimeName()}) {
 		t.Fatalf("clone argv: %+v", runner.calls[0])
 	}
-	if !slices.Contains(runner.calls[1].args, "--random-mac") || !slices.Contains(runner.calls[1].args, "--random-serial") {
+	if !slices.Contains(runner.calls[1].args, "--random-mac") ||
+		!slices.Contains(runner.calls[1].args, "--random-serial") {
 		t.Fatal("missing distinct VM identities")
 	}
 	for _, call := range runner.calls {
-		if !slices.Contains(call.env, "TART_HOME="+filepath.Join(cfg.Root, "tart")) || !slices.Contains(call.env, "TART_NO_AUTO_PRUNE=1") {
+		if !slices.Contains(call.env, "TART_HOME="+filepath.Join(cfg.Root, runtimeTart)) ||
+			!slices.Contains(call.env, "TART_NO_AUTO_PRUNE=1") {
 			t.Fatal("runtime uses unowned Tart home")
 		}
 	}
-	contents, err := os.ReadFile(n.job(m))
-	if err != nil {
-		t.Fatal(err)
-	}
+	contents, err := os.ReadFile(supervisorFile(t, n.Config.Root, m.ID))
+	requireNoError(t, err)
 	dec := xml.NewDecoder(strings.NewReader(string(contents)))
 	for {
 		_, err = dec.Token()
@@ -79,12 +78,13 @@ func TestNativeTartArgumentsPrivateEnvironmentAndSupervisor(t *testing.T) {
 	}
 }
 func TestNativeInventoryUsesObservedStateAndRejectsBadEndpoint(t *testing.T) {
+	t.Parallel()
 	h, cfg, _, req := setup(t)
-	defer h.Close()
+	defer closeHelper(t, h)
 	runner := &recordingRunner{}
-	n := &NativeRuntime{Config: cfg, Runner: runner}
-	m := Manifest{ID: req.MachineID, Profile: req.Profile}
-	state := "running"
+	n := &host.NativeRuntime{Config: cfg, Runner: runner}
+	m := host.Manifest{ID: req.MachineID, Profile: req.Profile}
+	state := stateRunning
 	ip := "192.168.64.5"
 	runner.reply = func(call commandCall) ([]byte, error) {
 		if call.args[0] == "list" {
@@ -96,34 +96,41 @@ func TestNativeInventoryUsesObservedStateAndRejectsBadEndpoint(t *testing.T) {
 	if err != nil || obs.State != model.Running || obs.Endpoint != "192.168.64.5:22" {
 		t.Fatalf("observed runtime: %+v %v", obs, err)
 	}
-	ip = "8.8.8.8"
-	if _, err = n.Inspect(context.Background(), m); err == nil {
-		t.Fatal("accepted public endpoint")
+	for _, invalid := range []string{"localhost", "127.0.0.1", "8.8.8.8", "192.168.1.2:80"} {
+		ip = invalid
+		if _, err = n.Inspect(context.Background(), m); err == nil {
+			t.Fatal("accepted unsafe endpoint", ip)
+		}
 	}
 	state = "suspended"
 	obs, err = n.Inspect(context.Background(), m)
 	if err != nil || obs.State != model.Unknown {
 		t.Fatal("mapped unsupported state to stopped")
 	}
-	state = "stopped"
+	state = stateStopped
 	obs, err = n.Inspect(context.Background(), m)
 	if err != nil || obs.State != model.Stopped {
 		t.Fatal("ignored runtime stop")
 	}
 }
 func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	runner := &recordingRunner{}
-	p := model.Profile{ID: "ubuntu-bare-v1", OS: "linux", Arch: "amd64", Runtime: "smolvm", CPU: 2, RAMMiB: 2048, ImagePath: "/opt/profiles/ubuntu-bare/agent-rootfs"}
-	cfg := Config{Root: root, SmolvmPath: "/opt/smolvm/bin/smolvm", LibraryDir: "/opt/smolvm/lib", DNS: "185.12.64.1"}
-	if err := cfg.Validate(); err != nil {
-		t.Fatal(err)
+	p := model.Profile{
+		ID:        "ubuntu-bare-v1",
+		OS:        osLinux,
+		Arch:      archAMD64,
+		Runtime:   runtimeSmolvm,
+		CPU:       2,
+		RAMMiB:    2048,
+		ImagePath: "/opt/profiles/ubuntu-bare/agent-rootfs",
 	}
-	n := &NativeRuntime{Config: cfg, Runner: runner}
-	m := Manifest{ID: model.NewID(), Profile: p, Port: 22001}
-	if err := n.Create(context.Background(), m); err != nil {
-		t.Fatal(err)
-	}
+	cfg := host.Config{Root: root, SmolvmPath: testSmolvmPath, LibraryDir: testSmolvmLibrary, DNS: "185.12.64.1"}
+	requireNoError(t, cfg.Validate())
+	n := &host.NativeRuntime{Config: cfg, Runner: runner}
+	m := host.Manifest{ID: model.NewID(), Profile: p, Port: 22001}
+	requireNoError(t, n.Create(context.Background(), m))
 	if len(runner.calls) != 2 {
 		t.Fatal("unexpected creation commands")
 	}
@@ -139,12 +146,14 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 			t.Fatalf("unexpected runtime flag %s", forbidden)
 		}
 	}
-	for _, required := range []string{"SMOLVM_PUBLISH_ADDR=127.0.0.1", "SMOLVM_EGRESS_FLOOR=strict", "SMOLVM_AGENT_ROOTFS=" + filepath.Join(machineDir(cfg, m), "agent-rootfs"), "XDG_DATA_HOME=" + filepath.Join(machineDir(cfg, m), "d"), "SMOLVM_LIB_DIR=/opt/smolvm/lib"} {
+	for _, required := range []string{"SMOLVM_PUBLISH_ADDR=127.0.0.1", "SMOLVM_EGRESS_FLOOR=strict", "SMOLVM_AGENT_ROOTFS=" + filepath.Join(filepath.Join(cfg.Root, "machines", m.ID), "agent-rootfs"), "XDG_DATA_HOME=" + filepath.Join(filepath.Join(cfg.Root, "machines", m.ID), "d"), "SMOLVM_LIB_DIR=/opt/smolvm/lib"} {
 		if !slices.Contains(create.env, required) {
 			t.Fatalf("missing private environment %s", required)
 		}
 	}
-	unit := string(n.jobContents(m))
+	requireNoError(t, os.MkdirAll(filepath.Join(cfg.Root, "jobs"), 0700))
+	requireNoError(t, n.Configure(context.Background(), m))
+	unit := readSupervisor(t, n.Config.Root, m.ID)
 	for _, required := range []string{"Type=oneshot", "RemainAfterExit=yes", "Restart=no", "SendSIGKILL=no", "TimeoutStartSec=infinity", "ExecStart=/opt/smolvm/bin/smolvm machine start --name cb-"} {
 		if !strings.Contains(unit, required) {
 			t.Fatalf("unit missing %s", required)
@@ -161,20 +170,17 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	}
 }
 func TestBootstrapSSHDPolicyAndRetainedHostKey(t *testing.T) {
+	t.Parallel()
 	h, _, _, req := setup(t)
-	defer h.Close()
-	m := Manifest{ID: req.MachineID, Profile: req.Profile}
-	script, err := bootstrapScript(m, req.SSHPublicKeys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	defer closeHelper(t, h)
+	m := host.Manifest{ID: req.MachineID, Profile: req.Profile}
+	script, err := preparedScript(t, m, req.SSHPublicKeys)
+	requireNoError(t, err)
 	matches := regexp.MustCompile(`printf '%s' '([A-Za-z0-9+/=]+)'`).FindAllStringSubmatch(script, -1)
 	var config string
 	for _, match := range matches {
-		decoded, err := base64.StdEncoding.DecodeString(match[1])
-		if err != nil {
-			t.Fatal(err)
-		}
+		decoded, decodeErr := base64.StdEncoding.DecodeString(match[1])
+		requireNoError(t, decodeErr)
 		if strings.HasPrefix(string(decoded), "Port 22") {
 			config = string(decoded)
 		}
@@ -184,21 +190,17 @@ func TestBootstrapSSHDPolicyAndRetainedHostKey(t *testing.T) {
 			t.Fatalf("SSHD missing %s", required)
 		}
 	}
-	start, err := bootstrapScript(m, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	start, err := preparedScript(t, m, nil)
+	requireNoError(t, err)
 	if strings.Contains(start, "ssh-keygen -q") || strings.Contains(start, "sshd_config\n") {
 		t.Fatal("start creates identity/configuration")
 	}
 	if !strings.Contains(start, "ssh-keygen -y -f /etc/clankerbox/ssh_host_ed25519_key") {
 		t.Fatal("start doesn't verify retained key")
 	}
-	m.Profile.Runtime = "smolvm"
-	linux, err := bootstrapScript(m, req.SSHPublicKeys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	m.Profile.Runtime = runtimeSmolvm
+	linux, err := preparedScript(t, m, req.SSHPublicKeys)
+	requireNoError(t, err)
 	ownership := strings.Index(linux, "chown 0:0 /run/sshd /root /etc/ssh")
 	if ownership < 0 || ownership > strings.Index(linux, "/usr/sbin/sshd -t") {
 		t.Fatal("sshd checked before preparing Linux ownership")
@@ -206,38 +208,38 @@ func TestBootstrapSSHDPolicyAndRetainedHostKey(t *testing.T) {
 }
 
 func TestSmolvmStopRequiresAcknowledgementBeforeSupervisorStop(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
-	m := Manifest{ID: model.NewID(), Port: 22000, Profile: model.Profile{Runtime: "smolvm"}}
-	cfg := Config{Root: root, SmolvmPath: "/opt/smolvm/bin/smolvm", LibraryDir: "/opt/smolvm/lib", SystemctlPath: "/usr/bin/systemctl"}
-	db := filepath.Join(machineDir(cfg, m), "d", "smolvm", "server", "smolvm.db")
-	if err := os.MkdirAll(filepath.Dir(db), 0700); err != nil {
-		t.Fatal(err)
+	m := host.Manifest{ID: model.NewID(), Port: 22000, Profile: model.Profile{Runtime: runtimeSmolvm}}
+	cfg := host.Config{
+		Root:          root,
+		SmolvmPath:    testSmolvmPath,
+		LibraryDir:    testSmolvmLibrary,
+		SystemctlPath: "/usr/bin/systemctl",
 	}
-	if err := os.WriteFile(db, nil, 0600); err != nil {
-		t.Fatal(err)
-	}
-	state := "running"
+	db := filepath.Join(filepath.Join(cfg.Root, "machines", m.ID), "d", runtimeSmolvm, "server", "smolvm.db")
+	requireNoError(t, os.MkdirAll(filepath.Dir(db), 0700))
+	requireNoError(t, os.WriteFile(db, nil, 0600))
+	state := stateRunning
 	runner := &recordingRunner{}
 	runner.reply = func(call commandCall) ([]byte, error) {
 		if call.path == cfg.SystemctlPath {
-			if state != "stopped" {
+			if state != stateStopped {
 				t.Fatal("supervisor stopped before guest exit")
 			}
 			return nil, nil
 		}
-		if slices.Contains(call.args, "stop") {
+		if slices.Contains(call.args, actionStop) {
 			if !slices.Contains(call.env, "SMOLVM_STOP_REQUIRE_ACK=1") {
 				t.Fatal("stop does not require guest shutdown acknowledgement")
 			}
-			state = "stopped"
+			state = stateStopped
 			return nil, nil
 		}
 		return []byte(`[{"name":"` + m.RuntimeName() + `","state":"` + state + `"}]`), nil
 	}
-	n := &NativeRuntime{Config: cfg, Runner: runner}
-	if err := n.Stop(context.Background(), m); err != nil {
-		t.Fatal(err)
-	}
+	n := &host.NativeRuntime{Config: cfg, Runner: runner}
+	requireNoError(t, n.Stop(context.Background(), m))
 	runner.calls = nil
 	runner.reply = func(call commandCall) ([]byte, error) {
 		if call.path == cfg.SystemctlPath {
@@ -248,4 +250,30 @@ func TestSmolvmStopRequiresAcknowledgementBeforeSupervisorStop(t *testing.T) {
 	if err := n.Stop(context.Background(), m); err == nil || len(runner.calls) != 1 {
 		t.Fatal("failed shutdown did not stop at runtime boundary")
 	}
+}
+
+func preparedScript(t *testing.T, m host.Manifest, keys []string) (string, error) {
+	t.Helper()
+	n, runner, fixture := nativeFixture(t)
+	m.ID = fixture.ID
+	n.Config.TartPath = "/opt/tart"
+	nativeDB(t, n, m)
+	key := testKey(t)
+	var script string
+	runner.reply = func(call commandCall) ([]byte, error) {
+		if slices.Contains(call.args, "list") || slices.Contains(call.args, "ls") {
+			return []byte(`[{"name":"` + m.RuntimeName() + `","state":"running"}]`), nil
+		}
+		if slices.Contains(call.args, "ip") {
+			return []byte("192.168.64.2"), nil
+		}
+		if len(call.input) > 0 {
+			script = string(call.input)
+		} else {
+			script = call.args[len(call.args)-1]
+		}
+		return []byte(key), nil
+	}
+	_, _, _, err := n.Prepare(context.Background(), m, keys)
+	return script, err
 }

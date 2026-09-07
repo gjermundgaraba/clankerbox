@@ -18,9 +18,12 @@ type Endpoint struct {
 	Port int    `json:"port"`
 }
 
+// Address formats the numeric endpoint, including IPv6 brackets.
 func (e Endpoint) Address() string { return net.JoinHostPort(e.Host, strconv.Itoa(e.Port)) }
+
+// Validate rejects non-loopback destinations and invalid ports.
 func (e Endpoint) Validate() error {
-	if (e.Host != "127.0.0.1" && e.Host != "::1") || e.Port < 1 || e.Port > 65535 {
+	if (e.Host != ipv4Loopback && e.Host != ipv6Loopback) || e.Port < 1 || e.Port > 65535 {
 		return errors.New("forward destination must be 127.0.0.1 or ::1 and port 1..65535")
 	}
 	return nil
@@ -40,6 +43,8 @@ func parsePort(s string) (int, error) {
 	}
 	return p, nil
 }
+
+// ParseEndpoint parses an explicit numeric loopback destination.
 func ParseEndpoint(s string) (Endpoint, error) {
 	h, p, e := net.SplitHostPort(s)
 	if e != nil {
@@ -53,9 +58,13 @@ func ParseEndpoint(s string) (Endpoint, error) {
 	return ep, ep.Validate()
 }
 
+// LinuxDiscoveryCommand lists listening TCP sockets without resolving names.
 const LinuxDiscoveryCommand = "ss -H -ltn"
+
+// MacDiscoveryCommand lists listening TCP sockets in machine-readable form.
 const MacDiscoveryCommand = "lsof -nP -iTCP -sTCP:LISTEN -F n"
 
+// DiscoveryCommand selects the fixed listener query for a supported guest OS.
 func DiscoveryCommand(os string) (string, error) {
 	switch os {
 	case "linux":
@@ -72,7 +81,8 @@ func discoveryEndpoint(s string) []Endpoint {
 	}
 	host := s[:i]
 	if strings.ContainsAny(host, "[]") {
-		if len(host) < 3 || host[0] != '[' || host[len(host)-1] != ']' || strings.ContainsAny(host[1:len(host)-1], "[]") {
+		if len(host) < 3 || host[0] != '[' || host[len(host)-1] != ']' ||
+			strings.ContainsAny(host[1:len(host)-1], "[]") {
 			return nil
 		}
 		host = host[1 : len(host)-1]
@@ -83,7 +93,7 @@ func discoveryEndpoint(s string) []Endpoint {
 	}
 	// An unqualified wildcard has no family information; probe both loopbacks.
 	if host == "*" {
-		return []Endpoint{{"127.0.0.1", p}, {"::1", p}}
+		return []Endpoint{{ipv4Loopback, p}, {ipv6Loopback, p}}
 	}
 	a, e := netip.ParseAddr(host)
 	if e != nil || a.Zone() != "" || (!a.IsLoopback() && !a.IsUnspecified()) {
@@ -91,23 +101,25 @@ func discoveryEndpoint(s string) []Endpoint {
 	}
 	// Other 127/8 addresses are not rewritten to a different listener.
 	if a.Is4() {
-		if a.String() != "127.0.0.1" && !a.IsUnspecified() {
+		if a.String() != ipv4Loopback && !a.IsUnspecified() {
 			return nil
 		}
-		return []Endpoint{{"127.0.0.1", p}}
+		return []Endpoint{{ipv4Loopback, p}}
 	}
 	if a.Is4In6() {
 		return nil
 	}
-	return []Endpoint{{"::1", p}}
+	return []Endpoint{{ipv6Loopback, p}}
 }
+
+// ParseListeners extracts eligible numeric loopback destinations from bounded discovery output.
 func ParseListeners(os, output string) ([]Endpoint, error) {
 	if _, e := DiscoveryCommand(os); e != nil {
 		return nil, e
 	}
 	found := map[Endpoint]bool{}
 	scan := bufio.NewScanner(strings.NewReader(output))
-	scan.Buffer(make([]byte, 4096), 64*1024)
+	scan.Buffer(make([]byte, initialScanBufferBytes), maxDiscoveryLineBytes)
 	for scan.Scan() {
 		line := scan.Text()
 		var address string
@@ -143,6 +155,7 @@ func ParseListeners(os, output string) ([]Endpoint, error) {
 	return out, nil
 }
 
+// Mapping describes a durable local socket and its current guest availability.
 type Mapping struct {
 	MachineID string   `json:"machine_id"`
 	Guest     Endpoint `json:"guest"`
@@ -155,40 +168,16 @@ type Mapping struct {
 // localhost and family-unspecified '*' prefer IPv4, then IPv6.
 func RewriteURL(raw string, mappings []Mapping, allowExternal bool) (string, error) {
 	u, e := url.Parse(raw)
-	if e != nil || u.Opaque != "" || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || strings.ContainsAny(raw, "\r\n\x00") {
+	if e != nil || u.Opaque != "" || u.Host == "" || (u.Scheme != "http" && u.Scheme != httpsScheme) || u.User != nil ||
+		strings.ContainsAny(raw, "\r\n\x00") {
 		return "", errors.New("URL must be http(s) without credentials")
 	}
-	h := strings.ToLower(u.Hostname())
-	h = strings.TrimSuffix(h, ".")
-	if strings.Contains(u.Host, "[") {
-		if _, err := netip.ParseAddr(h); err != nil {
-			return "", errors.New("invalid bracketed URL address")
-		}
-	}
-	local := h == "localhost" || h == "*"
-	family := ""
-	if a, e := netip.ParseAddr(h); e == nil {
-		if a.Zone() != "" {
-			return "", errors.New("scoped URL addresses are unsupported")
-		}
-		local = a.IsLoopback() || a.IsUnspecified()
-		if local {
-			if a.Is4() {
-				if a.String() != "127.0.0.1" && !a.IsUnspecified() {
-					return "", errors.New("unsupported loopback address")
-				}
-				family = "127.0.0.1"
-			} else if !a.Is4In6() {
-				family = "::1"
-			} else {
-				return "", errors.New("IPv4-mapped URL addresses are unsupported")
-			}
-		}
-	} else if ambiguousNumericHost(h) {
-		return "", errors.New("ambiguous numeric URL address")
+	local, family, hostErr := urlHostFamily(u)
+	if hostErr != nil {
+		return "", hostErr
 	}
 	port := 80
-	if u.Scheme == "https" {
+	if u.Scheme == httpsScheme {
 		port = 443
 	}
 	if u.Port() != "" {
@@ -205,29 +194,13 @@ func RewriteURL(raw string, mappings []Mapping, allowExternal bool) (string, err
 		}
 		return "", errors.New("URL host must be loopback or wildcard")
 	}
-	families := []string{family}
-	if family == "" {
-		families = []string{"127.0.0.1", "::1"}
-	}
-	for _, f := range families {
-		for _, m := range mappings {
-			if m.Guest == (Endpoint{f, port}) && m.Available {
-				ep, e := ParseEndpoint(m.Local)
-				if e != nil {
-					return "", errors.New("invalid local mapping")
-				}
-				u.Host = ep.Address()
-				return u.String(), nil
-			}
-		}
-	}
-	return "", fmt.Errorf("no available forward for guest port %d", port)
+	return rewriteLocalURL(u, family, port, mappings)
 }
 
 // Browsers normalize abbreviated, octal and hexadecimal IPv4 spellings. Never
 // pass these through as external hosts where they could reach an unrelated local service.
 func ambiguousNumericHost(host string) bool {
-	for _, part := range strings.Split(host, ".") {
+	for part := range strings.SplitSeq(host, ".") {
 		if part == "" {
 			return true
 		}
@@ -242,3 +215,74 @@ func ambiguousNumericHost(host string) bool {
 	}
 	return true
 }
+
+const (
+	httpsScheme  = "https"
+	ipv4Loopback = "127.0.0.1"
+	ipv6Loopback = "::1"
+)
+
+func urlHostFamily(u *url.URL) (bool, string, error) {
+	h := strings.ToLower(u.Hostname())
+	h = strings.TrimSuffix(h, ".")
+	if strings.Contains(u.Host, "[") {
+		if _, err := netip.ParseAddr(h); err != nil {
+			return false, "", errors.New("invalid bracketed URL address")
+		}
+	}
+	local := h == "localhost" || h == "*"
+	family := ""
+	address, parseErr := netip.ParseAddr(h)
+	if parseErr != nil {
+		if ambiguousNumericHost(h) {
+			return false, "", errors.New("ambiguous numeric URL address")
+		}
+		return local, family, nil
+	}
+	if address.Zone() != "" {
+		return false, "", errors.New("scoped URL addresses are unsupported")
+	}
+	if !address.IsLoopback() && !address.IsUnspecified() {
+		return false, "", nil
+	}
+	switch {
+	case address.Is4():
+		if address.String() != ipv4Loopback && !address.IsUnspecified() {
+			return false, "", errors.New("unsupported loopback address")
+		}
+		family = ipv4Loopback
+	case !address.Is4In6():
+		family = ipv6Loopback
+	default:
+		return false, "", errors.New("IPv4-mapped URL addresses are unsupported")
+	}
+	local = true
+
+	return local, family, nil
+}
+
+func rewriteLocalURL(u *url.URL, family string, port int, mappings []Mapping) (string, error) {
+	families := []string{family}
+	if family == "" {
+		families = []string{ipv4Loopback, ipv6Loopback}
+	}
+	for _, f := range families {
+		for _, m := range mappings {
+			if m.Guest == (Endpoint{f, port}) && m.Available {
+				ep, parseEndpointErr := ParseEndpoint(m.Local)
+				if parseEndpointErr != nil {
+					return "", errors.New("invalid local mapping")
+				}
+				u.Host = ep.Address()
+				return u.String(), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no available forward for guest port %d", port)
+}
+
+const (
+	maxDiscoveryLineBytes = 64 * 1024
+)
+
+const initialScanBufferBytes = 4096

@@ -12,33 +12,18 @@ import (
 
 func deriveCLI(ctx context.Context, a *API, command string, args []string, s Streams) error {
 	action := command
-	if command == "checkpoint" {
+	if command == checkpointCommand {
 		if len(args) == 0 {
 			return errors.New("checkpoint requires create, list, inspect or delete")
 		}
 		action = args[0]
 		args = args[1:]
 	}
-	if command == "checkpoint" && (action == "list" || action == "inspect") {
-		path := "/v1/checkpoints"
-		if action == "list" {
-			if len(args) != 0 {
-				return errors.New("list takes no arguments")
-			}
-		} else {
-			if len(args) != 1 || !model.ValidID(args[0]) {
-				return errors.New("immutable checkpoint ID required")
-			}
-			path += "/" + args[0]
-		}
-		var out json.RawMessage
-		if err := a.Do(ctx, "GET", path, nil, "", &out); err != nil {
-			return err
-		}
-		return jsonOut(s.Out, out)
+	if command == checkpointCommand && (action == "list" || action == inspectCommand) {
+		return queryCheckpoint(ctx, a, action, args, s)
 	}
-	child := command == "fork" || command == "restore"
-	if !child && action != "create" && action != "delete" {
+	child := command == forkCommand || command == "restore"
+	if !child && action != createCommand && action != "delete" {
 		return errors.New("unknown checkpoint action")
 	}
 	f := flags(command, s.Err)
@@ -60,33 +45,60 @@ func deriveCLI(ctx context.Context, a *API, command string, args []string, s Str
 	}
 	var body any
 	if child {
-		b, e := os.ReadFile(key)
-		if e != nil {
-			return e
+		input, inputErr := childInput(name, key)
+		if inputErr != nil {
+			return inputErr
 		}
-		in := model.ChildInput{Name: name, SSHPublicKeys: []string{strings.TrimSpace(string(b))}}
-		if e = in.Validate(); e != nil {
-			return e
-		}
-		body = in
+		body = input
 	}
-	target := f.Arg(0)
-	path := ""
-	if command == "fork" || command == "checkpoint" && action == "create" {
-		m, e := a.Resolve(ctx, target)
-		if e != nil {
-			return e
-		}
-		suffix := "fork"
-		if !child {
-			suffix = "checkpoint"
-		}
-		path = "/v1/machines/" + m.ID + "/" + suffix
-	} else {
-		if !model.ValidID(target) {
-			return errors.New("immutable checkpoint ID required")
-		}
-		path = "/v1/checkpoints/" + target + "/" + action
+	path, err := checkpointMutationPath(ctx, a, command, action, f.Arg(0))
+	if err != nil {
+		return err
 	}
 	return mutate(ctx, a, path, body, id, s.Out)
+}
+
+func queryCheckpoint(ctx context.Context, a *API, action string, args []string, streams Streams) error {
+	path := "/v1/checkpoints"
+	switch action {
+	case "list":
+		if len(args) != 0 {
+			return errors.New("list takes no arguments")
+		}
+	case inspectCommand:
+		if len(args) != 1 || !model.ValidID(args[0]) {
+			return errors.New("immutable checkpoint ID required")
+		}
+		path += "/" + args[0]
+	}
+	var out json.RawMessage
+	if err := a.Do(ctx, "GET", path, nil, "", &out); err != nil {
+		return err
+	}
+	return jsonOut(streams.Out, out)
+}
+
+func childInput(name, key string) (model.ChildInput, error) {
+	//nolint:gosec // G304: Read the public-key file explicitly selected by the local CLI user; key data is validated.
+	data, err := os.ReadFile(key)
+	if err != nil {
+		return model.ChildInput{}, err
+	}
+	input := model.ChildInput{Name: name, SSHPublicKeys: []string{strings.TrimSpace(string(data))}}
+	return input, input.Validate()
+}
+
+func checkpointMutationPath(ctx context.Context, a *API, command, action, target string) (string, error) {
+	if command == forkCommand || command == checkpointCommand && action == createCommand {
+		machine, err := a.Resolve(ctx, target)
+		if err != nil {
+			return "", err
+		}
+		suffix := command
+		return "/v1/machines/" + machine.ID + "/" + suffix, nil
+	}
+	if !model.ValidID(target) {
+		return "", errors.New("immutable checkpoint ID required")
+	}
+	return "/v1/checkpoints/" + target + "/" + action, nil
 }

@@ -1,3 +1,4 @@
+// Command clankerbox-host executes journaled host operations over an SSH pipe.
 package main
 
 import (
@@ -5,8 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
-	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,11 +15,17 @@ import (
 
 	"clankerbox/internal/host"
 	"clankerbox/internal/model"
+	"clankerbox/internal/statefs"
+)
+
+const (
+	maxRequestBytes  = 64 << 10
+	operationTimeout = 6 * time.Minute
 )
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		log.New(os.Stderr, "", 0).Print(err)
 		os.Exit(1)
 	}
 }
@@ -29,7 +36,7 @@ func run() error {
 	if *config == "" || flag.NArg() != 0 {
 		return errors.New("--config required")
 	}
-	data, err := os.ReadFile(*config)
+	data, err := statefs.ReadRegular(*config)
 	if err != nil {
 		return err
 	}
@@ -38,33 +45,38 @@ func run() error {
 		return err
 	}
 	if *connect == "" {
+		// Durable work can finish after its SSH caller disappears.
 		signal.Ignore(syscall.SIGHUP)
-	} // durable work can finish after its SSH caller disappears.
-	h, err := host.Open(cfg, nil)
-	if err != nil {
-		return err
 	}
-	defer h.Close()
 	signals := []os.Signal{os.Interrupt, syscall.SIGTERM}
 	if *connect != "" {
 		signals = append(signals, syscall.SIGHUP)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), signals...)
 	defer cancel()
-	if *connect != "" {
-		return h.Connect(ctx, *connect, os.Stdin, os.Stdout)
+	h, err := host.Open(cfg, nil)
+	if err != nil {
+		return err
 	}
-	decoder := json.NewDecoder(io.LimitReader(os.Stdin, (64<<10)+1))
+	err = serve(ctx, h, *connect)
+	return errors.Join(err, h.Close())
+}
+
+func serve(ctx context.Context, h *host.Helper, connect string) error {
+	if connect != "" {
+		return h.Connect(ctx, connect, os.Stdin, os.Stdout)
+	}
+	decoder := json.NewDecoder(io.LimitReader(os.Stdin, maxRequestBytes+1))
 	decoder.DisallowUnknownFields()
 	var req model.Request
-	if err = decoder.Decode(&req); err != nil {
+	if err := decoder.Decode(&req); err != nil {
 		return err
 	}
 	var extra any
-	if err = decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return errors.New("exactly one request required")
 	}
-	call, done := context.WithTimeout(ctx, 6*time.Minute)
+	call, done := context.WithTimeout(ctx, operationTimeout)
 	defer done()
 	resp := h.Execute(call, req)
 	return json.NewEncoder(os.Stdout).Encode(resp)

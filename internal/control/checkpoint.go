@@ -5,44 +5,54 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"slices"
+	"time"
 
 	"clankerbox/internal/model"
 )
 
-func readCheckpoint(q querier, id string) (model.Checkpoint, error) {
+func readCheckpoint(ctx context.Context, q querier, id string) (model.Checkpoint, error) {
 	var cp model.Checkpoint
 	var b []byte
-	err := q.QueryRow("SELECT body FROM checkpoints WHERE id=?", id).Scan(&b)
+	err := q.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
-		return cp, problem(404, "not_found", "checkpoint not found")
+		return cp, problem(http.StatusNotFound, "not_found", "checkpoint not found")
 	}
 	if err == nil {
 		err = json.Unmarshal(b, &cp)
 	}
 	return cp, err
 }
-func saveCheckpoint(q executor, cp model.Checkpoint) error {
+func saveCheckpoint(ctx context.Context, q executor, cp model.Checkpoint) error {
 	b, err := json.Marshal(cp)
 	if err != nil {
 		return err
 	}
-	_, err = q.Exec("INSERT INTO checkpoints(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body", cp.ID, b)
+	_, err = q.ExecContext(ctx,
+		"INSERT INTO checkpoints(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",
+		cp.ID,
+		b,
+	)
 	return err
 }
-func (c *Controller) Checkpoint(id string) (model.Checkpoint, error) {
+
+// Checkpoint retrieves a checkpoint by identifier.
+func (c *Controller) Checkpoint(ctx context.Context, id string) (model.Checkpoint, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return readCheckpoint(c.db, id)
+	return readCheckpoint(ctx, c.db, id)
 }
-func (c *Controller) Checkpoints() ([]model.Checkpoint, error) {
+
+// Checkpoints returns all recorded checkpoints.
+func (c *Controller) Checkpoints(ctx context.Context) (_ []model.Checkpoint, resultErr error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	rows, err := c.db.Query("SELECT body FROM checkpoints ORDER BY rowid")
+	rows, err := c.db.QueryContext(ctx, "SELECT body FROM checkpoints ORDER BY rowid")
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	out := []model.Checkpoint{}
 	for rows.Next() {
 		var b []byte
@@ -60,12 +70,12 @@ func (c *Controller) Checkpoints() ([]model.Checkpoint, error) {
 
 // Reservations live in existing intent, including operations whose acknowledgement
 // is unknown. No expiry can authorize mutating their source or deleting their input.
-func resourceIdle(q querier, id string, checkpoint bool) error {
-	rows, err := q.Query("SELECT request FROM operations WHERE status NOT IN ('succeeded','failed')")
+func resourceIdle(ctx context.Context, q querier, id string, checkpoint bool) (resultErr error) {
+	rows, err := q.QueryContext(ctx, "SELECT request FROM operations WHERE status NOT IN ('succeeded','failed')")
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	for rows.Next() {
 		var b []byte
 		var r model.Request
@@ -80,23 +90,33 @@ func resourceIdle(q querier, id string, checkpoint bool) error {
 			conflict = r.Checkpoint != nil && r.Checkpoint.ID == id
 		}
 		if conflict {
-			return problem(409, "operation_pending", "resource is reserved by a pending or unresolved operation")
+			return problem(
+				http.StatusConflict,
+				"operation_pending",
+				"resource is reserved by a pending or unresolved operation",
+			)
 		}
 	}
 	return rows.Err()
 }
-func sourceIdle(q querier, id string) error { return resourceIdle(q, id, false) }
-func machineDependencies(q querier, m model.Machine) error {
-	if m.ProfileSpec.Runtime != "smolvm" {
+func sourceIdle(ctx context.Context, q querier, id string) error {
+	return resourceIdle(ctx, q, id, false)
+}
+func machineDependencies(ctx context.Context, q querier, m model.Machine) error {
+	if m.ProfileSpec.Runtime != smolvmRuntime {
 		return nil
 	}
-	ms, err := machines(q)
+	ms, err := machines(ctx, q)
 	if err != nil {
 		return err
 	}
 	for _, child := range ms {
 		if child.ID != m.ID && (child.SourceMachineID == m.ID && child.CheckpointID == "" || child.StoreID == m.ID) {
-			return problem(409, "dependency", "retained Linux descendants depend on this machine's backing store")
+			return problem(
+				http.StatusConflict,
+				"dependency",
+				"retained Linux descendants depend on this machine's backing store",
+			)
 		}
 	}
 	return nil
@@ -106,10 +126,10 @@ func validateCheckpointResponse(req model.Request, resp model.Response) error {
 		return errors.New("missing checkpoint publication")
 	}
 	want, got := *req.Checkpoint, *resp.Checkpoint
-	if req.Action == "checkpoint-delete" {
+	if req.Action == deleteCheckpointAction {
 		want.Status = "deleted"
 	} else {
-		want.Status = "published"
+		want.Status = publishedStatus
 		want.RuntimePin = got.RuntimePin
 		if got.RuntimePin == "" {
 			return errors.New("missing checkpoint runtime pin")
@@ -123,130 +143,198 @@ func validateCheckpointResponse(req model.Request, resp model.Response) error {
 
 // Derive pins all children to their source's host/profile and allocates identities
 // before dispatch. Captures advance the source generation; forks reserve it.
-func (c *Controller) Derive(ctx context.Context, action, id, key string, in model.ChildInput) (model.Operation, error) {
+func (c *Controller) Derive(
+	ctx context.Context,
+	action, id, key string,
+	in model.ChildInput,
+) (_ model.Operation, resultErr error) {
 	var zero model.Operation
-	if action != "fork" && action != "restore" && action != "checkpoint-create" && action != "checkpoint-delete" {
-		return zero, problem(400, "unsupported", "unsupported action")
-	}
-	if !model.ValidID(id) {
-		return zero, problem(400, "invalid_request", "immutable resource ID required")
-	}
-	if err := validKey(key); err != nil {
+	if err := validateDerivation(action, id, key, &in); err != nil {
 		return zero, err
-	}
-	child := action == "fork" || action == "restore"
-	if child {
-		if err := in.Validate(); err != nil {
-			return zero, problem(400, "invalid_request", err.Error())
-		}
 	}
 	fp := model.Hash(struct {
 		Action, ID string
 		Input      model.ChildInput
 	}{action, id, in})
-	c.mu.Lock()
-	tx, err := c.db.Begin()
-	if err != nil {
-		c.mu.Unlock()
-		return zero, err
-	}
-	o, found, err := c.duplicate(tx, key, fp)
-	if err == nil {
-		err = tx.Commit()
-	} else {
-		tx.Rollback()
-	}
-	c.mu.Unlock()
+	o, found, err := c.duplicateIntent(ctx, key, fp)
 	if found || err != nil {
 		return o, err
 	}
-	sourceAction := action == "fork" || action == "checkpoint-create"
+	sourceAction := action == forkAction || action == createCheckpointAction
 	if sourceAction {
-		m, e := c.Inspect(ctx, id)
-		if e != nil {
-			return zero, e
-		}
-		if m.ObservationStale {
-			return zero, problem(503, "host_unavailable", m.ObservationError)
+		if err = c.requireFreshObservation(ctx, id); err != nil {
+			return zero, err
 		}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	tx, err = c.db.Begin()
+	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return zero, err
 	}
-	defer tx.Rollback()
-	if o, found, err := c.duplicate(tx, key, fp); found || err != nil {
-		if err == nil {
-			err = tx.Commit()
+	defer func() { resultErr = errors.Join(resultErr, rollbackTransaction(tx)) }()
+	duplicate, found, duplicateErr := c.duplicate(ctx, tx, key, fp)
+	if found || duplicateErr != nil {
+		if duplicateErr == nil {
+			duplicateErr = tx.Commit()
 		}
-		return o, err
+		return duplicate, duplicateErr
 	}
-	var source model.Machine
-	var cp *model.Checkpoint
-	if sourceAction {
-		source, err = readMachine(tx, id)
-		if err != nil {
-			return zero, err
-		}
-		if err = sourceIdle(tx, id); err != nil {
-			return zero, err
-		}
-		if source.Deleted || !source.Prepared || source.ObservationStale || source.Generation != source.AcceptedGeneration {
-			return zero, problem(409, "prerequisite", "source requires a current prepared generation")
-		}
-		want := model.Stopped
-		if source.ProfileSpec.Runtime == "smolvm" {
-			want = model.Running
-		}
-		if source.State != want {
-			return zero, problem(409, "prerequisite", "source requires state "+string(want))
-		}
-	} else {
-		value, e := readCheckpoint(tx, id)
-		if e != nil {
-			return zero, e
-		}
-		cp = &value
-		if err = resourceIdle(tx, id, true); err != nil {
-			return zero, err
-		}
-		if cp.Status != "published" {
-			return zero, problem(409, "prerequisite", "checkpoint is not published")
-		}
-		source = model.Machine{ID: cp.SourceMachineID, Host: cp.Host, Profile: cp.Profile.ID, ProfileSpec: cp.Profile}
+	source, cp, err := derivationSource(ctx, tx, id, sourceAction)
+	if err != nil {
+		return zero, err
 	}
-	p, ok := c.profile(source.Profile)
-	if !ok || !model.SameProfile(p, source.ProfileSpec) {
-		return zero, problem(409, "configuration", "pinned profile changed")
-	}
-	if action == "fork" && !slices.Contains(p.Capabilities, "fork") {
-		return zero, problem(400, "unsupported", "profile does not support concurrent fork")
-	}
-	h, ok := c.host(source.Host)
-	if !ok || !slices.Contains(h.ProfileIDs, p.ID) {
-		return zero, problem(503, "host_unavailable", "pinned host/profile unavailable")
+	p, h, err := c.derivationPlacement(source, action)
+	if err != nil {
+		return zero, err
 	}
 	now := c.now()
+	m, req, err := allocateDerivation(ctx, tx, action, in, source, cp, h, p, now)
+	if err != nil {
+		return zero, err
+	}
+	cp = req.Checkpoint
+	o = model.Operation{
+		ID:         model.NewID(),
+		MachineID:  m.ID,
+		Generation: m.Generation,
+		Action:     action,
+		Status:     pendingStatus,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if cp != nil {
+		o.CheckpointID = cp.ID
+	}
+	req.OperationID = o.ID
+	req.MachineID = m.ID
+	req.Generation = m.Generation
+	req.Name = m.Name
+	err = saveDerivedIntent(ctx, tx, key, fp, m, o, req)
+	if err == nil {
+		err = tx.Commit()
+	}
+	return o, err
+}
+
+func validateDerivation(action, id, key string, in *model.ChildInput) error {
+	if action != forkAction && action != restoreAction && action != createCheckpointAction &&
+		action != deleteCheckpointAction {
+		return problem(http.StatusBadRequest, "unsupported", "unsupported action")
+	}
+	if !model.ValidID(id) {
+		return problem(http.StatusBadRequest, "invalid_request", "immutable resource ID required")
+	}
+	if err := validKey(key); err != nil {
+		return err
+	}
+	child := action == forkAction || action == restoreAction
+	if child {
+		if err := in.Validate(); err != nil {
+			return problem(http.StatusBadRequest, "invalid_request", err.Error())
+		}
+	}
+
+	return nil
+}
+
+func derivationSource(
+	ctx context.Context,
+	tx *sql.Tx,
+	id string,
+	sourceAction bool,
+) (model.Machine, *model.Checkpoint, error) {
+	var err error
+	var source model.Machine
+	var cp *model.Checkpoint
+	if !sourceAction {
+		value, e := readCheckpoint(ctx, tx, id)
+		if e != nil {
+			return source, cp, e
+		}
+		cp = &value
+		if err = resourceIdle(ctx, tx, id, true); err != nil {
+			return source, cp, err
+		}
+		if cp.Status != publishedStatus {
+			return source, cp, problem(http.StatusConflict, "prerequisite", "checkpoint is not published")
+		}
+		source = model.Machine{ID: cp.SourceMachineID, Host: cp.Host, Profile: cp.Profile.ID, ProfileSpec: cp.Profile}
+
+		return source, cp, nil
+	}
+
+	source, err = readMachine(ctx, tx, id)
+	if err != nil {
+		return source, cp, err
+	}
+	if err = sourceIdle(ctx, tx, id); err != nil {
+		return source, cp, err
+	}
+	if source.Deleted || !source.Prepared || source.ObservationStale ||
+		source.Generation != source.AcceptedGeneration {
+		return source, cp, problem(
+			http.StatusConflict,
+			"prerequisite",
+			"source requires a current prepared generation",
+		)
+	}
+	want := model.Stopped
+	if source.ProfileSpec.Runtime == smolvmRuntime {
+		want = model.Running
+	}
+	if source.State != want {
+		return source, cp, problem(http.StatusConflict, "prerequisite", "source requires state "+string(want))
+	}
+
+	return source, cp, nil
+}
+
+func allocateDerivation(
+	ctx context.Context,
+	tx *sql.Tx,
+	action string,
+	in model.ChildInput,
+	source model.Machine,
+	cp *model.Checkpoint,
+	h model.Host,
+	p model.Profile,
+	now time.Time,
+) (model.Machine, model.Request, error) {
+	var err error
+	child := action == forkAction || action == restoreAction
 	req := model.Request{Action: action, Host: h.ID, Profile: p, Checkpoint: cp}
 	m := source
-	if child {
+	switch {
+	case child:
 		var count int
-		if err = tx.QueryRow("SELECT count(*) FROM machines WHERE name=? AND deleted=0", in.Name).Scan(&count); err != nil {
-			return zero, err
+		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM machines WHERE name=? AND deleted=0", in.Name).
+			Scan(&count); err != nil {
+			return model.Machine{}, req, err
 		}
 		if count != 0 {
-			return zero, problem(409, "name_conflict", "machine name already exists")
+			return model.Machine{}, req, problem(http.StatusConflict, "name_conflict", "machine name already exists")
 		}
-		if err = capacity(tx, h, p, ""); err != nil {
-			return zero, err
+		if err = capacity(ctx, tx, h, p, ""); err != nil {
+			return model.Machine{}, req, err
 		}
-		m = model.Machine{ID: model.NewID(), Name: in.Name, Host: h.ID, Profile: p.ID, ProfileSpec: p, State: model.Preparing, DesiredState: model.Running, Generation: 1, ObservationStale: true, CreatedAt: now, SourceMachineID: source.ID}
-		if action == "fork" {
+		m = model.Machine{
+			ID:               model.NewID(),
+			Name:             in.Name,
+			Host:             h.ID,
+			Profile:          p.ID,
+			ProfileSpec:      p,
+			State:            model.Preparing,
+			DesiredState:     model.Running,
+			Generation:       1,
+			ObservationStale: true,
+			CreatedAt:        now,
+			SourceMachineID:  source.ID,
+		}
+		if action == forkAction {
 			req.SourceMachineID = source.ID
 			req.SourceGeneration = source.Generation
-			if p.Runtime == "smolvm" {
+			if p.Runtime == smolvmRuntime {
 				m.StoreID = source.StoreID
 				if m.StoreID == "" {
 					m.StoreID = source.ID
@@ -256,39 +344,78 @@ func (c *Controller) Derive(ctx context.Context, action, id, key string, in mode
 			m.CheckpointID = cp.ID
 		}
 		req.SSHPublicKeys = in.SSHPublicKeys
-	} else if action == "checkpoint-create" {
+	case action == createCheckpointAction:
 		kind := "disk"
-		if p.Runtime == "smolvm" {
+		if p.Runtime == smolvmRuntime {
 			kind = "ram"
 		}
-		cp = &model.Checkpoint{ID: model.NewID(), Kind: kind, SourceMachineID: source.ID, SourceGeneration: source.Generation, Host: h.ID, Profile: p, CreatedAt: now, Status: "pending"}
+		cp = &model.Checkpoint{
+			ID:               model.NewID(),
+			Kind:             kind,
+			SourceMachineID:  source.ID,
+			SourceGeneration: source.Generation,
+			Host:             h.ID,
+			Profile:          p,
+			CreatedAt:        now,
+			Status:           pendingStatus,
+		}
 		req.Checkpoint = cp
 		req.SourceMachineID = source.ID
 		req.SourceGeneration = source.Generation
 		m.Generation++
-	} else {
+	default:
 		m = model.Machine{ID: cp.ID, Generation: 1}
 		cp.Status = "deleting"
 	}
-	o = model.Operation{ID: model.NewID(), MachineID: m.ID, Generation: m.Generation, Action: action, Status: "pending", CreatedAt: now, UpdatedAt: now}
-	if cp != nil {
-		o.CheckpointID = cp.ID
+
+	return m, req, nil
+}
+
+func (c *Controller) derivationPlacement(source model.Machine, action string) (model.Profile, model.Host, error) {
+	p, ok := c.profile(source.Profile)
+	if !ok || !model.SameProfile(p, source.ProfileSpec) {
+		return model.Profile{}, model.Host{}, problem(http.StatusConflict, "configuration", "pinned profile changed")
 	}
-	req.OperationID = o.ID
-	req.MachineID = m.ID
-	req.Generation = m.Generation
-	req.Name = m.Name
-	if action != "checkpoint-delete" {
-		err = saveMachine(tx, m)
+	if action == forkAction && !slices.Contains(p.Capabilities, forkAction) {
+		return model.Profile{}, model.Host{}, problem(
+			http.StatusBadRequest,
+			"unsupported",
+			"profile does not support concurrent fork",
+		)
+	}
+	h, ok := c.host(source.Host)
+	if !ok || !slices.Contains(h.ProfileIDs, p.ID) {
+		return model.Profile{}, model.Host{}, problem(
+			http.StatusServiceUnavailable,
+			"host_unavailable",
+			"pinned host/profile unavailable",
+		)
+	}
+
+	return p, h, nil
+}
+
+func saveDerivedIntent(
+	ctx context.Context,
+	tx *sql.Tx,
+	key, fp string,
+	m model.Machine,
+	o model.Operation,
+	req model.Request,
+) error {
+	var err error
+	action := req.Action
+	child := action == forkAction || action == restoreAction
+	cp := req.Checkpoint
+	if action != deleteCheckpointAction {
+		err = saveMachine(ctx, tx, m)
 	}
 	if err == nil && !child {
-		err = saveCheckpoint(tx, *cp)
+		err = saveCheckpoint(ctx, tx, *cp)
 	}
 	if err == nil {
-		err = insertOperation(tx, key, fp, o, req)
+		err = insertOperation(ctx, tx, key, fp, o, req)
 	}
-	if err == nil {
-		err = tx.Commit()
-	}
-	return o, err
+
+	return err
 }

@@ -13,10 +13,14 @@ import (
 	"sort"
 	"strings"
 
-	"clankerbox/internal/model"
+	"clankerbox/internal/statefs"
+
 	"golang.org/x/crypto/ssh"
+
+	"clankerbox/internal/model"
 )
 
+// Pin binds an immutable machine to its API origin, login, host key and guest OS.
 type Pin struct {
 	APIURL  string `json:"api_url"`
 	ID      string `json:"id"`
@@ -41,6 +45,8 @@ func canonicalKey(s string) (string, error) {
 	}
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(k))), nil
 }
+
+// Validate verifies the pin’s canonical origin, identity, host key and supported OS.
 func (p Pin) Validate() error {
 	u, e := validateAPIURL(p.APIURL)
 	if e != nil || u.String() != p.APIURL {
@@ -61,6 +67,8 @@ func (p Pin) Validate() error {
 }
 func (p Pin) key() string  { return p.APIURL + "\x00" + p.ID }
 func (p Pin) hash() string { h := sha256.Sum256([]byte(p.key())); return hex.EncodeToString(h[:12]) }
+
+// Pin resolves a machine and captures its authenticated connection identity.
 func (a *API) Pin(ctx context.Context, name string) (Pin, error) {
 	m, e := a.Resolve(ctx, name)
 	if e != nil {
@@ -68,6 +76,8 @@ func (a *API) Pin(ctx context.Context, name string) (Pin, error) {
 	}
 	return PinMachine(a.Config.URL, m)
 }
+
+// PinMachine validates the connection identity supplied for a machine.
 func PinMachine(origin string, m model.Machine) (Pin, error) {
 	k, e := canonicalKey(m.SSHHostKey)
 	if e != nil {
@@ -77,19 +87,19 @@ func PinMachine(origin string, m model.Machine) (Pin, error) {
 	return p, p.Validate()
 }
 
-// Trust is keyed by both API origin and immutable ID and is never silently rotated.
-func RememberPin(dir string, p Pin) error {
+// RememberPin stores trust by API origin and immutable ID and never silently rotates it.
+func RememberPin(dir string, p Pin) (err error) {
 	if e := p.Validate(); e != nil {
 		return e
 	}
-	if e := privateDir(dir); e != nil {
+	if e := statefs.EnsurePrivateDir(dir); e != nil {
 		return e
 	}
-	lock, e := privateLock(filepath.Join(dir, "trust.lock"), false)
+	lock, e := statefs.LockFile(filepath.Join(dir, "trust.lock"), false)
 	if e != nil {
 		return e
 	}
-	defer unlock(lock)
+	defer func() { err = errors.Join(err, lock.Close()) }()
 	path := filepath.Join(dir, "trust.json")
 	pins := map[string]Pin{}
 	if e = readJSONFile(path, &pins); e != nil {
@@ -105,59 +115,93 @@ func RememberPin(dir string, p Pin) error {
 const generatedHeader = "# Managed by clankerbox; do not edit.\n"
 
 func managedWrite(path, content string) error {
-	b, e := readPrivate(path)
-	if e != nil && !os.IsNotExist(e) {
+	b, e := statefs.ReadPrivate(path)
+	if e != nil && !errors.Is(e, os.ErrNotExist) {
 		return e
 	}
 	if e == nil && !bytes.HasPrefix(b, []byte(generatedHeader)) {
 		return fmt.Errorf("refusing to overwrite unrelated file %s", path)
 	}
-	return atomicPrivate(path, []byte(content))
+	return statefs.WritePrivate(path, []byte(content))
 }
 func sshPath(path string) error {
 	if !sshPathPattern.MatchString(path) {
-		return errors.New("SSH configuration paths must be absolute and contain only letters, digits, spaces, _, -, ., /")
+		return errors.New(
+			"SSH configuration paths must be absolute and contain only letters, digits, spaces, _, -, ., /",
+		)
 	}
 	return nil
 }
 
 // InstallSSHConfig writes explicit aliases and prepends a single Include to the
 // user's config. It never edits identity files or accepts changed trusted keys.
-func InstallSSHConfig(c Config, binary, sshDir string, machines []model.Machine) ([]string, error) {
+func InstallSSHConfig(c Config, binary, sshDir string, machines []model.Machine) (_ []string, err error) {
+	if err = prepareSSHInstallation(c, binary, sshDir); err != nil {
+		return nil, err
+	}
+	lock, err := statefs.LockFile(filepath.Join(sshDir, "clankerbox-install.lock"), false)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, lock.Close()) }()
+	selected, err := selectSSHMachines(c.URL, machines)
+	if err != nil {
+		return nil, err
+	}
+	// Validate supplied identities before changing generated files.
+	for _, alias := range selected {
+		if err = RememberPin(c.StateDir, alias.pin); err != nil {
+			return nil, err
+		}
+	}
+	known, err := renderKnownHosts(c.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	knownPath := filepath.Join(c.StateDir, "ssh_known_hosts")
+	includePath := filepath.Join(c.StateDir, "ssh_config")
+	conf := renderSSHConfig(c, binary, knownPath, selected)
+	return writeSSHInstallation(sshDir, includePath, knownPath, known, conf)
+}
+
+type sshAlias struct {
+	machine model.Machine
+	pin     Pin
+}
+
+func prepareSSHInstallation(c Config, binary, sshDir string) error {
 	for _, p := range []string{c.Path, c.StateDir, binary, sshDir} {
 		if e := sshPath(p); e != nil {
-			return nil, e
+			return e
 		}
 	}
 	if c.IdentityFile != "" {
 		if e := sshPath(c.IdentityFile); e != nil {
-			return nil, e
+			return e
 		}
 	}
-	if e := privateDir(c.StateDir); e != nil {
-		return nil, e
+	if e := statefs.EnsurePrivateDir(c.StateDir); e != nil {
+		return e
 	}
 	if e := os.MkdirAll(sshDir, 0700); e != nil {
-		return nil, e
+		return e
 	}
 	// OpenSSH permits a readable directory; only write access by others makes
 	// installation unsafe. Do not change the user's existing directory mode.
 	st, e := os.Lstat(sshDir)
 	if e != nil {
-		return nil, e
+		return e
 	}
 	if !st.IsDir() || st.Mode().Perm()&0022 != 0 {
-		return nil, errors.New("SSH directory must be a real directory not writable by others")
+		return errors.New("SSH directory must be a real directory not writable by others")
 	}
-	lock, e := privateLock(filepath.Join(sshDir, "clankerbox-install.lock"), false)
-	if e != nil {
-		return nil, e
-	}
-	defer unlock(lock)
+	return nil
+}
+
+func selectSSHMachines(origin string, machines []model.Machine) ([]sshAlias, error) {
 	sort.Slice(machines, func(i, j int) bool { return machines[i].ID < machines[j].ID })
 	aliases := map[string]string{}
-	pins := []Pin{}
-	selected := []model.Machine{}
+	selected := []sshAlias{}
 	for _, m := range machines {
 		if m.Deleted {
 			continue
@@ -169,9 +213,9 @@ func InstallSSHConfig(c Config, binary, sshDir string, machines []model.Machine)
 		if !model.ValidName(m.Name) {
 			return nil, errors.New("invalid machine alias for SSH configuration")
 		}
-		p, e := PinMachine(c.URL, m)
-		if e != nil {
-			return nil, fmt.Errorf("machine %s: %w", m.ID, e)
+		p, pinMachineErr := PinMachine(origin, m)
+		if pinMachineErr != nil {
+			return nil, fmt.Errorf("machine %s: %w", m.ID, pinMachineErr)
 		}
 		for _, alias := range []string{m.ID, m.Name} {
 			if id, ok := aliases[alias]; ok && id != m.ID {
@@ -179,35 +223,30 @@ func InstallSSHConfig(c Config, binary, sshDir string, machines []model.Machine)
 			}
 			aliases[alias] = m.ID
 		}
-		pins = append(pins, p)
-		selected = append(selected, m)
+		selected = append(selected, sshAlias{machine: m, pin: p})
 	}
-	// Validate all supplied identities before changing generated files.
-	for _, p := range pins {
-		if e := RememberPin(c.StateDir, p); e != nil {
-			return nil, e
-		}
-	}
-	knownPath := filepath.Join(c.StateDir, "ssh_known_hosts")
-	includePath := filepath.Join(c.StateDir, "ssh_config")
+	return selected, nil
+}
+
+func renderKnownHosts(dir string) (string, error) {
 	// Keep previously trusted IDs in known_hosts even if a machine was deleted.
-	trustLock, e := privateLock(filepath.Join(c.StateDir, "trust.lock"), false)
+	trustLock, e := statefs.LockFile(filepath.Join(dir, "trust.lock"), false)
 	if e != nil {
-		return nil, e
+		return "", e
 	}
 	remembered := map[string]Pin{}
-	e = readJSONFile(filepath.Join(c.StateDir, "trust.json"), &remembered)
-	unlock(trustLock)
+	e = readJSONFile(filepath.Join(dir, "trust.json"), &remembered)
+	e = errors.Join(e, trustLock.Close())
 	if e != nil {
-		return nil, e
+		return "", e
 	}
 	keys := map[string]string{}
 	for _, p := range remembered {
-		if e := p.Validate(); e != nil {
-			return nil, e
+		if validateErr := p.Validate(); validateErr != nil {
+			return "", validateErr
 		}
 		if k, ok := keys[p.ID]; ok && k != p.HostKey {
-			return nil, errors.New("machine ID host-key collision across API origins")
+			return "", errors.New("machine ID host-key collision across API origins")
 		}
 		keys[p.ID] = p.HostKey
 	}
@@ -216,19 +255,36 @@ func InstallSSHConfig(c Config, binary, sshDir string, machines []model.Machine)
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	var known, conf strings.Builder
+	var known strings.Builder
 	known.WriteString(generatedHeader)
-	conf.WriteString(generatedHeader)
 	for _, id := range ids {
 		fmt.Fprintf(&known, "cb.%s %s\n", id, keys[id])
 	}
-	for i, m := range selected {
+	return known.String(), nil
+}
+
+func renderSSHConfig(c Config, binary, knownPath string, selected []sshAlias) string {
+	var conf strings.Builder
+	conf.WriteString(generatedHeader)
+	for _, alias := range selected {
+		m := alias.machine
 		names := []string{m.ID}
 		if m.Name != m.ID {
 			names = append(names, m.Name)
 		}
 		for _, name := range names {
-			fmt.Fprintf(&conf, "Host cb.%s\n  HostName cb.%s\n  User %s\n  HostKeyAlias cb.%s\n  StrictHostKeyChecking yes\n  CheckHostIP no\n  UserKnownHostsFile \"%s\"\n  GlobalKnownHostsFile /dev/null\n  UpdateHostKeys no\n  ProxyCommand '%s' --config '%s' proxy %s\n", name, m.ID, pins[i].User, m.ID, knownPath, binary, c.Path, m.ID)
+			fmt.Fprintf(
+				&conf,
+				"Host cb.%s\n  HostName cb.%s\n  User %s\n  HostKeyAlias cb.%s\n  StrictHostKeyChecking yes\n  CheckHostIP no\n  UserKnownHostsFile \"%s\"\n  GlobalKnownHostsFile /dev/null\n  UpdateHostKeys no\n  ProxyCommand '%s' --config '%s' proxy %s\n",
+				name,
+				m.ID,
+				alias.pin.User,
+				m.ID,
+				knownPath,
+				binary,
+				c.Path,
+				m.ID,
+			)
 			if c.IdentityFile != "" {
 				fmt.Fprintf(&conf, "  IdentityFile \"%s\"\n  IdentitiesOnly yes\n", c.IdentityFile)
 			}
@@ -236,13 +292,14 @@ func InstallSSHConfig(c Config, binary, sshDir string, machines []model.Machine)
 		}
 	}
 	conf.WriteString("Host *\n")
+	return conf.String()
+}
+
+func writeSSHInstallation(sshDir, includePath, knownPath, known, conf string) ([]string, error) {
 	configPath := filepath.Join(sshDir, "config")
-	existing, e := os.ReadFile(configPath)
-	if e != nil && !os.IsNotExist(e) {
+	existing, e := statefs.ReadRegular(configPath)
+	if e != nil && !errors.Is(e, os.ErrNotExist) {
 		return nil, e
-	}
-	if st, e := os.Lstat(configPath); e == nil && !st.Mode().IsRegular() {
-		return nil, errors.New("refusing to replace non-regular SSH config")
 	}
 	include := "Include \"" + includePath + "\""
 	// Reposition our own Include before even a pre-existing Match/Host block.
@@ -255,21 +312,21 @@ func InstallSSHConfig(c Config, binary, sshDir string, machines []model.Machine)
 		preserved.WriteString(line)
 	}
 	for _, path := range []string{knownPath, includePath} {
-		b, e := readPrivate(path)
-		if e != nil && !os.IsNotExist(e) {
-			return nil, e
+		b, readPrivateErr := statefs.ReadPrivate(path)
+		if readPrivateErr != nil && !errors.Is(readPrivateErr, os.ErrNotExist) {
+			return nil, readPrivateErr
 		}
-		if e == nil && !bytes.HasPrefix(b, []byte(generatedHeader)) {
+		if readPrivateErr == nil && !bytes.HasPrefix(b, []byte(generatedHeader)) {
 			return nil, fmt.Errorf("refusing to overwrite unrelated file %s", path)
 		}
 	}
-	if e = managedWrite(knownPath, known.String()); e != nil {
+	if e = managedWrite(knownPath, known); e != nil {
 		return nil, e
 	}
-	if e = managedWrite(includePath, conf.String()); e != nil {
+	if e = managedWrite(includePath, conf); e != nil {
 		return nil, e
 	}
-	if e = atomicPrivate(configPath, []byte(include+"\n"+preserved.String())); e != nil {
+	if e = statefs.WritePrivate(configPath, []byte(include+"\n"+preserved.String())); e != nil {
 		return nil, e
 	}
 	return []string{configPath, includePath, knownPath}, nil

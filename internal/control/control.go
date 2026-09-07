@@ -8,21 +8,49 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/http"
 	"os"
-	"path/filepath"
 	"slices"
 	"sync"
-	"syscall"
 	"time"
 
+	_ "modernc.org/sqlite" // Register the SQLite database driver.
+
 	"clankerbox/internal/model"
-	_ "modernc.org/sqlite"
+	"clankerbox/internal/statefs"
 )
 
+const (
+	stopAction            = "stop"
+	restoreAction         = "restore"
+	startAction           = "start"
+	forkAction            = "fork"
+	inspectTimeout        = 12 * time.Second
+	inspectionConcurrency = 8
+	operationTimeout      = 6 * time.Minute
+	retryDelay            = 5 * time.Second
+)
+
+const (
+	smolvmRuntime          = "smolvm"
+	deleteCheckpointAction = "checkpoint-delete"
+	createCheckpointAction = "checkpoint-create"
+	publishedStatus        = "published"
+	pendingStatus          = "pending"
+	createAction           = "create"
+	deleteAction           = "delete"
+	succeededStatus        = "succeeded"
+	failedStatus           = "failed"
+)
+
+// Transport dispatches lifecycle requests and opens SSH streams to configured hosts.
 type Transport interface {
 	Call(context.Context, model.Host, model.Request) (model.Response, error)
 	Connect(context.Context, model.Host, string) (io.ReadWriteCloser, error)
 }
+
+// APIError describes a client-visible failure and its HTTP status.
 type APIError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -32,9 +60,12 @@ type APIError struct {
 func (e *APIError) Error() string                    { return e.Message }
 func problem(status int, code, message string) error { return &APIError{code, message, status} }
 
+// Controller owns durable lifecycle intent and serializes operations per host.
 type Controller struct {
+	logger    *slog.Logger
 	db        *sql.DB
-	lock      *os.File
+	lock      *statefs.Lock
+	stateDir  *statefs.Dir
 	cfg       model.Config
 	transport Transport
 	mu        sync.Mutex
@@ -43,40 +74,35 @@ type Controller struct {
 	now       func() time.Time
 }
 
+// Open opens the durable queue in a private state directory and acquires its exclusive controller lock.
+// Close releases the database, lock, and directory.
 func Open(path string, cfg model.Config, transport Transport) (*Controller, error) {
+	ctx := context.Background()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	if transport == nil {
 		return nil, errors.New("transport required")
 	}
-	path, err := filepath.Abs(path)
+	directory, err := statefs.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, err
-	}
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := directory.Lock("controller.lock", true)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(fmt.Errorf("controller database already in use: %w", err), directory.Close())
 	}
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		lock.Close()
-		return nil, fmt.Errorf("controller database already in use: %w", err)
-	}
-	fail := func(e error) (*Controller, error) { lock.Close(); return nil, e }
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	fail := func(err error) (*Controller, error) { return nil, errors.Join(err, lock.Close(), directory.Close()) }
+	databasePath, err := directory.Database("controller.db")
 	if err != nil {
 		return fail(err)
 	}
-	f.Close()
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", databasePath)
 	if err != nil {
 		return fail(err)
 	}
 	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
+	_, err = db.ExecContext(ctx, `PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
  CREATE TABLE IF NOT EXISTS checkpoints (id TEXT PRIMARY KEY, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS machines (id TEXT PRIMARY KEY, name TEXT NOT NULL, deleted INTEGER NOT NULL, body BLOB NOT NULL);
  CREATE UNIQUE INDEX IF NOT EXISTS live_names ON machines(name) WHERE deleted=0;
@@ -84,12 +110,24 @@ func Open(path string, cfg model.Config, transport Transport) (*Controller, erro
  CREATE INDEX IF NOT EXISTS pending_operations ON operations(status,next_attempt);
  UPDATE operations SET status='unresolved' WHERE status='running';`)
 	if err != nil {
-		db.Close()
-		return fail(err)
+		return fail(errors.Join(err, db.Close()))
 	}
-	return &Controller{db: db, lock: lock, cfg: cfg, transport: transport, busy: map[string]bool{}, now: func() time.Time { return time.Now().UTC() }}, nil
+	return &Controller{
+		logger:    slog.New(slog.NewTextHandler(os.Stderr, nil)),
+		db:        db,
+		lock:      lock,
+		stateDir:  directory,
+		cfg:       cfg,
+		transport: transport,
+		busy:      map[string]bool{},
+		now:       func() time.Time { return time.Now().UTC() },
+	}, nil
 }
-func (c *Controller) Close() error { err := c.db.Close(); c.lock.Close(); return err }
+
+// Close releases all resources owned by the controller.
+func (c *Controller) Close() error {
+	return errors.Join(c.db.Close(), c.lock.Close(), c.stateDir.Close())
+}
 func (c *Controller) host(id string) (model.Host, bool) {
 	for _, h := range c.cfg.Hosts {
 		if h.ID == id {
@@ -107,20 +145,29 @@ func (c *Controller) profile(id string) (model.Profile, bool) {
 	return model.Profile{}, false
 }
 
-type querier interface {
-	QueryRow(string, ...any) *sql.Row
-	Query(string, ...any) (*sql.Rows, error)
-}
-type executor interface {
-	Exec(string, ...any) (sql.Result, error)
+// rollbackTransaction releases an unfinished transaction and preserves cleanup failures.
+func rollbackTransaction(tx *sql.Tx) error {
+	err := tx.Rollback()
+	if errors.Is(err, sql.ErrTxDone) {
+		return nil
+	}
+	return err
 }
 
-func readMachine(q querier, id string) (model.Machine, error) {
+type querier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+type executor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func readMachine(ctx context.Context, q querier, id string) (model.Machine, error) {
 	var m model.Machine
 	var b []byte
-	err := q.QueryRow("SELECT body FROM machines WHERE id=?", id).Scan(&b)
+	err := q.QueryRowContext(ctx, "SELECT body FROM machines WHERE id=?", id).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
-		return m, problem(404, "not_found", "machine not found")
+		return m, problem(http.StatusNotFound, "not_found", "machine not found")
 	}
 	if err != nil {
 		return m, err
@@ -128,12 +175,12 @@ func readMachine(q querier, id string) (model.Machine, error) {
 	err = json.Unmarshal(b, &m)
 	return m, err
 }
-func machines(q querier) ([]model.Machine, error) {
-	rows, err := q.Query("SELECT body FROM machines WHERE deleted=0 ORDER BY name")
+func machines(ctx context.Context, q querier) (_ []model.Machine, resultErr error) {
+	rows, err := q.QueryContext(ctx, "SELECT body FROM machines WHERE deleted=0 ORDER BY name")
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
 	out := []model.Machine{}
 	for rows.Next() {
 		var b []byte
@@ -148,21 +195,28 @@ func machines(q querier) ([]model.Machine, error) {
 	}
 	return out, rows.Err()
 }
-func saveMachine(q executor, m model.Machine) error {
+func saveMachine(ctx context.Context, q executor, m model.Machine) error {
 	b, err := json.Marshal(m)
 	if err != nil {
 		return err
 	}
-	_, err = q.Exec("INSERT INTO machines(id,name,deleted,body) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET deleted=excluded.deleted,body=excluded.body", m.ID, m.Name, m.Deleted, b)
+	_, err = q.ExecContext(
+		ctx,
+		"INSERT INTO machines(id,name,deleted,body) VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET deleted=excluded.deleted,body=excluded.body",
+		m.ID,
+		m.Name,
+		m.Deleted,
+		b,
+	)
 	return err
 }
-func readOperation(q querier, id string) (model.Operation, error) {
+func readOperation(ctx context.Context, q querier, id string) (model.Operation, error) {
 	var o model.Operation
 	var b []byte
 	var status string
-	err := q.QueryRow("SELECT body,status FROM operations WHERE id=?", id).Scan(&b, &status)
+	err := q.QueryRowContext(ctx, "SELECT body,status FROM operations WHERE id=?", id).Scan(&b, &status)
 	if errors.Is(err, sql.ErrNoRows) {
-		return o, problem(404, "not_found", "operation not found")
+		return o, problem(http.StatusNotFound, "not_found", "operation not found")
 	}
 	if err != nil {
 		return o, err
@@ -171,22 +225,31 @@ func readOperation(q querier, id string) (model.Operation, error) {
 	o.Status = status
 	return o, err
 }
-func saveOperation(q executor, o model.Operation, next int64) error {
+func saveOperation(ctx context.Context, q executor, o model.Operation, next int64) error {
 	b, err := json.Marshal(o)
 	if err != nil {
 		return err
 	}
-	_, err = q.Exec("UPDATE operations SET status=?,body=?,next_attempt=? WHERE id=?", o.Status, b, next, o.ID)
+	_, err = q.ExecContext(
+		ctx,
+		"UPDATE operations SET status=?,body=?,next_attempt=? WHERE id=?",
+		o.Status,
+		b,
+		next,
+		o.ID,
+	)
 	return err
 }
-func (c *Controller) Operation(id string) (model.Operation, error) {
+
+// Operation retrieves a durable operation by identifier.
+func (c *Controller) Operation(ctx context.Context, id string) (model.Operation, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return readOperation(c.db, id)
+	return readOperation(ctx, c.db, id)
 }
-func (c *Controller) duplicate(tx *sql.Tx, key, fp string) (model.Operation, bool, error) {
+func (c *Controller) duplicate(ctx context.Context, tx *sql.Tx, key, fp string) (model.Operation, bool, error) {
 	var id, old string
-	err := tx.QueryRow("SELECT id,fingerprint FROM operations WHERE idem=?", key).Scan(&id, &old)
+	err := tx.QueryRowContext(ctx, "SELECT id,fingerprint FROM operations WHERE idem=?", key).Scan(&id, &old)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Operation{}, false, nil
 	}
@@ -194,27 +257,55 @@ func (c *Controller) duplicate(tx *sql.Tx, key, fp string) (model.Operation, boo
 		return model.Operation{}, false, err
 	}
 	if old != fp {
-		return model.Operation{}, true, problem(409, "idempotency_conflict", "Idempotency-Key was used for different input")
+		return model.Operation{}, true, problem(
+			http.StatusConflict,
+			"idempotency_conflict",
+			"Idempotency-Key was used for different input",
+		)
 	}
-	o, err := readOperation(tx, id)
+	o, err := readOperation(ctx, tx, id)
 	if err == nil && !o.Done() {
-		_, err = tx.Exec("UPDATE operations SET next_attempt=0 WHERE id=?", id)
+		_, err = tx.ExecContext(ctx, "UPDATE operations SET next_attempt=0 WHERE id=?", id)
 	}
 	return o, true, err
 }
+
+// duplicateIntent checks completed retries without requiring the host to be available.
+func (c *Controller) duplicateIntent(
+	ctx context.Context,
+	key, fingerprint string,
+) (_ model.Operation, _ bool, resultErr error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Operation{}, false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, rollbackTransaction(tx)) }()
+	op, found, err := c.duplicate(ctx, tx, key, fingerprint)
+	if err != nil {
+		return op, found, err
+	}
+	return op, found, tx.Commit()
+}
+
 func validKey(key string) error {
 	if len(key) < 1 || len(key) > 200 {
-		return problem(400, "invalid_request", "Idempotency-Key of 1..200 printable characters is required")
+		return problem(
+			http.StatusBadRequest,
+			"invalid_request",
+			"Idempotency-Key of 1..200 printable characters is required",
+		)
 	}
 	for _, r := range key {
 		if r < 33 || r > 126 {
-			return problem(400, "invalid_request", "invalid Idempotency-Key")
+			return problem(http.StatusBadRequest, "invalid_request", "invalid Idempotency-Key")
 		}
 	}
 	return nil
 }
-func capacity(tx *sql.Tx, h model.Host, p model.Profile, exclude string) error {
-	ms, err := machines(tx)
+func capacity(ctx context.Context, tx *sql.Tx, h model.Host, p model.Profile, exclude string) error {
+	ms, err := machines(ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -226,151 +317,160 @@ func capacity(tx *sql.Tx, h model.Host, p model.Profile, exclude string) error {
 		}
 	}
 	if cpu > h.CPU || ram > h.RAMMiB {
-		return problem(409, "capacity", "host CPU/RAM capacity is exhausted (unknown machines remain reserved)")
+		return problem(
+			http.StatusConflict,
+			"capacity",
+			"host CPU/RAM capacity is exhausted (unknown machines remain reserved)",
+		)
 	}
 	return nil
 }
-func insertOperation(tx *sql.Tx, key, fp string, o model.Operation, req model.Request) error {
+func insertOperation(ctx context.Context, tx *sql.Tx, key, fp string, o model.Operation, req model.Request) error {
 	b, _ := json.Marshal(o)
 	r, _ := json.Marshal(req)
-	_, err := tx.Exec("INSERT INTO operations(id,idem,fingerprint,machine_id,status,body,request) VALUES(?,?,?,?,?,?,?)", o.ID, key, fp, o.MachineID, o.Status, b, r)
+	_, err := tx.ExecContext(ctx,
+		"INSERT INTO operations(id,idem,fingerprint,machine_id,status,body,request) VALUES(?,?,?,?,?,?,?)",
+		o.ID,
+		key,
+		fp,
+		o.MachineID,
+		o.Status,
+		b,
+		r,
+	)
 	return err
 }
-func (c *Controller) Create(key string, in model.CreateInput) (model.Operation, error) {
+
+// Create accepts an idempotent request to create a machine.
+func (c *Controller) Create(
+	ctx context.Context,
+	key string,
+	in model.CreateInput,
+) (_ model.Operation, resultErr error) {
 	if err := validKey(key); err != nil {
 		return model.Operation{}, err
 	}
 	if err := in.Validate(); err != nil {
-		return model.Operation{}, problem(400, "invalid_request", err.Error())
+		return model.Operation{}, problem(http.StatusBadRequest, "invalid_request", err.Error())
 	}
 	fp := model.Hash(struct {
 		Action string
 		Input  model.CreateInput
-	}{"create", in})
+	}{createAction, in})
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	tx, err := c.db.Begin()
+	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Operation{}, err
 	}
-	defer tx.Rollback()
-	if o, found, err := c.duplicate(tx, key, fp); found || err != nil {
-		if err == nil {
-			err = tx.Commit()
+	defer func() { resultErr = errors.Join(resultErr, rollbackTransaction(tx)) }()
+	duplicate, found, duplicateErr := c.duplicate(ctx, tx, key, fp)
+	if found || duplicateErr != nil {
+		if duplicateErr == nil {
+			duplicateErr = tx.Commit()
 		}
-		return o, err
+		return duplicate, duplicateErr
 	}
 	p, ok := c.profile(in.Profile)
 	if !ok {
-		return model.Operation{}, problem(400, "invalid_request", "unknown profile")
+		return model.Operation{}, problem(http.StatusBadRequest, "invalid_request", "unknown profile")
 	}
 	h, ok := c.host(in.Host)
 	if !ok || !slices.Contains(h.ProfileIDs, p.ID) {
-		return model.Operation{}, problem(400, "invalid_request", "host does not provide profile")
+		return model.Operation{}, problem(http.StatusBadRequest, "invalid_request", "host does not provide profile")
 	}
 	var n int
-	if err = tx.QueryRow("SELECT count(*) FROM machines WHERE name=? AND deleted=0", in.Name).Scan(&n); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM machines WHERE name=? AND deleted=0", in.Name).
+		Scan(&n); err != nil {
 		return model.Operation{}, err
 	}
 	if n != 0 {
-		return model.Operation{}, problem(409, "name_conflict", "machine name already exists")
+		return model.Operation{}, problem(http.StatusConflict, "name_conflict", "machine name already exists")
 	}
-	if err = capacity(tx, h, p, ""); err != nil {
+	if err = capacity(ctx, tx, h, p, ""); err != nil {
 		return model.Operation{}, err
 	}
 	now := c.now()
-	m := model.Machine{ID: model.NewID(), Name: in.Name, Profile: p.ID, ProfileSpec: p, Host: h.ID, State: model.Preparing, DesiredState: model.Running, Generation: 1, ObservationStale: true, CreatedAt: now}
-	o := model.Operation{ID: model.NewID(), MachineID: m.ID, Action: "create", Generation: 1, Status: "pending", CreatedAt: now, UpdatedAt: now}
-	req := model.Request{Action: "create", OperationID: o.ID, MachineID: m.ID, Generation: 1, Name: m.Name, Profile: p, SSHPublicKeys: in.SSHPublicKeys}
-	if err = saveMachine(tx, m); err == nil {
-		err = insertOperation(tx, key, fp, o, req)
+	m := model.Machine{
+		ID:               model.NewID(),
+		Name:             in.Name,
+		Profile:          p.ID,
+		ProfileSpec:      p,
+		Host:             h.ID,
+		State:            model.Preparing,
+		DesiredState:     model.Running,
+		Generation:       1,
+		ObservationStale: true,
+		CreatedAt:        now,
+	}
+	o := model.Operation{
+		ID:         model.NewID(),
+		MachineID:  m.ID,
+		Action:     createAction,
+		Generation: 1,
+		Status:     pendingStatus,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	req := model.Request{
+		Action:        createAction,
+		OperationID:   o.ID,
+		MachineID:     m.ID,
+		Generation:    1,
+		Name:          m.Name,
+		Profile:       p,
+		SSHPublicKeys: in.SSHPublicKeys,
+	}
+	if err = saveMachine(ctx, tx, m); err == nil {
+		err = insertOperation(ctx, tx, key, fp, o, req)
 	}
 	if err == nil {
 		err = tx.Commit()
 	}
 	return o, err
 }
-func (c *Controller) Mutate(ctx context.Context, id, action, key string) (model.Operation, error) {
-	if !model.ValidID(id) {
-		return model.Operation{}, problem(400, "invalid_request", "invalid machine ID")
-	}
-	if action != "start" && action != "stop" && action != "delete" {
-		return model.Operation{}, problem(400, "unsupported", "unsupported action")
-	}
-	if err := validKey(key); err != nil {
+
+// Mutate accepts an idempotent start, stop, or delete after checking current host state.
+func (c *Controller) Mutate(ctx context.Context, id, action, key string) (_ model.Operation, resultErr error) {
+	if err := validateMutationInput(id, action, key); err != nil {
 		return model.Operation{}, err
 	}
 	fp := model.Hash(struct{ Action, ID string }{action, id})
 	// Check the idempotency key before observing: completed retries must work offline.
-	c.mu.Lock()
-	tx, err := c.db.Begin()
-	if err != nil {
-		c.mu.Unlock()
-		return model.Operation{}, err
-	}
-	o, found, err := c.duplicate(tx, key, fp)
-	if err == nil {
-		err = tx.Commit()
-	} else {
-		tx.Rollback()
-	}
-	c.mu.Unlock()
+	o, found, err := c.duplicateIntent(ctx, key, fp)
 	if found || err != nil {
 		return o, err
 	}
-	m, err := c.Inspect(ctx, id)
-	if err != nil {
+	if err = c.requireFreshObservation(ctx, id); err != nil {
 		return model.Operation{}, err
-	}
-	if m.ObservationStale {
-		return model.Operation{}, problem(503, "host_unavailable", m.ObservationError)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	tx, err = c.db.Begin()
+	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Operation{}, err
 	}
-	defer tx.Rollback()
-	if o, found, err := c.duplicate(tx, key, fp); found || err != nil {
-		if err == nil {
-			err = tx.Commit()
+	defer func() { resultErr = errors.Join(resultErr, rollbackTransaction(tx)) }()
+	duplicate, found, duplicateErr := c.duplicate(ctx, tx, key, fp)
+	if found || duplicateErr != nil {
+		if duplicateErr == nil {
+			duplicateErr = tx.Commit()
 		}
-		return o, err
+		return duplicate, duplicateErr
 	}
-	m, err = readMachine(tx, id)
+	m, err := readMachine(ctx, tx, id)
 	if err != nil {
 		return o, err
 	}
-	if m.Deleted {
-		return o, problem(409, "prerequisite", "machine is deleted")
-	}
-	if err = sourceIdle(tx, id); err != nil {
+	if err = validateMutation(ctx, tx, m, action); err != nil {
 		return o, err
-	}
-	if action == "delete" {
-		if err = machineDependencies(tx, m); err != nil {
-			return o, err
-		}
-	}
-	if m.ObservationStale || m.AcceptedGeneration != m.Generation {
-		return o, problem(409, "reconciliation_required", "host generation differs from controller; reconcile before mutating")
-	}
-	if !m.Prepared || m.State == model.Unknown || m.State == model.Preparing {
-		return o, problem(409, "prerequisite", "machine must have a known prepared execution")
-	}
-	if (action == "start" || action == "delete") && m.State != model.Stopped {
-		return o, problem(409, "prerequisite", "action requires a stopped machine")
-	}
-	if action == "stop" && m.State != model.Running {
-		return o, problem(409, "prerequisite", "stop requires a running machine")
 	}
 	h, ok := c.host(m.Host)
 	if !ok {
-		return o, problem(409, "configuration", "machine host is no longer configured")
+		return o, problem(http.StatusConflict, "configuration", "machine host is no longer configured")
 	}
-	if action == "start" {
-		if err = capacity(tx, h, m.ProfileSpec, m.ID); err != nil {
+	if action == startAction {
+		if err = capacity(ctx, tx, h, m.ProfileSpec, m.ID); err != nil {
 			return o, err
 		}
 		m.DesiredState = model.Running
@@ -379,16 +479,42 @@ func (c *Controller) Mutate(ctx context.Context, id, action, key string) (model.
 	}
 	m.Generation++
 	now := c.now()
-	o = model.Operation{ID: model.NewID(), MachineID: id, Action: action, Generation: m.Generation, Status: "pending", CreatedAt: now, UpdatedAt: now}
-	req := model.Request{Action: action, OperationID: o.ID, MachineID: id, Generation: m.Generation, Name: m.Name, Profile: m.ProfileSpec}
-	if err = saveMachine(tx, m); err == nil {
-		err = insertOperation(tx, key, fp, o, req)
+	o = model.Operation{
+		ID:         model.NewID(),
+		MachineID:  id,
+		Action:     action,
+		Generation: m.Generation,
+		Status:     pendingStatus,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	req := model.Request{
+		Action:      action,
+		OperationID: o.ID,
+		MachineID:   id,
+		Generation:  m.Generation,
+		Name:        m.Name,
+		Profile:     m.ProfileSpec,
+	}
+	if err = saveMachine(ctx, tx, m); err == nil {
+		err = insertOperation(ctx, tx, key, fp, o, req)
 	}
 	if err == nil {
 		err = tx.Commit()
 	}
 	return o, err
 }
+func (c *Controller) requireFreshObservation(ctx context.Context, id string) error {
+	m, err := c.Inspect(ctx, id)
+	if err != nil {
+		return err
+	}
+	if m.ObservationStale {
+		return problem(http.StatusServiceUnavailable, "host_unavailable", m.ObservationError)
+	}
+	return nil
+}
+
 func applyObservation(m *model.Machine, obs *model.Observation) {
 	m.State = obs.State
 	m.AcceptedGeneration = obs.Generation
@@ -418,9 +544,11 @@ func validateObservation(id string, obs *model.Observation) error {
 	}
 	return nil
 }
+
+// Inspect refreshes a machine observation and reports unavailable hosts as stale.
 func (c *Controller) Inspect(ctx context.Context, id string) (model.Machine, error) {
 	c.mu.Lock()
-	m, err := readMachine(c.db, id)
+	m, err := readMachine(ctx, c.db, id)
 	c.mu.Unlock()
 	if err != nil {
 		return m, err
@@ -433,10 +561,10 @@ func (c *Controller) Inspect(ctx context.Context, id string) (model.Machine, err
 	if !ok {
 		err = errors.New("host is no longer configured")
 	} else {
-		contact, cancel := context.WithTimeout(ctx, 12*time.Second)
+		contact, cancel := context.WithTimeout(ctx, inspectTimeout)
 		resp, err = c.transport.Call(contact, h, model.Request{Action: "inspect", MachineID: id})
 		cancel()
-		if err == nil && resp.Status != "succeeded" {
+		if err == nil && resp.Status != succeededStatus {
 			err = fmt.Errorf("host inspection: %s", resp.Error)
 		}
 		if err == nil {
@@ -445,7 +573,7 @@ func (c *Controller) Inspect(ctx context.Context, id string) (model.Machine, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	latest, readErr := readMachine(c.db, id)
+	latest, readErr := readMachine(ctx, c.db, id)
 	if readErr != nil {
 		return m, readErr
 	}
@@ -460,17 +588,19 @@ func (c *Controller) Inspect(ctx context.Context, id string) (model.Machine, err
 	} else if latest.ObservedAt == nil || !resp.Observation.ObservedAt.Before(*latest.ObservedAt) {
 		applyObservation(&latest, resp.Observation)
 	}
-	return latest, saveMachine(c.db, latest)
+	return latest, saveMachine(ctx, c.db, latest)
 }
+
+// List returns machines with refreshed host observations.
 func (c *Controller) List(ctx context.Context) ([]model.Machine, error) {
 	c.mu.Lock()
-	ms, err := machines(c.db)
+	ms, err := machines(ctx, c.db)
 	c.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, 8)
+	sem := make(chan struct{}, inspectionConcurrency)
 	errs := make([]error, len(ms))
 	for i := range ms {
 		wg.Add(1)
@@ -504,7 +634,9 @@ func (c *Controller) Run(ctx context.Context) {
 				if ctx.Err() != nil {
 					return
 				}
-				_ = c.ProcessOne(ctx, h.ID)
+				if err := c.ProcessOne(ctx, h.ID); err != nil && ctx.Err() == nil {
+					c.logger.ErrorContext(ctx, "reconcile host operation", "host", h.ID, "error", err)
+				}
 				select {
 				case <-ctx.Done():
 					return
@@ -515,164 +647,50 @@ func (c *Controller) Run(ctx context.Context) {
 	}
 	wg.Wait()
 }
-func (c *Controller) ProcessOne(ctx context.Context, hostID string) error {
-	c.workMu.Lock()
-	if c.busy[hostID] {
-		c.workMu.Unlock()
-		return nil
+
+func validateMutation(ctx context.Context, tx *sql.Tx, m model.Machine, action string) error {
+	var err error
+	if m.Deleted {
+		return problem(http.StatusConflict, "prerequisite", "machine is deleted")
 	}
-	c.busy[hostID] = true
-	c.workMu.Unlock()
-	defer func() { c.workMu.Lock(); delete(c.busy, hostID); c.workMu.Unlock() }()
-	c.mu.Lock()
-	rows, err := c.db.Query("SELECT id,request FROM operations WHERE status NOT IN ('succeeded','failed') AND next_attempt<=? ORDER BY rowid", c.now().Unix())
-	if err != nil {
-		c.mu.Unlock()
+	if err = sourceIdle(ctx, tx, m.ID); err != nil {
 		return err
 	}
-	type work struct {
-		id  string
-		req model.Request
-	}
-	candidates := []work{}
-	for rows.Next() {
-		var w work
-		var b []byte
-		if err = rows.Scan(&w.id, &b); err != nil {
-			break
+	if action == deleteAction {
+		if err = machineDependencies(ctx, tx, m); err != nil {
+			return err
 		}
-		if err = json.Unmarshal(b, &w.req); err != nil {
-			break
-		}
-		candidates = append(candidates, w)
 	}
-	rowErr := rows.Err()
-	rows.Close()
-	if err == nil {
-		err = rowErr
+	if m.ObservationStale || m.AcceptedGeneration != m.Generation {
+		return problem(
+			http.StatusConflict,
+			"reconciliation_required",
+			"host generation differs from controller; reconcile before mutating",
+		)
 	}
-	if err != nil {
-		c.mu.Unlock()
+	if !m.Prepared || m.State == model.Unknown || m.State == model.Preparing {
+		return problem(http.StatusConflict, "prerequisite", "machine must have a known prepared execution")
+	}
+	if (action == startAction || action == deleteAction) && m.State != model.Stopped {
+		return problem(http.StatusConflict, "prerequisite", "action requires a stopped machine")
+	}
+	if action == stopAction && m.State != model.Running {
+		return problem(http.StatusConflict, "prerequisite", "stop requires a running machine")
+	}
+
+	return nil
+}
+
+func validateMutationInput(id, action, key string) error {
+	if !model.ValidID(id) {
+		return problem(http.StatusBadRequest, "invalid_request", "invalid machine ID")
+	}
+	if action != startAction && action != stopAction && action != deleteAction {
+		return problem(http.StatusBadRequest, "unsupported", "unsupported action")
+	}
+	if err := validKey(key); err != nil {
 		return err
 	}
-	var req model.Request
-	var op model.Operation
-	var m model.Machine
-	found := false
-	for _, w := range candidates {
-		if w.req.Action == "checkpoint-delete" {
-			m = model.Machine{ID: w.req.MachineID, Host: w.req.Host}
-		} else {
-			m, err = readMachine(c.db, w.req.MachineID)
-		}
-		if err != nil {
-			break
-		}
-		if m.Host == hostID {
-			req = w.req
-			op, err = readOperation(c.db, w.id)
-			found = true
-			break
-		}
-	}
-	if err != nil || !found {
-		c.mu.Unlock()
-		return err
-	}
-	op.Status = "running"
-	op.UpdatedAt = c.now()
-	err = saveOperation(c.db, op, 0)
-	c.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	h, ok := c.host(hostID)
-	var resp model.Response
-	if !ok {
-		err = errors.New("host not configured")
-	} else {
-		call, cancel := context.WithTimeout(ctx, 6*time.Minute)
-		resp, err = c.transport.Call(call, h, req)
-		cancel()
-	}
-	if err == nil {
-		if resp.OperationID != op.ID {
-			err = errors.New("host returned wrong operation ID")
-		} else if resp.Status != "succeeded" && resp.Status != "failed" && resp.Status != "unresolved" {
-			err = errors.New("invalid operation status")
-		} else if resp.Status == "succeeded" {
-			if req.Action == "checkpoint-delete" {
-				err = validateCheckpointResponse(req, resp)
-			} else {
-				err = validateObservation(req.MachineID, resp.Observation)
-			}
-			if err == nil && req.Action != "checkpoint-delete" && resp.Observation.Generation != op.Generation {
-				err = errors.New("host returned wrong generation")
-			}
-		}
-	}
-	if err == nil && req.Action == "checkpoint-create" && resp.Status == "succeeded" {
-		err = validateCheckpointResponse(req, resp)
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	tx, txErr := c.db.Begin()
-	if txErr != nil {
-		return txErr
-	}
-	defer tx.Rollback()
-	if req.Action != "checkpoint-delete" {
-		m, txErr = readMachine(tx, op.MachineID)
-	}
-	if txErr != nil {
-		return txErr
-	}
-	op.UpdatedAt = c.now()
-	next := int64(0)
-	if err != nil {
-		op.Status = "unresolved"
-		op.Error = err.Error()
-		m.State = model.Unknown
-		m.ObservationStale = true
-		m.ObservationError = err.Error()
-	} else {
-		op.Status = resp.Status
-		op.Error = resp.Error
-		if resp.Observation != nil && validateObservation(m.ID, resp.Observation) == nil && resp.Observation.Generation == op.Generation {
-			if m.ObservedAt == nil || !resp.Observation.ObservedAt.Before(*m.ObservedAt) {
-				applyObservation(&m, resp.Observation)
-			}
-		} else {
-			m.ObservationStale = true
-		}
-	}
-	if !op.Done() {
-		next = c.now().Add(5 * time.Second).Unix()
-	}
-	if op.Status == "failed" && m.State == model.Stopped && !m.ObservationStale {
-		m.DesiredState = model.Stopped
-	}
-	if req.Checkpoint != nil && (req.Action == "checkpoint-create" || req.Action == "checkpoint-delete") {
-		cp := *req.Checkpoint
-		if op.Status == "succeeded" {
-			cp = *resp.Checkpoint
-		} else if req.Action == "checkpoint-create" {
-			cp.Status = op.Status
-		} else if op.Status == "failed" {
-			cp.Status = "published"
-		} else {
-			cp.Status = "deleting"
-		}
-		txErr = saveCheckpoint(tx, cp)
-	}
-	if txErr == nil && req.Action != "checkpoint-delete" {
-		txErr = saveMachine(tx, m)
-	}
-	if txErr == nil {
-		txErr = saveOperation(tx, op, next)
-	}
-	if txErr == nil {
-		txErr = tx.Commit()
-	}
-	return txErr
+
+	return nil
 }

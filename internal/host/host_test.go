@@ -1,4 +1,4 @@
-package host
+package host_test
 
 import (
 	"context"
@@ -10,8 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"clankerbox/internal/model"
+	"clankerbox/internal/host"
+
 	"golang.org/x/crypto/ssh"
+
+	"clankerbox/internal/model"
 )
 
 type memoryRuntime struct {
@@ -23,10 +26,10 @@ type memoryRuntime struct {
 	failCreate, failStart, failDelete         bool
 }
 
-func (r *memoryRuntime) Inspect(context.Context, Manifest) (RuntimeState, error) {
-	return RuntimeState{Exists: r.exists, State: r.state, Endpoint: "192.168.64.2:22"}, nil
+func (r *memoryRuntime) Inspect(context.Context, host.Manifest) (host.RuntimeState, error) {
+	return host.RuntimeState{Exists: r.exists, State: r.state, Endpoint: "192.168.64.2:22"}, nil
 }
-func (r *memoryRuntime) Create(context.Context, Manifest) error {
+func (r *memoryRuntime) Create(context.Context, host.Manifest) error {
 	r.creates++
 	r.exists = true
 	r.state = model.Stopped
@@ -36,8 +39,8 @@ func (r *memoryRuntime) Create(context.Context, Manifest) error {
 	}
 	return nil
 }
-func (r *memoryRuntime) Configure(context.Context, Manifest) error { return nil }
-func (r *memoryRuntime) Start(context.Context, Manifest) error {
+func (r *memoryRuntime) Configure(context.Context, host.Manifest) error { return nil }
+func (r *memoryRuntime) Start(context.Context, host.Manifest) error {
 	r.starts++
 	r.state = model.Running
 	if r.failStart {
@@ -45,18 +48,18 @@ func (r *memoryRuntime) Start(context.Context, Manifest) error {
 	}
 	return nil
 }
-func (r *memoryRuntime) Prepare(_ context.Context, _ Manifest, keys []string) (string, string, string, error) {
+func (r *memoryRuntime) Prepare(_ context.Context, _ host.Manifest, keys []string) (string, string, string, error) {
 	if len(keys) != 0 {
 		r.prepares++
 	}
 	return "admin", r.key, "192.168.64.2:22", nil
 }
-func (r *memoryRuntime) Stop(context.Context, Manifest) error {
+func (r *memoryRuntime) Stop(context.Context, host.Manifest) error {
 	r.stops++
 	r.state = model.Stopped
 	return nil
 }
-func (r *memoryRuntime) Delete(context.Context, Manifest) error {
+func (r *memoryRuntime) Delete(context.Context, host.Manifest) error {
 	if r.exists {
 		r.deletes++
 		r.exists = false
@@ -71,32 +74,44 @@ func (r *memoryRuntime) Delete(context.Context, Manifest) error {
 func testKey(t *testing.T) string {
 	t.Helper()
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requireNoError(t, err)
 	p, err := ssh.NewPublicKey(pub)
-	if err != nil {
-		t.Fatal(err)
-	}
+	requireNoError(t, err)
 	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(p)))
 }
-func setup(t *testing.T) (*Helper, Config, *memoryRuntime, model.Request) {
+func setup(t *testing.T) (*host.Helper, host.Config, *memoryRuntime, model.Request) {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
+	requireNoError(t, err)
+	p := model.Profile{
+		ID:        "mac-v1",
+		OS:        "macos",
+		Arch:      "arm64",
+		Runtime:   runtimeTart,
+		CPU:       2,
+		RAMMiB:    2048,
+		ImagePath: "seed",
 	}
-	p := model.Profile{ID: "mac-v1", OS: "macos", Arch: "arm64", Runtime: "tart", CPU: 2, RAMMiB: 2048, ImagePath: "seed"}
 	if err = p.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Root: root, Profiles: []model.Profile{p}, TartPath: "/opt/homebrew/bin/tart"}
-	rt := &memoryRuntime{key: testKey(t)}
-	h, err := Open(cfg, rt)
-	if err != nil {
-		t.Fatal(err)
+	cfg := host.Config{
+		Root:     filepath.Join(root, "state"),
+		Profiles: []model.Profile{p},
+		TartPath: "/opt/homebrew/bin/tart",
 	}
-	req := model.Request{Action: "create", OperationID: model.NewID(), MachineID: model.NewID(), Generation: 1, Name: "dev", Profile: p, SSHPublicKeys: []string{testKey(t)}}
+	rt := &memoryRuntime{key: testKey(t)}
+	h, err := host.Open(cfg, rt)
+	requireNoError(t, err)
+	req := model.Request{
+		Action:        actionCreate,
+		OperationID:   model.NewID(),
+		MachineID:     model.NewID(),
+		Generation:    1,
+		Name:          "dev",
+		Profile:       p,
+		SSHPublicKeys: []string{testKey(t)},
+	}
 	return h, cfg, rt, req
 }
 func requireStatus(t *testing.T, r model.Response, want string) {
@@ -106,50 +121,40 @@ func requireStatus(t *testing.T, r model.Response, want string) {
 	}
 }
 func TestDurableReplyLossDuplicateAndTombstone(t *testing.T) {
+	t.Parallel()
 	h, cfg, rt, req := setup(t)
 	ctx := context.Background()
-	requireStatus(t, h.Execute(ctx, req), "succeeded")
-	h.Close()
+	requireStatus(t, h.Execute(ctx, req), statusSucceeded)
+	closeHelper(t, h)
 	var err error
-	h, err = Open(cfg, rt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer h.Close()
-	requireStatus(t, h.Execute(ctx, req), "succeeded")
+	h, err = host.Open(cfg, rt)
+	requireNoError(t, err)
+	defer closeHelper(t, h)
+	requireStatus(t, h.Execute(ctx, req), statusSucceeded)
 	if rt.creates != 1 || rt.starts != 1 || rt.prepares != 1 {
 		t.Fatal("duplicate created another execution")
 	}
 	conflict := req
 	conflict.Name = "changed"
-	requireStatus(t, h.Execute(ctx, conflict), "failed")
-	rt.disk = "dirty git + untracked + sqlite"
-	op := req
-	op.Action = "stop"
-	op.OperationID = model.NewID()
-	op.Generation++
+	requireStatus(t, h.Execute(ctx, conflict), statusFailed)
+	rt.disk = retainedDiskContents
+	op := nextOperation(req, actionStop)
 	op.SSHPublicKeys = nil
-	requireStatus(t, h.Execute(ctx, op), "succeeded")
-	if rt.disk != "dirty git + untracked + sqlite" {
+	requireStatus(t, h.Execute(ctx, op), statusSucceeded)
+	if rt.disk != retainedDiskContents {
 		t.Fatal("stop deleted disk")
 	}
-	start := op
-	start.Action = "start"
-	start.OperationID = model.NewID()
-	start.Generation++
-	requireStatus(t, h.Execute(ctx, start), "succeeded")
-	if rt.disk != "dirty git + untracked + sqlite" || rt.creates != 1 || rt.prepares != 1 {
+	start := nextOperation(op, actionStart)
+	requireStatus(t, h.Execute(ctx, start), statusSucceeded)
+	if rt.disk != retainedDiskContents || rt.creates != 1 || rt.prepares != 1 {
 		t.Fatal("start replaced disk or identity")
 	}
 	op.OperationID = model.NewID()
 	op.Generation = start.Generation + 1
-	requireStatus(t, h.Execute(ctx, op), "succeeded")
-	del := op
-	del.Action = "delete"
-	del.OperationID = model.NewID()
-	del.Generation++
-	requireStatus(t, h.Execute(ctx, del), "succeeded")
-	requireStatus(t, h.Execute(ctx, del), "succeeded")
+	requireStatus(t, h.Execute(ctx, op), statusSucceeded)
+	del := nextOperation(op, actionDelete)
+	requireStatus(t, h.Execute(ctx, del), statusSucceeded)
+	requireStatus(t, h.Execute(ctx, del), statusSucceeded)
 	if rt.deletes != 1 {
 		t.Fatal("duplicate delete ran twice")
 	}
@@ -159,138 +164,124 @@ func TestDurableReplyLossDuplicateAndTombstone(t *testing.T) {
 	}
 	again := req
 	again.OperationID = model.NewID()
-	requireStatus(t, h.Execute(ctx, again), "failed")
+	requireStatus(t, h.Execute(ctx, again), statusFailed)
 	if rt.creates != 1 {
 		t.Fatal("recreated tombstone")
 	}
-	requireStatus(t, h.Execute(ctx, start), "succeeded")
+	requireStatus(t, h.Execute(ctx, start), statusSucceeded)
 	if rt.starts != 2 {
 		t.Fatal("old successful generation restarted deleted guest")
 	}
 }
 func TestInterruptedCreateReconcilesExactName(t *testing.T) {
+	t.Parallel()
 	h, _, rt, req := setup(t)
-	defer h.Close()
+	defer closeHelper(t, h)
 	rt.failCreate = true
-	requireStatus(t, h.Execute(context.Background(), req), "unresolved")
-	requireStatus(t, h.Execute(context.Background(), req), "succeeded")
+	requireStatus(t, h.Execute(context.Background(), req), statusUnresolved)
+	requireStatus(t, h.Execute(context.Background(), req), statusSucceeded)
 	if rt.creates != 1 {
 		t.Fatal("repeated ambiguous create")
 	}
 }
 func TestMissingAmbiguousCreateDoesNotRecreate(t *testing.T) {
+	t.Parallel()
 	h, _, rt, req := setup(t)
-	defer h.Close()
+	defer closeHelper(t, h)
 	rt.failCreate = true
-	requireStatus(t, h.Execute(context.Background(), req), "unresolved")
+	requireStatus(t, h.Execute(context.Background(), req), statusUnresolved)
 	rt.exists = false
-	requireStatus(t, h.Execute(context.Background(), req), "unresolved")
+	requireStatus(t, h.Execute(context.Background(), req), statusUnresolved)
 	if rt.creates != 1 {
 		t.Fatal("recreated after missing ambiguous record")
 	}
 }
 func TestAmbiguousStartNeverColdRestarts(t *testing.T) {
+	t.Parallel()
 	h, _, rt, req := setup(t)
-	defer h.Close()
+	defer closeHelper(t, h)
 	rt.failStart = true
-	requireStatus(t, h.Execute(context.Background(), req), "unresolved")
+	requireStatus(t, h.Execute(context.Background(), req), statusUnresolved)
 	rt.state = model.Stopped
-	requireStatus(t, h.Execute(context.Background(), req), "unresolved")
+	requireStatus(t, h.Execute(context.Background(), req), statusUnresolved)
 	if rt.starts != 1 {
 		t.Fatal("cold restart after ambiguous start")
 	}
 	next := req
-	next.Action = "delete"
+	next.Action = actionDelete
 	next.OperationID = model.NewID()
 	next.Generation = 2
-	requireStatus(t, h.Execute(context.Background(), next), "failed")
+	requireStatus(t, h.Execute(context.Background(), next), statusFailed)
 }
 func TestHostRejectsUnownedAndRunningDelete(t *testing.T) {
+	t.Parallel()
 	h, _, rt, req := setup(t)
-	defer h.Close()
+	defer closeHelper(t, h)
 	bad := req
 	bad.MachineID = "../../foreign"
-	requireStatus(t, h.Execute(context.Background(), bad), "failed")
+	requireStatus(t, h.Execute(context.Background(), bad), statusFailed)
 	rt.exists = true
 	rt.state = model.Stopped
-	requireStatus(t, h.Execute(context.Background(), req), "failed")
+	requireStatus(t, h.Execute(context.Background(), req), statusFailed)
 	if rt.creates != 0 {
 		t.Fatal("adopted foreign record")
 	}
 	h2, _, rt2, req2 := setup(t)
-	defer h2.Close()
-	requireStatus(t, h2.Execute(context.Background(), req2), "succeeded")
-	req2.Action = "delete"
+	defer closeHelper(t, h2)
+	requireStatus(t, h2.Execute(context.Background(), req2), statusSucceeded)
+	req2.Action = actionDelete
 	req2.OperationID = model.NewID()
 	req2.Generation = 2
 	req2.SSHPublicKeys = nil
-	requireStatus(t, h2.Execute(context.Background(), req2), "failed")
+	requireStatus(t, h2.Execute(context.Background(), req2), statusFailed)
 	if rt2.deletes != 0 {
 		t.Fatal("deleted running VM")
 	}
 }
 func TestRootOwnership(t *testing.T) {
+	t.Parallel()
 	h, cfg, _, _ := setup(t)
-	h.Close()
-	if err := os.WriteFile(filepath.Join(cfg.Root, ".owner"), []byte("foreign"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if h, err := Open(cfg, nil); err == nil {
-		h.Close()
+	closeHelper(t, h)
+	requireNoError(t, os.WriteFile(filepath.Join(cfg.Root, ".owner"), []byte("foreign"), 0600))
+	if reopened, err := host.Open(cfg, nil); err == nil {
+		closeHelper(t, reopened)
 		t.Fatal("adopted foreign root")
 	}
 }
 func TestBootstrapAndEndpointRestrictions(t *testing.T) {
+	t.Parallel()
 	h, _, _, req := setup(t)
-	defer h.Close()
-	m := Manifest{ID: req.MachineID, Profile: req.Profile}
-	script, err := bootstrapScript(m, req.SSHPublicKeys)
-	if err != nil {
-		t.Fatal(err)
-	}
+	defer closeHelper(t, h)
+	m := host.Manifest{ID: req.MachineID, Profile: req.Profile}
+	script, err := preparedScript(t, m, req.SSHPublicKeys)
+	requireNoError(t, err)
 	if strings.Contains(script, req.SSHPublicKeys[0]) {
 		t.Fatal("raw caller data interpolated in shell")
 	}
-	start, err := bootstrapScript(m, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	start, err := preparedScript(t, m, nil)
+	requireNoError(t, err)
 	if strings.Contains(start, "ssh-keygen -q") || strings.Contains(start, "authorized_keys'") {
 		t.Fatal("start regenerates guest identity")
-	}
-	for _, ep := range []string{"localhost:22", "127.0.0.1:22", "8.8.8.8:22", "192.168.1.2:80"} {
-		if validEndpoint(m, ep) == nil {
-			t.Fatalf("accepted endpoint %s", ep)
-		}
-	}
-	if err = validEndpoint(m, "192.168.64.2:22"); err != nil {
-		t.Fatal(err)
-	}
-	m.Profile.Runtime = "smolvm"
-	m.Port = 22000
-	for _, ep := range []string{"localhost:22000", "127.0.0.1:22001", "192.168.1.2:22000"} {
-		if validEndpoint(m, ep) == nil {
-			t.Fatalf("accepted endpoint %s", ep)
-		}
 	}
 }
 
 func TestInterruptedDeleteFinishesCleanupAndTombstone(t *testing.T) {
+	t.Parallel()
 	h, _, rt, req := setup(t)
-	defer h.Close()
+	defer closeHelper(t, h)
 	ctx := context.Background()
-	requireStatus(t, h.Execute(ctx, req), "succeeded")
+	requireStatus(t, h.Execute(ctx, req), statusSucceeded)
 	req.OperationID = model.NewID()
 	req.Generation++
-	req.Action = "stop"
+	req.Action = actionStop
 	req.SSHPublicKeys = nil
-	requireStatus(t, h.Execute(ctx, req), "succeeded")
+	requireStatus(t, h.Execute(ctx, req), statusSucceeded)
 	req.OperationID = model.NewID()
 	req.Generation++
-	req.Action = "delete"
+	req.Action = actionDelete
 	rt.failDelete = true
-	requireStatus(t, h.Execute(ctx, req), "unresolved")
-	requireStatus(t, h.Execute(ctx, req), "succeeded")
+	requireStatus(t, h.Execute(ctx, req), statusUnresolved)
+	requireStatus(t, h.Execute(ctx, req), statusSucceeded)
 	if rt.deletes != 1 {
 		t.Fatal("native deletion repeated after missing record")
 	}
@@ -301,8 +292,9 @@ func TestInterruptedDeleteFinishesCleanupAndTombstone(t *testing.T) {
 }
 
 func TestConcurrentHelperInitialization(t *testing.T) {
+	t.Parallel()
 	h, cfg, rt, _ := setup(t)
-	defer h.Close()
+	defer closeHelper(t, h)
 	start := make(chan struct{})
 	results := make(chan error, 16)
 	for range 16 {
@@ -311,7 +303,7 @@ func TestConcurrentHelperInitialization(t *testing.T) {
 			local := cfg
 			// Separate invocations decode independent profile records.
 			local.Profiles = append([]model.Profile(nil), cfg.Profiles...)
-			helper, err := Open(local, rt)
+			helper, err := host.Open(local, rt)
 			if err == nil {
 				err = helper.Close()
 			}
@@ -324,4 +316,41 @@ func TestConcurrentHelperInitialization(t *testing.T) {
 			t.Error(err)
 		}
 	}
+}
+
+func (*memoryRuntime) Prerequisite(context.Context, string, host.Manifest, *host.CheckpointSpec) error {
+	return errors.New("unsupported checkpoint operation")
+}
+func (*memoryRuntime) Fork(context.Context, host.Manifest, host.Manifest) error {
+	return errors.New("unsupported fork")
+}
+func (*memoryRuntime) Capture(context.Context, host.Manifest, host.CheckpointSpec) error {
+	return errors.New("unsupported capture")
+}
+func (*memoryRuntime) Restore(context.Context, host.Manifest, host.CheckpointSpec) error {
+	return errors.New("unsupported restore")
+}
+func (*memoryRuntime) DeleteCheckpoint(context.Context, host.CheckpointSpec) error {
+	return errors.New("unsupported checkpoint deletion")
+}
+
+func closeHelper(t *testing.T, h *host.Helper) {
+	t.Helper()
+	if err := h.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func nextOperation(previous model.Request, action string) model.Request {
+	previous.Action = action
+	previous.OperationID = model.NewID()
+	previous.Generation++
+	return previous
 }

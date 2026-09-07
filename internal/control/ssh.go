@@ -8,26 +8,31 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"clankerbox/internal/model"
 )
 
+const (
+	sshWaitDelay           = 2 * time.Second
+	maxHelperResponseBytes = 1 << 20
+	sshBufferBytes         = 4096
+	sshReadyTimeout        = 20 * time.Second
+)
+
 // SSHTransport uses the controller's own SSH config/identity and known_hosts.
 // Config paths and targets have a restricted alphabet because OpenSSH invokes a
 // remote login shell even when its local invocation uses argv. No API input is shell text.
-type SSHTransport struct{ Binary string }
+type SSHTransport struct{}
 
 func (s SSHTransport) command(ctx context.Context, h model.Host, connect string) (*exec.Cmd, error) {
 	if err := h.Validate(); err != nil {
 		return nil, err
-	}
-	bin := s.Binary
-	if bin == "" {
-		bin = "ssh"
 	}
 	remote := []string{h.HelperPath, "--config", h.ConfigPath}
 	if connect != "" {
@@ -36,13 +41,32 @@ func (s SSHTransport) command(ctx context.Context, h model.Host, connect string)
 		}
 		remote = append(remote, "--connect", connect)
 	}
-	cmd := exec.CommandContext(ctx, bin, "-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--", h.SSHTarget, strings.Join(remote, " "))
-	cmd.WaitDelay = 2 * time.Second
+	//nolint:gosec // G204: Host target, helper/config paths and machine ID are validated before building SSH arguments.
+	cmd := exec.CommandContext(
+		ctx,
+		"ssh",
+		"-T",
+		"-o",
+		"BatchMode=yes",
+		"-o",
+		"StrictHostKeyChecking=yes",
+		"-o",
+		"ConnectTimeout=10",
+		"-o",
+		"ServerAliveInterval=15",
+		"-o",
+		"ServerAliveCountMax=3",
+		"--",
+		h.SSHTarget,
+		strings.Join(remote, " "),
+	)
+	cmd.WaitDelay = sshWaitDelay
 	return cmd, nil
 }
 
 type limitedBuffer struct {
 	bytes.Buffer
+
 	limit int
 }
 
@@ -56,6 +80,8 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
+
+// Call runs one host helper request over SSH.
 func (s SSHTransport) Call(ctx context.Context, h model.Host, req model.Request) (model.Response, error) {
 	var resp model.Response
 	cmd, err := s.command(ctx, h, "")
@@ -64,8 +90,8 @@ func (s SSHTransport) Call(ctx context.Context, h model.Host, req model.Request)
 	}
 	b, _ := json.Marshal(req)
 	cmd.Stdin = bytes.NewReader(append(b, '\n'))
-	out := &limitedBuffer{limit: 1 << 20}
-	stderr := &limitedBuffer{limit: 4096}
+	out := &limitedBuffer{limit: maxHelperResponseBytes}
+	stderr := &limitedBuffer{limit: sshBufferBytes}
 	cmd.Stdout = out
 	cmd.Stderr = stderr
 	if err = cmd.Run(); err != nil {
@@ -79,11 +105,15 @@ func (s SSHTransport) Call(ctx context.Context, h model.Host, req model.Request)
 }
 
 type sshStream struct {
-	reader *bufio.Reader
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-	cmd    *exec.Cmd
-	once   sync.Once
+	reader   *bufio.Reader
+	stdin    io.WriteCloser
+	stdout   io.ReadCloser
+	cmd      *exec.Cmd
+	once     sync.Once
+	stopOnce sync.Once
+	stopErr  error
+	killed   bool
+	closeErr error
 }
 
 func (s *sshStream) Read(p []byte) (int, error)  { return s.reader.Read(p) }
@@ -91,15 +121,42 @@ func (s *sshStream) Write(p []byte) (int, error) { return s.stdin.Write(p) }
 func (s *sshStream) CloseWrite() error           { return s.stdin.Close() }
 func (s *sshStream) Close() error {
 	s.once.Do(func() {
-		_ = s.stdin.Close()
-		_ = s.stdout.Close()
-		if s.cmd.Process != nil {
-			_ = s.cmd.Process.Kill()
+		stdinErr := closedPipeError(s.stdin.Close())
+		stdoutErr := closedPipeError(s.stdout.Close())
+		stopErr := s.stop()
+		if errors.Is(stopErr, os.ErrProcessDone) {
+			stopErr = nil
 		}
-		_ = s.cmd.Wait()
+		waitErr := s.cmd.Wait()
+		if exitErr, ok := errors.AsType[*exec.ExitError](waitErr); ok && s.killed {
+			if status, signaled := exitErr.Sys().(syscall.WaitStatus); signaled && status.Signaled() &&
+				status.Signal() == syscall.SIGKILL {
+				waitErr = nil
+			}
+		}
+		s.closeErr = errors.Join(stdinErr, stdoutErr, stopErr, waitErr)
 	})
-	return nil
+	return s.closeErr
 }
+
+func closedPipeError(err error) error {
+	if errors.Is(err, os.ErrClosed) {
+		return nil
+	}
+	return err
+}
+
+func (s *sshStream) stop() error {
+	s.stopOnce.Do(func() {
+		s.stopErr = s.cmd.Process.Kill()
+		s.killed = s.stopErr == nil
+	})
+	return s.stopErr
+}
+
+// Connect opens a prepared machine SSH stream through its host.
+// Closing the returned stream terminates and reaps SSH. Close is idempotent and
+// reports unexpected pipe or process failures, excluding its deliberate kill.
 func (s SSHTransport) Connect(ctx context.Context, h model.Host, id string) (io.ReadWriteCloser, error) {
 	cmd, err := s.command(ctx, h, id)
 	if err != nil {
@@ -111,31 +168,29 @@ func (s SSHTransport) Connect(ctx context.Context, h model.Host, id string) (io.
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		stdin.Close()
-		return nil, err
+		return nil, errors.Join(err, stdin.Close())
 	}
 	cmd.Stderr = io.Discard
-	stream := &sshStream{reader: bufio.NewReaderSize(stdout, 4096), stdin: stdin, stdout: stdout, cmd: cmd}
+	stream := &sshStream{reader: bufio.NewReaderSize(stdout, sshBufferBytes), stdin: stdin, stdout: stdout, cmd: cmd}
+	cmd.Cancel = stream.stop
 	if err = cmd.Start(); err != nil {
-		stdin.Close()
-		stdout.Close()
-		return nil, err
+		return nil, errors.Join(err, stdin.Close(), stdout.Close())
 	}
 	ready := make(chan error, 1)
 	go func() {
-		line, err := stream.reader.ReadSlice('\n')
-		if err == nil {
+		line, readyErr := stream.reader.ReadSlice('\n')
+		if readyErr == nil {
 			var reply struct {
 				Ready bool `json:"ready"`
 			}
-			err = json.Unmarshal(line, &reply)
-			if err == nil && !reply.Ready {
-				err = errors.New("helper did not prepare SSH stream")
+			readyErr = json.Unmarshal(line, &reply)
+			if readyErr == nil && !reply.Ready {
+				readyErr = errors.New("helper did not prepare SSH stream")
 			}
 		}
-		ready <- err
+		ready <- readyErr
 	}()
-	timer := time.NewTimer(20 * time.Second)
+	timer := time.NewTimer(sshReadyTimeout)
 	defer timer.Stop()
 	select {
 	case err = <-ready:
@@ -145,8 +200,7 @@ func (s SSHTransport) Connect(ctx context.Context, h model.Host, id string) (io.
 		err = errors.New("SSH endpoint acquisition timed out")
 	}
 	if err != nil {
-		stream.Close()
-		return nil, err
+		return nil, errors.Join(err, stream.Close())
 	}
 	return stream, nil
 }

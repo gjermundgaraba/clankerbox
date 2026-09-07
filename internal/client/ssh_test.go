@@ -1,11 +1,13 @@
-package client
+package client_test
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -17,13 +19,15 @@ import (
 	"testing"
 	"time"
 
+	"clankerbox/internal/client"
+
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
 
 // This server is in-process only. It exercises the real upgrade, SSH handshake,
 // host-key check, fixed discovery exec and numeric direct-tcpip channel path.
-func localSSHServer(t *testing.T) (*API, Pin) {
+func localSSHServer(t *testing.T) (*client.API, client.Pin) {
 	t.Helper()
 	_, hostPriv, e := ed25519.GenerateKey(rand.Reader)
 	if e != nil {
@@ -32,97 +36,26 @@ func localSSHServer(t *testing.T) (*API, Pin) {
 	hostSigner, _ := ssh.NewSignerFromKey(hostPriv)
 	_, clientPriv, _ := ed25519.GenerateKey(rand.Reader)
 	clientSigner, _ := ssh.NewSignerFromKey(clientPriv)
-	config := &ssh.ServerConfig{PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
-		if c.User() != "root" || string(key.Marshal()) != string(clientSigner.PublicKey().Marshal()) {
-			return nil, io.EOF
-		}
-		return nil, nil
-	}}
+	config := &ssh.ServerConfig{
+		PublicKeyCallback: func(c ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
+			if c.User() != testLogin || string(key.Marshal()) != string(clientSigner.PublicKey().Marshal()) {
+				return nil, errors.New("SSH authentication rejected: unexpected username or public key")
+			}
+			//nolint:nilnil // Successful SSH authentication without optional permissions metadata.
+			return nil, nil
+		},
+	}
 	config.AddHostKey(hostSigner)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	conns := map[net.Conn]bool{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+testToken || r.URL.Path != "/v1/machines/"+testID+"/ssh" {
-			http.Error(w, "denied", 401)
-			return
-		}
-		conn, b, e := w.(http.Hijacker).Hijack()
-		if e != nil {
-			return
-		}
-		mu.Lock()
-		conns[conn] = true
-		mu.Unlock()
-		wg.Add(1)
-		defer wg.Done()
-		defer conn.Close()
-		defer func() { mu.Lock(); delete(conns, conn); mu.Unlock() }()
-		b.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: clankerbox-stream\r\n\r\n")
-		b.Flush()
-		sc, channels, requests, e := ssh.NewServerConn(&bufferedConn{Conn: conn, reader: b.Reader}, config)
-		if e != nil {
-			return
-		}
-		defer sc.Close()
-		go ssh.DiscardRequests(requests)
-		var channelWG sync.WaitGroup
-		defer channelWG.Wait()
-		for ch := range channels {
-			channelWG.Add(1)
-			go func(ch ssh.NewChannel) {
-				defer channelWG.Done()
-				switch ch.ChannelType() {
-				case "session":
-					c, reqs, e := ch.Accept()
-					if e != nil {
-						return
-					}
-					defer c.Close()
-					for req := range reqs {
-						var payload struct{ Command string }
-						ssh.Unmarshal(req.Payload, &payload)
-						if req.Type != "exec" || payload.Command != LinuxDiscoveryCommand {
-							req.Reply(false, nil)
-							continue
-						}
-						req.Reply(true, nil)
-						io.WriteString(c, "LISTEN 0 100 127.0.0.1:3000 *:*\n")
-						c.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))
-						return
-					}
-				case "direct-tcpip":
-					var payload struct {
-						Host       string
-						Port       uint32
-						Origin     string
-						OriginPort uint32
-					}
-					if ssh.Unmarshal(ch.ExtraData(), &payload) != nil || payload.Host != "127.0.0.1" || payload.Port != 3000 {
-						ch.Reject(ssh.Prohibited, "numeric loopback only")
-						return
-					}
-					c, reqs, e := ch.Accept()
-					if e != nil {
-						return
-					}
-					defer c.Close()
-					go ssh.DiscardRequests(reqs)
-					io.Copy(c, c)
-				default:
-					ch.Reject(ssh.UnknownChannelType, "unsupported")
-				}
-			}(ch)
-		}
-	}))
+	fixture := &sshTestServer{t: t, config: config, conns: map[net.Conn]bool{}}
+	server := httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
 	t.Cleanup(func() {
 		server.Close()
-		mu.Lock()
-		for conn := range conns {
-			conn.Close()
+		fixture.mu.Lock()
+		for conn := range fixture.conns {
+			closeTestStream(t, conn)
 		}
-		mu.Unlock()
-		wg.Wait()
+		fixture.mu.Unlock()
+		fixture.wg.Wait()
 	})
 	a := testAPI(t, server.URL)
 	der, _ := x509.MarshalPKCS8PrivateKey(clientPriv)
@@ -131,58 +64,66 @@ func localSSHServer(t *testing.T) (*API, Pin) {
 		t.Fatal(e)
 	}
 	a.Config.IdentityFile = identity
-	p := Pin{APIURL: server.URL, ID: testID, User: "root", HostKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))), OS: "linux"}
+	p := client.Pin{
+		APIURL:  server.URL,
+		ID:      testID,
+		User:    testLogin,
+		HostKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(hostSigner.PublicKey()))),
+		OS:      linuxOS,
+	}
 	return a, p
 }
 func TestSSHAuthenticationDiscoveryAndForwardOverUpgrade(t *testing.T) {
+	t.Parallel()
 	a, p := localSSHServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	s, e := SSHDialer(a)(ctx, p)
+	s, e := client.SSHDialer(a)(ctx, p)
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer s.Close()
-	out, e := s.Run(ctx, LinuxDiscoveryCommand)
+	defer closeTestStream(t, s)
+	out, e := s.Run(ctx, client.LinuxDiscoveryCommand)
 	if e != nil || !strings.Contains(out, "127.0.0.1:3000") {
 		t.Fatalf("discovery %q %v", out, e)
 	}
 	if _, e = s.Run(ctx, "ss -ltn; malicious"); e == nil {
 		t.Fatal("arbitrary discovery command accepted")
 	}
-	if _, e = s.Dial(ctx, Endpoint{"192.168.1.1", 3000}); e == nil {
+	if _, e = s.Dial(ctx, client.Endpoint{"192.168.1.1", 3000}); e == nil {
 		t.Fatal("non-loopback destination accepted")
 	}
-	conn, e := s.Dial(ctx, Endpoint{"127.0.0.1", 3000})
+	conn, e := s.Dial(ctx, client.Endpoint{ipv4Loopback, 3000})
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer conn.Close()
-	conn.Write([]byte("SSH echo"))
+	defer closeTestStream(t, conn)
+	checkError(t, resultError(conn.Write([]byte("SSH echo"))))
 	b := make([]byte, 8)
 	if _, e = io.ReadFull(conn, b); e != nil || string(b) != "SSH echo" {
 		t.Fatalf("SSH echo %q %v", b, e)
 	}
 }
 func TestSSHRejectsWrongHostKeyAndLogin(t *testing.T) {
+	t.Parallel()
 	a, p := localSSHServer(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	wrong := p
 	wrong.HostKey = testPin(t).HostKey
-	if s, e := SSHDialer(a)(ctx, wrong); e == nil {
-		s.Close()
+	if s, e := client.SSHDialer(a)(ctx, wrong); e == nil {
+		closeTestStream(t, s)
 		t.Fatal("wrong host key accepted")
 	}
 	wrong = p
-	wrong.User = "admin"
-	if s, e := SSHDialer(a)(ctx, wrong); e == nil {
-		s.Close()
+	wrong.User = alternateLogin
+	if s, e := client.SSHDialer(a)(ctx, wrong); e == nil {
+		closeTestStream(t, s)
 		t.Fatal("wrong login accepted")
 	}
 	wrong = p
 	wrong.APIURL = "http://127.0.0.1:1"
-	if _, e := SSHDialer(a)(ctx, wrong); e == nil {
+	if _, e := client.SSHDialer(a)(ctx, wrong); e == nil {
 		t.Fatal("API pin change accepted")
 	}
 }
@@ -202,33 +143,143 @@ func TestSSHAuthenticatesThroughLocalAgent(t *testing.T) {
 		t.Fatal(e)
 	}
 	socket := filepath.Join(shortDir(t), "agent.sock")
-	ln, e := net.Listen("unix", socket)
+	ln, e := (&net.ListenConfig{}).Listen(t.Context(), "unix", socket)
 	if e != nil {
 		t.Fatal(e)
 	}
-	defer ln.Close()
+	defer closeTestStream(t, ln)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		conn, e := ln.Accept()
-		if e != nil {
+		conn, acceptErr3 := ln.Accept()
+		if acceptErr3 != nil {
 			return
 		}
-		defer conn.Close()
-		agent.ServeAgent(ring, conn)
+		defer closeTestStream(t, conn)
+		checkError(t, testStreamError(agent.ServeAgent(ring, conn)))
 	}()
 	t.Setenv("SSH_AUTH_SOCK", socket)
 	a.Config.IdentityFile = ""
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	s, e := SSHDialer(a)(ctx, p)
+	s, e := client.SSHDialer(a)(ctx, p)
 	if e != nil {
 		t.Fatal(e)
 	}
-	s.Close()
+	closeTestStream(t, s)
 	select {
 	case <-done:
 	case <-ctx.Done():
 		t.Fatal("local ssh-agent connection leaked")
 	}
+}
+
+// sshTestConn retains bytes read ahead by the HTTP server before SSH starts.
+type sshTestConn struct {
+	net.Conn
+
+	reader *bufio.Reader
+}
+
+func (c *sshTestConn) Read(p []byte) (int, error) { return c.reader.Read(p) }
+
+type sshTestServer struct {
+	t      *testing.T
+	config *ssh.ServerConfig
+	mu     sync.Mutex
+	conns  map[net.Conn]bool
+	wg     sync.WaitGroup
+}
+
+func (fixture *sshTestServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != "Bearer "+testToken || r.URL.Path != "/v1/machines/"+testID+"/ssh" {
+		http.Error(w, "denied", http.StatusUnauthorized)
+		return
+	}
+	conn, b, e := hijack(w)
+	if e != nil {
+		return
+	}
+	fixture.mu.Lock()
+	fixture.conns[conn] = true
+	fixture.mu.Unlock()
+	fixture.wg.Add(1)
+	defer fixture.wg.Done()
+	defer closeTestStream(fixture.t, conn)
+	defer func() { fixture.mu.Lock(); delete(fixture.conns, conn); fixture.mu.Unlock() }()
+	checkError(
+		fixture.t,
+		resultError(
+			b.WriteString(
+				"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: clankerbox-stream\r\n\r\n",
+			),
+		),
+	)
+	checkError(fixture.t, b.Flush())
+	sc, channels, requests, e := ssh.NewServerConn(&sshTestConn{Conn: conn, reader: b.Reader}, fixture.config)
+	if e != nil {
+		return
+	}
+	defer closeTestStream(fixture.t, sc)
+	go ssh.DiscardRequests(requests)
+	var channelWG sync.WaitGroup
+	defer channelWG.Wait()
+	for ch := range channels {
+		channelWG.Go(func() { fixture.serveChannel(ch) })
+	}
+}
+
+func (fixture *sshTestServer) serveChannel(ch ssh.NewChannel) {
+	switch ch.ChannelType() {
+	case "session":
+		fixture.serveSession(ch)
+	case "direct-tcpip":
+		fixture.serveForward(ch)
+	default:
+		checkError(fixture.t, ch.Reject(ssh.UnknownChannelType, "unsupported"))
+	}
+}
+
+func (fixture *sshTestServer) serveSession(ch ssh.NewChannel) {
+	c, reqs, acceptErr := ch.Accept()
+	if acceptErr != nil {
+		return
+	}
+	defer closeTestStream(fixture.t, c)
+	for req := range reqs {
+		var payload struct{ Command string }
+		checkError(fixture.t, ssh.Unmarshal(req.Payload, &payload))
+		if req.Type != "exec" || payload.Command != client.LinuxDiscoveryCommand {
+			checkError(fixture.t, req.Reply(false, nil))
+			continue
+		}
+		checkError(fixture.t, req.Reply(true, nil))
+		checkError(fixture.t, resultError(io.WriteString(c, "LISTEN 0 100 127.0.0.1:3000 *:*\n")))
+		checkError(
+			fixture.t,
+			resultError(c.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{0}))),
+		)
+		return
+	}
+}
+
+func (fixture *sshTestServer) serveForward(ch ssh.NewChannel) {
+	var payload struct {
+		Host       string
+		Port       uint32
+		Origin     string
+		OriginPort uint32
+	}
+	if ssh.Unmarshal(ch.ExtraData(), &payload) != nil || payload.Host != ipv4Loopback ||
+		payload.Port != 3000 {
+		checkError(fixture.t, ch.Reject(ssh.Prohibited, "numeric loopback only"))
+		return
+	}
+	c, reqs, acceptErr2 := ch.Accept()
+	if acceptErr2 != nil {
+		return
+	}
+	defer closeTestStream(fixture.t, c)
+	go ssh.DiscardRequests(reqs)
+	checkError(fixture.t, testStreamError(resultError(io.Copy(c, c))))
 }
