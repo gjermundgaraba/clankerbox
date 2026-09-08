@@ -22,6 +22,7 @@ import (
 )
 
 const testAuthName = "codex"
+const testAuthHost = "linux"
 
 type authTestTransport struct{}
 
@@ -282,8 +283,9 @@ type stalledAuthTransport struct{ address string }
 func (stalledAuthTransport) Call(context.Context, model.Host, model.Request) (model.Response, error) {
 	return model.Response{}, errors.New("unused")
 }
-func (stalledAuthTransport) PrepareAuth(context.Context, model.Host, string, string) error {
-	return nil
+func (stalledAuthTransport) PrepareAuth(_ context.Context, _ model.Host, _ string, key string) error {
+	_, err := model.ValidateKeys([]string{key})
+	return err
 }
 func (s stalledAuthTransport) Connect(ctx context.Context, _ model.Host, _ string) (io.ReadWriteCloser, error) {
 	return (&net.Dialer{}).DialContext(ctx, "tcp", s.address)
@@ -301,7 +303,7 @@ func TestAuthRelayShutdownForcesUnresponsiveGuestClosed(t *testing.T) {
 	}
 	defer func() { _ = listener.Close() }()
 	c.transport = stalledAuthTransport{address: listener.Addr().String()}
-	c.cfg.Hosts = []model.Host{{ID: "linux"}}
+	c.cfg.Hosts = []model.Host{{ID: testAuthHost}}
 	forwarded := make(chan struct{})
 	peerDone := make(chan struct{})
 	go stalledAuthPeer(listener, c.auth.signer, forwarded, peerDone)
@@ -309,8 +311,9 @@ func TestAuthRelayShutdownForcesUnresponsiveGuestClosed(t *testing.T) {
 	defer cancel()
 	relay := &authRelay{
 		machine: model.Machine{
-			ID:         model.NewID(),
-			Host:       "linux",
+			ID:    model.NewID(),
+			State: model.Running, DesiredState: model.Running, Prepared: true,
+			Host:       testAuthHost,
 			SSHUser:    "root",
 			SSHHostKey: string(ssh.MarshalAuthorizedKey(c.auth.signer.PublicKey())),
 		},
@@ -376,5 +379,75 @@ func stalledAuthPeer(listener net.Listener, signer ssh.Signer, forwarded, peerDo
 			close(forwarded)
 		}
 		// Deliberately never acknowledge cancel-tcpip-forward.
+	}
+}
+
+type recoveringAuthTransport struct {
+	observation model.Observation
+	prepared    chan struct{}
+}
+
+func (r recoveringAuthTransport) Call(context.Context, model.Host, model.Request) (model.Response, error) {
+	return model.Response{Status: succeededStatus, Observation: &r.observation}, nil
+}
+func (r recoveringAuthTransport) PrepareAuth(context.Context, model.Host, string, string) error {
+	close(r.prepared)
+	return errors.New("stop after observation recovery")
+}
+func (recoveringAuthTransport) Connect(context.Context, model.Host, string) (io.ReadWriteCloser, error) {
+	return nil, errors.New("unused")
+}
+func TestAuthRecoversStaleObservationWithoutOperatorInspection(t *testing.T) {
+	t.Parallel()
+	c := authTestController(t)
+	if err := c.EnableAuth(bytes.Repeat([]byte{11}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	m := model.Machine{
+		ID:                 model.NewID(),
+		Name:               "recovering",
+		Host:               testAuthHost,
+		State:              model.Unknown,
+		DesiredState:       model.Running,
+		Prepared:           true,
+		Generation:         1,
+		AcceptedGeneration: 1,
+		ObservationStale:   true,
+	}
+	if err := saveMachine(t.Context(), c.db, m); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.auth.store.Import(t.Context(), testAuthName, authTestCache(t)); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.auth.store.Attach(t.Context(), m.ID, testAuthName); err != nil {
+		t.Fatal(err)
+	}
+	prepared := make(chan struct{})
+	c.cfg.Hosts = []model.Host{{ID: testAuthHost}}
+	c.transport = recoveringAuthTransport{
+		prepared: prepared,
+		observation: model.Observation{
+			MachineID:  m.ID,
+			State:      model.Running,
+			Prepared:   true,
+			Generation: 1,
+			ObservedAt: time.Now(),
+			SSHUser:    "root",
+			SSHHostKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(c.auth.signer.PublicKey()))),
+		},
+	}
+	defer c.closeAuthRelays()
+	c.reconcileAuth(t.Context())
+	select {
+	case <-prepared:
+	case <-time.After(time.Second):
+		t.Fatal("stale machine was never reinspected")
+	}
+	c.mu.Lock()
+	fresh, err := readMachine(t.Context(), c.db, m.ID)
+	c.mu.Unlock()
+	if err != nil || !authReady(fresh) {
+		t.Fatal("fresh host state not recovered", err)
 	}
 }

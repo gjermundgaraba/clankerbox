@@ -1,0 +1,100 @@
+{
+  "linux-live": {
+    "completed": true,
+    "marker": "AUTH_CONTROLLER_OK",
+    "event_types": [
+      "thread.started",
+      "turn.started",
+      "item.completed",
+      "turn.completed"
+    ]
+  },
+  "mac-live": {
+    "completed": true,
+    "marker": "AUTH_CONTROLLER_MAC_OK",
+    "event_types": [
+      "thread.started",
+      "turn.started",
+      "item.completed",
+      "turn.completed"
+    ]
+  },
+  "restored-live": {
+    "completed": true,
+    "marker": "AUTH_RESTORED_OK",
+    "event_types": [
+      "thread.started",
+      "turn.started",
+      "item.completed",
+      "turn.completed"
+    ]
+  },
+  "active-parent": {
+    "completed": true,
+    "marker": "AUTH_RUNNING_OK",
+    "event_types": [
+      "thread.started",
+      "turn.started",
+      "item.completed",
+      "item.started",
+      "item.completed",
+      "item.completed",
+      "turn.completed"
+    ],
+    "reported_usage": {
+      "input_tokens": 48427,
+      "cached_input_tokens": 0,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 150,
+      "reasoning_output_tokens": 0
+    }
+  },
+  "active-child": {
+    "completed": true,
+    "marker": "AUTH_RUNNING_OK",
+    "event_types": [
+      "thread.started",
+      "turn.started",
+      "item.completed",
+      "item.started",
+      "item.completed",
+      "item.completed",
+      "turn.completed"
+    ],
+    "reported_usage": {
+      "input_tokens": 36174,
+      "cached_input_tokens": 11648,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 117,
+      "reasoning_output_tokens": 0
+    }
+  },
+  "running_fork": {
+    "same_captured_thread": true,
+    "both_tools_completed": true,
+    "child_explicitly_attached": true
+  },
+  "restart": {
+    "saved_connection_recovered": true,
+    "relays_recovered": 5
+  },
+  "detach": {
+    "child_listener_closed": true,
+    "parent_available": true
+  },
+  "local_auth_unchanged": true,
+  "real_refresh_attempted": false,
+  "codex_version": "0.153.4",
+  "model": "gpt-6-astra",
+  "build_sha256": {
+    "clankerbox-host-linux": "f429ced7f23a720b4214dd8db9ab172553998ffe542783a7827ae1156bcf4850",
+    "clankerbox-host-mac": "d4b7d756056c373d2204e15ff6699a62dc02f77147c37bcf69dc84c322878b9b",
+    "clankerbox-server-linux": "dd8dfb6a66ae918078ce572253bfca8a507820a80db6b0c4316b098073742c43"
+  },
+  "cleanup": {
+    "machines_deleted": 5,
+    "checkpoint_deleted": true,
+    "bindings_remaining": 0,
+    "connection_retained": "codex"
+  }
+}

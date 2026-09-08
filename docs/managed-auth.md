@@ -86,3 +86,28 @@ The [experiment report](../spikes/auth-broker/README.md) covers the earlier feas
 work. Package and controller tests cover encryption/restart, concurrent refresh,
 revocation, streaming, identity isolation, unresolved-fork gating, request limits
 and unresponsive-guest shutdown. Live deployment validation is recorded separately.
+
+## Live validation: 2026-09-08
+
+Deployed to the existing controller and both runtime hosts. Codex 0.153.4 with
+`gpt-6-astra` completed real streamed requests on Linux, macOS, and a restored Linux
+RAM checkpoint. Guests had no Codex auth cache. A Linux fork initially had no
+binding or listener, and explicit attachment established its own relay.
+
+For running-process continuity, Codex started a shell tool waiting on a local file.
+The VM forked while that tool was running. After attaching the child and releasing
+the tool separately in each VM, both captured Codex processes completed their
+turns with `AUTH_RUNNING_OK`. This proves that controlled case, not arbitrary
+mid-inference stream continuation or provider-side session independence.
+
+A controller restart recovered the encrypted connection and all five attached
+machine relays. Detaching one child closed its listener while the parent remained
+available. The local source login file was unchanged. Real token refresh was not
+forced; refresh concurrency and ambiguous outcomes were tested with synthetic
+credentials. The existing imported login remains connected as `codex`.
+
+All five disposable machines and the test checkpoint were deleted after these
+checks. No test bindings remain; the imported connection is retained.
+Sanitized outcomes and deployed artifact hashes are in
+[managed-auth-validation.json](managed-auth-validation.json). No provider tokens,
+private keys, raw account identifiers or full provider replies are included there.

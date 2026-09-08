@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,7 +56,7 @@ func (c *Controller) reconcileAuth(ctx context.Context) {
 		if readErr == nil && m.Deleted {
 			_ = c.auth.store.Detach(ctx, m.ID)
 		}
-		if readErr == nil && authReady(m) && sourceIdle(ctx, c.db, m.ID) == nil {
+		if readErr == nil && authEligible(m) && sourceIdle(ctx, c.db, m.ID) == nil {
 			wanted[m.ID] = m
 		}
 	}
@@ -64,7 +65,8 @@ func (c *Controller) reconcileAuth(ctx context.Context) {
 	defer c.auth.mu.Unlock()
 	for id, relay := range c.auth.relays {
 		m, ok := wanted[id]
-		if !ok || c.auth.suspended[id] > 0 || m.Generation != relay.machine.Generation {
+		if !ok || (!authReady(m) && relay.status == "ready") || c.auth.suspended[id] > 0 ||
+			m.Generation != relay.machine.Generation {
 			relay.cancel()
 		}
 		select {
@@ -127,11 +129,19 @@ func (c *Controller) openAuthRelay(ctx context.Context, relay *authRelay) error 
 	}
 	setup, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
+	machine := relay.machine
+	if !authReady(machine) {
+		var err error
+		machine, err = c.Inspect(setup, machine.ID)
+		if err != nil || !authReady(machine) {
+			return errors.New("machine is not ready for auth")
+		}
+	}
 	if err := preparer.PrepareAuth(
 		setup,
 		h,
 		relay.machine.ID,
-		string(ssh.MarshalAuthorizedKey(c.auth.signer.PublicKey())),
+		strings.TrimSpace(string(ssh.MarshalAuthorizedKey(c.auth.signer.PublicKey()))),
 	); err != nil {
 		return err
 	}
@@ -142,7 +152,7 @@ func (c *Controller) openAuthRelay(ctx context.Context, relay *authRelay) error 
 	defer func() { _ = stream.Close() }()
 	conn := &authStreamConn{ReadWriteCloser: stream}
 	stop := context.AfterFunc(setup, func() { _ = conn.Close() })
-	client, err := c.authSSHClient(conn, relay.machine)
+	client, err := c.authSSHClient(conn, machine)
 	if err != nil {
 		stop()
 		return err
@@ -159,7 +169,7 @@ func (c *Controller) openAuthRelay(ctx context.Context, relay *authRelay) error 
 	}
 	defer func() { _ = listener.Close() }()
 	server := &http.Server{
-		Handler:           c.machineAuthHandler(relay.machine),
+		Handler:           c.machineAuthHandler(machine),
 		ReadHeaderTimeout: authHeaderTimeout,
 		ReadTimeout:       time.Minute,
 		IdleTimeout:       time.Minute,

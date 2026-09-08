@@ -171,6 +171,9 @@ func (c *Controller) authStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"connections": connections, "bindings": bindings, "relays": relays})
 }
 
+func authEligible(m model.Machine) bool {
+	return !m.Deleted && m.Prepared && m.DesiredState == model.Running && m.Generation == m.AcceptedGeneration
+}
 func authReady(m model.Machine) bool {
 	return !m.Deleted && m.Prepared && !m.ObservationStale && m.State == model.Running &&
 		m.DesiredState == model.Running &&
