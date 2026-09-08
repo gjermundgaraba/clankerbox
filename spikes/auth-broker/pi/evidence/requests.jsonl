@@ -1,0 +1,5 @@
+{"path": "/credential", "mode": "success"}
+{"path": "/v1/chat/completions", "mode": "success", "authorization": "Bearer dummy-broker-access-v1", "stream": true, "model": "mock"}
+{"path": "/credential", "mode": "upstream-fail"}
+{"path": "/v1/chat/completions", "mode": "upstream-fail", "authorization": "Bearer dummy-broker-access-v1", "stream": true, "model": "mock"}
+{"path": "/credential", "mode": "resolve-fail"}

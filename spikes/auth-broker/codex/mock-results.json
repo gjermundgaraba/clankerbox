@@ -1,0 +1,443 @@
+{
+  "version": "codex-cli 0.153.4",
+  "results": [
+    {
+      "auth_mode": "apikey",
+      "mock": "success",
+      "exit_code": 0,
+      "completed_text": true,
+      "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a08132-d53e-73a1-81e3-2cd88755433e\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"AUTH_PROBE_OK\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}\n",
+      "stderr": "Reading additional input from stdin...\n",
+      "elapsed_seconds": 0.28,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/plugins/featured?platform=codex",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/responses",
+          "authorization_present": true,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "CONNECT",
+          "path": "github.com:443",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        }
+      ]
+    },
+    {
+      "auth_mode": "apikey",
+      "mock": "unauthorized",
+      "exit_code": 1,
+      "completed_text": false,
+      "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a08132-d657-7e81-9a0c-be0dc245c425\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"unexpected status 401 Unauthorized: probe authorization revoked, url: http://127.0.0.1:45093/v1/responses\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"unexpected status 401 Unauthorized: probe authorization revoked, url: http://127.0.0.1:45093/v1/responses\"}}\n",
+      "stderr": "Reading additional input from stdin...\n",
+      "elapsed_seconds": 0.27,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/plugins/featured?platform=codex",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/responses",
+          "authorization_present": true,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "CONNECT",
+          "path": "github.com:443",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        }
+      ]
+    },
+    {
+      "auth_mode": "chatgpt",
+      "mock": "success",
+      "exit_code": 0,
+      "completed_text": true,
+      "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a08132-d773-7c90-af8a-0b221e74e398\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"AUTH_PROBE_OK\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}\n",
+      "stderr": "Reading additional input from stdin...\n2026-09-08T13:26:27.977093Z ERROR rmcp::transport::worker: worker quit with fatal: Deserialize error: data did not match any variant of untagged enum JsonRpcMessage, when process initialize response\n2026-09-08T13:26:27.980888Z ERROR rmcp::transport::worker: worker quit with fatal: Deserialize error: data did not match any variant of untagged enum JsonRpcMessage, when process initialize response\n",
+      "elapsed_seconds": 0.32,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/ps/plugins/list?scope=GLOBAL&limit=200",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/installed?limit=200",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/plugins/featured?platform=codex",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/suggested/codex?scope=GLOBAL",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/models?client_version=0.153.4",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/installed?limit=200&includeDownloadUrls=true",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/codex/ps/mcp",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/installed?limit=200",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/codex/ps/mcp",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/suggested/codex?scope=GLOBAL",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/codex/settings/user",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/suggested/codex?scope=GLOBAL",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/responses",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        }
+      ]
+    },
+    {
+      "auth_mode": "chatgpt",
+      "mock": "unauthorized",
+      "exit_code": 1,
+      "completed_text": false,
+      "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a08132-d8c5-7f13-ad60-e5ba8c3203dd\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"error sending request for url (https://auth.openai.com/oauth/token)\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"error sending request for url (https://auth.openai.com/oauth/token)\"}}\n",
+      "stderr": "Reading additional input from stdin...\n2026-09-08T13:26:28.318451Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse(\"HTTP 401: {\\\"error\\\":{\\\"message\\\":\\\"probe authorization revoked\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"code\\\":\\\"invalid_api_key\\\"}}\")\n2026-09-08T13:26:28.322284Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse(\"HTTP 401: {\\\"error\\\":{\\\"message\\\":\\\"probe authorization revoked\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"code\\\":\\\"invalid_api_key\\\"}}\")\n",
+      "elapsed_seconds": 0.35,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/ps/plugins/list?scope=GLOBAL&limit=200",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/suggested/codex?scope=GLOBAL",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/models?client_version=0.153.4",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/installed?limit=200",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/plugins/featured?platform=codex",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/installed?limit=200&includeDownloadUrls=true",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/suggested/codex?scope=GLOBAL",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/installed?limit=200",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/codex/ps/mcp",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/codex/ps/mcp",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/suggested/codex?scope=GLOBAL",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/codex/settings/user",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/suggested/codex?scope=GLOBAL",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/responses",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/responses",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "CONNECT",
+          "path": "auth.openai.com:443",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        }
+      ]
+    },
+    {
+      "auth_mode": "chatgpt",
+      "mock": "refresh",
+      "exit_code": 0,
+      "completed_text": true,
+      "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"01a08132-da27-7f23-9ecd-dede0a9b5858\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"AUTH_PROBE_OK\"}}\n{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}\n",
+      "stderr": "Reading additional input from stdin...\n2026-09-08T13:26:28.676750Z ERROR rmcp::transport::worker: worker quit with fatal: Deserialize error: data did not match any variant of untagged enum JsonRpcMessage, when process initialize response\n2026-09-08T13:26:28.680131Z ERROR rmcp::transport::worker: worker quit with fatal: Deserialize error: data did not match any variant of untagged enum JsonRpcMessage, when process initialize response\n2026-09-08T13:26:28.803517Z ERROR rmcp::transport::worker: worker quit with fatal: Deserialize error: data did not match any variant of untagged enum JsonRpcMessage, when process initialize response\n2026-09-08T13:26:28.805066Z ERROR rmcp::transport::worker: worker quit with fatal: Deserialize error: data did not match any variant of untagged enum JsonRpcMessage, when process initialize response\n",
+      "elapsed_seconds": 0.39,
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/ps/plugins/list?scope=GLOBAL&limit=200",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/installed?limit=200",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/v1/models?client_version=0.153.4",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/plugins/featured?platform=codex",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/suggested/codex?scope=GLOBAL",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/installed?limit=200&includeDownloadUrls=true",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/suggested/codex?scope=GLOBAL",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/codex/ps/mcp",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/installed?limit=200",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/codex/ps/mcp",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/suggested/codex?scope=GLOBAL",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/api/codex/settings/user",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "GET",
+          "path": "/ps/plugins/suggested/codex?scope=GLOBAL",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/responses",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/v1/responses",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "CONNECT",
+          "path": "auth.openai.com:443",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "https://auth.openai.com/oauth/token",
+          "mock_refresh": true
+        },
+        {
+          "method": "POST",
+          "path": "/v1/responses",
+          "authorization_present": true,
+          "account_header": "probe-account",
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/codex/ps/mcp",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        },
+        {
+          "method": "POST",
+          "path": "/api/codex/ps/mcp",
+          "authorization_present": false,
+          "account_header": null,
+          "upgrade": null
+        }
+      ]
+    }
+  ]
+}

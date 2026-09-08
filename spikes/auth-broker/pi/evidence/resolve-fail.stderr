@@ -1,0 +1,3 @@
+Error: Failed to load extension "/home/authprobe/probe/provider.ts": Failed to load extension: broker credential resolution failed: 403
+Error: Unknown provider "authprobe". Use --list-models to see available providers/models.
+Hint: Start without extensions using "pi -ne".

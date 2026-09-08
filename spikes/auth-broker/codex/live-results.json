@@ -1,0 +1,20 @@
+{
+  "model": "gpt-6-astra",
+  "exit_code": 0,
+  "marker_received": true,
+  "events": [
+    "thread.started",
+    "turn.started",
+    "item.completed",
+    "turn.completed"
+  ],
+  "requests": [
+    {
+      "path": "/backend-api/codex/responses",
+      "status": 200
+    }
+  ],
+  "local_auth_unchanged": true,
+  "real_refresh_token_transferred": false,
+  "real_access_token_in_guest": false
+}

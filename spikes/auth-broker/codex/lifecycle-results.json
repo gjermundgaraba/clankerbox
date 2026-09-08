@@ -1,0 +1,86 @@
+{
+  "results": [
+    {
+      "phase": "before-rotation",
+      "turn": {
+        "machine": "auth-exp-codex",
+        "exit_code": 0,
+        "marker_received": true
+      }
+    },
+    {
+      "phase": "after-rotation-concurrent",
+      "turns": [
+        {
+          "machine": "auth-exp-codex",
+          "exit_code": 0,
+          "marker_received": true
+        },
+        {
+          "machine": "auth-exp-codex-fork",
+          "exit_code": 0,
+          "marker_received": true
+        }
+      ]
+    },
+    {
+      "phase": "restore-old-checkpoint",
+      "turn": {
+        "machine": "auth-exp-codex-restored",
+        "exit_code": 0,
+        "marker_received": true
+      }
+    },
+    {
+      "phase": "revoke-child",
+      "turn": {
+        "machine": "auth-exp-codex-fork",
+        "exit_code": 1,
+        "marker_received": false
+      }
+    },
+    {
+      "phase": "parent-still-authorized",
+      "turn": {
+        "machine": "auth-exp-codex",
+        "exit_code": 0,
+        "marker_received": true
+      }
+    }
+  ],
+  "broker_requests": [
+    {
+      "machine": "auth-exp-codex",
+      "generation": 1,
+      "revoked": false
+    },
+    {
+      "machine": "auth-exp-codex",
+      "generation": 2,
+      "revoked": false
+    },
+    {
+      "machine": "auth-exp-codex-fork",
+      "generation": 2,
+      "revoked": false
+    },
+    {
+      "machine": "auth-exp-codex-restored",
+      "generation": 2,
+      "revoked": false
+    },
+    {
+      "machine": "auth-exp-codex-fork",
+      "generation": 2,
+      "revoked": true
+    },
+    {
+      "machine": "auth-exp-codex",
+      "generation": 2,
+      "revoked": false
+    }
+  ],
+  "real_provider_credentials_used": false,
+  "broker_state_location": "laptop process, outside guest snapshots",
+  "agent_process_continuity_tested": false
+}
