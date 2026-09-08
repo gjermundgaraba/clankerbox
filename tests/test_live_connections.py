@@ -15,9 +15,9 @@ class ConnectionHarnessTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             report = Path(directory) / 'lifecycle.json'
             report.write_text(json.dumps(dict(name='accept-test', status='passed', machine_id='a' * 32)))
-            setup_error = subprocess.CalledProcessError(17, ['ssh', 'setup'])
-            log_error = subprocess.CalledProcessError(18, ['ssh', 'log'])
-            cleanup_error = subprocess.CalledProcessError(19, ['ssh', 'cleanup'])
+            setup_error = subprocess.CalledProcessError(17, ['exec', 'setup'])
+            log_error = subprocess.CalledProcessError(18, ['exec', 'log'])
+            cleanup_error = subprocess.CalledProcessError(19, ['exec', 'cleanup'])
             argv = ['live_connections.py', '--binary', '/bin/false', '--config', '/unused',
                     '--lifecycle-result', str(report)]
             stderr = io.StringIO()

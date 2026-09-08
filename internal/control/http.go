@@ -181,7 +181,14 @@ func (c *Controller) registerMachineRoutes(mux *http.ServeMux) {
 	)
 	mux.HandleFunc(
 		"GET /v1/hosts",
-		func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, c.cfg.Hosts) },
+		func(w http.ResponseWriter, r *http.Request) {
+			hosts, err := c.Hosts(r.Context())
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, hosts)
+		},
 	)
 	mux.HandleFunc("GET /v1/machines", func(w http.ResponseWriter, r *http.Request) {
 		ms, err := c.List(r.Context())

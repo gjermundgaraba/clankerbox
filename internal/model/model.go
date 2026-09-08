@@ -107,7 +107,7 @@ func SameProfile(a, b Profile) bool {
 	return Hash(a) == Hash(b)
 }
 
-// Host describes an SSH helper endpoint and its available capacity.
+// Host describes an SSH helper endpoint and its configured capacity.
 type Host struct {
 	ID         string   `json:"id"`
 	SSHTarget  string   `json:"ssh_target"`
@@ -116,6 +116,17 @@ type Host struct {
 	ProfileIDs []string `json:"profile_ids"`
 	CPU        int      `json:"cpu"`
 	RAMMiB     int      `json:"ram_mib"`
+}
+
+// HostStatus adds current controller reservations to a configured host.
+// Remaining capacity can be negative after reducing configured limits.
+type HostStatus struct {
+	Host
+
+	UsedCPU         int `json:"used_cpu"`
+	UsedRAMMiB      int `json:"used_ram_mib"`
+	RemainingCPU    int `json:"remaining_cpu"`
+	RemainingRAMMiB int `json:"remaining_ram_mib"`
 }
 
 // Validate checks configuration invariants and normalizes derived fields where applicable.

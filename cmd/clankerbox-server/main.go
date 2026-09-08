@@ -6,7 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -17,6 +17,8 @@ import (
 	"clankerbox/internal/control"
 	"clankerbox/internal/model"
 	"clankerbox/internal/statefs"
+
+	"github.com/urfave/cli/v3"
 )
 
 const (
@@ -28,20 +30,39 @@ const (
 )
 
 func main() {
-	if err := run(); err != nil {
-		log.Fatal(err)
+	if err := newCommand().Run(context.Background(), os.Args); err != nil {
+		log.New(os.Stderr, "", 0).Print(err)
+		os.Exit(1)
 	}
 }
-func run() error {
-	config := flag.String("config", "", "JSON hosts/profiles configuration")
-	stateDir := flag.String("state-dir", "", "private controller state directory")
-	tokenFile := flag.String("token-file", "", "Bearer token file (at least 32 bytes)")
-	listen := flag.String("listen", "127.0.0.1:8080", "HTTP listen address")
-	flag.Parse()
-	if *config == "" || *stateDir == "" || *tokenFile == "" || flag.NArg() != 0 {
-		return errors.New("--config, --state-dir and --token-file are required")
+func newCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "clankerbox-server",
+		Usage:     "Serve the authenticated API and durable work queue",
+		UsageText: "clankerbox-server [options]",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "config", Usage: "JSON hosts/profiles configuration `FILE`", Required: true},
+			&cli.StringFlag{Name: "state-dir", Usage: "Private controller state `DIRECTORY`", Required: true},
+			&cli.StringFlag{Name: "token-file", Usage: "Bearer token `FILE` (at least 32 bytes)", Required: true},
+			&cli.StringFlag{Name: "listen", Usage: "HTTP listen `ADDRESS`", Value: "127.0.0.1:8080"},
+		},
+		Before: func(_ context.Context, cmd *cli.Command) (context.Context, error) {
+			if cmd.Args().Present() {
+				return nil, fmt.Errorf("unexpected argument %q", cmd.Args().First())
+			}
+			return nil, nil
+		},
+		OnUsageError: func(_ context.Context, _ *cli.Command, err error, _ bool) error { return err },
+		Action:       run,
 	}
-	data, err := statefs.ReadRegular(*config)
+}
+
+func run(parent context.Context, cmd *cli.Command) error {
+	config := cmd.String("config")
+	stateDir := cmd.String("state-dir")
+	tokenFile := cmd.String("token-file")
+	listen := cmd.String("listen")
+	data, err := statefs.ReadRegular(config)
 	if err != nil {
 		return err
 	}
@@ -49,12 +70,12 @@ func run() error {
 	if err = json.Unmarshal(data, &cfg); err != nil {
 		return err
 	}
-	token, err := statefs.ReadPrivate(*tokenFile)
+	token, err := statefs.ReadPrivate(tokenFile)
 	if err != nil {
 		return err
 	}
 	token = bytes.TrimRight(token, "\r\n")
-	c, err := control.Open(*stateDir, cfg, control.SSHTransport{})
+	c, err := control.Open(stateDir, cfg, control.SSHTransport{})
 	if err != nil {
 		return err
 	}
@@ -62,9 +83,9 @@ func run() error {
 	if err != nil {
 		return errors.Join(err, c.Close())
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, cancel := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	err = serve(ctx, c, handler, *listen)
+	err = serve(ctx, c, handler, listen)
 	return errors.Join(err, c.Close())
 }
 

@@ -306,8 +306,8 @@ personal-cloud, never copied into a guest. Global flags precede commands:
 
 ```sh
 clankerbox --config CONFIG profiles
-clankerbox --config CONFIG create --name dev --profile linux-dev-v2 --host linux --key PUBLIC_KEY_FILE
-clankerbox --config CONFIG operation OPERATION_ID
+clankerbox --config CONFIG create dev --profile linux-dev-v2 --host linux --key PUBLIC_KEY_FILE
+clankerbox --config CONFIG exec dev -- git --version
 clankerbox --config CONFIG ssh dev
 clankerbox --config CONFIG connect dev
 clankerbox --config CONFIG ports dev
@@ -315,9 +315,13 @@ clankerbox --config CONFIG url dev 'http://localhost:3000/path'
 clankerbox --config CONFIG vnc --viewer MAC_MACHINE
 ```
 
-Mutations return an operation; poll it until succeeded, failed or unresolved.
+Mutations now wait for completion by default (five minutes; positive `--timeout`
+overrides it). Use global `--json` for automation and mutation `--async` to return
+the accepted operation for explicit polling. See the latest
+[machine CLI acceptance](#machine-cli-acceptance); earlier evidence remains historical.
+See the [client guide](../README.md#using-machines) for output/default contracts.
 Connecting never implicitly starts a stopped machine. `connect` stays running
-while its forwards are needed; VNC holds its own consumer. `ssh-config install`
+while its forwards are needed; interactive `ssh` and VNC hold their own consumers. `ssh-config install`
 adds explicit `cb.NAME` and `cb.ID` entries for ordinary SSH/SCP. Run independently
 installed applications against those SSH aliases or the published local port
 mappings. Application installation and session lifecycle belong to the caller.
@@ -364,15 +368,17 @@ collector was added. Mac branches and checkpoints require a stopped source and
 use Tart's retained disk clones, not RAM continuation.
 
 ```sh
-clankerbox --config CONFIG fork --name experiment --key PUBLIC_KEY_FILE SOURCE
+clankerbox --config CONFIG fork SOURCE experiment --key PUBLIC_KEY_FILE
 clankerbox --config CONFIG checkpoint create SOURCE
 clankerbox --config CONFIG checkpoint list
 clankerbox --config CONFIG checkpoint inspect CHECKPOINT_ID
-clankerbox --config CONFIG restore --name recovered --key PUBLIC_KEY_FILE CHECKPOINT_ID
+clankerbox --config CONFIG restore CHECKPOINT_ID recovered --key PUBLIC_KEY_FILE
 clankerbox --config CONFIG checkpoint delete CHECKPOINT_ID
 ```
 
-Poll the returned operation before depending on a mutation's result. Checkpoint
+Mutations wait before returning resource summaries. For manual polling, use
+`--json checkpoint create SOURCE --async` (the async flag follows the nested
+action). Checkpoint
 commands address immutable checkpoint IDs; restore creates a new machine rather
 than overwriting an existing workspace. A pre-upgrade Linux source needs an
 explicit stop/start to enable branchable supervision; capture does not secretly
@@ -460,3 +466,36 @@ ephemeral range), with the owner's existing `32768-65535` range also acceptable.
 If egress is filtered, outgoing UDP to `1.1.1.1:53` must also be permitted.
 Evidence: `.work/dns-provider-recheck.txt`; see
 [Hetzner's stateless firewall documentation](https://docs.hetzner.com/robot/dedicated-server/firewall).
+
+## Machine CLI acceptance
+
+On 2026-09-07, the redesigned local CLI was exercised against the existing private
+HTTPS controller and unchanged Linux/Mac helpers. No controller redeployment or
+new guest application dependency was needed.
+
+- Linux and Mac: positional create with profile-aware host selection and public
+  key fallback, default wait returning running machines, literal exec arguments,
+  interactive SSH holding automatic HTTP forwarding until exit, ordinary
+  external SSH aliases, and explicit stop/start/delete.
+- Linux: live fork and RAM checkpoint/restore retained a test file; checkpoint
+  deletion and child cleanup completed. Standalone `connect` served HTTP and
+  external SCP transferred a file verified byte-for-byte. JSON/async stop was
+  inspected to completion. A deliberately tiny start timeout returned accepted
+  IDs; the operation subsequently finished without resubmission. Exec preserved
+  exit status 37, including after that start.
+- Mac: stopped-source disk fork retained a file in the guest home directory.
+  The first probe used `/tmp`, which was absent after the cold fork boot; the
+  persistent-home probe passed. This does not promise temporary-file retention.
+- A running-machine deletion was rejected as expected; cleanup used explicit
+  stop followed by delete. The guide now makes that prerequisite explicit.
+
+The requested Codex deslop/ponytail review identified one valid local-viewer
+diagnostic regression. Silent exit propagation is now limited to SSH, with an
+executable regression test for viewer failure. Full race-enabled tests and lint
+passed, including literal exec streams, status 37/255, owner lifetime, config
+defaults, output modes, wait failures and cancellation without duplicate mutation.
+
+These are disposable toy checks, not a new certification of VNC rendering,
+Mac checkpoint restore, controller outages, long retention or backup behavior.
+Earlier runtime acceptance remains separate. All machines and checkpoints from
+this CLI round were deleted after verification.

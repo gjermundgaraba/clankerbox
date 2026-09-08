@@ -268,8 +268,6 @@ const (
 	testMachineName = "dev"
 )
 
-const nameFlag = "--name"
-
 func TestLoadConfigFilePermissions(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

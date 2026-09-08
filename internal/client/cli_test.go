@@ -39,7 +39,7 @@ func TestCLIHasNoApplicationLauncher(t *testing.T) {
 		t.Fatal("application launcher advertised in help")
 	}
 	err := client.Run(context.Background(), []string{configFlag, a.Config.Path, "herdr", testMachineName}, streams)
-	if err == nil || err.Error() != `unknown command "herdr"` {
+	if err == nil || !strings.Contains(err.Error(), "herdr") {
 		t.Fatalf("application command should be rejected without connecting: %v", err)
 	}
 }
@@ -60,11 +60,14 @@ func TestCLIJSONCommandsAndIdempotency(t *testing.T) {
 	checkError(t, os.WriteFile(a.Config.Path, b, 0600))
 	key := filepath.Join(t.TempDir(), "key.pub")
 	checkError(t, os.WriteFile(key, []byte(p.HostKey+"\n"), 0600))
-	for _, args := range [][]string{{"profiles"}, {"hosts"}, {"machines"}, {inspectCommand, testMachineName}, {"operation", otherID}, {"create", nameFlag, testMachineName, "--profile", linuxOS, "--host", "host", keyFlag, key, idempotencyFlag, mutationRetryKey}, {"start", idempotencyFlag, mutationRetryKey, testMachineName}, {"stop", idempotencyFlag, mutationRetryKey, testID}, {deleteCommand, idempotencyFlag, mutationRetryKey, testID}} {
+	for _, args := range [][]string{{"profiles"}, {hostsCommand}, {"machines"}, {inspectCommand, testMachineName}, {"operation", otherID}, {createCommand, testMachineName, "--profile", linuxOS, "--host", "host", keyFlag, key, idempotencyFlag, mutationRetryKey}, {"start", idempotencyFlag, mutationRetryKey, testMachineName}, {"stop", idempotencyFlag, mutationRetryKey, testID}, {deleteCommand, idempotencyFlag, mutationRetryKey, testID}} {
+		if args[0] == createCommand || args[0] == "start" || args[0] == "stop" || args[0] == deleteCommand {
+			args = append(args, "--async")
+		}
 		var out, stderr bytes.Buffer
 		e := client.Run(
 			context.Background(),
-			append([]string{configFlag, a.Config.Path}, args...),
+			append([]string{configFlag, a.Config.Path, jsonFlag}, args...),
 			client.Streams{In: strings.NewReader(""), Out: &out, Err: &stderr},
 		)
 		if e != nil {
@@ -247,6 +250,8 @@ func cliTestHandler(t *testing.T, p client.Pin, record func(string)) http.Handle
 			}
 			w.WriteHeader(http.StatusAccepted)
 			checkError(t, json.NewEncoder(w).Encode(model.Operation{ID: otherID, MachineID: testID, Status: "pending"}))
+		case r.URL.Path == hostsAPIPath:
+			checkError(t, json.NewEncoder(w).Encode([]model.Host{{ID: "host", ProfileIDs: []string{linuxOS}}}))
 		case r.URL.Path == machinesPath:
 			checkError(t, json.NewEncoder(w).Encode([]model.Machine{machineFromPin(p, testMachineName)}))
 		case r.URL.Path == "/v1/machines/"+testID:

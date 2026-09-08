@@ -26,11 +26,14 @@ import (
 
 // Config locates the API, credentials and local private state.
 type Config struct {
-	URL          string `json:"url"`
-	TokenFile    string `json:"token_file"`
-	IdentityFile string `json:"identity_file"`
-	StateDir     string `json:"state_dir"`
-	Path         string `json:"-"`
+	DefaultHost    string `json:"default_host,omitempty"`
+	DefaultProfile string `json:"default_profile,omitempty"`
+	PublicKeyFile  string `json:"public_key_file,omitempty"`
+	URL            string `json:"url"`
+	TokenFile      string `json:"token_file"`
+	IdentityFile   string `json:"identity_file"`
+	StateDir       string `json:"state_dir"`
+	Path           string `json:"-"`
 }
 
 // DefaultConfigPath returns the conventional per-user client configuration path.
@@ -81,6 +84,12 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if c.IdentityFile != "" {
 		c.IdentityFile, e = absolutePath(c.IdentityFile, filepath.Dir(path))
+		if e != nil {
+			return c, e
+		}
+	}
+	if c.PublicKeyFile != "" {
+		c.PublicKeyFile, e = absolutePath(c.PublicKeyFile, filepath.Dir(path))
 		if e != nil {
 			return c, e
 		}

@@ -34,18 +34,21 @@ func TestCheckpointCLIThinMutationsAndDiscovery(t *testing.T) {
 		args []string
 		path string
 	}{
-		{"fork", []string{nameFlag, childName, keyFlag, key, idempotencyFlag, checkpointRetryKey, "source"}, "POST /v1/machines/" + testID + "/fork"},
-		{"restore", []string{nameFlag, childName, keyFlag, key, idempotencyFlag, checkpointRetryKey, otherID}, "POST /v1/checkpoints/" + otherID + "/restore"},
-		{checkpointCommand, []string{"create", idempotencyFlag, checkpointRetryKey, "source"}, "POST /v1/machines/" + testID + "/checkpoint"},
+		{"fork", []string{"source", childName, keyFlag, key, idempotencyFlag, checkpointRetryKey}, "POST /v1/machines/" + testID + "/fork"},
+		{"restore", []string{otherID, childName, keyFlag, key, idempotencyFlag, checkpointRetryKey}, "POST /v1/checkpoints/" + otherID + "/restore"},
+		{checkpointCommand, []string{createCommand, idempotencyFlag, checkpointRetryKey, "source"}, "POST /v1/machines/" + testID + "/checkpoint"},
 		{checkpointCommand, []string{deleteCommand, idempotencyFlag, checkpointRetryKey, otherID}, "POST /v1/checkpoints/" + otherID + "/delete"},
 		{checkpointCommand, []string{"list"}, "GET /v1/checkpoints"},
 		{checkpointCommand, []string{inspectCommand, otherID}, "GET /v1/checkpoints/" + otherID},
 	} {
+		if strings.HasPrefix(command.path, "POST ") {
+			command.args = append(command.args, "--async")
+		}
 		paths = nil
 		var out bytes.Buffer
 		if err := client.Run(
 			context.Background(),
-			append([]string{configFlag, a.Config.Path, command.name}, command.args...),
+			append([]string{configFlag, a.Config.Path, jsonFlag, command.name}, command.args...),
 			client.Streams{Out: &out, Err: io.Discard},
 		); err != nil {
 			t.Fatal(command, err)
@@ -77,6 +80,9 @@ func checkpointTestHandler(t *testing.T, pin client.Pin, record func(string)) ht
 	return func(w http.ResponseWriter, r *http.Request) {
 		record(r.Method + " " + r.URL.Path)
 		var out any = []model.Checkpoint{}
+		if r.URL.Path == "/v1/checkpoints/"+otherID {
+			out = model.Checkpoint{ID: otherID}
+		}
 		if r.URL.Path == machinesPath {
 			out = []model.Machine{machineFromPin(pin, "source")}
 		}

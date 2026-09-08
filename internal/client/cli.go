@@ -7,8 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
-	"fmt"
 	"io"
 	"net"
 	"os"
@@ -30,17 +28,6 @@ type Streams struct {
 }
 
 func jsonOut(w io.Writer, v any) error { return json.NewEncoder(w).Encode(v) }
-func flags(name string, errOut io.Writer) *flag.FlagSet {
-	f := flag.NewFlagSet(name, flag.ContinueOnError)
-	f.SetOutput(errOut)
-	return f
-}
-func oneArg(args []string) error {
-	if len(args) != 1 {
-		return errors.New("command requires exactly one machine name or ID")
-	}
-	return nil
-}
 func executable() (string, error) {
 	p, e := os.Executable()
 	if e != nil {
@@ -63,95 +50,6 @@ func requestKey(s string) (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// Usage describes the supported CLI commands.
-const Usage = `usage: clankerbox [--config PATH] COMMAND
-  profiles | hosts | machines | inspect NAME/ID | operation ID
-  create --name NAME --profile PROFILE --host HOST --key PUBLIC_KEY_FILE [--idempotency-key KEY]
-  fork|restore --name CHILD --key PUBLIC_KEY_FILE [--idempotency-key KEY] SOURCE/CHECKPOINT_ID
-  checkpoint create SOURCE | checkpoint list | checkpoint inspect ID | checkpoint delete ID
-  start|stop|delete [--idempotency-key KEY] NAME/ID
-  ssh NAME/ID [command...] | proxy IMMUTABLE_ID | ssh-config install
-  connect [--forward 127.0.0.1:PORT|[::1]:PORT] NAME/ID
-  ports NAME/ID | url NAME/ID URL | open-url NAME/ID URL
-  vnc [--viewer] NAME/ID
-`
-
-// Run executes one CLI command using the supplied streams and cancellation context.
-func Run(ctx context.Context, args []string, streams Streams) error {
-	global := flags("clankerbox", streams.Err)
-	path := global.String("config", DefaultConfigPath(), "client JSON config")
-	if e := global.Parse(args); e != nil {
-		return e
-	}
-	args = global.Args()
-	if len(args) == 0 {
-		return errors.New(strings.TrimSpace(Usage))
-	}
-	if args[0] == "help" {
-		_, e := io.WriteString(streams.Out, Usage)
-		return e
-	}
-	c, e := LoadConfig(*path)
-	if e != nil {
-		return e
-	}
-	a, e := NewAPI(c)
-	if e != nil {
-		return e
-	}
-	command := args[0]
-	args = args[1:]
-	runner := commandRunner{api: a, streams: streams}
-	switch command {
-	case "profiles", "hosts", "machines":
-		return runner.listResources(ctx, command, args)
-	case inspectCommand:
-		return runner.inspectMachine(ctx, args)
-	case "operation":
-		return runner.inspectOperation(ctx, args)
-	case createCommand:
-		return runner.createMachine(ctx, command, args)
-	case forkCommand, "restore", checkpointCommand:
-		return deriveCLI(ctx, a, command, args, streams)
-	case "start", "stop", "delete":
-		return runner.mutateMachine(ctx, command, args)
-	case "proxy":
-		return runner.proxyMachine(ctx, args)
-	case "ssh-config":
-		return runner.installSSH(ctx, args)
-	case "ssh":
-		return runner.sshMachine(ctx, args)
-	case "_owner":
-		return runner.serveOwner(ctx, args)
-	case "connect":
-		return runner.connectMachine(ctx, command, args)
-	case portsCommand, urlCommand, openURLCommand:
-		return runner.queryForward(ctx, command, args)
-	case "vnc":
-		return runner.vncMachine(ctx, command, args)
-	default:
-		return fmt.Errorf("unknown command %q", command)
-	}
-}
-
-func mutate(ctx context.Context, a *API, path string, in any, id string, w io.Writer) error {
-	var out json.RawMessage
-	if e := a.Do(ctx, "POST", path, in, id, &out); e != nil {
-		return fmt.Errorf("%w; retry with --idempotency-key %s", e, id)
-	}
-	return jsonOut(w, out)
-}
-
-type endpointFlags []Endpoint
-
-func (e *endpointFlags) String() string { return "" }
-func (e *endpointFlags) Set(s string) error {
-	ep, err := ParseEndpoint(s)
-	if err == nil {
-		*e = append(*e, ep)
-	}
-	return err
-}
 func acquireName(ctx context.Context, a *API, name string) (*Handle, error) {
 	p, e := a.Pin(ctx, name)
 	if e != nil {
@@ -201,7 +99,7 @@ func installPinned(ctx context.Context, a *API, p Pin) error {
 	_, e = InstallSSHConfig(a.Config, b, sshDirectory(), ms)
 	return e
 }
-func hold(ctx context.Context, h *Handle, w io.Writer) error {
+func (runner commandRunner) hold(ctx context.Context, h *Handle) error {
 	ticker := time.NewTicker(statusRefreshInterval)
 	defer ticker.Stop()
 	for {
@@ -212,7 +110,7 @@ func hold(ctx context.Context, h *Handle, w io.Writer) error {
 			}
 			return e
 		}
-		if e = jsonOut(w, r); e != nil {
+		if e = runner.output(r); e != nil {
 			return e
 		}
 		select {
@@ -244,13 +142,21 @@ func awaitMapping(ctx context.Context, h *Handle, ep Endpoint) (Mapping, error) 
 		}
 	}
 }
+
+// SSHExitError carries an SSH process status whose diagnostics were already streamed.
+type SSHExitError struct{ *exec.ExitError }
+
 func runSSH(ctx context.Context, streams Streams, args ...string) error {
 	//nolint:gosec // G204: Execute the fixed SSH program with separate arguments from the local CLI.
 	cmd := exec.CommandContext(ctx, "ssh", args...)
 	cmd.Stdin = streams.In
 	cmd.Stdout = streams.Out
 	cmd.Stderr = streams.Err
-	return cmd.Run()
+	err := cmd.Run()
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok {
+		return &SSHExitError{exit}
+	}
+	return err
 }
 func openViewer(ctx context.Context, url string) error {
 	command := "xdg-open"
@@ -287,6 +193,7 @@ func proxyStdio(ctx context.Context, c net.Conn, in io.Reader, out io.Writer) (e
 }
 
 const (
+	deleteCommand     = "delete"
 	checkpointCommand = "checkpoint"
 	forkCommand       = "fork"
 	createCommand     = "create"
@@ -295,104 +202,89 @@ const (
 )
 
 type commandRunner struct {
-	api     *API
-	streams Streams
+	api        *API
+	streams    Streams
+	structured bool
 }
 
-func (runner commandRunner) listResources(ctx context.Context, command string, args []string) error {
+func (runner commandRunner) listResources(ctx context.Context, command string) error {
 	var e error
-	if len(args) != 0 {
-		return errors.New("unexpected arguments")
-	}
-	var out json.RawMessage
-	e = runner.api.Do(ctx, "GET", "/v1/"+command, nil, "", &out)
+	out := resourceList(command)
+	e = runner.api.Do(ctx, "GET", "/v1/"+command, nil, "", out)
 	if e != nil {
 		return e
 	}
-	return jsonOut(runner.streams.Out, out)
+	return runner.output(out)
 }
 
 func (runner commandRunner) inspectMachine(ctx context.Context, args []string) error {
-	var e error
-	if e = oneArg(args); e != nil {
-		return e
-	}
 	m, resolveErr := runner.api.Resolve(ctx, args[0])
 	if resolveErr != nil {
 		return resolveErr
 	}
-	return jsonOut(runner.streams.Out, m)
+	return runner.output(m)
 }
 
 func (runner commandRunner) inspectOperation(ctx context.Context, args []string) error {
 	var e error
-	if len(args) != 1 || !model.ValidID(args[0]) {
+	if !model.ValidID(args[0]) {
 		return errors.New("operation requires an immutable operation ID")
 	}
-	var out json.RawMessage
+	var out model.Operation
 	if e = runner.api.Do(ctx, "GET", "/v1/operations/"+args[0], nil, "", &out); e != nil {
 		return e
 	}
-	return jsonOut(runner.streams.Out, out)
+	return runner.output(out)
 }
 
-func (runner commandRunner) createMachine(ctx context.Context, command string, args []string) error {
+func (runner commandRunner) createMachine(
+	ctx context.Context,
+	name, profile, host, key, idem string,
+	wait *waitOptions,
+) error {
 	var e error
-	f := flags(command, runner.streams.Err)
-	name := f.String("name", "", "machine name")
-	profile := f.String("profile", "", "profile ID")
-	host := f.String("host", "", "host ID")
-	key := f.String("key", "", "public key file")
-	idem := f.String("idempotency-key", "", "retry key")
-	if e = f.Parse(args); e != nil {
+	if key == "" || profile == "" {
+		return errors.New("create requires a profile and public key (flags or config defaults)")
+	}
+	host, e = runner.api.selectHost(ctx, host, profile)
+	if e != nil {
 		return e
 	}
-	if f.NArg() != 0 || *key == "" {
-		return errors.New("create requires --name, --profile, --host and --key")
-	}
-	b, readFileErr := os.ReadFile(*key)
+	//nolint:gosec // Read the public-key file explicitly selected by the CLI user.
+	b, readFileErr := os.ReadFile(key)
 	if readFileErr != nil {
 		return readFileErr
 	}
 	in := model.CreateInput{
-		Name:          *name,
-		Profile:       *profile,
-		Host:          *host,
+		Name:          name,
+		Profile:       profile,
+		Host:          host,
 		SSHPublicKeys: []string{strings.TrimSpace(string(b))},
 	}
 	if readFileErr = in.Validate(); readFileErr != nil {
 		return readFileErr
 	}
-	id, readFileErr := requestKey(*idem)
+	id, readFileErr := requestKey(idem)
 	if readFileErr != nil {
 		return readFileErr
 	}
-	return mutate(ctx, runner.api, "/v1/machines", in, id, runner.streams.Out)
+	return runner.mutate(ctx, "/v1/machines", in, id, wait, createCommand)
 }
 
-func (runner commandRunner) mutateMachine(ctx context.Context, command string, args []string) error {
-	var e error
-	f := flags(command, runner.streams.Err)
-	idem := f.String("idempotency-key", "", "retry key")
-	if e = f.Parse(args); e != nil {
-		return e
-	}
-	if e = oneArg(f.Args()); e != nil {
-		return e
-	}
-	m, resolveErr2 := runner.api.Resolve(ctx, f.Arg(0))
+func (runner commandRunner) mutateMachine(ctx context.Context, command, target, idem string, wait *waitOptions) error {
+	m, resolveErr2 := runner.api.Resolve(ctx, target)
 	if resolveErr2 != nil {
 		return resolveErr2
 	}
-	id, resolveErr2 := requestKey(*idem)
+	id, resolveErr2 := requestKey(idem)
 	if resolveErr2 != nil {
 		return resolveErr2
 	}
-	return mutate(ctx, runner.api, "/v1/machines/"+m.ID+"/"+command, nil, id, runner.streams.Out)
+	return runner.mutate(ctx, "/v1/machines/"+m.ID+"/"+command, nil, id, wait, command)
 }
 
 func (runner commandRunner) proxyMachine(ctx context.Context, args []string) (err error) {
-	if len(args) != 1 || !model.ValidID(args[0]) {
+	if !model.ValidID(args[0]) {
 		return errors.New("proxy requires an immutable machine ID")
 	}
 	conn, upgradeErr := runner.api.Upgrade(ctx, args[0])
@@ -403,10 +295,7 @@ func (runner commandRunner) proxyMachine(ctx context.Context, args []string) (er
 	return proxyStdio(ctx, conn, runner.streams.In, runner.streams.Out)
 }
 
-func (runner commandRunner) installSSH(ctx context.Context, args []string) error {
-	if len(args) != 1 || args[0] != "install" {
-		return errors.New("usage: ssh-config install")
-	}
+func (runner commandRunner) installSSH(ctx context.Context) error {
 	binary, executableErr := executable()
 	if executableErr != nil {
 		return executableErr
@@ -419,13 +308,10 @@ func (runner commandRunner) installSSH(ctx context.Context, args []string) error
 	if executableErr != nil {
 		return executableErr
 	}
-	return jsonOut(runner.streams.Out, map[string]any{"files": paths})
+	return runner.output(map[string]any{"files": paths})
 }
 
-func (runner commandRunner) sshMachine(ctx context.Context, args []string) error {
-	if len(args) < 1 {
-		return errors.New("ssh requires a machine")
-	}
+func (runner commandRunner) sshMachine(ctx context.Context, args []string) (err error) {
 	p, pinErr := runner.api.Pin(ctx, args[0])
 	if pinErr != nil {
 		return pinErr
@@ -433,14 +319,20 @@ func (runner commandRunner) sshMachine(ctx context.Context, args []string) error
 	if pinErr = installPinned(ctx, runner.api, p); pinErr != nil {
 		return pinErr
 	}
-	argv := append([]string{"-F", filepath.Join(runner.api.Config.StateDir, "ssh_config"), "cb." + p.ID}, args[1:]...)
+	binary, e := executable()
+	if e != nil {
+		return e
+	}
+	h, e := Acquire(ctx, runner.api.Config, p, binary)
+	if e != nil {
+		return e
+	}
+	defer func() { err = errors.Join(err, h.Close()) }()
+	argv := []string{"-F", filepath.Join(runner.api.Config.StateDir, "ssh_config"), "cb." + p.ID}
 	return runSSH(ctx, runner.streams, argv...)
 }
 
 func (runner commandRunner) serveOwner(ctx context.Context, args []string) error {
-	if len(args) != 1 {
-		return errors.New("invalid owner startup")
-	}
 	b, decodeStringErr := base64.RawURLEncoding.DecodeString(args[0])
 	if decodeStringErr != nil {
 		return decodeStringErr
@@ -465,18 +357,8 @@ func (runner commandRunner) serveOwner(ctx context.Context, args []string) error
 	return errors.Join(ownerErr, readinessErr)
 }
 
-func (runner commandRunner) connectMachine(ctx context.Context, command string, args []string) (err error) {
-	var e error
-	f := flags(command, runner.streams.Err)
-	var explicit endpointFlags
-	f.Var(&explicit, "forward", "numeric guest loopback HOST:PORT (repeatable)")
-	if e = f.Parse(args); e != nil {
-		return e
-	}
-	if e = oneArg(f.Args()); e != nil {
-		return e
-	}
-	h, acquireNameErr := acquireName(ctx, runner.api, f.Arg(0))
+func (runner commandRunner) connectMachine(ctx context.Context, target string, explicit []Endpoint) (err error) {
+	h, acquireNameErr := acquireName(ctx, runner.api, target)
 	if acquireNameErr != nil {
 		return acquireNameErr
 	}
@@ -486,24 +368,17 @@ func (runner commandRunner) connectMachine(ctx context.Context, command string, 
 			return acquireNameErr
 		}
 	}
-	return hold(ctx, h, runner.streams.Out)
+	return runner.hold(ctx, h)
 }
 
 func (runner commandRunner) queryForward(ctx context.Context, command string, args []string) error {
-	expected := 1
-	if command != portsCommand {
-		expected = 2
-	}
-	if len(args) != expected {
-		return errors.New("invalid command arguments")
-	}
 	// External URLs need no mapping; validate first and launch without acquiring.
 	if command == openURLCommand {
 		if raw, rewriteURLErr := RewriteURL(args[1], nil, true); rewriteURLErr == nil {
 			if rewriteURLErr = openViewer(ctx, raw); rewriteURLErr != nil {
 				return rewriteURLErr
 			}
-			return jsonOut(runner.streams.Out, map[string]string{urlCommand: raw})
+			return runner.output(map[string]string{urlCommand: raw})
 		}
 	}
 	p, queryPinErr := queryPin(ctx, runner.api, args[0])
@@ -515,7 +390,7 @@ func (runner commandRunner) queryForward(ctx context.Context, command string, ar
 		return queryPinErr
 	}
 	if command == portsCommand {
-		return jsonOut(runner.streams.Out, r.Mappings)
+		return runner.output(r.Mappings)
 	}
 	raw, queryPinErr := RewriteURL(args[1], r.Mappings, command == openURLCommand)
 	if queryPinErr != nil {
@@ -526,20 +401,11 @@ func (runner commandRunner) queryForward(ctx context.Context, command string, ar
 			return queryPinErr
 		}
 	}
-	return jsonOut(runner.streams.Out, map[string]string{"machine_id": p.ID, urlCommand: raw})
+	return runner.output(map[string]string{"machine_id": p.ID, urlCommand: raw})
 }
 
-func (runner commandRunner) vncMachine(ctx context.Context, command string, args []string) (err error) {
-	var e error
-	f := flags(command, runner.streams.Err)
-	viewer := f.Bool("viewer", false, "launch the native viewer")
-	if e = f.Parse(args); e != nil {
-		return e
-	}
-	if e = oneArg(f.Args()); e != nil {
-		return e
-	}
-	h, acquireNameErr2 := acquireName(ctx, runner.api, f.Arg(0))
+func (runner commandRunner) vncMachine(ctx context.Context, target string, viewer bool) (err error) {
+	h, acquireNameErr2 := acquireName(ctx, runner.api, target)
 	if acquireNameErr2 != nil {
 		return acquireNameErr2
 	}
@@ -552,15 +418,15 @@ func (runner commandRunner) vncMachine(ctx context.Context, command string, args
 	if acquireNameErr2 != nil {
 		return acquireNameErr2
 	}
-	if acquireNameErr2 = jsonOut(runner.streams.Out, m); acquireNameErr2 != nil {
+	if acquireNameErr2 = runner.output(m); acquireNameErr2 != nil {
 		return acquireNameErr2
 	}
-	if *viewer {
+	if viewer {
 		if acquireNameErr2 = openViewer(ctx, "vnc://"+m.Local); acquireNameErr2 != nil {
 			return acquireNameErr2
 		}
 	}
-	return hold(ctx, h, runner.streams.Out)
+	return runner.hold(ctx, h)
 }
 
 const (
@@ -574,3 +440,32 @@ const (
 	inspectCommand = "inspect"
 	urlCommand     = "url"
 )
+
+func (runner commandRunner) execMachine(ctx context.Context, args []string) error {
+	if len(args) < 3 || args[1] != "--" {
+		return errors.New("exec requires MACHINE -- ARGV")
+	}
+	p, err := runner.api.Pin(ctx, args[0])
+	if err != nil {
+		return err
+	}
+	if err = installPinned(ctx, runner.api, p); err != nil {
+		return err
+	}
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args[2:] {
+		if strings.ContainsRune(arg, 0) {
+			return errors.New("exec arguments cannot contain NUL")
+		}
+		quoted = append(quoted, "'"+strings.ReplaceAll(arg, "'", "'\"'\"'")+"'")
+	}
+	return runSSH(
+		ctx,
+		runner.streams,
+		"-T",
+		"-F",
+		filepath.Join(runner.api.Config.StateDir, "ssh_config"),
+		"cb."+p.ID,
+		strings.Join(quoted, " "),
+	)
+}

@@ -19,7 +19,7 @@ def main():
     parser.add_argument('--keep', action='store_true', help='leave this new machine running for connection acceptance')
     parser.add_argument('--resume', action='store_true', help='resume the exact disposable machine recorded in --result')
     args = parser.parse_args()
-    base = [str(Path(args.binary).resolve()), '--config', str(Path(args.config).resolve())]
+    base = [str(Path(args.binary).resolve()), '--config', str(Path(args.config).resolve()), '--json']
     report = {'name': 'accept-' + uuid.uuid4().hex[:12], 'events': [], 'status': 'running'}
     result_path = Path(args.result)
     result_path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,6 +39,8 @@ def main():
         return proc.stdout
 
     def operation(*command):
+        offset = 2 if command[0] == 'checkpoint' else 1
+        command = command[:offset] + ('--async',) + command[offset:]
         op = json.loads(run(*command))
         report['events'].append({'action': command[0], 'operation': op})
         if command[0] == 'create':
@@ -59,7 +61,7 @@ def main():
     save()
     try:
         if not args.resume:
-            operation('create', '--name', report['name'], '--profile', args.profile,
+            operation('create', report['name'], '--profile', args.profile,
                       '--host', args.host, '--key', args.key,
                       '--idempotency-key', report['name'])
         machine = report['machine_id']
@@ -76,7 +78,7 @@ chmod 755 scratch
 ln -sfn tracked link
 sync
 '''
-        run('ssh', machine, 'sh -se', data=setup)
+        run('exec', machine, '--', 'sh', '-se', data=setup)
         check = f'''set -eu
 cd "$HOME/{directory}"
 git diff --cached --no-ext-diff
@@ -85,17 +87,17 @@ cat scratch
 test -x scratch
 readlink link
 '''
-        before = run('ssh', machine, 'sh -se', data=check)
+        before = run('exec', machine, '--', 'sh', '-se', data=check)
         identity_before = json.loads(run('inspect', machine))['ssh_host_key']
         operation('stop', machine)
         stopped = json.loads(run('inspect', machine))
         if stopped['state'] != 'stopped':
             raise RuntimeError(f'expected stopped: {stopped}')
-        denied = subprocess.run(base + ['ssh', machine, 'true'], capture_output=True, timeout=30)
+        denied = subprocess.run(base + ['exec', machine, '--', 'true'], capture_output=True, timeout=30)
         if denied.returncode == 0:
             raise RuntimeError('SSH unexpectedly accepted a stopped machine')
         operation('start', machine)
-        after = run('ssh', machine, 'sh -se', data=check)
+        after = run('exec', machine, '--', 'sh', '-se', data=check)
         identity_after = json.loads(run('inspect', machine))['ssh_host_key']
         if before != after or identity_before != identity_after:
             raise RuntimeError('workspace contents or SSH identity changed across stop/start')

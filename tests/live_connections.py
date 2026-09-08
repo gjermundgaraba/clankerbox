@@ -23,7 +23,7 @@ def main():
     if not evidence['name'].startswith('accept-') or evidence['status'] != 'passed':
         raise ValueError('a passed disposable lifecycle report is required')
     machine = evidence['machine_id']
-    base = [str(Path(args.binary).resolve()), '--config', str(Path(args.config).resolve())]
+    base = [str(Path(args.binary).resolve()), '--config', str(Path(args.config).resolve()), '--json']
 
     def run(*command, data=None):
         return subprocess.check_output(base + list(command), input=data, text=True, timeout=45)
@@ -55,7 +55,7 @@ done
     stop = f'kill "$(cat {directory}/server.pid)"\n'
     consumers = []
     try:
-        run('ssh', machine, 'sh -se', data=f'mkdir -p {directory}\nprintf connection-ok >{directory}/index.html\n' + start)
+        run('exec', machine, '--', 'sh', '-se', data=f'mkdir -p {directory}\nprintf connection-ok >{directory}/index.html\n' + start)
         for _ in range(2):
             consumers.append(subprocess.Popen(base + ['connect', machine], stdout=subprocess.DEVNULL))
         address = mapping(True)
@@ -67,13 +67,13 @@ done
         consumers[0].send_signal(signal.SIGINT)
         consumers[0].wait(timeout=15)
         assert mapping(True) == address
-        run('ssh', machine, 'sh -se', data=stop)
+        run('exec', machine, '--', 'sh', '-se', data=stop)
         assert mapping(False) == address
-        run('ssh', machine, 'sh -se', data=start)
+        run('exec', machine, '--', 'sh', '-se', data=start)
         assert mapping(True) == address
         if args.restart_controller:
             process = 'ps -p "$(cat ' + directory + '/server.pid)" -o pid= -o lstart='
-            before = run('ssh', machine, process)
+            before = run('exec', machine, '--', 'sh', '-c', process)
             identity = json.loads(run('inspect', machine))['ssh_host_key']
             controller = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
                           args.restart_controller, 'sudo', '-n', 'systemctl']
@@ -90,7 +90,7 @@ done
                 subprocess.run(controller + ['start', 'clankerbox'], check=True, timeout=45)
             if mapping(True) != address:
                 raise RuntimeError('reconnect changed the local endpoint')
-            if run('ssh', machine, process) != before:
+            if run('exec', machine, '--', 'sh', '-c', process) != before:
                 raise RuntimeError('guest server process changed during controller outage')
             if json.loads(run('inspect', machine))['ssh_host_key'] != identity:
                 raise RuntimeError('SSH identity changed during controller outage')
@@ -103,7 +103,7 @@ done
     except Exception:
         # Keep guest startup errors visible before removing the disposable files.
         try:
-            print(run('ssh', machine, 'cat ' + directory + '/server.log'), file=sys.stderr)
+            print(run('exec', machine, '--', 'cat', directory + '/server.log'), file=sys.stderr)
         except subprocess.SubprocessError as error:
             print('Could not read guest startup log:', error, file=sys.stderr)
         raise
@@ -114,7 +114,7 @@ done
                 consumer.send_signal(signal.SIGINT)
                 consumer.wait(timeout=15)
         try:
-            run('ssh', machine, 'sh -se', data=f'''if test -s {directory}/server.pid; then
+            run('exec', machine, '--', 'sh', '-se', data=f'''if test -s {directory}/server.pid; then
   pid=$(cat {directory}/server.pid)
   if kill -0 "$pid" 2>/dev/null; then kill "$pid"; fi
 fi

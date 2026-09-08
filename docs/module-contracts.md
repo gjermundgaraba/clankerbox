@@ -60,6 +60,21 @@ package hierarchy was introduced just to support tests. Current root-machine
 store ancestry, pending-RAM protection, and old non-branchable-store rejection
 remain intentional safety behavior.
 
+## Client command boundary
+
+`client.Run` takes explicit streams and a cancellation context. Each invocation
+builds a fresh urfave/cli command tree. The client, controller, and host binaries
+use native flag parsing and generated help; help bypasses configuration and
+service startup. Machine names are positional, with no `--name` alias. Resource
+output is human-readable by default; global `--json` selects structured stdout.
+Executable errors are plain text on stderr. Owner
+IPC and raw exec/SSH/proxy streams keep their existing protocols. CLI lifecycle
+mutations submit once and share a bounded wait; `API.WaitOperation` only reads an
+accepted operation and returns its last known IDs on failure or cancellation.
+Tests exercise this boundary with local HTTP/SSH/IPC fixtures and the executable
+entry point, including literal exec arguments and remote exit status. The HTTP
+API and durable controller reconciliation rules are unchanged.
+
 ## Private storage
 
 `statefs.Open(path)` owns creation and validation of a current-user-owned `0700`

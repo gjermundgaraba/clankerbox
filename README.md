@@ -24,6 +24,118 @@ for current evidence and remaining acceptance work; the spike reports below
 describe earlier runs. Herdr was an external transport experiment, not a product
 dependency or release requirement.
 
+## Using machines
+
+Create `~/.config/clankerbox/config.json` with your API origin and local files:
+
+```json
+{
+  "url": "https://YOUR_CONTROLLER",
+  "token_file": "token",
+  "identity_file": "~/.ssh/id_ed25519",
+  "public_key_file": "~/.ssh/id_ed25519.pub",
+  "default_profile": "linux-dev-v2",
+  "state_dir": "~/.local/state/clankerbox"
+}
+```
+
+Config file paths resolve relative to the config directory; `~/` expands to your
+home. Keep token/private-key files mode 0600 and state directories mode 0700.
+Optional `default_host`, `default_profile` and `public_key_file` supply omitted
+flags. Explicit `--host`, `--profile` and `--key` override those defaults. Without
+a public-key setting, the client uses `identity_file` plus `.pub` if that file
+exists; it never guesses a public key from the SSH agent. Authentication can still
+use your SSH agent when `identity_file` is omitted. Without a host setting, create
+selects the sole host supporting the chosen profile; ambiguity or an incompatible
+configured host requires an explicit `--host`.
+
+```sh
+clankerbox profiles
+clankerbox create dev
+clankerbox exec dev -- git --version
+clankerbox ssh dev
+clankerbox stop dev
+clankerbox start dev
+clankerbox fork dev experiment
+clankerbox checkpoint create dev
+clankerbox restore CHECKPOINT_ID recovered
+```
+
+Create/start/stop/delete/fork and checkpoint create/delete/restore wait for their
+accepted operation, up to five minutes. `--timeout 10m` changes that positive
+bound. Success prints the machine or checkpoint summary; deletes print the
+completed operation. Failure, unresolved status, timeout or a lost operation read
+returns nonzero with the known operation and resource IDs. A timed-out operation
+may continue: inspect it before deciding to retry. Waiting never resubmits a
+mutation. Stopped machines require an explicit `start`; connecting never wakes
+them. Deletion requires a stopped machine. Runtime rules still apply: Mac
+forks/captures require a stopped source.
+
+Resource flags can appear before or after positionals, for example
+`create dev --profile mac-xcode-v3 --host mac --key KEY.pub`. Global flags precede the
+command. For automation:
+
+```sh
+clankerbox --json create batch-dev --async --idempotency-key REQUEST_KEY
+clankerbox --json operation OPERATION_ID
+clankerbox --json inspect dev
+clankerbox --json checkpoint create dev --async
+```
+
+`--json` prints structured resources, or the accepted operation with `--async`.
+Without `--async`, JSON mutations return machines (create/start/stop/fork/restore),
+a checkpoint (capture), or a completed operation (deletes). `operation` remains
+available for diagnostics. `exec MACHINE -- ARGV...` streams stdin/stdout/stderr,
+requests no PTY, preserves literal arguments and returns the remote exit status.
+Use `exec dev -- sh -c 'COMMAND'` when shell interpretation is intended.
+`ssh MACHINE` opens an interactive shell. Raw exec/SSH/proxy streams are
+unchanged by `--json`. `url` prints a plain URL; `--json url` prints the object.
+
+Interactive `clankerbox ssh dev` holds automatic forwarding until SSH exits.
+For standalone external SSH, SCP, Herdr or other TCP clients:
+
+```sh
+clankerbox ssh-config install
+clankerbox connect dev                  # keep running while forwards are needed
+# In another terminal:
+ssh cb.dev
+scp ./file cb.dev:workspace/
+herdr --remote cb.dev                   # independently installed application
+clankerbox ports dev
+clankerbox url dev http://localhost:3000/
+clankerbox connect dev --forward 127.0.0.1:5432
+clankerbox vnc MAC_MACHINE --viewer
+```
+
+Aliases use the existing immutable-ID ProxyCommand transport. Ordinary external
+SSH sessions need a separate `connect` for automatic local forwards. Each
+`connect`, interactive CLI SSH, or VNC consumer keeps the shared owner alive for
+its own lifetime; VNC exits when you stop its CLI command. Applications use the
+reported local TCP addresses. All three binaries use urfave/cli for flag parsing
+and generated help. `clankerbox` with no arguments shows root help; use
+`clankerbox COMMAND --help` or `clankerbox help COMMAND` for command details.
+Help never requires configuration or starts services. Names are positional:
+`create NAME`, `fork SOURCE CHILD`, and `restore CHECKPOINT CHILD`.
+Errors go to stderr as text, including with `--json`; that flag controls resource
+output on stdout.
+
+`clankerbox hosts` shows total, used and remaining CPU/RAM per host. Used
+capacity means controller reservations, not live CPU utilization or resident
+memory. Running, preparing and unknown machines reserve their pinned profile
+sizes; stopped machines release capacity unless a start is queued. Deleted
+machines are excluded. The command reads the same durable accounting used for
+admission without contacting hosts. Remaining capacity can be negative if host
+limits were reduced below existing reservations. `clankerbox hosts --json`
+includes `used_cpu`, `used_ram_mib`, `remaining_cpu` and `remaining_ram_mib`
+alongside configured totals `cpu` and `ram_mib`.
+
+The machine CLI passed disposable Linux and Mac checks for default lifecycle
+waiting, literal exec, interactive SSH forwarding and external SSH aliases.
+Linux checks also covered standalone forwarding/SCP, async operations, timeout
+recovery and checkpoint/restore; Mac checks covered stopped-source disk fork.
+See the [execution record](docs/implementation-execution.md#machine-cli-acceptance)
+for scope and limitations.
+
 ## Goal and intended architecture
 
 1. Run only the owner's agents and repositories. Machines may live for weeks;

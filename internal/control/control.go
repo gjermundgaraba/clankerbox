@@ -309,14 +309,8 @@ func capacity(ctx context.Context, tx *sql.Tx, h model.Host, p model.Profile, ex
 	if err != nil {
 		return err
 	}
-	cpu, ram := p.CPU, p.RAMMiB
-	for _, m := range ms {
-		if m.Host == h.ID && m.ID != exclude && (m.State != model.Stopped || m.DesiredState == model.Running) {
-			cpu += m.ProfileSpec.CPU
-			ram += m.ProfileSpec.RAMMiB
-		}
-	}
-	if cpu > h.CPU || ram > h.RAMMiB {
+	used := hostCapacity(h, ms, exclude)
+	if p.CPU > used.RemainingCPU || p.RAMMiB > used.RemainingRAMMiB {
 		return problem(
 			http.StatusConflict,
 			"capacity",

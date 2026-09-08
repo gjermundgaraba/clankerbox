@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -16,6 +16,8 @@ import (
 	"clankerbox/internal/host"
 	"clankerbox/internal/model"
 	"clankerbox/internal/statefs"
+
+	"github.com/urfave/cli/v3"
 )
 
 const (
@@ -24,19 +26,35 @@ const (
 )
 
 func main() {
-	if err := run(); err != nil {
+	if err := newCommand().Run(context.Background(), os.Args); err != nil {
 		log.New(os.Stderr, "", 0).Print(err)
 		os.Exit(1)
 	}
 }
-func run() error {
-	config := flag.String("config", "", "host JSON configuration")
-	connect := flag.String("connect", "", "relay this prepared machine's SSH endpoint")
-	flag.Parse()
-	if *config == "" || flag.NArg() != 0 {
-		return errors.New("--config required")
+func newCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "clankerbox-host",
+		Usage:     "Execute journaled host operations over an SSH pipe",
+		UsageText: "clankerbox-host [options]",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "config", Usage: "Host JSON configuration `FILE`", Required: true},
+			&cli.StringFlag{Name: "connect", Usage: "Relay the prepared `MACHINE` SSH endpoint"},
+		},
+		Before: func(_ context.Context, cmd *cli.Command) (context.Context, error) {
+			if cmd.Args().Present() {
+				return nil, fmt.Errorf("unexpected argument %q", cmd.Args().First())
+			}
+			return nil, nil
+		},
+		OnUsageError: func(_ context.Context, _ *cli.Command, err error, _ bool) error { return err },
+		Action:       run,
 	}
-	data, err := statefs.ReadRegular(*config)
+}
+
+func run(parent context.Context, cmd *cli.Command) error {
+	config := cmd.String("config")
+	connect := cmd.String("connect")
+	data, err := statefs.ReadRegular(config)
 	if err != nil {
 		return err
 	}
@@ -44,21 +62,21 @@ func run() error {
 	if err = json.Unmarshal(data, &cfg); err != nil {
 		return err
 	}
-	if *connect == "" {
+	if connect == "" {
 		// Durable work can finish after its SSH caller disappears.
 		signal.Ignore(syscall.SIGHUP)
 	}
 	signals := []os.Signal{os.Interrupt, syscall.SIGTERM}
-	if *connect != "" {
+	if connect != "" {
 		signals = append(signals, syscall.SIGHUP)
 	}
-	ctx, cancel := signal.NotifyContext(context.Background(), signals...)
+	ctx, cancel := signal.NotifyContext(parent, signals...)
 	defer cancel()
 	h, err := host.Open(cfg, nil)
 	if err != nil {
 		return err
 	}
-	err = serve(ctx, h, *connect)
+	err = serve(ctx, h, connect)
 	return errors.Join(err, h.Close())
 }
 

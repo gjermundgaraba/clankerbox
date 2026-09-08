@@ -19,7 +19,7 @@ def main():
     source = json.loads(Path(args.lifecycle_result).read_text())
     if not source['name'].startswith('accept-') or source['status'] != 'passed' or source.get('cleaned'):
         raise ValueError('an uncleaned passed disposable lifecycle report is required')
-    base = [str(Path(args.binary).resolve()), '--config', str(Path(args.config).resolve())]
+    base = [str(Path(args.binary).resolve()), '--config', str(Path(args.config).resolve()), '--json']
     report = {'source': source['machine_id'], 'machines': [source['machine_id']],
               'events': [], 'status': 'running'}
     result = Path(args.result)
@@ -43,6 +43,8 @@ def main():
         return json.loads(run('inspect', machine))
 
     def operation(*command):
+        offset = 2 if command[0] == 'checkpoint' else 1
+        command = command[:offset] + ('--async',) + command[offset:]
         op = json.loads(run(*command))
         report['events'].append({'command': list(command), 'operation': op})
         if command[0] in ('fork', 'restore'):
@@ -68,13 +70,13 @@ def main():
     linux = inspect(mid)['profile_spec']['os'] == 'linux'
 
     def write(machine, value):
-        run('ssh', machine, 'sh -se', data=f'printf %s {value} > "$HOME/{directory}/state"\nsync\n')
+        run('exec', machine, '--', 'sh', '-se', data=f'printf %s {value} > "$HOME/{directory}/state"\nsync\n')
 
     def read(machine):
-        return run('ssh', machine, f'cat "$HOME/{directory}/state"')
+        return run('exec', machine, '--', 'sh', '-c', f'cat "$HOME/{directory}/state"')
 
     def memory(machine):
-        return json.loads(run('ssh', machine, 'curl -fsS http://127.0.0.1:18349/'))
+        return json.loads(run('exec', machine, '--', 'curl', '-fsS', 'http://127.0.0.1:18349/'))
 
     def stop(machine):
         operation('stop', machine)
@@ -86,7 +88,7 @@ def main():
         if inspect(mid)['state'] == 'running':
             stop(mid)
         operation('start', mid)
-        run('ssh', mid, 'sh -se', data=f'mkdir -p "$HOME/{directory}"\n')
+        run('exec', mid, '--', 'sh', '-se', data=f'mkdir -p "$HOME/{directory}"\n')
         write(mid, 'source-A')
         original_key = inspect(mid)['ssh_host_key']
         if linux:
@@ -101,14 +103,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
 '''
-            run('ssh', mid, 'sh -se', data=f"cat > \"$HOME/{directory}/memory.py\" <<'PY'\n{program}PY\n"
+            run('exec', mid, '--', 'sh', '-se', data=f"cat > \"$HOME/{directory}/memory.py\" <<'PY'\n{program}PY\n"
                 + f'nohup python3 "$HOME/{directory}/memory.py" >"$HOME/{directory}/memory.log" 2>&1 </dev/null &\n'
                 + 'i=0; until curl -fsS http://127.0.0.1:18349/ >/dev/null; do i=$((i+1)); test "$i" -lt 30; sleep 1; done\n')
             original_memory = memory(mid)
             report['original_memory'] = original_memory
         else:
             stop(mid)
-        child = operation('fork', '--name', name + '-fork', '--key', args.key, mid)['machine_id']
+        child = operation('fork', mid, name + '-fork', '--key', args.key)['machine_id']
         need(read(child) == 'source-A', 'fork lost source disk state')
         child_key = inspect(child)['ssh_host_key']
         need(child_key != original_key, 'fork reused SSH identity')
@@ -142,7 +144,7 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
             return
         # The previous explicit Linux cold restart ended the memory fixture.
         if linux:
-            run('ssh', mid, 'sh -se', data=f'nohup python3 "$HOME/{directory}/memory.py" >"$HOME/{directory}/memory.log" 2>&1 </dev/null &\n'
+            run('exec', mid, '--', 'sh', '-se', data=f'nohup python3 "$HOME/{directory}/memory.py" >"$HOME/{directory}/memory.log" 2>&1 </dev/null &\n'
                 + 'i=0; until curl -fsS http://127.0.0.1:18349/ >/dev/null; do i=$((i+1)); test "$i" -lt 30; sleep 1; done\n')
             original_memory = memory(mid)
         else:
@@ -156,7 +158,7 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
         restored = []
         keys = {original_key, child_key}
         for index in range(2):
-            machine = operation('restore', '--name', name + '-restore-' + str(index), '--key', args.key, cp)['machine_id']
+            machine = operation('restore', cp, name + '-restore-' + str(index), '--key', args.key)['machine_id']
             restored.append(machine)
             need(read(machine) == 'source-A', 'restore did not roll disk back to capture')
             key = inspect(machine)['ssh_host_key']
