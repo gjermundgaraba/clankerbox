@@ -12,5 +12,11 @@ case "${SSH_ORIGINAL_COMMAND:-}" in
     test "${#id}" = 32 || exit 64
     exec "$helper" --config "$config" --connect "$id"
     ;;
+  "$expected --auth-prepare "*)
+    id=${SSH_ORIGINAL_COMMAND#"$expected --auth-prepare "}
+    case "$id" in ''|*[!0-9a-f]*) exit 64 ;; esac
+    test "${#id}" = 32 || exit 64
+    exec "$helper" --config "$config" --auth-prepare "$id"
+    ;;
   *) echo 'Only structured Clankerbox host control is permitted' >&2; exit 64 ;;
 esac

@@ -44,6 +44,11 @@ func newCommand() *cli.Command {
 			&cli.StringFlag{Name: "config", Usage: "JSON hosts/profiles configuration `FILE`", Required: true},
 			&cli.StringFlag{Name: "state-dir", Usage: "Private controller state `DIRECTORY`", Required: true},
 			&cli.StringFlag{Name: "token-file", Usage: "Bearer token `FILE` (at least 32 bytes)", Required: true},
+			&cli.StringFlag{
+				Name:      "auth-key-file",
+				Usage:     "Private 32-byte auth encryption key FILE (enables managed auth)",
+				TakesFile: true,
+			},
 			&cli.StringFlag{Name: "listen", Usage: "HTTP listen `ADDRESS`", Value: "127.0.0.1:8080"},
 		},
 		Before: func(_ context.Context, cmd *cli.Command) (context.Context, error) {
@@ -78,6 +83,15 @@ func run(parent context.Context, cmd *cli.Command) error {
 	c, err := control.Open(stateDir, cfg, control.SSHTransport{})
 	if err != nil {
 		return err
+	}
+	if path := cmd.String("auth-key-file"); path != "" {
+		key, readErr := statefs.ReadPrivate(path)
+		if readErr != nil {
+			return errors.Join(readErr, c.Close())
+		}
+		if enableErr := c.EnableAuth(key); enableErr != nil {
+			return errors.Join(enableErr, c.Close())
+		}
 	}
 	handler, err := c.Handler(token)
 	if err != nil {

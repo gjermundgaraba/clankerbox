@@ -23,6 +23,25 @@ class HostEntryTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertTrue(result.stdout.strip().endswith('--connect ' + 'a' * 32))
 
+    def test_structured_auth_preparation(self):
+        prefix = '/bin/echo --config /private/config.json'
+        machine_id = '0123456789abcdef' * 2
+        result = self.invoke(prefix + ' --auth-prepare ' + machine_id)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(),
+                         '--config /private/config.json --auth-prepare ' + machine_id)
+
+    def test_rejects_invalid_auth_preparation(self):
+        prefix = '/bin/echo --config /private/config.json --auth-prepare '
+        for suffix in ['', 'a' * 31, 'a' * 33, 'A' * 32, '../config',
+                       'a' * 32 + '\n', 'a' * 32 + ' --connect ' + 'b' * 32,
+                       'a' * 32 + '; echo injected', '$(echo injected)',
+                       'a' * 32 + ' --config /other']:
+            with self.subTest(suffix=suffix):
+                result = self.invoke(prefix + suffix)
+                self.assertEqual(result.returncode, 64)
+                self.assertEqual(result.stdout, '')
+
     def test_rejects_shell_and_arbitrary_destinations(self):
         prefix = '/bin/echo --config /private/config.json'
         for command in ['', 'sh', prefix + '; echo injected', prefix + ' --connect localhost:22',

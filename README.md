@@ -328,3 +328,5 @@ instructions and closed grants; inspect their README before attempting reproduct
 Private build trees, raw result directories, VM images and credentials do not
 belong in source control. Durable Markdown reports link the detailed evidence
 retained in this workspace.
+
+Managed Codex credentials and per-machine relays: [setup and usage](docs/managed-auth.md).

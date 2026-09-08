@@ -33,6 +33,7 @@ func newCommand(streams Streams) *cli.Command {
 		ExitErrHandler: func(context.Context, *cli.Command, error) {},
 		OnUsageError:   returnUsageError,
 	}
+	commandStreams(streams).addAuthCommands(root)
 	commandStreams(streams).addResourceCommands(root)
 	commandStreams(streams).addLifecycleCommands(root)
 	commandStreams(streams).addSSHCommands(root)

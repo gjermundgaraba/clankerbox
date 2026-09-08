@@ -39,8 +39,12 @@ func newCommand() *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "config", Usage: "Host JSON configuration `FILE`", Required: true},
 			&cli.StringFlag{Name: "connect", Usage: "Relay the prepared `MACHINE` SSH endpoint"},
+			&cli.StringFlag{Name: "auth-prepare", Usage: "Prepare the `MACHINE` auth relay public key"},
 		},
 		Before: func(_ context.Context, cmd *cli.Command) (context.Context, error) {
+			if cmd.String("connect") != "" && cmd.String("auth-prepare") != "" {
+				return nil, errors.New("connect and auth-prepare are mutually exclusive")
+			}
 			if cmd.Args().Present() {
 				return nil, fmt.Errorf("unexpected argument %q", cmd.Args().First())
 			}
@@ -76,7 +80,11 @@ func run(parent context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	err = serve(ctx, h, connect)
+	if id := cmd.String("auth-prepare"); id != "" {
+		err = serveAuth(ctx, h, id, os.Stdin, os.Stdout)
+	} else {
+		err = serve(ctx, h, connect)
+	}
 	return errors.Join(err, h.Close())
 }
 
@@ -98,4 +106,27 @@ func serve(ctx context.Context, h *host.Helper, connect string) error {
 	defer done()
 	resp := h.Execute(call, req)
 	return json.NewEncoder(os.Stdout).Encode(resp)
+}
+
+func serveAuth(ctx context.Context, h *host.Helper, id string, in io.Reader, out io.Writer) error {
+	decoder := json.NewDecoder(io.LimitReader(in, maxRequestBytes+1))
+	decoder.DisallowUnknownFields()
+	var req struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := decoder.Decode(&req); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		return errors.New("exactly one request required")
+	}
+	call, cancel := context.WithTimeout(ctx, operationTimeout)
+	defer cancel()
+	if err := h.PrepareAuth(call, id, req.PublicKey); err != nil {
+		return err
+	}
+	return json.NewEncoder(out).Encode(struct {
+		Ready bool `json:"ready"`
+	}{true})
 }

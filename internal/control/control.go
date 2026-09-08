@@ -62,6 +62,7 @@ func problem(status int, code, message string) error { return &APIError{code, me
 
 // Controller owns durable lifecycle intent and serializes operations per host.
 type Controller struct {
+	auth      *authRuntime
 	logger    *slog.Logger
 	db        *sql.DB
 	lock      *statefs.Lock
@@ -618,6 +619,9 @@ func (c *Controller) List(ctx context.Context) ([]model.Machine, error) {
 // Unresolved work is retried with the exact persisted request, including its original ID.
 func (c *Controller) Run(ctx context.Context) {
 	var wg sync.WaitGroup
+	if c.auth != nil {
+		wg.Go(func() { c.runAuth(ctx) })
+	}
 	for _, h := range c.cfg.Hosts {
 		wg.Add(1)
 		go func(h model.Host) {
