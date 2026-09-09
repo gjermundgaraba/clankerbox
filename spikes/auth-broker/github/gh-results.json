@@ -1,0 +1,302 @@
+{
+  "version": "gh version 2.100.0 (2026-09-03)",
+  "cases": [
+    {
+      "name": "init",
+      "command": [
+        "git",
+        "init",
+        "-q"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "requests": []
+    },
+    {
+      "name": "remote",
+      "command": [
+        "git",
+        "remote",
+        "add",
+        "origin",
+        "git@github.com:owner/repo.git"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "requests": []
+    },
+    {
+      "name": "api-host-http-config",
+      "command": [
+        "gh",
+        "config",
+        "set",
+        "api_host",
+        "http://127.0.0.1:62891",
+        "--host",
+        "github.com"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "requests": []
+    },
+    {
+      "name": "api-host-http-rest",
+      "command": [
+        "gh",
+        "api",
+        "user"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "parse \"https://http:%2F%2F127.0.0.1:62891/user\": invalid port \":%2F%2F127.0.0.1:62891\" after host\n",
+      "requests": []
+    },
+    {
+      "name": "api-host-http-graphql",
+      "command": [
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        "query=query { viewer { login } }"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "parse \"https://http:%2F%2F127.0.0.1:62891/graphql\": invalid port \":%2F%2F127.0.0.1:62891\" after host\n",
+      "requests": []
+    },
+    {
+      "name": "api-host-http-pagination",
+      "command": [
+        "gh",
+        "api",
+        "--paginate",
+        "paginate"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "parse \"https://http:%2F%2F127.0.0.1:62891/paginate?per_page=100\": invalid port \":%2F%2F127.0.0.1:62891\" after host\n",
+      "requests": []
+    },
+    {
+      "name": "api-host-http-pr-list",
+      "command": [
+        "gh",
+        "pr",
+        "list",
+        "--json",
+        "number,title,url"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "invalid api_host for github.com: \"http://127.0.0.1:62891\" must be a hostname without a scheme or port, for example \"api.example.com\"\n",
+      "requests": []
+    },
+    {
+      "name": "api-host-http-repo-view",
+      "command": [
+        "gh",
+        "repo",
+        "view",
+        "--json",
+        "nameWithOwner,url"
+      ],
+      "exit": 1,
+      "stdout": "",
+      "stderr": "invalid api_host for github.com: \"http://127.0.0.1:62891\" must be a hostname without a scheme or port, for example \"api.example.com\"\n",
+      "requests": []
+    },
+    {
+      "name": "api-host-unset",
+      "command": [
+        "gh",
+        "config",
+        "set",
+        "api_host",
+        "",
+        "--host",
+        "github.com"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "requests": []
+    },
+    {
+      "name": "unix-socket-config",
+      "command": [
+        "gh",
+        "config",
+        "set",
+        "http_unix_socket",
+        "/var/folders/x5/l_sfvr990fngyzm_sxjnwsvw0000gn/T/clankerbox-gh-probe-n5sj6vmq/relay.sock"
+      ],
+      "exit": 0,
+      "stdout": "",
+      "stderr": "",
+      "requests": []
+    },
+    {
+      "name": "unix-rest",
+      "command": [
+        "gh",
+        "api",
+        "user"
+      ],
+      "exit": 0,
+      "stdout": "{\"login\": \"probe-user\", \"full_name\": \"owner/repo\"}",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/user",
+          "host": "api.github.com",
+          "authorization": "token clankerbox-github-placeholder",
+          "body": ""
+        }
+      ]
+    },
+    {
+      "name": "unix-graphql",
+      "command": [
+        "gh",
+        "api",
+        "graphql",
+        "-f",
+        "query=query { viewer { login } }"
+      ],
+      "exit": 0,
+      "stdout": "{\"data\": {\"viewer\": {\"login\": \"probe-user\"}}}",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "host": "api.github.com",
+          "authorization": "token clankerbox-github-placeholder",
+          "body": "{\"query\":\"query { viewer { login } }\"}"
+        }
+      ]
+    },
+    {
+      "name": "unix-pagination",
+      "command": [
+        "gh",
+        "api",
+        "--paginate",
+        "paginate"
+      ],
+      "exit": 0,
+      "stdout": "[{\"page\": 1},{\"page\": 2}]",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "GET",
+          "path": "/paginate?per_page=100",
+          "host": "api.github.com",
+          "authorization": "token clankerbox-github-placeholder",
+          "body": ""
+        },
+        {
+          "method": "GET",
+          "path": "/paginate?page=2",
+          "host": "api.github.com",
+          "authorization": "token clankerbox-github-placeholder",
+          "body": ""
+        }
+      ]
+    },
+    {
+      "name": "unix-pr-list",
+      "command": [
+        "gh",
+        "pr",
+        "list",
+        "--json",
+        "number,title,url"
+      ],
+      "exit": 0,
+      "stdout": "[{\"number\":123,\"title\":\"Mock PR\",\"url\":\"https://github.com/owner/repo/pull/123\"}]\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "host": "api.github.com",
+          "authorization": "token clankerbox-github-placeholder",
+          "body": "{\"query\":\"fragment pr on PullRequest{number,title,url}\\n\\t\\tquery PullRequestList(\\n\\t\\t\\t$owner: String!,\\n\\t\\t\\t$repo: String!,\\n\\t\\t\\t$limit: Int!,\\n\\t\\t\\t$endCursor: String,\\n\\t\\t\\t$baseBranch: String,\\n\\t\\t\\t$headBranch: String,\\n\\t\\t\\t$state: [PullRequestState!] = OPEN\\n\\t\\t) {\\n\\t\\t\\trepository(owner: $owner, name: $repo) {\\n\\t\\t\\t\\tpullRequests(\\n\\t\\t\\t\\t\\tstates: $state,\\n\\t\\t\\t\\t\\tbaseRefName: $baseBranch,\\n\\t\\t\\t\\t\\theadRefName: $headBranch,\\n\\t\\t\\t\\t\\tfirst: $limit,\\n\\t\\t\\t\\t\\tafter: $endCursor,\\n\\t\\t\\t\\t\\torderBy: {field: CREATED_AT, direction: DESC}\\n\\t\\t\\t\\t) {\\n\\t\\t\\t\\t\\ttotalCount\\n\\t\\t\\t\\t\\tnodes {\\n\\t\\t\\t\\t\\t\\t...pr\\n\\t\\t\\t\\t\\t}\\n\\t\\t\\t\\t\\tpageInfo {\\n\\t\\t\\t\\t\\t\\thasNextPage\\n\\t\\t\\t\\t\\t\\tendCursor\\n\\t\\t\\t\\t\\t}\\n\\t\\t\\t\\t}\\n\\t\\t\\t}\\n\\t\\t}\",\"variables\":{\"limit\":30,\"owner\":\"owner\",\"repo\":\"repo\",\"state\":[\"OPEN\"]}}"
+        }
+      ]
+    },
+    {
+      "name": "unix-repo-view",
+      "command": [
+        "gh",
+        "repo",
+        "view",
+        "--json",
+        "nameWithOwner,url"
+      ],
+      "exit": 0,
+      "stdout": "{\"nameWithOwner\":\"owner/repo\",\"url\":\"https://github.com/owner/repo\"}\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "host": "api.github.com",
+          "authorization": "token clankerbox-github-placeholder",
+          "body": "{\"query\":\"query RepositoryInfo($owner: String!, $name: String!) {\\n\\t\\trepository(owner: $owner, name: $name) {nameWithOwner,url}\\n\\t}\",\"variables\":{\"name\":\"repo\",\"owner\":\"owner\"}}"
+        }
+      ]
+    },
+    {
+      "name": "unix-pr-create",
+      "command": [
+        "gh",
+        "pr",
+        "create",
+        "--repo",
+        "owner/repo",
+        "--base",
+        "main",
+        "--head",
+        "probe",
+        "--title",
+        "fixture",
+        "--body",
+        "fixture"
+      ],
+      "exit": 0,
+      "stdout": "https://github.com/owner/repo/pull/124\n",
+      "stderr": "",
+      "requests": [
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "host": "api.github.com",
+          "authorization": "token clankerbox-github-placeholder",
+          "body": "{\"query\":\"\\n\\tfragment repo on Repository {\\n\\t\\tid\\n\\t\\tdatabaseId\\n\\t\\tname\\n\\t\\towner { login }\\n\\t\\thasIssuesEnabled\\n\\t\\tdescription\\n\\t\\thasWikiEnabled\\n\\t\\tviewerPermission\\n\\t\\tdefaultBranchRef {\\n\\t\\t\\tname\\n\\t\\t}\\n\\t}\\n\\n\\tquery RepositoryInfo($owner: String!, $name: String!) {\\n\\t\\trepository(owner: $owner, name: $name) {\\n\\t\\t\\t...repo\\n\\t\\t\\tparent {\\n\\t\\t\\t\\t...repo\\n\\t\\t\\t}\\n\\t\\t\\tmergeCommitAllowed\\n\\t\\t\\trebaseMergeAllowed\\n\\t\\t\\tsquashMergeAllowed\\n\\t\\t}\\n\\t}\",\"variables\":{\"name\":\"repo\",\"owner\":\"owner\"}}"
+        },
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "host": "api.github.com",
+          "authorization": "token clankerbox-github-placeholder",
+          "body": "{\"query\":\"\\n\\tquery PullRequestForBranch($owner: String!, $repo: String!, $headRefName: String!, $states: [PullRequestState!]) {\\n\\t\\trepository(owner: $owner, name: $repo) {\\n\\t\\t\\tpullRequests(headRefName: $headRefName, states: $states, first: 30, orderBy: { field: CREATED_AT, direction: DESC }) {\\n\\t\\t\\t\\tnodes {url,id,number,state,baseRefName,headRefName,isCrossRepository,headRepositoryOwner{id,login,...on User{name}}}\\n\\t\\t\\t}\\n\\t\\t\\tdefaultBranchRef { name }\\n\\t\\t}\\n\\t}\",\"variables\":{\"headRefName\":\"probe\",\"owner\":\"owner\",\"repo\":\"repo\",\"states\":[\"OPEN\"]}}"
+        },
+        {
+          "method": "POST",
+          "path": "/graphql",
+          "host": "api.github.com",
+          "authorization": "token clankerbox-github-placeholder",
+          "body": "{\"query\":\"\\n\\t\\tmutation PullRequestCreate($input: CreatePullRequestInput!) {\\n\\t\\t\\tcreatePullRequest(input: $input) {\\n\\t\\t\\t\\tpullRequest {\\n\\t\\t\\t\\t\\tid\\n\\t\\t\\t\\t\\turl\\n\\t\\t\\t\\t}\\n\\t\\t\\t}\\n\\t}\",\"variables\":{\"input\":{\"baseRefName\":\"main\",\"body\":\"fixture\",\"draft\":false,\"headRefName\":\"probe\",\"maintainerCanModify\":true,\"repositoryId\":\"R_mock\",\"title\":\"fixture\"}}}"
+        }
+      ]
+    }
+  ]
+}

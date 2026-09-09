@@ -16,6 +16,8 @@ import (
 )
 
 const authRelayAddress = "127.0.0.1:18443"
+const authGitHubSocket = "/tmp/clankerbox-gh.sock"
+const authRelayListenerCount = 2
 const authReconcileInterval = 3 * time.Second
 const authCloseGrace = 2 * time.Second
 const authHeaderTimeout = 10 * time.Second
@@ -45,18 +47,15 @@ func (c *Controller) runAuth(ctx context.Context) {
 	}
 }
 func (c *Controller) reconcileAuth(ctx context.Context) {
-	bindings, err := c.auth.store.Bindings(ctx)
-	if err != nil {
-		return
-	}
 	wanted := make(map[string]model.Machine)
 	c.mu.Lock()
-	for _, b := range bindings {
-		m, readErr := readMachine(ctx, c.db, b.MachineID)
-		if readErr == nil && m.Deleted {
-			_ = c.auth.store.Detach(ctx, m.ID)
-		}
-		if readErr == nil && authEligible(m) && sourceIdle(ctx, c.db, m.ID) == nil {
+	allMachines, err := machines(ctx, c.db)
+	if err != nil {
+		c.mu.Unlock()
+		return
+	}
+	for _, m := range allMachines {
+		if authEligible(m) && sourceIdle(ctx, c.db, m.ID) == nil {
 			wanted[m.ID] = m
 		}
 	}
@@ -83,13 +82,6 @@ func (c *Controller) reconcileAuth(ctx context.Context) {
 		relay := &authRelay{machine: m, cancel: cancel, done: make(chan struct{}), status: "connecting"}
 		c.auth.relays[id] = relay
 		go c.serveAuthRelay(call, relay)
-	}
-}
-func (c *Controller) stopAuthRelay(id string) {
-	c.auth.mu.Lock()
-	defer c.auth.mu.Unlock()
-	if relay := c.auth.relays[id]; relay != nil {
-		relay.cancel()
 	}
 }
 func (c *Controller) closeAuthRelays() {
@@ -163,11 +155,30 @@ func (c *Controller) openAuthRelay(ctx context.Context, relay *authRelay) error 
 		stop()
 		return err
 	}
+	githubListener, err := client.ListenUnix(authGitHubSocket)
+	if err != nil {
+		stop()
+		_ = listener.Close()
+		return err
+	}
+	defer func() { _ = githubListener.Close() }()
 	if !stop() {
 		_ = listener.Close()
+		_ = githubListener.Close()
 		return errors.New("auth setup timed out")
 	}
 	defer func() { _ = listener.Close() }()
+	return c.serveAuthListeners(ctx, relay, machine, conn, client, listener, githubListener)
+}
+
+func (c *Controller) serveAuthListeners(
+	ctx context.Context,
+	relay *authRelay,
+	machine model.Machine,
+	conn net.Conn,
+	client *ssh.Client,
+	listener, githubListener net.Listener,
+) error {
 	server := &http.Server{
 		Handler:           c.machineAuthHandler(machine),
 		ReadHeaderTimeout: authHeaderTimeout,
@@ -184,6 +195,7 @@ func (c *Controller) openAuthRelay(ctx context.Context, relay *authRelay) error 
 			defer force.Stop()
 			_ = server.Close()
 			_ = listener.Close()
+			_ = githubListener.Close()
 			_ = client.Close()
 		})
 	}
@@ -191,7 +203,15 @@ func (c *Controller) openAuthRelay(ctx context.Context, relay *authRelay) error 
 	shutdown := context.AfterFunc(ctx, closeRelay)
 	defer shutdown()
 	c.relayStatus(relay, "ready")
-	return server.Serve(newAuthListener(listener))
+	tcpRelay := newAuthListener(listener)
+	unixRelay := &authListener{Listener: githubListener, slots: tcpRelay.slots}
+	served := make(chan error, authRelayListenerCount)
+	go func() { served <- server.Serve(tcpRelay) }()
+	go func() { served <- server.Serve(unixRelay) }()
+	err := <-served
+	closeRelay()
+	<-served
+	return err
 }
 func (c *Controller) authSSHClient(conn net.Conn, m model.Machine) (*ssh.Client, error) {
 	expected, _, _, _, err := ssh.ParseAuthorizedKey([]byte(m.SSHHostKey))
@@ -229,8 +249,8 @@ func (c *Controller) machineAuthHandler(expected model.Machine) http.Handler {
 			writeError(w, problem(http.StatusForbidden, "auth_unavailable", "machine authorization is unavailable"))
 			return
 		}
-		// Identity is supplied by this dedicated controller-created SSH listener, never the guest.
-		c.auth.store.Proxy(w, r, expected.ID)
+		// Only this dedicated listener can authorize a ready machine; the request route selects its provider.
+		c.auth.store.Proxy(w, r)
 	})
 }
 

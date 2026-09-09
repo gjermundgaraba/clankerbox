@@ -77,6 +77,7 @@ func (c *Controller) Handler(token []byte) (http.Handler, error) {
 	c.registerMachineRoutes(mux)
 	c.registerAuthRoutes(mux)
 	c.registerCheckpointRoutes(mux)
+	c.registerGuestRoutes(mux)
 	mux.HandleFunc("GET /v1/machines/{id}/ssh", c.stream)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
@@ -191,21 +192,14 @@ func (c *Controller) registerMachineRoutes(mux *http.ServeMux) {
 			writeJSON(w, http.StatusOK, hosts)
 		},
 	)
-	mux.HandleFunc("GET /v1/machines", func(w http.ResponseWriter, r *http.Request) {
-		ms, err := c.List(r.Context())
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, ms)
-	})
+	mux.HandleFunc("GET /v1/machines", c.listMachines)
 	mux.HandleFunc("GET /v1/machines/{id}", func(w http.ResponseWriter, r *http.Request) {
 		m, err := c.Inspect(r.Context(), r.PathValue("id"))
 		if err != nil {
 			writeError(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, m)
+		writeJSON(w, http.StatusOK, c.decorate(m))
 	})
 	mux.HandleFunc("GET /v1/operations/{id}", func(w http.ResponseWriter, r *http.Request) {
 		o, err := c.Operation(r.Context(), r.PathValue("id"))
@@ -293,4 +287,46 @@ func bridgeSSH(conn net.Conn, rw *bufio.ReadWriter, upstream io.ReadWriteCloser)
 	_ = conn.Close()
 	_ = upstream.Close()
 	<-done
+}
+
+func (c *Controller) listMachines(w http.ResponseWriter, r *http.Request) {
+	ms, err := c.List(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	filter, err := labelFilter(r.URL.Query()["label"])
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	out := make([]model.Machine, 0, len(ms))
+	for _, m := range ms {
+		if matchesLabels(m, filter) {
+			out = append(out, c.decorate(m))
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// labelFilter parses repeatable key=value query parameters; every pair must match.
+func labelFilter(values []string) ([][2]string, error) {
+	filter := make([][2]string, 0, len(values))
+	for _, value := range values {
+		key, val, ok := strings.Cut(value, "=")
+		if !ok || key == "" {
+			return nil, problem(http.StatusBadRequest, "invalid_request", "label filters use key=value")
+		}
+		filter = append(filter, [2]string{key, val})
+	}
+	return filter, nil
+}
+
+func matchesLabels(m model.Machine, filter [][2]string) bool {
+	for _, pair := range filter {
+		if value, ok := m.Labels[pair[0]]; !ok || value != pair[1] {
+			return false
+		}
+	}
+	return true
 }

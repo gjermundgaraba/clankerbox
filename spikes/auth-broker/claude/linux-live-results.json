@@ -1,0 +1,43 @@
+{
+  "date": "2026-09-08",
+  "provider": "claude",
+  "connection": "claude",
+  "claude_version": "2.1.263",
+  "model": "claude-sonnet-4-6",
+  "linux_inference": {
+    "marker": "CLAUDE_LINUX_OK",
+    "is_error": false,
+    "exit_code": 0
+  },
+  "linux_running_fork": {
+    "fork_point": "Claude Bash tool waiting for a per-VM release file",
+    "same_running_pid_before_release": 624,
+    "child_initially_detached": true,
+    "child_explicitly_attached": true,
+    "both_guest_environments_placeholder_only": true,
+    "both_guest_credential_caches_absent": true,
+    "parent": {
+      "marker": "CLAUDE_FORK_OK",
+      "is_error": false,
+      "num_turns": 2,
+      "terminal_reason": "completed"
+    },
+    "child": {
+      "marker": "CLAUDE_FORK_OK",
+      "is_error": false,
+      "num_turns": 2,
+      "terminal_reason": "completed"
+    }
+  },
+  "limitations": [
+    "Controlled fork during a waiting tool, not arbitrary mid-inference stream continuation.",
+    "No macOS running-process fork tested.",
+    "No exhaustive guest RAM or filesystem secret scan.",
+    "No billing-dashboard verification."
+  ],
+  "real_provider_inference": true,
+  "cleanup": {
+    "test_machines_deleted": true,
+    "connection_retained": true
+  }
+}

@@ -75,6 +75,22 @@ Tests exercise this boundary with local HTTP/SSH/IPC fixtures and the executable
 entry point, including literal exec arguments and remote exit status. The HTTP
 API and durable controller reconciliation rules are unchanged.
 
+## Guest session boundary
+
+`clankerbox-guest` runs inside a machine as the SSH user and is a new process
+boundary with its own lifetime: it outlives every consumer connection, the
+controller's SSH link, and the controller itself, and it ends only with the
+machine or an explicit daemon stop. `internal/guest/session` owns PTY, VT,
+ring, attach, input admission, and teardown policy; `internal/guest/daemon`
+owns the singleton lock, the private socket with peer-credential checks, and
+per-connection protocol handling; `internal/guest/protocol` is the wire
+contract shared with consumers, pinned by the conformance and messages
+fixtures under `protocol/`. The controller's `guestLink` registry owns link
+eligibility, suspension around copies, stream capacity, and materialized
+`guest` status; it bridges upgraded streams without parsing them and runs a
+protocol client only for listing and the readiness probe. Same-user processes
+in the guest are trusted; the terminal key restricts transport, not authority.
+
 ## Private storage
 
 `statefs.Open(path)` owns creation and validation of a current-user-owned `0700`

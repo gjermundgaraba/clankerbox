@@ -59,6 +59,9 @@ clankerbox start dev
 clankerbox fork dev experiment
 clankerbox checkpoint create dev
 clankerbox restore CHECKPOINT_ID recovered
+clankerbox sessions dev
+clankerbox labels dev team=core purpose=review
+clankerbox events
 ```
 
 Create/start/stop/delete/fork and checkpoint create/delete/restore wait for their
@@ -257,6 +260,24 @@ existing checkpoint in 0.971 s, excluding capture and later branch preparation;
 that is a different timing boundary. See the [full measurements](spikes/latency/RESULTS.md)
 for p95s, populated/dirty workloads, pins and pause-measurement limitations.
 
+## Terminal sessions
+
+Every prepared, running machine also carries `clankerbox-guest`, a session
+daemon that owns terminal PTYs, the authoritative Ghostty VT state, and a
+bounded output ring inside the guest, so a terminal survives every connection
+drop, controller restart, and consumer restart. The controller keeps one SSH
+link per ready machine using its own terminal key, which the guest accepts only
+as the forced command `clankerbox-guest proxy`. Consumers reach the daemon
+through `GET /v1/machines/{id}/sessions/stream` (HTTP upgrade
+`clankerbox-session`), inspect `guest` status on the machine record, set
+`labels`, and follow `GET /v1/events`. Deploy `bin/clankerbox-guest-linux-amd64`
+and `bin/clankerbox-guest-darwin-arm64` under `<host root>/guest/` next to the
+host helper; preparation installs the matching binary into each guest when its
+digest differs. The protocol, contract, and failure matrix are in
+[docs/terminal-sessions.md](docs/terminal-sessions.md). This feature has unit and
+integration coverage with a fake guest sshd and a real daemon; it is not yet
+live-qualified on the private controller.
+
 ## Remaining acceptance work
 
 1. Exercise the actual agent/tool image and network reconnection on the supported
@@ -272,6 +293,9 @@ for p95s, populated/dirty workloads, pins and pause-measurement limitations.
 5. Preserve separate contracts for retained disks, live forks and persistent RAM
    checkpoints. Track backing-file references before garbage collection; RAM/disk
    snapshots are secret-bearing even if file backups exclude credential files.
+6. Live-qualify terminal sessions: guest binary installation through the trusted
+   exec channel on both platforms, the forced-command key line, link suspension
+   across a fork, and consumer resume after a controller restart.
 
 Retained lifecycle and connection live acceptance now pass on both platforms.
 Fork/checkpoint/restore APIs are implemented, with the platform-specific acceptance
@@ -329,4 +353,4 @@ Private build trees, raw result directories, VM images and credentials do not
 belong in source control. Durable Markdown reports link the detailed evidence
 retained in this workspace.
 
-Managed Codex credentials and per-machine relays: [setup and usage](docs/managed-auth.md).
+Managed coding-agent credentials and per-machine relays: [setup and usage](docs/managed-auth.md).

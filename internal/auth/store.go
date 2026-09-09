@@ -1,5 +1,5 @@
-// Package auth keeps ChatGPT credentials on the controller and proxies only
-// Codex Responses traffic. One Store owns the database for the process lifetime;
+// Package auth keeps subscription credentials on the controller and proxies only
+// provider-specific inference traffic. One Store owns the database for the process lifetime;
 // callers must hold the controller's exclusive state-directory lock.
 package auth
 
@@ -8,8 +8,10 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -19,9 +21,13 @@ import (
 )
 
 const (
+	providerCodex         = "codex"
+	providerClaude        = "claude"
+	providerGitHub        = "github"
 	statusReady           = "ready"
 	maxConcurrentRequests = 8
 	maxAuthBytes          = 1 << 20
+	maxClaudeTokenBytes   = 16 << 10
 	handshakeTimeout      = 10 * time.Second
 	headerTimeout         = 60 * time.Second
 	idleTimeout           = 90 * time.Second
@@ -29,11 +35,13 @@ const (
 
 var (
 	// ErrInvalid reports an unsupported or malformed auth cache.
-	ErrInvalid = errors.New("invalid ChatGPT Codex authentication")
-	// ErrNotFound reports an absent connection or binding.
-	ErrNotFound = errors.New("authentication connection or binding not found")
-	// ErrConflict reports an existing connection name or account.
-	ErrConflict = errors.New("authentication connection name or account already exists")
+	ErrInvalid = errors.New("invalid subscription authentication")
+	// ErrNotFound reports an absent connection.
+	ErrNotFound = errors.New("authentication connection not found")
+	// ErrConflict reports an existing connection name, account, or provider.
+	ErrConflict = errors.New(
+		"authentication connection name, account, or provider already exists; disconnect the existing connection first",
+	)
 	// ErrReauthRequired requires disconnecting and importing a fresh cache.
 	ErrReauthRequired = errors.New("authentication requires a fresh import")
 	errStore          = errors.New("authentication storage unavailable")
@@ -48,21 +56,16 @@ type Connection struct {
 	Status    string    `json:"status"`
 }
 
-// Binding associates a host-owned machine ID with a connection.
-type Binding struct {
-	MachineID      string `json:"machine_id"`
-	ConnectionName string `json:"connection_name"`
-}
-
 type credentials struct {
+	Provider     string `json:"provider,omitempty"`
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	AccountID    string `json:"account_id"`
 }
 
 type activity struct {
-	machine, connection string
-	cancel              context.CancelFunc
+	connection string
+	cancel     context.CancelFunc
 }
 
 // Store owns encrypted credentials and active proxy requests.
@@ -74,9 +77,11 @@ type Store struct {
 	active map[*activity]struct{}
 	slots  chan struct{}
 	// These are deliberately private: production destinations cannot be configured.
-	client                   *http.Client
-	responsesURL, refreshURL string
-	now                      func() time.Time
+	client                     *http.Client
+	responsesURL, refreshURL   string
+	anthropicURL               string
+	githubAPIURL, githubGitURL string
+	now                        func() time.Time
 }
 
 // New initializes the store and verifies existing ciphertext with key.
@@ -111,27 +116,39 @@ func New(db *sql.DB, key []byte) (*Store, error) {
 		},
 		responsesURL: "https://chatgpt.com/backend-api/codex/responses",
 		refreshURL:   "https://auth.openai.com/oauth/token",
+		anthropicURL: "https://api.anthropic.com",
+		githubAPIURL: "https://api.github.com",
+		githubGitURL: "https://github.com",
 	}
-	_, err = db.ExecContext(
-		context.Background(),
-		`CREATE TABLE IF NOT EXISTS auth_connections (name TEXT PRIMARY KEY, account_id TEXT NOT NULL UNIQUE, expires_at INTEGER NOT NULL, status TEXT NOT NULL, encrypted BLOB NOT NULL);
-CREATE TABLE IF NOT EXISTS auth_bindings (machine_id TEXT PRIMARY KEY, connection_name TEXT NOT NULL);`,
-	)
-	if err != nil {
+	// A store from before per-provider connections is rebuilt empty; the operator
+	// reconnects each provider once. There is no migration of legacy rows.
+	var providerColumns int
+	if err = db.QueryRowContext(context.Background(), `SELECT count(*) FROM pragma_table_info('auth_connections') WHERE name='provider'`).
+		Scan(&providerColumns); err != nil {
 		return nil, errStore
 	}
-	rows, err := db.QueryContext(context.Background(), `SELECT name, account_id, encrypted FROM auth_connections`)
+	statements := `CREATE TABLE IF NOT EXISTS auth_connections (name TEXT PRIMARY KEY, account_id TEXT NOT NULL UNIQUE, expires_at INTEGER NOT NULL, status TEXT NOT NULL, encrypted BLOB NOT NULL, provider TEXT NOT NULL UNIQUE); DROP TABLE IF EXISTS auth_bindings;`
+	if providerColumns == 0 {
+		statements = `DROP TABLE IF EXISTS auth_connections; ` + statements
+	}
+	if _, err = db.ExecContext(context.Background(), statements); err != nil {
+		return nil, errStore
+	}
+	rows, err := db.QueryContext(
+		context.Background(),
+		`SELECT name, account_id, encrypted, provider FROM auth_connections`,
+	)
 	if err != nil {
 		return nil, errStore
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var name, account string
+		var name, account, provider string
 		var encrypted []byte
-		if rows.Scan(&name, &account, &encrypted) != nil {
+		if rows.Scan(&name, &account, &encrypted, &provider) != nil {
 			return nil, errStore
 		}
-		if _, err = s.decrypt(name, account, encrypted); err != nil {
+		if c, decryptErr := s.decrypt(name, account, encrypted); decryptErr != nil || c.Provider != provider {
 			return nil, errStore
 		}
 	}
@@ -207,6 +224,14 @@ func (s *Store) decrypt(name, account string, b []byte) (credentials, error) {
 	if err != nil || json.Unmarshal(plain, &c) != nil || c.AccountID != account {
 		return credentials{}, errStore
 	}
+	// A store upgraded in place before the rebuild rule keeps Codex ciphertext without a
+	// provider field; New verifies it against the row's column like every other row.
+	if c.Provider == "" {
+		c.Provider = providerCodex
+	}
+	if c.Provider != providerCodex && c.Provider != providerClaude && c.Provider != providerGitHub {
+		return credentials{}, errStore
+	}
 	return c, nil
 }
 
@@ -227,14 +252,25 @@ func (s *Store) Import(ctx context.Context, name string, raw []byte) (Connection
 	if err != nil || account != input.Tokens.AccountID || !expiry.After(s.now()) {
 		return Connection{}, ErrInvalid
 	}
-	encrypted, err := s.encrypt(name, input.Tokens)
+	input.Tokens.Provider = providerCodex
+	return s.importCredentials(ctx, name, input.Tokens, expiry)
+}
+
+func (s *Store) importCredentials(
+	ctx context.Context,
+	name string,
+	c credentials,
+	expiry time.Time,
+) (Connection, error) {
+	account := c.AccountID
+	encrypted, err := s.encrypt(name, c)
 	if err != nil {
 		return Connection{}, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var count int
-	if s.db.QueryRowContext(ctx, `SELECT count(*) FROM auth_connections WHERE name=? OR account_id=?`, name, account).
+	if s.db.QueryRowContext(ctx, `SELECT count(*) FROM auth_connections WHERE name=? OR account_id=? OR provider=?`, name, account, c.Provider).
 		Scan(&count) !=
 		nil {
 		return Connection{}, errStore
@@ -244,21 +280,56 @@ func (s *Store) Import(ctx context.Context, name string, raw []byte) (Connection
 	}
 	_, err = s.db.ExecContext(
 		ctx,
-		`INSERT INTO auth_connections(name,account_id,expires_at,status,encrypted) VALUES(?,?,?,'ready',?)`,
+		`INSERT INTO auth_connections(name,account_id,expires_at,status,encrypted,provider) VALUES(?,?,?,'ready',?,?)`,
 		name,
 		account,
 		expiry.Unix(),
 		encrypted,
+		c.Provider,
 	)
 	if err != nil {
 		return Connection{}, errStore
 	}
-	return Connection{Name: name, Provider: "codex", AccountID: account, ExpiresAt: expiry, Status: statusReady}, nil
+	if c.Provider == providerClaude || c.Provider == providerGitHub {
+		account = ""
+	}
+	return Connection{Name: name, Provider: c.Provider, AccountID: account, ExpiresAt: expiry, Status: statusReady}, nil
+}
+
+// ImportClaude stores a token generated by Claude Code's setup-token command.
+// Its opaque value provides no trustworthy account ID or expiry metadata.
+func (s *Store) ImportClaude(ctx context.Context, name string, raw []byte) (Connection, error) {
+	var input struct {
+		Token string `json:"token"`
+	}
+	if !validName(name) || len(raw) > maxAuthBytes || json.Unmarshal(raw, &input) != nil ||
+		!strings.HasPrefix(input.Token, "sk-ant-oat01-") ||
+		len(input.Token) <= len("sk-ant-oat01-") ||
+		len(input.Token) > maxClaudeTokenBytes {
+		return Connection{}, ErrInvalid
+	}
+	for _, r := range input.Token {
+		if r <= 32 || r >= 127 {
+			return Connection{}, ErrInvalid
+		}
+	}
+	// Internal deduplication key, not a claimed identity. The slash makes this
+	// namespace disjoint from validated Codex account IDs. Never expose it publicly.
+	digest := sha256.Sum256([]byte(input.Token))
+	c := credentials{
+		Provider:    providerClaude,
+		AccessToken: input.Token,
+		AccountID:   "claude/" + hex.EncodeToString(digest[:]),
+	}
+	return s.importCredentials(ctx, name, c, time.Time{})
 }
 
 // List returns public connection metadata.
 func (s *Store) List(ctx context.Context) ([]Connection, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name,account_id,expires_at,status FROM auth_connections ORDER BY name`)
+	rows, err := s.db.QueryContext(
+		ctx,
+		`SELECT name,account_id,expires_at,status,provider FROM auth_connections ORDER BY name`,
+	)
 	if err != nil {
 		return nil, errStore
 	}
@@ -267,11 +338,14 @@ func (s *Store) List(ctx context.Context) ([]Connection, error) {
 	for rows.Next() {
 		var c Connection
 		var expiry int64
-		if rows.Scan(&c.Name, &c.AccountID, &expiry, &c.Status) != nil {
+		if rows.Scan(&c.Name, &c.AccountID, &expiry, &c.Status, &c.Provider) != nil {
 			return nil, errStore
 		}
 		c.ExpiresAt = time.Unix(expiry, 0).UTC()
-		c.Provider = "codex"
+		if c.Provider == providerClaude || c.Provider == providerGitHub {
+			c.AccountID = ""
+			c.ExpiresAt = time.Time{}
+		}
 		result = append(result, c)
 	}
 	if rows.Err() != nil {
@@ -280,100 +354,25 @@ func (s *Store) List(ctx context.Context) ([]Connection, error) {
 	return result, nil
 }
 
-// Attach grants a machine access to a ready connection.
-func (s *Store) Attach(ctx context.Context, machineID, name string) error {
-	if !validName(machineID) || !validName(name) {
-		return ErrInvalid
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var status string
-	err := s.db.QueryRowContext(ctx, `SELECT status FROM auth_connections WHERE name=?`, name).Scan(&status)
-	if errors.Is(err, sql.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return errStore
-	}
-	if status != statusReady {
-		return ErrReauthRequired
-	}
-	_, err = s.db.ExecContext(
-		ctx,
-		`INSERT INTO auth_bindings(machine_id,connection_name) VALUES(?,?) ON CONFLICT(machine_id) DO UPDATE SET connection_name=excluded.connection_name`,
-		machineID,
-		name,
-	)
-	if err != nil {
-		return errStore
-	}
-	s.cancelLocked(machineID, "")
-	return nil
-}
-
-// Detach removes a machine binding and cancels its active requests.
-func (s *Store) Detach(ctx context.Context, machineID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM auth_bindings WHERE machine_id=?`, machineID); err != nil {
-		return errStore
-	}
-	s.cancelLocked(machineID, "")
-	return nil
-}
-
-// Bindings lists machine-to-connection associations.
-func (s *Store) Bindings(ctx context.Context) ([]Binding, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT machine_id,connection_name FROM auth_bindings ORDER BY machine_id`)
-	if err != nil {
-		return nil, errStore
-	}
-	defer func() { _ = rows.Close() }()
-	result := []Binding{}
-	for rows.Next() {
-		var b Binding
-		if rows.Scan(&b.MachineID, &b.ConnectionName) != nil {
-			return nil, errStore
-		}
-		result = append(result, b)
-	}
-	if rows.Err() != nil {
-		return nil, errStore
-	}
-	return result, nil
-}
-
 // Disconnect removes local authority and cancels streams. It does not revoke
-// the user's separate Codex login with OpenAI.
+// the user's separate provider login.
 func (s *Store) Disconnect(ctx context.Context, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	tx, err := s.db.BeginTx(ctx, nil)
+	res, err := s.db.ExecContext(ctx, `DELETE FROM auth_connections WHERE name=?`, name)
 	if err != nil {
 		return errStore
 	}
-	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.ExecContext(ctx, `DELETE FROM auth_bindings WHERE connection_name=?`, name); err != nil {
-		return errStore
-	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM auth_connections WHERE name=?`, name)
-	if err != nil {
-		return errStore
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
+	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
-	if tx.Commit() != nil {
-		return errStore
-	}
-	s.cancelLocked("", name)
+	s.cancelLocked(name)
 	return nil
 }
 
-func (s *Store) cancelLocked(machine, name string) {
+func (s *Store) cancelLocked(name string) {
 	for a := range s.active {
-		if machine != "" && a.machine == machine || name != "" && a.connection == name {
+		if a.connection == name {
 			a.cancel()
 		}
 	}

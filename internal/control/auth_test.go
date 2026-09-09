@@ -23,6 +23,46 @@ import (
 
 const testAuthName = "codex"
 const testAuthHost = "linux"
+const testAuthPayloadKey = "auth"
+const testAuthNameKey = "name"
+const testAuthProviderKey = "provider"
+
+func TestClaudeAuthManagement(t *testing.T) {
+	t.Parallel()
+	c := authTestController(t)
+	if err := c.EnableAuth(bytes.Repeat([]byte{12}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	h, err := c.Handler(bytes.Repeat([]byte("x"), 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const token = "sk-ant-oat01-synthetic-controller-test-token" //nolint:gosec // G101: synthetic test credential.
+	w := authTestRequest(t, h, "POST", "/v1/auth/connections", map[string]any{
+		testAuthNameKey: "claude", testAuthProviderKey: "claude", testAuthPayloadKey: map[string]string{"token": token},
+	})
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), token) ||
+		!strings.Contains(w.Body.String(), `"provider":"claude"`) {
+		t.Fatal(w.Code, "unexpected or unsafe Claude import response")
+	}
+	w = authTestRequest(t, h, "GET", "/v1/auth/status", nil)
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), token) ||
+		!strings.Contains(w.Body.String(), `"provider":"claude"`) {
+		t.Fatal(w.Code, "unexpected or unsafe Claude status response")
+	}
+	w = authTestRequest(t, h, "POST", "/v1/auth/connections", map[string]any{
+		testAuthNameKey:     "other",
+		testAuthProviderKey: "unsupported",
+		testAuthPayloadKey:  map[string]string{"token": token},
+	})
+	if w.Code != http.StatusBadRequest || strings.Contains(w.Body.String(), token) {
+		t.Fatal(w.Code, "unsupported provider accepted or secret exposed")
+	}
+	w = authTestRequest(t, h, "DELETE", "/v1/auth/connections/claude", nil)
+	if w.Code != http.StatusOK {
+		t.Fatal(w.Code)
+	}
+}
 
 type authTestTransport struct{}
 
@@ -79,7 +119,6 @@ func authTestRequest(t *testing.T, h http.Handler, method, path string, body any
 	return w
 }
 
-//nolint:funlen // One end-to-end management sequence exercises binding isolation.
 func TestAuthManagementAndMachineAuthorization(t *testing.T) {
 	t.Parallel()
 	c := authTestController(t)
@@ -99,7 +138,7 @@ func TestAuthManagementAndMachineAuthorization(t *testing.T) {
 		h,
 		"POST",
 		"/v1/auth/connections",
-		map[string]any{"name": testAuthName, "provider": testAuthName, "auth": raw},
+		map[string]any{testAuthNameKey: testAuthName, testAuthProviderKey: testAuthName, testAuthPayloadKey: raw},
 	)
 	if w.Code != 200 || strings.Contains(w.Body.String(), "synthetic") {
 		t.Fatal(w.Code, w.Body.String())
@@ -109,7 +148,7 @@ func TestAuthManagementAndMachineAuthorization(t *testing.T) {
 		h,
 		"POST",
 		"/v1/auth/connections",
-		map[string]any{"name": testAuthName, "provider": testAuthName, "auth": raw},
+		map[string]any{testAuthNameKey: testAuthName, testAuthProviderKey: testAuthName, testAuthPayloadKey: raw},
 	)
 	if w.Code != 409 {
 		t.Fatal(w.Code, w.Body.String())
@@ -126,18 +165,22 @@ func TestAuthManagementAndMachineAuthorization(t *testing.T) {
 	if err = saveMachine(t.Context(), c.db, m); err != nil {
 		t.Fatal(err)
 	}
-	w = authTestRequest(t, h, "POST", "/v1/machines/"+m.ID+"/auth", map[string]string{"connection": testAuthName})
-	if w.Code != 200 {
-		t.Fatal(w.Code, w.Body.String())
+	for _, method := range []string{http.MethodPost, http.MethodDelete} {
+		w = authTestRequest(t, h, method, "/v1/machines/"+m.ID+"/auth", nil)
+		if w.Code != http.StatusNotFound {
+			t.Fatal("retired auth binding route remains available", w.Code)
+		}
 	}
 	w = authTestRequest(t, h, "GET", "/v1/auth/status", nil)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), m.ID) || strings.Contains(w.Body.String(), "synthetic") {
+	if w.Code != 200 || strings.Contains(w.Body.String(), "bindings") ||
+		strings.Contains(w.Body.String(), "synthetic") {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	// A copied guest can claim the parent's ID in headers, but a child listener stays child-scoped.
+	// An unprepared child cannot claim its parent's ready state through headers.
 	child := m
 	child.ID = model.NewID()
 	child.Name = "child"
+	child.Prepared = false
 	if err = saveMachine(t.Context(), c.db, child); err != nil {
 		t.Fatal(err)
 	}
@@ -147,9 +190,9 @@ func TestAuthManagementAndMachineAuthorization(t *testing.T) {
 	w = httptest.NewRecorder()
 	c.machineAuthHandler(child).ServeHTTP(w, request)
 	if w.Code != 403 {
-		t.Fatal("child inherited parent authorization", w.Code)
+		t.Fatal("unprepared child authorized", w.Code)
 	}
-	// Requests from a stale generation cannot reach a provider even with an existing binding.
+	// Requests from a stale generation cannot reach a provider.
 	m.AcceptedGeneration = 2
 	if err = saveMachine(t.Context(), c.db, m); err != nil {
 		t.Fatal(err)
@@ -159,14 +202,6 @@ func TestAuthManagementAndMachineAuthorization(t *testing.T) {
 		ServeHTTP(w, httptest.NewRequestWithContext(t.Context(), "POST", "/v1/responses", strings.NewReader(`{}`)))
 	if w.Code != 403 {
 		t.Fatal(w.Code)
-	}
-	w = authTestRequest(t, h, "DELETE", "/v1/machines/"+m.ID+"/auth", nil)
-	if w.Code != 200 {
-		t.Fatal(w.Code)
-	}
-	bindings, err := c.auth.store.Bindings(t.Context())
-	if err != nil || len(bindings) != 0 {
-		t.Fatal(bindings, err)
 	}
 	w = authTestRequest(t, h, "DELETE", "/v1/auth/connections/codex", nil)
 	if w.Code != 200 {
@@ -226,7 +261,7 @@ func TestAuthSuspendsSourceUntilRelayCloses(t *testing.T) {
 	}
 }
 
-func TestAuthUnresolvedForkKeepsParentDetachedFromRelay(t *testing.T) {
+func TestAuthUnresolvedForkKeepsParentRelaySuspended(t *testing.T) {
 	t.Parallel()
 	c := authTestController(t)
 	if err := c.EnableAuth(bytes.Repeat([]byte{9}, 32)); err != nil {
@@ -245,9 +280,6 @@ func TestAuthUnresolvedForkKeepsParentDetachedFromRelay(t *testing.T) {
 		AcceptedGeneration: 1,
 	}
 	if err := saveMachine(t.Context(), c.db, m); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.auth.store.Attach(t.Context(), m.ID, testAuthName); err != nil {
 		t.Fatal(err)
 	}
 	op := model.Operation{ID: model.NewID(), MachineID: model.NewID(), Status: "unresolved"}
@@ -376,6 +408,9 @@ func stalledAuthPeer(listener net.Listener, signer ssh.Signer, forwarded, peerDo
 	for req := range requests {
 		if req.Type == "tcpip-forward" {
 			_ = req.Reply(true, nil)
+		}
+		if req.Type == "streamlocal-forward@openssh.com" {
+			_ = req.Reply(true, nil)
 			close(forwarded)
 		}
 		// Deliberately never acknowledge cancel-tcpip-forward.
@@ -420,9 +455,6 @@ func TestAuthRecoversStaleObservationWithoutOperatorInspection(t *testing.T) {
 	if _, err := c.auth.store.Import(t.Context(), testAuthName, authTestCache(t)); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.auth.store.Attach(t.Context(), m.ID, testAuthName); err != nil {
-		t.Fatal(err)
-	}
 	prepared := make(chan struct{})
 	c.cfg.Hosts = []model.Host{{ID: testAuthHost}}
 	c.transport = recoveringAuthTransport{
@@ -449,5 +481,53 @@ func TestAuthRecoversStaleObservationWithoutOperatorInspection(t *testing.T) {
 	c.mu.Unlock()
 	if err != nil || !authReady(fresh) {
 		t.Fatal("fresh host state not recovered", err)
+	}
+}
+
+func TestAuthAutomaticallyReconcilesPreparedMachinesWithoutConnections(t *testing.T) {
+	t.Parallel()
+	c := authTestController(t)
+	if err := c.EnableAuth(bytes.Repeat([]byte{13}, 32)); err != nil {
+		t.Fatal(err)
+	}
+	defer c.closeAuthRelays()
+	for _, fixture := range []struct {
+		name     string
+		prepared bool
+		running  bool
+	}{
+		{"parent", true, true},
+		{"fork", true, true},
+		{"restore", true, true},
+		{"not-prepared", false, true},
+		{"stopped", true, false},
+	} {
+		state := model.Stopped
+		if fixture.running {
+			state = model.Running
+		}
+		m := model.Machine{
+			ID:                 model.NewID(),
+			Name:               fixture.name,
+			Prepared:           fixture.prepared,
+			State:              state,
+			DesiredState:       state,
+			Generation:         1,
+			AcceptedGeneration: 1,
+		}
+		if err := saveMachine(t.Context(), c.db, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.reconcileAuth(t.Context())
+	c.auth.mu.Lock()
+	defer c.auth.mu.Unlock()
+	if len(c.auth.relays) != 3 {
+		t.Fatalf("expected automatic relays for all three prepared running machines, got %d", len(c.auth.relays))
+	}
+	for _, relay := range c.auth.relays {
+		if !relay.machine.Prepared || relay.machine.DesiredState != model.Running {
+			t.Fatal("ineligible machine has relay")
+		}
 	}
 }

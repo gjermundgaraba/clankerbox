@@ -1,0 +1,32 @@
+{
+  "date": "2026-09-08",
+  "manual_attach_calls": 0,
+  "provider_connections_preserved": [
+    "claude",
+    "codex"
+  ],
+  "binding_table_removed": true,
+  "existing_running_machine_auto_relay": true,
+  "same_vm_concurrent_real_inference": {
+    "codex": "AUTO_CODEX_OK",
+    "claude": "AUTO_CLAUDE_OK"
+  },
+  "fork_auto_relay_real_claude": "AUTO_FORK_OK",
+  "ram_restore_auto_relay_real_codex": "AUTO_RESTORE_OK",
+  "controller_restart_recovered_relays": 3,
+  "validation": [
+    "go test -race ./...",
+    "golangci-lint run ./...",
+    "database integrity",
+    "infrastructure runbook validation"
+  ],
+  "deployed_sha256": {
+    "server": "ca0e0bc35cebe3ec839022ccfc529d4f84b18c0323e7f045abcd501f9610b47b",
+    "cli": "fa7eb89977c65a7eb89d72e067c7a05ab6485f6d682ec5508f4b57428a31455d"
+  },
+  "cleanup": {
+    "test_machines_deleted": true,
+    "test_checkpoint_deleted": true,
+    "connections_retained": true
+  }
+}

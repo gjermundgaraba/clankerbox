@@ -1,0 +1,533 @@
+{
+  "revision": 2,
+  "requests": [
+    {
+      "op": "session.create",
+      "args": {
+        "session_id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+        "label": "shell",
+        "cwd": "/root",
+        "argv": [
+          "/bin/bash",
+          "-l"
+        ],
+        "env": {
+          "TERM_PROGRAM": "clankerdesk"
+        },
+        "cols": 80,
+        "rows": 24
+      }
+    },
+    {
+      "op": "session.list",
+      "args": {}
+    },
+    {
+      "op": "session.open",
+      "args": {
+        "session_id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+        "from_offset": 1024,
+        "from_incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e"
+      }
+    },
+    {
+      "op": "session.input",
+      "args": {
+        "session_id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+        "data": "aGkK"
+      }
+    },
+    {
+      "op": "session.resize",
+      "args": {
+        "session_id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+        "cols": 100,
+        "rows": 30
+      }
+    },
+    {
+      "op": "session.end",
+      "args": {
+        "session_id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d"
+      }
+    },
+    {
+      "op": "session.report",
+      "args": {
+        "session_id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+        "state": "attention"
+      }
+    }
+  ],
+  "values": [
+    {
+      "op": "session.create",
+      "case": "created",
+      "value": {
+        "session": {
+          "id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+          "label": "shell",
+          "cwd": "/root",
+          "argv": [
+            "/bin/bash",
+            "-l"
+          ],
+          "cols": 80,
+          "rows": 24,
+          "status": "running",
+          "exit_code": null,
+          "signal": null,
+          "pid": 1234,
+          "created_at": "2026-09-09T12:00:00Z",
+          "ended_at": null,
+          "offset": 2048,
+          "retained_from": 0,
+          "last_resize_offset": 512,
+          "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+          "reply_overflow": 0,
+          "activity": {
+            "state": "working",
+            "source": "process",
+            "since": "2026-09-09T12:00:01Z"
+          },
+          "foreground": {
+            "pid": 1300,
+            "command": "codex"
+          }
+        }
+      }
+    },
+    {
+      "op": "session.list",
+      "case": "inventory",
+      "value": {
+        "sessions": [
+          {
+            "id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+            "label": "shell",
+            "cwd": "/root",
+            "argv": [
+              "/bin/bash",
+              "-l"
+            ],
+            "cols": 80,
+            "rows": 24,
+            "status": "running",
+            "exit_code": null,
+            "signal": null,
+            "pid": 1234,
+            "created_at": "2026-09-09T12:00:00Z",
+            "ended_at": null,
+            "offset": 2048,
+            "retained_from": 0,
+            "last_resize_offset": 512,
+            "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+            "reply_overflow": 0,
+            "activity": {
+              "state": "working",
+              "source": "process",
+              "since": "2026-09-09T12:00:01Z"
+            },
+            "foreground": {
+              "pid": 1300,
+              "command": "codex"
+            }
+          },
+          {
+            "id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+            "label": "shell",
+            "cwd": "/root",
+            "argv": [
+              "/bin/bash",
+              "-l"
+            ],
+            "cols": 80,
+            "rows": 24,
+            "status": "exited",
+            "exit_code": 0,
+            "signal": null,
+            "pid": 1234,
+            "created_at": "2026-09-09T12:00:00Z",
+            "ended_at": "2026-09-09T12:00:05Z",
+            "offset": 2048,
+            "retained_from": 0,
+            "last_resize_offset": 512,
+            "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+            "reply_overflow": 0,
+            "activity": {
+              "state": "exited",
+              "source": "process",
+              "since": "2026-09-09T12:00:05Z"
+            },
+            "foreground": null
+          }
+        ]
+      }
+    },
+    {
+      "op": "session.open",
+      "case": "resume",
+      "value": {
+        "mode": "resume",
+        "offset": 1024,
+        "session": {
+          "id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+          "label": "shell",
+          "cwd": "/root",
+          "argv": [
+            "/bin/bash",
+            "-l"
+          ],
+          "cols": 80,
+          "rows": 24,
+          "status": "running",
+          "exit_code": null,
+          "signal": null,
+          "pid": 1234,
+          "created_at": "2026-09-09T12:00:00Z",
+          "ended_at": null,
+          "offset": 2048,
+          "retained_from": 0,
+          "last_resize_offset": 512,
+          "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+          "reply_overflow": 0,
+          "activity": {
+            "state": "working",
+            "source": "process",
+            "since": "2026-09-09T12:00:01Z"
+          },
+          "foreground": {
+            "pid": 1300,
+            "command": "codex"
+          }
+        }
+      }
+    },
+    {
+      "op": "session.open",
+      "case": "snapshot",
+      "value": {
+        "mode": "snapshot",
+        "offset": 2048,
+        "session": {
+          "id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+          "label": "shell",
+          "cwd": "/root",
+          "argv": [
+            "/bin/bash",
+            "-l"
+          ],
+          "cols": 80,
+          "rows": 24,
+          "status": "running",
+          "exit_code": null,
+          "signal": null,
+          "pid": 1234,
+          "created_at": "2026-09-09T12:00:00Z",
+          "ended_at": null,
+          "offset": 2048,
+          "retained_from": 0,
+          "last_resize_offset": 512,
+          "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+          "reply_overflow": 0,
+          "activity": {
+            "state": "working",
+            "source": "process",
+            "since": "2026-09-09T12:00:01Z"
+          },
+          "foreground": {
+            "pid": 1300,
+            "command": "codex"
+          }
+        },
+        "snapshot_bytes": 4096
+      }
+    },
+    {
+      "op": "session.open",
+      "case": "unavailable",
+      "value": {
+        "mode": "unavailable",
+        "offset": 2048,
+        "session": {
+          "id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+          "label": "shell",
+          "cwd": "/root",
+          "argv": [
+            "/bin/bash",
+            "-l"
+          ],
+          "cols": 80,
+          "rows": 24,
+          "status": "running",
+          "exit_code": null,
+          "signal": null,
+          "pid": 1234,
+          "created_at": "2026-09-09T12:00:00Z",
+          "ended_at": null,
+          "offset": 2048,
+          "retained_from": 0,
+          "last_resize_offset": 512,
+          "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+          "reply_overflow": 0,
+          "activity": {
+            "state": "working",
+            "source": "process",
+            "since": "2026-09-09T12:00:01Z"
+          },
+          "foreground": {
+            "pid": 1300,
+            "command": "codex"
+          }
+        }
+      }
+    },
+    {
+      "op": "session.open",
+      "case": "ended with view",
+      "value": {
+        "mode": "ended",
+        "offset": 2048,
+        "session": {
+          "id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+          "label": "shell",
+          "cwd": "/root",
+          "argv": [
+            "/bin/bash",
+            "-l"
+          ],
+          "cols": 80,
+          "rows": 24,
+          "status": "exited",
+          "exit_code": 0,
+          "signal": null,
+          "pid": 1234,
+          "created_at": "2026-09-09T12:00:00Z",
+          "ended_at": "2026-09-09T12:00:05Z",
+          "offset": 2048,
+          "retained_from": 0,
+          "last_resize_offset": 512,
+          "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+          "reply_overflow": 0,
+          "activity": {
+            "state": "exited",
+            "source": "process",
+            "since": "2026-09-09T12:00:05Z"
+          },
+          "foreground": null
+        },
+        "view": {
+          "cursor": {
+            "x": 0,
+            "y": 1
+          },
+          "bytes": 7
+        }
+      }
+    },
+    {
+      "op": "session.open",
+      "case": "ended without view",
+      "value": {
+        "mode": "ended",
+        "offset": 2048,
+        "session": {
+          "id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+          "label": "shell",
+          "cwd": "/root",
+          "argv": [
+            "/bin/bash",
+            "-l"
+          ],
+          "cols": 80,
+          "rows": 24,
+          "status": "lost",
+          "exit_code": null,
+          "signal": null,
+          "pid": 1234,
+          "created_at": "2026-09-09T12:00:00Z",
+          "ended_at": "2026-09-09T12:00:05Z",
+          "offset": 2048,
+          "retained_from": 0,
+          "last_resize_offset": 512,
+          "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+          "reply_overflow": 0,
+          "activity": {
+            "state": "exited",
+            "source": "none",
+            "since": "2026-09-09T12:00:05Z"
+          },
+          "foreground": null
+        }
+      }
+    },
+    {
+      "op": "session.input",
+      "case": "accepted",
+      "value": {
+        "status": "accepted"
+      }
+    },
+    {
+      "op": "session.input",
+      "case": "refused",
+      "value": {
+        "status": "refused",
+        "reason": "not_running"
+      }
+    },
+    {
+      "op": "session.resize",
+      "case": "resized",
+      "value": {
+        "session": {
+          "id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+          "label": "shell",
+          "cwd": "/root",
+          "argv": [
+            "/bin/bash",
+            "-l"
+          ],
+          "cols": 80,
+          "rows": 24,
+          "status": "running",
+          "exit_code": null,
+          "signal": null,
+          "pid": 1234,
+          "created_at": "2026-09-09T12:00:00Z",
+          "ended_at": null,
+          "offset": 2048,
+          "retained_from": 0,
+          "last_resize_offset": 512,
+          "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+          "reply_overflow": 0,
+          "activity": {
+            "state": "working",
+            "source": "process",
+            "since": "2026-09-09T12:00:01Z"
+          },
+          "foreground": {
+            "pid": 1300,
+            "command": "codex"
+          }
+        }
+      }
+    },
+    {
+      "op": "session.end",
+      "case": "ended",
+      "value": {
+        "session": {
+          "id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+          "label": "shell",
+          "cwd": "/root",
+          "argv": [
+            "/bin/bash",
+            "-l"
+          ],
+          "cols": 80,
+          "rows": 24,
+          "status": "exited",
+          "exit_code": 0,
+          "signal": null,
+          "pid": 1234,
+          "created_at": "2026-09-09T12:00:00Z",
+          "ended_at": "2026-09-09T12:00:05Z",
+          "offset": 2048,
+          "retained_from": 0,
+          "last_resize_offset": 512,
+          "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+          "reply_overflow": 0,
+          "activity": {
+            "state": "exited",
+            "source": "process",
+            "since": "2026-09-09T12:00:05Z"
+          },
+          "foreground": null
+        }
+      }
+    },
+    {
+      "op": "session.report",
+      "case": "reported",
+      "value": {}
+    }
+  ],
+  "events": [
+    {
+      "event": "hello",
+      "body": {
+        "event": "hello",
+        "protocol": 2,
+        "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+        "boot_id": "boot-1",
+        "daemon_version": "2026.09",
+        "os": "linux",
+        "user": "root",
+        "wasm_sha256": "93fb99f59f7a6b7b657e17de1a2a932c2b59e1b3cbd16506941ccb84af6d1ef1",
+        "max_sessions": 48
+      }
+    },
+    {
+      "event": "session",
+      "body": {
+        "event": "session",
+        "session": {
+          "id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+          "label": "shell",
+          "cwd": "/root",
+          "argv": [
+            "/bin/bash",
+            "-l"
+          ],
+          "cols": 80,
+          "rows": 24,
+          "status": "exited",
+          "exit_code": 0,
+          "signal": null,
+          "pid": 1234,
+          "created_at": "2026-09-09T12:00:00Z",
+          "ended_at": "2026-09-09T12:00:05Z",
+          "offset": 2048,
+          "retained_from": 0,
+          "last_resize_offset": 512,
+          "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
+          "reply_overflow": 0,
+          "activity": {
+            "state": "exited",
+            "source": "process",
+            "since": "2026-09-09T12:00:05Z"
+          },
+          "foreground": null
+        }
+      }
+    },
+    {
+      "event": "resize",
+      "body": {
+        "event": "resize",
+        "session_id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+        "cols": 100,
+        "rows": 30,
+        "offset": 2048
+      }
+    },
+    {
+      "event": "output_gap",
+      "body": {
+        "event": "output_gap",
+        "session_id": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+        "reason": "overflow"
+      }
+    }
+  ],
+  "error": {
+    "request_id": 7,
+    "ok": false,
+    "error": {
+      "code": "not_found",
+      "message": "no such session",
+      "retryable": false
+    }
+  }
+}

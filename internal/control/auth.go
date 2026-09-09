@@ -70,20 +70,6 @@ func (c *Controller) registerAuthRoutes(mux *http.ServeMux) {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "disconnected"})
 	})
-	handle("POST /v1/machines/{id}/auth", c.authAttach)
-	handle("DELETE /v1/machines/{id}/auth", func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		if !model.ValidID(id) {
-			writeError(w, problem(http.StatusBadRequest, "invalid_request", "invalid machine ID"))
-			return
-		}
-		if err := c.auth.store.Detach(r.Context(), id); err != nil {
-			writeAuthError(w, err)
-			return
-		}
-		c.stopAuthRelay(id)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "detached"})
-	})
 }
 
 func writeAuthError(w http.ResponseWriter, err error) {
@@ -115,49 +101,30 @@ func (c *Controller) authImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if in.Provider != "codex" {
-		writeError(w, problem(http.StatusBadRequest, "invalid_request", "only codex is supported"))
+	var connection auth.Connection
+	var err error
+	switch in.Provider {
+	case "codex":
+		connection, err = c.auth.store.Import(r.Context(), in.Name, in.Auth)
+	case "claude":
+		connection, err = c.auth.store.ImportClaude(r.Context(), in.Name, in.Auth)
+	case "github":
+		connection, err = c.auth.store.ImportGitHub(r.Context(), in.Name, in.Auth)
+	default:
+		writeError(
+			w,
+			problem(http.StatusBadRequest, "invalid_request", "supported providers are codex, claude, and github"),
+		)
 		return
 	}
-	connection, err := c.auth.store.Import(r.Context(), in.Name, in.Auth)
 	if err != nil {
 		writeAuthError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, connection)
 }
-func (c *Controller) authAttach(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Connection string `json:"connection"`
-	}
-	if err := decode(w, r, &in, false); err != nil {
-		writeError(w, err)
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	m, err := readMachine(r.Context(), c.db, r.PathValue("id"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if m.Deleted || !m.Prepared {
-		writeError(w, problem(http.StatusConflict, "prerequisite", "auth requires a prepared live machine"))
-		return
-	}
-	if err = c.auth.store.Attach(r.Context(), m.ID, in.Connection); err != nil {
-		writeAuthError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"machine_id": m.ID, "connection_name": in.Connection})
-}
 func (c *Controller) authStatus(w http.ResponseWriter, r *http.Request) {
 	connections, err := c.auth.store.List(r.Context())
-	if err != nil {
-		writeAuthError(w, err)
-		return
-	}
-	bindings, err := c.auth.store.Bindings(r.Context())
 	if err != nil {
 		writeAuthError(w, err)
 		return
@@ -168,7 +135,7 @@ func (c *Controller) authStatus(w http.ResponseWriter, r *http.Request) {
 		relays[id] = relay.status
 	}
 	c.auth.mu.Unlock()
-	writeJSON(w, http.StatusOK, map[string]any{"connections": connections, "bindings": bindings, "relays": relays})
+	writeJSON(w, http.StatusOK, map[string]any{"connections": connections, "relays": relays})
 }
 
 func authEligible(m model.Machine) bool {

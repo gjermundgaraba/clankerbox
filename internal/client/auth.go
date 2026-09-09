@@ -5,10 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
@@ -17,70 +22,74 @@ import (
 )
 
 const codexAuthProvider = "codex"
+const claudeAuthProvider = "claude"
+const githubAuthProvider = "github"
+const githubAuthTimeout = 30 * time.Second
+const maxAuthTokenBytes = 16 * 1024
 const authStatusKey = "status"
 const authNameKey = "name"
 
 type authConnectionStatus struct {
 	Name      string `json:"name"`
+	Provider  string `json:"provider"`
 	AccountID string `json:"account_id"`
 	ExpiresAt string `json:"expires_at"`
 	Status    string `json:"status"`
 }
-type authBinding struct {
-	MachineID      string `json:"machine_id"`
-	ConnectionName string `json:"connection_name"`
-}
 type authStatus struct {
 	Connections []authConnectionStatus `json:"connections"`
-	Bindings    []authBinding          `json:"bindings"`
 	Relays      map[string]string      `json:"relays"`
 }
 
 func (streams commandStreams) addAuthCommands(root *cli.Command) {
 	auth := &cli.Command{
 		Name:         "auth",
-		Usage:        "Manage controller-held coding agent connections",
+		Usage:        "Manage controller-held provider connections",
 		OnUsageError: returnUsageError,
 	}
 	connect := streams.command(
 		"connect",
-		"Import a local Codex login",
-		"codex",
+		"Import a Codex login, Claude subscription token, or GitHub login",
+		"codex|claude|github",
 		1,
 		func(ctx context.Context, r commandRunner, c *cli.Command) error {
-			return r.connectAuth(ctx, c.Args().First(), c.String(authNameKey), c.String("auth-file"))
+			provider := c.Args().First()
+			name := c.String(authNameKey)
+			if !c.IsSet(authNameKey) {
+				name = provider
+			}
+			if provider != codexAuthProvider && provider != claudeAuthProvider && provider != githubAuthProvider {
+				return errors.New("supported connection providers are codex, claude, and github")
+			}
+			if c.IsSet("auth-file") && provider != codexAuthProvider {
+				return errors.New("--auth-file is only supported for codex")
+			}
+			if c.Bool("token-stdin") && provider == codexAuthProvider {
+				return errors.New("--token-stdin is only supported for claude and github")
+			}
+			if provider == claudeAuthProvider && !c.Bool("token-stdin") {
+				return errors.New("claude requires --token-stdin with a token from claude setup-token")
+			}
+			if provider != codexAuthProvider {
+				return r.connectTokenAuth(ctx, provider, name, c.Bool("token-stdin"))
+			}
+			return r.connectCodexAuth(ctx, name, c.String("auth-file"))
 		},
 	)
 	connect.Flags = []cli.Flag{
-		&cli.StringFlag{Name: authNameKey, Value: codexAuthProvider, Usage: "Connection name"},
+		&cli.StringFlag{Name: authNameKey, Usage: "Connection name (default: provider name)"},
+		&cli.BoolFlag{
+			Name:  "token-stdin",
+			Usage: "Read a Claude subscription token or GitHub token from standard input",
+		},
 		&cli.StringFlag{
 			Name:      "auth-file",
 			Usage:     "Private Codex auth JSON file (default: ~/.codex/auth.json)",
 			TakesFile: true,
 		},
 	}
-	attach := streams.command(
-		"attach",
-		"Bind a connection to a machine",
-		"MACHINE",
-		1,
-		func(ctx context.Context, r commandRunner, c *cli.Command) error {
-			return r.bindAuth(ctx, c.Args().First(), c.String("connection"), true)
-		},
-	)
-	attach.Flags = []cli.Flag{&cli.StringFlag{Name: "connection", Value: codexAuthProvider, Usage: "Connection name"}}
 	auth.Commands = []*cli.Command{
 		connect,
-		attach,
-		streams.command(
-			"detach",
-			"Remove a machine's connection binding",
-			"MACHINE",
-			1,
-			func(ctx context.Context, r commandRunner, c *cli.Command) error {
-				return r.bindAuth(ctx, c.Args().First(), "", false)
-			},
-		),
 		streams.command(
 			"disconnect",
 			"Remove a stored connection",
@@ -110,7 +119,7 @@ func (streams commandStreams) addAuthCommands(root *cli.Command) {
 		),
 		streams.command(
 			"status",
-			"Show connection and binding metadata",
+			"Show connection and machine relay status",
 			" ",
 			0,
 			func(ctx context.Context, r commandRunner, _ *cli.Command) error { return r.showAuthStatus(ctx) },
@@ -119,10 +128,7 @@ func (streams commandStreams) addAuthCommands(root *cli.Command) {
 	root.Commands = append(root.Commands, auth)
 }
 
-func (runner commandRunner) connectAuth(ctx context.Context, provider, name, path string) error {
-	if provider != codexAuthProvider {
-		return errors.New("only codex connections are supported")
-	}
+func (runner commandRunner) connectCodexAuth(ctx context.Context, name, path string) error {
 	if !model.ValidName(name) {
 		return errors.New("invalid connection name")
 	}
@@ -152,48 +158,89 @@ func (runner commandRunner) connectAuth(ctx context.Context, provider, name, pat
 		Name     string          `json:"name"`
 		Provider string          `json:"provider"`
 		Auth     json.RawMessage `json:"auth"`
-	}{name, provider, raw}
+	}{name, codexAuthProvider, raw}
 	if err = runner.api.Do(ctx, http.MethodPost, "/v1/auth/connections", body, "", nil); err != nil {
 		return err
 	}
 	return runner.authResult(
-		map[string]string{authNameKey: name, "provider": provider, authStatusKey: "connected"},
+		map[string]string{authNameKey: name, "provider": codexAuthProvider, authStatusKey: "connected"},
 		"Connection %s imported. The controller holds a copy of this login. Refreshing a shared local login can conflict; use a dedicated login for long-lived use.\n",
 		name,
 	)
 }
 
-func (runner commandRunner) bindAuth(ctx context.Context, machine, connection string, attach bool) error {
-	if attach && !model.ValidName(connection) {
+func (runner commandRunner) connectTokenAuth(ctx context.Context, provider, name string, stdin bool) error {
+	if !model.ValidName(name) {
 		return errors.New("invalid connection name")
 	}
-	m, err := runner.api.Resolve(ctx, machine)
+	if _, err := validateAPIURL(runner.api.Config.URL); err != nil {
+		return err
+	}
+	var raw []byte
+	var err error
+	if stdin {
+		if runner.streams.In == nil {
+			return errors.New("token required on standard input")
+		}
+		raw, err = io.ReadAll(io.LimitReader(runner.streams.In, maxAuthTokenBytes+1))
+	} else {
+		raw, err = localGitHubToken(ctx)
+	}
+	defer clear(raw)
 	if err != nil {
+		if !stdin {
+			return err
+		}
+		return errors.New("could not read token from standard input")
+	}
+	if len(raw) > maxAuthTokenBytes {
+		return errors.New("token exceeds size limit")
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" || strings.ContainsAny(token, " \t\r\n") {
+		return errors.New("input must contain a single token")
+	}
+	body := struct {
+		Name     string            `json:"name"`
+		Provider string            `json:"provider"`
+		Auth     map[string]string `json:"auth"`
+	}{name, provider, map[string]string{"token": token}}
+	if err = runner.api.Do(ctx, http.MethodPost, "/v1/auth/connections", body, "", nil); err != nil {
 		return err
-	}
-	method := http.MethodDelete
-	var body any
-	if attach {
-		method = http.MethodPost
-		body = map[string]string{"connection": connection}
-	}
-	if err = runner.api.Do(ctx, method, "/v1/machines/"+m.ID+"/auth", body, "", nil); err != nil {
-		return err
-	}
-	if attach {
-		return runner.authResult(
-			authBinding{m.ID, connection},
-			"Connection %s bound to machine %s. Binding saved; relay starts when the machine is running. Check clankerbox auth status.\n",
-			connection,
-			m.ID,
-		)
 	}
 	return runner.authResult(
-		map[string]string{"machine_id": m.ID, authStatusKey: "detached"},
-		"Connection binding removed from machine %s.\n",
-		m.ID,
+		map[string]string{authNameKey: name, "provider": provider, authStatusKey: "connected"},
+		"Connection %s imported. Replace the token when it expires or is revoked.\n", name,
 	)
 }
+
+// tokenCapture bounds retained subprocess output while draining its stdout.
+type tokenCapture struct {
+	raw []byte
+}
+
+func (capture *tokenCapture) Write(p []byte) (int, error) {
+	remaining := maxAuthTokenBytes + 1 - len(capture.raw)
+	capture.raw = append(capture.raw, p[:min(len(p), remaining)]...)
+	return len(p), nil
+}
+
+func localGitHubToken(ctx context.Context) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, githubAuthTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gh", "auth", "token", "--hostname", "github.com")
+	var capture tokenCapture
+	cmd.Stdout = &capture
+	cmd.Stderr = io.Discard
+	if err := cmd.Run(); err != nil {
+		clear(capture.raw)
+		return nil, errors.New(
+			"could not obtain GitHub token; run gh auth login --hostname github.com or use --token-stdin",
+		)
+	}
+	return capture.raw, nil
+}
+
 func (runner commandRunner) authResult(value any, format string, args ...any) error {
 	if runner.structured {
 		return jsonOut(runner.streams.Out, value)
@@ -202,7 +249,7 @@ func (runner commandRunner) authResult(value any, format string, args ...any) er
 	return err
 }
 func (runner commandRunner) showAuthStatus(ctx context.Context) error {
-	status := authStatus{Connections: []authConnectionStatus{}, Bindings: []authBinding{}, Relays: map[string]string{}}
+	status := authStatus{Connections: []authConnectionStatus{}, Relays: map[string]string{}}
 	if err := runner.api.Do(ctx, http.MethodGet, "/v1/auth/status", nil, "", &status); err != nil {
 		return err
 	}
@@ -210,34 +257,39 @@ func (runner commandRunner) showAuthStatus(ctx context.Context) error {
 		return jsonOut(runner.streams.Out, status)
 	}
 	for _, c := range status.Connections {
+		expires := c.ExpiresAt
+		if expires == "" || expires == "0001-01-01T00:00:00Z" {
+			expires = "unknown"
+		}
 		if _, err := fmt.Fprintf(
 			runner.streams.Out,
-			"Connection %q: %q  Account: %q  Expires: %q\n",
+			"Connection %q: %q  Provider: %q  Account: %q  Expires: %q\n",
 			c.Name,
 			c.Status,
+			c.Provider,
 			c.AccountID,
-			c.ExpiresAt,
+			expires,
 		); err != nil {
 			return err
 		}
 	}
-	for _, b := range status.Bindings {
-		relay := status.Relays[b.MachineID]
-		if relay == "" {
-			relay = "waiting (stopped/detached)"
-		}
+	machines := make([]string, 0, len(status.Relays))
+	for machine := range status.Relays {
+		machines = append(machines, machine)
+	}
+	slices.Sort(machines)
+	for _, machine := range machines {
 		if _, err := fmt.Fprintf(
 			runner.streams.Out,
-			"Machine %q: connection %q  Relay: %q\n",
-			b.MachineID,
-			b.ConnectionName,
-			relay,
+			"Machine %q: Relay: %q\n",
+			machine,
+			status.Relays[machine],
 		); err != nil {
 			return err
 		}
 	}
-	if len(status.Connections) == 0 && len(status.Bindings) == 0 {
-		_, err := fmt.Fprintln(runner.streams.Out, "No auth connections or bindings.")
+	if len(status.Connections) == 0 && len(status.Relays) == 0 {
+		_, err := fmt.Fprintln(runner.streams.Out, "No auth connections or machine relays.")
 		return err
 	}
 	return nil

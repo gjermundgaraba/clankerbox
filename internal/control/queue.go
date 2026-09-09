@@ -111,6 +111,11 @@ func (c *Controller) callHost(
 		return model.Response{}, err
 	}
 	defer resume()
+	resumeGuest, err := c.suspendGuest(call, req)
+	if err != nil {
+		return model.Response{}, err
+	}
+	defer resumeGuest()
 	resp, err := c.transport.Call(call, host, req)
 	if err != nil {
 		return resp, err

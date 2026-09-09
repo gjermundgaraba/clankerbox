@@ -1,0 +1,11 @@
+{
+  "source": "source-build",
+  "repository": "https://github.com/ghostty-org/ghostty",
+  "api": "libghostty-vt",
+  "ghosttyCommit": "492300cad104195411d12217dd22f1cd05f31376",
+  "zigVersion": "0.16.0",
+  "sourceArchiveSha256": "12ff0ed206e42049433c2afbacfd9656d568241e482e718b930868915e21cb93",
+  "command": "zig build -Demit-lib-vt -Dtarget=wasm32-freestanding -Doptimize=ReleaseSmall",
+  "sha256": "93fb99f59f7a6b7b657e17de1a2a932c2b59e1b3cbd16506941ccb84af6d1ef1",
+  "bytes": 813202
+}

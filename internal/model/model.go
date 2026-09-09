@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -213,14 +214,59 @@ type Machine struct {
 	ObservationStale   bool       `json:"observation_stale"`
 	ObservationError   string     `json:"observation_error,omitempty"`
 	CreatedAt          time.Time  `json:"created_at"`
+	// Labels are caller-owned metadata replaced as a whole map.
+	Labels map[string]string `json:"labels,omitempty"`
+	// Guest and AuthRelay are materialized views attached to API responses only.
+	Guest     *GuestStatus `json:"guest,omitempty"`
+	AuthRelay string       `json:"auth_relay,omitempty"`
+}
+
+// GuestStatus is the observed state of the controller's link to a machine's
+// session daemon. Ready means a successful daemon hello; Protocol is the wire
+// revision that hello advertised.
+type GuestStatus struct {
+	Status        string `json:"status"`
+	Reason        string `json:"reason,omitempty"`
+	Incarnation   string `json:"incarnation,omitempty"`
+	Protocol      int    `json:"protocol,omitempty"`
+	DaemonVersion string `json:"daemon_version,omitempty"`
+	WasmSHA256    string `json:"wasm_sha256,omitempty"`
+}
+
+const (
+	maxLabels      = 32
+	maxLabelLength = 64
+)
+
+// ValidateLabels bounds label keys and values to short printable strings.
+func ValidateLabels(labels map[string]string) error {
+	if len(labels) > maxLabels {
+		return errors.New("at most 32 labels")
+	}
+	for k, v := range labels {
+		if k == "" || len(k) > maxLabelLength || len(v) > maxLabelLength || !printableLabel(k) || !printableLabel(v) {
+			return errors.New("label keys and values must be 1..64 printable characters")
+		}
+	}
+	return nil
+}
+
+func printableLabel(s string) bool {
+	for _, r := range s {
+		if !unicode.IsPrint(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // CreateInput describes a requested machine and its authorized SSH keys.
 type CreateInput struct {
-	Name          string   `json:"name"`
-	Profile       string   `json:"profile"`
-	Host          string   `json:"host"`
-	SSHPublicKeys []string `json:"ssh_public_keys"`
+	Name          string            `json:"name"`
+	Profile       string            `json:"profile"`
+	Host          string            `json:"host"`
+	SSHPublicKeys []string          `json:"ssh_public_keys"`
+	Labels        map[string]string `json:"labels,omitempty"`
 }
 
 // Validate checks configuration invariants and normalizes derived fields where applicable.
@@ -233,7 +279,7 @@ func (in *CreateInput) Validate() error {
 		return err
 	}
 	in.SSHPublicKeys = keys
-	return nil
+	return ValidateLabels(in.Labels)
 }
 
 // ValidateKeys validates, canonicalizes, deduplicates, and sorts SSH public keys.
@@ -268,9 +314,11 @@ func ValidateKeys(keys []string) ([]string, error) {
 }
 
 // ChildInput describes the identity and SSH access for a derived machine.
+// Labels are merged over the inherited ones; they never clear them.
 type ChildInput struct {
-	Name          string   `json:"name"`
-	SSHPublicKeys []string `json:"ssh_public_keys"`
+	Name          string            `json:"name"`
+	SSHPublicKeys []string          `json:"ssh_public_keys"`
+	Labels        map[string]string `json:"labels,omitempty"`
 }
 
 // Validate checks configuration invariants and normalizes derived fields where applicable.
@@ -280,7 +328,10 @@ func (in *ChildInput) Validate() error {
 	}
 	keys, err := ValidateKeys(in.SSHPublicKeys)
 	in.SSHPublicKeys = keys
-	return err
+	if err != nil {
+		return err
+	}
+	return ValidateLabels(in.Labels)
 }
 
 // Checkpoint describes an owned artifact. Paths are private helper inventory.
@@ -294,6 +345,8 @@ type Checkpoint struct {
 	CreatedAt        time.Time `json:"created_at"`
 	Status           string    `json:"status"` // pending, published, unresolved, failed, deleting, deleted
 	RuntimePin       string    `json:"runtime_pin,omitempty"`
+	// Labels are the source machine's labels at capture time.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // Operation records a durable lifecycle request and its outcome.

@@ -19,7 +19,7 @@ type authListener struct {
 // whose native [net.Conn] implementation does not support deadlines. Expiration
 // is terminal: either deadline closes the whole channel, including the opposite
 // direction, and a later deadline reset cannot revive it.
-func newAuthListener(listener net.Listener) net.Listener {
+func newAuthListener(listener net.Listener) *authListener {
 	return &authListener{Listener: listener, slots: make(chan struct{}, authRelayConnectionLimit)}
 }
 func (listener *authListener) Accept() (net.Conn, error) {

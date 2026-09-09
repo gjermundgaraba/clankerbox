@@ -23,6 +23,8 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const testAccountID = "account-1"
+
 const testRefreshSecret = "test-refresh-secret"
 const cancelAction = "cancel"
 
@@ -66,12 +68,9 @@ func testStore(t *testing.T) (*Store, string) {
 	return s, path
 }
 
-func importBinding(t *testing.T, s *Store, expiry time.Time) {
+func importCodexConnection(t *testing.T, s *Store, expiry time.Time) {
 	t.Helper()
-	if _, err := s.Import(context.Background(), "personal", cache("account-1", expiry)); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Attach(context.Background(), "machine-1", "personal"); err != nil {
+	if _, err := s.Import(context.Background(), "personal", cache(testAccountID, expiry)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -84,7 +83,7 @@ func proxyRequest(ctx context.Context, s *Store) *httptest.ResponseRecorder {
 		strings.NewReader(`{"model":"test","stream":true}`),
 	)
 	w := httptest.NewRecorder()
-	s.Proxy(w, r, "machine-1")
+	s.Proxy(w, r)
 	return w
 }
 
@@ -92,16 +91,16 @@ func TestEncryptedAtRestRestartAndAAD(t *testing.T) {
 	t.Parallel()
 	s, path := testStore(t)
 	expiry := time.Now().Add(time.Hour)
-	importBinding(t, s, expiry)
+	importCodexConnection(t, s, expiry)
 	var encrypted []byte
 	if err := s.db.QueryRowContext(t.Context(), `SELECT encrypted FROM auth_connections`).Scan(&encrypted); err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(encrypted, []byte(testRefreshSecret)) ||
-		bytes.Contains(encrypted, []byte(fakeToken("account-1", expiry))) {
+		bytes.Contains(encrypted, []byte(fakeToken(testAccountID, expiry))) {
 		t.Fatal("plaintext credentials in ciphertext")
 	}
-	if _, err := s.decrypt("different-name", "account-1", encrypted); err == nil {
+	if _, err := s.decrypt("different-name", testAccountID, encrypted); err == nil {
 		t.Fatal("AAD did not bind connection name")
 	}
 	if _, err := New(s.db, bytes.Repeat([]byte{43}, 32)); err == nil {
@@ -119,17 +118,13 @@ func TestEncryptedAtRestRestartAndAAD(t *testing.T) {
 	if err != nil || c.RefreshToken != testRefreshSecret {
 		t.Fatalf("restart credentials unavailable: %v", err)
 	}
-	bindings, err := restarted.Bindings(context.Background())
-	if err != nil || len(bindings) != 1 {
-		t.Fatalf("restart binding: %v %v", bindings, err)
-	}
 	//nolint:gosec // G304: this test created path in its temporary directory.
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Contains(raw, []byte(testRefreshSecret)) ||
-		bytes.Contains(raw, []byte(fakeToken("account-1", expiry))) {
+		bytes.Contains(raw, []byte(fakeToken(testAccountID, expiry))) {
 		t.Fatal("plaintext credential on disk")
 	}
 	public, _ := json.Marshal(connections)
@@ -142,33 +137,30 @@ func TestImportValidationAndAccountOwnership(t *testing.T) {
 	t.Parallel()
 	s, _ := testStore(t)
 	ctx := context.Background()
-	for _, raw := range [][]byte{[]byte(`{"OPENAI_API_KEY":"secret"}`), []byte(`{"auth_mode":"apikey","tokens":{}}`), cache("account-1", time.Now().Add(-time.Hour)), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"not-jwt","refresh_token":"secret","account_id":"account"}}`)} {
+	for _, raw := range [][]byte{[]byte(`{"OPENAI_API_KEY":"secret"}`), []byte(`{"auth_mode":"apikey","tokens":{}}`), cache(testAccountID, time.Now().Add(-time.Hour)), []byte(`{"auth_mode":"chatgpt","tokens":{"access_token":"not-jwt","refresh_token":"secret","account_id":"account"}}`)} {
 		if _, err := s.Import(ctx, "personal", raw); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("invalid cache accepted: %v", err)
 		}
 	}
-	importBinding(t, s, time.Now().Add(time.Hour))
+	importCodexConnection(t, s, time.Now().Add(time.Hour))
 	if _, err := s.Import(
 		ctx,
 		"duplicate",
-		cache("account-1", time.Now().Add(time.Hour)),
+		cache(testAccountID, time.Now().Add(time.Hour)),
 	); !errors.Is(
 		err,
 		ErrConflict,
 	) {
 		t.Fatalf("duplicate account accepted: %v", err)
 	}
-	if err := s.Attach(ctx, "machine-2", "missing"); !errors.Is(err, ErrNotFound) {
-		t.Fatal(err)
-	}
 }
 
 func TestConcurrentRefreshRotatesOnceAndPersists(t *testing.T) {
 	t.Parallel()
 	s, _ := testStore(t)
-	importBinding(t, s, time.Now().Add(30*time.Second))
+	importCodexConnection(t, s, time.Now().Add(30*time.Second))
 	var refreshes, requests atomic.Int32
-	newAccess := fakeToken("account-1", time.Now().Add(time.Hour))
+	newAccess := fakeToken(testAccountID, time.Now().Add(time.Hour))
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/oauth/token" {
 			refreshes.Add(1)
@@ -218,7 +210,7 @@ func TestConcurrentRefreshRotatesOnceAndPersists(t *testing.T) {
 func TestAmbiguousRefreshFailsClosedAcrossRestart(t *testing.T) {
 	t.Parallel()
 	s, _ := testStore(t)
-	importBinding(t, s, time.Now().Add(30*time.Second))
+	importCodexConnection(t, s, time.Now().Add(30*time.Second))
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -252,16 +244,16 @@ func TestAmbiguousRefreshFailsClosedAcrossRestart(t *testing.T) {
 func TestProxyHeaderAllowlistRoutesAndErrors(t *testing.T) {
 	t.Parallel()
 	s, _ := testStore(t)
-	importBinding(t, s, time.Now().Add(time.Hour))
+	importCodexConnection(t, s, time.Now().Add(time.Hour))
 	var calls atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
-		if r.URL.Path != "/backend-api/codex/responses" || r.Header.Get("Chatgpt-Account-Id") != "account-1" ||
+		if r.URL.Path != "/backend-api/codex/responses" || r.Header.Get(accountHeader) != testAccountID ||
 			!strings.HasPrefix(r.Header.Get("Authorization"), "Bearer test-header.") ||
 			r.Header.Get("Session_id") != "session-test" {
 			t.Error("upstream routing or injected auth incorrect")
 		}
-		for _, key := range []string{"Cookie", "X-Forwarded-For", "Proxy-Authorization", "X-Api-Key", "X-Arbitrary-Secret", "Connection"} {
+		for _, key := range []string{cookieHeader, forwardedHeader, proxyAuthHeader, headerAPI, "X-Arbitrary-Secret", connectionHeader} {
 			if r.Header.Get(key) != "" {
 				t.Errorf("forwarded unsafe header %s", key)
 			}
@@ -274,12 +266,12 @@ func TestProxyHeaderAllowlistRoutesAndErrors(t *testing.T) {
 	defer upstream.Close()
 	s.responsesURL = upstream.URL + "/backend-api/codex/responses"
 	r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/responses", strings.NewReader(`{}`))
-	for _, key := range []string{"Authorization", "ChatGPT-Account-Id", "Cookie", "X-Forwarded-For", "Proxy-Authorization", "X-Api-Key", "X-Arbitrary-Secret", "Connection"} {
+	for _, key := range []string{"Authorization", "ChatGPT-Account-Id", cookieHeader, forwardedHeader, proxyAuthHeader, headerAPI, "X-Arbitrary-Secret", connectionHeader} {
 		r.Header.Set(key, "guest-secret")
 	}
 	r.Header.Set("Session_id", "session-test")
 	w := httptest.NewRecorder()
-	s.Proxy(w, r, "machine-1")
+	s.Proxy(w, r)
 	if w.Code != 200 || !w.Flushed || w.Body.String() != "data: first\n\ndata: second\n\n" ||
 		w.Header().Get("Set-Cookie") != "" ||
 		w.Header().Get("Authorization") != "" {
@@ -288,7 +280,7 @@ func TestProxyHeaderAllowlistRoutesAndErrors(t *testing.T) {
 	for _, path := range []string{"/v1/models", "/responses?target=evil", "/v1/responses/", "https://evil.example/other"} {
 		routeRequest := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(`{}`))
 		routeResponse := httptest.NewRecorder()
-		s.Proxy(routeResponse, routeRequest, "machine-1")
+		s.Proxy(routeResponse, routeRequest)
 		if routeResponse.Code != 404 {
 			t.Errorf("route accepted: %s", path)
 		}
@@ -315,7 +307,7 @@ func TestProxyHeaderAllowlistRoutesAndErrors(t *testing.T) {
 
 func TestCancellationAndRevocationStopStream(t *testing.T) {
 	t.Parallel()
-	for _, action := range []string{cancelAction, "detach", "disconnect"} {
+	for _, action := range []string{cancelAction, "disconnect"} {
 		t.Run(action, func(t *testing.T) {
 			t.Parallel()
 			testCancellation(t, action)
@@ -326,7 +318,7 @@ func TestCancellationAndRevocationStopStream(t *testing.T) {
 func testCancellation(t *testing.T, action string) {
 	t.Helper()
 	s, _ := testStore(t)
-	importBinding(t, s, time.Now().Add(time.Hour))
+	importCodexConnection(t, s, time.Now().Add(time.Hour))
 	started := make(chan struct{})
 	stopped := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -351,10 +343,6 @@ func testCancellation(t *testing.T, action string) {
 	switch action {
 	case cancelAction:
 		cancel()
-	case "detach":
-		if err := s.Detach(context.Background(), "machine-1"); err != nil {
-			t.Fatal(err)
-		}
 	case "disconnect":
 		if err := s.Disconnect(context.Background(), "personal"); err != nil {
 			t.Fatal(err)
@@ -372,7 +360,7 @@ func testCancellation(t *testing.T, action string) {
 	}
 	if action != cancelAction {
 		if w := proxyRequest(context.Background(), s); w.Code != 403 {
-			t.Fatalf("revoked binding accepted: %d", w.Code)
+			t.Fatalf("disconnected provider accepted: %d", w.Code)
 		}
 	}
 }
@@ -380,7 +368,7 @@ func testCancellation(t *testing.T, action string) {
 func TestStreamFlushesBeforeCompletion(t *testing.T) {
 	t.Parallel()
 	s, _ := testStore(t)
-	importBinding(t, s, time.Now().Add(time.Hour))
+	importCodexConnection(t, s, time.Now().Add(time.Hour))
 	release := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -395,7 +383,7 @@ func TestStreamFlushesBeforeCompletion(t *testing.T) {
 	defer upstream.Close()
 	s.responsesURL = upstream.URL
 	broker := httptest.NewServer(
-		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.Proxy(w, r, "machine-1") }),
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { s.Proxy(w, r) }),
 	)
 	defer broker.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -422,7 +410,7 @@ func TestStreamFlushesBeforeCompletion(t *testing.T) {
 func TestDisconnectDuringRefreshCannotRestoreConnection(t *testing.T) {
 	t.Parallel()
 	s, _ := testStore(t)
-	importBinding(t, s, time.Now().Add(30*time.Second))
+	importCodexConnection(t, s, time.Now().Add(30*time.Second))
 	started := make(chan struct{})
 	stopped := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -457,16 +445,12 @@ func TestDisconnectDuringRefreshCannotRestoreConnection(t *testing.T) {
 	if err != nil || len(connections) != 0 {
 		t.Fatalf("refresh restored deleted connection: %v %v", connections, err)
 	}
-	bindings, err := s.Bindings(context.Background())
-	if err != nil || len(bindings) != 0 {
-		t.Fatalf("disconnect left bindings: %v %v", bindings, err)
-	}
 }
 
 func TestRedirectDoesNotForwardCredential(t *testing.T) {
 	t.Parallel()
 	s, _ := testStore(t)
-	importBinding(t, s, time.Now().Add(time.Hour))
+	importCodexConnection(t, s, time.Now().Add(time.Hour))
 	var calls atomic.Int32
 	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { calls.Add(1) }))
 	defer target.Close()
@@ -490,7 +474,7 @@ func (*countingBody) Close() error               { return nil }
 func TestProxyCapacityRejectsBeforeReadAndReleasesOnCancel(t *testing.T) {
 	t.Parallel()
 	s, _ := testStore(t)
-	importBinding(t, s, time.Now().Add(time.Hour))
+	importCodexConnection(t, s, time.Now().Add(time.Hour))
 	started := make(chan struct{}, maxConcurrentRequests)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -517,7 +501,7 @@ func TestProxyCapacityRejectsBeforeReadAndReleasesOnCancel(t *testing.T) {
 	body := &countingBody{}
 	rejected := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/responses", body)
 	w := httptest.NewRecorder()
-	s.Proxy(w, rejected, "machine-1")
+	s.Proxy(w, rejected)
 	if w.Code != http.StatusTooManyRequests || body.reads.Load() != 0 {
 		t.Fatalf("saturated request: status %d, body reads %d", w.Code, body.reads.Load())
 	}
@@ -529,8 +513,40 @@ func TestProxyCapacityRejectsBeforeReadAndReleasesOnCancel(t *testing.T) {
 	// An admitted invalid body proves slots can be reused without contacting upstream.
 	invalid := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/responses", strings.NewReader("invalid"))
 	w = httptest.NewRecorder()
-	s.Proxy(w, invalid, "machine-1")
+	s.Proxy(w, invalid)
 	if w.Code != http.StatusBadRequest || len(s.slots) != 0 {
 		t.Fatalf("released slot not reusable: status %d slots %d", w.Code, len(s.slots))
+	}
+}
+
+func TestCodexCiphertextWithoutProviderStillLoads(t *testing.T) {
+	t.Parallel()
+	s, _ := testStore(t)
+	expiry := time.Now().Add(time.Hour)
+	importCodexConnection(t, s, expiry)
+	// A store upgraded in place before the rebuild rule: the column says codex while the
+	// ciphertext predates the provider field.
+	legacy, err := s.encrypt("personal", credentials{
+		AccessToken:  fakeToken(testAccountID, expiry),
+		RefreshToken: testRefreshSecret,
+		AccountID:    testAccountID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(
+		t.Context(),
+		`UPDATE auth_connections SET encrypted=? WHERE name='personal'`,
+		legacy,
+	); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := New(s.db, bytes.Repeat([]byte{42}, 32))
+	if err != nil {
+		t.Fatalf("startup rejected pre-provider Codex ciphertext: %v", err)
+	}
+	connections, err := reopened.List(t.Context())
+	if err != nil || len(connections) != 1 || connections[0].Provider != providerCodex {
+		t.Fatalf("connections after reopen: %+v %v", connections, err)
 	}
 }

@@ -1,0 +1,106 @@
+{
+  "revision": 2,
+  "cases": [
+    {
+      "name": "request session.list",
+      "hex": "00000025017b22726571756573745f6964223a312c226f70223a2273657373696f6e2e6c697374227d",
+      "kind": 1,
+      "json": {
+        "request_id": 1,
+        "op": "session.list"
+      }
+    },
+    {
+      "name": "response ok",
+      "hex": "00000033027b22726571756573745f6964223a312c226f6b223a747275652c2276616c7565223a7b2273657373696f6e73223a5b5d7d7d",
+      "kind": 2,
+      "json": {
+        "request_id": 1,
+        "ok": true,
+        "value": {
+          "sessions": []
+        }
+      }
+    },
+    {
+      "name": "response error",
+      "hex": "00000067027b22726571756573745f6964223a322c226f6b223a66616c73652c226572726f72223a7b22636f6465223a226e6f745f666f756e64222c226d657373616765223a226e6f20737563682073657373696f6e222c22726574727961626c65223a66616c73657d7d",
+      "kind": 2,
+      "json": {
+        "request_id": 2,
+        "ok": false,
+        "error": {
+          "code": "not_found",
+          "message": "no such session",
+          "retryable": false
+        }
+      }
+    },
+    {
+      "name": "event hello",
+      "hex": "000000f8037b226576656e74223a2268656c6c6f222c2270726f746f636f6c223a322c22696e6361726e6174696f6e223a2233663962366232652d336438652d346135622d396336642d316532663361346235633664222c22626f6f745f6964223a2262222c226461656d6f6e5f76657273696f6e223a2274657374222c226f73223a226c696e7578222c2275736572223a22726f6f74222c227761736d5f736861323536223a2239336662393966353966376136623762363537653137646531613261393332633262353965316233636264313635303639343163636238346166366431656631222c226d61785f73657373696f6e73223a34387d",
+      "kind": 3,
+      "json": {
+        "event": "hello",
+        "protocol": 2,
+        "incarnation": "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d",
+        "boot_id": "b",
+        "daemon_version": "test",
+        "os": "linux",
+        "user": "root",
+        "wasm_sha256": "93fb99f59f7a6b7b657e17de1a2a932c2b59e1b3cbd16506941ccb84af6d1ef1",
+        "max_sessions": 48
+      }
+    },
+    {
+      "name": "output frame",
+      "hex": "0000000b1000000000000004d26869",
+      "kind": 16,
+      "next_offset": 1234,
+      "data_hex": "6869"
+    },
+    {
+      "name": "output frame max offset",
+      "hex": "0000000a10001fffffffffffff00",
+      "kind": 16,
+      "next_offset": 9007199254740991,
+      "data_hex": "00"
+    },
+    {
+      "name": "snapshot data",
+      "hex": "0000000412000102",
+      "kind": 18,
+      "data_hex": "000102"
+    },
+    {
+      "name": "zero length",
+      "hex": "00000000",
+      "error": "empty"
+    },
+    {
+      "name": "unknown kind",
+      "hex": "000000027f78",
+      "error": "unknown_kind"
+    },
+    {
+      "name": "output short body",
+      "hex": "000000051000000000",
+      "error": "short_body"
+    },
+    {
+      "name": "output without bytes",
+      "hex": "00000009100000000000000005",
+      "error": "empty_output"
+    },
+    {
+      "name": "output offset beyond 2^53-1",
+      "hex": "0000000a10002000000000000078",
+      "error": "offset_range"
+    },
+    {
+      "name": "length beyond 1 MiB",
+      "hex": "00100001",
+      "error": "too_large"
+    }
+  ]
+}

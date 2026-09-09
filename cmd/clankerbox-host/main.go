@@ -40,10 +40,17 @@ func newCommand() *cli.Command {
 			&cli.StringFlag{Name: "config", Usage: "Host JSON configuration `FILE`", Required: true},
 			&cli.StringFlag{Name: "connect", Usage: "Relay the prepared `MACHINE` SSH endpoint"},
 			&cli.StringFlag{Name: "auth-prepare", Usage: "Prepare the `MACHINE` auth relay public key"},
+			&cli.StringFlag{Name: "guest-prepare", Usage: "Prepare the `MACHINE` terminal key and guest daemon"},
 		},
 		Before: func(_ context.Context, cmd *cli.Command) (context.Context, error) {
-			if cmd.String("connect") != "" && cmd.String("auth-prepare") != "" {
-				return nil, errors.New("connect and auth-prepare are mutually exclusive")
+			modes := 0
+			for _, flag := range []string{"connect", "auth-prepare", "guest-prepare"} {
+				if cmd.String(flag) != "" {
+					modes++
+				}
+			}
+			if modes > 1 {
+				return nil, errors.New("connect, auth-prepare and guest-prepare are mutually exclusive")
 			}
 			if cmd.Args().Present() {
 				return nil, fmt.Errorf("unexpected argument %q", cmd.Args().First())
@@ -81,7 +88,9 @@ func run(parent context.Context, cmd *cli.Command) error {
 		return err
 	}
 	if id := cmd.String("auth-prepare"); id != "" {
-		err = serveAuth(ctx, h, id, os.Stdin, os.Stdout)
+		err = servePrepare(ctx, id, os.Stdin, os.Stdout, h.PrepareAuth)
+	} else if guestID := cmd.String("guest-prepare"); guestID != "" {
+		err = servePrepare(ctx, guestID, os.Stdin, os.Stdout, h.PrepareGuest)
 	} else {
 		err = serve(ctx, h, connect)
 	}
@@ -108,7 +117,14 @@ func serve(ctx context.Context, h *host.Helper, connect string) error {
 	return json.NewEncoder(os.Stdout).Encode(resp)
 }
 
-func serveAuth(ctx context.Context, h *host.Helper, id string, in io.Reader, out io.Writer) error {
+// servePrepare reads one public-key request and runs a preparation step.
+func servePrepare(
+	ctx context.Context,
+	id string,
+	in io.Reader,
+	out io.Writer,
+	prepare func(context.Context, string, string) error,
+) error {
 	decoder := json.NewDecoder(io.LimitReader(in, maxRequestBytes+1))
 	decoder.DisallowUnknownFields()
 	var req struct {
@@ -123,7 +139,7 @@ func serveAuth(ctx context.Context, h *host.Helper, id string, in io.Reader, out
 	}
 	call, cancel := context.WithTimeout(ctx, operationTimeout)
 	defer cancel()
-	if err := h.PrepareAuth(call, id, req.PublicKey); err != nil {
+	if err := prepare(call, id, req.PublicKey); err != nil {
 		return err
 	}
 	return json.NewEncoder(out).Encode(struct {

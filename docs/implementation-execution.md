@@ -499,3 +499,112 @@ These are disposable toy checks, not a new certification of VNC rendering,
 Mac checkpoint restore, controller outages, long retention or backup behavior.
 Earlier runtime acceptance remains separate. All machines and checkpoints from
 this CLI round were deleted after verification.
+
+## 2026-09-09: Terminal sessions
+
+Implemented the guest session daemon (`cmd/clankerbox-guest`,
+`internal/guest/*`), the controller guest link, session stream and list
+endpoints, machine labels, the change-notification stream, host-side guest
+preparation (`--guest-prepare`), and the `sessions`, `labels`, and `events`
+CLI commands, following `docs/terminal-sessions.md`.
+
+### Executed checks and review
+
+- `go test ./...` and `go test -race` on the guest packages pass on macOS,
+  including real PTY sessions, exactly-once attach and resume, input dedup,
+  ring eviction, resize forcing snapshots, slow-subscriber drops, exit status
+  and signal reporting, lost-record conversion on daemon restart, singleton
+  lock behavior, the proxy bridge, and the controller link against a fake guest
+  sshd bridging to a real daemon.
+- `make lint` passes with the repository configuration.
+- `make build` cross-builds `bin/clankerbox-guest-linux-amd64` and
+  `bin/clankerbox-guest-darwin-arm64`.
+- Two independent design reviews were incorporated before implementation.
+
+### Review rounds and fixes (2026-09-09)
+
+Three independent reviews of the uncommitted change set were validated and
+implemented together: the proxy now ends when the daemon side does and closes
+its socket on cancellation; `lookup` copies session records under the session
+lock (the race the fingerprint change introduced); stopped attachments always
+unregister; the keepalive is a daemon hello probe that refreshes the cached
+hello; `session.list` uses an uncounted control stream; child labels are merged
+over inherited ones; the change digest excludes observation freshness; the VT
+continuation limit is 8 MiB so snapshots fit the 32 MiB cap; unused VT
+callbacks, dead channels and alternatives were removed; and a pre-provider auth
+store is rebuilt rather than migrated.
+
+### Live qualification (2026-09-09)
+
+Deployed to the private controller and both runtime hosts (record in the
+personal-cloud controller runbook). On the running Linux machine the controller
+installed the guest daemon through `smolvm machine exec -i`, authorized the
+terminal key with the forced `clankerbox-guest proxy` command, and reported the
+link `ready` with the pinned `wasm_sha256`. From the desk, a browser terminal on
+that machine survived a page reload, a desk restart (snapshot reattach), and a
+controller restart (resume from the committed offset), always in the same shell
+process; a hidden viewer did not shrink the shared grid; ending the terminal kept
+its final screen. `sessions`, `labels`, and `events` worked against the live API.
+A machine created from the canvas picker became running with its guest link
+ready within seconds, was stopped and deleted from its card, and its card showed
+the deletion. Not exercised live: macOS guests, link suspension across a fork or
+checkpoint, and a daemon-only restart inside a guest.
+
+### Review round two (2026-09-09)
+
+A second review of the uncommitted work produced eleven findings; eight were
+implemented, three in part. Guest client calls are now bounded by their context
+(cancellation closes the connection, which also releases a write the peer is not
+consuming); the event queue is an explicit frame bound and `Close` releases a
+reader parked on it; fork/restore validate the merged label map before it is
+saved; the auth README states the rebuild behavior; the spec no longer contradicts
+itself on lost-create recovery; and stale comments were removed. The Codex
+ciphertext fallback was kept: deploying without it stopped the controller, because
+the live store gained its `provider` column in place before the rebuild rule and
+still holds provider-less Codex ciphertext, which startup verification decrypts.
+A regression test now covers that row shape. On the desk side, ending a terminal
+always goes through the guest, and attach/create replies refresh informational
+session fields. A follow-up serialized `wazero.NewRuntime` in `vt.NewLoader`:
+wazero 1.12 caches its version string in an unsynchronized global, and tests
+that start several daemons in one process tripped the race detector
+intermittently.
+
+### Wire revision 2 (2026-09-09)
+
+A protocol design review led to one coordinated clean break across Clankerbox
+and Clankerdesk. The guest protocol now has one supported wire revision,
+compared exactly at hello; the major/minor pair, the capability list, and the
+JSON capability ledger are gone. `session.open` replaces `session.attach` and
+answers with the whole bootstrap in one reply: `resume`, `snapshot` (with the
+byte count the SNAPSHOT_DATA frames carry), `unavailable`, or `ended` with the
+final view while this daemon still holds the terminal. The separate snapshot
+event, the input identity and its duplicate cache, the manager-wide inventory
+feed (`events.subscribe`), and the callerless `session.inspect`, `session.read`,
+`session.signal`, and `session.remove` operations were deleted; attachments still
+receive ordered session, resize, and gap events. Interrupting a command is input:
+the consumer writes the Ctrl-C byte and the line discipline or the raw-mode
+program handles it as a keyboard would. `protocol/messages.json` is written by
+the Go tests and vendored by Clankerdesk, whose typed operation table decodes
+every entry. On the desk side a per-terminal attachment module owns the mirror,
+cursor, and link; the terminal service keeps the catalog, viewers, and reconnect
+policy. Machine submissions retry the identical request under one idempotency
+key while the transport fails, inspections coalesce per machine, and cards show
+the controller's observation health.
+A review of that change found that replies were HTML-escaped, so an ended
+view over a maximal grid could exceed the frame limit and close the
+connection; bodies are now encoded compactly and a view that still cannot be
+framed is omitted from the ended reply. The desk's attachment module gained
+the same-chunk closure, bad-frame-after-hello, deliberate-close, and
+create-retry cases it had promised, and the machine service retries only
+identified transport failures and shares slow inspections while they run.
+A second review pointed out that omitting an oversized final view traded a
+framing failure for data loss; the ended reply now announces the view's byte
+count and its text follows as SNAPSHOT_DATA frames, the same path a snapshot
+takes, which also retired the size check. The desk's attachment module owns
+its socket from the start of an opening, so a close during the handshake
+reaches it and a disposed terminal never sends a request; the controller
+client raises its unreachable error only for the exchange itself.
+A third review noted that a final view whose frames failed to write left the
+connection open with its announced bytes outstanding; a failed view transfer
+now closes the sink like a failed stream, and a session test covers both the
+delivered and the failed transfer.

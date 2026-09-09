@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -23,9 +24,13 @@ const (
 	refreshTimeout     = 30 * time.Second
 )
 
-// Proxy serves POST /v1/responses and /responses. The caller supplies machineID
-// from a host-controlled listener, never from guest headers or request fields.
-func (s *Store) Proxy(w http.ResponseWriter, r *http.Request, machineID string) {
+// Proxy serves fixed inference routes using the connection for each provider.
+// The caller must validate machine access through a host-controlled listener.
+func (s *Store) Proxy(w http.ResponseWriter, r *http.Request) {
+	if r.Host == "api.github.com" || strings.HasPrefix(r.URL.Path, "/github/") {
+		s.proxyGitHub(w, r)
+		return
+	}
 	if !validProxyRequest(w, r) {
 		return
 	}
@@ -46,14 +51,14 @@ func (s *Store) Proxy(w http.ResponseWriter, r *http.Request, machineID string) 
 	defer cancel()
 	s.mu.Lock()
 	var name string
-	err = s.db.QueryRowContext(ctx, `SELECT connection_name FROM auth_bindings WHERE machine_id=?`, machineID).
-		Scan(&name)
+	provider := routeProvider(r.URL.Path)
+	err = s.db.QueryRowContext(ctx, `SELECT name FROM auth_connections WHERE provider=?`, provider).Scan(&name)
 	if err != nil {
 		s.mu.Unlock()
-		safeError(w, http.StatusForbidden, "machine authentication unavailable")
+		safeError(w, http.StatusForbidden, "provider authentication unavailable")
 		return
 	}
-	a := &activity{machine: machineID, connection: name, cancel: cancel}
+	a := &activity{connection: name, cancel: cancel}
 	s.active[a] = struct{}{}
 	gate := s.gates[name]
 	if gate == nil {
@@ -75,6 +80,10 @@ func (s *Store) Proxy(w http.ResponseWriter, r *http.Request, machineID string) 
 		}
 		return
 	}
+	if c.Provider != provider {
+		safeError(w, http.StatusForbidden, "connection does not support this provider")
+		return
+	}
 	s.forward(ctx, w, r, body, name, c)
 }
 
@@ -86,21 +95,24 @@ func (s *Store) forward(
 	name string,
 	c credentials,
 ) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.responsesURL, bytes.NewReader(body))
+	target, headers := s.forwardSettings(r, c.Provider)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 	if err != nil {
 		safeError(w, http.StatusBadGateway, "upstream unavailable")
 		return
 	}
 	// Build headers from scratch; guest auth, account, cookies, host, routing,
 	// forwarding, connection, and proxy headers have no authority here.
-	for _, key := range []string{"OpenAI-Beta", "Originator", "Session_id", "Conversation_id", "X-Codex-Turn-State", "X-Codex-Turn-Metadata"} {
+	for _, key := range headers {
 		if value := r.Header.Get(key); len(value) <= 8192 && value != "" {
 			req.Header.Set(key, value)
 		}
 	}
 	req.Header.Set("Authorization", "Bearer "+c.AccessToken)
-	req.Header.Set("Chatgpt-Account-Id", c.AccountID)
-	req.Header.Set("Content-Type", "application/json")
+	if c.Provider == providerCodex {
+		req.Header.Set("Chatgpt-Account-Id", c.AccountID)
+	}
+	req.Header.Set(contentTypeHeader, "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Accept-Encoding", "identity")
 	resp, err := s.client.Do(req)
@@ -125,8 +137,57 @@ func (s *Store) forward(
 	streamResponse(w, resp)
 }
 
+func (s *Store) forwardSettings(r *http.Request, provider string) (string, []string) {
+	target := s.responsesURL
+	headers := []string{
+		"OpenAI-Beta",
+		"Originator",
+		"Session_id",
+		"Conversation_id",
+		"X-Codex-Turn-State",
+		"X-Codex-Turn-Metadata",
+	}
+	if provider == providerClaude {
+		target = s.anthropicURL + "/v1/messages"
+		if r.URL.Path == "/v1/messages/count_tokens" {
+			target += "/count_tokens"
+		}
+		if r.URL.RawQuery != "" {
+			target += "?beta=true"
+		}
+		headers = []string{
+			"Anthropic-Version",
+			"Anthropic-Beta",
+			"X-App",
+			"User-Agent",
+			"X-Stainless-Lang",
+			"X-Stainless-Package-Version",
+			"X-Stainless-OS",
+			"X-Stainless-Arch",
+			"X-Stainless-Runtime",
+			"X-Stainless-Runtime-Version",
+			"X-Stainless-Retry-Count",
+			"X-Stainless-Timeout",
+		}
+	}
+	return target, headers
+}
+
+func routeProvider(path string) string {
+	switch path {
+	case "/v1/responses", "/responses":
+		return providerCodex
+	case "/v1/messages", "/v1/messages/count_tokens":
+		return providerClaude
+	default:
+		return ""
+	}
+}
+
 func validProxyRequest(w http.ResponseWriter, r *http.Request) bool {
-	if (r.URL.Path != "/v1/responses" && r.URL.Path != "/responses") || r.URL.RawQuery != "" || r.URL.RawPath != "" {
+	provider := routeProvider(r.URL.Path)
+	validQuery := r.URL.RawQuery == "" || (provider == providerClaude && r.URL.RawQuery == "beta=true")
+	if provider == "" || !validQuery || r.URL.RawPath != "" {
 		safeError(w, http.StatusNotFound, "unsupported broker route")
 		return false
 	}
@@ -161,7 +222,7 @@ func (s *Store) rejectAccess(ctx context.Context, name, token string) {
 }
 
 func streamResponse(w http.ResponseWriter, resp *http.Response) {
-	for _, key := range []string{"Content-Type", "X-Request-Id", "X-Codex-Turn-State"} {
+	for _, key := range []string{contentTypeHeader, "X-Request-Id", "Request-Id", "X-Codex-Turn-State"} {
 		if v := resp.Header.Get(key); v != "" {
 			w.Header().Set(key, v)
 		}
@@ -186,7 +247,7 @@ func streamResponse(w http.ResponseWriter, resp *http.Response) {
 }
 
 func safeError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(contentTypeHeader, "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": message}})
@@ -197,11 +258,11 @@ func safeError(w http.ResponseWriter, status int, message string) {
 // leave the old refresh token consumed, so none are automatically retried.
 func (s *Store) access(ctx context.Context, name string) (credentials, error) {
 	s.mu.Lock()
-	var account, status string
+	var account, status, provider string
 	var expiry int64
 	var encrypted []byte
-	err := s.db.QueryRowContext(ctx, `SELECT account_id,expires_at,status,encrypted FROM auth_connections WHERE name=?`, name).
-		Scan(&account, &expiry, &status, &encrypted)
+	err := s.db.QueryRowContext(ctx, `SELECT account_id,expires_at,status,encrypted,provider FROM auth_connections WHERE name=?`, name).
+		Scan(&account, &expiry, &status, &encrypted, &provider)
 	if err != nil {
 		s.mu.Unlock()
 		if errors.Is(err, sql.ErrNoRows) {
@@ -218,7 +279,12 @@ func (s *Store) access(ctx context.Context, name string) (credentials, error) {
 		s.mu.Unlock()
 		return credentials{}, err
 	}
-	if time.Unix(expiry, 0).After(s.now().Add(refreshMargin)) {
+	if c.Provider != provider {
+		s.mu.Unlock()
+		return credentials{}, errStore
+	}
+	if provider == providerClaude || provider == providerGitHub ||
+		time.Unix(expiry, 0).After(s.now().Add(refreshMargin)) {
 		s.mu.Unlock()
 		return c, nil
 	}
@@ -273,7 +339,7 @@ func (s *Store) refresh(ctx context.Context, c credentials) (credentials, time.T
 	if err != nil {
 		return credentials{}, time.Time{}, ErrReauthRequired
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(contentTypeHeader, "application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
 		return credentials{}, time.Time{}, ErrReauthRequired

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"slices"
 	"time"
@@ -331,19 +332,9 @@ func allocateDerivation(
 			CreatedAt:        now,
 			SourceMachineID:  source.ID,
 		}
-		if action == forkAction {
-			req.SourceMachineID = source.ID
-			req.SourceGeneration = source.Generation
-			if p.Runtime == smolvmRuntime {
-				m.StoreID = source.StoreID
-				if m.StoreID == "" {
-					m.StoreID = source.ID
-				}
-			}
-		} else {
-			m.CheckpointID = cp.ID
+		if err = linkChild(&m, &req, action, in, source, cp); err != nil {
+			return model.Machine{}, req, err
 		}
-		req.SSHPublicKeys = in.SSHPublicKeys
 	case action == createCheckpointAction:
 		kind := "disk"
 		if p.Runtime == smolvmRuntime {
@@ -358,6 +349,7 @@ func allocateDerivation(
 			Profile:          p,
 			CreatedAt:        now,
 			Status:           pendingStatus,
+			Labels:           source.Labels,
 		}
 		req.Checkpoint = cp
 		req.SourceMachineID = source.ID
@@ -418,4 +410,50 @@ func saveDerivedIntent(
 	}
 
 	return err
+}
+
+// linkChild records the derivation's ancestry, access, and labels on the child and
+// its request. Inherited and requested labels are validated as the map that is saved.
+func linkChild(
+	m *model.Machine,
+	req *model.Request,
+	action string,
+	in model.ChildInput,
+	source model.Machine,
+	cp *model.Checkpoint,
+) error {
+	if action == forkAction {
+		req.SourceMachineID = source.ID
+		req.SourceGeneration = source.Generation
+		if req.Profile.Runtime == smolvmRuntime {
+			m.StoreID = source.StoreID
+			if m.StoreID == "" {
+				m.StoreID = source.ID
+			}
+		}
+	} else {
+		m.CheckpointID = cp.ID
+	}
+	m.Labels = childLabels(action, in, source, cp)
+	if err := model.ValidateLabels(m.Labels); err != nil {
+		return problem(http.StatusBadRequest, "invalid_request", "labels after inheritance: "+err.Error())
+	}
+	req.SSHPublicKeys = in.SSHPublicKeys
+	return nil
+}
+
+// childLabels inherits the source's (fork) or checkpoint's (restore) labels and
+// lets the request add or override entries.
+func childLabels(action string, in model.ChildInput, source model.Machine, cp *model.Checkpoint) map[string]string {
+	labels := map[string]string{}
+	if action == forkAction {
+		maps.Copy(labels, source.Labels)
+	} else if cp != nil {
+		maps.Copy(labels, cp.Labels)
+	}
+	maps.Copy(labels, in.Labels)
+	if len(labels) == 0 {
+		return nil
+	}
+	return labels
 }

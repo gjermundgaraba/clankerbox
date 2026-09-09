@@ -1,0 +1,36 @@
+{
+  "date": "2026-09-08",
+  "test": "real Claude subscription inference through controller-held setup-token",
+  "platform": "macOS arm64",
+  "profile": "mac-xcode-v3",
+  "claude_version": "2.1.263",
+  "installation": "official @anthropic-ai/claude-code npm package pinned to 2.1.263 in disposable VM",
+  "launcher": "clankerbox-claude",
+  "model": "claude-sonnet-4-6",
+  "exit_code": 0,
+  "result": {
+    "type": "result",
+    "subtype": "success",
+    "is_error": false,
+    "result": "CLANKERBOX_CLAUDE_MAC_LIVE_OK",
+    "num_turns": 1,
+    "terminal_reason": "completed",
+    "api_error_status": null
+  },
+  "guest_checks": {
+    "credential_cache_files_present_before": false,
+    "credential_cache_files_present_after": false,
+    "claude_keychain_entry_present_after": false,
+    "oauth_token_prefix_files_in_claude_config_after": 0
+  },
+  "cleanup": {
+    "disposable_vm_stopped": true,
+    "disposable_vm_deleted": true,
+    "shared_connection_retained": true
+  },
+  "limits": [
+    "No macOS fork performed in this bounded test.",
+    "Credential scan covers known Claude cache files, the Claude keychain service, and Claude configuration paths; it is not an exhaustive memory or filesystem scan.",
+    "Successful provider inference does not independently establish subscription billing or policy compliance."
+  ]
+}

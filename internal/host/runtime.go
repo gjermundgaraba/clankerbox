@@ -377,7 +377,7 @@ func (n *NativeRuntime) guest(ctx context.Context, m Manifest, script string) ([
 			m.RuntimeName(),
 			"-i",
 			"--",
-			"/bin/sh",
+			guestShell,
 			shellStrictFlags,
 		}
 		return n.Runner.Run(ctx, path, args, n.env(m), []byte(script))
@@ -388,7 +388,7 @@ func (n *NativeRuntime) guest(ctx context.Context, m Manifest, script string) ([
 		nameFlag,
 		m.RuntimeName(),
 		"--",
-		"/bin/sh",
+		guestShell,
 		shellStrictFlags,
 		"-c",
 		script,

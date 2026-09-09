@@ -32,11 +32,11 @@ func bootstrapScript(m Manifest, keys []string) (string, error) {
 		}
 		keyData = base64.StdEncoding.EncodeToString([]byte(strings.Join(canonical, "\n") + "\n"))
 	}
-	user, home, decode := "root", "/root", "base64 -d"
+	user, home, decode := authRootUser, rootHome, linuxDecode
 	if m.Profile.Runtime == runtimeTart {
-		user = "admin"
-		home = "/Users/admin"
-		decode = "/usr/bin/base64 -D"
+		user = authMacUser
+		home = adminHome
+		decode = macDecode
 	}
 	config := `Port 22
 Protocol 2

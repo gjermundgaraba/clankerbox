@@ -3,6 +3,7 @@ package control_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -253,4 +254,32 @@ func captureAfterReservedFork(
 	}
 
 	return source, fork, cp
+}
+
+func TestDerivationRejectsLabelsBeyondTheLimitAfterInheritance(t *testing.T) {
+	t.Parallel()
+	c, _, in, _ := setupControl(t)
+	defer closeTest(t, c)
+	ctx := t.Context()
+	source := mustCreate(t, c, in, "create")
+	labels := map[string]string{}
+	for i := range 32 {
+		labels[fmt.Sprintf("k%d", i)] = "v"
+	}
+	if _, err := c.SetLabels(ctx, source.MachineID, labels); err != nil {
+		t.Fatal(err)
+	}
+	mustMutate(t, c, source.MachineID, "stop", "stop")
+	child := model.ChildInput{
+		Name:          "child",
+		SSHPublicKeys: []string{testPublicKey(t)},
+		Labels:        map[string]string{"extra": "v"},
+	}
+	_, err := c.Derive(ctx, "fork", source.MachineID, "fork-overflow", child)
+	expectCode(t, err, "invalid_request")
+	// The inherited map alone is still within the limit.
+	child.Labels = nil
+	if _, err = c.Derive(ctx, "fork", source.MachineID, "fork", child); err != nil {
+		t.Fatal(err)
+	}
 }
