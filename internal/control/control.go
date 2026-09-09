@@ -382,15 +382,7 @@ func (c *Controller) Create(
 	if !ok || !slices.Contains(h.ProfileIDs, p.ID) {
 		return model.Operation{}, problem(http.StatusBadRequest, "invalid_request", "host does not provide profile")
 	}
-	var n int
-	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM machines WHERE name=? AND deleted=0", in.Name).
-		Scan(&n); err != nil {
-		return model.Operation{}, err
-	}
-	if n != 0 {
-		return model.Operation{}, problem(http.StatusConflict, "name_conflict", "machine name already exists")
-	}
-	if err = capacity(ctx, tx, h, p, ""); err != nil {
+	if err = admitCreate(ctx, tx, h, p, in.Name); err != nil {
 		return model.Operation{}, err
 	}
 	now := c.now()
@@ -435,6 +427,35 @@ func (c *Controller) Create(
 		err = tx.Commit()
 	}
 	return o, err
+}
+
+func admitCreate(ctx context.Context, tx *sql.Tx, h model.Host, p model.Profile, name string) error {
+	var count int
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM machines WHERE name=? AND deleted=0", name).
+		Scan(&count); err != nil {
+		return err
+	}
+	if count != 0 {
+		return problem(http.StatusConflict, "name_conflict", "machine name already exists")
+	}
+	if p.Runtime == "local" {
+		// A local host owns one immutable machine even after it is stopped or
+		// deleted. Check within admission's transaction, including pending creates,
+		// before a rejected request can acquire a durable capacity reservation.
+		if err := tx.QueryRowContext(ctx,
+			"SELECT count(*) FROM machines WHERE json_extract(CAST(body AS TEXT),'$.host')=?", h.ID).
+			Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			return problem(
+				http.StatusConflict,
+				"local_machine_exists",
+				"local host already has its retained machine; use a new dev state directory for another environment",
+			)
+		}
+	}
+	return capacity(ctx, tx, h, p, "")
 }
 
 // Mutate accepts an idempotent start, stop, or delete after checking current host state.

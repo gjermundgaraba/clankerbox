@@ -29,7 +29,9 @@ const (
 
 // Config configures a Manager.
 type Config struct {
-	StateDir      string
+	StateDir string
+	// DefaultCwd is the initial directory when a session omits cwd.
+	DefaultCwd    string
 	Loader        *vt.Loader
 	Incarnation   string
 	DaemonVersion string
@@ -214,7 +216,10 @@ func (m *Manager) newRecord(args protocol.CreateArgs) protocol.Session {
 	}
 	cwd := args.Cwd
 	if cwd == "" {
-		cwd = homeDir()
+		cwd = m.cfg.DefaultCwd
+		if cwd == "" {
+			cwd = homeDir()
+		}
 	} else if !filepath.IsAbs(cwd) {
 		cwd = filepath.Join(homeDir(), cwd)
 	}

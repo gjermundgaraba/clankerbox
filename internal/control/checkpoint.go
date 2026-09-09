@@ -269,6 +269,13 @@ func derivationSource(
 	if err != nil {
 		return source, cp, err
 	}
+	if source.ProfileSpec.Runtime == "local" {
+		return source, cp, problem(
+			http.StatusBadRequest,
+			"unsupported",
+			"local machines do not support forks or checkpoints",
+		)
+	}
 	if err = sourceIdle(ctx, tx, id); err != nil {
 		return source, cp, err
 	}

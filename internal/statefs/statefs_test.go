@@ -289,3 +289,75 @@ func TestFileOperationsThroughTrustedParentAlias(t *testing.T) {
 		t.Fatal("accepted final file symlink beneath parent alias")
 	}
 }
+
+func TestOpenAppendPreservesContentsAndPermissions(t *testing.T) {
+	t.Parallel()
+	dir, path := directory(t)
+	for _, contents := range []string{"first\n", "second\n"} {
+		file, err := dir.OpenAppend("log")
+		check(t, err)
+		_, err = file.WriteString(contents)
+		check(t, errors.Join(err, file.Close()))
+	}
+	actual, err := dir.ReadFile("log")
+	check(t, err)
+	if string(actual) != "first\nsecond\n" {
+		t.Fatalf("appended contents = %q", actual)
+	}
+	info, err := os.Stat(filepath.Join(path, "log"))
+	check(t, err)
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("append file mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestOpenAppendRejectsUnsafeEntries(t *testing.T) {
+	t.Parallel()
+	dir, path := directory(t)
+	check(t, dir.WriteFile("original", []byte("keep")))
+	check(t, os.Symlink("original", filepath.Join(path, "alias")))
+	check(t, syscall.Mkfifo(filepath.Join(path, fifoName), 0600))
+	check(t, os.Mkdir(filepath.Join(path, "directory"), 0700))
+	for _, name := range []string{"readable", "writable"} {
+		check(t, dir.WriteFile(name, []byte("keep")))
+	}
+	//nolint:gosec // Deliberately unsafe fixture: append must reject public-readable files.
+	check(t, os.Chmod(filepath.Join(path, "readable"), 0644))
+	//nolint:gosec // Deliberately unsafe fixture: append must reject public-writable files.
+	check(t, os.Chmod(filepath.Join(path, "writable"), 0666))
+	for _, name := range []string{"alias", fifoName, "directory", "readable", "writable", "", ".", "..", "../escape", "/absolute", "nested/file"} {
+		file, err := dir.OpenAppend(name)
+		if file != nil {
+			check(t, file.Close())
+		}
+		if err == nil {
+			t.Errorf("accepted append to %q", name)
+		}
+	}
+	original, err := dir.ReadFile("original")
+	check(t, err)
+	if string(original) != "keep" {
+		t.Fatalf("modified alias target: %q", original)
+	}
+}
+
+func TestOpenAppendUsesVerifiedDirectoryHandle(t *testing.T) {
+	t.Parallel()
+	dir, path := directory(t)
+	check(t, dir.WriteFile("log", []byte("original\n")))
+	moved := path + "-moved"
+	check(t, os.Rename(path, moved))
+	check(t, os.Mkdir(path, 0700))
+	file, err := dir.OpenAppend("log")
+	check(t, err)
+	_, err = file.WriteString("appended\n")
+	check(t, errors.Join(err, file.Close()))
+	actual, err := statefs.ReadPrivate(filepath.Join(moved, "log"))
+	check(t, err)
+	if string(actual) != "original\nappended\n" {
+		t.Fatalf("append contents = %q", actual)
+	}
+	if _, err = os.Stat(filepath.Join(path, "log")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("appended through substituted directory: %v", err)
+	}
+}

@@ -64,7 +64,9 @@ func DefaultPaths() (Paths, error) {
 
 // Options configure Serve.
 type Options struct {
-	Paths       Paths
+	Paths Paths
+	// DefaultCwd overrides the home directory for sessions with no requested cwd.
+	DefaultCwd  string
 	Version     string
 	MaxSessions int
 	RingSize    int
@@ -104,6 +106,7 @@ func Serve(ctx context.Context, opts Options) error {
 	defer func() { _ = loader.Close(context.Background()) }()
 	manager, err := session.New(ctx, session.Config{
 		StateDir:      opts.Paths.State,
+		DefaultCwd:    opts.DefaultCwd,
 		Loader:        loader,
 		Incarnation:   uuid.NewString(),
 		DaemonVersion: opts.Version,

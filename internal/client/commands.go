@@ -39,6 +39,7 @@ func newCommand(streams Streams) *cli.Command {
 	commandStreams(streams).addSSHCommands(root)
 	commandStreams(streams).addConnectionCommands(root)
 	commandStreams(streams).addSessionCommands(root)
+	commandStreams(streams).addDevCommands(root)
 	return root
 }
 

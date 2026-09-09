@@ -937,6 +937,8 @@ func (c *Config) validateProfiles() error {
 		}
 		seen[p.ID] = true
 		switch p.Runtime {
+		case "local":
+			return errors.New("local profiles require clankerbox dev, not a VM host helper")
 		case runtimeTart:
 			if !model.SafePath(c.TartPath) || !model.SafePath(c.LaunchctlPath) {
 				return errors.New("tart requires absolute tart_path and launchctl_path")

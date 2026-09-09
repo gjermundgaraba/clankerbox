@@ -26,6 +26,13 @@ dependency or release requirement.
 
 ## Using machines
 
+For applications developing against Clankerbox locally, `clankerbox dev` runs
+the real controller and guest terminal protocol on your computer without a VM.
+It supplies one machine named `local`, prints Clankerdesk connection configuration,
+and retains terminal processes across controller or consumer restarts. See
+[local development](docs/local-development.md) for setup, workspace selection and
+shutdown.
+
 Create `~/.config/clankerbox/config.json` with your API origin and local files:
 
 ```json

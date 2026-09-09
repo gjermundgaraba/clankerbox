@@ -262,6 +262,13 @@ func (d *Dir) readFile(name string, private bool) ([]byte, error) {
 	return data, errors.Join(err, file.Close())
 }
 
+// OpenAppend opens a private regular file for appending, creating it with mode
+// 0600 if absent. It rejects symlinks and special files without blocking, and
+// validates the opened descriptor. The caller owns the returned file.
+func (d *Dir) OpenAppend(name string) (*os.File, error) {
+	return d.openFile(name, os.O_CREATE|os.O_WRONLY|os.O_APPEND, true)
+}
+
 // WriteFile atomically replaces a regular file with private contents and syncs
 // both the file and its directory. On an error after rename, the new contents
 // may already be visible. Existing nonregular files are never replaced.

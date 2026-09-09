@@ -93,6 +93,15 @@ in the guest are trusted; the terminal key restricts transport, not authority.
 
 ## Private storage
 
+Local development uses the same controller and guest process boundaries through
+`clankerbox dev`. Its private local transport retains the one machine's operation
+journal and SSH identity, authenticates the controller's terminal key, and exposes
+only the guest proxy command. The detached guest outlives controller cancellation;
+explicit dev stop owns guest shutdown through a separate private Unix socket.
+Local sessions can select a default workspace without changing production guests'
+home-directory default or the guest wire protocol. See
+[local development](local-development.md).
+
 `statefs.Open(path)` owns creation and validation of a current-user-owned `0700`
 directory, returns a held directory handle, and rejects unsafe existing roots.
 It does not silently change existing directory permissions. Ancestors must be
@@ -104,6 +113,8 @@ symlinks in the final file component.
 
 Directory operations accept single-component names. Private reads validate the
 opened file's ownership, type, and permissions, then read the same descriptor.
+Private append opens validate the write descriptor and preserve existing contents
+without reading them, so opening a retained guest log does not load its history.
 Descriptor-relative opening rejects final symlinks and cannot block on a FIFO.
 Ordinary user configuration may be readable by others, but may not be writable
 by them. Atomic replacement syncs both contents and the containing directory;

@@ -50,6 +50,9 @@ const smolvmRuntime = "smolvm"
 
 // RuntimeCapabilities returns the operations supported by a runtime and architecture.
 func RuntimeCapabilities(runtime, arch string) []string {
+	if runtime == "local" {
+		return []string{"create", "start", "stop", "delete", "sessions"}
+	}
 	out := []string{"create", "start", "stop", "delete", "ssh", "checkpoint", "restore"}
 	if runtime == smolvmRuntime {
 		if arch == "amd64" {
@@ -83,7 +86,8 @@ func (p *Profile) Validate() error {
 		return errors.New("unsupported architecture")
 	}
 	if (p.Runtime != "tart" || p.OS != "macos" || p.Arch != "arm64") &&
-		(p.Runtime != smolvmRuntime || p.OS != "linux") {
+		(p.Runtime != smolvmRuntime || p.OS != "linux") &&
+		(p.Runtime != "local" || (p.OS != "linux" && p.OS != "macos")) {
 		return errors.New("unsupported OS/runtime combination")
 	}
 	if p.Runtime == smolvmRuntime && !SafePath(p.ImagePath) {
