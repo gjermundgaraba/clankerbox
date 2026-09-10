@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"time"
 	"unicode"
 )
 
@@ -44,6 +45,7 @@ const (
 	CodeConflict        = "conflict"
 	CodeAlreadyAttached = "already_attached"
 	CodeCapacity        = "capacity"
+	CodeExpired         = "expired"
 	CodeInternal        = "internal"
 )
 
@@ -228,7 +230,10 @@ type Foreground struct {
 	Command string `json:"command"`
 }
 
-// CreateArgs are the arguments of session.create.
+// CreateArgs are the arguments of session.create. CreatedAt is when the
+// caller decided to create the session (RFC 3339); a daemon refuses a create
+// it does not remember once that is older than its retry horizon, so a
+// repeated create can never start a second process after retention.
 type CreateArgs struct {
 	SessionID string            `json:"session_id"`
 	Label     string            `json:"label,omitempty"`
@@ -237,12 +242,25 @@ type CreateArgs struct {
 	Env       map[string]string `json:"env,omitempty"`
 	Cols      uint16            `json:"cols"`
 	Rows      uint16            `json:"rows"`
+	CreatedAt string            `json:"created_at"`
+}
+
+// Created parses CreatedAt.
+func (a CreateArgs) Created() (time.Time, error) {
+	created, err := time.Parse(time.RFC3339Nano, a.CreatedAt)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%w: created_at must be RFC 3339", errInvalid)
+	}
+	return created, nil
 }
 
 // Validate checks bounds.
 func (a CreateArgs) Validate() error {
 	if !uuidPattern.MatchString(a.SessionID) {
 		return fmt.Errorf("%w: session_id must be a UUID", errInvalid)
+	}
+	if _, err := a.Created(); err != nil {
+		return err
 	}
 	if len(a.Label) > MaxLabel || !printable(a.Label) {
 		return fmt.Errorf("%w: label", errInvalid)

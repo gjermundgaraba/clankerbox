@@ -249,6 +249,7 @@ func TestExecutableDevRetainsTerminalAcrossControllerRestart(t *testing.T) {
 				SessionID: uuid.NewString(),
 				Cols:      80,
 				Rows:      24,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 				Argv: []string{
 					"/bin/sh",
 					"-c",
@@ -383,7 +384,7 @@ func verifyFreshTerminal(ctx context.Context, t *testing.T, guest *client.Client
 	t.Helper()
 	var created protocol.SessionValue
 	requireOK(t, guest.CallInto(ctx, protocol.OpSessionCreate, protocol.CreateArgs{
-		SessionID: uuid.NewString(), Cols: 80, Rows: 24,
+		SessionID: uuid.NewString(), Cols: 80, Rows: 24, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		Argv: []string{"/bin/sh", "-c", "printf 'fresh-shell-marker\\n'; read -r line"},
 	}, &created))
 	zero := uint64(0)

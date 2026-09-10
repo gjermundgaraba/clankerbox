@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -93,6 +95,10 @@ func (r *recorder) prefixBytes() []byte {
 	return r.prefix
 }
 
+func stamp() string {
+	return time.Now().UTC().Format(time.RFC3339Nano)
+}
+
 func newLoader(t *testing.T) *vt.Loader {
 	t.Helper()
 	loader, err := vt.NewLoader(t.Context())
@@ -128,6 +134,7 @@ func create(t *testing.T, m *session.Manager, argv ...string) protocol.Session {
 		Cwd:       t.TempDir(),
 		Cols:      80,
 		Rows:      24,
+		CreatedAt: stamp(),
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -411,9 +418,9 @@ func TestExitOutcomesAndLostOnRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
-	exited, err := m.Create(
-		protocol.CreateArgs{SessionID: uuid.NewString(), Argv: []string{shell, "-c", "exit 7"}, Cols: 80, Rows: 24},
-	)
+	exited, err := m.Create(protocol.CreateArgs{
+		SessionID: uuid.NewString(), Argv: []string{shell, "-c", "exit 7"}, Cols: 80, Rows: 24, CreatedAt: stamp(),
+	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -421,9 +428,9 @@ func TestExitOutcomesAndLostOnRestart(t *testing.T) {
 		record := inspect(t, m, exited.ID)
 		return record.Status == protocol.StatusExited && record.ExitCode != nil && *record.ExitCode == 7
 	})
-	signalled, err := m.Create(
-		protocol.CreateArgs{SessionID: uuid.NewString(), Argv: []string{shell, "-c", sleepForever}, Cols: 80, Rows: 24},
-	)
+	signalled, err := m.Create(protocol.CreateArgs{
+		SessionID: uuid.NewString(), Argv: []string{shell, "-c", sleepForever}, Cols: 80, Rows: 24, CreatedAt: stamp(),
+	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -438,9 +445,9 @@ func TestExitOutcomesAndLostOnRestart(t *testing.T) {
 		value.View == nil {
 		t.Fatalf("ended open with view: %v %+v", err, value)
 	}
-	running, err := m.Create(
-		protocol.CreateArgs{SessionID: uuid.NewString(), Argv: []string{shell, "-c", sleepForever}, Cols: 80, Rows: 24},
-	)
+	running, err := m.Create(protocol.CreateArgs{
+		SessionID: uuid.NewString(), Argv: []string{shell, "-c", sleepForever}, Cols: 80, Rows: 24, CreatedAt: stamp(),
+	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -493,6 +500,7 @@ func TestCreateIdempotentAndCapacity(t *testing.T) {
 		Argv:      []string{shell, "-c", sleepForever},
 		Cols:      80,
 		Rows:      24,
+		CreatedAt: stamp(),
 	}
 	first, err := m.Create(args)
 	if err != nil {
@@ -549,7 +557,9 @@ func TestSlowSubscriberIsDroppedNotThePTY(t *testing.T) {
 	}
 }
 
-func TestEndedSessionsExpireFromThisDaemon(t *testing.T) {
+// A remembered session answers its create however old it is; retention is the
+// only thing that forgets, and it comes after the horizon.
+func TestEndedSessionsExpireAndStaleCreatesNeverStart(t *testing.T) {
 	t.Parallel()
 	loader := newLoader(t)
 	var clock sync.Mutex
@@ -568,12 +578,134 @@ func TestEndedSessionsExpireFromThisDaemon(t *testing.T) {
 		t.Fatalf("manager: %v", err)
 	}
 	t.Cleanup(m.Close)
-	record := create(t, m, shell, "-c", "exit 0")
+	advance := func(d time.Duration) {
+		clock.Lock()
+		defer clock.Unlock()
+		now = now.Add(d)
+	}
+	args := protocol.CreateArgs{
+		SessionID: uuid.NewString(),
+		Argv:      []string{shell, "-c", "exit 0"},
+		Cwd:       t.TempDir(),
+		Cols:      80,
+		Rows:      24,
+		CreatedAt: now.UTC().Format(time.RFC3339Nano),
+	}
+	record, err := m.Create(args)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
 	eventually(t, "exit", func() bool { return inspect(t, m, record.ID).Status == protocol.StatusExited })
-	clock.Lock()
-	now = now.Add(8 * 24 * time.Hour)
-	clock.Unlock()
+	advance(2 * 24 * time.Hour)
+	if again, createErr := m.Create(args); createErr != nil || again.PID != record.PID {
+		t.Fatalf("a remembered session must answer its stale create: %v %+v", createErr, again)
+	}
+	fresh := args
+	fresh.SessionID = uuid.NewString()
+	var typed *protocol.Error
+	if _, err = m.Create(fresh); !errors.As(err, &typed) || typed.Code != protocol.CodeExpired || typed.Retryable {
+		t.Fatalf("an unknown stale create must be refused: %v", err)
+	}
+	// A create dated beyond the clock allowance can never expire, so it is never accepted.
+	future := fresh
+	future.CreatedAt = now.Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err = m.Create(future); !errors.As(err, &typed) || typed.Code != protocol.CodeInvalid {
+		t.Fatalf("a future-dated create must be refused: %v", err)
+	}
+	advance(6 * 24 * time.Hour)
 	eventually(t, "retention to remove the ended session", func() bool { return len(m.List()) == 0 })
+	if _, err = m.Create(args); !errors.As(err, &typed) || typed.Code != protocol.CodeExpired {
+		t.Fatalf("a forgotten create must not start again: %v", err)
+	}
+}
+
+// lockedBuffer collects log lines written from several goroutines.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func TestRecordFailuresAreLoggedNotHidden(t *testing.T) {
+	t.Parallel()
+	loader := newLoader(t)
+	stateDir := t.TempDir()
+	var logged lockedBuffer
+	log := slog.New(slog.NewTextHandler(&logged, nil))
+	m, err := session.New(t.Context(), session.Config{
+		StateDir: stateDir, Loader: loader, Incarnation: uuid.NewString(), Log: log,
+	})
+	if err != nil {
+		t.Fatalf("manager: %v", err)
+	}
+	record := create(t, m, shell, "-c", sleepForever)
+	// The record directory stops accepting writes; the exit is still served from memory.
+	dir := filepath.Join(stateDir, "sessions", record.ID)
+	if err = os.Chmod(dir, 0o500); err != nil { //nolint:gosec // A directory that refuses writes.
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) //nolint:gosec // Restored for cleanup.
+	ended, err := m.End(record.ID)
+	if err != nil || ended.Status != protocol.StatusExited {
+		t.Fatalf("end: %v %+v", err, ended)
+	}
+	if !strings.Contains(logged.String(), "write session record") {
+		t.Fatalf("failed exit write was not logged: %q", logged.String())
+	}
+	if inspect(t, m, record.ID).Status != protocol.StatusExited {
+		t.Fatal("in-memory record lost its exit")
+	}
+	// A record that cannot be decoded keeps its id as a lost session, so a repeated
+	// create for it is answered, never run again; a stray directory is only skipped.
+	corrupt := uuid.NewString()
+	for _, name := range []string{corrupt, "not-a-session"} {
+		entry := filepath.Join(stateDir, "sessions", name)
+		if err = os.MkdirAll(entry, 0o700); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err = os.WriteFile(filepath.Join(entry, "manifest.json"), []byte("{"), 0o600); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	m.Close()
+	restarted, err := session.New(t.Context(), session.Config{
+		StateDir: stateDir, Loader: loader, Incarnation: uuid.NewString(), Log: log,
+	})
+	if err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+	t.Cleanup(restarted.Close)
+	for _, line := range []string{"quarantine unreadable session record", "skip stray session entry"} {
+		if !strings.Contains(logged.String(), line) {
+			t.Fatalf("%q was not logged: %q", line, logged.String())
+		}
+	}
+	// The unwritten exit is the one thing a restart cannot recover: the on-disk record
+	// still said running, so that session and the quarantined one both come back lost.
+	statuses := map[string]string{}
+	for _, listed := range restarted.List() {
+		statuses[listed.ID] = listed.Status
+	}
+	if len(statuses) != 2 || statuses[record.ID] != protocol.StatusLost || statuses[corrupt] != protocol.StatusLost {
+		t.Fatalf("unexpected records after restart: %+v", statuses)
+	}
+	again, err := restarted.Create(protocol.CreateArgs{
+		SessionID: corrupt, Argv: []string{shell, "-c", "exit 0"}, Cols: 80, Rows: 24, CreatedAt: stamp(),
+	})
+	if err != nil || again.Status != protocol.StatusLost || again.PID != 0 {
+		t.Fatalf("a quarantined id must answer lost, not start: %v %+v", err, again)
+	}
 }
 
 func TestActivityChangesReachAttachments(t *testing.T) {

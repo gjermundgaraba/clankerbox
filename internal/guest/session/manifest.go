@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
 	"clankerbox/internal/guest/protocol"
+	"clankerbox/internal/statefs"
 )
 
 const (
@@ -15,7 +17,6 @@ const (
 	manifestName    = "manifest.json"
 	sessionsDirName = "sessions"
 	dirMode         = 0o700
-	fileMode        = 0o600
 )
 
 // manifest is the durable session record plus the liveness guard fields.
@@ -32,41 +33,38 @@ func sessionDir(stateDir, id string) string {
 	return filepath.Join(stateDir, sessionsDirName, id)
 }
 
-// writeManifest replaces the manifest atomically.
+// writeManifest replaces the manifest durably: a private temp file, synced,
+// renamed over the previous document, with the directory synced too. A record
+// directory created here is made durable through its parents as well, so a
+// crash cannot forget a session that was already started.
 func writeManifest(stateDir string, m manifest) error {
-	dir := sessionDir(stateDir, m.ID)
-	if err := os.MkdirAll(dir, dirMode); err != nil {
-		return fmt.Errorf("create session directory: %w", err)
+	path := sessionDir(stateDir, m.ID)
+	_, statErr := os.Lstat(path)
+	dir, err := statefs.Open(path)
+	if err != nil {
+		return fmt.Errorf("open session directory: %w", err)
 	}
+	defer func() { _ = dir.Close() }()
 	m.Version = manifestVersion
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("encode manifest: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, ".manifest-*")
-	if err != nil {
-		return fmt.Errorf("create manifest temp file: %w", err)
-	}
-	name := tmp.Name()
-	if _, err = tmp.Write(raw); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(name)
+	if err = dir.WriteFile(manifestName, raw); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
-	if err = tmp.Chmod(fileMode); err != nil {
-		_ = tmp.Close()
-		_ = os.Remove(name)
-		return fmt.Errorf("chmod manifest: %w", err)
+	if !errors.Is(statErr, os.ErrNotExist) {
+		return nil
 	}
-	if err = tmp.Close(); err != nil {
-		_ = os.Remove(name)
-		return fmt.Errorf("close manifest: %w", err)
+	return errors.Join(syncDir(filepath.Dir(path)), syncDir(stateDir))
+}
+
+func syncDir(path string) error {
+	dir, err := os.Open(path) //nolint:gosec // A directory the daemon itself created or validated.
+	if err != nil {
+		return err
 	}
-	if err = os.Rename(name, filepath.Join(dir, manifestName)); err != nil {
-		_ = os.Remove(name)
-		return fmt.Errorf("publish manifest: %w", err)
-	}
-	return nil
+	return errors.Join(dir.Sync(), dir.Close())
 }
 
 // removeManifest deletes a session directory.
@@ -77,9 +75,11 @@ func removeManifest(stateDir, id string) error {
 	return nil
 }
 
-// readManifests loads every manifest under the state directory. Unreadable
-// entries are skipped; a missing sessions directory yields no manifests.
-func readManifests(stateDir string) ([]manifest, error) {
+// readManifests loads every manifest under the state directory. An entry that
+// cannot be read or decoded is logged and kept as an unfinished record of that
+// id, so the id is still known and never started again; a missing sessions
+// directory yields no manifests.
+func readManifests(stateDir string, log *slog.Logger) ([]manifest, error) {
 	entries, err := os.ReadDir(filepath.Join(stateDir, sessionsDirName))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -93,13 +93,21 @@ func readManifests(stateDir string) ([]manifest, error) {
 			continue
 		}
 		path := filepath.Join(stateDir, sessionsDirName, entry.Name(), manifestName)
-		raw, readErr := os.ReadFile(path) //nolint:gosec // Inside the private state directory.
-		if readErr != nil {
-			continue
-		}
 		var m manifest
-		if json.Unmarshal(raw, &m) != nil || m.ID != entry.Name() {
-			continue
+		raw, problem := os.ReadFile(path) //nolint:gosec // Inside the private state directory.
+		if problem == nil {
+			problem = json.Unmarshal(raw, &m)
+		}
+		if problem == nil && m.ID != entry.Name() {
+			problem = errors.New("manifest id differs from its directory")
+		}
+		if problem != nil {
+			if (protocol.SessionArgs{SessionID: entry.Name()}).Validate() != nil {
+				log.Error("skip stray session entry", "path", path, "error", problem)
+				continue
+			}
+			log.Error("quarantine unreadable session record", "path", path, "error", problem)
+			m = manifest{ID: entry.Name(), Argv: []string{}, Status: protocol.StatusStarting}
 		}
 		out = append(out, m)
 	}

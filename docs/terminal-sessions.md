@@ -70,8 +70,16 @@ State lives under `$HOME/.clankerbox/`, created and validated as a private
 - `guest.sock` (0600): created by the lock holder only, after it removed any
   stale socket. A process that fails to take the lock never touches the socket.
 - `daemon.log`: daemon stdout and stderr after detachment.
-- `sessions/<id>/manifest.json`: written with temp file plus rename before the
-  session is published; replaced atomically on every state change.
+- `sessions/<id>/manifest.json`: written through `statefs` (private temp file,
+  fsync, rename, directory fsync, and the parents synced when the record
+  directory is new) before the session is published and on every state
+  change. A write that fails once the process runs is logged to
+  `daemon.log` and the in-memory record stays authoritative until the daemon
+  restarts, after which the on-disk record wins: an unwritten exit comes back
+  as `lost`. A record that cannot be read or decoded at startup is logged and
+  quarantined: its id stays known as a `lost` session, so a repeated create for
+  it is answered rather than run again; an entry whose name is not a session id
+  is skipped.
 
 `clankerbox-guest proxy` connects to the socket. On connection failure it runs
 `clankerbox-guest daemon` detached in a new session with every inherited
@@ -135,13 +143,18 @@ Zero viewers change nothing: parsing, ring, and activity continue.
 records that were not finished when a previous daemon died.
 
 - `starting`: the manifest is durably written; the child is being spawned. If
-  spawning fails the manifest is removed and the request fails.
+  spawning fails before the child exists the manifest is removed and the
+  request fails; once the child runs, its id stays taken whatever a later
+  write does.
 - `running`: the child is alive. The daemon owns it and reaps it with `wait`.
 - `exited`: the child was reaped. The record carries `exit_code` for a normal
   exit or `signal` for signal termination; neither is fabricated from PTY EOF.
   After the wait, the daemon drains the PTY for at most 2 s or until EOF, then
   publishes the final `session` event carrying the final `offset`. Descendants
-  that keep the PTY slave open past the drain are left alone.
+  that keep the PTY slave open past the drain are left alone. The final screen
+  text and cursor are captured once at exit and the terminal and the output
+  ring are released: an ended session costs its record and that text, not a VT
+  instance, and nothing resumes an ended session.
 - `lost`: a copied or restarted daemon found an unfinished manifest. Its pid is
   never signalled during cleanup. Daemon loss means ownership loss, not proven
   death of every descendant.
@@ -157,7 +170,11 @@ manifest-only record (after a daemon restart) or a `lost` session it answers
 `ended` with the known status and no `view`, never an invented screen.
 Retention applies equally to sessions the running daemon owned and to records
 adopted from earlier daemons. A repeated `session.create` with the same id is a
-conflict unless cwd, argv, and env match.
+conflict unless cwd, argv, and env match, and a create the daemon does not
+remember is refused as `expired` once its `created_at` is older than 24 h.
+Retention is longer than that horizon, so a session this daemon ran is still
+remembered when its create expires and a repeated create never starts a second
+process.
 
 ### Activity
 
@@ -244,7 +261,7 @@ revision plus the engine artifact.
 
 | Op | Args | Value |
 | --- | --- | --- |
-| `session.create` | `session_id` (caller-minted UUID), `label?` ≤ 200, `cwd?` ≤ 4096, `argv?`, `env?` ≤ 64 entries, `cols` 2–500, `rows` 1–300 | `{session}` |
+| `session.create` | `session_id` (caller-minted UUID), `label?` ≤ 200, `cwd?` ≤ 4096, `argv?`, `env?` ≤ 64 entries, `cols` 2–500, `rows` 1–300, `created_at` (RFC 3339, when the caller decided to create) | `{session}` |
 | `session.list` | | `{sessions}` |
 | `session.open` | `session_id`, `from_offset?`, `from_incarnation?` | `{mode, offset, session, snapshot_bytes?, view?}`; modes `resume` and `snapshot` are followed by stream frames on this connection, including ordered `session` events for this session's activity, foreground, and exit; `ended` with a view is followed by the view's text bytes; `unavailable` is complete |
 | `session.input` | `session_id`, `data` base64 ≤ 256 KiB decoded | `{status: accepted \| refused, reason?}` |
@@ -253,7 +270,8 @@ revision plus the engine artifact.
 | `session.report` | `session_id`, `state ∈ idle, working, attention` | `{}` |
 
 Error codes: `not_found`, `not_running`, `invalid`, `too_large`, `conflict`,
-`already_attached`, `capacity`, `internal`. Only `capacity` is retryable.
+`already_attached`, `capacity`, `expired`, `internal`. Only `capacity` is
+retryable.
 Every operation names its session; none depends on the connection having
 opened one. Interrupting a command is input: the consumer writes the byte a
 terminal would, and the line discipline or the raw-mode program handles it
@@ -262,7 +280,13 @@ exactly as it would for a keyboard.
 `session.create` is idempotent on `session_id`: a repeat with identical
 immutable arguments (`cwd`, `argv`, `env`) returns the existing session; a
 repeat with different arguments fails with `conflict`, so a lost reply is
-recovered by repeating the same create.
+recovered by repeating the same create. The repeat is bounded by `created_at`:
+a create the daemon does not remember that is older than the 24 h horizon
+fails with `expired` and is never started, and ended sessions are remembered
+for longer than that, so a consumer that keeps repeating a create gets either
+the session it started or a refusal, never a second process. A create dated
+more than 1 h ahead of the daemon's clock is refused as `invalid`, so the
+horizon holds across clock skew.
 
 ### Open and resume
 
@@ -381,10 +405,12 @@ protocol.
 ### Endpoints
 
 - `GET /v1/machines/{id}/sessions/stream` with `Connection: Upgrade` and
-  `Upgrade: clankerbox-session`. Prerequisites as for the SSH stream. 503
-  `guest_unavailable` with a reason code (`connecting`, `suspended`,
-  `incompatible`, `unreachable`) when the link is not ready; 429 `capacity`
-  when the link is full. On success the raw frame stream is bridged; the first
+  `Upgrade: clankerbox-session`. Prerequisites as for the SSH stream. 503 with
+  the link status as the code (`guest_connecting`, `guest_suspended`,
+  `guest_incompatible`, `guest_unreachable`, `guest_unavailable`) and the
+  link's reason as the message when the link is not ready, so a consumer can
+  tell a deployment problem from a link that is still coming up; 429
+  `capacity` when the link is full. On success the raw frame stream is bridged; the first
   bytes the caller reads are the daemon `hello`.
 - `GET /v1/machines/{id}/sessions` runs `session.list` over a control channel.
 - `GET /v1/machines/{id}` gains `guest: {status ∈ ready | connecting |
@@ -446,7 +472,17 @@ terminal client is added.
   arguments before `session.create` is sent. A lost reply is recovered by
   repeating the identical idempotent create, serialized per id, never by
   inspecting alone, and a `pending` row is never finalized from an inventory
-  read. Copied sessions in a forked machine are not adopted automatically; an
+  read. The persisted create carries the row's creation time as `created_at`,
+  and an `expired` refusal finalizes the row with that reason. A `pending`
+  row has three exits: confirmed by the guest, refused by the guest, or
+  abandoned by the desk. `terminal.end` on a `pending` row whose machine
+  cannot be reached abandons the intent (reason `abandoned`) instead of
+  waiting for a link that may never come, dropping a handshake in flight so
+  the create is never sent; a shell the guest may have started before is
+  untracked and stays visible in `session.list`. A machine the
+  controller does not have (`not_found` at the stream) finalizes the row like
+  a deleted machine, and binding checks that the machine exists first.
+  Copied sessions in a forked machine are not adopted automatically; an
   explicit `terminal.adopt` operation is later work. Rebinding a workspace's
   machine never retargets existing terminals.
 - Each workspace binds one machine (`workspace_machines` table).
@@ -462,12 +498,28 @@ terminal client is added.
   restores the mirror after complete validation and pushes a fresh `0x00`
   frame to every attached browser; on `unavailable` it keeps the mirror and
   retries every 2 s; on `ended` it records the outcome and the view, or the
-  mirror's own screen when there is none. Only the ordered `resize` event
+  mirror's own screen when there is none. The catalog finalizes a terminal
+  only from the ordered exit `session` event on its stream or from an ended
+  open; the `session.end` reply is answered to the caller but never applied,
+  so the recorded screen always holds the last output whatever order the
+  daemon's control and stream writers took. Only the ordered `resize` event
   changes the mirror grid and the browsers' grid, serialized with output on
   each browser socket.
 - Before attaching, the host compares `hello.wasm_sha256` with its own
   terminal-core digest. A mismatch puts the session into `disconnected` with
-  reason `incompatible` and retries only every 60 s. A browser announces the
+  reason `incompatible` and retries only every 60 s; the controller's
+  `guest_incompatible` refusal is treated the same way, and its other
+  `guest_*` codes set the reason to the link status with the normal backoff.
+  Every wait a workspace worker can observe fits the supervisor's 30 s request
+  bound, which exceeds the longest composed operation (a terminal create and
+  its compensating end): controller calls time out after 5 s (at most three
+  attempts for a mutation), the stream upgrade (wall-clock, including a refusal's body, which
+  settles even when it ends early) and the hello after 10 s, and a guest reply
+  or the next announced bootstrap bytes after 15 s, which closes the link so
+  the reconnect loop takes over; `terminal.create` answers after its first
+  attempt or after 10 s with the row as it stands. A finalized session whose
+  catalog write fails keeps its owner, whose mirror still answers reads, and
+  the write is tried again every 5 s. A browser announces the
   digest of the WASM it actually loaded in its first attachment message; the
   host refuses a mismatch with a close code that makes the client reload, so a
   page opened before a deployment never decodes a newer snapshot.
@@ -476,14 +528,19 @@ terminal client is added.
 - Status mapping: guest `starting`, `running` → `running`; guest `exited` →
   `exited` with exit code or signal; guest `lost` → `exited` without a code;
   link down or `unavailable` while the machine runs → `disconnected` with a
-  reason. Browsers keep their view during `disconnected` and resume when the
-  host resyncs.
+  reason: `link` for transport failures, the controller's code for a refusal
+  (the link status for `guest_*`, else the code itself such as `capacity`),
+  and `machine <state>` for a prerequisite refusal such as a stopped machine;
+  a `lost` record ends the row with reason `lost`. Browsers keep their view
+  during `disconnected` and resume when the host resyncs.
 - Host restart reconciles every non-final catalog row (`pending`, `running`,
   and `disconnected`) by opening it: `pending` → repeat the create, then open;
   running → a fresh snapshot; `ended` → store the outcome with the view when
   present; `not_found` → `exited` without a code and no screen.
-- A `machines` host capability in the SDK owns the controller client and the
-  workspace binding. Every mutation is submitted under one idempotency key per
+- A `machines` host capability in the SDK owns the controller client; the
+  workspace binding (which machine new terminals start on) is the terminal
+  capability's setting, so the machine service needs no terminal engine.
+  Every mutation is submitted under one idempotency key per
   call; the desk repeats the identical request under that key a bounded number
   of times when the transport fails without a controller answer, so the
   accepted operation is recovered rather than duplicated. Beyond that a lost
@@ -492,8 +549,9 @@ terminal client is added.
   whose id the card keeps. The `clankerbox` extension shows machines as canvas
   shapes with state, observation health, and activity and exposes
   `machines.list`, `machines.create`, `machines.fork`, `machines.start`,
-  `machines.stop`, `machines.delete`, and `workspace.bindMachine`. Machine
-  shapes show machine state only; activity stays on terminal shapes in v1.
+  `machines.stop`, `machines.delete`, and `clankerbox.bind`, which calls the
+  terminal capability. Machine shapes show machine state only; activity stays
+  on terminal shapes in v1.
   Cards poll inspection through the desk, which coalesces concurrent and
   recent inspections per machine; the desk does not consume `/v1/events`.
 - `ssh2` and `node-pty` leave the server. Tests use an in-process fake
@@ -514,6 +572,8 @@ terminal client is added.
 | Snapshot larger than the tail queue, continuation overflow | Prefix streams outside the live queue; `unavailable` is a typed open outcome with bounded retry. |
 | Large paste while the child floods output | Reader and writer progress independently; replies have reserved capacity; overflow is counted, never a deadlock. |
 | Guest exits while desk is disconnected | Reconciliation records the exit outcome; never invented success or permanent `disconnected`. |
+| Desk away for longer than a day with a pending create | The guest refuses the stale create as `expired` and the row is finalized with that reason; a remembered session answers instead. Never a second process. |
+| Pending create on a machine that cannot be reached | `terminal.end` abandons it with reason `abandoned`; a shell the guest may have started stays in `session.list`. |
 | Desk restart after persisting `disconnected` | Reconciled like `running`; fresh snapshot. |
 | Old daemon, new desk | `incompatible`, sessions untouched. |
 | Guest daemon dies | Shells receive SIGHUP; sessions listed as `lost` on the next daemon start. |
@@ -537,14 +597,19 @@ terminal client is added.
   two resizes at one offset; input admission and refusal after exit; large paste
   during output flood; reply overflow accounting; pid and start-time guard;
   process teardown and final drain; concurrent first proxies; stale socket;
-  activity ranking with process exit override.
+  activity ranking with process exit override; the stale-create refusal with
+  the horizon inside retention; terminal and ring release at exit with the
+  view retained; logged record write failures and skipped records.
 - Controller tests: link lifecycle mirrored from the auth relay tests with the
   fake SSH guest, including source reservations and capacity; stream upgrade
   bridging; labels and inheritance; change notifications; guest status.
 - Clankerdesk tests: the existing terminal suites against the fake controller
   and guest; lost create reply; restart after `disconnected`; browser opened
-  during an outage; incompatible daemon; the browser acceptance test unchanged
-  in intent.
+  during an outage; incompatible daemon; an end reply overtaking the stream's
+  tail; abandoned and expired creates; unknown machines at bind and create;
+  the controller's `guest_incompatible` refusal; a paused viewer under a
+  snapshot larger than the live backlog limit; a guest that answers hello and
+  nothing else; the browser acceptance test unchanged in intent.
 - Live check on the private controller: create machine, open two browsers,
   kill the desk host, restart the controller, fork the machine, and verify each
   row of the failure matrix. Recorded in `docs/implementation-execution.md`.

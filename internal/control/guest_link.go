@@ -249,7 +249,7 @@ func (c *Controller) serveGuestLink(ctx context.Context, link *guestLink) {
 	case ctx.Err() != nil:
 		link.set(guestStatusSuspended, "link closed")
 	case errors.Is(err, client.ErrIncompatible):
-		link.set(guestStatusIncompat, "protocol major mismatch")
+		link.set(guestStatusIncompat, "wire revision mismatch")
 	case err != nil:
 		// Transport diagnostics may contain runtime output; expose only a fixed reason.
 		link.set(guestStatusUnavailable, "guest daemon unreachable")

@@ -278,6 +278,7 @@ func TestGuestLinkReadyListAndStream(t *testing.T) {
 	var created protocol.SessionValue
 	err = guest.CallInto(t.Context(), protocol.OpSessionCreate, protocol.CreateArgs{
 		SessionID: uuid.NewString(), Argv: []string{"/bin/sh", "-c", "sleep 30"}, Cwd: t.TempDir(), Cols: 80, Rows: 24,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}, &created)
 	if err != nil {
 		t.Fatalf("create through link: %v", err)

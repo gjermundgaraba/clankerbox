@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sync"
@@ -44,6 +45,7 @@ type Session struct {
 	stateDir    string
 	bootID      string
 	now         func() time.Time
+	log         *slog.Logger
 
 	term   *vt.Terminal
 	ring   *ring
@@ -51,6 +53,9 @@ type Session struct {
 	cmd    *exec.Cmd
 	writer *ptyWriter
 	subs   []*subscriber
+	// The final screen, captured once at exit when the terminal is released.
+	view  *protocol.View
+	final []byte
 
 	lastOutput time.Time
 	hook       *hookState
@@ -69,10 +74,12 @@ type spawnOptions struct {
 	ringSize    int
 	loader      *vt.Loader
 	now         func() time.Time
+	log         *slog.Logger
 }
 
 // spawn writes the starting manifest, starts the child on a PTY, and begins
-// the reader, writer, and wait loops.
+// the reader, writer, and wait loops. The manifest is removed only when the
+// child never existed: once it runs, its id stays taken whatever storage does.
 func spawn(opts spawnOptions) (*Session, error) {
 	s := &Session{
 		record:      opts.record,
@@ -80,6 +87,7 @@ func spawn(opts spawnOptions) (*Session, error) {
 		stateDir:    opts.stateDir,
 		bootID:      opts.bootID,
 		now:         opts.now,
+		log:         opts.log,
 		ring:        newRing(opts.ringSize),
 		writer:      newPtyWriter(),
 		readDone:    make(chan struct{}),
@@ -132,12 +140,8 @@ func (s *Session) start(opts spawnOptions) error {
 	if s.startTime, err = processStartTime(cmd.Process.Pid); err != nil {
 		s.startTime = 0
 	}
-	if err = writeManifest(s.stateDir, s.manifest()); err != nil {
-		_ = cmd.Process.Kill()
-		_ = master.Close()
-		_ = term.Close()
-		return err
-	}
+	// Like every later write: logged when it fails, the running record stays in memory.
+	s.persist()
 	go s.writer.run(master)
 	go s.readLoop()
 	go s.waitLoop()
@@ -160,6 +164,14 @@ func (s *Session) timestamp() string {
 
 func (s *Session) manifest() manifest {
 	return manifest{Session: s.record, StartTime: s.startTime, BootID: s.bootID, Fingerprint: s.fingerprint}
+}
+
+// persist writes the record under the session mutex. A failure is logged and
+// the in-memory record stays authoritative until the daemon restarts.
+func (s *Session) persist() {
+	if err := writeManifest(s.stateDir, s.manifest()); err != nil {
+		s.log.Error("write session record", "session", s.record.ID, "error", err)
+	}
 }
 
 // onReply runs inside vt.Write, under the session mutex held by ingest.
@@ -214,10 +226,16 @@ func (s *Session) waitLoop() {
 	s.record.Foreground = nil
 	s.record.Activity = protocol.Activity{State: protocol.ActivityExited, Source: protocol.SourceProcess, Since: ended}
 	s.applyExit(err)
+	// An ended session is its record plus its final screen: the terminal and
+	// the ring are released here, since nothing resumes an ended session.
+	s.view, s.final = capture(s.term)
+	term := s.term
+	s.term, s.ring = nil, nil
+	s.persist()
 	record := s.record
-	_ = writeManifest(s.stateDir, s.manifest())
 	subs := s.subs
 	s.mu.Unlock()
+	_ = term.Close()
 	s.writer.close()
 	_ = s.master.Close()
 	for _, sub := range subs {
@@ -271,12 +289,11 @@ func (s *Session) open(
 	defer s.mu.Unlock()
 	cut := s.record.Offset
 	if !s.running() {
-		view, text := s.view()
-		value := protocol.OpenValue{Mode: protocol.ModeEnded, Offset: cut, Session: s.record, View: view}
-		if view == nil {
+		value := protocol.OpenValue{Mode: protocol.ModeEnded, Offset: cut, Session: s.record, View: s.view}
+		if s.view == nil {
 			return value, nil, nil
 		}
-		return value, &Attachment{sink: sink, final: text}, nil
+		return value, &Attachment{sink: sink, final: s.final}, nil
 	}
 	sub := newSubscriber(sink, s.record.ID)
 	if s.resumable(args, incarnation) {
@@ -304,18 +321,14 @@ func (s *Session) open(
 	}, &Attachment{sub: sub, session: s}, nil
 }
 
-// view reads the final screen under the session mutex: its announcement and
-// the text bytes. Nil when the terminal is gone or cannot be read, never an
-// invented screen.
-func (s *Session) view() (*protocol.View, []byte) {
-	if s.term == nil {
-		return nil, nil
-	}
-	text, err := s.term.Text()
+// capture reads the final screen once: its announcement and the text bytes.
+// Nil when the terminal cannot be read, never an invented screen.
+func capture(term *vt.Terminal) (*protocol.View, []byte) {
+	text, err := term.Text()
 	if err != nil {
 		return nil, nil
 	}
-	x, y, err := s.term.Cursor()
+	x, y, err := term.Cursor()
 	if err != nil {
 		return nil, nil
 	}
@@ -386,7 +399,7 @@ func (s *Session) resize(cols, rows uint16) (protocol.Session, error) {
 	for _, sub := range s.subs {
 		sub.enqueueEvent(event)
 	}
-	_ = writeManifest(s.stateDir, s.manifest())
+	s.persist()
 	return s.record, nil
 }
 
@@ -458,15 +471,4 @@ func (s *Session) foreground() *protocol.Foreground {
 		return nil
 	}
 	return &protocol.Foreground{PID: pgid, Command: processCommand(pgid)}
-}
-
-// close releases the VT after the session ended.
-func (s *Session) close() {
-	s.mu.Lock()
-	term := s.term
-	s.term = nil
-	s.mu.Unlock()
-	if term != nil {
-		_ = term.Close()
-	}
 }

@@ -608,3 +608,71 @@ A third review noted that a final view whose frames failed to write left the
 connection open with its announced bytes outstanding; a failed view transfer
 now closes the sink like a failed stream, and a session test covers both the
 delivered and the failed transfer.
+
+### Architecture review round (2026-09-10)
+
+An architecture review of the wire revision 2 work confirmed eight findings and
+a cleanup, resolved as a few contracts. On the guest, an ended session is now
+its record plus its final screen: the text and cursor are captured once at exit
+and the terminal and the output ring are released, since nothing resumes an
+ended session; manifests are written through `statefs` (fsync of file and
+directory) and every discarded persistence error is logged, with the in-memory
+record staying authoritative until a restart; and `session.create` carries
+`created_at`, so a create the daemon does not remember that is older than the
+24 h horizon is refused as `expired` and never started, while ended sessions
+are remembered for longer, closing the window in which a desk that had been
+away could start a second process. The controller names the guest link status
+in its refusal code (`guest_incompatible`, `guest_unavailable`, and so on).
+On the desk, a terminal is finalized only from the ordered exit event on its
+stream or from the guest's ended view, never from the `session.end` reply, so
+the recorded screen holds the last output whatever order the daemon's writers
+took; the exited status and the screen are one catalog write; a pending create
+has three exits (confirmed, refused, or abandoned by `terminal.end` when its
+machine cannot be reached), an unknown machine finalizes the row instead of
+retrying forever and binding checks the machine exists; every wait a workspace
+worker can observe fits the supervisor's 20 s bound (guest replies 15 s and the
+link closes, controller calls 5 s, create answers after 10 s at most); viewers
+get a bootstrap allowance so a snapshot larger than the live backlog limit is
+never counted as backlog; and the workspace binding moved to the terminal
+capability, which removed the machine service's dependency on the terminal
+engine.
+A review of that round found six gaps in the failure paths, all closed. The
+guest quarantines a record it cannot read as a `lost` session instead of
+forgetting its id, and refuses a create dated more than an hour ahead of its
+clock, so the no-replay guarantee no longer depends on intact manifests or
+synchronized clocks. The desk drops a handshake in flight when a pending
+create is abandoned, so the late hello never sends the create; bounds a
+bootstrap whose announced bytes stop arriving with the same 15 s deadline as
+a reply; gives the stream upgrade a wall-clock deadline and settles a refusal
+that ends early; keeps a finalized session whose catalog write fails, with its
+mirror answering reads, and retries the write every 5 s while lookups prefer
+the live owner over its row; and accumulates a viewer's bootstrap allowance
+across back-to-back snapshots. The fake controller now refuses streams to a
+stopped machine with the real controller's 409, and the desk reports such
+refusals as `machine <state>`.
+A second review, on simplicity and correctness, found that the quarantined
+record's empty grid reached the desk's catalog and broke its schema, that a
+failed catalog write skipped closing an abandoned handshake, and that a new
+record directory was not durable through its parents. The desk now takes
+nothing but the outcome from a lost record and ignores late frames for a
+finalized session; the handshake is dropped before the catalog write; and the
+guest syncs the parent directories when a record directory is new.
+Deployed on 2026-09-10 (server `7a8bc92d…`, Linux guest `2590858e…`, Mac
+guest `d4235acd…`, CLI `90362b23…`) and verified live from a local desk with
+a disposable Linux machine: exit codes and markers recorded through the
+stream, a flood ended mid-output with its last line recorded, an exit during a
+controller restart recorded from the captured view, a pending terminal on a
+stopped machine reported `machine stopped` and abandoned on request, and an
+unknown machine finalized at once. Details in the controller README of
+personal-cloud.
+A completion review then measured four remaining failure paths. The guest's
+post-spawn record write is now logged rather than fatal, like every later
+write, so a child that already runs never has its id deleted; the desk's
+`end` answers with the finalized session when the ordered exit retired the
+link before the reply arrived; a viewer may have one bootstrap in flight, and
+one still receiving a snapshot when the next is needed is shed rather than
+credited twice; a create the catalog cannot record leaves nothing behind;
+controller refusal codes and a guest's `lost` record become the terminal's
+reason; and the supervisor's bound is 30 s, above the longest composed
+operation. The watchdog itself, which cannot tell a hung worker from host work
+that is legitimately slow, is left for a later design pass.

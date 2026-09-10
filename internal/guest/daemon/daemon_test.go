@@ -89,6 +89,7 @@ func createSession(t *testing.T, c *client.Client, script string) protocol.Sessi
 		Cwd:       t.TempDir(),
 		Cols:      80,
 		Rows:      24,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}, &value)
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -296,6 +297,7 @@ func TestEndedReplyCarriesALargeViewInFrames(t *testing.T) {
 		Cwd:       t.TempDir(),
 		Cols:      500,
 		Rows:      300,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}, &value)
 	if err != nil {
 		t.Fatalf("create: %v", err)

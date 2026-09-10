@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -25,7 +26,16 @@ const (
 	DefaultRingSize = 8 * 1024 * 1024
 	// endedRetention is how long ended records stay listed.
 	endedRetention = 7 * 24 * time.Hour
+	// createHorizon is how long a caller may repeat a create this daemon does
+	// not remember. Ended sessions are remembered for longer, so a session this
+	// daemon ran is still known when its create expires and never starts twice.
+	createHorizon = 24 * time.Hour
+	// createSkew is how far ahead of this daemon's clock a create may be dated.
+	createSkew = time.Hour
 )
+
+// Horizon plus skew must stay inside retention; a negative constant does not compile.
+const _ uint64 = uint64(endedRetention - createHorizon - createSkew)
 
 // Config configures a Manager.
 type Config struct {
@@ -38,6 +48,9 @@ type Config struct {
 	MaxSessions   int
 	RingSize      int
 	Now           func() time.Time
+	// Log receives record persistence failures; the in-memory record stays
+	// authoritative until the daemon restarts. Defaults to slog.Default.
+	Log *slog.Logger
 }
 
 // Manager owns every session of one daemon.
@@ -104,6 +117,9 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.Log == nil {
+		cfg.Log = slog.Default()
+	}
 	m := &Manager{
 		ctx:     ctx,
 		cfg:     cfg,
@@ -114,7 +130,7 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 		stop:    make(chan struct{}),
 		stopped: make(chan struct{}),
 	}
-	manifests, err := readManifests(cfg.StateDir)
+	manifests, err := readManifests(cfg.StateDir, cfg.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +159,9 @@ func (m *Manager) adoptManifest(record manifest) {
 		session.Foreground = nil
 		session.Activity = protocol.Activity{State: protocol.ActivityExited, Source: protocol.SourceNone, Since: ended}
 		record.Session = session
-		_ = writeManifest(m.cfg.StateDir, record)
+		if err := writeManifest(m.cfg.StateDir, record); err != nil {
+			m.cfg.Log.Error("write session record", "session", session.ID, "error", err)
+		}
 	}
 	m.records[session.ID] = record
 }
@@ -169,20 +187,37 @@ func (m *Manager) Close() {
 	<-m.stopped
 }
 
-// Create starts a session or returns the existing one for a repeated id.
+// Create starts a session or returns the existing one for a repeated id. A
+// create this daemon does not remember is refused once it is older than the
+// retry horizon, never started.
 func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	record := m.newRecord(args)
 	fingerprint := createFingerprint(record, args.Env)
 	if existing, ok := m.lookup(args.SessionID); ok {
-		if existing.Fingerprint != fingerprint {
+		// A quarantined record has no fingerprint left to compare; the id is still taken.
+		if existing.Fingerprint != "" && existing.Fingerprint != fingerprint {
 			return protocol.Session{}, &protocol.Error{
 				Code:    protocol.CodeConflict,
 				Message: "session id exists with different arguments",
 			}
 		}
 		return existing.Session, nil
+	}
+	created, err := args.Created()
+	if err != nil {
+		return protocol.Session{}, &protocol.Error{Code: protocol.CodeInvalid, Message: err.Error()}
+	}
+	now := m.cfg.Now()
+	if created.After(now.Add(createSkew)) {
+		return protocol.Session{}, &protocol.Error{Code: protocol.CodeInvalid, Message: "created_at is in the future"}
+	}
+	if now.Sub(created) > createHorizon {
+		return protocol.Session{}, &protocol.Error{
+			Code:    protocol.CodeExpired,
+			Message: "create is older than the retry horizon and was never started",
+		}
 	}
 	if m.runningCount() >= m.cfg.MaxSessions {
 		return protocol.Session{}, &protocol.Error{
@@ -201,6 +236,7 @@ func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
 		ringSize:    m.cfg.RingSize,
 		loader:      m.cfg.Loader,
 		now:         m.cfg.Now,
+		log:         m.cfg.Log,
 	})
 	if err != nil {
 		return protocol.Session{}, &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
@@ -424,16 +460,21 @@ func (m *Manager) prune(now time.Time) {
 	defer m.mu.Unlock()
 	for id, s := range m.live {
 		if expired(s.snapshot(), now) {
-			s.close()
 			delete(m.live, id)
-			_ = removeManifest(m.cfg.StateDir, id)
+			m.forget(id)
 		}
 	}
 	for id, record := range m.records {
 		if expired(record.Session, now) {
 			delete(m.records, id)
-			_ = removeManifest(m.cfg.StateDir, id)
+			m.forget(id)
 		}
+	}
+}
+
+func (m *Manager) forget(id string) {
+	if err := removeManifest(m.cfg.StateDir, id); err != nil {
+		m.cfg.Log.Error("remove session record", "session", id, "error", err)
 	}
 }
 

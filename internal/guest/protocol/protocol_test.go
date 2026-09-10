@@ -181,6 +181,7 @@ type messagesFile struct {
 const (
 	id          = "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d"
 	incarnation = "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e"
+	created     = "2026-09-09T12:00:00Z"
 )
 
 // exampleSessions are the three records the fixture shows: running, exited, and lost.
@@ -197,7 +198,7 @@ func exampleSessions() (protocol.Session, protocol.Session, protocol.Session) {
 		Rows:             24,
 		Status:           protocol.StatusRunning,
 		PID:              1234,
-		CreatedAt:        "2026-09-09T12:00:00Z",
+		CreatedAt:        created,
 		Offset:           2048,
 		RetainedFrom:     0,
 		LastResizeOffset: &lastResize,
@@ -231,6 +232,7 @@ func exampleMessages() messagesFile {
 			{protocol.OpSessionCreate, protocol.CreateArgs{
 				SessionID: id, Label: "shell", Cwd: "/root", Argv: []string{"/bin/bash", "-l"},
 				Env: map[string]string{"TERM_PROGRAM": "clankerdesk"}, Cols: 80, Rows: 24,
+				CreatedAt: created,
 			}},
 			{protocol.OpSessionList, protocol.Empty{}},
 			{protocol.OpSessionOpen, protocol.OpenArgs{SessionID: id, FromOffset: &from, FromIncarnation: incarnation}},
@@ -322,7 +324,9 @@ func TestOutputFrameBounds(t *testing.T) {
 
 func TestValidation(t *testing.T) {
 	t.Parallel()
-	good := protocol.CreateArgs{SessionID: "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d", Cols: 80, Rows: 24}
+	good := protocol.CreateArgs{
+		SessionID: "3f9b6b2e-3d8e-4a5b-9c6d-1e2f3a4b5c6d", Cols: 80, Rows: 24, CreatedAt: created,
+	}
 	if err := good.Validate(); err != nil {
 		t.Fatalf("valid create rejected: %v", err)
 	}
@@ -330,6 +334,11 @@ func TestValidation(t *testing.T) {
 	bad.Cols = 1
 	if err := bad.Validate(); !protocol.IsInvalid(err) {
 		t.Fatalf("grid bound not enforced: %v", err)
+	}
+	bad = good
+	bad.CreatedAt = "yesterday"
+	if err := bad.Validate(); !protocol.IsInvalid(err) {
+		t.Fatalf("created_at not validated: %v", err)
 	}
 	bad = good
 	bad.SessionID = "not-a-uuid"

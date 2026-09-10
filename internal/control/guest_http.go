@@ -91,15 +91,13 @@ func (c *Controller) sessionStream(w http.ResponseWriter, r *http.Request) {
 	bridgeSSH(conn, rw, upstream)
 }
 
+// guestProblem names the link status in the error code, so a consumer can tell
+// an incompatible daemon from a link that is still connecting.
 func guestProblem(err error, view model.GuestStatus) error {
 	if errors.Is(err, errGuestCapacity) {
 		return problem(http.StatusTooManyRequests, "capacity", "guest stream capacity reached")
 	}
-	reason := view.Status
-	if view.Reason != "" {
-		reason += ": " + view.Reason
-	}
-	return problem(http.StatusServiceUnavailable, "guest_unavailable", reason)
+	return problem(http.StatusServiceUnavailable, "guest_"+view.Status, view.Reason)
 }
 
 // ListSessions runs session.list over a short-lived control stream.

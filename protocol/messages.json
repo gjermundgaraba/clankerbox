@@ -15,7 +15,8 @@
           "TERM_PROGRAM": "clankerdesk"
         },
         "cols": 80,
-        "rows": 24
+        "rows": 24,
+        "created_at": "2026-09-09T12:00:00Z"
       }
     },
     {
