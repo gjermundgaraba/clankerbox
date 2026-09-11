@@ -32,9 +32,9 @@ func bootstrapScript(m Manifest, keys []string) (string, error) {
 		}
 		keyData = base64.StdEncoding.EncodeToString([]byte(strings.Join(canonical, "\n") + "\n"))
 	}
-	user, home, decode := authRootUser, rootHome, linuxDecode
+	user, home, decode := rootUser, rootHome, linuxDecode
 	if m.Profile.Runtime == runtimeTart {
-		user = authMacUser
+		user = adminUser
 		home = adminHome
 		decode = macDecode
 	}

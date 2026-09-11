@@ -80,13 +80,9 @@ these limitations:
 - Userfaultfd-based lazy generations, macOS/Windows behaviour, portable RAM
   recovery, host reboot and general application crash consistency are not
   established by this test. Non-Linux allocation behaviour is unchanged.
-- Real coding-agent session behaviour is a separate test; shared sentinel
-  acceptance is not a substitute for it. The subsequent
-  [real Codex/ChatGPT run](CODEX_RESULTS.md) now also passes active-tool RAM forks,
-  independent concurrent coding/context turns and connection recovery.
+- Shared sentinel acceptance does not establish application-session continuity.
 
 The completed fix run removed its VMs, guardians, records and disk directories.
 Private source/build/log inputs remain under
 `/home/clanker/clankerbox-smolvm.Jf1bpB` (about 7.4 GiB at handoff), including an
-original-library copy in `original-runtime/libkrun.so`. Later Codex runs have
-their own resource and cleanup records. No existing user workspace was removed.
+original-library copy in `original-runtime/libkrun.so`. No existing user workspace was removed.

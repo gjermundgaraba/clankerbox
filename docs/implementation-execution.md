@@ -489,7 +489,7 @@ new guest application dependency was needed.
 - A running-machine deletion was rejected as expected; cleanup used explicit
   stop followed by delete. The guide now makes that prerequisite explicit.
 
-The requested Codex deslop/ponytail review identified one valid local-viewer
+The requested code review identified one valid local-viewer
 diagnostic regression. Silent exit propagation is now limited to SSH, with an
 executable regression test for viewer failure. Full race-enabled tests and lint
 passed, including literal exec streams, status 37/255, owner lifetime, config
@@ -531,8 +531,7 @@ unregister; the keepalive is a daemon hello probe that refreshes the cached
 hello; `session.list` uses an uncounted control stream; child labels are merged
 over inherited ones; the change digest excludes observation freshness; the VT
 continuation limit is 8 MiB so snapshots fit the 32 MiB cap; unused VT
-callbacks, dead channels and alternatives were removed; and a pre-provider auth
-store is rebuilt rather than migrated.
+callbacks, dead channels and alternatives were removed.
 
 ### Live qualification (2026-09-09)
 
@@ -557,12 +556,8 @@ implemented, three in part. Guest client calls are now bounded by their context
 (cancellation closes the connection, which also releases a write the peer is not
 consuming); the event queue is an explicit frame bound and `Close` releases a
 reader parked on it; fork/restore validate the merged label map before it is
-saved; the auth README states the rebuild behavior; the spec no longer contradicts
-itself on lost-create recovery; and stale comments were removed. The Codex
-ciphertext fallback was kept: deploying without it stopped the controller, because
-the live store gained its `provider` column in place before the rebuild rule and
-still holds provider-less Codex ciphertext, which startup verification decrypts.
-A regression test now covers that row shape. On the desk side, ending a terminal
+saved; the spec clarifies lost-create recovery, and stale comments were removed.
+On the desk side, ending a terminal
 always goes through the guest, and attach/create replies refresh informational
 session fields. A follow-up serialized `wazero.NewRuntime` in `vt.NewLoader`:
 wazero 1.12 caches its version string in an unsynchronized global, and tests

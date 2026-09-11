@@ -75,7 +75,6 @@ func (c *Controller) Handler(token []byte) (http.Handler, error) {
 	expected := sha256.Sum256(token)
 	mux := http.NewServeMux()
 	c.registerMachineRoutes(mux)
-	c.registerAuthRoutes(mux)
 	c.registerCheckpointRoutes(mux)
 	c.registerGuestRoutes(mux)
 	mux.HandleFunc("GET /v1/machines/{id}/ssh", c.stream)

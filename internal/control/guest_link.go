@@ -112,7 +112,7 @@ func (c *Controller) runGuest(ctx context.Context) {
 	}
 }
 
-// reconcileGuest applies the auth relay's complete eligibility rule: prepared,
+// reconcileGuest applies the complete guest-link eligibility rule: prepared,
 // running at the accepted generation, fresh observation, not suspended, and no
 // pending or unresolved source reservation.
 func (c *Controller) reconcileGuest(ctx context.Context) {
@@ -124,7 +124,7 @@ func (c *Controller) reconcileGuest(ctx context.Context) {
 		return
 	}
 	for _, m := range allMachines {
-		if authEligible(m) && sourceIdle(ctx, c.db, m.ID) == nil {
+		if guestEligible(m) && sourceIdle(ctx, c.db, m.ID) == nil {
 			wanted[m.ID] = m
 		}
 	}
@@ -133,7 +133,7 @@ func (c *Controller) reconcileGuest(ctx context.Context) {
 	defer c.guest.mu.Unlock()
 	for id, link := range c.guest.links {
 		m, ok := wanted[id]
-		if !ok || (!authReady(m) && link.state() == guestStatusReady) || c.guest.suspended[id] > 0 ||
+		if !ok || (!guestReady(m) && link.state() == guestStatusReady) || c.guest.suspended[id] > 0 ||
 			m.Generation != link.machine.Generation {
 			link.cancel()
 		}
@@ -167,8 +167,8 @@ func (c *Controller) closeGuestLinks() {
 	}
 }
 
-// suspendGuest closes a machine's link before a runtime copies its memory and
-// waits for the teardown, mirroring suspendAuth.
+// suspendGuest closes a machine's link and waits for teardown before a runtime
+// copies its memory.
 func (c *Controller) suspendGuest(ctx context.Context, req model.Request) (func(), error) {
 	id := req.MachineID
 	if req.Action == forkAction {
@@ -270,10 +270,10 @@ func (c *Controller) openGuestLink(ctx context.Context, link *guestLink) error {
 	setup, cancel := context.WithTimeout(ctx, guestSetupTimeout)
 	defer cancel()
 	machine := link.machine
-	if !authReady(machine) {
+	if !guestReady(machine) {
 		var err error
 		machine, err = c.Inspect(setup, machine.ID)
-		if err != nil || !authReady(machine) {
+		if err != nil || !guestReady(machine) {
 			return errors.New("machine is not ready for guest sessions")
 		}
 	}
@@ -285,7 +285,7 @@ func (c *Controller) openGuestLink(ctx context.Context, link *guestLink) error {
 		return err
 	}
 	defer func() { _ = stream.Close() }()
-	conn := &authStreamConn{ReadWriteCloser: stream}
+	conn := &guestStreamConn{ReadWriteCloser: stream}
 	stop := context.AfterFunc(setup, func() { _ = conn.Close() })
 	sshClient, err := c.guestSSHClient(conn, machine)
 	if err != nil {
@@ -305,7 +305,7 @@ func (c *Controller) openGuestLink(ctx context.Context, link *guestLink) error {
 }
 
 // guestSSHClient authenticates with the terminal key against the pinned guest host key.
-func (c *Controller) guestSSHClient(conn *authStreamConn, m model.Machine) (*ssh.Client, error) {
+func (c *Controller) guestSSHClient(conn *guestStreamConn, m model.Machine) (*ssh.Client, error) {
 	expected, _, _, _, err := ssh.ParseAuthorizedKey([]byte(m.SSHHostKey))
 	if err != nil {
 		return nil, errors.New("invalid prepared guest host key")
@@ -495,19 +495,45 @@ func (c *Controller) GuestStatus(id string) model.GuestStatus {
 	return link.view()
 }
 
-// decorate attaches guest and auth relay views to an API copy of a machine.
+// decorate attaches the guest link view to an API copy of a machine.
 func (c *Controller) decorate(m model.Machine) model.Machine {
 	if m.Deleted {
 		return m
 	}
 	view := c.GuestStatus(m.ID)
 	m.Guest = &view
-	if c.auth != nil {
-		c.auth.mu.Lock()
-		if relay := c.auth.relays[m.ID]; relay != nil {
-			m.AuthRelay = relay.status
-		}
-		c.auth.mu.Unlock()
-	}
 	return m
 }
+
+func guestEligible(m model.Machine) bool {
+	return !m.Deleted && m.Prepared && m.DesiredState == model.Running && m.Generation == m.AcceptedGeneration
+}
+func guestReady(m model.Machine) bool {
+	return !m.Deleted && m.Prepared && !m.ObservationStale && m.State == model.Running &&
+		m.DesiredState == model.Running &&
+		m.Generation == m.AcceptedGeneration
+}
+
+// guestStreamConn adapts the existing SSH helper stream; context timers close the
+// transport to bound handshake and daemon readiness. SSH itself does not use deadlines.
+type guestStreamConn struct {
+	io.ReadWriteCloser
+
+	once sync.Once
+	err  error
+}
+
+func (c *guestStreamConn) Close() error {
+	c.once.Do(func() { c.err = c.ReadWriteCloser.Close() })
+	return c.err
+}
+func (*guestStreamConn) LocalAddr() net.Addr              { return guestAddress("controller") }
+func (*guestStreamConn) RemoteAddr() net.Addr             { return guestAddress("guest") }
+func (*guestStreamConn) SetDeadline(time.Time) error      { return nil }
+func (*guestStreamConn) SetReadDeadline(time.Time) error  { return nil }
+func (*guestStreamConn) SetWriteDeadline(time.Time) error { return nil }
+
+type guestAddress string
+
+func (guestAddress) Network() string  { return "ssh" }
+func (a guestAddress) String() string { return string(a) }

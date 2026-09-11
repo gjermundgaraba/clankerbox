@@ -33,12 +33,6 @@ no-traffic retention observation, and C/Docker workloads. It required the full
 14-unit native stack. These measurements do not rank it against bare-metal
 Cocoon; pre-resume identity preparation and comprehensive recovery remain gaps.
 
-Real Codex/ChatGPT application tests are tracked in the
-[separate execution report](real-agent-execution.md). Cocoon, Cube and patched
-smolvm have passed the same active-tool, independent coding and conversation-continuity checks,
-including explicit connection reset and later disconnect recovery. Runtime RAM
-acceptance and actual agent continuation remain separate results.
-
 ## Original recommendation and current qualification
 
 Keep Tart for macOS. The original shortlist put Cocoon first and CubeSandbox

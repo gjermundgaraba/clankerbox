@@ -14,7 +14,7 @@ import uuid
 
 ROOT = Path(__file__).resolve().parent
 REV = "d0081641c59822e4e5653b7462e914410b81910a"
-GRANTS = frozenset(("cube-isolated-20260905", "cube-codex-20260905"))
+GRANT = "cube-isolated-20260905"
 NAMES = ("parent", "child-a", "child-b")
 DELTAS = (10, 100, 1000)
 GUEST = "/var/tmp/cube-guest.py"
@@ -39,7 +39,7 @@ def isolated():
         raise RuntimeError("Requires a disposable KVM VM, never the existing bare-metal host")
     scope = json.loads((ROOT / '.work/scope.json').read_text())
     marker = json.loads(Path('/etc/clanker-cube-scope').read_text())
-    require(scope == marker and scope['grant'] in GRANTS, 'Wrong isolated scope marker')
+    require(scope == marker and scope['grant'] == GRANT, 'Wrong isolated scope marker')
 
 
 def sdk():

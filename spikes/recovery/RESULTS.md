@@ -165,7 +165,6 @@ physical power-loss test, cross-CPU compatibility result or arbitrary applicatio
 transaction guarantee. No credentials or real agent sessions are captured here.
 The runtime/device/CPU profile is pinned; cross-host/cross-version migration,
 long-duration soak and production supervision/networking remain untested here.
-Earlier [real Codex session-fork results](../../docs/real-agent-execution.md) and
 [Tart stopped-disk results](../tart-checkpoints/RESULTS.md) remain separate evidence;
 they were not rerun against the newer portable artifact profile. See
 [scope and protocol](README.md).

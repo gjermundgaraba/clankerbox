@@ -16,6 +16,8 @@ import (
 )
 
 const (
+	rootUser         = "root"
+	adminUser        = "admin"
 	rootHome         = "/root"
 	adminHome        = "/Users/admin"
 	linuxDecode      = "base64 -d"
@@ -186,9 +188,9 @@ func guestKeyScript(m Manifest, publicKey string) (string, error) {
 	if err != nil || len(keys) != 1 {
 		return "", errors.New("invalid terminal public key")
 	}
-	user, home, decode := authRootUser, rootHome, linuxDecode
+	user, home, decode := rootUser, rootHome, linuxDecode
 	if m.Profile.Runtime == runtimeTart {
-		user, home, decode = authMacUser, adminHome, macDecode
+		user, home, decode = adminUser, adminHome, macDecode
 	}
 	line := `restrict,command="` + guestBinaryPath + ` proxy" ` + keys[0] + " " + guestKeyComment
 	encoded := base64.StdEncoding.EncodeToString([]byte(line + "\n"))

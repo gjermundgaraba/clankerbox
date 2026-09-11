@@ -4,7 +4,7 @@ Current state: **patched concurrent RAM acceptance and synced-disk lifecycle PAS
 See [the executed RAM-fork fix](RAM_FIX.md) and
 [the separate libkrun patch](libkrun-dax-fork.patch). This fixes the reproduced
 Linux x86_64 virtiofs/DAX eager-fork failure; it is not an upstream merge or a
-claim about all device modes. Real Codex session tests are a separate follow-up.
+claim about all device modes or application-session continuity.
 
 The initial result below was **KVM retention PASS; concurrent RAM acceptance FAIL**. Executed under
 coordinator grant `smolvm-isolated-20260905` alongside other host activity. All
@@ -160,8 +160,8 @@ produced four misleading patched-suite failures during runner development. The
 runner was corrected; no such failed run is counted as a patched pass.
 
 Unit tests use only temporary SQLite databases and a private
-`SMOLVM_TEST_VM_CACHE_ROOT` (compiled under `cfg(test)` only). No HOME or
-CODEX_HOME override is used. The first Cargo invocation unintentionally used
+`SMOLVM_TEST_VM_CACHE_ROOT` (compiled under `cfg(test)` only). No HOME
+override is used. The first Cargo invocation unintentionally used
 the normal Cargo cache; it was stopped and all subsequent dependency/build
 writes use `.work/cargo`. No package was globally installed.
 

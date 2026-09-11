@@ -220,9 +220,8 @@ type Machine struct {
 	CreatedAt          time.Time  `json:"created_at"`
 	// Labels are caller-owned metadata replaced as a whole map.
 	Labels map[string]string `json:"labels,omitempty"`
-	// Guest and AuthRelay are materialized views attached to API responses only.
-	Guest     *GuestStatus `json:"guest,omitempty"`
-	AuthRelay string       `json:"auth_relay,omitempty"`
+	// Guest is a materialized view attached to API responses only.
+	Guest *GuestStatus `json:"guest,omitempty"`
 }
 
 // GuestStatus is the observed state of the controller's link to a machine's

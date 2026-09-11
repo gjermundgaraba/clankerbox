@@ -204,11 +204,11 @@ func exampleSessions() (protocol.Session, protocol.Session, protocol.Session) {
 		LastResizeOffset: &lastResize,
 		Incarnation:      incarnation,
 		Activity: protocol.Activity{
-			State:  protocol.ActivityWorking,
+			State:  protocol.ActivityUnknown,
 			Source: protocol.SourceProcess,
 			Since:  "2026-09-09T12:00:01Z",
 		},
-		Foreground: &protocol.Foreground{PID: 1300, Command: "codex"},
+		Foreground: &protocol.Foreground{PID: 1300, Command: "python3"},
 	}
 	exited := running
 	exited.Status = protocol.StatusExited

@@ -1,1 +1,0 @@
-/home/authprobe/.pi/agent/auth.json

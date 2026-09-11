@@ -184,9 +184,9 @@ Every session carries `activity: {state, source, since}` with
 
 - A hook report owns the state for 300 s after the last report.
 - Below that, process observation reads the PTY foreground process group. A
-  known coding-agent binary in the foreground with output in the last 2 s is
-  `working`, without output for 2 s it is `idle`. A shell in the foreground is
-  `idle`. Any other foreground process is `unknown`.
+  shell in the foreground is `idle`. Every other foreground process is
+  `unknown`, regardless of its name or output. Applications can report
+  `working` or `attention` explicitly through the generic hook.
 - Process exit sets `exited` immediately, overriding a hook TTL.
 
 Hooks report through `clankerbox-guest report <state>` inside the guest, which
@@ -253,8 +253,8 @@ revision plus the engine artifact.
  "pid": 1234, "created_at": "…", "ended_at": null,
  "offset": 10240, "retained_from": 0, "last_resize_offset": null,
  "incarnation": "<uuid>", "reply_overflow": 0,
- "activity": {"state": "idle", "source": "process", "since": "…"},
- "foreground": {"pid": 1300, "command": "codex"}}
+ "activity": {"state": "unknown", "source": "process", "since": "…"},
+ "foreground": {"pid": 1300, "command": "python3"}}
 ```
 
 ### Operations
@@ -374,7 +374,7 @@ a Go-produced snapshot fixture is restored by Clankerdesk's terminal-core tests.
 ### Terminal key and guest link
 
 The controller owns an Ed25519 terminal key created by `statefs` in its state
-directory on first start, independent of `--auth-key-file`. Machine preparation
+directory on first start. Machine preparation
 installs its public key in the guest user's `authorized_keys` as
 
 ```text
@@ -387,8 +387,8 @@ forwarding, and agent requests are denied by `restrict`. Generated sshd
 configuration sets `MaxSessions 64` so the link can carry up to 48 session
 streams plus control channels.
 
-`guestLink` is a registry beside `authRelay` with the same lifecycle and the
-complete eligibility rule of the auth relay: prepared, running, accepted
+`guestLink` is the controller registry for session connections, using the
+eligibility rule: prepared, running, accepted
 generation, fresh observation, not suspended, and no pending or unresolved
 source reservation (`sourceIdle`). Links are cancelled and awaited before a
 fork or checkpoint is dispatched. Reconciliation runs every 3 s. The link uses
@@ -415,7 +415,7 @@ protocol.
 - `GET /v1/machines/{id}/sessions` runs `session.list` over a control channel.
 - `GET /v1/machines/{id}` gains `guest: {status ∈ ready | connecting |
   suspended | incompatible | unreachable | unavailable, incarnation?, protocol?,
-  daemon_version?, wasm_sha256?, reason?}` and `auth_relay: status`. `ready`
+  daemon_version?, wasm_sha256?, reason?}`. `ready`
   means a successful `hello`. These are materialized views of in-memory state
   and are included in machine change notifications.
 - `POST /v1/machines/{id}/labels` with `{"labels": {...}}` replaces the label
@@ -600,7 +600,7 @@ terminal client is added.
   activity ranking with process exit override; the stale-create refusal with
   the horizon inside retention; terminal and ring release at exit with the
   view retained; logged record write failures and skipped records.
-- Controller tests: link lifecycle mirrored from the auth relay tests with the
+- Controller tests: link lifecycle exercised with the
   fake SSH guest, including source reservations and capacity; stream upgrade
   bridging; labels and inheritance; change notifications; guest status.
 - Clankerdesk tests: the existing terminal suites against the fake controller

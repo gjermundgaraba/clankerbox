@@ -1,13 +1,5 @@
 # Spike execution
 
-Follow-up: the [smolvm RAM-fork fix](../spikes/smolvm/RAM_FIX.md) now passes
-three-way RAM acceptance and synced-disk recovery. The authorized
-[real Codex/ChatGPT execution](real-agent-execution.md) now passes on Cocoon,
-Cube and patched smolvm, including active-tool continuation and separate
-connection recovery. Temporary credentials and runtime resources were cleaned.
-Its results are separate from the completed initial experiments below; the
-expanded local suite now passes 70 tests in normal and optimized Python.
-
 Status: seven workstreams implemented and scoped runtime experiments completed
 2026-09-05; owned runtime resources cleaned up. No production service was
 deployed. Existing Mac and Hetzner services and original VM inventory are
@@ -137,9 +129,7 @@ caused a conservative cleanup stop; the final audit confirms no owned VM,
 snapshot, process or cgroup remains. In-flight I/O, multi-file/database transaction
 coherence and host power-loss durability remain untested.
 
-The initial experiments used no current user login tokens. The user subsequently
-selected Codex CLI and explicitly authorized copying the local ChatGPT login;
-the [separate real-agent follow-up](real-agent-execution.md) tracks that work.
+The initial experiments used no current user login tokens.
 Production personal-cloud deployment/WireGuard, host reboot, interrupted-clone
 fault injection, capacity exhaustion and broad compatibility/performance coverage
 remain separate unexecuted checks. None imposes a lifetime limit on machines.

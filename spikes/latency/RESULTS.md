@@ -135,12 +135,6 @@ Sources: [RAM generations](/Users/example/ws/pers/not-mine/smolvm/libkrun/src/vm
 [eager scan](/Users/example/ws/pers/not-mine/smolvm/libkrun/src/vmm/src/snapshot.rs:1183),
 [retained DAX correction](../smolvm/RAM_FIX.md).
 
-The previous approximately 2.4-second Cocoon observation was a **second capture
-of a 2-GiB VM**, not the first capture of the 4-GiB VMs in this run. Previous
-first capture was approximately 3.97 seconds. Differences in workload, timing
-boundaries, and host state also prevent treating those observations as a
-regression benchmark. See [previous real-agent results](../cocoon/REAL_AGENT_RESULTS.md).
-
 ## Source interruption: important limit
 
 Both guest clocks detected five approximately 100-ms host VMM-process
@@ -181,8 +175,7 @@ checked at sampled endpoints rather than enforced continuously as a disk quota.
 No host sysctl, global cache flush, service, firewall, package or filesystem
 changes were made. No login credentials or model calls are involved.
 
-This controlled C workload complements the [earlier real Codex session-fork
-acceptance](../cocoon/REAL_AGENT_RESULTS.md); it does not measure model-response
+This controlled C workload does not measure model-response
 latency, network reconnection, arbitrary in-flight filesystem transactions, or
 full payload-byte integrity. Status verifies a RAM-only process identity,
 eight sentinel bytes per RAM page, and the independently overwritten disk marker.

@@ -35,7 +35,8 @@ func TestCLIHasNoApplicationLauncher(t *testing.T) {
 	if err := client.Run(context.Background(), []string{"help"}, streams); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "herdr") {
+	if strings.Contains(out.String(), "herdr") ||
+		strings.Contains(out.String(), "Manage controller-held provider connections") {
 		t.Fatal("application launcher advertised in help")
 	}
 	err := client.Run(context.Background(), []string{configFlag, a.Config.Path, "herdr", testMachineName}, streams)
@@ -348,5 +349,14 @@ func proxyShutdownHandler(
 		case <-ctx.Done():
 			t.Error("proxy never read stdin")
 		}
+	}
+}
+
+func TestCLIRejectsProviderAuth(t *testing.T) {
+	t.Parallel()
+	streams := client.Streams{Out: io.Discard, Err: io.Discard}
+	if err := client.Run(t.Context(), []string{"auth", "status"}, streams); err == nil ||
+		!strings.Contains(err.Error(), "auth") {
+		t.Fatalf("removed command must be rejected without reading configuration: %v", err)
 	}
 }

@@ -219,7 +219,6 @@ later follow-ups do not rewrite that evidence.
 | --- | --- | --- |
 | Initial architecture, September 4 | Orchard lifecycle conflict reproduced in upstream-code tests with fake runtimes. Real Tart/Vetu lifecycle and local backup roundtrips passed; infrastructure inspected, not deployed. | [Orchard](docs/spikes/orchard-lifecycle.md), [Vetu](docs/spikes/vetu-runtime.md), [Tart](docs/spikes/tart-runtime.md), [backup](docs/spikes/workspace-backup.md) |
 | Runtime capabilities, September 5 | Cocoon and Cube concurrent RAM forks passed. Smolvm's initial failure was reproduced and fixed in libkrun. Tart stopped-disk branches and recovery passed. | [Execution record](docs/spike-execution.md), [smolvm fix](spikes/smolvm/RAM_FIX.md), [Tart results](spikes/tart-checkpoints/RESULTS.md) |
-| Real agents, September 5 | Cocoon, Cube and patched smolvm passed real Codex/ChatGPT active-tool forks, independent coding/context turns and connection recovery. | [Real-agent results](docs/real-agent-execution.md) |
 | Controlled latency, September 5 | 320/320 measured trials passed across matched startup, fresh capture and concurrent fanout workloads. Persistence contracts differ between runtimes. | [Latency results](spikes/latency/RESULTS.md), [concurrency audit](spikes/latency/CONCURRENCY_AUDIT.md) |
 | Recovery/lifecycle, September 6 | Both Linux candidates restored continuing RAM and flushed disk state without original processes. Newer smolvm portable artifacts and Cocoon's complete fixed-layout bundle passed independent-copy restoration. | [Recovery results](spikes/recovery/RESULTS.md), [independent supplemental review](spikes/recovery/shared/SUPPLEMENTAL_REVIEW.md) |
 
@@ -230,14 +229,7 @@ later follow-ups do not rewrite that evidence.
 | smolvm | Live siblings survived source death; portable artifacts restored twice with original processes/paths unavailable; descendant checkpoints, retained cold restart and malformed/incompatible artifact rejection passed. | Newer patched build and `ubuntu-bare-v1`; same compatible host, no reboot or new real-agent portable-restore test. Ancestor disk dependencies were retained during live lineage tests. |
 | Cocoon + Firecracker | Concurrent RAM forks, direct-disk rollback, ancestor deletion and two independent copied-bundle restores passed. | Native import into a fresh store succeeded but clone rejected original absolute dependencies. The adapter supplies complete fixed-layout recovery, not arbitrary relocation. |
 | Tart | Stopped-disk checkpoints preserved dirty Git/SQLite state; branches diverged, cold restarted and survived parent/checkpoint deletion with separate SSH identities. | One VM ran at a time. Cold-boot filesystem recovery, not RAM/process continuation or concurrent Mac RAM forks. |
-| CubeSandbox | Nested-KVM RAM forks, controller continuity, guest C/Docker builds and separate real-agent acceptance passed. | Full native stack inside a disposable outer VM; not a comparable bare-metal performance or host-loss recovery result. |
-
-Real-agent success required **resetting inherited transports and reconnecting**
-while preserving Codex and its running tool/controller processes. It does not
-prove that cloned remote TCP/TLS connections or long-running OAuth refresh are
-safe. Those runs used an earlier smolvm build/profile, not the newer portable
-recovery configuration. Temporary credential-bearing machines and copies were
-removed after sanitized evidence collection.
+| CubeSandbox | Nested-KVM RAM forks, controller continuity, guest C/Docker builds passed. | Full native stack inside a disposable outer VM; not a comparable bare-metal performance or host-loss recovery result. |
 
 Smolvm's interrupted-checkpoint test observed the source paused after the
 checkpoint CLI was killed during SAVE staging. Explicit `RESUME` preserved RAM
@@ -318,7 +310,7 @@ The historical recovery integration run passed all **12 local test suites**. Rec
 evidence was independently audited: 100 RAM-status replies, 70 direct-disk replies
 and 10 exported binary paths, with no integrity findings. Five failed recovery-round
 attempts remain recorded, including the native host-backed-image rejection.
-Synthetic runtime evidence and real-agent evidence are intentionally separate.
+Synthetic runtime evidence does not establish application-session continuity.
 
 The recovery round removed 29 exact disposable payload/cache targets accounting
 for 54.59 GiB of allocated data after evidence export. Pinned binaries, reusable
@@ -360,4 +352,11 @@ Private build trees, raw result directories, VM images and credentials do not
 belong in source control. Durable Markdown reports link the detailed evidence
 retained in this workspace.
 
-Managed coding-agent credentials and per-machine relays: [setup and usage](docs/managed-auth.md).
+
+Clankerbox is application-neutral: install and authenticate guest tools yourself.
+It does not import provider credentials, configure provider routing, or infer
+activity from coding-agent names. Applications may use generic activity hooks
+([terminal sessions](docs/terminal-sessions.md#activity)).
+
+The [application-neutral cutover](docs/application-neutral-cutover.md) records
+removed surfaces, rebuild boundaries, and deployment verification.

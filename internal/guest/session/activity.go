@@ -8,21 +8,8 @@ import (
 
 const (
 	hookTTL        = 300 * time.Second
-	outputQuiet    = 2 * time.Second
 	activityPeriod = time.Second
 )
-
-// isAgent reports whether a foreground command is a known coding agent.
-func isAgent(command string) bool {
-	switch command {
-	case "codex", "claude", "gemini", "cursor-agent", "aider", "opencode", "amp", "pi",
-		"copilot", "goose", "droid", "kimi", "qwen", "kiro", "hermes", "grok", "cline",
-		"clankerbox-codex", "clankerbox-claude":
-		return true
-	default:
-		return false
-	}
-}
 
 // isShell reports whether a foreground command is an interactive shell.
 func isShell(command string) bool {
@@ -34,8 +21,8 @@ func isShell(command string) bool {
 	}
 }
 
-// observe recomputes activity from the hook state, the foreground process,
-// and recent output, and tells attachments when the record changed.
+// observe recomputes activity from the hook state and foreground process,
+// and tells attachments when the record changed.
 func (s *Session) observe(now time.Time) {
 	foreground := s.foreground()
 	s.mu.Lock()
@@ -71,11 +58,6 @@ func (s *Session) classify(now time.Time, foreground *protocol.Foreground) (stri
 	}
 	switch {
 	case isShell(foreground.Command):
-		return protocol.ActivityIdle, protocol.SourceProcess
-	case isAgent(foreground.Command):
-		if now.Sub(s.lastOutput) < outputQuiet {
-			return protocol.ActivityWorking, protocol.SourceProcess
-		}
 		return protocol.ActivityIdle, protocol.SourceProcess
 	default:
 		return protocol.ActivityUnknown, protocol.SourceProcess

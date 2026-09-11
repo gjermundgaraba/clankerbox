@@ -87,13 +87,13 @@
           "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
           "reply_overflow": 0,
           "activity": {
-            "state": "working",
+            "state": "unknown",
             "source": "process",
             "since": "2026-09-09T12:00:01Z"
           },
           "foreground": {
             "pid": 1300,
-            "command": "codex"
+            "command": "python3"
           }
         }
       }
@@ -125,13 +125,13 @@
             "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
             "reply_overflow": 0,
             "activity": {
-              "state": "working",
+              "state": "unknown",
               "source": "process",
               "since": "2026-09-09T12:00:01Z"
             },
             "foreground": {
               "pid": 1300,
-              "command": "codex"
+              "command": "python3"
             }
           },
           {
@@ -193,13 +193,13 @@
           "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
           "reply_overflow": 0,
           "activity": {
-            "state": "working",
+            "state": "unknown",
             "source": "process",
             "since": "2026-09-09T12:00:01Z"
           },
           "foreground": {
             "pid": 1300,
-            "command": "codex"
+            "command": "python3"
           }
         }
       }
@@ -232,13 +232,13 @@
           "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
           "reply_overflow": 0,
           "activity": {
-            "state": "working",
+            "state": "unknown",
             "source": "process",
             "since": "2026-09-09T12:00:01Z"
           },
           "foreground": {
             "pid": 1300,
-            "command": "codex"
+            "command": "python3"
           }
         },
         "snapshot_bytes": 4096
@@ -272,13 +272,13 @@
           "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
           "reply_overflow": 0,
           "activity": {
-            "state": "working",
+            "state": "unknown",
             "source": "process",
             "since": "2026-09-09T12:00:01Z"
           },
           "foreground": {
             "pid": 1300,
-            "command": "codex"
+            "command": "python3"
           }
         }
       }
@@ -403,13 +403,13 @@
           "incarnation": "9d7c1e4a-2b6f-4c8d-a1e2-5f6a7b8c9d0e",
           "reply_overflow": 0,
           "activity": {
-            "state": "working",
+            "state": "unknown",
             "source": "process",
             "since": "2026-09-09T12:00:01Z"
           },
           "foreground": {
             "pid": 1300,
-            "command": "codex"
+            "command": "python3"
           }
         }
       }

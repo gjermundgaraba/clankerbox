@@ -57,10 +57,9 @@ type Session struct {
 	view  *protocol.View
 	final []byte
 
-	lastOutput time.Time
-	hook       *hookState
-	readDone   chan struct{}
-	waitDone   chan struct{}
+	hook     *hookState
+	readDone chan struct{}
+	waitDone chan struct{}
 }
 
 // spawnOptions carries everything needed to start a session.
@@ -136,7 +135,6 @@ func (s *Session) start(opts spawnOptions) error {
 	s.cmd = cmd
 	s.record.PID = cmd.Process.Pid
 	s.record.Status = protocol.StatusRunning
-	s.lastOutput = s.now()
 	if s.startTime, err = processStartTime(cmd.Process.Pid); err != nil {
 		s.startTime = 0
 	}
@@ -204,7 +202,6 @@ func (s *Session) ingest(data []byte) {
 	s.ring.append(chunk)
 	s.record.Offset += uint64(len(chunk))
 	s.record.RetainedFrom = s.ring.start
-	s.lastOutput = s.now()
 	for _, sub := range s.subs {
 		sub.enqueueOutput(s.record.Offset, chunk)
 	}

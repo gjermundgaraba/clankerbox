@@ -54,6 +54,7 @@ func TestCommandValidation(t *testing.T) {
 	}{
 		{"required flags", nil, "Required flag"},
 		{"unknown flag", []string{"--unknown"}, "flag provided but not defined"},
+		{"removed auth flag", []string{"--auth-key-file", "unused"}, "flag provided but not defined"},
 		{"unexpected argument", append(append([]string{}, required...), "extra"), "unexpected argument"},
 		{"missing value", []string{testConfigFlag}, "flag needs an argument"},
 	}

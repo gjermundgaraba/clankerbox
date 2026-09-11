@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -743,4 +744,72 @@ func TestMain(m *testing.M) {
 	}
 	_ = loader.Close(context.Background())
 	os.Exit(m.Run())
+}
+
+func TestActivityUsesShellsAndExplicitHooksNotAgentNames(t *testing.T) {
+	t.Parallel()
+	loader := newLoader(t)
+	var clock sync.Mutex
+	now := time.Now()
+	m, err := session.New(t.Context(), session.Config{
+		StateDir: t.TempDir(), Loader: loader, Incarnation: uuid.NewString(),
+		Now: func() time.Time {
+			clock.Lock()
+			defer clock.Unlock()
+			return now
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(m.Close)
+	// A shell waiting on input is idle without an application hook.
+	sh := create(t, m, shell, "-c", "read line")
+	eventually(t, "idle shell", func() bool {
+		activity := inspect(t, m, sh.ID).Activity
+		return activity.State == protocol.ActivityIdle && activity.Source == protocol.SourceProcess
+	})
+	// Use real foreground processes with formerly special names, without
+	// installing an agent or touching any user credential/configuration file.
+	directory := t.TempDir()
+	source := filepath.Join(directory, "main.go")
+	if err = os.WriteFile(source, []byte(`package main
+import ("io"; "os")
+func main() { _, _ = io.Copy(os.Stdout, os.Stdin) }
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(directory, "fixture")
+	//nolint:gosec // Build a test-owned foreground process; no installed application is invoked.
+	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, source)
+	if output, buildErr := build.CombinedOutput(); buildErr != nil {
+		t.Fatalf("build fixture: %v %s", buildErr, output)
+	}
+	for _, name := range []string{"codex", "claude", "ordinary-tool"} {
+		path := filepath.Join(t.TempDir(), name)
+		if err = os.Link(binary, path); err != nil {
+			t.Fatal(err)
+		}
+		record := create(t, m, path)
+		send(t, m, record.ID, "activity-output\n")
+		eventually(t, "unknown activity for "+name, func() bool {
+			r := inspect(t, m, record.ID)
+			return r.Foreground != nil && r.Foreground.Command == name &&
+				r.Activity.State == protocol.ActivityUnknown && r.Activity.Source == protocol.SourceProcess
+		})
+		if err = m.Report(protocol.ReportArgs{SessionID: record.ID, State: protocol.ActivityWorking}); err != nil {
+			t.Fatal(err)
+		}
+		if activity := inspect(t, m, record.ID).Activity; activity.State != protocol.ActivityWorking ||
+			activity.Source != protocol.SourceHook {
+			t.Fatalf("explicit hook lost: %+v", activity)
+		}
+		clock.Lock()
+		now = now.Add(301 * time.Second)
+		clock.Unlock()
+		eventually(t, "expired hook", func() bool {
+			activity := inspect(t, m, record.ID).Activity
+			return activity.State == protocol.ActivityUnknown && activity.Source == protocol.SourceProcess
+		})
+	}
 }
