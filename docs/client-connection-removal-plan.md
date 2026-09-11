@@ -297,5 +297,11 @@ The original live `stopped_session_rejected` result above exercised the runner's
 local readiness guard, not the session endpoint. It does not establish live
 server-side stopped-session enforcement. The harness now requires a direct
 HTTP 409 `prerequisite` response; local controller and probe regression tests
-cover that contract and reject unrelated failures. The corrected live check
-has not yet been rerun against personal-cloud.
+cover that contract and reject unrelated failures.
+
+The corrected check passed against personal-cloud on both Linux and macOS after
+redeploying review fixes `03857ea` on 2026-09-11. Fresh disposable machines passed
+keyless create, session command execution, stop/direct HTTP 409 prerequisite/start,
+dirty Git and host-identity retention, and stop/delete cleanup. Existing
+`test-machine` was not stopped or modified. Evidence:
+`.work/review-redeploy-20260911/{linux,mac}-lifecycle.json`.
