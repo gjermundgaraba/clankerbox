@@ -3,6 +3,8 @@ module clankerbox
 go 1.27.1
 
 require (
+	github.com/creack/pty v1.1.24
+	github.com/google/uuid v1.6.0
 	github.com/tetratelabs/wazero v1.12.0
 	github.com/urfave/cli/v3 v3.11.0
 	golang.org/x/crypto v0.56.0
@@ -11,9 +13,7 @@ require (
 )
 
 require (
-	github.com/creack/pty v1.1.24 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect

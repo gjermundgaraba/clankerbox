@@ -53,7 +53,7 @@ func RuntimeCapabilities(runtime, arch string) []string {
 	if runtime == "local" {
 		return []string{"create", "start", "stop", "delete", "sessions"}
 	}
-	out := []string{"create", "start", "stop", "delete", "ssh", "checkpoint", "restore"}
+	out := []string{"create", "start", "stop", "delete", "sessions", "checkpoint", "restore"}
 	if runtime == smolvmRuntime {
 		if arch == "amd64" {
 			return append(out, "fork", "live-fork", "ram-checkpoint")
@@ -263,13 +263,12 @@ func printableLabel(s string) bool {
 	return true
 }
 
-// CreateInput describes a requested machine and its authorized SSH keys.
+// CreateInput describes a requested machine.
 type CreateInput struct {
-	Name          string            `json:"name"`
-	Profile       string            `json:"profile"`
-	Host          string            `json:"host"`
-	SSHPublicKeys []string          `json:"ssh_public_keys"`
-	Labels        map[string]string `json:"labels,omitempty"`
+	Name    string            `json:"name"`
+	Profile string            `json:"profile"`
+	Host    string            `json:"host"`
+	Labels  map[string]string `json:"labels,omitempty"`
 }
 
 // Validate checks configuration invariants and normalizes derived fields where applicable.
@@ -277,62 +276,40 @@ func (in *CreateInput) Validate() error {
 	if !ValidName(in.Name) || !ValidName(in.Profile) || !ValidName(in.Host) {
 		return errors.New("name, profile and host must be valid names")
 	}
-	keys, err := ValidateKeys(in.SSHPublicKeys)
-	if err != nil {
-		return err
-	}
-	in.SSHPublicKeys = keys
 	return ValidateLabels(in.Labels)
 }
 
-// ValidateKeys validates, canonicalizes, deduplicates, and sorts SSH public keys.
-func ValidateKeys(keys []string) ([]string, error) {
-	if len(keys) == 0 || len(keys) > 32 {
-		return nil, errors.New("supply 1..32 SSH public keys")
+// ValidateKey validates and canonicalizes one bare SSH public key.
+func ValidateKey(key string) (string, error) {
+	if len(key) > 16384 || strings.ContainsAny(key, "\r\n\x00") {
+		return "", errors.New("SSH key must be a single authorized-key line")
 	}
-	out := make([]string, 0, len(keys))
-	for _, key := range keys {
-		if len(key) > 16384 || strings.ContainsAny(key, "\r\n\x00") {
-			return nil, errors.New("SSH keys must be single authorized-key lines")
-		}
-		pub, _, opts, rest, err := ssh.ParseAuthorizedKey([]byte(key))
-		if err != nil || len(opts) != 0 || len(rest) != 0 {
-			return nil, errors.New("invalid SSH public key; authorized-key options are forbidden")
-		}
-		if _, ok := pub.(*ssh.Certificate); ok {
-			return nil, errors.New("SSH certificates are unsupported")
-		}
-		switch pub.Type() {
-		case "ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521":
-		default:
-			return nil, errors.New("unsupported SSH public key type")
-		}
-		canonical := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))
-		if !slices.Contains(out, canonical) {
-			out = append(out, canonical)
-		}
+	pub, _, opts, rest, err := ssh.ParseAuthorizedKey([]byte(key))
+	if err != nil || len(opts) != 0 || len(rest) != 0 {
+		return "", errors.New("invalid SSH public key; authorized-key options are forbidden")
 	}
-	slices.Sort(out)
-	return out, nil
+	if _, ok := pub.(*ssh.Certificate); ok {
+		return "", errors.New("SSH certificates are unsupported")
+	}
+	switch pub.Type() {
+	case "ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521":
+	default:
+		return "", errors.New("unsupported SSH public key type")
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), nil
 }
 
-// ChildInput describes the identity and SSH access for a derived machine.
+// ChildInput describes the identity for a derived machine.
 // Labels are merged over the inherited ones; they never clear them.
 type ChildInput struct {
-	Name          string            `json:"name"`
-	SSHPublicKeys []string          `json:"ssh_public_keys"`
-	Labels        map[string]string `json:"labels,omitempty"`
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // Validate checks configuration invariants and normalizes derived fields where applicable.
 func (in *ChildInput) Validate() error {
 	if !ValidName(in.Name) {
 		return errors.New("valid child name required")
-	}
-	keys, err := ValidateKeys(in.SSHPublicKeys)
-	in.SSHPublicKeys = keys
-	if err != nil {
-		return err
 	}
 	return ValidateLabels(in.Labels)
 }
@@ -380,7 +357,6 @@ type Request struct {
 	Generation       int64       `json:"generation,omitempty"`
 	Name             string      `json:"name,omitempty"`
 	Profile          Profile     `json:"profile"`
-	SSHPublicKeys    []string    `json:"ssh_public_keys,omitempty"`
 }
 
 // Observation describes the host-reported state of a machine.

@@ -72,18 +72,6 @@ func (runner commandRunner) output(value any) error {
 			optionalLine(v.Error),
 		)
 		return err
-	case map[string]string:
-		_, err := fmt.Fprintln(runner.streams.Out, v[urlCommand])
-		return err
-	case map[string]any:
-		_, err := fmt.Fprintln(runner.streams.Out, v["files"])
-		return err
-	case []Mapping:
-		return runner.mappings(v)
-	case Mapping:
-		return runner.mappings([]Mapping{v})
-	case Status:
-		return runner.connectionStatus(v)
 	default:
 		return fmt.Errorf("unsupported CLI output %T", value)
 	}
@@ -184,32 +172,8 @@ func (runner commandRunner) checkpoints(items []model.Checkpoint) error {
 	}
 	return w.Flush()
 }
-func (runner commandRunner) mappings(items []Mapping) error {
-	w := tabwriter.NewWriter(runner.streams.Out, 0, tableTabWidth, tablePadding, ' ', 0)
-	if _, err := fmt.Fprintln(w, "GUEST\tLOCAL\tAVAILABLE\tERROR"); err != nil {
-		return err
-	}
-	for _, m := range items {
-		if _, err := fmt.Fprintf(w, "%s\t%s\t%t\t%s\n", m.Guest.Address(), m.Local, m.Available, m.Error); err != nil {
-			return err
-		}
-	}
-	return w.Flush()
-}
 
 const (
 	tableTabWidth = 4
 	tablePadding  = 2
 )
-
-func (runner commandRunner) connectionStatus(status Status) error {
-	if _, err := fmt.Fprintf(
-		runner.streams.Out,
-		"Machine %s\n%s",
-		status.Pin.ID,
-		optionalLine(status.ConnectionError),
-	); err != nil {
-		return err
-	}
-	return runner.mappings(status.Mappings)
-}

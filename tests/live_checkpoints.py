@@ -11,7 +11,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', required=True)
     parser.add_argument('--config', required=True)
-    parser.add_argument('--key', required=True)
+    parser.add_argument('--session-runner', required=True)
     parser.add_argument('--lifecycle-result', required=True)
     parser.add_argument('--result', required=True)
     parser.add_argument('--fork-only', action='store_true')
@@ -32,6 +32,13 @@ def main():
     def need(condition, message):
         if not condition:
             raise RuntimeError(message)
+
+    def guest(machine, *argv, data=None):
+        proc = subprocess.run([args.session_runner, '--config', args.config, machine, *argv],
+                              input=data or '', text=True, capture_output=True, timeout=100)
+        if proc.returncode:
+            raise RuntimeError(f'session command failed: {proc.stderr[-2048:]} {proc.stdout[-2048:]}')
+        return proc.stdout
 
     def run(*command, data=None):
         p = subprocess.run(base + list(command), input=data, text=True, capture_output=True, timeout=90)
@@ -70,13 +77,13 @@ def main():
     linux = inspect(mid)['profile_spec']['os'] == 'linux'
 
     def write(machine, value):
-        run('exec', machine, '--', 'sh', '-se', data=f'printf %s {value} > "$HOME/{directory}/state"\nsync\n')
+        guest(machine, 'sh', '-se', data=f'printf %s {value} > "$HOME/{directory}/state"\nsync\n')
 
     def read(machine):
-        return run('exec', machine, '--', 'sh', '-c', f'cat "$HOME/{directory}/state"')
+        return guest(machine, 'sh', '-c', f'cat "$HOME/{directory}/state"')
 
     def memory(machine):
-        return json.loads(run('exec', machine, '--', 'curl', '-fsS', 'http://127.0.0.1:18349/'))
+        return json.loads(guest(machine, 'curl', '-fsS', 'http://127.0.0.1:18349/'))
 
     def stop(machine):
         operation('stop', machine)
@@ -88,7 +95,7 @@ def main():
         if inspect(mid)['state'] == 'running':
             stop(mid)
         operation('start', mid)
-        run('exec', mid, '--', 'sh', '-se', data=f'mkdir -p "$HOME/{directory}"\n')
+        guest(mid, 'sh', '-se', data=f'mkdir -p "$HOME/{directory}"\n')
         write(mid, 'source-A')
         original_key = inspect(mid)['ssh_host_key']
         if linux:
@@ -103,14 +110,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
 '''
-            run('exec', mid, '--', 'sh', '-se', data=f"cat > \"$HOME/{directory}/memory.py\" <<'PY'\n{program}PY\n"
+            guest(mid, 'sh', '-se', data=f"cat > \"$HOME/{directory}/memory.py\" <<'PY'\n{program}PY\n"
                 + f'nohup python3 "$HOME/{directory}/memory.py" >"$HOME/{directory}/memory.log" 2>&1 </dev/null &\n'
                 + 'i=0; until curl -fsS http://127.0.0.1:18349/ >/dev/null; do i=$((i+1)); test "$i" -lt 30; sleep 1; done\n')
             original_memory = memory(mid)
             report['original_memory'] = original_memory
         else:
             stop(mid)
-        child = operation('fork', mid, name + '-fork', '--key', args.key)['machine_id']
+        child = operation('fork', mid, name + '-fork')['machine_id']
         need(read(child) == 'source-A', 'fork lost source disk state')
         child_key = inspect(child)['ssh_host_key']
         need(child_key != original_key, 'fork reused SSH identity')
@@ -144,7 +151,7 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
             return
         # The previous explicit Linux cold restart ended the memory fixture.
         if linux:
-            run('exec', mid, '--', 'sh', '-se', data=f'nohup python3 "$HOME/{directory}/memory.py" >"$HOME/{directory}/memory.log" 2>&1 </dev/null &\n'
+            guest(mid, 'sh', '-se', data=f'nohup python3 "$HOME/{directory}/memory.py" >"$HOME/{directory}/memory.log" 2>&1 </dev/null &\n'
                 + 'i=0; until curl -fsS http://127.0.0.1:18349/ >/dev/null; do i=$((i+1)); test "$i" -lt 30; sleep 1; done\n')
             original_memory = memory(mid)
         else:
@@ -158,7 +165,7 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
         restored = []
         keys = {original_key, child_key}
         for index in range(2):
-            machine = operation('restore', cp, name + '-restore-' + str(index), '--key', args.key)['machine_id']
+            machine = operation('restore', cp, name + '-restore-' + str(index))['machine_id']
             restored.append(machine)
             need(read(machine) == 'source-A', 'restore did not roll disk back to capture')
             key = inspect(machine)['ssh_host_key']

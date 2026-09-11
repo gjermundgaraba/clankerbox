@@ -1,5 +1,10 @@
 # Lifecycle and connections implementation — execution record
 
+> Historical plan/evidence. Client SSH, exec, forwarding and VNC were retired;
+> use the [current README](../README.md) and
+> [cutover record](client-connection-removal-plan.md), not these old commands.
+
+
 ## Current product boundary
 
 Clankerbox provides machines, SSH transport, generic TCP forwarding and local URL

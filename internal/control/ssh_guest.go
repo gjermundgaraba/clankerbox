@@ -16,8 +16,8 @@ func (s SSHTransport) PrepareGuest(ctx context.Context, h model.Host, id, public
 	if !model.ValidID(id) {
 		return errors.New("invalid machine ID")
 	}
-	keys, err := model.ValidateKeys([]string{publicKey})
-	if err != nil || len(keys) != 1 {
+	canonicalKey, err := model.ValidateKey(publicKey)
+	if err != nil {
 		return errors.New("invalid terminal public key")
 	}
 	cmd, err := s.command(ctx, h, "")
@@ -27,7 +27,7 @@ func (s SSHTransport) PrepareGuest(ctx context.Context, h model.Host, id, public
 	cmd.Args[len(cmd.Args)-1] += " --guest-prepare " + id
 	body, _ := json.Marshal(struct {
 		PublicKey string `json:"public_key"`
-	}{keys[0]})
+	}{canonicalKey})
 	cmd.Stdin = bytes.NewReader(append(body, '\n'))
 	out := &limitedBuffer{limit: maxHelperResponseBytes}
 	stderr := &limitedBuffer{limit: sshBufferBytes}

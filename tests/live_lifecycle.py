@@ -14,9 +14,9 @@ def main():
     parser.add_argument('--config', required=True)
     parser.add_argument('--profile', required=True)
     parser.add_argument('--host', required=True)
-    parser.add_argument('--key', required=True)
+    parser.add_argument('--session-runner', required=True)
     parser.add_argument('--result', required=True)
-    parser.add_argument('--keep', action='store_true', help='leave this new machine running for connection acceptance')
+    parser.add_argument('--keep', action='store_true', help='leave this new machine running for checkpoint acceptance')
     parser.add_argument('--resume', action='store_true', help='resume the exact disposable machine recorded in --result')
     args = parser.parse_args()
     base = [str(Path(args.binary).resolve()), '--config', str(Path(args.config).resolve()), '--json']
@@ -31,6 +31,13 @@ def main():
 
     def save():
         result_path.write_text(json.dumps(report, indent=2) + '\n')
+
+    def guest(machine, *argv, data=None):
+        proc = subprocess.run([args.session_runner, '--config', args.config, machine, *argv],
+                              input=data or '', text=True, capture_output=True, timeout=100)
+        if proc.returncode:
+            raise RuntimeError(f'session command failed: {proc.stderr[-2048:]} {proc.stdout[-2048:]}')
+        return proc.stdout
 
     def run(*command, data=None):
         proc = subprocess.run(base + list(command), input=data, text=True, capture_output=True, timeout=90)
@@ -62,7 +69,7 @@ def main():
     try:
         if not args.resume:
             operation('create', report['name'], '--profile', args.profile,
-                      '--host', args.host, '--key', args.key,
+                      '--host', args.host,
                       '--idempotency-key', report['name'])
         machine = report['machine_id']
         directory = 'workspace/' + report['name']
@@ -78,7 +85,7 @@ chmod 755 scratch
 ln -sfn tracked link
 sync
 '''
-        run('exec', machine, '--', 'sh', '-se', data=setup)
+        guest(machine, 'sh', '-se', data=setup)
         check = f'''set -eu
 cd "$HOME/{directory}"
 git diff --cached --no-ext-diff
@@ -87,21 +94,21 @@ cat scratch
 test -x scratch
 readlink link
 '''
-        before = run('exec', machine, '--', 'sh', '-se', data=check)
+        before = guest(machine, 'sh', '-se', data=check)
         identity_before = json.loads(run('inspect', machine))['ssh_host_key']
         operation('stop', machine)
         stopped = json.loads(run('inspect', machine))
         if stopped['state'] != 'stopped':
             raise RuntimeError(f'expected stopped: {stopped}')
-        denied = subprocess.run(base + ['exec', machine, '--', 'true'], capture_output=True, timeout=30)
+        denied = subprocess.run([args.session_runner, '--config', args.config, machine, 'true'], capture_output=True, timeout=30)
         if denied.returncode == 0:
-            raise RuntimeError('SSH unexpectedly accepted a stopped machine')
+            raise RuntimeError('session unexpectedly accepted a stopped machine')
         operation('start', machine)
-        after = run('exec', machine, '--', 'sh', '-se', data=check)
+        after = guest(machine, 'sh', '-se', data=check)
         identity_after = json.loads(run('inspect', machine))['ssh_host_key']
         if before != after or identity_before != identity_after:
             raise RuntimeError('workspace contents or SSH identity changed across stop/start')
-        report['events'].append({'retained_dirty_git_and_identity': True, 'stopped_ssh_rejected': True})
+        report['events'].append({'retained_dirty_git_and_identity': True, 'stopped_session_rejected': True})
         report['status'] = 'passed'
     except Exception as error:
         report['status'] = 'failed'

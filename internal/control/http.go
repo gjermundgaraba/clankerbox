@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"clankerbox/internal/model"
 )
@@ -77,7 +76,6 @@ func (c *Controller) Handler(token []byte) (http.Handler, error) {
 	c.registerMachineRoutes(mux)
 	c.registerCheckpointRoutes(mux)
 	c.registerGuestRoutes(mux)
-	mux.HandleFunc("GET /v1/machines/{id}/ssh", c.stream)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		value := strings.TrimPrefix(auth, "Bearer ")
@@ -98,80 +96,10 @@ func hasToken(s, want string) bool {
 	}
 	return false
 }
-func (c *Controller) stream(w http.ResponseWriter, r *http.Request) {
-	if r.ProtoMajor != 1 || !hasToken(r.Header.Get("Connection"), "upgrade") ||
-		!strings.EqualFold(r.Header.Get("Upgrade"), "clankerbox-stream") {
-		w.Header().Set("Upgrade", "clankerbox-stream")
-		writeError(
-			w,
-			problem(
-				http.StatusUpgradeRequired,
-				"upgrade_required",
-				"use HTTP/1.1 Connection: Upgrade and Upgrade: clankerbox-stream",
-			),
-		)
-		return
-	}
-	if r.ContentLength > 0 || len(r.TransferEncoding) != 0 {
-		writeError(w, problem(http.StatusBadRequest, "invalid_request", "SSH upgrade does not accept a request body"))
-		return
-	}
-	m, err := c.Inspect(r.Context(), r.PathValue("id"))
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if m.ObservationStale {
-		writeError(w, problem(http.StatusServiceUnavailable, "host_unavailable", m.ObservationError))
-		return
-	}
-	if m.Deleted || !m.Prepared || m.State != model.Running || m.Generation != m.AcceptedGeneration {
-		writeError(
-			w,
-			problem(
-				http.StatusConflict,
-				"prerequisite",
-				"SSH requires the prepared running machine at the accepted generation",
-			),
-		)
-		return
-	}
-	h, ok := c.host(m.Host)
-	if !ok {
-		writeError(w, problem(http.StatusServiceUnavailable, "host_unavailable", "host missing from configuration"))
-		return
-	}
-	hj, ok := w.(http.Hijacker)
-	if !ok {
-		writeError(w, problem(http.StatusInternalServerError, "upgrade_unavailable", "HTTP upgrade unavailable"))
-		return
-	}
-	upstream, err := c.transport.Connect(r.Context(), h, m.ID)
-	if err != nil {
-		writeError(w, problem(http.StatusServiceUnavailable, "host_unavailable", err.Error()))
-		return
-	}
-	defer c.closeStream(upstream)
-	conn, rw, err := hj.Hijack()
-	if err != nil {
-		return
-	}
-	defer c.closeStream(conn)
-	_ = conn.SetDeadline(time.Time{})
-	if _, err = rw.WriteString(
-		"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: clankerbox-stream\r\nCache-Control: no-store\r\n\r\n",
-	); err != nil {
-		return
-	}
-	if err = rw.Flush(); err != nil {
-		return
-	}
-	bridgeSSH(conn, rw, upstream)
-}
 
 func (c *Controller) closeStream(stream io.Closer) {
 	if err := stream.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-		c.logger.Error("close SSH stream", "error", err)
+		c.logger.Error("close session stream", "error", err)
 	}
 }
 
@@ -268,7 +196,7 @@ func (c *Controller) registerCheckpointRoutes(mux *http.ServeMux) {
 	}
 }
 
-func bridgeSSH(conn net.Conn, rw *bufio.ReadWriter, upstream io.ReadWriteCloser) {
+func bridgeSession(conn net.Conn, rw *bufio.ReadWriter, upstream io.ReadWriteCloser) {
 	done := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(upstream, rw)

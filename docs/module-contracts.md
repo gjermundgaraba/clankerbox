@@ -23,7 +23,7 @@ flowchart LR
     J --> G[Separate file checks]
   end
   subgraph After
-    E[External tests and callers] -->|Run / Owner / Acquire| CL[Client: forwarding and consumer lifetimes]
+    E[External tests and callers] -->|Run / API| CL[Client: API requests and lifecycle waits]
     E -->|Create / Derive / Inspect| CO[Controller: queue and journal]
     E -->|Execute / Inspect / Connect| HO[Host: reconciliation and journal]
     HO -->|runtime inputs| RT[Complete Runtime contract]
@@ -36,29 +36,9 @@ flowchart LR
 
 ## Public behavior
 
-The client `Owner` owns authenticated connection recovery, discovery, stable local
-reservations, and explicit forwards. Its status is one consistent snapshot rather
-than separate mapping and error reads. `ServeOwner` owns IPC and process-level
-consumer lifetimes. `Acquire` returns a consumer handle; closing a handle releases
-its explicit forwards without affecting another consumer's lease. The detached
-owner intentionally outlives the command that acquired it.
-
-The controller owns queue claiming, transport dispatch, response validation, and
-transactional completion. Callers supply a context to operations that read or
-mutate the database. Recovery tests close and reopen the same state directory;
-they assert durable replies and unresolved-operation behavior through public APIs.
-
-The host owns generation checks, runtime/profile pins, journal ordering, and
-ambiguity after partial work. `Runtime` covers both ordinary lifecycle operations
-and checkpoints. `CheckpointSpec` contains runtime inputs, not a journal record.
-Native runtime tests observe command arguments, environment, scripts, artifacts,
-and supervisor output. Fault fakes can perform a side effect and lose its reply;
-the host must retain its no-replay and resource-dependency safeguards on restart.
-
-Persistence stays inside the controller and host. No repository interface or
-package hierarchy was introduced just to support tests. Current root-machine
-store ancestry, pending-RAM protection, and old non-branchable-store rejection
-remain intentional safety behavior.
+The client owns authenticated API requests, resource output and lifecycle waits.
+It has no forwarding owner, IPC leases, local listeners or SSH identity state.
+The controller owns the restricted SSH link to the guest session daemon.
 
 ## Client command boundary
 
@@ -68,12 +48,9 @@ use native flag parsing and generated help; help bypasses configuration and
 service startup. Machine names are positional, with no `--name` alias. Resource
 output is human-readable by default; global `--json` selects structured stdout.
 Executable errors are plain text on stderr. Owner
-IPC and raw exec/SSH/proxy streams keep their existing protocols. CLI lifecycle
-mutations submit once and share a bounded wait; `API.WaitOperation` only reads an
-accepted operation and returns its last known IDs on failure or cancellation.
-Tests exercise this boundary with local HTTP/SSH/IPC fixtures and the executable
-entry point, including literal exec arguments and remote exit status. The HTTP
-API and durable controller reconciliation rules are unchanged.
+CLI lifecycle and session-list commands use authenticated HTTP; events use SSE.
+The raw guest SSH endpoint and workstation connection commands do not exist.
+Tests exercise retained command behavior through HTTP and process boundaries.
 
 ## Guest session boundary
 
@@ -128,8 +105,7 @@ while the database is in use. A process running as the same user, or root, is
 trusted; these checks are not a sandbox against that identity.
 
 The controller uses `controller.db` and `controller.lock`. The host retains
-`host.db`, its ownership marker, and its short initialization lock. Client state
-keeps its existing durable pin and reservation names.
+`host.db`, its ownership marker, and its short initialization lock. The client has no durable pin or reservation state.
 
 ## Retained-state cutover
 

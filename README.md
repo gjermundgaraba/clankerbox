@@ -1,28 +1,14 @@
 # Clankerbox
 
 API-first coding machines with retained workspaces, concurrent Linux RAM forks,
-and explicit recovery points. Applications use generic SSH and TCP connections;
-Clankerbox does not bundle or manage applications, agents, panes or sessions.
+explicit recovery points, and guest-owned terminal sessions. Applications use the
+bearer-authenticated session API. Clankerbox does not manage application credentials.
 
-Status as of **2026-09-07**: the Go/SQLite controller, host helpers and connection
-CLI are implemented, with a private controller deployed for acceptance. Linux
-retained lifecycle, SSH/SCP and automatic forwarding have
-passed live checks; lifecycle and forwarding also pass through the deployed
-private control path. macOS retained lifecycle and forwarding now pass with
-Tart 2.36 / Softnet 0.23 and the macOS 26.6.2 / Xcode 26.6 profile. Native VNC
-desktop interaction and local URL mapping have also passed.
-Fork/checkpoint/restore APIs are implemented. Mac stopped-disk branching and two
-independent checkpoint restores, and Linux live forks with independent retained
-disks and SSH identities, pass live acceptance. Linux portable checkpoints also
-pass two independent RAM-continuing restores after source deletion, followed by
-checkpoint deletion and retained cold restarts. These are synthetic workload checks,
-not a new real-agent or host-reboot qualification.
-Controller-restart reconnection passes on both platforms without restarting guests.
-This is **not yet a completed release or production-qualified
-service**. See the [implementation execution record](docs/implementation-execution.md)
-for current evidence and remaining acceptance work; the spike reports below
-describe earlier runs. Herdr was an external transport experiment, not a product
-dependency or release requirement.
+The workstation SSH, exec, proxy, forwarding, URL and VNC features are retired.
+Internal SSH still carries controller/host operations and restricted guest-session
+links. See [terminal sessions](docs/terminal-sessions.md) and the
+[connection removal record](docs/client-connection-removal-plan.md) for scope and
+validation. Historical spike and execution records below are not current CLI guides.
 
 ## Using machines
 
@@ -39,28 +25,20 @@ Create `~/.config/clankerbox/config.json` with your API origin and local files:
 {
   "url": "https://YOUR_CONTROLLER",
   "token_file": "token",
-  "identity_file": "~/.ssh/id_ed25519",
-  "public_key_file": "~/.ssh/id_ed25519.pub",
-  "default_profile": "linux-dev-v2",
-  "state_dir": "~/.local/state/clankerbox"
+  "default_profile": "linux-dev-v2"
 }
 ```
 
 Config file paths resolve relative to the config directory; `~/` expands to your
-home. Keep token/private-key files mode 0600 and state directories mode 0700.
-Optional `default_host`, `default_profile` and `public_key_file` supply omitted
-flags. Explicit `--host`, `--profile` and `--key` override those defaults. Without
-a public-key setting, the client uses `identity_file` plus `.pub` if that file
-exists; it never guesses a public key from the SSH agent. Authentication can still
-use your SSH agent when `identity_file` is omitted. Without a host setting, create
-selects the sole host supporting the chosen profile; ambiguity or an incompatible
-configured host requires an explicit `--host`.
+home. Keep the bearer token file mode 0600. Optional `default_host` and
+`default_profile` supply omitted flags; `--host` and `--profile` override them.
+Without a host setting, create selects the sole host supporting the profile;
+ambiguity or an incompatible configured host requires an explicit `--host`.
+No workstation SSH key, SSH agent, or client state directory is needed.
 
 ```sh
 clankerbox profiles
 clankerbox create dev
-clankerbox exec dev -- git --version
-clankerbox ssh dev
 clankerbox stop dev
 clankerbox start dev
 clankerbox fork dev experiment
@@ -82,7 +60,7 @@ them. Deletion requires a stopped machine. Runtime rules still apply: Mac
 forks/captures require a stopped source.
 
 Resource flags can appear before or after positionals, for example
-`create dev --profile mac-xcode-v3 --host mac --key KEY.pub`. Global flags precede the
+`create dev --profile mac-xcode-v3 --host mac`. Global flags precede the
 command. For automation:
 
 ```sh
@@ -95,33 +73,12 @@ clankerbox --json checkpoint create dev --async
 `--json` prints structured resources, or the accepted operation with `--async`.
 Without `--async`, JSON mutations return machines (create/start/stop/fork/restore),
 a checkpoint (capture), or a completed operation (deletes). `operation` remains
-available for diagnostics. `exec MACHINE -- ARGV...` streams stdin/stdout/stderr,
-requests no PTY, preserves literal arguments and returns the remote exit status.
-Use `exec dev -- sh -c 'COMMAND'` when shell interpretation is intended.
-`ssh MACHINE` opens an interactive shell. Raw exec/SSH/proxy streams are
-unchanged by `--json`. `url` prints a plain URL; `--json url` prints the object.
+available for diagnostics. Use Clankerdesk or another session-API consumer for
+terminal interaction; `sessions` lists the retained sessions but is not an
+interactive terminal client. There is no supported direct guest SSH/SCP, local
+port forwarding, URL mapping or VNC client.
 
-Interactive `clankerbox ssh dev` holds automatic forwarding until SSH exits.
-For standalone external SSH, SCP, Herdr or other TCP clients:
-
-```sh
-clankerbox ssh-config install
-clankerbox connect dev                  # keep running while forwards are needed
-# In another terminal:
-ssh cb.dev
-scp ./file cb.dev:workspace/
-herdr --remote cb.dev                   # independently installed application
-clankerbox ports dev
-clankerbox url dev http://localhost:3000/
-clankerbox connect dev --forward 127.0.0.1:5432
-clankerbox vnc MAC_MACHINE --viewer
-```
-
-Aliases use the existing immutable-ID ProxyCommand transport. Ordinary external
-SSH sessions need a separate `connect` for automatic local forwards. Each
-`connect`, interactive CLI SSH, or VNC consumer keeps the shared owner alive for
-its own lifetime; VNC exits when you stop its CLI command. Applications use the
-reported local TCP addresses. All three binaries use urfave/cli for flag parsing
+The binaries use urfave/cli for flag parsing
 and generated help. `clankerbox` with no arguments shows root help; use
 `clankerbox COMMAND --help` or `clankerbox help COMMAND` for command details.
 Help never requires configuration or starts services. Names are positional:
@@ -138,13 +95,6 @@ admission without contacting hosts. Remaining capacity can be negative if host
 limits were reduced below existing reservations. `clankerbox hosts --json`
 includes `used_cpu`, `used_ram_mib`, `remaining_cpu` and `remaining_ram_mib`
 alongside configured totals `cpu` and `ram_mib`.
-
-The machine CLI passed disposable Linux and Mac checks for default lifecycle
-waiting, literal exec, interactive SSH forwarding and external SSH aliases.
-Linux checks also covered standalone forwarding/SCP, async operations, timeout
-recovery and checkpoint/restore; Mac checks covered stopped-source disk fork.
-See the [execution record](docs/implementation-execution.md#machine-cli-acceptance)
-for scope and limitations.
 
 ## Goal and intended architecture
 
@@ -206,7 +156,7 @@ tests but brought a full 14-unit native stack. See the
 [runtime investigation](docs/concurrent-ram-forks.md). The earlier
 [build plan](docs/historical-build-plan.md) is preserved as historical reference.
 The [current release-one plan](docs/recommended-plan.md) records the agreed Go,
-smolvm/Tart, capability-aware API and automatic connection/port-forwarding design.
+smolvm/Tart and capability-aware API design (the connection/forwarding parts are historical).
 It keeps operational file backups outside the product API.
 
 ## Spike history and evidence

@@ -192,7 +192,7 @@ func (h *Helper) applyDerived(
 		return unresolved(err)
 	}
 	if req.Action == actionFork || req.Action == actionRestore {
-		if err = h.prepareDerivedChild(ctx, req, &m, &a); err != nil {
+		if err = h.prepareDerivedChild(ctx, &m, &a); err != nil {
 			return unresolved(err)
 		}
 	} else {
@@ -318,10 +318,6 @@ func (h *Helper) childIdentity(
 	if _, e := h.manifest(ctx, req.MachineID); !errors.Is(e, sql.ErrNoRows) {
 		return Manifest{}, errors.New("child identity already owned")
 	}
-	keys, e := model.ValidateKeys(req.SSHPublicKeys)
-	if e != nil || model.Hash(keys) != model.Hash(req.SSHPublicKeys) {
-		return Manifest{}, errors.New("canonical child login keys required")
-	}
 	m := Manifest{
 		ID:              req.MachineID,
 		Name:            req.Name,
@@ -352,12 +348,12 @@ func (h *Helper) childIdentity(
 	return m, nil
 }
 
-func (h *Helper) prepareDerivedChild(ctx context.Context, req model.Request, m *Manifest, a *accepted) error {
+func (h *Helper) prepareDerivedChild(ctx context.Context, m *Manifest, a *accepted) error {
 	a.Phase = "preparation"
 	if err := h.save(ctx, *m, *a); err != nil {
 		return err
 	}
-	user, key, endpoint, prepareErr := h.runtime.Prepare(ctx, *m, req.SSHPublicKeys)
+	user, key, endpoint, prepareErr := h.runtime.Initialize(ctx, *m)
 	if prepareErr != nil {
 		return prepareErr
 	}

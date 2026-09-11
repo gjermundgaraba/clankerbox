@@ -49,7 +49,7 @@ func (r *branchRuntime) Stop(ctx context.Context, m host.Manifest) error {
 func (r *branchRuntime) Delete(ctx context.Context, m host.Manifest) error {
 	return r.machine(m).Delete(ctx, m)
 }
-func (r *branchRuntime) Prepare(ctx context.Context, m host.Manifest, keys []string) (string, string, string, error) {
+func (r *branchRuntime) Initialize(ctx context.Context, m host.Manifest) (string, string, string, error) {
 	r.preparations++
 	if r.fail == "preparation" {
 		return "", "", "", errors.New("preparation reply lost")
@@ -57,7 +57,7 @@ func (r *branchRuntime) Prepare(ctx context.Context, m host.Manifest, keys []str
 	if m.SSHPrivateKey != "" {
 		r.machine(m).key = m.SSHHostKey
 	}
-	return r.machine(m).Prepare(ctx, m, keys)
+	return r.machine(m).Initialize(ctx, m)
 }
 func (r *branchRuntime) Prerequisite(context.Context, string, host.Manifest, *host.CheckpointSpec) error {
 	if r.fail == "prerequisite" {
@@ -113,7 +113,6 @@ func setupBranch(t *testing.T) (*host.Helper, host.Config, *branchRuntime, model
 	req.Action = actionStop
 	req.OperationID = model.NewID()
 	req.Generation++
-	req.SSHPublicKeys = nil
 	requireStatus(t, h.Execute(context.Background(), req), statusSucceeded)
 	return h, cfg, rt, req
 }
@@ -149,7 +148,6 @@ func forkRequest(t *testing.T, source model.Request) model.Request {
 		Profile:          source.Profile,
 		SourceMachineID:  source.MachineID,
 		SourceGeneration: source.Generation,
-		SSHPublicKeys:    []string{testKey(t)},
 	}
 }
 func TestHelperBranchIdentityDuplicatesAndSourceGeneration(t *testing.T) {
@@ -177,7 +175,7 @@ func TestHelperBranchIdentityDuplicatesAndSourceGeneration(t *testing.T) {
 		t.Fatal("replayed branch")
 	}
 	changed := child
-	changed.SSHPublicKeys = source.SSHPublicKeys
+	changed.Name = "different-child"
 	requireStatus(t, h.Execute(ctx, changed), statusFailed)
 	second := forkRequest(t, source)
 	requireStatus(t, h.Execute(ctx, second), statusSucceeded)
@@ -344,12 +342,10 @@ func TestHostLinuxDependencyGuardPreservesOwnedStore(t *testing.T) {
 		t.Fatal("child did not retain independent identity in shared store")
 	}
 	source.Action, source.OperationID, source.Generation = actionStop, model.NewID(), 2
-	source.SSHPublicKeys = nil
 	requireStatus(t, h.Execute(ctx, source), statusSucceeded)
 	source.Action, source.OperationID, source.Generation = actionDelete, model.NewID(), 3
 	requireStatus(t, h.Execute(ctx, source), statusFailed)
 	child.Action, child.OperationID, child.Generation = actionStop, model.NewID(), 2
-	child.SSHPublicKeys = nil
 	requireStatus(t, h.Execute(ctx, child), statusSucceeded)
 	child.Action, child.OperationID, child.Generation = actionDelete, model.NewID(), 3
 	requireStatus(t, h.Execute(ctx, child), statusSucceeded)
@@ -489,4 +485,8 @@ func exerciseInterruptedChild(t *testing.T, phase string) {
 		stop.Action = actionDelete
 		requireStatus(t, h.Execute(ctx, stop), statusFailed)
 	}
+}
+
+func (r *branchRuntime) Verify(ctx context.Context, m host.Manifest) (string, string, string, error) {
+	return r.machine(m).Verify(ctx, m)
 }

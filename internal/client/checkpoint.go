@@ -3,15 +3,13 @@ package client
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
 
 	"clankerbox/internal/model"
 )
 
 func (runner commandRunner) deriveMachine(
 	ctx context.Context,
-	command, action, target, name, key, idem string,
+	command, action, target, name, idem string,
 	wait *waitOptions,
 ) error {
 	a := runner.api
@@ -22,8 +20,8 @@ func (runner commandRunner) deriveMachine(
 	}
 	var body any
 	if child {
-		input, inputErr := childInput(name, key)
-		if inputErr != nil {
+		input := model.ChildInput{Name: name}
+		if inputErr := input.Validate(); inputErr != nil {
 			return inputErr
 		}
 		body = input
@@ -55,16 +53,6 @@ func (runner commandRunner) queryCheckpoint(ctx context.Context, action string, 
 		return err
 	}
 	return runner.output(out)
-}
-
-func childInput(name, key string) (model.ChildInput, error) {
-	//nolint:gosec // G304: Read the public-key file explicitly selected by the local CLI user; key data is validated.
-	data, err := os.ReadFile(key)
-	if err != nil {
-		return model.ChildInput{}, err
-	}
-	input := model.ChildInput{Name: name, SSHPublicKeys: []string{strings.TrimSpace(string(data))}}
-	return input, input.Validate()
 }
 
 func checkpointMutationPath(ctx context.Context, a *API, command, action, target string) (string, error) {

@@ -1,5 +1,10 @@
 # Clankerbox release-one implementation plan
 
+> Historical plan/evidence. Client SSH, exec, forwarding and VNC were retired;
+> use the [current README](../README.md) and
+> [cutover record](client-connection-removal-plan.md), not these old commands.
+
+
 Updated September 7, 2026 after the owner approved pragmatic fork preparation.
 This is an implementation plan, not a deployed service or a claim that all
 acceptance tests have passed. The [README](../README.md) records spike evidence

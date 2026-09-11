@@ -122,7 +122,8 @@ type Runtime interface {
 	Create(context.Context, Manifest) error
 	Configure(context.Context, Manifest) error
 	Start(context.Context, Manifest) error
-	Prepare(context.Context, Manifest, []string) (string, string, string, error)
+	Initialize(context.Context, Manifest) (string, string, string, error)
+	Verify(context.Context, Manifest) (string, string, string, error)
 	Stop(context.Context, Manifest) error
 	Delete(context.Context, Manifest) error
 }
@@ -634,11 +635,7 @@ func (r *lifecycleAttempt) prepareCreated(ctx context.Context) error {
 		if state.State != model.Running {
 			return errors.New("preparation interrupted; explicit reconciliation required before another boot")
 		}
-		r.machine.SSHUser, r.machine.SSHHostKey, r.machine.Endpoint, err = r.helper.runtime.Prepare(
-			ctx,
-			r.machine,
-			r.operation.Request.SSHPublicKeys,
-		)
+		r.machine.SSHUser, r.machine.SSHHostKey, r.machine.Endpoint, err = r.helper.runtime.Initialize(ctx, r.machine)
 		if err != nil {
 			return err
 		}
@@ -674,7 +671,7 @@ func (r *lifecycleAttempt) startRetained(ctx context.Context, state RuntimeState
 	}
 	r.machine.Branchable = r.machine.Profile.Runtime == runtimeSmolvm
 	// Reinstall no identity: verify the retained key and restart sshd through trusted exec.
-	user, key, endpoint, e := r.helper.runtime.Prepare(ctx, r.machine, nil)
+	user, key, endpoint, e := r.helper.runtime.Verify(ctx, r.machine)
 	if e != nil {
 		return e
 	}
@@ -880,13 +877,6 @@ func (h *Helper) createIdentity(ctx context.Context, req model.Request, merr err
 	}
 	if req.Generation != 1 {
 		return Manifest{}, errors.New("create requires generation 1")
-	}
-	keys, e := model.ValidateKeys(req.SSHPublicKeys)
-	if e != nil {
-		return Manifest{}, e
-	}
-	if model.Hash(keys) != model.Hash(req.SSHPublicKeys) {
-		return Manifest{}, errors.New("SSH keys must use canonical sorted public-key lines")
 	}
 	m := Manifest{ID: req.MachineID, Name: req.Name, Profile: req.Profile}
 	if m.Profile.Runtime == runtimeSmolvm {

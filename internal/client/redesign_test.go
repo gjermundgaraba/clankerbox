@@ -7,8 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -30,7 +28,7 @@ func TestCLIHelpWithoutConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v %q", arg, err, out.String())
 		}
-		for _, text := range []string{"clankerbox", "COMMANDS:", checkpointCommand, "ssh-config", "--config", jsonFlag} {
+		for _, text := range []string{"clankerbox", "COMMANDS:", checkpointCommand, "sessions", "--config", jsonFlag} {
 			if !strings.Contains(out.String(), text) {
 				t.Fatalf("%s: missing %q in help: %s", arg, text, &out)
 			}
@@ -64,7 +62,7 @@ func boolName(value bool) string {
 func testWaitResult(t *testing.T, command []string, structured bool) {
 	t.Helper()
 	var posts, reads atomic.Int32
-	machine := machineFromPin(testPin(t), childName)
+	machine := testMachine(childName)
 	checkpoint := model.Checkpoint{ID: otherID, Status: "published"}
 	operation := model.Operation{ID: otherID, MachineID: testID, CheckpointID: otherID, Status: pendingStatus}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -90,10 +88,8 @@ func testWaitResult(t *testing.T, command []string, structured bool) {
 	defer server.Close()
 	a := testAPI(t, server.URL)
 	a.Config.DefaultProfile = linuxOS
-	a.Config.PublicKeyFile = filepath.Join(t.TempDir(), "key.pub")
-	checkError(t, os.WriteFile(a.Config.PublicKeyFile, []byte(machine.SSHHostKey), 0600))
-	writeConfig(t, a.Config)
-	args := []string{configFlag, a.Config.Path}
+	writeConfig(t, a)
+	args := []string{configFlag, a.path}
 	if structured {
 		args = append(args, jsonFlag)
 	}
@@ -160,11 +156,11 @@ func testWaitFailure(t *testing.T, status string) {
 	}))
 	defer server.Close()
 	a := testAPI(t, server.URL)
-	writeConfig(t, a.Config)
+	writeConfig(t, a)
 	var out bytes.Buffer
 	err := client.Run(
 		ctx,
-		[]string{configFlag, a.Config.Path, checkpointCommand, deleteCommand, otherID, timeoutFlag, "25ms"},
+		[]string{configFlag, a.path, checkpointCommand, deleteCommand, otherID, timeoutFlag, "500ms"},
 		client.Streams{Out: &out, Err: io.Discard},
 	)
 	if err == nil {
@@ -197,13 +193,13 @@ func TestAsyncAndInvalidTimeout(t *testing.T) {
 	}))
 	defer server.Close()
 	a := testAPI(t, server.URL)
-	writeConfig(t, a.Config)
+	writeConfig(t, a)
 	for _, timeout := range []string{"0s", "-1s", "garbage"} {
 		err := client.Run(
 			t.Context(),
 			[]string{
 				configFlag,
-				a.Config.Path,
+				a.path,
 				jsonFlag,
 				checkpointCommand,
 				deleteCommand,
@@ -226,7 +222,7 @@ func TestAsyncAndInvalidTimeout(t *testing.T) {
 		t,
 		client.Run(
 			t.Context(),
-			[]string{configFlag, a.Config.Path, jsonFlag, checkpointCommand, deleteCommand, otherID, asyncFlag},
+			[]string{configFlag, a.path, jsonFlag, checkpointCommand, deleteCommand, otherID, asyncFlag},
 			client.Streams{Out: &out, Err: io.Discard},
 		),
 	)
@@ -248,10 +244,10 @@ func TestMissingFlagValueNeverSubmitsMutation(t *testing.T) {
 	}))
 	defer server.Close()
 	a := testAPI(t, server.URL)
-	writeConfig(t, a.Config)
+	writeConfig(t, a)
 	err := client.Run(
 		t.Context(),
-		[]string{configFlag, a.Config.Path, checkpointCommand, deleteCommand, otherID, asyncFlag, idempotencyFlag},
+		[]string{configFlag, a.path, checkpointCommand, deleteCommand, otherID, asyncFlag, idempotencyFlag},
 		client.Streams{Out: io.Discard, Err: io.Discard},
 	)
 	if err == nil || !strings.Contains(err.Error(), "flag needs an argument") {
@@ -264,7 +260,7 @@ func TestMissingFlagValueNeverSubmitsMutation(t *testing.T) {
 
 func TestConfigDefaultsAndHostSelection(t *testing.T) {
 	t.Parallel()
-	for _, scenario := range []string{"defaults", "override", "sole-mac", ambiguousCase, incompatibleDefaultCase, "identity-fallback"} {
+	for _, scenario := range []string{"defaults", "override", "sole-mac", ambiguousCase, incompatibleDefaultCase} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
 			testCreateDefaults(t, scenario)
@@ -293,21 +289,15 @@ func testCreateDefaults(t *testing.T, scenario string) {
 	a := testAPI(t, server.URL)
 	a.Config.DefaultProfile = linuxOS
 	a.Config.DefaultHost = linuxOS
-	a.Config.PublicKeyFile = "login.pub"
-	key := testPin(t).HostKey
-	checkError(t, os.WriteFile(filepath.Join(filepath.Dir(a.Config.Path), "login.pub"), []byte(key), 0600))
 	extra := []string{}
 	expectedProfile, expectedHost := linuxOS, linuxOS
 	switch scenario {
 	case "override":
-		a.Config.PublicKeyFile = "missing.pub"
 		extra = []string{
 			profileFlag,
 			macOS,
 			"--host",
 			macHostName,
-			"--key",
-			filepath.Join(filepath.Dir(a.Config.Path), "login.pub"),
 		}
 		expectedProfile, expectedHost = macOS, macHostName
 	case "sole-mac", ambiguousCase:
@@ -316,19 +306,10 @@ func testCreateDefaults(t *testing.T, scenario string) {
 		expectedProfile, expectedHost = macOS, macHostName
 	case incompatibleDefaultCase:
 		extra = []string{profileFlag, macOS}
-	case "identity-fallback":
-		a.Config.PublicKeyFile = ""
-		a.Config.IdentityFile = filepath.Join(filepath.Dir(a.Config.Path), "identity")
-		checkError(t, os.WriteFile(a.Config.IdentityFile+".pub", []byte(key), 0600))
 	}
-	writeConfig(t, a.Config)
-	config, err := client.LoadConfig(a.Config.Path)
-	checkError(t, err)
-	if scenario == "defaults" && config.PublicKeyFile != filepath.Join(filepath.Dir(a.Config.Path), "login.pub") {
-		t.Fatal("relative public key not resolved", config.PublicKeyFile)
-	}
-	args := append([]string{configFlag, a.Config.Path, createCommand, asyncFlag, childName}, extra...)
-	err = client.Run(t.Context(), args, client.Streams{Out: io.Discard, Err: io.Discard})
+	writeConfig(t, a)
+	args := append([]string{configFlag, a.path, createCommand, asyncFlag, childName}, extra...)
+	err := client.Run(t.Context(), args, client.Streams{Out: io.Discard, Err: io.Discard})
 	if scenario == ambiguousCase || scenario == incompatibleDefaultCase {
 		if err == nil || posts.Load() != 0 {
 			t.Fatalf("unsafe host selection: %v", err)
@@ -337,9 +318,7 @@ func testCreateDefaults(t *testing.T, scenario string) {
 	}
 	checkError(t, err)
 	if posts.Load() != 1 || received.Host != expectedHost || received.Profile != expectedProfile ||
-		received.Name != childName ||
-		len(received.SSHPublicKeys) != 1 ||
-		received.SSHPublicKeys[0] != key {
+		received.Name != childName {
 		t.Fatalf("incorrect defaults: %+v", received)
 	}
 }
@@ -377,14 +356,13 @@ const (
 
 func TestResourceQueriesDefaultHumanAndExplicitJSON(t *testing.T) {
 	t.Parallel()
-	pin := testPin(t)
-	server := httptest.NewServer(cliTestHandler(t, pin, func(string) {}))
+	server := httptest.NewServer(cliTestHandler(t, func(string) {}))
 	defer server.Close()
 	a := testAPI(t, server.URL)
-	writeConfig(t, a.Config)
+	writeConfig(t, a)
 	for _, command := range [][]string{{"profiles"}, {hostsCommand}, {"machines"}, {inspectCommand, testMachineName}, {"operation", otherID}} {
 		for _, structured := range []bool{false, true} {
-			args := []string{configFlag, a.Config.Path}
+			args := []string{configFlag, a.path}
 			if structured {
 				args = append(args, jsonFlag)
 			}
@@ -395,47 +373,6 @@ func TestResourceQueriesDefaultHumanAndExplicitJSON(t *testing.T) {
 			}
 		}
 	}
-}
-
-func TestURLPlainAndJSONWithExistingForward(t *testing.T) {
-	t.Parallel()
-	pin := testPin(t)
-	a := testAPI(t, pin.APIURL)
-	a.Config.StateDir = shortDir(t)
-	writeConfig(t, a.Config)
-	checkError(t, client.RememberPin(a.Config.StateDir, pin))
-	endpoint := client.Endpoint{Host: ipv4Loopback, Port: 3000}
-	remote := &fakeRemote{}
-	remote.set([]client.Endpoint{endpoint}, false)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	ready, done := make(chan error, 1), make(chan error, 1)
-	go func() { done <- client.ServeOwner(ctx, a.Config, pin, remote.dial, func(err error) { ready <- err }) }()
-	checkError(t, <-ready)
-	handle := acquireTestLease(t, a.Config, pin)
-	defer closeTestStream(t, handle)
-	mapping := awaitHandleMapping(t, handle, endpoint)
-	for _, structured := range []bool{false, true} {
-		args := []string{configFlag, a.Config.Path}
-		if structured {
-			args = append(args, jsonFlag)
-		}
-		args = append(args, "url", pin.ID, "http://localhost:3000/a%20b?q=x#y")
-		var out bytes.Buffer
-		checkError(t, client.Run(ctx, args, client.Streams{Out: &out, Err: io.Discard}))
-		expected := "http://" + mapping.Local + "/a%20b?q=x#y"
-		if structured {
-			var result map[string]string
-			checkError(t, json.Unmarshal(out.Bytes(), &result))
-			if result["url"] != expected || result["machine_id"] != pin.ID {
-				t.Fatal(result)
-			}
-		} else if out.String() != expected+"\n" {
-			t.Fatalf("not a plain URL: %q", out.String())
-		}
-	}
-	cancel()
-	checkError(t, <-done)
 }
 
 const stopCommand = "stop"

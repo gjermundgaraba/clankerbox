@@ -411,13 +411,12 @@ func (c *Controller) Create(
 		UpdatedAt:  now,
 	}
 	req := model.Request{
-		Action:        createAction,
-		OperationID:   o.ID,
-		MachineID:     m.ID,
-		Generation:    1,
-		Name:          m.Name,
-		Profile:       p,
-		SSHPublicKeys: in.SSHPublicKeys,
+		Action:      createAction,
+		OperationID: o.ID,
+		MachineID:   m.ID,
+		Generation:  1,
+		Name:        m.Name,
+		Profile:     p,
 	}
 	if err = saveMachine(ctx, tx, m); err == nil {
 		err = insertOperation(ctx, tx, key, fp, o, req)
@@ -564,8 +563,8 @@ func validateObservation(id string, obs *model.Observation) error {
 		return errors.New("invalid observed state")
 	}
 	if obs.Prepared {
-		keys, err := model.ValidateKeys([]string{obs.SSHHostKey})
-		if err != nil || len(keys) != 1 || obs.SSHUser == "" {
+		_, err := model.ValidateKey(obs.SSHHostKey)
+		if err != nil || obs.SSHUser == "" {
 			return errors.New("invalid prepared SSH identity")
 		}
 	}

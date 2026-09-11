@@ -174,7 +174,7 @@ func TestBootstrapSSHDPolicyAndRetainedHostKey(t *testing.T) {
 	h, _, _, req := setup(t)
 	defer closeHelper(t, h)
 	m := host.Manifest{ID: req.MachineID, Profile: req.Profile}
-	script, err := preparedScript(t, m, req.SSHPublicKeys)
+	script, err := preparedScript(t, m, true)
 	requireNoError(t, err)
 	matches := regexp.MustCompile(`printf '%s' '([A-Za-z0-9+/=]+)'`).FindAllStringSubmatch(script, -1)
 	var config string
@@ -185,12 +185,15 @@ func TestBootstrapSSHDPolicyAndRetainedHostKey(t *testing.T) {
 			config = string(decoded)
 		}
 	}
-	for _, required := range []string{"PasswordAuthentication no", "KbdInteractiveAuthentication no", "AuthenticationMethods publickey", "PermitOpen 127.0.0.1:* [::1]:*", "PermitListen none", "AllowTcpForwarding local", "AllowStreamLocalForwarding no", "AllowUsers admin", "Subsystem sftp internal-sftp", "SetEnv PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"} {
+	for _, required := range []string{"PasswordAuthentication no", "KbdInteractiveAuthentication no", "AuthenticationMethods publickey", "AllowTcpForwarding no", "PermitTTY no", "MaxSessions 64", "AllowStreamLocalForwarding no", "AllowUsers admin", "SetEnv PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"} {
 		if !strings.Contains(config, required) {
 			t.Fatalf("SSHD missing %s", required)
 		}
 	}
-	start, err := preparedScript(t, m, nil)
+	if strings.Contains(config, "Subsystem sftp") || strings.Contains(config, "PermitOpen") {
+		t.Fatal("retired guest access remains enabled")
+	}
+	start, err := preparedScript(t, m, false)
 	requireNoError(t, err)
 	if strings.Contains(start, "ssh-keygen -q") || strings.Contains(start, "sshd_config\n") {
 		t.Fatal("start creates identity/configuration")
@@ -199,7 +202,7 @@ func TestBootstrapSSHDPolicyAndRetainedHostKey(t *testing.T) {
 		t.Fatal("start doesn't verify retained key")
 	}
 	m.Profile.Runtime = runtimeSmolvm
-	linux, err := preparedScript(t, m, req.SSHPublicKeys)
+	linux, err := preparedScript(t, m, true)
 	requireNoError(t, err)
 	ownership := strings.Index(linux, "chown 0:0 /run/sshd /root /etc/ssh")
 	if ownership < 0 || ownership > strings.Index(linux, "/usr/sbin/sshd -t") {
@@ -252,7 +255,7 @@ func TestSmolvmStopRequiresAcknowledgementBeforeSupervisorStop(t *testing.T) {
 	}
 }
 
-func preparedScript(t *testing.T, m host.Manifest, keys []string) (string, error) {
+func preparedScript(t *testing.T, m host.Manifest, initialize bool) (string, error) {
 	t.Helper()
 	n, runner, fixture := nativeFixture(t)
 	m.ID = fixture.ID
@@ -274,6 +277,11 @@ func preparedScript(t *testing.T, m host.Manifest, keys []string) (string, error
 		}
 		return []byte(key), nil
 	}
-	_, _, _, err := n.Prepare(context.Background(), m, keys)
+	var err error
+	if initialize {
+		_, _, _, err = n.Initialize(context.Background(), m)
+	} else {
+		_, _, _, err = n.Verify(context.Background(), m)
+	}
 	return script, err
 }

@@ -19,18 +19,9 @@ import (
 // data made from parsed public keys. No caller-controlled shell syntax is used.
 // The guest's durable claim is written before generating its single new key:
 // reply loss resumes that identity, never rotates it. Starts only verify it.
-func bootstrapScript(m Manifest, keys []string) (string, error) {
+func bootstrapScript(m Manifest, initialize bool) (string, error) {
 	if !model.ValidID(m.ID) {
 		return "", errors.New("invalid bootstrap ID")
-	}
-	create := len(keys) != 0
-	keyData := ""
-	if create {
-		canonical, err := model.ValidateKeys(keys)
-		if err != nil {
-			return "", err
-		}
-		keyData = base64.StdEncoding.EncodeToString([]byte(strings.Join(canonical, "\n") + "\n"))
 	}
 	user, home, decode := rootUser, rootHome, linuxDecode
 	if m.Profile.Runtime == runtimeTart {
@@ -49,9 +40,9 @@ PermitEmptyPasswords no
 AuthenticationMethods publickey
 PermitRootLogin prohibit-password
 AllowUsers ` + user + `
-AllowTcpForwarding local
-PermitOpen 127.0.0.1:* [::1]:*
-PermitListen none
+AllowTcpForwarding no
+PermitTTY no
+MaxSessions 64
 AllowStreamLocalForwarding no
 GatewayPorts no
 AllowAgentForwarding no
@@ -59,7 +50,6 @@ X11Forwarding no
 PermitTunnel no
 UsePAM yes
 StrictModes yes
-Subsystem sftp internal-sftp
 PidFile /var/run/clankerbox-sshd.pid
 `
 	if m.Profile.Runtime == runtimeTart {
@@ -74,19 +64,19 @@ PidFile /var/run/clankerbox-sshd.pid
 		// sshd's required ownership inside the guest, before validating config.
 		s.WriteString("mkdir -p /run/sshd\nchown 0:0 /run/sshd /root /etc/ssh\nchmod 0755 /run/sshd\n")
 	}
-	if create && m.SourceMachineID != "" {
+	if initialize && m.SourceMachineID != "" {
 		if err := installChildIdentity(&s, m, decode); err != nil {
 			return "", err
 		}
 	}
 
-	if create {
+	if initialize {
 		s.WriteString(
 			"if [ ! -e /etc/clankerbox/owner ]; then\n  test ! -e /etc/clankerbox\n  mkdir -m 700 /etc/clankerbox\n  printf '%s\\n' '" + m.ID + "' > /etc/clankerbox/owner\n  sync\nfi\n",
 		)
 	}
 	s.WriteString("test \"$(cat /etc/clankerbox/owner)\" = '" + m.ID + "'\n")
-	if create {
+	if initialize {
 		if m.SourceMachineID == "" {
 			s.WriteString(
 				"if [ ! -e /etc/clankerbox/ssh_host_ed25519_key ]; then\n  /usr/bin/ssh-keygen -q -t ed25519 -N '' -f /etc/clankerbox/ssh_host_ed25519_key\n  sync\nfi\n",
@@ -96,15 +86,15 @@ PidFile /var/run/clankerbox-sshd.pid
 			"/usr/bin/ssh-keygen -y -f /etc/clankerbox/ssh_host_ed25519_key > /etc/clankerbox/ssh_host_ed25519_key.pub\n",
 		)
 		s.WriteString(
-			"mkdir -p '" + home + "/.ssh'\nchmod 700 '" + home + "/.ssh'\nprintf '%s' '" + keyData + "' | " + decode + " > '" + home + "/.ssh/authorized_keys'\nchmod 600 '" + home + "/.ssh/authorized_keys'\nchown -R '" + user + "' '" + home + "/.ssh'\nprintf '%s' '" + cfgData + "' | " + decode + " > /etc/ssh/sshd_config\nchmod 600 /etc/ssh/sshd_config\n/usr/sbin/sshd -t\nsync\n",
+			"mkdir -p '" + home + "/.ssh'\nchmod 700 '" + home + "/.ssh'\n: > '" + home + "/.ssh/authorized_keys'\nchmod 600 '" + home + "/.ssh/authorized_keys'\nchown -R '" + user + "' '" + home + "/.ssh'\nprintf '%s' '" + cfgData + "' | " + decode + " > /etc/ssh/sshd_config\nchmod 600 /etc/ssh/sshd_config\n/usr/sbin/sshd -t\nsync\n",
 		)
 	} else {
 		s.WriteString(
 			"test -s /etc/clankerbox/ssh_host_ed25519_key\ntest -s /etc/clankerbox/prepared\n/usr/sbin/sshd -t\n",
 		)
 	}
-	writeSSHDStart(&s, m.Profile.Runtime, create)
-	if create {
+	writeSSHDStart(&s, m.Profile.Runtime, initialize)
+	if initialize {
 		s.WriteString("printf '%s\\n' '" + m.ID + "' > /etc/clankerbox/prepared\nsync\n")
 	}
 	s.WriteString("/usr/bin/ssh-keygen -y -f /etc/clankerbox/ssh_host_ed25519_key\n")
@@ -116,8 +106,8 @@ PidFile /var/run/clankerbox-sshd.pid
 }
 
 // Prepare installs or verifies the guest SSH identity through trusted runtime execution.
-func (n *NativeRuntime) Prepare(ctx context.Context, m Manifest, keys []string) (string, string, string, error) {
-	script, err := bootstrapScript(m, keys)
+func (n *NativeRuntime) prepare(ctx context.Context, m Manifest, initialize bool) (string, string, string, error) {
+	script, err := bootstrapScript(m, initialize)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -129,8 +119,8 @@ func (n *NativeRuntime) Prepare(ctx context.Context, m Manifest, keys []string) 
 	}
 	// Use exactly one public-key line from the trusted runtime channel.
 	key := strings.TrimSpace(string(out))
-	canonical, err := model.ValidateKeys([]string{key})
-	if err != nil || len(canonical) != 1 {
+	canonical, err := model.ValidateKey(key)
+	if err != nil {
 		return "", "", "", fmt.Errorf("trusted bootstrap returned invalid host key: %q", key)
 	}
 	state, err := n.Inspect(ctx, m)
@@ -144,15 +134,15 @@ func (n *NativeRuntime) Prepare(ctx context.Context, m Manifest, keys []string) 
 	if m.Profile.Runtime == runtimeTart {
 		user = "admin"
 	}
-	if m.SourceMachineID != "" && len(keys) != 0 {
-		if canonical[0] != m.SSHHostKey {
+	if m.SourceMachineID != "" && initialize {
+		if canonical != m.SSHHostKey {
 			return "", "", "", errors.New("fresh host key was not installed")
 		}
 		if err = waitSSHIdentity(call, state.Endpoint, m.SSHHostKey); err != nil {
 			return "", "", "", err
 		}
 	}
-	return user, canonical[0], state.Endpoint, nil
+	return user, canonical, state.Endpoint, nil
 }
 
 // Readiness follows a handshake with the new daemon key, not merely writing it.
@@ -212,11 +202,11 @@ func installChildIdentity(s *strings.Builder, m Manifest, decode string) error {
 	return nil
 }
 
-func writeSSHDStart(s *strings.Builder, runtime string, create bool) {
+func writeSSHDStart(s *strings.Builder, runtime string, initialize bool) {
 	if runtime == runtimeTart {
 		// Private DHCP DNS servers are deliberately unreachable through Softnet.
 		// The supported Tart image names its primary network service Ethernet.
-		if create {
+		if initialize {
 			s.WriteString("/usr/sbin/networksetup -setdnsservers Ethernet 1.1.1.1 8.8.8.8\n")
 		}
 		s.WriteString(
@@ -229,4 +219,14 @@ func writeSSHDStart(s *strings.Builder, runtime string, create bool) {
 			"mkdir -p /run/sshd\nif [ -s /var/run/clankerbox-sshd.pid ] && kill -0 \"$(cat /var/run/clankerbox-sshd.pid)\" 2>/dev/null; then\n  kill -HUP \"$(cat /var/run/clankerbox-sshd.pid)\"\nelse\n  rm -f /var/run/clankerbox-sshd.pid\n  /usr/sbin/sshd -f /etc/ssh/sshd_config\nfi\n",
 		)
 	}
+}
+
+// Initialize establishes the owned guest identity during create/fork/restore.
+func (n *NativeRuntime) Initialize(ctx context.Context, m Manifest) (string, string, string, error) {
+	return n.prepare(ctx, m, true)
+}
+
+// Verify checks the existing identity on start without rotating keys.
+func (n *NativeRuntime) Verify(ctx context.Context, m Manifest) (string, string, string, error) {
+	return n.prepare(ctx, m, false)
 }

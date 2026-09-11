@@ -445,7 +445,6 @@ func linkChild(
 	if err := model.ValidateLabels(m.Labels); err != nil {
 		return problem(http.StatusBadRequest, "invalid_request", "labels after inheritance: "+err.Error())
 	}
-	req.SSHPublicKeys = in.SSHPublicKeys
 	return nil
 }
 

@@ -3,7 +3,6 @@ package dev
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -13,10 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
-
-	"golang.org/x/crypto/ssh"
 
 	"clankerbox/internal/control"
 	"clankerbox/internal/model"
@@ -157,29 +153,16 @@ func localWorkspace(dir *statefs.Dir, opts Options) (string, error) {
 	return workspace, dir.WriteFile("workspace-path", []byte(workspace))
 }
 
-func localCredentials(dir *statefs.Dir) ([]byte, string, error) {
+func localCredentials(dir *statefs.Dir) ([]byte, error) {
 	token, err := dir.ReadFile("token")
 	if errors.Is(err, os.ErrNotExist) {
 		token = []byte(rand.Text() + rand.Text())
 		err = dir.WriteFile("token", token)
 	}
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
-	key, err := dir.ReadFile("access.pub")
-	if errors.Is(err, os.ErrNotExist) {
-		pub, _, genErr := ed25519.GenerateKey(rand.Reader)
-		if genErr != nil {
-			return nil, "", genErr
-		}
-		sshKey, keyErr := ssh.NewPublicKey(pub)
-		if keyErr != nil {
-			return nil, "", keyErr
-		}
-		key = ssh.MarshalAuthorizedKey(sshKey)
-		err = dir.WriteFile("access.pub", key)
-	}
-	return token, strings.TrimSpace(string(key)), err
+	return token, nil
 }
 
 // Run serves until cancellation. Stopping this controller leaves the independent
@@ -209,7 +192,7 @@ func Run(parent context.Context, options Options, ready func(Connection) error) 
 	if err != nil {
 		return err
 	}
-	token, publicKey, err := localCredentials(dir)
+	token, err := localCredentials(dir)
 	if err != nil {
 		return err
 	}
@@ -223,7 +206,7 @@ func Run(parent context.Context, options Options, ready func(Connection) error) 
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, controller.Close()) }()
-	return serveController(parent, controller, listener, dir, opts, token, publicKey, ready)
+	return serveController(parent, controller, listener, dir, opts, token, ready)
 }
 
 func serveController(
@@ -233,7 +216,6 @@ func serveController(
 	dir *statefs.Dir,
 	opts Options,
 	token []byte,
-	publicKey string,
 	ready func(Connection) error,
 ) (resultErr error) {
 	handler, err := controller.Handler(token)
@@ -247,7 +229,7 @@ func serveController(
 	defer func() { cancel(); <-workers }()
 	startup, stopStartup := context.WithTimeout(ctx, startupTimeout)
 	defer stopStartup()
-	machine, err := seedMachine(startup, controller, publicKey)
+	machine, err := seedMachine(startup, controller)
 	if err != nil {
 		return err
 	}
@@ -288,7 +270,7 @@ func serveController(
 	}
 }
 
-func localMachineID(ctx context.Context, c *control.Controller, publicKey string) (string, error) {
+func localMachineID(ctx context.Context, c *control.Controller) (string, error) {
 	machines, err := c.List(ctx)
 	if err != nil {
 		return "", err
@@ -304,7 +286,7 @@ func localMachineID(ctx context.Context, c *control.Controller, publicKey string
 		op, createErr := c.Create(
 			ctx,
 			"dev-local-machine",
-			model.CreateInput{Name: localName, Profile: localName, Host: localName, SSHPublicKeys: []string{publicKey}},
+			model.CreateInput{Name: localName, Profile: localName, Host: localName},
 		)
 		if createErr != nil {
 			return "", createErr
@@ -317,8 +299,8 @@ func localMachineID(ctx context.Context, c *control.Controller, publicKey string
 	return id, nil
 }
 
-func seedMachine(ctx context.Context, c *control.Controller, publicKey string) (model.Machine, error) {
-	id, err := localMachineID(ctx, c, publicKey)
+func seedMachine(ctx context.Context, c *control.Controller) (model.Machine, error) {
+	id, err := localMachineID(ctx, c)
 	if err != nil {
 		return model.Machine{}, err
 	}
@@ -402,10 +384,8 @@ func writeConnections(dir *statefs.Dir, conn Connection) error {
 		"client.json": map[string]string{
 			"url":             conn.URL,
 			"token_file":      conn.TokenPath,
-			"state_dir":       filepath.Join(conn.StateDir, "client"),
 			"default_host":    localName,
 			"default_profile": localName,
-			"public_key_file": filepath.Join(conn.StateDir, "access.pub"),
 		},
 	}
 	for name, config := range configs {

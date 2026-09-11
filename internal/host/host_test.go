@@ -27,7 +27,7 @@ type memoryRuntime struct {
 }
 
 func (r *memoryRuntime) Inspect(context.Context, host.Manifest) (host.RuntimeState, error) {
-	return host.RuntimeState{Exists: r.exists, State: r.state, Endpoint: "192.168.64.2:22"}, nil
+	return host.RuntimeState{Exists: r.exists, State: r.state, Endpoint: testGuestEndpoint}, nil
 }
 func (r *memoryRuntime) Create(context.Context, host.Manifest) error {
 	r.creates++
@@ -48,11 +48,9 @@ func (r *memoryRuntime) Start(context.Context, host.Manifest) error {
 	}
 	return nil
 }
-func (r *memoryRuntime) Prepare(_ context.Context, _ host.Manifest, keys []string) (string, string, string, error) {
-	if len(keys) != 0 {
-		r.prepares++
-	}
-	return "admin", r.key, "192.168.64.2:22", nil
+func (r *memoryRuntime) Initialize(_ context.Context, _ host.Manifest) (string, string, string, error) {
+	r.prepares++
+	return "admin", r.key, testGuestEndpoint, nil
 }
 func (r *memoryRuntime) Stop(context.Context, host.Manifest) error {
 	r.stops++
@@ -104,13 +102,12 @@ func setup(t *testing.T) (*host.Helper, host.Config, *memoryRuntime, model.Reque
 	h, err := host.Open(cfg, rt)
 	requireNoError(t, err)
 	req := model.Request{
-		Action:        actionCreate,
-		OperationID:   model.NewID(),
-		MachineID:     model.NewID(),
-		Generation:    1,
-		Name:          "dev",
-		Profile:       p,
-		SSHPublicKeys: []string{testKey(t)},
+		Action:      actionCreate,
+		OperationID: model.NewID(),
+		MachineID:   model.NewID(),
+		Generation:  1,
+		Name:        "dev",
+		Profile:     p,
 	}
 	return h, cfg, rt, req
 }
@@ -139,7 +136,6 @@ func TestDurableReplyLossDuplicateAndTombstone(t *testing.T) {
 	requireStatus(t, h.Execute(ctx, conflict), statusFailed)
 	rt.disk = retainedDiskContents
 	op := nextOperation(req, actionStop)
-	op.SSHPublicKeys = nil
 	requireStatus(t, h.Execute(ctx, op), statusSucceeded)
 	if rt.disk != retainedDiskContents {
 		t.Fatal("stop deleted disk")
@@ -232,7 +228,6 @@ func TestHostRejectsUnownedAndRunningDelete(t *testing.T) {
 	req2.Action = actionDelete
 	req2.OperationID = model.NewID()
 	req2.Generation = 2
-	req2.SSHPublicKeys = nil
 	requireStatus(t, h2.Execute(context.Background(), req2), statusFailed)
 	if rt2.deletes != 0 {
 		t.Fatal("deleted running VM")
@@ -253,12 +248,12 @@ func TestBootstrapAndEndpointRestrictions(t *testing.T) {
 	h, _, _, req := setup(t)
 	defer closeHelper(t, h)
 	m := host.Manifest{ID: req.MachineID, Profile: req.Profile}
-	script, err := preparedScript(t, m, req.SSHPublicKeys)
+	script, err := preparedScript(t, m, true)
 	requireNoError(t, err)
-	if strings.Contains(script, req.SSHPublicKeys[0]) {
-		t.Fatal("raw caller data interpolated in shell")
+	if !strings.Contains(script, ": >") {
+		t.Fatal("initialization must clear inherited login access")
 	}
-	start, err := preparedScript(t, m, nil)
+	start, err := preparedScript(t, m, false)
 	requireNoError(t, err)
 	if strings.Contains(start, "ssh-keygen -q") || strings.Contains(start, "authorized_keys'") {
 		t.Fatal("start regenerates guest identity")
@@ -274,7 +269,6 @@ func TestInterruptedDeleteFinishesCleanupAndTombstone(t *testing.T) {
 	req.OperationID = model.NewID()
 	req.Generation++
 	req.Action = actionStop
-	req.SSHPublicKeys = nil
 	requireStatus(t, h.Execute(ctx, req), statusSucceeded)
 	req.OperationID = model.NewID()
 	req.Generation++
@@ -354,3 +348,9 @@ func nextOperation(previous model.Request, action string) model.Request {
 	previous.Generation++
 	return previous
 }
+
+func (r *memoryRuntime) Verify(context.Context, host.Manifest) (string, string, string, error) {
+	return "admin", r.key, testGuestEndpoint, nil
+}
+
+const testGuestEndpoint = "192.168.64.2:22"

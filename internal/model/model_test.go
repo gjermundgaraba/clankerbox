@@ -23,13 +23,13 @@ func TestKeys(t *testing.T) {
 	s, _ := ssh.NewPublicKey(pub)
 	key := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s)))
 	for _, bad := range []string{"", key + "\n", `command="touch /tmp/no" ` + key, "ssh-ed25519 invalid", key + "\n" + key} {
-		if _, err := model.ValidateKeys([]string{bad}); err == nil {
+		if _, err := model.ValidateKey(bad); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
 	}
-	keys, err := model.ValidateKeys([]string{key + " comment", key})
-	if err != nil || len(keys) != 1 || keys[0] != key {
-		t.Fatalf("normalization: %v %v", keys, err)
+	canonicalKey, err := model.ValidateKey(key + " comment")
+	if err != nil || canonicalKey != key {
+		t.Fatalf("normalization: %v %v", canonicalKey, err)
 	}
 }
 func TestProfilesAndNames(t *testing.T) {

@@ -19,7 +19,7 @@ type commandAction func(context.Context, commandRunner, *cli.Command) error
 func newCommand(streams Streams) *cli.Command {
 	root := &cli.Command{
 		Name: "clankerbox", Usage: "Create and control machines",
-		Description: "Lifecycle changes wait for completion by default. Connections require a running machine.",
+		Description: "Lifecycle changes wait for completion by default. Terminal sessions require a running machine.",
 		Reader:      streams.In, Writer: streams.Out, ErrWriter: streams.Err,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -35,16 +35,11 @@ func newCommand(streams Streams) *cli.Command {
 	}
 	commandStreams(streams).addResourceCommands(root)
 	commandStreams(streams).addLifecycleCommands(root)
-	commandStreams(streams).addSSHCommands(root)
-	commandStreams(streams).addConnectionCommands(root)
 	commandStreams(streams).addSessionCommands(root)
 	commandStreams(streams).addDevCommands(root)
 	return root
 }
 
-func keyFlag() cli.Flag {
-	return &cli.StringFlag{Name: "key", Usage: "Read SSH public key from FILE (default: config)", TakesFile: true}
-}
 func configValue(c *cli.Command, name, fallback string) string {
 	if c.IsSet(name) {
 		return c.String(name)
@@ -103,16 +98,6 @@ func (streams commandStreams) command(name, usage, argsUsage string, count int, 
 const restoreCommand = "restore"
 const childArgCount = 2
 
-// rawCommandHelp handles local help without parsing the remote argument tail.
-func rawCommandHelp(action cli.ActionFunc) cli.ActionFunc {
-	return func(ctx context.Context, c *cli.Command) error {
-		if c.NArg() == 1 && (c.Args().First() == "--help" || c.Args().First() == "-h") {
-			return cli.ShowCommandHelp(ctx, c.Root(), c.Name)
-		}
-		return action(ctx, c)
-	}
-}
-
 func (streams commandStreams) checkpoints() *cli.Command {
 	command := streams.command
 	checkpoint := &cli.Command{Name: "checkpoint", Usage: "Manage machine checkpoints", OnUsageError: returnUsageError}
@@ -128,7 +113,6 @@ func (streams commandStreams) checkpoints() *cli.Command {
 					"checkpoint",
 					c.Name,
 					c.Args().First(),
-					"",
 					"",
 					c.String("idempotency-key"),
 					waitFlags(c),
@@ -208,7 +192,6 @@ func (streams commandStreams) addLifecycleCommands(root *cli.Command) {
 				c.Args().First(),
 				configValue(c, "profile", r.api.Config.DefaultProfile),
 				configValue(c, "host", r.api.Config.DefaultHost),
-				configValue(c, "key", r.api.Config.publicKeyFile()),
 				c.String("idempotency-key"),
 				waitFlags(c),
 			)
@@ -218,7 +201,6 @@ func (streams commandStreams) addLifecycleCommands(root *cli.Command) {
 		lifecycleFlags(),
 		&cli.StringFlag{Name: "profile", Usage: "Machine profile (default: config)"},
 		&cli.StringFlag{Name: "host", Usage: "Host (default: config or automatic selection)"},
-		keyFlag(),
 	)
 	root.Commands = append(root.Commands, create)
 	for _, name := range []string{"start", "stop", "delete"} {
@@ -247,7 +229,6 @@ func (streams commandStreams) addLifecycleCommands(root *cli.Command) {
 					c.Name,
 					c.Args().Get(0),
 					c.Args().Get(1),
-					configValue(c, "key", r.api.Config.publicKeyFile()),
 					c.String("idempotency-key"),
 					waitFlags(c),
 				)
@@ -256,129 +237,10 @@ func (streams commandStreams) addLifecycleCommands(root *cli.Command) {
 		if name == restoreCommand {
 			c.ArgsUsage = "CHECKPOINT_ID CHILD"
 		}
-		c.Flags = append(lifecycleFlags(), keyFlag())
+		c.Flags = lifecycleFlags()
 		root.Commands = append(root.Commands, c)
 	}
 	root.Commands = append(root.Commands, streams.checkpoints())
-}
-
-func (streams commandStreams) addSSHCommands(root *cli.Command) {
-	command := streams.command
-	sshConfig := &cli.Command{
-		Name:         "ssh-config",
-		OnUsageError: returnUsageError,
-		Usage:        "Manage SSH aliases",
-		Commands: []*cli.Command{
-			command(
-				"install",
-				"Install SSH aliases",
-				" ",
-				0,
-				func(ctx context.Context, r commandRunner, _ *cli.Command) error { return r.installSSH(ctx) },
-			),
-		},
-	}
-	root.Commands = append(root.Commands, sshConfig)
-	exec := command(
-		"exec",
-		"Execute literal arguments remotely, preserving streams and exit status",
-		"MACHINE -- COMMAND [ARG...]",
-		-1,
-		func(ctx context.Context, r commandRunner, c *cli.Command) error {
-			return r.execMachine(ctx, c.Args().Slice())
-		},
-	)
-	exec.SkipFlagParsing = true
-	exec.Action = rawCommandHelp(exec.Action)
-	ssh := command(
-		"ssh",
-		"Open an interactive SSH session",
-		"MACHINE",
-		1,
-		func(ctx context.Context, r commandRunner, c *cli.Command) error {
-			return r.sshMachine(ctx, c.Args().Slice())
-		},
-	)
-	root.Commands = append(
-		root.Commands,
-		exec,
-		ssh,
-		command(
-			"proxy",
-			"Proxy a machine's SSH stream",
-			"IMMUTABLE_ID",
-			1,
-			func(ctx context.Context, r commandRunner, c *cli.Command) error {
-				return r.proxyMachine(ctx, c.Args().Slice())
-			},
-		),
-	)
-	owner := command(
-		"_owner",
-		"Run the forwarding owner",
-		"PIN",
-		1,
-		func(ctx context.Context, r commandRunner, c *cli.Command) error {
-			return r.serveOwner(ctx, c.Args().Slice())
-		},
-	)
-	owner.Hidden = true
-	root.Commands = append(root.Commands, owner)
-}
-
-func (streams commandStreams) addConnectionCommands(root *cli.Command) {
-	command := streams.command
-	connect := command(
-		"connect",
-		"Hold a connection and port forwards until exit",
-		"MACHINE",
-		1,
-		func(ctx context.Context, r commandRunner, c *cli.Command) error {
-			var endpoints []Endpoint
-			for _, value := range c.StringSlice("forward") {
-				ep, err := ParseEndpoint(value)
-				if err != nil {
-					return err
-				}
-				endpoints = append(endpoints, ep)
-			}
-			return r.connectMachine(ctx, c.Args().First(), endpoints)
-		},
-	)
-	connect.Flags = []cli.Flag{
-		&cli.StringSliceFlag{Name: "forward", Usage: "Forward numeric guest loopback HOST:PORT (repeatable)"},
-	}
-	connect.DisableSliceFlagSeparator = true
-	root.Commands = append(root.Commands, connect)
-	for _, name := range []string{"ports", "url", "open-url"} {
-		count, usage := 2, "MACHINE URL"
-		if name == "ports" {
-			count, usage = 1, "MACHINE"
-		}
-		root.Commands = append(
-			root.Commands,
-			command(
-				name,
-				name+" for a connected machine",
-				usage,
-				count,
-				func(ctx context.Context, r commandRunner, c *cli.Command) error {
-					return r.queryForward(ctx, c.Name, c.Args().Slice())
-				},
-			),
-		)
-	}
-	vnc := command(
-		"vnc",
-		"Forward VNC until exit",
-		"MACHINE",
-		1,
-		func(ctx context.Context, r commandRunner, c *cli.Command) error {
-			return r.vncMachine(ctx, c.Args().First(), c.Bool("viewer"))
-		},
-	)
-	vnc.Flags = []cli.Flag{&cli.BoolFlag{Name: "viewer", Usage: "Open the native VNC viewer"}}
-	root.Commands = append(root.Commands, vnc)
 }
 
 func returnUsageError(_ context.Context, _ *cli.Command, err error, _ bool) error { return err }

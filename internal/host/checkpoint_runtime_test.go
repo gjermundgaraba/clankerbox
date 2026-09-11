@@ -150,12 +150,11 @@ func TestChildTrustedExecSendsPrivateScriptOverStdin(t *testing.T) {
 		observed = true
 		return nil, stopped
 	}
-	loginKeys := []string{testKey(t)}
-	_, _, _, err = n.Prepare(context.Background(), m, loginKeys)
+	_, _, _, err = n.Initialize(context.Background(), m)
 	if !observed || !errors.Is(err, stopped) {
 		t.Fatal("bootstrap did not cross runtime stdin boundary", err)
 	}
-	_, _, _, err = n.Prepare(context.Background(), m, loginKeys)
+	_, _, _, err = n.Initialize(context.Background(), m)
 	if !errors.Is(err, stopped) {
 		t.Fatal("second bootstrap did not reach the same runtime boundary", err)
 	}
@@ -499,7 +498,7 @@ func TestChildPreparationVerifiesLiveSSHIdentity(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	user, key, endpoint, err := n.Prepare(ctx, m, []string{testKey(t)})
+	user, key, endpoint, err := n.Initialize(ctx, m)
 	requireNoError(t, err)
 	if user != "root" || key != m.SSHHostKey || endpoint != listener.Addr().String() {
 		t.Fatalf("unexpected prepared identity: %s %s %s", user, key, endpoint)

@@ -111,7 +111,7 @@ unsupported. There is no VM isolation, Linux emulation, disk branching or RAM
 continuation across daemon shutdown.
 
 The internal SSH transport accepts only the controller's terminal key and fixed
-guest proxy command. Generic `clankerbox ssh`, `exec`, SCP, VNC and automatic TCP
+guest proxy command. Direct SSH, exec, SCP, VNC and automatic TCP
 forwarding are not provided by this mode. Applications interact through the guest
 session API; local services they start can be reached directly on localhost.
 

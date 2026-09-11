@@ -88,7 +88,7 @@ func (c *Controller) sessionStream(w http.ResponseWriter, r *http.Request) {
 	if err = rw.Flush(); err != nil {
 		return
 	}
-	bridgeSSH(conn, rw, upstream)
+	bridgeSession(conn, rw, upstream)
 }
 
 // guestProblem names the link status in the error code, so a consumer can tell

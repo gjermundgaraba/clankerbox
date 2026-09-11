@@ -16,17 +16,16 @@ import (
 )
 
 const (
-	rootUser         = "root"
-	adminUser        = "admin"
-	rootHome         = "/root"
-	adminHome        = "/Users/admin"
-	linuxDecode      = "base64 -d"
-	macDecode        = "/usr/bin/base64 -D"
-	guestShell       = "/bin/sh"
-	guestBinaryDir   = "guest"
-	guestBinaryPath  = "/usr/local/bin/clankerbox-guest"
-	guestKeyComment  = "clankerbox-terminal"
-	guestMaxSessions = "64"
+	rootUser        = "root"
+	adminUser       = "admin"
+	rootHome        = "/root"
+	adminHome       = "/Users/admin"
+	linuxDecode     = "base64 -d"
+	macDecode       = "/usr/bin/base64 -D"
+	guestShell      = "/bin/sh"
+	guestBinaryDir  = "guest"
+	guestBinaryPath = "/usr/local/bin/clankerbox-guest"
+	guestKeyComment = "clankerbox-terminal"
 )
 
 // PrepareGuest installs the terminal key, sshd session capacity, and the guest
@@ -42,8 +41,8 @@ func (h *Helper) PrepareGuest(ctx context.Context, id, publicKey string) (result
 	if !model.ValidID(id) {
 		return errors.New("invalid machine ID")
 	}
-	keys, err := model.ValidateKeys([]string{publicKey})
-	if err != nil || len(keys) != 1 {
+	canonicalKey, err := model.ValidateKey(publicKey)
+	if err != nil {
 		return errors.New("invalid terminal public key")
 	}
 	m, err := h.manifest(ctx, id)
@@ -85,7 +84,7 @@ func (h *Helper) PrepareGuest(ctx context.Context, id, publicKey string) (result
 	if err != nil {
 		return err
 	}
-	return rt.PrepareGuest(ctx, m, keys[0], binary)
+	return rt.PrepareGuest(ctx, m, canonicalKey, binary)
 }
 
 // guestBinary reads the deployed guest binary for the machine's platform.
@@ -178,30 +177,25 @@ func guestInstallScript(m Manifest, digest string) string {
 		"chmod 755 '" + tmp + "'\nchown 0:0 '" + tmp + "'\nmv -f '" + tmp + "' '" + guestBinaryPath + "'\n"
 }
 
-// guestKeyScript replaces only the terminal-tagged authorized key line and
-// raises sshd's session capacity for the link.
+// guestKeyScript installs the sole managed terminal key.
 func guestKeyScript(m Manifest, publicKey string) (string, error) {
 	if !model.ValidID(m.ID) {
 		return "", errors.New("invalid machine ID")
 	}
-	keys, err := model.ValidateKeys([]string{publicKey})
-	if err != nil || len(keys) != 1 {
+	canonicalKey, err := model.ValidateKey(publicKey)
+	if err != nil {
 		return "", errors.New("invalid terminal public key")
 	}
 	user, home, decode := rootUser, rootHome, linuxDecode
 	if m.Profile.Runtime == runtimeTart {
 		user, home, decode = adminUser, adminHome, macDecode
 	}
-	line := `restrict,command="` + guestBinaryPath + ` proxy" ` + keys[0] + " " + guestKeyComment
+	line := `restrict,command="` + guestBinaryPath + ` proxy" ` + canonicalKey + " " + guestKeyComment
 	encoded := base64.StdEncoding.EncodeToString([]byte(line + "\n"))
 	script := "set -eu\numask 077\ntest \"$(cat /etc/clankerbox/owner)\" = '" + m.ID + "'\n" +
 		"mkdir -p '" + home + "/.ssh'\nkeys='" + home + "/.ssh/authorized_keys'\ntest -f \"$keys\"\n" +
-		"awk '$NF != \"" + guestKeyComment + "\"' \"$keys\" > \"$keys.guest-tmp\"\n" +
-		"printf '%s' '" + encoded + "' | " + decode + " >> \"$keys.guest-tmp\"\n" +
-		"chmod 600 \"$keys.guest-tmp\"\nchown '" + user + "' \"$keys.guest-tmp\"\nmv \"$keys.guest-tmp\" \"$keys\"\n" +
-		"awk '!/^MaxSessions /' /etc/ssh/sshd_config > /etc/ssh/sshd_config.guest-tmp\n" +
-		"printf '%s\\n' 'MaxSessions " + guestMaxSessions + "' >> /etc/ssh/sshd_config.guest-tmp\n" +
-		"/usr/sbin/sshd -t -f /etc/ssh/sshd_config.guest-tmp\nmv /etc/ssh/sshd_config.guest-tmp /etc/ssh/sshd_config\n"
+		"printf '%s' '" + encoded + "' | " + decode + " > \"$keys.guest-tmp\"\n" +
+		"chmod 600 \"$keys.guest-tmp\"\nchown '" + user + "' \"$keys.guest-tmp\"\nmv \"$keys.guest-tmp\" \"$keys\"\n"
 	var b strings.Builder
 	b.WriteString(script)
 	writeSSHDStart(&b, m.Profile.Runtime, false)

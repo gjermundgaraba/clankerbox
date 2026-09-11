@@ -351,7 +351,7 @@ func clearLocalIdentity(obs model.Observation) model.Observation {
 }
 
 func (t *localTransport) PrepareGuest(ctx context.Context, _ model.Host, id, key string) error {
-	keys, err := model.ValidateKeys([]string{key})
+	canonicalKey, err := model.ValidateKey(key)
 	if err != nil {
 		return err
 	}
@@ -369,7 +369,7 @@ func (t *localTransport) PrepareGuest(ctx context.Context, _ model.Host, id, key
 	if t.observe(ctx).State != model.Running {
 		return errors.New("local daemon is not running")
 	}
-	t.journal.GuestKey = keys[0]
+	t.journal.GuestKey = canonicalKey
 	return t.save()
 }
 

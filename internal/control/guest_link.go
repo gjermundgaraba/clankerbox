@@ -497,6 +497,7 @@ func (c *Controller) GuestStatus(id string) model.GuestStatus {
 
 // decorate attaches the guest link view to an API copy of a machine.
 func (c *Controller) decorate(m model.Machine) model.Machine {
+	m.ProfileSpec.Capabilities = model.RuntimeCapabilities(m.ProfileSpec.Runtime, m.ProfileSpec.Arch)
 	if m.Deleted {
 		return m
 	}

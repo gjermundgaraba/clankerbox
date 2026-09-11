@@ -18,7 +18,7 @@ The terminal key can only reach the session daemon, but the daemon is not a
 reduced-privilege account. `session.create` runs arbitrary commands as the
 machine's SSH user (`root` on Linux, `admin` on macOS). Anyone holding the
 controller bearer token holds shell-equivalent authority over every prepared
-machine, exactly as with `clankerbox ssh`. Same-user processes inside the guest
+machine. Same-user processes inside the guest
 are trusted, as elsewhere in Clankerbox.
 
 ## Continuity contract
@@ -381,8 +381,7 @@ installs its public key in the guest user's `authorized_keys` as
 restrict,command="/usr/local/bin/clankerbox-guest proxy" ssh-ed25519 … clankerbox-terminal
 ```
 
-Preparation replaces only the line tagged `clankerbox-terminal` and preserves
-every other entry. The forced command ignores the requested command; PTY,
+Preparation installs only the managed terminal key, replacing guest login access. The forced command ignores the requested command; PTY,
 forwarding, and agent requests are denied by `restrict`. Generated sshd
 configuration sets `MaxSessions 64` so the link can carry up to 48 session
 streams plus control channels.
@@ -405,7 +404,8 @@ protocol.
 ### Endpoints
 
 - `GET /v1/machines/{id}/sessions/stream` with `Connection: Upgrade` and
-  `Upgrade: clankerbox-session`. Prerequisites as for the SSH stream. 503 with
+  `Upgrade: clankerbox-session`. Requires a prepared running machine at the accepted generation, with fresh
+  observation and no pending source reservation. 503 with
   the link status as the code (`guest_connecting`, `guest_suspended`,
   `guest_incompatible`, `guest_unreachable`, `guest_unavailable`) and the
   link's reason as the message when the link is not ready, so a consumer can

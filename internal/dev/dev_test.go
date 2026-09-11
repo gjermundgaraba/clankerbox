@@ -464,10 +464,8 @@ func verifyMachineStopStart(ctx context.Context, t *testing.T, connection dev.Co
 
 func verifyExtraMachineRejected(ctx context.Context, t *testing.T, connection dev.Connection) {
 	t.Helper()
-	key, err := os.ReadFile(filepath.Join(connection.StateDir, "access.pub"))
-	requireOK(t, err)
 	body, err := json.Marshal(model.CreateInput{
-		Name: "extra", Host: "local", Profile: "local", SSHPublicKeys: []string{strings.TrimSpace(string(key))},
+		Name: "extra", Host: "local", Profile: "local",
 	})
 	requireOK(t, err)
 	status, data := devRequest(ctx, t, connection, http.MethodPost, "/v1/machines", string(body))

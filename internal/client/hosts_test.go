@@ -38,9 +38,9 @@ func TestHostsCapacityOutput(t *testing.T) {
 	}))
 	defer server.Close()
 	a := testAPI(t, server.URL)
-	writeConfig(t, a.Config)
+	writeConfig(t, a)
 	for _, structured := range []bool{false, true} {
-		args := []string{configFlag, a.Config.Path, hostsCommand}
+		args := []string{configFlag, a.path, hostsCommand}
 		if structured {
 			args = append(args, jsonFlag)
 		}

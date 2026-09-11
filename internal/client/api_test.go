@@ -1,21 +1,15 @@
 package client_test
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
-	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
-	"time"
 
 	"clankerbox/internal/client"
 
@@ -26,7 +20,13 @@ const testID = "0123456789abcdef0123456789abcdef"
 const otherID = "abcdef0123456789abcdef0123456789"
 const testToken = "abcdefghijklmnopqrstuvwxyz1234567890"
 
-func testAPI(t *testing.T, url string) *client.API {
+type apiFixture struct {
+	*client.API
+
+	path string
+}
+
+func testAPI(t *testing.T, url string) *apiFixture {
 	t.Helper()
 	dir := t.TempDir()
 	token := filepath.Join(dir, "token")
@@ -34,12 +34,12 @@ func testAPI(t *testing.T, url string) *client.API {
 		t.Fatal(e)
 	}
 	a, e := client.NewAPI(
-		client.Config{URL: url, TokenFile: token, StateDir: dir, Path: filepath.Join(dir, "config.json")},
+		client.Config{URL: url, TokenFile: token},
 	)
 	if e != nil {
 		t.Fatal(e)
 	}
-	return a
+	return &apiFixture{API: a, path: filepath.Join(dir, "config.json")}
 }
 func TestAPIAndAliasResolution(t *testing.T) {
 	t.Parallel()
@@ -91,61 +91,11 @@ func TestRedirectsDoNotLeakToken(t *testing.T) {
 	if e := a.Do(context.Background(), "GET", machinesPath, nil, "", &out); e == nil {
 		t.Fatal("redirect accepted")
 	}
-	if _, e := a.Upgrade(context.Background(), testID); e == nil {
-		t.Fatal("upgrade redirect accepted")
-	}
 	if requests.Load() != 0 {
 		t.Fatal("followed redirect")
 	}
 }
-func TestActualUpgradeRetainsBufferedBytesAndIsBidirectional(t *testing.T) {
-	t.Parallel()
-	done := make(chan struct{})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer close(done)
-		if r.URL.Path != "/v1/machines/"+testID+"/ssh" || r.Header.Get("Authorization") != "Bearer "+testToken ||
-			r.Header.Get("Upgrade") != "clankerbox-stream" {
-			t.Error("invalid upgrade request")
-		}
-		c, b, e := hijack(w)
-		if e != nil {
-			t.Error(e)
-			return
-		}
-		defer closeTestStream(t, c)
-		checkError(t, resultError(b.WriteString(
-			"HTTP/1.1 101 Switching Protocols\r\nConnection: keep-alive, Upgrade\r\nUpgrade: clankerbox-stream\r\n\r\nSSH-ready\n",
-		)))
-		checkError(t, b.Flush())
-		checkError(t, testStreamError(resultError(io.Copy(c, b))))
-	}))
-	defer server.Close()
-	a := testAPI(t, server.URL)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	conn, e := a.Upgrade(ctx, testID)
-	if e != nil {
-		t.Fatal(e)
-	}
-	checkError(t, conn.SetDeadline(time.Now().Add(2*time.Second)))
-	greeting := make([]byte, len("SSH-ready\n"))
-	if _, e = io.ReadFull(conn, greeting); e != nil || string(greeting) != "SSH-ready\n" {
-		t.Fatalf("buffer lost %q %v", greeting, e)
-	}
-	if _, e = conn.Write([]byte("test bytes")); e != nil {
-		t.Fatal(e)
-	}
-	echo := make([]byte, 10)
-	if _, e = io.ReadFull(conn, echo); e != nil || string(echo) != "test bytes" {
-		t.Fatalf("echo %q %v", echo, e)
-	}
-	closeTestStream(t, conn)
-	select {
-	case <-done:
-	case <-ctx.Done():
-		t.Fatal("server stream leaked")
-	}
-}
+
 func TestTLSAndOriginValidation(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{"http://example.com", "ftp://127.0.0.1", "https://user:pass@example.com", "https://example.com/path", "https://example.com?token=secret", "https://example.com#frag", "http://127.0.0.1:0", "http://[::1%25lo]"} {
@@ -164,52 +114,15 @@ func TestTLSAndOriginValidation(t *testing.T) {
 	if e := a.Do(context.Background(), "GET", machinesPath, nil, "", &out); e == nil {
 		t.Fatal("untrusted API TLS accepted")
 	}
-	if _, e := a.Upgrade(context.Background(), testID); e == nil {
-		t.Fatal("untrusted upgrade TLS accepted")
-	}
-}
-func TestBadUpgradeAndTokenPrivacy(t *testing.T) {
-	t.Parallel()
-	server := httptest.NewServer(
-		http.HandlerFunc(
-			func(w http.ResponseWriter, _ *http.Request) { http.Error(w, testToken, http.StatusUnauthorized) },
-		),
-	)
-	defer server.Close()
-	a := testAPI(t, server.URL)
-	e := a.Do(context.Background(), "GET", machinesPath, nil, "", nil)
-	if e == nil || strings.Contains(e.Error(), testToken) {
-		t.Fatalf("unsafe error %v", e)
-	}
-	_, e = a.Upgrade(context.Background(), testID)
-	if e == nil || strings.Contains(e.Error(), testToken) {
-		t.Fatalf("unsafe upgrade error %v", e)
-	}
-	if _, e = a.Upgrade(context.Background(), testMachineName); e == nil {
-		t.Fatal("proxy accepted alias")
-	}
-	//nolint:gosec // G302: This fixture verifies rejection of a token readable by other users.
-	checkError(t, os.Chmod(a.Config.TokenFile, 0644))
-	if e = a.Do(t.Context(), "GET", machinesPath, nil, "", nil); e == nil || !strings.Contains(e.Error(), "private") {
-		t.Fatal("public token file accepted")
-	}
-	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Upgrade", "other")
-		w.WriteHeader(http.StatusSwitchingProtocols)
-	}))
-	defer bad.Close()
-	if _, e = testAPI(t, bad.URL).Upgrade(context.Background(), testID); e == nil {
-		t.Fatal("bad upgrade protocol accepted")
-	}
 }
 
-func writeConfig(t *testing.T, config client.Config) {
+func writeConfig(t *testing.T, a *apiFixture) {
 	t.Helper()
-	data, err := json.Marshal(config)
+	data, err := json.Marshal(a.Config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(config.Path, data, 0600); err != nil {
+	if err = os.WriteFile(a.path, data, 0600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -241,27 +154,6 @@ const (
 )
 
 func resultError[T any](_ T, err error) error { return err }
-
-func testStreamError(err error) error {
-	if errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF) {
-		return nil
-	}
-	return err
-}
-
-// closeTestStream accepts completed transport shutdown and reports other failures.
-func closeTestStream(t *testing.T, stream io.Closer) {
-	t.Helper()
-	checkError(t, testStreamError(stream.Close()))
-}
-
-func hijack(w http.ResponseWriter) (net.Conn, *bufio.ReadWriter, error) {
-	hijacker, ok := w.(http.Hijacker)
-	if !ok {
-		return nil, nil, errors.New("test HTTP server does not support hijacking")
-	}
-	return hijacker.Hijack()
-}
 
 const (
 	keyFlag         = "--key"
@@ -324,3 +216,7 @@ func TestLoadConfigRejectsNonregularFiles(t *testing.T) {
 }
 
 const configFixtureJSON = `{"url":"http://127.0.0.1:8080","token_file":"token","state_dir":"state"}`
+
+func testMachine(name string) model.Machine {
+	return model.Machine{ID: testID, Name: name, Profile: "linux", Host: hostName, State: model.Running, Prepared: true}
+}

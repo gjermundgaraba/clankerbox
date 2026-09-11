@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -109,19 +108,6 @@ func (runner commandRunner) mutate(
 		return operationError(operation, err)
 	}
 	return runner.output(out)
-}
-
-func (c Config) publicKeyFile() string {
-	if c.PublicKeyFile != "" {
-		return c.PublicKeyFile
-	}
-	if c.IdentityFile != "" {
-		path := c.IdentityFile + ".pub"
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-			return path
-		}
-	}
-	return ""
 }
 
 func (a *API) selectHost(ctx context.Context, host, profile string) (string, error) {

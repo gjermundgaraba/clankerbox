@@ -1,9 +1,8 @@
-// Command clankerbox controls machines and owns local forwarding sessions.
+// Command clankerbox controls machines and lists guest terminal sessions.
 package main
 
 import (
 	"context"
-	"errors"
 	"log"
 	"os"
 	"os/signal"
@@ -14,10 +13,6 @@ import (
 
 func main() {
 	if err := run(); err != nil {
-		var remote *client.SSHExitError
-		if errors.As(err, &remote) && remote.ExitCode() > 0 {
-			os.Exit(remote.ExitCode())
-		}
 		log.New(os.Stderr, "", 0).Print(err)
 		os.Exit(1)
 	}

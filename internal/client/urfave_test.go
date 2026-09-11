@@ -3,21 +3,18 @@ package client
 
 import (
 	"bytes"
-	"context"
-	"reflect"
+	"io"
 	"strings"
 	"testing"
-
-	"github.com/urfave/cli/v3"
 )
 
 func TestCommandHelpWithoutConfiguration(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{nil, {helpFlag}, {"create", helpFlag}, {checkpointCommand}, {checkpointCommand, "delete", helpFlag}, {"ssh-config", "install", helpFlag}, {execCommand, helpFlag}, {"help", execCommand}} {
+	for _, args := range [][]string{nil, {helpFlag}, {"create", helpFlag}, {checkpointCommand}, {checkpointCommand, "delete", helpFlag}, {sessionsCommand, helpFlag}, {"help", sessionsCommand}} {
 		var out, diagnostics bytes.Buffer
 		err := Run(
 			t.Context(),
-			append([]string{"--config", "/missing/config"}, args...),
+			append([]string{configFlag, missingConfig}, args...),
 			Streams{Out: &out, Err: &diagnostics},
 		)
 		if err != nil || !strings.Contains(out.String(), "USAGE:") || diagnostics.Len() != 0 {
@@ -29,29 +26,16 @@ func TestCommandHelpWithoutConfiguration(t *testing.T) {
 	}
 }
 
-func TestExecParserPreservesArgumentTail(t *testing.T) {
-	t.Parallel()
-	tail := []string{parserMachine, "--", "printf", "", helpFlag, "--json", "--", "a b", "'"}
-	var out bytes.Buffer
-	root := newCommand(Streams{Out: &out, Err: &out})
-	var got []string
-	root.Command(execCommand).Action = func(_ context.Context, c *cli.Command) error { got = c.Args().Slice(); return nil }
-	err := root.Run(t.Context(), append([]string{"clankerbox", execCommand}, tail...))
-	if err != nil || !reflect.DeepEqual(got, tail) {
-		t.Fatalf("got %q, error %v", got, err)
-	}
-}
-
 func TestCLIRejectsRetiredSyntaxAndInvalidArguments(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{{"create", "--name", "child"}, {"ssh", parserMachine, "echo", "hello"}, {"machines", "extra"}, {"start", parserMachine, "--timeout", "0s"}, {"unknown"}, {checkpointCommand, "--unknown"}, {"ssh-config", "--unknown"}, {checkpointCommand, "unknown"}} {
+	for _, args := range [][]string{{"create", "--name", "child"}, {"ssh", parserMachine, "echo", "hello"}, {"machines", "extra"}, {"start", parserMachine, "--timeout", "0s"}, {"unknown"}, {checkpointCommand, "--unknown"}, {sessionsCommand, "--unknown"}, {checkpointCommand, "unknown"}} {
 		var out, diagnostics bytes.Buffer
 		err := Run(
 			t.Context(),
-			append([]string{"--config", "/missing/config"}, args...),
+			append([]string{configFlag, missingConfig}, args...),
 			Streams{Out: &out, Err: &diagnostics},
 		)
-		if err == nil || strings.Contains(err.Error(), "/missing/config") {
+		if err == nil || strings.Contains(err.Error(), missingConfig) {
 			t.Fatalf("%v: %v", args, err)
 		}
 		if out.Len() != 0 || diagnostics.Len() != 0 {
@@ -68,4 +52,24 @@ func TestCLIRejectsRetiredSyntaxAndInvalidArguments(t *testing.T) {
 const helpFlag = "--help"
 const parserMachine = "machine"
 
-const execCommand = "exec"
+const sessionsCommand = "sessions"
+const configFlag = "--config"
+
+func TestRetiredConnectionsAreUnknown(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"ssh", "proxy", "exec", "vnc", "ssh-config", "connect", "ports", "url", "open-url", "_owner"} {
+		root := newCommand(Streams{Out: io.Discard, Err: io.Discard})
+		if root.Command(name) != nil {
+			t.Errorf("retired command %s is registered", name)
+		}
+		if err := root.Run(
+			t.Context(),
+			[]string{"clankerbox", configFlag, missingConfig, name},
+		); err == nil ||
+			strings.Contains(err.Error(), missingConfig) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+const missingConfig = "/missing/config"

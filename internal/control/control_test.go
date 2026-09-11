@@ -171,10 +171,9 @@ func setupControlConfig(
 		t.Fatal(err)
 	}
 	in := model.CreateInput{
-		Name:          machineName,
-		Profile:       cfg.Profiles[0].ID,
-		Host:          cfg.Hosts[0].ID,
-		SSHPublicKeys: []string{testPublicKey(t)},
+		Name:    machineName,
+		Profile: cfg.Profiles[0].ID,
+		Host:    cfg.Hosts[0].ID,
 	}
 	return c, transport, in, path
 }
@@ -385,7 +384,7 @@ func TestDatabaseSingleController(t *testing.T) {
 		t.Fatal("second controller opened same database")
 	}
 }
-func TestHTTPAuthenticationInvalidRequestsAndUpgrade(t *testing.T) {
+func TestHTTPAuthenticationInvalidRequestsAndRetiredSSH(t *testing.T) {
 	t.Parallel()
 	c, tr, in, _ := setupControl(t)
 	defer closeTest(t, c)
@@ -459,15 +458,11 @@ func TestHTTPAuthenticationInvalidRequestsAndUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer closeTest(t, resp.Body)
-	if resp.StatusCode != http.StatusSwitchingProtocols {
+	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("upgrade: %d", resp.StatusCode)
 	}
-	data := make([]byte, 9)
-	if _, err = io.ReadFull(reader, data); err != nil || string(data) != "SSH-hello" {
-		t.Fatalf("lost buffered upgrade bytes: %q %v", data, err)
-	}
-	if tr.connects != 1 {
-		t.Fatal("wrong stream count")
+	if tr.connects != 0 {
+		t.Fatal("retired endpoint opened transport")
 	}
 }
 
@@ -492,7 +487,7 @@ func (r *integrationRuntime) Start(context.Context, host.Manifest) error {
 	r.state.State = model.Running
 	return nil
 }
-func (r *integrationRuntime) Prepare(context.Context, host.Manifest, []string) (string, string, string, error) {
+func (r *integrationRuntime) Initialize(context.Context, host.Manifest) (string, string, string, error) {
 	return "admin", r.key, "192.168.64.2:22", nil
 }
 func (r *integrationRuntime) Stop(context.Context, host.Manifest) error {
@@ -557,10 +552,9 @@ func TestControllerAndHostJournalsTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	in := model.CreateInput{
-		Name:          machineName,
-		Profile:       cfg.Profiles[0].ID,
-		Host:          cfg.Hosts[0].ID,
-		SSHPublicKeys: []string{testPublicKey(t)},
+		Name:    machineName,
+		Profile: cfg.Profiles[0].ID,
+		Host:    cfg.Hosts[0].ID,
 	}
 	o := mustCreate(t, c, in, "durable")
 	closeTest(t, c)
@@ -650,4 +644,8 @@ func TestProviderAuthIsAbsentFromAPI(t *testing.T) {
 		!strings.Contains(w.Body.String(), `"guest"`) {
 		t.Fatalf("unexpected machine view: %d %s", w.Code, w.Body)
 	}
+}
+
+func (r *integrationRuntime) Verify(ctx context.Context, m host.Manifest) (string, string, string, error) {
+	return r.Initialize(ctx, m)
 }

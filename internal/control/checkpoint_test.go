@@ -17,7 +17,7 @@ func TestCheckpointIntentDuplicatesAndReservations(t *testing.T) {
 	c, tr, in, _ := setupControl(t)
 	defer closeTest(t, c)
 	ctx := context.Background()
-	child := model.ChildInput{Name: "child", SSHPublicKeys: []string{testPublicKey(t)}}
+	child := model.ChildInput{Name: "child"}
 	source, fork, cp := captureAfterReservedFork(t, c, tr, in, child)
 	// Stop the first child to make space for two independent restores.
 	mustMutate(t, c, fork.MachineID, "stop", "stop-child")
@@ -156,7 +156,7 @@ func TestLinuxControllerDependencyAndUnavailableSource(t *testing.T) {
 		"fork",
 		source.MachineID,
 		"fork",
-		model.ChildInput{Name: "descendant", SSHPublicKeys: in.SSHPublicKeys},
+		model.ChildInput{Name: "descendant"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -271,9 +271,8 @@ func TestDerivationRejectsLabelsBeyondTheLimitAfterInheritance(t *testing.T) {
 	}
 	mustMutate(t, c, source.MachineID, "stop", "stop")
 	child := model.ChildInput{
-		Name:          "child",
-		SSHPublicKeys: []string{testPublicKey(t)},
-		Labels:        map[string]string{"extra": "v"},
+		Name:   "child",
+		Labels: map[string]string{"extra": "v"},
 	}
 	_, err := c.Derive(ctx, "fork", source.MachineID, "fork-overflow", child)
 	expectCode(t, err, "invalid_request")

@@ -53,7 +53,7 @@ func checkRetainedEngine(t *testing.T, digest string) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	serveRetainedHello(ctx, t, transport.guestState, digest)
-	_, key, err := localCredentials(root)
+	_, err := localCredentials(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,11 +69,11 @@ func checkRetainedEngine(t *testing.T, digest string) {
 	done := make(chan struct{})
 	go func() { defer close(done); controller.Run(ctx) }()
 	defer func() { cancel(); <-done }()
-	id, err := localMachineID(ctx, controller, key)
+	id, err := localMachineID(ctx, controller)
 	if err != nil {
 		t.Fatal(err)
 	}
-	machine, err := seedMachine(ctx, controller, key)
+	machine, err := seedMachine(ctx, controller)
 	if machine.ID != id {
 		t.Fatalf("retained machine changed: %q != %q", machine.ID, id)
 	}
