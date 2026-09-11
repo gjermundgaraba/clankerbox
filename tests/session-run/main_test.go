@@ -3,13 +3,53 @@ package main
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"clankerbox/internal/client"
 	guest "clankerbox/internal/guest/client"
 	"clankerbox/internal/guest/daemon"
 )
+
+func TestSessionUpgradeUsesHTTP1(t *testing.T) { //nolint:paralleltest // Replaces the default transport.
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Upgrade") != "" && r.ProtoMajor != 1 {
+			t.Errorf("upgrade negotiated %s", r.Proto)
+		}
+		w.WriteHeader(http.StatusTeapot)
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+	// Prewarm HTTP/2 so Clone inherits its ALPN configuration, as it does after
+	// the readiness requests in a real acceptance run.
+	base := server.Client()
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := base.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	previous := http.DefaultTransport
+	http.DefaultTransport = base.Transport                 //nolint:reassign // Trust only this test server's certificate.
+	t.Cleanup(func() { http.DefaultTransport = previous }) //nolint:reassign // Restore test-scoped override.
+	token := filepath.Join(t.TempDir(), "token")
+	if err = os.WriteFile(token, []byte("acceptance-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = connect(t.Context(), client.Config{URL: server.URL, TokenFile: token}, "test-machine")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 418") {
+		t.Fatalf("expected HTTP/1.1 response, got %v", err)
+	}
+}
 
 func TestSessionCommandOutputAndExit(t *testing.T) {
 	t.Parallel()

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -122,7 +123,14 @@ func connect(ctx context.Context, config client.Config, id string) (*guest.Clien
 	}
 	transport := base.Clone()
 	transport.Proxy = nil
-	transport.ForceAttemptHTTP2 = false
+	// Session streams use an HTTP/1.1 upgrade, including over TLS. A cloned
+	// default transport may already have HTTP/2 registered in TLSNextProto.
+	transport.Protocols = new(http.Protocols)
+	transport.Protocols.SetHTTP1(true)
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	transport.TLSClientConfig.NextProtos = []string{"http/1.1"}
 	defer transport.CloseIdleConnections()
 	httpClient := &http.Client{
 		Transport:     transport,
