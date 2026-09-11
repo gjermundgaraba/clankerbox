@@ -1,15 +1,15 @@
 # Client connection removal — clean-break plan
 
-Status: implemented; deployment and live qualification in progress.
+Status: implemented, deployed and live-qualified on 2026-09-11.
 
 The follow-up implementation request authorizes deployment of both applications
 and manual validation. Existing workloads and infrastructure remain preserved;
-only newly created acceptance resources are cleanup targets.
+only newly created acceptance machines/checkpoints were workload cleanup targets.
 
 Implementation note: the current Clankerdesk checkout now owns durable create
 allocations and no longer exposes the earlier fork workflow. The key field was
 removed from its persisted request schema and creation defaults; allocation
-recovery remains intact. The deployed old image has no machines.sqlite catalog.
+recovery remains intact. The predecessor image had no machines.sqlite catalog.
 
 ## Agreed scope
 
@@ -23,13 +23,15 @@ recovery remains intact. The deployed old image has no machines.sqlite catalog.
 - Include matching Clankerdesk changes and a personal-cloud deployment audit.
 - Development state is disposable; no compatibility wrappers, deprecated
   stubs, migrations, dual schemas, or automatic legacy-state cleanup.
-- This plan does not authorize deployment, terminating processes, deleting
-  VMs/checkpoints, or editing personal SSH configuration. Existing operating
-  records describe deployed infrastructure; inventory it before any cutover.
+- The original planning request did not authorize deployment, terminating
+  processes, deleting VMs/checkpoints, or editing personal SSH configuration.
+  The follow-up authorizes the coordinated deployment and disposable live tests.
+  Existing operating records describe deployed infrastructure; inventory it before
+  any cutover.
 
 No unresolved product-scope questions remain.
 
-## What the companion repositories actually use
+## Companion-repository inspection at planning time
 
 ### Clankerdesk
 
@@ -232,3 +234,59 @@ reset and coordinate controller, helpers and desk. Preserve infrastructure
 credentials, ownership journals and unrelated machines unless separately
 selected for retirement. Do not execute the old deployment record's cleanup
 steps as part of implementing this source change.
+
+## Completion record — 2026-09-11
+
+- Product removal: `f232ece678ac292f12cd5e9b74fce445a2e5933e`.
+  Test-only HTTPS runner correction: `316e6fa` (HTTP/1.1 ALPN, including after
+  the default transport has negotiated HTTP/2; regression test added).
+- Clankerdesk: `fea997383189c4f2cd7e68a2f3eb44e97985ed1b`; personal-cloud
+  Compose no longer provisions workstation keys. Release/image pin: `74b9a24`.
+  Controller and both Linux/macOS helpers and guest artifacts were installed
+  together. No database reset, workload rebuild, credential rotation, firewall
+  change or personal SSH configuration edit was needed.
+- An obsolete active `terminal` extension left by the preceding desk deployment
+  conflicted with the combined `clankerbox` extension. The exact active library
+  entry was manually deactivated while stopped, after backing up the catalog;
+  existing workspace data and historical pinned revisions were preserved. There
+  is no product migration, alias, fallback or automatic legacy-state deletion.
+- `make build`, `make test` (race detector), `make lint`, four Python unit tests,
+  local real-dev session command/output/exit checks, and the runner's focused
+  race/HTTPS regression tests passed. Clankerdesk `vp run ready` passed (103
+  server tests and seven browser tests); GitHub Quality and image CI passed.
+- Live public-contract checks passed: all ten retired commands and connection
+  flags fail; authenticated raw SSH returns 404, unauthenticated access 401;
+  key-bearing provisioning requests return 400. Machine capabilities advertise
+  sessions, not SSH.
+- Linux and macOS keyless create/stop/start retained dirty Git state, modes,
+  symlinks and machine identity; stopped sessions were refused. Both exercised
+  session create/snapshot/input/reconnect/resume/activity/end. Fresh guests had
+  exactly one restricted forced-command terminal key, no interactive SSH PTY,
+  TCP/agent/X11 forwarding or SFTP subsystem, and MaxSessions 64.
+- Linux live fork and two RAM-checkpoint restores preserved the in-memory token
+  and PID. Mac stopped disk fork/checkpoint/restore passed. Both verified fresh
+  child SSH identities, cold-restart identity stability and independent disks;
+  Linux also verified the source deletion guard.
+- Live browser validation created a machine and tethered terminal, sent real
+  keyboard input from two browsers and input through MCP, saved a shared note,
+  selected a wtf ticket, and restarted the desk container. Session PID 517,
+  terminal screen, placement, note and ticket survived. Browser-confirmed machine
+  closure removed its machine, terminal and tether. No browser page errors.
+- All eight lifecycle/copy qualification machines and both checkpoints were
+  deleted by their tests; the separate browser-created machine was also deleted.
+  Existing `test-machine` (`ad8cd000ed13c8996c30fe8a7eace330`) remains running,
+  guest-ready, with its original generation and host identity and no sessions.
+- Infrastructure validation, deployment status (including outside-source denial),
+  backup freshness and retained restore evidence checks passed. Fresh desk export
+  `20260911T214511Z` passed archive/checksum and restored SQLite integrity checks,
+  including its new machine-allocation catalog. This is artifact verification,
+  not an isolated restored application startup.
+- Unrelated canvas limitation observed: an overlapping terminal can intercept
+  pointer events intended for another card. Moving the cards apart allowed the
+  workflow; it is recorded in Clankerdesk's current limitations, not hidden by
+  forced clicks. A transient controller timeout during simultaneous copy tests
+  recovered via the existing explicit **Retry creation**, without reallocating.
+
+Private evidence: `.work/client-removal-20260911/` and
+`../clankerdesk/test-results/client-removal/`. Deployed hashes and recovery details
+are in personal-cloud's controller and Clankerdesk operating records.
