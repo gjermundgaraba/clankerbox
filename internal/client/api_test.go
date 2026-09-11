@@ -145,20 +145,11 @@ const (
 	inspectCommand     = "inspect"
 	configFlag         = "--config"
 	mutationRetryKey   = "retry-123"
-	ipv4Loopback       = "127.0.0.1"
-	ipv6Loopback       = "::1"
 	linuxOS            = "linux"
-	mappedIPv6URL      = "http://[::1]:43124/"
-	alternateLogin     = "admin"
-	testLogin          = "root"
+	testMachineName    = "dev"
 )
 
 func resultError[T any](_ T, err error) error { return err }
-
-const (
-	keyFlag         = "--key"
-	testMachineName = "dev"
-)
 
 func TestLoadConfigFilePermissions(t *testing.T) {
 	t.Parallel()
@@ -215,8 +206,28 @@ func TestLoadConfigRejectsNonregularFiles(t *testing.T) {
 	}
 }
 
-const configFixtureJSON = `{"url":"http://127.0.0.1:8080","token_file":"token","state_dir":"state"}`
+const configFixtureJSON = `{"url":"http://127.0.0.1:8080","token_file":"token"}`
 
 func testMachine(name string) model.Machine {
 	return model.Machine{ID: testID, Name: name, Profile: "linux", Host: hostName, State: model.Running, Prepared: true}
+}
+
+func TestAPIPortValidation(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		port     string
+		rejected bool
+	}{
+		{"1", false}, {"65535", false}, {"00443", false}, {"", false},
+		{"0", true}, {"65536", true}, {"9999999999999999999999999", true},
+		{"-1", true}, {"+443", true}, {"https", true}, {"４４３", true},
+	} {
+		t.Run(test.port, func(t *testing.T) {
+			t.Parallel()
+			_, err := client.NewAPI(client.Config{URL: "https://example.com:" + test.port})
+			if (err != nil) != test.rejected {
+				t.Fatalf("port %q: %v", test.port, err)
+			}
+		})
+	}
 }

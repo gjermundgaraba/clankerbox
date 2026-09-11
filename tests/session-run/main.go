@@ -27,9 +27,20 @@ import (
 
 func main() {
 	config := flag.String("config", client.DefaultConfigPath(), "Client configuration")
+	expectStopped := flag.Bool(
+		"expect-stopped",
+		false,
+		"Require the session endpoint to reject MACHINE_ID with 409 prerequisite",
+	)
 	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
-	code, err := run(ctx, *config, flag.Args(), os.Stdin, os.Stdout)
+	var code int
+	var err error
+	if *expectStopped {
+		err = runStoppedCheck(ctx, *config, flag.Args())
+	} else {
+		code, err = run(ctx, *config, flag.Args(), os.Stdin, os.Stdout)
+	}
 	cancel()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -41,6 +52,10 @@ func main() {
 func run(ctx context.Context, path string, args []string, in io.Reader, out io.Writer) (int, error) {
 	if len(args) < minimumArgs {
 		return 0, errors.New("requires MACHINE COMMAND [ARG...]")
+	}
+	script, err := commandScript(args[1:], in)
+	if err != nil {
+		return 0, err
 	}
 	config, err := client.LoadConfig(path)
 	if err != nil {
@@ -59,17 +74,20 @@ func run(ctx context.Context, path string, args []string, in io.Reader, out io.W
 		return 0, err
 	}
 	defer func() { _ = link.Close() }()
-	input, err := io.ReadAll(io.LimitReader(in, maxInputBytes+1))
+	return execute(ctx, link, script, out)
+}
+
+func commandScript(args []string, in io.Reader) (string, error) {
+	// Raw input cannot fit if it already exceeds the per-argument protocol bound.
+	// The final check also accounts for quoting, argv and the gate's overhead.
+	input, err := io.ReadAll(io.LimitReader(in, protocol.MaxArg+1))
 	if err != nil {
-		return 0, err
-	}
-	if len(input) > maxInputBytes {
-		return 0, errors.New("acceptance input too large")
+		return "", err
 	}
 	// The command waits behind a gate until its output subscription is installed.
 	// Text stdin is supplied by a pipe, not PTY canonical input or an EOF keystroke.
-	argv := make([]string, len(args)-1)
-	for i, arg := range args[1:] {
+	argv := make([]string, len(args))
+	for i, arg := range args {
 		argv[i] = quote(arg)
 	}
 	script := "stty -echo -onlcr; printf 'SESSION_RUN_READY\\n'; read gate; printf %s " + quote(
@@ -78,7 +96,13 @@ func run(ctx context.Context, path string, args []string, in io.Reader, out io.W
 		argv,
 		" ",
 	)
-	return execute(ctx, link, script, out)
+	if len(script) > protocol.MaxArg {
+		return "", fmt.Errorf(
+			"quoted command, stdin and gate must fit the session argv limit of %d bytes",
+			protocol.MaxArg,
+		)
+	}
+	return script, nil
 }
 
 func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
@@ -106,6 +130,55 @@ func readyMachine(ctx context.Context, api *client.API, name string) (model.Mach
 }
 
 func connect(ctx context.Context, config client.Config, id string) (*guest.Client, error) {
+	response, err := requestSession(ctx, config, id)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode != http.StatusSwitchingProtocols || response.Header.Get("Upgrade") != "clankerbox-session" {
+		_ = response.Body.Close()
+		return nil, fmt.Errorf("session upgrade returned HTTP %d", response.StatusCode)
+	}
+	stream, ok := response.Body.(io.ReadWriteCloser)
+	if !ok {
+		_ = response.Body.Close()
+		return nil, errors.New("session upgrade is not bidirectional")
+	}
+	return guest.Dial(ctx, stream)
+}
+
+func runStoppedCheck(ctx context.Context, path string, args []string) error {
+	if len(args) != 1 || !model.ValidID(args[0]) {
+		return errors.New("--expect-stopped requires one MACHINE_ID")
+	}
+	config, err := client.LoadConfig(path)
+	if err != nil {
+		return err
+	}
+	// Deliberately bypass readiness/inspection: only the authenticated session
+	// endpoint's specific prerequisite response can satisfy this acceptance check.
+	response, err := requestSession(ctx, config, args[0])
+	if err != nil {
+		return err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode != http.StatusConflict {
+		return fmt.Errorf("expected stopped-session HTTP 409 prerequisite, got HTTP %d", response.StatusCode)
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err = json.NewDecoder(io.LimitReader(response.Body, maxErrorBytes)).Decode(&body); err != nil {
+		return fmt.Errorf("invalid stopped-session response: %w", err)
+	}
+	if body.Error.Code != "prerequisite" {
+		return fmt.Errorf("expected stopped-session prerequisite, got %q", body.Error.Code)
+	}
+	return nil
+}
+
+func requestSession(ctx context.Context, config client.Config, id string) (*http.Response, error) {
 	token, err := statefs.ReadPrivate(config.TokenFile)
 	if err != nil {
 		return nil, err
@@ -136,20 +209,7 @@ func connect(ctx context.Context, config client.Config, id string) (*guest.Clien
 		Transport:     transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
-	response, err := httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if response.StatusCode != http.StatusSwitchingProtocols || response.Header.Get("Upgrade") != "clankerbox-session" {
-		_ = response.Body.Close()
-		return nil, fmt.Errorf("session upgrade returned HTTP %d", response.StatusCode)
-	}
-	stream, ok := response.Body.(io.ReadWriteCloser)
-	if !ok {
-		_ = response.Body.Close()
-		return nil, errors.New("session upgrade is not bidirectional")
-	}
-	return guest.Dial(ctx, stream)
+	return httpClient.Do(req)
 }
 
 func execute(ctx context.Context, link *guest.Client, script string, out io.Writer) (int, error) {
@@ -194,7 +254,7 @@ const (
 	commandTimeout = 90 * time.Second
 	cleanupTimeout = 5 * time.Second
 	minimumArgs    = 2
-	maxInputBytes  = 32 << 10
+	maxErrorBytes  = 4 << 10
 )
 
 type outputReader struct {

@@ -22,7 +22,7 @@ import (
 	"clankerbox/internal/model"
 )
 
-// Config locates the API, credentials and local private state.
+// Config locates the API and bearer credentials and supplies creation defaults.
 type Config struct {
 	DefaultHost    string `json:"default_host,omitempty"`
 	DefaultProfile string `json:"default_profile,omitempty"`
@@ -238,14 +238,6 @@ const (
 )
 
 func parsePort(s string) (int, error) {
-	if s == "" {
-		return 0, errors.New("missing numeric port")
-	}
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, errors.New("invalid numeric port")
-		}
-	}
 	p, e := strconv.Atoi(s)
 	if e != nil || p < 1 || p > 65535 {
 		return 0, errors.New("port must be 1..65535")

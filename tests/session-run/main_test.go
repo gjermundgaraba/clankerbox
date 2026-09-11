@@ -87,7 +87,10 @@ func TestSessionCommandOutputAndExit(t *testing.T) {
 	}
 	defer func() { _ = link.Close() }()
 	var output bytes.Buffer
-	script := "stty -echo -onlcr; printf 'SESSION_RUN_READY\\n'; read gate; printf 'one\\ntwo\\n'; exit 7"
+	script, err := commandScript([]string{"sh", "-c", "cat; exit 7"}, strings.NewReader("one\ntwo\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	code, err := execute(ctx, link, script, &output)
 	if err != nil || code != 7 || output.String() != "one\ntwo\n" {
 		t.Fatalf("code=%d output=%q error=%v", code, output.String(), err)

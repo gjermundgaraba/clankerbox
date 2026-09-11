@@ -47,7 +47,7 @@ builds a fresh urfave/cli command tree. The client, controller, and host binarie
 use native flag parsing and generated help; help bypasses configuration and
 service startup. Machine names are positional, with no `--name` alias. Resource
 output is human-readable by default; global `--json` selects structured stdout.
-Executable errors are plain text on stderr. Owner
+Executable errors are plain text on stderr.
 CLI lifecycle and session-list commands use authenticated HTTP; events use SSE.
 The raw guest SSH endpoint and workstation connection commands do not exist.
 Tests exercise retained command behavior through HTTP and process boundaries.

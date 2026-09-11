@@ -1,12 +1,11 @@
 package control_test
 
 import (
-	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -435,31 +434,14 @@ func TestHTTPAuthenticationInvalidRequestsAndRetiredSSH(t *testing.T) {
 		}
 	}
 	o := mustCreate(t, c, in, "valid")
-	server := httptest.NewServer(handler)
-	defer server.Close()
-	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", strings.TrimPrefix(server.URL, "http://"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeTest(t, conn)
-	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	_, err = fmt.Fprintf(
-		conn,
-		"GET /v1/machines/%s/ssh HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer %s\r\nConnection: keep-alive, Upgrade\r\nUpgrade: clankerbox-stream\r\n\r\nSSH-hello",
-		o.MachineID,
-		token,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(reader, &http.Request{Method: http.MethodGet})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer closeTest(t, resp.Body)
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("upgrade: %d", resp.StatusCode)
+	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/machines/"+o.MachineID+"/ssh", nil)
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("Connection", "keep-alive, Upgrade")
+	r.Header.Set("Upgrade", "clankerbox-stream")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("retired upgrade: %d", w.Code)
 	}
 	if tr.connects != 0 {
 		t.Fatal("retired endpoint opened transport")
@@ -648,4 +630,40 @@ func TestProviderAuthIsAbsentFromAPI(t *testing.T) {
 
 func (r *integrationRuntime) Verify(ctx context.Context, m host.Manifest) (string, string, string, error) {
 	return r.Initialize(ctx, m)
+}
+
+func TestStoppedSessionEndpointPrerequisite(t *testing.T) {
+	t.Parallel()
+	c, tr, in, _ := setupControl(t)
+	defer closeTest(t, c)
+	o := mustCreate(t, c, in, "create-stopped-test")
+	mustMutate(t, c, o.MachineID, "stop", "stop-test")
+	token := strings.Repeat("t", 32)
+	handler, err := c.Handler([]byte(token))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := httptest.NewRequestWithContext(
+		t.Context(),
+		http.MethodGet,
+		"/v1/machines/"+o.MachineID+"/sessions/stream",
+		nil,
+	)
+	r.Header.Set("Authorization", "Bearer "+token)
+	r.Header.Set("Connection", "Upgrade")
+	r.Header.Set("Upgrade", "clankerbox-session")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	var body struct {
+		Error control.APIError `json:"error"`
+	}
+	if err = json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if w.Code != http.StatusConflict || body.Error.Code != "prerequisite" {
+		t.Fatalf("expected stopped prerequisite, got %d %s", w.Code, w.Body.String())
+	}
+	if tr.connects != 0 {
+		t.Fatal("stopped session opened transport")
+	}
 }

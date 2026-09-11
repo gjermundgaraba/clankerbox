@@ -26,3 +26,15 @@ is disabled and text stdin is passed through a pipe. Exit status and ordered out
 come from the guest protocol. It merges PTY stdout/stderr and is not a replacement
 product exec API. Interrupted actions require operator inspection; the test session
 is ended on completion or failure where the link remains usable.
+
+The adapter's shell gate, quoted command arguments and quoted text stdin must
+fit **one 4,096-byte protocol argument**. Shell quoting can expand apostrophes;
+there is no fixed raw-stdin allowance independent of the command. Oversize
+commands fail locally before contacting the controller. Larger payload transfer
+is not supported by this adapter.
+
+`session-run --config FILE --expect-stopped MACHINE_ID` bypasses local readiness
+checks and makes an authenticated HTTP/1.1 session upgrade request. It succeeds
+only on HTTP 409 with error code `prerequisite`; transport/authentication errors,
+other responses and an accepted upgrade all fail. The lifecycle harness uses
+this probe after confirming the machine is stopped.

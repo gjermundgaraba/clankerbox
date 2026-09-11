@@ -290,3 +290,12 @@ steps as part of implementing this source change.
 Private evidence: `.work/client-removal-20260911/` and
 `../clankerdesk/test-results/client-removal/`. Deployed hashes and recovery details
 are in personal-cloud's controller and Clankerdesk operating records.
+
+### Review qualification correction
+
+The original live `stopped_session_rejected` result above exercised the runner's
+local readiness guard, not the session endpoint. It does not establish live
+server-side stopped-session enforcement. The harness now requires a direct
+HTTP 409 `prerequisite` response; local controller and probe regression tests
+cover that contract and reject unrelated failures. The corrected live check
+has not yet been rerun against personal-cloud.

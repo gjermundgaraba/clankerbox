@@ -100,9 +100,10 @@ readlink link
         stopped = json.loads(run('inspect', machine))
         if stopped['state'] != 'stopped':
             raise RuntimeError(f'expected stopped: {stopped}')
-        denied = subprocess.run([args.session_runner, '--config', args.config, machine, 'true'], capture_output=True, timeout=30)
-        if denied.returncode == 0:
-            raise RuntimeError('session unexpectedly accepted a stopped machine')
+        denied = subprocess.run([args.session_runner, '--config', args.config, '--expect-stopped', machine],
+                                capture_output=True, text=True, timeout=100)
+        if denied.returncode != 0:
+            raise RuntimeError(f'stopped-session prerequisite check failed: {denied.stderr[-2048:]}')
         operation('start', machine)
         after = guest(machine, 'sh', '-se', data=check)
         identity_after = json.loads(run('inspect', machine))['ssh_host_key']
