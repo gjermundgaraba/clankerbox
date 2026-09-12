@@ -73,7 +73,6 @@ type Controller struct {
 	mu        sync.Mutex
 	workMu    sync.Mutex
 	busy      map[string]bool
-	now       func() time.Time
 }
 
 // Open opens the durable queue in a private state directory and acquires its exclusive controller lock.
@@ -128,7 +127,6 @@ func Open(path string, cfg model.Config, transport Transport) (*Controller, erro
 		cfg:       cfg,
 		transport: transport,
 		busy:      map[string]bool{},
-		now:       func() time.Time { return time.Now().UTC() },
 	}, nil
 }
 
@@ -384,7 +382,7 @@ func (c *Controller) Create(
 	if err = admitCreate(ctx, tx, h, p, in.Name); err != nil {
 		return model.Operation{}, err
 	}
-	now := c.now()
+	now := time.Now().UTC()
 	m := model.Machine{
 		ID:               model.NewID(),
 		Name:             in.Name,
@@ -504,7 +502,7 @@ func (c *Controller) Mutate(ctx context.Context, id, action, key string) (_ mode
 		m.DesiredState = model.Stopped
 	}
 	m.Generation++
-	now := c.now()
+	now := time.Now().UTC()
 	o = model.Operation{
 		ID:         model.NewID(),
 		MachineID:  id,

@@ -105,7 +105,7 @@ PidFile /var/run/clankerbox-sshd.pid
 	return script, nil
 }
 
-// Prepare installs or verifies the guest SSH identity through trusted runtime execution.
+// prepare installs or verifies the guest SSH identity through trusted runtime execution.
 func (n *NativeRuntime) prepare(ctx context.Context, m Manifest, initialize bool) (string, string, string, error) {
 	script, err := bootstrapScript(m, initialize)
 	if err != nil {

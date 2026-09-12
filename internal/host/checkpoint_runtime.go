@@ -249,7 +249,7 @@ func (n *NativeRuntime) DeleteCheckpoint(ctx context.Context, cp CheckpointSpec)
 	if err != nil {
 		return err
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+	if !info.IsDir() {
 		return errors.New("checkpoint directory ownership mismatch")
 	}
 	if err = os.RemoveAll(dir); err != nil {
@@ -267,12 +267,10 @@ func (n *NativeRuntime) smolvmPrerequisite(action string, p model.Profile, cp *C
 			"prerequisite: portable smolvm capture does not support custom DNS; configure an explicitly supported portable profile without weakening isolation",
 		)
 	}
-	if action == actionRestore || action == actionDeleteCheckpoint {
+	if action == actionRestore {
 		if err := regularNonempty(n.artifact(*cp)); err != nil {
 			return fmt.Errorf("checkpoint unavailable: %w", err)
 		}
-	}
-	if action == actionRestore {
 		info, err := os.Stat(p.ImagePath)
 		if err != nil {
 			return err

@@ -38,3 +38,25 @@ checks and makes an authenticated HTTP/1.1 session upgrade request. It succeeds
 only on HTTP 409 with error code `prerequisite`; transport/authentication errors,
 other responses and an accepted upgrade all fail. The lifecycle harness uses
 this probe after confirming the machine is stopped.
+
+Both live harnesses create `--result` exclusively and persist complete report
+updates with atomic replacement and file/directory fsync. Accepted operation and
+resource IDs are recorded **before** polling. Failed operations are recorded;
+unresolved operations, transport ambiguity and polling timeouts retain a pending
+mutation for inspection. Neither harness replays a mutation to resolve uncertainty.
+
+Only lifecycle supports `--resume`: it reuses the exact uncleaned disposable
+machine in the report, never creates another one, and refuses a pending mutation.
+Inspect/reconcile ambiguous operations before attempting another qualification;
+do not remove pending evidence just to bypass this refusal. Lifecycle cleans its
+known, settled disposable machine unless `--keep` is set; checkpoint failures
+retain all named objects without automatic cleanup.
+
+`session-run --config FILE --expect-delete-dependency MACHINE_ID` makes one
+bearer-authenticated source-delete request and succeeds only on **HTTP 409 with
+error code `dependency`**. Authentication/transport errors, other status codes
+(including 503) and unexpectedly accepted operations fail qualification. The
+checkpoint harness journals the probe intent first and records any unexpectedly
+accepted operation emitted by the adapter before failing. This is a destructive
+negative test: use only the explicitly retained disposable source with its live
+descendant, never an existing workload. It is not a product CLI/API command.

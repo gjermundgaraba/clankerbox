@@ -2,8 +2,6 @@ package client
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -12,9 +10,8 @@ import (
 	"clankerbox/internal/model"
 )
 
-// Streams supplies the command input, output and diagnostic destinations.
+// Streams supplies the command output and diagnostic destinations.
 type Streams struct {
-	In  io.Reader
 	Out io.Writer
 	Err io.Writer
 }
@@ -105,10 +102,6 @@ func (runner commandRunner) mutateMachine(ctx context.Context, command, target, 
 }
 
 const (
-	requestKeyBytes = 16
-)
-
-const (
 	inspectCommand = "inspect"
 )
 
@@ -119,9 +112,5 @@ func requestKey(s string) (string, error) {
 		}
 		return s, nil
 	}
-	b := make([]byte, requestKeyBytes)
-	if _, e := rand.Read(b); e != nil {
-		return "", e
-	}
-	return hex.EncodeToString(b), nil
+	return model.NewID(), nil
 }

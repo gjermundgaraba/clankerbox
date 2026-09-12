@@ -1,11 +1,13 @@
 # Terminal sessions
 
-Status as of 2026-09-09: design revision 3 after two independent reviews. The
-Clankerbox side (guest daemon, protocol, controller link, endpoints, labels,
-events, CLI, host preparation) is implemented with unit and integration tests;
-nothing is live-qualified. Clankerdesk is the only consumer.
+This document describes the current terminal-session contract and Clankerdesk
+integration. The guest daemon, protocol, controller link, endpoints, labels,
+events, CLI, and host preparation are implemented with unit and integration
+tests. The dated [connection-removal completion record](client-connection-removal-plan.md#completion-record--2026-09-11)
+is the authority for completed live qualification, including its stopped-session correction; it does not qualify later
+changes or imply that every consumer/failure-matrix scenario below was run live.
 
-Clankerbox gains a guest-side daemon that owns terminal sessions inside each
+Clankerbox has a guest-side daemon that owns terminal sessions inside each
 machine, a controller path that exposes those sessions to an authenticated API
 caller, and small machine-record additions (labels, guest status, change
 notifications). A terminal session survives every network hop, controller
@@ -113,9 +115,10 @@ Each session holds:
 - `last_resize_offset`, or none when the session was never resized.
 - Subscribers (attached streams). Each has an immutable bootstrap prefix
   (snapshot bytes or a ring slice copied at the cut) written outside the session
-  mutex, and a separately bounded live tail queue (8 MiB) with a 60 s stall
-  clock. A subscriber whose tail overflows or stalls is dropped with a
-  best-effort `gap` event; the PTY reader never waits for a viewer.
+  mutex and released after transmission. The live tail queue admits output and
+  events in order, bounded by 8 MiB of output and 1,024 items. Frame writes have
+  a 60 s stall clock. A subscriber whose tail overflows or stalls is dropped
+  with a best-effort `output_gap` event; the PTY reader never waits for a viewer.
 - One PTY writer goroutine draining one FIFO of entries. Each entry is either
   one caller input or one protocol reply, admitted in arrival order, and is
   written completely (through any partial writes) before the next entry
@@ -162,7 +165,10 @@ records that were not finished when a previous daemon died.
 `session.end` sends SIGHUP to the foreground process group when its session id
 equals the child's session id, waits 500 ms, then SIGTERM and SIGKILL to the
 child's own process group with the same wait, each step guarded by a liveness
-check on pid plus kernel start time plus boot id. The PTY closes after the
+check on pid plus the kernel start time captured by the live daemon when
+available. These signalling guards are not persisted; restarted daemons never
+signal adopted records. The boot id is diagnostic metadata in `hello`, not a
+session liveness guard. The PTY closes after the
 child is reaped. Ended records are retained until the daemon prunes records
 older than 7 days. `session.open` on an `exited` session answers `ended` with
 the final screen as `view` while the daemon that owned it is alive; on a
@@ -238,12 +244,15 @@ The daemon sends a `hello` event first on every connection:
 ```
 
 There is one supported wire revision. Every consumer compares `protocol` for
-equality and treats any other value as `incompatible`; any change to an
-operation, value, event, or bound is a new revision, and all bindings move
-together. Consumers that decode snapshots also require `wasm_sha256` equality
-with their own artifact and otherwise enter a visible `incompatible` state
-instead of retrying. The deployable compatibility unit is therefore the wire
-revision plus the engine artifact.
+equality and treats any other value as `incompatible`. Incompatible framing,
+operation semantics, or bounds require a new revision and all bindings move
+together; no old-revision support or negotiation is provided. Compatible
+optional JSON fields need not change the revision when existing consumers
+ignore them and their absence preserves existing behavior. Consumers that
+decode snapshots also require `wasm_sha256` equality with their own artifact
+and otherwise enter a visible `incompatible` state instead of repeatedly
+trying to decode snapshots. The deployable compatibility unit is therefore
+the wire revision plus the engine artifact.
 
 ### Session object
 
@@ -430,7 +439,7 @@ protocol.
   present label.
 - `GET /v1/events` is a server-sent-event stream of change notifications:
   `{"type": "machine", "id"}` and `{"type": "operation", "id"}` after the
-  corresponding transaction committed or the machine's guest/auth link view
+  corresponding transaction committed or the machine's guest link view
   changed, plus `{"type": "reset"}` as the first
   message so a subscriber refetches inventory after subscribing. Events carry
   ids only; consumers refetch. Subscribers are bounded; an overflowing
@@ -451,10 +460,13 @@ Preparation runs the installer only when the installed hash differs, on new and
 existing machines alike, and never starts a stopped machine to do so.
 
 Replacing a daemon ends its sessions until descriptor handoff exists. A new
-consumer build that requires a newer `wasm_sha256` therefore refuses old
-daemons with `incompatible` and leaves them running; ending them is an explicit
-operator action: send `SIGTERM` to the pid in `$HOME/.clankerbox/daemon.pid`
-inside the guest, or restart the machine.
+consumer build that requires a different wire revision or `wasm_sha256`
+therefore refuses old daemons with `incompatible` and leaves them running.
+After deploying matching binaries, explicitly stop the machine, wait for the
+accepted stop operation to succeed, then start it and wait for a ready guest
+link. This ends its sessions. Do not depend on opening an incompatible guest
+terminal to recover it, and do not retry a stop/start mutation whose outcome
+is unknown; inspect its accepted operation instead.
 
 ### CLI
 
@@ -591,25 +603,22 @@ terminal client is added.
 
 ## Verification
 
-- Go unit tests, external packages, real PTYs on Linux and macOS: frame codec
-  against the conformance fixture; ring offsets and eviction; attach modes and
-  exactly-once delivery under concurrent output; drops at every attach boundary;
-  two resizes at one offset; input admission and refusal after exit; large paste
-  during output flood; reply overflow accounting; pid and start-time guard;
-  process teardown and final drain; concurrent first proxies; stale socket;
-  activity ranking with process exit override; the stale-create refusal with
-  the horizon inside retention; terminal and ring release at exit with the
-  view retained; logged record write failures and skipped records.
-- Controller tests: link lifecycle exercised with the
-  fake SSH guest, including source reservations and capacity; stream upgrade
-  bridging; labels and inheritance; change notifications; guest status.
-- Clankerdesk tests: the existing terminal suites against the fake controller
-  and guest; lost create reply; restart after `disconnected`; browser opened
-  during an outage; incompatible daemon; an end reply overtaking the stream's
-  tail; abandoned and expired creates; unknown machines at bind and create;
-  the controller's `guest_incompatible` refusal; a paused viewer under a
-  snapshot larger than the live backlog limit; a guest that answers hello and
-  nothing else; the browser acceptance test unchanged in intent.
-- Live check on the private controller: create machine, open two browsers,
-  kill the desk host, restart the controller, fork the machine, and verify each
-  row of the failure matrix. Recorded in `docs/implementation-execution.md`.
+- Guest tests cover framing and message fixtures; snapshot restoration and VT
+  replies; ring replay across resize; input admission and refusal after exit;
+  exit/final-view handling; singleton ownership and proxy shutdown; create
+  idempotency, capacity, expiry and retention; activity hooks and process-name
+  independence; logged manifest failures. Real PTYs exercise the process boundary.
+- Deterministic subscriber tests check exact byte/item queue limits, ordered
+  resize/output delivery, and prefix release on success and failure. A blocked
+  real attachment test verifies that event overflow sheds only that viewer while
+  the PTY and another viewer continue.
+- Controller tests use fake SSH peers and a real daemon for link lifecycle,
+  copy reservations, stream bridging, labels, notifications and guest status.
+- Further failure-matrix qualification includes simultaneous first proxies,
+  stale-socket recovery, explicit PID/start-time mismatch, large paste during an
+  output flood and exhausted reply capacity. These are not claimed as existing
+  focused regression tests merely because the implementation guards them.
+- Consumer/browser and deployment results live in the dated
+  [completion record](client-connection-removal-plan.md#completion-record--2026-09-11).
+  Requalify changed behavior with matching binaries; this document and its failure
+  matrix are not evidence that every scenario has been run on both platforms.

@@ -185,11 +185,11 @@ func (c *Controller) Derive(
 	if err != nil {
 		return zero, err
 	}
-	p, h, err := c.derivationPlacement(source, action)
+	p, h, err := c.derivationPlacement(source, action, cp)
 	if err != nil {
 		return zero, err
 	}
-	now := c.now()
+	now := time.Now().UTC()
 	m, req, err := allocateDerivation(ctx, tx, action, in, source, cp, h, p, now)
 	if err != nil {
 		return zero, err
@@ -370,7 +370,22 @@ func allocateDerivation(
 	return m, req, nil
 }
 
-func (c *Controller) derivationPlacement(source model.Machine, action string) (model.Profile, model.Host, error) {
+func (c *Controller) derivationPlacement(
+	source model.Machine,
+	action string,
+	cp *model.Checkpoint,
+) (model.Profile, model.Host, error) {
+	if action == deleteCheckpointAction && cp.Kind == "ram" {
+		h, ok := c.host(cp.Host)
+		if !ok {
+			return model.Profile{}, model.Host{}, problem(
+				http.StatusServiceUnavailable,
+				"host_unavailable",
+				"checkpoint host unavailable",
+			)
+		}
+		return cp.Profile, h, nil
+	}
 	p, ok := c.profile(source.Profile)
 	if !ok || !model.SameProfile(p, source.ProfileSpec) {
 		return model.Profile{}, model.Host{}, problem(http.StatusConflict, "configuration", "pinned profile changed")
@@ -419,7 +434,7 @@ func saveDerivedIntent(
 	return err
 }
 
-// linkChild records the derivation's ancestry, access, and labels on the child and
+// linkChild records the derivation's ancestry and labels on the child and
 // its request. Inherited and requested labels are validated as the map that is saved.
 func linkChild(
 	m *model.Machine,

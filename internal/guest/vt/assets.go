@@ -20,11 +20,6 @@ var asset []byte
 //go:embed assets/ghostty-vt.build.json
 var provenance []byte
 
-// Asset returns the embedded WebAssembly binary.
-func Asset() []byte {
-	return asset
-}
-
 // Provenance returns the embedded build record for the asset.
 func Provenance() []byte {
 	return provenance

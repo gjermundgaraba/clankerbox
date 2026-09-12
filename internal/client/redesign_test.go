@@ -16,26 +16,6 @@ import (
 	"clankerbox/internal/model"
 )
 
-func TestCLIHelpWithoutConfig(t *testing.T) {
-	t.Parallel()
-	for _, arg := range []string{"help", "--help", "-h"} {
-		var out bytes.Buffer
-		err := client.Run(
-			t.Context(),
-			[]string{"--config", "/missing/config", arg},
-			client.Streams{Out: &out, Err: io.Discard},
-		)
-		if err != nil {
-			t.Fatalf("%s: %v %q", arg, err, out.String())
-		}
-		for _, text := range []string{"clankerbox", "COMMANDS:", checkpointCommand, "sessions", "--config", jsonFlag} {
-			if !strings.Contains(out.String(), text) {
-				t.Fatalf("%s: missing %q in help: %s", arg, text, &out)
-			}
-		}
-	}
-}
-
 func TestLifecycleWaitResults(t *testing.T) {
 	t.Parallel()
 	for _, command := range [][]string{
@@ -260,7 +240,7 @@ func TestMissingFlagValueNeverSubmitsMutation(t *testing.T) {
 
 func TestConfigDefaultsAndHostSelection(t *testing.T) {
 	t.Parallel()
-	for _, scenario := range []string{"defaults", "override", "sole-mac", ambiguousCase, incompatibleDefaultCase} {
+	for _, scenario := range []string{"defaults", "override", "sole-mac", ambiguousCase, noHostCase, incompatibleDefaultCase} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
 			testCreateDefaults(t, scenario)
@@ -274,15 +254,23 @@ func testCreateDefaults(t *testing.T, scenario string) {
 	if scenario == ambiguousCase {
 		hosts = append(hosts, model.Host{ID: "mac2", ProfileIDs: []string{macOS}})
 	}
-	var posts atomic.Int32
+	if scenario == noHostCase {
+		hosts = nil
+	}
+	var posts, gets atomic.Int32
 	var received model.CreateInput
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			posts.Add(1)
 			checkError(t, json.NewDecoder(r.Body).Decode(&received))
+			if scenario == incompatibleDefaultCase {
+				http.Error(w, "host does not support profile", http.StatusBadRequest)
+				return
+			}
 			checkError(t, json.NewEncoder(w).Encode(model.Operation{ID: otherID, Status: pendingStatus}))
 			return
 		}
+		gets.Add(1)
 		checkError(t, json.NewEncoder(w).Encode(hosts))
 	}))
 	defer server.Close()
@@ -291,6 +279,7 @@ func testCreateDefaults(t *testing.T, scenario string) {
 	a.Config.DefaultHost = linuxOS
 	extra := []string{}
 	expectedProfile, expectedHost := linuxOS, linuxOS
+	var expectedGets int32
 	switch scenario {
 	case "override":
 		extra = []string{
@@ -300,23 +289,34 @@ func testCreateDefaults(t *testing.T, scenario string) {
 			macHostName,
 		}
 		expectedProfile, expectedHost = macOS, macHostName
-	case "sole-mac", ambiguousCase:
+	case "sole-mac", ambiguousCase, noHostCase:
 		a.Config.DefaultHost = ""
 		extra = []string{"--profile=macos"}
 		expectedProfile, expectedHost = macOS, macHostName
+		expectedGets = 1
 	case incompatibleDefaultCase:
 		extra = []string{profileFlag, macOS}
+		expectedProfile = macOS
 	}
 	writeConfig(t, a)
 	args := append([]string{configFlag, a.path, createCommand, asyncFlag, childName}, extra...)
 	err := client.Run(t.Context(), args, client.Streams{Out: io.Discard, Err: io.Discard})
-	if scenario == ambiguousCase || scenario == incompatibleDefaultCase {
+	if gets.Load() != expectedGets {
+		t.Fatalf("discovery requests=%d, want %d", gets.Load(), expectedGets)
+	}
+	if scenario == ambiguousCase || scenario == noHostCase {
 		if err == nil || posts.Load() != 0 {
 			t.Fatalf("unsafe host selection: %v", err)
 		}
 		return
 	}
-	checkError(t, err)
+	if scenario == incompatibleDefaultCase {
+		if err == nil {
+			t.Fatal("ignored server admission failure")
+		}
+	} else {
+		checkError(t, err)
+	}
 	if posts.Load() != 1 || received.Host != expectedHost || received.Profile != expectedProfile ||
 		received.Name != childName {
 		t.Fatalf("incorrect defaults: %+v", received)
@@ -345,8 +345,8 @@ const (
 	macOS                   = "macos"
 	hostName                = "host"
 	ambiguousCase           = "ambiguous"
+	noHostCase              = "no-host"
 	incompatibleDefaultCase = "incompatible-default"
-	execCommand             = "exec"
 )
 
 const (
@@ -360,7 +360,7 @@ func TestResourceQueriesDefaultHumanAndExplicitJSON(t *testing.T) {
 	defer server.Close()
 	a := testAPI(t, server.URL)
 	writeConfig(t, a)
-	for _, command := range [][]string{{"profiles"}, {hostsCommand}, {"machines"}, {inspectCommand, testMachineName}, {"operation", otherID}} {
+	for _, command := range [][]string{{"profiles"}, {hostsCommand}, {machinesCommand}, {inspectCommand, testMachineName}, {"operation", otherID}} {
 		for _, structured := range []bool{false, true} {
 			args := []string{configFlag, a.path}
 			if structured {

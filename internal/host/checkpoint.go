@@ -122,10 +122,10 @@ func (h *Helper) executeDerived(ctx context.Context, req model.Request, a accept
 			Error:       "interrupted " + a.Phase + "; explicit operator inspection required; no automatic replay",
 		}
 	}
-	if !h.profile(req.Profile) {
-		return failure(req, errors.New("unknown or changed pinned profile"))
-	}
 	if req.Action == actionFork || req.Action == actionCapture {
+		if !h.profile(req.Profile) {
+			return failure(req, errors.New("unknown or changed pinned profile"))
+		}
 		source, err = h.derivedSource(ctx, req)
 		if err != nil {
 			return failure(req, err)
@@ -263,8 +263,14 @@ func (h *Helper) derivedCheckpoint(ctx context.Context, req model.Request) (*own
 	expected := *req.Checkpoint
 	expected.Status = cp.Status
 	if cp.Status != "published" || model.Hash(expected) != model.Hash(cp.Checkpoint) ||
-		cp.RuntimePin != h.runtimePin(req.Profile) {
-		return nil, errors.New("checkpoint is unpublished or incompatible with pinned host/runtime/profile")
+		!model.SameProfile(cp.Profile, req.Profile) {
+		return nil, errors.New("checkpoint is unpublished or its identity/profile does not match")
+	}
+	// RAM deletion uses only the owned artifact directory, not the current runtime.
+	if req.Action != actionDeleteCheckpoint || cp.Kind != checkpointRAM {
+		if !h.profile(req.Profile) || cp.RuntimePin != h.runtimePin(cp.Profile) {
+			return nil, errors.New("checkpoint is incompatible with pinned host/runtime/profile")
+		}
 	}
 	if err := h.resourceIdle(ctx, cp.ID, true); err != nil {
 		return nil, err
@@ -297,7 +303,7 @@ func (h *Helper) captureIdentity(
 	if _, e := h.checkpoint(ctx, value.ID); !errors.Is(e, sql.ErrNoRows) {
 		return Manifest{}, nil, errors.New("checkpoint identity already owned")
 	}
-	value.RuntimePin = h.runtimePin(req.Profile)
+	value.RuntimePin = h.runtimePin(value.Profile)
 	cp := &ownedCheckpoint{Checkpoint: value, Source: source}
 	m := source
 	m.Generation = req.Generation

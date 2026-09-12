@@ -145,3 +145,71 @@ func TestOversizeCommandFailsBeforeConfiguration(t *testing.T) {
 		t.Fatalf("expected local argument bound, got %v", err)
 	}
 }
+
+func TestDeleteProbeRequiresDependency(t *testing.T) {
+	t.Parallel()
+	const id = "0123456789abcdef0123456789abcdef"
+	const dependency = `{"error":{"code":"dependency"}}`
+	const accepted = `{"id":"abcdef0123456789abcdef0123456789","machine_id":"` + id + `","status":"accepted"}`
+	for _, test := range []struct {
+		name   string
+		status int
+		body   string
+		pass   bool
+	}{
+		{"dependency", 409, dependency, true},
+		{"wrong conflict", 409, `{"error":{"code":"prerequisite"}}`, false},
+		{"malformed", 409, `not json`, false},
+		{"missing code", 409, `{}`, false},
+		{"unavailable", 503, dependency, false},
+		{"unauthorized", 401, dependency, false},
+		{"redirect", 307, dependency, false},
+		{"accepted", 202, accepted, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
+				if r.Method != http.MethodPost || r.URL.Path != "/v1/machines/"+id+"/delete" ||
+					r.Header.Get("Idempotency-Key") == "" ||
+					r.Header.Get("Authorization") != "Bearer "+strings.Repeat("t", 32) {
+					t.Error("missing exact target, authentication or mutation identity")
+				}
+				w.Header().Set("Location", "/must-not-follow")
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			}))
+			defer server.Close()
+			var out strings.Builder
+			err := runDeleteDependencyCheck(t.Context(), acceptanceConfig(t, server.URL), []string{id}, &out)
+			if (err == nil) != test.pass {
+				t.Fatalf("unexpected result: %v", err)
+			}
+			if test.status == http.StatusAccepted && out.String() != accepted {
+				t.Fatalf("accepted operation not retained: %q", out.String())
+			}
+			if test.status != http.StatusAccepted && out.Len() != 0 {
+				t.Fatalf("rejection emitted as operation: %q", out.String())
+			}
+			server.Close()
+			if requests != 1 {
+				t.Fatalf("probe replayed: %d requests", requests)
+			}
+		})
+	}
+}
+
+func TestDeleteProbeTransportFailure(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(
+		http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { t.Error("unexpected request") }),
+	)
+	path := acceptanceConfig(t, server.URL)
+	server.Close()
+	var out strings.Builder
+	err := runDeleteDependencyCheck(t.Context(), path, []string{"0123456789abcdef0123456789abcdef"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "idempotency key") || out.Len() != 0 {
+		t.Fatalf("transport ambiguity not retained: %v, %q", err, out.String())
+	}
+}

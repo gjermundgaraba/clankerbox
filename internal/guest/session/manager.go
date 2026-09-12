@@ -207,7 +207,7 @@ func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
 	}
 	created, err := args.Created()
 	if err != nil {
-		return protocol.Session{}, &protocol.Error{Code: protocol.CodeInvalid, Message: err.Error()}
+		return protocol.Session{}, err
 	}
 	now := m.cfg.Now()
 	if created.After(now.Add(createSkew)) {
@@ -232,7 +232,6 @@ func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
 		fingerprint: fingerprint,
 		env:         args.Env,
 		stateDir:    m.cfg.StateDir,
-		bootID:      m.bootID,
 		ringSize:    m.cfg.RingSize,
 		loader:      m.cfg.Loader,
 		now:         m.cfg.Now,
@@ -487,15 +486,8 @@ func expired(record protocol.Session, now time.Time) bool {
 }
 
 func mapError(err error) error {
-	switch {
-	case err == nil:
-		return nil
-	case errors.Is(err, errNotRunning):
+	if errors.Is(err, errNotRunning) {
 		return &protocol.Error{Code: protocol.CodeNotRunning, Message: "session is not running"}
-	default:
-		if typed, ok := errors.AsType[*protocol.Error](err); ok {
-			return typed
-		}
-		return &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
 	}
+	return &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
 }

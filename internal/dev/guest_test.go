@@ -65,12 +65,12 @@ func TestGuestSurvivesClientAndStopsExplicitly(t *testing.T) {
 		defer cancel()
 		_ = stopGuest(ctx, state)
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Cold WASM compilation in a race-instrumented subprocess is startup work,
+	// not the connection behavior this test measures.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
-	for guestReady(ctx, state) != nil {
-		if err = waitPoll(ctx, guestPoll); err != nil {
-			t.Fatal(err)
-		}
+	if err = waitGuestReady(ctx, state); err != nil {
+		t.Fatal(err)
 	}
 	// Readiness closes each connection; reconnecting leaves the helper alive.
 	if err = guestReady(ctx, state); err != nil {

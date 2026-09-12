@@ -262,20 +262,21 @@ func (s testSSHStream) Close() error { return s.session.Close() }
 func TestLocalSSHRestrictsAccessAndUsesRealDaemon(t *testing.T) {
 	t.Parallel()
 	transport, _, _ := testTransport(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	daemonCtx, stopDaemon := context.WithCancel(ctx)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	ended := make(chan error, 1)
 	go func() {
-		ended <- daemon.Serve(daemonCtx, daemon.Options{Paths: daemon.PathsIn(transport.guestState), Version: "local-transport-test"})
+		ended <- daemon.Serve(ctx, daemon.Options{Paths: daemon.PathsIn(transport.guestState), Version: "local-transport-test"})
 	}()
 	defer func() {
-		stopDaemon()
+		cancel()
 		if err := <-ended; err != nil {
 			t.Error(err)
 		}
 	}()
-	waitLocalDaemon(ctx, t, transport.guestState)
+	// Wait for a greeting, not merely the socket created before WASM compilation.
+	if err := waitGuestReady(ctx, transport.guestState); err != nil {
+		t.Fatal(err)
+	}
 	id := model.NewID()
 	transport.journal.Observation = model.Observation{MachineID: id, Generation: 1}
 	signer := testSigner(t)
@@ -331,22 +332,6 @@ func checkLocalAccess(t *testing.T, sshClient *ssh.Client) {
 		t.Fatal("allowed arbitrary exec")
 	}
 	_ = session.Close()
-}
-
-func waitLocalDaemon(ctx context.Context, t *testing.T, guestState string) {
-	t.Helper()
-	for {
-		conn, err := daemon.Dial(ctx, daemon.PathsIn(guestState))
-		if err == nil {
-			_ = conn.Close()
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("daemon startup timeout")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
 }
 
 func checkLocalProtocol(ctx context.Context, t *testing.T, sshClient *ssh.Client) {

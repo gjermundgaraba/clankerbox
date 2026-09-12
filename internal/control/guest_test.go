@@ -158,7 +158,14 @@ func startGuestDaemon(t *testing.T) daemon.Paths {
 	deadline := time.Now().Add(guestTestTimeout)
 	for time.Now().Before(deadline) {
 		if conn, dialErr := daemon.Dial(t.Context(), paths); dialErr == nil {
+			// Socket creation precedes cold WASM compilation. Give fixture startup
+			// its own budget before the controller's connection deadlines begin.
+			_ = conn.SetReadDeadline(time.Now().Add(time.Minute))
+			frame, readErr := protocol.ReadFrame(conn)
 			_ = conn.Close()
+			if readErr != nil || frame.Kind != protocol.KindEvent {
+				t.Fatalf("daemon did not become ready: frame kind %d, %v", frame.Kind, readErr)
+			}
 			return paths
 		}
 		time.Sleep(20 * time.Millisecond)

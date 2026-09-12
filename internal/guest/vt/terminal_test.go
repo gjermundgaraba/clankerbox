@@ -2,8 +2,6 @@ package vt_test
 
 import (
 	"bytes"
-	"context"
-	"os"
 	"strings"
 	"testing"
 
@@ -208,15 +206,4 @@ func TestClosedTerminalRejectsUse(t *testing.T) {
 	if _, err := term.Snapshot(); err == nil {
 		t.Fatal("snapshot after close succeeded")
 	}
-}
-
-// TestMain constructs one runtime before parallel tests so wazero's lazily
-// cached version string is written once, not raced by concurrent loaders.
-func TestMain(m *testing.M) {
-	loader, err := vt.NewLoader(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	_ = loader.Close(context.Background())
-	os.Exit(m.Run())
 }

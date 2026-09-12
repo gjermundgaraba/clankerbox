@@ -14,6 +14,7 @@ import (
 	"clankerbox/internal/client"
 	guest "clankerbox/internal/guest/client"
 	"clankerbox/internal/guest/daemon"
+	"clankerbox/internal/guest/protocol"
 )
 
 func TestSessionUpgradeUsesHTTP1(t *testing.T) { //nolint:paralleltest // Replaces the default transport.
@@ -59,7 +60,7 @@ func TestSessionCommandOutputAndExit(t *testing.T) {
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	paths := daemon.PathsIn(dir + "/guest")
-	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- daemon.Serve(ctx, daemon.Options{Paths: paths}) }()
@@ -69,12 +70,22 @@ func TestSessionCommandOutputAndExit(t *testing.T) {
 			t.Error(serveErr)
 		}
 	}()
-	var link *guest.Client
+	startupDeadline := time.Now().Add(time.Minute)
 	for {
 		conn, dialErr := daemon.Dial(ctx, paths)
 		if dialErr == nil {
-			link, err = guest.Dial(ctx, conn)
+			// The socket is published before cold terminal-engine compilation.
+			// Wait for an actual greeting before the client's hello timer starts.
+			_ = conn.SetReadDeadline(startupDeadline)
+			frame, readErr := protocol.ReadFrame(conn)
+			_ = conn.Close()
+			if readErr != nil || frame.Kind != protocol.KindEvent {
+				t.Fatalf("daemon did not become ready: frame kind %d, %v", frame.Kind, readErr)
+			}
 			break
+		}
+		if time.Now().After(startupDeadline) {
+			t.Fatal("daemon socket never appeared")
 		}
 		select {
 		case <-ctx.Done():
@@ -82,6 +93,13 @@ func TestSessionCommandOutputAndExit(t *testing.T) {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
+	commandCtx, cancelCommand := context.WithTimeout(ctx, 20*time.Second)
+	defer cancelCommand()
+	conn, err := daemon.Dial(commandCtx, paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	link, err := guest.Dial(commandCtx, conn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +109,7 @@ func TestSessionCommandOutputAndExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	code, err := execute(ctx, link, script, &output)
+	code, err := execute(commandCtx, link, script, &output)
 	if err != nil || code != 7 || output.String() != "one\ntwo\n" {
 		t.Fatalf("code=%d output=%q error=%v", code, output.String(), err)
 	}

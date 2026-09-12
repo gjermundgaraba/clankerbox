@@ -741,41 +741,13 @@ func (r *lifecycleAttempt) deleteRetained(ctx context.Context, state RuntimeStat
 }
 
 // Connect resolves only a prepared owned machine. The readiness line is consumed
-// by the controller, never by the user's SSH client.
+// by the controller before it starts the restricted guest SSH link.
 func (h *Helper) Connect(ctx context.Context, id string, in io.Reader, out io.Writer) (resultErr error) {
-	if !model.ValidID(id) {
-		return errors.New("invalid machine ID")
-	}
-	m, err := h.manifest(ctx, id)
+	m, err := h.readyMachine(ctx, id)
 	if err != nil {
 		return err
 	}
-	if !m.Prepared || m.Deleted {
-		return errors.New("machine is not prepared")
-	}
-	var operation []byte
-	if err = h.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE machine_id=? AND generation=?", id, m.Generation).
-		Scan(&operation); err != nil {
-		return err
-	}
-	var latest accepted
-	if err = json.Unmarshal(operation, &latest); err != nil {
-		return err
-	}
-	if latest.Response.Status != statusSucceeded {
-		return errors.New("machine operation is unresolved; ssh endpoint is not ready")
-	}
-	obs, err := h.observation(ctx, m)
-	if err != nil {
-		return err
-	}
-	if obs.State != model.Running {
-		return errors.New("machine is not running")
-	}
-	if err = validEndpoint(m, obs.Endpoint); err != nil {
-		return err
-	}
-	conn, err := (&net.Dialer{Timeout: connectionTimeout}).DialContext(ctx, "tcp", obs.Endpoint)
+	conn, err := (&net.Dialer{Timeout: connectionTimeout}).DialContext(ctx, "tcp", m.Endpoint)
 	if err != nil {
 		return err
 	}

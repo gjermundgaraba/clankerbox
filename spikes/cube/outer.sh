@@ -5,10 +5,9 @@ cd "$(dirname "$0")"
 python3 - <<'PY'
 from pathlib import Path
 import json
-from cube_spike import GRANTS, require
+from cube_spike import validate_host_scope
 s=json.loads(Path('.work/scope.json').read_text())
-require(s['grant'] in GRANTS, 'Wrong grant')
-require(str(Path.cwd())==s['root']+'/cube', 'Wrong exact host scope')
+validate_host_scope(s, Path.cwd())
 PY
 exec ssh -n -i "$PWD/.work/target/id_ed25519" -p 22070 \
   -o ConnectTimeout=5 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \

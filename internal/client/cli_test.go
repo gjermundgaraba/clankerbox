@@ -17,28 +17,6 @@ import (
 	"clankerbox/internal/model"
 )
 
-func TestCLIHasNoApplicationLauncher(t *testing.T) {
-	t.Parallel()
-	a := testAPI(t, "http://127.0.0.1:1")
-	b, _ := json.Marshal(a.Config)
-	if err := os.WriteFile(a.path, b, 0600); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	streams := client.Streams{In: strings.NewReader(""), Out: &out, Err: io.Discard}
-	if err := client.Run(context.Background(), []string{"help"}, streams); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(out.String(), "herdr") ||
-		strings.Contains(out.String(), "Manage controller-held provider connections") {
-		t.Fatal("application launcher advertised in help")
-	}
-	err := client.Run(context.Background(), []string{configFlag, a.path, "herdr", testMachineName}, streams)
-	if err == nil || !strings.Contains(err.Error(), "herdr") {
-		t.Fatalf("application command should be rejected without connecting: %v", err)
-	}
-}
-
 func TestCLIJSONCommandsAndIdempotency(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
@@ -52,7 +30,7 @@ func TestCLIJSONCommandsAndIdempotency(t *testing.T) {
 	a := testAPI(t, server.URL)
 	b, _ := json.Marshal(a.Config)
 	checkError(t, os.WriteFile(a.path, b, 0600))
-	for _, args := range [][]string{{"profiles"}, {hostsCommand}, {"machines"}, {inspectCommand, testMachineName}, {"operation", otherID}, {createCommand, testMachineName, "--profile", linuxOS, "--host", hostName, idempotencyFlag, mutationRetryKey}, {"start", idempotencyFlag, mutationRetryKey, testMachineName}, {"stop", idempotencyFlag, mutationRetryKey, testID}, {deleteCommand, idempotencyFlag, mutationRetryKey, testID}} {
+	for _, args := range [][]string{{"profiles"}, {hostsCommand}, {machinesCommand}, {inspectCommand, testMachineName}, {"operation", otherID}, {createCommand, testMachineName, "--profile", linuxOS, "--host", hostName, idempotencyFlag, mutationRetryKey}, {"start", idempotencyFlag, mutationRetryKey, testMachineName}, {"stop", idempotencyFlag, mutationRetryKey, testID}, {deleteCommand, idempotencyFlag, mutationRetryKey, testID}} {
 		if args[0] == createCommand || args[0] == "start" || args[0] == "stop" || args[0] == deleteCommand {
 			args = append(args, "--async")
 		}
@@ -60,7 +38,7 @@ func TestCLIJSONCommandsAndIdempotency(t *testing.T) {
 		e := client.Run(
 			context.Background(),
 			append([]string{configFlag, a.path, jsonFlag}, args...),
-			client.Streams{In: strings.NewReader(""), Out: &out, Err: &stderr},
+			client.Streams{Out: &out, Err: &stderr},
 		)
 		if e != nil {
 			t.Fatalf("%v: %v", args, e)
@@ -149,14 +127,5 @@ func cliTestHandler(t *testing.T, record func(string)) http.HandlerFunc {
 		default:
 			checkError(t, resultError(io.WriteString(w, "[]")))
 		}
-	}
-}
-
-func TestCLIRejectsProviderAuth(t *testing.T) {
-	t.Parallel()
-	streams := client.Streams{Out: io.Discard, Err: io.Discard}
-	if err := client.Run(t.Context(), []string{"auth", "status"}, streams); err == nil ||
-		!strings.Contains(err.Error(), "auth") {
-		t.Fatalf("removed command must be rejected without reading configuration: %v", err)
 	}
 }

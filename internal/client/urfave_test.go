@@ -1,39 +1,48 @@
-//nolint:testpackage // Inspect parser output directly without configuring remote services.
-package client
+package client_test
 
 import (
 	"bytes"
-	"io"
 	"strings"
 	"testing"
+
+	"clankerbox/internal/client"
 )
 
 func TestCommandHelpWithoutConfiguration(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{nil, {helpFlag}, {"create", helpFlag}, {checkpointCommand}, {checkpointCommand, "delete", helpFlag}, {sessionsCommand, helpFlag}, {"help", sessionsCommand}} {
+	for _, args := range [][]string{nil, {"help"}, {helpFlag}, {"-h"}, {createCommand, helpFlag}, {checkpointCommand}, {checkpointCommand, deleteCommand, helpFlag}, {sessionsCommand, helpFlag}, {"help", sessionsCommand}} {
 		var out, diagnostics bytes.Buffer
-		err := Run(
+		err := client.Run(
 			t.Context(),
 			append([]string{configFlag, missingConfig}, args...),
-			Streams{Out: &out, Err: &diagnostics},
+			client.Streams{Out: &out, Err: &diagnostics},
 		)
 		if err != nil || !strings.Contains(out.String(), "USAGE:") || diagnostics.Len() != 0 {
 			t.Fatalf("%v: %v stdout=%q stderr=%q", args, err, &out, &diagnostics)
 		}
-		if strings.Contains(out.String(), "_owner") {
-			t.Fatal("private command appears in help")
+		for _, retired := range []string{"_owner", "herdr", "application launcher"} {
+			if strings.Contains(out.String(), retired) {
+				t.Fatalf("retired feature %q appears in help", retired)
+			}
+		}
+		if len(args) == 0 {
+			for _, text := range []string{"clankerbox", "COMMANDS:", checkpointCommand, sessionsCommand, configFlag, jsonFlag} {
+				if !strings.Contains(out.String(), text) {
+					t.Fatalf("missing %q in root help: %s", text, &out)
+				}
+			}
 		}
 	}
 }
 
 func TestCLIRejectsRetiredSyntaxAndInvalidArguments(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{{"create", "--name", "child"}, {"ssh", parserMachine, "echo", "hello"}, {"machines", "extra"}, {"start", parserMachine, "--timeout", "0s"}, {"unknown"}, {checkpointCommand, "--unknown"}, {sessionsCommand, "--unknown"}, {checkpointCommand, "unknown"}} {
+	for _, args := range [][]string{{createCommand, "--name", childName}, {machinesCommand, "extra"}, {startCommand, testMachineName, timeoutFlag, "0s"}, {"unknown"}, {checkpointCommand, "--unknown"}, {sessionsCommand, "--unknown"}, {checkpointCommand, "unknown"}} {
 		var out, diagnostics bytes.Buffer
-		err := Run(
+		err := client.Run(
 			t.Context(),
 			append([]string{configFlag, missingConfig}, args...),
-			Streams{Out: &out, Err: &diagnostics},
+			client.Streams{Out: &out, Err: &diagnostics},
 		)
 		if err == nil || strings.Contains(err.Error(), missingConfig) {
 			t.Fatalf("%v: %v", args, err)
@@ -50,24 +59,23 @@ func TestCLIRejectsRetiredSyntaxAndInvalidArguments(t *testing.T) {
 }
 
 const helpFlag = "--help"
-const parserMachine = "machine"
 
 const sessionsCommand = "sessions"
-const configFlag = "--config"
 
 func TestRetiredConnectionsAreUnknown(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"ssh", "proxy", "exec", "vnc", "ssh-config", "connect", "ports", "url", "open-url", "_owner"} {
-		root := newCommand(Streams{Out: io.Discard, Err: io.Discard})
-		if root.Command(name) != nil {
-			t.Errorf("retired command %s is registered", name)
-		}
-		if err := root.Run(
+	for _, name := range []string{"ssh", "proxy", "exec", "vnc", "ssh-config", "connect", "ports", "url", "open-url", "_owner", "herdr", "auth"} {
+		var out, diagnostics bytes.Buffer
+		err := client.Run(
 			t.Context(),
-			[]string{"clankerbox", configFlag, missingConfig, name},
-		); err == nil ||
-			strings.Contains(err.Error(), missingConfig) {
+			[]string{configFlag, missingConfig, name},
+			client.Streams{Out: &out, Err: &diagnostics},
+		)
+		if err == nil || !strings.Contains(err.Error(), "No help topic for '"+name+"'") {
 			t.Errorf("%s: %v", name, err)
+		}
+		if out.Len() != 0 || diagnostics.Len() != 0 {
+			t.Fatalf("%s: unexpected stdout=%q stderr=%q", name, &out, &diagnostics)
 		}
 	}
 }

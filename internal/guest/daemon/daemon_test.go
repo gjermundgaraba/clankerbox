@@ -54,16 +54,29 @@ func startDaemon(t *testing.T) daemon.Paths {
 			t.Errorf("daemon exited with %v", serveErr)
 		}
 	})
+	waitDaemonReady(t, paths)
+	return paths
+}
+
+func waitDaemonReady(t *testing.T, paths daemon.Paths) {
+	t.Helper()
 	deadline := time.Now().Add(waitTimeout)
 	for time.Now().Before(deadline) {
 		if conn, dialErr := daemon.Dial(t.Context(), paths); dialErr == nil {
+			// Serve publishes its socket before compiling the terminal engine.
+			// Wait for readiness, not just socket existence, before client hello
+			// deadlines start. Parallel race tests can make cold compilation slow.
+			_ = conn.SetReadDeadline(time.Now().Add(time.Minute))
+			frame, readErr := protocol.ReadFrame(conn)
 			_ = conn.Close()
-			return paths
+			if readErr != nil || frame.Kind != protocol.KindEvent {
+				t.Fatalf("daemon did not become ready: frame kind %d, %v", frame.Kind, readErr)
+			}
+			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("daemon socket never appeared")
-	return paths
 }
 
 func connect(t *testing.T, paths daemon.Paths) *client.Client {
@@ -136,6 +149,7 @@ func TestProxyEndsWhenTheDaemonDoes(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	served := serve(ctx, paths)
+	waitDaemonReady(t, paths)
 	stdinReader, stdinWriter := io.Pipe()
 	defer func() { _ = stdinWriter.Close() }()
 	stdoutReader, stdoutWriter := io.Pipe()
@@ -488,13 +502,4 @@ func restoreMirror(t *testing.T, loader *vt.Loader, snapshot []byte) *vt.Termina
 		t.Fatalf("restore: %v", err)
 	}
 	return mirror
-}
-
-func TestMain(m *testing.M) {
-	loader, err := vt.NewLoader(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	_ = loader.Close(context.Background())
-	os.Exit(m.Run())
 }

@@ -25,7 +25,6 @@ type connection struct {
 	manager    *session.Manager
 	conn       net.Conn
 	writeMu    sync.Mutex
-	stateMu    sync.Mutex
 	attachment *session.Attachment
 }
 
@@ -59,11 +58,8 @@ func serveConn(ctx context.Context, manager *session.Manager, conn net.Conn) {
 }
 
 func (c *connection) shutdown() {
-	c.stateMu.Lock()
-	attachment := c.attachment
-	c.stateMu.Unlock()
-	if attachment != nil {
-		attachment.Stop()
+	if c.attachment != nil {
+		c.attachment.Stop()
 	}
 	_ = c.conn.Close()
 }
@@ -106,16 +102,9 @@ func (c *connection) handle(request protocol.Request) (protocol.Response, func()
 
 func failure(requestID uint64, err error) protocol.Response {
 	if typed, ok := errors.AsType[*protocol.Error](err); ok {
-		return protocol.Fail(requestID, typed.Code, typed.Message)
+		return protocol.Response{RequestID: requestID, Error: typed}
 	}
-	switch {
-	case protocol.IsTooLarge(err):
-		return protocol.Fail(requestID, protocol.CodeTooLarge, err.Error())
-	case protocol.IsInvalid(err):
-		return protocol.Fail(requestID, protocol.CodeInvalid, err.Error())
-	default:
-		return protocol.Fail(requestID, protocol.CodeInternal, err.Error())
-	}
+	return protocol.Fail(requestID, protocol.CodeInternal, err.Error())
 }
 
 func decodeArgs(raw json.RawMessage, out any) error {
@@ -162,10 +151,7 @@ func (c *connection) open(raw json.RawMessage) (any, func(), error) {
 	if err := args.Validate(); err != nil {
 		return nil, nil, err
 	}
-	c.stateMu.Lock()
-	busy := c.attachment != nil
-	c.stateMu.Unlock()
-	if busy {
+	if c.attachment != nil {
 		return nil, nil, &protocol.Error{
 			Code:    protocol.CodeAlreadyAttached,
 			Message: "connection already carries a session",
@@ -182,9 +168,7 @@ func (c *connection) open(raw json.RawMessage) (any, func(), error) {
 		// The final view's text follows the reply; the connection stays free to open again.
 		return value, attachment.Run, nil
 	}
-	c.stateMu.Lock()
 	c.attachment = attachment
-	c.stateMu.Unlock()
 	return value, func() { go attachment.Run() }, nil
 }
 

@@ -27,6 +27,11 @@ import (
 
 func main() {
 	config := flag.String("config", client.DefaultConfigPath(), "Client configuration")
+	expectDependency := flag.Bool(
+		"expect-delete-dependency",
+		false,
+		"Require deletion to reject MACHINE_ID with 409 dependency",
+	)
 	expectStopped := flag.Bool(
 		"expect-stopped",
 		false,
@@ -36,9 +41,14 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	var code int
 	var err error
-	if *expectStopped {
+	switch {
+	case *expectDependency && *expectStopped:
+		err = errors.New("choose only one prerequisite probe")
+	case *expectDependency:
+		err = runDeleteDependencyCheck(ctx, *config, flag.Args(), os.Stdout)
+	case *expectStopped:
 		err = runStoppedCheck(ctx, *config, flag.Args())
-	} else {
+	default:
 		code, err = run(ctx, *config, flag.Args(), os.Stdin, os.Stdout)
 	}
 	cancel()
@@ -178,18 +188,77 @@ func runStoppedCheck(ctx context.Context, path string, args []string) error {
 	return nil
 }
 
-func requestSession(ctx context.Context, config client.Config, id string) (*http.Response, error) {
-	token, err := statefs.ReadPrivate(config.TokenFile)
-	if err != nil {
-		return nil, err
+// runDeleteDependencyCheck makes exactly one mutation attempt against the source
+// explicitly supplied by checkpoint acceptance. Unexpected acceptance must be
+// emitted before returning an error so the harness can retain the operation ID.
+func runDeleteDependencyCheck(ctx context.Context, path string, args []string, out io.Writer) error {
+	if len(args) != 1 || !model.ValidID(args[0]) {
+		return errors.New("--expect-delete-dependency requires one MACHINE_ID")
 	}
+	config, err := client.LoadConfig(path)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		config.URL+"/v1/machines/"+args[0]+"/delete",
+		strings.NewReader("{}"),
+	)
+	if err != nil {
+		return err
+	}
+	key := model.NewID()
+	req.Header.Set("Idempotency-Key", key)
+	req.Header.Set("Content-Type", "application/json")
+	response, err := sendRequest(config, req)
+	if err != nil {
+		return fmt.Errorf("delete probe idempotency key %s requires inspection: %w", key, err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxErrorBytes+1))
+	if err != nil || len(body) > maxErrorBytes {
+		return fmt.Errorf("delete probe idempotency key %s: incomplete or oversized response", key)
+	}
+	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
+		// Emit the complete accepted response, even if its schema is unexpected.
+		// The surrounding report already records the mutation intent.
+		if _, err = out.Write(body); err != nil {
+			return fmt.Errorf("delete probe idempotency key %s: recording acceptance: %w", key, err)
+		}
+	}
+	var problem struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if response.StatusCode != http.StatusConflict || json.Unmarshal(body, &problem) != nil ||
+		problem.Error.Code != "dependency" {
+		return fmt.Errorf(
+			"expected HTTP 409 dependency, got HTTP %d (delete probe idempotency key %s)",
+			response.StatusCode,
+			key,
+		)
+	}
+	return nil
+}
+
+func requestSession(ctx context.Context, config client.Config, id string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.URL+"/v1/machines/"+id+"/sessions/stream", nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "clankerbox-session")
+	return sendRequest(config, req)
+}
+
+func sendRequest(config client.Config, req *http.Request) (*http.Response, error) {
+	token, err := statefs.ReadPrivate(config.TokenFile)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
 		return nil, errors.New("default transport is not HTTP")

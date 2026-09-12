@@ -13,19 +13,15 @@ import (
 )
 
 const (
-	manifestVersion = 1
 	manifestName    = "manifest.json"
 	sessionsDirName = "sessions"
 	dirMode         = 0o700
 )
 
-// manifest is the durable session record plus the liveness guard fields.
+// manifest is the durable session record plus the create retry fingerprint.
 type manifest struct {
 	protocol.Session
 
-	Version     int    `json:"version"`
-	StartTime   uint64 `json:"start_time"`
-	BootID      string `json:"boot_id"`
 	Fingerprint string `json:"fingerprint,omitempty"`
 }
 
@@ -45,7 +41,6 @@ func writeManifest(stateDir string, m manifest) error {
 		return fmt.Errorf("open session directory: %w", err)
 	}
 	defer func() { _ = dir.Close() }()
-	m.Version = manifestVersion
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("encode manifest: %w", err)

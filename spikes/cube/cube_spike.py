@@ -25,6 +25,17 @@ def require(condition, detail):
         raise RuntimeError(detail)
 
 
+def validate_host_scope(scope, directory):
+    """Both host wrappers use the same recorded grant, path and owner identity."""
+    root = Path(scope['root'])
+    prefix = 'clankerbox-cube.'
+    require(scope['grant'] == GRANT, 'Wrong grant')
+    require(root.parent == Path('/home/clanker') and root.name.startswith(prefix)
+            and root.name[len(prefix):].isalnum(), 'Wrong host scope prefix')
+    require(Path(directory) == root / 'cube', 'Wrong exact host scope path')
+    require(scope['owner'] == 'clanker-cube-' + root.name[len(prefix):].lower(), 'Wrong scope owner')
+
+
 def write(path, value):
     temp = path.with_suffix(".tmp")
     temp.write_text(json.dumps(value, indent=2) + "\n")

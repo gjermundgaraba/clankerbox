@@ -3,6 +3,7 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -13,7 +14,6 @@ class StoppedSessionAcceptanceTests(unittest.TestCase):
     def exercise(self, probe_result):
         state = 'running'
         operation = None
-        reports = []
         probes = []
 
         def run(command, **kwargs):
@@ -38,23 +38,21 @@ class StoppedSessionAcceptanceTests(unittest.TestCase):
                 self.fail(f'unexpected command: {command}')
             return subprocess.CompletedProcess(command, 0, json.dumps(value), '')
 
-        def save(_path, text):
-            reports.append(json.loads(text))
-            return len(text)
-
-        argv = ['live_lifecycle.py', '--binary', 'cli', '--config', 'config',
-                '--host', 'linux', '--profile', 'test', '--session-runner', 'runner',
-                '--result', 'not-written.json', '--keep']
-        with (patch('sys.argv', argv), patch.object(subprocess, 'run', run),
-              patch.object(Path, 'mkdir'), patch.object(Path, 'write_text', save),
-              contextlib.redirect_stdout(io.StringIO())):
-            try:
-                live_lifecycle.main()
-            except (RuntimeError, subprocess.TimeoutExpired):
-                pass
+        with tempfile.TemporaryDirectory() as directory:
+            result = Path(directory) / 'evidence.json'
+            argv = ['live_lifecycle.py', '--binary', 'cli', '--config', 'config',
+                    '--host', 'linux', '--profile', 'test', '--session-runner', 'runner',
+                    '--result', str(result), '--keep']
+            with (patch('sys.argv', argv), patch.object(subprocess, 'run', run),
+                  contextlib.redirect_stdout(io.StringIO())):
+                try:
+                    live_lifecycle.main()
+                except (RuntimeError, subprocess.TimeoutExpired):
+                    pass
+            report = json.loads(result.read_text())
         self.assertEqual(len(probes), 1)
         self.assertEqual(probes[0][-2:], ['--expect-stopped', 'a' * 32])
-        return reports[-1]
+        return report
 
     def test_confirmed_prerequisite_passes(self):
         self.assertEqual(self.exercise(0)['status'], 'passed')

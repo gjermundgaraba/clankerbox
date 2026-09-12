@@ -1,7 +1,7 @@
 # smolvm retained workspaces and concurrent RAM branches
 
-Current state: **patched concurrent RAM acceptance and synced-disk lifecycle PASS**.
-See [the executed RAM-fork fix](RAM_FIX.md) and
+Final spike result (2026-09-05): **patched concurrent RAM acceptance and synced-disk lifecycle PASS**.
+The final-results authority is [the executed RAM-fork fix](RAM_FIX.md) and
 [the separate libkrun patch](libkrun-dax-fork.patch). This fixes the reproduced
 Linux x86_64 virtiofs/DAX eager-fork failure; it is not an upstream merge or a
 claim about all device modes or application-session continuity.
@@ -29,10 +29,9 @@ sentinel and report its marker/PID, but the source then fails to execute both
 reproduced this immediately after the **first** branch, before a second branch.
 Its log records `kernel-fault userfaultfd unavailable; using materialized RAM
 generation` and a successful `OK forked generation` response. No userfaultfd
-sysctl was changed. The exact source/guest-exec failure remains unresolved; this
-spike does not attribute it to a particular VMM memory or disk defect without
-further evidence. All shared three-way inheritance/divergence checks must pass
-before calling this a successful RAM fork.
+sysctl was changed. At this initial boundary the source/guest-exec failure was
+unresolved; no particular VMM memory or disk defect was established. The subsequent diagnosis,
+fix and passing three-way checks are recorded in [RAM_FIX.md](RAM_FIX.md).
 
 | Run directory under `results/kvm/` | Actual outcome |
 | --- | --- |
@@ -60,10 +59,11 @@ empty. Final audits are in `results/kvm/final-cleanup.json` and
 `results/kvm/final-process-audit.json`; the original evidence was not overwritten.
 
 All timings are **under concurrent host activity**, not isolated performance.
-Source pause, networking/quarantine, Docker, portable RAM recovery, real-agent
-sessions, host reboot and source API-delete refusal remain **NOT RUN**. The
-full RAM runner stops on the earlier source-exec failure before those dependent
-steps. Python guest compilation in the full branch path likewise was not reached.
+At the initial boundary, source pause, networking/quarantine, Docker, portable
+RAM recovery, real-agent sessions, host reboot and source API-delete refusal were
+**NOT RUN**. The full RAM runner stopped on the source-exec failure before those
+dependent steps; Python guest compilation in the full branch path was not reached.
+See [RAM_FIX.md](RAM_FIX.md) for subsequent executed checks and remaining gaps.
 
 ## Revisions and artifacts
 
@@ -89,7 +89,8 @@ The bundled VMM provenance pins libkrun
 `55bb7c5273178826240b39e907475fb6011afd8e`. The Linux run uses the audited tree's
 `lib/linux-x86_64`, not an installed runtime. The v1.13.1 release rootfs supplies
 utilities; its agent is replaced with a static-musl build from the audited
-source. This mixed rootfs/source combination still needs real KVM validation.
+source. This mixed rootfs/source combination was used in the subsequently
+completed [bounded KVM qualification](RAM_FIX.md); that does not qualify other combinations.
 
 Private build tools: Rust 1.98.0, Zig 0.15.2, CMake 4.1.3, Ninja 1.13.1. Official
 archive SHA-256 checks are enforced in `prestage.sh`. Cargo uses the committed
@@ -133,7 +134,7 @@ when it has no descendants. Upstream ties this checkpoint to a VMM/memfd
 identity. **Stopped disk retention does not establish durable RAM recovery**;
 portable-checkpoint recovery after VMM death remains a separate test.
 
-## Local checks and current evidence
+## Initial local checks and evidence (2026-09-05, before the RAM-fork fix)
 
 Run from this directory:
 
@@ -150,7 +151,7 @@ Run from this directory:
 | Failed deletion preserves record; watchdog cleanup invariants | PASS, 1 + 5 native CLI Rust tests (`results/delete.log`, `results/helper.log`). |
 | macOS arm64 CLI/test compilation | PASS using bundled libkrun. Initial plain link failed because libkrun was not on the search path; `LIBKRUN_DIR` resolved it without installation. |
 | Patched Linux x86_64 CLI compilation / `--version` | PASS in private staging. Static-musl guest agent also built successfully; two upstream time-type deprecation warnings. |
-| Parent + two concurrent RAM children | FAIL: source cannot exec after the first branch; full common acceptance not completed. |
+| Parent + two concurrent RAM children | Initial FAIL: source cannot exec after the first branch; full common acceptance not completed. |
 | Actual one-VM retained disk lifecycle | PASS: controller restart, stop/start, VMM death and cold disk recovery. |
 | Python runner ownership/signal/socket safety | PASS: 3 discoverable local tests, also under `python3 -O`; no safety `assert` remains. |
 
@@ -165,7 +166,7 @@ override is used. The first Cargo invocation unintentionally used
 the normal Cargo cache; it was stopped and all subsequent dependency/build
 writes use `.work/cargo`. No package was globally installed.
 
-## Executed host plan
+## Historical executed host plan (2026-09-05)
 
 **Staging directory:** `/home/clanker/clankerbox-smolvm.Jf1bpB`.
 Private preparation was explicitly authorized; approximately 6.8 GiB is
@@ -205,8 +206,10 @@ virtual-memory limit. No builds will overlap the actual VM run.
    its three VM records/processes and any snapshot guardians are confirmed gone.
    No existing VM, existing network, unrelated file or service is a cleanup target.
 
-The granted command is (reuse the grant only while coordinator authorization
-remains active):
+The historical invocation below records the initial run, not a current command
+or authorization. The grant and scope must not be reused; any new remote run
+requires fresh explicit authorization. Final executed evidence is in
+[RAM_FIX.md](RAM_FIX.md):
 
 ```sh
 sudo -n -u clanker -g kvm -- python3 \
@@ -224,8 +227,8 @@ Sequential branch calls avoid smolvm's optional batch rendezvous protocol; the
 three resulting guests must run concurrently with the same inherited guest PID
 and marker. The two branches can originate from different capture timestamps.
 It now also checks the parent immediately after each branch, so the known
-source failure stops the run at the first affected boundary. Add
-`--retention-only` to execute the independent one-VM lifecycle test.
+source failure stopped the run at the first affected boundary. The initial
+`--retention-only` invocation executed the independent one-VM lifecycle test.
 
 It then checks source-delete rejection, controller restart with continuing
 guest processes, explicit child stop/start with retained disk, and a pidfd-bound

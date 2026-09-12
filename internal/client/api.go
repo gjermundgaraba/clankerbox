@@ -145,23 +145,22 @@ func (a *API) token() (string, error) {
 	return t, nil
 }
 
-// Do sends an authenticated JSON request and decodes a successful response into out.
-func (a *API) Do(ctx context.Context, method, path string, body any, idempotency string, out any) (err error) {
+func (a *API) request(ctx context.Context, method, path string, body any, idempotency string) (*http.Request, error) {
 	var r io.Reader
 	if body != nil {
 		b, e := json.Marshal(body)
 		if e != nil {
-			return e
+			return nil, e
 		}
 		r = bytes.NewReader(b)
 	}
 	token, e := a.token()
 	if e != nil {
-		return e
+		return nil, e
 	}
 	req, e := http.NewRequestWithContext(ctx, method, a.Config.URL+path, r)
 	if e != nil {
-		return e
+		return nil, e
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
@@ -170,6 +169,15 @@ func (a *API) Do(ctx context.Context, method, path string, body any, idempotency
 	}
 	if idempotency != "" {
 		req.Header.Set("Idempotency-Key", idempotency)
+	}
+	return req, nil
+}
+
+// Do sends an authenticated JSON request and decodes a successful response into out.
+func (a *API) Do(ctx context.Context, method, path string, body any, idempotency string, out any) (err error) {
+	req, e := a.request(ctx, method, path, body, idempotency)
+	if e != nil {
+		return e
 	}
 	res, e := a.http.Do(req)
 	if e != nil {

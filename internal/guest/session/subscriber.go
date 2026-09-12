@@ -9,6 +9,8 @@ import (
 const (
 	// tailLimit bounds the live bytes queued for one subscriber.
 	tailLimit = 8 * 1024 * 1024
+	// tailItems also bounds event and small-output queue overhead.
+	tailItems = 1024
 	// outputChunk is the largest OUTPUT payload.
 	outputChunk = protocol.MaxFrame - 1 - protocol.OutputHeader
 )
@@ -49,32 +51,29 @@ func newSubscriber(sink Sink, sessionID string) *subscriber {
 	return &subscriber{sink: sink, sessionID: sessionID, wake: make(chan struct{}, 1)}
 }
 
-// enqueueOutput queues live bytes; it drops the subscriber when the tail
-// limit is exceeded and returns false.
-func (s *subscriber) enqueueOutput(next uint64, data []byte) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.dropped != "" {
-		return false
-	}
-	if s.queued+len(data) > tailLimit {
-		s.dropped = "overflow"
-		s.signal()
-		return false
-	}
-	s.queue = append(s.queue, item{data: data, next: next})
-	s.queued += len(data)
-	s.signal()
-	return true
+func (s *subscriber) enqueueOutput(next uint64, data []byte) {
+	s.enqueue(item{data: data, next: next})
 }
 
 func (s *subscriber) enqueueEvent(event any) {
+	s.enqueue(item{event: event})
+}
+
+// enqueue admits output and events in order under the same bounded policy.
+// A full tail drops only this subscriber; producers never wait for its sink.
+func (s *subscriber) enqueue(it item) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.dropped != "" {
 		return
 	}
-	s.queue = append(s.queue, item{event: event})
+	if s.queued+len(it.data) > tailLimit || len(s.queue) == tailItems {
+		s.dropped = "overflow"
+		s.signal()
+		return
+	}
+	s.queue = append(s.queue, it)
+	s.queued += len(it.data)
 	s.signal()
 }
 
@@ -135,12 +134,14 @@ func (s *subscriber) send(it item) error {
 }
 
 func (s *subscriber) sendPrefix() error {
+	prefix := s.prefix
+	s.prefix = nil
 	if s.snapshot {
-		return s.sink.SendSnapshot(s.prefix)
+		return s.sink.SendSnapshot(prefix)
 	}
 	next := s.from
-	for len(s.prefix) > 0 {
-		chunk := s.prefix
+	for len(prefix) > 0 {
+		chunk := prefix
 		if len(chunk) > outputChunk {
 			chunk = chunk[:outputChunk]
 		}
@@ -148,7 +149,7 @@ func (s *subscriber) sendPrefix() error {
 		if err := s.sink.SendOutput(next, chunk); err != nil {
 			return err
 		}
-		s.prefix = s.prefix[len(chunk):]
+		prefix = prefix[len(chunk):]
 	}
 	return nil
 }

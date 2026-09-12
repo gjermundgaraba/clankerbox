@@ -368,32 +368,18 @@ func (n *NativeRuntime) guest(ctx context.Context, m Manifest, script string) ([
 		args = []string{runtimeExec, "-i", m.RuntimeName(), "/bin/bash", shellStrictFlags}
 		return n.Runner.Run(ctx, path, args, n.env(m), []byte(script))
 	}
-	if m.SourceMachineID != "" {
-		// Child bootstrap contains a private host key; keep it out of process argv.
-		args = []string{
-			smolvmMachineCommand,
-			runtimeExec,
-			nameFlag,
-			m.RuntimeName(),
-			"-i",
-			"--",
-			guestShell,
-			shellStrictFlags,
-		}
-		return n.Runner.Run(ctx, path, args, n.env(m), []byte(script))
-	}
+	// Scripts can contain a child host key; always keep them out of process argv.
 	args = []string{
 		smolvmMachineCommand,
 		runtimeExec,
 		nameFlag,
 		m.RuntimeName(),
+		"-i",
 		"--",
 		guestShell,
 		shellStrictFlags,
-		"-c",
-		script,
 	}
-	return n.Runner.Run(ctx, path, args, n.env(m), nil)
+	return n.Runner.Run(ctx, path, args, n.env(m), []byte(script))
 }
 
 // Stop requires native stop acknowledgement before stopping supervision.

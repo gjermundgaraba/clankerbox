@@ -20,7 +20,7 @@ func newCommand(streams Streams) *cli.Command {
 	root := &cli.Command{
 		Name: "clankerbox", Usage: "Create and control machines",
 		Description: "Lifecycle changes wait for completion by default. Terminal sessions require a running machine.",
-		Reader:      streams.In, Writer: streams.Out, ErrWriter: streams.Err,
+		Writer:      streams.Out, ErrWriter: streams.Err,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:      "config",

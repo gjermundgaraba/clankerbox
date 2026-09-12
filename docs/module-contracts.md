@@ -1,6 +1,7 @@
 # Module contracts and state cutover
 
-Tests use external Go test packages and exercise supported operations. Production
+Prefer external Go test packages for supported behavior; use internal policy tests
+where a public test would require long sleeps or oversized workloads. Production
 types do not expose journal accessors, private helper aliases, or test-only hooks.
 The HTTP, SSH, Unix socket, runtime command, and process boundaries remain real:
 they have distinct lifetimes and failure behavior.
@@ -42,15 +43,41 @@ The controller owns the restricted SSH link to the guest session daemon.
 
 ## Client command boundary
 
-`client.Run` takes explicit streams and a cancellation context. Each invocation
-builds a fresh urfave/cli command tree. The client, controller, and host binaries
+`client.Run` takes output streams and a cancellation context. Each invocation builds
+a fresh urfave/cli command tree. The client, controller, and host binaries
 use native flag parsing and generated help; help bypasses configuration and
 service startup. Machine names are positional, with no `--name` alias. Resource
 output is human-readable by default; global `--json` selects structured stdout.
 Executable errors are plain text on stderr.
 CLI lifecycle and session-list commands use authenticated HTTP; events use SSE.
+Both use the same verified transport, with ambient proxies and redirects disabled.
+SSE removes only the ordinary request timeout; cancellation still ends the stream.
+An explicit creation host is sent directly to the controller. Only an omitted host
+requires discovery, so a discovery change cannot prevent an idempotent retry from
+returning its already accepted operation.
 The raw guest SSH endpoint and workstation connection commands do not exist.
 Tests exercise retained command behavior through HTTP and process boundaries.
+
+## Host and checkpoint boundary
+
+Guest preparation and restricted connections share one readiness check: an owned,
+prepared machine, a succeeded current generation, and a running runtime with a
+valid endpoint. Preparation keeps its mutation lock; connections do not hold that
+lock for the lifetime of a stream. Runtime guest scripts travel on stdin on both
+platforms, including scripts that carry a child's private host key.
+
+Checkpoint identity retains its captured profile and runtime pin. Restore requires
+the same physical profile and current runtime configuration; discovery-only
+capability changes do not rewrite or invalidate the captured identity. Pins are
+checked against the archived profile, not rehashed with current discovery metadata.
+
+RAM checkpoint deletion needs the configured owning host and its owned artifact
+directory, not a still-installed capture runtime or active profile. It retains
+exact checkpoint identity, dependency/reservation checks, the operation journal
+and the deleted record. Ambiguous deletion is never replayed automatically.
+Tart checkpoint deletion still needs compatible runtime placement and native
+stopped-clone checks because it invokes Tart rather than removing an artifact
+directory. No checkpoint migration or alternate legacy validation path is added.
 
 ## Guest session boundary
 

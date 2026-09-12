@@ -3,13 +3,13 @@
 import argparse
 import json
 from pathlib import Path
-import re
 from gate import validate_base
 
 
-def render(base, scope):
+def render(base):
+    base = base.resolve()
     validate_base(base)
-    if not (base.is_absolute() and re.fullmatch('[a-z0-9]{2}', scope)): raise ValueError("validation failed: base.is_absolute() and re.fullmatch('[a-z0-9]{2}', scope)")
+    scope = 'q7'
     config = dict(root_dir=str(base / 'd'), run_dir=str(base / 'r'), log_dir=str(base / 'l'),
                   fc_binary=str(base / 'bin/firecracker'), use_firecracker=True,
                   cni_conf_dir=str(base / 'cni-conf'), cni_bin_dir=str(base / 'cni-bin'),
@@ -34,5 +34,5 @@ def render(base, scope):
 
 if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__); p.add_argument('base', type=Path)
-    p.add_argument('--scope', default='q7'); a=p.parse_args()
-    render(a.base.resolve(), a.scope)
+    a = p.parse_args()
+    render(a.base)

@@ -41,7 +41,7 @@ func (c *Controller) pendingWork(ctx context.Context) (_ []queuedWork, resultErr
 	rows, err := c.db.QueryContext(
 		ctx,
 		"SELECT id,request FROM operations WHERE status NOT IN ('succeeded','failed') AND next_attempt<=? ORDER BY rowid",
-		c.now().Unix(),
+		time.Now().Unix(),
 	)
 	if err != nil {
 		return nil, err
@@ -88,7 +88,7 @@ func (c *Controller) claimWork(ctx context.Context, hostID string) (model.Reques
 			return req, op, false, err
 		}
 		op.Status = "running"
-		op.UpdatedAt = c.now()
+		op.UpdatedAt = time.Now().UTC()
 		return work.req, op, true, saveOperation(ctx, c.db, op, 0)
 	}
 	return req, op, false, nil
@@ -185,11 +185,11 @@ func (c *Controller) completeWork(
 	if txErr != nil {
 		return txErr
 	}
-	op.UpdatedAt = c.now()
+	op.UpdatedAt = time.Now().UTC()
 	next := int64(0)
 	applyOperationResponse(&m, &op, resp, err)
 	if !op.Done() {
-		next = c.now().Add(retryDelay).Unix()
+		next = op.UpdatedAt.Add(retryDelay).Unix()
 	}
 	if op.Status == failedStatus && m.State == model.Stopped && !m.ObservationStale {
 		m.DesiredState = model.Stopped

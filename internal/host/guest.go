@@ -28,7 +28,7 @@ const (
 	guestKeyComment = "clankerbox-terminal"
 )
 
-// PrepareGuest installs the terminal key, sshd session capacity, and the guest
+// PrepareGuest installs the terminal key and the guest
 // session binary through the trusted runtime channel.
 func (h *Helper) PrepareGuest(ctx context.Context, id, publicKey string) (resultErr error) {
 	h.mu.Lock()
@@ -38,40 +38,12 @@ func (h *Helper) PrepareGuest(ctx context.Context, id, publicKey string) (result
 		return err
 	}
 	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	if !model.ValidID(id) {
-		return errors.New("invalid machine ID")
-	}
 	canonicalKey, err := model.ValidateKey(publicKey)
 	if err != nil {
 		return errors.New("invalid terminal public key")
 	}
-	m, err := h.manifest(ctx, id)
+	m, err := h.readyMachine(ctx, id)
 	if err != nil {
-		return err
-	}
-	if !m.Prepared || m.Deleted {
-		return errors.New("machine is not prepared")
-	}
-	var body []byte
-	if err = h.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE machine_id=? AND generation=?", id, m.Generation).
-		Scan(&body); err != nil {
-		return err
-	}
-	var op accepted
-	if err = json.Unmarshal(body, &op); err != nil {
-		return err
-	}
-	if op.Response.Status != statusSucceeded {
-		return errors.New("machine operation is unresolved")
-	}
-	obs, err := h.observation(ctx, m)
-	if err != nil {
-		return err
-	}
-	if obs.State != model.Running {
-		return errors.New("machine is not running")
-	}
-	if err = validEndpoint(m, obs.Endpoint); err != nil {
 		return err
 	}
 	rt, ok := h.runtime.(interface {
@@ -85,6 +57,45 @@ func (h *Helper) PrepareGuest(ctx context.Context, id, publicKey string) (result
 		return err
 	}
 	return rt.PrepareGuest(ctx, m, canonicalKey, binary)
+}
+
+// readyMachine resolves the current endpoint only after the owned generation succeeds.
+// Callers retain their own mutation locks; Connect never holds one for a stream lifetime.
+func (h *Helper) readyMachine(ctx context.Context, id string) (Manifest, error) {
+	if !model.ValidID(id) {
+		return Manifest{}, errors.New("invalid machine ID")
+	}
+	m, err := h.manifest(ctx, id)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if !m.Prepared || m.Deleted {
+		return Manifest{}, errors.New("machine is not prepared")
+	}
+	var body []byte
+	if err = h.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE machine_id=? AND generation=?", id, m.Generation).
+		Scan(&body); err != nil {
+		return Manifest{}, err
+	}
+	var op accepted
+	if err = json.Unmarshal(body, &op); err != nil {
+		return Manifest{}, err
+	}
+	if op.Response.Status != statusSucceeded {
+		return Manifest{}, errors.New("machine operation is unresolved")
+	}
+	obs, err := h.observation(ctx, m)
+	if err != nil {
+		return Manifest{}, err
+	}
+	if obs.State != model.Running {
+		return Manifest{}, errors.New("machine is not running")
+	}
+	if err = validEndpoint(m, obs.Endpoint); err != nil {
+		return Manifest{}, err
+	}
+	m.Endpoint = obs.Endpoint
+	return m, nil
 }
 
 // guestBinary reads the deployed guest binary for the machine's platform.
@@ -103,7 +114,7 @@ func (h *Helper) guestBinary(m Manifest) ([]byte, error) {
 }
 
 // PrepareGuest installs the binary when its digest differs, then the key line
-// and sshd capacity, in an already running guest.
+// in an already running guest.
 func (n *NativeRuntime) PrepareGuest(ctx context.Context, m Manifest, publicKey string, binary []byte) error {
 	digest := sha256.Sum256(binary)
 	want := hex.EncodeToString(digest[:])

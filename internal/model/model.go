@@ -33,9 +33,7 @@ func SafePath(s string) bool { return pathPattern.MatchString(s) }
 // NewID creates a random resource identifier.
 func NewID() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
+	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
 }
 

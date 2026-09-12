@@ -6,17 +6,11 @@ config=${2:?config path required}
 expected="$helper --config $config"
 case "${SSH_ORIGINAL_COMMAND:-}" in
   "$expected") exec "$helper" --config "$config" ;;
-  "$expected --connect "*)
-    id=${SSH_ORIGINAL_COMMAND#"$expected --connect "}
-    case "$id" in ''|*[!0-9a-f]*) exit 64 ;; esac
-    test "${#id}" = 32 || exit 64
-    exec "$helper" --config "$config" --connect "$id"
-    ;;
-  "$expected --guest-prepare "*)
-    id=${SSH_ORIGINAL_COMMAND#"$expected --guest-prepare "}
-    case "$id" in ''|*[!0-9a-f]*) exit 64 ;; esac
-    test "${#id}" = 32 || exit 64
-    exec "$helper" --config "$config" --guest-prepare "$id"
-    ;;
+  "$expected --connect "*) action=--connect ;;
+  "$expected --guest-prepare "*) action=--guest-prepare ;;
   *) echo 'Only structured Clankerbox host control is permitted' >&2; exit 64 ;;
 esac
+id=${SSH_ORIGINAL_COMMAND#"$expected $action "}
+case "$id" in *[!0123456789abcdef]*) exit 64 ;; esac
+test "${#id}" = 32 || exit 64
+exec "$helper" --config "$config" "$action" "$id"

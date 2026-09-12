@@ -6,11 +6,10 @@ cd "$(dirname "$0")"
 test "$(uname -s)" = Linux
 python3 - <<'PY'
 import json, os, pathlib
-from cube_spike import GRANTS, require
+from cube_spike import GRANT, require, validate_host_scope
 s = json.loads(pathlib.Path('.work/scope.json').read_text())
-require(s['grant'] in GRANTS and os.environ.get('CUBE_HOST_SLOT_GRANTED') == s['grant'], 'Wrong grant')
-require(str(pathlib.Path.cwd()) == s['root'] + '/cube', 'Wrong host scope path')
-require(s['root'].startswith('/home/clanker/clankerbox-cube.'), 'Wrong host scope prefix')
+validate_host_scope(s, pathlib.Path.cwd())
+require(os.environ.get('CUBE_HOST_SLOT_GRANTED') == GRANT, 'Wrong grant')
 PY
 target="$PWD/.work/target"
 owner=$(python3 -c 'import json; print(json.load(open(".work/scope.json"))["owner"])')

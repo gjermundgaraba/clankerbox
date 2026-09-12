@@ -97,18 +97,16 @@ func (runner commandRunner) setLabels(ctx context.Context, args []string) error 
 
 // Stream copies a long-lived text response to out line by line until ctx ends.
 func (a *API) Stream(ctx context.Context, path string, out io.Writer) error {
-	token, err := a.token()
+	req, err := a.request(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.Config.URL+path, nil)
+	req.Header.Set("Accept", "text/event-stream")
+	httpClient := *a.http
+	httpClient.Timeout = 0
+	res, err := httpClient.Do(req)
 	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
+		return errors.New("API request failed (transport or TLS error)")
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Discoverable safety checks using fake proc files; no signals or VMs."""
 import importlib.util
-import os
 from pathlib import Path
 import socket
 import tempfile
@@ -23,7 +22,7 @@ class SafetyTests(unittest.TestCase):
                 runner.remove_owned_orphan(name)
 
     def test_foreign_pid_and_birth(self):
-        with tempfile.TemporaryDirectory(dir=Path(__file__).parent / ".work") as tmp:
+        with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             binary, foreign = root / "smolvm", root / "foreign"
             binary.touch()
@@ -45,21 +44,21 @@ class SafetyTests(unittest.TestCase):
                     runner.owned_process(invalid, binary, proc_root=root)
 
     def test_active_and_unowned_socket_are_preserved(self):
-        # macOS AF_UNIX paths are short; the fixture stays inside our owned tree.
-        path = Path(__file__).parent / ".work/safety.sock"
-        with socket.socket(socket.AF_UNIX) as server:
-            server.bind(str(path))
-            try:
+        # macOS AF_UNIX paths are short; each test owns an isolated /tmp path.
+        with tempfile.TemporaryDirectory(prefix='cb-smol-', dir='/tmp') as tmp:
+            path = Path(tmp) / 'safety.sock'
+            with socket.socket(socket.AF_UNIX) as server:
+                server.bind(str(path))
                 server.listen()
                 with self.assertRaises(ValueError):
                     runner.clear_dead_socket(path)
                 with self.assertRaises(ValueError):
                     runner.clear_dead_socket(path, path.stat().st_ino)
                 self.assertTrue(path.exists())
-            finally:
                 inode = path.stat().st_ino
-        runner.clear_dead_socket(path, inode)
-        self.assertFalse(path.exists())
+            runner.clear_dead_socket(path, inode)
+            self.assertFalse(path.exists())
+
 
 
 if __name__ == "__main__":

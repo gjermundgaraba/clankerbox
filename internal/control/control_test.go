@@ -27,6 +27,8 @@ const (
 	succeededStatus  = "succeeded"
 	unresolvedStatus = "unresolved"
 	machineName      = "dev"
+	smolvmRuntime    = "smolvm"
+	tartRuntime      = "tart"
 )
 
 type testTransport struct {
@@ -133,7 +135,7 @@ func (t *testTransport) Connect(context.Context, model.Host, string) (io.ReadWri
 func config() model.Config {
 	return model.Config{
 		Profiles: []model.Profile{
-			{ID: "mac-v1", OS: "macos", Arch: "arm64", Runtime: "tart", CPU: 2, RAMMiB: 2048, ImagePath: "seed"},
+			{ID: "mac-v1", OS: "macos", Arch: "arm64", Runtime: tartRuntime, CPU: 2, RAMMiB: 2048, ImagePath: "seed"},
 		},
 		Hosts: []model.Host{
 			{

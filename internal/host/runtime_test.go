@@ -270,11 +270,10 @@ func preparedScript(t *testing.T, m host.Manifest, initialize bool) (string, err
 		if slices.Contains(call.args, "ip") {
 			return []byte("192.168.64.2"), nil
 		}
-		if len(call.input) > 0 {
-			script = string(call.input)
-		} else {
-			script = call.args[len(call.args)-1]
+		if len(call.input) == 0 || !slices.Contains(call.args, "-i") {
+			t.Fatal("bootstrap script must use runtime stdin")
 		}
+		script = string(call.input)
 		return []byte(key), nil
 	}
 	var err error

@@ -21,5 +21,5 @@ func main() {
 func run() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	return client.Run(ctx, os.Args[1:], client.Streams{In: os.Stdin, Out: os.Stdout, Err: os.Stderr})
+	return client.Run(ctx, os.Args[1:], client.Streams{Out: os.Stdout, Err: os.Stderr})
 }

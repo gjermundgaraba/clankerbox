@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Explicit live acceptance against disposable machines, never existing targets."""
 import argparse
+from functools import partial
 import json
-from pathlib import Path
 import subprocess
-import time
 import uuid
+
+from acceptance import Acceptance, Report, run_guest
 
 
 def main():
@@ -19,53 +20,22 @@ def main():
     parser.add_argument('--keep', action='store_true', help='leave this new machine running for checkpoint acceptance')
     parser.add_argument('--resume', action='store_true', help='resume the exact disposable machine recorded in --result')
     args = parser.parse_args()
-    base = [str(Path(args.binary).resolve()), '--config', str(Path(args.config).resolve()), '--json']
-    report = {'name': 'accept-' + uuid.uuid4().hex[:12], 'events': [], 'status': 'running'}
-    result_path = Path(args.result)
-    result_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence = Report(args.result,
+                      {'name': 'accept-' + uuid.uuid4().hex[:12], 'events': [], 'status': 'running'},
+                      resume=args.resume)
+    report = evidence.data
+    acceptance = Acceptance(args.binary, args.config, evidence, timeout=420)
     if args.resume:
-        report = json.loads(result_path.read_text())
-        assert report['name'].startswith('accept-') and report['machine_id']
+        if not report['name'].startswith('accept-') or not report.get('machine_id') or report.get('cleaned'):
+            raise ValueError('an uncleaned disposable machine report is required')
+        acceptance.require_settled()
         report['status'] = 'running'
         report.pop('error', None)
+        evidence.save()
+    save, run, operation = evidence.save, acceptance.run, acceptance.operation
 
-    def save():
-        result_path.write_text(json.dumps(report, indent=2) + '\n')
+    guest = partial(run_guest, args.session_runner, args.config)
 
-    def guest(machine, *argv, data=None):
-        proc = subprocess.run([args.session_runner, '--config', args.config, machine, *argv],
-                              input=data or '', text=True, capture_output=True, timeout=100)
-        if proc.returncode:
-            raise RuntimeError(f'session command failed: {proc.stderr[-2048:]} {proc.stdout[-2048:]}')
-        return proc.stdout
-
-    def run(*command, data=None):
-        proc = subprocess.run(base + list(command), input=data, text=True, capture_output=True, timeout=90)
-        if proc.returncode:
-            raise RuntimeError(f'{command[0]} failed: {proc.stderr[-2048:]}')
-        return proc.stdout
-
-    def operation(*command):
-        offset = 2 if command[0] == 'checkpoint' else 1
-        command = command[:offset] + ('--async',) + command[offset:]
-        op = json.loads(run(*command))
-        report['events'].append({'action': command[0], 'operation': op})
-        if command[0] == 'create':
-            report['machine_id'] = op['machine_id']
-        save()
-        deadline = time.monotonic() + 420
-        while time.monotonic() < deadline:
-            op = json.loads(run('operation', op['id']))
-            if op['status'] == 'succeeded':
-                report['events'].append({'completed': op})
-                save()
-                return op
-            if op['status'] == 'failed':
-                raise RuntimeError(str(op))
-            time.sleep(2)
-        raise RuntimeError(f'operation did not complete: {op}')
-
-    save()
     try:
         if not args.resume:
             operation('create', report['name'], '--profile', args.profile,
@@ -119,6 +89,7 @@ readlink link
         machine = report.get('machine_id')
         if machine and not args.keep:
             try:
+                acceptance.require_settled()
                 state = json.loads(run('inspect', machine))['state']
                 if state == 'running':
                     operation('stop', machine)

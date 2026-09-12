@@ -23,7 +23,9 @@ class Checks(unittest.TestCase):
     def test_quarantine_order_and_fail_closed(self):
         with tempfile.TemporaryDirectory(dir=BASE / '.work') as temp:
             base = Path(temp)
-            render.render(base, 'q7')
+            rendered = render.render(base)
+            self.assertEqual(rendered['net_scope'], 'q7')
+            self.assertEqual(rendered['cgroup_parent'], 'cqq7.slice')
             c = json.loads((base / 'cni-conf/child-a.conflist').read_text())
             self.assertFalse(c['plugins'][0]['ipMasq'])
             self.assertFalse(c['plugins'][0]['isGateway'])
@@ -130,7 +132,7 @@ class Checks(unittest.TestCase):
 from pathlib import Path
 import gate, render
 checks = [lambda: gate.validate_base(Path('/tmp/unowned')),
-          lambda: render.render(Path('/tmp/unowned'), 'q7'),
+          lambda: render.render(Path('/tmp/unowned')),
           lambda: gate.release({'vm_id':'one'}, {'prepared':False}, lambda *a: None)]
 for check in checks:
     try:

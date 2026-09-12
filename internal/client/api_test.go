@@ -3,6 +3,7 @@ package client_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -91,6 +92,9 @@ func TestRedirectsDoNotLeakToken(t *testing.T) {
 	if e := a.Do(context.Background(), "GET", machinesPath, nil, "", &out); e == nil {
 		t.Fatal("redirect accepted")
 	}
+	if e := a.Stream(t.Context(), eventsPath, io.Discard); e == nil {
+		t.Fatal("stream redirect accepted")
+	}
 	if requests.Load() != 0 {
 		t.Fatal("followed redirect")
 	}
@@ -113,6 +117,9 @@ func TestTLSAndOriginValidation(t *testing.T) {
 	var out any
 	if e := a.Do(context.Background(), "GET", machinesPath, nil, "", &out); e == nil {
 		t.Fatal("untrusted API TLS accepted")
+	}
+	if e := a.Stream(t.Context(), eventsPath, io.Discard); e == nil {
+		t.Fatal("untrusted streaming API TLS accepted")
 	}
 }
 
@@ -137,6 +144,7 @@ func checkError(t *testing.T, err error) {
 
 const (
 	machinesPath       = "/v1/machines"
+	machinesCommand    = "machines"
 	checkpointRetryKey = "once"
 	childName          = "child"
 	idempotencyFlag    = "--idempotency-key"

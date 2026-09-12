@@ -33,7 +33,9 @@ Config file paths resolve relative to the config directory; `~/` expands to your
 home. Keep the bearer token file mode 0600. Optional `default_host` and
 `default_profile` supply omitted flags; `--host` and `--profile` override them.
 Without a host setting, create selects the sole host supporting the profile;
-ambiguity or an incompatible configured host requires an explicit `--host`.
+ambiguity requires an explicit `--host`. Explicit or configured hosts go directly
+to the controller, which owns admission and returns previously accepted requests
+before checking current host/profile eligibility.
 No workstation SSH key, SSH agent, or client state directory is needed.
 
 ```sh
@@ -223,9 +225,11 @@ through `GET /v1/machines/{id}/sessions/stream` (HTTP upgrade
 and `bin/clankerbox-guest-darwin-arm64` under `<host root>/guest/` next to the
 host helper; preparation installs the matching binary into each guest when its
 digest differs. The protocol, contract, and failure matrix are in
-[docs/terminal-sessions.md](docs/terminal-sessions.md). This feature has unit and
-integration coverage with a fake guest sshd and a real daemon; it is not yet
-live-qualified on the private controller.
+[docs/terminal-sessions.md](docs/terminal-sessions.md). Unit and integration tests
+use a fake guest sshd and a real daemon. Dated Linux/macOS live qualification and
+its boundaries are recorded in the
+[connection removal completion record](docs/client-connection-removal-plan.md#completion-record--2026-09-11).
+Source-only cleanup does not requalify a deployed release.
 
 ## Remaining acceptance work
 
@@ -236,17 +240,16 @@ live-qualified on the private controller.
    host reboot. Process-independent restoration is not power-loss durability.
 3. Test upgrade/CPU compatibility, realistic memory/disk pressure, long-running
    credential behavior and retention. No artificial lease limit follows from these gaps.
-4. Complete operational backup/restore integration. Private networking and
-   per-machine SSH access/identity are now deployed; backup fixtures alone do
-   not establish a deployed backup service.
+4. Exercise an isolated restored application startup. Private networking,
+   restricted guest links and backup artifact verification are deployed; archive
+   integrity checks alone do not establish restored application behavior.
 5. Preserve separate contracts for retained disks, live forks and persistent RAM
    checkpoints. Track backing-file references before garbage collection; RAM/disk
    snapshots are secret-bearing even if file backups exclude credential files.
-6. Live-qualify terminal sessions: guest binary installation through the trusted
-   exec channel on both platforms, the forced-command key line, link suspension
-   across a fork, and consumer resume after a controller restart.
+6. Requalify changed terminal and runtime behavior on both platforms before
+   release; preserve the prior live results and their specific failure boundaries.
 
-Retained lifecycle and connection live acceptance now pass on both platforms.
+Retained lifecycle and session live acceptance have passed on both platforms.
 Fork/checkpoint/restore APIs are implemented, with the platform-specific acceptance
 limits recorded above and in the execution record. Broader operational failure
 acceptance remains unfinished. Fork preparation replaces SSH identity and gates

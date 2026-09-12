@@ -43,7 +43,6 @@ type Session struct {
 	fingerprint string
 	startTime   uint64
 	stateDir    string
-	bootID      string
 	now         func() time.Time
 	log         *slog.Logger
 
@@ -69,7 +68,6 @@ type spawnOptions struct {
 	fingerprint string
 	env         map[string]string
 	stateDir    string
-	bootID      string
 	ringSize    int
 	loader      *vt.Loader
 	now         func() time.Time
@@ -84,7 +82,6 @@ func spawn(opts spawnOptions) (*Session, error) {
 		record:      opts.record,
 		fingerprint: opts.fingerprint,
 		stateDir:    opts.stateDir,
-		bootID:      opts.bootID,
 		now:         opts.now,
 		log:         opts.log,
 		ring:        newRing(opts.ringSize),
@@ -161,7 +158,7 @@ func (s *Session) timestamp() string {
 }
 
 func (s *Session) manifest() manifest {
-	return manifest{Session: s.record, StartTime: s.startTime, BootID: s.bootID, Fingerprint: s.fingerprint}
+	return manifest{Session: s.record, Fingerprint: s.fingerprint}
 }
 
 // persist writes the record under the session mutex. A failure is logged and

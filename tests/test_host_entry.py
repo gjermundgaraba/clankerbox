@@ -15,41 +15,33 @@ class HostEntryTests(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
 
-    def test_structured_control_and_connection(self):
-        command = '/bin/echo --config /private/config.json'
-        self.assertEqual(self.invoke(command).stdout.strip(), '--config /private/config.json')
-        command += ' --connect ' + 'a' * 32
-        result = self.invoke(command)
-        self.assertEqual(result.returncode, 0)
-        self.assertTrue(result.stdout.strip().endswith('--connect ' + 'a' * 32))
-
-    def test_structured_guest_preparation(self):
-        prefix = '/bin/echo --config /private/config.json'
+    def test_structured_commands(self):
         machine_id = '0123456789abcdef' * 2
-        result = self.invoke(prefix + ' --guest-prepare ' + machine_id)
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(result.stdout.strip(),
-                         '--config /private/config.json --guest-prepare ' + machine_id)
+        for tail in ('', ' --connect ' + machine_id, ' --guest-prepare ' + machine_id):
+            with self.subTest(tail=tail):
+                result = self.invoke('/bin/echo --config /private/config.json' + tail)
+                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.stdout.strip(), '--config /private/config.json' + tail)
 
-    def test_rejects_invalid_guest_preparation(self):
-        prefix = '/bin/echo --config /private/config.json --guest-prepare '
-        for suffix in ['', 'a' * 31, 'a' * 33, 'A' * 32, '../config',
-                       'a' * 32 + '\n', 'a' * 32 + ' --connect ' + 'b' * 32,
-                       'a' * 32 + '; echo injected', '$(echo injected)',
-                       'a' * 32 + ' --config /other']:
-            with self.subTest(suffix=suffix):
-                result = self.invoke(prefix + suffix)
-                self.assertEqual(result.returncode, 64)
-                self.assertEqual(result.stdout, '')
+    def test_rejects_invalid_ids(self):
+        for action in ('--connect', '--guest-prepare'):
+            prefix = '/bin/echo --config /private/config.json ' + action + ' '
+            for suffix in ['', 'a' * 31, 'a' * 33, 'A' * 32, 'é' * 32, '../config', 'localhost:22',
+                           'a' * 32 + '\n', 'a' * 32 + ' --connect ' + 'b' * 32,
+                           'a' * 32 + '; echo injected', '$(echo injected)',
+                           'a' * 32 + ' --config /other']:
+                with self.subTest(action=action, suffix=suffix):
+                    result = self.invoke(prefix + suffix)
+                    self.assertEqual(result.returncode, 64)
+                    self.assertEqual(result.stdout, '')
 
-    def test_rejects_shell_and_arbitrary_destinations(self):
+    def test_rejects_unknown_commands(self):
         prefix = '/bin/echo --config /private/config.json'
-        for command in ['', 'sh', prefix + ' --auth-prepare ' + 'a' * 32, prefix + '; echo injected', prefix + ' --connect localhost:22',
-                        prefix + ' --connect ' + 'a' * 31, prefix + ' --connect ' + 'a' * 32 + '\n',
-                        prefix + ' --connect ' + 'a' * 32 + ' --config /other']:
+        for command in ['', 'sh', prefix + ' --auth-prepare ' + 'a' * 32,
+                        prefix + '; echo injected', prefix + ' --connect', prefix + ' --guest-prepare']:
             with self.subTest(command=command):
                 result = self.invoke(command)
-                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(result.returncode, 64)
                 self.assertEqual(result.stdout, '')
 
 

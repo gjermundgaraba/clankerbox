@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 	"unicode"
 )
@@ -91,12 +91,7 @@ const (
 	EventOutputGap = "output_gap"
 )
 
-var (
-	uuidPattern    = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-	errInvalid     = errors.New("invalid")
-	errTooLarge    = errors.New("too large")
-	errReportState = errors.New("state must be idle, working, or attention")
-)
+var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
 // Request is the JSON body of a REQUEST frame.
 type Request struct {
@@ -249,7 +244,7 @@ type CreateArgs struct {
 func (a CreateArgs) Created() (time.Time, error) {
 	created, err := time.Parse(time.RFC3339Nano, a.CreatedAt)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("%w: created_at must be RFC 3339", errInvalid)
+		return time.Time{}, &Error{Code: CodeInvalid, Message: "created_at must be RFC 3339"}
 	}
 	return created, nil
 }
@@ -257,31 +252,31 @@ func (a CreateArgs) Created() (time.Time, error) {
 // Validate checks bounds.
 func (a CreateArgs) Validate() error {
 	if !uuidPattern.MatchString(a.SessionID) {
-		return fmt.Errorf("%w: session_id must be a UUID", errInvalid)
+		return &Error{Code: CodeInvalid, Message: "session_id must be a UUID"}
 	}
 	if _, err := a.Created(); err != nil {
 		return err
 	}
 	if len(a.Label) > MaxLabel || !printable(a.Label) {
-		return fmt.Errorf("%w: label", errInvalid)
+		return &Error{Code: CodeInvalid, Message: "label"}
 	}
-	if len(a.Cwd) > MaxCwd || hasNUL(a.Cwd) {
-		return fmt.Errorf("%w: cwd", errInvalid)
+	if len(a.Cwd) > MaxCwd || strings.ContainsRune(a.Cwd, '\x00') {
+		return &Error{Code: CodeInvalid, Message: "cwd"}
 	}
 	if len(a.Argv) > MaxArgv {
-		return fmt.Errorf("%w: argv", errTooLarge)
+		return &Error{Code: CodeTooLarge, Message: "argv"}
 	}
 	for _, arg := range a.Argv {
-		if len(arg) > MaxArg || hasNUL(arg) {
-			return fmt.Errorf("%w: argv entry", errInvalid)
+		if len(arg) > MaxArg || strings.ContainsRune(arg, '\x00') {
+			return &Error{Code: CodeInvalid, Message: "argv entry"}
 		}
 	}
 	if len(a.Env) > MaxEnv {
-		return fmt.Errorf("%w: env", errTooLarge)
+		return &Error{Code: CodeTooLarge, Message: "env"}
 	}
 	for k, v := range a.Env {
-		if k == "" || hasNUL(k) || hasNUL(v) || len(k)+len(v) > MaxArg {
-			return fmt.Errorf("%w: env entry", errInvalid)
+		if k == "" || strings.ContainsRune(k, '\x00') || strings.ContainsRune(v, '\x00') || len(k)+len(v) > MaxArg {
+			return &Error{Code: CodeInvalid, Message: "env entry"}
 		}
 	}
 	return validateGrid(a.Cols, a.Rows)
@@ -295,7 +290,7 @@ type SessionArgs struct {
 // Validate checks the id.
 func (a SessionArgs) Validate() error {
 	if !uuidPattern.MatchString(a.SessionID) {
-		return fmt.Errorf("%w: session_id must be a UUID", errInvalid)
+		return &Error{Code: CodeInvalid, Message: "session_id must be a UUID"}
 	}
 	return nil
 }
@@ -313,7 +308,7 @@ func (a OpenArgs) Validate() error {
 		return err
 	}
 	if a.FromOffset != nil && *a.FromOffset > MaxOffset {
-		return fmt.Errorf("%w: from_offset", errInvalid)
+		return &Error{Code: CodeInvalid, Message: "from_offset"}
 	}
 	return nil
 }
@@ -350,10 +345,10 @@ func (a InputArgs) Validate() ([]byte, error) {
 	}
 	data, err := base64.StdEncoding.DecodeString(a.Data)
 	if err != nil {
-		return nil, fmt.Errorf("%w: data is not base64", errInvalid)
+		return nil, &Error{Code: CodeInvalid, Message: "data is not base64"}
 	}
 	if len(data) > MaxInputBytes {
-		return nil, fmt.Errorf("%w: data", errTooLarge)
+		return nil, &Error{Code: CodeTooLarge, Message: "data"}
 	}
 	return data, nil
 }
@@ -394,7 +389,7 @@ func (a ReportArgs) Validate() error {
 	case ActivityIdle, ActivityWorking, ActivityAttention:
 		return nil
 	default:
-		return errReportState
+		return &Error{Code: CodeInvalid, Message: "state must be idle, working, or attention"}
 	}
 }
 
@@ -417,26 +412,11 @@ type SessionsValue struct {
 // Empty is the value of operations without data.
 type Empty struct{}
 
-// IsInvalid reports whether err is a validation failure (invalid or too large).
-func IsInvalid(err error) bool {
-	return errors.Is(err, errInvalid) || errors.Is(err, errTooLarge) || errors.Is(err, errReportState)
-}
-
-// IsTooLarge reports whether err is a size violation.
-func IsTooLarge(err error) bool {
-	return errors.Is(err, errTooLarge)
-}
-
 func validateGrid(cols, rows uint16) error {
 	if cols < MinCols || cols > MaxCols || rows < MinRows || rows > MaxRows {
-		return fmt.Errorf(
-			"%w: grid must be %d-%d columns and %d-%d rows",
-			errInvalid,
-			MinCols,
-			MaxCols,
-			MinRows,
-			MaxRows,
-		)
+		return &Error{Code: CodeInvalid, Message: fmt.Sprintf(
+			"grid must be %d-%d columns and %d-%d rows", MinCols, MaxCols, MinRows, MaxRows,
+		)}
 	}
 	return nil
 }
@@ -448,13 +428,4 @@ func printable(s string) bool {
 		}
 	}
 	return true
-}
-
-func hasNUL(s string) bool {
-	for i := range len(s) {
-		if s[i] == 0 {
-			return true
-		}
-	}
-	return false
 }

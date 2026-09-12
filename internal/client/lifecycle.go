@@ -111,6 +111,9 @@ func (runner commandRunner) mutate(
 }
 
 func (a *API) selectHost(ctx context.Context, host, profile string) (string, error) {
+	if host != "" {
+		return host, nil
+	}
 	var hosts []model.Host
 	if err := a.Do(ctx, "GET", "/v1/hosts", nil, "", &hosts); err != nil {
 		return "", err
@@ -120,12 +123,6 @@ func (a *API) selectHost(ctx context.Context, host, profile string) (string, err
 		if slices.Contains(h.ProfileIDs, profile) {
 			eligible = append(eligible, h.ID)
 		}
-	}
-	if host != "" {
-		if slices.Contains(eligible, host) {
-			return host, nil
-		}
-		return "", fmt.Errorf("host %q does not support profile %q; select --host explicitly", host, profile)
 	}
 	if len(eligible) != 1 {
 		return "", fmt.Errorf(

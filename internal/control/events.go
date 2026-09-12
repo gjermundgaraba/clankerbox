@@ -122,7 +122,7 @@ func (c *Controller) pollChanges(ctx context.Context) {
 	}
 }
 
-// machineDigest hashes the API view, so guest and auth link transitions that live
+// machineDigest hashes the API view, so guest link transitions that live
 // outside the stored row invalidate subscribers too. Observation freshness is
 // excluded: a consumer's own refetch must not produce the next event.
 func (c *Controller) machineDigest(body []byte) [sha256.Size]byte {

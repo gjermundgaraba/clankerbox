@@ -531,30 +531,73 @@ func TestCreateIdempotentAndCapacity(t *testing.T) {
 	}
 }
 
+// blockedSnapshot holds a real attachment at bootstrap while producers fill its tail.
+type blockedSnapshot struct {
+	*recorder
+
+	started chan struct{}
+	release chan struct{}
+}
+
+func (s *blockedSnapshot) SendSnapshot(data []byte) error {
+	close(s.started)
+	<-s.release
+	return s.recorder.SendSnapshot(data)
+}
+
 func TestSlowSubscriberIsDroppedNotThePTY(t *testing.T) {
 	t.Parallel()
-	m, loader := newManager(t)
-	record := create(
-		t,
-		m,
-		shell,
-		"-c",
-		`i=0; while [ $i -lt 400 ]; do head -c 65536 /dev/zero | tr '\0' 'y'; i=$((i+1)); done; printf 'FLOOD_DONE\r\n'; sleep 30`,
-	)
-	slow := newRecorder()
-	slow.fail = true
+	m, _ := newManager(t)
+	record := create(t, m, shell, "-c", `while read line; do printf 'echo:%s\r\n' "$line"; done`)
+	slow := &blockedSnapshot{recorder: newRecorder(), started: make(chan struct{}), release: make(chan struct{})}
+	release := sync.OnceFunc(func() { close(slow.release) })
+	t.Cleanup(release)
 	_, attachment, err := m.Open(protocol.OpenArgs{SessionID: record.ID}, slow)
 	if err != nil {
-		t.Fatalf("open: %v", err)
+		t.Fatal(err)
 	}
+	t.Cleanup(attachment.Stop)
 	go attachment.Run()
-	eventually(t, "flood completes with a failing viewer", func() bool {
-		return strings.Contains(screen(t, loader, m, record.ID), "FLOOD_DONE")
+	select {
+	case <-slow.started:
+	case <-time.After(waitTimeout):
+		t.Fatal("snapshot write never started")
+	}
+	for i := range 1100 {
+		state := protocol.ActivityWorking
+		if i%2 == 0 {
+			state = protocol.ActivityAttention
+		}
+		if err = m.Report(protocol.ReportArgs{SessionID: record.ID, State: state}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Another viewer and the PTY continue while the first is still blocked.
+	fast := newRecorder()
+	_, fastAttachment, err := m.Open(protocol.OpenArgs{SessionID: record.ID}, fast)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(fastAttachment.Stop)
+	go fastAttachment.Run()
+	send(t, m, record.ID, "continued\n")
+	eventually(t, "PTY and healthy viewer continue", func() bool {
+		return strings.Contains(fast.text(), "echo:continued")
 	})
+	release()
 	select {
 	case <-slow.closed:
 	case <-time.After(waitTimeout):
-		t.Fatal("failing sink was not closed")
+		t.Fatal("overflowed subscriber was not closed")
+	}
+	slow.mu.Lock()
+	defer slow.mu.Unlock()
+	if len(slow.events) == 0 {
+		t.Fatal("missing overflow notice")
+	}
+	gap, ok := slow.events[len(slow.events)-1].(protocol.GapEvent)
+	if !ok || gap.Reason != "overflow" || gap.SessionID != record.ID {
+		t.Fatalf("missing final overflow notice: %+v", slow.events[len(slow.events)-1])
 	}
 }
 
@@ -735,17 +778,6 @@ func TestActivityChangesReachAttachments(t *testing.T) {
 	})
 }
 
-// TestMain constructs one runtime before parallel tests so wazero's lazily
-// cached version string is written once, not raced by concurrent loaders.
-func TestMain(m *testing.M) {
-	loader, err := vt.NewLoader(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	_ = loader.Close(context.Background())
-	os.Exit(m.Run())
-}
-
 func TestActivityUsesShellsAndExplicitHooksNotAgentNames(t *testing.T) {
 	t.Parallel()
 	loader := newLoader(t)
@@ -785,31 +817,32 @@ func main() { _, _ = io.Copy(os.Stdout, os.Stdin) }
 	if output, buildErr := build.CombinedOutput(); buildErr != nil {
 		t.Fatalf("build fixture: %v %s", buildErr, output)
 	}
+	var record protocol.Session
 	for _, name := range []string{"codex", "claude", "ordinary-tool"} {
 		path := filepath.Join(t.TempDir(), name)
 		if err = os.Link(binary, path); err != nil {
 			t.Fatal(err)
 		}
-		record := create(t, m, path)
+		record = create(t, m, path)
 		send(t, m, record.ID, "activity-output\n")
 		eventually(t, "unknown activity for "+name, func() bool {
 			r := inspect(t, m, record.ID)
 			return r.Foreground != nil && r.Foreground.Command == name &&
 				r.Activity.State == protocol.ActivityUnknown && r.Activity.Source == protocol.SourceProcess
 		})
-		if err = m.Report(protocol.ReportArgs{SessionID: record.ID, State: protocol.ActivityWorking}); err != nil {
-			t.Fatal(err)
-		}
-		if activity := inspect(t, m, record.ID).Activity; activity.State != protocol.ActivityWorking ||
-			activity.Source != protocol.SourceHook {
-			t.Fatalf("explicit hook lost: %+v", activity)
-		}
-		clock.Lock()
-		now = now.Add(301 * time.Second)
-		clock.Unlock()
-		eventually(t, "expired hook", func() bool {
-			activity := inspect(t, m, record.ID).Activity
-			return activity.State == protocol.ActivityUnknown && activity.Source == protocol.SourceProcess
-		})
 	}
+	if err = m.Report(protocol.ReportArgs{SessionID: record.ID, State: protocol.ActivityWorking}); err != nil {
+		t.Fatal(err)
+	}
+	if activity := inspect(t, m, record.ID).Activity; activity.State != protocol.ActivityWorking ||
+		activity.Source != protocol.SourceHook {
+		t.Fatalf("explicit hook lost: %+v", activity)
+	}
+	clock.Lock()
+	now = now.Add(301 * time.Second)
+	clock.Unlock()
+	eventually(t, "expired hook", func() bool {
+		activity := inspect(t, m, record.ID).Activity
+		return activity.State == protocol.ActivityUnknown && activity.Source == protocol.SourceProcess
+	})
 }

@@ -135,7 +135,7 @@ func TestLinuxControllerDependencyAndUnavailableSource(t *testing.T) {
 	cfg := config()
 	cfg.Profiles[0] = model.Profile{
 		ID:        "linux-v1",
-		Runtime:   "smolvm",
+		Runtime:   smolvmRuntime,
 		OS:        "linux",
 		Arch:      "amd64",
 		CPU:       2,

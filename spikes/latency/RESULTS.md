@@ -23,11 +23,16 @@ Workspace disk retention is a separate capability and was tested independently;
 this caveat does not mean that smolvm's workspace disk is volatile. Cocoon's
 file-backed snapshots were not subjected to a reboot or power-loss recovery test.
 
-Sources: [memfd allocation](/Users/example/ws/pers/not-mine/smolvm/libkrun/src/vmm/src/builder.rs:1849),
-[fork checkpoint handler](/Users/example/ws/pers/not-mine/smolvm/libkrun/src/libkrun/src/lib.rs:1253),
-[live-FD restore](/Users/example/ws/pers/not-mine/smolvm/libkrun/src/libkrun/src/lib.rs:1409),
-[separate portable restore](/Users/example/ws/pers/not-mine/smolvm/libkrun/src/libkrun/src/lib.rs:1328),
-[Cocoon snapshot files](../cocoon/.work/cocoon/hypervisor/firecracker/snapshot.go).
+Sources: [memfd allocation](https://github.com/smol-machines/libkrun/blob/dbf5f235047333ac7b831b5a32497aa8c1d46663/src/vmm/src/builder.rs#L1849),
+[fork checkpoint handler](https://github.com/smol-machines/libkrun/blob/dbf5f235047333ac7b831b5a32497aa8c1d46663/src/libkrun/src/lib.rs#L1253),
+[live-FD restore](https://github.com/smol-machines/libkrun/blob/dbf5f235047333ac7b831b5a32497aa8c1d46663/src/libkrun/src/lib.rs#L1409),
+[separate portable restore](https://github.com/smol-machines/libkrun/blob/dbf5f235047333ac7b831b5a32497aa8c1d46663/src/libkrun/src/lib.rs#L1328),
+[Cocoon snapshot files](https://github.com/cocoonstack/cocoon/blob/23a05603479a7552213adfb5fa25f2de7b2dbaf9/hypervisor/firecracker/snapshot.go).
+
+Source links pin the audited upstream revisions. The measured libkrun also
+includes the checked-in [DAX fork correction](../smolvm/libkrun-dax-fork.patch);
+[RAM_FIX.md](../smolvm/RAM_FIX.md) records its provenance and bounded validation.
+Line anchors refer to the unpatched pin, not an author-local working tree.
 
 ## Startup measurements
 
@@ -117,10 +122,10 @@ does not support the requested reflinks, so the disk path falls back to copying
 allocated extents while preserving holes. Restoring children from the resulting
 checkpoint is a separate, much shorter operation.
 
-Sources: [Cocoon capture ordering](../cocoon/.work/cocoon/hypervisor/firecracker/snapshot.go),
-[disk capture](../cocoon/.work/cocoon/hypervisor/disks.go),
-[sparse-copy fallback](../cocoon/.work/cocoon/utils/sparse_linux.go),
-[snapshot persistence](../cocoon/.work/cocoon/snapshot/localfile/localfile.go).
+Sources: [Cocoon capture ordering](https://github.com/cocoonstack/cocoon/blob/23a05603479a7552213adfb5fa25f2de7b2dbaf9/hypervisor/firecracker/snapshot.go),
+[disk capture](https://github.com/cocoonstack/cocoon/blob/23a05603479a7552213adfb5fa25f2de7b2dbaf9/hypervisor/disks.go),
+[sparse-copy fallback](https://github.com/cocoonstack/cocoon/blob/23a05603479a7552213adfb5fa25f2de7b2dbaf9/utils/sparse_linux.go),
+[snapshot persistence](https://github.com/cocoonstack/cocoon/blob/23a05603479a7552213adfb5fa25f2de7b2dbaf9/snapshot/localfile/localfile.go).
 
 Patched smolvm's first capture can seal its existing RAM backing and let the
 source continue through private copy-on-write mappings. A later capture must
@@ -130,9 +135,9 @@ pages, and copies nonzero runs. The source resumes **before** that copy finishes
 so capture-command duration is not equivalent to source interruption. A 64-MiB
 workload still entails a scan over roughly 4 GiB of configured RAM on that path.
 
-Sources: [RAM generations](/Users/example/ws/pers/not-mine/smolvm/libkrun/src/vmm/src/snapshot.rs:773),
-[resume before copy completion](/Users/example/ws/pers/not-mine/smolvm/libkrun/src/vmm/src/lib.rs:1251),
-[eager scan](/Users/example/ws/pers/not-mine/smolvm/libkrun/src/vmm/src/snapshot.rs:1183),
+Sources: [RAM generations](https://github.com/smol-machines/libkrun/blob/dbf5f235047333ac7b831b5a32497aa8c1d46663/src/vmm/src/snapshot.rs#L773),
+[resume before copy completion](https://github.com/smol-machines/libkrun/blob/dbf5f235047333ac7b831b5a32497aa8c1d46663/src/vmm/src/lib.rs#L1251),
+[eager scan](https://github.com/smol-machines/libkrun/blob/dbf5f235047333ac7b831b5a32497aa8c1d46663/src/vmm/src/snapshot.rs#L1183),
 [retained DAX correction](../smolvm/RAM_FIX.md).
 
 ## Source interruption: important limit
@@ -149,7 +154,7 @@ concurrent state queries during snapshot creation, leaving timeout gaps in the
 state observer. We retain guest-observed heartbeat gaps and raw state samples,
 but do not rank the runtimes by a falsely precise vCPU-pause number.
 
-Sources: [smolvm KVM clock adjustment](/Users/example/ws/pers/not-mine/smolvm/libkrun/src/vmm/src/linux/vstate.rs:1017),
+Sources: [smolvm KVM clock adjustment](https://github.com/smol-machines/libkrun/blob/dbf5f235047333ac7b831b5a32497aa8c1d46663/src/vmm/src/linux/vstate.rs#L1017),
 [calibration harness](calibrate.py), [measurement boundaries](README.md).
 
 ## Concurrent means concurrent, not four sequential reboots
