@@ -49,9 +49,9 @@ use native flag parsing and generated help; help bypasses configuration and
 service startup. Machine names are positional, with no `--name` alias. Resource
 output is human-readable by default; global `--json` selects structured stdout.
 Executable errors are plain text on stderr.
-CLI lifecycle and session-list commands use authenticated HTTP; events use SSE.
-Both use the same verified transport, with ambient proxies and redirects disabled.
-SSE removes only the ordinary request timeout; cancellation still ends the stream.
+CLI lifecycle and session-list commands use authenticated HTTP over the same
+verified transport, with ambient proxies and redirects disabled. Lifecycle waits
+poll operation status.
 An explicit creation host is sent directly to the controller. Only an omitted host
 requires discovery, so a discovery change cannot prevent an idempotent retry from
 returning its already accepted operation.

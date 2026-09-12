@@ -1,11 +1,9 @@
 package client
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"text/tabwriter"
@@ -37,15 +35,6 @@ func (streams commandStreams) addSessionCommands(root *cli.Command) {
 			-1,
 			func(ctx context.Context, r commandRunner, c *cli.Command) error {
 				return r.setLabels(ctx, c.Args().Slice())
-			},
-		),
-		command(
-			"events",
-			"Print committed change notifications until interrupted",
-			" ",
-			0,
-			func(ctx context.Context, r commandRunner, _ *cli.Command) error {
-				return r.api.Stream(ctx, "/v1/events", r.streams.Out)
 			},
 		),
 	)
@@ -93,36 +82,4 @@ func (runner commandRunner) setLabels(ctx context.Context, args []string) error 
 		return err
 	}
 	return runner.output(&updated)
-}
-
-// Stream copies a long-lived text response to out line by line until ctx ends.
-func (a *API) Stream(ctx context.Context, path string, out io.Writer) error {
-	req, err := a.request(ctx, http.MethodGet, path, nil, "")
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	httpClient := *a.http
-	httpClient.Timeout = 0
-	res, err := httpClient.Do(req)
-	if err != nil {
-		return errors.New("API request failed (transport or TLS error)")
-	}
-	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("API returned HTTP %d", res.StatusCode)
-	}
-	scanner := bufio.NewScanner(res.Body)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if after, ok := strings.CutPrefix(line, "data: "); ok {
-			if _, err = fmt.Fprintln(out, after); err != nil {
-				return err
-			}
-		}
-	}
-	if err = scanner.Err(); err != nil && ctx.Err() == nil {
-		return err
-	}
-	return nil
 }

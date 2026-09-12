@@ -2,17 +2,17 @@
 
 This document describes the current terminal-session contract and Clankerdesk
 integration. The guest daemon, protocol, controller link, endpoints, labels,
-events, CLI, and host preparation are implemented with unit and integration
+CLI, and host preparation are implemented with unit and integration
 tests. The dated [connection-removal completion record](client-connection-removal-plan.md#completion-record--2026-09-11)
 is the authority for completed live qualification, including its stopped-session correction; it does not qualify later
 changes or imply that every consumer/failure-matrix scenario below was run live.
 
 Clankerbox has a guest-side daemon that owns terminal sessions inside each
 machine, a controller path that exposes those sessions to an authenticated API
-caller, and small machine-record additions (labels, guest status, change
-notifications). A terminal session survives every network hop, controller
-restart, and consumer restart. It ends only when its process exits, when a
-caller ends it, or when the guest daemon or machine stops.
+caller, and small machine-record additions (labels and guest status). A terminal
+session survives every network hop, controller restart, and consumer restart.
+It ends only when its process exits, when a caller ends it, or when the guest
+daemon or machine stops.
 
 ## Trust boundary
 
@@ -404,7 +404,7 @@ protocol.
   suspended | incompatible | unreachable | unavailable, incarnation?, protocol?,
   daemon_version?, wasm_sha256?, reason?}`. `ready`
   means a successful `hello`. These are materialized views of in-memory state
-  and are included in machine change notifications.
+  returned with machine inspection.
 - `POST /v1/machines/{id}/labels` with `{"labels": {...}}` replaces the label
   map (keys and values ≤ 64 printable characters, ≤ 32 entries, `{}` clears).
   Labels ride in the machine body and the replacement runs under the
@@ -415,14 +415,6 @@ protocol.
   the request adds to or overrides them; request labels never clear inherited
   ones. `GET /v1/machines?label=k=v` requires every repeated pair to match a
   present label.
-- `GET /v1/events` is a server-sent-event stream of change notifications:
-  `{"type": "machine", "id"}` and `{"type": "operation", "id"}` after the
-  corresponding transaction committed or the machine's guest link view
-  changed, plus `{"type": "reset"}` as the first
-  message so a subscriber refetches inventory after subscribing. Events carry
-  ids only; consumers refetch. Subscribers are bounded; an overflowing
-  subscriber is closed and must resubscribe. Heartbeats every 15 s keep the
-  connection past the server idle timeout.
 
 ### Guest binary delivery
 
@@ -449,8 +441,7 @@ is unknown; inspect its accepted operation instead.
 ### CLI
 
 `clankerbox sessions MACHINE` lists sessions. `clankerbox labels MACHINE k=v …`
-sets labels. `clankerbox events` prints the change stream. No interactive
-terminal client is added.
+sets labels. No interactive terminal client is added.
 
 ## Clankerdesk
 
@@ -542,7 +533,7 @@ terminal client is added.
   `machines.stop`, `machines.delete`, and `clankerbox.bind`, which calls the
   terminal capability. Machine shapes show machine state only.
   Cards poll inspection through the desk, which coalesces concurrent and
-  recent inspections per machine; the desk does not consume `/v1/events`.
+  recent inspections per machine.
 - `ssh2` and `node-pty` leave the server. Tests use an in-process fake
   controller plus a fake guest daemon written against the conformance fixture,
   and terminal-core restores a Go-produced snapshot fixture.
@@ -588,7 +579,7 @@ terminal client is added.
   real attachment test verifies that output overflow sheds only that viewer while
   the PTY and another viewer continue.
 - Controller tests use fake SSH peers and a real daemon for link lifecycle,
-  copy reservations, stream bridging, labels, notifications and guest status.
+  copy reservations, stream bridging, labels and guest status.
 - Further failure-matrix qualification includes simultaneous first proxies,
   stale-socket recovery, explicit PID/start-time mismatch, large paste during an
   output flood and exhausted reply capacity. These are not claimed as existing

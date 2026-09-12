@@ -62,9 +62,9 @@ const helpFlag = "--help"
 
 const sessionsCommand = "sessions"
 
-func TestRetiredConnectionsAreUnknown(t *testing.T) {
+func TestRetiredCommandsAreUnknown(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"ssh", "proxy", "exec", "vnc", "ssh-config", "connect", "ports", "url", "open-url", "_owner", "herdr", "auth"} {
+	for _, name := range []string{"ssh", "proxy", "exec", "vnc", "ssh-config", "connect", "ports", "url", "open-url", "_owner", "herdr", "auth", "events"} {
 		var out, diagnostics bytes.Buffer
 		err := client.Run(
 			t.Context(),

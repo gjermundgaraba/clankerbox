@@ -16,14 +16,12 @@ import (
 const (
 	sessionUpgrade     = "clankerbox-session"
 	sessionListTimeout = 15 * time.Second
-	eventsHeartbeat    = 15 * time.Second
 )
 
 func (c *Controller) registerGuestRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/machines/{id}/sessions/stream", c.sessionStream)
 	mux.HandleFunc("GET /v1/machines/{id}/sessions", c.listSessions)
 	mux.HandleFunc("POST /v1/machines/{id}/labels", c.setLabels)
-	mux.HandleFunc("GET /v1/events", c.serveEvents)
 }
 
 // streamMachine validates the prerequisites shared by upgraded streams.
@@ -178,43 +176,4 @@ func (c *Controller) setLabels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c.decorate(m))
-}
-
-// serveEvents streams committed change notifications as server-sent events.
-func (c *Controller) serveEvents(w http.ResponseWriter, r *http.Request) {
-	changes, cancel := c.changes.subscribe()
-	defer cancel()
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	controller := http.NewResponseController(w)
-	write := func(payload string) bool {
-		_ = controller.SetWriteDeadline(time.Now().Add(eventsHeartbeat))
-		if _, err := fmt.Fprint(w, payload); err != nil {
-			return false
-		}
-		return controller.Flush() == nil
-	}
-	if !write("data: {\"type\":\"reset\"}\n\n") {
-		return
-	}
-	heartbeat := time.NewTicker(eventsHeartbeat)
-	defer heartbeat.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-heartbeat.C:
-			if !write(": heartbeat\n\n") {
-				return
-			}
-		case change, ok := <-changes:
-			if !ok {
-				return
-			}
-			if !write("data: {\"type\":\"" + change.Kind + "\",\"id\":\"" + change.ID + "\"}\n\n") {
-				return
-			}
-		}
-	}
 }

@@ -48,7 +48,6 @@ clankerbox checkpoint create dev
 clankerbox restore CHECKPOINT_ID recovered
 clankerbox sessions dev
 clankerbox labels dev team=core purpose=review
-clankerbox events
 ```
 
 Create/start/stop/delete/fork and checkpoint create/delete/restore wait for their
@@ -220,8 +219,8 @@ drop, controller restart, and consumer restart. The controller keeps one SSH
 link per ready machine using its own terminal key, which the guest accepts only
 as the forced command `clankerbox-guest proxy`. Consumers reach the daemon
 through `GET /v1/machines/{id}/sessions/stream` (HTTP upgrade
-`clankerbox-session`), inspect `guest` status on the machine record, set
-`labels`, and follow `GET /v1/events`. Deploy `bin/clankerbox-guest-linux-amd64`
+`clankerbox-session`), inspect `guest` status on the machine record, and set
+`labels`. Deploy `bin/clankerbox-guest-linux-amd64`
 and `bin/clankerbox-guest-darwin-arm64` under `<host root>/guest/` next to the
 host helper; preparation installs the matching binary into each guest when its
 digest differs. The protocol, contract, and failure matrix are in

@@ -63,7 +63,6 @@ func problem(status int, code, message string) error { return &APIError{code, me
 // Controller owns durable lifecycle intent and serializes operations per host.
 type Controller struct {
 	guest     *guestRuntime
-	changes   *changeHub
 	logger    *slog.Logger
 	db        *sql.DB
 	lock      *statefs.Lock
@@ -119,7 +118,6 @@ func Open(path string, cfg model.Config, transport Transport) (*Controller, erro
 	}
 	return &Controller{
 		guest:     guest,
-		changes:   newChangeHub(),
 		logger:    slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		db:        db,
 		lock:      lock,
@@ -649,7 +647,6 @@ func (c *Controller) List(ctx context.Context) ([]model.Machine, error) {
 func (c *Controller) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	wg.Go(func() { c.runGuest(ctx) })
-	wg.Go(func() { c.runChanges(ctx) })
 	for _, h := range c.cfg.Hosts {
 		wg.Add(1)
 		go func(h model.Host) {

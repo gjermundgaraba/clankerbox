@@ -105,7 +105,7 @@ removing its state directory.
 ## Scope
 
 The `local` profile supports the existing machine's start/stop/delete lifecycle,
-labels, events and guest sessions. Its CPU/RAM values are admission bookkeeping
+labels and guest sessions. Its CPU/RAM values are admission bookkeeping
 for one local machine, not resource limits. Forks and checkpoints are explicitly
 unsupported. There is no VM isolation, Linux emulation, disk branching or RAM
 continuation across daemon shutdown.

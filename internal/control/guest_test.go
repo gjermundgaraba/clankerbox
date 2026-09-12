@@ -329,9 +329,6 @@ func TestGuestHTTPEndpoints(t *testing.T) {
 	f := setupGuest(t)
 	c := f.controller
 	waitGuestReady(t, c, f.machine.ID)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go c.runChanges(ctx)
 	handler, err := c.Handler([]byte(guestTestToken))
 	if err != nil {
 		t.Fatal(err)
@@ -369,7 +366,11 @@ func TestGuestHTTPEndpoints(t *testing.T) {
 			t.Fatalf("filter %s: %d %s", query, status, body)
 		}
 	}
-	testEventsAndUpgrade(t, server, f)
+	status, body = guestRequest(t, server, http.MethodGet, "/v1/events", "")
+	if status != http.StatusNotFound {
+		t.Fatalf("retired events endpoint %d %s", status, body)
+	}
+	testSessionUpgrade(t, server, f)
 }
 
 func guestRequest(t *testing.T, server *httptest.Server, method, path, body string) (int, []byte) {
@@ -388,24 +389,8 @@ func guestRequest(t *testing.T, server *httptest.Server, method, path, body stri
 	return res.StatusCode, out
 }
 
-func testEventsAndUpgrade(t *testing.T, server *httptest.Server, f guestFixture) {
+func testSessionUpgrade(t *testing.T, server *httptest.Server, f guestFixture) {
 	t.Helper()
-	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/v1/events", nil)
-	req.Header.Set("Authorization", "Bearer "+guestTestToken)
-	res, err := http.DefaultClient.Do(req)
-	if err != nil || res.StatusCode != http.StatusOK {
-		t.Fatalf("events: %v", err)
-	}
-	defer func() { _ = res.Body.Close() }()
-	events := bufio.NewReader(res.Body)
-	line, _ := events.ReadString('\n')
-	if !strings.Contains(line, `"reset"`) {
-		t.Fatalf("first event %q", line)
-	}
-	if _, err = f.controller.SetLabels(t.Context(), f.machine.ID, map[string]string{"a": "b"}); err != nil {
-		t.Fatalf("set labels: %v", err)
-	}
-	awaitMachineEvent(t, events, f.machine.ID, "a label change")
 	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", strings.TrimPrefix(server.URL, "http://"))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -443,25 +428,4 @@ func testEventsAndUpgrade(t *testing.T, server *httptest.Server, f guestFixture)
 		t.Fatalf("unexpected hello %+v", guest.Hello())
 	}
 	_ = guest.Close()
-	// A link transition lives outside the stored row and must still invalidate.
-	f.controller.guest.mu.Lock()
-	link := f.controller.guest.links[f.machine.ID]
-	f.controller.guest.mu.Unlock()
-	link.set(guestStatusUnreachable, "test transition")
-	awaitMachineEvent(t, events, f.machine.ID, "a guest link transition")
-}
-
-func awaitMachineEvent(t *testing.T, events *bufio.Reader, machineID, after string) {
-	t.Helper()
-	deadline := time.Now().Add(guestTestTimeout)
-	for time.Now().Before(deadline) {
-		line, err := events.ReadString('\n')
-		if err != nil {
-			t.Fatalf("events ended: %v", err)
-		}
-		if strings.Contains(line, `"machine"`) && strings.Contains(line, machineID) {
-			return
-		}
-	}
-	t.Fatalf("no machine change event after %s", after)
 }
