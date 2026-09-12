@@ -64,9 +64,9 @@ func (runner commandRunner) listSessions(ctx context.Context, name string) error
 		return jsonOut(runner.streams.Out, sessions)
 	}
 	w := tabwriter.NewWriter(runner.streams.Out, 0, 0, tablePadding, ' ', 0)
-	_, _ = fmt.Fprintln(w, "ID\tSTATUS\tACTIVITY\tSIZE\tLABEL")
+	_, _ = fmt.Fprintln(w, "ID\tSTATUS\tSIZE\tLABEL")
 	for _, s := range sessions {
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%dx%d\t%s\n", s.ID, s.Status, s.Activity.State, s.Cols, s.Rows, s.Label)
+		_, _ = fmt.Fprintf(w, "%s\t%s\t%dx%d\t%s\n", s.ID, s.Status, s.Cols, s.Rows, s.Label)
 	}
 	return w.Flush()
 }

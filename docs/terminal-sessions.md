@@ -49,7 +49,7 @@ clankerbox-server (machine gating, one SSH link per ready machine)
 clankerbox-guest proxy  (stdio ⇄ $HOME/.clankerbox/guest.sock)
    │  Unix socket, same user, SO_PEERCRED / LOCAL_PEERCRED
    ▼
-clankerbox-guest daemon (PTYs, Ghostty VT, ring, sessions, activity)
+clankerbox-guest daemon (PTYs, Ghostty VT, ring, sessions)
 ```
 
 The controller bridges upgraded streams without parsing them. It does run a
@@ -99,11 +99,10 @@ Session shells never inherit the lock, socket, or log descriptors.
 Each session holds:
 
 - A PTY master set non-blocking and a child started in a new session with the
-  PTY as its controlling terminal, `TERM=xterm-256color`,
-  `CLANKERBOX_SESSION_ID=<id>`, and the requested `cwd` created with
-  `mkdir -p`. Default command is `$SHELL -l`, falling back to `/bin/sh -l`. No
-  machine id is placed in the environment because copied processes keep their
-  parent's environment.
+  PTY as its controlling terminal, `TERM=xterm-256color`, and the requested
+  `cwd` created with `mkdir -p`. Default command is `$SHELL -l`, falling back
+  to `/bin/sh -l`. No machine id is placed in the environment because copied
+  processes keep their parent's environment.
 - The authoritative Ghostty VT: the pinned `ghostty-vt.wasm` executed with
   wazero, one instance per session. `internal/guest/vt` vendors the artifact
   with its provenance; its sha256 is a test-pinned constant and is advertised in
@@ -138,7 +137,7 @@ guest VT's write-to-PTY callback, which only copies bytes into the reply queue
 and never re-enters the VT or takes the session mutex. Replies happen once,
 inside the machine, independent of viewers.
 
-Zero viewers change nothing: parsing, ring, and activity continue.
+Zero viewers change nothing: parsing and ring retention continue.
 
 ### Process state machine
 
@@ -182,25 +181,7 @@ Retention is longer than that horizon, so a session this daemon ran is still
 remembered when its create expires and a repeated create never starts a second
 process.
 
-### Activity
-
-Every session carries `activity: {state, source, since}` with
-`state ∈ idle | working | attention | unknown | exited` and daemon-owned
-`source ∈ hook | process | none`. Observations are advisory.
-
-- A hook report owns the state for 300 s after the last report.
-- Below that, process observation reads the PTY foreground process group. A
-  shell in the foreground is `idle`. Every other foreground process is
-  `unknown`, regardless of its name or output. Applications can report
-  `working` or `attention` explicitly through the generic hook.
-- Process exit sets `exited` immediately, overriding a hook TTL.
-
-Hooks report through `clankerbox-guest report <state>` inside the guest, which
-reads `CLANKERBOX_SESSION_ID` from the environment and sends `session.report`.
-It reports hook state only; ranking is the daemon's. OSC progress and
-notification signals are a later source.
-
-## Wire protocol, revision 2
+## Wire protocol, revision 3
 
 One framed byte stream, carrier independent. Consumers speak it to the guest
 through the controller; the guest proxy speaks it over stdio; the daemon speaks
@@ -238,7 +219,7 @@ an operation's normal outcome (input status) are successful typed values;
 The daemon sends a `hello` event first on every connection:
 
 ```json
-{"event": "hello", "protocol": 2,
+{"event": "hello", "protocol": 3,
  "incarnation": "<uuid>", "boot_id": "<id>", "daemon_version": "…",
  "os": "linux", "user": "root", "wasm_sha256": "93fb…", "max_sessions": 48}
 ```
@@ -261,9 +242,7 @@ the wire revision plus the engine artifact.
  "cols": 80, "rows": 24, "status": "running", "exit_code": null, "signal": null,
  "pid": 1234, "created_at": "…", "ended_at": null,
  "offset": 10240, "retained_from": 0, "last_resize_offset": null,
- "incarnation": "<uuid>", "reply_overflow": 0,
- "activity": {"state": "unknown", "source": "process", "since": "…"},
- "foreground": {"pid": 1300, "command": "python3"}}
+ "incarnation": "<uuid>", "reply_overflow": 0}
 ```
 
 ### Operations
@@ -272,11 +251,10 @@ the wire revision plus the engine artifact.
 | --- | --- | --- |
 | `session.create` | `session_id` (caller-minted UUID), `label?` ≤ 200, `cwd?` ≤ 4096, `argv?`, `env?` ≤ 64 entries, `cols` 2–500, `rows` 1–300, `created_at` (RFC 3339, when the caller decided to create) | `{session}` |
 | `session.list` | | `{sessions}` |
-| `session.open` | `session_id`, `from_offset?`, `from_incarnation?` | `{mode, offset, session, snapshot_bytes?, view?}`; modes `resume` and `snapshot` are followed by stream frames on this connection, including ordered `session` events for this session's activity, foreground, and exit; `ended` with a view is followed by the view's text bytes; `unavailable` is complete |
+| `session.open` | `session_id`, `from_offset?`, `from_incarnation?` | `{mode, offset, session, snapshot_bytes?, view?}`; modes `resume` and `snapshot` are followed by stream frames on this connection, including ordered `session` events for this session's exit; `ended` with a view is followed by the view's text bytes; `unavailable` is complete |
 | `session.input` | `session_id`, `data` base64 ≤ 256 KiB decoded | `{status: accepted \| refused, reason?}` |
 | `session.resize` | `session_id`, `cols`, `rows` | `{session}` |
 | `session.end` | `session_id` | `{session}` |
-| `session.report` | `session_id`, `state ∈ idle, working, attention` | `{}` |
 
 Error codes: `not_found`, `not_running`, `invalid`, `too_large`, `conflict`,
 `already_attached`, `capacity`, `expired`, `internal`. Only `capacity` is
@@ -559,11 +537,10 @@ terminal client is added.
   reply is resolved by listing machines (live names are unique and
   desk-created machines carry the workspace label) or by reading the operation
   whose id the card keeps. The `clankerbox` extension shows machines as canvas
-  shapes with state, observation health, and activity and exposes
+  shapes with state and observation health and exposes
   `machines.list`, `machines.create`, `machines.fork`, `machines.start`,
   `machines.stop`, `machines.delete`, and `clankerbox.bind`, which calls the
-  terminal capability. Machine shapes show machine state only; activity stays
-  on terminal shapes in v1.
+  terminal capability. Machine shapes show machine state only.
   Cards poll inspection through the desk, which coalesces concurrent and
   recent inspections per machine; the desk does not consume `/v1/events`.
 - `ssh2` and `node-pty` leave the server. Tests use an in-process fake
@@ -596,8 +573,6 @@ terminal client is added.
 - Daemon upgrade without ending sessions: PTY descriptor handoff between daemon
   generations, plus an on-disk journal so the ring survives.
 - Explicit adoption of copied or externally created sessions into a workspace.
-- Additional activity sources: OSC 9;4 progress, OSC 777 notifications, and
-  Ghostty shell-integration prompt marks, which also enable last-command reads.
 - TCP streams into the guest through the same link for browsers and MCP servers.
 - Read-only attachments and history range reads.
 
@@ -606,11 +581,11 @@ terminal client is added.
 - Guest tests cover framing and message fixtures; snapshot restoration and VT
   replies; ring replay across resize; input admission and refusal after exit;
   exit/final-view handling; singleton ownership and proxy shutdown; create
-  idempotency, capacity, expiry and retention; activity hooks and process-name
-  independence; logged manifest failures. Real PTYs exercise the process boundary.
+  idempotency, capacity, expiry and retention; logged manifest failures. Real
+  PTYs exercise the process boundary.
 - Deterministic subscriber tests check exact byte/item queue limits, ordered
   resize/output delivery, and prefix release on success and failure. A blocked
-  real attachment test verifies that event overflow sheds only that viewer while
+  real attachment test verifies that output overflow sheds only that viewer while
   the PTY and another viewer continue.
 - Controller tests use fake SSH peers and a real daemon for link lifecycle,
   copy reservations, stream bridging, labels, notifications and guest status.

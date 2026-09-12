@@ -13,7 +13,7 @@ import (
 
 // Revision is the one supported wire revision, advertised in hello and
 // compared exactly by every consumer.
-const Revision = 2
+const Revision = 3
 
 // Frame kinds.
 const (

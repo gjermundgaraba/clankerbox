@@ -8,6 +8,10 @@ Credentials configured inside a guest may be captured in its disk or RAM
 snapshots. Treat those snapshots/backups as sensitive; Clankerbox no longer
 provides external credential storage or centralized provider revocation.
 
+The later wire-revision-3 cutover also removed generic activity reporting and
+foreground-process metadata. References to hooks below describe the historical
+verification run, not the current API.
+
 ## Removal inventory
 
 - Deleted the credential broker, its encrypted store, all three production
@@ -15,8 +19,7 @@ provides external credential storage or centralized provider revocation.
 - Deleted host auth preparation, launchers, GitHub Git/shell configuration,
   server encryption-key configuration, and the machine `auth_relay` view.
 - Removed all 17 agent-command heuristics, the two launcher aliases, and their
-  output-timing state. Shells remain idle; other processes have unknown activity
-  unless an application reports state through the generic hook.
+  output-timing state.
 - Removed the auth-broker experiments (including experimental Pi support),
   the real-agent workload harness, provider-specific Cocoon/Cube/smolvm
   experiments and evidence, and their setup/validation documents.
@@ -25,8 +28,8 @@ provides external credential storage or centralized provider revocation.
 Shared guest-link eligibility, the SSH stream adapter, guest preparation, and
 OS-user constants were moved/renamed directly. Guest-link suspension before
 memory copies, operation recovery, API bearer authentication, pinned SSH
-identities, file permissions, generic activity hooks, ordinary Git, and
-application-neutral runtime experiments remain supported.
+identities, file permissions, ordinary Git, and application-neutral runtime
+experiments remain supported.
 
 The unrelated protected VM named `codex-macos-tahoe-xcodegen-base` remains named
 in historical inventories and an ownership-rejection test: it is not a product

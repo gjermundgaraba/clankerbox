@@ -204,23 +204,14 @@ func exampleSessions() (protocol.Session, protocol.Session, protocol.Session) {
 		RetainedFrom:     0,
 		LastResizeOffset: &lastResize,
 		Incarnation:      incarnation,
-		Activity: protocol.Activity{
-			State:  protocol.ActivityUnknown,
-			Source: protocol.SourceProcess,
-			Since:  "2026-09-09T12:00:01Z",
-		},
-		Foreground: &protocol.Foreground{PID: 1300, Command: "python3"},
 	}
 	exited := running
 	exited.Status = protocol.StatusExited
 	exited.ExitCode = &code
 	exited.EndedAt = &ended
-	exited.Foreground = nil
-	exited.Activity = protocol.Activity{State: protocol.ActivityExited, Source: protocol.SourceProcess, Since: ended}
 	lost := exited
 	lost.Status = protocol.StatusLost
 	lost.ExitCode = nil
-	lost.Activity.Source = protocol.SourceNone
 	return running, exited, lost
 }
 
@@ -240,7 +231,6 @@ func exampleMessages() messagesFile {
 			{protocol.OpSessionInput, protocol.InputArgs{SessionID: id, Data: "aGkK"}},
 			{protocol.OpSessionResize, protocol.ResizeArgs{SessionID: id, Cols: 100, Rows: 30}},
 			{protocol.OpSessionEnd, protocol.SessionArgs{SessionID: id}},
-			{protocol.OpSessionReport, protocol.ReportArgs{SessionID: id, State: protocol.ActivityAttention}},
 		},
 		Values: []namedValue{
 			{protocol.OpSessionCreate, "created", protocol.SessionValue{Session: running}},
@@ -275,7 +265,6 @@ func exampleMessages() messagesFile {
 			},
 			{protocol.OpSessionResize, "resized", protocol.SessionValue{Session: running}},
 			{protocol.OpSessionEnd, "ended", protocol.SessionValue{Session: exited}},
-			{protocol.OpSessionReport, "reported", protocol.Empty{}},
 		},
 		Events: []namedEvent{
 			{protocol.EventHello, protocol.Hello{
@@ -352,8 +341,6 @@ func TestValidation(t *testing.T) {
 	input.Data = base64.StdEncoding.EncodeToString(make([]byte, protocol.MaxInputBytes+1))
 	_, err = input.Validate()
 	assertValidation(t, err, protocol.CodeTooLarge, "data")
-	report := protocol.ReportArgs{SessionID: good.SessionID, State: "asleep"}
-	assertValidation(t, report.Validate(), protocol.CodeInvalid, "state must be idle, working, or attention")
 }
 
 func assertValidation(t *testing.T, err error, code, message string) {

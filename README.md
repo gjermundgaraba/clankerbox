@@ -307,9 +307,9 @@ retained in this workspace.
 
 
 Clankerbox is application-neutral: install and authenticate guest tools yourself.
-It does not import provider credentials, configure provider routing, or infer
-activity from coding-agent names. Applications may use generic activity hooks
-([terminal sessions](docs/terminal-sessions.md#activity)).
+It does not import provider credentials, configure provider routing, or track
+what applications are doing. See [terminal sessions](docs/terminal-sessions.md)
+for the supported process lifecycle and terminal protocol.
 
 The [application-neutral cutover](docs/application-neutral-cutover.md) records
 removed surfaces, rebuild boundaries, and deployment verification.

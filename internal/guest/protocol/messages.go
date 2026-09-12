@@ -33,7 +33,6 @@ const (
 	OpSessionInput  = "session.input"
 	OpSessionResize = "session.resize"
 	OpSessionEnd    = "session.end"
-	OpSessionReport = "session.report"
 )
 
 // Error codes.
@@ -69,18 +68,6 @@ const (
 const (
 	InputAccepted = "accepted"
 	InputRefused  = "refused"
-)
-
-// Activity states and sources.
-const (
-	ActivityIdle      = "idle"
-	ActivityWorking   = "working"
-	ActivityAttention = "attention"
-	ActivityUnknown   = "unknown"
-	ActivityExited    = "exited"
-	SourceHook        = "hook"
-	SourceProcess     = "process"
-	SourceNone        = "none"
 )
 
 // Event names.
@@ -191,38 +178,23 @@ type GapEvent struct {
 
 // Session is the durable session record.
 type Session struct {
-	ID               string      `json:"id"`
-	Label            string      `json:"label"`
-	Cwd              string      `json:"cwd"`
-	Argv             []string    `json:"argv"`
-	Cols             uint16      `json:"cols"`
-	Rows             uint16      `json:"rows"`
-	Status           string      `json:"status"`
-	ExitCode         *int        `json:"exit_code"`
-	Signal           *string     `json:"signal"`
-	PID              int         `json:"pid"`
-	CreatedAt        string      `json:"created_at"`
-	EndedAt          *string     `json:"ended_at"`
-	Offset           uint64      `json:"offset"`
-	RetainedFrom     uint64      `json:"retained_from"`
-	LastResizeOffset *uint64     `json:"last_resize_offset"`
-	Incarnation      string      `json:"incarnation"`
-	ReplyOverflow    uint64      `json:"reply_overflow"`
-	Activity         Activity    `json:"activity"`
-	Foreground       *Foreground `json:"foreground"`
-}
-
-// Activity is the advisory agent state of a session.
-type Activity struct {
-	State  string `json:"state"`
-	Source string `json:"source"`
-	Since  string `json:"since"`
-}
-
-// Foreground describes the PTY foreground process.
-type Foreground struct {
-	PID     int    `json:"pid"`
-	Command string `json:"command"`
+	ID               string   `json:"id"`
+	Label            string   `json:"label"`
+	Cwd              string   `json:"cwd"`
+	Argv             []string `json:"argv"`
+	Cols             uint16   `json:"cols"`
+	Rows             uint16   `json:"rows"`
+	Status           string   `json:"status"`
+	ExitCode         *int     `json:"exit_code"`
+	Signal           *string  `json:"signal"`
+	PID              int      `json:"pid"`
+	CreatedAt        string   `json:"created_at"`
+	EndedAt          *string  `json:"ended_at"`
+	Offset           uint64   `json:"offset"`
+	RetainedFrom     uint64   `json:"retained_from"`
+	LastResizeOffset *uint64  `json:"last_resize_offset"`
+	Incarnation      string   `json:"incarnation"`
+	ReplyOverflow    uint64   `json:"reply_overflow"`
 }
 
 // CreateArgs are the arguments of session.create. CreatedAt is when the
@@ -372,25 +344,6 @@ func (a ResizeArgs) Validate() error {
 		return err
 	}
 	return validateGrid(a.Cols, a.Rows)
-}
-
-// ReportArgs are the arguments of session.report.
-type ReportArgs struct {
-	SessionID string `json:"session_id"`
-	State     string `json:"state"`
-}
-
-// Validate checks the state.
-func (a ReportArgs) Validate() error {
-	if err := (SessionArgs{SessionID: a.SessionID}).Validate(); err != nil {
-		return err
-	}
-	switch a.State {
-	case ActivityIdle, ActivityWorking, ActivityAttention:
-		return nil
-	default:
-		return &Error{Code: CodeInvalid, Message: "state must be idle, working, or attention"}
-	}
 }
 
 // Cursor is a grid position.

@@ -21,6 +21,22 @@ func greet(peer net.Conn) bool {
 	return protocol.WriteFrame(peer, protocol.Frame{Kind: protocol.KindEvent, Body: raw}) == nil
 }
 
+func TestRejectsPreviousWireRevision(t *testing.T) {
+	t.Parallel()
+	local, peer := net.Pipe()
+	defer func() { _ = peer.Close() }()
+	go func() {
+		raw, err := json.Marshal(protocol.Hello{Event: protocol.EventHello, Protocol: 2})
+		if err == nil {
+			_ = protocol.WriteFrame(peer, protocol.Frame{Kind: protocol.KindEvent, Body: raw})
+		}
+	}()
+	_, err := client.Dial(t.Context(), local)
+	if !errors.Is(err, client.ErrIncompatible) {
+		t.Fatalf("previous revision was not rejected: %v", err)
+	}
+}
+
 func TestCallEndsWithItsContextWhileThePeerStopsReading(t *testing.T) {
 	t.Parallel()
 	local, peer := net.Pipe()

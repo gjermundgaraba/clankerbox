@@ -1,5 +1,5 @@
 // Package client is a small consumer of the terminal session protocol used by
-// the guest proxy and report commands, by the controller for listing and
+// the guest sessions command, by the controller for listing and
 // readiness probes, and by tests. It depends only on the protocol package.
 package client
 

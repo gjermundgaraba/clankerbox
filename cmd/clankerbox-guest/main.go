@@ -1,7 +1,7 @@
 // Command clankerbox-guest runs inside a machine and owns terminal sessions.
 // The daemon subcommand serves the session protocol on a private Unix socket;
 // proxy bridges stdio to it for the SSH forced command and starts the daemon
-// on demand; report lets agent hooks publish activity.
+// on demand.
 package main
 
 import (
@@ -72,22 +72,6 @@ func newCommand(stdin io.Reader, stdout io.Writer) *cli.Command {
 						return err
 					}
 					return daemon.Proxy(ctx, paths, stdin, stdout)
-				},
-			},
-			{
-				Name:      "report",
-				Usage:     "report agent activity for the session in CLANKERBOX_SESSION_ID",
-				ArgsUsage: "idle|working|attention",
-				Flags:     []cli.Flag{stateFlag},
-				Action: func(ctx context.Context, c *cli.Command) error {
-					if c.Args().Len() != 1 {
-						return errors.New("report takes exactly one state")
-					}
-					paths, err := resolvePaths(c.String("state-dir"))
-					if err != nil {
-						return err
-					}
-					return daemon.Report(ctx, paths, c.Args().First())
 				},
 			},
 			{

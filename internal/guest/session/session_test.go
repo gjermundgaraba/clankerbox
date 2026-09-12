@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -547,8 +546,14 @@ func (s *blockedSnapshot) SendSnapshot(data []byte) error {
 
 func TestSlowSubscriberIsDroppedNotThePTY(t *testing.T) {
 	t.Parallel()
+	const floodBytes = 9 * 1024 * 1024
 	m, _ := newManager(t)
-	record := create(t, m, shell, "-c", `while read line; do printf 'echo:%s\r\n' "$line"; done`)
+	record := create(t, m, shell, "-c", `while read line; do
+case "$line" in
+  flood) dd if=/dev/zero bs=1048576 count=9 2>/dev/null ;;
+  *) printf 'echo:%s\r\n' "$line" ;;
+esac
+done`)
 	slow := &blockedSnapshot{recorder: newRecorder(), started: make(chan struct{}), release: make(chan struct{})}
 	release := sync.OnceFunc(func() { close(slow.release) })
 	t.Cleanup(release)
@@ -563,15 +568,13 @@ func TestSlowSubscriberIsDroppedNotThePTY(t *testing.T) {
 	case <-time.After(waitTimeout):
 		t.Fatal("snapshot write never started")
 	}
-	for i := range 1100 {
-		state := protocol.ActivityWorking
-		if i%2 == 0 {
-			state = protocol.ActivityAttention
-		}
-		if err = m.Report(protocol.ReportArgs{SessionID: record.ID, State: state}); err != nil {
-			t.Fatal(err)
-		}
-	}
+	// Exceed the subscriber's 8 MiB tail through the real PTY. NUL output
+	// keeps terminal parsing cheap; exact queue limits are tested separately.
+	before := inspect(t, m, record.ID).Offset
+	send(t, m, record.ID, "flood\n")
+	eventually(t, "PTY flood to exceed the blocked viewer's tail", func() bool {
+		return inspect(t, m, record.ID).Offset-before >= floodBytes
+	})
 	// Another viewer and the PTY continue while the first is still blocked.
 	fast := newRecorder()
 	_, fastAttachment, err := m.Open(protocol.OpenArgs{SessionID: record.ID}, fast)
@@ -750,99 +753,4 @@ func TestRecordFailuresAreLoggedNotHidden(t *testing.T) {
 	if err != nil || again.Status != protocol.StatusLost || again.PID != 0 {
 		t.Fatalf("a quarantined id must answer lost, not start: %v %+v", err, again)
 	}
-}
-
-func TestActivityChangesReachAttachments(t *testing.T) {
-	t.Parallel()
-	m, _ := newManager(t)
-	record := create(t, m, shell, "-c", sleepForever)
-	sink := newRecorder()
-	_, attachment, err := m.Open(protocol.OpenArgs{SessionID: record.ID}, sink)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	go attachment.Run()
-	if err = m.Report(protocol.ReportArgs{SessionID: record.ID, State: protocol.ActivityAttention}); err != nil {
-		t.Fatalf("report: %v", err)
-	}
-	eventually(t, "attention event on the attachment", func() bool {
-		sink.mu.Lock()
-		defer sink.mu.Unlock()
-		for _, event := range sink.events {
-			change, ok := event.(protocol.SessionEvent)
-			if ok && change.Session.Activity.State == protocol.ActivityAttention {
-				return true
-			}
-		}
-		return false
-	})
-}
-
-func TestActivityUsesShellsAndExplicitHooksNotAgentNames(t *testing.T) {
-	t.Parallel()
-	loader := newLoader(t)
-	var clock sync.Mutex
-	now := time.Now()
-	m, err := session.New(t.Context(), session.Config{
-		StateDir: t.TempDir(), Loader: loader, Incarnation: uuid.NewString(),
-		Now: func() time.Time {
-			clock.Lock()
-			defer clock.Unlock()
-			return now
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(m.Close)
-	// A shell waiting on input is idle without an application hook.
-	sh := create(t, m, shell, "-c", "read line")
-	eventually(t, "idle shell", func() bool {
-		activity := inspect(t, m, sh.ID).Activity
-		return activity.State == protocol.ActivityIdle && activity.Source == protocol.SourceProcess
-	})
-	// Use real foreground processes with formerly special names, without
-	// installing an agent or touching any user credential/configuration file.
-	directory := t.TempDir()
-	source := filepath.Join(directory, "main.go")
-	if err = os.WriteFile(source, []byte(`package main
-import ("io"; "os")
-func main() { _, _ = io.Copy(os.Stdout, os.Stdin) }
-`), 0600); err != nil {
-		t.Fatal(err)
-	}
-	binary := filepath.Join(directory, "fixture")
-	//nolint:gosec // Build a test-owned foreground process; no installed application is invoked.
-	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, source)
-	if output, buildErr := build.CombinedOutput(); buildErr != nil {
-		t.Fatalf("build fixture: %v %s", buildErr, output)
-	}
-	var record protocol.Session
-	for _, name := range []string{"codex", "claude", "ordinary-tool"} {
-		path := filepath.Join(t.TempDir(), name)
-		if err = os.Link(binary, path); err != nil {
-			t.Fatal(err)
-		}
-		record = create(t, m, path)
-		send(t, m, record.ID, "activity-output\n")
-		eventually(t, "unknown activity for "+name, func() bool {
-			r := inspect(t, m, record.ID)
-			return r.Foreground != nil && r.Foreground.Command == name &&
-				r.Activity.State == protocol.ActivityUnknown && r.Activity.Source == protocol.SourceProcess
-		})
-	}
-	if err = m.Report(protocol.ReportArgs{SessionID: record.ID, State: protocol.ActivityWorking}); err != nil {
-		t.Fatal(err)
-	}
-	if activity := inspect(t, m, record.ID).Activity; activity.State != protocol.ActivityWorking ||
-		activity.Source != protocol.SourceHook {
-		t.Fatalf("explicit hook lost: %+v", activity)
-	}
-	clock.Lock()
-	now = now.Add(301 * time.Second)
-	clock.Unlock()
-	eventually(t, "expired hook", func() bool {
-		activity := inspect(t, m, record.ID).Activity
-		return activity.State == protocol.ActivityUnknown && activity.Source == protocol.SourceProcess
-	})
 }

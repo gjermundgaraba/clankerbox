@@ -106,7 +106,7 @@ func (a *Attachment) Stop() {
 }
 
 // New loads manifests, converts unfinished records to lost, and starts the
-// activity observer.
+// retention cleanup loop.
 func New(ctx context.Context, cfg Config) (*Manager, error) {
 	if cfg.MaxSessions <= 0 {
 		cfg.MaxSessions = DefaultMaxSessions
@@ -137,7 +137,7 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 	for _, record := range manifests {
 		m.adoptManifest(record)
 	}
-	go m.observe()
+	go m.cleanup()
 	return m, nil
 }
 
@@ -156,8 +156,6 @@ func (m *Manager) adoptManifest(record manifest) {
 		session.Status = protocol.StatusLost
 		ended := m.cfg.Now().UTC().Format(time.RFC3339Nano)
 		session.EndedAt = &ended
-		session.Foreground = nil
-		session.Activity = protocol.Activity{State: protocol.ActivityExited, Source: protocol.SourceNone, Since: ended}
 		record.Session = session
 		if err := writeManifest(m.cfg.StateDir, record); err != nil {
 			m.cfg.Log.Error("write session record", "session", session.ID, "error", err)
@@ -181,7 +179,7 @@ func (m *Manager) Hello() protocol.Hello {
 	}
 }
 
-// Close stops the observer. Sessions are not ended; the process exit ends them.
+// Close stops retention cleanup. Sessions are not ended; the process exit ends them.
 func (m *Manager) Close() {
 	close(m.stop)
 	<-m.stopped
@@ -411,45 +409,19 @@ func (m *Manager) End(id string) (protocol.Session, error) {
 	return s.end(), nil
 }
 
-// Report records a hook state for a session; attachments see the change
-// through the session's own ordered events.
-func (m *Manager) Report(args protocol.ReportArgs) error {
-	s, err := m.liveSession(args.SessionID)
-	if err != nil {
-		return err
-	}
-	s.report(args.State, m.cfg.Now())
-	s.observe(m.cfg.Now())
-	return nil
-}
-
-// observe runs the activity observer and prunes old ended records.
-func (m *Manager) observe() {
+// cleanup periodically prunes old ended records.
+func (m *Manager) cleanup() {
 	defer close(m.stopped)
-	ticker := time.NewTicker(activityPeriod)
+	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-m.stop:
 			return
 		case <-ticker.C:
-			m.tick()
+			m.prune(m.cfg.Now())
 		}
 	}
-}
-
-func (m *Manager) tick() {
-	now := m.cfg.Now()
-	m.mu.Lock()
-	sessions := make([]*Session, 0, len(m.live))
-	for _, s := range m.live {
-		sessions = append(sessions, s)
-	}
-	m.mu.Unlock()
-	for _, s := range sessions {
-		s.observe(now)
-	}
-	m.prune(now)
 }
 
 // prune applies the ended-session retention to sessions this daemon ran and

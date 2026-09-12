@@ -29,17 +29,3 @@ func bootID() string {
 	}
 	return strings.TrimSpace(value)
 }
-
-// processCommand returns the short command name of pid.
-func processCommand(pid int) string {
-	info, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
-	if err != nil {
-		return ""
-	}
-	comm := info.Proc.P_comm[:]
-	end := 0
-	for end < len(comm) && comm[end] != 0 {
-		end++
-	}
-	return string(comm[:end])
-}

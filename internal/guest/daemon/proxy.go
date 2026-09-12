@@ -22,8 +22,6 @@ const (
 	logMode        = 0o600
 )
 
-var errNoSessionID = errors.New("CLANKERBOX_SESSION_ID is not set")
-
 func dialer() *net.Dialer {
 	return &net.Dialer{Timeout: connectBackoff}
 }
@@ -114,24 +112,6 @@ func StartDetached(paths Paths) error {
 		return fmt.Errorf("release daemon: %w", err)
 	}
 	return nil
-}
-
-// Report sends a hook state for the session named by CLANKERBOX_SESSION_ID.
-func Report(ctx context.Context, paths Paths, state string) error {
-	id := os.Getenv("CLANKERBOX_SESSION_ID")
-	if id == "" {
-		return errNoSessionID
-	}
-	conn, err := Dial(ctx, paths)
-	if err != nil {
-		return err
-	}
-	c, err := client.Dial(ctx, conn)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = c.Close() }()
-	return c.CallInto(ctx, protocol.OpSessionReport, protocol.ReportArgs{SessionID: id, State: state}, nil)
 }
 
 // List returns the daemon's sessions without starting a daemon.

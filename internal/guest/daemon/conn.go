@@ -85,8 +85,6 @@ func (c *connection) handle(request protocol.Request) (protocol.Response, func()
 		value, err = c.resize(request.Args)
 	case protocol.OpSessionEnd:
 		value, err = c.end(request.Args)
-	case protocol.OpSessionReport:
-		value, err = c.report(request.Args)
 	default:
 		err = &protocol.Error{Code: protocol.CodeInvalid, Message: "unknown operation " + request.Op}
 	}
@@ -209,20 +207,6 @@ func (c *connection) end(raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	return protocol.SessionValue{Session: record}, nil
-}
-
-func (c *connection) report(raw json.RawMessage) (any, error) {
-	var args protocol.ReportArgs
-	if err := decodeArgs(raw, &args); err != nil {
-		return nil, err
-	}
-	if err := args.Validate(); err != nil {
-		return nil, err
-	}
-	if err := c.manager.Report(args); err != nil {
-		return nil, err
-	}
-	return protocol.Empty{}, nil
 }
 
 func (c *connection) send(kind byte, body any) error {

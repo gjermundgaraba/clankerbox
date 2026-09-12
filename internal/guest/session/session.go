@@ -31,11 +31,6 @@ var (
 	errSnapshotTooLarge = errors.New("snapshot exceeds the announced maximum")
 )
 
-type hookState struct {
-	state string
-	at    time.Time
-}
-
 // Session is one live or ended terminal owned by this daemon.
 type Session struct {
 	mu          sync.Mutex
@@ -56,7 +51,6 @@ type Session struct {
 	view  *protocol.View
 	final []byte
 
-	hook     *hookState
 	readDone chan struct{}
 	waitDone chan struct{}
 }
@@ -90,11 +84,6 @@ func spawn(opts spawnOptions) (*Session, error) {
 		waitDone:    make(chan struct{}),
 	}
 	s.record.Status = protocol.StatusStarting
-	s.record.Activity = protocol.Activity{
-		State:  protocol.ActivityUnknown,
-		Source: protocol.SourceNone,
-		Since:  s.timestamp(),
-	}
 	if err := writeManifest(s.stateDir, s.manifest()); err != nil {
 		return nil, err
 	}
@@ -122,7 +111,7 @@ func (s *Session) start(opts spawnOptions) error {
 	argv := s.record.Argv
 	cmd := exec.CommandContext(opts.ctx, argv[0], argv[1:]...) //nolint:gosec // Shell-equivalent authority by contract.
 	cmd.Dir = s.record.Cwd
-	cmd.Env = buildEnv(opts.env, s.record.ID)
+	cmd.Env = buildEnv(opts.env)
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: s.record.Rows, Cols: s.record.Cols})
 	if err != nil {
 		_ = term.Close()
@@ -145,8 +134,8 @@ func (s *Session) start(opts spawnOptions) error {
 
 // buildEnv appends terminal defaults and requested overrides; exec keeps the
 // last value for a duplicated key.
-func buildEnv(extra map[string]string, id string) []string {
-	env := append(os.Environ(), "TERM=xterm-256color", "CLANKERBOX_SESSION_ID="+id)
+func buildEnv(extra map[string]string) []string {
+	env := append(os.Environ(), "TERM=xterm-256color")
 	for k, v := range extra {
 		env = append(env, k+"="+v)
 	}
@@ -217,8 +206,6 @@ func (s *Session) waitLoop() {
 	s.record.Status = protocol.StatusExited
 	ended := s.timestamp()
 	s.record.EndedAt = &ended
-	s.record.Foreground = nil
-	s.record.Activity = protocol.Activity{State: protocol.ActivityExited, Source: protocol.SourceProcess, Since: ended}
 	s.applyExit(err)
 	// An ended session is its record plus its final screen: the terminal and
 	// the ring are released here, since nothing resumes an ended session.
@@ -449,20 +436,4 @@ func (s *Session) waitExit(d time.Duration) bool {
 	case <-time.After(d):
 		return false
 	}
-}
-
-// foreground reports the PTY foreground process.
-func (s *Session) foreground() *protocol.Foreground {
-	s.mu.Lock()
-	master := s.master
-	running := s.running()
-	s.mu.Unlock()
-	if !running || master == nil {
-		return nil
-	}
-	pgid, err := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPGRP)
-	if err != nil || pgid <= 0 {
-		return nil
-	}
-	return &protocol.Foreground{PID: pgid, Command: processCommand(pgid)}
 }
