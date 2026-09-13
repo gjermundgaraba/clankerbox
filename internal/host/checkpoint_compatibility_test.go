@@ -13,8 +13,6 @@ func TestCheckpointCompatibilityUsesArchivedProfile(t *testing.T) {
 	t.Parallel()
 	h, cfg, rt, source := setupBranch(t)
 	capture := captureRequest(source)
-	// Discovery metadata may change independently of physical runtime support.
-	capture.Checkpoint.Profile.Capabilities = []string{"ssh"}
 	response := h.Execute(t.Context(), capture)
 	requireStatus(t, response, statusSucceeded)
 	closeHelper(t, h)
@@ -23,9 +21,6 @@ func TestCheckpointCompatibilityUsesArchivedProfile(t *testing.T) {
 	defer closeHelper(t, h)
 	restore := restoreRequest(source, response.Checkpoint)
 	requireStatus(t, h.Execute(t.Context(), restore), statusSucceeded)
-	if response.Checkpoint.Profile.Capabilities[0] != "ssh" {
-		t.Fatal("rewrote archived checkpoint metadata")
-	}
 	deletion := checkpointDeletion(response.Checkpoint)
 	requireStatus(t, h.Execute(t.Context(), deletion), statusSucceeded)
 }
@@ -62,8 +57,7 @@ func testCheckpointDeletionDrift(t *testing.T, kind, drift string) {
 	case "profile":
 		cfg.Profiles[0].CPU++
 	case "runtime":
-		cfg.TartPath += "-changed"
-		cfg.SmolvmPath += "-changed"
+		cfg.RuntimeDigest += "-changed"
 	case "retired-profile":
 		cfg.Profiles = nil
 	}
@@ -73,11 +67,11 @@ func testCheckpointDeletionDrift(t *testing.T, kind, drift string) {
 	requireStatus(t, h.Execute(t.Context(), restoreRequest(source, response.Checkpoint)), statusFailed)
 	deletion := checkpointDeletion(response.Checkpoint)
 	want := statusFailed
-	if kind == checkpointRAM {
+	if kind == checkpointRAM || drift != "runtime" {
 		want = statusSucceeded
 	}
 	requireStatus(t, h.Execute(t.Context(), deletion), want)
-	if kind == checkpointRAM {
+	if want == statusSucceeded {
 		requireStatus(t, h.Execute(t.Context(), deletion), statusSucceeded)
 		if rt.checkpointDeletes != 1 {
 			t.Fatal("replayed artifact deletion")
@@ -102,10 +96,9 @@ func checkpointSource(t *testing.T, kind string) (*host.Helper, host.Config, *br
 	cfg.Root, err = filepath.EvalSymlinks(root)
 	requireNoError(t, err)
 	p := source.Profile
-	p.Runtime, p.OS, p.Arch, p.ImagePath = runtimeSmolvm, osLinux, archAMD64, testRootfs
-	p.Capabilities = nil
+	p.Runtime, p.OS, p.Arch = runtimeSmolvm, osLinux, archAMD64
 	requireNoError(t, p.Validate())
-	cfg.Profiles = []model.Profile{p}
+	cfg.Profiles = []host.ProfileBinding{{Profile: p, ImagePath: testRootfs}}
 	cfg.HostOS = osLinux
 	cfg.SmolvmPath, cfg.LibraryDir = testSmolvmPath, testSmolvmLibrary
 	source.Profile = p

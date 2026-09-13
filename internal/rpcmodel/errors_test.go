@@ -5,13 +5,14 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
 
 	v1 "clankerbox/gen/clankerbox/v1"
 	"clankerbox/gen/clankerbox/v1/clankerboxv1connect"
-	"clankerbox/internal/guest/protocol"
+	"clankerbox/internal/model"
 	"clankerbox/internal/rpcmodel"
 )
 
@@ -55,19 +56,19 @@ func TestTypedErrorDetailCrossesRealRPC(t *testing.T) {
 func TestErrorReasonDistinctionsAndCancellation(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		code   string
+		code   model.Reason
 		reason v1.ErrorReason
 		status connect.Code
 	}{
-		{"unsupported", v1.ErrorReason_ERROR_REASON_UNSUPPORTED, connect.CodeUnimplemented},
-		{"prerequisite", v1.ErrorReason_ERROR_REASON_PREREQUISITE, connect.CodeFailedPrecondition},
-		{"capacity", v1.ErrorReason_ERROR_REASON_CAPACITY, connect.CodeResourceExhausted},
-		{"host_unavailable", v1.ErrorReason_ERROR_REASON_UNAVAILABLE, connect.CodeUnavailable},
-		{"idempotency_conflict", v1.ErrorReason_ERROR_REASON_IDEMPOTENCY_CONFLICT, connect.CodeAborted},
-		{"identity_mismatch", v1.ErrorReason_ERROR_REASON_IDENTITY_MISMATCH, connect.CodePermissionDenied},
-		{"engine_mismatch", v1.ErrorReason_ERROR_REASON_ENGINE_MISMATCH, connect.CodeFailedPrecondition},
+		{model.ReasonUnsupported, v1.ErrorReason_ERROR_REASON_UNSUPPORTED, connect.CodeUnimplemented},
+		{model.ReasonPrerequisite, v1.ErrorReason_ERROR_REASON_PREREQUISITE, connect.CodeFailedPrecondition},
+		{model.ReasonCapacity, v1.ErrorReason_ERROR_REASON_CAPACITY, connect.CodeResourceExhausted},
+		{model.ReasonUnavailable, v1.ErrorReason_ERROR_REASON_UNAVAILABLE, connect.CodeUnavailable},
+		{model.ReasonIdempotencyConflict, v1.ErrorReason_ERROR_REASON_IDEMPOTENCY_CONFLICT, connect.CodeAborted},
+		{model.ReasonIdentityMismatch, v1.ErrorReason_ERROR_REASON_IDENTITY_MISMATCH, connect.CodePermissionDenied},
+		{model.ReasonEngineMismatch, v1.ErrorReason_ERROR_REASON_ENGINE_MISMATCH, connect.CodeFailedPrecondition},
 	} {
-		err := rpcmodel.ErrorFromCode(test.code, "message", test.code == "capacity")
+		err := rpcmodel.ToError(model.NewError(test.code, "message", test.code == model.ReasonCapacity))
 		detail, ok := rpcmodel.Detail(err)
 		if !ok || detail.GetReason() != test.reason || connect.CodeOf(err) != test.status {
 			t.Fatalf("lost category %s: %v", test.code, err)
@@ -82,13 +83,17 @@ func TestErrorReasonDistinctionsAndCancellation(t *testing.T) {
 	if connect.CodeOf(rpcmodel.ToError(context.DeadlineExceeded)) != connect.CodeDeadlineExceeded {
 		t.Fatal("deadline changed")
 	}
-	sessionErr := &protocol.Error{Code: protocol.CodeCapacity, Message: "writer full", Retryable: true}
+	sessionErr := &model.Error{Reason: model.ReasonCapacity, Message: "writer full", Retryable: true}
 	detail, ok := rpcmodel.Detail(rpcmodel.ToError(sessionErr))
 	if !ok || !detail.GetRetryable() || detail.GetReason() != v1.ErrorReason_ERROR_REASON_CAPACITY {
 		t.Fatal("session refusal reason lost")
 	}
+	existing := connect.NewError(connect.CodePermissionDenied, errors.New("already typed"))
+	if !errors.Is(rpcmodel.ToError(existing), existing) {
+		t.Fatal("structured caller error replaced")
+	}
 	internal := rpcmodel.ToError(errors.New("private credential path"))
-	if internal.Error() == "private credential path" {
+	if strings.Contains(internal.Error(), "private credential path") {
 		t.Fatal("raw private error exposed")
 	}
 }

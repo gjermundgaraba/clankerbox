@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"clankerbox/internal/model"
+
 	"github.com/google/uuid"
 
 	"clankerbox/internal/guest/protocol"
@@ -397,12 +399,12 @@ func TestInputIsAdmissionOnly(t *testing.T) {
 		t.Fatalf("end: %v", err)
 	}
 	refused, err := m.Input(protocol.InputArgs{SessionID: record.ID, Data: "YQ=="}, []byte("a"))
-	if err != nil || refused.Status != protocol.InputRefused || refused.Reason != protocol.CodeNotRunning {
+	if err != nil || refused.Status != protocol.InputRefused || refused.Reason != string(model.ReasonNotRunning) {
 		t.Fatalf("input after exit: %v %+v", err, refused)
 	}
 	missing := protocol.InputArgs{SessionID: uuid.NewString(), Data: "YQ=="}
-	var typed *protocol.Error
-	if _, err = m.Input(missing, []byte("a")); !errors.As(err, &typed) || typed.Code != protocol.CodeNotFound {
+	var typed *model.Error
+	if _, err = m.Input(missing, []byte("a")); !errors.As(err, &typed) || typed.Reason != model.ReasonNotFound {
 		t.Fatalf("unknown session: %v", err)
 	}
 }
@@ -451,7 +453,11 @@ func TestExitOutcomesAndLostOnRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	// Save an unfinished durable record to simulate a crash; orderly Close now
+	// terminates and persists every live session before returning.
+	restore := unfinishedManifest(t, stateDir, running.ID)
 	m.Close()
+	restore()
 	restarted, err := session.New(
 		t.Context(),
 		session.Config{StateDir: stateDir, Loader: loader, Incarnation: uuid.NewString()},
@@ -476,12 +482,30 @@ func TestExitOutcomesAndLostOnRestart(t *testing.T) {
 	if err != nil || value.Mode != protocol.ModeEnded || value.View != nil {
 		t.Fatalf("manifest-only record must have no view: %v %+v", err, value)
 	}
-	var typed *protocol.Error
+	var typed *model.Error
 	_, _, err = restarted.Open(protocol.OpenArgs{SessionID: uuid.NewString()}, newRecorder())
-	if !errors.As(err, &typed) || typed.Code != protocol.CodeNotFound {
+	if !errors.As(err, &typed) || typed.Reason != model.ReasonNotFound {
 		t.Fatalf("unknown session: %v", err)
 	}
 	_, _ = m.End(running.ID)
+}
+
+// unfinishedManifest retains the pre-shutdown fixture to simulate a crash.
+func unfinishedManifest(t *testing.T, stateDir, id string) func() {
+	t.Helper()
+	manifestPath := filepath.Join(stateDir, "sessions", id, "manifest.json")
+	// #nosec G304 -- Test-owned temporary state and session UUID.
+	unfinished, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		t.Helper()
+		// #nosec G703 -- Restore only the test-owned manifest read above.
+		if writeErr := os.WriteFile(manifestPath, unfinished, 0o600); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}
 }
 
 func TestCreateIdempotentAndCapacity(t *testing.T) {
@@ -524,8 +548,8 @@ func TestCreateIdempotentAndCapacity(t *testing.T) {
 	other := args
 	other.SessionID = uuid.NewString()
 	_, err = m.Create(other)
-	var typed *protocol.Error
-	if !errors.As(err, &typed) || typed.Code != protocol.CodeCapacity {
+	var typed *model.Error
+	if !errors.As(err, &typed) || typed.Reason != model.ReasonCapacity {
 		t.Fatalf("capacity not enforced: %v", err)
 	}
 }
@@ -649,19 +673,19 @@ func TestEndedSessionsExpireAndStaleCreatesNeverStart(t *testing.T) {
 	}
 	fresh := args
 	fresh.SessionID = uuid.NewString()
-	var typed *protocol.Error
-	if _, err = m.Create(fresh); !errors.As(err, &typed) || typed.Code != protocol.CodeExpired || typed.Retryable {
+	var typed *model.Error
+	if _, err = m.Create(fresh); !errors.As(err, &typed) || typed.Reason != model.ReasonExpired || typed.Retryable {
 		t.Fatalf("an unknown stale create must be refused: %v", err)
 	}
 	// A create dated beyond the clock allowance can never expire, so it is never accepted.
 	future := fresh
 	future.CreatedAt = now.Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
-	if _, err = m.Create(future); !errors.As(err, &typed) || typed.Code != protocol.CodeInvalid {
+	if _, err = m.Create(future); !errors.As(err, &typed) || typed.Reason != model.ReasonInvalid {
 		t.Fatalf("a future-dated create must be refused: %v", err)
 	}
 	advance(6 * 24 * time.Hour)
 	eventually(t, "retention to remove the ended session", func() bool { return len(m.List()) == 0 })
-	if _, err = m.Create(args); !errors.As(err, &typed) || typed.Code != protocol.CodeExpired {
+	if _, err = m.Create(args); !errors.As(err, &typed) || typed.Reason != model.ReasonExpired {
 		t.Fatalf("a forgotten create must not start again: %v", err)
 	}
 }

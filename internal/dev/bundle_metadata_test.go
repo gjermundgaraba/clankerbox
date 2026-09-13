@@ -1,4 +1,3 @@
-//nolint:testpackage // Verify private bundle trust boundary without exporting mutable metadata helpers.
 package dev
 
 import (

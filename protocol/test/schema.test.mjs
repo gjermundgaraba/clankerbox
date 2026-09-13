@@ -4,7 +4,7 @@ import { create, fromBinary, fromJson, toBinary, toJson } from "@bufbuild/protob
 import {
   SessionSchema, SessionStatus, OpenSchema, OpenedSchema, OpenMode,
   AttachmentRequestSchema, AttachmentEventSchema, MachineService, HostService,
-  SessionService, GuestService, ErrorDetailSchema, ErrorReason,
+  SessionService, ErrorDetailSchema, ErrorReason,
 } from "../dist/index.js";
 
 test("generated uint64 uses bigint and protobuf JSON decimal strings", () => {
@@ -43,16 +43,18 @@ test("atomic cut and resume start remain distinct; final screen cursor is typed"
 });
 
 test("shared typed attachment and service methods have the intended shapes", () => {
-  for (const service of [SessionService, HostService, GuestService]) {
+  for (const service of [SessionService]) {
     const attach = service.method.attachSession;
     assert.equal(attach.methodKind, "bidi_streaming");
     assert.equal(attach.input.typeName, AttachmentRequestSchema.typeName);
     assert.equal(attach.output.typeName, AttachmentEventSchema.typeName);
     assert.equal(service.method.endSession.methodKind, "unary");
   }
+  assert.equal(HostService.method.attachSession, undefined);
+  assert.equal(HostService.method.createSession, undefined);
   assert.equal(MachineService.method.setLabels.output.typeName, "clankerbox.v1.Machine");
   assert.equal(MachineService.method.createMachine.output.typeName, "clankerbox.v1.Operation");
-  for (const service of [MachineService, SessionService, HostService, GuestService])
+  for (const service of [MachineService, SessionService, HostService])
     for (const method of Object.keys(service.method))
       assert(!/report|activity|foreground|watchChanges|events/i.test(method));
   const frame = create(AttachmentRequestSchema, {

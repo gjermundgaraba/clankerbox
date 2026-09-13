@@ -126,10 +126,6 @@ func (runner commandRunner) mutateMachine(ctx context.Context, command, target, 
 	return runner.finishMutation(ctx, operation, err, id, wait, command)
 }
 
-const (
-	inspectCommand = "inspect"
-)
-
 func requestKey(s string) (string, error) {
 	if s != "" {
 		if len(s) > 200 || strings.ContainsAny(s, "\r\n\x00 \t") {

@@ -57,5 +57,5 @@ func TestAlreadyStoppedStillRefusesSourceReservation(t *testing.T) {
 		Prepared:   true,
 	}
 	_, err := controller.Mutate(t.Context(), created.MachineID, "stop", "reserved-stop")
-	expectCode(t, err, "operation_pending")
+	expectCode(t, err, model.ReasonOperationPending)
 }

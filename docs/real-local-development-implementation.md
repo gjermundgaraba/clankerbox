@@ -1,6 +1,6 @@
 # Real local development implementation record
 
-This is the implementation and qualification record for
+This is the historical implementation and qualification record for
 [the agreed plan](real-local-development-plan.md). Release [0.2.1](https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.2.1)
 is published from signed commit `b7db763e729f26fe8654f6621b39868617f902b7`.
 Both required installed dev platforms and the production Linux/Tart/Desk topology
@@ -78,10 +78,10 @@ manager without replaying restore. The fresh complete acceptance run passed the 
 
 Detailed evidence and executable commands live in
 [engine qualification](../spikes/real-local-engine/README.md),
-[RPC qualification](../spikes/real-local-rpc/README.md),
-[guest qualification](../spikes/real-local-guest/README.md),
-[proxy qualification](../spikes/real-local-proxy/README.md), and
-[installed/Desk qualification](../spikes/real-local-installed/README.md).
+[RPC qualification](archive/real-local/real-local-rpc.md),
+[guest qualification](archive/real-local/real-local-guest.md),
+[proxy qualification](archive/real-local/real-local-proxy.md), and
+[installed/Desk qualification](archive/real-local/real-local-installed.md).
 Private evidence contains operational paths and is not a release payload.
 
 ## Validation and fixes found by real execution
@@ -130,7 +130,7 @@ exact-pinned for both image architectures in `images/package-locks`; read-only
 checks match the exported images and actual dpkg state.
 New RPC dependencies and code generators are exact-pinned; Node is 26.8.2 and
 pnpm is 12.4.1. The engine source commits, qualified patch and native binary
-hashes are recorded in [engine pins](../spikes/real-local-engine/pins.json).
+hashes are recorded in [engine pins](../scripts/release/inputs/pins.json).
 
 Personal-cloud contains role-specific TLS/service/firewall staging, verified
 artifact staging, consistent SQLite backup helpers, exact-ID retained profile

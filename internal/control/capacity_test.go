@@ -1,4 +1,4 @@
-package control //nolint:testpackage // Exercise the private accounting helper shared by discovery and admission.
+package control
 
 import (
 	"database/sql"

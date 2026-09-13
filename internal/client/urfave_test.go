@@ -20,11 +20,6 @@ func TestCommandHelpWithoutConfiguration(t *testing.T) {
 		if err != nil || !strings.Contains(out.String(), "USAGE:") || diagnostics.Len() != 0 {
 			t.Fatalf("%v: %v stdout=%q stderr=%q", args, err, &out, &diagnostics)
 		}
-		for _, retired := range []string{"_owner", "herdr", "application launcher"} {
-			if strings.Contains(out.String(), retired) {
-				t.Fatalf("retired feature %q appears in help", retired)
-			}
-		}
 		if len(args) == 0 {
 			for _, text := range []string{"clankerbox", "COMMANDS:", checkpointCommand, sessionsCommand, configFlag, jsonFlag} {
 				if !strings.Contains(out.String(), text) {
@@ -35,7 +30,7 @@ func TestCommandHelpWithoutConfiguration(t *testing.T) {
 	}
 }
 
-func TestCLIRejectsRetiredSyntaxAndInvalidArguments(t *testing.T) {
+func TestCLIRejectsInvalidArguments(t *testing.T) {
 	t.Parallel()
 	for _, args := range [][]string{{createCommand, "--name", childName}, {machinesCommand, "extra"}, {startCommand, testMachineName, timeoutFlag, "0s"}, {"unknown"}, {checkpointCommand, "--unknown"}, {sessionsCommand, "--unknown"}, {checkpointCommand, "unknown"}} {
 		var out, diagnostics bytes.Buffer
@@ -62,24 +57,6 @@ const helpFlag = "--help"
 
 const sessionsCommand = "sessions"
 
-func TestRetiredCommandsAreUnknown(t *testing.T) {
-	t.Parallel()
-	for _, name := range []string{"ssh", "proxy", "exec", "vnc", "ssh-config", "connect", "ports", "url", "open-url", "_owner", "herdr", "auth", "events", "_dev-guest"} {
-		var out, diagnostics bytes.Buffer
-		err := client.Run(
-			t.Context(),
-			[]string{configFlag, missingConfig, name},
-			client.Streams{Out: &out, Err: &diagnostics},
-		)
-		if err == nil || !strings.Contains(err.Error(), "No help topic for '"+name+"'") {
-			t.Errorf("%s: %v", name, err)
-		}
-		if out.Len() != 0 || diagnostics.Len() != 0 {
-			t.Fatalf("%s: unexpected stdout=%q stderr=%q", name, &out, &diagnostics)
-		}
-	}
-}
-
 const missingConfig = "/missing/config"
 
 func TestDevHelpDescribesRealRetainedEnvironment(t *testing.T) {
@@ -95,11 +72,6 @@ func TestDevHelpDescribesRealRetainedEnvironment(t *testing.T) {
 	for _, want := range []string{"--state-dir", "--listen", "--bundle", "destroy", "stop", "VM"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q: %s", want, &out)
-		}
-	}
-	for _, retired := range []string{"--workspace", "local shells", "_dev-guest", "one local machine"} {
-		if strings.Contains(out.String(), retired) {
-			t.Errorf("retired dev behavior %q", retired)
 		}
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"clankerbox/internal/model"
+	"clankerbox/internal/rpcidentity"
 	"clankerbox/internal/statefs"
 )
 
@@ -69,8 +70,9 @@ func (ExecRunner) Run(ctx context.Context, path string, args, env []string, inpu
 
 // NativeRuntime translates lifecycle operations into pinned runtime and supervisor commands.
 type NativeRuntime struct {
-	Config Config
-	Runner Runner
+	Config    Config
+	Runner    Runner
+	authority *rpcidentity.Authority
 }
 
 func (n *NativeRuntime) env(m Manifest) []string {
@@ -168,12 +170,16 @@ func (n *NativeRuntime) Inspect(ctx context.Context, m Manifest) (RuntimeState, 
 
 // Create creates one owned native machine without adopting an existing identity.
 func (n *NativeRuntime) Create(ctx context.Context, m Manifest) error {
+	imagePath, resolutionErr := n.Config.imagePath(m.Profile)
+	if resolutionErr != nil {
+		return resolutionErr
+	}
 	dir := machineDir(n.Config, m)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
 	if m.Profile.Runtime == runtimeTart {
-		_, err := n.run(ctx, m, "clone", m.Profile.ImagePath, m.RuntimeName())
+		_, err := n.run(ctx, m, "clone", imagePath, m.RuntimeName())
 		return err
 	}
 	if err := os.MkdirAll(n.runtimeHome(m), 0700); err != nil {
@@ -193,7 +199,7 @@ func (n *NativeRuntime) Create(ctx context.Context, m Manifest) error {
 		return errors.New("rootfs destination exists after interrupted create; refusing replacement")
 	}
 	// Each machine gets its own writable copy of the supplied bare Ubuntu profile.
-	if _, err := n.Runner.Run(ctx, "/bin/cp", []string{"-a", m.Profile.ImagePath, rootfs}, n.env(m), nil); err != nil {
+	if _, err := n.Runner.Run(ctx, "/bin/cp", []string{"-a", imagePath, rootfs}, n.env(m), nil); err != nil {
 		return err
 	}
 	storage, overlay := m.Profile.StorageGiB, m.Profile.OverlayGiB
@@ -692,10 +698,6 @@ func (n *NativeRuntime) runtimeData(m Manifest) string {
 func (n *NativeRuntime) runtimeCache(m Manifest) string {
 	if n.hostOS() == hostDarwin {
 		return filepath.Join(n.runtimeHome(m), "Library", "Caches")
-	}
-	legacy := filepath.Join(storeDir(n.Config, m), "c")
-	if _, err := os.Lstat(legacy); !errors.Is(err, os.ErrNotExist) {
-		return legacy
 	}
 	return filepath.Join(n.Config.Root, "runtime", "c")
 }

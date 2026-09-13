@@ -26,7 +26,7 @@ func TestHelpDoesNotStartService(t *testing.T) {
 			if err := cmd.Run(context.Background(), append([]string{cmd.Name}, args...)); err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{"clankerbox-host", testConfigFlag, "persistent private host RPC service"} {
+			for _, want := range []string{"clankerbox-host", testConfigFlag, "--init", "guest authority", "persistent private host RPC service"} {
 				if !strings.Contains(output.String(), want) {
 					t.Errorf("help missing %q: %s", want, &output)
 				}

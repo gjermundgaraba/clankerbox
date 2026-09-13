@@ -21,8 +21,8 @@ into the installed bundle. Archive SHA256 must be checked before extraction.
 ## Build inputs
 
 1. Build the exact engine and static guest agent from
-   [the engine pins](../../spikes/real-local-engine/pins.json) and
-   [qualified patch](../../spikes/real-local-engine/runtime.patch). Preserve the
+   [the engine pins](inputs/pins.json) and
+   [qualified patch](inputs/runtime.patch). Preserve the
    upstream runtime archive and source/build provenance. Replacing the engine
    with a newer unqualified upstream binary is not a dependency update.
 2. Download the Ubuntu Base 26.04.1 and Node 26.8.2 archives for each architecture.
@@ -42,12 +42,34 @@ into the installed bundle. Archive SHA256 must be checked before extraction.
    `recipe`, and `.smolvm`. Stop/delete only that exact disposable builder. Use
    the staging script's safe extractor to normalize export symlinks; recreate
    empty runtime mount directories and mode-1777 `tmp`.
-5. Collect notices from locked dependency sources with `notices.py`, then build:
+5. Generate Cargo metadata from the pinned engine source with `cargo metadata
+   --locked --format-version 1 --manifest-path ENGINE_SOURCE/Cargo.toml`, saving
+   stdout to a private JSON file. Collect notices explicitly:
+
+```sh
+python3 scripts/release/notices.py --engine-source ENGINE_SOURCE \
+  --rust-metadata PRIVATE_CARGO_METADATA --output NEW_NOTICES_DIRECTORY
+```
+
+The collector binds its Go module files, engine Cargo lock and metadata hash in
+`provenance.json`; `dependencies.json` enumerates packages and notice paths, and
+`inventory.json` binds every copied notice's bytes, type and mode. Workspace crates
+inherit the pinned engine license when they have none of their own. A third-party
+crate that declares a license but ships no notice file is explicitly recorded as
+`upstream-no-notice-file`; the collector does not invent its missing copyright
+notice. Inspect that list when assembling redistributable source material.
+
+6. Build with explicit source and notice inputs. The assembler checks the required
+   engine `LICENSE` and `Cargo.lock` against [source provenance](inputs/source.json),
+   verifies all native notices and dependency inventory before invoking Go, and
+   checks the copied license inventory again before producing a manifest:
+
 
 ```sh
 python3 scripts/release/bundle.py --os darwin --arch arm64 --version VERSION \
   --engine PATCHED_ENGINE --runtime-assets VERIFIED_RUNTIME_DIRECTORY \
-  --image NORMALIZED_ARM64_IMAGE --output NEW_OUTPUT_DIRECTORY
+  --image NORMALIZED_ARM64_IMAGE --engine-source ENGINE_SOURCE \
+  --dependency-notices NEW_NOTICES_DIRECTORY --output NEW_OUTPUT_DIRECTORY
 ```
 
 Repeat for `--os linux --arch amd64`. `--no-archive` creates a local qualification
@@ -86,3 +108,17 @@ Authoritative sources: [libkrun](https://github.com/smol-machines/libkrun),
 [MoltenVK](https://github.com/KhronosGroup/MoltenVK),
 [libepoxy](https://github.com/anholt/libepoxy), and
 [virglrenderer](https://gitlab.freedesktop.org/virgl/virglrenderer).
+
+## Production Mac host
+
+Build the host with its stable `org.clankerbox.host` application identity and
+Local Network purpose string, using an existing Apple signing identity:
+
+```sh
+python3 scripts/release/build-mac-host.py --output NEW_HOST_BINARY \
+  --version VERSION --identity APPLE_SIGNING_IDENTITY
+```
+
+This embeds the versioned Info.plist, signs with hardened runtime, and verifies
+the Apple certificate chain. It does not install the executable or change
+keychain or privacy settings. Dev bundle hosts remain ad-hoc signed.

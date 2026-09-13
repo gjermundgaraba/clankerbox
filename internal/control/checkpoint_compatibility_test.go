@@ -26,7 +26,6 @@ func testCheckpointDeletionPlacement(t *testing.T, runtime, change string) {
 	cfg := config()
 	if runtime == smolvmRuntime {
 		cfg.Profiles[0].Runtime, cfg.Profiles[0].OS, cfg.Profiles[0].Arch = runtime, fixtureLinuxOS, fixtureAMD64
-		cfg.Profiles[0].ImagePath = fixtureRootfs
 	}
 	c, tr, in, path := setupControlConfig(t, cfg)
 	source := mustCreate(t, c, in, "source")
@@ -59,7 +58,7 @@ func testCheckpointDeletionPlacement(t *testing.T, runtime, change string) {
 		t.Fatal("restored with incompatible placement")
 	}
 	deletion, err := c.Derive(t.Context(), "checkpoint-delete", cp.ID, "delete", model.ChildInput{})
-	if runtime == tartRuntime || change == missingHost {
+	if change == missingHost {
 		if err == nil {
 			t.Fatal("deleted without required host/runtime placement")
 		}
@@ -70,7 +69,7 @@ func testCheckpointDeletionPlacement(t *testing.T, runtime, change string) {
 	}
 	// Even after profile retirement, accepted deletion remains a reservation.
 	_, err = c.Derive(t.Context(), "checkpoint-delete", cp.ID, "delete-again", model.ChildInput{})
-	expectCode(t, err, "operation_pending")
+	expectCode(t, err, model.ReasonOperationPending)
 	processHost(t, c, in.Host)
 	done, err := c.Operation(t.Context(), deletion.ID)
 	if err != nil || done.Status != succeededStatus {

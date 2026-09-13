@@ -1,4 +1,3 @@
-//nolint:testpackage // Exercises post-resume supervisor handling without a live VM.
 package host
 
 import (

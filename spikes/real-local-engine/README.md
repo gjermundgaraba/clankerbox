@@ -19,8 +19,8 @@ engine/supervisor tests. They do not qualify product RPC handlers or guest PTYs;
 | Trusted native exec and loopback-only TCP publication | PASS | PASS |
 | Explicit teardown leaves no gate VM records | PASS | PASS |
 
-Machine-readable results: [Mac](evidence/mac/mac-acceptance.json),
-[Linux](evidence/linux/acceptance.json). Commands, supervisor jobs and launch logs
+Machine-readable results: [Mac](../../docs/archive/real-local/engine-evidence/mac/mac-acceptance.json),
+[Linux](../../docs/archive/real-local/engine-evidence/linux/acceptance.json). Commands, supervisor jobs and launch logs
 are alongside those reports. Mac `parent-job-after-launch.txt` records an exited
 launcher while guest execution remains available. Linux SSH command completion
 precedes subsequent independent exec/HTTP requests. Final inventories record cleanup.
@@ -36,8 +36,8 @@ They do not establish host-reboot recovery or unsynced-write crash consistency.
 
 ## Reconciled engine artifact
 
-[pins.json](pins.json) records source/library revisions and artifact hashes.
-`runtime.patch` is the exact five-file deployed-source diff against smolvm
+[release pins](../../scripts/release/inputs/pins.json) records source/library revisions and artifact hashes.
+[runtime.patch](../../scripts/release/inputs/runtime.patch) is the exact five-file deployed-source diff against smolvm
 `e8d09ef616d363004d55b80a6cdb31a4e7e1842d` (v1.14.1), retrieved from the retained
 Linux build. It includes the later `state_probe.rs` lineage correction missing
 from the older local v1.14.1 working tree and original four-file patch manifest.

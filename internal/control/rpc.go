@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -17,12 +18,7 @@ import (
 
 type machineRPC struct{ c *Controller }
 
-func rpcError(err error) error {
-	if e, ok := errors.AsType[*APIError](err); ok {
-		return rpcmodel.ErrorFromCode(e.Code, e.Message, e.Status == http.StatusServiceUnavailable)
-	}
-	return rpcmodel.ToError(err)
-}
+func rpcError(err error) error { return rpcmodel.ToError(err) }
 func operationResult(o model.Operation, err error) (*connect.Response[v1.Operation], error) {
 	if err != nil {
 		return nil, rpcError(err)
@@ -67,7 +63,7 @@ func (s *machineRPC) ListMachines(
 	r *connect.Request[v1.ListMachinesRequest],
 ) (*connect.Response[v1.ListMachinesResponse], error) {
 	if err := model.ValidateLabels(r.Msg.GetLabels()); err != nil {
-		return nil, rpcmodel.ErrorFromCode("invalid_request", err.Error(), false)
+		return nil, rpcmodel.ToError(model.NewError(model.ReasonInvalid, err.Error(), false))
 	}
 	ms, e := s.c.List(ctx)
 	if e != nil {
@@ -127,8 +123,11 @@ func (c *Controller) resolve(ctx context.Context, id string) (string, error) {
 	defer c.mu.Unlock()
 	var resolved string
 	e := c.db.QueryRowContext(ctx, "SELECT id FROM machines WHERE name=? AND deleted=0", id).Scan(&resolved)
+	if errors.Is(e, sql.ErrNoRows) {
+		return "", model.NewError(model.ReasonNotFound, "machine not found", false)
+	}
 	if e != nil {
-		return "", problem(http.StatusNotFound, "not_found", "machine not found")
+		return "", e
 	}
 	return resolved, nil
 }

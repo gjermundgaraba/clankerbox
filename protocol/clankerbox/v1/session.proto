@@ -13,13 +13,6 @@ service SessionService {
   rpc AttachSession(stream AttachmentRequest) returns (stream AttachmentEvent);
 }
 // Authenticated private guest endpoint. Identical terminal messages across relays.
-service GuestService {
-  rpc DescribeGuest(DescribeGuestRequest) returns (GuestDescription);
-  rpc CreateSession(CreateSessionRequest) returns (Session);
-  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
-  rpc EndSession(EndSessionRequest) returns (Session);
-  rpc AttachSession(stream AttachmentRequest) returns (stream AttachmentEvent);
-}
 message DescribeGuestRequest { string machine_id = 1; }
 message GuestDescription {
   string machine_id = 1;

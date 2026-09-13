@@ -62,13 +62,8 @@ The public services are:
 | --- | --- |
 | `MachineService` | Host/profile discovery, machine and checkpoint lifecycle, operation inspection, synchronous label replacement. |
 | `SessionService` | `DescribeGuest`, `CreateSession`, `ListSessions`, `EndSession`, `AttachSession`. |
-| private `HostService` | Typed durable operation submission/status, machine inspection and description, and machine-routed session RPCs. |
-| private `GuestService` | The same session methods and attachment messages at the guest boundary. |
-
-There is no REST session endpoint, HTTP upgrade carrier, forced-command SSH link,
-handwritten JSON operation envelope or compatibility listener. Replace old clients
-and deploy a matching generated SDK. Historical completion records qualify their
-recorded releases only, not the current transport.
+| private `HostService` | Typed durable operation submission/status, machine inspection and host description. |
+| private mounts of `SessionService` | The same generated session contract at host and guest boundaries, with endpoint-owned authorization. |
 
 ## Session ownership and persistence
 
@@ -129,7 +124,7 @@ durable operation; cancellation of the request does not cancel accepted work.
 
 An `AttachmentRequest` contains exactly one of `Open`, `Input` or `Resize`.
 `Open` must be first and may appear only once. It carries the machine/session IDs,
-expected engine digest and optional `ResumeCursor {offset, incarnation}`.
+optional expected engine digest and `ResumeCursor {offset, incarnation}`.
 Subsequent controls name this attachment's session implicitly and use strictly
 increasing positive `uint64` sequence IDs.
 
@@ -146,8 +141,9 @@ after validating their limit. Protobuf JSON represents 64-bit integers as string
 ### Atomic opening
 
 The session mutex selects the cut, captures the immutable bootstrap prefix and
-registers the subscriber. Sending happens outside that mutex: Opened, complete
-prefix, then the ordered live tail. Output at the cut is neither skipped nor
+registers the subscriber. Sending happens outside that mutex: Opened first, then
+the prefix before terminal-state events from the live tail. ACKs may interleave
+with prefix chunks after Opened; controls retain their admission order. Output at the cut is neither skipped nor
 duplicated. A snapshot consumes no output offsets.
 
 | Mode | Contract |
@@ -172,7 +168,8 @@ offset; the informational session record is not a substitute for that event.
 
 `DescribeGuest` and `Opened.guest` expose schema `clankerbox.v1`, machine ID,
 incarnation, boot ID, daemon version, workload user, engine digest and capacity.
-Snapshot consumers require exact engine-digest equality. A mismatch is a visible
+Snapshot consumers supply their expected engine digest and require exact equality.
+The guest checks it when supplied; attaching does not require a discovery round-trip. A mismatch is a visible
 incompatible state and does not end existing sessions. Installing a new binary
 does not hand off live PTYs: explicitly stop/start to replace a daemon after
 inspecting any uncertain lifecycle operation.
@@ -202,18 +199,27 @@ Each subscriber has an immutable bootstrap prefix separate from its live-tail
 budget. The tail is bounded at 8 MiB of output and 1024 items, with bounded send
 stall handling. Overflow drops that attachment with best-effort Gap. Relays own
 bounded streams and propagate cancellation; disconnect never invokes EndSession.
+A clean request half-close stops control admission, drains the finite set of responses
+already queued, and detaches. It does not wait for the shell or an unbounded live
+tail. Relays close the upstream request direction and receive its clean completion.
+
+Controls can be admitted while a snapshot or resume prefix is being sent. One
+bounded event queue carries ACKs and terminal events; a stalled reader eventually
+backpressures its own attachment. Clankerdesk keeps user input disabled until its
+mirror is ready.
 
 ## Host routing and lifecycle barriers
 
 The persistent host admits guest calls only for the owned, prepared, running
 machine at its accepted generation, without conflicting source reservations.
-Registering a guest lease and accepting an operation share the admission mutex.
+Registering a guest lease and publishing journal reservations share a short
+admission mutex; native effects run outside it. Unrelated machines remain usable.
 Fork/checkpoint reservations revoke existing guest leases before runtime work;
 consumers reconnect after admission becomes available. Rebinding copied machine
 identity rejects inherited parent sessions without losing PTY ownership.
 
 Guest binary installation and management use the runtime's native privileged
-bootstrap channel. Application terminal traffic uses GuestService. A host or
+bootstrap channel. Application terminal traffic uses SessionService. A host or
 controller restart reconstructs its routing from durable machine/operation state;
 the PTY remains with the guest. Public Machine includes a sanitized guest status;
 public Host/Profile omit private endpoints, certificates and local image paths.
@@ -273,8 +279,8 @@ The transport gate records Go-to-Go and actual Node-to-Go HTTP/2 over h2c, Unix
 and verified TLS, including duplex operation, cancellation, large chunks,
 bounded slow readers and exact bigint values. The separate Caddy gate uses the
 actual edge binary on an isolated listener; it does not qualify production-domain
-routing. See [RPC gate](../spikes/real-local-rpc/README.md),
-[proxy gate](../spikes/real-local-proxy/README.md) and
-[real guest identity proof](../spikes/real-local-guest/README.md).
+routing. See [RPC gate](archive/real-local/real-local-rpc.md),
+[proxy gate](archive/real-local/real-local-proxy.md) and
+[real guest identity proof](archive/real-local/real-local-guest.md).
 Historical terminal and runtime records retain their original scope. A deployment
 must validate its matching guest binaries, image, runtime bundle and consumer SDK.

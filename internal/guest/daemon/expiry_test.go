@@ -1,4 +1,3 @@
-//nolint:testpackage // Exercise the real TLS admission configuration with an advanced verification clock.
 package daemon
 
 import (
@@ -42,7 +41,7 @@ func TestExpiredTransportCredentialsRejectAdmission(t *testing.T) {
 				ident.config.Time = future
 				ident.mu.Unlock()
 			}
-			rpc := clankerboxv1connect.NewGuestServiceClient(client, endpoint)
+			rpc := clankerboxv1connect.NewSessionServiceClient(client, endpoint)
 			if _, err = rpc.DescribeGuest(t.Context(), request); err == nil {
 				t.Fatal("expired " + side + " credential admitted")
 			}

@@ -14,11 +14,16 @@ import (
 
 type deadlineKey struct{}
 
+type streamIO struct {
+	setWriteDeadline func(time.Time) error
+	stopReading      func() error
+}
+
 // WithWriteDeadline exposes only this HTTP stream's deadline to its handler.
 func WithWriteDeadline(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rc := http.NewResponseController(w)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), deadlineKey{}, rc.SetWriteDeadline)))
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), deadlineKey{}, streamIO{setWriteDeadline: rc.SetWriteDeadline, stopReading: r.Body.Close})))
 	})
 }
 
@@ -28,15 +33,25 @@ func WriteEvent(
 	stream *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent],
 	event *v1.AttachmentEvent,
 ) error {
-	set, ok := ctx.Value(deadlineKey{}).(func(time.Time) error)
+	control, ok := ctx.Value(deadlineKey{}).(streamIO)
 	if !ok {
 		return errors.New("RPC stream handler lacks write-deadline middleware")
 	}
-	if err := set(time.Now().Add(StallTimeout)); err != nil {
+	if err := control.setWriteDeadline(time.Now().Add(StallTimeout)); err != nil {
 		return err
 	}
 	err := stream.Send(event)
-	return errors.Join(err, set(time.Time{}))
+	return errors.Join(err, control.setWriteDeadline(time.Time{}))
+}
+
+// StopReading interrupts the handler's request reader without cancelling the
+// response direction. Call it before joining a control reader during teardown.
+func StopReading(ctx context.Context) error {
+	control, ok := ctx.Value(deadlineKey{}).(streamIO)
+	if !ok {
+		return errors.New("RPC stream handler lacks write-deadline middleware")
+	}
+	return control.stopReading()
 }
 
 // Relay preserves both message orders using a single in-flight message per
@@ -50,10 +65,15 @@ func Relay(
 	up *connect.BidiStreamForClient[v1.AttachmentRequest, v1.AttachmentEvent],
 	first *v1.AttachmentRequest,
 ) error {
+	var controlsDone chan struct{}
 	defer func() {
 		// Cancel blocked sends before closing their request stream. CloseRequest
 		// may otherwise wait for a sender that is still waiting on flow control.
 		cancel()
+		_ = StopReading(ctx)
+		if controlsDone != nil {
+			<-controlsDone
+		}
 		_ = up.CloseRequest()
 		_ = up.CloseResponse()
 	}()
@@ -66,7 +86,11 @@ func Relay(
 		return err
 	}
 	controls := make(chan error, 1)
-	go relayControls(down, send, controls, cancel)
+	controlsDone = make(chan struct{})
+	go func() {
+		defer close(controlsDone)
+		relayControls(down, send, up.CloseRequest, controls, cancel)
+	}()
 	for {
 		event, err := up.Receive()
 		if err != nil {
@@ -91,17 +115,25 @@ func Relay(
 func relayControls(
 	down *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent],
 	send func(*v1.AttachmentRequest) error,
+	closeRequest func() error,
 	controls chan<- error,
 	cancel context.CancelFunc,
 ) {
-	defer cancel()
 	for {
 		message, err := down.Receive()
 		if err == nil {
 			err = send(message)
 		}
 		if err != nil {
+			if errors.Is(err, io.EOF) {
+				if closeErr := closeRequest(); closeErr != nil {
+					err = closeErr
+				}
+			}
 			controls <- err
+			if !errors.Is(err, io.EOF) {
+				cancel()
+			}
 			return
 		}
 	}

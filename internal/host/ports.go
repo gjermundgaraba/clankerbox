@@ -24,7 +24,7 @@ const portLeaseFile = "leases.json"
 // The engine still must bind successfully: unrelated applications do not use this registry.
 func (h *Helper) port(ctx context.Context, id string) (int, error) {
 	if !model.ValidID(id) {
-		return 0, errors.New("invalid port lease machine identity")
+		return 0, model.NewError(model.ReasonInvalid, "invalid port lease machine identity", false)
 	}
 	var chosen int
 	err := h.withPortLeases(func(leases map[int]portLease) error {
@@ -66,7 +66,7 @@ func (h *Helper) availablePort(ctx context.Context, leases map[int]portLease) (i
 		}
 		return port, nil
 	}
-	return 0, errors.New("capacity: private guest RPC port range exhausted")
+	return 0, model.NewError(model.ReasonCapacity, "capacity: private guest RPC port range exhausted", true)
 }
 func (h *Helper) withPortLeases(fn func(map[int]portLease) error) (resultErr error) {
 	dir, err := statefs.Open(h.cfg.PortLeaseRoot)

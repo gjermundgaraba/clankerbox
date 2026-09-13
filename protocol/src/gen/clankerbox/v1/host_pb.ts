@@ -8,15 +8,13 @@ import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
 import type { Checkpoint, GuestStatus, MachineState, OperationStatus, Profile } from "./resources_pb.js";
 import { file_clankerbox_v1_resources } from "./resources_pb.js";
-import type { AttachmentEventSchema, AttachmentRequestSchema, CreateSessionRequestSchema, DescribeGuestRequestSchema, EndSessionRequestSchema, GuestDescriptionSchema, ListSessionsRequestSchema, ListSessionsResponseSchema, SessionSchema } from "./session_pb.js";
-import { file_clankerbox_v1_session } from "./session_pb.js";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file clankerbox/v1/host.proto.
  */
 export const file_clankerbox_v1_host: GenFile = /*@__PURE__*/
-  fileDesc("ChhjbGFua2VyYm94L3YxL2hvc3QucHJvdG8SDWNsYW5rZXJib3gudjEiFQoTRGVzY3JpYmVIb3N0UmVxdWVzdCKHAQoPSG9zdERlc2NyaXB0aW9uEg8KB2hvc3RfaWQYASABKAkSCgoCb3MYAiABKAkSDAoEYXJjaBgDIAEoCRIPCgd2ZXJzaW9uGAQgASgJEigKCHByb2ZpbGVzGAUgAygLMhYuY2xhbmtlcmJveC52MS5Qcm9maWxlEg4KBnNjaGVtYRgGIAEoCSJNCg5Qcm9maWxlQmluZGluZxInCgdwcm9maWxlGAEgASgLMhYuY2xhbmtlcmJveC52MS5Qcm9maWxlEhIKCmltYWdlX3BhdGgYAiABKAkicgoRQ2hlY2twb2ludEJpbmRpbmcSLQoKY2hlY2twb2ludBgBIAEoCzIZLmNsYW5rZXJib3gudjEuQ2hlY2twb2ludBIuCgdwcm9maWxlGAIgASgLMh0uY2xhbmtlcmJveC52MS5Qcm9maWxlQmluZGluZyKgAQoRT3BlcmF0aW9uSWRlbnRpdHkSFAoMb3BlcmF0aW9uX2lkGAEgASgJEhIKCm1hY2hpbmVfaWQYAiABKAkSEgoKZ2VuZXJhdGlvbhgDIAEoAxIMCgRuYW1lGAQgASgJEi4KB3Byb2ZpbGUYBSABKAsyHS5jbGFua2VyYm94LnYxLlByb2ZpbGVCaW5kaW5nEg8KB2hvc3RfaWQYBiABKAkiEwoRQ3JlYXRlSG9zdE1hY2hpbmUiEgoQU3RhcnRIb3N0TWFjaGluZSIRCg9TdG9wSG9zdE1hY2hpbmUiEwoRRGVsZXRlSG9zdE1hY2hpbmUiRwoPRm9ya0hvc3RNYWNoaW5lEhkKEXNvdXJjZV9tYWNoaW5lX2lkGAEgASgJEhkKEXNvdXJjZV9nZW5lcmF0aW9uGAIgASgDIoMBChVDYXB0dXJlSG9zdENoZWNrcG9pbnQSGQoRc291cmNlX21hY2hpbmVfaWQYASABKAkSGQoRc291cmNlX2dlbmVyYXRpb24YAiABKAMSNAoKY2hlY2twb2ludBgDIAEoCzIgLmNsYW5rZXJib3gudjEuQ2hlY2twb2ludEJpbmRpbmcigwEKFVJlc3RvcmVIb3N0Q2hlY2twb2ludBIZChFzb3VyY2VfbWFjaGluZV9pZBgBIAEoCRIZChFzb3VyY2VfZ2VuZXJhdGlvbhgCIAEoAxI0CgpjaGVja3BvaW50GAMgASgLMiAuY2xhbmtlcmJveC52MS5DaGVja3BvaW50QmluZGluZyJMChREZWxldGVIb3N0Q2hlY2twb2ludBI0CgpjaGVja3BvaW50GAEgASgLMiAuY2xhbmtlcmJveC52MS5DaGVja3BvaW50QmluZGluZyKaBAoWU3VibWl0T3BlcmF0aW9uUmVxdWVzdBIyCghpZGVudGl0eRgBIAEoCzIgLmNsYW5rZXJib3gudjEuT3BlcmF0aW9uSWRlbnRpdHkSMgoGY3JlYXRlGAIgASgLMiAuY2xhbmtlcmJveC52MS5DcmVhdGVIb3N0TWFjaGluZUgAEjAKBXN0YXJ0GAMgASgLMh8uY2xhbmtlcmJveC52MS5TdGFydEhvc3RNYWNoaW5lSAASLgoEc3RvcBgEIAEoCzIeLmNsYW5rZXJib3gudjEuU3RvcEhvc3RNYWNoaW5lSAASMgoGZGVsZXRlGAUgASgLMiAuY2xhbmtlcmJveC52MS5EZWxldGVIb3N0TWFjaGluZUgAEi4KBGZvcmsYBiABKAsyHi5jbGFua2VyYm94LnYxLkZvcmtIb3N0TWFjaGluZUgAEkIKEmNhcHR1cmVfY2hlY2twb2ludBgHIAEoCzIkLmNsYW5rZXJib3gudjEuQ2FwdHVyZUhvc3RDaGVja3BvaW50SAASQgoScmVzdG9yZV9jaGVja3BvaW50GAggASgLMiQuY2xhbmtlcmJveC52MS5SZXN0b3JlSG9zdENoZWNrcG9pbnRIABJAChFkZWxldGVfY2hlY2twb2ludBgJIAEoCzIjLmNsYW5rZXJib3gudjEuRGVsZXRlSG9zdENoZWNrcG9pbnRIAEIICgZhY3Rpb24icgoXU3VibWl0T3BlcmF0aW9uUmVzcG9uc2USFAoMb3BlcmF0aW9uX2lkGAEgASgJEhAKCGFjY2VwdGVkGAIgASgIEi8KCW9wZXJhdGlvbhgDIAEoCzIcLmNsYW5rZXJib3gudjEuSG9zdE9wZXJhdGlvbiIvChdHZXRIb3N0T3BlcmF0aW9uUmVxdWVzdBIUCgxvcGVyYXRpb25faWQYASABKAki9QEKDUhvc3RPcGVyYXRpb24SFAoMb3BlcmF0aW9uX2lkGAEgASgJEi4KBnN0YXR1cxgCIAEoDjIeLmNsYW5rZXJib3gudjEuT3BlcmF0aW9uU3RhdHVzEg0KBWVycm9yGAMgASgJEi8KC29ic2VydmF0aW9uGAQgASgLMhouY2xhbmtlcmJveC52MS5PYnNlcnZhdGlvbhI0CgpjaGVja3BvaW50GAUgASgLMiAuY2xhbmtlcmJveC52MS5DaGVja3BvaW50QmluZGluZxINCgVwaGFzZRgGIAEoCRIZChFpbnB1dF9maW5nZXJwcmludBgHIAEoCSJIChVJbnNwZWN0TWFjaGluZVJlcXVlc3QSEgoKbWFjaGluZV9pZBgBIAEoCRIbChNleHBlY3RlZF9nZW5lcmF0aW9uGAIgASgDIuABCgtPYnNlcnZhdGlvbhISCgptYWNoaW5lX2lkGAEgASgJEhIKCmdlbmVyYXRpb24YAiABKAMSKgoFc3RhdGUYAyABKA4yGy5jbGFua2VyYm94LnYxLk1hY2hpbmVTdGF0ZRIQCghwcmVwYXJlZBgEIAEoCBIPCgdkZWxldGVkGAUgASgIEi8KC29ic2VydmVkX2F0GAYgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIpCgVndWVzdBgHIAEoCzIaLmNsYW5rZXJib3gudjEuR3Vlc3RTdGF0dXMyjgYKC0hvc3RTZXJ2aWNlElIKDERlc2NyaWJlSG9zdBIiLmNsYW5rZXJib3gudjEuRGVzY3JpYmVIb3N0UmVxdWVzdBoeLmNsYW5rZXJib3gudjEuSG9zdERlc2NyaXB0aW9uEmAKD1N1Ym1pdE9wZXJhdGlvbhIlLmNsYW5rZXJib3gudjEuU3VibWl0T3BlcmF0aW9uUmVxdWVzdBomLmNsYW5rZXJib3gudjEuU3VibWl0T3BlcmF0aW9uUmVzcG9uc2USWAoQR2V0SG9zdE9wZXJhdGlvbhImLmNsYW5rZXJib3gudjEuR2V0SG9zdE9wZXJhdGlvblJlcXVlc3QaHC5jbGFua2VyYm94LnYxLkhvc3RPcGVyYXRpb24SUgoOSW5zcGVjdE1hY2hpbmUSJC5jbGFua2VyYm94LnYxLkluc3BlY3RNYWNoaW5lUmVxdWVzdBoaLmNsYW5rZXJib3gudjEuT2JzZXJ2YXRpb24SVQoNRGVzY3JpYmVHdWVzdBIjLmNsYW5rZXJib3gudjEuRGVzY3JpYmVHdWVzdFJlcXVlc3QaHy5jbGFua2VyYm94LnYxLkd1ZXN0RGVzY3JpcHRpb24STAoNQ3JlYXRlU2Vzc2lvbhIjLmNsYW5rZXJib3gudjEuQ3JlYXRlU2Vzc2lvblJlcXVlc3QaFi5jbGFua2VyYm94LnYxLlNlc3Npb24SVwoMTGlzdFNlc3Npb25zEiIuY2xhbmtlcmJveC52MS5MaXN0U2Vzc2lvbnNSZXF1ZXN0GiMuY2xhbmtlcmJveC52MS5MaXN0U2Vzc2lvbnNSZXNwb25zZRJGCgpFbmRTZXNzaW9uEiAuY2xhbmtlcmJveC52MS5FbmRTZXNzaW9uUmVxdWVzdBoWLmNsYW5rZXJib3gudjEuU2Vzc2lvbhJVCg1BdHRhY2hTZXNzaW9uEiAuY2xhbmtlcmJveC52MS5BdHRhY2htZW50UmVxdWVzdBoeLmNsYW5rZXJib3gudjEuQXR0YWNobWVudEV2ZW50KAEwAUIrWiljbGFua2VyYm94L2dlbi9jbGFua2VyYm94L3YxO2NsYW5rZXJib3h2MWIGcHJvdG8z", [file_google_protobuf_timestamp, file_clankerbox_v1_resources, file_clankerbox_v1_session]);
+  fileDesc("ChhjbGFua2VyYm94L3YxL2hvc3QucHJvdG8SDWNsYW5rZXJib3gudjEiFQoTRGVzY3JpYmVIb3N0UmVxdWVzdCKHAQoPSG9zdERlc2NyaXB0aW9uEg8KB2hvc3RfaWQYASABKAkSCgoCb3MYAiABKAkSDAoEYXJjaBgDIAEoCRIPCgd2ZXJzaW9uGAQgASgJEigKCHByb2ZpbGVzGAUgAygLMhYuY2xhbmtlcmJveC52MS5Qcm9maWxlEg4KBnNjaGVtYRgGIAEoCSKZAQoRT3BlcmF0aW9uSWRlbnRpdHkSFAoMb3BlcmF0aW9uX2lkGAEgASgJEhIKCm1hY2hpbmVfaWQYAiABKAkSEgoKZ2VuZXJhdGlvbhgDIAEoAxIMCgRuYW1lGAQgASgJEicKB3Byb2ZpbGUYBSABKAsyFi5jbGFua2VyYm94LnYxLlByb2ZpbGUSDwoHaG9zdF9pZBgGIAEoCSITChFDcmVhdGVIb3N0TWFjaGluZSISChBTdGFydEhvc3RNYWNoaW5lIhEKD1N0b3BIb3N0TWFjaGluZSITChFEZWxldGVIb3N0TWFjaGluZSJHCg9Gb3JrSG9zdE1hY2hpbmUSGQoRc291cmNlX21hY2hpbmVfaWQYASABKAkSGQoRc291cmNlX2dlbmVyYXRpb24YAiABKAMifAoVQ2FwdHVyZUhvc3RDaGVja3BvaW50EhkKEXNvdXJjZV9tYWNoaW5lX2lkGAEgASgJEhkKEXNvdXJjZV9nZW5lcmF0aW9uGAIgASgDEi0KCmNoZWNrcG9pbnQYAyABKAsyGS5jbGFua2VyYm94LnYxLkNoZWNrcG9pbnQifAoVUmVzdG9yZUhvc3RDaGVja3BvaW50EhkKEXNvdXJjZV9tYWNoaW5lX2lkGAEgASgJEhkKEXNvdXJjZV9nZW5lcmF0aW9uGAIgASgDEi0KCmNoZWNrcG9pbnQYAyABKAsyGS5jbGFua2VyYm94LnYxLkNoZWNrcG9pbnQiRQoURGVsZXRlSG9zdENoZWNrcG9pbnQSLQoKY2hlY2twb2ludBgBIAEoCzIZLmNsYW5rZXJib3gudjEuQ2hlY2twb2ludCKaBAoWU3VibWl0T3BlcmF0aW9uUmVxdWVzdBIyCghpZGVudGl0eRgBIAEoCzIgLmNsYW5rZXJib3gudjEuT3BlcmF0aW9uSWRlbnRpdHkSMgoGY3JlYXRlGAIgASgLMiAuY2xhbmtlcmJveC52MS5DcmVhdGVIb3N0TWFjaGluZUgAEjAKBXN0YXJ0GAMgASgLMh8uY2xhbmtlcmJveC52MS5TdGFydEhvc3RNYWNoaW5lSAASLgoEc3RvcBgEIAEoCzIeLmNsYW5rZXJib3gudjEuU3RvcEhvc3RNYWNoaW5lSAASMgoGZGVsZXRlGAUgASgLMiAuY2xhbmtlcmJveC52MS5EZWxldGVIb3N0TWFjaGluZUgAEi4KBGZvcmsYBiABKAsyHi5jbGFua2VyYm94LnYxLkZvcmtIb3N0TWFjaGluZUgAEkIKEmNhcHR1cmVfY2hlY2twb2ludBgHIAEoCzIkLmNsYW5rZXJib3gudjEuQ2FwdHVyZUhvc3RDaGVja3BvaW50SAASQgoScmVzdG9yZV9jaGVja3BvaW50GAggASgLMiQuY2xhbmtlcmJveC52MS5SZXN0b3JlSG9zdENoZWNrcG9pbnRIABJAChFkZWxldGVfY2hlY2twb2ludBgJIAEoCzIjLmNsYW5rZXJib3gudjEuRGVsZXRlSG9zdENoZWNrcG9pbnRIAEIICgZhY3Rpb24icgoXU3VibWl0T3BlcmF0aW9uUmVzcG9uc2USFAoMb3BlcmF0aW9uX2lkGAEgASgJEhAKCGFjY2VwdGVkGAIgASgIEi8KCW9wZXJhdGlvbhgDIAEoCzIcLmNsYW5rZXJib3gudjEuSG9zdE9wZXJhdGlvbiIvChdHZXRIb3N0T3BlcmF0aW9uUmVxdWVzdBIUCgxvcGVyYXRpb25faWQYASABKAki7gEKDUhvc3RPcGVyYXRpb24SFAoMb3BlcmF0aW9uX2lkGAEgASgJEi4KBnN0YXR1cxgCIAEoDjIeLmNsYW5rZXJib3gudjEuT3BlcmF0aW9uU3RhdHVzEg0KBWVycm9yGAMgASgJEi8KC29ic2VydmF0aW9uGAQgASgLMhouY2xhbmtlcmJveC52MS5PYnNlcnZhdGlvbhItCgpjaGVja3BvaW50GAUgASgLMhkuY2xhbmtlcmJveC52MS5DaGVja3BvaW50Eg0KBXBoYXNlGAYgASgJEhkKEWlucHV0X2ZpbmdlcnByaW50GAcgASgJIkgKFUluc3BlY3RNYWNoaW5lUmVxdWVzdBISCgptYWNoaW5lX2lkGAEgASgJEhsKE2V4cGVjdGVkX2dlbmVyYXRpb24YAiABKAMi4AEKC09ic2VydmF0aW9uEhIKCm1hY2hpbmVfaWQYASABKAkSEgoKZ2VuZXJhdGlvbhgCIAEoAxIqCgVzdGF0ZRgDIAEoDjIbLmNsYW5rZXJib3gudjEuTWFjaGluZVN0YXRlEhAKCHByZXBhcmVkGAQgASgIEg8KB2RlbGV0ZWQYBSABKAgSLwoLb2JzZXJ2ZWRfYXQYBiABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEikKBWd1ZXN0GAcgASgLMhouY2xhbmtlcmJveC52MS5HdWVzdFN0YXR1czLxAgoLSG9zdFNlcnZpY2USUgoMRGVzY3JpYmVIb3N0EiIuY2xhbmtlcmJveC52MS5EZXNjcmliZUhvc3RSZXF1ZXN0Gh4uY2xhbmtlcmJveC52MS5Ib3N0RGVzY3JpcHRpb24SYAoPU3VibWl0T3BlcmF0aW9uEiUuY2xhbmtlcmJveC52MS5TdWJtaXRPcGVyYXRpb25SZXF1ZXN0GiYuY2xhbmtlcmJveC52MS5TdWJtaXRPcGVyYXRpb25SZXNwb25zZRJYChBHZXRIb3N0T3BlcmF0aW9uEiYuY2xhbmtlcmJveC52MS5HZXRIb3N0T3BlcmF0aW9uUmVxdWVzdBocLmNsYW5rZXJib3gudjEuSG9zdE9wZXJhdGlvbhJSCg5JbnNwZWN0TWFjaGluZRIkLmNsYW5rZXJib3gudjEuSW5zcGVjdE1hY2hpbmVSZXF1ZXN0GhouY2xhbmtlcmJveC52MS5PYnNlcnZhdGlvbkIrWiljbGFua2VyYm94L2dlbi9jbGFua2VyYm94L3YxO2NsYW5rZXJib3h2MWIGcHJvdG8z", [file_google_protobuf_timestamp, file_clankerbox_v1_resources]);
 
 /**
  * @generated from message clankerbox.v1.DescribeHostRequest
@@ -74,53 +72,6 @@ export const HostDescriptionSchema: GenMessage<HostDescription> = /*@__PURE__*/
   messageDesc(file_clankerbox_v1_host, 1);
 
 /**
- * Private configuration pin. Public discovery uses only Profile, never this DTO.
- * The host must validate this exact binding against its trusted installed profile.
- *
- * @generated from message clankerbox.v1.ProfileBinding
- */
-export type ProfileBinding = Message<"clankerbox.v1.ProfileBinding"> & {
-  /**
-   * @generated from field: clankerbox.v1.Profile profile = 1;
-   */
-  profile?: Profile | undefined;
-
-  /**
-   * @generated from field: string image_path = 2;
-   */
-  imagePath: string;
-};
-
-/**
- * Describes the message clankerbox.v1.ProfileBinding.
- * Use `create(ProfileBindingSchema)` to create a new message.
- */
-export const ProfileBindingSchema: GenMessage<ProfileBinding> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 2);
-
-/**
- * @generated from message clankerbox.v1.CheckpointBinding
- */
-export type CheckpointBinding = Message<"clankerbox.v1.CheckpointBinding"> & {
-  /**
-   * @generated from field: clankerbox.v1.Checkpoint checkpoint = 1;
-   */
-  checkpoint?: Checkpoint | undefined;
-
-  /**
-   * @generated from field: clankerbox.v1.ProfileBinding profile = 2;
-   */
-  profile?: ProfileBinding | undefined;
-};
-
-/**
- * Describes the message clankerbox.v1.CheckpointBinding.
- * Use `create(CheckpointBindingSchema)` to create a new message.
- */
-export const CheckpointBindingSchema: GenMessage<CheckpointBinding> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 3);
-
-/**
  * @generated from message clankerbox.v1.OperationIdentity
  */
 export type OperationIdentity = Message<"clankerbox.v1.OperationIdentity"> & {
@@ -145,9 +96,9 @@ export type OperationIdentity = Message<"clankerbox.v1.OperationIdentity"> & {
   name: string;
 
   /**
-   * @generated from field: clankerbox.v1.ProfileBinding profile = 5;
+   * @generated from field: clankerbox.v1.Profile profile = 5;
    */
-  profile?: ProfileBinding | undefined;
+  profile?: Profile | undefined;
 
   /**
    * @generated from field: string host_id = 6;
@@ -160,7 +111,7 @@ export type OperationIdentity = Message<"clankerbox.v1.OperationIdentity"> & {
  * Use `create(OperationIdentitySchema)` to create a new message.
  */
 export const OperationIdentitySchema: GenMessage<OperationIdentity> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 4);
+  messageDesc(file_clankerbox_v1_host, 2);
 
 /**
  * @generated from message clankerbox.v1.CreateHostMachine
@@ -173,7 +124,7 @@ export type CreateHostMachine = Message<"clankerbox.v1.CreateHostMachine"> & {
  * Use `create(CreateHostMachineSchema)` to create a new message.
  */
 export const CreateHostMachineSchema: GenMessage<CreateHostMachine> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 5);
+  messageDesc(file_clankerbox_v1_host, 3);
 
 /**
  * @generated from message clankerbox.v1.StartHostMachine
@@ -186,7 +137,7 @@ export type StartHostMachine = Message<"clankerbox.v1.StartHostMachine"> & {
  * Use `create(StartHostMachineSchema)` to create a new message.
  */
 export const StartHostMachineSchema: GenMessage<StartHostMachine> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 6);
+  messageDesc(file_clankerbox_v1_host, 4);
 
 /**
  * @generated from message clankerbox.v1.StopHostMachine
@@ -199,7 +150,7 @@ export type StopHostMachine = Message<"clankerbox.v1.StopHostMachine"> & {
  * Use `create(StopHostMachineSchema)` to create a new message.
  */
 export const StopHostMachineSchema: GenMessage<StopHostMachine> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 7);
+  messageDesc(file_clankerbox_v1_host, 5);
 
 /**
  * @generated from message clankerbox.v1.DeleteHostMachine
@@ -212,7 +163,7 @@ export type DeleteHostMachine = Message<"clankerbox.v1.DeleteHostMachine"> & {
  * Use `create(DeleteHostMachineSchema)` to create a new message.
  */
 export const DeleteHostMachineSchema: GenMessage<DeleteHostMachine> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 8);
+  messageDesc(file_clankerbox_v1_host, 6);
 
 /**
  * @generated from message clankerbox.v1.ForkHostMachine
@@ -234,7 +185,7 @@ export type ForkHostMachine = Message<"clankerbox.v1.ForkHostMachine"> & {
  * Use `create(ForkHostMachineSchema)` to create a new message.
  */
 export const ForkHostMachineSchema: GenMessage<ForkHostMachine> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 9);
+  messageDesc(file_clankerbox_v1_host, 7);
 
 /**
  * @generated from message clankerbox.v1.CaptureHostCheckpoint
@@ -251,9 +202,9 @@ export type CaptureHostCheckpoint = Message<"clankerbox.v1.CaptureHostCheckpoint
   sourceGeneration: bigint;
 
   /**
-   * @generated from field: clankerbox.v1.CheckpointBinding checkpoint = 3;
+   * @generated from field: clankerbox.v1.Checkpoint checkpoint = 3;
    */
-  checkpoint?: CheckpointBinding | undefined;
+  checkpoint?: Checkpoint | undefined;
 };
 
 /**
@@ -261,7 +212,7 @@ export type CaptureHostCheckpoint = Message<"clankerbox.v1.CaptureHostCheckpoint
  * Use `create(CaptureHostCheckpointSchema)` to create a new message.
  */
 export const CaptureHostCheckpointSchema: GenMessage<CaptureHostCheckpoint> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 10);
+  messageDesc(file_clankerbox_v1_host, 8);
 
 /**
  * @generated from message clankerbox.v1.RestoreHostCheckpoint
@@ -278,9 +229,9 @@ export type RestoreHostCheckpoint = Message<"clankerbox.v1.RestoreHostCheckpoint
   sourceGeneration: bigint;
 
   /**
-   * @generated from field: clankerbox.v1.CheckpointBinding checkpoint = 3;
+   * @generated from field: clankerbox.v1.Checkpoint checkpoint = 3;
    */
-  checkpoint?: CheckpointBinding | undefined;
+  checkpoint?: Checkpoint | undefined;
 };
 
 /**
@@ -288,16 +239,16 @@ export type RestoreHostCheckpoint = Message<"clankerbox.v1.RestoreHostCheckpoint
  * Use `create(RestoreHostCheckpointSchema)` to create a new message.
  */
 export const RestoreHostCheckpointSchema: GenMessage<RestoreHostCheckpoint> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 11);
+  messageDesc(file_clankerbox_v1_host, 9);
 
 /**
  * @generated from message clankerbox.v1.DeleteHostCheckpoint
  */
 export type DeleteHostCheckpoint = Message<"clankerbox.v1.DeleteHostCheckpoint"> & {
   /**
-   * @generated from field: clankerbox.v1.CheckpointBinding checkpoint = 1;
+   * @generated from field: clankerbox.v1.Checkpoint checkpoint = 1;
    */
-  checkpoint?: CheckpointBinding | undefined;
+  checkpoint?: Checkpoint | undefined;
 };
 
 /**
@@ -305,7 +256,7 @@ export type DeleteHostCheckpoint = Message<"clankerbox.v1.DeleteHostCheckpoint">
  * Use `create(DeleteHostCheckpointSchema)` to create a new message.
  */
 export const DeleteHostCheckpointSchema: GenMessage<DeleteHostCheckpoint> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 12);
+  messageDesc(file_clankerbox_v1_host, 10);
 
 /**
  * @generated from message clankerbox.v1.SubmitOperationRequest
@@ -375,7 +326,7 @@ export type SubmitOperationRequest = Message<"clankerbox.v1.SubmitOperationReque
  * Use `create(SubmitOperationRequestSchema)` to create a new message.
  */
 export const SubmitOperationRequestSchema: GenMessage<SubmitOperationRequest> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 13);
+  messageDesc(file_clankerbox_v1_host, 11);
 
 /**
  * @generated from message clankerbox.v1.SubmitOperationResponse
@@ -404,7 +355,7 @@ export type SubmitOperationResponse = Message<"clankerbox.v1.SubmitOperationResp
  * Use `create(SubmitOperationResponseSchema)` to create a new message.
  */
 export const SubmitOperationResponseSchema: GenMessage<SubmitOperationResponse> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 14);
+  messageDesc(file_clankerbox_v1_host, 12);
 
 /**
  * @generated from message clankerbox.v1.GetHostOperationRequest
@@ -421,7 +372,7 @@ export type GetHostOperationRequest = Message<"clankerbox.v1.GetHostOperationReq
  * Use `create(GetHostOperationRequestSchema)` to create a new message.
  */
 export const GetHostOperationRequestSchema: GenMessage<GetHostOperationRequest> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 15);
+  messageDesc(file_clankerbox_v1_host, 13);
 
 /**
  * @generated from message clankerbox.v1.HostOperation
@@ -448,9 +399,9 @@ export type HostOperation = Message<"clankerbox.v1.HostOperation"> & {
   observation?: Observation | undefined;
 
   /**
-   * @generated from field: clankerbox.v1.CheckpointBinding checkpoint = 5;
+   * @generated from field: clankerbox.v1.Checkpoint checkpoint = 5;
    */
-  checkpoint?: CheckpointBinding | undefined;
+  checkpoint?: Checkpoint | undefined;
 
   /**
    * Optional host journal metadata, separate from public operation completion.
@@ -470,7 +421,7 @@ export type HostOperation = Message<"clankerbox.v1.HostOperation"> & {
  * Use `create(HostOperationSchema)` to create a new message.
  */
 export const HostOperationSchema: GenMessage<HostOperation> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 16);
+  messageDesc(file_clankerbox_v1_host, 14);
 
 /**
  * @generated from message clankerbox.v1.InspectMachineRequest
@@ -492,7 +443,7 @@ export type InspectMachineRequest = Message<"clankerbox.v1.InspectMachineRequest
  * Use `create(InspectMachineRequestSchema)` to create a new message.
  */
 export const InspectMachineRequestSchema: GenMessage<InspectMachineRequest> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 17);
+  messageDesc(file_clankerbox_v1_host, 15);
 
 /**
  * @generated from message clankerbox.v1.Observation
@@ -539,7 +490,7 @@ export type Observation = Message<"clankerbox.v1.Observation"> & {
  * Use `create(ObservationSchema)` to create a new message.
  */
 export const ObservationSchema: GenMessage<Observation> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_host, 18);
+  messageDesc(file_clankerbox_v1_host, 16);
 
 /**
  * @generated from service clankerbox.v1.HostService
@@ -579,46 +530,6 @@ export const HostService: GenService<{
     methodKind: "unary";
     input: typeof InspectMachineRequestSchema;
     output: typeof ObservationSchema;
-  },
-  /**
-   * @generated from rpc clankerbox.v1.HostService.DescribeGuest
-   */
-  describeGuest: {
-    methodKind: "unary";
-    input: typeof DescribeGuestRequestSchema;
-    output: typeof GuestDescriptionSchema;
-  },
-  /**
-   * @generated from rpc clankerbox.v1.HostService.CreateSession
-   */
-  createSession: {
-    methodKind: "unary";
-    input: typeof CreateSessionRequestSchema;
-    output: typeof SessionSchema;
-  },
-  /**
-   * @generated from rpc clankerbox.v1.HostService.ListSessions
-   */
-  listSessions: {
-    methodKind: "unary";
-    input: typeof ListSessionsRequestSchema;
-    output: typeof ListSessionsResponseSchema;
-  },
-  /**
-   * @generated from rpc clankerbox.v1.HostService.EndSession
-   */
-  endSession: {
-    methodKind: "unary";
-    input: typeof EndSessionRequestSchema;
-    output: typeof SessionSchema;
-  },
-  /**
-   * @generated from rpc clankerbox.v1.HostService.AttachSession
-   */
-  attachSession: {
-    methodKind: "bidi_streaming";
-    input: typeof AttachmentRequestSchema;
-    output: typeof AttachmentEventSchema;
   },
 }> = /*@__PURE__*/
   serviceDesc(file_clankerbox_v1_host, 0);

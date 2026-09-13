@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -18,32 +19,58 @@ import (
 
 // RPCTransport waits for the host's durable final result, never treating its
 // acceptance acknowledgement as completion of the controller reservation.
-type RPCTransport struct{}
+type RPCTransport struct {
+	mu      sync.Mutex
+	clients map[string]*hostClients
+	closed  bool
+}
 
-func hostClient(h model.Host) (clankerboxv1connect.HostServiceClient, *http.Client, error) {
-	client, origin, err := rpctransport.Client(
-		h.Endpoint,
-		rpctransport.Credentials{CAFile: h.TLSCA, CertFile: h.TLSCert, KeyFile: h.TLSKey, PeerID: h.PeerID},
-		"",
-	)
-	if err != nil {
-		return nil, nil, err
+type hostClients struct {
+	host     clankerboxv1connect.HostServiceClient
+	sessions clankerboxv1connect.SessionServiceClient
+	http     *http.Client
+}
+
+func (t *RPCTransport) client(h model.Host) (*hostClients, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return nil, errors.New("controller transport closed")
 	}
-	return clankerboxv1connect.NewHostServiceClient(
-		client,
-		origin,
-		connect.WithReadMaxBytes(rpctransport.MaxMessage),
-		connect.WithSendMaxBytes(rpctransport.MaxMessage),
-	), client, nil
+	if c := t.clients[h.ID]; c != nil {
+		return c, nil
+	}
+	client, origin, err := rpctransport.Client(h.Endpoint,
+		rpctransport.Credentials{CAFile: h.TLSCA, CertFile: h.TLSCert, KeyFile: h.TLSKey, PeerID: h.PeerID}, "")
+	if err != nil {
+		return nil, err
+	}
+	opts := []connect.ClientOption{connect.WithReadMaxBytes(rpctransport.MaxMessage), connect.WithSendMaxBytes(rpctransport.MaxMessage)}
+	c := &hostClients{host: clankerboxv1connect.NewHostServiceClient(client, origin, opts...), sessions: clankerboxv1connect.NewSessionServiceClient(client, origin, opts...), http: client}
+	if t.clients == nil {
+		t.clients = make(map[string]*hostClients)
+	}
+	t.clients[h.ID] = c
+	return c, nil
+}
+
+// Close disposes connections after the controller's handlers and worker stop.
+func (t *RPCTransport) Close() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closed = true
+	for _, c := range t.clients {
+		c.http.CloseIdleConnections()
+	}
 }
 
 // Call binds the configured host identity and waits for its durable operation result.
-func (RPCTransport) Call(ctx context.Context, h model.Host, r model.Request) (model.Response, error) {
-	client, httpClient, err := hostClient(h)
+func (t *RPCTransport) Call(ctx context.Context, h model.Host, r model.Request) (model.Response, error) {
+	clients, err := t.client(h)
 	if err != nil {
 		return model.Response{}, err
 	}
-	defer httpClient.CloseIdleConnections()
+	client := clients.host
 	if r.Action == "inspect" {
 		res, e := client.InspectMachine(
 			ctx,

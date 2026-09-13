@@ -16,6 +16,8 @@ import (
 // The guest's private key may be copied with RAM; child access remains closed
 // until the live daemon adopts a fresh machine binding.
 type Binding struct {
+	// Pending records host-owned installation intent; guests do not interpret it.
+	Pending     bool   `json:"pending,omitempty"`
 	MachineID   string `json:"machine_id"`
 	HostID      string `json:"host_id"`
 	Certificate []byte `json:"certificate"`
@@ -25,6 +27,15 @@ type Binding struct {
 
 // LoadOrCreate retains one private authority with an atomic key/certificate file.
 func LoadOrCreate(root string) (*Authority, error) {
+	return loadAuthority(root, true)
+}
+
+// Load opens an existing authority without replacing missing trust material.
+func Load(root string) (*Authority, error) {
+	return loadAuthority(root, false)
+}
+
+func loadAuthority(root string, create bool) (*Authority, error) {
 	dir, err := statefs.Open(root)
 	if err != nil {
 		return nil, err
@@ -36,7 +47,7 @@ func LoadOrCreate(root string) (*Authority, error) {
 	}
 	defer func() { _ = lock.Close() }()
 	raw, err := dir.ReadFile("authority.pem")
-	if errors.Is(err, os.ErrNotExist) {
+	if create && errors.Is(err, os.ErrNotExist) {
 		a, createErr := NewAuthority()
 		if createErr != nil {
 			_ = dir.Close()

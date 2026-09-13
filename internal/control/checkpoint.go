@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
-	"net/http"
 	"slices"
 	"time"
 
@@ -18,7 +17,7 @@ func readCheckpoint(ctx context.Context, q querier, id string) (model.Checkpoint
 	var b []byte
 	err := q.QueryRowContext(ctx, "SELECT body FROM checkpoints WHERE id=?", id).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
-		return cp, problem(http.StatusNotFound, "not_found", "checkpoint not found")
+		return cp, model.NewError(model.ReasonNotFound, "checkpoint not found", false)
 	}
 	if err == nil {
 		err = json.Unmarshal(b, &cp)
@@ -91,11 +90,7 @@ func resourceIdle(ctx context.Context, q querier, id string, checkpoint bool) (r
 			conflict = r.Checkpoint != nil && r.Checkpoint.ID == id
 		}
 		if conflict {
-			return problem(
-				http.StatusConflict,
-				"operation_pending",
-				"resource is reserved by a pending or unresolved operation",
-			)
+			return model.NewError(model.ReasonOperationPending, "resource is reserved by a pending or unresolved operation", false)
 		}
 	}
 	return rows.Err()
@@ -113,11 +108,7 @@ func machineDependencies(ctx context.Context, q querier, m model.Machine) error 
 	}
 	for _, child := range ms {
 		if child.ID != m.ID && (child.SourceMachineID == m.ID && child.CheckpointID == "" || child.StoreID == m.ID) {
-			return problem(
-				http.StatusConflict,
-				"dependency",
-				"retained Linux descendants depend on this machine's backing store",
-			)
+			return model.NewError(model.ReasonDependency, "retained Linux descendants depend on this machine's backing store", false)
 		}
 	}
 	return nil
@@ -221,10 +212,10 @@ func (c *Controller) Derive(
 func validateDerivation(action, id, key string, in *model.ChildInput) error {
 	if action != forkAction && action != restoreAction && action != createCheckpointAction &&
 		action != deleteCheckpointAction {
-		return problem(http.StatusBadRequest, "unsupported", "unsupported action")
+		return model.NewError(model.ReasonUnsupported, "unsupported action", false)
 	}
 	if !model.ValidID(id) {
-		return problem(http.StatusBadRequest, "invalid_request", "immutable resource ID required")
+		return model.NewError(model.ReasonInvalid, "immutable resource ID required", false)
 	}
 	if err := validKey(key); err != nil {
 		return err
@@ -232,7 +223,7 @@ func validateDerivation(action, id, key string, in *model.ChildInput) error {
 	child := action == forkAction || action == restoreAction
 	if child {
 		if err := in.Validate(); err != nil {
-			return problem(http.StatusBadRequest, "invalid_request", err.Error())
+			return model.NewError(model.ReasonInvalid, err.Error(), false)
 		}
 	}
 
@@ -258,7 +249,7 @@ func derivationSource(
 			return source, cp, err
 		}
 		if cp.Status != publishedStatus {
-			return source, cp, problem(http.StatusConflict, "prerequisite", "checkpoint is not published")
+			return source, cp, model.NewError(model.ReasonPrerequisite, "checkpoint is not published", false)
 		}
 		source = model.Machine{ID: cp.SourceMachineID, Host: cp.Host, Profile: cp.Profile.ID, ProfileSpec: cp.Profile}
 
@@ -274,18 +265,14 @@ func derivationSource(
 	}
 	if source.Deleted || !source.Prepared || source.ObservationStale ||
 		source.Generation != source.AcceptedGeneration {
-		return source, cp, problem(
-			http.StatusConflict,
-			"prerequisite",
-			"source requires a current prepared generation",
-		)
+		return source, cp, model.NewError(model.ReasonPrerequisite, "source requires a current prepared generation", false)
 	}
 	want := model.Stopped
 	if source.ProfileSpec.Runtime == smolvmRuntime {
 		want = model.Running
 	}
 	if source.State != want {
-		return source, cp, problem(http.StatusConflict, "prerequisite", "source requires state "+string(want))
+		return source, cp, model.NewError(model.ReasonPrerequisite, "source requires state "+string(want), false)
 	}
 
 	return source, cp, nil
@@ -314,7 +301,7 @@ func allocateDerivation(
 			return model.Machine{}, req, err
 		}
 		if count != 0 {
-			return model.Machine{}, req, problem(http.StatusConflict, "name_conflict", "machine name already exists")
+			return model.Machine{}, req, model.NewError(model.ReasonNameConflict, "machine name already exists", false)
 		}
 		if err = capacity(ctx, tx, h, p, ""); err != nil {
 			return model.Machine{}, req, err
@@ -368,35 +355,23 @@ func (c *Controller) derivationPlacement(
 	action string,
 	cp *model.Checkpoint,
 ) (model.Profile, model.Host, error) {
-	if action == deleteCheckpointAction && cp.Kind == "ram" {
+	if action == deleteCheckpointAction {
 		h, ok := c.host(cp.Host)
 		if !ok {
-			return model.Profile{}, model.Host{}, problem(
-				http.StatusServiceUnavailable,
-				"host_unavailable",
-				"checkpoint host unavailable",
-			)
+			return model.Profile{}, model.Host{}, model.NewError(model.ReasonUnavailable, "checkpoint host unavailable", true)
 		}
 		return cp.Profile, h, nil
 	}
 	p, ok := c.profile(source.Profile)
 	if !ok || !model.SameProfile(p, source.ProfileSpec) {
-		return model.Profile{}, model.Host{}, problem(http.StatusConflict, "configuration", "pinned profile changed")
+		return model.Profile{}, model.Host{}, model.NewError(model.ReasonConfiguration, "pinned profile changed", false)
 	}
-	if action == forkAction && !slices.Contains(p.Capabilities, forkAction) {
-		return model.Profile{}, model.Host{}, problem(
-			http.StatusBadRequest,
-			"unsupported",
-			"profile does not support concurrent fork",
-		)
+	if action == forkAction && !slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), forkAction) {
+		return model.Profile{}, model.Host{}, model.NewError(model.ReasonUnsupported, "profile does not support concurrent fork", false)
 	}
 	h, ok := c.host(source.Host)
 	if !ok || !slices.Contains(h.ProfileIDs, p.ID) {
-		return model.Profile{}, model.Host{}, problem(
-			http.StatusServiceUnavailable,
-			"host_unavailable",
-			"pinned host/profile unavailable",
-		)
+		return model.Profile{}, model.Host{}, model.NewError(model.ReasonUnavailable, "pinned host/profile unavailable", true)
 	}
 
 	return p, h, nil
@@ -451,7 +426,7 @@ func linkChild(
 	}
 	m.Labels = childLabels(action, in, source, cp)
 	if err := model.ValidateLabels(m.Labels); err != nil {
-		return problem(http.StatusBadRequest, "invalid_request", "labels after inheritance: "+err.Error())
+		return model.NewError(model.ReasonInvalid, "labels after inheritance: "+err.Error(), false)
 	}
 	return nil
 }

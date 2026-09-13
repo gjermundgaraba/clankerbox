@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -66,23 +65,21 @@ func RuntimeCapabilities(runtime, arch string) []string {
 
 // Profile describes a configured VM image and its resource requirements.
 type Profile struct {
-	ID           string   `json:"id"`
-	OS           string   `json:"os"`
-	Arch         string   `json:"arch"`
-	Runtime      string   `json:"runtime"`
-	CPU          int      `json:"cpu"`
-	RAMMiB       int      `json:"ram_mib"`
-	ImagePath    string   `json:"image_path"`
-	ImageDigest  string   `json:"image_digest,omitempty"`
-	Capabilities []string `json:"capabilities"`
-	StorageGiB   int      `json:"storage_gib,omitempty"`
-	OverlayGiB   int      `json:"overlay_gib,omitempty"`
+	ID          string `json:"id"`
+	OS          string `json:"os"`
+	Arch        string `json:"arch"`
+	Runtime     string `json:"runtime"`
+	CPU         int    `json:"cpu"`
+	RAMMiB      int    `json:"ram_mib"`
+	ImageDigest string `json:"image_digest"`
+	StorageGiB  int    `json:"storage_gib,omitempty"`
+	OverlayGiB  int    `json:"overlay_gib,omitempty"`
 }
 
-// Validate checks configuration invariants and normalizes derived fields where applicable.
+// Validate checks portable configuration invariants.
 func (p *Profile) Validate() error {
-	if !ValidName(p.ID) || p.CPU < 1 || p.CPU > 255 || p.RAMMiB < 128 || p.ImagePath == "" {
-		return errors.New("profile requires id, cpu (1..255), ram_mib >=128 and image_path")
+	if !ValidName(p.ID) || p.CPU < 1 || p.CPU > 255 || p.RAMMiB < 128 || p.ImageDigest == "" {
+		return errors.New("profile requires id, cpu (1..255), ram_mib >=128 and image_digest")
 	}
 	if p.Arch != archARM64 && p.Arch != archAMD64 {
 		return errors.New("unsupported architecture")
@@ -91,31 +88,15 @@ func (p *Profile) Validate() error {
 		(p.Runtime != smolvmRuntime || p.OS != "linux") {
 		return errors.New("unsupported OS/runtime combination")
 	}
-	if p.Runtime == smolvmRuntime && !SafePath(p.ImagePath) {
-		return errors.New("smolvm image_path must be an absolute bare agent-rootfs directory")
-	}
 	if p.StorageGiB < 0 || p.OverlayGiB < 0 {
 		return errors.New("invalid disk sizes")
 	}
-	// Capabilities describe implementation support, not a configurable allowlist.
-	if len(p.Capabilities) > 0 &&
-		!slices.Equal(p.Capabilities, RuntimeCapabilities(p.Runtime, p.Arch)) {
-		return errors.New("capabilities are derived from runtime support; omit them from profile configuration")
-	}
-	p.Capabilities = RuntimeCapabilities(p.Runtime, p.Arch)
+
 	return nil
 }
 
-// SameProfile excludes derived discovery fields from the durable configuration pin.
-func SameProfile(a, b Profile) bool {
-	if a.ImageDigest != "" && a.ImageDigest == b.ImageDigest {
-		a.ImagePath = ""
-		b.ImagePath = ""
-	}
-	a.Capabilities = nil
-	b.Capabilities = nil
-	return Hash(a) == Hash(b)
-}
+// SameProfile compares the complete portable compatibility value.
+func SameProfile(a, b Profile) bool { return a == b }
 
 // Host describes a private authenticated host service and its configured capacity.
 type Host struct {
@@ -141,7 +122,7 @@ type HostStatus struct {
 	RemainingRAMMiB int `json:"remaining_ram_mib"`
 }
 
-// Validate checks configuration invariants and normalizes derived fields where applicable.
+// Validate checks portable configuration invariants.
 func (h Host) Validate() error {
 	if !ValidName(h.ID) || h.CPU < 1 || h.RAMMiB < 128 || len(h.ProfileIDs) == 0 {
 		return errors.New("invalid host identity, profiles or capacity")
@@ -174,7 +155,7 @@ type Config struct {
 	Profiles []Profile `json:"profiles"`
 }
 
-// Validate checks configuration invariants and normalizes derived fields where applicable.
+// Validate checks portable configuration invariants.
 func (c *Config) Validate() error {
 	ps := map[string]bool{}
 	hs := map[string]bool{}
@@ -288,7 +269,7 @@ type CreateInput struct {
 	Labels  map[string]string `json:"labels,omitempty"`
 }
 
-// Validate checks configuration invariants and normalizes derived fields where applicable.
+// Validate checks portable configuration invariants.
 func (in *CreateInput) Validate() error {
 	if !ValidName(in.Name) || !ValidName(in.Profile) || !ValidName(in.Host) {
 		return errors.New("name, profile and host must be valid names")
@@ -303,7 +284,7 @@ type ChildInput struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
-// Validate checks configuration invariants and normalizes derived fields where applicable.
+// Validate checks portable configuration invariants.
 func (in *ChildInput) Validate() error {
 	if !ValidName(in.Name) {
 		return errors.New("valid child name required")
@@ -370,6 +351,9 @@ type Observation struct {
 
 // Response carries a host helper operation result.
 type Response struct {
+	// Cause preserves admission failure identity until the caller receives its result.
+	// Accepted operation outcomes retain their durable human-readable Error.
+	Cause       error        `json:"-"`
 	Checkpoint  *Checkpoint  `json:"checkpoint,omitempty"`
 	OperationID string       `json:"operation_id,omitempty"`
 	Status      string       `json:"status"`

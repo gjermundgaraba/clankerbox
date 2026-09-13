@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"clankerbox/internal/model"
 )
 
 // Bounds shared by every implementation.
@@ -23,19 +25,6 @@ const (
 	MinRows       = 1
 	MaxRows       = 300
 	MaxInputBytes = 256 * 1024
-)
-
-// Error codes.
-const (
-	CodeNotFound        = "not_found"
-	CodeNotRunning      = "not_running"
-	CodeInvalid         = "invalid"
-	CodeTooLarge        = "too_large"
-	CodeConflict        = "conflict"
-	CodeAlreadyAttached = "already_attached"
-	CodeCapacity        = "capacity"
-	CodeExpired         = "expired"
-	CodeInternal        = "internal"
 )
 
 // Session statuses.
@@ -69,18 +58,6 @@ const (
 )
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
-
-// Error describes a request that could not be applied.
-type Error struct {
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Retryable bool   `json:"retryable"`
-}
-
-// Error implements error.
-func (e *Error) Error() string {
-	return e.Code + ": " + e.Message
-}
 
 // Hello is the first event on every connection.
 type Hello struct {
@@ -156,7 +133,7 @@ type CreateArgs struct {
 func (a CreateArgs) Created() (time.Time, error) {
 	created, err := time.Parse(time.RFC3339Nano, a.CreatedAt)
 	if err != nil {
-		return time.Time{}, &Error{Code: CodeInvalid, Message: "created_at must be RFC 3339"}
+		return time.Time{}, &model.Error{Reason: model.ReasonInvalid, Message: "created_at must be RFC 3339"}
 	}
 	return created, nil
 }
@@ -164,31 +141,31 @@ func (a CreateArgs) Created() (time.Time, error) {
 // Validate checks bounds.
 func (a CreateArgs) Validate() error {
 	if !uuidPattern.MatchString(a.SessionID) {
-		return &Error{Code: CodeInvalid, Message: "session_id must be a UUID"}
+		return &model.Error{Reason: model.ReasonInvalid, Message: "session_id must be a UUID"}
 	}
 	if _, err := a.Created(); err != nil {
 		return err
 	}
 	if len(a.Label) > MaxLabel || !printable(a.Label) {
-		return &Error{Code: CodeInvalid, Message: "label"}
+		return &model.Error{Reason: model.ReasonInvalid, Message: "label"}
 	}
 	if len(a.Cwd) > MaxCwd || strings.ContainsRune(a.Cwd, '\x00') {
-		return &Error{Code: CodeInvalid, Message: "cwd"}
+		return &model.Error{Reason: model.ReasonInvalid, Message: "cwd"}
 	}
 	if len(a.Argv) > MaxArgv {
-		return &Error{Code: CodeTooLarge, Message: "argv"}
+		return &model.Error{Reason: model.ReasonTooLarge, Message: "argv"}
 	}
 	for _, arg := range a.Argv {
 		if len(arg) > MaxArg || strings.ContainsRune(arg, '\x00') {
-			return &Error{Code: CodeInvalid, Message: "argv entry"}
+			return &model.Error{Reason: model.ReasonInvalid, Message: "argv entry"}
 		}
 	}
 	if len(a.Env) > MaxEnv {
-		return &Error{Code: CodeTooLarge, Message: "env"}
+		return &model.Error{Reason: model.ReasonTooLarge, Message: "env"}
 	}
 	for k, v := range a.Env {
 		if k == "" || strings.ContainsRune(k, '\x00') || strings.ContainsRune(v, '\x00') || len(k)+len(v) > MaxArg {
-			return &Error{Code: CodeInvalid, Message: "env entry"}
+			return &model.Error{Reason: model.ReasonInvalid, Message: "env entry"}
 		}
 	}
 	return validateGrid(a.Cols, a.Rows)
@@ -202,7 +179,7 @@ type SessionArgs struct {
 // Validate checks the id.
 func (a SessionArgs) Validate() error {
 	if !uuidPattern.MatchString(a.SessionID) {
-		return &Error{Code: CodeInvalid, Message: "session_id must be a UUID"}
+		return &model.Error{Reason: model.ReasonInvalid, Message: "session_id must be a UUID"}
 	}
 	return nil
 }
@@ -254,10 +231,10 @@ func (a InputArgs) Validate() ([]byte, error) {
 	}
 	data, err := base64.StdEncoding.DecodeString(a.Data)
 	if err != nil {
-		return nil, &Error{Code: CodeInvalid, Message: "data is not base64"}
+		return nil, &model.Error{Reason: model.ReasonInvalid, Message: "data is not base64"}
 	}
 	if len(data) > MaxInputBytes {
-		return nil, &Error{Code: CodeTooLarge, Message: "data"}
+		return nil, &model.Error{Reason: model.ReasonTooLarge, Message: "data"}
 	}
 	return data, nil
 }
@@ -304,7 +281,7 @@ type Empty struct{}
 
 func validateGrid(cols, rows uint16) error {
 	if cols < MinCols || cols > MaxCols || rows < MinRows || rows > MaxRows {
-		return &Error{Code: CodeInvalid, Message: fmt.Sprintf(
+		return &model.Error{Reason: model.ReasonInvalid, Message: fmt.Sprintf(
 			"grid must be %d-%d columns and %d-%d rows", MinCols, MaxCols, MinRows, MaxRows,
 		)}
 	}

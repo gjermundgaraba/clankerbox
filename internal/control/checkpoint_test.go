@@ -25,12 +25,12 @@ func TestCheckpointIntentDuplicatesAndReservations(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = c.Derive(ctx, "checkpoint-delete", cp.ID, "delete-busy", model.ChildInput{})
-	expectCode(t, err, "operation_pending")
+	expectCode(t, err, model.ReasonOperationPending)
 	// Restore and deletion use the same reservation, including ambiguous responses.
 	tr.unavailable = true
 	processHost(t, c, "mac")
 	_, err = c.Derive(ctx, "checkpoint-delete", cp.ID, "delete-unresolved", model.ChildInput{})
-	expectCode(t, err, "operation_pending")
+	expectCode(t, err, model.ReasonOperationPending)
 	tr.unavailable = false
 	if _, err = c.Derive(ctx, "restore", cp.ID, "restore", child); err != nil {
 		t.Fatal(err)
@@ -84,20 +84,20 @@ func TestCaptureMissingPublicationRemainsUnresolved(t *testing.T) {
 		t.Fatalf("partial artifact published: %+v %v", cp, err)
 	}
 	_, err = c.Mutate(ctx, source.MachineID, "delete", "delete")
-	expectCode(t, err, "operation_pending")
+	expectCode(t, err, model.ReasonOperationPending)
 }
 
 func TestLinuxControllerDependencyAndUnavailableSource(t *testing.T) {
 	t.Parallel()
 	cfg := config()
 	cfg.Profiles[0] = model.Profile{
-		ID:        fixtureLinuxProfile,
-		Runtime:   smolvmRuntime,
-		OS:        fixtureLinuxOS,
-		Arch:      fixtureAMD64,
-		CPU:       2,
-		RAMMiB:    2048,
-		ImagePath: fixtureRootfs,
+		ID:          fixtureLinuxProfile,
+		Runtime:     smolvmRuntime,
+		OS:          fixtureLinuxOS,
+		Arch:        fixtureAMD64,
+		CPU:         2,
+		RAMMiB:      2048,
+		ImageDigest: "image-content",
 	}
 	cfg.Hosts[0].ProfileIDs = []string{cfg.Profiles[0].ID}
 	c, tr, in, _ := setupControlConfig(t, cfg)
@@ -106,7 +106,7 @@ func TestLinuxControllerDependencyAndUnavailableSource(t *testing.T) {
 	source := mustCreate(t, c, in, "create")
 	tr.unavailable = true
 	_, err := c.Derive(ctx, "checkpoint-create", source.MachineID, "capture", model.ChildInput{})
-	expectCode(t, err, "host_unavailable")
+	expectCode(t, err, model.ReasonUnavailable)
 	tr.unavailable = false
 	child, err := c.Derive(
 		ctx,
@@ -130,7 +130,7 @@ func TestLinuxControllerDependencyAndUnavailableSource(t *testing.T) {
 	}
 	mustMutate(t, c, source.MachineID, "stop", "stop")
 	_, err = c.Mutate(ctx, source.MachineID, "delete", "delete")
-	expectCode(t, err, "dependency")
+	expectCode(t, err, model.ReasonDependency)
 }
 
 func checkpointWithStatus(t *testing.T, controller *control.Controller, id, status string) model.Checkpoint {
@@ -187,10 +187,10 @@ func captureAfterReservedFork(
 	}
 	for _, action := range []string{"start", "delete"} {
 		_, err = c.Mutate(ctx, source.MachineID, action, action+"-conflict")
-		expectCode(t, err, "operation_pending")
+		expectCode(t, err, model.ReasonOperationPending)
 	}
 	_, err = c.Derive(ctx, "checkpoint-create", source.MachineID, "capture-conflict", model.ChildInput{})
-	expectCode(t, err, "operation_pending")
+	expectCode(t, err, model.ReasonOperationPending)
 	processHost(t, c, "mac")
 	m, err := c.Inspect(ctx, fork.MachineID)
 	if err != nil || m.SourceMachineID != source.MachineID || m.Host != in.Host || m.ID == source.MachineID {
@@ -232,7 +232,7 @@ func TestDerivationRejectsLabelsBeyondTheLimitAfterInheritance(t *testing.T) {
 		Labels: map[string]string{"extra": "v"},
 	}
 	_, err := c.Derive(ctx, "fork", source.MachineID, "fork-overflow", child)
-	expectCode(t, err, "invalid_request")
+	expectCode(t, err, model.ReasonInvalid)
 	// The inherited map alone is still within the limit.
 	child.Labels = nil
 	if _, err = c.Derive(ctx, "fork", source.MachineID, "fork", child); err != nil {

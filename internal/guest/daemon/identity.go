@@ -151,9 +151,12 @@ func (i *identity) connState(c net.Conn, state http.ConnState) {
 func (i *identity) withIdentity(ctx context.Context, machine string, fn func() error) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	epoch, ok := ctx.Value(epochKey{}).(uint64)
 	if !ok || i.config == nil || epoch != i.epoch || machine != i.binding.MachineID {
-		return errors.New("guest identity mismatch or replaced transport")
+		return model.NewError(model.ReasonIdentityMismatch, "guest identity mismatch or replaced transport", false)
 	}
 	return fn()
 }

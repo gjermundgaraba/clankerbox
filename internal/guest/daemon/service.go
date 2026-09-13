@@ -4,19 +4,18 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
 	"sync"
-	"time"
 
 	"connectrpc.com/connect"
 
 	v1 "clankerbox/gen/clankerbox/v1"
 	"clankerbox/internal/guest/protocol"
 	"clankerbox/internal/guest/session"
+	"clankerbox/internal/model"
 	"clankerbox/internal/rpcmodel"
+	"clankerbox/internal/rpctransport"
 )
 
-type deadlineKey struct{}
 type service struct {
 	identity *identity
 	manager  *session.Manager
@@ -25,20 +24,13 @@ type service struct {
 func (s *service) description(machine string) *v1.GuestDescription {
 	return rpcmodel.ToGuestDescription(machine, s.manager.Hello())
 }
-func denied(err error) error {
-	if err == nil {
-		return nil
-	}
-	return connect.NewError(connect.CodePermissionDenied, err)
-}
-
 func (s *service) DescribeGuest(
 	ctx context.Context,
 	r *connect.Request[v1.DescribeGuestRequest],
 ) (*connect.Response[v1.GuestDescription], error) {
 	err := s.identity.withIdentity(ctx, r.Msg.GetMachineId(), func() error { return nil })
 	if err != nil {
-		return nil, denied(err)
+		return nil, rpcmodel.ToError(err)
 	}
 	return connect.NewResponse(s.description(r.Msg.GetMachineId())), nil
 }
@@ -59,7 +51,7 @@ func (s *service) CreateSession(
 		func() error { record, opErr = s.manager.Create(a); return nil },
 	)
 	if err != nil {
-		return nil, denied(err)
+		return nil, rpcmodel.ToError(err)
 	}
 	if opErr != nil {
 		return nil, rpcmodel.ToError(opErr)
@@ -79,7 +71,7 @@ func (s *service) ListSessions(
 		return nil
 	})
 	if err != nil {
-		return nil, denied(err)
+		return nil, rpcmodel.ToError(err)
 	}
 	return connect.NewResponse(w), nil
 }
@@ -94,12 +86,6 @@ func (s *service) EndSession(
 		func() (protocol.Session, error) { return s.manager.End(r.Msg.GetSessionId()) },
 	)
 	if opErr != nil {
-		if errors.Is(opErr, context.Canceled) || errors.Is(opErr, context.DeadlineExceeded) {
-			return nil, opErr
-		}
-		if connect.CodeOf(opErr) == connect.CodePermissionDenied {
-			return nil, opErr
-		}
 		return nil, rpcmodel.ToError(opErr)
 	}
 	return connect.NewResponse(rpcmodel.ToSession(record)), nil
@@ -123,7 +109,7 @@ func (i *identity) acceptEnd(
 		return nil
 	})
 	if err != nil {
-		return protocol.Session{}, denied(err)
+		return protocol.Session{}, rpcmodel.ToError(err)
 	}
 	select {
 	case r := <-done:
@@ -138,34 +124,31 @@ type queued struct {
 	err   error
 }
 type streamSink struct {
-	ctx       context.Context
-	queue     chan queued
-	bootstrap chan struct{}
-	once      sync.Once
-	remaining uint64
-	position  uint64
-	view      bool
+	ctx    context.Context
+	cancel context.CancelCauseFunc
+	queue  chan queued
+	// Serialize producers with the EOF boundary, while the writer drains without
+	// this lock. There is exactly one bounded queue for prefix, ACKs and live events.
+	mu       sync.Mutex
+	closed   bool
+	position uint64
+	view     bool
 }
 
-func (s *streamSink) ready() { s.once.Do(func() { close(s.bootstrap) }) }
 func (s *streamSink) put(e *v1.AttachmentEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return io.EOF
+	}
 	select {
 	case s.queue <- queued{event: e}:
 		return nil
 	case <-s.ctx.Done():
-		return s.ctx.Err()
+		return context.Cause(s.ctx)
 	}
 }
-func (s *streamSink) prefix(n int) {
-	// #nosec G115 -- n is a nonnegative slice length.
-	if uint64(n) >= s.remaining {
-		s.remaining = 0
-		s.ready()
-	} else {
-		// #nosec G115 -- n is a nonnegative slice length.
-		s.remaining -= uint64(n)
-	}
-}
+
 func (s *streamSink) SendSnapshot(data []byte) error {
 	for len(data) > 0 {
 		n := min(len(data), chunkBytes)
@@ -181,7 +164,6 @@ func (s *streamSink) SendSnapshot(data []byte) error {
 			return err
 		}
 		s.position += uint64(n)
-		s.prefix(n)
 		data = data[n:]
 	}
 	return nil
@@ -198,7 +180,6 @@ func (s *streamSink) SendOutput(next uint64, data []byte) error {
 		); err != nil {
 			return err
 		}
-		s.prefix(n)
 		data = data[n:]
 	}
 	return nil
@@ -225,7 +206,16 @@ func (s *streamSink) SendEvent(event any) error {
 	}
 	return s.put(e)
 }
+
+// Close seals the queue and places a finite drain boundary after admitted
+// responses. Producers cannot append behind the boundary, even for a live shell.
 func (s *streamSink) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	s.closed = true
 	select {
 	case s.queue <- queued{err: io.EOF}:
 	case <-s.ctx.Done():
@@ -242,10 +232,10 @@ func (s *service) AttachSession(
 	}
 	open := first.GetOpen()
 	if open == nil {
-		return connect.NewError(connect.CodeInvalidArgument, errors.New("first message must open attachment"))
+		return rpcmodel.ToError(model.NewError(model.ReasonInvalid, "first message must open attachment", false))
 	}
 	if open.GetExpectedEngineDigest() != s.manager.Hello().WasmSHA256 {
-		return connect.NewError(connect.CodeFailedPrecondition, errors.New("terminal engine mismatch"))
+		return rpcmodel.ToError(model.NewError(model.ReasonEngineMismatch, "terminal engine mismatch", false))
 	}
 	a := protocol.OpenArgs{SessionID: open.GetSessionId()}
 	if open.GetResumeCursor() != nil {
@@ -256,9 +246,9 @@ func (s *service) AttachSession(
 	if err = a.Validate(); err != nil {
 		return rpcmodel.ToError(err)
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	sink := &streamSink{ctx: ctx, queue: make(chan queued, sinkQueueSize), bootstrap: make(chan struct{})}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	sink := &streamSink{ctx: ctx, cancel: cancel, queue: make(chan queued, sinkQueueSize)}
 	var value protocol.OpenValue
 	var attachment *session.Attachment
 	var opErr error
@@ -268,7 +258,7 @@ func (s *service) AttachSession(
 		func() error { value, attachment, opErr = s.manager.Open(a, sink); return nil },
 	)
 	if err != nil {
-		return denied(err)
+		return rpcmodel.ToError(err)
 	}
 	if opErr != nil {
 		return rpcmodel.ToError(opErr)
@@ -276,20 +266,11 @@ func (s *service) AttachSession(
 	if attachment != nil {
 		defer attachment.Stop()
 	}
-	size := value.SnapshotBytes
 	if value.View != nil {
-		size = value.View.Bytes
 		sink.view = true
 	}
-	sink.remaining = size
-	if value.Mode == protocol.ModeResume && a.FromOffset != nil {
-		sink.remaining = value.Session.Offset - *a.FromOffset
-	}
-	if sink.remaining == 0 {
-		sink.ready()
-	}
 
-	if err = writeEvent(
+	if err = rpctransport.WriteEvent(
 		ctx,
 		stream,
 		&v1.AttachmentEvent{
@@ -301,13 +282,36 @@ func (s *service) AttachSession(
 	if attachment == nil {
 		return nil
 	}
+	return s.streamAttachment(ctx, stream, sink, open, attachment)
+}
+
+func (s *service) streamAttachment(
+	ctx context.Context,
+	stream *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent],
+	sink *streamSink,
+	open *v1.Open,
+	attachment *session.Attachment,
+) error {
+	runDone := make(chan struct{})
 	go func() {
+		defer close(runDone)
 		attachment.Run()
 		if !attachment.Streams() {
 			sink.Close()
 		}
 	}()
-	go s.receiveControls(ctx, sink, stream, open)
+	controlsDone := make(chan struct{})
+	defer func() {
+		sink.cancel(nil)
+		_ = rpctransport.StopReading(ctx)
+		attachment.Stop()
+		<-runDone
+		<-controlsDone
+	}()
+	go func() {
+		defer close(controlsDone)
+		s.receiveControls(ctx, sink, stream, open)
+	}()
 
 	return writeQueued(ctx, stream, sink)
 }
@@ -320,7 +324,7 @@ func writeQueued(
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return context.Cause(ctx)
 		case item := <-sink.queue:
 			if item.err != nil {
 				if errors.Is(item.err, io.EOF) {
@@ -328,18 +332,11 @@ func writeQueued(
 				}
 				return item.err
 			}
-			if err := writeEvent(ctx, stream, item.event); err != nil {
+			if err := rpctransport.WriteEvent(ctx, stream, item.event); err != nil {
 				return err
 			}
 		}
 	}
-}
-
-func deadlines(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rc := http.NewResponseController(w)
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), deadlineKey{}, rc.SetWriteDeadline)))
-	})
 }
 
 func (s *service) receiveControls(
@@ -348,16 +345,15 @@ func (s *service) receiveControls(
 	stream *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent],
 	open *v1.Open,
 ) {
-	select {
-	case <-sink.bootstrap:
-	case <-ctx.Done():
-		return
-	}
 	var previous uint64
 	for {
 		control, err := stream.Receive()
 		if err != nil {
-			sink.fail(err)
+			if errors.Is(err, io.EOF) {
+				sink.Close()
+			} else {
+				sink.fail(err)
+			}
 			return
 		}
 		seq := control.GetInput().GetSequence()
@@ -366,7 +362,7 @@ func (s *service) receiveControls(
 		}
 		if seq == 0 || seq <= previous {
 			sink.fail(
-				connect.NewError(connect.CodeInvalidArgument, errors.New("control sequence must strictly increase")),
+				rpcmodel.ToError(model.NewError(model.ReasonInvalid, "control sequence must strictly increase", false)),
 			)
 			return
 		}
@@ -378,7 +374,7 @@ func (s *service) receiveControls(
 			func() error { ack = s.applyControl(open.GetSessionId(), control); return nil },
 		)
 		if err != nil {
-			sink.fail(denied(err))
+			sink.fail(rpcmodel.ToError(err))
 			return
 		}
 		if sink.put(&v1.AttachmentEvent{Event: &v1.AttachmentEvent_Ack{Ack: ack}}) != nil {
@@ -386,12 +382,7 @@ func (s *service) receiveControls(
 		}
 	}
 }
-func (s *streamSink) fail(err error) {
-	select {
-	case s.queue <- queued{err: err}:
-	case <-s.ctx.Done():
-	}
-}
+func (s *streamSink) fail(err error) { s.cancel(err) }
 func (s *service) applyControl(id string, control *v1.AttachmentRequest) *v1.Ack {
 	if input := control.GetInput(); input != nil {
 		return s.input(id, input)
@@ -424,23 +415,7 @@ func (s *service) input(id string, input *v1.Input) *v1.Ack {
 	return ack
 }
 
-func writeEvent(
-	ctx context.Context,
-	stream *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent],
-	event *v1.AttachmentEvent,
-) error {
-	set, ok := ctx.Value(deadlineKey{}).(func(time.Time) error)
-	if !ok {
-		return errors.New("guest stream requires write deadline middleware")
-	}
-	if err := set(time.Now().Add(writeStallTimeout)); err != nil {
-		return err
-	}
-	return errors.Join(stream.Send(event), set(time.Time{}))
-}
-
 const (
-	chunkBytes        = 64 << 10
-	sinkQueueSize     = 32
-	writeStallTimeout = 30 * time.Second
+	chunkBytes    = 64 << 10
+	sinkQueueSize = 32
 )

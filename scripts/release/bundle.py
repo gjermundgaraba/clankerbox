@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build an immutable installed runtime bundle; no toolchains run on end users' hosts.
 
-Engine binaries must already be built from spikes/real-local-engine/pins.json
+Engine binaries must already be built from scripts/release/inputs/pins.json
 and runtime.patch. The image is the exported generic recipe output. This
 assembler hashes every payload file and link and refuses to replace an output.
 """
@@ -36,24 +36,84 @@ def inventory(root, include_root=True):
     paths = ([root] if include_root else []) + sorted(root.rglob('*'), key=lambda p: p.relative_to(root).as_posix())
     return [entry(p, p.relative_to(root).as_posix()) for p in paths]
 
+def canonical_json(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).replace('\u2028', '\\u2028').replace('\u2029', '\\u2029')
+
 def content_digest(files):
-    canonical = json.dumps(files, sort_keys=True, separators=(',', ':'), ensure_ascii=False)
-    canonical = canonical.replace('\u2028', '\\u2028').replace('\u2029', '\\u2029')
-    return hashlib.sha256(canonical.encode()).hexdigest()
+    return hashlib.sha256(canonical_json(files).encode()).hexdigest()
 
 def verify_inputs(args):
-    pins = json.loads((ROOT/'spikes/real-local-engine/pins.json').read_text())
+    pins = json.loads((ROOT/'scripts/release/inputs/pins.json').read_text())
     expected_engine = pins['hashes']['target/debug/smolvm'] if args.os == 'darwin' else pins['linux_cli_sha256']
     if sha(args.engine) != expected_engine:
         raise ValueError('engine does not match qualified platform binary')
-    if sha(ROOT/'spikes/real-local-engine/runtime.patch') != pins['runtime_patch_sha256']:
+    if sha(ROOT/'scripts/release/inputs/runtime.patch') != pins['runtime_patch_sha256']:
         raise ValueError('runtime patch does not match qualification')
     expected_agent = (pins['hashes']['agent-target/aarch64-unknown-linux-musl/release/smolvm-agent']
-                      if args.arch == 'arm64' else json.loads((ROOT/'spikes/real-local-engine/evidence/linux-image/sources.json').read_text())['agent_sha256'])
+                      if args.arch == 'arm64' else json.loads((ROOT/'scripts/release/inputs/linux-amd64-image-sources.json').read_text())['agent_sha256'])
     if sha(args.image/'usr/local/bin/smolvm-agent') != expected_agent:
         raise ValueError('image agent does not match qualified platform binary')
     if stat.S_IMODE(args.image.stat().st_mode) != 0o755:
         raise ValueError('image root must preserve guest mode 0755')
+
+def required_file(root, name):
+    path = root / name
+    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+        raise ValueError('required regular nonempty file: ' + str(path))
+    return path
+
+def verify_licenses(engine_source, notices):
+    source = json.loads((ROOT/'scripts/release/inputs/source.json').read_text())
+    for name, expected in source['files'].items():
+        if sha(required_file(engine_source, name)) != expected:
+            raise ValueError('engine source license/provenance mismatch: ' + name)
+    native = ROOT/'scripts/release/licenses'
+    for item in json.loads(required_file(native, 'sources.json').read_text()):
+        if sha(required_file(native, item['file'])) != item['sha256']:
+            raise ValueError('native notice checksum mismatch: ' + item['file'])
+    provenance = json.loads(required_file(notices, 'provenance.json').read_text())
+    expected = {'go_mod_sha256': sha(ROOT/'go.mod'), 'go_sum_sha256': sha(ROOT/'go.sum'),
+                'rust_lock_sha256': source['files']['Cargo.lock']}
+    for key, value in expected.items():
+        if provenance.get(key) != value:
+            raise ValueError('dependency notice provenance mismatch: ' + key)
+    rows = json.loads(required_file(notices, 'dependencies.json').read_text())
+    if not rows or {row['ecosystem'] for row in rows} != {'go', 'rust'}:
+        raise ValueError('dependency inventory must enumerate Go and Rust packages')
+    for row in rows:
+        if not row.get('name') or not row.get('version'):
+            raise ValueError('dependency inventory lacks package identity')
+        if row['ecosystem'] == 'go': key = row['name'].replace('/', '_') + '@' + row['version']
+        else: key = row['name'] + '-' + row['version']
+        if pathlib.PurePosixPath(key).name != key or key in ('.', '..'):
+            raise ValueError('unsafe dependency package path')
+        if not row.get('notices') and not (row.get('license') and row.get('notice_status') == 'upstream-no-notice-file'):
+            raise ValueError('unexplained missing dependency notice: ' + row['name'])
+        for name in row['notices']:
+            path = pathlib.PurePosixPath(name)
+            if path.is_absolute() or '..' in path.parts:
+                raise ValueError('unsafe dependency notice path')
+            required_file(notices/row['ecosystem']/key, name)
+    declared = json.loads(required_file(notices, 'inventory.json').read_text())
+    actual = [item for item in inventory(notices, include_root=False) if item['path'] != 'inventory.json']
+    if declared != actual or any(item['type'] not in ('file', 'directory') for item in actual):
+        raise ValueError('dependency notice inventory mismatch')
+    return source
+
+def verify_release_licenses(out):
+    licenses = out/'licenses'
+    provenance = json.loads(required_file(licenses, 'source.json').read_text())
+    if sha(required_file(licenses, 'smolvm-LICENSE')) != provenance['files']['LICENSE']:
+        raise ValueError('release engine license checksum mismatch')
+    for name in ['dependencies.json', 'provenance.json', 'inventory.json']:
+        required_file(licenses/'dependencies', name)
+    notices = licenses/'dependencies'
+    actual = [item for item in inventory(notices, include_root=False) if item['path'] != 'inventory.json']
+    if json.loads((notices/'inventory.json').read_text()) != actual:
+        raise ValueError('release dependency notice inventory mismatch')
+    for item in json.loads(required_file(licenses/'native', 'sources.json').read_text()):
+        if sha(required_file(licenses/'native', item['file'])) != item['sha256']:
+            raise ValueError('release native notice mismatch: ' + item['file'])
 
 def package_archive(out):
     archive=out.with_name(out.name+'.tar.gz')
@@ -64,7 +124,6 @@ def package_archive(out):
             info.uid=info.gid=0;info.uname=info.gname='';info.mtime=0
             # GNU headers preserve literal Unicode link bytes on Apple tar
             # without PAX hdrcharset warnings on GNU tar.
-            info.pax_headers={}
             return info
         for path in sorted(out.iterdir()):tar.add(path,arcname=path.name,filter=normalize)
     checksum=sha(archive)
@@ -80,10 +139,13 @@ def main():
     parser.add_argument('--engine', type=pathlib.Path, required=True)
     parser.add_argument('--runtime-assets', type=pathlib.Path, required=True)
     parser.add_argument('--image', type=pathlib.Path, required=True)
+    parser.add_argument('--engine-source', type=pathlib.Path, required=True, help='Pinned smolvm source containing LICENSE and Cargo.lock')
+    parser.add_argument('--dependency-notices', type=pathlib.Path, required=True, help='Complete notices.py output with provenance and inventory')
     parser.add_argument('--output', type=pathlib.Path, required=True)
     args = parser.parse_args()
     if (args.os,args.arch) not in [('darwin','arm64'),('linux','amd64')]:parser.error('unqualified platform')
     verify_inputs(args)
+    source_provenance = verify_licenses(args.engine_source, args.dependency_notices)
     # The private extraction parent protects the bundle; payload modes are reproducible.
     os.umask(0o022)
     out = args.output.resolve();out.mkdir(parents=True, exist_ok=False)
@@ -100,15 +162,14 @@ def main():
         shutil.copy2(args.runtime_assets/name,runtime/name)
     shutil.copytree(args.image,out/'image',symlinks=True)
     licenses=out/'licenses';licenses.mkdir()
-    source=ROOT/'.work/real-local-engine/source'
-    for file in source.glob('LICENSE*'):shutil.copy2(file,licenses/('smolvm-'+file.name))
-    shutil.copytree(ROOT/'scripts/release/licenses',licenses/'native')
-    notices=ROOT/'.work/real-local-release/notices'
-    if not notices.is_dir():raise RuntimeError('collect locked Go/Rust dependency notices before release assembly')
-    shutil.copytree(notices,licenses/'dependencies')
+    shutil.copy2(args.engine_source/'LICENSE', licenses/'smolvm-LICENSE')
+    (licenses/'source.json').write_text(json.dumps(source_provenance, indent=2)+'\n')
+    shutil.copytree(ROOT/'scripts/release/licenses', licenses/'native')
+    shutil.copytree(args.dependency_notices, licenses/'dependencies')
+    verify_release_licenses(out)
     shutil.copy2(ROOT/'scripts/release/README.md',out/'RELEASE.md')
-    shutil.copy2(ROOT/'spikes/real-local-engine/pins.json',out/'engine-pins.json')
-    shutil.copy2(ROOT/'spikes/real-local-engine/runtime.patch',out/'runtime.patch')
+    shutil.copy2(ROOT/'scripts/release/inputs/pins.json',out/'engine-pins.json')
+    shutil.copy2(ROOT/'scripts/release/inputs/runtime.patch',out/'runtime.patch')
     if args.os=='darwin':
         subprocess.run(['codesign','--verify','--strict',str(runtime/'smolvm')],check=True)
         subprocess.run(['codesign','--force','--sign','-',str(out/'clankerbox')],check=True)

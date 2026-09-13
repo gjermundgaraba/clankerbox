@@ -131,6 +131,7 @@ func (OpenMode) EnumDescriptor() ([]byte, []int) {
 	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{1}
 }
 
+// Authenticated private guest endpoint. Identical terminal messages across relays.
 type DescribeGuestRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	MachineId     string                 `protobuf:"bytes,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
@@ -1966,13 +1967,6 @@ const file_clankerbox_v1_session_proto_rawDesc = "" +
 	"\fListSessions\x12\".clankerbox.v1.ListSessionsRequest\x1a#.clankerbox.v1.ListSessionsResponse\x12F\n" +
 	"\n" +
 	"EndSession\x12 .clankerbox.v1.EndSessionRequest\x1a\x16.clankerbox.v1.Session\x12U\n" +
-	"\rAttachSession\x12 .clankerbox.v1.AttachmentRequest\x1a\x1e.clankerbox.v1.AttachmentEvent(\x010\x012\xab\x03\n" +
-	"\fGuestService\x12U\n" +
-	"\rDescribeGuest\x12#.clankerbox.v1.DescribeGuestRequest\x1a\x1f.clankerbox.v1.GuestDescription\x12L\n" +
-	"\rCreateSession\x12#.clankerbox.v1.CreateSessionRequest\x1a\x16.clankerbox.v1.Session\x12W\n" +
-	"\fListSessions\x12\".clankerbox.v1.ListSessionsRequest\x1a#.clankerbox.v1.ListSessionsResponse\x12F\n" +
-	"\n" +
-	"EndSession\x12 .clankerbox.v1.EndSessionRequest\x1a\x16.clankerbox.v1.Session\x12U\n" +
 	"\rAttachSession\x12 .clankerbox.v1.AttachmentRequest\x1a\x1e.clankerbox.v1.AttachmentEvent(\x010\x01B+Z)clankerbox/gen/clankerbox/v1;clankerboxv1b\x06proto3"
 
 var (
@@ -2046,23 +2040,13 @@ var file_clankerbox_v1_session_proto_depIdxs = []int32{
 	6,  // 24: clankerbox.v1.SessionService.ListSessions:input_type -> clankerbox.v1.ListSessionsRequest
 	8,  // 25: clankerbox.v1.SessionService.EndSession:input_type -> clankerbox.v1.EndSessionRequest
 	13, // 26: clankerbox.v1.SessionService.AttachSession:input_type -> clankerbox.v1.AttachmentRequest
-	2,  // 27: clankerbox.v1.GuestService.DescribeGuest:input_type -> clankerbox.v1.DescribeGuestRequest
-	5,  // 28: clankerbox.v1.GuestService.CreateSession:input_type -> clankerbox.v1.CreateSessionRequest
-	6,  // 29: clankerbox.v1.GuestService.ListSessions:input_type -> clankerbox.v1.ListSessionsRequest
-	8,  // 30: clankerbox.v1.GuestService.EndSession:input_type -> clankerbox.v1.EndSessionRequest
-	13, // 31: clankerbox.v1.GuestService.AttachSession:input_type -> clankerbox.v1.AttachmentRequest
-	3,  // 32: clankerbox.v1.SessionService.DescribeGuest:output_type -> clankerbox.v1.GuestDescription
-	4,  // 33: clankerbox.v1.SessionService.CreateSession:output_type -> clankerbox.v1.Session
-	7,  // 34: clankerbox.v1.SessionService.ListSessions:output_type -> clankerbox.v1.ListSessionsResponse
-	4,  // 35: clankerbox.v1.SessionService.EndSession:output_type -> clankerbox.v1.Session
-	24, // 36: clankerbox.v1.SessionService.AttachSession:output_type -> clankerbox.v1.AttachmentEvent
-	3,  // 37: clankerbox.v1.GuestService.DescribeGuest:output_type -> clankerbox.v1.GuestDescription
-	4,  // 38: clankerbox.v1.GuestService.CreateSession:output_type -> clankerbox.v1.Session
-	7,  // 39: clankerbox.v1.GuestService.ListSessions:output_type -> clankerbox.v1.ListSessionsResponse
-	4,  // 40: clankerbox.v1.GuestService.EndSession:output_type -> clankerbox.v1.Session
-	24, // 41: clankerbox.v1.GuestService.AttachSession:output_type -> clankerbox.v1.AttachmentEvent
-	32, // [32:42] is the sub-list for method output_type
-	22, // [22:32] is the sub-list for method input_type
+	3,  // 27: clankerbox.v1.SessionService.DescribeGuest:output_type -> clankerbox.v1.GuestDescription
+	4,  // 28: clankerbox.v1.SessionService.CreateSession:output_type -> clankerbox.v1.Session
+	7,  // 29: clankerbox.v1.SessionService.ListSessions:output_type -> clankerbox.v1.ListSessionsResponse
+	4,  // 30: clankerbox.v1.SessionService.EndSession:output_type -> clankerbox.v1.Session
+	24, // 31: clankerbox.v1.SessionService.AttachSession:output_type -> clankerbox.v1.AttachmentEvent
+	27, // [27:32] is the sub-list for method output_type
+	22, // [22:27] is the sub-list for method input_type
 	22, // [22:22] is the sub-list for extension type_name
 	22, // [22:22] is the sub-list for extension extendee
 	0,  // [0:22] is the sub-list for field type_name
@@ -2098,7 +2082,7 @@ func file_clankerbox_v1_session_proto_init() {
 			NumEnums:      2,
 			NumMessages:   24,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   1,
 		},
 		GoTypes:           file_clankerbox_v1_session_proto_goTypes,
 		DependencyIndexes: file_clankerbox_v1_session_proto_depIdxs,

@@ -116,20 +116,22 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	root := shortNativeRoot(t)
 	runner := &recordingRunner{}
 	p := model.Profile{
-		ID:        "ubuntu-bare-v1",
-		OS:        osLinux,
-		Arch:      archAMD64,
-		Runtime:   runtimeSmolvm,
-		CPU:       2,
-		RAMMiB:    2048,
-		ImagePath: "/opt/profiles/ubuntu-bare/agent-rootfs",
+		ID:          "ubuntu-bare-v1",
+		OS:          osLinux,
+		Arch:        archAMD64,
+		Runtime:     runtimeSmolvm,
+		CPU:         2,
+		RAMMiB:      2048,
+		ImageDigest: "image-content",
 	}
 	cfg := host.Config{
-		HostOS:     osLinux,
-		Root:       root,
-		SmolvmPath: testSmolvmPath,
-		LibraryDir: testSmolvmLibrary,
-		DNS:        "185.12.64.1",
+		RuntimeDigest: "engine-content",
+		Profiles:      []host.ProfileBinding{{Profile: p, ImagePath: "/opt/profiles/ubuntu-bare/agent-rootfs"}},
+		HostOS:        osLinux,
+		Root:          root,
+		SmolvmPath:    testSmolvmPath,
+		LibraryDir:    testSmolvmLibrary,
+		DNS:           "185.12.64.1",
 	}
 	cfg.SmolvmPath = templateBundle(t)
 	requireNoError(t, cfg.Validate())
@@ -138,6 +140,9 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	requireNoError(t, n.Create(context.Background(), m))
 	if len(runner.calls) != 2 {
 		t.Fatal("unexpected creation commands")
+	}
+	if runner.calls[0].path != "/bin/cp" || runner.calls[0].args[1] != cfg.Profiles[0].ImagePath {
+		t.Fatal("creation did not resolve its image from host configuration")
 	}
 	create := runner.calls[1]
 	joined := strings.Join(create.args, " ")

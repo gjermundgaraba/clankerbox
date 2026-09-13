@@ -2,17 +2,15 @@ package host
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"net/http"
-	"path/filepath"
-	"sync"
+	"fmt"
 
 	"clankerbox/internal/statefs"
 
 	v1 "clankerbox/gen/clankerbox/v1"
 	"clankerbox/gen/clankerbox/v1/clankerboxv1connect"
-	"clankerbox/internal/guest/vt"
 	"clankerbox/internal/model"
 	"clankerbox/internal/rpcidentity"
 	"clankerbox/internal/rpcmodel"
@@ -21,142 +19,117 @@ import (
 	"connectrpc.com/connect"
 )
 
-type guestRegistry struct {
-	mu     sync.Mutex
-	leases map[string]map[*guestLease]bool
-	status map[string]*model.GuestStatus
-}
-type guestLease struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	client   clankerboxv1connect.GuestServiceClient
-	http     *http.Client
-	registry *guestRegistry
-	id       string
+func (h *Helper) leaseGuest(ctx context.Context, id string) (*guestLease, error) {
+	for range 2 {
+		lease, renewal, err := h.prepareGuestLease(ctx, id)
+		if err != nil || !renewal {
+			return lease, err
+		}
+	}
+	return nil, model.NewError(model.ReasonUnavailable, "guest binding renewal did not complete", true)
 }
 
-func newGuestRegistry() *guestRegistry {
-	return &guestRegistry{leases: make(map[string]map[*guestLease]bool), status: make(map[string]*model.GuestStatus)}
-}
-func (g *guestRegistry) suspend(ids ...string) {
+func (h *Helper) prepareGuestLease(ctx context.Context, id string) (*guestLease, bool, error) {
+	if !model.ValidID(id) {
+		return nil, false, model.NewError(model.ReasonInvalid, "invalid machine ID", false)
+	}
+	g := h.guests
 	g.mu.Lock()
-	defer g.mu.Unlock()
-	for _, id := range ids {
-		if id == "" {
-			continue
-		}
-		for lease := range g.leases[id] {
-			lease.cancel()
-			lease.http.CloseIdleConnections()
-		}
-		g.status[id] = &model.GuestStatus{Status: statusUnavailable, Reason: "machine operation reserved"}
+	slot := g.slot(id)
+	if g.closed || len(slot.reserved) != 0 {
+		g.mu.Unlock()
+		return nil, false, ErrBusy
 	}
-}
-func (g *guestRegistry) close() {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	for _, leases := range g.leases {
-		for l := range leases {
-			l.cancel()
-			l.http.CloseIdleConnections()
-		}
+	epoch := slot.epoch
+	inProgress := slot.renewal
+	g.mu.Unlock()
+	if inProgress != nil {
+		return nil, true, waitRenewal(ctx, inProgress)
 	}
-}
-func (g *guestRegistry) observation(id string) *model.GuestStatus {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if value := g.status[id]; value != nil {
-		valueCopy := *value
-		return &valueCopy
-	}
-	return &model.GuestStatus{Status: statusUnavailable, Reason: "guest has not been contacted"}
-}
-func (l *guestLease) release() {
-	l.cancel()
-	l.http.CloseIdleConnections()
-	l.registry.mu.Lock()
-	delete(l.registry.leases[l.id], l)
-	if len(l.registry.leases[l.id]) == 0 {
-		delete(l.registry.leases, l.id)
-	}
-	l.registry.mu.Unlock()
-}
-func (h *Helper) leaseGuest(ctx context.Context, id string) (*guestLease, error) {
-	// Registration shares the admission mutex with durable reservation. No request
-	// can slip between operation acceptance and cancellation of its guest streams.
-	if !h.mu.TryLock() {
-		return nil, ErrBusy
-	}
-	defer h.mu.Unlock()
 	m, err := h.readyMachine(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	authority, err := rpcidentity.LoadOrCreate(filepath.Join(h.cfg.Root, "guest-authority"))
+	binding, err := readGuestBinding(h.cfg, m)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	defer func() { _ = authority.Close() }()
-	credentials, err := authority.HostCredentials(h.cfg.HostID)
+	if binding.Pending || rpcidentity.Expiring(binding.Certificate) {
+		return nil, true, h.renewGuest(ctx, m, epoch)
+	}
+	credentials, err := h.authority.HostCredentials(h.cfg.HostID)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	raw, err := statefs.ReadRegular(bindingPath(h.cfg, m))
-	if err != nil {
-		return nil, err
-	}
-	var binding rpcidentity.Binding
-	if err = json.Unmarshal(raw, &binding); err != nil {
-		return nil, err
-	}
-	if binding.MachineID != id || binding.HostID != h.cfg.HostID {
-		return nil, errors.New("retained guest binding identity mismatch")
-	}
-	if rpcidentity.Expiring(binding.Certificate) {
-		h.guests.suspend(id)
-		endpoint, e := h.runtime.Verify(ctx, m)
+	key := fmt.Sprintf("%s:%x:%x", m.Endpoint, sha256.Sum256(binding.Certificate), sha256.Sum256(credentials.Certificate))
+	g.mu.Lock()
+	candidate := g.slot(id).client
+	g.mu.Unlock()
+	owned := false
+	if candidate == nil || candidate.key != key {
+		client, e := credentials.HTTPClient(id)
 		if e != nil {
-			return nil, e
+			return nil, false, e
 		}
-		m.Endpoint = endpoint
+		candidate = &guestClient{key: key, http: client, rpc: clankerboxv1connect.NewSessionServiceClient(
+			client, "https://"+m.Endpoint, connect.WithReadMaxBytes(rpctransport.MaxMessage), connect.WithSendMaxBytes(rpctransport.MaxMessage))}
+		owned = true
 	}
-	client, err := credentials.HTTPClient(id)
-	if err != nil {
-		return nil, err
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	slot = g.slot(id)
+	if g.closed || slot.epoch != epoch || len(slot.reserved) != 0 || slot.renewal != nil {
+		if owned {
+			candidate.http.CloseIdleConnections()
+		}
+		return nil, false, ErrBusy
+	}
+	if slot.client != nil && slot.client.key == key {
+		if owned {
+			candidate.http.CloseIdleConnections()
+		}
+		candidate = slot.client
+	} else {
+		if slot.client != nil {
+			slot.client.http.CloseIdleConnections()
+		}
+		slot.client = candidate
 	}
 	call, cancel := context.WithCancel(ctx)
-	lease := &guestLease{
-		ctx:    call,
-		cancel: cancel,
-		http:   client,
-		client: clankerboxv1connect.NewGuestServiceClient(
-			client,
-			"https://"+m.Endpoint,
-			connect.WithReadMaxBytes(rpctransport.MaxMessage),
-			connect.WithSendMaxBytes(rpctransport.MaxMessage),
-		),
-		registry: h.guests,
-		id:       id,
+	lease := &guestLease{ctx: call, cancel: cancel, client: candidate.rpc, registry: g, id: id}
+	if g.leases[id] == nil {
+		g.leases[id] = make(map[*guestLease]bool)
 	}
-	h.guests.mu.Lock()
-	if h.guests.leases[id] == nil {
-		h.guests.leases[id] = make(map[*guestLease]bool)
-	}
-	h.guests.leases[id][lease] = true
-	h.guests.mu.Unlock()
-	return lease, nil
+	g.leases[id][lease] = true
+	return lease, false, nil
 }
+
+func readGuestBinding(cfg Config, m Manifest) (rpcidentity.Binding, error) {
+	raw, err := statefs.ReadRegular(bindingPath(cfg, m))
+	if err != nil {
+		return rpcidentity.Binding{}, err
+	}
+	var b rpcidentity.Binding
+	if err = json.Unmarshal(raw, &b); err != nil {
+		return b, err
+	}
+	if b.MachineID != m.ID || b.HostID != cfg.HostID {
+		return b, model.NewError(model.ReasonIdentityMismatch, "retained guest binding identity mismatch", false)
+	}
+	return b, nil
+}
+
 func (l *guestLease) describe() (*connect.Response[v1.GuestDescription], error) {
 	ctx, cancel := context.WithTimeout(l.ctx, connectionTimeout)
 	defer cancel()
 	d, err := l.client.DescribeGuest(ctx, connect.NewRequest(&v1.DescribeGuestRequest{MachineId: l.id}))
-	if err == nil && (d.Msg.GetMachineId() != l.id || d.Msg.GetEngineDigest() != vt.AssetSHA256) {
+	if err == nil && d.Msg.GetMachineId() != l.id {
 		err = errors.New("guest identity or terminal engine mismatch")
 	}
 	l.registry.mu.Lock()
 	defer l.registry.mu.Unlock()
 	if l.ctx.Err() != nil {
-		err = l.ctx.Err()
+		return nil, l.ctx.Err()
 	}
 	if err != nil {
 		l.registry.status[l.id] = &model.GuestStatus{Status: statusUnavailable, Reason: err.Error()}
@@ -195,9 +168,6 @@ func (r *RPC) CreateSession(
 		return nil, hostError(err)
 	}
 	defer l.release()
-	if _, err = l.describe(); err != nil {
-		return nil, rpcmodel.ToError(err)
-	}
 	return l.client.CreateSession(l.ctx, in)
 }
 
@@ -211,9 +181,6 @@ func (r *RPC) ListSessions(
 		return nil, hostError(err)
 	}
 	defer l.release()
-	if _, err = l.describe(); err != nil {
-		return nil, rpcmodel.ToError(err)
-	}
 	return l.client.ListSessions(l.ctx, in)
 }
 
@@ -227,9 +194,6 @@ func (r *RPC) EndSession(
 		return nil, hostError(err)
 	}
 	defer l.release()
-	if _, err = l.describe(); err != nil {
-		return nil, rpcmodel.ToError(err)
-	}
 	return l.client.EndSession(l.ctx, in)
 }
 
@@ -244,16 +208,13 @@ func (r *RPC) AttachSession(
 	}
 	open := first.GetOpen()
 	if open == nil {
-		return rpcmodel.ErrorFromCode("invalid", "first attachment message must be Open", false)
+		return rpcmodel.ToError(model.NewError(model.ReasonInvalid, "first attachment message must be Open", false))
 	}
 	l, err := r.Service.helper.leaseGuest(ctx, open.GetMachineId())
 	if err != nil {
 		return hostError(err)
 	}
 	defer l.release()
-	if _, err = l.describe(); err != nil {
-		return rpcmodel.ToError(err)
-	}
 	upstream := l.client.AttachSession(l.ctx)
 	return rpctransport.Relay(ctx, l.cancel, stream, upstream, first)
 }

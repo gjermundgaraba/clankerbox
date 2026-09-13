@@ -99,7 +99,7 @@ func (runner commandRunner) profiles(items []model.Profile) error {
 			p.Runtime,
 			p.CPU,
 			p.RAMMiB,
-			strings.Join(p.Capabilities, ","),
+			strings.Join(model.RuntimeCapabilities(p.Runtime, p.Arch), ","),
 		); err != nil {
 			return err
 		}

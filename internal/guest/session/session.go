@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"clankerbox/internal/model"
+
 	"github.com/creack/pty"
 	"golang.org/x/sys/unix"
 
@@ -115,7 +117,7 @@ func (s *Session) start(opts spawnOptions) error {
 		return fmt.Errorf("create working directory: %w", err)
 	}
 	argv := s.record.Argv
-	cmd := exec.CommandContext(opts.ctx, argv[0], argv[1:]...) //nolint:gosec // Shell-equivalent authority by contract.
+	cmd := exec.CommandContext(context.WithoutCancel(opts.ctx), argv[0], argv[1:]...) //nolint:gosec // Shell-equivalent authority by contract.
 	cmd.Dir = s.record.Cwd
 	cmd.Env = buildEnv(opts.env)
 	if opts.workload != nil {
@@ -228,6 +230,7 @@ func (s *Session) waitLoop() {
 	_ = term.Close()
 	s.writer.close()
 	_ = s.master.Close()
+	<-s.writer.done
 	for _, sub := range subs {
 		sub.enqueueEvent(protocol.SessionEvent{Event: protocol.EventSession, Session: record})
 	}
@@ -353,7 +356,7 @@ func (s *Session) input(data []byte) protocol.InputValue {
 	defer s.mu.Unlock()
 	switch {
 	case !s.running():
-		return protocol.InputValue{Status: protocol.InputRefused, Reason: protocol.CodeNotRunning}
+		return protocol.InputValue{Status: protocol.InputRefused, Reason: string(model.ReasonNotRunning)}
 	case !s.writer.enqueueInput(data):
 		return protocol.InputValue{Status: protocol.InputRefused, Reason: "queue_full"}
 	default:
@@ -397,9 +400,9 @@ func (s *Session) resize(cols, rows uint16) (protocol.Session, error) {
 func (s *Session) end() protocol.Session {
 	s.mu.Lock()
 	if !s.running() {
-		record := s.record
 		s.mu.Unlock()
-		return record
+		<-s.waitDone
+		return s.snapshot()
 	}
 	pid := s.record.PID
 	fd := int(s.master.Fd())

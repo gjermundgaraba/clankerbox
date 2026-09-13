@@ -86,9 +86,9 @@ func (runner commandRunner) finishMutation(
 	if wait.async {
 		return runner.output(operation)
 	}
-	ctx, cancel := context.WithTimeout(ctx, wait.timeout)
-	defer cancel()
-	operation, err = runner.api.WaitOperation(ctx, operation)
+	waitCtx, cancel := context.WithTimeout(ctx, wait.timeout)
+	operation, err = runner.api.WaitOperation(waitCtx, operation)
+	cancel()
 	if err != nil {
 		return err
 	}

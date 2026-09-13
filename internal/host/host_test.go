@@ -69,13 +69,13 @@ func setup(t *testing.T) (*host.Helper, host.Config, *memoryRuntime, model.Reque
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	requireNoError(t, err)
 	p := model.Profile{
-		ID:        "mac-v1",
-		OS:        "macos",
-		Arch:      archARM64,
-		Runtime:   runtimeTart,
-		CPU:       2,
-		RAMMiB:    2048,
-		ImagePath: "seed",
+		ID:          "mac-v1",
+		OS:          "macos",
+		Arch:        archARM64,
+		Runtime:     runtimeTart,
+		CPU:         2,
+		RAMMiB:      2048,
+		ImageDigest: "image-content",
 	}
 	if err = p.Validate(); err != nil {
 		t.Fatal(err)
@@ -83,7 +83,8 @@ func setup(t *testing.T) (*host.Helper, host.Config, *memoryRuntime, model.Reque
 	cfg := host.Config{HostOS: osDarwin,
 		Root:          filepath.Join(root, "state"),
 		PortLeaseRoot: filepath.Join(root, "ports"),
-		Profiles:      []model.Profile{p},
+		Profiles:      []host.ProfileBinding{{Profile: p, ImagePath: "seed"}},
+		RuntimeDigest: "engine-content",
 		TartPath:      "/opt/homebrew/bin/tart",
 	}
 	rt := &memoryRuntime{}
@@ -267,7 +268,7 @@ func TestConcurrentHelperInitialization(t *testing.T) {
 			<-start
 			local := cfg
 			// Separate invocations decode independent profile records.
-			local.Profiles = append([]model.Profile(nil), cfg.Profiles...)
+			local.Profiles = append([]host.ProfileBinding(nil), cfg.Profiles...)
 			helper, err := host.Open(local, rt)
 			if err == nil {
 				err = helper.Close()

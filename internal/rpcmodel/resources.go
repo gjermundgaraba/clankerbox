@@ -17,7 +17,7 @@ import (
 // Schema is the one supported RPC package identity.
 const Schema = "clankerbox.v1"
 
-// ToProfile projects configured profile capabilities without private installation paths.
+// ToProfile derives discovery capabilities from the portable profile.
 //
 //nolint:gosec // Domain validation bounds outbound capacity, PID and exit-status values.
 func ToProfile(p model.Profile) *v1.Profile {
@@ -29,7 +29,7 @@ func ToProfile(p model.Profile) *v1.Profile {
 		Runtime:      p.Runtime,
 		Cpu:          uint32(p.CPU),
 		RamMib:       uint64(p.RAMMiB),
-		Capabilities: slices.Clone(p.Capabilities),
+		Capabilities: model.RuntimeCapabilities(p.Runtime, p.Arch),
 		StorageGib: uint64(
 			p.StorageGiB,
 		),
@@ -39,7 +39,7 @@ func ToProfile(p model.Profile) *v1.Profile {
 	}
 }
 
-// FromProfile reconstructs only the public fields. Trusted installation resolves ImagePath.
+// FromProfile reconstructs portable compatibility fields; capabilities are derived.
 func FromProfile(p *v1.Profile) (model.Profile, error) {
 	if p == nil {
 		return model.Profile{}, fmt.Errorf("profile required")
@@ -57,35 +57,16 @@ func FromProfile(p *v1.Profile) (model.Profile, error) {
 		return model.Profile{}, err
 	}
 	return model.Profile{
-		ID:           p.GetId(),
-		ImageDigest:  p.GetImageDigest(),
-		OS:           p.GetOs(),
-		Arch:         p.GetArch(),
-		Runtime:      p.GetRuntime(),
-		CPU:          int(p.GetCpu()),
-		RAMMiB:       ram,
-		Capabilities: slices.Clone(p.GetCapabilities()),
-		StorageGiB:   storage,
-		OverlayGiB:   overlay,
+		ID:          p.GetId(),
+		ImageDigest: p.GetImageDigest(),
+		OS:          p.GetOs(),
+		Arch:        p.GetArch(),
+		Runtime:     p.GetRuntime(),
+		CPU:         int(p.GetCpu()),
+		RAMMiB:      ram,
+		StorageGiB:  storage,
+		OverlayGiB:  overlay,
 	}, nil
-}
-
-// ToProfileBinding includes the exact trusted private image installation pin.
-func ToProfileBinding(p model.Profile) *v1.ProfileBinding {
-	return &v1.ProfileBinding{Profile: ToProfile(p), ImagePath: p.ImagePath}
-}
-
-// FromProfileBinding restores a private configured profile without validating host ownership.
-func FromProfileBinding(p *v1.ProfileBinding) (model.Profile, error) {
-	if p == nil {
-		return model.Profile{}, fmt.Errorf("profile binding required")
-	}
-	out, err := FromProfile(p.GetProfile())
-	if err != nil {
-		return out, err
-	}
-	out.ImagePath = p.GetImagePath()
-	return out, nil
 }
 
 // ToHost projects public host capacity and reservation accounting.
@@ -173,16 +154,12 @@ func FromGuestStatus(g *v1.GuestStatus) *model.GuestStatus {
 
 // ToMachine projects public machine identity and observation fields.
 func ToMachine(m model.Machine) *v1.Machine {
-	// Discovery reflects the installed implementation, while persisted profile
-	// snapshots and private operation bindings retain their historical values.
-	profile := m.ProfileSpec
-	profile.Capabilities = model.RuntimeCapabilities(profile.Runtime, profile.Arch)
 	out := &v1.Machine{
 		Id:                 m.ID,
 		Name:               m.Name,
 		ProfileId:          m.Profile,
 		HostId:             m.Host,
-		Profile:            ToProfile(profile),
+		Profile:            ToProfile(m.ProfileSpec),
 		State:              ToState(m.State),
 		DesiredState:       ToState(m.DesiredState),
 		Generation:         m.Generation,
@@ -296,33 +273,6 @@ func FromCheckpoint(c *v1.Checkpoint) (model.Checkpoint, error) {
 		RuntimePin:       c.GetRuntimePin(),
 		Labels:           maps.Clone(c.GetLabels()),
 	}, nil
-}
-
-// ToCheckpointBinding preserves the private checkpoint profile pin for host control.
-func ToCheckpointBinding(c model.Checkpoint) *v1.CheckpointBinding {
-	return &v1.CheckpointBinding{Checkpoint: ToCheckpoint(c), Profile: ToProfileBinding(c.Profile)}
-}
-
-// FromCheckpointBinding checks and restores matching public and private checkpoint profiles.
-func FromCheckpointBinding(c *v1.CheckpointBinding) (model.Checkpoint, error) {
-	if c == nil {
-		return model.Checkpoint{}, fmt.Errorf("checkpoint binding required")
-	}
-	out, err := FromCheckpoint(c.GetCheckpoint())
-	if err != nil {
-		return out, err
-	}
-	p, err := FromProfileBinding(c.GetProfile())
-	if err != nil {
-		return out, err
-	}
-	public := p
-	public.ImagePath = ""
-	if model.Hash(public) != model.Hash(out.Profile) {
-		return out, fmt.Errorf("checkpoint profile binding mismatch")
-	}
-	out.Profile = p
-	return out, nil
 }
 
 // ToOperation projects a durable lifecycle operation.

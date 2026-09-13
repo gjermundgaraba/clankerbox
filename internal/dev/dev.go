@@ -48,11 +48,9 @@ type environment struct {
 	Namespace    string `json:"namespace"`
 	BundlePath   string `json:"bundle_path"`
 	BundleDigest string `json:"bundle_digest"`
-	ProfileID    string `json:"profile_id"`
 	dir          *statefs.Dir
 	lock         *statefs.Lock
 	bundle       Bundle
-	upgrade      bool
 }
 
 // DefaultStateDir returns the current project directory’s owned appliance path.
@@ -185,7 +183,6 @@ func (e *environment) initialize(ctx context.Context, state, bundlePath string) 
 	e.Namespace = environmentPrefix + name
 	e.BundlePath = b.manifest
 	e.BundleDigest = b.digest
-	e.ProfileID = b.ProfileID
 	e.bundle = b
 	return jsonWrite(e.dir, environmentManifest, e)
 }
@@ -207,35 +204,11 @@ func (e *environment) restore(data []byte, state, bundlePath string) error {
 	}
 	e.bundle, err = verifyBundle(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("environment requires bundle digest %s; supply an intact copy with --bundle: %w", e.BundleDigest, err)
 	}
-	if e.bundle.digest != e.BundleDigest || e.bundle.manifest != e.BundlePath {
-		if bundlePath == "" {
-			return errors.New("retained bundle changed; pass an explicitly verified compatible --bundle to upgrade")
-		}
-		if err = e.compatibleUpgrade(); err != nil {
-			return err
-		}
-		e.upgrade = true
+	if e.bundle.digest != e.BundleDigest {
+		return fmt.Errorf("environment requires bundle digest %s; a different release requires explicit dev destroy and recreation", e.BundleDigest)
 	}
-	return e.restoreUpgrade()
-}
-func (e *environment) restoreUpgrade() error {
-	raw, err := e.dir.ReadFile(upgradeManifest)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var intent bundleUpgrade
-	if err = json.Unmarshal(raw, &intent); err != nil {
-		return err
-	}
-	if intent.ToDigest != e.bundle.digest || intent.ToPath != e.bundle.manifest {
-		return errors.New("unfinished bundle upgrade requires the same explicit --bundle")
-	}
-	e.upgrade = true
 	return nil
 }
 func (e *environment) hostConfig() host.Config {
@@ -249,7 +222,6 @@ func (e *environment) hostConfig() host.Config {
 		RAMMiB:      b.ProfileRAMMiB,
 		StorageGiB:  b.StorageGiB,
 		OverlayGiB:  b.OverlayGiB,
-		ImagePath:   b.path(b.ImagePath),
 		ImageDigest: b.ImageDigest,
 	}
 	return host.Config{
@@ -258,7 +230,7 @@ func (e *environment) hostConfig() host.Config {
 		HostID:        localHostID,
 		Root:          e.HostRoot,
 		Listen:        "unix://" + filepath.Join(e.HostRoot, "host.sock"),
-		Profiles:      []model.Profile{p},
+		Profiles:      []host.ProfileBinding{{Profile: p, ImagePath: b.path(b.ImagePath)}},
 		SmolvmPath:    b.path(b.Smolvm),
 		LibraryDir:    b.path(b.LibraryDir),
 		SystemdUser:   runtime.GOOS == linuxPlatform,
@@ -304,7 +276,7 @@ func (e *environment) prepare() error {
 		return errors.New("host has fewer CPUs than the pinned profile")
 	}
 	c := model.Config{
-		Profiles: cfg.Profiles,
+		Profiles: []model.Profile{profile.Profile},
 		Hosts: []model.Host{
 			{
 				ID:         cfg.HostID,
@@ -331,6 +303,18 @@ func (e *environment) prepareHostRoot(cfg host.Config) error {
 	if !errors.Is(statErr, os.ErrNotExist) {
 		return statErr
 	}
+	// Initialize privately and publish host state and its environment binding
+	// together. Interruption can never leave a live host root without its proof.
+	if err := statefs.EnsurePrivateDir(filepath.Dir(e.HostRoot)); err != nil {
+		return err
+	}
+	staged, err := os.MkdirTemp(filepath.Dir(e.HostRoot), ".")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(staged) }()
+	cfg.Root = staged
+	cfg.Listen = "unix://" + filepath.Join(staged, "host.sock")
 	helper, err := host.Open(cfg, nil)
 	if err != nil {
 		return err
@@ -338,12 +322,25 @@ func (e *environment) prepareHostRoot(cfg host.Config) error {
 	if err = helper.Close(); err != nil {
 		return err
 	}
-	root, err := statefs.Open(e.HostRoot)
+	root, err := statefs.Open(staged)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = root.Close() }()
-	return jsonWrite(root, "dev-owner.json", map[string]string{"state_dir": e.StateDir, "namespace": e.Namespace})
+	err = jsonWrite(root, "dev-owner.json", map[string]string{"state_dir": e.StateDir, "namespace": e.Namespace})
+	closeErr := root.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if _, err = os.Lstat(e.HostRoot); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("host root appeared during initialization; refusing replacement")
+	}
+	if err = os.Rename(staged, e.HostRoot); err != nil {
+		return err
+	}
+	return statefs.Sync(filepath.Dir(e.HostRoot))
 }
 
 func (e *environment) validateHostRoot() error {
@@ -398,10 +395,8 @@ func Run(ctx context.Context, opts Options, onReady func(Connection) error) erro
 	if err = preflight(ctx, env.bundle); err != nil {
 		return err
 	}
-	if env.upgrade {
-		if err = env.applyUpgrade(ctx); err != nil {
-			return err
-		}
+	if err = env.relocateBundle(ctx); err != nil {
+		return err
 	}
 	if err = env.prepare(); err != nil {
 		return err
@@ -418,7 +413,7 @@ func Run(ctx context.Context, opts Options, onReady func(Connection) error) erro
 		URL:               child.url,
 		TokenPath:         filepath.Join(env.StateDir, "token"),
 		DefaultHost:       localHostID,
-		DefaultProfile:    env.ProfileID,
+		DefaultProfile:    env.bundle.ProfileID,
 		StateDir:          env.StateDir,
 		ClientConfig:      filepath.Join(env.StateDir, "client.json"),
 		ClankerdeskConfig: filepath.Join(env.StateDir, "clankerdesk.json"),
@@ -557,5 +552,10 @@ const (
 	environmentManifest = "environment.json"
 	environmentLock     = "environment.lock"
 	environmentPrefix   = "clankerbox-dev-"
-	upgradeManifest     = "upgrade.json"
+)
+
+const (
+	linuxPlatform = "linux"
+	macPlatform   = "darwin"
+	localHostID   = "local"
 )

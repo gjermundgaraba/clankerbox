@@ -1,4 +1,3 @@
-//nolint:testpackage // Exercise supervisor timing without changing host service registrations.
 package dev
 
 import (

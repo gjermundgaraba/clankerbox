@@ -2,11 +2,8 @@ package control_test
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -14,8 +11,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"golang.org/x/crypto/ssh"
 
 	"clankerbox/internal/control"
 	"clankerbox/internal/host"
@@ -32,7 +27,6 @@ const (
 
 type testTransport struct {
 	cancelDispatch context.CancelFunc
-	test           *testing.T
 	mu             sync.Mutex
 	observations   map[string]model.Observation
 	responses      map[string]model.Response
@@ -40,8 +34,6 @@ type testTransport struct {
 	lost           bool
 	unavailable    bool
 	failHost       string
-	key            string
-	connects       int
 }
 
 func closeTest(t *testing.T, closer io.Closer) {
@@ -51,15 +43,6 @@ func closeTest(t *testing.T, closer io.Closer) {
 	}
 }
 
-func testPublicKey(t *testing.T) string {
-	t.Helper()
-	pub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, _ := ssh.NewPublicKey(pub)
-	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(p)))
-}
 func (t *testTransport) Call(ctx context.Context, h model.Host, r model.Request) (model.Response, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -86,7 +69,7 @@ func (t *testTransport) Call(ctx context.Context, h model.Host, r model.Request)
 	obs.MachineID = r.MachineID
 	obs.Generation = r.Generation
 	obs.Prepared = true
-	obs.Endpoint = "192.168.64.2:22"
+	obs.Endpoint = "192.168.64.2:7443"
 	obs.ObservedAt = time.Now().UTC()
 	switch r.Action {
 	case "create", "start", "fork", "restore":
@@ -115,24 +98,10 @@ func (t *testTransport) Call(ctx context.Context, h model.Host, r model.Request)
 	}
 	return resp, nil
 }
-func (t *testTransport) Connect(context.Context, model.Host, string) (io.ReadWriteCloser, error) {
-	t.mu.Lock()
-	t.connects++
-	t.mu.Unlock()
-	a, b := net.Pipe()
-	go func() {
-		defer closeTest(t.test, b)
-		buf := make([]byte, 9)
-		if _, err := io.ReadFull(b, buf); err == nil {
-			_, _ = b.Write(buf)
-		}
-	}()
-	return a, nil
-}
 func config() model.Config {
 	return model.Config{
 		Profiles: []model.Profile{
-			{ID: "mac-v1", OS: "macos", Arch: "arm64", Runtime: tartRuntime, CPU: 2, RAMMiB: 2048, ImagePath: "seed"},
+			{ID: "mac-v1", OS: "macos", Arch: "arm64", Runtime: tartRuntime, CPU: 2, RAMMiB: 2048, ImageDigest: "image-content"},
 		},
 		Hosts: []model.Host{
 			{
@@ -156,10 +125,8 @@ func setupControlConfig(
 ) (*control.Controller, *testTransport, model.CreateInput, string) {
 	t.Helper()
 	transport := &testTransport{
-		test:         t,
 		observations: map[string]model.Observation{},
 		responses:    map[string]model.Response{},
-		key:          testPublicKey(t),
 	}
 	path := filepath.Join(t.TempDir(), "state")
 	c, err := control.Open(path, cfg, transport)
@@ -200,11 +167,11 @@ func mustMutate(t *testing.T, c *control.Controller, id, action, key string) mod
 	}
 	return o
 }
-func expectCode(t *testing.T, err error, code string) {
+func expectCode(t *testing.T, err error, reason model.Reason) {
 	t.Helper()
-	var e *control.APIError
-	if !errors.As(err, &e) || e.Code != code {
-		t.Fatalf("error %v, want code %s", err, code)
+	var e *model.Error
+	if !errors.As(err, &e) || e.Reason != reason {
+		t.Fatalf("error %v, want reason %s", err, reason)
 	}
 }
 func TestControllerDurableIntentReplyLossAndDuplicates(t *testing.T) {
@@ -247,7 +214,7 @@ func TestControllerDurableIntentReplyLossAndDuplicates(t *testing.T) {
 	}
 	in.Name = fixtureDifferent
 	_, err = c.Create(t.Context(), "create-once", in)
-	expectCode(t, err, "idempotency_conflict")
+	expectCode(t, err, model.ReasonIdempotencyConflict)
 }
 func TestLifecycleCapacityAndImmutableIdentity(t *testing.T) {
 	t.Parallel()
@@ -258,13 +225,13 @@ func TestLifecycleCapacityAndImmutableIdentity(t *testing.T) {
 	b := mustCreate(t, c, in, "b")
 	in.Name = "third"
 	_, err := c.Create(t.Context(), "full", in)
-	expectCode(t, err, "capacity")
+	expectCode(t, err, model.ReasonCapacity)
 	_, err = c.Mutate(context.Background(), a.MachineID, "delete", "bad-delete")
-	expectCode(t, err, "prerequisite")
+	expectCode(t, err, model.ReasonPrerequisite)
 	mustMutate(t, c, a.MachineID, "stop", "stop-a")
 	third := mustCreate(t, c, in, "third")
 	_, err = c.Mutate(context.Background(), a.MachineID, "start", "full-start")
-	expectCode(t, err, "capacity")
+	expectCode(t, err, model.ReasonCapacity)
 	mustMutate(t, c, third.MachineID, "stop", "stop-third")
 	mustMutate(t, c, a.MachineID, "start", "start-a")
 	mustMutate(t, c, a.MachineID, "stop", "stop-a-again")
@@ -297,14 +264,14 @@ func TestObservationStalenessAndGenerationFencing(t *testing.T) {
 		t.Fatalf("staleness hidden: %+v %v", m, err)
 	}
 	_, err = c.Mutate(context.Background(), o.MachineID, "stop", "stop")
-	expectCode(t, err, "host_unavailable")
+	expectCode(t, err, model.ReasonUnavailable)
 	tr.unavailable = false
 	obs := tr.observations[o.MachineID]
 	obs.Generation = 9
 	obs.State = model.Stopped
 	tr.observations[o.MachineID] = obs
 	_, err = c.Mutate(context.Background(), o.MachineID, "start", "start")
-	expectCode(t, err, "reconciliation_required")
+	expectCode(t, err, model.ReasonReconciliationRequired)
 }
 func TestPendingOperationPreventsNewMutation(t *testing.T) {
 	t.Parallel()
@@ -313,7 +280,7 @@ func TestPendingOperationPreventsNewMutation(t *testing.T) {
 	tr.lost = true
 	o := mustCreate(t, c, in, "create")
 	_, err := c.Mutate(context.Background(), o.MachineID, "stop", fixtureDifferent)
-	expectCode(t, err, "operation_pending")
+	expectCode(t, err, model.ReasonOperationPending)
 }
 func TestConcurrentIdempotency(t *testing.T) {
 	t.Parallel()
@@ -384,7 +351,6 @@ func TestDatabaseSingleController(t *testing.T) {
 type integrationRuntime struct {
 	state   host.RuntimeState
 	creates int
-	key     string
 }
 
 func (r *integrationRuntime) Inspect(context.Context, host.Manifest) (host.RuntimeState, error) {
@@ -441,9 +407,6 @@ func (t *helperTransport) Call(ctx context.Context, _ model.Host, r model.Reques
 	}
 	return resp, nil
 }
-func (t *helperTransport) Connect(context.Context, model.Host, string) (io.ReadWriteCloser, error) {
-	return nil, errors.New("not used")
-}
 func TestControllerAndHostJournalsTogether(t *testing.T) {
 	t.Parallel()
 	cfg := config()
@@ -452,8 +415,8 @@ func TestControllerAndHostJournalsTogether(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt := &integrationRuntime{key: testPublicKey(t)}
-	hc := host.Config{Root: filepath.Join(root, "host"), Profiles: cfg.Profiles, TartPath: "/opt/homebrew/bin/tart"}
+	rt := &integrationRuntime{}
+	hc := host.Config{Root: filepath.Join(root, "host"), RuntimeDigest: "engine-content", Profiles: []host.ProfileBinding{{Profile: cfg.Profiles[0], ImagePath: "seed"}}, TartPath: "/opt/homebrew/bin/tart"}
 	helper, err := host.Open(hc, rt)
 	if err != nil {
 		t.Fatal(err)

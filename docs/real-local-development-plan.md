@@ -1,6 +1,8 @@
 # Real local Clankerbox — clean-break architecture and plan
 
-Status: implemented, deployed and live-qualified. See
+Status: historical plan, implemented for release 0.2.1. References to current code
+and findings below describe that planning baseline. The follow-up
+[clean-break plan](real-local-clean-break-plan.md) owns the ongoing simplification. See
 [the implementation record](real-local-development-implementation.md) for exact
 artifacts, platform evidence and retained-state handling.
 
@@ -328,7 +330,7 @@ credentials; those are separate product capabilities.
 
 ## 6. Engine support, artifacts and supervision
 
-Current findings:
+Findings at the planning baseline:
 
 - The inspected smolvm 1.14.1 source supports Apple Silicon hosts with arm64
   Linux guests and includes macOS fork-and-continue and portable-checkpoint code.

@@ -100,51 +100,26 @@ const restoreCommand = "restore"
 const childArgCount = 2
 
 func (streams commandStreams) checkpoints() *cli.Command {
-	command := streams.command
-	checkpoint := &cli.Command{Name: "checkpoint", Usage: "Manage machine checkpoints", OnUsageError: returnUsageError}
-	for _, name := range []string{"create", deleteCommandName} {
-		c := command(
-			name,
-			name+" a checkpoint",
-			"ID",
-			1,
-			func(ctx context.Context, r commandRunner, c *cli.Command) error {
-				return r.deriveMachine(
-					ctx,
-					"checkpoint",
-					c.Name,
-					c.Args().First(),
-					"",
-					c.String("idempotency-key"),
-					waitFlags(c),
-				)
-			},
-		)
-		if name == "create" {
-			c.ArgsUsage = "MACHINE"
-		}
-		c.Flags = lifecycleFlags()
-		checkpoint.Commands = append(checkpoint.Commands, c)
+	create := streams.command("create", "Capture a machine checkpoint", "MACHINE", 1,
+		func(ctx context.Context, r commandRunner, c *cli.Command) error {
+			return r.captureCheckpoint(ctx, c.Args().First(), c.String("idempotency-key"), waitFlags(c))
+		})
+	create.Flags = lifecycleFlags()
+	remove := streams.command("delete", "Delete a checkpoint", "CHECKPOINT_ID", 1,
+		func(ctx context.Context, r commandRunner, c *cli.Command) error {
+			return r.deleteCheckpoint(ctx, c.Args().First(), c.String("idempotency-key"), waitFlags(c))
+		})
+	remove.Flags = lifecycleFlags()
+	return &cli.Command{Name: "checkpoint", Usage: "Manage machine checkpoints", OnUsageError: returnUsageError,
+		Commands: []*cli.Command{create, remove,
+			streams.command("list", "List checkpoints", " ", 0, func(ctx context.Context, r commandRunner, _ *cli.Command) error {
+				return r.listCheckpoints(ctx)
+			}),
+			streams.command("inspect", "Inspect a checkpoint", "CHECKPOINT_ID", 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
+				return r.inspectCheckpoint(ctx, c.Args().First())
+			}),
+		},
 	}
-	for _, name := range []string{"list", "inspect"} {
-		count, usage := 0, " "
-		if name == "inspect" {
-			count, usage = 1, "ID"
-		}
-		checkpoint.Commands = append(
-			checkpoint.Commands,
-			command(
-				name,
-				name+" checkpoints",
-				usage,
-				count,
-				func(ctx context.Context, r commandRunner, c *cli.Command) error {
-					return r.queryCheckpoint(ctx, c.Name, c.Args().Slice())
-				},
-			),
-		)
-	}
-	return checkpoint
 }
 
 func (streams commandStreams) addResourceCommands(root *cli.Command) {
@@ -217,31 +192,23 @@ func (streams commandStreams) addLifecycleCommands(root *cli.Command) {
 		c.Flags = lifecycleFlags()
 		root.Commands = append(root.Commands, c)
 	}
-	for _, name := range []string{"fork", restoreCommand} {
-		c := command(
-			name,
-			name+" a machine into a new child",
-			"SOURCE CHILD",
-			childArgCount,
-			func(ctx context.Context, r commandRunner, c *cli.Command) error {
-				return r.deriveMachine(
-					ctx,
-					c.Name,
-					c.Name,
-					c.Args().Get(0),
-					c.Args().Get(1),
-					c.String("idempotency-key"),
-					waitFlags(c),
-				)
-			},
-		)
-		if name == restoreCommand {
-			c.ArgsUsage = "CHECKPOINT_ID CHILD"
-		}
-		c.Flags = lifecycleFlags()
-		root.Commands = append(root.Commands, c)
-	}
+	fork := command("fork", "Fork a machine into a new child", "MACHINE CHILD", childArgCount,
+		func(ctx context.Context, r commandRunner, c *cli.Command) error {
+			return r.forkMachine(ctx, c.Args().Get(0), c.Args().Get(1), c.String("idempotency-key"), waitFlags(c))
+		})
+	fork.Flags = lifecycleFlags()
+	restore := command("restore", "Restore a checkpoint into a new machine", "CHECKPOINT_ID CHILD", childArgCount,
+		func(ctx context.Context, r commandRunner, c *cli.Command) error {
+			return r.restoreCheckpoint(ctx, c.Args().Get(0), c.Args().Get(1), c.String("idempotency-key"), waitFlags(c))
+		})
+	restore.Flags = lifecycleFlags()
+	root.Commands = append(root.Commands, fork, restore)
 	root.Commands = append(root.Commands, streams.checkpoints())
 }
 
 func returnUsageError(_ context.Context, _ *cli.Command, err error, _ bool) error { return err }
+
+const (
+	stopCommandName   = "stop"
+	deleteCommandName = "delete"
+)

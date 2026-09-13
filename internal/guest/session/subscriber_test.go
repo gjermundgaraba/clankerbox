@@ -1,4 +1,4 @@
-package session //nolint:testpackage // Exact queue budgets and retained prefix ownership have no public observation.
+package session
 
 import (
 	"bytes"

@@ -67,6 +67,7 @@ func loadBinding(cfg Config, m Manifest, a *rpcidentity.Authority, initial bool)
 	if err != nil {
 		return b, err
 	}
+	b.Pending = true
 	//nolint:gosec // The guest private key is deliberately stored in a private binding file.
 	raw, err = json.Marshal(b)
 	if err != nil {
@@ -79,11 +80,10 @@ func (n *NativeRuntime) prepareRPC(ctx context.Context, m Manifest, initial bool
 	if !model.ValidID(m.ID) || !model.ValidName(n.Config.HostID) {
 		return "", errors.New("valid machine and host identities required for guest binding")
 	}
-	a, err := rpcidentity.LoadOrCreate(filepath.Join(n.Config.Root, "guest-authority"))
-	if err != nil {
-		return "", err
+	a := n.authority
+	if a == nil {
+		return "", errors.New("host guest authority is not initialized")
 	}
-	defer func() { _ = a.Close() }()
 	binding, err := loadBinding(n.Config, m, a, initial)
 	if err != nil {
 		return "", err
@@ -95,7 +95,17 @@ func (n *NativeRuntime) prepareRPC(ctx context.Context, m Manifest, initial bool
 	if err = n.installGuestService(ctx, m, binding, initial); err != nil {
 		return "", err
 	}
-	return n.waitGuestIdentity(ctx, m, credentials)
+	endpoint, err := n.waitGuestIdentity(ctx, m, credentials)
+	if err != nil {
+		return "", err
+	}
+	binding.Pending = false
+	// #nosec G117 -- Binding credentials are persisted only through statefs mode 0600.
+	raw, err := json.Marshal(binding)
+	if err != nil {
+		return "", err
+	}
+	return endpoint, statefs.WritePrivate(bindingPath(n.Config, m), raw)
 }
 
 func (n *NativeRuntime) installGuestService(
@@ -131,7 +141,7 @@ func (n *NativeRuntime) installGuestService(
 	if _, err = n.guest(ctx, m, script); err != nil {
 		return err
 	}
-	//nolint:gosec // Trusted native stdin delivers the private guest binding.
+	// #nosec G117 -- Trusted native stdin delivers the private guest binding.
 	raw, err := json.Marshal(binding)
 	if err != nil {
 		return err
@@ -180,7 +190,7 @@ func (n *NativeRuntime) waitGuestIdentity(
 		return "", err
 	}
 	defer httpClient.CloseIdleConnections()
-	client := clankerboxv1connect.NewGuestServiceClient(httpClient, "https://"+state.Endpoint)
+	client := clankerboxv1connect.NewSessionServiceClient(httpClient, "https://"+state.Endpoint)
 	deadline, cancel := context.WithTimeout(ctx, guestReadyTimeout)
 	defer cancel()
 	for {

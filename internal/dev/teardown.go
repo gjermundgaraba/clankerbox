@@ -27,16 +27,22 @@ type teardownJournal struct {
 }
 
 // Stop settles ordinary stop operations before stopping the host service.
-func Stop(ctx context.Context, state string) error { return teardown(ctx, state, false) }
+func Stop(ctx context.Context, opts Options) error { return teardown(ctx, opts, false) }
 
 // Destroy deletes dependency-ordered resources and exact owned environment roots.
-func Destroy(ctx context.Context, state string) error { return teardown(ctx, state, true) }
-func teardown(ctx context.Context, state string, destroy bool) error {
-	env, err := openEnvironment(ctx, Options{StateDir: state}, false)
+func Destroy(ctx context.Context, opts Options) error { return teardown(ctx, opts, true) }
+func teardown(ctx context.Context, opts Options, destroy bool) error {
+	env, err := openEnvironment(ctx, opts, false)
 	if err != nil {
 		return err
 	}
 	defer env.close()
+	if err = env.relocateBundle(ctx); err != nil {
+		return err
+	}
+	if err = env.prepare(); err != nil {
+		return err
+	}
 	journal, err := env.beginTeardown(destroy)
 	if err != nil {
 		return err

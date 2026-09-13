@@ -298,13 +298,19 @@ func cachedBundle(ctx context.Context, source string) (Bundle, error) {
 	if err = extractBundle(archive, staging); err != nil {
 		return Bundle{}, err
 	}
-	if _, err = verifyBundle(filepath.Join(staging, bundleManifestName)); err != nil {
+	verified, err := verifyBundle(filepath.Join(staging, bundleManifestName))
+	if err != nil {
 		return Bundle{}, err
 	}
 	if err = os.Rename(staging, final); err != nil {
 		return Bundle{}, err
 	}
-	return verifyBundle(filepath.Join(final, bundleManifestName))
+	if err = statefs.Sync(cachePath); err != nil {
+		return Bundle{}, err
+	}
+	verified.root = final
+	verified.manifest = filepath.Join(final, bundleManifestName)
+	return verified, nil
 }
 func downloadBundle(ctx context.Context, source, destination string) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)

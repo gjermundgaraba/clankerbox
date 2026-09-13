@@ -3,18 +3,13 @@ package rpcmodel
 import (
 	"context"
 	"errors"
-	"strings"
+	"log/slog"
 
 	"connectrpc.com/connect"
 
 	v1 "clankerbox/gen/clankerbox/v1"
-	"clankerbox/internal/guest/protocol"
+	"clankerbox/internal/model"
 )
-
-// NewError attaches a typed reason while retaining the standard RPC status.
-func NewError(reason v1.ErrorReason, message string, retryable bool) *connect.Error {
-	return ErrorWithDetail(&v1.ErrorDetail{Reason: reason, Message: message, Retryable: retryable})
-}
 
 // ErrorWithDetail attaches a structured reason and resource identity to a Connect error.
 func ErrorWithDetail(detail *v1.ErrorDetail) *connect.Error {
@@ -28,15 +23,7 @@ func ErrorWithDetail(detail *v1.ErrorDetail) *connect.Error {
 	return out
 }
 
-// ErrorFromCode maps existing domain error categories without depending on the
-// controller package (which itself imports this package for RPC handlers).
-func ErrorFromCode(code, message string, retryable bool) *connect.Error {
-	reason := Reason(code)
-	return NewError(reason, message, retryable)
-}
-
-// ToError preserves existing typed RPC errors and session-domain errors.
-// Controller APIError callers should supply their code via ErrorFromCode.
+// ToError is the RPC boundary for shared domain failures.
 func ToError(err error) error {
 	if err == nil {
 		return nil
@@ -50,10 +37,14 @@ func ToError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return connect.NewError(connect.CodeDeadlineExceeded, err)
 	}
-	if domain, ok := errors.AsType[*protocol.Error](err); ok {
-		return ErrorFromCode(domain.Code, domain.Message, domain.Retryable)
+	if domain, ok := errors.AsType[*model.Error](err); ok {
+		if wireReason := reason(domain.Reason); wireReason != v1.ErrorReason_ERROR_REASON_INTERNAL {
+			return ErrorWithDetail(&v1.ErrorDetail{Reason: wireReason, Message: domain.Message, Retryable: domain.Retryable})
+		}
 	}
-	return NewError(v1.ErrorReason_ERROR_REASON_INTERNAL, "internal error", false)
+	// The RPC boundary reports unexpected causes through the process logger before redacting them.
+	slog.Error("unexpected RPC failure", "error", err) //nolint:sloglint // Shared boundary uses the service-configured process logger.
+	return ErrorWithDetail(&v1.ErrorDetail{Reason: v1.ErrorReason_ERROR_REASON_INTERNAL, Message: "internal error"})
 }
 
 // Detail extracts a typed reason, including after Connect serialization.
@@ -73,55 +64,54 @@ func Detail(err error) (*v1.ErrorDetail, bool) {
 	return nil, false
 }
 
-// Reason maps stable domain failure categories into typed wire reasons.
-func Reason(code string) v1.ErrorReason {
-	switch code {
-	case "invalid", "invalid_request":
+// reason translates the shared domain vocabulary to the wire enum.
+func reason(value model.Reason) v1.ErrorReason {
+	switch value {
+	case model.ReasonInvalid:
 		return v1.ErrorReason_ERROR_REASON_INVALID
-	case "not_found":
+	case model.ReasonNotFound:
 		return v1.ErrorReason_ERROR_REASON_NOT_FOUND
-	case "conflict":
+	case model.ReasonConflict:
 		return v1.ErrorReason_ERROR_REASON_CONFLICT
-	case "idempotency_conflict":
+	case model.ReasonIdempotencyConflict:
 		return v1.ErrorReason_ERROR_REASON_IDEMPOTENCY_CONFLICT
-	case "name_conflict":
+	case model.ReasonNameConflict:
 		return v1.ErrorReason_ERROR_REASON_NAME_CONFLICT
-	case "operation_pending":
+	case model.ReasonOperationPending:
 		return v1.ErrorReason_ERROR_REASON_OPERATION_PENDING
-	case "dependency":
+	case model.ReasonDependency:
 		return v1.ErrorReason_ERROR_REASON_DEPENDENCY
-	case "configuration":
+	case model.ReasonConfiguration:
 		return v1.ErrorReason_ERROR_REASON_CONFIGURATION
-	case "reconciliation_required":
+	case model.ReasonReconciliationRequired:
 		return v1.ErrorReason_ERROR_REASON_RECONCILIATION_REQUIRED
-	case "unsupported":
+	case model.ReasonUnsupported:
 		return v1.ErrorReason_ERROR_REASON_UNSUPPORTED
-	case "prerequisite":
+	case model.ReasonPrerequisite:
 		return v1.ErrorReason_ERROR_REASON_PREREQUISITE
-	case "capacity":
+	case model.ReasonCapacity:
 		return v1.ErrorReason_ERROR_REASON_CAPACITY
-	case "unavailable", "host_unavailable":
+	case model.ReasonUnavailable:
 		return v1.ErrorReason_ERROR_REASON_UNAVAILABLE
-	case "unauthorized", "unauthenticated":
+	case model.ReasonUnauthenticated:
 		return v1.ErrorReason_ERROR_REASON_UNAUTHENTICATED
-	case "permission_denied":
+	case model.ReasonPermissionDenied:
 		return v1.ErrorReason_ERROR_REASON_PERMISSION_DENIED
-	case "identity_mismatch":
+	case model.ReasonIdentityMismatch:
 		return v1.ErrorReason_ERROR_REASON_IDENTITY_MISMATCH
-	case "engine_mismatch":
+	case model.ReasonEngineMismatch:
 		return v1.ErrorReason_ERROR_REASON_ENGINE_MISMATCH
-	case "expired":
+	case model.ReasonExpired:
 		return v1.ErrorReason_ERROR_REASON_EXPIRED
-	case "not_running":
+	case model.ReasonNotRunning:
 		return v1.ErrorReason_ERROR_REASON_NOT_RUNNING
-	case "too_large":
+	case model.ReasonTooLarge:
 		return v1.ErrorReason_ERROR_REASON_TOO_LARGE
-	case "already_attached":
+	case model.ReasonAlreadyAttached:
 		return v1.ErrorReason_ERROR_REASON_ALREADY_ATTACHED
+	case model.ReasonInternal:
+		return v1.ErrorReason_ERROR_REASON_INTERNAL
 	default:
-		if strings.HasPrefix(code, "guest_") {
-			return v1.ErrorReason_ERROR_REASON_UNAVAILABLE
-		}
 		return v1.ErrorReason_ERROR_REASON_INTERNAL
 	}
 }

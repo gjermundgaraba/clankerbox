@@ -16,13 +16,13 @@ func ToHostRequest(r model.Request) (*v1.SubmitOperationRequest, error) {
 			MachineId:   r.MachineID,
 			Generation:  r.Generation,
 			Name:        r.Name,
-			Profile:     ToProfileBinding(r.Profile),
+			Profile:     ToProfile(r.Profile),
 			HostId:      r.Host,
 		},
 	}
-	var checkpoint *v1.CheckpointBinding
+	var checkpoint *v1.Checkpoint
 	if r.Checkpoint != nil {
-		checkpoint = ToCheckpointBinding(*r.Checkpoint)
+		checkpoint = ToCheckpoint(*r.Checkpoint)
 	}
 	switch r.Action {
 	case actionCreate:
@@ -68,14 +68,12 @@ func ToHostRequest(r model.Request) (*v1.SubmitOperationRequest, error) {
 }
 
 // FromHostRequest decodes one typed host mutation while preserving journal input fields.
-//
-//nolint:gocognit,funlen // One explicit case per generated action keeps the wire-to-journal mapping auditable.
 func FromHostRequest(r *v1.SubmitOperationRequest) (model.Request, error) {
 	if r == nil || r.GetIdentity() == nil {
 		return model.Request{}, fmt.Errorf("operation identity required")
 	}
 	id := r.GetIdentity()
-	p, err := FromProfileBinding(id.GetProfile())
+	p, err := FromProfile(id.GetProfile())
 	if err != nil {
 		return model.Request{}, err
 	}
@@ -87,7 +85,7 @@ func FromHostRequest(r *v1.SubmitOperationRequest) (model.Request, error) {
 		Profile:     p,
 		Host:        id.GetHostId(),
 	}
-	var checkpoint *v1.CheckpointBinding
+	var checkpoint *v1.Checkpoint
 	needsCheckpoint := false
 	switch action := r.GetAction().(type) {
 	case *v1.SubmitOperationRequest_Create:
@@ -146,7 +144,7 @@ func FromHostRequest(r *v1.SubmitOperationRequest) (model.Request, error) {
 		return out, fmt.Errorf("typed operation action required")
 	}
 	if needsCheckpoint {
-		cp, checkpointErr := FromCheckpointBinding(checkpoint)
+		cp, checkpointErr := FromCheckpoint(checkpoint)
 		if checkpointErr != nil {
 			return out, checkpointErr
 		}
@@ -199,7 +197,7 @@ func ToHostResponse(r model.Response) *v1.HostOperation {
 		out.Observation = ToObservation(*r.Observation)
 	}
 	if r.Checkpoint != nil {
-		out.Checkpoint = ToCheckpointBinding(*r.Checkpoint)
+		out.Checkpoint = ToCheckpoint(*r.Checkpoint)
 	}
 	return out
 }
@@ -222,7 +220,7 @@ func FromHostResponse(r *v1.HostOperation) (model.Response, error) {
 		out.Observation = &o
 	}
 	if r.GetCheckpoint() != nil {
-		cp, checkpointErr := FromCheckpointBinding(r.GetCheckpoint())
+		cp, checkpointErr := FromCheckpoint(r.GetCheckpoint())
 		if checkpointErr != nil {
 			return out, checkpointErr
 		}

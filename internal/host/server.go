@@ -68,7 +68,8 @@ func runService(
 	path, handler := NewHandler(service)
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
-	server := rpctransport.Server(rpctransport.WithWriteDeadline(mux), tlsConfig)
+	requests := &rpctransport.Handlers{Handler: mux}
+	server := rpctransport.Server(requests, tlsConfig)
 	if tlsConfig != nil {
 		listener = tls.NewListener(listener, tlsConfig)
 	}
@@ -81,23 +82,37 @@ func runService(
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	httpErr := server.Shutdown(shutdown)
-	if httpErr != nil {
-		_ = server.Close()
-	}
-	workErr := service.Shutdown(shutdown)
-	// Never close the database under a still-running native operation.
-	if workErr == nil {
-		err = errors.Join(err, h.Close(), lock.Close())
-	} else {
-		// A caller returning on its deadline must not release lifetime ownership
-		// while an in-process worker can still affect retained resources.
-		go func() { <-service.done; _ = h.Close(); _ = lock.Close() }()
-	}
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
-	return errors.Join(err, httpErr, workErr)
+	return errors.Join(err, shutdownService(shutdown, requests, server, service, lock))
+}
+
+func shutdownService(ctx context.Context, requests *rpctransport.Handlers, server *http.Server, service *Service, lock *statefs.Lock) error {
+	h := service.helper
+	requests.Stop()
+	h.guests.close()
+	h.cancel()
+	httpErr := server.Shutdown(ctx)
+	if httpErr != nil {
+		_ = server.Close()
+	}
+	workErr := service.Shutdown(ctx)
+	// The same owner keeps handlers, native effects, renewal and journal resources
+	// alive together, even when the caller's bounded shutdown has expired.
+	cleanup := make(chan error, 1)
+	go func() {
+		<-service.done
+		requests.Wait()
+		cleanup <- errors.Join(h.Close(), lock.Close())
+	}()
+	var cleanupErr error
+	select {
+	case cleanupErr = <-cleanup:
+	case <-ctx.Done():
+		cleanupErr = ctx.Err()
+	}
+	return errors.Join(httpErr, workErr, cleanupErr)
 }
 
 func validateService(cfg Config) error {

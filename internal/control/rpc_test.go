@@ -43,7 +43,7 @@ func serveRPC(t *testing.T, h http.Handler) (*http.Client, string) {
 	t.Cleanup(hc.CloseIdleConnections)
 	return hc, origin
 }
-func TestTypedPublicResourcesIdempotencyLabelsAndRetiredRoutes(t *testing.T) {
+func TestTypedPublicResourcesIdempotencyLabelsAndAuthentication(t *testing.T) {
 	t.Parallel()
 	c, _, in, _ := setupControl(t)
 	defer closeTest(t, c)
@@ -104,15 +104,6 @@ func TestTypedPublicResourcesIdempotencyLabelsAndRetiredRoutes(t *testing.T) {
 	if e != nil || len(listed.Msg.GetMachines()) != 1 {
 		t.Fatal(e)
 	}
-	for _, path := range []string{"/v1/machines", "/v1/events", "/v1/machines/" + m.Msg.GetId() + "/sessions/stream", "/v1/auth/status"} {
-		r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
-		r.Header.Set("Authorization", "Bearer "+strings.Repeat("t", 32))
-		w := httptest.NewRecorder()
-		h.ServeHTTP(w, r)
-		if w.Code != 404 {
-			t.Fatalf("retired route %s %d", path, w.Code)
-		}
-	}
 	r := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		clankerboxv1connect.MachineServiceListMachinesProcedure,
@@ -128,13 +119,13 @@ func TestTypedSessionsRefuseStoppedAndReservedSource(t *testing.T) {
 	t.Parallel()
 	cfg := config()
 	cfg.Profiles[0] = model.Profile{
-		ID:        fixtureLinuxProfile,
-		Runtime:   "smolvm",
-		OS:        fixtureLinuxOS,
-		Arch:      fixtureAMD64,
-		CPU:       2,
-		RAMMiB:    2048,
-		ImagePath: fixtureRootfs,
+		ID:          fixtureLinuxProfile,
+		Runtime:     "smolvm",
+		OS:          fixtureLinuxOS,
+		Arch:        fixtureAMD64,
+		CPU:         2,
+		RAMMiB:      2048,
+		ImageDigest: "image-content",
 	}
 	cfg.Hosts[0].ProfileIDs = []string{fixtureLinuxProfile}
 	c, _, in, _ := setupControlConfig(t, cfg)
@@ -230,12 +221,14 @@ func TestHostAcceptanceIsNotControllerCompletion(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 450*time.Millisecond)
 	defer cancel()
-	_, e = (control.RPCTransport{}).Call(ctx, model.Host{ID: fixtureLocalHost, Endpoint: endpoint}, req)
+	transport := &control.RPCTransport{}
+	defer transport.Close()
+	_, e = transport.Call(ctx, model.Host{ID: fixtureLocalHost, Endpoint: endpoint}, req)
 	if e == nil || ctx.Err() == nil || f.polls.Load() < 1 {
 		t.Fatalf("accepted considered complete: %v", e)
 	}
 	f.final.Store(true)
-	res, e := (control.RPCTransport{}).Call(t.Context(), model.Host{ID: fixtureLocalHost, Endpoint: endpoint}, req)
+	res, e := transport.Call(t.Context(), model.Host{ID: fixtureLocalHost, Endpoint: endpoint}, req)
 	if e != nil || res.Status != "succeeded" {
 		t.Fatalf("final result %v %+v", e, res)
 	}

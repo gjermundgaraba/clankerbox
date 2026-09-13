@@ -9,8 +9,8 @@ These contracts are separate from SQLite journal models. `internal/rpcmodel`
 translates the existing durable machine/checkpoint/operation and session records;
 this transport work does not rewrite journals. Public Profile, Host, Machine,
 and Checkpoint values omit image paths, private network endpoints, SSH fields,
-engine store paths and credentials. Only the authenticated private host protocol
-uses ProfileBinding/CheckpointBinding to carry exact trusted installation pins.
+engine store paths and credentials. The host protocol also carries only portable profile identity; hosts resolve
+image paths from their own configuration after checking every compatibility field.
 
 ## Services
 
@@ -19,15 +19,14 @@ uses ProfileBinding/CheckpointBinding to carry exact trusted installation pins.
   idempotency keys and return durable Operations; labels return the updated
   Machine directly. Clients poll GetOperation with bounded waits and never
   resubmit a mutation merely because a wait times out.
-- `SessionService` is the public controller's machine-routed terminal boundary.
+- `SessionService` is mounted independently on controller, host and guest. Each
+  endpoint owns its authentication and machine admission.
 - `HostService` provides durable typed operation submission/status, host and
-  machine inspection, and machine-routed terminal methods. SubmitOperation
+  machine inspection. SubmitOperation
   acknowledgement is distinct from final operation success. Each action is a
   Protobuf oneof payload; there is no generic JSON command dispatcher.
-- `GuestService` provides the authenticated guest endpoint. It has the same
-  DescribeGuest/CreateSession/ListSessions/EndSession/AttachSession shapes as
-  the routing services. Guest identity rebind is local administration outside
-  this ordinary session service.
+
+Guest identity rebind is local administration outside the session service.
 
 The same AttachmentRequest/AttachmentEvent types cross each terminal relay.
 Exactly one Open comes first; subsequent Input/Resize controls are processed in
@@ -38,6 +37,18 @@ SnapshotChunk/ViewChunk positions are attachment-local bootstrap positions.
 Partial snapshots never become committed resume state. Final views retain their
 cursor and can be unavailable. Output offsets and input sequences are uint64;
 TypeScript uses bigint and Protobuf JSON uses decimal strings.
+
+Opened is always first. ACKs may interleave with snapshot/view chunks or retained
+resume output; they acknowledge control admission independently of prefix progress.
+The immutable prefix finishes before any live terminal-state event. Input and
+resize retain their control sequence ordering, and all events share one bounded
+attachment queue. Clients that stop reading responses eventually backpressure
+control admission.
+
+Clean request EOF seals a finite drain boundary for queued responses and detaches
+after that boundary, without waiting for the shell or draining an unbounded live
+tail. Relays half-close the upstream request direction and continue receiving
+through clean upstream completion. Errors and cancellation cancel the attachment.
 
 Accepted input means admission to the bounded guest writer, not shell execution.
 Lost acknowledgements are uncertain and must not cause automatic input replay.

@@ -6,16 +6,16 @@ mkdir -p "$TASK_ROOT"
 if [[ ! -d "$TASK_ROOT/source/.git" ]]; then
   git clone https://github.com/smol-machines/smolvm.git "$TASK_ROOT/source"
   git -C "$TASK_ROOT/source" checkout --detach e8d09ef616d363004d55b80a6cdb31a4e7e1842d
-  git -C "$TASK_ROOT/source" apply "$PWD/spikes/real-local-engine/runtime.patch"
+  git -C "$TASK_ROOT/source" apply "$PWD/scripts/release/inputs/runtime.patch"
 fi
 [[ $(git -C "$TASK_ROOT/source" rev-parse HEAD) == e8d09ef616d363004d55b80a6cdb31a4e7e1842d ]]
-git -C "$TASK_ROOT/source" apply --reverse --check "$PWD/spikes/real-local-engine/runtime.patch"
+git -C "$TASK_ROOT/source" apply --reverse --check "$PWD/scripts/release/inputs/runtime.patch"
 if [[ ! -f "$TASK_ROOT/release-mac.tar.gz" ]]; then
   curl -fL https://github.com/smol-machines/smolvm/releases/download/v1.14.1/smolvm-1.14.1-darwin-arm64.tar.gz -o "$TASK_ROOT/release-mac.tar.gz"
 fi
 python3 - <<'PY'
 import hashlib,json,pathlib
-r=pathlib.Path('.work/real-local-engine');p=json.loads(pathlib.Path('spikes/real-local-engine/pins.json').read_text())
+r=pathlib.Path('.work/real-local-engine');p=json.loads(pathlib.Path('scripts/release/inputs/pins.json').read_text())
 if hashlib.file_digest((r/'release-mac.tar.gz').open('rb'),'sha256').hexdigest()!=p['hashes']['release-mac.tar.gz']:raise SystemExit('release checksum mismatch')
 PY
 if [[ ! -d "$TASK_ROOT/smolvm-1.14.1-darwin-arm64" ]]; then tar -xzf "$TASK_ROOT/release-mac.tar.gz" -C "$TASK_ROOT"; fi

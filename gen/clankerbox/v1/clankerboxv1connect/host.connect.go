@@ -45,20 +45,6 @@ const (
 	// HostServiceInspectMachineProcedure is the fully-qualified name of the HostService's
 	// InspectMachine RPC.
 	HostServiceInspectMachineProcedure = "/clankerbox.v1.HostService/InspectMachine"
-	// HostServiceDescribeGuestProcedure is the fully-qualified name of the HostService's DescribeGuest
-	// RPC.
-	HostServiceDescribeGuestProcedure = "/clankerbox.v1.HostService/DescribeGuest"
-	// HostServiceCreateSessionProcedure is the fully-qualified name of the HostService's CreateSession
-	// RPC.
-	HostServiceCreateSessionProcedure = "/clankerbox.v1.HostService/CreateSession"
-	// HostServiceListSessionsProcedure is the fully-qualified name of the HostService's ListSessions
-	// RPC.
-	HostServiceListSessionsProcedure = "/clankerbox.v1.HostService/ListSessions"
-	// HostServiceEndSessionProcedure is the fully-qualified name of the HostService's EndSession RPC.
-	HostServiceEndSessionProcedure = "/clankerbox.v1.HostService/EndSession"
-	// HostServiceAttachSessionProcedure is the fully-qualified name of the HostService's AttachSession
-	// RPC.
-	HostServiceAttachSessionProcedure = "/clankerbox.v1.HostService/AttachSession"
 )
 
 // HostServiceClient is a client for the clankerbox.v1.HostService service.
@@ -69,11 +55,6 @@ type HostServiceClient interface {
 	SubmitOperation(context.Context, *connect.Request[v1.SubmitOperationRequest]) (*connect.Response[v1.SubmitOperationResponse], error)
 	GetHostOperation(context.Context, *connect.Request[v1.GetHostOperationRequest]) (*connect.Response[v1.HostOperation], error)
 	InspectMachine(context.Context, *connect.Request[v1.InspectMachineRequest]) (*connect.Response[v1.Observation], error)
-	DescribeGuest(context.Context, *connect.Request[v1.DescribeGuestRequest]) (*connect.Response[v1.GuestDescription], error)
-	CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error)
-	ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
-	EndSession(context.Context, *connect.Request[v1.EndSessionRequest]) (*connect.Response[v1.Session], error)
-	AttachSession(context.Context) *connect.BidiStreamForClient[v1.AttachmentRequest, v1.AttachmentEvent]
 }
 
 // NewHostServiceClient constructs a client for the clankerbox.v1.HostService service. By default,
@@ -111,36 +92,6 @@ func NewHostServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(hostServiceMethods.ByName("InspectMachine")),
 			connect.WithClientOptions(opts...),
 		),
-		describeGuest: connect.NewClient[v1.DescribeGuestRequest, v1.GuestDescription](
-			httpClient,
-			baseURL+HostServiceDescribeGuestProcedure,
-			connect.WithSchema(hostServiceMethods.ByName("DescribeGuest")),
-			connect.WithClientOptions(opts...),
-		),
-		createSession: connect.NewClient[v1.CreateSessionRequest, v1.Session](
-			httpClient,
-			baseURL+HostServiceCreateSessionProcedure,
-			connect.WithSchema(hostServiceMethods.ByName("CreateSession")),
-			connect.WithClientOptions(opts...),
-		),
-		listSessions: connect.NewClient[v1.ListSessionsRequest, v1.ListSessionsResponse](
-			httpClient,
-			baseURL+HostServiceListSessionsProcedure,
-			connect.WithSchema(hostServiceMethods.ByName("ListSessions")),
-			connect.WithClientOptions(opts...),
-		),
-		endSession: connect.NewClient[v1.EndSessionRequest, v1.Session](
-			httpClient,
-			baseURL+HostServiceEndSessionProcedure,
-			connect.WithSchema(hostServiceMethods.ByName("EndSession")),
-			connect.WithClientOptions(opts...),
-		),
-		attachSession: connect.NewClient[v1.AttachmentRequest, v1.AttachmentEvent](
-			httpClient,
-			baseURL+HostServiceAttachSessionProcedure,
-			connect.WithSchema(hostServiceMethods.ByName("AttachSession")),
-			connect.WithClientOptions(opts...),
-		),
 	}
 }
 
@@ -150,11 +101,6 @@ type hostServiceClient struct {
 	submitOperation  *connect.Client[v1.SubmitOperationRequest, v1.SubmitOperationResponse]
 	getHostOperation *connect.Client[v1.GetHostOperationRequest, v1.HostOperation]
 	inspectMachine   *connect.Client[v1.InspectMachineRequest, v1.Observation]
-	describeGuest    *connect.Client[v1.DescribeGuestRequest, v1.GuestDescription]
-	createSession    *connect.Client[v1.CreateSessionRequest, v1.Session]
-	listSessions     *connect.Client[v1.ListSessionsRequest, v1.ListSessionsResponse]
-	endSession       *connect.Client[v1.EndSessionRequest, v1.Session]
-	attachSession    *connect.Client[v1.AttachmentRequest, v1.AttachmentEvent]
 }
 
 // DescribeHost calls clankerbox.v1.HostService.DescribeHost.
@@ -177,31 +123,6 @@ func (c *hostServiceClient) InspectMachine(ctx context.Context, req *connect.Req
 	return c.inspectMachine.CallUnary(ctx, req)
 }
 
-// DescribeGuest calls clankerbox.v1.HostService.DescribeGuest.
-func (c *hostServiceClient) DescribeGuest(ctx context.Context, req *connect.Request[v1.DescribeGuestRequest]) (*connect.Response[v1.GuestDescription], error) {
-	return c.describeGuest.CallUnary(ctx, req)
-}
-
-// CreateSession calls clankerbox.v1.HostService.CreateSession.
-func (c *hostServiceClient) CreateSession(ctx context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-	return c.createSession.CallUnary(ctx, req)
-}
-
-// ListSessions calls clankerbox.v1.HostService.ListSessions.
-func (c *hostServiceClient) ListSessions(ctx context.Context, req *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
-	return c.listSessions.CallUnary(ctx, req)
-}
-
-// EndSession calls clankerbox.v1.HostService.EndSession.
-func (c *hostServiceClient) EndSession(ctx context.Context, req *connect.Request[v1.EndSessionRequest]) (*connect.Response[v1.Session], error) {
-	return c.endSession.CallUnary(ctx, req)
-}
-
-// AttachSession calls clankerbox.v1.HostService.AttachSession.
-func (c *hostServiceClient) AttachSession(ctx context.Context) *connect.BidiStreamForClient[v1.AttachmentRequest, v1.AttachmentEvent] {
-	return c.attachSession.CallBidiStream(ctx)
-}
-
 // HostServiceHandler is an implementation of the clankerbox.v1.HostService service.
 type HostServiceHandler interface {
 	DescribeHost(context.Context, *connect.Request[v1.DescribeHostRequest]) (*connect.Response[v1.HostDescription], error)
@@ -210,11 +131,6 @@ type HostServiceHandler interface {
 	SubmitOperation(context.Context, *connect.Request[v1.SubmitOperationRequest]) (*connect.Response[v1.SubmitOperationResponse], error)
 	GetHostOperation(context.Context, *connect.Request[v1.GetHostOperationRequest]) (*connect.Response[v1.HostOperation], error)
 	InspectMachine(context.Context, *connect.Request[v1.InspectMachineRequest]) (*connect.Response[v1.Observation], error)
-	DescribeGuest(context.Context, *connect.Request[v1.DescribeGuestRequest]) (*connect.Response[v1.GuestDescription], error)
-	CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error)
-	ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
-	EndSession(context.Context, *connect.Request[v1.EndSessionRequest]) (*connect.Response[v1.Session], error)
-	AttachSession(context.Context, *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent]) error
 }
 
 // NewHostServiceHandler builds an HTTP handler from the service implementation. It returns the path
@@ -248,36 +164,6 @@ func NewHostServiceHandler(svc HostServiceHandler, opts ...connect.HandlerOption
 		connect.WithSchema(hostServiceMethods.ByName("InspectMachine")),
 		connect.WithHandlerOptions(opts...),
 	)
-	hostServiceDescribeGuestHandler := connect.NewUnaryHandler(
-		HostServiceDescribeGuestProcedure,
-		svc.DescribeGuest,
-		connect.WithSchema(hostServiceMethods.ByName("DescribeGuest")),
-		connect.WithHandlerOptions(opts...),
-	)
-	hostServiceCreateSessionHandler := connect.NewUnaryHandler(
-		HostServiceCreateSessionProcedure,
-		svc.CreateSession,
-		connect.WithSchema(hostServiceMethods.ByName("CreateSession")),
-		connect.WithHandlerOptions(opts...),
-	)
-	hostServiceListSessionsHandler := connect.NewUnaryHandler(
-		HostServiceListSessionsProcedure,
-		svc.ListSessions,
-		connect.WithSchema(hostServiceMethods.ByName("ListSessions")),
-		connect.WithHandlerOptions(opts...),
-	)
-	hostServiceEndSessionHandler := connect.NewUnaryHandler(
-		HostServiceEndSessionProcedure,
-		svc.EndSession,
-		connect.WithSchema(hostServiceMethods.ByName("EndSession")),
-		connect.WithHandlerOptions(opts...),
-	)
-	hostServiceAttachSessionHandler := connect.NewBidiStreamHandler(
-		HostServiceAttachSessionProcedure,
-		svc.AttachSession,
-		connect.WithSchema(hostServiceMethods.ByName("AttachSession")),
-		connect.WithHandlerOptions(opts...),
-	)
 	return "/clankerbox.v1.HostService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case HostServiceDescribeHostProcedure:
@@ -288,16 +174,6 @@ func NewHostServiceHandler(svc HostServiceHandler, opts ...connect.HandlerOption
 			hostServiceGetHostOperationHandler.ServeHTTP(w, r)
 		case HostServiceInspectMachineProcedure:
 			hostServiceInspectMachineHandler.ServeHTTP(w, r)
-		case HostServiceDescribeGuestProcedure:
-			hostServiceDescribeGuestHandler.ServeHTTP(w, r)
-		case HostServiceCreateSessionProcedure:
-			hostServiceCreateSessionHandler.ServeHTTP(w, r)
-		case HostServiceListSessionsProcedure:
-			hostServiceListSessionsHandler.ServeHTTP(w, r)
-		case HostServiceEndSessionProcedure:
-			hostServiceEndSessionHandler.ServeHTTP(w, r)
-		case HostServiceAttachSessionProcedure:
-			hostServiceAttachSessionHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -321,24 +197,4 @@ func (UnimplementedHostServiceHandler) GetHostOperation(context.Context, *connec
 
 func (UnimplementedHostServiceHandler) InspectMachine(context.Context, *connect.Request[v1.InspectMachineRequest]) (*connect.Response[v1.Observation], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("clankerbox.v1.HostService.InspectMachine is not implemented"))
-}
-
-func (UnimplementedHostServiceHandler) DescribeGuest(context.Context, *connect.Request[v1.DescribeGuestRequest]) (*connect.Response[v1.GuestDescription], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("clankerbox.v1.HostService.DescribeGuest is not implemented"))
-}
-
-func (UnimplementedHostServiceHandler) CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("clankerbox.v1.HostService.CreateSession is not implemented"))
-}
-
-func (UnimplementedHostServiceHandler) ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("clankerbox.v1.HostService.ListSessions is not implemented"))
-}
-
-func (UnimplementedHostServiceHandler) EndSession(context.Context, *connect.Request[v1.EndSessionRequest]) (*connect.Response[v1.Session], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("clankerbox.v1.HostService.EndSession is not implemented"))
-}
-
-func (UnimplementedHostServiceHandler) AttachSession(context.Context, *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent]) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New("clankerbox.v1.HostService.AttachSession is not implemented"))
 }

@@ -14,11 +14,11 @@ func (streams commandStreams) addDevCommands(root *cli.Command) {
 	root.Commands = append(root.Commands, &cli.Command{
 		Name:        "dev",
 		Usage:       "Run an owned local VM environment",
-		Description: "Start a persistent native host service and foreground controller. Ctrl-C preserves VMs; dev stop stops VMs, and dev destroy deletes the owned environment.",
+		Description: "Start a persistent native host service and foreground controller. Ctrl-C preserves VMs; dev stop stops VMs, and dev destroy deletes the owned environment. Each environment uses one immutable bundle; changing releases requires explicit destroy/recreate and discards its VM contents.",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "state-dir", Value: dev.DefaultStateDir(), Usage: "Owned environment DIRECTORY"},
 			&cli.StringFlag{Name: "listen", Value: "127.0.0.1:0", Usage: "Loopback controller ADDRESS"},
-			&cli.StringFlag{Name: "bundle", Usage: "Verified runtime bundle MANIFEST"},
+			&cli.StringFlag{Name: "bundle", Usage: "Verified bundle MANIFEST (same digest for an existing environment)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() != 0 {
@@ -57,7 +57,7 @@ func (streams commandStreams) addDevCommands(root *cli.Command) {
 					if cmd.NArg() != 0 {
 						return errors.New("dev stop takes no arguments")
 					}
-					return dev.Stop(ctx, cmd.String("state-dir"))
+					return dev.Stop(ctx, dev.Options{StateDir: cmd.String("state-dir"), Bundle: cmd.String("bundle")})
 				},
 			},
 			{
@@ -67,7 +67,7 @@ func (streams commandStreams) addDevCommands(root *cli.Command) {
 					if cmd.NArg() != 0 {
 						return errors.New("dev destroy takes no arguments")
 					}
-					return dev.Destroy(ctx, cmd.String("state-dir"))
+					return dev.Destroy(ctx, dev.Options{StateDir: cmd.String("state-dir"), Bundle: cmd.String("bundle")})
 				},
 			},
 		},

@@ -32,7 +32,7 @@ func (f *runnerFixture) DescribeGuest(
 	r *connect.Request[v1.DescribeGuestRequest],
 ) (*connect.Response[v1.GuestDescription], error) {
 	if f.reason != "" {
-		return nil, rpcmodel.ErrorFromCode(f.reason, "fixture", false)
+		return nil, rpcmodel.ToError(model.NewError(model.Reason(f.reason), "fixture", false))
 	}
 	return connect.NewResponse(
 		&v1.GuestDescription{MachineId: r.Msg.GetMachineId(), Incarnation: "inc", EngineDigest: "digest"},
@@ -64,7 +64,7 @@ func (f *runnerFixture) DeleteMachine(
 		panic("missing idempotency key")
 	}
 	if f.reason != "" {
-		return nil, rpcmodel.ErrorFromCode(f.reason, "fixture", false)
+		return nil, rpcmodel.ToError(model.NewError(model.Reason(f.reason), "fixture", false))
 	}
 	return connect.NewResponse(
 		rpcmodel.ToOperation(

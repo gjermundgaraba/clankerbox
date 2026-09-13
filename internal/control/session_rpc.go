@@ -2,7 +2,6 @@ package control
 
 import (
 	"context"
-	"net/http"
 
 	"connectrpc.com/connect"
 
@@ -20,17 +19,16 @@ type sessionRPC struct{ c *Controller }
 func (c *Controller) sessionHost(
 	ctx context.Context,
 	id string,
-) (clankerboxv1connect.HostServiceClient, *http.Client, error) {
+) (clankerboxv1connect.SessionServiceClient, error) {
 	if !model.ValidID(id) {
-		return nil, nil, rpcmodel.ErrorFromCode("invalid_request", "immutable machine ID required", false)
+		return nil, rpcmodel.ToError(model.NewError(model.ReasonInvalid, "immutable machine ID required", false))
 	}
 	c.mu.Lock()
 	m, err := readMachine(ctx, c.db, id)
 	if err == nil && (!guestReady(m)) {
-		err = problem(
-			http.StatusConflict,
-			"prerequisite",
-			"session requires a prepared running machine at the accepted generation",
+		err = model.NewError(
+			model.ReasonPrerequisite,
+			"session requires a prepared running machine at the accepted generation", false,
 		)
 	}
 	if err == nil {
@@ -39,16 +37,16 @@ func (c *Controller) sessionHost(
 	h, ok := c.host(m.Host)
 	c.mu.Unlock()
 	if err != nil {
-		return nil, nil, rpcError(err)
+		return nil, rpcError(err)
 	}
 	if !ok {
-		return nil, nil, rpcmodel.ErrorFromCode("unavailable", "host is no longer configured", true)
+		return nil, rpcmodel.ToError(model.NewError(model.ReasonUnavailable, "host is no longer configured", true))
 	}
-	client, httpClient, err := hostClient(h)
+	client, err := c.clients.client(h)
 	if err != nil {
-		return nil, nil, rpcmodel.ErrorFromCode("unavailable", err.Error(), true)
+		return nil, rpcmodel.ToError(model.NewError(model.ReasonUnavailable, err.Error(), true))
 	}
-	return client, httpClient, nil
+	return client.sessions, nil
 }
 func guestReady(m model.Machine) bool {
 	return !m.Deleted && m.Prepared && !m.ObservationStale && m.State == model.Running &&
@@ -60,11 +58,10 @@ func (s *sessionRPC) DescribeGuest(
 	ctx context.Context,
 	r *connect.Request[v1.DescribeGuestRequest],
 ) (*connect.Response[v1.GuestDescription], error) {
-	h, c, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
+	h, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
 	if e != nil {
 		return nil, e
 	}
-	defer c.CloseIdleConnections()
 	return h.DescribeGuest(ctx, connect.NewRequest(r.Msg))
 }
 
@@ -72,11 +69,10 @@ func (s *sessionRPC) CreateSession(
 	ctx context.Context,
 	r *connect.Request[v1.CreateSessionRequest],
 ) (*connect.Response[v1.Session], error) {
-	h, c, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
+	h, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
 	if e != nil {
 		return nil, e
 	}
-	defer c.CloseIdleConnections()
 	return h.CreateSession(ctx, connect.NewRequest(r.Msg))
 }
 
@@ -84,11 +80,10 @@ func (s *sessionRPC) ListSessions(
 	ctx context.Context,
 	r *connect.Request[v1.ListSessionsRequest],
 ) (*connect.Response[v1.ListSessionsResponse], error) {
-	h, c, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
+	h, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
 	if e != nil {
 		return nil, e
 	}
-	defer c.CloseIdleConnections()
 	return h.ListSessions(ctx, connect.NewRequest(r.Msg))
 }
 
@@ -96,11 +91,10 @@ func (s *sessionRPC) EndSession(
 	ctx context.Context,
 	r *connect.Request[v1.EndSessionRequest],
 ) (*connect.Response[v1.Session], error) {
-	h, c, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
+	h, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
 	if e != nil {
 		return nil, e
 	}
-	defer c.CloseIdleConnections()
 	return h.EndSession(ctx, connect.NewRequest(r.Msg))
 }
 
@@ -114,13 +108,12 @@ func (s *sessionRPC) AttachSession(
 	}
 	open := first.GetOpen()
 	if open == nil {
-		return rpcmodel.ErrorFromCode("invalid_request", "attachment must start with Open", false)
+		return rpcmodel.ToError(model.NewError(model.ReasonInvalid, "attachment must start with Open", false))
 	}
-	h, c, e := s.c.sessionHost(ctx, open.GetMachineId())
+	h, e := s.c.sessionHost(ctx, open.GetMachineId())
 	if e != nil {
 		return e
 	}
-	defer c.CloseIdleConnections()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	return rpctransport.Relay(ctx, cancel, down, h.AttachSession(ctx), first)
@@ -129,7 +122,7 @@ func (s *sessionRPC) AttachSession(
 // SetLabels is synchronous controller-local metadata; no host call or operation.
 func (c *Controller) SetLabels(ctx context.Context, id string, labels map[string]string) (model.Machine, error) {
 	if err := model.ValidateLabels(labels); err != nil {
-		return model.Machine{}, problem(http.StatusBadRequest, "invalid_request", err.Error())
+		return model.Machine{}, model.NewError(model.ReasonInvalid, err.Error(), false)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -138,7 +131,7 @@ func (c *Controller) SetLabels(ctx context.Context, id string, labels map[string
 		return m, err
 	}
 	if m.Deleted {
-		return m, problem(http.StatusConflict, "prerequisite", "machine is deleted")
+		return m, model.NewError(model.ReasonPrerequisite, "machine is deleted", false)
 	}
 	m.Labels = labels
 	if len(labels) == 0 {

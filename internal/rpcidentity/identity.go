@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"clankerbox/internal/model"
+	"clankerbox/internal/rpctransport"
 	"clankerbox/internal/statefs"
 )
 
@@ -26,6 +27,7 @@ import (
 type Authority struct {
 	directory   *statefs.Dir
 	mu          sync.Mutex
+	hosts       map[string]Credentials
 	Certificate []byte
 	key         *ecdsa.PrivateKey
 	cert        *x509.Certificate
@@ -123,7 +125,16 @@ func (a *Authority) HostCredentials(id string) (Credentials, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if c, ok := a.hosts[id]; ok && !Expiring(c.Certificate) {
+		return c, nil
+	}
 	if c, ok, err := a.retainedHost(id); err != nil || ok {
+		if ok {
+			if a.hosts == nil {
+				a.hosts = make(map[string]Credentials)
+			}
+			a.hosts[id] = c
+		}
 		return c, err
 	}
 	c, err := a.issue("spiffe://clankerbox/host/"+id, false, time.Now().Add(30*24*time.Hour))
@@ -140,6 +151,10 @@ func (a *Authority) HostCredentials(id string) (Credentials, error) {
 			return c, e
 		}
 	}
+	if a.hosts == nil {
+		a.hosts = make(map[string]Credentials)
+	}
+	a.hosts[id] = c
 	return c, nil
 }
 
@@ -168,26 +183,9 @@ func (c Credentials) HTTPClient(machine string) (*http.Client, error) {
 	if !roots.AppendCertsFromPEM(c.Authority) {
 		return nil, errors.New("invalid authority")
 	}
-	p := new(http.Protocols)
-	p.SetHTTP2(true)
-	return &http.Client{
-		Transport: &http.Transport{
-			Protocols: p,
-			TLSClientConfig: &tls.Config{
-				MinVersion:   tls.VersionTLS13,
-				ServerName:   "guest.clankerbox.internal",
-				RootCAs:      roots,
-				Certificates: []tls.Certificate{cert},
-				VerifyConnection: func(s tls.ConnectionState) error {
-					if len(s.PeerCertificates) == 0 ||
-						!HasURI(s.PeerCertificates[0], "spiffe://clankerbox/machine/"+machine) {
-						return errors.New("wrong guest machine")
-					}
-					return nil
-				},
-			},
-		},
-	}, nil
+	cfg := rpctransport.PeerClientTLS(cert, roots, "spiffe://clankerbox/machine/"+machine)
+	cfg.ServerName = "guest.clankerbox.internal"
+	return rpctransport.TLSClient(cfg), nil
 }
 
 func (a *Authority) retainedHost(id string) (Credentials, bool, error) {

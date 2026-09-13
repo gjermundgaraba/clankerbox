@@ -1,4 +1,3 @@
-//nolint:testpackage // Tests exercise private ownership and teardown boundaries without exporting them.
 package dev
 
 import (
@@ -20,9 +19,13 @@ import (
 )
 
 const (
-	fixtureRuntimeLibrary = "runtime/lib"
-	fixtureRuntime        = "runtime"
-	fixtureAgent          = "image/usr/local/bin/smolvm-agent"
+	fixtureImage             = "image"
+	fixtureInit              = "image/init"
+	fixtureSource            = "source"
+	fixtureAcceptedOperation = "accepted-operation"
+	fixtureRuntimeLibrary    = "runtime/lib"
+	fixtureRuntime           = "runtime"
+	fixtureAgent             = "image/usr/local/bin/smolvm-agent"
 )
 
 func makeBundle(t *testing.T) string {
@@ -279,7 +282,7 @@ func TestDevListenRequiresLoopbackAndStopDoesNotCreateState(t *testing.T) {
 		}
 	}
 	state := filepath.Join(t.TempDir(), "missing")
-	if err := Stop(context.Background(), state); err == nil {
+	if err := Stop(context.Background(), Options{StateDir: state}); err == nil {
 		t.Fatal("stopped missing environment")
 	}
 	if _, err := os.Stat(state); !errors.Is(err, os.ErrNotExist) {
@@ -315,55 +318,6 @@ func TestSafeArchivePreservesGuestReadAndExecutePermissions(t *testing.T) {
 	}
 	if info.Mode()&os.ModeSticky == 0 {
 		t.Fatal("guest temporary directory lost sticky bit")
-	}
-}
-
-func TestCompatibleBundleUpgradePinsRuntimeImageAndProfile(t *testing.T) {
-	t.Parallel()
-	b, err := verifyBundle(makeBundle(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := privateTemp(t)
-	root := privateTemp(t)
-	e := &environment{StateDir: state, HostRoot: root, Namespace: "test-upgrade", bundle: b}
-	dir, err := statefs.Open(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = dir.Close() }()
-	if err = jsonWrite(
-		dir,
-		"dev-owner.json",
-		map[string]string{"state_dir": state, "namespace": e.Namespace},
-	); err != nil {
-		t.Fatal(err)
-	}
-	old := e.hostConfig()
-	if err = jsonWrite(dir, "service.json", old); err != nil {
-		t.Fatal(err)
-	}
-	replacement, err := verifyBundle(makeBundle(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	e.bundle = replacement
-	if err = e.compatibleUpgrade(); err != nil {
-		t.Fatalf("compatible service code location upgrade refused: %v", err)
-	}
-	e.bundle.RuntimeDigest = strings.Repeat("3", 64)
-	if err = e.compatibleUpgrade(); err == nil {
-		t.Fatal("runtime content upgrade silently accepted")
-	}
-	e.bundle = replacement
-	e.bundle.ImageDigest = strings.Repeat("4", 64)
-	if err = e.compatibleUpgrade(); err == nil {
-		t.Fatal("image content upgrade silently accepted")
-	}
-	e.bundle = replacement
-	e.bundle.ProfileRAMMiB++
-	if err = e.compatibleUpgrade(); err == nil {
-		t.Fatal("retained resource profile upgrade silently accepted")
 	}
 }
 

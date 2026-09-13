@@ -20,33 +20,33 @@ import (
 	_ "modernc.org/sqlite" // Register the inventory database driver.
 
 	"clankerbox/internal/model"
+	"clankerbox/internal/rpcidentity"
 	"clankerbox/internal/statefs"
 )
 
 // Config pins the private storage root and trusted runtime installation paths.
 type Config struct {
-	QuarantinedMachineIDs []string        `json:"quarantined_machine_ids,omitempty"`
-	RuntimeDigest         string          `json:"runtime_digest,omitempty"`
-	PortLeaseRoot         string          `json:"port_lease_root,omitempty"`
-	Listen                string          `json:"listen,omitempty"`
-	TLSCert               string          `json:"tls_cert,omitempty"`
-	TLSKey                string          `json:"tls_key,omitempty"`
-	TLSCA                 string          `json:"tls_ca,omitempty"`
-	ControllerID          string          `json:"controller_id,omitempty"`
-	HostOS                string          `json:"host_os,omitempty"`
-	HostID                string          `json:"host_id,omitempty"`
-	Root                  string          `json:"root"`
-	Profiles              []model.Profile `json:"profiles"`
-	TartPath              string          `json:"tart_path,omitempty"`
-	SmolvmPath            string          `json:"smolvm_path,omitempty"`
-	LibraryDir            string          `json:"library_dir,omitempty"`
-	DNS                   string          `json:"dns,omitempty"`
-	LaunchctlPath         string          `json:"launchctl_path,omitempty"`
-	LaunchdDomain         string          `json:"launchd_domain,omitempty"`
-	SystemctlPath         string          `json:"systemctl_path,omitempty"`
-	SystemdUser           bool            `json:"systemd_user,omitempty"`
-	PortMin               int             `json:"port_min,omitempty"`
-	PortMax               int             `json:"port_max,omitempty"`
+	RuntimeDigest string           `json:"runtime_digest,omitempty"`
+	PortLeaseRoot string           `json:"port_lease_root,omitempty"`
+	Listen        string           `json:"listen,omitempty"`
+	TLSCert       string           `json:"tls_cert,omitempty"`
+	TLSKey        string           `json:"tls_key,omitempty"`
+	TLSCA         string           `json:"tls_ca,omitempty"`
+	ControllerID  string           `json:"controller_id,omitempty"`
+	HostOS        string           `json:"host_os,omitempty"`
+	HostID        string           `json:"host_id,omitempty"`
+	Root          string           `json:"root"`
+	Profiles      []ProfileBinding `json:"profiles"`
+	TartPath      string           `json:"tart_path,omitempty"`
+	SmolvmPath    string           `json:"smolvm_path,omitempty"`
+	LibraryDir    string           `json:"library_dir,omitempty"`
+	DNS           string           `json:"dns,omitempty"`
+	LaunchctlPath string           `json:"launchctl_path,omitempty"`
+	LaunchdDomain string           `json:"launchd_domain,omitempty"`
+	SystemctlPath string           `json:"systemctl_path,omitempty"`
+	SystemdUser   bool             `json:"systemd_user,omitempty"`
+	PortMin       int              `json:"port_min,omitempty"`
+	PortMax       int              `json:"port_max,omitempty"`
 }
 
 const (
@@ -58,9 +58,6 @@ const (
 
 // Validate applies runtime defaults and rejects unsafe or inconsistent host configuration.
 func (c *Config) Validate() error {
-	if err := c.validateQuarantine(); err != nil {
-		return err
-	}
 	if c.HostOS == "" {
 		c.HostOS = runtime.GOOS
 	}
@@ -178,12 +175,16 @@ type accepted struct {
 
 // Helper reconciles requests against a durable generation and ownership journal.
 type Helper struct {
-	cfg     Config
-	state   *statefs.Dir
-	db      *sql.DB
-	runtime Runtime
-	guests  *guestRegistry
-	mu      sync.Mutex
+	cfg       Config
+	state     *statefs.Dir
+	db        *sql.DB
+	runtime   Runtime
+	guests    *guestRegistry
+	authority *rpcidentity.Authority
+	lifetime  context.Context
+	cancel    context.CancelFunc
+	renewals  sync.WaitGroup
+	mu        sync.Mutex
 }
 
 const ownerMarker = "clankerbox-host-v1\n"
@@ -224,9 +225,15 @@ func Open(cfg Config, rt Runtime) (_ *Helper, resultErr error) {
 		return nil, err
 	}
 
-	if err = validateOwner(dir); err != nil {
+	authority, err := initializeAuthority(dir, cfg)
+	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if !retained {
+			resultErr = errors.Join(resultErr, authority.Close())
+		}
+	}()
 
 	for _, name := range []string{"machines", "jobs", runtimeTart, "checkpoints"} {
 		if childErr := statefs.EnsurePrivateDir(filepath.Join(cfg.Root, name)); childErr != nil {
@@ -253,7 +260,10 @@ func Open(cfg Config, rt Runtime) (_ *Helper, resultErr error) {
 		return nil, errors.Join(err, db.Close())
 	}
 	if rt == nil {
-		rt = &NativeRuntime{Config: cfg, Runner: ExecRunner{}}
+		rt = &NativeRuntime{Config: cfg, Runner: ExecRunner{}, authority: authority}
+	}
+	if native, ok := rt.(*NativeRuntime); ok {
+		native.authority = authority
 	}
 	closeErr := lock.Close()
 	lockClosed = true
@@ -261,7 +271,12 @@ func Open(cfg Config, rt Runtime) (_ *Helper, resultErr error) {
 		return nil, errors.Join(closeErr, db.Close())
 	}
 	retained = true
-	h := &Helper{cfg: cfg, state: dir, db: db, runtime: rt, guests: newGuestRegistry()}
+	lifetime, cancel := context.WithCancel(context.Background())
+	h := &Helper{cfg: cfg, state: dir, db: db, runtime: rt, guests: newGuestRegistry(), authority: authority, lifetime: lifetime, cancel: cancel}
+	if err = h.restoreGuestReservations(context.Background()); err != nil {
+		_ = h.Close()
+		return nil, err
+	}
 	if err = h.adoptPorts(context.Background()); err != nil {
 		_ = h.Close()
 		return nil, err
@@ -270,7 +285,12 @@ func Open(cfg Config, rt Runtime) (_ *Helper, resultErr error) {
 }
 
 // Close releases the journal and its private directory handle.
-func (h *Helper) Close() error { h.guests.close(); return errors.Join(h.db.Close(), h.state.Close()) }
+func (h *Helper) Close() error {
+	h.cancel()
+	h.guests.close()
+	h.renewals.Wait()
+	return errors.Join(h.authority.Close(), h.db.Close(), h.state.Close())
+}
 
 func (h *Helper) manifest(ctx context.Context, id string) (Manifest, error) {
 	var m Manifest
@@ -281,7 +301,20 @@ func (h *Helper) manifest(ctx context.Context, id string) (Manifest, error) {
 	}
 	return m, err
 }
-func (h *Helper) save(ctx context.Context, m Manifest, a accepted) (resultErr error) {
+func (h *Helper) save(ctx context.Context, m Manifest, a accepted) error {
+	h.guests.mu.Lock()
+	err := h.saveJournal(ctx, m, a)
+	if err == nil {
+		h.guests.apply(a)
+	}
+	h.guests.mu.Unlock()
+	if err == nil && m.Deleted && a.Phase == phaseDone {
+		err = h.releasePort(m)
+	}
+	return err
+}
+
+func (h *Helper) saveJournal(ctx context.Context, m Manifest, a accepted) (resultErr error) {
 	// Persist ambiguous effects even when the operation deadline has expired.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), connectionTimeout)
 	defer cancel()
@@ -325,18 +358,12 @@ func (h *Helper) save(ctx context.Context, m Manifest, a accepted) (resultErr er
 	if err == nil {
 		err = tx.Commit()
 	}
-	if err == nil && a.Phase == phaseAccepted && a.Response.Status == statusUnresolved {
-		h.guests.suspend(a.Request.MachineID, a.Request.SourceMachineID)
-	}
-	if err == nil && m.Deleted && a.Phase == phaseDone {
-		err = h.releasePort(m)
-	}
 	return err
 }
 func (h *Helper) profile(p model.Profile) bool {
 	for _, local := range h.cfg.Profiles {
 		if local.ID == p.ID {
-			return model.SameProfile(local, p)
+			return model.SameProfile(local.Profile, p)
 		}
 	}
 	return false
@@ -379,39 +406,36 @@ func (h *Helper) observation(ctx context.Context, m Manifest) (*model.Observatio
 
 // Inspect reports the current owned state without starting or recreating a machine.
 func (h *Helper) Inspect(ctx context.Context, id string) model.Response {
-	if err := h.cfg.quarantineError(id); err != nil {
-		return model.Response{Status: statusFailed, Error: err.Error()}
-	}
 	if !model.ValidID(id) {
-		return model.Response{Status: statusFailed, Error: "invalid machine ID"}
+		return failure(model.Request{}, model.NewError(model.ReasonInvalid, "invalid machine ID", false))
 	}
 	m, err := h.manifest(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return failure(model.Request{}, model.NewError(model.ReasonNotFound, "owned machine not found", false))
+	}
 	if err != nil {
-		return model.Response{Status: statusFailed, Error: "owned machine not found"}
+		return failure(model.Request{}, err)
 	}
 	obs, err := h.observation(ctx, m)
 	if err != nil {
-		return model.Response{Status: statusUnresolved, Error: err.Error()}
+		return model.Response{Status: statusUnresolved, Error: err.Error(), Cause: err}
 	}
 	return model.Response{Status: statusSucceeded, Observation: obs}
 }
 func failure(req model.Request, err error) model.Response {
-	return model.Response{OperationID: req.OperationID, Status: statusFailed, Error: err.Error()}
+	return model.Response{OperationID: req.OperationID, Status: statusFailed, Error: err.Error(), Cause: err}
 }
 
 // Execute serializes a generation transition and journals native effects before dispatch.
 func (h *Helper) Execute(ctx context.Context, req model.Request) model.Response {
-	if err := h.cfg.quarantineRequest(req); err != nil {
-		return failure(req, err)
-	}
 	if req.Action == "inspect" {
 		if req.OperationID != "" || req.Generation != 0 {
-			return failure(req, errors.New("inspect must not carry an operation generation"))
+			return failure(req, model.NewError(model.ReasonInvalid, "inspect must not carry an operation generation", false))
 		}
 		return h.Inspect(ctx, req.MachineID)
 	}
 	if !model.ValidID(req.MachineID) || !model.ValidID(req.OperationID) || req.Generation < 1 {
-		return failure(req, errors.New("invalid operation identity"))
+		return failure(req, model.NewError(model.ReasonInvalid, "invalid operation identity", false))
 	}
 	switch req.Action {
 	case actionCreate,
@@ -423,7 +447,7 @@ func (h *Helper) Execute(ctx context.Context, req model.Request) model.Response 
 		actionCapture,
 		actionDeleteCheckpoint:
 	default:
-		return failure(req, errors.New("unsupported action"))
+		return failure(req, model.NewError(model.ReasonUnsupported, "unsupported action", false))
 	}
 	// flock serializes separate stdin helper processes. A busy helper gives a retryable answer.
 	h.mu.Lock()
@@ -451,7 +475,7 @@ func (h *Helper) executeLocked(ctx context.Context, req model.Request, acceptOnl
 		Scan(&fp, &raw)
 	if err == nil {
 		if fp != model.Hash(req) {
-			return failure(req, errors.New("operation ID input conflict"))
+			return failure(req, model.NewError(model.ReasonIdempotencyConflict, "operation ID input conflict", false))
 		}
 		if err = json.Unmarshal(raw, &a); err != nil {
 			return failure(req, err)
@@ -467,13 +491,16 @@ func (h *Helper) executeLocked(ctx context.Context, req model.Request, acceptOnl
 		return h.executeDerived(ctx, req, a, len(raw) != 0, acceptOnly)
 	}
 	m, merr := h.manifest(ctx, req.MachineID)
-	if len(raw) == 0 {
+	switch {
+	case len(raw) == 0:
 		m, a, err = h.acceptLifecycle(ctx, req, m, merr)
 		if err != nil {
 			return failure(req, err)
 		}
-	} else if merr != nil || m.Generation != req.Generation {
-		return failure(req, errors.New("accepted generation no longer current"))
+	case merr != nil:
+		return failure(req, merr)
+	case m.Generation != req.Generation:
+		return failure(req, model.NewError(model.ReasonConflict, "accepted generation no longer current", false))
 	}
 	if acceptOnly {
 		return a.Response
@@ -481,9 +508,10 @@ func (h *Helper) executeLocked(ctx context.Context, req model.Request, acceptOnl
 	return h.reconcile(ctx, m, a)
 }
 
-type rejectedOperationError string
+// rejectedOperationError marks a refusal known to precede native effects.
+type rejectedOperationError struct{ error }
 
-func (e rejectedOperationError) Error() string { return string(e) }
+func (e rejectedOperationError) Unwrap() error { return e.error }
 
 // lifecycleAttempt owns one journalled generation and its phase transitions.
 // Each native effect is preceded by a durable phase, so retries can inspect
@@ -530,7 +558,7 @@ func (r *lifecycleAttempt) run(ctx context.Context) model.Response {
 	case r.operation.Request.Action == actionCreate:
 		err = r.create(ctx, state)
 	case !r.machine.Prepared:
-		err = rejectedOperationError("machine has not completed trusted preparation")
+		err = rejectedOperationError{model.NewError(model.ReasonPrerequisite, "machine has not completed trusted preparation", false)}
 	default:
 		switch r.operation.Request.Action {
 		case actionStart:
@@ -589,7 +617,7 @@ func (r *lifecycleAttempt) createRecord(ctx context.Context, state RuntimeState)
 	switch r.operation.Phase {
 	case phaseAccepted:
 		if state.Exists {
-			return rejectedOperationError("refusing to adopt an existing runtime name")
+			return rejectedOperationError{model.NewError(model.ReasonPrerequisite, "refusing to adopt an existing runtime name", false)}
 		}
 		if err = r.persist(ctx, "creating"); err != nil {
 			return err
@@ -686,7 +714,7 @@ func (r *lifecycleAttempt) startRetained(ctx context.Context, state RuntimeState
 
 	if r.operation.Phase == phaseAccepted {
 		if !state.Exists || state.State != model.Stopped {
-			return rejectedOperationError("start requires an existing stopped runtime record")
+			return rejectedOperationError{model.NewError(model.ReasonPrerequisite, "start requires an existing stopped runtime record", false)}
 		}
 		if err = r.persist(ctx, "starting"); err != nil {
 			return err
@@ -720,7 +748,7 @@ func (r *lifecycleAttempt) stopRetained(ctx context.Context, state RuntimeState)
 	}
 	if r.operation.Phase == phaseAccepted {
 		if state.State != model.Running {
-			return rejectedOperationError("stop requires running execution")
+			return rejectedOperationError{model.NewError(model.ReasonPrerequisite, "stop requires running execution", false)}
 		}
 		if err = r.persist(ctx, "stopping"); err != nil {
 			return err
@@ -746,7 +774,7 @@ func (r *lifecycleAttempt) deleteRetained(ctx context.Context, state RuntimeStat
 
 	if r.operation.Phase == phaseAccepted {
 		if !state.Exists || state.State != model.Stopped {
-			return rejectedOperationError("delete requires an inspected stopped owned runtime")
+			return rejectedOperationError{model.NewError(model.ReasonPrerequisite, "delete requires an inspected stopped owned runtime", false)}
 		}
 		if err = r.persist(ctx, "deleting"); err != nil {
 			return err
@@ -816,8 +844,11 @@ func (h *Helper) acceptLifecycle(
 			return Manifest{}, accepted{}, err
 		}
 	}
-	if !model.ValidName(req.Name) || !h.profile(req.Profile) {
-		return Manifest{}, accepted{}, errors.New("unknown or changed pinned profile/name")
+	if !model.ValidName(req.Name) {
+		return Manifest{}, accepted{}, model.NewError(model.ReasonInvalid, "valid machine name required", false)
+	}
+	if !h.profile(req.Profile) {
+		return Manifest{}, accepted{}, model.NewError(model.ReasonConfiguration, "unknown or changed pinned profile", false)
 	}
 	if req.Action == actionCreate {
 		m, err = h.createIdentity(ctx, req, merr)
@@ -843,11 +874,14 @@ func (h *Helper) acceptLifecycle(
 func (h *Helper) createIdentity(ctx context.Context, req model.Request, merr error) (Manifest, error) {
 	var err error
 
-	if !errors.Is(merr, sql.ErrNoRows) {
-		return Manifest{}, errors.New("machine ID already owned; it cannot be recreated")
+	if merr != nil && !errors.Is(merr, sql.ErrNoRows) {
+		return Manifest{}, merr
+	}
+	if merr == nil {
+		return Manifest{}, model.NewError(model.ReasonConflict, "machine ID already owned; it cannot be recreated", false)
 	}
 	if req.Generation != 1 {
-		return Manifest{}, errors.New("create requires generation 1")
+		return Manifest{}, model.NewError(model.ReasonInvalid, "create requires generation 1", false)
 	}
 	m := Manifest{ID: req.MachineID, Name: req.Name, Profile: req.Profile}
 	if m.Profile.Runtime == runtimeSmolvm {
@@ -862,14 +896,17 @@ func (h *Helper) createIdentity(ctx context.Context, req model.Request, merr err
 func (h *Helper) validateRetainedGeneration(ctx context.Context, req model.Request, m Manifest, merr error) error {
 	var err error
 
-	if merr != nil || m.Deleted {
-		return errors.New("stopped owned machine required; missing or deleted identity")
+	if merr != nil && !errors.Is(merr, sql.ErrNoRows) {
+		return merr
+	}
+	if errors.Is(merr, sql.ErrNoRows) || m.Deleted {
+		return model.NewError(model.ReasonNotFound, "stopped owned machine required; missing or deleted identity", false)
 	}
 	if m.Generation+1 != req.Generation {
-		return errors.New("generation conflict; controller reconciliation required")
+		return model.NewError(model.ReasonConflict, "generation conflict; controller reconciliation required", false)
 	}
 	if m.Name != req.Name || !model.SameProfile(m.Profile, req.Profile) {
-		return errors.New("immutable machine identity conflict")
+		return model.NewError(model.ReasonConflict, "immutable machine identity conflict", false)
 	}
 	var last []byte
 	if err = h.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE machine_id=? AND generation=?", m.ID, m.Generation).
@@ -881,12 +918,15 @@ func (h *Helper) validateRetainedGeneration(ctx context.Context, req model.Reque
 		return err
 	}
 	if previous.Response.Status != statusSucceeded && previous.Response.Status != statusFailed {
-		return errors.New("previous generation is unresolved")
+		return model.NewError(model.ReasonReconciliationRequired, "previous generation is unresolved", false)
 	}
 	return nil
 }
 
 func (c *Config) validateProfiles() error {
+	if c.RuntimeDigest == "" {
+		return errors.New("runtime_digest required")
+	}
 	seen := map[string]bool{}
 	for i := range c.Profiles {
 		p := &c.Profiles[i]
@@ -897,7 +937,7 @@ func (c *Config) validateProfiles() error {
 			return errors.New("duplicate profile")
 		}
 		seen[p.ID] = true
-		if err := c.validateRuntimeProfile(*p); err != nil {
+		if err := c.validateRuntimeProfile(p.Profile); err != nil {
 			return err
 		}
 	}
@@ -932,28 +972,6 @@ func (c *Config) validateRuntimeProfile(p model.Profile) error {
 		if len(c.Root)+len(suffix) >= limit {
 			return errors.New("smolvm root too long for Unix socket paths; use a short private path")
 		}
-	}
-	return nil
-}
-
-func validateOwner(dir *statefs.Dir) error {
-	b, err := dir.ReadFile(".owner")
-	if errors.Is(err, os.ErrNotExist) {
-		entries, readErr := dir.Entries()
-		if readErr != nil {
-			return readErr
-		}
-		for _, entry := range entries {
-			if entry.Name() != ".lock" {
-				return errors.New("refusing to adopt a nonempty unowned root")
-			}
-		}
-		err = dir.WriteFile(".owner", []byte(ownerMarker))
-	} else if err == nil && string(b) != ownerMarker {
-		err = errors.New("private root ownership marker mismatch")
-	}
-	if err != nil {
-		return err
 	}
 	return nil
 }

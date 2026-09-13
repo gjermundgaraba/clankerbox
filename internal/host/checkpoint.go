@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"clankerbox/internal/model"
 )
@@ -31,19 +30,10 @@ func (h *Helper) checkpoint(ctx context.Context, id string) (ownedCheckpoint, er
 	return cp, err
 }
 func (h *Helper) runtimePin(p model.Profile) string {
-	if h.cfg.RuntimeDigest != "" && p.ImageDigest != "" {
-		p.ImagePath = ""
-		p.Capabilities = nil
-		return model.Hash(struct {
-			Profile      model.Profile
-			Runtime, DNS string
-		}{p, h.cfg.RuntimeDigest, h.cfg.DNS})
-	}
-	// Legacy records retain their original conservative path-dependent pin.
 	return model.Hash(struct {
-		Profile                    model.Profile
-		Smolvm, Tart, Library, DNS string
-	}{p, h.cfg.SmolvmPath, h.cfg.TartPath, h.cfg.LibraryDir, h.cfg.DNS})
+		Profile      model.Profile
+		Runtime, DNS string
+	}{p, h.cfg.RuntimeDigest, h.cfg.DNS})
 }
 func (h *Helper) resourceIdle(ctx context.Context, id string, checkpoint bool) (resultErr error) {
 	rows, err := h.db.QueryContext(ctx, "SELECT body FROM operations")
@@ -69,7 +59,7 @@ func (h *Helper) resourceIdle(ctx context.Context, id string, checkpoint bool) (
 			conflict = r.Checkpoint != nil && r.Checkpoint.ID == id
 		}
 		if conflict {
-			return errors.New("resource reserved by unresolved operation; explicit inspection required")
+			return model.NewError(model.ReasonOperationPending, "resource reserved by unresolved operation; explicit inspection required", true)
 		}
 	}
 	return rows.Err()
@@ -94,7 +84,7 @@ func (h *Helper) machineDependencies(ctx context.Context, m Manifest) (resultErr
 		}
 		if !child.Deleted && child.ID != m.ID &&
 			(child.StoreID == m.ID || child.SourceMachineID == m.ID && child.CheckpointID == "") {
-			return errors.New("retained Linux descendants depend on this machine; deletion refused")
+			return model.NewError(model.ReasonDependency, "retained Linux descendants depend on this machine; deletion refused", false)
 		}
 	}
 	return rows.Err()
@@ -114,7 +104,7 @@ func (h *Helper) executeDerived(
 	}
 	if req.Action == actionFork || req.Action == actionCapture {
 		if !h.profile(req.Profile) {
-			return failure(req, errors.New("unknown or changed pinned profile"))
+			return failure(req, model.NewError(model.ReasonConfiguration, "unknown or changed pinned profile", false))
 		}
 		source, err = h.derivedSource(ctx, req)
 		if err != nil {
@@ -217,9 +207,12 @@ func (h *Helper) applyDerived(
 
 func (h *Helper) derivedSource(ctx context.Context, req model.Request) (Manifest, error) {
 	if !model.ValidID(req.SourceMachineID) || req.SourceGeneration < 1 {
-		return Manifest{}, errors.New("invalid source identity/generation")
+		return Manifest{}, model.NewError(model.ReasonInvalid, "invalid source identity/generation", false)
 	}
 	source, err := h.manifest(ctx, req.SourceMachineID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Manifest{}, model.NewError(model.ReasonNotFound, "source machine not found", false)
+	}
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -228,7 +221,7 @@ func (h *Helper) derivedSource(ctx context.Context, req model.Request) (Manifest
 	}
 	if source.Deleted || !source.Prepared || source.Generation != req.SourceGeneration ||
 		!model.SameProfile(source.Profile, req.Profile) {
-		return Manifest{}, errors.New("source identity/profile/generation conflict")
+		return Manifest{}, model.NewError(model.ReasonConflict, "source identity/profile/generation conflict", false)
 	}
 	state, e := h.runtime.Inspect(ctx, source)
 	if e != nil {
@@ -239,16 +232,19 @@ func (h *Helper) derivedSource(ctx context.Context, req model.Request) (Manifest
 		want = model.Running
 	}
 	if !state.Exists || state.State != want {
-		return Manifest{}, fmt.Errorf("prerequisite: source must be %s", want)
+		return Manifest{}, model.NewError(model.ReasonPrerequisite, "source must be "+string(want), false)
 	}
 	return source, nil
 }
 
 func (h *Helper) derivedCheckpoint(ctx context.Context, req model.Request) (*ownedCheckpoint, error) {
 	if req.Checkpoint == nil || !model.ValidID(req.Checkpoint.ID) {
-		return nil, errors.New("owned checkpoint ID required")
+		return nil, model.NewError(model.ReasonInvalid, "owned checkpoint ID required", false)
 	}
 	value, e := h.checkpoint(ctx, req.Checkpoint.ID)
+	if errors.Is(e, sql.ErrNoRows) {
+		return nil, model.NewError(model.ReasonNotFound, "checkpoint not found", false)
+	}
 	if e != nil {
 		return nil, e
 	}
@@ -257,12 +253,12 @@ func (h *Helper) derivedCheckpoint(ctx context.Context, req model.Request) (*own
 	expected.Status = cp.Status
 	if cp.Status != "published" || model.Hash(expected) != model.Hash(cp.Checkpoint) ||
 		!model.SameProfile(cp.Profile, req.Profile) {
-		return nil, errors.New("checkpoint is unpublished or its identity/profile does not match")
+		return nil, model.NewError(model.ReasonConflict, "checkpoint is unpublished or its identity/profile does not match", false)
 	}
 	// RAM deletion uses only the owned artifact directory, not the current runtime.
 	if req.Action != actionDeleteCheckpoint || cp.Kind != checkpointRAM {
-		if !h.profile(req.Profile) || cp.RuntimePin != h.runtimePin(cp.Profile) {
-			return nil, errors.New("checkpoint is incompatible with pinned host/runtime/profile")
+		if (req.Action != actionDeleteCheckpoint && !h.profile(req.Profile)) || cp.RuntimePin != h.runtimePin(cp.Profile) {
+			return nil, model.NewError(model.ReasonConfiguration, "checkpoint is incompatible with pinned host/runtime/profile", false)
 		}
 	}
 	if err := h.resourceIdle(ctx, cp.ID, true); err != nil {
@@ -278,7 +274,7 @@ func (h *Helper) captureIdentity(
 ) (Manifest, *ownedCheckpoint, error) {
 	if req.MachineID != source.ID || req.Generation != source.Generation+1 || req.Name != source.Name ||
 		req.Checkpoint == nil {
-		return Manifest{}, nil, errors.New("capture generation/identity conflict")
+		return Manifest{}, nil, model.NewError(model.ReasonConflict, "capture generation/identity conflict", false)
 	}
 	value := *req.Checkpoint
 	kind := checkpointDisk
@@ -291,10 +287,12 @@ func (h *Helper) captureIdentity(
 		value.Host != req.Host ||
 		value.CreatedAt.IsZero() ||
 		!model.SameProfile(value.Profile, req.Profile) {
-		return Manifest{}, nil, errors.New("invalid checkpoint identity")
+		return Manifest{}, nil, model.NewError(model.ReasonInvalid, "invalid checkpoint identity", false)
 	}
-	if _, e := h.checkpoint(ctx, value.ID); !errors.Is(e, sql.ErrNoRows) {
-		return Manifest{}, nil, errors.New("checkpoint identity already owned")
+	if _, e := h.checkpoint(ctx, value.ID); e == nil {
+		return Manifest{}, nil, model.NewError(model.ReasonConflict, "checkpoint identity already owned", false)
+	} else if !errors.Is(e, sql.ErrNoRows) {
+		return Manifest{}, nil, e
 	}
 	value.RuntimePin = h.runtimePin(value.Profile)
 	cp := &ownedCheckpoint{Checkpoint: value, Source: source}
@@ -312,10 +310,12 @@ func (h *Helper) childIdentity(
 	var err error
 
 	if req.Generation != 1 || !model.ValidName(req.Name) {
-		return Manifest{}, errors.New("child requires a new generation-one identity/name")
+		return Manifest{}, model.NewError(model.ReasonInvalid, "child requires a new generation-one identity/name", false)
 	}
-	if _, e := h.manifest(ctx, req.MachineID); !errors.Is(e, sql.ErrNoRows) {
-		return Manifest{}, errors.New("child identity already owned")
+	if _, e := h.manifest(ctx, req.MachineID); e == nil {
+		return Manifest{}, model.NewError(model.ReasonConflict, "child identity already owned", false)
+	} else if !errors.Is(e, sql.ErrNoRows) {
+		return Manifest{}, e
 	}
 	m := Manifest{
 		ID:              req.MachineID,
@@ -391,7 +391,7 @@ func (h *Helper) derivedPrerequisite(
 	cp *ownedCheckpoint,
 ) error {
 	if source.Profile.Runtime == runtimeSmolvm && !source.Branchable {
-		return errors.New("prerequisite: Linux source must explicitly stop/start with --branchable")
+		return model.NewError(model.ReasonPrerequisite, "prerequisite: Linux source must explicitly stop/start with --branchable", false)
 	}
 
 	var spec *CheckpointSpec
@@ -453,7 +453,7 @@ func (h *Helper) derivedIdentity(
 		return h.captureIdentity(ctx, req, source)
 	case actionDeleteCheckpoint:
 		if req.MachineID != cp.ID || req.Generation != 1 {
-			return Manifest{}, nil, errors.New("checkpoint deletion identity conflict")
+			return Manifest{}, nil, model.NewError(model.ReasonConflict, "checkpoint deletion identity conflict", false)
 		}
 		return Manifest{}, cp, nil
 	default:
@@ -470,7 +470,7 @@ func (h *Helper) resumeAcceptedDerived(ctx context.Context, req model.Request, a
 	if req.Action != actionDeleteCheckpoint {
 		m, err = h.manifest(ctx, req.MachineID)
 		if err != nil || m.Generation != req.Generation {
-			return failure(req, errors.New("accepted generation no longer current"))
+			return failure(req, model.NewError(model.ReasonConflict, "accepted generation no longer current", false))
 		}
 	}
 	var source Manifest
@@ -479,7 +479,7 @@ func (h *Helper) resumeAcceptedDerived(ctx context.Context, req model.Request, a
 	case actionFork:
 		source, err = h.manifest(ctx, req.SourceMachineID)
 		if err == nil && source.Generation != req.SourceGeneration {
-			err = errors.New("accepted source generation changed")
+			err = model.NewError(model.ReasonConflict, "accepted source generation changed", false)
 		}
 	case actionCapture:
 		cp = a.Checkpoint

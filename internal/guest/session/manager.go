@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"clankerbox/internal/model"
+
 	"clankerbox/internal/guest/protocol"
 	"clankerbox/internal/guest/vt"
 )
@@ -67,6 +69,8 @@ type Manager struct {
 	records map[string]manifest
 	stop    chan struct{}
 	stopped chan struct{}
+	closing bool
+	closed  chan struct{}
 }
 
 // Attachment is what follows an open reply on the wire: a registered
@@ -134,7 +138,7 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 		cfg.Log = slog.Default()
 	}
 	m := &Manager{
-		ctx:     ctx,
+		ctx:     context.WithoutCancel(ctx),
 		cfg:     cfg,
 		bootID:  bootID(),
 		user:    currentUser(),
@@ -142,6 +146,7 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 		records: make(map[string]manifest),
 		stop:    make(chan struct{}),
 		stopped: make(chan struct{}),
+		closed:  make(chan struct{}),
 	}
 	if cfg.Workload != nil {
 		m.user = cfg.Workload.User
@@ -194,10 +199,37 @@ func (m *Manager) Hello() protocol.Hello {
 	}
 }
 
-// Close stops retention cleanup. Sessions are not ended; the process exit ends them.
-func (m *Manager) Close() {
-	close(m.stop)
-	<-m.stopped
+// Close joins every session before its loader or state directory may be released.
+func (m *Manager) Close() { _ = m.Shutdown(context.Background()) }
+
+// Shutdown refuses new creation and joins all owned work. A timeout leaves
+// resources owned by the manager until a subsequent call completes successfully.
+func (m *Manager) Shutdown(ctx context.Context) error {
+	m.mu.Lock()
+	if !m.closing {
+		m.closing = true
+		close(m.stop)
+		sessions := make([]*Session, 0, len(m.live))
+		for _, s := range m.live {
+			sessions = append(sessions, s)
+		}
+		go func() {
+			var joined sync.WaitGroup
+			for _, s := range sessions {
+				joined.Go(func() { s.end() })
+			}
+			joined.Wait()
+			<-m.stopped
+			close(m.closed)
+		}()
+	}
+	m.mu.Unlock()
+	select {
+	case <-m.closed:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Create starts a session or returns the existing one for a repeated id. A
@@ -206,13 +238,16 @@ func (m *Manager) Close() {
 func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closing {
+		return protocol.Session{}, &model.Error{Reason: model.ReasonNotRunning, Message: "session manager is closing"}
+	}
 	record := m.newRecord(args)
 	fingerprint := createFingerprint(record, args.Env)
 	if existing, ok := m.lookup(args.SessionID); ok {
 		// A quarantined record has no fingerprint left to compare; the id is still taken.
 		if existing.Fingerprint != "" && existing.Fingerprint != fingerprint {
-			return protocol.Session{}, &protocol.Error{
-				Code:    protocol.CodeConflict,
+			return protocol.Session{}, &model.Error{
+				Reason:  model.ReasonConflict,
 				Message: "session id exists with different arguments",
 			}
 		}
@@ -224,17 +259,17 @@ func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
 	}
 	now := m.cfg.Now()
 	if created.After(now.Add(createSkew)) {
-		return protocol.Session{}, &protocol.Error{Code: protocol.CodeInvalid, Message: "created_at is in the future"}
+		return protocol.Session{}, &model.Error{Reason: model.ReasonInvalid, Message: "created_at is in the future"}
 	}
 	if now.Sub(created) > createHorizon {
-		return protocol.Session{}, &protocol.Error{
-			Code:    protocol.CodeExpired,
+		return protocol.Session{}, &model.Error{
+			Reason:  model.ReasonExpired,
 			Message: "create is older than the retry horizon and was never started",
 		}
 	}
 	if m.runningCount() >= m.cfg.MaxSessions {
-		return protocol.Session{}, &protocol.Error{
-			Code:      protocol.CodeCapacity,
+		return protocol.Session{}, &model.Error{
+			Reason:    model.ReasonCapacity,
 			Message:   "session limit reached",
 			Retryable: true,
 		}
@@ -252,7 +287,7 @@ func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
 		log:         m.cfg.Log,
 	})
 	if err != nil {
-		return protocol.Session{}, &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
+		return protocol.Session{}, &model.Error{Reason: model.ReasonInternal, Message: err.Error()}
 	}
 	m.live[record.ID] = s
 	return s.snapshot(), nil
@@ -345,9 +380,9 @@ func (m *Manager) liveSession(id string) (*Session, error) {
 		return s, nil
 	}
 	if _, ok := m.records[id]; ok {
-		return nil, &protocol.Error{Code: protocol.CodeNotRunning, Message: "session is not running"}
+		return nil, &model.Error{Reason: model.ReasonNotRunning, Message: "session is not running"}
 	}
-	return nil, &protocol.Error{Code: protocol.CodeNotFound, Message: msgNoSuchSession}
+	return nil, &model.Error{Reason: model.ReasonNotFound, Message: msgNoSuchSession}
 }
 
 // List returns every known session ordered by creation time.
@@ -390,7 +425,7 @@ func (m *Manager) Open(args protocol.OpenArgs, sink Sink) (protocol.OpenValue, *
 	m.mu.Unlock()
 	if !live {
 		if !known {
-			return protocol.OpenValue{}, nil, &protocol.Error{Code: protocol.CodeNotFound, Message: msgNoSuchSession}
+			return protocol.OpenValue{}, nil, &model.Error{Reason: model.ReasonNotFound, Message: msgNoSuchSession}
 		}
 		return protocol.OpenValue{Mode: protocol.ModeEnded, Offset: record.Offset, Session: record.Session}, nil, nil
 	}
@@ -454,6 +489,12 @@ func (m *Manager) prune(now time.Time) {
 	defer m.mu.Unlock()
 	for id, s := range m.live {
 		if expired(s.snapshot(), now) {
+			// Exited status precedes final resource release; retain ownership until joined.
+			select {
+			case <-s.waitDone:
+			default:
+				continue
+			}
 			delete(m.live, id)
 			m.forget(id)
 		}
@@ -482,7 +523,7 @@ func expired(record protocol.Session, now time.Time) bool {
 
 func mapError(err error) error {
 	if errors.Is(err, errNotRunning) {
-		return &protocol.Error{Code: protocol.CodeNotRunning, Message: "session is not running"}
+		return &model.Error{Reason: model.ReasonNotRunning, Message: "session is not running"}
 	}
-	return &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
+	return &model.Error{Reason: model.ReasonInternal, Message: err.Error()}
 }

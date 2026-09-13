@@ -70,7 +70,6 @@ func writeConfig(t *testing.T, a *apiFixture) {
 }
 
 const (
-	machinesPath       = "/v1/machines"
 	machinesCommand    = "machines"
 	checkpointRetryKey = "once"
 	childName          = "child"
@@ -80,7 +79,6 @@ const (
 	inspectCommand     = "inspect"
 	configFlag         = "--config"
 	mutationRetryKey   = "retry-123"
-	linuxOS            = fixtureLinux
 	testMachineName    = "dev"
 )
 
@@ -158,5 +156,32 @@ func TestAPIPortValidation(t *testing.T) {
 				t.Fatalf("port %q: %v", test.port, err)
 			}
 		})
+	}
+}
+
+func TestTokenPathsResolveFromConfigAndHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(t.TempDir(), "configs")
+	if err := os.Mkdir(configDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ input, want string }{
+		{"../private/token", filepath.Join(filepath.Dir(configDir), "private", "token")},
+		{"~/private/token", filepath.Join(home, "private", "token")},
+		{filepath.Join(home, "absolute-token"), filepath.Join(home, "absolute-token")},
+	} {
+		path := filepath.Join(configDir, "client.json")
+		raw, err := json.Marshal(client.Config{URL: "http://127.0.0.1:8080", TokenFile: test.input})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		config, err := client.LoadConfig(path)
+		if err != nil || config.TokenFile != test.want {
+			t.Fatalf("%q: %q want %q: %v", test.input, config.TokenFile, test.want, err)
+		}
 	}
 }

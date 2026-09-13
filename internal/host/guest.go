@@ -2,6 +2,7 @@ package host
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,18 +21,18 @@ const (
 // readyMachine resolves the current endpoint only after the owned generation succeeds.
 // Callers hold admission only until registering a cancellable guest lease.
 func (h *Helper) readyMachine(ctx context.Context, id string) (Manifest, error) {
-	if err := h.cfg.quarantineError(id); err != nil {
-		return Manifest{}, err
-	}
 	if !model.ValidID(id) {
-		return Manifest{}, errors.New("invalid machine ID")
+		return Manifest{}, model.NewError(model.ReasonInvalid, "invalid machine ID", false)
 	}
 	m, err := h.manifest(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Manifest{}, model.NewError(model.ReasonNotFound, "owned machine not found", false)
+	}
 	if err != nil {
 		return Manifest{}, err
 	}
 	if !m.Prepared || m.Deleted {
-		return Manifest{}, errors.New("machine is not prepared")
+		return Manifest{}, model.NewError(model.ReasonPrerequisite, "machine is not prepared", false)
 	}
 	var body []byte
 	if err = h.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE machine_id=? AND generation=?", id, m.Generation).
@@ -43,14 +44,14 @@ func (h *Helper) readyMachine(ctx context.Context, id string) (Manifest, error) 
 		return Manifest{}, err
 	}
 	if op.Response.Status != statusSucceeded {
-		return Manifest{}, errors.New("machine operation is unresolved")
+		return Manifest{}, model.NewError(model.ReasonReconciliationRequired, "machine operation is unresolved", false)
 	}
 	obs, err := h.observation(ctx, m)
 	if err != nil {
 		return Manifest{}, err
 	}
 	if obs.State != model.Running {
-		return Manifest{}, errors.New("machine is not running")
+		return Manifest{}, model.NewError(model.ReasonNotRunning, "machine is not running", false)
 	}
 	if err = validEndpoint(m, obs.Endpoint); err != nil {
 		return Manifest{}, err

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Clankerbox Host</string>
+	<key>CFBundleIdentifier</key>
+	<string>org.clankerbox.host</string>
+	<key>CFBundleName</key>
+	<string>Clankerbox Host</string>
+	<key>CFBundleVersion</key>
+	<string>0.2.0</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Clankerbox Host connects to your locally managed virtual machines to provide authenticated terminal sessions.</string>
+</dict>
+</plist>

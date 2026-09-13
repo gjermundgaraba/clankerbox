@@ -1,4 +1,3 @@
-//nolint:testpackage // Verifies private cache ownership independently of native effects.
 package host
 
 import (

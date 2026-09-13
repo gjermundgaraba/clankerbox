@@ -1,4 +1,3 @@
-//nolint:testpackage // Tests exercise private ownership and teardown boundaries without exporting them.
 package dev
 
 import (

@@ -42,7 +42,7 @@ func regularNonempty(path string) error {
 // Prerequisite checks runtime support and retained artifacts before any live effect.
 func (n *NativeRuntime) Prerequisite(ctx context.Context, action string, source Manifest, cp *CheckpointSpec) error {
 	if (action == actionRestore || action == actionDeleteCheckpoint) && cp == nil {
-		return errors.New("checkpoint required")
+		return model.NewError(model.ReasonInvalid, "checkpoint required", false)
 	}
 	p := source.Profile
 	if cp != nil {
@@ -58,11 +58,11 @@ func (n *NativeRuntime) Prerequisite(ctx context.Context, action string, source 
 				return err
 			}
 			if !state.Exists || state.State != model.Stopped {
-				return errors.New("checkpoint clone must exist and remain stopped")
+				return model.NewError(model.ReasonPrerequisite, "checkpoint clone must exist and remain stopped", false)
 			}
 		}
 	default:
-		return errors.New("unsupported checkpoint runtime")
+		return model.NewError(model.ReasonUnsupported, "unsupported checkpoint runtime", false)
 	}
 	return nil
 }
@@ -187,7 +187,7 @@ func (n *NativeRuntime) Capture(ctx context.Context, source Manifest, cp Checkpo
 			return err
 		}
 	default:
-		return errors.New("unsupported checkpoint kind")
+		return model.NewError(model.ReasonUnsupported, "unsupported checkpoint kind", false)
 	}
 	if err := statefs.Sync(dir); err != nil {
 		return err
@@ -311,23 +311,25 @@ func (n *NativeRuntime) DeleteCheckpoint(ctx context.Context, cp CheckpointSpec)
 
 func (n *NativeRuntime) smolvmPrerequisite(action string, p model.Profile, cp *CheckpointSpec) error {
 	if action == actionFork && p.Arch != archAMD64 && (n.hostOS() != hostDarwin || p.Arch != "arm64") {
-		return errors.New("unsupported: unqualified host/guest fork architecture")
+		return model.NewError(model.ReasonUnsupported, "unsupported: unqualified host/guest fork architecture", false)
 	}
 	if action == actionCapture && n.Config.DNS != "" {
-		return errors.New(
-			"prerequisite: portable smolvm capture does not support custom DNS; configure an explicitly supported portable profile without weakening isolation",
-		)
+		return model.NewError(model.ReasonPrerequisite, "portable smolvm capture does not support custom DNS", false)
 	}
 	if action == actionRestore {
 		if err := regularNonempty(n.artifact(*cp)); err != nil {
 			return fmt.Errorf("checkpoint unavailable: %w", err)
 		}
-		info, err := os.Stat(p.ImagePath)
+		imagePath, err := n.Config.imagePath(p)
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(imagePath)
 		if err != nil {
 			return err
 		}
 		if !info.IsDir() {
-			return errors.New("pinned agent rootfs unavailable for restored retained disk operation")
+			return model.NewError(model.ReasonConfiguration, "pinned agent rootfs unavailable for restored retained disk operation", false)
 		}
 	}
 	return nil
@@ -335,7 +337,7 @@ func (n *NativeRuntime) smolvmPrerequisite(action string, p model.Profile, cp *C
 
 func (n *NativeRuntime) restoreDisk(ctx context.Context, m Manifest, cp CheckpointSpec) error {
 	if cp.Kind != checkpointDisk {
-		return errors.New("unsupported: Tart cannot restore RAM")
+		return model.NewError(model.ReasonUnsupported, "unsupported: Tart cannot restore RAM", false)
 	}
 	if _, err := n.run(ctx, m, "clone", checkpointMachine(cp).RuntimeName(), m.RuntimeName()); err != nil {
 		return err
@@ -344,6 +346,10 @@ func (n *NativeRuntime) restoreDisk(ctx context.Context, m Manifest, cp Checkpoi
 }
 
 func (n *NativeRuntime) restoreRAM(ctx context.Context, m *Manifest, cp CheckpointSpec) error {
+	imagePath, resolutionErr := n.Config.imagePath(m.Profile)
+	if resolutionErr != nil {
+		return resolutionErr
+	}
 	if cp.Kind != checkpointRAM || m.StoreID != "" {
 		return errors.New("RAM restore requires an independent runtime store")
 	}
@@ -364,7 +370,7 @@ func (n *NativeRuntime) restoreRAM(ctx context.Context, m *Manifest, cp Checkpoi
 	if _, err := n.Runner.Run(
 		ctx,
 		"/bin/cp",
-		[]string{"-a", m.Profile.ImagePath, filepath.Join(machineDir(n.Config, *m), "agent-rootfs")},
+		[]string{"-a", imagePath, filepath.Join(machineDir(n.Config, *m), "agent-rootfs")},
 		n.env(*m),
 		nil,
 	); err != nil {

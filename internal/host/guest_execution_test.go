@@ -1,4 +1,3 @@
-//nolint:testpackage // Exercises the private read-only readiness boundary.
 package host
 
 import (

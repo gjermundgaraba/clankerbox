@@ -19,7 +19,7 @@ build. Other Linux distributions and older macOS releases have not been qualifie
 ## Install and start
 
 Download the self-contained archive and checksum for your host platform from
-[release 0.2.0](https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.2.0)
+[release 0.2.1](https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.2.1)
 using your normal private repository access. Verify SHA256 before extraction. The archive places
 `clankerbox` beside `bundle.json` and all verified controller, host, guest,
 smolvm/libkrun/agent, image and profile payloads. Add that extracted directory to
@@ -66,7 +66,7 @@ systemd user manager. Fix a failing preflight before starting the environment;
 Clankerbox does not silently select emulation or modify host privileges.
 
 The default profile is `linux-dev-v3`: 2 vCPUs and 1024 MiB RAM, with the bundle's
-explicit storage/overlay sizes. A profile declares capabilities and content pins.
+explicit storage/overlay sizes. A profile declares resources and content pins; the API derives its capabilities.
 Host OS, guest OS and runtime engine are distinct: an Apple Silicon host can run
 a forkable Linux guest. Startup output reports readiness and connection paths;
 there is no promised download, boot or restore latency.
@@ -171,31 +171,28 @@ Do not remove an environment directory by hand to stop VMs. Do not edit or repla
 a retained bundle's files: startup verifies its manifest/content pin and rejects
 silent drift.
 
-## Compatible service updates
+## Bundle identity and replacement
 
-After exiting the foreground controller, explicitly select a verified replacement:
+Each environment belongs to one verified bundle content digest. Ordinary restart
+uses that same bundle and preserves live VMs. Changing service, engine or image
+contents requires explicit destroy/recreate; dev VM contents are disposable when
+changing releases. Finish teardown with the old bundle before selecting the new one:
 
 ```sh
-clankerbox dev --state-dir /absolute/path/to/environment --bundle /path/to/new/bundle.json
+clankerbox dev --state-dir /absolute/path/to/environment destroy
+clankerbox dev --state-dir /absolute/path/to/environment --bundle /new/bundle.json
 ```
 
-A compatible update keeps the exact runtime digest, image digest and profile
-semantics while allowing controller, host and guest service code or installation
-locations to change. The updater drains accepted host operations, stops the owned
-host service without stopping VMs, records the new unit/environment pin and starts
-the replacement services. Pending work must settle; unresolved operations leave
-the environment intact. A changed runtime, guest image or profile requires another
-environment rather than an implicit reinterpretation of retained VMs/checkpoints.
+The bundle path is a locator. If an intact copy of the same bundle moved, supply
+its manifest with `--bundle` on startup, stop or destroy:
 
-An interrupted update records `upgrade.json`; repeat the same explicit `--bundle`
-to complete it. Without that flag, the retained manifest remains mandatory and
-unchanged. Updating service files does not hand off a live guest daemon's PTYs;
-new guest daemon code takes effect through the explicit guest/machine lifecycle,
-with the session compatibility checks described in the terminal contract.
-The compatibility/recovery checks have unit coverage. Installed Linux live
-qualification also replaced the host service while preserving a running machine
-and its guest-manager incarnation; see the exact artifact evidence in
-[installed qualification](../spikes/real-local-installed/README.md).
+```sh
+clankerbox dev --state-dir /absolute/path/to/environment --bundle /relocated/bundle.json stop
+```
+
+Clankerbox verifies the exact content digest and repairs owned configuration and
+supervisor paths. A different digest is refused without deleting the environment.
+Keep an intact matching bundle available until teardown finishes.
 
 ## Qualification
 
@@ -206,6 +203,6 @@ The real guest proof covers copied PTY/memory continuity and machine identity
 rebinding on its recorded runtime/image combination. These checks do not claim
 host-reboot durability, arbitrary CPU compatibility, production-domain routing or
 a startup-time guarantee. See [the implementation plan](real-local-development-plan.md)
-for acceptance status and [RPC](../spikes/real-local-rpc/README.md),
-[proxy](../spikes/real-local-proxy/README.md), and
-[guest identity](../spikes/real-local-guest/README.md) proof boundaries.
+for acceptance status and [RPC](archive/real-local/real-local-rpc.md),
+[proxy](archive/real-local/real-local-proxy.md), and
+[guest identity](archive/real-local/real-local-guest.md) proof boundaries.

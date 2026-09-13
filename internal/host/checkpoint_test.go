@@ -305,8 +305,6 @@ func TestHostLinuxDependencyGuardPreservesOwnedStore(t *testing.T) {
 	requireNoError(t, h.Close())
 	p := source.Profile
 	p.Runtime, p.OS, p.Arch = runtimeSmolvm, osLinux, archAMD64
-	p.ImagePath = "/opt/profiles/rootfs"
-	p.Capabilities = nil
 	requireNoError(t, p.Validate())
 	root := filepath.Join("/tmp", model.NewID()[:8])
 	err := os.Mkdir(root, 0700)
@@ -318,7 +316,7 @@ func TestHostLinuxDependencyGuardPreservesOwnedStore(t *testing.T) {
 	})
 	cfg.Root, err = filepath.EvalSymlinks(root)
 	requireNoError(t, err)
-	cfg.Profiles = []model.Profile{p}
+	cfg.Profiles = []host.ProfileBinding{{Profile: p, ImagePath: "/opt/profiles/rootfs"}}
 	cfg.HostOS = osLinux
 	cfg.SmolvmPath, cfg.LibraryDir = testSmolvmPath, testSmolvmLibrary
 	source.Profile = p
@@ -395,7 +393,7 @@ func TestNativePrerequisitesAndPendingRAMGuard(t *testing.T) {
 	}
 }
 
-func TestHelperRestoreChecksPinnedRuntimePaths(t *testing.T) {
+func TestHelperRestoreChecksPinnedRuntimeContent(t *testing.T) {
 	t.Parallel()
 	h, cfg, rt, source := setupBranch(t)
 	defer func() {
@@ -413,13 +411,13 @@ func TestHelperRestoreChecksPinnedRuntimePaths(t *testing.T) {
 	req.SourceGeneration = 0
 	req.Checkpoint = resp.Checkpoint
 	requireNoError(t, h.Close())
-	cfg.TartPath = "/other/version/tart"
+	cfg.RuntimeDigest = "other-runtime-content"
 	var err error
 	h, err = host.Open(cfg, rt)
 	requireNoError(t, err)
 	requireStatus(t, h.Execute(ctx, req), statusFailed)
 	if rt.restores != 0 {
-		t.Fatal("restored after configured runtime path changed")
+		t.Fatal("restored after configured runtime content changed")
 	}
 }
 

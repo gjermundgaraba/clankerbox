@@ -24,10 +24,11 @@ type ptyWriter struct {
 	replies int
 	closed  bool
 	wake    chan struct{}
+	done    chan struct{}
 }
 
 func newPtyWriter() *ptyWriter {
-	return &ptyWriter{wake: make(chan struct{}, 1)}
+	return &ptyWriter{wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
 // enqueueInput admits caller input within its budget.
@@ -79,6 +80,7 @@ func (w *ptyWriter) close() {
 
 // run writes entries until closed or the PTY fails.
 func (w *ptyWriter) run(pty io.Writer) {
+	defer close(w.done)
 	for {
 		<-w.wake
 		for {

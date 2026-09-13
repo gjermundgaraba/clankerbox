@@ -43,13 +43,8 @@ func Client(endpoint string, credentials Credentials, token string) (*http.Clien
 	if err != nil {
 		return nil, "", err
 	}
-	protocols := new(http.Protocols)
-	protocols.SetHTTP2(true)
-	transport := &http.Transport{
-		Protocols:             protocols,
-		ForceAttemptHTTP2:     true,
-		ResponseHeaderTimeout: readHeaderTimeout,
-	}
+	transport := http2Transport(nil)
+	protocols := transport.Protocols
 	origin := strings.TrimRight(endpoint, "/")
 	switch u.Scheme {
 	case "unix":
@@ -89,12 +84,29 @@ func Client(endpoint string, credentials Credentials, token string) (*http.Clien
 	if token != "" {
 		roundTripper = &bearerTransport{base: transport, token: token}
 	}
-	return &http.Client{
-		Transport: roundTripper,
-		// RPC routes never redirect. In particular, a bearer transport must not
-		// reattach credentials after net/http strips them across origins.
+	return rpcClient(roundTripper), origin, nil
+}
+
+func http2Transport(cfg *tls.Config) *http.Transport {
+	protocols := new(http.Protocols)
+	protocols.SetHTTP2(true)
+	return &http.Transport{Protocols: protocols, ForceAttemptHTTP2: true,
+		ResponseHeaderTimeout: readHeaderTimeout, TLSClientConfig: cfg}
+}
+
+func rpcClient(transport http.RoundTripper) *http.Client {
+	return &http.Client{Transport: transport,
+		// Redirects must never reattach credentials at a different destination.
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}, origin, nil
+	}
+}
+
+// TLSClient owns an HTTP/2 transport using the endpoint owner's verified TLS configuration.
+func TLSClient(cfg *tls.Config) *http.Client { return rpcClient(http2Transport(cfg)) }
+
+// PeerClientTLS verifies the certificate chain and the exact role URI.
+func PeerClientTLS(cert tls.Certificate, roots *x509.CertPool, peer string) *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}, RootCAs: roots, VerifyConnection: verifyPeer(peer)}
 }
 
 func loopback(host string) bool { ip := net.ParseIP(host); return ip != nil && ip.IsLoopback() }
@@ -143,7 +155,7 @@ func clientTLS(c Credentials) (*tls.Config, error) {
 		if c.CAFile == "" || c.CertFile == "" || c.KeyFile == "" {
 			return nil, errors.New("private RPC requires CA, client certificate and private key")
 		}
-		cfg.VerifyConnection = verifyPeer(c.PeerID)
+		cfg = PeerClientTLS(cfg.Certificates[0], cfg.RootCAs, c.PeerID)
 	}
 	return cfg, nil
 }

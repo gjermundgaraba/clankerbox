@@ -25,13 +25,13 @@ func TestMacSmolvmBranchJobBecomesRetainedStartWithoutReplay(t *testing.T) {
 		LaunchdDomain: "gui/501",
 	}
 	p := model.Profile{
-		ID:        "linux-arm",
-		Runtime:   "smolvm",
-		OS:        osLinux,
-		Arch:      archARM64,
-		CPU:       2,
-		RAMMiB:    768,
-		ImagePath: testRootfs,
+		ID:          "linux-arm",
+		Runtime:     "smolvm",
+		OS:          osLinux,
+		Arch:        archARM64,
+		CPU:         2,
+		RAMMiB:      768,
+		ImageDigest: "image-content",
 	}
 	parent := host.Manifest{ID: model.NewID(), Profile: p}
 	child := host.Manifest{ID: model.NewID(), StoreID: parent.ID, Profile: p, Port: 48192}
@@ -61,18 +61,19 @@ func TestMacSmolvmBranchJobBecomesRetainedStartWithoutReplay(t *testing.T) {
 func TestHostPlatformConfigurationDoesNotFollowGuestEngine(t *testing.T) {
 	t.Parallel()
 	p := model.Profile{
-		ID:        "arm-bare",
-		Runtime:   "smolvm",
-		OS:        osLinux,
-		Arch:      archARM64,
-		CPU:       2,
-		RAMMiB:    768,
-		ImagePath: testRootfs,
+		ID:          "arm-bare",
+		Runtime:     "smolvm",
+		OS:          osLinux,
+		Arch:        archARM64,
+		CPU:         2,
+		RAMMiB:      768,
+		ImageDigest: "image-content",
 	}
 	c := host.Config{
 		HostOS:        osDarwin,
 		Root:          "/Users/test/.cb/env",
-		Profiles:      []model.Profile{p},
+		Profiles:      []host.ProfileBinding{{Profile: p, ImagePath: testRootfs}},
+		RuntimeDigest: "engine-content",
 		SmolvmPath:    "/opt/smolvm/bin/smolvm",
 		LibraryDir:    "/opt/smolvm/lib",
 		SystemctlPath: "not-a-path",

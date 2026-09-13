@@ -55,20 +55,25 @@ func TestAcceptedWorkOutlivesRequestAndDuplicateDoesNotRepeat(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	accepted, err := s.Submit(ctx, req)
 	requireNoError(t, err)
-	if accepted.Fingerprint != model.Hash(req) || accepted.Response.Status != statusUnresolved {
+	if accepted.Fingerprint != model.Hash(req) || accepted.Response.Status != "pending" {
 		t.Fatalf("incorrect acceptance: %+v", accepted)
 	}
 	cancel()
 	<-held.entered
 	persisted, err := h.Operation(context.Background(), req.OperationID)
 	requireNoError(t, err)
-	if persisted.Fingerprint != model.Hash(req) {
+	if persisted.Fingerprint != model.Hash(req) || persisted.Response.Status != statusUnresolved {
 		t.Fatal("effects started without identity commitment")
 	}
 	duplicate, err := s.Submit(context.Background(), req)
 	requireNoError(t, err)
-	if duplicate.Fingerprint != accepted.Fingerprint {
+	if duplicate.Fingerprint != accepted.Fingerprint || duplicate.Response.Status != "running" {
 		t.Fatal("duplicate identity differs")
+	}
+	live, err := s.Operation(context.Background(), req.OperationID)
+	requireNoError(t, err)
+	if live.Response.Status != duplicate.Response.Status {
+		t.Fatalf("submit and get disagree on active work: %s / %s", duplicate.Response.Status, live.Response.Status)
 	}
 	conflict := req
 	conflict.Name = "other"

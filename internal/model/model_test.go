@@ -16,31 +16,21 @@ const (
 func TestProfilesAndNames(t *testing.T) {
 	t.Parallel()
 	p := model.Profile{
-		ID:        "ubuntu-bare-v1",
-		OS:        linuxOS,
-		Arch:      archAMD64,
-		Runtime:   smolvmRuntime,
-		CPU:       2,
-		RAMMiB:    2048,
-		ImagePath: "/opt/profiles/ubuntu/agent-rootfs",
+		ID:          "ubuntu-bare-v1",
+		OS:          linuxOS,
+		Arch:        archAMD64,
+		Runtime:     smolvmRuntime,
+		CPU:         2,
+		RAMMiB:      2048,
+		ImageDigest: "image-content",
 	}
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.Validate(); err != nil {
-		t.Fatal("canonical advertised capabilities must validate again:", err)
-	}
-	p.Capabilities = []string{"create", "start", "stop", "delete", "ssh"}
-	if err := p.Validate(); err == nil {
-		t.Fatal("accepted legacy baseline capabilities")
-	}
-	p.Capabilities = []string{"ssh"}
-	if err := p.Validate(); err == nil {
-		t.Fatal("silently expanded a configured capability subset")
-	}
-	p.Capabilities = append(p.Capabilities, "fork")
-	if err := p.Validate(); err == nil {
-		t.Fatal("advertised unimplemented fork")
+	missingDigest := p
+	missingDigest.ImageDigest = ""
+	if err := missingDigest.Validate(); err == nil {
+		t.Fatal("accepted missing content identity")
 	}
 }
 
@@ -61,13 +51,13 @@ func TestNamesAndIDs(t *testing.T) {
 func TestCheckpointCapabilitiesAndDerivedProfilePin(t *testing.T) {
 	t.Parallel()
 	p := model.Profile{
-		ID:        linuxOS,
-		Runtime:   smolvmRuntime,
-		OS:        linuxOS,
-		Arch:      archAMD64,
-		CPU:       2,
-		RAMMiB:    2048,
-		ImagePath: "/opt/rootfs",
+		ID:          linuxOS,
+		Runtime:     smolvmRuntime,
+		OS:          linuxOS,
+		Arch:        archAMD64,
+		CPU:         2,
+		RAMMiB:      2048,
+		ImageDigest: "image-content",
 	}
 	configured := p
 	if err := p.Validate(); err != nil {
@@ -76,28 +66,26 @@ func TestCheckpointCapabilitiesAndDerivedProfilePin(t *testing.T) {
 	if !model.SameProfile(configured, p) {
 		t.Fatal("new discovery capability invalidated retained profile pin")
 	}
-	if !slices.Contains(p.Capabilities, "live-fork") || !slices.Contains(p.Capabilities, "ram-checkpoint") ||
-		slices.Contains(p.Capabilities, "disk-checkpoint") {
-		t.Fatal("wrong Linux capability", p.Capabilities)
+	if !slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), "live-fork") || !slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), "ram-checkpoint") ||
+		slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), "disk-checkpoint") {
+		t.Fatal("wrong Linux capability", model.RuntimeCapabilities(p.Runtime, p.Arch))
 	}
 	p.Runtime = "tart"
 	p.OS = "macos"
 	p.Arch = "arm64"
-	p.Capabilities = nil
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(p.Capabilities, "live-fork") || slices.Contains(p.Capabilities, "ram-checkpoint") ||
-		!slices.Contains(p.Capabilities, "disk-checkpoint") {
-		t.Fatal("Mac emulates RAM", p.Capabilities)
+	if slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), "live-fork") || slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), "ram-checkpoint") ||
+		!slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), "disk-checkpoint") {
+		t.Fatal("Mac emulates RAM", model.RuntimeCapabilities(p.Runtime, p.Arch))
 	}
 	p.Runtime = smolvmRuntime
 	p.OS = linuxOS
-	p.Capabilities = nil
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(p.Capabilities, "live-fork") || !slices.Contains(p.Capabilities, "fork") {
+	if !slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), "live-fork") || !slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), "fork") {
 		t.Fatal("qualified macOS arm64 engine supports live fork")
 	}
 }

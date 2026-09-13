@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"os"
 	"slices"
 	"sync"
@@ -48,16 +47,6 @@ type Transport interface {
 	Call(context.Context, model.Host, model.Request) (model.Response, error)
 }
 
-// APIError describes a client-visible failure and its HTTP status.
-type APIError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-	Status  int    `json:"-"`
-}
-
-func (e *APIError) Error() string                    { return e.Message }
-func problem(status int, code, message string) error { return &APIError{code, message, status} }
-
 // Controller owns durable lifecycle intent and serializes operations per host.
 type Controller struct {
 	logger    *slog.Logger
@@ -66,6 +55,7 @@ type Controller struct {
 	stateDir  *statefs.Dir
 	cfg       model.Config
 	transport Transport
+	clients   *RPCTransport
 	mu        sync.Mutex
 	workMu    sync.Mutex
 	busy      map[string]bool
@@ -109,6 +99,10 @@ func Open(path string, cfg model.Config, transport Transport) (*Controller, erro
 	if err != nil {
 		return fail(errors.Join(err, db.Close()))
 	}
+	clients, ok := transport.(*RPCTransport)
+	if !ok {
+		clients = &RPCTransport{}
+	}
 	return &Controller{
 		logger:    slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		db:        db,
@@ -116,12 +110,14 @@ func Open(path string, cfg model.Config, transport Transport) (*Controller, erro
 		stateDir:  directory,
 		cfg:       cfg,
 		transport: transport,
+		clients:   clients,
 		busy:      map[string]bool{},
 	}, nil
 }
 
 // Close releases all resources owned by the controller.
 func (c *Controller) Close() error {
+	c.clients.Close()
 	return errors.Join(c.db.Close(), c.lock.Close(), c.stateDir.Close())
 }
 func (c *Controller) host(id string) (model.Host, bool) {
@@ -163,7 +159,7 @@ func readMachine(ctx context.Context, q querier, id string) (model.Machine, erro
 	var b []byte
 	err := q.QueryRowContext(ctx, "SELECT body FROM machines WHERE id=?", id).Scan(&b)
 	if errors.Is(err, sql.ErrNoRows) {
-		return m, problem(http.StatusNotFound, "not_found", "machine not found")
+		return m, model.NewError(model.ReasonNotFound, "machine not found", false)
 	}
 	if err != nil {
 		return m, err
@@ -212,7 +208,7 @@ func readOperation(ctx context.Context, q querier, id string) (model.Operation, 
 	var status string
 	err := q.QueryRowContext(ctx, "SELECT body,status FROM operations WHERE id=?", id).Scan(&b, &status)
 	if errors.Is(err, sql.ErrNoRows) {
-		return o, problem(http.StatusNotFound, "not_found", "operation not found")
+		return o, model.NewError(model.ReasonNotFound, "operation not found", false)
 	}
 	if err != nil {
 		return o, err
@@ -253,11 +249,7 @@ func (c *Controller) duplicate(ctx context.Context, tx *sql.Tx, key, fp string) 
 		return model.Operation{}, false, err
 	}
 	if old != fp {
-		return model.Operation{}, true, problem(
-			http.StatusConflict,
-			"idempotency_conflict",
-			"Idempotency-Key was used for different input",
-		)
+		return model.Operation{}, true, model.NewError(model.ReasonIdempotencyConflict, "Idempotency-Key was used for different input", false)
 	}
 	o, err := readOperation(ctx, tx, id)
 	if err == nil && !o.Done() {
@@ -287,15 +279,11 @@ func (c *Controller) duplicateIntent(
 
 func validKey(key string) error {
 	if len(key) < 1 || len(key) > 200 {
-		return problem(
-			http.StatusBadRequest,
-			"invalid_request",
-			"Idempotency-Key of 1..200 printable characters is required",
-		)
+		return model.NewError(model.ReasonInvalid, "Idempotency-Key of 1..200 printable characters is required", false)
 	}
 	for _, r := range key {
 		if r < 33 || r > 126 {
-			return problem(http.StatusBadRequest, "invalid_request", "invalid Idempotency-Key")
+			return model.NewError(model.ReasonInvalid, "invalid Idempotency-Key", false)
 		}
 	}
 	return nil
@@ -307,11 +295,7 @@ func capacity(ctx context.Context, tx *sql.Tx, h model.Host, p model.Profile, ex
 	}
 	used := hostCapacity(h, ms, exclude)
 	if p.CPU > used.RemainingCPU || p.RAMMiB > used.RemainingRAMMiB {
-		return problem(
-			http.StatusConflict,
-			"capacity",
-			"host CPU/RAM capacity is exhausted (unknown machines remain reserved)",
-		)
+		return model.NewError(model.ReasonCapacity, "host CPU/RAM capacity is exhausted (unknown machines remain reserved)", false)
 	}
 	return nil
 }
@@ -341,7 +325,7 @@ func (c *Controller) Create(
 		return model.Operation{}, err
 	}
 	if err := in.Validate(); err != nil {
-		return model.Operation{}, problem(http.StatusBadRequest, "invalid_request", err.Error())
+		return model.Operation{}, model.NewError(model.ReasonInvalid, err.Error(), false)
 	}
 	fp := model.Hash(struct {
 		Action string
@@ -363,11 +347,11 @@ func (c *Controller) Create(
 	}
 	p, ok := c.profile(in.Profile)
 	if !ok {
-		return model.Operation{}, problem(http.StatusBadRequest, "invalid_request", "unknown profile")
+		return model.Operation{}, model.NewError(model.ReasonInvalid, "unknown profile", false)
 	}
 	h, ok := c.host(in.Host)
 	if !ok || !slices.Contains(h.ProfileIDs, p.ID) {
-		return model.Operation{}, problem(http.StatusBadRequest, "invalid_request", "host does not provide profile")
+		return model.Operation{}, model.NewError(model.ReasonInvalid, "host does not provide profile", false)
 	}
 	if err = admitCreate(ctx, tx, h, p, in.Name); err != nil {
 		return model.Operation{}, err
@@ -422,7 +406,7 @@ func admitCreate(ctx context.Context, tx *sql.Tx, h model.Host, p model.Profile,
 		return err
 	}
 	if count != 0 {
-		return problem(http.StatusConflict, "name_conflict", "machine name already exists")
+		return model.NewError(model.ReasonNameConflict, "machine name already exists", false)
 	}
 	return capacity(ctx, tx, h, p, "")
 }
@@ -464,7 +448,7 @@ func (c *Controller) Mutate(ctx context.Context, id, action, key string) (_ mode
 	}
 	h, ok := c.host(m.Host)
 	if !ok {
-		return o, problem(http.StatusConflict, "configuration", "machine host is no longer configured")
+		return o, model.NewError(model.ReasonConfiguration, "machine host is no longer configured", false)
 	}
 	if action == stopAction && m.State == model.Stopped {
 		return completeStopped(ctx, tx, m, key, fp)
@@ -541,7 +525,7 @@ func (c *Controller) requireFreshObservation(ctx context.Context, id string) err
 		return err
 	}
 	if m.ObservationStale {
-		return problem(http.StatusServiceUnavailable, "host_unavailable", m.ObservationError)
+		return model.NewError(model.ReasonUnavailable, m.ObservationError, true)
 	}
 	return nil
 }
@@ -678,7 +662,7 @@ func (c *Controller) Run(ctx context.Context) {
 func validateMutation(ctx context.Context, tx *sql.Tx, m model.Machine, action string) error {
 	var err error
 	if m.Deleted {
-		return problem(http.StatusConflict, "prerequisite", "machine is deleted")
+		return model.NewError(model.ReasonPrerequisite, "machine is deleted", false)
 	}
 	if err = sourceIdle(ctx, tx, m.ID); err != nil {
 		return err
@@ -689,20 +673,16 @@ func validateMutation(ctx context.Context, tx *sql.Tx, m model.Machine, action s
 		}
 	}
 	if m.ObservationStale || m.AcceptedGeneration != m.Generation {
-		return problem(
-			http.StatusConflict,
-			"reconciliation_required",
-			"host generation differs from controller; reconcile before mutating",
-		)
+		return model.NewError(model.ReasonReconciliationRequired, "host generation differs from controller; reconcile before mutating", false)
 	}
 	if !m.Prepared || m.State == model.Unknown || m.State == model.Preparing {
-		return problem(http.StatusConflict, "prerequisite", "machine must have a known prepared execution")
+		return model.NewError(model.ReasonPrerequisite, "machine must have a known prepared execution", false)
 	}
 	if (action == startAction || action == deleteAction) && m.State != model.Stopped {
-		return problem(http.StatusConflict, "prerequisite", "action requires a stopped machine")
+		return model.NewError(model.ReasonPrerequisite, "action requires a stopped machine", false)
 	}
 	if action == stopAction && m.State != model.Running && m.State != model.Stopped {
-		return problem(http.StatusConflict, "prerequisite", "stop requires a running machine")
+		return model.NewError(model.ReasonPrerequisite, "stop requires a running machine", false)
 	}
 
 	return nil
@@ -710,10 +690,10 @@ func validateMutation(ctx context.Context, tx *sql.Tx, m model.Machine, action s
 
 func validateMutationInput(id, action, key string) error {
 	if !model.ValidID(id) {
-		return problem(http.StatusBadRequest, "invalid_request", "invalid machine ID")
+		return model.NewError(model.ReasonInvalid, "invalid machine ID", false)
 	}
 	if action != startAction && action != stopAction && action != deleteAction {
-		return problem(http.StatusBadRequest, "unsupported", "unsupported action")
+		return model.NewError(model.ReasonUnsupported, "unsupported action", false)
 	}
 	if err := validKey(key); err != nil {
 		return err

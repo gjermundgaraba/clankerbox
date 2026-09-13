@@ -151,7 +151,7 @@ func (e *environment) startHost(ctx context.Context) error {
 	existing, readErr := root.ReadFile(filepath.Base(path))
 	if readErr == nil {
 		if !bytes.Equal(existing, desired) {
-			return errors.New("retained host service definition changed; stop and explicitly migrate environment")
+			return errors.New("owned host service definition differs from the verified bundle; refusing replacement")
 		}
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return readErr
@@ -335,7 +335,26 @@ func waitServiceAbsent(ctx context.Context, observe func(context.Context) (bool,
 }
 
 func (e *environment) stopSystemd(ctx context.Context, destroy bool) error {
-	if _, err := command(ctx, "systemctl", "--user", "stop", e.Namespace+".service"); err != nil {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	link := filepath.Join(home, ".config", "systemd", "user", e.Namespace+".service")
+	target, err := os.Readlink(link)
+	if errors.Is(err, os.ErrNotExist) {
+		out, inspectErr := command(ctx, "systemctl", "--user", "show", "--property=LoadState", "--value", e.Namespace+".service")
+		if inspectErr == nil && strings.TrimSpace(string(out)) == "not-found" {
+			return nil
+		}
+		return errors.New("host unit lacks its owned registration; refusing to stop another service")
+	}
+	if err != nil {
+		return err
+	}
+	if target != e.unitPath() {
+		return errors.New("refusing to stop foreign systemd registration")
+	}
+	if _, err = command(ctx, "systemctl", "--user", "stop", e.Namespace+".service"); err != nil {
 		return err
 	}
 	out, err := command(ctx, "systemctl", "--user", "is-active", e.Namespace+".service")
@@ -343,7 +362,7 @@ func (e *environment) stopSystemd(ctx context.Context, destroy bool) error {
 	if err == nil || status == "active" {
 		return errors.New("host service remains active")
 	}
-	if status != "inactive" && status != supervisorFailedStatus {
+	if status != "inactive" && status != "failed" {
 		return fmt.Errorf("unable to verify host stopped: %w", err)
 	}
 	if destroy {

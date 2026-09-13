@@ -283,7 +283,6 @@ const (
 	commandTimeout = 90 * time.Second
 	cleanupTimeout = 5 * time.Second
 	minimumArgs    = 2
-	maxErrorBytes  = 4 << 10
 )
 
 const terminalCols = 120

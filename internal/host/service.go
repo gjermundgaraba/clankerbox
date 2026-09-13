@@ -22,10 +22,10 @@ type OperationRecord struct {
 const operationTimeout = 6 * time.Minute
 
 // ErrBusy asks callers to retry the same operation identity.
-var ErrBusy = errors.New("host mutation admission busy; retry with the same operation identity")
+var ErrBusy = model.NewError(model.ReasonUnavailable, "host mutation admission busy; retry with the same operation identity", true)
 
 // ErrOperationNotFound means no durable acceptance exists.
-var ErrOperationNotFound = errors.New("host operation not found")
+var ErrOperationNotFound = model.NewError(model.ReasonNotFound, "host operation not found", false)
 
 // Service owns accepted work independently of any RPC request. One worker preserves
 // the host core's mutation serialization. Restarts reconcile the same journal.
@@ -72,11 +72,11 @@ func (s *Service) Submit(ctx context.Context, req model.Request) (OperationRecor
 	defer s.mu.Unlock()
 	select {
 	case <-s.done:
-		return OperationRecord{}, errors.New("host worker stopped")
+		return OperationRecord{}, model.NewError(model.ReasonUnavailable, "host worker stopped", true)
 	default:
 	}
 	if s.closed {
-		return OperationRecord{}, errors.New("host service shutting down")
+		return OperationRecord{}, model.NewError(model.ReasonUnavailable, "host service shutting down", true)
 	}
 	if err := s.validateRequest(req); err != nil {
 		return OperationRecord{}, err
@@ -84,12 +84,12 @@ func (s *Service) Submit(ctx context.Context, req model.Request) (OperationRecor
 	existing, err := s.helper.Operation(ctx, req.OperationID)
 	if err == nil {
 		if existing.Fingerprint != model.Hash(req) {
-			return OperationRecord{}, errors.New("operation ID input conflict")
+			return OperationRecord{}, model.NewError(model.ReasonIdempotencyConflict, "operation ID input conflict", false)
 		}
 		if existing.Phase == phaseAccepted {
 			s.notify()
 		}
-		return existing, nil
+		return s.presentOperation(existing), nil
 	}
 	if !errors.Is(err, ErrOperationNotFound) {
 		return OperationRecord{}, err
@@ -104,13 +104,6 @@ func (s *Service) Submit(ctx context.Context, req model.Request) (OperationRecor
 		return OperationRecord{}, fmt.Errorf("%w: %w", ErrBusy, err)
 	}
 	response := h.executeLocked(ctx, req, true)
-	if record, e := h.Operation(
-		context.WithoutCancel(ctx),
-		req.OperationID,
-	); e == nil && record.Fingerprint == model.Hash(req) && record.Response.Status != statusFailed &&
-		record.Response.Status != statusSucceeded {
-		h.guests.suspend(req.MachineID, req.SourceMachineID)
-	}
 	closeErr := lock.Close()
 	// A cancelled caller may lose the read-back/ack after a successful commit.
 	// Wake the host worker regardless; the journal decides whether work exists.
@@ -120,21 +113,21 @@ func (s *Service) Submit(ctx context.Context, req model.Request) (OperationRecor
 	}
 	record, err := h.Operation(ctx, req.OperationID)
 	if err != nil {
-		if response.Error != "" {
-			return OperationRecord{}, errors.New(response.Error)
+		if response.Cause != nil {
+			return OperationRecord{}, response.Cause
 		}
 		return OperationRecord{}, err
 	}
 	if record.Fingerprint != model.Hash(req) {
-		return OperationRecord{}, errors.New("operation ID input conflict")
+		return OperationRecord{}, model.NewError(model.ReasonIdempotencyConflict, "operation ID input conflict", false)
 	}
 	s.notify()
-	return record, nil
+	return s.presentOperation(record), nil
 }
 
 func validMutation(req model.Request) error {
 	if !model.ValidID(req.MachineID) || !model.ValidID(req.OperationID) || req.Generation < 1 {
-		return errors.New("invalid operation identity")
+		return model.NewError(model.ReasonInvalid, "invalid operation identity", false)
 	}
 	switch req.Action {
 	case actionCreate,
@@ -147,13 +140,13 @@ func validMutation(req model.Request) error {
 		actionDeleteCheckpoint:
 		return nil
 	}
-	return errors.New("unsupported action")
+	return model.NewError(model.ReasonUnsupported, "unsupported action", false)
 }
 
 // Operation reads the authoritative durable operation record.
 func (h *Helper) Operation(ctx context.Context, id string) (OperationRecord, error) {
 	if !model.ValidID(id) {
-		return OperationRecord{}, errors.New("invalid operation identity")
+		return OperationRecord{}, model.NewError(model.ReasonInvalid, "invalid operation identity", false)
 	}
 	var raw []byte
 	var fp string
@@ -186,9 +179,6 @@ func (s *Service) pending() ([]model.Request, error) {
 		}
 		if err = json.Unmarshal(raw, &a); err != nil {
 			return nil, err
-		}
-		if s.helper.cfg.quarantineRequest(a.Request) != nil {
-			continue
 		}
 		if a.Response.Status != statusSucceeded && a.Response.Status != statusFailed {
 			result = append(result, a.Request)
@@ -259,7 +249,12 @@ func (s *Service) Operation(ctx context.Context, id string) (OperationRecord, er
 	if err != nil {
 		return r, err
 	}
-	active := s.active[id]
+	return s.presentOperation(r), nil
+}
+
+// presentOperation projects durable intent into the live service status. The caller holds s.mu.
+func (s *Service) presentOperation(r OperationRecord) OperationRecord {
+	active := s.active[r.Response.OperationID]
 	if r.Response.Status == statusUnresolved {
 		switch {
 		case active:
@@ -272,18 +267,15 @@ func (s *Service) Operation(ctx context.Context, id string) (OperationRecord, er
 			r.Response.Error = "interrupted " + r.Phase + "; explicit inspection required"
 		}
 	}
-	return r, nil
+	return r
 }
 
 func (s *Service) validateRequest(req model.Request) error {
-	if err := s.helper.cfg.quarantineRequest(req); err != nil {
-		return err
-	}
 	if err := validMutation(req); err != nil {
 		return err
 	}
 	if s.helper.cfg.HostID != "" && req.Host != s.helper.cfg.HostID {
-		return errors.New("host identity mismatch")
+		return model.NewError(model.ReasonIdentityMismatch, "host identity mismatch", false)
 	}
 	return nil
 }

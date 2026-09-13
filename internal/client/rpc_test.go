@@ -13,7 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"connectrpc.com/connect"
 
@@ -70,7 +69,7 @@ func (f *rpcFixture) ListProfiles(
 ) (*connect.Response[v1.ListProfilesResponse], error) {
 	return connect.NewResponse(
 		&v1.ListProfilesResponse{
-			Profiles: []*v1.Profile{{Id: fixtureLinux, Os: fixtureLinux, Arch: fixtureArch, Runtime: fixtureRuntime}},
+			Profiles: []*v1.Profile{{Id: fixtureLinux, Os: fixtureLinux, Arch: fixtureArch, Runtime: fixtureRuntime, ImageDigest: strings.Repeat("a", 64), Cpu: 2, RamMib: 1024, StorageGib: 1, OverlayGib: 8}},
 		},
 	), nil
 }
@@ -82,10 +81,12 @@ func fixtureMachine() *v1.Machine {
 			Profile: fixtureLinux,
 			Host:    fixtureHostID,
 			ProfileSpec: model.Profile{
-				ID:      fixtureLinux,
-				OS:      fixtureLinux,
-				Arch:    fixtureArch,
-				Runtime: fixtureRuntime,
+				ID:          fixtureLinux,
+				OS:          fixtureLinux,
+				Arch:        fixtureArch,
+				Runtime:     fixtureRuntime,
+				ImageDigest: strings.Repeat("a", 64),
+				CPU:         2, RAMMiB: 1024, StorageGiB: 1, OverlayGiB: 8,
 			},
 			State:              model.Running,
 			DesiredState:       model.Running,
@@ -101,7 +102,7 @@ func (f *rpcFixture) GetMachine(
 	r *connect.Request[v1.GetMachineRequest],
 ) (*connect.Response[v1.Machine], error) {
 	if r.Msg.GetMachineId() != testMachineName && r.Msg.GetMachineId() != testID {
-		return nil, rpcmodel.ErrorFromCode("not_found", "machine missing", false)
+		return nil, rpcmodel.ToError(model.NewError(model.ReasonNotFound, "machine missing", false))
 	}
 	return connect.NewResponse(fixtureMachine()), nil
 }
@@ -344,8 +345,6 @@ func TestCanceledWaitRetainsIdentity(t *testing.T) {
 	}
 }
 
-var _ = time.Second
-
 func (f *rpcFixture) mutation(action, key string) (*connect.Response[v1.Operation], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -422,10 +421,12 @@ func fixtureCheckpoint() *v1.Checkpoint {
 			Kind:            "disk",
 			Status:          "published",
 			Profile: model.Profile{
-				ID:      fixtureLinux,
-				OS:      fixtureLinux,
-				Arch:    fixtureArch,
-				Runtime: fixtureRuntime,
+				ID:          fixtureLinux,
+				OS:          fixtureLinux,
+				Arch:        fixtureArch,
+				Runtime:     fixtureRuntime,
+				ImageDigest: strings.Repeat("a", 64),
+				CPU:         2, RAMMiB: 1024, StorageGiB: 1, OverlayGiB: 8,
 			},
 		},
 	)

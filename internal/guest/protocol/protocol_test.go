@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"clankerbox/internal/model"
+
 	"clankerbox/internal/guest/protocol"
 )
 
@@ -21,16 +23,16 @@ func TestValidation(t *testing.T) {
 	}
 	bad := good
 	bad.Cols = 1
-	assertValidation(t, bad.Validate(), protocol.CodeInvalid, "grid must be 2-500 columns and 1-300 rows")
+	assertValidation(t, bad.Validate(), model.ReasonInvalid, "grid must be 2-500 columns and 1-300 rows")
 	bad = good
 	bad.CreatedAt = "yesterday"
-	assertValidation(t, bad.Validate(), protocol.CodeInvalid, "created_at must be RFC 3339")
+	assertValidation(t, bad.Validate(), model.ReasonInvalid, "created_at must be RFC 3339")
 	bad = good
 	bad.SessionID = "not-a-uuid"
-	assertValidation(t, bad.Validate(), protocol.CodeInvalid, "session_id must be a UUID")
+	assertValidation(t, bad.Validate(), model.ReasonInvalid, "session_id must be a UUID")
 	bad = good
 	bad.Argv = make([]string, protocol.MaxArgv+1)
-	assertValidation(t, bad.Validate(), protocol.CodeTooLarge, "argv")
+	assertValidation(t, bad.Validate(), model.ReasonTooLarge, "argv")
 	input := protocol.InputArgs{SessionID: good.SessionID, Data: "aGk="}
 	data, err := input.Validate()
 	if err != nil || string(data) != "hi" {
@@ -38,16 +40,16 @@ func TestValidation(t *testing.T) {
 	}
 	input.Data = "***"
 	_, err = input.Validate()
-	assertValidation(t, err, protocol.CodeInvalid, "data is not base64")
+	assertValidation(t, err, model.ReasonInvalid, "data is not base64")
 	input.Data = base64.StdEncoding.EncodeToString(make([]byte, protocol.MaxInputBytes+1))
 	_, err = input.Validate()
-	assertValidation(t, err, protocol.CodeTooLarge, "data")
+	assertValidation(t, err, model.ReasonTooLarge, "data")
 }
 
-func assertValidation(t *testing.T, err error, code, message string) {
+func assertValidation(t *testing.T, err error, code model.Reason, message string) {
 	t.Helper()
-	typed, ok := errors.AsType[*protocol.Error](err)
-	if !ok || typed.Code != code || typed.Message != message || typed.Retryable {
+	typed, ok := errors.AsType[*model.Error](err)
+	if !ok || typed.Reason != code || typed.Message != message || typed.Retryable {
 		t.Fatalf("want non-retryable %s %q, got %v", code, message, err)
 	}
 }

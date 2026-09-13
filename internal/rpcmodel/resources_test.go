@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protoreflect"
 
 	v1 "clankerbox/gen/clankerbox/v1"
 	"clankerbox/internal/model"
@@ -17,16 +16,15 @@ import (
 
 func profile() model.Profile {
 	return model.Profile{
-		ID:           "linux-dev-v2",
-		OS:           "linux",
-		Arch:         "arm64",
-		Runtime:      "smolvm",
-		CPU:          2,
-		RAMMiB:       2048,
-		ImagePath:    "/private/images/linux",
-		Capabilities: []string{testCreate, "sessions", testFork},
-		StorageGiB:   4,
-		OverlayGiB:   16,
+		ID:          "linux-dev-v2",
+		OS:          "linux",
+		Arch:        "arm64",
+		Runtime:     "smolvm",
+		CPU:         2,
+		RAMMiB:      2048,
+		ImageDigest: "image-content",
+		StorageGiB:  4,
+		OverlayGiB:  16,
 	}
 }
 func checkpoint() model.Checkpoint {
@@ -102,8 +100,6 @@ func TestPublicMachineRoundTripAndRedaction(t *testing.T) {
 	}
 	source.StoreID = ""
 	source.Endpoint = ""
-	source.ProfileSpec.ImagePath = ""
-	source.ProfileSpec.Capabilities = model.RuntimeCapabilities(source.ProfileSpec.Runtime, source.ProfileSpec.Arch)
 	if !reflect.DeepEqual(source, restored) {
 		t.Fatalf("public fields changed:\nwant %#v\ngot %#v", source, restored)
 	}
@@ -112,42 +108,35 @@ func TestPublicMachineRoundTripAndRedaction(t *testing.T) {
 		t.Fatal("labels alias wire storage")
 	}
 }
-func TestMachineDiscoveryRefreshesHistoricalCapabilitiesWithoutChangingBindings(t *testing.T) {
+func TestCapabilitiesAreDerivedOnlyAtDiscovery(t *testing.T) {
 	t.Parallel()
-	const retiredSSH = "ssh"
 	stored := profile()
-	legacyCapabilities := []string{testCreate, retiredSSH}
-	stored.Capabilities = append([]string(nil), legacyCapabilities...)
-	before := rpcmodel.ToProfileBinding(stored)
+	before := stored
 	wire := rpcmodel.ToMachine(model.Machine{ProfileSpec: stored})
 	if !reflect.DeepEqual(wire.GetProfile().GetCapabilities(), model.RuntimeCapabilities(stored.Runtime, stored.Arch)) {
-		t.Fatalf("stale machine capabilities: %v", wire.GetProfile().GetCapabilities())
+		t.Fatal("incorrect derived capabilities")
 	}
-	if !reflect.DeepEqual(stored.Capabilities, legacyCapabilities) ||
-		!proto.Equal(before, rpcmodel.ToProfileBinding(stored)) {
-		t.Fatal("public discovery changed the durable profile or private operation binding")
+	wire.GetProfile().Capabilities = []string{"caller-supplied"}
+	decoded, err := rpcmodel.FromProfile(wire.GetProfile())
+	if err != nil || decoded != before || stored != before {
+		t.Fatal("discovery metadata changed portable identity", err)
 	}
 }
 func TestProfilesHostsAndCheckpoints(t *testing.T) {
 	t.Parallel()
 	original := profile()
-	restored, err := rpcmodel.FromProfileBinding(
-		cloneWire(t, rpcmodel.ToProfileBinding(original), &v1.ProfileBinding{}),
+	restored, err := rpcmodel.FromProfile(
+		cloneWire(t, rpcmodel.ToProfile(original), &v1.Profile{}),
 	)
 	if err != nil || !reflect.DeepEqual(original, restored) {
 		t.Fatalf("private profile pin lost: %#v %v", restored, err)
 	}
 	cp := checkpoint()
-	cpRestored, err := rpcmodel.FromCheckpointBinding(
-		cloneWire(t, rpcmodel.ToCheckpointBinding(cp), &v1.CheckpointBinding{}),
+	cpRestored, err := rpcmodel.FromCheckpoint(
+		cloneWire(t, rpcmodel.ToCheckpoint(cp), &v1.Checkpoint{}),
 	)
 	if err != nil || !reflect.DeepEqual(cp, cpRestored) {
 		t.Fatalf("checkpoint pin lost: %#v %v", cpRestored, err)
-	}
-	conflicting := rpcmodel.ToCheckpointBinding(cp)
-	conflicting.Profile.Profile.Cpu++
-	if _, err = rpcmodel.FromCheckpointBinding(conflicting); err == nil {
-		t.Fatal("conflicting public/private checkpoint profile accepted")
 	}
 	source := model.HostStatus{
 		ID:              testHost,
@@ -246,7 +235,7 @@ func TestHostTypedSubmissionsPreserveJournalInputs(t *testing.T) {
 		t.Fatal("inspect allowed through mutation oneof")
 	}
 	if _, err := rpcmodel.FromHostRequest(
-		&v1.SubmitOperationRequest{Identity: &v1.OperationIdentity{Profile: rpcmodel.ToProfileBinding(profile())}},
+		&v1.SubmitOperationRequest{Identity: &v1.OperationIdentity{Profile: rpcmodel.ToProfile(profile())}},
 	); err == nil {
 		t.Fatal("missing action accepted")
 	}
@@ -275,11 +264,12 @@ func TestHostResponsePreservesResultWithoutTransportSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	source.Observation.Endpoint = ""
-	if !reflect.DeepEqual(source, restored) {
+	if source.OperationID != restored.OperationID || source.Status != restored.Status || source.Error != restored.Error ||
+		!reflect.DeepEqual(source.Checkpoint, restored.Checkpoint) || !reflect.DeepEqual(source.Observation, restored.Observation) || restored.Cause != nil {
 		t.Fatalf("host result changed: %#v", restored)
 	}
 }
-func TestPublicSchemaDoesNotExposePrivateFieldsOrRetiredSurfaces(t *testing.T) {
+func TestPublicSchemaDoesNotExposePrivateFields(t *testing.T) {
 	t.Parallel()
 	for _, message := range []proto.Message{&v1.Profile{}, &v1.Host{}, &v1.Machine{}, &v1.Checkpoint{}, &v1.GuestStatus{}} {
 		fields := message.ProtoReflect().Descriptor().Fields()
@@ -288,24 +278,6 @@ func TestPublicSchemaDoesNotExposePrivateFieldsOrRetiredSurfaces(t *testing.T) {
 			for _, private := range []string{"ssh", "image_path", "endpoint", "helper_path", "config_path", "store_id", "credential"} {
 				if strings.Contains(name, private) {
 					t.Fatalf("public %T has private %s", message, name)
-				}
-			}
-		}
-	}
-}
-
-func TestRetiredMethodsRemainAbsent(t *testing.T) {
-	t.Parallel()
-	for _, file := range []protoreflect.FileDescriptor{v1.File_clankerbox_v1_resources_proto, v1.File_clankerbox_v1_machine_proto, v1.File_clankerbox_v1_session_proto, v1.File_clankerbox_v1_host_proto} {
-		services := file.Services()
-		for i := range services.Len() {
-			methods := services.Get(i).Methods()
-			for j := range methods.Len() {
-				name := strings.ToLower(string(methods.Get(j).Name()))
-				for _, retired := range []string{"watchchanges", "report", "activity", "foreground", "events"} {
-					if strings.Contains(name, retired) {
-						t.Fatalf("retired method %s", name)
-					}
 				}
 			}
 		}

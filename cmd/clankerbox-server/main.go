@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -26,11 +27,7 @@ import (
 )
 
 const (
-	headerTimeout   = 10 * time.Second
-	requestTimeout  = 30 * time.Second
-	idleTimeout     = time.Minute
 	shutdownTimeout = 10 * time.Second
-	maxHeaderBytes  = 16 << 10
 )
 
 func main() {
@@ -88,7 +85,7 @@ func run(parent context.Context, cmd *cli.Command) error {
 		return err
 	}
 	token = bytes.TrimRight(token, "\r\n")
-	c, err := control.Open(stateDir, cfg, control.RPCTransport{})
+	c, err := control.Open(stateDir, cfg, &control.RPCTransport{})
 	if err != nil {
 		return err
 	}
@@ -98,28 +95,17 @@ func run(parent context.Context, cmd *cli.Command) error {
 	}
 	ctx, cancel := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	var tlsConfig *tls.Config
-	if cmd.String("tls-cert") != "" || cmd.String("tls-key") != "" {
-		certData, e := statefs.ReadRegular(cmd.String("tls-cert"))
-		if e != nil {
-			return errors.Join(e, c.Close())
-		}
-		keyData, e := statefs.ReadPrivate(cmd.String("tls-key"))
-		if e != nil {
-			return errors.Join(e, c.Close())
-		}
-		pair, e := tls.X509KeyPair(certData, keyData)
-		if e != nil {
-			return errors.Join(e, c.Close())
-		}
-		tlsConfig = &tls.Config{
-			MinVersion:   tls.VersionTLS13,
-			Certificates: []tls.Certificate{pair},
-			NextProtos:   []string{"h2"},
-		}
+	tlsConfig, err := controllerTLS(cmd)
+	if err != nil {
+		return errors.Join(err, c.Close())
 	}
+
+	return serve(ctx, c, handler, listen, tlsConfig, cmd.String("ready-file"))
+}
+
+func controllerTLS(cmd *cli.Command) (*tls.Config, error) {
 	if cmd.String("tls-client-ca") != "" || cmd.String("tls-client-peer-id") != "" {
-		tlsConfig, err = rpctransport.ServerTLS(
+		return rpctransport.ServerTLS(
 			rpctransport.Credentials{
 				CAFile:   cmd.String("tls-client-ca"),
 				CertFile: cmd.String("tls-cert"),
@@ -127,12 +113,27 @@ func run(parent context.Context, cmd *cli.Command) error {
 				PeerID:   cmd.String("tls-client-peer-id"),
 			},
 		)
-		if err != nil {
-			return errors.Join(err, c.Close())
+	} else if cmd.String("tls-cert") != "" || cmd.String("tls-key") != "" {
+		certData, e := statefs.ReadRegular(cmd.String("tls-cert"))
+		if e != nil {
+			return nil, e
 		}
+		keyData, e := statefs.ReadPrivate(cmd.String("tls-key"))
+		if e != nil {
+			return nil, e
+		}
+		pair, e := tls.X509KeyPair(certData, keyData)
+		if e != nil {
+			return nil, e
+		}
+		return &tls.Config{
+			MinVersion:   tls.VersionTLS13,
+			Certificates: []tls.Certificate{pair},
+			NextProtos:   []string{"h2"},
+		}, nil
 	}
-	err = serve(ctx, c, handler, listen, tlsConfig, cmd.String("ready-file"))
-	return errors.Join(err, c.Close())
+
+	return nil, nil //nolint:nilnil // A nil TLS config selects the explicitly configured plaintext listener.
 }
 
 func serve(
@@ -141,12 +142,8 @@ func serve(
 	handler http.Handler,
 	listen string,
 	tlsConfig *tls.Config,
-	readyFiles ...string,
+	readyFile string,
 ) error {
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-	workers := make(chan struct{})
-	go func() { defer close(workers); c.Run(ctx) }()
 	endpoint := listen
 	if !strings.Contains(endpoint, "://") {
 		scheme := "http"
@@ -155,55 +152,81 @@ func serve(
 		}
 		endpoint = scheme + "://" + listen
 	}
-	listener, err := rpctransport.Listen(ctx, endpoint)
+	if strings.HasPrefix(endpoint, "https://") && tlsConfig == nil {
+		return errors.Join(errors.New("HTTPS listener requires --tls-cert and --tls-key"), c.Close())
+	}
+	listener, err := rpctransport.Listen(parent, endpoint)
 	if err != nil {
-		cancel()
-		<-workers
-		return err
+		return errors.Join(err, c.Close())
 	}
 	defer func() { _ = listener.Close() }()
-	if strings.HasPrefix(endpoint, "https://") && tlsConfig == nil {
-		cancel()
-		<-workers
-		return errors.New("HTTPS listener requires --tls-cert and --tls-key")
+	if err = writeReady(readyFile, listener.Addr().String(), tlsConfig != nil); err != nil {
+		return errors.Join(err, c.Close())
 	}
-	if err = writeReady(readyFiles, listener.Addr().String(), tlsConfig != nil); err != nil {
-		cancel()
-		<-workers
-		return err
-	}
-
-	server := rpctransport.Server(handler, tlsConfig)
-	stopped := make(chan error, 1)
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	workers := make(chan struct{})
+	go func() { defer close(workers); c.Run(ctx) }()
+	requests := &rpctransport.Handlers{Handler: handler}
+	server := rpctransport.Server(requests, tlsConfig)
+	// Request cancellation and worker cancellation share the service lifetime;
+	// live attachments need not consume the entire graceful shutdown allowance.
+	server.BaseContext = func(net.Listener) context.Context { return ctx }
+	completed := make(chan error, 1)
 	go func() {
-		<-ctx.Done()
-		shutdown, done := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
-		defer done()
-		shutdownErr := server.Shutdown(shutdown)
-		if shutdownErr != nil {
-			shutdownErr = errors.Join(shutdownErr, server.Close())
+		if tlsConfig != nil {
+			completed <- server.ServeTLS(listener, "", "")
+		} else {
+			completed <- server.Serve(listener)
 		}
-		stopped <- shutdownErr
 	}()
 	log.Printf("clankerbox API listening on %s", listen)
-	if tlsConfig != nil {
-		err = server.ServeTLS(listener, "", "")
-	} else {
-		err = server.Serve(listener)
+	select {
+	case err = <-completed:
+	case <-ctx.Done():
 	}
 	cancel()
-	<-workers
+	shutdown, done := context.WithTimeout(context.WithoutCancel(parent), shutdownTimeout)
+	defer done()
 	if errors.Is(err, http.ErrServerClosed) {
 		err = nil
 	}
-	return errors.Join(err, <-stopped)
+	return errors.Join(err, shutdownController(shutdown, requests, server, c, workers))
 }
 
-func writeReady(files []string, address string, secure bool) error {
-	if len(files) == 0 || files[0] == "" {
+// shutdownController owns final release. Its caller has stopped workers and
+// cancelled request contexts; timing out never releases resources under them.
+func shutdownController(
+	ctx context.Context,
+	requests *rpctransport.Handlers,
+	server *http.Server,
+	c *control.Controller,
+	workers <-chan struct{},
+) error {
+	requests.Stop()
+	httpErr := server.Shutdown(ctx)
+	if httpErr != nil {
+		httpErr = errors.Join(httpErr, server.Close())
+	}
+	cleanup := make(chan error, 1)
+	go func() {
+		<-workers
+		requests.Wait()
+		cleanup <- c.Close()
+	}()
+	select {
+	case err := <-cleanup:
+		return errors.Join(httpErr, err)
+	case <-ctx.Done():
+		return errors.Join(httpErr, ctx.Err())
+	}
+}
+
+func writeReady(file string, address string, secure bool) error {
+	if file == "" {
 		return nil
 	}
-	dir, err := statefs.Open(filepath.Dir(files[0]))
+	dir, err := statefs.Open(filepath.Dir(file))
 	if err != nil {
 		return err
 	}
@@ -212,5 +235,5 @@ func writeReady(files []string, address string, secure bool) error {
 	if secure {
 		scheme = "https://"
 	}
-	return dir.WriteFile(filepath.Base(files[0]), []byte(scheme+address+"\n"))
+	return dir.WriteFile(filepath.Base(file), []byte(scheme+address+"\n"))
 }

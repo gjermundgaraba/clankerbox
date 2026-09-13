@@ -1,4 +1,3 @@
-//nolint:testpackage // Verifies the private checkpoint pin independently of native effects.
 package host
 
 import (
@@ -10,11 +9,11 @@ import (
 func TestCheckpointContentPinIgnoresInstallationPaths(t *testing.T) {
 	t.Parallel()
 	h := &Helper{cfg: Config{RuntimeDigest: "engine-content", SmolvmPath: "/old/bin/smolvm", LibraryDir: "/old/lib"}}
-	p := model.Profile{ID: "image", Runtime: runtimeSmolvm, ImagePath: "/old/image", ImageDigest: "image-content"}
+	p := model.Profile{ID: "image", Runtime: runtimeSmolvm, ImageDigest: "image-content"}
 	before := h.runtimePin(p)
 	h.cfg.SmolvmPath = "/new/bin/smolvm"
 	h.cfg.LibraryDir = "/new/lib"
-	p.ImagePath = "/new/image"
+	h.cfg.Profiles = []ProfileBinding{{Profile: p, ImagePath: "/new/image"}}
 	if before != h.runtimePin(p) {
 		t.Fatal("installation path changed content pin")
 	}

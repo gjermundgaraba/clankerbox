@@ -1,4 +1,3 @@
-//nolint:testpackage // Exercises the private durable allocator independently of VM side effects.
 package host
 
 import (

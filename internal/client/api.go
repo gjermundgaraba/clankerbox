@@ -120,7 +120,6 @@ func NewAPI(c Config) (*API, error) {
 		return nil, err
 	}
 	a := &API{Config: c, http: client}
-	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	client.Transport = &tokenTransport{base: client.Transport, api: a}
 	a.machine = clankerboxv1connect.NewMachineServiceClient(
 		client,

@@ -25,6 +25,7 @@ import (
 	"clankerbox/internal/guest/session"
 	"clankerbox/internal/guest/vt"
 	"clankerbox/internal/rpcidentity"
+	"clankerbox/internal/rpctransport"
 	"clankerbox/internal/statefs"
 )
 
@@ -75,6 +76,11 @@ type Server struct {
 	listener, adminListener net.Listener
 	once                    sync.Once
 	failure                 chan error
+	closed                  chan struct{}
+	closeErr                error
+	admission               sync.Mutex
+	closing                 bool
+	handlers                sync.WaitGroup
 }
 
 // Start requires a privileged daemon and explicit unprivileged workload identity.
@@ -86,11 +92,11 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{directory: dir, failure: make(chan error, listenerCount)}
+	s := &Server{directory: dir, failure: make(chan error, listenerCount), closed: make(chan struct{})}
 	good := false
 	defer func() {
 		if !good {
-			s.Close()
+			_ = s.Close()
 		}
 	}()
 	s.lock, err = dir.Lock("guest.lock", true)
@@ -112,7 +118,7 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	if err = s.identity.rebind(*binding); err != nil {
 		return nil, err
 	}
-	s.loader, err = vt.NewLoader(ctx)
+	s.loader, err = vt.NewLoader(context.WithoutCancel(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -139,12 +145,12 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 }
 
 // Serve retains all guest state until the daemon receives explicit shutdown.
-func Serve(ctx context.Context, opts Options) error {
+func Serve(ctx context.Context, opts Options) (err error) {
 	s, err := Start(ctx, opts)
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer func() { err = errors.Join(err, s.Close()) }()
 	select {
 	case <-ctx.Done():
 		return nil
@@ -159,33 +165,72 @@ func Serve(ctx context.Context, opts Options) error {
 // Address returns the actual bound guest transport address.
 func (s *Server) Address() string { return s.listener.Addr().String() }
 
-// Close stops admission and releases the manager and its lifetime lock.
-func (s *Server) Close() {
+// Close uses the service shutdown bound. On failure resources remain owned
+// until background teardown completes; callers must report failure and exit.
+func (s *Server) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	return s.Shutdown(ctx)
+}
+
+// Shutdown first closes transport admission, then joins handlers and sessions
+// before releasing the terminal loader and persistent state lifetime lock.
+func (s *Server) Shutdown(ctx context.Context) error {
 	s.once.Do(func() {
-		if s.public != nil {
-			_ = s.public.Close()
+		s.admission.Lock()
+		s.closing = true
+		s.admission.Unlock()
+		go s.release()
+	})
+	select {
+	case <-s.closed:
+		return s.closeErr
+	case <-ctx.Done():
+		return fmt.Errorf("guest shutdown incomplete: %w", ctx.Err())
+	}
+}
+
+func (s *Server) release() {
+	defer close(s.closed)
+	if s.public != nil {
+		_ = s.public.Close()
+	}
+	if s.admin != nil {
+		_ = s.admin.Close()
+	}
+	if s.listener != nil {
+		_ = s.listener.Close()
+	}
+	if s.adminListener != nil {
+		_ = s.adminListener.Close()
+	}
+	s.handlers.Wait()
+	if s.manager != nil {
+		s.manager.Close()
+	}
+	if s.loader != nil {
+		s.closeErr = errors.Join(s.closeErr, s.loader.Close(context.Background()))
+	}
+	if s.lock != nil {
+		s.closeErr = errors.Join(s.closeErr, s.lock.Close())
+	}
+	if s.directory != nil {
+		s.closeErr = errors.Join(s.closeErr, s.directory.Close())
+	}
+}
+
+func (s *Server) track(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.admission.Lock()
+		if s.closing {
+			s.admission.Unlock()
+			http.Error(w, "guest is closing", http.StatusServiceUnavailable)
+			return
 		}
-		if s.admin != nil {
-			_ = s.admin.Close()
-		}
-		if s.listener != nil {
-			_ = s.listener.Close()
-		}
-		if s.adminListener != nil {
-			_ = s.adminListener.Close()
-		}
-		if s.manager != nil {
-			s.manager.Close()
-		}
-		if s.loader != nil {
-			_ = s.loader.Close(context.Background())
-		}
-		if s.lock != nil {
-			_ = s.lock.Close()
-		}
-		if s.directory != nil {
-			_ = s.directory.Close()
-		}
+		s.handlers.Add(1)
+		s.admission.Unlock()
+		defer s.handlers.Done()
+		next.ServeHTTP(w, r)
 	})
 }
 
@@ -234,14 +279,14 @@ func Rebind(ctx context.Context, paths Paths, body []byte) error {
 
 func (s *Server) listen(ctx context.Context, opts Options) error {
 	var err error
-	handlerPath, handler := clankerboxv1connect.NewGuestServiceHandler(
+	handlerPath, handler := clankerboxv1connect.NewSessionServiceHandler(
 		&service{identity: s.identity, manager: s.manager},
 		connect.WithReadMaxBytes(requestMaxBytes),
 		connect.WithSendMaxBytes(eventMaxBytes),
 	)
 	mux := http.NewServeMux()
 	mux.Handle(handlerPath, handler)
-	s.public = boundedServer(deadlines(mux))
+	s.public = boundedServer(s.track(rpctransport.WithWriteDeadline(mux)))
 	s.public.TLSConfig = s.identity.tlsConfig()
 	s.public.ConnContext = s.identity.connContext
 	s.public.ConnState = s.identity.connState
@@ -264,13 +309,14 @@ func (s *Server) listen(ctx context.Context, opts Options) error {
 	if err = os.Chmod(opts.Paths.Socket, 0600); err != nil {
 		return err
 	}
-	s.admin = boundedServer(s.identity.adminHandler())
+	s.admin = boundedServer(s.track(s.identity.adminHandler()))
 	go func() { s.failure <- s.public.Serve(tls.NewListener(s.listener, s.public.TLSConfig)) }()
 	go func() { s.failure <- s.admin.Serve(&peerListener{Listener: s.adminListener}) }()
 	return nil
 }
 
 const (
+	shutdownTimeout = 10 * time.Second
 	listenerCount   = 2
 	requestMaxBytes = 300 << 10
 	eventMaxBytes   = 128 << 10

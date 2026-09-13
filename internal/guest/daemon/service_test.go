@@ -1,4 +1,3 @@
-//nolint:testpackage // Exercise private admission epochs and durable failure fencing.
 package daemon
 
 import (
@@ -19,6 +18,7 @@ import (
 	"clankerbox/internal/guest/session"
 	"clankerbox/internal/guest/vt"
 	"clankerbox/internal/rpcidentity"
+	"clankerbox/internal/rpctransport"
 	"clankerbox/internal/statefs"
 )
 
@@ -63,14 +63,14 @@ func testGuest(t *testing.T) (*identity, *session.Manager, *rpcidentity.Authorit
 	)
 	manager = mustValue(t, manager, err)
 	t.Cleanup(manager.Close)
-	path, handler := clankerboxv1connect.NewGuestServiceHandler(
+	path, handler := clankerboxv1connect.NewSessionServiceHandler(
 		&service{identity: ident, manager: manager},
 		connect.WithReadMaxBytes(requestMaxBytes),
 		connect.WithSendMaxBytes(eventMaxBytes),
 	)
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
-	server := boundedServer(deadlines(mux))
+	server := boundedServer(rpctransport.WithWriteDeadline(mux))
 	server.TLSConfig = ident.tlsConfig()
 	server.ConnContext = ident.connContext
 	server.ConnState = ident.connState
@@ -85,14 +85,14 @@ func guestClient(
 	t *testing.T,
 	a *rpcidentity.Authority,
 	machine, endpoint string,
-) clankerboxv1connect.GuestServiceClient {
+) clankerboxv1connect.SessionServiceClient {
 	t.Helper()
 	creds, err := a.HostCredentials("host")
 	creds = mustValue(t, creds, err)
 	client, err := creds.HTTPClient(machine)
 	client = mustValue(t, client, err)
 	t.Cleanup(client.CloseIdleConnections)
-	return clankerboxv1connect.NewGuestServiceClient(client, endpoint)
+	return clankerboxv1connect.NewSessionServiceClient(client, endpoint)
 }
 
 func TestLiveRebindRetainsManagerAndFencesOldMachine(t *testing.T) {
@@ -148,7 +148,7 @@ func TestLiveRebindRetainsManagerAndFencesOldMachine(t *testing.T) {
 	}
 }
 
-func TestResumePrefixPrecedesControls(t *testing.T) {
+func TestResumePrefixPrecedesLiveOutputWithInterleavedACK(t *testing.T) {
 	t.Parallel()
 	_, manager, auth, endpoint := testGuest(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
@@ -164,20 +164,14 @@ func TestResumePrefixPrecedesControls(t *testing.T) {
 				CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 				Cols:      80,
 				Rows:      24,
-				Argv:      []string{"/bin/sh", "-c", "stty -echo; head -c 131072 /dev/zero | tr '\\000' x; cat"},
+				Argv:      []string{"/bin/sh", "-c", "stty -echo; head -c 8388608 /dev/zero | tr '\\000' x; cat"},
 			},
 		),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for manager.List()[0].Offset < 131072 {
-		select {
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
+	waitForOffset(ctx, t, manager, 8388608)
 	stream := client.AttachSession(ctx)
 	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
 	hello := manager.Hello()
@@ -204,21 +198,25 @@ func TestResumePrefixPrecedesControls(t *testing.T) {
 	}
 	first, err := stream.Receive()
 	first = mustValue(t, first, err)
-	if first.GetOpened() == nil || first.GetOpened().GetCut() < 131072 {
+	if first.GetOpened() == nil || first.GetOpened().GetCut() < 8388608 {
 		t.Fatal("missing authoritative cut")
 	}
+	// Stop receiving while the 8 MiB prefix exceeds transport and queue capacity.
+	// Newly admitted input must still reach the shell and remain in the live tail.
+	waitForOffset(ctx, t, manager, first.GetOpened().GetCut()+1)
 	var offset uint64
-	for {
+	acked := false
+	for !acked || offset < first.GetOpened().GetCut() {
 		event, receiveErr := stream.Receive()
 		event = mustValue(t, event, receiveErr)
 		if output := event.GetOutput(); output != nil {
 			offset = output.GetNextOffset()
 		}
 		if ack := event.GetAck(); ack != nil {
-			if !ack.GetAccepted() || offset < first.GetOpened().GetCut() {
-				t.Fatal("control acknowledged before retained prefix")
+			if !ack.GetAccepted() || offset >= first.GetOpened().GetCut() {
+				t.Fatal("ACK did not interleave with bounded resume prefix")
 			}
-			break
+			acked = true
 		}
 	}
 }
@@ -241,5 +239,16 @@ func TestPersistenceFailureFencesAdmission(t *testing.T) {
 		func() error { t.Fatal("uncertain binding admitted work"); return nil },
 	); err == nil {
 		t.Fatal("failed persistence left transport usable")
+	}
+}
+
+func waitForOffset(ctx context.Context, t *testing.T, manager *session.Manager, offset uint64) {
+	t.Helper()
+	for manager.List()[0].Offset < offset {
+		select {
+		case <-ctx.Done():
+			t.Fatal("waiting for terminal output", ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
 	}
 }

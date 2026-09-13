@@ -1,4 +1,4 @@
-package session //nolint:testpackage // Resource release has no public observation.
+package session
 
 import (
 	"bytes"
