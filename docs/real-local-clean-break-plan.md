@@ -1,9 +1,9 @@
 # Real-local correctness, simplification, and clean reset
 
-Status (2026-09-13): implementation and isolated qualification complete;
-[release v0.3.0](https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.3.0)
-published from `725122d`. Production reset and cutover are in progress; production
-acceptance is not yet complete.
+Status (2026-09-13): implemented, released and deployed.
+[Release v0.3.0](https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.3.0)
+ships source `725122d`. Isolated and production qualification passed; the final
+application is empty, with healthy services and reusable base images preserved.
 
 `make test`, lint, and vet passed. Native smolvm qualification passed on macOS
 arm64 and Linux amd64: lifecycle persistence, RAM forks, checkpoint capture,
@@ -465,4 +465,46 @@ Complete means all stages pass, the matching new deployment works through real
 clients, and current docs/operating records match it. Report remaining failures
 explicitly and include handwritten/generated code and dependency deltas. A green
 unit suite, smaller diff, or healthy HTTP endpoint alone does not establish
-completion. This plan does not claim the implementation or deployment has run.
+completion. The completed validation and deployed artifacts are recorded below.
+
+
+## Completion record — 2026-09-13
+
+The clean-break implementation shipped as v0.3.0. Both release archives passed
+exact file/mode/link inventory and notice checks. The installed Linux and signed
+Mac host/guest binaries matched the qualified artifacts, including hashes read
+inside real production guests. Local CLI installation uses the published bundle.
+
+- Go race tests, vet, lint, Python release/image tests, SDK generation/build/tests,
+  Desk quality/build/browser tests and personal-cloud validation passed.
+- Linux and macOS smolvm passed the full RAM lifecycle/fork/checkpoint matrix,
+  independent restored disk checks, active-stream shutdown and dev bundle relocation.
+  Production Linux and Tart passed lifecycle/session/isolation and full checkpoint
+  acceptance. Tart additionally passed running-copy rejection and checkpoint
+  deletion after a profile edit. The exact production profile was restored.
+- The final signed Mac system LaunchDaemon reached Tart guests from its production
+  executable path; no additional Local Network permission was needed after installation.
+- Two Desk browser viewers kept the same guest shell and file through resize,
+  reload and Desk/controller/Linux-host restarts. Unrelated guest RPC remained
+  responsive during native mutation. Terminal closure was verified in the browser;
+  the normal shape API completed machine closure after browser automation stalled
+  on its confirmation. All test resources were removed and Desk reset to empty.
+- Final public/native inventories were empty, with no unfinished or failed
+  controller/host operations. Deployment health, access restrictions and the
+  first post-release backup export/SQLite verification passed. Source checkouts,
+  reusable bases, PKI and unrelated infrastructure were retained.
+
+Production source is `725122d`; `c9d4fe8` subsequently corrected only the SDK
+qualification harness to inspect inherited environment keys before Apple's Python
+launcher adds developer-tool variables. No product binary or allowed key set changed.
+Clankerdesk source is `466ed41`; its immutable image was deployed by personal-cloud
+`def78ac`. Exact deployed hashes and operating results live in personal-cloud's
+controller/runtime and Desk runbooks.
+
+Rename-aware implementation deltas through `c9d4fe8` are 2,268 fewer handwritten
+source lines (including release tools and removed spike programs), 3,788 fewer
+generated lines, and 1,207 additional test/harness lines. Product source alone grew
+90 lines; the overall Clankerbox change removed 4,219 lines. Desk added 178 lines,
+154 of them tests. Archive moves are not counted as source deletions. No new
+external dependencies were added; Connect moved from SDK runtime to development
+dependencies, and obsolete spike dependency graphs were removed.
