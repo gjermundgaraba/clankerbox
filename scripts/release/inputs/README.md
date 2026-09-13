@@ -17,9 +17,7 @@
 - `source.json`: the expected engine source `LICENSE` and `Cargo.lock` digests.
 - `HostInfo.plist`: the Info.plist template for the signed macOS host.
 
-The runtime inventories were taken from the qualified v0.3.0 release archives,
-verified against their published SHA256 files and GitHub asset digests, and
-checked against each archive's `bundle.json`. Their provenance fields record the
-archive URL and hash and the manifest hash; assembly enforces only the `files`
-lists. Update them only from a separately qualified release: hashing whatever
-is in a proposed `--runtime-assets` directory does not establish qualification.
+The runtime inventories were taken from qualified release bundles and checked
+against each bundle's `bundle.json`. Assembly enforces the `files` lists. Update
+them only from a separately qualified build: hashing whatever is in a proposed
+`--runtime-assets` directory does not establish qualification.

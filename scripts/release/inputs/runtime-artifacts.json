@@ -1,12 +1,6 @@
 {
   "platforms": {
     "darwin-arm64": {
-      "provenance": {
-        "release": "v0.3.0",
-        "archive_url": "https://github.com/gjermundgaraba/clankerbox/releases/download/v0.3.0/clankerbox-0.3.0-darwin-arm64.tar.gz",
-        "archive_sha256": "ea4cebfa2854db23e2ceb1c55945ca9a74305290329f0ede1cd90d08c6bd1bae",
-        "bundle_manifest_sha256": "195e41d6145b93e47bb83c3489ab0de45d477b0183404c4723e452efb86a28d6"
-      },
       "files": [
         {
           "path": "lib",
@@ -55,12 +49,6 @@
       ]
     },
     "linux-amd64": {
-      "provenance": {
-        "release": "v0.3.0",
-        "archive_url": "https://github.com/gjermundgaraba/clankerbox/releases/download/v0.3.0/clankerbox-0.3.0-linux-amd64.tar.gz",
-        "archive_sha256": "30d20580b488390419689431f4c81263242ba47ba263a1b0f0c099f67ae16a4e",
-        "bundle_manifest_sha256": "14d33ec2a6ed1cd16950f1c5f35f8504aceac8867f06d94c24fa6e0544b31c18"
-      },
       "files": [
         {
           "path": "lib",

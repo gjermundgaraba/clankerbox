@@ -26,10 +26,9 @@ make build
 
 `clankerbox dev` runs a controller, a host service and Linux VMs on your
 workstation (Apple Silicon macOS, or Linux/amd64 with KVM). It needs a runtime
-bundle: the engine, guest image, profiles and service binaries. Each
-[release](https://github.com/gjermundgaraba/clankerbox/releases) ships one next
-to the CLI. A release CLI finds its bundle automatically; a source build takes
-the manifest from an extracted release archive:
+bundle: the engine, guest image, profiles and service binaries. A release
+archive ships the bundle next to the CLI, which finds it automatically; a
+source build takes the manifest explicitly:
 
 ```sh
 bin/clankerbox dev --bundle /path/to/bundle.json

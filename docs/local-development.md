@@ -18,8 +18,7 @@ templates, a guest image and profiles.
 [Release packaging](../scripts/release/README.md) describes how bundles are
 assembled.
 
-A [release archive](https://github.com/gjermundgaraba/clankerbox/releases)
-places `clankerbox` beside `bundle.json`. Extract it with
+A release archive places `clankerbox` beside `bundle.json`. Extract it with
 permissions preserved into a directory that other users cannot modify:
 
 ```sh
