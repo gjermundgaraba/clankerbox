@@ -1,0 +1,33 @@
+Clankerbox
+Copyright (c) 2026 Gjermund Garaba
+Licensed under the MIT License; see LICENSE.
+
+This repository embeds, and its release archives bundle, third-party software.
+
+Embedded in this repository
+
+- Ghostty (libghostty-vt), compiled to WebAssembly as
+  internal/guest/vt/assets/ghostty-vt.wasm.
+  MIT License, Copyright (c) 2024 Mitchell Hashimoto, Ghostty contributors.
+  License text: internal/guest/vt/assets/GHOSTTY-LICENSE.
+  Source commit and build command: internal/guest/vt/assets/ghostty-vt.build.json.
+
+Bundled in release archives
+
+Release archives ship a runtime bundle built from the sources pinned in
+scripts/release/inputs/pins.json. License texts are in scripts/release/licenses,
+and every release attaches the libkrun, libkrunfw and Linux kernel source
+archives it was built from.
+
+- smolvm (smol-machines/smolvm): Apache License 2.0.
+- libkrun (smol-machines/libkrun): Apache License 2.0.
+- libkrunfw (smol-machines/libkrunfw): LGPL-2.1-only, containing a Linux kernel
+  under GPL-2.0-only.
+- MoltenVK (KhronosGroup/MoltenVK): Apache License 2.0. macOS archives only.
+- libepoxy (anholt/libepoxy): MIT License. macOS archives only.
+- virglrenderer (freedesktop.org): MIT License. macOS archives only.
+- Ubuntu Base and Node.js inside the Linux guest image; sources are pinned in
+  scripts/release/inputs/linux-amd64-image-sources.json.
+
+Go and JavaScript dependencies are listed in go.mod and protocol/package.json
+and are distributed under their own licenses.
