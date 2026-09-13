@@ -5,7 +5,7 @@ from functools import partial
 import json
 from pathlib import Path
 
-from acceptance import Acceptance, Report, run_guest
+from acceptance import Acceptance, Report, run_guest, describe_guest
 
 
 def main():
@@ -62,7 +62,7 @@ def main():
         operation('start', mid)
         guest(mid, 'sh', '-se', data=f'mkdir -p "$HOME/{directory}"\n')
         write(mid, 'source-A')
-        original_key = inspect(mid)['ssh_host_key']
+        original_identity = describe_guest(args.session_runner, args.config, mid)
         if linux:
             program = '''import http.server, json, os, time, uuid
 token = uuid.uuid4().hex
@@ -80,12 +80,16 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
                 + 'i=0; until curl -fsS http://127.0.0.1:18349/ >/dev/null; do i=$((i+1)); test "$i" -lt 30; sleep 1; done\n')
             original_memory = memory(mid)
             report['original_memory'] = original_memory
+            report['fork_identity'] = original_identity
+            save()
         else:
             stop(mid)
         child = operation('fork', mid, name + '-fork')['machine_id']
         need(read(child) == 'source-A', 'fork lost source disk state')
-        child_key = inspect(child)['ssh_host_key']
-        need(child_key != original_key, 'fork reused SSH identity')
+        child_identity = describe_guest(args.session_runner, args.config, child)
+        need(child_identity['machine_id'] != original_identity['machine_id'], 'fork reused machine identity')
+        if linux:
+            need(child_identity['incarnation'] == original_identity['incarnation'], 'fork restarted guest manager')
         if linux:
             for machine in (mid, child):
                 sample = memory(machine)
@@ -95,7 +99,8 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
         stop(child)
         operation('start', child)
         need(read(child) == 'child-B', 'fork lost independent disk on cold restart')
-        need(inspect(child)['ssh_host_key'] == child_key, 'fork key changed on cold restart')
+        restarted_child = describe_guest(args.session_runner, args.config, child)
+        need(restarted_child['machine_id'] == child_identity['machine_id'] and restarted_child['incarnation'] != child_identity['incarnation'], 'cold restart identity invariant failed')
         stop(child)
         if not linux:
             operation('start', mid)
@@ -117,8 +122,12 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
             guest(mid, 'sh', '-se', data=f'nohup python3 "$HOME/{directory}/memory.py" >"$HOME/{directory}/memory.log" 2>&1 </dev/null &\n'
                 + 'i=0; until curl -fsS http://127.0.0.1:18349/ >/dev/null; do i=$((i+1)); test "$i" -lt 30; sleep 1; done\n')
             original_memory = memory(mid)
+            report['capture_memory'] = original_memory
         else:
             stop(mid)
+        capture_identity = describe_guest(args.session_runner, args.config, mid) if linux else None
+        report['capture_identity'] = capture_identity
+        save()
         cp = operation('checkpoint', 'create', mid)['checkpoint_id']
         if not linux:
             operation('start', mid)
@@ -126,18 +135,22 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
         stop(mid)
         operation('delete', mid)
         restored = []
-        keys = {original_key, child_key}
+        identities = {original_identity['machine_id'], child_identity['machine_id']}
         for index in range(2):
             machine = operation('restore', cp, name + '-restore-' + str(index))['machine_id']
             restored.append(machine)
             need(read(machine) == 'source-A', 'restore did not roll disk back to capture')
-            key = inspect(machine)['ssh_host_key']
-            need(key not in keys, 'restore reused SSH identity')
-            keys.add(key)
+            identity = describe_guest(args.session_runner, args.config, machine)
+            need(identity['machine_id'] not in identities, 'restore reused machine identity')
+            identities.add(identity['machine_id'])
+            if linux:
+                need(identity['incarnation'] == capture_identity['incarnation'], 'RAM restore restarted guest manager')
             if linux:
                 sample = memory(machine)
                 need(sample['token'] == original_memory['token'] and sample['pid'] == original_memory['pid'],
                      'restore cold-booted instead of continuing RAM')
+                report['events'].append({'restored_machine': machine, 'identity': identity, 'memory': sample})
+                save()
             write(machine, 'restore-' + str(index))
             stop(machine)
         operation('checkpoint', 'delete', cp)

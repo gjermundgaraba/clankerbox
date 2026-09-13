@@ -1,13 +1,8 @@
 package model_test
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
 	"slices"
-	"strings"
 	"testing"
-
-	"golang.org/x/crypto/ssh"
 
 	"clankerbox/internal/model"
 )
@@ -15,29 +10,15 @@ import (
 const (
 	linuxOS       = "linux"
 	smolvmRuntime = "smolvm"
+	archAMD64     = "amd64"
 )
 
-func TestKeys(t *testing.T) {
-	t.Parallel()
-	pub, _, _ := ed25519.GenerateKey(rand.Reader)
-	s, _ := ssh.NewPublicKey(pub)
-	key := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(s)))
-	for _, bad := range []string{"", key + "\n", `command="touch /tmp/no" ` + key, "ssh-ed25519 invalid", key + "\n" + key} {
-		if _, err := model.ValidateKey(bad); err == nil {
-			t.Errorf("accepted %q", bad)
-		}
-	}
-	canonicalKey, err := model.ValidateKey(key + " comment")
-	if err != nil || canonicalKey != key {
-		t.Fatalf("normalization: %v %v", canonicalKey, err)
-	}
-}
 func TestProfilesAndNames(t *testing.T) {
 	t.Parallel()
 	p := model.Profile{
 		ID:        "ubuntu-bare-v1",
 		OS:        linuxOS,
-		Arch:      "amd64",
+		Arch:      archAMD64,
 		Runtime:   smolvmRuntime,
 		CPU:       2,
 		RAMMiB:    2048,
@@ -61,6 +42,10 @@ func TestProfilesAndNames(t *testing.T) {
 	if err := p.Validate(); err == nil {
 		t.Fatal("advertised unimplemented fork")
 	}
+}
+
+func TestNamesAndIDs(t *testing.T) {
+	t.Parallel()
 	for _, s := range []string{"../a", "-option", "a;uname", "a b", ""} {
 		if model.ValidName(s) {
 			t.Fatalf("accepted alias %q", s)
@@ -79,7 +64,7 @@ func TestCheckpointCapabilitiesAndDerivedProfilePin(t *testing.T) {
 		ID:        linuxOS,
 		Runtime:   smolvmRuntime,
 		OS:        linuxOS,
-		Arch:      "amd64",
+		Arch:      archAMD64,
 		CPU:       2,
 		RAMMiB:    2048,
 		ImagePath: "/opt/rootfs",
@@ -112,7 +97,16 @@ func TestCheckpointCapabilitiesAndDerivedProfilePin(t *testing.T) {
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if slices.Contains(p.Capabilities, "live-fork") || slices.Contains(p.Capabilities, "fork") {
-		t.Fatal("arm64 branch freezes source; cannot advertise concurrent fork")
+	if !slices.Contains(p.Capabilities, "live-fork") || !slices.Contains(p.Capabilities, "fork") {
+		t.Fatal("qualified macOS arm64 engine supports live fork")
+	}
+}
+
+func TestUnknownRuntimeHasNoCapabilities(t *testing.T) {
+	t.Parallel()
+	for _, pair := range [][2]string{{"local", archAMD64}, {"unknown", "arm64"}, {"smolvm", "riscv64"}, {"tart", archAMD64}} {
+		if len(model.RuntimeCapabilities(pair[0], pair[1])) != 0 {
+			t.Fatalf("unqualified runtime advertised support: %v", pair)
+		}
 	}
 }

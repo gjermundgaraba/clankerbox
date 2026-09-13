@@ -2,16 +2,10 @@ package host
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"database/sql"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
-	"strings"
-
-	"golang.org/x/crypto/ssh"
 
 	"clankerbox/internal/model"
 )
@@ -37,6 +31,15 @@ func (h *Helper) checkpoint(ctx context.Context, id string) (ownedCheckpoint, er
 	return cp, err
 }
 func (h *Helper) runtimePin(p model.Profile) string {
+	if h.cfg.RuntimeDigest != "" && p.ImageDigest != "" {
+		p.ImagePath = ""
+		p.Capabilities = nil
+		return model.Hash(struct {
+			Profile      model.Profile
+			Runtime, DNS string
+		}{p, h.cfg.RuntimeDigest, h.cfg.DNS})
+	}
+	// Legacy records retain their original conservative path-dependent pin.
 	return model.Hash(struct {
 		Profile                    model.Profile
 		Smolvm, Tart, Library, DNS string
@@ -96,31 +99,18 @@ func (h *Helper) machineDependencies(ctx context.Context, m Manifest) (resultErr
 	}
 	return rows.Err()
 }
-func freshIdentity() (string, string, error) {
-	_, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return "", "", err
-	}
-	block, err := ssh.MarshalPrivateKey(key, "")
-	if err != nil {
-		return "", "", err
-	}
-	pub, err := ssh.NewPublicKey(key.Public())
-	if err != nil {
-		return "", "", err
-	}
-	return string(pem.EncodeToMemory(block)), strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), nil
-}
-func (h *Helper) executeDerived(ctx context.Context, req model.Request, a accepted, retry bool) model.Response {
+
+func (h *Helper) executeDerived(
+	ctx context.Context,
+	req model.Request,
+	a accepted,
+	retry, acceptOnly bool,
+) model.Response {
 	var m, source Manifest
 	var cp *ownedCheckpoint
 	var err error
 	if retry {
-		return model.Response{
-			OperationID: req.OperationID,
-			Status:      statusUnresolved,
-			Error:       "interrupted " + a.Phase + "; explicit operator inspection required; no automatic replay",
-		}
+		return h.retryDerived(ctx, req, a, acceptOnly)
 	}
 	if req.Action == actionFork || req.Action == actionCapture {
 		if !h.profile(req.Profile) {
@@ -158,6 +148,9 @@ func (h *Helper) executeDerived(ctx context.Context, req model.Request, a accept
 	}
 	if err = h.save(ctx, m, a); err != nil {
 		return failure(req, err)
+	}
+	if acceptOnly {
+		return a.Response
 	}
 	return h.applyDerived(ctx, req, a, m, source, cp)
 }
@@ -294,7 +287,7 @@ func (h *Helper) captureIdentity(
 	}
 	if !model.ValidID(value.ID) || value.Kind != kind || value.SourceMachineID != source.ID ||
 		value.SourceGeneration != source.Generation ||
-		value.Status != "pending" ||
+		value.Status != statusPending ||
 		value.Host != req.Host ||
 		value.CreatedAt.IsZero() ||
 		!model.SameProfile(value.Profile, req.Profile) {
@@ -336,7 +329,7 @@ func (h *Helper) childIdentity(
 		m.SourceMachineID = cp.SourceMachineID
 	}
 	if req.Profile.Runtime == runtimeSmolvm {
-		m.Port, err = h.port(ctx)
+		m.Port, err = h.port(ctx, req.MachineID)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -347,10 +340,7 @@ func (h *Helper) childIdentity(
 			}
 		}
 	}
-	m.SSHPrivateKey, m.SSHHostKey, err = freshIdentity()
-	if err != nil {
-		return Manifest{}, err
-	}
+
 	return m, nil
 }
 
@@ -359,14 +349,11 @@ func (h *Helper) prepareDerivedChild(ctx context.Context, m *Manifest, a *accept
 	if err := h.save(ctx, *m, *a); err != nil {
 		return err
 	}
-	user, key, endpoint, prepareErr := h.runtime.Initialize(ctx, *m)
+	endpoint, prepareErr := h.runtime.Initialize(ctx, *m)
 	if prepareErr != nil {
 		return prepareErr
 	}
-	if key != m.SSHHostKey {
-		return errors.New("child did not acknowledge the persisted fresh SSH key")
-	}
-	m.SSHUser, m.Endpoint = user, endpoint
+	m.Endpoint = endpoint
 	m.Prepared = true
 	m.Branchable = m.Profile.Runtime == runtimeSmolvm
 	return nil
@@ -444,7 +431,6 @@ func (h *Helper) unresolvedDerived(
 	if req.Action == actionFork || req.Action == actionRestore {
 		m.Prepared = false
 		m.Endpoint = ""
-		m.SSHUser = ""
 	}
 	a.Response = model.Response{OperationID: req.OperationID, Status: statusUnresolved, Error: e.Error()}
 	if a.Checkpoint != nil && req.Action == actionCapture {
@@ -473,5 +459,60 @@ func (h *Helper) derivedIdentity(
 	default:
 		m, err := h.childIdentity(ctx, req, source, cp)
 		return m, cp, err
+	}
+}
+
+// Only an accepted phase is effect-free. Later derived phases deliberately remain ambiguous.
+func (h *Helper) resumeAcceptedDerived(ctx context.Context, req model.Request, a accepted) model.Response {
+	var m Manifest
+	var err error
+	// Checkpoint deletion owns a checkpoint identity, not a machine manifest.
+	if req.Action != actionDeleteCheckpoint {
+		m, err = h.manifest(ctx, req.MachineID)
+		if err != nil || m.Generation != req.Generation {
+			return failure(req, errors.New("accepted generation no longer current"))
+		}
+	}
+	var source Manifest
+	var cp *ownedCheckpoint
+	switch req.Action {
+	case actionFork:
+		source, err = h.manifest(ctx, req.SourceMachineID)
+		if err == nil && source.Generation != req.SourceGeneration {
+			err = errors.New("accepted source generation changed")
+		}
+	case actionCapture:
+		cp = a.Checkpoint
+		if cp != nil {
+			source = cp.Source
+		}
+	case actionRestore, actionDeleteCheckpoint:
+		if req.Checkpoint == nil {
+			return failure(req, errors.New("accepted checkpoint missing"))
+		}
+		value, e := h.checkpoint(ctx, req.Checkpoint.ID)
+		err = e
+		cp = &value
+	}
+	if err != nil {
+		return failure(req, err)
+	}
+	if req.Action != actionFork && cp == nil {
+		return failure(req, errors.New("accepted checkpoint missing"))
+	}
+	return h.applyDerived(ctx, req, a, m, source, cp)
+}
+
+func (h *Helper) retryDerived(ctx context.Context, req model.Request, a accepted, acceptOnly bool) model.Response {
+	if acceptOnly {
+		return a.Response
+	}
+	if a.Phase == phaseAccepted {
+		return h.resumeAcceptedDerived(ctx, req, a)
+	}
+	return model.Response{
+		OperationID: req.OperationID,
+		Status:      statusUnresolved,
+		Error:       "interrupted " + a.Phase + "; explicit operator inspection required; no automatic replay",
 	}
 }

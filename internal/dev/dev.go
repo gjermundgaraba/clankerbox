@@ -1,425 +1,561 @@
-// Package dev runs the production controller and guest protocol on this computer.
+// Package dev provisions an owned local appliance using the ordinary host and
+// controller binaries. It contains no guest transport or simulated machine.
 package dev
 
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
-	"clankerbox/internal/control"
+	"connectrpc.com/connect"
+
+	v1 "clankerbox/gen/clankerbox/v1"
+	"clankerbox/gen/clankerbox/v1/clankerboxv1connect"
+	"clankerbox/internal/host"
 	"clankerbox/internal/model"
+	"clankerbox/internal/rpctransport"
 	"clankerbox/internal/statefs"
 )
 
-const (
-	localName         = "local"
-	startupTimeout    = 30 * time.Second
-	pollInterval      = 100 * time.Millisecond
-	localRAMMiB       = 128
-	readHeaderTimeout = 10 * time.Second
-	shutdownTimeout   = 5 * time.Second
-	unixPathLimit     = 104
-)
+// Options selects the owned environment, loopback listener, and explicit bundle.
+type Options struct{ StateDir, Listen, Bundle string }
 
-// Options locates a retained local environment. Executable is the clankerbox
-// binary used to launch its independent guest helper.
-type Options struct {
-	StateDir   string
-	Workspace  string
-	Listen     string
-	Executable string
-}
-
-// Target is the host-only connection configuration accepted by Clankerdesk.
-// Machines is omitted because this environment supplies one existing machine.
-type Target struct {
-	URL       string `json:"url"`
-	TokenPath string `json:"tokenPath"`
-}
-
-// Connection describes a ready environment, including the seeded machine.
+// Connection publishes client configuration locations without embedding credentials.
 type Connection struct {
-	Target
-
-	MachineID         string `json:"machineId"`
+	URL               string `json:"url"`
+	TokenPath         string `json:"tokenPath"`
+	DefaultHost       string `json:"defaultHost"`
+	DefaultProfile    string `json:"defaultProfile"`
 	StateDir          string `json:"stateDir"`
-	Workspace         string `json:"workspace"`
-	ClankerdeskConfig string `json:"clankerdeskConfig"`
 	ClientConfig      string `json:"clientConfig"`
+	ClankerdeskConfig string `json:"clankerdeskConfig"`
+}
+type environment struct {
+	Version      int    `json:"version"`
+	StateDir     string `json:"state_dir"`
+	HostRoot     string `json:"host_root"`
+	Namespace    string `json:"namespace"`
+	BundlePath   string `json:"bundle_path"`
+	BundleDigest string `json:"bundle_digest"`
+	ProfileID    string `json:"profile_id"`
+	dir          *statefs.Dir
+	lock         *statefs.Lock
+	bundle       Bundle
+	upgrade      bool
 }
 
-// DefaultStateDir keeps local development separate from normal client state.
+// DefaultStateDir returns the current project directory’s owned appliance path.
 func DefaultStateDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".local", "state", "clankerbox-dev")
+	wd, e := os.Getwd()
+	if e != nil {
+		return ".clankerbox"
+	}
+	return filepath.Join(wd, ".clankerbox")
+}
+func namespace(path string) string {
+	sum := sha256.Sum256([]byte(path))
+	return hex.EncodeToString(sum[:6])
+}
+func canonicalState(path string) (string, error) {
+	if path == "" {
+		path = DefaultStateDir()
+	}
+	p, e := filepath.Abs(path)
+	if e != nil {
+		return "", e
+	}
+	if p == string(filepath.Separator) {
+		return "", errors.New("filesystem root cannot be an environment")
+	}
+	parent, e := filepath.EvalSymlinks(filepath.Dir(p))
+	if e != nil {
+		return "", e
+	}
+	p = filepath.Join(parent, filepath.Base(p))
+	if i, statErr := os.Lstat(p); statErr == nil && i.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("environment root cannot be a symlink")
+	}
+	return p, nil
+}
+func (e *environment) close() {
+	if e.lock != nil {
+		_ = e.lock.Close()
+	}
+	if e.dir != nil {
+		_ = e.dir.Close()
+	}
+}
+func jsonWrite(d *statefs.Dir, name string, value any) error {
+	raw, e := json.MarshalIndent(value, "", "  ")
+	if e != nil {
+		return e
+	}
+	return d.WriteFile(name, append(raw, '\n'))
+}
+func token() string {
+	var bytes [32]byte
+	if _, e := rand.Read(bytes[:]); e != nil {
+		panic(e)
+	}
+	return hex.EncodeToString(bytes[:])
 }
 
-func localConfig() model.Config {
-	osName := runtime.GOOS
-	if osName == "darwin" {
-		osName = "macos"
+func openEnvironment(ctx context.Context, opts Options, create bool) (*environment, error) {
+	state, e := canonicalState(opts.StateDir)
+	if e != nil {
+		return nil, e
 	}
-	return model.Config{
+	if !create {
+		if _, e = os.Lstat(state); e != nil {
+			return nil, e
+		}
+	}
+	d, e := statefs.Open(state)
+	if e != nil {
+		return nil, e
+	}
+	env := &environment{dir: d}
+	ok := false
+	defer func() {
+		if !ok {
+			env.close()
+		}
+	}()
+	env.lock, e = d.Lock(environmentLock, true)
+	if e != nil {
+		return nil, fmt.Errorf("environment is active or teardown is already running: %w", e)
+	}
+
+	data, e := d.ReadFile(environmentManifest)
+	switch {
+	case errors.Is(e, os.ErrNotExist):
+		if !create {
+			return nil, errors.New("not an owned dev environment")
+		}
+		e = env.initialize(ctx, state, opts.Bundle)
+	case e != nil:
+		return nil, e
+	default:
+		e = env.restore(data, state, opts.Bundle)
+	}
+	if e != nil {
+		return nil, e
+	}
+
+	ok = true
+	return env, nil
+}
+func (e *environment) initialize(ctx context.Context, state, bundlePath string) error {
+	entries, err := e.dir.Entries()
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.Name() != environmentLock {
+			return errors.New("refusing to adopt nonempty directory without environment manifest")
+		}
+	}
+	b, err := resolveBundle(ctx, bundlePath)
+	if err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	name := namespace(state)
+	short := filepath.Join(home, ".cb", name)
+	if _, err = os.Lstat(short); !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("short host root already exists without this environment: %s", short)
+	}
+	e.Version = 1
+	e.StateDir = state
+	e.HostRoot = short
+	e.Namespace = environmentPrefix + name
+	e.BundlePath = b.manifest
+	e.BundleDigest = b.digest
+	e.ProfileID = b.ProfileID
+	e.bundle = b
+	return jsonWrite(e.dir, environmentManifest, e)
+}
+func (e *environment) restore(data []byte, state, bundlePath string) error {
+	if err := json.Unmarshal(data, e); err != nil {
+		return err
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	if e.Version != 1 || e.StateDir != state || e.HostRoot != filepath.Join(home, ".cb", namespace(state)) ||
+		e.Namespace != environmentPrefix+namespace(state) {
+		return errors.New("environment ownership manifest mismatch")
+	}
+	path := e.BundlePath
+	if bundlePath != "" {
+		path = bundlePath
+	}
+	e.bundle, err = verifyBundle(path)
+	if err != nil {
+		return err
+	}
+	if e.bundle.digest != e.BundleDigest || e.bundle.manifest != e.BundlePath {
+		if bundlePath == "" {
+			return errors.New("retained bundle changed; pass an explicitly verified compatible --bundle to upgrade")
+		}
+		if err = e.compatibleUpgrade(); err != nil {
+			return err
+		}
+		e.upgrade = true
+	}
+	return e.restoreUpgrade()
+}
+func (e *environment) restoreUpgrade() error {
+	raw, err := e.dir.ReadFile(upgradeManifest)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var intent bundleUpgrade
+	if err = json.Unmarshal(raw, &intent); err != nil {
+		return err
+	}
+	if intent.ToDigest != e.bundle.digest || intent.ToPath != e.bundle.manifest {
+		return errors.New("unfinished bundle upgrade requires the same explicit --bundle")
+	}
+	e.upgrade = true
+	return nil
+}
+func (e *environment) hostConfig() host.Config {
+	b := e.bundle
+	p := model.Profile{
+		ID:          b.ProfileID,
+		OS:          linuxPlatform,
+		Arch:        runtime.GOARCH,
+		Runtime:     "smolvm",
+		CPU:         b.ProfileCPU,
+		RAMMiB:      b.ProfileRAMMiB,
+		StorageGiB:  b.StorageGiB,
+		OverlayGiB:  b.OverlayGiB,
+		ImagePath:   b.path(b.ImagePath),
+		ImageDigest: b.ImageDigest,
+	}
+	return host.Config{
+		RuntimeDigest: b.RuntimeDigest,
+		HostOS:        runtime.GOOS,
+		HostID:        localHostID,
+		Root:          e.HostRoot,
+		Listen:        "unix://" + filepath.Join(e.HostRoot, "host.sock"),
+		Profiles:      []model.Profile{p},
+		SmolvmPath:    b.path(b.Smolvm),
+		LibraryDir:    b.path(b.LibraryDir),
+		SystemdUser:   runtime.GOOS == linuxPlatform,
+	}
+}
+func (e *environment) prepare() error {
+	cfg := e.hostConfig()
+	if err := e.prepareHostRoot(cfg); err != nil {
+		return err
+	}
+
+	root, err := statefs.Open(e.HostRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	guestDir, err := statefs.Open(filepath.Join(e.HostRoot, "guest"))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = guestDir.Close() }()
+	guest, err := statefs.ReadRegular(e.bundle.path(e.bundle.Guest))
+	if err != nil {
+		return err
+	}
+	guestName := "clankerbox-guest-linux-" + runtime.GOARCH
+	if err = guestDir.WriteFile(guestName, guest); err != nil {
+		return err
+	}
+	//nolint:gosec // Verified private guest executable requires owner execution.
+	if err = os.Chmod(filepath.Join(e.HostRoot, "guest", guestName), 0700); err != nil {
+		return err
+	}
+	if err = jsonWrite(root, "service.json", cfg); err != nil {
+		return err
+	}
+	profile := cfg.Profiles[0]
+	cpu := profile.CPU * defaultMachineSlots
+	if cpu > runtime.NumCPU() {
+		cpu = runtime.NumCPU()
+	}
+	if cpu < profile.CPU {
+		return errors.New("host has fewer CPUs than the pinned profile")
+	}
+	c := model.Config{
+		Profiles: cfg.Profiles,
 		Hosts: []model.Host{
 			{
-				ID:         localName,
-				SSHTarget:  "localhost",
-				HelperPath: "/local",
-				ConfigPath: "/local",
-				ProfileIDs: []string{localName},
-				CPU:        1,
-				RAMMiB:     localRAMMiB,
-			},
-		},
-		Profiles: []model.Profile{
-			{
-				ID:        localName,
-				OS:        osName,
-				Arch:      runtime.GOARCH,
-				Runtime:   localName,
-				CPU:       1,
-				RAMMiB:    localRAMMiB,
-				ImagePath: localName,
+				ID:         cfg.HostID,
+				Endpoint:   cfg.Listen,
+				ProfileIDs: []string{profile.ID},
+				CPU:        cpu,
+				RAMMiB:     profile.RAMMiB * defaultMachineSlots,
 			},
 		},
 	}
+	if err = jsonWrite(e.dir, "controller-config.json", c); err != nil {
+		return err
+	}
+	if _, err = e.dir.ReadFile("token"); errors.Is(err, os.ErrNotExist) {
+		return e.dir.WriteFile("token", []byte(token()+"\n"))
+	}
+	return err
+}
+func (e *environment) prepareHostRoot(cfg host.Config) error {
+	_, statErr := os.Lstat(e.HostRoot)
+	if statErr == nil {
+		return e.validateHostRoot()
+	}
+	if !errors.Is(statErr, os.ErrNotExist) {
+		return statErr
+	}
+	helper, err := host.Open(cfg, nil)
+	if err != nil {
+		return err
+	}
+	if err = helper.Close(); err != nil {
+		return err
+	}
+	root, err := statefs.Open(e.HostRoot)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	return jsonWrite(root, "dev-owner.json", map[string]string{"state_dir": e.StateDir, "namespace": e.Namespace})
 }
 
-func prepareOptions(opts Options) (Options, error) {
-	var err error
-	if opts.StateDir == "" {
-		opts.StateDir = DefaultStateDir()
-	}
-	if opts.StateDir, err = filepath.Abs(opts.StateDir); err != nil {
-		return opts, err
-	}
-	if len(filepath.Join(opts.StateDir, "guest", guestAdminSocket)) >= unixPathLimit {
-		return opts, errors.New("dev state directory is too long for Unix sockets; use a shorter --state-dir")
-	}
-	if opts.Listen == "" {
-		opts.Listen = "127.0.0.1:4780"
-	}
-	host, _, err := net.SplitHostPort(opts.Listen)
+func (e *environment) validateHostRoot() error {
+	root, err := statefs.Open(e.HostRoot)
 	if err != nil {
-		return opts, err
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	raw, err := root.ReadFile("dev-owner.json")
+	if err != nil {
+		return err
+	}
+	var owner map[string]string
+	if err = json.Unmarshal(raw, &owner); err != nil {
+		return err
+	}
+	if owner["state_dir"] != e.StateDir || owner["namespace"] != e.Namespace {
+		return errors.New("short host root ownership mismatch")
+	}
+	return nil
+}
+func validateListen(listen string) error {
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		return err
 	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
-		return opts, errors.New("dev listen address must be a numeric loopback address")
-	}
-	if opts.Executable == "" {
-		opts.Executable, err = os.Executable()
-	}
-	if err != nil {
-		return opts, err
-	}
-	return opts, nil
-}
-
-func localWorkspace(dir *statefs.Dir, opts Options) (string, error) {
-	previous, err := dir.ReadFile("workspace-path")
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return "", err
-	}
-	workspace := opts.Workspace
-	if workspace == "" {
-		workspace = string(previous)
-		if workspace == "" {
-			workspace = filepath.Join(opts.StateDir, "workspace")
-		}
-	}
-	workspace, err = filepath.Abs(workspace)
-	if err != nil {
-		return "", err
-	}
-	if err = os.MkdirAll(workspace, 0700); err != nil {
-		return "", err
-	}
-	workspace, err = filepath.EvalSymlinks(workspace)
-	if err != nil {
-		return "", err
-	}
-	if len(previous) != 0 && string(previous) != workspace {
-		return "", errors.New("this dev environment already has a different workspace; use another --state-dir")
-	}
-	return workspace, dir.WriteFile("workspace-path", []byte(workspace))
-}
-
-func localCredentials(dir *statefs.Dir) ([]byte, error) {
-	token, err := dir.ReadFile("token")
-	if errors.Is(err, os.ErrNotExist) {
-		token = []byte(rand.Text() + rand.Text())
-		err = dir.WriteFile("token", token)
-	}
-	if err != nil {
-		return nil, err
-	}
-	return token, nil
-}
-
-// Run serves until cancellation. Stopping this controller leaves the independent
-// guest and its shells alive. Stop explicitly ends the guest afterwards.
-func Run(parent context.Context, options Options, ready func(Connection) error) (resultErr error) {
-	opts, err := prepareOptions(options)
-	if err != nil {
-		return err
-	}
-	dir, err := statefs.Open(opts.StateDir)
-	if err != nil {
-		return err
-	}
-	defer func() { resultErr = errors.Join(resultErr, dir.Close()) }()
-	lock, err := dir.Lock("dev.lock", true)
-	if err != nil {
-		return fmt.Errorf("dev environment is already running: %w", err)
-	}
-	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	// Reserve the public port before starting any background guest process.
-	listener, err := (&net.ListenConfig{}).Listen(parent, "tcp", opts.Listen)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = listener.Close() }()
-	opts.Workspace, err = localWorkspace(dir, opts)
-	if err != nil {
-		return err
-	}
-	token, err := localCredentials(dir)
-	if err != nil {
-		return err
-	}
-	transport, err := newTransport(dir, filepath.Join(opts.StateDir, "guest"), opts.Workspace, opts.Executable)
-	if err != nil {
-		return err
-	}
-	defer func() { resultErr = errors.Join(resultErr, transport.Close()) }()
-	controller, err := control.Open(filepath.Join(opts.StateDir, "controller"), localConfig(), transport)
-	if err != nil {
-		return err
-	}
-	defer func() { resultErr = errors.Join(resultErr, controller.Close()) }()
-	return serveController(parent, controller, listener, dir, opts, token, ready)
-}
-
-func serveController(
-	parent context.Context,
-	controller *control.Controller,
-	listener net.Listener,
-	dir *statefs.Dir,
-	opts Options,
-	token []byte,
-	ready func(Connection) error,
-) (resultErr error) {
-	handler, err := controller.Handler(token)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
-	workers := make(chan struct{})
-	go func() { defer close(workers); controller.Run(ctx) }()
-	defer func() { cancel(); <-workers }()
-	startup, stopStartup := context.WithTimeout(ctx, startupTimeout)
-	defer stopStartup()
-	machine, err := seedMachine(startup, controller)
-	if err != nil {
-		return err
-	}
-	target := Target{URL: "http://" + listener.Addr().String(), TokenPath: filepath.Join(opts.StateDir, "token")}
-	connection := Connection{
-		Target:    target,
-		MachineID: machine.ID, StateDir: opts.StateDir, Workspace: opts.Workspace,
-		ClankerdeskConfig: filepath.Join(opts.StateDir, "clankerdesk.json"),
-		ClientConfig:      filepath.Join(opts.StateDir, "client.json"),
-	}
-	if err = writeConnections(dir, connection); err != nil {
-		return err
-	}
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: readHeaderTimeout, IdleTimeout: time.Minute}
-	served := make(chan error, 1)
-	go func() { served <- server.Serve(listener) }()
-	defer func() {
-		cancel()
-		shutdown, done := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer done()
-		if closeErr := server.Shutdown(shutdown); closeErr != nil {
-			resultErr = errors.Join(resultErr, closeErr, server.Close())
-		}
-	}()
-	if ready != nil {
-		if err = ready(connection); err != nil {
-			return err
-		}
-	}
-	select {
-	case <-ctx.Done():
-		return nil
-	case err = <-served:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
-		}
-		return err
-	}
-}
-
-func localMachineID(ctx context.Context, c *control.Controller) (string, error) {
-	machines, err := c.List(ctx)
-	if err != nil {
-		return "", err
-	}
-	var id string
-	for _, machine := range machines {
-		if machine.Name == localName {
-			id = machine.ID
-			break
-		}
-	}
-	if id == "" {
-		op, createErr := c.Create(
-			ctx,
-			"dev-local-machine",
-			model.CreateInput{Name: localName, Profile: localName, Host: localName},
-		)
-		if createErr != nil {
-			return "", createErr
-		}
-		id = op.MachineID
-		if err = waitOperation(ctx, c, op.ID); err != nil {
-			return "", err
-		}
-	}
-	return id, nil
-}
-
-func seedMachine(ctx context.Context, c *control.Controller) (model.Machine, error) {
-	id, err := localMachineID(ctx, c)
-	if err != nil {
-		return model.Machine{}, err
-	}
-	startKey := model.NewID()
-	for {
-		machine, inspectErr := c.Inspect(ctx, id)
-		if inspectErr != nil {
-			return machine, inspectErr
-		}
-		if machine.Deleted {
-			return machine, errors.New("local machine was deleted; use a new --state-dir to create another environment")
-		}
-		if machine.State == model.Stopped {
-			if err = startWhenIdle(ctx, c, id, startKey); err != nil {
-				return machine, err
-			}
-		} else if status := c.GuestStatus(id); machine.State == model.Running && status.Status == "ready" {
-			return machine, checkGuestEngine(status.WasmSHA256)
-		}
-		if err = waitPoll(ctx, pollInterval); err != nil {
-			return machine, fmt.Errorf("local guest did not become ready: %w", err)
-		}
-	}
-}
-
-// The controller atomically refuses a new start while recovery owns the machine.
-// Leave its worker running and inspect again rather than racing that reservation.
-func startWhenIdle(ctx context.Context, c *control.Controller, id, key string) error {
-	op, err := c.Mutate(ctx, id, "start", key)
-	var apiErr *control.APIError
-	if errors.As(err, &apiErr) && apiErr.Code == "operation_pending" {
-		return nil
-	}
-	// Recovery can also complete between our stopped observation and Mutate's
-	// fresh observation. A now-running machine no longer needs a start.
-	if apiErr != nil && apiErr.Code == "prerequisite" {
-		machine, inspectErr := c.Inspect(ctx, id)
-		if inspectErr == nil && !machine.Deleted && machine.State == model.Running {
-			return nil
-		}
-	}
-	if err != nil {
-		return err
-	}
-	return waitOperation(ctx, c, op.ID)
-}
-
-func waitOperation(ctx context.Context, c *control.Controller, id string) error {
-	for {
-		op, err := c.Operation(ctx, id)
-		if err != nil {
-			return err
-		}
-		switch op.Status {
-		case localSucceeded:
-			return nil
-		case localFailed:
-			return fmt.Errorf("local operation %s %s: %s", id, op.Status, op.Error)
-		}
-		if err = waitPoll(ctx, pollInterval); err != nil {
-			return fmt.Errorf("waiting for local operation %s (%s: %s): %w", id, op.Status, op.Error, err)
-		}
-	}
-}
-
-func waitPoll(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-func writeConnections(dir *statefs.Dir, conn Connection) error {
-	configs := map[string]any{
-		"clankerdesk.json": conn.Target,
-		"connection.json":  conn,
-		"client.json": map[string]string{
-			"url":             conn.URL,
-			"token_file":      conn.TokenPath,
-			"default_host":    localName,
-			"default_profile": localName,
-		},
-	}
-	for name, config := range configs {
-		data, err := json.MarshalIndent(config, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err = dir.WriteFile(name, append(data, '\n')); err != nil {
-			return err
-		}
+		return errors.New("dev listen must use a literal loopback address")
 	}
 	return nil
 }
 
-// Stop ends local shells after the dev controller has been stopped. It preserves
-// the workspace and journal so the next Run starts the same machine identity.
-func Stop(ctx context.Context, stateDir string) (resultErr error) {
-	if stateDir == "" {
-		stateDir = DefaultStateDir()
+// Run starts the persistent host service and foreground ordinary controller.
+func Run(ctx context.Context, opts Options, onReady func(Connection) error) error {
+	if opts.Listen == "" {
+		opts.Listen = "127.0.0.1:0"
 	}
-	if _, err := os.Stat(stateDir); errors.Is(err, os.ErrNotExist) {
-		return nil
+	if err := validateListen(opts.Listen); err != nil {
+		return err
 	}
-	dir, err := statefs.Open(stateDir)
+	env, err := openEnvironment(ctx, opts, true)
 	if err != nil {
 		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, dir.Close()) }()
-	lock, err := dir.Lock("dev.lock", true)
-	if err != nil {
-		return errors.New("stop the running clankerbox dev command with Ctrl-C before running dev stop")
+	defer env.close()
+	if _, err = env.dir.ReadFile("teardown.json"); err == nil {
+		return errors.New("unfinished teardown fences this environment; run dev stop or dev destroy to finish")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
-	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	stop, cancel := context.WithTimeout(ctx, startupTimeout)
-	defer cancel()
-	return stopGuest(stop, filepath.Join(stateDir, "guest"))
+	if err = preflight(ctx, env.bundle); err != nil {
+		return err
+	}
+	if env.upgrade {
+		if err = env.applyUpgrade(ctx); err != nil {
+			return err
+		}
+	}
+	if err = env.prepare(); err != nil {
+		return err
+	}
+	if err = env.startHost(ctx); err != nil {
+		return err
+	}
+	child, err := env.startController(ctx, opts.Listen, "token")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = child.stop() }()
+	conn := Connection{
+		URL:               child.url,
+		TokenPath:         filepath.Join(env.StateDir, "token"),
+		DefaultHost:       localHostID,
+		DefaultProfile:    env.ProfileID,
+		StateDir:          env.StateDir,
+		ClientConfig:      filepath.Join(env.StateDir, "client.json"),
+		ClankerdeskConfig: filepath.Join(env.StateDir, "clankerdesk.json"),
+	}
+	if err = jsonWrite(
+		env.dir,
+		"client.json",
+		map[string]string{
+			"url":             conn.URL,
+			"token_file":      conn.TokenPath,
+			"default_host":    conn.DefaultHost,
+			"default_profile": conn.DefaultProfile,
+		},
+	); err != nil {
+		return err
+	}
+	if err = jsonWrite(
+		env.dir,
+		"clankerdesk.json",
+		map[string]any{
+			"url":       conn.URL,
+			"tokenPath": conn.TokenPath,
+			"machines":  map[string]string{"host": conn.DefaultHost, "profile": conn.DefaultProfile},
+		},
+	); err != nil {
+		return err
+	}
+	if err = jsonWrite(env.dir, "connection.json", conn); err != nil {
+		return err
+	}
+	if onReady != nil {
+		if err = onReady(conn); err != nil {
+			return err
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return child.stop()
+	case <-child.done:
+		return fmt.Errorf("controller exited: %w", child.err)
+	}
 }
+
+type controllerProcess struct {
+	cmd  *exec.Cmd
+	done chan struct{}
+	err  error
+	url  string
+}
+
+func (c *controllerProcess) stop() error {
+	select {
+	case <-c.done:
+		return c.err
+	default:
+	}
+	_ = c.cmd.Process.Signal(os.Interrupt)
+	select {
+	case <-c.done:
+		return c.err
+	case <-time.After(controllerShutdownTimeout):
+		_ = c.cmd.Process.Kill()
+		<-c.done
+		return errors.New("controller required forced termination; retained state preserved")
+	}
+}
+func (e *environment) startController(ctx context.Context, listen, tokenName string) (*controllerProcess, error) {
+	ready := filepath.Join(e.StateDir, "controller-ready")
+	if err := os.Remove(ready); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	c := &controllerProcess{done: make(chan struct{})}
+	//nolint:gosec // The verified bundle pins this executable; arguments are owned private paths.
+	c.cmd = exec.CommandContext(context.WithoutCancel(ctx),
+		e.bundle.path(e.bundle.Controller),
+		"--config",
+		filepath.Join(e.StateDir, "controller-config.json"),
+		"--state-dir",
+		filepath.Join(e.StateDir, "controller"),
+		"--token-file",
+		filepath.Join(e.StateDir, tokenName),
+		"--listen",
+		listen,
+		"--ready-file",
+		ready,
+	)
+	c.cmd.Stdout = os.Stderr
+	c.cmd.Stderr = os.Stderr
+	if err := c.cmd.Start(); err != nil {
+		return nil, err
+	}
+	go func() { c.err = c.cmd.Wait(); close(c.done) }()
+	timer := time.NewTimer(serviceStartupTimeout)
+	defer timer.Stop()
+	tick := time.NewTicker(readinessPollInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			_ = c.stop()
+			return nil, ctx.Err()
+		case <-c.done:
+			return nil, fmt.Errorf("controller startup failed: %w", c.err)
+		case <-timer.C:
+			_ = c.stop()
+			return nil, errors.New("controller readiness timed out")
+		case <-tick.C:
+			data, err := statefs.ReadPrivate(ready)
+			if err != nil {
+				continue
+			}
+			c.url = strings.TrimSpace(string(data))
+			auth, err := e.dir.ReadFile(tokenName)
+			if err != nil {
+				_ = c.stop()
+				return nil, err
+			}
+			hc, origin, err := rpctransport.Client(c.url, rpctransport.Credentials{}, strings.TrimSpace(string(auth)))
+			if err != nil {
+				_ = c.stop()
+				return nil, err
+			}
+			probe, cancel := context.WithTimeout(ctx, time.Second)
+			rpc := clankerboxv1connect.NewMachineServiceClient(hc, origin)
+			_, err = rpc.ListHosts(probe, connect.NewRequest(&v1.ListHostsRequest{}))
+			cancel()
+			hc.CloseIdleConnections()
+			if err == nil {
+				return c, nil
+			}
+		}
+	}
+}
+
+const (
+	environmentManifest = "environment.json"
+	environmentLock     = "environment.lock"
+	environmentPrefix   = "clankerbox-dev-"
+	upgradeManifest     = "upgrade.json"
+)

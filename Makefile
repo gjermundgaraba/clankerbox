@@ -4,6 +4,7 @@ build:
 	go build -o bin/clankerbox ./cmd/clankerbox
 	go build -o bin/clankerbox-server ./cmd/clankerbox-server
 	go build -o bin/clankerbox-host ./cmd/clankerbox-host
+	GOOS=linux GOARCH=arm64 go build -o bin/clankerbox-guest-linux-arm64 ./cmd/clankerbox-guest
 	GOOS=linux GOARCH=amd64 go build -o bin/clankerbox-guest-linux-amd64 ./cmd/clankerbox-guest
 	GOOS=darwin GOARCH=arm64 go build -o bin/clankerbox-guest-darwin-arm64 ./cmd/clankerbox-guest
 

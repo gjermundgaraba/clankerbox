@@ -1,0 +1,95 @@
+syntax = "proto3";
+package clankerbox.v1;
+option go_package = "clankerbox/gen/clankerbox/v1;clankerboxv1";
+import "google/protobuf/timestamp.proto";
+import "clankerbox/v1/resources.proto";
+import "clankerbox/v1/session.proto";
+
+service HostService {
+  rpc DescribeHost(DescribeHostRequest) returns (HostDescription);
+  // Acknowledges durable acceptance, not successful completion. Accepted work
+  // belongs to the host lifetime. An identical retry cannot repeat unsafe effects.
+  rpc SubmitOperation(SubmitOperationRequest) returns (SubmitOperationResponse);
+  rpc GetHostOperation(GetHostOperationRequest) returns (HostOperation);
+  rpc InspectMachine(InspectMachineRequest) returns (Observation);
+  rpc DescribeGuest(DescribeGuestRequest) returns (GuestDescription);
+  rpc CreateSession(CreateSessionRequest) returns (Session);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc EndSession(EndSessionRequest) returns (Session);
+  rpc AttachSession(stream AttachmentRequest) returns (stream AttachmentEvent);
+}
+message DescribeHostRequest {}
+message HostDescription {
+  string host_id = 1;
+  string os = 2;
+  string arch = 3;
+  string version = 4;
+  repeated Profile profiles = 5;
+  string schema = 6;
+}
+// Private configuration pin. Public discovery uses only Profile, never this DTO.
+// The host must validate this exact binding against its trusted installed profile.
+message ProfileBinding { Profile profile = 1; string image_path = 2; }
+message CheckpointBinding { Checkpoint checkpoint = 1; ProfileBinding profile = 2; }
+message OperationIdentity {
+  string operation_id = 1;
+  string machine_id = 2;
+  int64 generation = 3;
+  string name = 4;
+  ProfileBinding profile = 5;
+  string host_id = 6;
+}
+message CreateHostMachine {}
+message StartHostMachine {}
+message StopHostMachine {}
+message DeleteHostMachine {}
+message ForkHostMachine { string source_machine_id = 1; int64 source_generation = 2; }
+message CaptureHostCheckpoint {
+  string source_machine_id = 1; int64 source_generation = 2;
+  CheckpointBinding checkpoint = 3;
+}
+message RestoreHostCheckpoint {
+  string source_machine_id = 1; int64 source_generation = 2;
+  CheckpointBinding checkpoint = 3;
+}
+message DeleteHostCheckpoint { CheckpointBinding checkpoint = 1; }
+message SubmitOperationRequest {
+  OperationIdentity identity = 1;
+  oneof action {
+    CreateHostMachine create = 2;
+    StartHostMachine start = 3;
+    StopHostMachine stop = 4;
+    DeleteHostMachine delete = 5;
+    ForkHostMachine fork = 6;
+    CaptureHostCheckpoint capture_checkpoint = 7;
+    RestoreHostCheckpoint restore_checkpoint = 8;
+    DeleteHostCheckpoint delete_checkpoint = 9;
+  }
+}
+message SubmitOperationResponse {
+  // Identity and input fingerprint are committed before this response.
+  string operation_id = 1;
+  bool accepted = 2;
+  HostOperation operation = 3;
+}
+message GetHostOperationRequest { string operation_id = 1; }
+message HostOperation {
+  string operation_id = 1;
+  OperationStatus status = 2;
+  string error = 3;
+  Observation observation = 4;
+  CheckpointBinding checkpoint = 5;
+  // Optional host journal metadata, separate from public operation completion.
+  string phase = 6;
+  string input_fingerprint = 7;
+}
+message InspectMachineRequest { string machine_id = 1; int64 expected_generation = 2; }
+message Observation {
+  string machine_id = 1;
+  int64 generation = 2;
+  MachineState state = 3;
+  bool prepared = 4;
+  bool deleted = 5;
+  google.protobuf.Timestamp observed_at = 6;
+  GuestStatus guest = 7;
+}

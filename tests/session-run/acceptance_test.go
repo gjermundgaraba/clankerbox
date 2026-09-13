@@ -67,59 +67,6 @@ func acceptanceConfig(t *testing.T, origin string) string {
 	return path
 }
 
-func TestStoppedCheckRequiresEndpointPrerequisite(t *testing.T) {
-	t.Parallel()
-	const id = "0123456789abcdef0123456789abcdef"
-	const prerequisiteBody = `{"error":{"code":"prerequisite"}}`
-	for _, test := range []struct {
-		name     string
-		status   int
-		body     string
-		rejected bool
-	}{
-		{"prerequisite", 409, prerequisiteBody, false},
-		{"other conflict", 409, `{"error":{"code":"conflict"}}`, true},
-		{"invalid response", 409, `not json`, true},
-		{"missing code", 409, `{}`, true},
-		{"unauthorized", 401, prerequisiteBody, true},
-		{"unavailable", 503, prerequisiteBody, true},
-		{"not found", 404, `{}`, true},
-		{"unexpected success", 200, `{}`, true},
-		{"upgrade accepted", 101, "", true},
-		{"redirect", 307, "", true},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			requests := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests++
-				if r.Method != http.MethodGet || r.URL.Path != "/v1/machines/"+id+"/sessions/stream" ||
-					r.ProtoMajor != 1 {
-					t.Errorf("not a direct session request: %s %s %s", r.Method, r.URL.Path, r.Proto)
-				}
-				if r.Header.Get("Authorization") != "Bearer "+strings.Repeat("t", 32) ||
-					r.Header.Get("Connection") != "Upgrade" ||
-					r.Header.Get("Upgrade") != "clankerbox-session" {
-					t.Error("missing authentication or upgrade headers")
-				}
-				w.Header().Set("Location", "/must-not-follow")
-				w.Header().Set("Upgrade", "clankerbox-session")
-				w.WriteHeader(test.status)
-				_, _ = w.Write([]byte(test.body))
-			}))
-			defer server.Close()
-			err := runStoppedCheck(t.Context(), acceptanceConfig(t, server.URL), []string{id})
-			if (err != nil) != test.rejected {
-				t.Fatalf("error=%v, rejected=%v", err, test.rejected)
-			}
-			server.Close()
-			if requests != 1 {
-				t.Fatalf("expected only the upgrade request, got %d", requests)
-			}
-		})
-	}
-}
-
 func TestStoppedCheckTransportFailure(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(
@@ -127,7 +74,7 @@ func TestStoppedCheckTransportFailure(t *testing.T) {
 	)
 	path := acceptanceConfig(t, server.URL)
 	server.Close()
-	if err := runStoppedCheck(t.Context(), path, []string{"0123456789abcdef0123456789abcdef"}); err == nil {
+	if err := runStoppedCheck(t.Context(), path, []string{testMachineID}); err == nil {
 		t.Fatal("transport failure passed as a stopped prerequisite")
 	}
 }
@@ -146,60 +93,6 @@ func TestOversizeCommandFailsBeforeConfiguration(t *testing.T) {
 	}
 }
 
-func TestDeleteProbeRequiresDependency(t *testing.T) {
-	t.Parallel()
-	const id = "0123456789abcdef0123456789abcdef"
-	const dependency = `{"error":{"code":"dependency"}}`
-	const accepted = `{"id":"abcdef0123456789abcdef0123456789","machine_id":"` + id + `","status":"accepted"}`
-	for _, test := range []struct {
-		name   string
-		status int
-		body   string
-		pass   bool
-	}{
-		{"dependency", 409, dependency, true},
-		{"wrong conflict", 409, `{"error":{"code":"prerequisite"}}`, false},
-		{"malformed", 409, `not json`, false},
-		{"missing code", 409, `{}`, false},
-		{"unavailable", 503, dependency, false},
-		{"unauthorized", 401, dependency, false},
-		{"redirect", 307, dependency, false},
-		{"accepted", 202, accepted, false},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-			requests := 0
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests++
-				if r.Method != http.MethodPost || r.URL.Path != "/v1/machines/"+id+"/delete" ||
-					r.Header.Get("Idempotency-Key") == "" ||
-					r.Header.Get("Authorization") != "Bearer "+strings.Repeat("t", 32) {
-					t.Error("missing exact target, authentication or mutation identity")
-				}
-				w.Header().Set("Location", "/must-not-follow")
-				w.WriteHeader(test.status)
-				_, _ = w.Write([]byte(test.body))
-			}))
-			defer server.Close()
-			var out strings.Builder
-			err := runDeleteDependencyCheck(t.Context(), acceptanceConfig(t, server.URL), []string{id}, &out)
-			if (err == nil) != test.pass {
-				t.Fatalf("unexpected result: %v", err)
-			}
-			if test.status == http.StatusAccepted && out.String() != accepted {
-				t.Fatalf("accepted operation not retained: %q", out.String())
-			}
-			if test.status != http.StatusAccepted && out.Len() != 0 {
-				t.Fatalf("rejection emitted as operation: %q", out.String())
-			}
-			server.Close()
-			if requests != 1 {
-				t.Fatalf("probe replayed: %d requests", requests)
-			}
-		})
-	}
-}
-
 func TestDeleteProbeTransportFailure(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(
@@ -208,7 +101,7 @@ func TestDeleteProbeTransportFailure(t *testing.T) {
 	path := acceptanceConfig(t, server.URL)
 	server.Close()
 	var out strings.Builder
-	err := runDeleteDependencyCheck(t.Context(), path, []string{"0123456789abcdef0123456789abcdef"}, &out)
+	err := runDeleteDependencyCheck(t.Context(), path, []string{testMachineID}, &out)
 	if err == nil || !strings.Contains(err.Error(), "idempotency key") || out.Len() != 0 {
 		t.Fatalf("transport ambiguity not retained: %v, %q", err, out.String())
 	}

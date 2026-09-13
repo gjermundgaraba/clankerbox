@@ -15,10 +15,14 @@ class StoppedSessionAcceptanceTests(unittest.TestCase):
         state = 'running'
         operation = None
         probes = []
+        incarnation = 0
 
         def run(command, **kwargs):
-            nonlocal state, operation
+            nonlocal state, operation, incarnation
             if command[0] == 'runner':
+                if '--describe-guest' in command:
+                    value = {'machine_id': 'a' * 32, 'incarnation': str(incarnation)}
+                    return subprocess.CompletedProcess(command, 0, json.dumps(value), '')
                 if '--expect-stopped' in command:
                     probes.append(command)
                     if isinstance(probe_result, Exception):
@@ -28,12 +32,13 @@ class StoppedSessionAcceptanceTests(unittest.TestCase):
             action = command[4]
             if action in ('create', 'stop', 'start'):
                 state = 'stopped' if action == 'stop' else 'running'
+                if action in ('create', 'start'): incarnation += 1
                 operation = {'id': 'operation', 'machine_id': 'a' * 32, 'status': 'succeeded'}
                 value = operation
             elif action == 'operation':
                 value = operation
             elif action == 'inspect':
-                value = {'state': state, 'ssh_host_key': 'unchanged identity'}
+                value = {'state': state}
             else:
                 self.fail(f'unexpected command: {command}')
             return subprocess.CompletedProcess(command, 0, json.dumps(value), '')

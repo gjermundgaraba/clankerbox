@@ -4,14 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/urfave/cli/v3"
 
+	"connectrpc.com/connect"
+
+	v1 "clankerbox/gen/clankerbox/v1"
 	"clankerbox/internal/guest/protocol"
-	"clankerbox/internal/model"
+	"clankerbox/internal/rpcmodel"
 )
 
 const labelSeparator = "="
@@ -46,8 +48,16 @@ func (runner commandRunner) listSessions(ctx context.Context, name string) error
 		return err
 	}
 	var sessions []protocol.Session
-	if err = runner.api.Do(ctx, http.MethodGet, "/v1/machines/"+m.ID+"/sessions", nil, "", &sessions); err != nil {
+	response, err := runner.api.sessions.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{MachineId: m.ID}))
+	if err != nil {
 		return err
+	}
+	for _, value := range response.Msg.GetSessions() {
+		record, e := rpcmodel.FromSession(value)
+		if e != nil {
+			return e
+		}
+		sessions = append(sessions, record)
 	}
 	if runner.structured {
 		return jsonOut(runner.streams.Out, sessions)
@@ -76,9 +86,8 @@ func (runner commandRunner) setLabels(ctx context.Context, args []string) error 
 		}
 		labels[key] = value
 	}
-	var updated model.Machine
-	body := map[string]map[string]string{"labels": labels}
-	if err = runner.api.Do(ctx, http.MethodPost, "/v1/machines/"+m.ID+"/labels", body, "", &updated); err != nil {
+	updated, err := runner.api.SetLabels(ctx, m.ID, labels)
+	if err != nil {
 		return err
 	}
 	return runner.output(&updated)

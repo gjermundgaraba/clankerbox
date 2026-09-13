@@ -1,0 +1,48 @@
+syntax = "proto3";
+package guest.v1;
+option go_package = "clankerbox/spikes/real-local-guest/gen/guest/v1;guestv1";
+
+// Isolated gate-A guest contract; not a supported product endpoint.
+service GuestService {
+  rpc Describe(DescribeRequest) returns (Description);
+  rpc Create(CreateRequest) returns (Session);
+  rpc List(ListRequest) returns (ListResponse);
+  rpc End(EndRequest) returns (Session);
+  rpc Attach(stream Control) returns (stream Event);
+}
+message DescribeRequest { string machine_id = 1; }
+message Description { string machine_id = 1; string incarnation = 2; string engine_digest = 3; }
+message CreateRequest {
+  string machine_id = 1; string session_id = 2; string created_at = 3;
+  repeated string argv = 4; uint32 cols = 5; uint32 rows = 6;
+}
+message ListRequest { string machine_id = 1; }
+message ListResponse { repeated Session sessions = 1; }
+message EndRequest { string machine_id = 1; string session_id = 2; }
+message Session {
+  string id = 1; string status = 2; int64 pid = 3; string incarnation = 4;
+  uint64 offset = 5; uint64 retained_from = 6; uint32 cols = 7; uint32 rows = 8;
+  optional int32 exit_code = 9;
+}
+message Open {
+  string machine_id = 1; string session_id = 2; string expected_engine_digest = 3;
+  optional uint64 resume_offset = 4; string resume_incarnation = 5;
+}
+message Input { uint64 sequence = 1; bytes data = 2; }
+message Resize { uint64 sequence = 1; uint32 cols = 2; uint32 rows = 3; }
+message Control { oneof value { Open open = 1; Input input = 2; Resize resize = 3; } }
+message Opened {
+  Description identity = 1; Session session = 2; string mode = 3;
+  uint64 cut = 4; uint64 bootstrap_bytes = 5;
+}
+message SnapshotChunk { bytes data = 1; }
+message Output { uint64 next_offset = 1; bytes data = 2; }
+message Resized { uint64 offset = 1; uint32 cols = 2; uint32 rows = 3; }
+message Ack { uint64 sequence = 1; bool accepted = 2; string reason = 3; }
+message Gap { string reason = 1; }
+message Event {
+  oneof value {
+    Opened opened = 1; SnapshotChunk snapshot = 2; Output output = 3;
+    Resized resized = 4; Ack ack = 5; Session exited = 6; Gap gap = 7;
+  }
+}

@@ -32,8 +32,8 @@ func (a *API) WaitOperation(ctx context.Context, operation model.Operation) (mod
 		default:
 			return operation, operationError(operation, fmt.Errorf("unknown status %q", operation.Status))
 		}
-		var current model.Operation
-		if err := a.Do(ctx, "GET", "/v1/operations/"+operation.ID, nil, "", &current); err != nil {
+		current, err := a.Operation(ctx, operation.ID)
+		if err != nil {
 			return operation, operationError(operation, errors.Join(err, ctx.Err()))
 		}
 		if current.ID != operation.ID {
@@ -72,50 +72,49 @@ type waitOptions struct {
 	timeout time.Duration
 }
 
-func (runner commandRunner) mutate(
+func (runner commandRunner) finishMutation(
 	ctx context.Context,
-	path string,
-	in any,
-	id string,
+	operation model.Operation,
+	err error,
+	key string,
 	wait *waitOptions,
 	result string,
 ) error {
-	var operation model.Operation
-	if err := runner.api.Do(ctx, "POST", path, in, id, &operation); err != nil {
-		return fmt.Errorf("%w; retry with --idempotency-key %s", err, id)
+	if err != nil {
+		return fmt.Errorf("%w; retry with --idempotency-key %s", err, key)
 	}
 	if wait.async {
 		return runner.output(operation)
 	}
 	ctx, cancel := context.WithTimeout(ctx, wait.timeout)
 	defer cancel()
-	operation, err := runner.api.WaitOperation(ctx, operation)
+	operation, err = runner.api.WaitOperation(ctx, operation)
 	if err != nil {
 		return err
 	}
-	var out any
-	switch result {
-	case deleteCommand:
+	if result == deleteCommand {
 		return runner.output(operation)
-	case checkpointCommand:
-		out = &model.Checkpoint{}
-		path = "/v1/checkpoints/" + operation.CheckpointID
-	default:
-		out = &model.Machine{}
-		path = "/v1/machines/" + operation.MachineID
 	}
-	if err = runner.api.Do(ctx, "GET", path, nil, "", out); err != nil {
-		return operationError(operation, err)
+	if result == checkpointCommand {
+		cp, e := runner.api.Checkpoint(ctx, operation.CheckpointID)
+		if e != nil {
+			return operationError(operation, e)
+		}
+		return runner.output(cp)
 	}
-	return runner.output(out)
+	m, e := runner.api.Resolve(ctx, operation.MachineID)
+	if e != nil {
+		return operationError(operation, e)
+	}
+	return runner.output(m)
 }
 
 func (a *API) selectHost(ctx context.Context, host, profile string) (string, error) {
 	if host != "" {
 		return host, nil
 	}
-	var hosts []model.Host
-	if err := a.Do(ctx, "GET", "/v1/hosts", nil, "", &hosts); err != nil {
+	hosts, err := a.Hosts(ctx)
+	if err != nil {
 		return "", err
 	}
 	var eligible []string

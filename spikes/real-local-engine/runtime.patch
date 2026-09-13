@@ -1,0 +1,244 @@
+diff --git a/crates/smolvm-agent/src/main.rs b/crates/smolvm-agent/src/main.rs
+index 18a95c4a..d3bd29e0 100644
+--- a/crates/smolvm-agent/src/main.rs
++++ b/crates/smolvm-agent/src/main.rs
+@@ -1056,6 +1056,12 @@ fn ensure_mount_dir(path: &str) {
+     }
+ }
+ 
++fn persistent_root_overlay_options(overlay_mount: &str) -> String {
++    format!(
++        "lowerdir=/,upperdir={overlay_mount}/upper,workdir={overlay_mount}/work,index=off,redirect_dir=off,metacopy=off"
++    )
++}
++
+ /// Set up persistent rootfs overlay using overlayfs on /dev/vdb.
+ ///
+ /// If /dev/vdb exists (overlay disk attached by host), this function:
+@@ -1266,19 +1272,10 @@ fn setup_persistent_rootfs() {
+     let overlay_src = cstr("overlay");
+     let newroot = cstr(NEWROOT);
+     let overlay_type = cstr("overlay");
+-    // Simple overlayfs without index/redirect_dir/uuid — these options trigger
+-    // ext4 xattr writes + journal flushes on every mount. On macOS/HVF each
+-    // ext4 journal flush (FUA/barrier) serializes to an APFS fsync (~10-30ms).
+-    // With 15-30 flushes per mount, they add 200-900ms to every boot.
+-    //
+-    // These options also do NOT enable Docker overlay2 on this overlay — the
+-    // lower layer is the initramfs (ramfs) which has no file-handle support,
+-    // so the kernel falls back to index=off for any overlay2 upper dir on this
+-    // root regardless. Docker's data root is on /storage/ (bare ext4), not here.
+-    let overlay_opts = cstr(&format!(
+-        "lowerdir=/,upperdir={}/upper,workdir={}/work",
+-        OVERLAY_MOUNT, OVERLAY_MOUNT
+-    ));
++    // Virtiofs lower file handles change between cold boots. Explicitly
++    // disable origin/index, redirects and metacopy so persisted upper files
++    // do not depend on stale lower handles (ESTALE on Ubuntu rootfs).
++    let overlay_opts = cstr(&persistent_root_overlay_options(OVERLAY_MOUNT));
+     // SAFETY: mount overlayfs with the specified options
+     let result = unsafe {
+         libc::mount(
+@@ -7118,6 +7115,23 @@ mod bg_reap_tests {
+ 
+ #[cfg(test)]
+ mod tests {
++    #[test]
++    fn retained_root_overlay_disables_stale_lower_handles() {
++        let options = super::persistent_root_overlay_options("/mnt/overlay");
++        let flags: Vec<_> = options.split(',').collect();
++        for required in [
++            "lowerdir=/",
++            "upperdir=/mnt/overlay/upper",
++            "workdir=/mnt/overlay/work",
++            "index=off",
++            "redirect_dir=off",
++            "metacopy=off",
++        ] {
++            assert!(flags.contains(&required), "missing {required}: {options}");
++        }
++        assert_eq!(flags.len(), 6);
++    }
++
+     use super::*;
+ 
+     #[cfg(target_os = "linux")]
+diff --git a/src/agent/client.rs b/src/agent/client.rs
+index 99809b07..67dafba4 100644
+--- a/src/agent/client.rs
++++ b/src/agent/client.rs
+@@ -1497,7 +1497,15 @@ impl AgentClient {
+         // Returns Ok only when the ack is actually received, so callers
+         // can distinguish "sync confirmed" from "sync unknown".
+         match self.receive() {
+-            Ok(_) => {
++            Ok(response) => {
++                if std::env::var("SMOLVM_STOP_REQUIRE_ACK").as_deref() == Ok("1")
++                    && !is_shutdown_ack(&response)
++                {
++                    return Err(Error::agent(
++                        "shutdown ack",
++                        "guest response did not acknowledge shutdown",
++                    ));
++                }
+                 tracing::debug!("agent acknowledged shutdown (sync complete)");
+                 Ok(())
+             }
+@@ -3895,3 +3903,33 @@ mod flatten_timeout_tests {
+         }
+     }
+ }
++
++// The matching guest sends this only after sync_and_unmount_storage().
++fn is_shutdown_ack(response: &AgentResponse) -> bool {
++    matches!(response, AgentResponse::Ok { data: Some(data) }
++        if data.get("shutdown").and_then(serde_json::Value::as_bool) == Some(true))
++}
++
++#[cfg(test)]
++mod retained_shutdown_tests {
++    use super::*;
++
++    #[test]
++    fn retained_shutdown_accepts_only_explicit_ack() {
++        assert!(is_shutdown_ack(&AgentResponse::Ok {
++            data: Some(serde_json::json!({"shutdown": true})),
++        }));
++        for data in [
++            None,
++            Some(serde_json::json!({})),
++            Some(serde_json::json!({"shutdown": false})),
++            Some(serde_json::json!({"shutdown": "true"})),
++        ] {
++            assert!(!is_shutdown_ack(&AgentResponse::Ok { data }));
++        }
++        assert!(!is_shutdown_ack(&AgentResponse::Pong {
++            version: 1,
++            capabilities: vec![],
++        }));
++    }
++}
+diff --git a/src/agent/manager.rs b/src/agent/manager.rs
+index abe49084..74d28664 100644
+--- a/src/agent/manager.rs
++++ b/src/agent/manager.rs
+@@ -2594,6 +2594,18 @@ impl AgentManager {
+             false
+         };
+ 
++        // Retained controllers require confirmed guest sync before any live
++        // VMM termination, even when its PID identity is known.
++        if std::env::var("SMOLVM_STOP_REQUIRE_ACK").as_deref() == Ok("1")
++            && !shutdown_acked
++            && process::is_alive(pid)
++        {
++            return Err(Error::agent(
++                "stop agent",
++                "guest shutdown not acknowledged; retained VM was not terminated",
++            ));
++        }
++
+         // Identity check: vsock acknowledgement OR strict PID start-time match OR
+         // an argv match on this VM's unique boot-config path. We intentionally do
+         // NOT use the lenient is_our_process() here because it treats any alive
+@@ -3277,6 +3289,42 @@ fn boot_failure_reason(exit_code: Option<i32>, startup_log: Option<&str>) -> Str
+ 
+ #[cfg(test)]
+ mod tests {
++    // Run separately with SMOLVM_STOP_REQUIRE_ACK=1 and with it absent.
++    // This is a disposable host sleep process, never a VM.
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn retained_shutdown_orphan_preserves_live_process_and_markers() {
++        use std::process::Command;
++        let temp = tempfile::tempdir().unwrap();
++        let storage = StorageDisk::open_or_create_at(&temp.path().join("storage.raw"), 1).unwrap();
++        let overlay = OverlayDisk::open_or_create_at(&temp.path().join("overlay.raw"), 1).unwrap();
++        let mut manager = AgentManager::new(temp.path(), storage, overlay).unwrap();
++        manager.vsock_socket = temp.path().join("missing.sock");
++        manager.pid_file = temp.path().join("agent.pid");
++        manager.config_file = temp.path().join("agent.config.json");
++        let mut child = Command::new("/bin/sleep").arg("60").spawn().unwrap();
++        let pid = child.id() as i32;
++        let start = process::process_start_time(pid).unwrap();
++        std::fs::write(&manager.pid_file, format!("{pid}\n{start}\n")).unwrap();
++        std::fs::write(&manager.config_file, "marker").unwrap();
++        let result = manager.stop();
++        let alive = process::is_alive(pid);
++        let pid_preserved = manager.pid_file.exists();
++        let config_preserved = manager.config_file.exists();
++        let _ = child.kill();
++        let _ = child.wait();
++        if std::env::var("SMOLVM_STOP_REQUIRE_ACK").as_deref() == Ok("1") {
++            assert!(result.unwrap_err().to_string().contains("not acknowledged"));
++            assert!(alive && pid_preserved && config_preserved);
++        } else {
++            result.unwrap();
++            assert!(!alive && !pid_preserved && !config_preserved);
++        }
++        // A dead process may always be cleaned up, even without an ACK.
++        manager.stop().unwrap();
++        assert!(!manager.pid_file.exists());
++    }
++
+     /// An explicit override must win even over a real default, and a rootfs
+     /// is only accepted when `sbin/init` is present — checked without following
+     /// the symlink, because in a real rootfs it points at a guest-only path.
+diff --git a/src/agent/state_probe.rs b/src/agent/state_probe.rs
+index 1d6829ad..d4490e31 100644
+--- a/src/agent/state_probe.rs
++++ b/src/agent/state_probe.rs
+@@ -118,8 +118,10 @@ fn has_frozen_fork_state(name: &str, record: &VmRecord) -> bool {
+     {
+         return false;
+     }
+-    if db
+-        .dependent_clones(name)
++    // A cold-restarted source can retain children from an earlier live
++    // generation. Their independent CoW bases do not freeze this execution.
++    // Use the same lineage rule as start, retaining the legacy frozen guard.
++    if crate::agent::fork::restart_blocking_dependent_clones(&db, name)
+         .map(|clones| !clones.is_empty())
+         .unwrap_or(false)
+     {
+diff --git a/src/cli/vm_common.rs b/src/cli/vm_common.rs
+index a51c89e9..3c36f18c 100644
+--- a/src/cli/vm_common.rs
++++ b/src/cli/vm_common.rs
+@@ -2111,6 +2111,12 @@ pub fn stop_vm_named(name: &str) -> smolvm::Result<()> {
+     let resolved = smolvm::agent::state_probe::resolve_state(name, &record);
+     match resolved {
+         RecordState::Unreachable => {
++            if std::env::var("SMOLVM_STOP_REQUIRE_ACK").as_deref() == Ok("1") {
++                return Err(smolvm::Error::agent(
++                    "stop",
++                    "guest is unreachable; acknowledged shutdown required",
++                ));
++            }
+             // Only past this point is the zombie confirmed dead. On
+             // failure we return the error without claiming the machine
+             // stopped and without detaching its volumes.
+@@ -2150,6 +2156,12 @@ pub fn stop_vm_named(name: &str) -> smolvm::Result<()> {
+             // checkpoint only after confirming process death.
+         }
+         other => {
++            // Check for an unrecorded live VMM before detaching any resources.
++            // stop() retains PID/socket files if the guest cannot acknowledge.
++            let require_ack = std::env::var("SMOLVM_STOP_REQUIRE_ACK").as_deref() == Ok("1");
++            if require_ack {
++                AgentManager::for_vm(name)?.stop()?;
++            }
+             // Not running. If a prior start mounted the layers volume but the
+             // VM failed to boot, it could still be mounted — detach it. Safe:
+             // resolve_state() probed liveness, so the process is confirmed dead.
+@@ -2164,7 +2176,9 @@ pub fn stop_vm_named(name: &str) -> smolvm::Result<()> {
+             // never persisted). Check the on-disk PID file and, if the
+             // process is alive and its argv matches this VM's boot config
+             // path, kill it so the user doesn't have to hunt it manually.
+-            kill_orphaned_boot_process(name);
++            if !require_ack {
++                kill_orphaned_boot_process(name);
++            }
+             println!("Machine '{}' is not running (state: {})", name, other);
+             return Ok(());
+         }

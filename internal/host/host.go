@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,22 +25,51 @@ import (
 
 // Config pins the private storage root and trusted runtime installation paths.
 type Config struct {
-	Root          string          `json:"root"`
-	Profiles      []model.Profile `json:"profiles"`
-	TartPath      string          `json:"tart_path,omitempty"`
-	SmolvmPath    string          `json:"smolvm_path,omitempty"`
-	LibraryDir    string          `json:"library_dir,omitempty"`
-	DNS           string          `json:"dns,omitempty"`
-	LaunchctlPath string          `json:"launchctl_path,omitempty"`
-	LaunchdDomain string          `json:"launchd_domain,omitempty"`
-	SystemctlPath string          `json:"systemctl_path,omitempty"`
-	SystemdUser   bool            `json:"systemd_user,omitempty"`
-	PortMin       int             `json:"port_min,omitempty"`
-	PortMax       int             `json:"port_max,omitempty"`
+	QuarantinedMachineIDs []string        `json:"quarantined_machine_ids,omitempty"`
+	RuntimeDigest         string          `json:"runtime_digest,omitempty"`
+	PortLeaseRoot         string          `json:"port_lease_root,omitempty"`
+	Listen                string          `json:"listen,omitempty"`
+	TLSCert               string          `json:"tls_cert,omitempty"`
+	TLSKey                string          `json:"tls_key,omitempty"`
+	TLSCA                 string          `json:"tls_ca,omitempty"`
+	ControllerID          string          `json:"controller_id,omitempty"`
+	HostOS                string          `json:"host_os,omitempty"`
+	HostID                string          `json:"host_id,omitempty"`
+	Root                  string          `json:"root"`
+	Profiles              []model.Profile `json:"profiles"`
+	TartPath              string          `json:"tart_path,omitempty"`
+	SmolvmPath            string          `json:"smolvm_path,omitempty"`
+	LibraryDir            string          `json:"library_dir,omitempty"`
+	DNS                   string          `json:"dns,omitempty"`
+	LaunchctlPath         string          `json:"launchctl_path,omitempty"`
+	LaunchdDomain         string          `json:"launchd_domain,omitempty"`
+	SystemctlPath         string          `json:"systemctl_path,omitempty"`
+	SystemdUser           bool            `json:"systemd_user,omitempty"`
+	PortMin               int             `json:"port_min,omitempty"`
+	PortMax               int             `json:"port_max,omitempty"`
 }
+
+const (
+	hostDarwin        = "darwin"
+	hostLinux         = "linux"
+	statusPending     = "pending"
+	statusUnavailable = "unavailable"
+)
 
 // Validate applies runtime defaults and rejects unsafe or inconsistent host configuration.
 func (c *Config) Validate() error {
+	if err := c.validateQuarantine(); err != nil {
+		return err
+	}
+	if c.HostOS == "" {
+		c.HostOS = runtime.GOOS
+	}
+	if c.HostOS != hostDarwin && c.HostOS != hostLinux {
+		return errors.New("unsupported host platform")
+	}
+	if c.HostID != "" && !model.ValidName(c.HostID) {
+		return errors.New("invalid host identity")
+	}
 	if !model.SafePath(c.Root) || filepath.Clean(c.Root) != c.Root || c.Root == "/" {
 		return errors.New("root must be a dedicated absolute private directory")
 	}
@@ -59,6 +88,22 @@ func (c *Config) Validate() error {
 	if !regexp.MustCompile(`^(gui/[0-9]+|user/[0-9]+|system)$`).MatchString(c.LaunchdDomain) {
 		return errors.New("invalid launchd_domain")
 	}
+	if err := c.validatePorts(); err != nil {
+		return err
+	}
+	return c.validateProfiles()
+}
+func (c *Config) validatePorts() error {
+	if c.PortLeaseRoot == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return err
+		}
+		c.PortLeaseRoot = filepath.Join(home, ".clankerbox", "ports")
+	}
+	if !model.SafePath(c.PortLeaseRoot) {
+		return errors.New("port_lease_root must be an absolute private path")
+	}
 	if c.PortMin == 0 {
 		c.PortMin = 22000
 	}
@@ -66,9 +111,9 @@ func (c *Config) Validate() error {
 		c.PortMax = 22999
 	}
 	if c.PortMin < 1024 || c.PortMax < c.PortMin || c.PortMax > 65535 {
-		return errors.New("invalid private SSH port range")
+		return errors.New("invalid private guest RPC port range")
 	}
-	return c.validateProfiles()
+	return nil
 }
 
 // Manifest describes the owned machine passed to a runtime operation.
@@ -78,15 +123,12 @@ type Manifest struct {
 	SourceMachineID string        `json:"source_machine_id,omitempty"`
 	CheckpointID    string        `json:"checkpoint_id,omitempty"`
 	Branchable      bool          `json:"branchable,omitempty"`
-	SSHPrivateKey   string        `json:"ssh_private_key,omitempty"`
 	ID              string        `json:"id"`
 	Name            string        `json:"name"`
 	Profile         model.Profile `json:"profile"`
 	Generation      int64         `json:"generation"`
 	Prepared        bool          `json:"prepared"`
 	Deleted         bool          `json:"deleted"`
-	SSHUser         string        `json:"ssh_user,omitempty"`
-	SSHHostKey      string        `json:"ssh_host_key,omitempty"`
 	Endpoint        string        `json:"endpoint,omitempty"`
 	Port            int           `json:"port,omitempty"`
 }
@@ -102,7 +144,7 @@ type RuntimeState struct {
 }
 
 // CheckpointSpec describes a runtime artifact without exposing the operation journal.
-// SourcePort retains the captured guest's original forwarded SSH port for RAM restore.
+// SourcePort retains the captured guest's original forwarded guest RPC port for RAM restore.
 type CheckpointSpec struct {
 	ID         string
 	Kind       string
@@ -122,8 +164,8 @@ type Runtime interface {
 	Create(context.Context, Manifest) error
 	Configure(context.Context, Manifest) error
 	Start(context.Context, Manifest) error
-	Initialize(context.Context, Manifest) (string, string, string, error)
-	Verify(context.Context, Manifest) (string, string, string, error)
+	Initialize(context.Context, Manifest) (string, error)
+	Verify(context.Context, Manifest) (string, error)
 	Stop(context.Context, Manifest) error
 	Delete(context.Context, Manifest) error
 }
@@ -140,6 +182,7 @@ type Helper struct {
 	state   *statefs.Dir
 	db      *sql.DB
 	runtime Runtime
+	guests  *guestRegistry
 	mu      sync.Mutex
 }
 
@@ -171,6 +214,15 @@ func Open(cfg Config, rt Runtime) (_ *Helper, resultErr error) {
 			resultErr = errors.Join(resultErr, lock.Close())
 		}
 	}()
+
+	// A durable cross-environment lease uses the full canonical root identity.
+	cfg.Root, err = filepath.EvalSymlinks(cfg.Root)
+	if err != nil {
+		return nil, err
+	}
+	if err = cfg.Validate(); err != nil {
+		return nil, err
+	}
 
 	if err = validateOwner(dir); err != nil {
 		return nil, err
@@ -209,11 +261,16 @@ func Open(cfg Config, rt Runtime) (_ *Helper, resultErr error) {
 		return nil, errors.Join(closeErr, db.Close())
 	}
 	retained = true
-	return &Helper{cfg: cfg, state: dir, db: db, runtime: rt}, nil
+	h := &Helper{cfg: cfg, state: dir, db: db, runtime: rt, guests: newGuestRegistry()}
+	if err = h.adoptPorts(context.Background()); err != nil {
+		_ = h.Close()
+		return nil, err
+	}
+	return h, nil
 }
 
 // Close releases the journal and its private directory handle.
-func (h *Helper) Close() error { return errors.Join(h.db.Close(), h.state.Close()) }
+func (h *Helper) Close() error { h.guests.close(); return errors.Join(h.db.Close(), h.state.Close()) }
 
 func (h *Helper) manifest(ctx context.Context, id string) (Manifest, error) {
 	var m Manifest
@@ -268,6 +325,12 @@ func (h *Helper) save(ctx context.Context, m Manifest, a accepted) (resultErr er
 	if err == nil {
 		err = tx.Commit()
 	}
+	if err == nil && a.Phase == phaseAccepted && a.Response.Status == statusUnresolved {
+		h.guests.suspend(a.Request.MachineID, a.Request.SourceMachineID)
+	}
+	if err == nil && m.Deleted && a.Phase == phaseDone {
+		err = h.releasePort(m)
+	}
 	return err
 }
 func (h *Helper) profile(p model.Profile) bool {
@@ -278,54 +341,17 @@ func (h *Helper) profile(p model.Profile) bool {
 	}
 	return false
 }
-func (h *Helper) port(ctx context.Context) (_ int, resultErr error) {
-	rows, err := h.db.QueryContext(ctx, "SELECT body FROM machines")
-	if err != nil {
-		return 0, err
-	}
-	defer func() { resultErr = errors.Join(resultErr, rows.Close()) }()
-	used := map[int]bool{}
-	for rows.Next() {
-		var b []byte
-		var m Manifest
-		if err = rows.Scan(&b); err != nil {
-			return 0, err
-		}
-		if err = json.Unmarshal(b, &m); err != nil {
-			return 0, err
-		}
-		if !m.Deleted {
-			used[m.Port] = true
-		}
-	}
-	if err = rows.Err(); err != nil {
-		return 0, err
-	}
-	for p := h.cfg.PortMin; p <= h.cfg.PortMax; p++ {
-		if !used[p] {
-			listener, listenErr := (&net.ListenConfig{}).Listen(
-				ctx,
-				"tcp4",
-				net.JoinHostPort("127.0.0.1", strconv.Itoa(p)),
-			)
-			if listenErr == nil {
-				return p, listener.Close()
-			}
-		}
-	}
-	return 0, errors.New("private SSH port range exhausted")
-}
+
 func (h *Helper) observation(ctx context.Context, m Manifest) (*model.Observation, error) {
 	obs := &model.Observation{
 		MachineID:  m.ID,
 		Generation: m.Generation,
 		Prepared:   m.Prepared,
 		Deleted:    m.Deleted,
-		SSHUser:    m.SSHUser,
-		SSHHostKey: m.SSHHostKey,
 		Endpoint:   m.Endpoint,
 		State:      model.Stopped,
 		ObservedAt: time.Now().UTC(),
+		Guest:      h.guests.observation(m.ID),
 	}
 	if m.Deleted {
 		return obs, nil
@@ -347,14 +373,15 @@ func (h *Helper) observation(ctx context.Context, m Manifest) (*model.Observatio
 	}
 	if !m.Prepared {
 		obs.Endpoint = ""
-		obs.SSHUser = ""
-		obs.SSHHostKey = ""
 	}
 	return obs, nil
 }
 
 // Inspect reports the current owned state without starting or recreating a machine.
 func (h *Helper) Inspect(ctx context.Context, id string) model.Response {
+	if err := h.cfg.quarantineError(id); err != nil {
+		return model.Response{Status: statusFailed, Error: err.Error()}
+	}
 	if !model.ValidID(id) {
 		return model.Response{Status: statusFailed, Error: "invalid machine ID"}
 	}
@@ -374,6 +401,9 @@ func failure(req model.Request, err error) model.Response {
 
 // Execute serializes a generation transition and journals native effects before dispatch.
 func (h *Helper) Execute(ctx context.Context, req model.Request) model.Response {
+	if err := h.cfg.quarantineRequest(req); err != nil {
+		return failure(req, err)
+	}
 	if req.Action == "inspect" {
 		if req.OperationID != "" || req.Generation != 0 {
 			return failure(req, errors.New("inspect must not carry an operation generation"))
@@ -406,14 +436,14 @@ func (h *Helper) Execute(ctx context.Context, req model.Request) model.Response 
 			Error:       "lock host mutation: " + err.Error(),
 		}
 	}
-	response := h.executeLocked(ctx, req)
+	response := h.executeLocked(ctx, req, false)
 	if closeErr := lock.Close(); closeErr != nil {
 		response.Status = statusUnresolved
 		response.Error = errors.Join(errors.New(response.Error), closeErr).Error()
 	}
 	return response
 }
-func (h *Helper) executeLocked(ctx context.Context, req model.Request) model.Response {
+func (h *Helper) executeLocked(ctx context.Context, req model.Request, acceptOnly bool) model.Response {
 	var a accepted
 	var raw []byte
 	var fp string
@@ -434,7 +464,7 @@ func (h *Helper) executeLocked(ctx context.Context, req model.Request) model.Res
 	}
 	if req.Action == actionFork || req.Action == actionRestore || req.Action == actionCapture ||
 		req.Action == actionDeleteCheckpoint {
-		return h.executeDerived(ctx, req, a, len(raw) != 0)
+		return h.executeDerived(ctx, req, a, len(raw) != 0, acceptOnly)
 	}
 	m, merr := h.manifest(ctx, req.MachineID)
 	if len(raw) == 0 {
@@ -444,6 +474,9 @@ func (h *Helper) executeLocked(ctx context.Context, req model.Request) model.Res
 		}
 	} else if merr != nil || m.Generation != req.Generation {
 		return failure(req, errors.New("accepted generation no longer current"))
+	}
+	if acceptOnly {
+		return a.Response
 	}
 	return h.reconcile(ctx, m, a)
 }
@@ -635,7 +668,7 @@ func (r *lifecycleAttempt) prepareCreated(ctx context.Context) error {
 		if state.State != model.Running {
 			return errors.New("preparation interrupted; explicit reconciliation required before another boot")
 		}
-		r.machine.SSHUser, r.machine.SSHHostKey, r.machine.Endpoint, err = r.helper.runtime.Initialize(ctx, r.machine)
+		r.machine.Endpoint, err = r.helper.runtime.Initialize(ctx, r.machine)
 		if err != nil {
 			return err
 		}
@@ -670,15 +703,12 @@ func (r *lifecycleAttempt) startRetained(ctx context.Context, state RuntimeState
 		return errors.New("start is ambiguous; refusing another cold boot")
 	}
 	r.machine.Branchable = r.machine.Profile.Runtime == runtimeSmolvm
-	// Reinstall no identity: verify the retained key and restart sshd through trusted exec.
-	user, key, endpoint, e := r.helper.runtime.Verify(ctx, r.machine)
+	endpoint, e := r.helper.runtime.Verify(ctx, r.machine)
 	if e != nil {
 		return e
 	}
-	if user != r.machine.SSHUser || key != r.machine.SSHHostKey {
-		return errors.New("retained SSH identity changed")
-	}
 	r.machine.Endpoint = endpoint
+
 	return nil
 }
 
@@ -740,37 +770,6 @@ func (r *lifecycleAttempt) deleteRetained(ctx context.Context, state RuntimeStat
 	return nil
 }
 
-// Connect resolves only a prepared owned machine. The readiness line is consumed
-// by the controller before it starts the restricted guest SSH link.
-func (h *Helper) Connect(ctx context.Context, id string, in io.Reader, out io.Writer) (resultErr error) {
-	m, err := h.readyMachine(ctx, id)
-	if err != nil {
-		return err
-	}
-	conn, err := (&net.Dialer{Timeout: connectionTimeout}).DialContext(ctx, "tcp", m.Endpoint)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
-			resultErr = errors.Join(resultErr, closeErr)
-		}
-	}()
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
-	if _, err = io.WriteString(out, "{\"ready\":true}\n"); err != nil {
-		return err
-	}
-	go func() {
-		_, _ = io.Copy(conn, in)
-		if tcp, ok := conn.(*net.TCPConn); ok {
-			_ = tcp.CloseWrite()
-		}
-	}()
-	_, err = io.Copy(out, conn)
-	_ = conn.Close()
-	return err
-}
 func validEndpoint(m Manifest, endpoint string) error {
 	host, port, err := net.SplitHostPort(endpoint)
 	if err != nil {
@@ -784,8 +783,8 @@ func validEndpoint(m Manifest, endpoint string) error {
 		if host != "127.0.0.1" || port != strconv.Itoa(m.Port) {
 			return errors.New("endpoint differs from assigned private loopback forward")
 		}
-	} else if port != "22" || !ip.IsPrivate() || ip.IsLoopback() {
-		return errors.New("tart endpoint must be a private guest IP on port 22")
+	} else if port != "7443" || !ip.IsPrivate() || ip.IsLoopback() {
+		return errors.New("tart endpoint must be a private guest IP on port 7443")
 	}
 	return nil
 }
@@ -852,7 +851,7 @@ func (h *Helper) createIdentity(ctx context.Context, req model.Request, merr err
 	}
 	m := Manifest{ID: req.MachineID, Name: req.Name, Profile: req.Profile}
 	if m.Profile.Runtime == runtimeSmolvm {
-		m.Port, err = h.port(ctx)
+		m.Port, err = h.port(ctx, req.MachineID)
 		if err != nil {
 			return Manifest{}, err
 		}
@@ -898,26 +897,40 @@ func (c *Config) validateProfiles() error {
 			return errors.New("duplicate profile")
 		}
 		seen[p.ID] = true
-		switch p.Runtime {
-		case "local":
-			return errors.New("local profiles require clankerbox dev, not a VM host helper")
-		case runtimeTart:
-			if !model.SafePath(c.TartPath) || !model.SafePath(c.LaunchctlPath) {
-				return errors.New("tart requires absolute tart_path and launchctl_path")
-			}
-		case runtimeSmolvm:
-			if !model.SafePath(c.SmolvmPath) || !model.SafePath(c.LibraryDir) || !model.SafePath(c.SystemctlPath) {
-				return errors.New("smolvm requires absolute smolvm_path, library_dir and systemctl_path")
-			}
-			if len(
-				c.Root,
-			)+len(
-				"/machines/",
-			)+32+len(
-				"/c/smolvm/vms/0000000000000000/control.sock",
-			) >= unixSocketPathLimit {
-				return errors.New("smolvm root too long for Unix socket paths; use a short private path")
-			}
+		if err := c.validateRuntimeProfile(*p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (c *Config) validateRuntimeProfile(p model.Profile) error {
+	switch p.Runtime {
+	case runtimeTart:
+		if c.HostOS != hostDarwin {
+			return errors.New("tart requires a macOS host")
+		}
+		if !model.SafePath(c.TartPath) || !model.SafePath(c.LaunchctlPath) {
+			return errors.New("tart requires absolute tart_path and launchctl_path")
+		}
+	case runtimeSmolvm:
+		if (c.HostOS == hostDarwin && p.Arch != "arm64") || (c.HostOS == hostLinux && p.Arch != "amd64") {
+			return errors.New("unsupported: smolvm host/guest architecture is not qualified")
+		}
+		supervisorPath := c.SystemctlPath
+		if c.HostOS == hostDarwin {
+			supervisorPath = c.LaunchctlPath
+		}
+		if !model.SafePath(c.SmolvmPath) || !model.SafePath(c.LibraryDir) || !model.SafePath(supervisorPath) {
+			return errors.New("smolvm requires absolute smolvm_path, library_dir and systemctl_path")
+		}
+		suffix := "/runtime/c/smolvm/vms/0000000000000000/control.sock"
+		limit := unixSocketPathLimit
+		if c.HostOS == hostDarwin {
+			suffix = "/runtime/Library/Caches/smolvm/vms/0000000000000000/control.sock"
+			limit = 104
+		}
+		if len(c.Root)+len(suffix) >= limit {
+			return errors.New("smolvm root too long for Unix socket paths; use a short private path")
 		}
 	}
 	return nil

@@ -1,0 +1,9 @@
+[]
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+
+0 loaded units listed.
+To show all installed unit files use 'systemctl list-unit-files'.
+8d2a6485a91c19af6fbd1eac409e7dd708f50e581afee50cb2929871994f5d29  /home/clanker/cbre.WEMt4r/bin/smolvm
+c232121105422b88640b09802a9fca0601caf136d38f04f9b3f0e5d6c3bec0ca  /home/clanker/cbre.WEMt4r/agent-rootfs/usr/local/bin/smolvm-agent
+3f021ac366152b33c7c329f893804fa9adda5d4352fac4b88214ae28fb89ebd0  /home/clanker/clankerbox/versions/1.14.1/lib/libkrun.so
+3f021ac366152b33c7c329f893804fa9adda5d4352fac4b88214ae28fb89ebd0  /home/clanker/clankerbox/versions/1.14.1/lib/libkrun.so.2

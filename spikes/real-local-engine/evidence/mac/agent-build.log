@@ -1,0 +1,86 @@
+   Compiling ring v0.17.14
+   Compiling icu_properties v2.2.0
+   Compiling icu_normalizer v2.2.0
+   Compiling serde_core v1.0.228
+   Compiling getrandom v0.2.17
+   Compiling tracing-attributes v0.1.31
+   Compiling linux-raw-sys v0.12.1
+   Compiling adler2 v2.0.1
+   Compiling serde v1.0.228
+   Compiling untrusted v0.9.0
+   Compiling log v0.4.32
+   Compiling pin-project-lite v0.2.17
+   Compiling simd-adler32 v0.3.9
+   Compiling zmij v1.0.21
+   Compiling miniz_oxide v0.8.9
+   Compiling tracing v0.1.44
+   Compiling rustix v1.1.4
+   Compiling idna_adapter v1.2.2
+   Compiling crc32fast v1.5.0
+   Compiling crypto-common v0.1.7
+   Compiling block-buffer v0.10.4
+   Compiling serde_derive v1.0.228
+   Compiling rustls v0.23.40
+   Compiling percent-encoding v2.3.2
+   Compiling autocfg v1.5.1
+   Compiling serde_json v1.0.150
+   Compiling memoffset v0.9.1
+   Compiling form_urlencoded v1.2.2
+   Compiling rustls-webpki v0.103.13
+   Compiling digest v0.10.7
+   Compiling flate2 v1.1.9
+   Compiling idna v1.1.0
+   Compiling webpki-roots v1.0.7
+   Compiling getrandom v0.4.2
+   Compiling parking_lot_core v0.9.12
+   Compiling regex-syntax v0.8.11
+   Compiling base64 v0.22.1
+   Compiling memchr v2.8.1
+   Compiling itoa v1.0.18
+   Compiling static_assertions v1.1.0
+   Compiling twox-hash v1.6.3
+   Compiling regex-automata v0.4.14
+   Compiling webpki-roots v0.26.11
+   Compiling url v2.5.8
+   Compiling xattr v1.6.1
+   Compiling filetime v0.2.29
+   Compiling cpufeatures v0.2.17
+   Compiling lazy_static v1.5.0
+   Compiling scopeguard v1.2.0
+   Compiling lock_api v0.4.14
+   Compiling sharded-slab v0.1.7
+   Compiling sha2 v0.10.9
+   Compiling tar v0.4.46
+   Compiling ureq v2.12.1
+   Compiling matchers v0.2.0
+   Compiling ruzstd v0.7.3
+   Compiling hmac v0.12.1
+   Compiling tracing-serde v0.2.0
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.9
+   Compiling fastrand v2.4.1
+   Compiling nu-ansi-term v0.50.3
+   Compiling tempfile v3.27.0
+   Compiling tracing-subscriber v0.3.23
+   Compiling smolvm-oci-layer v1.14.1 (/Users/example/ws/pers/clankerbox/.work/real-local-engine/source/crates/smolvm-oci-layer)
+   Compiling smolvm-s3fs v1.14.1 (/Users/example/ws/pers/clankerbox/.work/real-local-engine/source/crates/smolvm-s3fs)
+   Compiling parking_lot v0.12.5
+   Compiling nix v0.27.1
+   Compiling smolvm-protocol v1.14.1 (/Users/example/ws/pers/clankerbox/.work/real-local-engine/source/crates/smolvm-protocol)
+   Compiling smolvm-agent v1.14.1 (/Users/example/ws/pers/clankerbox/.work/real-local-engine/source/crates/smolvm-agent)
+warning: use of deprecated type alias `libc::time_t`: This type is changed to 64-bit in musl 1.2.0, we'll follow that change in the future release. See #1848 for more info.
+   --> crates/smolvm-agent/src/main.rs:232:47
+    |
+232 |         tv_sec: (ns / 1_000_000_000) as libc::time_t,
+    |                                               ^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated type alias `libc::time_t`: This type is changed to 64-bit in musl 1.2.0, we'll follow that change in the future release. See #1848 for more info.
+  --> crates/smolvm-agent/src/timesync.rs:82:62
+   |
+82 |                 tv_sec: (host_ns / NANOS_IN_SECOND) as libc::time_t,
+   |                                                              ^^^^^^
+
+warning: `smolvm-agent` (bin "smolvm-agent") generated 2 warnings
+    Finished `release` profile [optimized] target(s) in 50.90s

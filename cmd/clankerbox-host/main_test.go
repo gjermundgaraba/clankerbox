@@ -26,7 +26,7 @@ func TestHelpDoesNotStartService(t *testing.T) {
 			if err := cmd.Run(context.Background(), append([]string{cmd.Name}, args...)); err != nil {
 				t.Fatal(err)
 			}
-			for _, want := range []string{"clankerbox-host", testConfigFlag, "--connect", "--guest-prepare"} {
+			for _, want := range []string{"clankerbox-host", testConfigFlag, "persistent private host RPC service"} {
 				if !strings.Contains(output.String(), want) {
 					t.Errorf("help missing %q: %s", want, &output)
 				}
@@ -47,10 +47,10 @@ func TestCommandValidation(t *testing.T) {
 		{
 			"conflicting modes",
 			[]string{testConfigFlag, testConfigFile, "--connect", "machine", "--guest-prepare", "machine"},
-			"mutually exclusive",
+			unknownFlag,
 		},
-		{"unknown flag", []string{"--unknown"}, "flag provided but not defined"},
-		{"removed auth flag", []string{"--auth-prepare", "unused"}, "flag provided but not defined"},
+		{"unknown flag", []string{"--unknown"}, unknownFlag},
+		{"removed auth flag", []string{"--auth-prepare", "unused"}, unknownFlag},
 		{"unexpected argument", append(append([]string{}, required...), "extra"), "unexpected argument"},
 		{"missing value", []string{testConfigFlag}, "flag needs an argument"},
 	}
@@ -87,9 +87,7 @@ func TestCommandFlags(t *testing.T) {
 			if got := cmd.String("config"); got != testConfigFile {
 				t.Errorf("config = %q", got)
 			}
-			if got := cmd.String("connect"); got != "" {
-				t.Errorf("connect = %q", got)
-			}
+
 			return nil
 		}
 		if err := cmd.Run(
@@ -103,3 +101,5 @@ func TestCommandFlags(t *testing.T) {
 		}
 	}
 }
+
+const unknownFlag = "flag provided but not defined"

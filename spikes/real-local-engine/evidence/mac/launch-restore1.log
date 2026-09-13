@@ -1,0 +1,24 @@
+[2m2026-09-12T18:13:19.427867Z[0m [34mDEBUG[0m starting smolvm [3mversion[0m[2m=[0m"1.14.1"
+Starting machine 'gate-restore1' and 1 port mapping(s)...
+[2m2026-09-12T18:13:19.436179Z[0m [32m INFO[0m preparing agent VM launch [3mrootfs[0m[2m=[0m/private/tmp/cbre-0bkjipap/agent-rootfs [3mstorage[0m[2m=[0m/private/tmp/cbre-0bkjipap/h/Library/Caches/smolvm/vms/2313268317b9c8df/storage.qcow2 [3msocket[0m[2m=[0m/private/tmp/cbre-0bkjipap/h/Library/Caches/smolvm/vms/2313268317b9c8df/agent.sock [3mmount_count[0m[2m=[0m0
+[2m2026-09-12T18:13:19.437071Z[0m [32m INFO[0m boot: disks ready [3melapsed_ms[0m[2m=[0m1
+[2m2026-09-12T18:13:19.438378Z[0m [32m INFO[0m boot: config written [3melapsed_ms[0m[2m=[0m3
+[2m2026-09-12T18:13:19.463358Z[0m [32m INFO[0m boot: subprocess spawned [3mpid[0m[2m=[0m79615 [3mspawn_ms[0m[2m=[0m24
+[2m2026-09-12T18:13:19.463941Z[0m [34mDEBUG[0m waiting for agent to be ready
+[2m2026-09-12T18:13:19.474171Z[0m [34mDEBUG[0m starting smolvm [3mversion[0m[2m=[0m"1.14.1"
+[2m2026-09-12T18:13:19.859928Z[0m [32m INFO[0m clone agent ready (ping) [3melapsed_ms[0m[2m=[0m396
+[2m2026-09-12T18:13:19.864200Z[0m [32m INFO[0m agent VM is ready [3mpid[0m[2m=[0m79615 [3mboot_ms[0m[2m=[0m400.637583
+Machine 'gate-restore1' running (PID: 79615)
+[2m2026-09-12T18:13:20.206235Z[0m [34mDEBUG[0m agent manager detached, VM will continue running
+[2m2026-09-12T18:13:29.565509Z[0m [34mDEBUG[0m starting smolvm [3mversion[0m[2m=[0m"1.14.1"
+Starting machine 'gate-restore1' and 1 port mapping(s)...
+[2m2026-09-12T18:13:29.573014Z[0m [32m INFO[0m preparing agent VM launch [3mrootfs[0m[2m=[0m/private/tmp/cbre-0bkjipap/agent-rootfs [3mstorage[0m[2m=[0m/private/tmp/cbre-0bkjipap/h/Library/Caches/smolvm/vms/2313268317b9c8df/storage.qcow2 [3msocket[0m[2m=[0m/private/tmp/cbre-0bkjipap/h/Library/Caches/smolvm/vms/2313268317b9c8df/agent.sock [3mmount_count[0m[2m=[0m0
+[2m2026-09-12T18:13:29.573372Z[0m [32m INFO[0m boot: disks ready [3melapsed_ms[0m[2m=[0m1
+[2m2026-09-12T18:13:29.573779Z[0m [32m INFO[0m boot: config written [3melapsed_ms[0m[2m=[0m1
+[2m2026-09-12T18:13:29.574452Z[0m [32m INFO[0m boot: subprocess spawned [3mpid[0m[2m=[0m80010 [3mspawn_ms[0m[2m=[0m0
+[2m2026-09-12T18:13:29.575051Z[0m [34mDEBUG[0m waiting for agent to be ready
+[2m2026-09-12T18:13:29.590716Z[0m [34mDEBUG[0m starting smolvm [3mversion[0m[2m=[0m"1.14.1"
+[2m2026-09-12T18:13:30.714388Z[0m [34mDEBUG[0m agent ready (doorbell) [3melapsed_ms[0m[2m=[0m1139
+[2m2026-09-12T18:13:30.714455Z[0m [32m INFO[0m agent VM is ready [3mpid[0m[2m=[0m80010 [3mboot_ms[0m[2m=[0m1139.934583
+Machine 'gate-restore1' running (PID: 80010)
+[2m2026-09-12T18:13:30.768746Z[0m [34mDEBUG[0m agent manager detached, VM will continue running

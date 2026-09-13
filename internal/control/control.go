@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -44,10 +43,9 @@ const (
 	failedStatus           = "failed"
 )
 
-// Transport dispatches lifecycle requests and opens SSH streams to configured hosts.
+// Transport dispatches typed lifecycle work to configured host services.
 type Transport interface {
 	Call(context.Context, model.Host, model.Request) (model.Response, error)
-	Connect(context.Context, model.Host, string) (io.ReadWriteCloser, error)
 }
 
 // APIError describes a client-visible failure and its HTTP status.
@@ -62,7 +60,6 @@ func problem(status int, code, message string) error { return &APIError{code, me
 
 // Controller owns durable lifecycle intent and serializes operations per host.
 type Controller struct {
-	guest     *guestRuntime
 	logger    *slog.Logger
 	db        *sql.DB
 	lock      *statefs.Lock
@@ -112,12 +109,7 @@ func Open(path string, cfg model.Config, transport Transport) (*Controller, erro
 	if err != nil {
 		return fail(errors.Join(err, db.Close()))
 	}
-	guest, err := openGuestRuntime(directory)
-	if err != nil {
-		return fail(errors.Join(err, db.Close()))
-	}
 	return &Controller{
-		guest:     guest,
 		logger:    slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		db:        db,
 		lock:      lock,
@@ -432,23 +424,6 @@ func admitCreate(ctx context.Context, tx *sql.Tx, h model.Host, p model.Profile,
 	if count != 0 {
 		return problem(http.StatusConflict, "name_conflict", "machine name already exists")
 	}
-	if p.Runtime == "local" {
-		// A local host owns one immutable machine even after it is stopped or
-		// deleted. Check within admission's transaction, including pending creates,
-		// before a rejected request can acquire a durable capacity reservation.
-		if err := tx.QueryRowContext(ctx,
-			"SELECT count(*) FROM machines WHERE json_extract(CAST(body AS TEXT),'$.host')=?", h.ID).
-			Scan(&count); err != nil {
-			return err
-		}
-		if count != 0 {
-			return problem(
-				http.StatusConflict,
-				"local_machine_exists",
-				"local host already has its retained machine; use a new dev state directory for another environment",
-			)
-		}
-	}
 	return capacity(ctx, tx, h, p, "")
 }
 
@@ -491,6 +466,9 @@ func (c *Controller) Mutate(ctx context.Context, id, action, key string) (_ mode
 	if !ok {
 		return o, problem(http.StatusConflict, "configuration", "machine host is no longer configured")
 	}
+	if action == stopAction && m.State == model.Stopped {
+		return completeStopped(ctx, tx, m, key, fp)
+	}
 	if action == startAction {
 		if err = capacity(ctx, tx, h, m.ProfileSpec, m.ID); err != nil {
 			return o, err
@@ -526,6 +504,37 @@ func (c *Controller) Mutate(ctx context.Context, id, action, key string) (_ mode
 	}
 	return o, err
 }
+
+// completeStopped records an idempotent no-op only after fresh host observation
+// and ordinary reservation/generation admission. No host effect or generation
+// advance is necessary to establish the already-observed desired stopped state.
+func completeStopped(
+	ctx context.Context,
+	tx *sql.Tx,
+	m model.Machine,
+	key, fingerprint string,
+) (model.Operation, error) {
+	now := time.Now().UTC()
+	operation := model.Operation{ID: model.NewID(), MachineID: m.ID, Action: stopAction,
+		Generation: m.Generation, Status: succeededStatus, CreatedAt: now, UpdatedAt: now}
+	m.DesiredState = model.Stopped
+	if err := saveMachine(ctx, tx, m); err != nil {
+		return operation, err
+	}
+	request := model.Request{
+		Action:      stopAction,
+		OperationID: operation.ID,
+		MachineID:   m.ID,
+		Generation:  m.Generation,
+		Name:        m.Name,
+		Profile:     m.ProfileSpec,
+	}
+	if err := insertOperation(ctx, tx, key, fingerprint, operation, request); err != nil {
+		return operation, err
+	}
+	return operation, tx.Commit()
+}
+
 func (c *Controller) requireFreshObservation(ctx context.Context, id string) error {
 	m, err := c.Inspect(ctx, id)
 	if err != nil {
@@ -541,9 +550,7 @@ func applyObservation(m *model.Machine, obs *model.Observation) {
 	m.State = obs.State
 	m.AcceptedGeneration = obs.Generation
 	m.Prepared = obs.Prepared
-	m.SSHUser = obs.SSHUser
-	m.SSHHostKey = obs.SSHHostKey
-	m.Endpoint = obs.Endpoint
+	m.Guest = obs.Guest
 	m.ObservedAt = &obs.ObservedAt
 	m.ObservationStale = false
 	m.ObservationError = ""
@@ -557,12 +564,6 @@ func validateObservation(id string, obs *model.Observation) error {
 	case model.Running, model.Stopped, model.Unknown, model.Preparing:
 	default:
 		return errors.New("invalid observed state")
-	}
-	if obs.Prepared {
-		_, err := model.ValidateKey(obs.SSHHostKey)
-		if err != nil || obs.SSHUser == "" {
-			return errors.New("invalid prepared SSH identity")
-		}
 	}
 	return nil
 }
@@ -584,7 +585,11 @@ func (c *Controller) Inspect(ctx context.Context, id string) (model.Machine, err
 		err = errors.New("host is no longer configured")
 	} else {
 		contact, cancel := context.WithTimeout(ctx, inspectTimeout)
-		resp, err = c.transport.Call(contact, h, model.Request{Action: "inspect", MachineID: id})
+		resp, err = c.transport.Call(
+			contact,
+			h,
+			model.Request{Action: "inspect", MachineID: id, Generation: m.Generation},
+		)
 		cancel()
 		if err == nil && resp.Status != succeededStatus {
 			err = fmt.Errorf("host inspection: %s", resp.Error)
@@ -646,7 +651,6 @@ func (c *Controller) List(ctx context.Context) ([]model.Machine, error) {
 // Unresolved work is retried with the exact persisted request, including its original ID.
 func (c *Controller) Run(ctx context.Context) {
 	var wg sync.WaitGroup
-	wg.Go(func() { c.runGuest(ctx) })
 	for _, h := range c.cfg.Hosts {
 		wg.Add(1)
 		go func(h model.Host) {
@@ -697,7 +701,7 @@ func validateMutation(ctx context.Context, tx *sql.Tx, m model.Machine, action s
 	if (action == startAction || action == deleteAction) && m.State != model.Stopped {
 		return problem(http.StatusConflict, "prerequisite", "action requires a stopped machine")
 	}
-	if action == stopAction && m.State != model.Running {
+	if action == stopAction && m.State != model.Running && m.State != model.Stopped {
 		return problem(http.StatusConflict, "prerequisite", "stop requires a running machine")
 	}
 

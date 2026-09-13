@@ -25,8 +25,8 @@ func testCheckpointDeletionPlacement(t *testing.T, runtime, change string) {
 	t.Helper()
 	cfg := config()
 	if runtime == smolvmRuntime {
-		cfg.Profiles[0].Runtime, cfg.Profiles[0].OS, cfg.Profiles[0].Arch = runtime, "linux", "amd64"
-		cfg.Profiles[0].ImagePath = "/opt/rootfs"
+		cfg.Profiles[0].Runtime, cfg.Profiles[0].OS, cfg.Profiles[0].Arch = runtime, fixtureLinuxOS, fixtureAMD64
+		cfg.Profiles[0].ImagePath = fixtureRootfs
 	}
 	c, tr, in, path := setupControlConfig(t, cfg)
 	source := mustCreate(t, c, in, "source")

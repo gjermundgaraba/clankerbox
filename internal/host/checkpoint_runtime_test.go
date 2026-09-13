@@ -2,21 +2,14 @@ package host_test
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/pem"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-	"time"
-
-	"golang.org/x/crypto/ssh"
 
 	"clankerbox/internal/host"
 
@@ -26,9 +19,9 @@ import (
 
 func nativeFixture(t *testing.T) (*host.NativeRuntime, *recordingRunner, host.Manifest) {
 	t.Helper()
-	cfg := host.Config{
-		Root:          t.TempDir(),
-		SmolvmPath:    testSmolvmPath,
+	cfg := host.Config{HostOS: osLinux,
+		Root:          shortNativeRoot(t),
+		SmolvmPath:    templateBundle(t),
 		LibraryDir:    testSmolvmLibrary,
 		SystemctlPath: "/usr/bin/systemctl",
 	}
@@ -114,53 +107,6 @@ func TestNativeCapturePreservesPartialArtifactAndPublicationPermissions(t *testi
 	}
 }
 
-func TestChildTrustedExecSendsPrivateScriptOverStdin(t *testing.T) {
-	t.Parallel()
-	n, r, m := nativeFixture(t)
-	nativeDB(t, n, m)
-	m.SourceMachineID = model.NewID()
-	pub, private, err := ed25519.GenerateKey(rand.Reader)
-	requireNoError(t, err)
-	block, err := ssh.MarshalPrivateKey(private, "")
-	requireNoError(t, err)
-	public, err := ssh.NewPublicKey(pub)
-	requireNoError(t, err)
-	m.SSHPrivateKey = string(pem.EncodeToMemory(block))
-	m.SSHHostKey = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(public)))
-	observed := false
-	var firstScript string
-	stopped := errors.New("stop after observing bootstrap transport")
-	r.reply = func(call commandCall) ([]byte, error) {
-		if slices.Contains(call.args, "ls") {
-			return []byte(`[{"name":"` + m.RuntimeName() + `","state":"running"}]`), nil
-		}
-		if len(call.input) == 0 || !slices.Contains(call.args, "-i") ||
-			strings.Contains(strings.Join(call.args, " "), m.SSHPrivateKey) {
-			t.Fatal("private bootstrap leaked into argv or lost stdin")
-		}
-		script := string(call.input)
-		if !strings.Contains(script, m.SourceMachineID) || !strings.Contains(script, "case \"$owner\"") ||
-			strings.Contains(script, "ssh-keygen -q") {
-			t.Fatal("child bootstrap does not replace inherited ownership with its persisted identity")
-		}
-		if firstScript != "" && firstScript != script {
-			t.Fatal("preparation retry changed persisted identity script")
-		}
-		firstScript = script
-		observed = true
-		return nil, stopped
-	}
-	_, _, _, err = n.Initialize(context.Background(), m)
-	if !observed || !errors.Is(err, stopped) {
-		t.Fatal("bootstrap did not cross runtime stdin boundary", err)
-	}
-	_, _, _, err = n.Initialize(context.Background(), m)
-	if !errors.Is(err, stopped) {
-		t.Fatal("second bootstrap did not reach the same runtime boundary", err)
-	}
-}
-
-// supervisorFile locates the file emitted by Configure, independent of its filename convention.
 func supervisorFile(t *testing.T, root, id string) string {
 	t.Helper()
 	dir, err := statefs.Open(filepath.Join(root, "jobs"))
@@ -202,8 +148,7 @@ func ramFixturePaths(root string, m host.Manifest) []string {
 	sum := sha256.Sum256([]byte(m.RuntimeName()))
 	dir := filepath.Join(
 		root,
-		"machines",
-		storeID(m),
+		"runtime",
 		"c",
 		runtimeSmolvm,
 		"vms",
@@ -321,9 +266,9 @@ func (f *restoreFixture) update(call commandCall) {
 			nameFlag,
 			f.m.RuntimeName(),
 			"--remove-port",
-			"22000:22",
+			"22000:7443",
 			"--port",
-			"22001:22",
+			"22001:7443",
 		},
 	) {
 		f.t.Fatal("restore changed more than host port mapping", call.args)
@@ -334,6 +279,7 @@ func (f *restoreFixture) update(call commandCall) {
 func exerciseNativeRestore(t *testing.T, missingRAM bool) {
 	t.Helper()
 	n, r, m := nativeFixture(t)
+	n.Config.SmolvmPath = templateBundle(t)
 	m.Port = 22001
 	cp := host.CheckpointSpec{
 		ID:         model.NewID(),
@@ -442,7 +388,7 @@ func observeBranchSupervisor(
 	if slices.Contains(call.args, actionStart) {
 		unit, err := os.ReadFile(supervisorFile(t, n.Config.Root, child.ID))
 		requireNoError(t, err)
-		want := "machine branch --from " + source.RuntimeName() + " --name " + child.RuntimeName() + " --port 22001:22 --branchable"
+		want := "machine branch --from " + source.RuntimeName() + " --name " + child.RuntimeName() + " --port 22001:7443 --branchable"
 		if !strings.Contains(string(unit), want) {
 			t.Fatal("not supervised initial branch:", string(unit))
 		}
@@ -453,57 +399,13 @@ func observeBranchSupervisor(
 	}
 }
 
-func TestChildPreparationVerifiesLiveSSHIdentity(t *testing.T) {
-	t.Parallel()
-	n, runner, m := nativeFixture(t)
-	nativeDB(t, n, m)
-	m.SourceMachineID = model.NewID()
-	_, private, err := ed25519.GenerateKey(rand.Reader)
+func shortNativeRoot(t *testing.T) string {
+	t.Helper()
+	//nolint:usetesting // Native Unix sockets require bounded paths even in tests.
+	root, err := os.MkdirTemp("/tmp", "cbn-")
 	requireNoError(t, err)
-	block, err := ssh.MarshalPrivateKey(private, "")
+	root, err = filepath.EvalSymlinks(root)
 	requireNoError(t, err)
-	m.SSHPrivateKey = string(pem.EncodeToMemory(block))
-	signer, err := ssh.NewSignerFromKey(private)
-	requireNoError(t, err)
-	m.SSHHostKey = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))
-	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	requireNoError(t, err)
-	defer func() { requireNoError(t, listener.Close()) }()
-	address, ok := listener.Addr().(*net.TCPAddr)
-	if !ok {
-		t.Fatal("expected TCP listener")
-	}
-	m.Port = address.Port
-	done := make(chan error, 1)
-	go func() {
-		conn, acceptErr := listener.Accept()
-		if acceptErr != nil {
-			done <- acceptErr
-			return
-		}
-		if deadlineErr := conn.SetDeadline(time.Now().Add(3 * time.Second)); deadlineErr != nil {
-			done <- errors.Join(deadlineErr, conn.Close())
-			return
-		}
-		config := &ssh.ServerConfig{NoClientAuth: true}
-		config.AddHostKey(signer)
-		_, _, _, handshakeErr := ssh.NewServerConn(conn, config)
-		done <- handshakeErr
-	}()
-	runner.reply = func(call commandCall) ([]byte, error) {
-		if slices.Contains(call.args, "ls") {
-			return []byte(`[{"name":"` + m.RuntimeName() + `","state":"running"}]`), nil
-		}
-		return []byte(m.SSHHostKey), nil
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
-	defer cancel()
-	user, key, endpoint, err := n.Initialize(ctx, m)
-	requireNoError(t, err)
-	if user != "root" || key != m.SSHHostKey || endpoint != listener.Addr().String() {
-		t.Fatalf("unexpected prepared identity: %s %s %s", user, key, endpoint)
-	}
-	if err = <-done; err == nil {
-		t.Fatal("identity probe authenticated instead of stopping after host verification")
-	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	return root
 }

@@ -19,7 +19,7 @@ type Streams struct {
 func jsonOut(w io.Writer, v any) error { return json.NewEncoder(w).Encode(v) }
 
 const (
-	deleteCommand     = "delete"
+	deleteCommand     = deleteCommandName
 	checkpointCommand = "checkpoint"
 	forkCommand       = "fork"
 	createCommand     = "create"
@@ -32,11 +32,24 @@ type commandRunner struct {
 }
 
 func (runner commandRunner) listResources(ctx context.Context, command string) error {
-	var e error
-	out := resourceList(command)
-	e = runner.api.Do(ctx, "GET", "/v1/"+command, nil, "", out)
-	if e != nil {
-		return e
+	var out any
+	var err error
+	switch command {
+	case "hosts":
+		var v []model.HostStatus
+		v, err = runner.api.Hosts(ctx)
+		out = &v
+	case "profiles":
+		var v []model.Profile
+		v, err = runner.api.Profiles(ctx)
+		out = &v
+	default:
+		var v []model.Machine
+		v, err = runner.api.Machines(ctx)
+		out = &v
+	}
+	if err != nil {
+		return err
 	}
 	return runner.output(out)
 }
@@ -50,12 +63,11 @@ func (runner commandRunner) inspectMachine(ctx context.Context, args []string) e
 }
 
 func (runner commandRunner) inspectOperation(ctx context.Context, args []string) error {
-	var e error
 	if !model.ValidID(args[0]) {
 		return errors.New("operation requires an immutable operation ID")
 	}
-	var out model.Operation
-	if e = runner.api.Do(ctx, "GET", "/v1/operations/"+args[0], nil, "", &out); e != nil {
+	out, e := runner.api.Operation(ctx, args[0])
+	if e != nil {
 		return e
 	}
 	return runner.output(out)
@@ -86,7 +98,8 @@ func (runner commandRunner) createMachine(
 	if e != nil {
 		return e
 	}
-	return runner.mutate(ctx, "/v1/machines", in, id, wait, createCommand)
+	operation, err := runner.api.CreateMachine(ctx, id, in)
+	return runner.finishMutation(ctx, operation, err, id, wait, createCommand)
 }
 
 func (runner commandRunner) mutateMachine(ctx context.Context, command, target, idem string, wait *waitOptions) error {
@@ -98,7 +111,19 @@ func (runner commandRunner) mutateMachine(ctx context.Context, command, target, 
 	if resolveErr2 != nil {
 		return resolveErr2
 	}
-	return runner.mutate(ctx, "/v1/machines/"+m.ID+"/"+command, nil, id, wait, command)
+	var operation model.Operation
+	var err error
+	switch command {
+	case "start":
+		operation, err = runner.api.StartMachine(ctx, m.ID, id)
+	case stopCommandName:
+		operation, err = runner.api.StopMachine(ctx, m.ID, id)
+	case deleteCommandName:
+		operation, err = runner.api.DeleteMachine(ctx, m.ID, id)
+	default:
+		return errors.New("unknown mutation")
+	}
+	return runner.finishMutation(ctx, operation, err, id, wait, command)
 }
 
 const (

@@ -2,9 +2,6 @@ package control //nolint:testpackage // Exercise the private accounting helper s
 
 import (
 	"database/sql"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"reflect"
 	"testing"
 
@@ -102,16 +99,12 @@ func TestHostsSnapshotAndAdmission(t *testing.T) {
 		{Host: hosts[1], UsedCPU: 2, UsedRAMMiB: 1024, RemainingCPU: 6, RemainingRAMMiB: 7168},
 		{Host: hosts[2], RemainingCPU: 2, RemainingRAMMiB: 2048},
 	}
-	mux := http.NewServeMux()
-	c.registerMachineRoutes(mux)
-	response := httptest.NewRecorder()
-	mux.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/hosts", nil))
-	var got []model.HostStatus
-	if err = json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+	got, err := c.Hosts(t.Context())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Code != http.StatusOK || !reflect.DeepEqual(got, want) {
-		t.Fatalf("hosts: %d %+v, want %+v", response.Code, got, want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("hosts %+v want %+v", got, want)
 	}
 	tx, err := db.BeginTx(t.Context(), nil)
 	if err != nil {

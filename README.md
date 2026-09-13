@@ -4,20 +4,20 @@ API-first coding machines with retained workspaces, concurrent Linux RAM forks,
 explicit recovery points, and guest-owned terminal sessions. Applications use the
 bearer-authenticated session API. Clankerbox does not manage application credentials.
 
-The workstation SSH, exec, proxy, forwarding, URL and VNC features are retired.
-Internal SSH still carries controller/host operations and restricted guest-session
-links. See [terminal sessions](docs/terminal-sessions.md) and the
-[connection removal record](docs/client-connection-removal-plan.md) for scope and
-validation. Historical spike and execution records below are not current CLI guides.
+Applications and the CLI use generated `clankerbox.v1` Connect services. Private
+host and guest RPC replace internal SSH and upgraded session framing. See
+[terminal sessions](docs/terminal-sessions.md) and the
+[generated SDK](protocol/README.md) for current consumer contracts. Historical
+spike and execution records below retain their original qualification boundaries.
 
 ## Using machines
 
-For applications developing against Clankerbox locally, `clankerbox dev` runs
-the real controller and guest terminal protocol on your computer without a VM.
-It supplies one machine named `local`, prints Clankerdesk connection configuration,
-and retains terminal processes across controller or consumer restarts. See
-[local development](docs/local-development.md) for setup, workspace selection and
-shutdown.
+`clankerbox dev` manages a project-scoped environment with the real controller,
+persistent host service and Linux VMs. Apple Silicon hosts use the supported
+smolvm Linux/arm64 runtime; Linux/amd64 hosts use KVM. The control-plane services
+run locally and guest terminals stay inside their VM. See
+[local development](docs/local-development.md) for the installed runtime bundle,
+project configuration, environment lifecycle and Clankerdesk target.
 
 Create `~/.config/clankerbox/config.json` with your API origin and local files:
 
@@ -104,8 +104,8 @@ alongside configured totals `cpu` and `ram_mib`.
 2. Preserve workspaces across normal stop/start and control-plane outages.
    Deletion is explicit; operational workspace backups are outside the product API
    and separate from RAM checkpoints.
-3. Support concurrent RAM forks for Linux coding sessions. macOS/Xcode machines
-   need retained disks and disk branching, not equivalent RAM-fork capabilities.
+3. Support concurrent RAM forks for Linux coding sessions on Linux/amd64 and
+   Apple Silicon hosts. Tart macOS/Xcode guests retain their stopped-disk contract.
 4. Let callers choose an OS, architecture and capability profile. Do not silently
    substitute another machine type or cold boot when RAM restoration was requested.
 5. Keep orchestration small and API-first, with explicit recovery and no HA/SLA
@@ -126,7 +126,7 @@ See [deployment and network design](docs/spikes/deployment-network.md).
 
 ## Current recommendation
 
-**Prefer the tested, pinned smolvm build for Linux and Tart for macOS.** This is
+**Use the pinned smolvm runtime for Linux guests and Tart for macOS guests.** This is
 an implementation direction, not a demonstrated overall win or production
 qualification. Cocoon remains a strong alternative.
 
@@ -212,23 +212,23 @@ for p95s, populated/dirty workloads, pins and pause-measurement limitations.
 
 ## Terminal sessions
 
-Every prepared, running machine also carries `clankerbox-guest`, a session
-daemon that owns terminal PTYs, the authoritative Ghostty VT state, and a
-bounded output ring inside the guest, so a terminal survives every connection
-drop, controller restart, and consumer restart. The controller keeps one SSH
-link per ready machine using its own terminal key, which the guest accepts only
-as the forced command `clankerbox-guest proxy`. Consumers reach the daemon
-through `GET /v1/machines/{id}/sessions/stream` (HTTP upgrade
-`clankerbox-session`), inspect `guest` status on the machine record, and set
-`labels`. Deploy `bin/clankerbox-guest-linux-amd64`
-and `bin/clankerbox-guest-darwin-arm64` under `<host root>/guest/` next to the
-host helper; preparation installs the matching binary into each guest when its
-digest differs. The protocol, contract, and failure matrix are in
-[docs/terminal-sessions.md](docs/terminal-sessions.md). Unit and integration tests
-use a fake guest sshd and a real daemon. Dated Linux/macOS live qualification and
-its boundaries are recorded in the
-[connection removal completion record](docs/client-connection-removal-plan.md#completion-record--2026-09-11).
-Source-only cleanup does not requalify a deployed release.
+Prepared running machines carry `clankerbox-guest`, which owns PTYs, authoritative
+Ghostty VT state and retained output. Public SessionService provides DescribeGuest,
+CreateSession, ListSessions, EndSession and typed bidirectional AttachSession over
+HTTP/2. The controller routes through the persistent private HostService, and the
+host authenticates the machine-bound GuestService with mutual TLS. Workload UIDs
+cannot read guest management credentials or invoke rebinding.
+
+Generated Go and TypeScript bindings preserve `uint64` offsets exactly; Node uses
+`bigint`. Atomic Opened metadata selects snapshot, resume, final view or unavailable
+mode. Input ACKs express bounded admission; a lost ACK is never replayed. Closing
+an attachment does not end its session. Public machine labels and readiness remain
+available through MachineService. See [the session contract](docs/terminal-sessions.md)
+and [the SDK package](protocol/README.md) for consumer migration and generation.
+
+The isolated transport and real guest proofs document their exact boundaries;
+source changes do not requalify a deployed release. Current deployment acceptance
+must use the matching runtime bundle, guest image, engine digest and generated SDK.
 
 ## Remaining acceptance work
 
@@ -251,7 +251,7 @@ Source-only cleanup does not requalify a deployed release.
 Retained lifecycle and session live acceptance have passed on both platforms.
 Fork/checkpoint/restore APIs are implemented, with the platform-specific acceptance
 limits recorded above and in the execution record. Broader operational failure
-acceptance remains unfinished. Fork preparation replaces SSH identity and gates
+acceptance remains unfinished. Fork preparation replaces the machine-scoped RPC binding and gates
 published access, not the child's first network traffic or inherited application
 credentials; strict network quarantine and automatic ambiguous-operation recovery
 are deliberately deferred.

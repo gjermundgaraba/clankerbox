@@ -6,7 +6,7 @@ import json
 import subprocess
 import uuid
 
-from acceptance import Acceptance, Report, run_guest
+from acceptance import Acceptance, Report, run_guest, describe_guest
 
 
 def main():
@@ -65,7 +65,7 @@ test -x scratch
 readlink link
 '''
         before = guest(machine, 'sh', '-se', data=check)
-        identity_before = json.loads(run('inspect', machine))['ssh_host_key']
+        identity_before = describe_guest(args.session_runner, args.config, machine)
         operation('stop', machine)
         stopped = json.loads(run('inspect', machine))
         if stopped['state'] != 'stopped':
@@ -76,9 +76,10 @@ readlink link
             raise RuntimeError(f'stopped-session prerequisite check failed: {denied.stderr[-2048:]}')
         operation('start', machine)
         after = guest(machine, 'sh', '-se', data=check)
-        identity_after = json.loads(run('inspect', machine))['ssh_host_key']
-        if before != after or identity_before != identity_after:
-            raise RuntimeError('workspace contents or SSH identity changed across stop/start')
+        identity_after = describe_guest(args.session_runner, args.config, machine)
+        if (before != after or identity_before['machine_id'] != identity_after['machine_id']
+                or identity_before['incarnation'] == identity_after['incarnation']):
+            raise RuntimeError('workspace contents or guest cold-start identity invariant failed')
         report['events'].append({'retained_dirty_git_and_identity': True, 'stopped_session_rejected': True})
         report['status'] = 'passed'
     except Exception as error:

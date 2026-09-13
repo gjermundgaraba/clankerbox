@@ -2,231 +2,252 @@ package host
 
 import (
 	"context"
-	"encoding/base64"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
-
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/ssh"
-
+	v1 "clankerbox/gen/clankerbox/v1"
+	"clankerbox/gen/clankerbox/v1/clankerboxv1connect"
 	"clankerbox/internal/model"
+	"clankerbox/internal/rpcidentity"
+	"clankerbox/internal/statefs"
+
+	"connectrpc.com/connect"
 )
 
-// bootstrapScript contains only fixed shell source, a checked hex ID and base64
-// data made from parsed public keys. No caller-controlled shell syntax is used.
-// The guest's durable claim is written before generating its single new key:
-// reply loss resumes that identity, never rotates it. Starts only verify it.
-func bootstrapScript(m Manifest, initialize bool) (string, error) {
-	if !model.ValidID(m.ID) {
-		return "", errors.New("invalid bootstrap ID")
-	}
-	user, home, decode := rootUser, rootHome, linuxDecode
+func guestStatePath(m Manifest) string {
 	if m.Profile.Runtime == runtimeTart {
-		user = adminUser
-		home = adminHome
-		decode = macDecode
+		return "/private/var/lib/clankerbox-guest"
 	}
-	config := `Port 22
-Protocol 2
-HostKey /etc/clankerbox/ssh_host_ed25519_key
-AuthorizedKeysFile .ssh/authorized_keys
-PubkeyAuthentication yes
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitEmptyPasswords no
-AuthenticationMethods publickey
-PermitRootLogin prohibit-password
-AllowUsers ` + user + `
-AllowTcpForwarding no
-PermitTTY no
-MaxSessions 64
-AllowStreamLocalForwarding no
-GatewayPorts no
-AllowAgentForwarding no
-X11Forwarding no
-PermitTunnel no
-UsePAM yes
-StrictModes yes
-PidFile /var/run/clankerbox-sshd.pid
-`
-	if m.Profile.Runtime == runtimeTart {
-		// Noninteractive SSH does not read the image's Homebrew login profile.
-		config += "SetEnv PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin\n"
-	}
-	cfgData := base64.StdEncoding.EncodeToString([]byte(config))
-	var s strings.Builder
-	s.WriteString("set -eu\numask 077\n")
-	if m.Profile.Runtime == runtimeSmolvm {
-		// The bare rootfs is staged by the unprivileged host account. Restore
-		// sshd's required ownership inside the guest, before validating config.
-		s.WriteString("mkdir -p /run/sshd\nchown 0:0 /run/sshd /root /etc/ssh\nchmod 0755 /run/sshd\n")
-	}
-	if initialize && m.SourceMachineID != "" {
-		if err := installChildIdentity(&s, m, decode); err != nil {
-			return "", err
-		}
-	}
-
-	if initialize {
-		s.WriteString(
-			"if [ ! -e /etc/clankerbox/owner ]; then\n  test ! -e /etc/clankerbox\n  mkdir -m 700 /etc/clankerbox\n  printf '%s\\n' '" + m.ID + "' > /etc/clankerbox/owner\n  sync\nfi\n",
-		)
-	}
-	s.WriteString("test \"$(cat /etc/clankerbox/owner)\" = '" + m.ID + "'\n")
-	if initialize {
-		if m.SourceMachineID == "" {
-			s.WriteString(
-				"if [ ! -e /etc/clankerbox/ssh_host_ed25519_key ]; then\n  /usr/bin/ssh-keygen -q -t ed25519 -N '' -f /etc/clankerbox/ssh_host_ed25519_key\n  sync\nfi\n",
-			)
-		}
-		s.WriteString(
-			"/usr/bin/ssh-keygen -y -f /etc/clankerbox/ssh_host_ed25519_key > /etc/clankerbox/ssh_host_ed25519_key.pub\n",
-		)
-		s.WriteString(
-			"mkdir -p '" + home + "/.ssh'\nchmod 700 '" + home + "/.ssh'\n: > '" + home + "/.ssh/authorized_keys'\nchmod 600 '" + home + "/.ssh/authorized_keys'\nchown -R '" + user + "' '" + home + "/.ssh'\nprintf '%s' '" + cfgData + "' | " + decode + " > /etc/ssh/sshd_config\nchmod 600 /etc/ssh/sshd_config\n/usr/sbin/sshd -t\nsync\n",
-		)
-	} else {
-		s.WriteString(
-			"test -s /etc/clankerbox/ssh_host_ed25519_key\ntest -s /etc/clankerbox/prepared\n/usr/sbin/sshd -t\n",
-		)
-	}
-	writeSSHDStart(&s, m.Profile.Runtime, initialize)
-	if initialize {
-		s.WriteString("printf '%s\\n' '" + m.ID + "' > /etc/clankerbox/prepared\nsync\n")
-	}
-	s.WriteString("/usr/bin/ssh-keygen -y -f /etc/clankerbox/ssh_host_ed25519_key\n")
-	script := s.String()
-	if m.Profile.Runtime == runtimeTart {
-		script = "sudo -n /bin/bash -se <<'CLANKERBOX_TRUSTED_BOOTSTRAP'\n" + script + "CLANKERBOX_TRUSTED_BOOTSTRAP\n"
-	}
-	return script, nil
+	return "/var/lib/clankerbox-guest"
 }
 
-// prepare installs or verifies the guest SSH identity through trusted runtime execution.
-func (n *NativeRuntime) prepare(ctx context.Context, m Manifest, initialize bool) (string, string, string, error) {
-	script, err := bootstrapScript(m, initialize)
-	if err != nil {
-		return "", "", "", err
+// Initialize installs and binds the dedicated guest service after creation.
+func (n *NativeRuntime) Initialize(ctx context.Context, m Manifest) (string, error) {
+	return n.prepareRPC(ctx, m, true)
+}
+
+// Verify authenticates the retained service, renewing its identity when required.
+func (n *NativeRuntime) Verify(ctx context.Context, m Manifest) (string, error) {
+	return n.prepareRPC(ctx, m, false)
+}
+
+func bindingPath(cfg Config, m Manifest) string {
+	return filepath.Join(machineDir(cfg, m), "guest-binding.json")
+}
+func loadBinding(cfg Config, m Manifest, a *rpcidentity.Authority, initial bool) (rpcidentity.Binding, error) {
+	path := bindingPath(cfg, m)
+	raw, err := statefs.ReadRegular(path)
+	switch {
+	case err == nil:
+		var b rpcidentity.Binding
+		if err = json.Unmarshal(raw, &b); err != nil {
+			return b, err
+		}
+		if b.MachineID != m.ID || b.HostID != cfg.HostID {
+			return b, errors.New("retained guest binding identity mismatch")
+		}
+		if !rpcidentity.Expiring(b.Certificate) {
+			return b, nil
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		return rpcidentity.Binding{}, err
+	case !initial:
+		return rpcidentity.Binding{}, errors.New(
+			"prerequisite: retained machine requires explicit guest RPC identity cutover",
+		)
 	}
-	call, cancel := context.WithTimeout(ctx, guestReadyTimeout)
-	defer cancel()
-	out, err := n.guest(call, m, script)
+	b, err := a.Binding(m.ID, cfg.HostID)
 	if err != nil {
-		return "", "", "", err
+		return b, err
 	}
-	// Use exactly one public-key line from the trusted runtime channel.
-	key := strings.TrimSpace(string(out))
-	canonical, err := model.ValidateKey(key)
+	//nolint:gosec // The guest private key is deliberately stored in a private binding file.
+	raw, err = json.Marshal(b)
 	if err != nil {
-		return "", "", "", fmt.Errorf("trusted bootstrap returned invalid host key: %q", key)
+		return b, err
 	}
+	return b, statefs.WritePrivate(path, raw)
+}
+
+func (n *NativeRuntime) prepareRPC(ctx context.Context, m Manifest, initial bool) (string, error) {
+	if !model.ValidID(m.ID) || !model.ValidName(n.Config.HostID) {
+		return "", errors.New("valid machine and host identities required for guest binding")
+	}
+	a, err := rpcidentity.LoadOrCreate(filepath.Join(n.Config.Root, "guest-authority"))
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = a.Close() }()
+	binding, err := loadBinding(n.Config, m, a, initial)
+	if err != nil {
+		return "", err
+	}
+	credentials, err := a.HostCredentials(n.Config.HostID)
+	if err != nil {
+		return "", err
+	}
+	if err = n.installGuestService(ctx, m, binding, initial); err != nil {
+		return "", err
+	}
+	return n.waitGuestIdentity(ctx, m, credentials)
+}
+
+func (n *NativeRuntime) installGuestService(
+	ctx context.Context,
+	m Manifest,
+	binding rpcidentity.Binding,
+	initial bool,
+) error {
+	guestState := guestStatePath(m)
+	guestBinding := guestState + "/binding.json"
+	binary, err := (&Helper{cfg: n.Config}).guestBinary(m)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(binary)
+	digest := hex.EncodeToString(sum[:])
+	installed, err := n.guest(ctx, m, guestDigestScript(m))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(installed)) != digest {
+		if err = n.guestInstall(ctx, m, guestInstallScript(m, digest), binary); err != nil {
+			return err
+		}
+	}
+	script, err := provisionGuestScript(m)
+	if err != nil {
+		return err
+	}
+	if _, err = n.guest(ctx, m, script); err != nil {
+		return err
+	}
+	//nolint:gosec // Trusted native stdin delivers the private guest binding.
+	raw, err := json.Marshal(binding)
+	if err != nil {
+		return err
+	}
+	install := "set -eu\numask 077\ncat > " + guestBinding + ".tmp\nchmod 600 " + guestBinding + ".tmp\nchown 0:0 " + guestBinding + ".tmp\nmv -f " + guestBinding + ".tmp " + guestBinding + "\nsync\n"
+	if err = n.guestInstall(ctx, m, install, raw); err != nil {
+		return err
+	}
+	// Exit 3 specifically means there is no listening daemon. Other failures never
+	// become permission to replace a live manager or cold-restore a RAM child.
+	rebind := "set +e\n" + guestBinaryPath + " rebind --state-dir " + guestState + " < " + guestBinding + "\ncode=$?\nif [ \"$code\" -eq 0 ]; then printf 'bound\\n'; elif [ \"$code\" -eq 3 ]; then printf 'absent\\n'; else exit \"$code\"; fi\n"
+	out, err := n.guest(ctx, m, privilegedScript(m, rebind))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(out)) == "absent" {
+		if initial && m.Profile.Runtime == runtimeSmolvm && m.SourceMachineID != "" {
+			return errors.New("RAM child daemon is absent; refusing cold session substitution")
+		}
+		command := guestBinaryPath + " serve --state-dir " + guestState + " --binding-file " + guestBinding + " --listen 0.0.0.0:7443 --workload-user clankerbox"
+		launch := "set -eu\numask 077\nnohup " + command + " > " + guestState + "/daemon.log 2>&1 < /dev/null &\n"
+		if _, err = n.guest(ctx, m, privilegedScript(m, launch)); err != nil {
+			return err
+		}
+	} else if strings.TrimSpace(string(out)) != "bound" {
+		return errors.New("guest did not acknowledge identity binding")
+	}
+
+	return nil
+}
+
+func (n *NativeRuntime) waitGuestIdentity(
+	ctx context.Context,
+	m Manifest,
+	credentials rpcidentity.Credentials,
+) (string, error) {
 	state, err := n.Inspect(ctx, m)
 	if err != nil {
-		return "", "", "", err
+		return "", err
 	}
 	if state.State != model.Running {
-		return "", "", "", errors.New("guest stopped during preparation")
+		return "", errors.New("guest stopped during preparation")
 	}
-	user := "root"
-	if m.Profile.Runtime == runtimeTart {
-		user = "admin"
+	httpClient, err := credentials.HTTPClient(m.ID)
+	if err != nil {
+		return "", err
 	}
-	if m.SourceMachineID != "" && initialize {
-		if canonical != m.SSHHostKey {
-			return "", "", "", errors.New("fresh host key was not installed")
-		}
-		if err = waitSSHIdentity(call, state.Endpoint, m.SSHHostKey); err != nil {
-			return "", "", "", err
-		}
-	}
-	return user, canonical, state.Endpoint, nil
-}
-
-// Readiness follows a handshake with the new daemon key, not merely writing it.
-// No guest login or application process is needed to verify the host identity.
-func waitSSHIdentity(ctx context.Context, endpoint, want string) error {
-	verified := errors.New("host identity verified")
+	defer httpClient.CloseIdleConnections()
+	client := clankerboxv1connect.NewGuestServiceClient(httpClient, "https://"+state.Endpoint)
+	deadline, cancel := context.WithTimeout(ctx, guestReadyTimeout)
+	defer cancel()
 	for {
-		conn, err := (&net.Dialer{Timeout: identityAttemptTimeout}).DialContext(ctx, "tcp", endpoint)
-		if err == nil {
-			if deadlineErr := conn.SetDeadline(time.Now().Add(identityAttemptTimeout)); deadlineErr != nil {
-				return errors.Join(deadlineErr, conn.Close())
-			}
-			_, _, _, err = ssh.NewClientConn(
-				conn,
-				endpoint,
-				&ssh.ClientConfig{
-					User: "clankerbox-identity-check",
-					HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
-						if strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key))) == want {
-							return verified
-						}
-						return errors.New("inherited SSH host key still active")
-					},
-				},
-			)
-			// NewClientConn closes the transport when the callback aborts the handshake.
-			if errors.Is(err, verified) {
-				return nil
-			}
+		call, done := context.WithTimeout(deadline, identityAttemptTimeout)
+		result, e := client.DescribeGuest(call, connect.NewRequest(&v1.DescribeGuestRequest{MachineId: m.ID}))
+		done()
+		if e == nil && result.Msg.GetMachineId() == m.ID && result.Msg.GetUser() == "clankerbox" {
+			return state.Endpoint, nil
 		}
 		select {
-		case <-ctx.Done():
-			return fmt.Errorf("fresh SSH identity not ready: %w", ctx.Err())
+		case <-deadline.Done():
+			return "", fmt.Errorf("guest TLS identity readiness: %w (last: %w)", deadline.Err(), e)
 		case <-time.After(identityRetryInterval):
 		}
 	}
 }
 
-func installChildIdentity(s *strings.Builder, m Manifest, decode string) error {
-	if !model.ValidID(m.SourceMachineID) || m.SSHPrivateKey == "" {
-		return errors.New("persisted child identity required")
+func privilegedScript(m Manifest, script string) string {
+	if m.Profile.Runtime == runtimeTart {
+		return "sudo -n /bin/bash -se <<'CLANKERBOX_ROOT_BOOTSTRAP'\n" + script + "CLANKERBOX_ROOT_BOOTSTRAP\n"
 	}
-	signer, err := ssh.ParsePrivateKey([]byte(m.SSHPrivateKey))
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey()))) != m.SSHHostKey {
-		return errors.New("persisted child SSH identity mismatch")
-	}
-	private := base64.StdEncoding.EncodeToString([]byte(m.SSHPrivateKey))
-	s.WriteString(
-		"owner=$(cat /etc/clankerbox/owner)\ncase \"$owner\" in '" + m.SourceMachineID + "'|'" + m.ID + "') ;; *) exit 1 ;; esac\n",
-	)
-	s.WriteString(
-		"printf '%s' '" + private + "' | " + decode + " > /etc/clankerbox/ssh_host_ed25519_key\nchmod 600 /etc/clankerbox/ssh_host_ed25519_key\nprintf '%s\\n' '" + m.ID + "' > /etc/clankerbox/owner\nrm -f /etc/clankerbox/prepared\nsync\n",
-	)
-	return nil
+	return script
 }
 
-func writeSSHDStart(s *strings.Builder, runtime string, initialize bool) {
-	if runtime == runtimeTart {
-		// Private DHCP DNS servers are deliberately unreachable through Softnet.
-		// The supported Tart image names its primary network service Ethernet.
-		if initialize {
-			s.WriteString("/usr/sbin/networksetup -setdnsservers Ethernet 1.1.1.1 8.8.8.8\n")
-		}
-		s.WriteString(
-			"/bin/launchctl enable system/com.openssh.sshd\nif ! /bin/launchctl print system/com.openssh.sshd >/dev/null 2>&1; then\n  /bin/launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist\nfi\n",
-		)
+// Only system directories and the dedicated service account are provisioned.
+// The root daemon's identity/admin socket remains inaccessible to PTY workloads.
+func provisionGuestScript(m Manifest) (string, error) {
+	if !model.ValidID(m.ID) {
+		return "", errors.New("invalid owned machine identity")
+	}
+	s := fmt.Sprintf("set -eu\numask 077\nhost_uid=%d\nstate_dir=%s\n", os.Geteuid(), guestStatePath(m))
+	if m.Profile.Runtime == runtimeSmolvm {
+		s += `for d in / /usr /usr/local /usr/local/bin /bin /sbin /etc /lib /lib64 /var /var/lib /home; do
+ if [ -d "$d" ]; then chown 0:0 "$d"; chmod 755 "$d"; fi
+done
+for d in /usr /lib /lib64; do if [ -d "$d" ]; then find "$d" -type d -exec chmod 755 {} \;; fi; done
+chown 0:0 /tmp; chmod 1777 /tmp
+if ! id clankerbox >/dev/null 2>&1; then
+ uid=32001
+ while [ "$uid" = "$host_uid" ] || [ -n "$(awk -F: -v uid="$uid" '$3 == uid { print $1 }' /etc/passwd)" ]; do
+  uid=$((uid + 1)); test "$uid" -lt 60000
+ done
+ if command -v useradd >/dev/null 2>&1; then useradd -u "$uid" -m -s /bin/sh clankerbox; else adduser -u "$uid" -D -h /home/clankerbox -s /bin/sh clankerbox; fi
+fi
+uid=$(id -u clankerbox); test "$uid" -ge 1000; test "$uid" != "$host_uid"
+for d in /usr /etc /lib /lib64 /bin /sbin; do
+ if [ -d "$d" ]; then test -z "$(find "$d" -xdev -uid "$uid" -print -quit)"; fi
+done
+home=/home/clankerbox
+mkdir -p "$home"; chown clankerbox "$home"; chmod 700 "$home"
+`
 	} else {
-		// The supported bare profile has smolvm-agent as init, not guest systemd.
-		// sshd's daemon mode survives the short synchronous guest exec command.
-		s.WriteString(
-			"mkdir -p /run/sshd\nif [ -s /var/run/clankerbox-sshd.pid ] && kill -0 \"$(cat /var/run/clankerbox-sshd.pid)\" 2>/dev/null; then\n  kill -HUP \"$(cat /var/run/clankerbox-sshd.pid)\"\nelse\n  rm -f /var/run/clankerbox-sshd.pid\n  /usr/sbin/sshd -f /etc/ssh/sshd_config\nfi\n",
-		)
+		s += `if ! id clankerbox >/dev/null 2>&1; then
+ test -z "$(dscl . -search /Users UniqueID 1001)"
+ dscl . -create /Users/clankerbox
+ dscl . -create /Users/clankerbox UniqueID 1001
+ dscl . -create /Users/clankerbox PrimaryGroupID 20
+ dscl . -create /Users/clankerbox UserShell /bin/zsh
+ dscl . -create /Users/clankerbox NFSHomeDirectory /Users/clankerbox
+ dscl . -create /Users/clankerbox Password '*'
+fi
+test "$(id -u clankerbox)" -ge 501
+mkdir -p /Users/clankerbox; chown clankerbox:staff /Users/clankerbox; chmod 700 /Users/clankerbox
+`
 	}
-}
-
-// Initialize establishes the owned guest identity during create/fork/restore.
-func (n *NativeRuntime) Initialize(ctx context.Context, m Manifest) (string, string, string, error) {
-	return n.prepare(ctx, m, true)
-}
-
-// Verify checks the existing identity on start without rotating keys.
-func (n *NativeRuntime) Verify(ctx context.Context, m Manifest) (string, string, string, error) {
-	return n.prepare(ctx, m, false)
+	s += `for group in $(id -Gn clankerbox); do case "$group" in root|wheel|sudo|admin) echo 'workload account has privileged membership' >&2; exit 1;; esac; done
+test ! -L "$state_dir"
+mkdir -p "$state_dir"
+chown 0:0 "$state_dir"
+chmod 700 "$state_dir"
+`
+	return privilegedScript(m, s), nil
 }

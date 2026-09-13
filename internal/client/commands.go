@@ -90,6 +90,7 @@ func (streams commandStreams) command(name, usage, argsUsage string, count int, 
 			if err != nil {
 				return err
 			}
+			defer api.Close()
 			return action(ctx, commandRunner{api: api, streams: Streams(streams), structured: cmd.Bool("json")}, cmd)
 		},
 	}
@@ -101,7 +102,7 @@ const childArgCount = 2
 func (streams commandStreams) checkpoints() *cli.Command {
 	command := streams.command
 	checkpoint := &cli.Command{Name: "checkpoint", Usage: "Manage machine checkpoints", OnUsageError: returnUsageError}
-	for _, name := range []string{"create", "delete"} {
+	for _, name := range []string{"create", deleteCommandName} {
 		c := command(
 			name,
 			name+" a checkpoint",
@@ -203,7 +204,7 @@ func (streams commandStreams) addLifecycleCommands(root *cli.Command) {
 		&cli.StringFlag{Name: "host", Usage: "Host (default: config or automatic selection)"},
 	)
 	root.Commands = append(root.Commands, create)
-	for _, name := range []string{"start", "stop", "delete"} {
+	for _, name := range []string{"start", stopCommandName, deleteCommandName} {
 		c := command(
 			name,
 			name+" a machine",

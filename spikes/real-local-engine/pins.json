@@ -1,0 +1,21 @@
+{
+  "smolvm": "e8d09ef616d363004d55b80a6cdb31a4e7e1842d",
+  "libkrun": "f4cb46a5e6189872394d205494c14e9a6974816c",
+  "libkrunfw": "55bb7c5273178826240b39e907475fb6011afd8e",
+  "runtime_patch_sha256": "8ec0f09eb799d1d8e6b0ec9d7dfbfe0b54c694c8621bf65adaea0be0ccd08af2",
+  "hashes": {
+    "release-mac.tar.gz": "27f2ae7057f235a67a58fd13d0657c268cf9a16f214f8b177427d29daab0ae2f",
+    "target/debug/smolvm": "3da18e546ed1a15ef54e4cfe7d994138a55a6f788e91ff2685f77f9549139a7d",
+    "agent-target/aarch64-unknown-linux-musl/release/smolvm-agent": "4a865968574287f672d0b3b7e34ff3a8454caafa77ec812eb0d7de6a80d03880",
+    "sentinel-arm64": "79bf74d14e89155685934717af80882445b15d64e02205ec6c4a32575d50e3bd",
+    "sentinel-amd64": "1aa8d439de8f635c08355fb2efb14b549d1c02ff2d13d1276f77ea6db5186fc2",
+    "source/Cargo.lock": "1f28cf0c7675ab6369ead628bb56f4f4d157e7c1622a30000298d3193d6b7b7d",
+    "smolvm-1.14.1-darwin-arm64/lib/libkrun.dylib": "a50f17482e15aff553490e01405a0d238f5a715f3b0a68e4c42d8e873f39b821",
+    "smolvm-1.14.1-darwin-arm64/lib/libkrunfw.5.dylib": "af0e3f5011d6735539b1c9b80e3fbf9672289921c070593b7955c9b8e0ef7c34"
+  },
+  "mac": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "rust": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "zig": "0.16.0",
+  "linux_cli_sha256": "8d2a6485a91c19af6fbd1eac409e7dd708f50e581afee50cb2929871994f5d29",
+  "release_url": "https://github.com/smol-machines/smolvm/releases/download/v1.14.1/smolvm-1.14.1-darwin-arm64.tar.gz"
+}

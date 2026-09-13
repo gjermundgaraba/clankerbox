@@ -11,8 +11,8 @@ const (
 	tailLimit = 8 * 1024 * 1024
 	// tailItems also bounds event and small-output queue overhead.
 	tailItems = 1024
-	// outputChunk is the largest OUTPUT payload.
-	outputChunk = protocol.MaxFrame - 1 - protocol.OutputHeader
+	// outputChunk bounds each manager delivery before transport chunking.
+	outputChunk = 64 << 10
 )
 
 // Sink writes frames for one attached connection. Calls happen from one

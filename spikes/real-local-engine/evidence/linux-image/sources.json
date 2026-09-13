@@ -1,0 +1,10 @@
+{
+  "ubuntu": "26.04.1",
+  "node": "26.8.2",
+  "arch": "amd64",
+  "archives": {
+    "ubuntu": "a496a960472ce474a59590b8987d3a1135d3cbef1991f3b1abe8cacfea8bf85a",
+    "node": "40e1d3225c1c9ae9a2671c98ecb9857e4d5555026394f348645676798840d5c5"
+  },
+  "agent_sha256": "c232121105422b88640b09802a9fca0601caf136d38f04f9b3f0e5d6c3bec0ca"
+}

@@ -1,0 +1,55 @@
+syntax = "proto3";
+package clankerbox.v1;
+option go_package = "clankerbox/gen/clankerbox/v1;clankerboxv1";
+import "clankerbox/v1/resources.proto";
+
+service MachineService {
+  rpc ListHosts(ListHostsRequest) returns (ListHostsResponse);
+  rpc ListProfiles(ListProfilesRequest) returns (ListProfilesResponse);
+  rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse);
+  rpc GetMachine(GetMachineRequest) returns (Machine);
+  rpc CreateMachine(CreateMachineRequest) returns (Operation);
+  rpc StartMachine(StartMachineRequest) returns (Operation);
+  rpc StopMachine(StopMachineRequest) returns (Operation);
+  rpc DeleteMachine(DeleteMachineRequest) returns (Operation);
+  rpc ForkMachine(ForkMachineRequest) returns (Operation);
+  rpc CaptureCheckpoint(CaptureCheckpointRequest) returns (Operation);
+  rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse);
+  rpc GetCheckpoint(GetCheckpointRequest) returns (Checkpoint);
+  rpc DeleteCheckpoint(DeleteCheckpointRequest) returns (Operation);
+  rpc RestoreCheckpoint(RestoreCheckpointRequest) returns (Operation);
+  rpc GetOperation(GetOperationRequest) returns (Operation);
+  // Controller-local synchronous metadata replacement; no operation is created.
+  rpc SetLabels(SetLabelsRequest) returns (Machine);
+}
+message ListHostsRequest {}
+message ListHostsResponse { repeated Host hosts = 1; }
+message ListProfilesRequest {}
+message ListProfilesResponse { repeated Profile profiles = 1; }
+message ListMachinesRequest { bool include_deleted = 1; map<string,string> labels = 2; }
+message ListMachinesResponse { repeated Machine machines = 1; }
+// Resource lookups retain supported machine-name aliases as well as IDs.
+message GetMachineRequest { string machine_id = 1; }
+message CreateMachineRequest {
+  string idempotency_key = 1; string name = 2; string profile_id = 3;
+  string host_id = 4; map<string,string> labels = 5;
+}
+message StartMachineRequest { string idempotency_key = 1; string machine_id = 2; }
+message StopMachineRequest { string idempotency_key = 1; string machine_id = 2; }
+message DeleteMachineRequest { string idempotency_key = 1; string machine_id = 2; }
+message ForkMachineRequest {
+  string idempotency_key = 1; string machine_id = 2; string name = 3;
+  // Child labels merge over inherited source labels.
+  map<string,string> labels = 4;
+}
+message CaptureCheckpointRequest { string idempotency_key = 1; string machine_id = 2; }
+message ListCheckpointsRequest { bool include_deleted = 1; }
+message ListCheckpointsResponse { repeated Checkpoint checkpoints = 1; }
+message GetCheckpointRequest { string checkpoint_id = 1; }
+message DeleteCheckpointRequest { string idempotency_key = 1; string checkpoint_id = 2; }
+message RestoreCheckpointRequest {
+  string idempotency_key = 1; string checkpoint_id = 2; string name = 3;
+  map<string,string> labels = 4;
+}
+message GetOperationRequest { string operation_id = 1; }
+message SetLabelsRequest { string machine_id = 1; map<string,string> labels = 2; }

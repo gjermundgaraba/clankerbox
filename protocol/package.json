@@ -1,0 +1,49 @@
+{
+  "name": "@clankerbox/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.4.1",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./resources": {
+      "types": "./dist/gen/clankerbox/v1/resources_pb.d.ts",
+      "import": "./dist/gen/clankerbox/v1/resources_pb.js"
+    },
+    "./machine": {
+      "types": "./dist/gen/clankerbox/v1/machine_pb.d.ts",
+      "import": "./dist/gen/clankerbox/v1/machine_pb.js"
+    },
+    "./session": {
+      "types": "./dist/gen/clankerbox/v1/session_pb.d.ts",
+      "import": "./dist/gen/clankerbox/v1/session_pb.js"
+    },
+    "./host": {
+      "types": "./dist/gen/clankerbox/v1/host_pb.d.ts",
+      "import": "./dist/gen/clankerbox/v1/host_pb.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "generate": "./scripts/generate.sh",
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.15.0",
+    "@connectrpc/connect": "2.2.0",
+    "@connectrpc/connect-node": "2.2.0"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "2.15.0",
+    "typescript": "7.0.2"
+  }
+}

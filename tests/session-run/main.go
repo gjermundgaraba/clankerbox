@@ -4,23 +4,23 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"strings"
 	"time"
 
+	"connectrpc.com/connect"
+	"google.golang.org/protobuf/encoding/protojson"
+
+	v1 "clankerbox/gen/clankerbox/v1"
 	"clankerbox/internal/client"
-	guest "clankerbox/internal/guest/client"
 	"clankerbox/internal/guest/protocol"
 	"clankerbox/internal/model"
-	"clankerbox/internal/statefs"
+	"clankerbox/internal/rpcmodel"
 
 	"github.com/google/uuid"
 )
@@ -30,20 +30,23 @@ func main() {
 	expectDependency := flag.Bool(
 		"expect-delete-dependency",
 		false,
-		"Require deletion to reject MACHINE_ID with 409 dependency",
+		"Require deletion to reject MACHINE_ID with typed dependency",
 	)
 	expectStopped := flag.Bool(
 		"expect-stopped",
 		false,
-		"Require the session endpoint to reject MACHINE_ID with 409 prerequisite",
+		"Require the session endpoint to reject MACHINE_ID with typed prerequisite",
 	)
+	describeGuest := flag.Bool("describe-guest", false, "Describe MACHINE_ID through authenticated ordinary guest RPC")
 	flag.Parse()
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	var code int
 	var err error
 	switch {
-	case *expectDependency && *expectStopped:
+	case (*expectDependency && *expectStopped) || (*describeGuest && (*expectDependency || *expectStopped)):
 		err = errors.New("choose only one prerequisite probe")
+	case *describeGuest:
+		err = runDescribeGuest(ctx, *config, flag.Args(), os.Stdout)
 	case *expectDependency:
 		err = runDeleteDependencyCheck(ctx, *config, flag.Args(), os.Stdout)
 	case *expectStopped:
@@ -79,12 +82,8 @@ func run(ctx context.Context, path string, args []string, in io.Reader, out io.W
 	if err != nil {
 		return 0, err
 	}
-	link, err := connect(ctx, config, machine.ID)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = link.Close() }()
-	return execute(ctx, link, script, out)
+	defer api.Close()
+	return execute(ctx, api, machine.ID, script, out)
 }
 
 func commandScript(args []string, in io.Reader) (string, error) {
@@ -139,184 +138,145 @@ func readyMachine(ctx context.Context, api *client.API, name string) (model.Mach
 	}
 }
 
-func connect(ctx context.Context, config client.Config, id string) (*guest.Client, error) {
-	response, err := requestSession(ctx, config, id)
-	if err != nil {
-		return nil, err
-	}
-	if response.StatusCode != http.StatusSwitchingProtocols || response.Header.Get("Upgrade") != "clankerbox-session" {
-		_ = response.Body.Close()
-		return nil, fmt.Errorf("session upgrade returned HTTP %d", response.StatusCode)
-	}
-	stream, ok := response.Body.(io.ReadWriteCloser)
-	if !ok {
-		_ = response.Body.Close()
-		return nil, errors.New("session upgrade is not bidirectional")
-	}
-	return guest.Dial(ctx, stream)
-}
-
 func runStoppedCheck(ctx context.Context, path string, args []string) error {
 	if len(args) != 1 || !model.ValidID(args[0]) {
 		return errors.New("--expect-stopped requires one MACHINE_ID")
 	}
-	config, err := client.LoadConfig(path)
-	if err != nil {
-		return err
+	config, e := client.LoadConfig(path)
+	if e != nil {
+		return e
 	}
-	// Deliberately bypass readiness/inspection: only the authenticated session
-	// endpoint's specific prerequisite response can satisfy this acceptance check.
-	response, err := requestSession(ctx, config, args[0])
-	if err != nil {
-		return err
+	api, e := client.NewAPI(config)
+	if e != nil {
+		return e
 	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusConflict {
-		return fmt.Errorf("expected stopped-session HTTP 409 prerequisite, got HTTP %d", response.StatusCode)
-	}
-	var body struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-	if err = json.NewDecoder(io.LimitReader(response.Body, maxErrorBytes)).Decode(&body); err != nil {
-		return fmt.Errorf("invalid stopped-session response: %w", err)
-	}
-	if body.Error.Code != "prerequisite" {
-		return fmt.Errorf("expected stopped-session prerequisite, got %q", body.Error.Code)
+	defer api.Close()
+	_, e = api.SessionClient().DescribeGuest(ctx, connect.NewRequest(&v1.DescribeGuestRequest{MachineId: args[0]}))
+	detail, ok := rpcmodel.Detail(e)
+	if !ok || detail.GetReason() != v1.ErrorReason_ERROR_REASON_PREREQUISITE {
+		return fmt.Errorf("expected stopped-session prerequisite, got %w", e)
 	}
 	return nil
 }
-
-// runDeleteDependencyCheck makes exactly one mutation attempt against the source
-// explicitly supplied by checkpoint acceptance. Unexpected acceptance must be
-// emitted before returning an error so the harness can retain the operation ID.
 func runDeleteDependencyCheck(ctx context.Context, path string, args []string, out io.Writer) error {
 	if len(args) != 1 || !model.ValidID(args[0]) {
 		return errors.New("--expect-delete-dependency requires one MACHINE_ID")
 	}
-	config, err := client.LoadConfig(path)
-	if err != nil {
-		return err
+	config, e := client.LoadConfig(path)
+	if e != nil {
+		return e
 	}
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		config.URL+"/v1/machines/"+args[0]+"/delete",
-		strings.NewReader("{}"),
-	)
-	if err != nil {
-		return err
+	api, e := client.NewAPI(config)
+	if e != nil {
+		return e
 	}
+	defer api.Close()
 	key := model.NewID()
-	req.Header.Set("Idempotency-Key", key)
-	req.Header.Set("Content-Type", "application/json")
-	response, err := sendRequest(config, req)
-	if err != nil {
-		return fmt.Errorf("delete probe idempotency key %s requires inspection: %w", key, err)
-	}
-	defer func() { _ = response.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(response.Body, maxErrorBytes+1))
-	if err != nil || len(body) > maxErrorBytes {
-		return fmt.Errorf("delete probe idempotency key %s: incomplete or oversized response", key)
-	}
-	if response.StatusCode >= http.StatusOK && response.StatusCode < http.StatusMultipleChoices {
-		// Emit the complete accepted response, even if its schema is unexpected.
-		// The surrounding report already records the mutation intent.
-		if _, err = out.Write(body); err != nil {
-			return fmt.Errorf("delete probe idempotency key %s: recording acceptance: %w", key, err)
+	op, e := api.DeleteMachine(ctx, args[0], key)
+	if e == nil {
+		if writeErr := json.NewEncoder(out).Encode(op); writeErr != nil {
+			return writeErr
 		}
+		return fmt.Errorf("unexpected accepted delete operation %s (idempotency key %s)", op.ID, key)
 	}
-	var problem struct {
-		Error struct {
-			Code string `json:"code"`
-		} `json:"error"`
-	}
-	if response.StatusCode != http.StatusConflict || json.Unmarshal(body, &problem) != nil ||
-		problem.Error.Code != "dependency" {
-		return fmt.Errorf(
-			"expected HTTP 409 dependency, got HTTP %d (delete probe idempotency key %s)",
-			response.StatusCode,
-			key,
-		)
+	detail, ok := rpcmodel.Detail(e)
+	if !ok || detail.GetReason() != v1.ErrorReason_ERROR_REASON_DEPENDENCY {
+		return fmt.Errorf("delete probe idempotency key %s requires inspection: %w", key, e)
 	}
 	return nil
 }
-
-func requestSession(ctx context.Context, config client.Config, id string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.URL+"/v1/machines/"+id+"/sessions/stream", nil)
-	if err != nil {
-		return nil, err
+func execute(ctx context.Context, api *client.API, machine, script string, out io.Writer) (int, error) {
+	service := api.SessionClient()
+	desc, e := service.DescribeGuest(ctx, connect.NewRequest(&v1.DescribeGuestRequest{MachineId: machine}))
+	if e != nil {
+		return 0, e
 	}
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "clankerbox-session")
-	return sendRequest(config, req)
-}
-
-func sendRequest(config client.Config, req *http.Request) (*http.Response, error) {
-	token, err := statefs.ReadPrivate(config.TokenFile)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
-	base, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return nil, errors.New("default transport is not HTTP")
-	}
-	transport := base.Clone()
-	transport.Proxy = nil
-	// Session streams use an HTTP/1.1 upgrade, including over TLS. A cloned
-	// default transport may already have HTTP/2 registered in TLSNextProto.
-	transport.Protocols = new(http.Protocols)
-	transport.Protocols.SetHTTP1(true)
-	if transport.TLSClientConfig == nil {
-		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
-	}
-	transport.TLSClientConfig.NextProtos = []string{"http/1.1"}
-	defer transport.CloseIdleConnections()
-	httpClient := &http.Client{
-		Transport:     transport,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
-	return httpClient.Do(req)
-}
-
-func execute(ctx context.Context, link *guest.Client, script string, out io.Writer) (int, error) {
 	id := uuid.NewString()
-	args := protocol.SessionArgs{SessionID: id}
-	if err := link.CallInto(
+	_, e = service.CreateSession(
 		ctx,
-		protocol.OpSessionCreate,
-		protocol.CreateArgs{
-			SessionID: id,
-			Argv:      []string{"/bin/sh", "-c", script},
-			Cols:      terminalCols,
-			Rows:      terminalRows,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		},
-		nil,
-	); err != nil {
-		return 0, err
+		connect.NewRequest(
+			&v1.CreateSessionRequest{
+				MachineId: machine,
+				SessionId: id,
+				Argv:      []string{"/bin/sh", "-c", script},
+				Cols:      terminalCols,
+				Rows:      terminalRows,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			},
+		),
+	)
+	if e != nil {
+		return 0, e
 	}
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 		defer cancel()
-		_ = link.CallInto(cleanup, protocol.OpSessionEnd, args, nil)
+		_, _ = service.EndSession(cleanup, connect.NewRequest(&v1.EndSessionRequest{MachineId: machine, SessionId: id}))
 	}()
-	offset := uint64(0)
-	var opened protocol.OpenValue
-	if err := link.CallInto(
-		ctx,
-		protocol.OpSessionOpen,
-		protocol.OpenArgs{SessionID: id, FromOffset: &offset, FromIncarnation: link.Hello().Incarnation},
-		&opened,
-	); err != nil {
-		return 0, err
+	stream := service.AttachSession(ctx)
+	defer func() { _ = stream.CloseRequest() }()
+	defer func() { _ = stream.CloseResponse() }()
+	e = stream.Send(
+		&v1.AttachmentRequest{
+			Command: &v1.AttachmentRequest_Open{
+				Open: &v1.Open{
+					MachineId:            machine,
+					SessionId:            id,
+					ExpectedEngineDigest: desc.Msg.GetEngineDigest(),
+					ResumeCursor:         &v1.ResumeCursor{Offset: 0, Incarnation: desc.Msg.GetIncarnation()},
+				},
+			},
+		},
+	)
+	if e != nil {
+		return 0, e
 	}
-	if opened.Mode != "resume" {
-		return 0, fmt.Errorf("expected complete output replay, got %s", opened.Mode)
+	first, e := stream.Receive()
+	if e != nil {
+		return 0, e
 	}
-	return consume(ctx, link, id, out)
+	opened := first.GetOpened()
+	if opened == nil || opened.GetMode() != v1.OpenMode_OPEN_MODE_RESUME {
+		return 0, errors.New("expected complete output resume")
+	}
+	return receiveCommand(stream, id, out)
+}
+
+func receiveCommand(
+	stream *connect.BidiStreamForClient[v1.AttachmentRequest, v1.AttachmentEvent],
+	id string,
+	out io.Writer,
+) (int, error) {
+	ready := false
+	var pending strings.Builder
+	for {
+		event, e := stream.Receive()
+		if e != nil {
+			return 0, e
+		}
+		switch value := event.GetEvent().(type) {
+		case *v1.AttachmentEvent_Output:
+			ready, e = commandOutput(stream, value.Output.GetData(), out, &pending, ready)
+			if e != nil {
+				return 0, e
+			}
+
+		case *v1.AttachmentEvent_Ack:
+			if !value.Ack.GetAccepted() {
+				return 0, fmt.Errorf("command gate input refused: %s", value.Ack.GetReason())
+			}
+		case *v1.AttachmentEvent_Gap:
+			return 0, errors.New("session output lost")
+		case *v1.AttachmentEvent_SessionExited:
+			if value.SessionExited.GetSession().GetId() != id {
+				return 0, errors.New("session identity changed")
+			}
+			if value.SessionExited.Session.ExitCode == nil {
+				return 0, errors.New("session ended without exit status")
+			}
+			return int(value.SessionExited.GetSession().GetExitCode()), nil
+		}
+	}
 }
 
 const (
@@ -326,77 +286,55 @@ const (
 	maxErrorBytes  = 4 << 10
 )
 
-type outputReader struct {
-	ready   bool
-	pending strings.Builder
-	out     io.Writer
-}
+const terminalCols = 120
+const terminalRows = 40
 
-func (r *outputReader) output(ctx context.Context, link *guest.Client, id string, body []byte) error {
-	_, data, err := protocol.ParseOutput(body)
+func runDescribeGuest(ctx context.Context, path string, args []string, out io.Writer) error {
+	if len(args) != 1 || !model.ValidID(args[0]) {
+		return errors.New("--describe-guest requires one MACHINE_ID")
+	}
+	cfg, err := client.LoadConfig(path)
 	if err != nil {
 		return err
 	}
-	if r.ready {
-		_, err = r.out.Write(data)
+	api, err := client.NewAPI(cfg)
+	if err != nil {
 		return err
 	}
-	r.pending.Write(data)
-	if !strings.Contains(r.pending.String(), "SESSION_RUN_READY\n") {
-		return nil
+	defer api.Close()
+	result, err := api.SessionClient().
+		DescribeGuest(ctx, connect.NewRequest(&v1.DescribeGuestRequest{MachineId: args[0]}))
+	if err != nil {
+		return err
 	}
-	r.ready = true
-	return link.CallInto(
-		ctx,
-		protocol.OpSessionInput,
-		protocol.InputArgs{SessionID: id, Data: base64.StdEncoding.EncodeToString([]byte("\n"))},
-		nil,
+	if result.Msg.GetMachineId() != args[0] || result.Msg.GetIncarnation() == "" {
+		return errors.New("guest description identity mismatch")
+	}
+	raw, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(result.Msg)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, string(raw))
+	return err
+}
+
+func commandOutput(
+	stream *connect.BidiStreamForClient[v1.AttachmentRequest, v1.AttachmentEvent],
+	data []byte,
+	out io.Writer,
+	pending *strings.Builder,
+	ready bool,
+) (bool, error) {
+	if ready {
+		_, err := out.Write(data)
+		return true, err
+	}
+	pending.Write(data)
+	if !strings.Contains(pending.String(), "SESSION_RUN_READY\n") {
+		return false, nil
+	}
+	err := stream.Send(
+		&v1.AttachmentRequest{Command: &v1.AttachmentRequest_Input{Input: &v1.Input{Sequence: 1, Data: []byte("\n")}}},
 	)
+	return true, err
 }
-
-func sessionExit(frame guest.Frame, id string) (int, bool, error) {
-	if frame.Event == protocol.EventOutputGap {
-		return 0, false, errors.New("session output lost")
-	}
-	if frame.Event != protocol.EventSession {
-		return 0, false, nil
-	}
-	var event protocol.SessionEvent
-	if err := json.Unmarshal(frame.Body, &event); err != nil {
-		return 0, false, err
-	}
-	if event.Session.ID != id || event.Session.Status == protocol.StatusRunning {
-		return 0, false, nil
-	}
-	if event.Session.ExitCode == nil {
-		return 0, false, errors.New("session ended without exit status")
-	}
-	return *event.Session.ExitCode, true, nil
-}
-
-func consume(ctx context.Context, link *guest.Client, id string, out io.Writer) (int, error) {
-	reader := outputReader{out: out}
-	for {
-		select {
-		case <-ctx.Done():
-			return 0, ctx.Err()
-		case frame, ok := <-link.Events():
-			if !ok {
-				return 0, link.Err()
-			}
-			if frame.Kind == protocol.KindOutput {
-				if err := reader.output(ctx, link, id, frame.Body); err != nil {
-					return 0, err
-				}
-				continue
-			}
-			code, done, err := sessionExit(frame, id)
-			if err != nil || done {
-				return code, err
-			}
-		}
-	}
-}
-
-const terminalCols = 120
-const terminalRows = 40

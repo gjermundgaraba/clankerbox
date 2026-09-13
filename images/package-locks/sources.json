@@ -1,0 +1,40 @@
+{
+  "format": 1,
+  "qualified_date": "2026-09-12",
+  "requested": [
+    "git",
+    "curl",
+    "python3",
+    "tmux",
+    "build-essential",
+    "ca-certificates"
+  ],
+  "architectures": {
+    "arm64": {
+      "ubuntu": "26.04.1",
+      "ubuntu_sha256": "5a1906794ced63a71a8119c3f211ef5f0bbe0a243001b4bbd41fdf80c5b219fd",
+      "files": {
+        "automatic.txt": "82bd548ff2850b50fd0516e499ff670c591146d095522bbd59c9dcf162cd1e36",
+        "base.tsv": "65831fbb3dc4881f4d37e738b48530cd6bf5c5b20e5496b57fe308a02efacaea",
+        "install.tsv": "3b8e487b5af96b6573c77a73b644a4cd08ceb90b0a7812a10551698cad69233f",
+        "packages.tsv": "9823d67e1b029168b17942cd92d88824654becd689e7c40804e14aa140b50628"
+      },
+      "base_count": 87,
+      "package_count": 188,
+      "install_count": 108
+    },
+    "amd64": {
+      "ubuntu": "26.04.1",
+      "ubuntu_sha256": "a496a960472ce474a59590b8987d3a1135d3cbef1991f3b1abe8cacfea8bf85a",
+      "files": {
+        "automatic.txt": "88947f9031a33130ffc318cf64deb0368811d6ba81c240f249d226fd403be240",
+        "base.tsv": "381668161753e8f7099de438e883453bd16efc7896342b09c0b0b46a00743e91",
+        "install.tsv": "5492568cd5451c801defc844b87906b4b7997a44d989bf827efcea2b4d08d240",
+        "packages.tsv": "3ee904314a8f17a9a98045e3c0e5c895f3e06481b2d5782da9f4b2bd19b47511"
+      },
+      "base_count": 87,
+      "package_count": 189,
+      "install_count": 109
+    }
+  }
+}

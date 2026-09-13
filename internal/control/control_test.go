@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -87,8 +86,6 @@ func (t *testTransport) Call(ctx context.Context, h model.Host, r model.Request)
 	obs.MachineID = r.MachineID
 	obs.Generation = r.Generation
 	obs.Prepared = true
-	obs.SSHHostKey = t.key
-	obs.SSHUser = "admin"
 	obs.Endpoint = "192.168.64.2:22"
 	obs.ObservedAt = time.Now().UTC()
 	switch r.Action {
@@ -140,9 +137,7 @@ func config() model.Config {
 		Hosts: []model.Host{
 			{
 				ID:         "mac",
-				SSHTarget:  "worker@mac",
-				HelperPath: "/opt/bin/clankerbox-host",
-				ConfigPath: "/etc/clankerbox/host.json",
+				Endpoint:   "unix:///tmp/clankerbox-test-host.sock",
 				ProfileIDs: []string{"mac-v1"},
 				CPU:        4,
 				RAMMiB:     4096,
@@ -250,7 +245,7 @@ func TestControllerDurableIntentReplyLossAndDuplicates(t *testing.T) {
 	if len(tr.calls) != 2 || model.Hash(tr.calls[0]) != model.Hash(tr.calls[1]) {
 		t.Fatal("retry did not replay exact persisted request")
 	}
-	in.Name = "different"
+	in.Name = fixtureDifferent
 	_, err = c.Create(t.Context(), "create-once", in)
 	expectCode(t, err, "idempotency_conflict")
 }
@@ -317,7 +312,7 @@ func TestPendingOperationPreventsNewMutation(t *testing.T) {
 	defer closeTest(t, c)
 	tr.lost = true
 	o := mustCreate(t, c, in, "create")
-	_, err := c.Mutate(context.Background(), o.MachineID, "stop", "different")
+	_, err := c.Mutate(context.Background(), o.MachineID, "stop", fixtureDifferent)
 	expectCode(t, err, "operation_pending")
 }
 func TestConcurrentIdempotency(t *testing.T) {
@@ -385,73 +380,7 @@ func TestDatabaseSingleController(t *testing.T) {
 		t.Fatal("second controller opened same database")
 	}
 }
-func TestHTTPAuthenticationInvalidRequestsAndRetiredSSH(t *testing.T) {
-	t.Parallel()
-	c, tr, in, _ := setupControl(t)
-	defer closeTest(t, c)
-	token := strings.Repeat("t", 32)
-	handler, err := c.Handler([]byte(token))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = c.Handler([]byte("short")); err == nil {
-		t.Fatal("short token accepted")
-	}
-	routes := []string{
-		"/v1/profiles",
-		"/v1/hosts",
-		"/v1/machines",
-		"/v1/machines/" + model.NewID(),
-		"/v1/operations/" + model.NewID(),
-		"/v1/machines/" + model.NewID() + "/ssh",
-		"/v1/unknown",
-	}
-	for _, route := range routes {
-		for _, method := range []string{"GET", "POST"} {
-			r := httptest.NewRequestWithContext(t.Context(), method, route, nil)
-			r.Header.Set("Authorization", "Bearer wrong")
-			w := httptest.NewRecorder()
-			handler.ServeHTTP(w, r)
-			if w.Code != 401 {
-				t.Fatalf("%s %s without auth: %d", method, route, w.Code)
-			}
-		}
-	}
-	invalid := []string{
-		`{}`,
-		`{"name":"x","profile":"mac-v1","host":"mac","ssh_public_keys":["invalid"]}`,
-		`{"unknown":1}`,
-		`{} {}`,
-		`{"name":"../escape"}`,
-		strings.Repeat("x", 70<<10),
-	}
-	for _, body := range invalid {
-		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/machines", strings.NewReader(body))
-		r.Header.Set("Authorization", "Bearer "+token)
-		r.Header.Set("Idempotency-Key", "invalid")
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, r)
-		if w.Code != 400 {
-			t.Fatalf("invalid request status: %d", w.Code)
-		}
-	}
-	o := mustCreate(t, c, in, "valid")
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/machines/"+o.MachineID+"/ssh", nil)
-	r.Header.Set("Authorization", "Bearer "+token)
-	r.Header.Set("Connection", "keep-alive, Upgrade")
-	r.Header.Set("Upgrade", "clankerbox-stream")
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, r)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("retired upgrade: %d", w.Code)
-	}
-	if tr.connects != 0 {
-		t.Fatal("retired endpoint opened transport")
-	}
-}
 
-// Exercise the real durable helper journal and the controller across a lost SSH
-// reply. The only substitute is VM execution, so no hypervisor is needed in CI.
 type integrationRuntime struct {
 	state   host.RuntimeState
 	creates int
@@ -471,8 +400,8 @@ func (r *integrationRuntime) Start(context.Context, host.Manifest) error {
 	r.state.State = model.Running
 	return nil
 }
-func (r *integrationRuntime) Initialize(context.Context, host.Manifest) (string, string, string, error) {
-	return "admin", r.key, "192.168.64.2:22", nil
+func (r *integrationRuntime) Initialize(context.Context, host.Manifest) (string, error) {
+	return "192.168.64.2:443", nil
 }
 func (r *integrationRuntime) Stop(context.Context, host.Manifest) error {
 	r.state.State = model.Stopped
@@ -620,52 +549,8 @@ func TestProviderAuthIsAbsentFromAPI(t *testing.T) {
 			t.Fatalf("%s %s: got %d, want 404", route.method, route.path, w.Code)
 		}
 	}
-	r := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/machines", nil)
-	r.Header.Set("Authorization", "Bearer "+token)
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, r)
-	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "auth_relay") ||
-		!strings.Contains(w.Body.String(), `"guest"`) {
-		t.Fatalf("unexpected machine view: %d %s", w.Code, w.Body)
-	}
 }
 
-func (r *integrationRuntime) Verify(ctx context.Context, m host.Manifest) (string, string, string, error) {
+func (r *integrationRuntime) Verify(ctx context.Context, m host.Manifest) (string, error) {
 	return r.Initialize(ctx, m)
-}
-
-func TestStoppedSessionEndpointPrerequisite(t *testing.T) {
-	t.Parallel()
-	c, tr, in, _ := setupControl(t)
-	defer closeTest(t, c)
-	o := mustCreate(t, c, in, "create-stopped-test")
-	mustMutate(t, c, o.MachineID, "stop", "stop-test")
-	token := strings.Repeat("t", 32)
-	handler, err := c.Handler([]byte(token))
-	if err != nil {
-		t.Fatal(err)
-	}
-	r := httptest.NewRequestWithContext(
-		t.Context(),
-		http.MethodGet,
-		"/v1/machines/"+o.MachineID+"/sessions/stream",
-		nil,
-	)
-	r.Header.Set("Authorization", "Bearer "+token)
-	r.Header.Set("Connection", "Upgrade")
-	r.Header.Set("Upgrade", "clankerbox-session")
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, r)
-	var body struct {
-		Error control.APIError `json:"error"`
-	}
-	if err = json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if w.Code != http.StatusConflict || body.Error.Code != "prerequisite" {
-		t.Fatalf("expected stopped prerequisite, got %d %s", w.Code, w.Body.String())
-	}
-	if tr.connects != 0 {
-		t.Fatal("stopped session opened transport")
-	}
 }

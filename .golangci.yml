@@ -354,6 +354,6 @@ linters:
       os-temp-dir: true
 
   exclusions:
-    generated: disable
+    generated: strict
     presets: []
     paths: []

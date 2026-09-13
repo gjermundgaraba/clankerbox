@@ -3,7 +3,6 @@ package host_test
 import (
 	"context"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +16,6 @@ import (
 
 type branchRuntime struct {
 	machines                                                   map[string]*memoryRuntime
-	key                                                        string
 	inputs                                                     map[string]host.Manifest
 	forks, captures, restores, checkpointDeletes, preparations int
 	fail                                                       string
@@ -29,7 +27,7 @@ func (r *branchRuntime) machine(m host.Manifest) *memoryRuntime {
 	}
 	r.inputs[m.ID] = m
 	if r.machines[m.ID] == nil {
-		r.machines[m.ID] = &memoryRuntime{key: r.key}
+		r.machines[m.ID] = &memoryRuntime{}
 	}
 	return r.machines[m.ID]
 }
@@ -49,14 +47,12 @@ func (r *branchRuntime) Stop(ctx context.Context, m host.Manifest) error {
 func (r *branchRuntime) Delete(ctx context.Context, m host.Manifest) error {
 	return r.machine(m).Delete(ctx, m)
 }
-func (r *branchRuntime) Initialize(ctx context.Context, m host.Manifest) (string, string, string, error) {
+func (r *branchRuntime) Initialize(ctx context.Context, m host.Manifest) (string, error) {
 	r.preparations++
 	if r.fail == "preparation" {
-		return "", "", "", errors.New("preparation reply lost")
+		return "", errors.New("preparation reply lost")
 	}
-	if m.SSHPrivateKey != "" {
-		r.machine(m).key = m.SSHHostKey
-	}
+
 	return r.machine(m).Initialize(ctx, m)
 }
 func (r *branchRuntime) Prerequisite(context.Context, string, host.Manifest, *host.CheckpointSpec) error {
@@ -106,7 +102,7 @@ func setupBranch(t *testing.T) (*host.Helper, host.Config, *branchRuntime, model
 	if err = h.Close(); err != nil {
 		t.Fatal(err)
 	}
-	rt := &branchRuntime{machines: map[string]*memoryRuntime{}, key: testKey(t)}
+	rt := &branchRuntime{machines: map[string]*memoryRuntime{}}
 	h, err = host.Open(cfg, rt)
 	requireNoError(t, err)
 	requireStatus(t, h.Execute(context.Background(), req), statusSucceeded)
@@ -166,7 +162,7 @@ func TestHelperBranchIdentityDuplicatesAndSourceGeneration(t *testing.T) {
 	requireStatus(t, resp, statusSucceeded)
 	original := rt.inputs[source.MachineID]
 	cloned := rt.inputs[child.MachineID]
-	if cloned.SSHHostKey == original.SSHHostKey || cloned.SSHPrivateKey == "" || !resp.Observation.Prepared ||
+	if cloned.ID == original.ID || !resp.Observation.Prepared ||
 		cloned.SourceMachineID != original.ID {
 		t.Fatalf("child identity not independent: %+v", resp.Observation)
 	}
@@ -180,7 +176,7 @@ func TestHelperBranchIdentityDuplicatesAndSourceGeneration(t *testing.T) {
 	second := forkRequest(t, source)
 	requireStatus(t, h.Execute(ctx, second), statusSucceeded)
 	sibling := rt.inputs[second.MachineID]
-	if sibling.SSHHostKey == cloned.SSHHostKey {
+	if sibling.ID == cloned.ID {
 		t.Fatal("cloned host key")
 	}
 }
@@ -258,7 +254,7 @@ func TestHelperCheckpointRestoreTwiceAndDeleteIndependently(t *testing.T) {
 		req.Checkpoint = resp.Checkpoint
 		result := h.Execute(ctx, req)
 		requireStatus(t, result, statusSucceeded)
-		keys[result.Observation.SSHHostKey] = true
+		keys[result.Observation.MachineID] = true
 		if rt.machine(host.Manifest{ID: req.MachineID}).starts != 0 {
 			t.Fatal("substituted cold boot for restore")
 		}
@@ -323,9 +319,10 @@ func TestHostLinuxDependencyGuardPreservesOwnedStore(t *testing.T) {
 	cfg.Root, err = filepath.EvalSymlinks(root)
 	requireNoError(t, err)
 	cfg.Profiles = []model.Profile{p}
+	cfg.HostOS = osLinux
 	cfg.SmolvmPath, cfg.LibraryDir = testSmolvmPath, testSmolvmLibrary
 	source.Profile = p
-	rt := &branchRuntime{machines: map[string]*memoryRuntime{}, key: testKey(t)}
+	rt := &branchRuntime{machines: map[string]*memoryRuntime{}}
 	h, err = host.Open(cfg, rt)
 	requireNoError(t, err)
 	defer func() {
@@ -355,14 +352,14 @@ func TestHostLinuxDependencyGuardPreservesOwnedStore(t *testing.T) {
 
 func TestNativePrerequisitesAndPendingRAMGuard(t *testing.T) {
 	t.Parallel()
-	cfg := host.Config{Root: t.TempDir(), DNS: "1.1.1.1"}
+	cfg := host.Config{HostOS: osLinux, Root: shortNativeRoot(t), DNS: "1.1.1.1"}
 	requireNoError(t, os.MkdirAll(filepath.Join(cfg.Root, "jobs"), 0700))
 	n := &host.NativeRuntime{Config: cfg, Runner: &recordingRunner{}}
 	source := host.Manifest{Profile: model.Profile{Runtime: runtimeSmolvm, Arch: archAMD64}}
 	if err := n.Prerequisite(context.Background(), actionCapture, source, nil); err == nil {
 		t.Fatal("custom DNS portable capture accepted")
 	}
-	source.Profile.Arch = "arm64"
+	source.Profile.Arch = archARM64
 	if err := n.Prerequisite(context.Background(), actionFork, source, nil); err == nil {
 		t.Fatal("nonconcurrent native branch advertised as concurrent")
 	}
@@ -444,7 +441,7 @@ func exerciseInterruptedChild(t *testing.T, phase string) {
 	requireStatus(t, h.Execute(ctx, req), statusUnresolved)
 	m := rt.inputs[req.MachineID]
 	var err error
-	if m.SSHPrivateKey == "" {
+	if m.ID == "" {
 		t.Fatal("missing child identity at runtime boundary")
 	}
 	closeHelper(t, h)
@@ -459,12 +456,10 @@ func exerciseInterruptedChild(t *testing.T, phase string) {
 	}
 	obs := h.Inspect(ctx, m.ID)
 	if obs.Observation != nil &&
-		(obs.Observation.Prepared || obs.Observation.Endpoint != "" || obs.Observation.SSHHostKey != "") {
+		(obs.Observation.Prepared || obs.Observation.Endpoint != "") {
 		t.Fatal("exposed unresolved child endpoint")
 	}
-	if connectErr := h.Connect(ctx, m.ID, strings.NewReader(""), io.Discard); connectErr == nil {
-		t.Fatal("unresolved child exposed a connection")
-	}
+
 	if phase == actionRestore {
 		del := model.Request{
 			Action:      actionDeleteCheckpoint,
@@ -487,6 +482,6 @@ func exerciseInterruptedChild(t *testing.T, phase string) {
 	}
 }
 
-func (r *branchRuntime) Verify(ctx context.Context, m host.Manifest) (string, string, string, error) {
+func (r *branchRuntime) Verify(ctx context.Context, m host.Manifest) (string, error) {
 	return r.machine(m).Verify(ctx, m)
 }

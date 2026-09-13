@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"clankerbox/internal/model"
 	"clankerbox/internal/statefs"
@@ -68,6 +69,11 @@ func (n *NativeRuntime) Prerequisite(ctx context.Context, action string, source 
 
 // Fork creates a live child while retaining the source runtime store where required.
 func (n *NativeRuntime) Fork(ctx context.Context, source, child Manifest) error {
+	if child.Profile.Runtime == runtimeSmolvm {
+		if err := n.stageTemplates(child); err != nil {
+			return err
+		}
+	}
 	if err := os.MkdirAll(machineDir(n.Config, child), 0700); err != nil {
 		return err
 	}
@@ -94,7 +100,10 @@ func (n *NativeRuntime) Fork(ctx context.Context, source, child Manifest) error 
 	// Replace only its future ExecStart once branch completion is acknowledged.
 	branch := n.Config.SmolvmPath + " machine branch --from " + source.RuntimeName() + " --name " + child.RuntimeName() + " --port " + strconv.Itoa(
 		child.Port,
-	) + ":22 --branchable"
+	) + ":7443 --branchable"
+	if n.hostOS() == hostDarwin {
+		return n.forkDarwin(ctx, child, branch)
+	}
 	if err = statefs.WritePrivate(n.job(child), n.linuxJobContents(child, branch)); err != nil {
 		return err
 	}
@@ -113,8 +122,36 @@ func (n *NativeRuntime) Fork(ctx context.Context, source, child Manifest) error 
 	return err
 }
 
+func (n *NativeRuntime) forkDarwin(ctx context.Context, child Manifest, branch string) error {
+	var err error
+
+	if err = statefs.WritePrivate(n.job(child), n.smolvmPlist(child, strings.Fields(branch))); err != nil {
+		return err
+	}
+	target := n.Config.LaunchdDomain + "/" + n.label(child)
+	if _, e := n.supervisor(ctx, child, "print", target); e == nil {
+		return errors.New("branch launch job already exists; explicit inspection required")
+	}
+	if _, err = n.supervisor(ctx, child, "bootstrap", n.Config.LaunchdDomain, n.job(child)); err != nil {
+		return err
+	}
+	if _, err = n.supervisor(ctx, child, "kickstart", target); err != nil {
+		return err
+	}
+	if err = n.waitState(ctx, child, model.Running, runtimeStartTimeout); err != nil {
+		return err
+	}
+	// Replace only the job file for future execution. Unloading a live branch job could affect descendants.
+	return n.Configure(ctx, child)
+}
+
 // Capture writes an immutable checkpoint and retains partial artifacts on failure.
 func (n *NativeRuntime) Capture(ctx context.Context, source Manifest, cp CheckpointSpec) error {
+	if source.Profile.Runtime == runtimeSmolvm {
+		if err := n.stageTemplates(source); err != nil {
+			return err
+		}
+	}
 	dir := n.checkpointDir(cp)
 	// An interrupted directory is evidence, never a destination to reuse.
 	if err := os.Mkdir(dir, 0700); err != nil {
@@ -122,25 +159,7 @@ func (n *NativeRuntime) Capture(ctx context.Context, source Manifest, cp Checkpo
 	}
 	switch cp.Kind {
 	case checkpointDisk:
-		if _, err := n.run(
-			ctx,
-			source,
-			"clone",
-			source.RuntimeName(),
-			checkpointMachine(cp).RuntimeName(),
-		); err != nil {
-			return err
-		}
-		state, err := n.Inspect(ctx, checkpointMachine(cp))
-		if err != nil {
-			return err
-		}
-		if !state.Exists || state.State != model.Stopped {
-			return errors.New("checkpoint clone not confirmed stopped")
-		}
-		// Sync the independently cloned APFS files before journal publication.
-		vmDir := filepath.Join(n.Config.Root, runtimeTart, "vms", checkpointMachine(cp).RuntimeName())
-		if err = syncTree(vmDir); err != nil {
+		if err := n.captureTart(ctx, source, cp); err != nil {
 			return err
 		}
 	case checkpointRAM:
@@ -186,18 +205,42 @@ func syncTree(root string) error {
 		return statefs.Sync(path)
 	})
 }
+func (n *NativeRuntime) captureTart(ctx context.Context, source Manifest, cp CheckpointSpec) error {
+	if _, err := n.run(
+		ctx,
+		source,
+		"clone",
+		source.RuntimeName(),
+		checkpointMachine(cp).RuntimeName(),
+	); err != nil {
+		return err
+	}
+	state, err := n.Inspect(ctx, checkpointMachine(cp))
+	if err != nil {
+		return err
+	}
+	if !state.Exists || state.State != model.Stopped {
+		return errors.New("checkpoint clone not confirmed stopped")
+	}
+	// Sync the independently cloned APFS files before journal publication.
+	vmDir := filepath.Join(n.Config.Root, runtimeTart, "vms", checkpointMachine(cp).RuntimeName())
+	if err = syncTree(vmDir); err != nil {
+		return err
+	}
+
+	return nil
+}
 func (n *NativeRuntime) pendingRAMFiles(m Manifest) []string {
 	sum := sha256.Sum256([]byte(m.RuntimeName()))
 	dir := filepath.Join(
-		storeDir(n.Config, m),
-		"c",
+		n.runtimeCache(m),
 		runtimeSmolvm,
 		"vms",
 		hex.EncodeToString(sum[:8]),
 		"portable-checkpoint",
 	)
 	out := []string{}
-	for _, name := range []string{"pending", "checkpoint.bin", "memory.bin", "manifest.bin"} {
+	for _, name := range []string{statusPending, "checkpoint.bin", "memory.bin", "manifest.bin"} {
 		out = append(out, filepath.Join(dir, name))
 	}
 	return out
@@ -224,16 +267,24 @@ func (n *NativeRuntime) Restore(ctx context.Context, m Manifest, cp CheckpointSp
 	if err := n.Start(ctx, m); err != nil {
 		return err
 	}
-	if m.PendingRAM {
-		m.PendingRAM = false
-		if err := n.Configure(ctx, m); err != nil {
-			return err
-		}
-		if _, err := n.supervisor(ctx, m, "daemon-reload"); err != nil {
-			return err
-		}
+	return n.finishRAMRestore(ctx, m)
+}
+
+func (n *NativeRuntime) finishRAMRestore(ctx context.Context, m Manifest) error {
+	if !m.PendingRAM {
+		return nil
 	}
-	return nil
+	m.PendingRAM = false
+	if err := n.Configure(ctx, m); err != nil {
+		return err
+	}
+	// macOS starts the same retained command for both first RAM resume and
+	// later cold starts. Never unload its live job merely to refresh the plist.
+	if n.hostOS() == hostDarwin {
+		return nil
+	}
+	_, err := n.supervisor(ctx, m, "daemon-reload")
+	return err
 }
 
 // DeleteCheckpoint removes only the specified owned checkpoint artifact.
@@ -259,8 +310,8 @@ func (n *NativeRuntime) DeleteCheckpoint(ctx context.Context, cp CheckpointSpec)
 }
 
 func (n *NativeRuntime) smolvmPrerequisite(action string, p model.Profile, cp *CheckpointSpec) error {
-	if action == actionFork && p.Arch != archAMD64 {
-		return errors.New("unsupported: concurrent Linux RAM fork requires amd64")
+	if action == actionFork && p.Arch != archAMD64 && (n.hostOS() != hostDarwin || p.Arch != "arm64") {
+		return errors.New("unsupported: unqualified host/guest fork architecture")
 	}
 	if action == actionCapture && n.Config.DNS != "" {
 		return errors.New(
@@ -296,7 +347,14 @@ func (n *NativeRuntime) restoreRAM(ctx context.Context, m *Manifest, cp Checkpoi
 	if cp.Kind != checkpointRAM || m.StoreID != "" {
 		return errors.New("RAM restore requires an independent runtime store")
 	}
-	for _, sub := range []string{"d", "c", "config", "r", "home", "empty-docker"} {
+	if err := os.MkdirAll(n.runtimeHome(*m), 0700); err != nil {
+		return err
+	}
+	if err := n.stageTemplates(*m); err != nil {
+		return err
+	}
+
+	for _, sub := range []string{"d", "config", "r", "home", "empty-docker"} {
 		if err := os.MkdirAll(filepath.Join(machineDir(n.Config, *m), sub), 0700); err != nil {
 			return err
 		}
@@ -332,9 +390,9 @@ func (n *NativeRuntime) restoreRAM(ctx context.Context, m *Manifest, cp Checkpoi
 		nameFlag,
 		m.RuntimeName(),
 		"--remove-port",
-		strconv.Itoa(cp.SourcePort)+":22",
+		strconv.Itoa(cp.SourcePort)+":7443",
 		"--port",
-		strconv.Itoa(m.Port)+":22",
+		strconv.Itoa(m.Port)+":7443",
 	); err != nil {
 		return err
 	}

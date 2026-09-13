@@ -124,3 +124,14 @@ class Acceptance:
         self.report.data.pop('pending')
         self.report.data['events'].append({'source_delete_dependency_rejected': machine})
         self.report.save()
+
+
+def describe_guest(runner, config, machine):
+    proc = subprocess.run([runner, '--config', config, '--describe-guest', machine],
+                          capture_output=True, text=True, timeout=100)
+    if proc.returncode:
+        raise RuntimeError('guest description failed: ' + proc.stderr[-2048:])
+    value = json.loads(proc.stdout)
+    if value.get('machine_id') != machine or not value.get('incarnation'):
+        raise RuntimeError('verified guest identity differs from requested machine')
+    return value

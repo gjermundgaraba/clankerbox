@@ -1,487 +1,377 @@
-package dev_test
+//nolint:testpackage // Tests exercise private ownership and teardown boundaries without exporting them.
+package dev
 
 import (
-	"bufio"
+	"archive/tar"
+	"compress/gzip"
 	"context"
-	"encoding/base64"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
-	"net"
-	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"sync"
-	"syscall"
 	"testing"
-	"time"
 
-	"github.com/google/uuid"
-
-	"clankerbox/internal/dev"
-	"clankerbox/internal/guest/client"
-	"clankerbox/internal/guest/daemon"
-	"clankerbox/internal/guest/protocol"
-	"clankerbox/internal/model"
+	v1 "clankerbox/gen/clankerbox/v1"
+	"clankerbox/internal/statefs"
 )
 
-func requireOK(t *testing.T, err error) {
+const (
+	fixtureRuntimeLibrary = "runtime/lib"
+	fixtureRuntime        = "runtime"
+	fixtureAgent          = "image/usr/local/bin/smolvm-agent"
+)
+
+func makeBundle(t *testing.T) string {
 	t.Helper()
+	root := t.TempDir()
+	b := Bundle{
+		ManifestFormat: 2,
+		Version:        "test-1",
+		OS:             runtime.GOOS,
+		Arch:           runtime.GOARCH,
+		RuntimeDigest:  strings.Repeat("1", 64),
+		ImageDigest:    strings.Repeat("2", 64),
+		Controller:     "bin/controller",
+		Host:           "bin/host",
+		Guest:          "bin/guest",
+		Smolvm:         "runtime/smolvm",
+		LibraryDir:     fixtureRuntimeLibrary,
+		ImagePath:      fixtureImage,
+		ProfileID:      "linux-dev",
+		ProfileCPU:     2,
+		ProfileRAMMiB:  1024,
+		StorageGiB:     1,
+		OverlayGiB:     8,
+	}
+	for _, dir := range []string{"bin", fixtureRuntime, fixtureRuntimeLibrary, fixtureImage, "image/usr", "image/usr/local", "image/usr/local/bin"} {
+		if err := os.Mkdir(filepath.Join(root, dir), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{b.Controller, b.Host, b.Guest, b.Smolvm, "runtime/lib/library", fixtureInit, fixtureAgent} {
+		data := []byte("fixture " + name)
+		if err := os.WriteFile(filepath.Join(root, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+		//nolint:gosec // Fixture executables deliberately need owner execute permission.
+		if err := os.Chmod(filepath.Join(root, name), 0700); err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(data)
+		b.Files = append(
+			b.Files,
+			BundleFile{Path: name, Type: bundleRegularFile, Mode: 0700, SHA256: hex.EncodeToString(sum[:])},
+		)
+	}
+	if err := os.Symlink("init", filepath.Join(root, fixtureImage, "link")); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("init"))
+	b.Files = append(
+		b.Files,
+		BundleFile{Path: "image/link", Type: "symlink", Mode: 0777, SHA256: hex.EncodeToString(sum[:])},
+	)
+	for _, name := range []string{"bin", fixtureRuntime, fixtureRuntimeLibrary, fixtureImage, "image/usr", "image/usr/local", "image/usr/local/bin"} {
+		b.Files = append(b.Files, BundleFile{Path: name, Type: "directory", Mode: 0700})
+	}
+	//nolint:gosec // Guest image root must permit the unprivileged workload to traverse it.
+	if err := os.Chmod(filepath.Join(root, fixtureImage), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for index := range b.Files {
+		if b.Files[index].Path == fixtureImage {
+			b.Files[index].Mode = 0755
+		}
+	}
+	b.ImageDigest, _ = componentDigest(componentInventory(b.Files, b.ImagePath))
+	runtimeEntries := componentInventory(b.Files, fixtureRuntime)
+	for _, entry := range b.Files {
+		if entry.Path == fixtureAgent {
+			entry.Path = "smolvm-agent"
+			runtimeEntries = append(runtimeEntries, entry)
+		}
+	}
+	b.RuntimeDigest, _ = componentDigest(runtimeEntries)
+	raw, _ := json.Marshal(b)
+	path := filepath.Join(root, bundleManifestName)
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+func TestBundleVerifiesPayloadAndRejectsTamper(t *testing.T) {
+	t.Parallel()
+	path := makeBundle(t)
+	b, err := verifyBundle(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-}
-
-type devFixture struct {
-	root, state, executable string
-}
-
-func setupDev(ctx context.Context, t *testing.T) devFixture {
-	t.Helper()
-	// Keep real Unix socket paths below Darwin's length limit.
-	root, err := os.MkdirTemp("", "cb-dev-")
-	requireOK(t, err)
-	t.Cleanup(func() { _ = os.RemoveAll(root) })
-	state, executable := filepath.Join(root, "state"), filepath.Join(root, "clankerbox")
-	//nolint:gosec // Build the repository CLI into the test-owned directory.
-	build := exec.CommandContext(ctx, "go", "build", "-o", executable, "./cmd/clankerbox")
-	build.Dir = filepath.Join("..", "..")
-	output, err := build.CombinedOutput()
-	if err != nil {
-		t.Fatalf("build: %v\n%s", err, output)
+	if err = os.WriteFile(b.path(b.Guest), []byte("modified"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
-		defer stop()
-		requireOK(t, dev.Stop(cleanup, state))
-	})
-	return devFixture{root: root, state: state, executable: executable}
+	if _, err = verifyBundle(path); err == nil || !strings.Contains(err.Error(), "checksum") {
+		t.Fatalf("tamper accepted: %v", err)
+	}
 }
-
-func TestDevRestartRecoversFailedGuestLaunch(t *testing.T) {
+func TestBundleRejectsUnlistedAndEscapingSymlink(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 60*time.Second)
-	t.Cleanup(cancel)
-	fixture := setupDev(ctx, t)
-	// A failed launch leaves a durable, unresolved create with a delayed retry.
-	first, stopFirst := context.WithTimeout(ctx, 3*time.Second)
-	err := dev.Run(first, dev.Options{
-		StateDir: fixture.state, Listen: "127.0.0.1:0", Executable: filepath.Join(fixture.root, "missing-guest"),
-	}, func(dev.Connection) error {
-		return errors.New("unexpected readiness for missing guest executable")
-	})
-	stopFirst()
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("startup did not keep unresolved launch recovery alive until its deadline: %v", err)
-	}
-	restarted := startDev(ctx, t, fixture.executable, fixture.state)
-	status, data := devRequest(ctx, t, restarted.connection, http.MethodGet, "/v1/machines", "")
-	var machines []model.Machine
-	requireOK(t, json.Unmarshal(data, &machines))
-	if status != http.StatusOK || len(machines) != 1 || machines[0].Generation != 1 ||
-		machines[0].State != model.Running {
-		t.Fatalf("create was not recovered under its original generation: %d %s", status, data)
-	}
-	verifyFreshTerminal(ctx, t, devStream(ctx, t, restarted.connection))
-	restarted.stop()
-}
-
-type devProcess struct {
-	connection dev.Connection
-	stop       func()
-}
-
-func startDev(ctx context.Context, t *testing.T, executable, state string) devProcess {
-	t.Helper()
-	log, err := os.CreateTemp(t.TempDir(), "controller-log-")
-	requireOK(t, err)
-	t.Cleanup(func() { _ = log.Close() })
-	//nolint:gosec // Build and run the repository's CLI with fixed test arguments.
-	cmd := exec.CommandContext(ctx, executable, "--json", "dev", "--state-dir", state, "--listen", "127.0.0.1:0")
-	cmd.Stderr = log
-	stdout, err := cmd.StdoutPipe()
-	requireOK(t, err)
-	requireOK(t, cmd.Start())
-	done := make(chan struct{})
-	var processErr error
-	go func() { processErr = cmd.Wait(); close(done) }()
-	var once sync.Once
-	stop := func() {
-		once.Do(func() {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			select {
-			case <-done:
-			case <-ctx.Done():
-				_ = cmd.Process.Kill()
-				<-done
+	for _, kind := range []string{"extra", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			path := makeBundle(t)
+			root := filepath.Dir(path)
+			if kind == "extra" {
+				_ = os.WriteFile(filepath.Join(root, "extra"), []byte("unverified"), 0600)
+			} else {
+				_ = os.Remove(filepath.Join(root, "image/link"))
+				_ = os.Symlink("../../outside", filepath.Join(root, "image/link"))
 			}
-			if processErr != nil {
-				data, _ := os.ReadFile(log.Name())
-				t.Errorf("controller: %v\n%s", processErr, data)
+			if _, err := verifyBundle(path); err == nil {
+				t.Fatal("unsafe bundle accepted")
 			}
 		})
 	}
-	t.Cleanup(stop)
-	var connection dev.Connection
-	decoded := make(chan error, 1)
-	go func() { decoded <- json.NewDecoder(stdout).Decode(&connection) }()
-	select {
-	case err = <-decoded:
-		if err != nil {
-			data, _ := os.ReadFile(log.Name())
-			t.Fatalf("controller readiness: %v\n%s", err, data)
-		}
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
-	}
-	return devProcess{connection: connection, stop: stop}
 }
-
-func devRequest(ctx context.Context, t *testing.T, connection dev.Connection, method, path, body string) (int, []byte) {
+func archiveFixture(t *testing.T, headers []*tar.Header) string {
 	t.Helper()
-	token, err := os.ReadFile(connection.TokenPath)
-	requireOK(t, err)
-	request, err := http.NewRequestWithContext(ctx, method, connection.URL+path, strings.NewReader(body))
-	requireOK(t, err)
-	request.Header.Set("Authorization", "Bearer "+string(token))
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Idempotency-Key", uuid.NewString())
-	response, err := http.DefaultClient.Do(request)
-	requireOK(t, err)
-	defer func() { _ = response.Body.Close() }()
-	data, err := io.ReadAll(response.Body)
-	requireOK(t, err)
-	return response.StatusCode, data
-}
-
-func devStream(ctx context.Context, t *testing.T, connection dev.Connection) *client.Client {
-	t.Helper()
-	token, err := os.ReadFile(connection.TokenPath)
-	requireOK(t, err)
-	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", strings.TrimPrefix(connection.URL, "http://"))
-	requireOK(t, err)
-	t.Cleanup(func() { _ = conn.Close() })
-	request, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodGet,
-		connection.URL+"/v1/machines/"+connection.MachineID+"/sessions/stream",
-		nil,
-	)
-	requireOK(t, err)
-	request.Header.Set("Authorization", "Bearer "+string(token))
-	request.Header.Set("Connection", "Upgrade")
-	request.Header.Set("Upgrade", "clankerbox-session")
-	deadline, _ := ctx.Deadline()
-	requireOK(t, conn.SetDeadline(deadline))
-	requireOK(t, request.Write(conn))
-	reader := bufio.NewReader(conn)
-	response, err := http.ReadResponse(reader, request)
-	requireOK(t, err)
-	requireOK(t, response.Body.Close())
-	if response.StatusCode != http.StatusSwitchingProtocols {
-		t.Fatalf("upgrade: %s", response.Status)
-	}
-	guest, err := client.Dial(ctx, struct {
-		io.Reader
-		io.WriteCloser
-	}{reader, conn})
-	requireOK(t, err)
-	t.Cleanup(func() { _ = guest.Close() })
-	return guest
-}
-
-func awaitOutput(ctx context.Context, t *testing.T, guest *client.Client, marker string) {
-	t.Helper()
-	var output strings.Builder
-	for {
-		select {
-		case event, ok := <-guest.Events():
-			if !ok {
-				t.Fatalf("guest closed: %v", guest.Err())
-			}
-			if event.Kind == protocol.KindOutput {
-				output.Write(event.Body)
-				if strings.Contains(output.String(), marker) {
-					return
-				}
-			}
-		case <-ctx.Done():
-			t.Fatalf("waiting for %q: %v; output %q", marker, ctx.Err(), output.String())
-		}
-	}
-}
-
-//nolint:funlen // Keep the two process lifetimes and terminal assertions together.
-func TestExecutableDevRetainsTerminalAcrossControllerRestart(t *testing.T) {
-	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), 90*time.Second)
-	t.Cleanup(cancel)
-	fixture := setupDev(ctx, t)
-	first := startDev(ctx, t, fixture.executable, fixture.state)
-	status, data := devRequest(ctx, t, first.connection, http.MethodGet, "/v1/machines", "")
-	var machines []model.Machine
-	requireOK(t, json.Unmarshal(data, &machines))
-	if status != http.StatusOK || len(machines) != 1 || machines[0].ID != first.connection.MachineID {
-		t.Fatalf("machines: %d %s", status, data)
-	}
-	status, data = devRequest(
-		ctx,
-		t,
-		first.connection,
-		http.MethodPost,
-		"/v1/machines/"+first.connection.MachineID+"/checkpoint",
-		"{}",
-	)
-	if status != http.StatusBadRequest || !strings.Contains(string(data), "unsupported") {
-		t.Fatalf("local checkpoint should be unsupported: %d %s", status, data)
-	}
-	guest := devStream(ctx, t, first.connection)
-	incarnation := guest.Hello().Incarnation
-	var created protocol.SessionValue
-	requireOK(
-		t,
-		guest.CallInto(
-			ctx,
-			protocol.OpSessionCreate,
-			protocol.CreateArgs{
-				SessionID: uuid.NewString(),
-				Cols:      80,
-				Rows:      24,
-				CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-				Argv: []string{
-					"/bin/sh",
-					"-c",
-					"printf 'initial-marker\\n'; while IFS= read -r line; do printf 'reply:%s\\n' \"$line\"; done",
-				},
-			},
-			&created,
-		),
-	)
-	if created.Session.Cwd != first.connection.Workspace {
-		t.Fatalf("shell cwd %q, workspace %q", created.Session.Cwd, first.connection.Workspace)
-	}
-	zero := uint64(0)
-	var opened protocol.OpenValue
-	requireOK(
-		t,
-		guest.CallInto(
-			ctx,
-			protocol.OpSessionOpen,
-			protocol.OpenArgs{SessionID: created.Session.ID, FromOffset: &zero, FromIncarnation: incarnation},
-			&opened,
-		),
-	)
-	awaitOutput(ctx, t, guest, "initial-marker")
-	first.stop()
-	second := startDev(ctx, t, fixture.executable, fixture.state)
-	if second.connection.MachineID != first.connection.MachineID ||
-		second.connection.Workspace != first.connection.Workspace {
-		t.Fatal("restart changed machine or workspace")
-	}
-	later := devStream(ctx, t, second.connection)
-	if later.Hello().Incarnation != incarnation {
-		t.Fatal("restart replaced guest daemon")
-	}
-	requireOK(
-		t,
-		later.CallInto(
-			ctx,
-			protocol.OpSessionOpen,
-			protocol.OpenArgs{SessionID: created.Session.ID, FromOffset: &zero, FromIncarnation: incarnation},
-			&opened,
-		),
-	)
-	if opened.Session.Status != protocol.StatusRunning || opened.Session.PID != created.Session.PID {
-		t.Fatalf("retained shell: %+v", opened.Session)
-	}
-	requireOK(
-		t,
-		later.CallInto(
-			ctx,
-			protocol.OpSessionResize,
-			protocol.ResizeArgs{SessionID: created.Session.ID, Cols: 100, Rows: 30},
-			nil,
-		),
-	)
-	var input protocol.InputValue
-	requireOK(
-		t,
-		later.CallInto(
-			ctx,
-			protocol.OpSessionInput,
-			protocol.InputArgs{
-				SessionID: created.Session.ID,
-				Data:      base64.StdEncoding.EncodeToString([]byte("after-restart\n")),
-			},
-			&input,
-		),
-	)
-	if input.Status != protocol.InputAccepted {
-		t.Fatalf("input: %+v", input)
-	}
-	awaitOutput(ctx, t, later, "reply:after-restart")
-	second.stop()
-	// Exercise the user-facing explicit cleanup command as well as its API.
-	//nolint:gosec // The built CLI receives fixed cleanup arguments.
-	stop := exec.CommandContext(ctx, fixture.executable, "dev", "--state-dir", fixture.state, "stop")
-	output, err := stop.CombinedOutput()
+	path := filepath.Join(t.TempDir(), "test.tgz")
+	//nolint:gosec // Test archive resides in this test’s private temporary directory.
+	f, err := os.Create(path)
 	if err != nil {
-		t.Fatalf("dev stop: %v\n%s", err, output)
+		t.Fatal(err)
 	}
-	_, err = os.Stat(daemon.PathsIn(filepath.Join(fixture.state, "guest")).Socket)
-	if !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("daemon socket survived stop: %v", err)
-	}
-	verifyRestartAfterGuestStop(
-		ctx, t, fixture.executable, fixture.state, first.connection, incarnation, created.Session.ID,
-	)
-}
-
-func verifyRestartAfterGuestStop(
-	ctx context.Context,
-	t *testing.T,
-	executable, state string,
-	previous dev.Connection,
-	incarnation, sessionID string,
-) {
-	t.Helper()
-	restarted := startDev(ctx, t, executable, state)
-	if restarted.connection.MachineID != previous.MachineID {
-		t.Fatal("explicit guest stop changed machine identity")
-	}
-	guest := devStream(ctx, t, restarted.connection)
-	if guest.Hello().Incarnation == incarnation {
-		t.Fatal("explicit stop did not replace daemon incarnation")
-	}
-	var sessions protocol.SessionsValue
-	requireOK(t, guest.CallInto(ctx, protocol.OpSessionList, protocol.Empty{}, &sessions))
-	found := false
-	for _, record := range sessions.Sessions {
-		if record.ID == sessionID {
-			found = true
-			if record.Status != protocol.StatusLost && record.Status != protocol.StatusExited {
-				t.Fatalf("old session remains active: %+v", record)
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	for _, h := range headers {
+		if err = tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		if h.Size > 0 {
+			_, err = tw.Write([]byte(strings.Repeat("x", int(h.Size))))
+			if err != nil {
+				t.Fatal(err)
 			}
 		}
 	}
-	if !found {
-		t.Fatal("explicit stop discarded previous session history")
+	if err = tw.Close(); err != nil {
+		t.Fatal(err)
 	}
-	verifyFreshTerminal(ctx, t, guest)
-	verifyMachineStopStart(ctx, t, restarted.connection, guest.Hello().Incarnation)
-	restarted.stop()
-	afterRejection := startDev(ctx, t, executable, state)
-	if afterRejection.connection.MachineID != previous.MachineID {
-		t.Fatal("restart after rejected extra create changed local machine")
+	if err = gz.Close(); err != nil {
+		t.Fatal(err)
 	}
-	verifyFreshTerminal(ctx, t, devStream(ctx, t, afterRejection.connection))
-	afterRejection.stop()
+	_ = f.Close()
+	return path
 }
-
-func verifyFreshTerminal(ctx context.Context, t *testing.T, guest *client.Client) {
-	t.Helper()
-	var created protocol.SessionValue
-	requireOK(t, guest.CallInto(ctx, protocol.OpSessionCreate, protocol.CreateArgs{
-		SessionID: uuid.NewString(), Cols: 80, Rows: 24, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		Argv: []string{"/bin/sh", "-c", "printf 'fresh-shell-marker\\n'; read -r line"},
-	}, &created))
-	zero := uint64(0)
-	requireOK(t, guest.CallInto(ctx, protocol.OpSessionOpen, protocol.OpenArgs{
-		SessionID: created.Session.ID, FromOffset: &zero, FromIncarnation: guest.Hello().Incarnation,
-	}, nil))
-	awaitOutput(ctx, t, guest, "fresh-shell-marker")
-	requireOK(t, guest.CallInto(ctx, protocol.OpSessionEnd, protocol.SessionArgs{SessionID: created.Session.ID}, nil))
-}
-
-func waitDevOperation(ctx context.Context, t *testing.T, connection dev.Connection, action string) {
-	t.Helper()
-	status, data := devRequest(
-		ctx,
-		t,
-		connection,
-		http.MethodPost,
-		"/v1/machines/"+connection.MachineID+"/"+action,
-		"{}",
-	)
-	if status != http.StatusAccepted {
-		t.Fatalf("%s: %d %s", action, status, data)
+func TestSafeArchiveRejectsTraversalAndSymlinkAncestors(t *testing.T) {
+	t.Parallel()
+	cases := [][]*tar.Header{
+		{{Name: "../outside", Typeflag: tar.TypeReg, Size: 1}},
+		{{Name: "/outside", Typeflag: tar.TypeReg, Size: 1}},
+		{{Name: "escape", Typeflag: tar.TypeSymlink, Linkname: "../outside"}},
+		{
+			{Name: "dir", Typeflag: tar.TypeDir},
+			{Name: "alias", Typeflag: tar.TypeSymlink, Linkname: "dir"},
+			{Name: "alias/file", Typeflag: tar.TypeReg, Size: 1},
+		},
+		{{Name: "file", Typeflag: tar.TypeReg, Size: 1}, {Name: "file", Typeflag: tar.TypeReg, Size: 1}},
+		{{Name: "device", Typeflag: tar.TypeChar}},
 	}
-	var operation model.Operation
-	requireOK(t, json.Unmarshal(data, &operation))
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		status, data = devRequest(ctx, t, connection, http.MethodGet, "/v1/operations/"+operation.ID, "")
-		if status != http.StatusOK {
-			t.Fatalf("operation: %d %s", status, data)
-		}
-		requireOK(t, json.Unmarshal(data, &operation))
-		switch operation.Status {
-		case "succeeded":
-			return
-		case "failed", "unresolved":
-			t.Fatalf("%s: %+v", action, operation)
-		}
-		select {
-		case <-ticker.C:
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
+	for _, headers := range cases {
+		root := t.TempDir()
+		if err := extractBundle(archiveFixture(t, headers), root); err == nil {
+			t.Fatalf("unsafe archive accepted: %+v", headers)
 		}
 	}
 }
-
-func verifyMachineStopStart(ctx context.Context, t *testing.T, connection dev.Connection, incarnation string) {
-	t.Helper()
-	waitDevOperation(ctx, t, connection, "stop")
-	verifyExtraMachineRejected(ctx, t, connection)
-	waitDevOperation(ctx, t, connection, "start")
-	ticker := time.NewTicker(50 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		status, data := devRequest(ctx, t, connection, http.MethodGet, "/v1/machines/"+connection.MachineID, "")
-		if status != http.StatusOK {
-			t.Fatalf("machine after start: %d %s", status, data)
-		}
-		var machine model.Machine
-		requireOK(t, json.Unmarshal(data, &machine))
-		if machine.Guest != nil && machine.Guest.Status == "ready" {
-			break
-		}
-		select {
-		case <-ticker.C:
-		case <-ctx.Done():
-			t.Fatal(ctx.Err())
+func TestEnvironmentRefusesWorkspaceAndExclusiveOwnership(t *testing.T) {
+	t.Parallel()
+	workspace := t.TempDir()
+	_ = os.WriteFile(filepath.Join(workspace, "work.txt"), []byte("keep"), 0600)
+	if _, err := openEnvironment(t.Context(), Options{StateDir: workspace, Bundle: makeBundle(t)}, true); err == nil {
+		t.Fatal("adopted populated workspace")
+	}
+	parent := t.TempDir()
+	state := filepath.Join(parent, "environment")
+	env, err := openEnvironment(t.Context(), Options{StateDir: state, Bundle: makeBundle(t)}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer env.close()
+	if _, err = openEnvironment(t.Context(), Options{StateDir: state}, false); err == nil {
+		t.Fatal("second environment admission acquired lock")
+	}
+	if namespace(state) == namespace(state+"-other") {
+		t.Fatal("environment namespaces collide")
+	}
+	if !strings.HasSuffix(env.HostRoot, namespace(env.StateDir)) {
+		t.Fatal("host root is not short environment namespace")
+	}
+}
+func TestDestructionOrderPreservesDependencies(t *testing.T) {
+	t.Parallel()
+	machines := []*v1.Machine{
+		{Id: fixtureSource},
+		{Id: "fork", SourceMachineId: fixtureSource},
+		{Id: "restored", CheckpointId: "snapshot"},
+	}
+	cp := []*v1.Checkpoint{{Id: "snapshot", SourceMachineId: fixtureSource}}
+	order, err := destructionOrder(machines, cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	positions := map[string]int{}
+	for i, r := range order {
+		positions[r.id] = i
+	}
+	if positions["restored"] >= positions["snapshot"] || positions["snapshot"] >= positions[fixtureSource] ||
+		positions["fork"] >= positions[fixtureSource] {
+		t.Fatalf("unsafe order: %+v", order)
+	}
+	if _, err = destructionOrder(
+		[]*v1.Machine{{Id: "a", SourceMachineId: "b"}, {Id: "b", SourceMachineId: "a"}},
+		nil,
+	); err == nil {
+		t.Fatal("dependency cycle accepted")
+	}
+}
+func TestDestroyRefusesUnknownEntriesBeforeRemovingHost(t *testing.T) {
+	t.Parallel()
+	state := privateTemp(t)
+	root := privateTemp(t)
+	d, err := statefs.Open(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = d.Close() }()
+	e := &environment{StateDir: state, HostRoot: root, Namespace: "test", dir: d}
+	rd, err := statefs.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rd.Close() }()
+	if err = jsonWrite(rd, "dev-owner.json", map[string]string{"state_dir": state, "namespace": "test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(state, "user-work"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.removeOwned(); err == nil {
+		t.Fatal("unknown workspace entry deleted")
+	}
+	if _, err = os.Stat(root); err != nil {
+		t.Fatal("host root removed before ownership preflight")
+	}
+}
+func TestDevListenRequiresLoopbackAndStopDoesNotCreateState(t *testing.T) {
+	t.Parallel()
+	for _, address := range []string{"0.0.0.0:0", "192.168.1.1:8080", "localhost:0"} {
+		if err := validateListen(address); err == nil {
+			t.Fatalf("accepted %s", address)
 		}
 	}
-	guest := devStream(ctx, t, connection)
-	if guest.Hello().Incarnation == incarnation {
-		t.Fatal("machine stop/start retained daemon")
+	for _, address := range []string{"127.0.0.1:0", "[::1]:0"} {
+		if err := validateListen(address); err != nil {
+			t.Fatal(err)
+		}
 	}
-	verifyFreshTerminal(ctx, t, guest)
+	state := filepath.Join(t.TempDir(), "missing")
+	if err := Stop(context.Background(), state); err == nil {
+		t.Fatal("stopped missing environment")
+	}
+	if _, err := os.Stat(state); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("stop created missing state")
+	}
 }
 
-func verifyExtraMachineRejected(ctx context.Context, t *testing.T, connection dev.Connection) {
+func TestSafeArchivePreservesGuestReadAndExecutePermissions(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	headers := []*tar.Header{
+		{
+			Name:     fixtureImage,
+			Typeflag: tar.TypeDir,
+			Mode:     0755,
+		},
+		{Name: "image/tmp", Typeflag: tar.TypeDir, Mode: 01777},
+		{Name: fixtureInit, Typeflag: tar.TypeReg, Size: 1, Mode: 0755},
+		{Name: "image/passwd", Typeflag: tar.TypeReg, Size: 1, Mode: 0644},
+	}
+	if err := extractBundle(archiveFixture(t, headers), root); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]os.FileMode{fixtureImage: 0755, fixtureInit: 0755, "image/passwd": 0644} {
+		i, e := os.Stat(filepath.Join(root, name))
+		if e != nil || i.Mode().Perm() != want {
+			t.Fatalf("%s guest permissions %v, %v", name, i, e)
+		}
+	}
+	info, err := os.Stat(filepath.Join(root, "image/tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSticky == 0 {
+		t.Fatal("guest temporary directory lost sticky bit")
+	}
+}
+
+func TestCompatibleBundleUpgradePinsRuntimeImageAndProfile(t *testing.T) {
+	t.Parallel()
+	b, err := verifyBundle(makeBundle(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := privateTemp(t)
+	root := privateTemp(t)
+	e := &environment{StateDir: state, HostRoot: root, Namespace: "test-upgrade", bundle: b}
+	dir, err := statefs.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = dir.Close() }()
+	if err = jsonWrite(
+		dir,
+		"dev-owner.json",
+		map[string]string{"state_dir": state, "namespace": e.Namespace},
+	); err != nil {
+		t.Fatal(err)
+	}
+	old := e.hostConfig()
+	if err = jsonWrite(dir, "service.json", old); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := verifyBundle(makeBundle(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.bundle = replacement
+	if err = e.compatibleUpgrade(); err != nil {
+		t.Fatalf("compatible service code location upgrade refused: %v", err)
+	}
+	e.bundle.RuntimeDigest = strings.Repeat("3", 64)
+	if err = e.compatibleUpgrade(); err == nil {
+		t.Fatal("runtime content upgrade silently accepted")
+	}
+	e.bundle = replacement
+	e.bundle.ImageDigest = strings.Repeat("4", 64)
+	if err = e.compatibleUpgrade(); err == nil {
+		t.Fatal("image content upgrade silently accepted")
+	}
+	e.bundle = replacement
+	e.bundle.ProfileRAMMiB++
+	if err = e.compatibleUpgrade(); err == nil {
+		t.Fatal("retained resource profile upgrade silently accepted")
+	}
+}
+
+func privateTemp(t *testing.T) string {
 	t.Helper()
-	body, err := json.Marshal(model.CreateInput{
-		Name: "extra", Host: "local", Profile: "local",
-	})
-	requireOK(t, err)
-	status, data := devRequest(ctx, t, connection, http.MethodPost, "/v1/machines", string(body))
-	if status != http.StatusConflict || !strings.Contains(string(data), "local_machine_exists") {
-		t.Fatalf("extra machine was not rejected during admission: %d %s", status, data)
+	path := filepath.Join(t.TempDir(), "private")
+	if err := statefs.EnsurePrivateDir(path); err != nil {
+		t.Fatal(err)
 	}
-	status, data = devRequest(ctx, t, connection, http.MethodGet, "/v1/machines", "")
-	var machines []model.Machine
-	requireOK(t, json.Unmarshal(data, &machines))
-	if status != http.StatusOK || len(machines) != 1 || machines[0].ID != connection.MachineID {
-		t.Fatalf("rejected create changed inventory: %d %s", status, data)
-	}
-	status, data = devRequest(ctx, t, connection, http.MethodGet, "/v1/hosts", "")
-	var hosts []model.HostStatus
-	requireOK(t, json.Unmarshal(data, &hosts))
-	if status != http.StatusOK || len(hosts) != 1 || hosts[0].UsedCPU != 0 || hosts[0].UsedRAMMiB != 0 {
-		t.Fatalf("rejected create left a reservation: %d %s", status, data)
-	}
+	return path
 }

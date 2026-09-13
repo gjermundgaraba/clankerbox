@@ -12,60 +12,56 @@ func (runner commandRunner) deriveMachine(
 	command, action, target, name, idem string,
 	wait *waitOptions,
 ) error {
-	a := runner.api
-	child := command == forkCommand || command == restoreCommand
-	id, err := requestKey(idem)
+	key, err := requestKey(idem)
 	if err != nil {
 		return err
 	}
-	var body any
-	if child {
-		input := model.ChildInput{Name: name}
-		if inputErr := input.Validate(); inputErr != nil {
-			return inputErr
+	child := model.ChildInput{Name: name}
+	if command == forkCommand || command == restoreCommand {
+		if err = child.Validate(); err != nil {
+			return err
 		}
-		body = input
 	}
-	path, err := checkpointMutationPath(ctx, a, command, action, target)
-	if err != nil {
-		return err
+	if command == forkCommand || command == checkpointCommand && action == createCommand {
+		m, e := runner.api.Resolve(ctx, target)
+		if e != nil {
+			return e
+		}
+		target = m.ID
+	} else if !model.ValidID(target) {
+		return errors.New("immutable checkpoint ID required")
 	}
+	var op model.Operation
 	result := action
-	if command == checkpointCommand && action == createCommand {
+	switch {
+	case command == forkCommand:
+		op, err = runner.api.ForkMachine(ctx, target, key, child)
+	case command == restoreCommand:
+		op, err = runner.api.RestoreCheckpoint(ctx, target, key, child)
+	case action == createCommand:
+		op, err = runner.api.CaptureCheckpoint(ctx, target, key)
 		result = checkpointCommand
+	case action == deleteCommand:
+		op, err = runner.api.DeleteCheckpoint(ctx, target, key)
+	default:
+		return errors.New("invalid checkpoint mutation")
 	}
-	return runner.mutate(ctx, path, body, id, wait, result)
+	return runner.finishMutation(ctx, op, err, key, wait, result)
 }
-
 func (runner commandRunner) queryCheckpoint(ctx context.Context, action string, args []string) error {
-	path := "/v1/checkpoints"
 	if action == inspectCommand {
 		if !model.ValidID(args[0]) {
 			return errors.New("immutable checkpoint ID required")
 		}
-		path += "/" + args[0]
-	}
-	var out any = &[]model.Checkpoint{}
-	if action == inspectCommand {
-		out = &model.Checkpoint{}
-	}
-	if err := runner.api.Do(ctx, "GET", path, nil, "", out); err != nil {
-		return err
-	}
-	return runner.output(out)
-}
-
-func checkpointMutationPath(ctx context.Context, a *API, command, action, target string) (string, error) {
-	if command == forkCommand || command == checkpointCommand && action == createCommand {
-		machine, err := a.Resolve(ctx, target)
-		if err != nil {
-			return "", err
+		cp, e := runner.api.Checkpoint(ctx, args[0])
+		if e != nil {
+			return e
 		}
-		suffix := command
-		return "/v1/machines/" + machine.ID + "/" + suffix, nil
+		return runner.output(cp)
 	}
-	if !model.ValidID(target) {
-		return "", errors.New("immutable checkpoint ID required")
+	cps, e := runner.api.Checkpoints(ctx)
+	if e != nil {
+		return e
 	}
-	return "/v1/checkpoints/" + target + "/" + action, nil
+	return runner.output(&cps)
 }

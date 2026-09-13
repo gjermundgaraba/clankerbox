@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -89,29 +90,32 @@ func (n *NativeRuntime) env(m Manifest) []string {
 	}
 	return append(
 		e,
-		"HOME="+filepath.Join(dir, "home"),
+		"HOME="+n.runtimeHome(m),
 		"XDG_DATA_HOME="+filepath.Join(dir, "d"),
-		"XDG_CACHE_HOME="+filepath.Join(dir, "c"),
+		"XDG_CACHE_HOME="+n.runtimeCache(m),
 		"XDG_CONFIG_HOME="+filepath.Join(dir, "config"),
 		"XDG_RUNTIME_DIR="+filepath.Join(dir, "r"),
 		"DOCKER_CONFIG="+filepath.Join(dir, "empty-docker"),
 		"SMOLVM_AGENT_ROOTFS="+filepath.Join(dir, "agent-rootfs"),
 		"SMOLVM_LIB_DIR="+n.Config.LibraryDir,
-		"LD_LIBRARY_PATH="+n.Config.LibraryDir,
+		n.libraryEnvironment(),
 		"SMOLVM_PUBLISH_ADDR=127.0.0.1",
 		"SMOLVM_EGRESS_FLOOR=strict",
 	)
 }
 func (n *NativeRuntime) run(ctx context.Context, m Manifest, args ...string) ([]byte, error) {
+	if err := n.validateRuntimeCache(m); err != nil {
+		return nil, err
+	}
 	path := n.Config.SmolvmPath
 	if m.Profile.Runtime == runtimeTart {
 		path = n.Config.TartPath
 	}
 	return n.Runner.Run(ctx, path, args, n.env(m), nil)
 }
-func (n *NativeRuntime) supervisor(ctx context.Context, m Manifest, args ...string) ([]byte, error) {
+func (n *NativeRuntime) supervisor(ctx context.Context, _ Manifest, args ...string) ([]byte, error) {
 	path := n.Config.SystemctlPath
-	if m.Profile.Runtime == runtimeTart {
+	if n.hostOS() == hostDarwin {
 		path = n.Config.LaunchctlPath
 	} else if n.Config.SystemdUser {
 		args = append([]string{"--user"}, args...)
@@ -125,13 +129,13 @@ func (n *NativeRuntime) supervisor(ctx context.Context, m Manifest, args ...stri
 	return n.Runner.Run(ctx, path, args, env, nil)
 }
 
-// Inspect reports the owned native inventory and validates its running SSH endpoint.
+// Inspect reports the owned native inventory and validates its running guest RPC endpoint.
 func (n *NativeRuntime) Inspect(ctx context.Context, m Manifest) (RuntimeState, error) {
 	if !model.ValidID(m.ID) {
 		return RuntimeState{}, errors.New("invalid owned runtime name")
 	}
 	if m.Profile.Runtime == runtimeSmolvm {
-		path := filepath.Join(storeDir(n.Config, m), "d", runtimeSmolvm, "server", "smolvm.db")
+		path := filepath.Join(n.runtimeData(m), runtimeSmolvm, "server", "smolvm.db")
 		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 			return RuntimeState{State: model.Unknown}, nil
 		} else if err != nil {
@@ -172,7 +176,14 @@ func (n *NativeRuntime) Create(ctx context.Context, m Manifest) error {
 		_, err := n.run(ctx, m, "clone", m.Profile.ImagePath, m.RuntimeName())
 		return err
 	}
-	for _, sub := range []string{"d", "c", "config", "r", "home", "empty-docker"} {
+	if err := os.MkdirAll(n.runtimeHome(m), 0700); err != nil {
+		return err
+	}
+	if err := n.stageTemplates(m); err != nil {
+		return err
+	}
+
+	for _, sub := range []string{"d", "config", "r", "home", "empty-docker"} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0700); err != nil {
 			return err
 		}
@@ -209,7 +220,7 @@ func (n *NativeRuntime) Create(ctx context.Context, m Manifest) error {
 		"--net-backend",
 		"virtio-net",
 		"--port",
-		strconv.Itoa(m.Port) + ":22",
+		strconv.Itoa(m.Port) + ":7443",
 	}
 	if n.Config.DNS != "" {
 		args = append(args, "--dns", n.Config.DNS)
@@ -220,7 +231,7 @@ func (n *NativeRuntime) Create(ctx context.Context, m Manifest) error {
 func (n *NativeRuntime) label(m Manifest) string { return "clankerbox." + m.RuntimeName() }
 func (n *NativeRuntime) job(m Manifest) string {
 	suffix := ".service"
-	if m.Profile.Runtime == runtimeTart {
+	if n.hostOS() == hostDarwin {
 		suffix = ".plist"
 	}
 	return filepath.Join(n.Config.Root, "jobs", n.label(m)+suffix)
@@ -267,7 +278,11 @@ func (n *NativeRuntime) jobContents(m Manifest) []byte {
 		)
 		return []byte(b.String())
 	}
-	return n.linuxJobContents(m, n.Config.SmolvmPath+" machine start --name "+m.RuntimeName()+" --branchable")
+	args := []string{n.Config.SmolvmPath, "machine", "start", "--name", m.RuntimeName(), "--branchable"}
+	if n.hostOS() == hostDarwin {
+		return n.smolvmPlist(m, args)
+	}
+	return n.linuxJobContents(m, strings.Join(args, " "))
 }
 
 func (n *NativeRuntime) linuxJobContents(m Manifest, command string) []byte {
@@ -314,12 +329,20 @@ func (n *NativeRuntime) Configure(ctx context.Context, m Manifest) error {
 
 // Start starts the retained machine and waits for its observed running state.
 func (n *NativeRuntime) Start(ctx context.Context, m Manifest) error {
+	if m.Profile.Runtime == runtimeSmolvm {
+		if err := n.stageTemplates(m); err != nil {
+			return err
+		}
+	}
 	// Re-register retained units after a host reboot, without enabling boot startup.
 	if _, err := os.Stat(n.job(m)); err != nil {
 		return fmt.Errorf("persistent supervisor definition missing: %w", err)
 	}
 	var err error
-	if m.Profile.Runtime == runtimeTart {
+	if n.hostOS() == hostDarwin {
+		if err = n.validateRetainedStart(ctx, m); err != nil {
+			return err
+		}
 		err = n.startTart(ctx, m)
 	} else {
 		err = n.startSmolvm(ctx, m)
@@ -329,6 +352,27 @@ func (n *NativeRuntime) Start(ctx context.Context, m Manifest) error {
 	}
 
 	return n.waitState(ctx, m, model.Running, runtimeStartTimeout)
+}
+func (n *NativeRuntime) validateRetainedStart(ctx context.Context, m Manifest) error {
+	if m.Profile.Runtime != runtimeSmolvm {
+		return nil
+	}
+	state, err := n.Inspect(ctx, m)
+	if err != nil {
+		return err
+	}
+	if !state.Exists || state.State != model.Stopped {
+		return errors.New("supervised start requires stopped retained runtime")
+	}
+	if !m.PendingRAM {
+		return nil
+	}
+	for _, path := range n.pendingRAMFiles(m) {
+		if err = regularNonempty(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (n *NativeRuntime) waitState(ctx context.Context, m Manifest, want model.State, limit time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, limit)
@@ -368,7 +412,7 @@ func (n *NativeRuntime) guest(ctx context.Context, m Manifest, script string) ([
 		args = []string{runtimeExec, "-i", m.RuntimeName(), "/bin/bash", shellStrictFlags}
 		return n.Runner.Run(ctx, path, args, n.env(m), []byte(script))
 	}
-	// Scripts can contain a child host key; always keep them out of process argv.
+	// Scripts can contain private binding data; always keep them out of process argv.
 	args = []string{
 		smolvmMachineCommand,
 		runtimeExec,
@@ -405,7 +449,7 @@ func (n *NativeRuntime) Stop(ctx context.Context, m Manifest) error {
 	if err := n.waitState(ctx, m, model.Stopped, guestReadyTimeout); err != nil {
 		return err
 	}
-	if m.Profile.Runtime == runtimeSmolvm {
+	if m.Profile.Runtime == runtimeSmolvm && n.hostOS() == hostLinux {
 		_, err := n.supervisor(ctx, m, actionStop, n.label(m)+".service")
 		return err
 	}
@@ -483,7 +527,7 @@ func (n *NativeRuntime) runtimeEndpoint(ctx context.Context, m Manifest) (string
 		if err != nil {
 			return "", err
 		}
-		endpoint = net.JoinHostPort(strings.TrimSpace(string(out)), "22")
+		endpoint = net.JoinHostPort(strings.TrimSpace(string(out)), "7443")
 	}
 	if err := validEndpoint(m, endpoint); err != nil {
 		return "", err
@@ -493,6 +537,12 @@ func (n *NativeRuntime) runtimeEndpoint(ctx context.Context, m Manifest) (string
 
 func (n *NativeRuntime) startTart(ctx context.Context, m Manifest) error {
 	target := n.Config.LaunchdDomain + "/" + n.label(m)
+	if _, err := n.supervisor(ctx, m, "print", target); err == nil && m.Profile.Runtime == runtimeSmolvm {
+		// Start has confirmed native stopped state: reload future start arguments, never replay a branch command.
+		if _, err = n.supervisor(ctx, m, "bootout", target); err != nil {
+			return err
+		}
+	}
 	if _, err := n.supervisor(ctx, m, "print", target); err != nil {
 		if _, err = n.supervisor(ctx, m, "bootstrap", n.Config.LaunchdDomain, n.job(m)); err != nil {
 			return err
@@ -556,6 +606,18 @@ func (n *NativeRuntime) deleteTart(ctx context.Context, m Manifest, exists bool)
 func (n *NativeRuntime) deleteSmolvm(ctx context.Context, m Manifest, exists bool) error {
 	var err error
 
+	if n.hostOS() == hostDarwin {
+		target := n.Config.LaunchdDomain + "/" + n.label(m)
+		if _, err = n.supervisor(ctx, m, "print", target); err == nil {
+			if _, err = n.supervisor(ctx, m, "bootout", target); err != nil {
+				return err
+			}
+		}
+		if exists {
+			_, err = n.run(ctx, m, "machine", "delete", "--name", m.RuntimeName(), "--force")
+		}
+		return err
+	}
 	unit := n.label(m) + ".service"
 	load, loadErr := n.supervisor(ctx, m, "show", unit, "--property=LoadState", "--value")
 	if loadErr != nil {
@@ -602,5 +664,65 @@ func (n *NativeRuntime) reclaimMachineFiles(m Manifest) error {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("refusing symlinked machine directory")
 	}
-	return os.RemoveAll(dir)
+	if err = os.RemoveAll(dir); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (n *NativeRuntime) hostOS() string {
+	if n.Config.HostOS != "" {
+		return n.Config.HostOS
+	}
+	return runtime.GOOS
+}
+func (n *NativeRuntime) runtimeHome(m Manifest) string {
+	if n.hostOS() != hostDarwin {
+		return filepath.Join(storeDir(n.Config, m), "home")
+	}
+	// One private engine inventory per host; native names scope disks and sockets.
+	return filepath.Join(n.Config.Root, "runtime")
+}
+func (n *NativeRuntime) runtimeData(m Manifest) string {
+	if n.hostOS() == hostDarwin {
+		return filepath.Join(n.runtimeHome(m), "Library", "Application Support")
+	}
+	return filepath.Join(storeDir(n.Config, m), "d")
+}
+func (n *NativeRuntime) runtimeCache(m Manifest) string {
+	if n.hostOS() == hostDarwin {
+		return filepath.Join(n.runtimeHome(m), "Library", "Caches")
+	}
+	legacy := filepath.Join(storeDir(n.Config, m), "c")
+	if _, err := os.Lstat(legacy); !errors.Is(err, os.ErrNotExist) {
+		return legacy
+	}
+	return filepath.Join(n.Config.Root, "runtime", "c")
+}
+func (n *NativeRuntime) libraryEnvironment() string {
+	if n.hostOS() == hostDarwin {
+		return "DYLD_LIBRARY_PATH=" + n.Config.LibraryDir
+	}
+	return "LD_LIBRARY_PATH=" + n.Config.LibraryDir
+}
+func (n *NativeRuntime) smolvmPlist(m Manifest, args []string) []byte {
+	var b strings.Builder
+	b.WriteString(
+		`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>` + xmlText(
+			n.label(m),
+		) + `</string><key>ProgramArguments</key><array>`,
+	)
+	for _, a := range args {
+		b.WriteString("<string>" + xmlText(a) + "</string>")
+	}
+	b.WriteString("</array><key>EnvironmentVariables</key><dict>")
+	for _, e := range n.env(m) {
+		k, v, _ := strings.Cut(e, "=")
+		b.WriteString("<key>" + xmlText(k) + "</key><string>" + xmlText(v) + "</string>")
+	}
+	log := xmlText(filepath.Join(machineDir(n.Config, m), "runtime.log"))
+	b.WriteString(
+		"</dict><key>RunAtLoad</key><false/><key>KeepAlive</key><false/><key>AbandonProcessGroup</key><true/><key>StandardOutPath</key><string>" + log + "</string><key>StandardErrorPath</key><string>" + log + "</string></dict></plist>\n",
+	)
+	return []byte(b.String())
 }

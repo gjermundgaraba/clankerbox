@@ -1,7 +1,4 @@
-// Command clankerbox-guest runs inside a machine and owns terminal sessions.
-// The daemon subcommand serves the session protocol on a private Unix socket;
-// proxy bridges stdio to it for the SSH forced command and starts the daemon
-// on demand.
+// Command clankerbox-guest owns authenticated guest sessions and live identity rebinding.
 package main
 
 import (
@@ -12,93 +9,113 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"os/user"
+	"strconv"
 	"syscall"
 
 	"github.com/urfave/cli/v3"
 
 	"clankerbox/internal/guest/daemon"
+	"clankerbox/internal/guest/session"
+	"clankerbox/internal/rpcidentity"
+	"clankerbox/internal/statefs"
 )
 
-// version is stamped at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
-func main() {
-	os.Exit(run())
-}
-
+func main() { os.Exit(run()) }
 func run() int {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 	if err := newCommand(os.Stdin, os.Stdout).Run(ctx, os.Args); err != nil {
 		fmt.Fprintln(os.Stderr, "clankerbox-guest:", err)
+		if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
+			return absentDaemonExit
+		}
 		return 1
 	}
 	return 0
 }
-
-func newCommand(stdin io.Reader, stdout io.Writer) *cli.Command {
-	stateFlag := &cli.StringFlag{
-		Name:  "state-dir",
-		Usage: "private state directory (default $HOME/.clankerbox)",
+func newCommand(stdin io.Reader, _ io.Writer) *cli.Command {
+	state := func() *cli.StringFlag {
+		return &cli.StringFlag{
+			Name:  "state-dir",
+			Value: "/var/lib/clankerbox-guest",
+			Usage: "Private root-owned guest state directory",
+		}
 	}
 	return &cli.Command{
 		Name:    "clankerbox-guest",
-		Usage:   "terminal session daemon for Clankerbox machines",
+		Usage:   "Authenticated terminal session service",
 		Version: version,
 		Commands: []*cli.Command{
 			{
-				Name:  "daemon",
-				Usage: "serve sessions on the private socket until stopped",
-				Flags: []cli.Flag{stateFlag},
+				Name:  "serve",
+				Usage: "Serve guest RPC with a separate unprivileged workload identity",
+				Flags: []cli.Flag{
+					state(),
+					&cli.StringFlag{Name: "listen", Value: "0.0.0.0:7443"},
+					&cli.StringFlag{Name: "binding-file"},
+					&cli.StringFlag{Name: "workload-user", Required: true},
+				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					paths, err := resolvePaths(c.String("state-dir"))
+					u, err := user.Lookup(c.String("workload-user"))
 					if err != nil {
 						return err
 					}
-					err = daemon.Serve(ctx, daemon.Options{Paths: paths, Version: version})
-					if errors.Is(err, daemon.ErrAlreadyRunning) {
-						return nil
+					uid, err := strconv.ParseUint(u.Uid, 10, 32)
+					if err != nil {
+						return err
 					}
-					return err
+					gid, err := strconv.ParseUint(u.Gid, 10, 32)
+					if err != nil {
+						return err
+					}
+					var binding *rpcidentity.Binding
+					if path := c.String("binding-file"); path != "" {
+						raw, e := statefs.ReadPrivate(path)
+						if e != nil {
+							return e
+						}
+						binding = &rpcidentity.Binding{}
+						if e = json.Unmarshal(raw, binding); e != nil {
+							return e
+						}
+					}
+					return daemon.Serve(
+						ctx,
+						daemon.Options{
+							Paths:   daemon.PathsIn(c.String("state-dir")),
+							Listen:  c.String("listen"),
+							Binding: binding,
+							Workload: &session.Workload{
+								UID:  uint32(uid),
+								GID:  uint32(gid),
+								Home: u.HomeDir,
+								User: u.Username,
+							},
+							Version: version,
+						},
+					)
 				},
 			},
 			{
-				Name:  "proxy",
-				Usage: "bridge stdio to the daemon socket, starting the daemon if needed",
-				Flags: []cli.Flag{stateFlag},
+				Name:  "rebind",
+				Usage: "Adopt a host-issued binding via the local administrative socket",
+				Flags: []cli.Flag{state()},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					paths, err := resolvePaths(c.String("state-dir"))
+					raw, err := io.ReadAll(io.LimitReader(stdin, bindingMaxBytes+1))
 					if err != nil {
 						return err
 					}
-					return daemon.Proxy(ctx, paths, stdin, stdout)
-				},
-			},
-			{
-				Name:  "sessions",
-				Usage: "print the daemon's sessions as JSON",
-				Flags: []cli.Flag{stateFlag},
-				Action: func(ctx context.Context, c *cli.Command) error {
-					paths, err := resolvePaths(c.String("state-dir"))
-					if err != nil {
-						return err
-					}
-					sessions, err := daemon.List(ctx, paths)
-					if err != nil {
-						return err
-					}
-					encoder := json.NewEncoder(stdout)
-					encoder.SetIndent("", "  ")
-					return encoder.Encode(sessions)
+					return daemon.Rebind(ctx, daemon.PathsIn(c.String("state-dir")), raw)
 				},
 			},
 		},
 	}
 }
 
-func resolvePaths(stateDir string) (daemon.Paths, error) {
-	if stateDir != "" {
-		return daemon.PathsIn(stateDir), nil
-	}
-	return daemon.DefaultPaths()
-}
+const (
+	absentDaemonExit = 3
+	bindingMaxBytes  = 64 << 10
+)

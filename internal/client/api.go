@@ -2,12 +2,8 @@
 package client
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -17,9 +13,11 @@ import (
 	"strings"
 	"time"
 
-	"clankerbox/internal/statefs"
+	"connectrpc.com/connect"
 
-	"clankerbox/internal/model"
+	"clankerbox/gen/clankerbox/v1/clankerboxv1connect"
+	"clankerbox/internal/rpctransport"
+	"clankerbox/internal/statefs"
 )
 
 // Config locates the API and bearer credentials and supplies creation defaults.
@@ -98,17 +96,16 @@ func validateAPIURL(raw string) (*url.URL, error) {
 	return u, nil
 }
 func isLoopbackHost(h string) bool {
-	if h == "localhost" {
-		return true
-	}
 	a, e := netip.ParseAddr(h)
 	return e == nil && a.Zone() == "" && a.IsLoopback()
 }
 
 // API authenticates requests to one validated origin without following redirects.
 type API struct {
-	Config Config
-	http   *http.Client
+	Config   Config
+	http     *http.Client
+	machine  clankerboxv1connect.MachineServiceClient
+	sessions clankerboxv1connect.SessionServiceClient
 }
 
 // NewAPI constructs a client with verified TLS and loopback-only plain HTTP.
@@ -118,21 +115,28 @@ func NewAPI(c Config) (*API, error) {
 		return nil, e
 	}
 	c.URL = u.String()
-	base, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		return nil, errors.New("default HTTP transport must support cloning")
+	client, origin, err := rpctransport.Client(c.URL, rpctransport.Credentials{}, "")
+	if err != nil {
+		return nil, err
 	}
-	tr := base.Clone()
-	tr.Proxy = nil // Do not send private API credentials through ambient HTTP proxies.
-	return &API{
-		Config: c,
-		http: &http.Client{
-			Transport:     tr,
-			Timeout:       apiRequestTimeout,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-	}, nil
+	a := &API{Config: c, http: client}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	client.Transport = &tokenTransport{base: client.Transport, api: a}
+	a.machine = clankerboxv1connect.NewMachineServiceClient(
+		client,
+		origin,
+		connect.WithReadMaxBytes(rpctransport.MaxMessage),
+		connect.WithSendMaxBytes(rpctransport.MaxMessage),
+	)
+	a.sessions = clankerboxv1connect.NewSessionServiceClient(
+		client,
+		origin,
+		connect.WithReadMaxBytes(rpctransport.MaxMessage),
+		connect.WithSendMaxBytes(rpctransport.MaxMessage),
+	)
+	return a, nil
 }
+
 func (a *API) token() (string, error) {
 	b, e := statefs.ReadPrivate(a.Config.TokenFile)
 	if e != nil {
@@ -143,101 +147,6 @@ func (a *API) token() (string, error) {
 		return "", errors.New("token_file must contain a token of at least 32 bytes without whitespace")
 	}
 	return t, nil
-}
-
-func (a *API) request(ctx context.Context, method, path string, body any, idempotency string) (*http.Request, error) {
-	var r io.Reader
-	if body != nil {
-		b, e := json.Marshal(body)
-		if e != nil {
-			return nil, e
-		}
-		r = bytes.NewReader(b)
-	}
-	token, e := a.token()
-	if e != nil {
-		return nil, e
-	}
-	req, e := http.NewRequestWithContext(ctx, method, a.Config.URL+path, r)
-	if e != nil {
-		return nil, e
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	if idempotency != "" {
-		req.Header.Set("Idempotency-Key", idempotency)
-	}
-	return req, nil
-}
-
-// Do sends an authenticated JSON request and decodes a successful response into out.
-func (a *API) Do(ctx context.Context, method, path string, body any, idempotency string, out any) (err error) {
-	req, e := a.request(ctx, method, path, body, idempotency)
-	if e != nil {
-		return e
-	}
-	res, e := a.http.Do(req)
-	if e != nil {
-		return errors.New("API request failed (transport or TLS error)")
-	}
-	defer func() { err = errors.Join(err, res.Body.Close()) }()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("API returned HTTP %d", res.StatusCode)
-	}
-	if out == nil {
-		return nil
-	}
-	b, e := io.ReadAll(io.LimitReader(res.Body, 4<<20+1))
-	if e != nil {
-		return e
-	}
-	if len(b) > 4<<20 {
-		return errors.New("API response too large")
-	}
-	if e = json.Unmarshal(b, out); e != nil {
-		return errors.New("invalid API JSON response")
-	}
-	return nil
-}
-
-// Machines lists machines visible to the authenticated user.
-func (a *API) Machines(ctx context.Context) ([]model.Machine, error) {
-	var ms []model.Machine
-	e := a.Do(ctx, "GET", "/v1/machines", nil, "", &ms)
-	return ms, e
-}
-
-// Resolve resolves a current alias or verifies the requested immutable machine ID.
-func (a *API) Resolve(ctx context.Context, name string) (model.Machine, error) {
-	var m model.Machine
-	if model.ValidID(name) {
-		e := a.Do(ctx, "GET", "/v1/machines/"+name, nil, "", &m)
-		if e == nil && m.ID != name {
-			e = errors.New("API machine identity mismatch")
-		}
-		return m, e
-	}
-	if !model.ValidName(name) {
-		return m, errors.New("invalid machine name or ID")
-	}
-	ms, e := a.Machines(ctx)
-	if e != nil {
-		return m, e
-	}
-	count := 0
-	for _, v := range ms {
-		if v.Name == name && !v.Deleted {
-			m = v
-			count++
-		}
-	}
-	if count != 1 {
-		return m, errors.New("machine name missing or ambiguous")
-	}
-	return m, nil
 }
 
 const (
@@ -252,3 +161,26 @@ func parsePort(s string) (int, error) {
 	}
 	return p, nil
 }
+
+type tokenTransport struct {
+	base http.RoundTripper
+	api  *API
+}
+
+func (t *tokenTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	token, e := t.api.token()
+	if e != nil {
+		return nil, e
+	}
+	clone := r.Clone(r.Context())
+	clone.Header.Set("Authorization", "Bearer "+token)
+	return t.base.RoundTrip(clone)
+}
+func (t *tokenTransport) CloseIdleConnections() {
+	if c, ok := t.base.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
+}
+
+// Close releases idle authenticated HTTP connections.
+func (a *API) Close() { a.http.CloseIdleConnections() }

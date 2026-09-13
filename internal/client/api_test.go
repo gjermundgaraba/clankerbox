@@ -7,13 +7,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"sync/atomic"
 	"syscall"
 	"testing"
 
 	"clankerbox/internal/client"
-
-	"clankerbox/internal/model"
 )
 
 const testID = "0123456789abcdef0123456789abcdef"
@@ -39,63 +36,9 @@ func testAPI(t *testing.T, url string) *apiFixture {
 	if e != nil {
 		t.Fatal(e)
 	}
+	t.Cleanup(a.Close)
 	return &apiFixture{API: a, path: filepath.Join(dir, "config.json")}
 }
-func TestAPIAndAliasResolution(t *testing.T) {
-	t.Parallel()
-	var alias atomic.Pointer[model.Machine]
-	alias.Store(&model.Machine{ID: testID})
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer "+testToken {
-			t.Error("wrong auth")
-		}
-		switch r.URL.Path {
-		case machinesPath:
-			checkError(t, json.NewEncoder(w).Encode([]model.Machine{{ID: alias.Load().ID, Name: testMachineName}}))
-		case "/v1/machines/" + testID:
-			checkError(t, json.NewEncoder(w).Encode(model.Machine{ID: testID}))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	a := testAPI(t, server.URL)
-	m, e := a.Resolve(context.Background(), testMachineName)
-	if e != nil || m.ID != testID {
-		t.Fatalf("%v %v", m, e)
-	}
-	alias.Store(&model.Machine{ID: otherID})
-	pinned, e := a.Resolve(context.Background(), m.ID)
-	if e != nil || pinned.ID != testID {
-		t.Fatalf("ID retargeted %v %v", pinned, e)
-	}
-	current, e := a.Resolve(context.Background(), testMachineName)
-	if e != nil || current.ID != otherID {
-		t.Fatalf("alias not updated %v %v", current, e)
-	}
-	if _, e = a.Resolve(context.Background(), "../dev"); e == nil {
-		t.Fatal("unsafe name accepted")
-	}
-}
-func TestRedirectsDoNotLeakToken(t *testing.T) {
-	t.Parallel()
-	var requests atomic.Int32
-	target := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) { requests.Add(1) }))
-	defer target.Close()
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
-	}))
-	defer server.Close()
-	a := testAPI(t, server.URL)
-	var out any
-	if e := a.Do(context.Background(), "GET", machinesPath, nil, "", &out); e == nil {
-		t.Fatal("redirect accepted")
-	}
-	if requests.Load() != 0 {
-		t.Fatal("followed redirect")
-	}
-}
-
 func TestTLSAndOriginValidation(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{"http://example.com", "ftp://127.0.0.1", "https://user:pass@example.com", "https://example.com/path", "https://example.com?token=secret", "https://example.com#frag", "http://127.0.0.1:0", "http://[::1%25lo]"} {
@@ -110,8 +53,7 @@ func TestTLSAndOriginValidation(t *testing.T) {
 	)
 	defer server.Close()
 	a := testAPI(t, server.URL)
-	var out any
-	if e := a.Do(context.Background(), "GET", machinesPath, nil, "", &out); e == nil {
+	if _, e := a.Machines(context.Background()); e == nil {
 		t.Fatal("untrusted API TLS accepted")
 	}
 }
@@ -127,14 +69,6 @@ func writeConfig(t *testing.T, a *apiFixture) {
 	}
 }
 
-// checkError reports fixture and handler failures from either test or server goroutines.
-func checkError(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Error(err)
-	}
-}
-
 const (
 	machinesPath       = "/v1/machines"
 	machinesCommand    = "machines"
@@ -146,11 +80,9 @@ const (
 	inspectCommand     = "inspect"
 	configFlag         = "--config"
 	mutationRetryKey   = "retry-123"
-	linuxOS            = "linux"
+	linuxOS            = fixtureLinux
 	testMachineName    = "dev"
 )
-
-func resultError[T any](_ T, err error) error { return err }
 
 func TestLoadConfigFilePermissions(t *testing.T) {
 	t.Parallel()
@@ -208,10 +140,6 @@ func TestLoadConfigRejectsNonregularFiles(t *testing.T) {
 }
 
 const configFixtureJSON = `{"url":"http://127.0.0.1:8080","token_file":"token"}`
-
-func testMachine(name string) model.Machine {
-	return model.Machine{ID: testID, Name: name, Profile: "linux", Host: hostName, State: model.Running, Prepared: true}
-}
 
 func TestAPIPortValidation(t *testing.T) {
 	t.Parallel()

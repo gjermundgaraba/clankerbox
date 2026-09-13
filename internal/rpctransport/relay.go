@@ -1,0 +1,108 @@
+package rpctransport
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net/http"
+	"time"
+
+	"connectrpc.com/connect"
+
+	v1 "clankerbox/gen/clankerbox/v1"
+)
+
+type deadlineKey struct{}
+
+// WithWriteDeadline exposes only this HTTP stream's deadline to its handler.
+func WithWriteDeadline(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rc := http.NewResponseController(w)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), deadlineKey{}, rc.SetWriteDeadline)))
+	})
+}
+
+// WriteEvent applies a per-message stall limit while permitting idle terminals.
+func WriteEvent(
+	ctx context.Context,
+	stream *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent],
+	event *v1.AttachmentEvent,
+) error {
+	set, ok := ctx.Value(deadlineKey{}).(func(time.Time) error)
+	if !ok {
+		return errors.New("RPC stream handler lacks write-deadline middleware")
+	}
+	if err := set(time.Now().Add(StallTimeout)); err != nil {
+		return err
+	}
+	err := stream.Send(event)
+	return errors.Join(err, set(time.Time{}))
+}
+
+// Relay preserves both message orders using a single in-flight message per
+// direction. It never retains terminal output or retries uncertain controls.
+// The upstream must be created using ctx returned by [context.WithCancel], whose
+// cancel is supplied here so every blocked upstream write can be interrupted.
+func Relay(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	down *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent],
+	up *connect.BidiStreamForClient[v1.AttachmentRequest, v1.AttachmentEvent],
+	first *v1.AttachmentRequest,
+) error {
+	defer func() {
+		// Cancel blocked sends before closing their request stream. CloseRequest
+		// may otherwise wait for a sender that is still waiting on flow control.
+		cancel()
+		_ = up.CloseRequest()
+		_ = up.CloseResponse()
+	}()
+	send := func(message *v1.AttachmentRequest) error {
+		timer := time.AfterFunc(StallTimeout, cancel)
+		defer timer.Stop()
+		return up.Send(message)
+	}
+	if err := send(first); err != nil {
+		return err
+	}
+	controls := make(chan error, 1)
+	go relayControls(down, send, controls, cancel)
+	for {
+		event, err := up.Receive()
+		if err != nil {
+			select {
+			case controlErr := <-controls:
+				if !errors.Is(controlErr, io.EOF) {
+					return controlErr
+				}
+			default:
+			}
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		if err = WriteEvent(ctx, down, event); err != nil {
+			return err
+		}
+	}
+}
+
+func relayControls(
+	down *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent],
+	send func(*v1.AttachmentRequest) error,
+	controls chan<- error,
+	cancel context.CancelFunc,
+) {
+	defer cancel()
+	for {
+		message, err := down.Receive()
+		if err == nil {
+			err = send(message)
+		}
+		if err != nil {
+			controls <- err
+			return
+		}
+	}
+}

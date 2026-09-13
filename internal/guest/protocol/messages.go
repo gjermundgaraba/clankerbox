@@ -1,9 +1,9 @@
+// Package protocol defines durable session values and manager operations.
+// Generated clankerbox.v1 messages define the transport contract.
 package protocol
 
 import (
-	"bytes"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -23,16 +23,6 @@ const (
 	MinRows       = 1
 	MaxRows       = 300
 	MaxInputBytes = 256 * 1024
-)
-
-// Operation names.
-const (
-	OpSessionCreate = "session.create"
-	OpSessionList   = "session.list"
-	OpSessionOpen   = "session.open"
-	OpSessionInput  = "session.input"
-	OpSessionResize = "session.resize"
-	OpSessionEnd    = "session.end"
 )
 
 // Error codes.
@@ -80,21 +70,6 @@ const (
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
-// Request is the JSON body of a REQUEST frame.
-type Request struct {
-	RequestID uint64          `json:"request_id"`
-	Op        string          `json:"op"`
-	Args      json.RawMessage `json:"args,omitempty"`
-}
-
-// Response is the JSON body of a RESPONSE frame.
-type Response struct {
-	RequestID uint64          `json:"request_id"`
-	OK        bool            `json:"ok"`
-	Value     json.RawMessage `json:"value,omitempty"`
-	Error     *Error          `json:"error,omitempty"`
-}
-
 // Error describes a request that could not be applied.
 type Error struct {
 	Code      string `json:"code"`
@@ -107,44 +82,9 @@ func (e *Error) Error() string {
 	return e.Code + ": " + e.Message
 }
 
-// Fail builds an error response.
-func Fail(requestID uint64, code, message string) Response {
-	return Response{
-		RequestID: requestID,
-		Error:     &Error{Code: code, Message: message, Retryable: code == CodeCapacity},
-	}
-}
-
-// Succeed builds a success response carrying value.
-func Succeed(requestID uint64, value any) (Response, error) {
-	raw, err := Encode(value)
-	if err != nil {
-		return Response{}, fmt.Errorf("encode response value: %w", err)
-	}
-	return Response{RequestID: requestID, OK: true, Value: raw}, nil
-}
-
-// Encode marshals a JSON body for the wire without HTML escaping, which would
-// otherwise expand `<`, `>`, and `&` in terminal text sixfold.
-func Encode(value any) ([]byte, error) {
-	var buf bytes.Buffer
-	encoder := json.NewEncoder(&buf)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
-}
-
-// EventHeader identifies an EVENT body before full decoding.
-type EventHeader struct {
-	Event string `json:"event"`
-}
-
 // Hello is the first event on every connection.
 type Hello struct {
 	Event         string `json:"event"`
-	Protocol      int    `json:"protocol"`
 	Incarnation   string `json:"incarnation"`
 	BootID        string `json:"boot_id"`
 	DaemonVersion string `json:"daemon_version"`
@@ -279,14 +219,11 @@ func (a OpenArgs) Validate() error {
 	if err := (SessionArgs{SessionID: a.SessionID}).Validate(); err != nil {
 		return err
 	}
-	if a.FromOffset != nil && *a.FromOffset > MaxOffset {
-		return &Error{Code: CodeInvalid, Message: "from_offset"}
-	}
 	return nil
 }
 
 // OpenValue is the one bootstrap description answering session.open. Mode
-// snapshot carries SnapshotBytes, the length of the SNAPSHOT_DATA frames that
+// snapshot carries SnapshotBytes, the length of the snapshot chunks that
 // follow; mode ended carries View while the daemon still holds the terminal,
 // and the view's text follows the same way, so no screen is too large to send.
 type OpenValue struct {
@@ -298,7 +235,7 @@ type OpenValue struct {
 }
 
 // View announces the final screen of an ended session: its cursor, and the
-// length of the UTF-8 text carried by the SNAPSHOT_DATA frames that follow.
+// length of the UTF-8 text carried by the snapshot chunks that follow.
 type View struct {
 	Cursor Cursor `json:"cursor"`
 	Bytes  uint64 `json:"bytes"`

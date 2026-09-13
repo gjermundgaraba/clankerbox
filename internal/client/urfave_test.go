@@ -64,7 +64,7 @@ const sessionsCommand = "sessions"
 
 func TestRetiredCommandsAreUnknown(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"ssh", "proxy", "exec", "vnc", "ssh-config", "connect", "ports", "url", "open-url", "_owner", "herdr", "auth", "events"} {
+	for _, name := range []string{"ssh", "proxy", "exec", "vnc", "ssh-config", "connect", "ports", "url", "open-url", "_owner", "herdr", "auth", "events", "_dev-guest"} {
 		var out, diagnostics bytes.Buffer
 		err := client.Run(
 			t.Context(),
@@ -81,3 +81,25 @@ func TestRetiredCommandsAreUnknown(t *testing.T) {
 }
 
 const missingConfig = "/missing/config"
+
+func TestDevHelpDescribesRealRetainedEnvironment(t *testing.T) {
+	t.Parallel()
+	var out, diagnostics bytes.Buffer
+	if err := client.Run(
+		t.Context(),
+		[]string{testMachineName, "--help"},
+		client.Streams{Out: &out, Err: &diagnostics},
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"--state-dir", "--listen", "--bundle", "destroy", "stop", "VM"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing %q: %s", want, &out)
+		}
+	}
+	for _, retired := range []string{"--workspace", "local shells", "_dev-guest", "one local machine"} {
+		if strings.Contains(out.String(), retired) {
+			t.Errorf("retired dev behavior %q", retired)
+		}
+	}
+}

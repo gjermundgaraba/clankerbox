@@ -61,6 +61,7 @@ type spawnOptions struct {
 	record      protocol.Session
 	fingerprint string
 	env         map[string]string
+	workload    *Workload
 	stateDir    string
 	ringSize    int
 	loader      *vt.Loader
@@ -104,7 +105,12 @@ func (s *Session) start(opts spawnOptions) error {
 		return fmt.Errorf("create terminal: %w", err)
 	}
 	s.term = term
-	if err = os.MkdirAll(s.record.Cwd, dirMode); err != nil {
+	if opts.workload == nil {
+		err = os.MkdirAll(s.record.Cwd, dirMode)
+	} else {
+		_, err = os.Stat(s.record.Cwd)
+	}
+	if err != nil {
 		_ = term.Close()
 		return fmt.Errorf("create working directory: %w", err)
 	}
@@ -112,6 +118,9 @@ func (s *Session) start(opts spawnOptions) error {
 	cmd := exec.CommandContext(opts.ctx, argv[0], argv[1:]...) //nolint:gosec // Shell-equivalent authority by contract.
 	cmd.Dir = s.record.Cwd
 	cmd.Env = buildEnv(opts.env)
+	if opts.workload != nil {
+		opts.workload.configure(cmd, opts.env)
+	}
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: s.record.Rows, Cols: s.record.Cols})
 	if err != nil {
 		_ = term.Close()

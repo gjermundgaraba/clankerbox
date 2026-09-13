@@ -1,0 +1,9 @@
+{"kind":"owned_machine","value":{"id":"4ecef2fb1619d0e15210b6eddad2c516","name":"cold-cutover-proof","profile":{"id":"linux-dev-v2","os":"linux","arch":"amd64","runtime":"smolvm","cpu":1,"ram_mib":768,"image_path":"/home/clanker/clankerbox/profiles/ubuntu-26.04.1-dev","capabilities":null,"storage_gib":4,"overlay_gib":16},"generation":1,"prepared":false,"deleted":false,"port":48000}}
+{"kind":"old_port_running","value":48000}
+{"kind":"clean_v2_image_boot","value":{"sshd_processes":[],"pid1":"/init.krun"}}
+{"kind":"seeded_legacy_ssh","value":{"config_sha":"d3ffe8108f12da2dc03068ab79425c7931bd94ce87ef53e35303d49b60695ed8","keys_sha":"02bd40491a037ed546c06214070181eac5948ce26b68d7d7d3a4a7276a990589","old_daemon_pid":"430","sshd_pid":"429"}}
+{"kind":"retired_managed_ssh","value":{"machine_id":"4ecef2fb1619d0e15210b6eddad2c516","retired_activation":["/etc/systemd/system/sockets.target.wants/ssh.socket","/etc/rc3.d/S01ssh","/etc/rc4.d/S01ssh","/etc/rc5.d/S01ssh","/etc/rc2.d/S01ssh"],"retired_forced_keys":1,"preserved_other_keys":0,"old_managed_processes":0}}
+{"kind":"new_guest_endpoint","value":"127.0.0.1:48000"}
+{"kind":"guest","value":{"machine_id":"4ecef2fb1619d0e15210b6eddad2c516","incarnation":"3054c0bc-4cd9-41e3-b8c5-c1b991fb6dbe","boot_id":"291df316-af82-4f20-8e31-6a30fc5c62b2","daemon_version":"dev","os":"linux","user":"clankerbox","engine_digest":"93fb99f59f7a6b7b657e17de1a2a932c2b59e1b3cbd16506941ccb84af6d1ef1","max_sessions":48,"schema":"clankerbox.v1"}}
+{"kind":"cold_restart_no_ssh","value":{"old_managed_processes":0,"managed_ssh_identity":false,"forced_terminal_key":false}}
+{"kind":"passed_cleaned","value":"4ecef2fb1619d0e15210b6eddad2c516"}

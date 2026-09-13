@@ -2,66 +2,27 @@ package host
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"clankerbox/internal/model"
 )
 
 const (
-	rootUser        = "root"
-	adminUser       = "admin"
-	rootHome        = "/root"
-	adminHome       = "/Users/admin"
-	linuxDecode     = "base64 -d"
-	macDecode       = "/usr/bin/base64 -D"
 	guestShell      = "/bin/sh"
 	guestBinaryDir  = "guest"
 	guestBinaryPath = "/usr/local/bin/clankerbox-guest"
-	guestKeyComment = "clankerbox-terminal"
 )
 
-// PrepareGuest installs the terminal key and the guest
-// session binary through the trusted runtime channel.
-func (h *Helper) PrepareGuest(ctx context.Context, id, publicKey string) (resultErr error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	lock, err := h.state.Lock(".lock", true)
-	if err != nil {
-		return err
-	}
-	defer func() { resultErr = errors.Join(resultErr, lock.Close()) }()
-	canonicalKey, err := model.ValidateKey(publicKey)
-	if err != nil {
-		return errors.New("invalid terminal public key")
-	}
-	m, err := h.readyMachine(ctx, id)
-	if err != nil {
-		return err
-	}
-	rt, ok := h.runtime.(interface {
-		PrepareGuest(context.Context, Manifest, string, []byte) error
-	})
-	if !ok {
-		return errors.New("runtime does not support guest preparation")
-	}
-	binary, err := h.guestBinary(m)
-	if err != nil {
-		return err
-	}
-	return rt.PrepareGuest(ctx, m, canonicalKey, binary)
-}
-
 // readyMachine resolves the current endpoint only after the owned generation succeeds.
-// Callers retain their own mutation locks; Connect never holds one for a stream lifetime.
+// Callers hold admission only until registering a cancellable guest lease.
 func (h *Helper) readyMachine(ctx context.Context, id string) (Manifest, error) {
+	if err := h.cfg.quarantineError(id); err != nil {
+		return Manifest{}, err
+	}
 	if !model.ValidID(id) {
 		return Manifest{}, errors.New("invalid machine ID")
 	}
@@ -100,9 +61,9 @@ func (h *Helper) readyMachine(ctx context.Context, id string) (Manifest, error) 
 
 // guestBinary reads the deployed guest binary for the machine's platform.
 func (h *Helper) guestBinary(m Manifest) ([]byte, error) {
-	goos := "linux"
+	goos := hostLinux
 	if m.Profile.Runtime == runtimeTart {
-		goos = "darwin"
+		goos = hostDarwin
 	}
 	name := "clankerbox-guest-" + goos + "-" + m.Profile.Arch
 	path := filepath.Join(h.cfg.Root, guestBinaryDir, name)
@@ -111,30 +72,6 @@ func (h *Helper) guestBinary(m Manifest) ([]byte, error) {
 		return nil, fmt.Errorf("guest binary %s is not deployed: %w", name, err)
 	}
 	return data, nil
-}
-
-// PrepareGuest installs the binary when its digest differs, then the key line
-// in an already running guest.
-func (n *NativeRuntime) PrepareGuest(ctx context.Context, m Manifest, publicKey string, binary []byte) error {
-	digest := sha256.Sum256(binary)
-	want := hex.EncodeToString(digest[:])
-	call, cancel := context.WithTimeout(ctx, guestReadyTimeout)
-	defer cancel()
-	installed, err := n.guest(call, m, guestDigestScript(m))
-	if err != nil {
-		return err
-	}
-	if strings.TrimSpace(string(installed)) != want {
-		if err = n.guestInstall(call, m, guestInstallScript(m, want), binary); err != nil {
-			return err
-		}
-	}
-	script, err := guestKeyScript(m, publicKey)
-	if err != nil {
-		return err
-	}
-	_, err = n.guest(call, m, script)
-	return err
 }
 
 // guestInstall runs a fixed installer command with the binary on stdin.
@@ -186,33 +123,4 @@ func guestInstallScript(m Manifest, digest string) string {
 		"actual=$(" + guestDigestTool(m) + " '" + tmp + "' | cut -d' ' -f1)\n" +
 		"if [ \"$actual\" != '" + digest + "' ]; then rm -f '" + tmp + "'; echo 'guest binary digest mismatch' >&2; exit 1; fi\n" +
 		"chmod 755 '" + tmp + "'\nchown 0:0 '" + tmp + "'\nmv -f '" + tmp + "' '" + guestBinaryPath + "'\n"
-}
-
-// guestKeyScript installs the sole managed terminal key.
-func guestKeyScript(m Manifest, publicKey string) (string, error) {
-	if !model.ValidID(m.ID) {
-		return "", errors.New("invalid machine ID")
-	}
-	canonicalKey, err := model.ValidateKey(publicKey)
-	if err != nil {
-		return "", errors.New("invalid terminal public key")
-	}
-	user, home, decode := rootUser, rootHome, linuxDecode
-	if m.Profile.Runtime == runtimeTart {
-		user, home, decode = adminUser, adminHome, macDecode
-	}
-	line := `restrict,command="` + guestBinaryPath + ` proxy" ` + canonicalKey + " " + guestKeyComment
-	encoded := base64.StdEncoding.EncodeToString([]byte(line + "\n"))
-	script := "set -eu\numask 077\ntest \"$(cat /etc/clankerbox/owner)\" = '" + m.ID + "'\n" +
-		"mkdir -p '" + home + "/.ssh'\nkeys='" + home + "/.ssh/authorized_keys'\ntest -f \"$keys\"\n" +
-		"printf '%s' '" + encoded + "' | " + decode + " > \"$keys.guest-tmp\"\n" +
-		"chmod 600 \"$keys.guest-tmp\"\nchown '" + user + "' \"$keys.guest-tmp\"\nmv \"$keys.guest-tmp\" \"$keys\"\n"
-	var b strings.Builder
-	b.WriteString(script)
-	writeSSHDStart(&b, m.Profile.Runtime, false)
-	script = b.String()
-	if m.Profile.Runtime == runtimeTart {
-		script = "sudo -n /bin/bash -se <<'CLANKERBOX_GUEST_PREPARE'\n" + script + "CLANKERBOX_GUEST_PREPARE\n"
-	}
-	return script, nil
 }

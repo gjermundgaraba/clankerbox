@@ -1,0 +1,18 @@
+{
+  "root": "/home/clanker/cbre.WEMt4r",
+  "binary": "/home/clanker/cbre.WEMt4r/bin/smolvm",
+  "env": {
+    "HOME": "/home/clanker/cbre.WEMt4r/h",
+    "XDG_DATA_HOME": "/home/clanker/cbre.WEMt4r/d",
+    "XDG_CACHE_HOME": "/home/clanker/cbre.WEMt4r/c",
+    "XDG_CONFIG_HOME": "/home/clanker/cbre.WEMt4r/config",
+    "XDG_RUNTIME_DIR": "/home/clanker/cbre.WEMt4r/r",
+    "DOCKER_CONFIG": "/home/clanker/cbre.WEMt4r/empty-docker",
+    "SMOLVM_AGENT_ROOTFS": "/home/clanker/cbre.WEMt4r/agent-rootfs",
+    "SMOLVM_LIB_DIR": "/home/clanker/clankerbox/versions/1.14.1/lib",
+    "LD_LIBRARY_PATH": "/home/clanker/clankerbox/versions/1.14.1/lib",
+    "SMOLVM_PUBLISH_ADDR": "127.0.0.1",
+    "SMOLVM_EGRESS_FLOOR": "strict",
+    "RUST_LOG": "smolvm=debug"
+  }
+}

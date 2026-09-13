@@ -13,12 +13,13 @@ import (
 	"time"
 	"unicode"
 
-	"golang.org/x/crypto/ssh"
+	"net"
+	"net/url"
+	"path/filepath"
 )
 
 var idPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var namePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
-var targetPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.@-]*$`)
 var pathPattern = regexp.MustCompile(`^/[A-Za-z0-9_./-]+$`)
 
 // ValidID reports whether s is a generated machine or operation identifier.
@@ -44,19 +45,21 @@ func Hash(v any) string {
 	return hex.EncodeToString(h[:])
 }
 
-const smolvmRuntime = "smolvm"
+const (
+	smolvmRuntime = "smolvm"
+	archARM64     = "arm64"
+	archAMD64     = "amd64"
+)
 
 // RuntimeCapabilities returns the operations supported by a runtime and architecture.
 func RuntimeCapabilities(runtime, arch string) []string {
-	if runtime == "local" {
-		return []string{"create", "start", "stop", "delete", "sessions"}
+	if (runtime != smolvmRuntime || (arch != archARM64 && arch != archAMD64)) &&
+		(runtime != "tart" || arch != archARM64) {
+		return nil
 	}
 	out := []string{"create", "start", "stop", "delete", "sessions", "checkpoint", "restore"}
 	if runtime == smolvmRuntime {
-		if arch == "amd64" {
-			return append(out, "fork", "live-fork", "ram-checkpoint")
-		}
-		return append(out, "ram-checkpoint")
+		return append(out, "fork", "live-fork", "ram-checkpoint")
 	}
 	return append(out, "fork", "disk-branch", "disk-checkpoint")
 }
@@ -70,6 +73,7 @@ type Profile struct {
 	CPU          int      `json:"cpu"`
 	RAMMiB       int      `json:"ram_mib"`
 	ImagePath    string   `json:"image_path"`
+	ImageDigest  string   `json:"image_digest,omitempty"`
 	Capabilities []string `json:"capabilities"`
 	StorageGiB   int      `json:"storage_gib,omitempty"`
 	OverlayGiB   int      `json:"overlay_gib,omitempty"`
@@ -80,12 +84,11 @@ func (p *Profile) Validate() error {
 	if !ValidName(p.ID) || p.CPU < 1 || p.CPU > 255 || p.RAMMiB < 128 || p.ImagePath == "" {
 		return errors.New("profile requires id, cpu (1..255), ram_mib >=128 and image_path")
 	}
-	if p.Arch != "arm64" && p.Arch != "amd64" {
+	if p.Arch != archARM64 && p.Arch != archAMD64 {
 		return errors.New("unsupported architecture")
 	}
-	if (p.Runtime != "tart" || p.OS != "macos" || p.Arch != "arm64") &&
-		(p.Runtime != smolvmRuntime || p.OS != "linux") &&
-		(p.Runtime != "local" || (p.OS != "linux" && p.OS != "macos")) {
+	if (p.Runtime != "tart" || p.OS != "macos" || p.Arch != archARM64) &&
+		(p.Runtime != smolvmRuntime || p.OS != "linux") {
 		return errors.New("unsupported OS/runtime combination")
 	}
 	if p.Runtime == smolvmRuntime && !SafePath(p.ImagePath) {
@@ -105,17 +108,23 @@ func (p *Profile) Validate() error {
 
 // SameProfile excludes derived discovery fields from the durable configuration pin.
 func SameProfile(a, b Profile) bool {
+	if a.ImageDigest != "" && a.ImageDigest == b.ImageDigest {
+		a.ImagePath = ""
+		b.ImagePath = ""
+	}
 	a.Capabilities = nil
 	b.Capabilities = nil
 	return Hash(a) == Hash(b)
 }
 
-// Host describes an SSH helper endpoint and its configured capacity.
+// Host describes a private authenticated host service and its configured capacity.
 type Host struct {
 	ID         string   `json:"id"`
-	SSHTarget  string   `json:"ssh_target"`
-	HelperPath string   `json:"helper_path"`
-	ConfigPath string   `json:"config_path"`
+	Endpoint   string   `json:"endpoint"`
+	TLSCA      string   `json:"tls_ca,omitempty"`
+	TLSCert    string   `json:"tls_cert,omitempty"`
+	TLSKey     string   `json:"tls_key,omitempty"`
+	PeerID     string   `json:"peer_id,omitempty"`
 	ProfileIDs []string `json:"profile_ids"`
 	CPU        int      `json:"cpu"`
 	RAMMiB     int      `json:"ram_mib"`
@@ -134,12 +143,27 @@ type HostStatus struct {
 
 // Validate checks configuration invariants and normalizes derived fields where applicable.
 func (h Host) Validate() error {
-	if !ValidName(h.ID) || !targetPattern.MatchString(h.SSHTarget) || !SafePath(h.HelperPath) ||
-		!SafePath(h.ConfigPath) ||
-		h.CPU < 1 ||
-		h.RAMMiB < 128 ||
-		len(h.ProfileIDs) == 0 {
-		return errors.New("invalid host identity, SSH target, absolute helper/config path, profile_ids or capacity")
+	if !ValidName(h.ID) || h.CPU < 1 || h.RAMMiB < 128 || len(h.ProfileIDs) == 0 {
+		return errors.New("invalid host identity, profiles or capacity")
+	}
+	u, err := url.Parse(h.Endpoint)
+	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("invalid host endpoint")
+	}
+	switch u.Scheme {
+	case "unix":
+		if u.Host != "" || !filepath.IsAbs(u.Path) || len(u.Path) > 103 {
+			return errors.New("invalid private Unix host endpoint")
+		}
+	case "https":
+		if u.Hostname() == "" || u.Path != "" || h.PeerID == "" || h.TLSCA == "" || h.TLSCert == "" || h.TLSKey == "" {
+			return errors.New("remote host requires endpoint, explicit peer identity and mutual TLS credentials")
+		}
+		if net.ParseIP(u.Hostname()) == nil && strings.ContainsAny(u.Hostname(), " /\\") {
+			return errors.New("invalid host endpoint hostname")
+		}
+	default:
+		return errors.New("host endpoint must use private Unix or verified mutual TLS")
 	}
 	return nil
 }
@@ -207,8 +231,6 @@ type Machine struct {
 	DesiredState       State      `json:"desired_state"`
 	Generation         int64      `json:"generation"`
 	AcceptedGeneration int64      `json:"accepted_generation"`
-	SSHUser            string     `json:"ssh_user,omitempty"`
-	SSHHostKey         string     `json:"ssh_host_key,omitempty"`
 	Endpoint           string     `json:"endpoint,omitempty"`
 	Prepared           bool       `json:"prepared"`
 	Deleted            bool       `json:"deleted"`
@@ -222,14 +244,11 @@ type Machine struct {
 	Guest *GuestStatus `json:"guest,omitempty"`
 }
 
-// GuestStatus is the observed state of the controller's link to a machine's
-// session daemon. Ready means a successful daemon hello; Protocol is the wire
-// revision that hello advertised.
+// GuestStatus is materialized from the host-owned authenticated guest service.
 type GuestStatus struct {
 	Status        string `json:"status"`
 	Reason        string `json:"reason,omitempty"`
 	Incarnation   string `json:"incarnation,omitempty"`
-	Protocol      int    `json:"protocol,omitempty"`
 	DaemonVersion string `json:"daemon_version,omitempty"`
 	WasmSHA256    string `json:"wasm_sha256,omitempty"`
 }
@@ -275,26 +294,6 @@ func (in *CreateInput) Validate() error {
 		return errors.New("name, profile and host must be valid names")
 	}
 	return ValidateLabels(in.Labels)
-}
-
-// ValidateKey validates and canonicalizes one bare SSH public key.
-func ValidateKey(key string) (string, error) {
-	if len(key) > 16384 || strings.ContainsAny(key, "\r\n\x00") {
-		return "", errors.New("SSH key must be a single authorized-key line")
-	}
-	pub, _, opts, rest, err := ssh.ParseAuthorizedKey([]byte(key))
-	if err != nil || len(opts) != 0 || len(rest) != 0 {
-		return "", errors.New("invalid SSH public key; authorized-key options are forbidden")
-	}
-	if _, ok := pub.(*ssh.Certificate); ok {
-		return "", errors.New("SSH certificates are unsupported")
-	}
-	switch pub.Type() {
-	case "ssh-ed25519", "ssh-rsa", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521":
-	default:
-		return "", errors.New("unsupported SSH public key type")
-	}
-	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), nil
 }
 
 // ChildInput describes the identity for a derived machine.
@@ -359,15 +358,14 @@ type Request struct {
 
 // Observation describes the host-reported state of a machine.
 type Observation struct {
-	MachineID  string    `json:"machine_id"`
-	Generation int64     `json:"generation"`
-	State      State     `json:"state"`
-	Prepared   bool      `json:"prepared"`
-	Deleted    bool      `json:"deleted"`
-	SSHUser    string    `json:"ssh_user,omitempty"`
-	SSHHostKey string    `json:"ssh_host_key,omitempty"`
-	Endpoint   string    `json:"endpoint,omitempty"`
-	ObservedAt time.Time `json:"observed_at"`
+	Guest      *GuestStatus `json:"guest,omitempty"`
+	MachineID  string       `json:"machine_id"`
+	Generation int64        `json:"generation"`
+	State      State        `json:"state"`
+	Prepared   bool         `json:"prepared"`
+	Deleted    bool         `json:"deleted"`
+	Endpoint   string       `json:"endpoint,omitempty"`
+	ObservedAt time.Time    `json:"observed_at"`
 }
 
 // Response carries a host helper operation result.

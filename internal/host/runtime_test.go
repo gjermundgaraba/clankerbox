@@ -2,13 +2,11 @@ package host_test
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/xml"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -93,7 +91,7 @@ func TestNativeInventoryUsesObservedStateAndRejectsBadEndpoint(t *testing.T) {
 		return []byte(ip), nil
 	}
 	obs, err := n.Inspect(context.Background(), m)
-	if err != nil || obs.State != model.Running || obs.Endpoint != "192.168.64.5:22" {
+	if err != nil || obs.State != model.Running || obs.Endpoint != "192.168.64.5:7443" {
 		t.Fatalf("observed runtime: %+v %v", obs, err)
 	}
 	for _, invalid := range []string{"localhost", "127.0.0.1", "8.8.8.8", "192.168.1.2:80"} {
@@ -115,7 +113,7 @@ func TestNativeInventoryUsesObservedStateAndRejectsBadEndpoint(t *testing.T) {
 }
 func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
+	root := shortNativeRoot(t)
 	runner := &recordingRunner{}
 	p := model.Profile{
 		ID:        "ubuntu-bare-v1",
@@ -126,7 +124,14 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 		RAMMiB:    2048,
 		ImagePath: "/opt/profiles/ubuntu-bare/agent-rootfs",
 	}
-	cfg := host.Config{Root: root, SmolvmPath: testSmolvmPath, LibraryDir: testSmolvmLibrary, DNS: "185.12.64.1"}
+	cfg := host.Config{
+		HostOS:     osLinux,
+		Root:       root,
+		SmolvmPath: testSmolvmPath,
+		LibraryDir: testSmolvmLibrary,
+		DNS:        "185.12.64.1",
+	}
+	cfg.SmolvmPath = templateBundle(t)
 	requireNoError(t, cfg.Validate())
 	n := &host.NativeRuntime{Config: cfg, Runner: runner}
 	m := host.Manifest{ID: model.NewID(), Profile: p, Port: 22001}
@@ -136,7 +141,7 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	}
 	create := runner.calls[1]
 	joined := strings.Join(create.args, " ")
-	for _, required := range []string{"machine create --name cb-", "--cpus 2 --mem 2048", "--net-backend virtio-net", "--port 22001:22", "--dns 185.12.64.1 -- /bin/true"} {
+	for _, required := range []string{"machine create --name cb-", "--cpus 2 --mem 2048", "--net-backend virtio-net", "--port 22001:7443", "--dns 185.12.64.1 -- /bin/true"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("missing %s from %s", required, joined)
 		}
@@ -154,7 +159,7 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	requireNoError(t, os.MkdirAll(filepath.Join(cfg.Root, "jobs"), 0700))
 	requireNoError(t, n.Configure(context.Background(), m))
 	unit := readSupervisor(t, n.Config.Root, m.ID)
-	for _, required := range []string{"Type=oneshot", "RemainAfterExit=yes", "Restart=no", "SendSIGKILL=no", "TimeoutStartSec=infinity", "ExecStart=/opt/smolvm/bin/smolvm machine start --name cb-"} {
+	for _, required := range []string{"Type=oneshot", "RemainAfterExit=yes", "Restart=no", "SendSIGKILL=no", "TimeoutStartSec=infinity", "ExecStart=" + cfg.SmolvmPath + " machine start --name cb-"} {
 		if !strings.Contains(unit, required) {
 			t.Fatalf("unit missing %s", required)
 		}
@@ -169,52 +174,11 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 		}
 	}
 }
-func TestBootstrapSSHDPolicyAndRetainedHostKey(t *testing.T) {
-	t.Parallel()
-	h, _, _, req := setup(t)
-	defer closeHelper(t, h)
-	m := host.Manifest{ID: req.MachineID, Profile: req.Profile}
-	script, err := preparedScript(t, m, true)
-	requireNoError(t, err)
-	matches := regexp.MustCompile(`printf '%s' '([A-Za-z0-9+/=]+)'`).FindAllStringSubmatch(script, -1)
-	var config string
-	for _, match := range matches {
-		decoded, decodeErr := base64.StdEncoding.DecodeString(match[1])
-		requireNoError(t, decodeErr)
-		if strings.HasPrefix(string(decoded), "Port 22") {
-			config = string(decoded)
-		}
-	}
-	for _, required := range []string{"PasswordAuthentication no", "KbdInteractiveAuthentication no", "AuthenticationMethods publickey", "AllowTcpForwarding no", "PermitTTY no", "MaxSessions 64", "AllowStreamLocalForwarding no", "AllowUsers admin", "SetEnv PATH=/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"} {
-		if !strings.Contains(config, required) {
-			t.Fatalf("SSHD missing %s", required)
-		}
-	}
-	if strings.Contains(config, "Subsystem sftp") || strings.Contains(config, "PermitOpen") {
-		t.Fatal("retired guest access remains enabled")
-	}
-	start, err := preparedScript(t, m, false)
-	requireNoError(t, err)
-	if strings.Contains(start, "ssh-keygen -q") || strings.Contains(start, "sshd_config\n") {
-		t.Fatal("start creates identity/configuration")
-	}
-	if !strings.Contains(start, "ssh-keygen -y -f /etc/clankerbox/ssh_host_ed25519_key") {
-		t.Fatal("start doesn't verify retained key")
-	}
-	m.Profile.Runtime = runtimeSmolvm
-	linux, err := preparedScript(t, m, true)
-	requireNoError(t, err)
-	ownership := strings.Index(linux, "chown 0:0 /run/sshd /root /etc/ssh")
-	if ownership < 0 || ownership > strings.Index(linux, "/usr/sbin/sshd -t") {
-		t.Fatal("sshd checked before preparing Linux ownership")
-	}
-}
-
 func TestSmolvmStopRequiresAcknowledgementBeforeSupervisorStop(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
+	root := shortNativeRoot(t)
 	m := host.Manifest{ID: model.NewID(), Port: 22000, Profile: model.Profile{Runtime: runtimeSmolvm}}
-	cfg := host.Config{
+	cfg := host.Config{HostOS: osLinux,
 		Root:          root,
 		SmolvmPath:    testSmolvmPath,
 		LibraryDir:    testSmolvmLibrary,
@@ -255,32 +219,11 @@ func TestSmolvmStopRequiresAcknowledgementBeforeSupervisorStop(t *testing.T) {
 	}
 }
 
-func preparedScript(t *testing.T, m host.Manifest, initialize bool) (string, error) {
+func templateBundle(t *testing.T) string {
 	t.Helper()
-	n, runner, fixture := nativeFixture(t)
-	m.ID = fixture.ID
-	n.Config.TartPath = "/opt/tart"
-	nativeDB(t, n, m)
-	key := testKey(t)
-	var script string
-	runner.reply = func(call commandCall) ([]byte, error) {
-		if slices.Contains(call.args, "list") || slices.Contains(call.args, "ls") {
-			return []byte(`[{"name":"` + m.RuntimeName() + `","state":"running"}]`), nil
-		}
-		if slices.Contains(call.args, "ip") {
-			return []byte("192.168.64.2"), nil
-		}
-		if len(call.input) == 0 || !slices.Contains(call.args, "-i") {
-			t.Fatal("bootstrap script must use runtime stdin")
-		}
-		script = string(call.input)
-		return []byte(key), nil
+	root := shortNativeRoot(t)
+	for _, name := range []string{"storage-template.ext4.zst", "overlay-template.ext4.zst"} {
+		requireNoError(t, os.WriteFile(filepath.Join(root, name), []byte("pinned compressed fixture"), 0600))
 	}
-	var err error
-	if initialize {
-		_, _, _, err = n.Initialize(context.Background(), m)
-	} else {
-		_, _, _, err = n.Verify(context.Background(), m)
-	}
-	return script, err
+	return filepath.Join(root, "smolvm")
 }

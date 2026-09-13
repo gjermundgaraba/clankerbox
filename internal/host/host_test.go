@@ -2,17 +2,12 @@ package host_test
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"clankerbox/internal/host"
-
-	"golang.org/x/crypto/ssh"
 
 	"clankerbox/internal/model"
 )
@@ -21,7 +16,6 @@ type memoryRuntime struct {
 	exists                                    bool
 	state                                     model.State
 	creates, starts, stops, deletes, prepares int
-	key                                       string
 	disk                                      string
 	failCreate, failStart, failDelete         bool
 }
@@ -48,9 +42,9 @@ func (r *memoryRuntime) Start(context.Context, host.Manifest) error {
 	}
 	return nil
 }
-func (r *memoryRuntime) Initialize(_ context.Context, _ host.Manifest) (string, string, string, error) {
+func (r *memoryRuntime) Initialize(_ context.Context, _ host.Manifest) (string, error) {
 	r.prepares++
-	return "admin", r.key, testGuestEndpoint, nil
+	return testGuestEndpoint, nil
 }
 func (r *memoryRuntime) Stop(context.Context, host.Manifest) error {
 	r.stops++
@@ -69,14 +63,7 @@ func (r *memoryRuntime) Delete(context.Context, host.Manifest) error {
 	}
 	return nil
 }
-func testKey(t *testing.T) string {
-	t.Helper()
-	pub, _, err := ed25519.GenerateKey(rand.Reader)
-	requireNoError(t, err)
-	p, err := ssh.NewPublicKey(pub)
-	requireNoError(t, err)
-	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(p)))
-}
+
 func setup(t *testing.T) (*host.Helper, host.Config, *memoryRuntime, model.Request) {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
@@ -84,7 +71,7 @@ func setup(t *testing.T) (*host.Helper, host.Config, *memoryRuntime, model.Reque
 	p := model.Profile{
 		ID:        "mac-v1",
 		OS:        "macos",
-		Arch:      "arm64",
+		Arch:      archARM64,
 		Runtime:   runtimeTart,
 		CPU:       2,
 		RAMMiB:    2048,
@@ -93,12 +80,13 @@ func setup(t *testing.T) (*host.Helper, host.Config, *memoryRuntime, model.Reque
 	if err = p.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	cfg := host.Config{
-		Root:     filepath.Join(root, "state"),
-		Profiles: []model.Profile{p},
-		TartPath: "/opt/homebrew/bin/tart",
+	cfg := host.Config{HostOS: osDarwin,
+		Root:          filepath.Join(root, "state"),
+		PortLeaseRoot: filepath.Join(root, "ports"),
+		Profiles:      []model.Profile{p},
+		TartPath:      "/opt/homebrew/bin/tart",
 	}
-	rt := &memoryRuntime{key: testKey(t)}
+	rt := &memoryRuntime{}
 	h, err := host.Open(cfg, rt)
 	requireNoError(t, err)
 	req := model.Request{
@@ -243,23 +231,6 @@ func TestRootOwnership(t *testing.T) {
 		t.Fatal("adopted foreign root")
 	}
 }
-func TestBootstrapAndEndpointRestrictions(t *testing.T) {
-	t.Parallel()
-	h, _, _, req := setup(t)
-	defer closeHelper(t, h)
-	m := host.Manifest{ID: req.MachineID, Profile: req.Profile}
-	script, err := preparedScript(t, m, true)
-	requireNoError(t, err)
-	if !strings.Contains(script, ": >") {
-		t.Fatal("initialization must clear inherited login access")
-	}
-	start, err := preparedScript(t, m, false)
-	requireNoError(t, err)
-	if strings.Contains(start, "ssh-keygen -q") || strings.Contains(start, "authorized_keys'") {
-		t.Fatal("start regenerates guest identity")
-	}
-}
-
 func TestInterruptedDeleteFinishesCleanupAndTombstone(t *testing.T) {
 	t.Parallel()
 	h, _, rt, req := setup(t)
@@ -349,8 +320,14 @@ func nextOperation(previous model.Request, action string) model.Request {
 	return previous
 }
 
-func (r *memoryRuntime) Verify(context.Context, host.Manifest) (string, string, string, error) {
-	return "admin", r.key, testGuestEndpoint, nil
+func (r *memoryRuntime) Verify(context.Context, host.Manifest) (string, error) {
+	return testGuestEndpoint, nil
 }
 
-const testGuestEndpoint = "192.168.64.2:22"
+const testGuestEndpoint = "192.168.64.2:7443"
+
+const (
+	osDarwin   = "darwin"
+	archARM64  = "arm64"
+	testRootfs = "/opt/rootfs"
+)

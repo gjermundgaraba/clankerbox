@@ -361,3 +361,26 @@ func TestOpenAppendUsesVerifiedDirectoryHandle(t *testing.T) {
 		t.Fatalf("appended through substituted directory: %v", err)
 	}
 }
+
+func TestConcurrentFirstLockCreation(t *testing.T) {
+	t.Parallel()
+	dir, path := directory(t)
+	other, err := statefs.Open(path)
+	check(t, err)
+	defer func() { check(t, other.Close()) }()
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, d := range []*statefs.Dir{dir, other} {
+		go func() {
+			<-start
+			lock, e := d.Lock("first.lock", false)
+			if e == nil {
+				e = lock.Close()
+			}
+			results <- e
+		}()
+	}
+	close(start)
+	check(t, <-results)
+	check(t, <-results)
+}

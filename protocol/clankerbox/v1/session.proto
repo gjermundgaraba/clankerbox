@@ -1,0 +1,139 @@
+syntax = "proto3";
+package clankerbox.v1;
+option go_package = "clankerbox/gen/clankerbox/v1;clankerboxv1";
+import "clankerbox/v1/resources.proto";
+
+// Public controller routing. Applications receive neither guest credentials nor
+// arbitrary endpoint routing. All session methods address an immutable machine ID.
+service SessionService {
+  rpc DescribeGuest(DescribeGuestRequest) returns (GuestDescription);
+  rpc CreateSession(CreateSessionRequest) returns (Session);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc EndSession(EndSessionRequest) returns (Session);
+  rpc AttachSession(stream AttachmentRequest) returns (stream AttachmentEvent);
+}
+// Authenticated private guest endpoint. Identical terminal messages across relays.
+service GuestService {
+  rpc DescribeGuest(DescribeGuestRequest) returns (GuestDescription);
+  rpc CreateSession(CreateSessionRequest) returns (Session);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc EndSession(EndSessionRequest) returns (Session);
+  rpc AttachSession(stream AttachmentRequest) returns (stream AttachmentEvent);
+}
+message DescribeGuestRequest { string machine_id = 1; }
+message GuestDescription {
+  string machine_id = 1;
+  string incarnation = 2;
+  string boot_id = 3;
+  string daemon_version = 4;
+  string os = 5;
+  string user = 6;
+  string engine_digest = 7;
+  uint32 max_sessions = 8;
+  string schema = 9;
+}
+enum SessionStatus {
+  SESSION_STATUS_UNSPECIFIED = 0;
+  SESSION_STATUS_STARTING = 1;
+  SESSION_STATUS_RUNNING = 2;
+  SESSION_STATUS_EXITED = 3;
+  SESSION_STATUS_LOST = 4;
+}
+message Session {
+  string id = 1;
+  string label = 2;
+  string cwd = 3;
+  repeated string argv = 4;
+  uint32 cols = 5;
+  uint32 rows = 6;
+  SessionStatus status = 7;
+  optional int32 exit_code = 8;
+  optional string signal = 9;
+  int64 pid = 10;
+  // RFC3339Nano strings preserve the session manager's durable creation identity.
+  string created_at = 11;
+  optional string ended_at = 12;
+  uint64 offset = 13;
+  uint64 retained_from = 14;
+  optional uint64 last_resize_offset = 15;
+  string incarnation = 16;
+  uint64 reply_overflow = 17;
+}
+message CreateSessionRequest {
+  string machine_id = 1;
+  string session_id = 2;
+  string label = 3;
+  string cwd = 4;
+  repeated string argv = 5;
+  map<string,string> env = 6;
+  uint32 cols = 7;
+  uint32 rows = 8;
+  // Caller decision time for creation deduplication/retry-horizon enforcement.
+  string created_at = 9;
+}
+message ListSessionsRequest { string machine_id = 1; }
+message ListSessionsResponse { repeated Session sessions = 1; }
+message EndSessionRequest { string machine_id = 1; string session_id = 2; }
+message ResumeCursor { uint64 offset = 1; string incarnation = 2; }
+message Open {
+  string machine_id = 1;
+  string session_id = 2;
+  string expected_engine_digest = 3;
+  ResumeCursor resume_cursor = 4;
+}
+message Input { uint64 sequence = 1; bytes data = 2; }
+message Resize { uint64 sequence = 1; uint32 cols = 2; uint32 rows = 3; }
+message AttachmentRequest {
+  // Exactly one Open first. Controls are processed in stream order thereafter.
+  oneof command { Open open = 1; Input input = 2; Resize resize = 3; }
+}
+enum OpenMode {
+  OPEN_MODE_UNSPECIFIED = 0;
+  OPEN_MODE_RESUME = 1;
+  OPEN_MODE_SNAPSHOT = 2;
+  OPEN_MODE_UNAVAILABLE = 3;
+  OPEN_MODE_ENDED = 4;
+}
+message Cursor { uint32 x = 1; uint32 y = 2; }
+message View { Cursor cursor = 1; uint64 bytes = 2; }
+message Opened {
+  GuestDescription guest = 1;
+  Session session = 2;
+  OpenMode mode = 3;
+  uint64 cut = 4;
+  uint64 snapshot_bytes = 5;
+  // Present only when the ended terminal still has a final screen available.
+  View view = 6;
+  // First retained offset when resuming; distinct from the atomic live cut.
+  uint64 start_offset = 7;
+}
+message SnapshotChunk {
+  // Position is attachment bootstrap-local, not a committed output cursor.
+  uint64 position = 1; bytes data = 2; bool final = 3;
+}
+message ViewChunk { uint64 position = 1; bytes data = 2; bool final = 3; }
+message Output { uint64 next_offset = 1; bytes data = 2; }
+message Resized { uint64 offset = 1; uint32 cols = 2; uint32 rows = 3; }
+message Ack {
+  uint64 sequence = 1;
+  // Accepted means bounded writer admission, never confirmed shell execution.
+  bool accepted = 2;
+  string reason = 3;
+  ErrorDetail error = 4;
+}
+message SessionExited { Session session = 1; }
+message Gap { string reason = 1; }
+message AttachmentEvent {
+  // Guest owns the atomic cut/subscription and ordering. Bootstrap completes
+  // before live output; no relay creates terminal state or replays uncertain input.
+  oneof event {
+    Opened opened = 1;
+    SnapshotChunk snapshot_chunk = 2;
+    ViewChunk view_chunk = 3;
+    Output output = 4;
+    Resized resized = 5;
+    Ack ack = 6;
+    SessionExited session_exited = 7;
+    Gap gap = 8;
+  }
+}

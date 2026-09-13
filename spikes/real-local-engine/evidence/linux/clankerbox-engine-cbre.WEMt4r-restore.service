@@ -1,0 +1,27 @@
+[Unit]
+Description=Isolated engine gate
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Restart=no
+KillMode=control-group
+SendSIGKILL=no
+TimeoutStartSec=240
+TimeoutStopSec=30
+MemoryMax=3G
+CPUQuota=200%
+Environment="HOME=/home/clanker/cbre.WEMt4r/h"
+Environment="XDG_DATA_HOME=/home/clanker/cbre.WEMt4r/d"
+Environment="XDG_CACHE_HOME=/home/clanker/cbre.WEMt4r/c"
+Environment="XDG_CONFIG_HOME=/home/clanker/cbre.WEMt4r/config"
+Environment="XDG_RUNTIME_DIR=/home/clanker/cbre.WEMt4r/r"
+Environment="DOCKER_CONFIG=/home/clanker/cbre.WEMt4r/empty-docker"
+Environment="SMOLVM_AGENT_ROOTFS=/home/clanker/cbre.WEMt4r/agent-rootfs"
+Environment="SMOLVM_LIB_DIR=/home/clanker/clankerbox/versions/1.14.1/lib"
+Environment="LD_LIBRARY_PATH=/home/clanker/clankerbox/versions/1.14.1/lib"
+Environment="SMOLVM_PUBLISH_ADDR=127.0.0.1"
+Environment="SMOLVM_EGRESS_FLOOR=strict"
+Environment="RUST_LOG=smolvm=debug"
+ExecStart=/home/clanker/cbre.WEMt4r/bin/smolvm machine start --name gate-restore --branchable
+StandardOutput=append:/home/clanker/cbre.WEMt4r/restore.log
+StandardError=append:/home/clanker/cbre.WEMt4r/restore.log

@@ -106,11 +106,6 @@ func (c *Controller) callHost(
 	}
 	call, cancel := context.WithTimeout(ctx, operationTimeout)
 	defer cancel()
-	resumeGuest, err := c.suspendGuest(call, req)
-	if err != nil {
-		return model.Response{}, err
-	}
-	defer resumeGuest()
 	resp, err := c.transport.Call(call, host, req)
 	if err != nil {
 		return resp, err

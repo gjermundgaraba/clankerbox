@@ -1,0 +1,48 @@
+{
+  "inherited": {
+    "token": "1891421ea9d8b9bc",
+    "pid": 415,
+    "count": 1
+  },
+  "diverged": [
+    {
+      "token": "1891421ea9d8b9bc",
+      "pid": 415,
+      "count": 2
+    },
+    {
+      "token": "1891421ea9d8b9bc",
+      "pid": 415,
+      "count": 3
+    }
+  ],
+  "disk_independent": true,
+  "capture": "Source resumed after 0.294s; packaging continued in the background\nCheckpointed 'gate-parent' to /home/clanker/cbre.WEMt4r/portable.smolcheckpoint (37 MiB compressed, 1.180s total, 0.294s source pause)\n",
+  "after_capture": {
+    "token": "1891421ea9d8b9bc",
+    "pid": 415,
+    "count": 2
+  },
+  "dependent_source_delete_rejected": "\u001b[2m2026-09-12T18:44:37.150716Z\u001b[0m \u001b[34mDEBUG\u001b[0m starting smolvm \u001b[3mversion\u001b[0m\u001b[2m=\u001b[0m\"1.14.1\"\n\u001b[2m2026-09-12T18:44:37.153021Z\u001b[0m \u001b[34mDEBUG\u001b[0m command failed \u001b[3merror\u001b[0m\u001b[2m=\u001b[0magent operation failed: delete: machine 'gate-parent' is the fork base for 1 clone(s) (gate-child); delete the clones first or use --cascade to remove them too\nError: agent operation failed: delete: machine 'gate-parent' is the fork base for 1 clone(s) (gate-child); delete the clones first or use --cascade to remove them too\n",
+  "cold_parent_with_descendant": true,
+  "source_and_child_deleted": true,
+  "restore1": {
+    "ram": {
+      "token": "1891421ea9d8b9bc",
+      "pid": 415,
+      "count": 2
+    },
+    "disk": "restore-1",
+    "cold_retained": true
+  },
+  "restore2": {
+    "ram": {
+      "token": "1891421ea9d8b9bc",
+      "pid": 415,
+      "count": 2
+    },
+    "disk": "restore-2",
+    "cold_retained": true
+  },
+  "complete": true
+}

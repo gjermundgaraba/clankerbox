@@ -1,0 +1,11 @@
+Traceback (most recent call last):
+  File "/Users/example/ws/pers/clankerbox/spikes/real-local-engine/restore_mac.py", line 29, in <module>
+    require(http(48182)['count']==3,'child lost RAM with source restart');run('machine','stop','--name','gate-parent');run('machine','stop','--name','gate-child');run('machine','delete','--name','gate-child');run('machine','delete','--name','gate-parent')
+                                                                                                                                                                                                                 ~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/example/ws/pers/clankerbox/spikes/real-local-engine/restore_mac.py", line 6, in run
+    if ok and p.returncode:raise RuntimeError(p.stderr+p.stdout)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: 2026-09-12T18:12:49.684951Z DEBUG starting smolvm version="1.14.1"
+2026-09-12T18:12:49.719451Z DEBUG command failed error=agent operation failed: delete: machine 'gate-parent' is the fork base for 1 clone(s) (gate-child); delete the clones first or use --cascade to remove them too
+Error: agent operation failed: delete: machine 'gate-parent' is the fork base for 1 clone(s) (gate-child); delete the clones first or use --cascade to remove them too
+

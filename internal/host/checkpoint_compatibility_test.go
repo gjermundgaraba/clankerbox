@@ -102,13 +102,14 @@ func checkpointSource(t *testing.T, kind string) (*host.Helper, host.Config, *br
 	cfg.Root, err = filepath.EvalSymlinks(root)
 	requireNoError(t, err)
 	p := source.Profile
-	p.Runtime, p.OS, p.Arch, p.ImagePath = runtimeSmolvm, osLinux, archAMD64, "/opt/rootfs"
+	p.Runtime, p.OS, p.Arch, p.ImagePath = runtimeSmolvm, osLinux, archAMD64, testRootfs
 	p.Capabilities = nil
 	requireNoError(t, p.Validate())
 	cfg.Profiles = []model.Profile{p}
+	cfg.HostOS = osLinux
 	cfg.SmolvmPath, cfg.LibraryDir = testSmolvmPath, testSmolvmLibrary
 	source.Profile = p
-	rt := &branchRuntime{machines: map[string]*memoryRuntime{}, key: testKey(t)}
+	rt := &branchRuntime{machines: map[string]*memoryRuntime{}}
 	h, err = host.Open(cfg, rt)
 	requireNoError(t, err)
 	requireStatus(t, h.Execute(t.Context(), source), statusSucceeded)

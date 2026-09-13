@@ -1,0 +1,152 @@
+syntax = "proto3";
+package clankerbox.v1;
+option go_package = "clankerbox/gen/clankerbox/v1;clankerboxv1";
+
+import "google/protobuf/timestamp.proto";
+
+// Public resource DTOs never contain credentials, image paths, or private endpoints.
+message Profile {
+  string id = 1;
+  string os = 2;
+  string arch = 3;
+  string runtime = 4;
+  uint32 cpu = 5;
+  uint64 ram_mib = 6;
+  repeated string capabilities = 7;
+  uint64 storage_gib = 8;
+  uint64 overlay_gib = 9;
+  string image_digest = 10;
+}
+message Host {
+  string id = 1;
+  repeated string profile_ids = 2;
+  uint32 cpu = 3;
+  uint64 ram_mib = 4;
+  uint32 used_cpu = 5;
+  uint64 used_ram_mib = 6;
+  // Remaining capacity may be negative after configured capacity is reduced.
+  int64 remaining_cpu = 7;
+  int64 remaining_ram_mib = 8;
+}
+enum MachineState {
+  MACHINE_STATE_UNSPECIFIED = 0;
+  MACHINE_STATE_RUNNING = 1;
+  MACHINE_STATE_STOPPED = 2;
+  MACHINE_STATE_UNKNOWN = 3;
+  MACHINE_STATE_PREPARING = 4;
+}
+message GuestStatus {
+  string status = 1;
+  string reason = 2;
+  string incarnation = 3;
+  string daemon_version = 4;
+  string engine_digest = 5;
+  // The single supported RPC schema, not negotiation of legacy carriers.
+  string schema = 6;
+}
+message Machine {
+  string id = 1;
+  string name = 2;
+  string profile_id = 3;
+  string host_id = 4;
+  Profile profile = 5;
+  MachineState state = 6;
+  MachineState desired_state = 7;
+  int64 generation = 8;
+  int64 accepted_generation = 9;
+  bool prepared = 10;
+  bool deleted = 11;
+  google.protobuf.Timestamp observed_at = 12;
+  bool observation_stale = 13;
+  string observation_error = 14;
+  google.protobuf.Timestamp created_at = 15;
+  map<string,string> labels = 16;
+  GuestStatus guest = 17;
+  string source_machine_id = 18;
+  string checkpoint_id = 19;
+}
+enum OperationAction {
+  OPERATION_ACTION_UNSPECIFIED = 0;
+  OPERATION_ACTION_CREATE = 1;
+  OPERATION_ACTION_START = 2;
+  OPERATION_ACTION_STOP = 3;
+  OPERATION_ACTION_DELETE = 4;
+  OPERATION_ACTION_FORK = 5;
+  OPERATION_ACTION_CAPTURE_CHECKPOINT = 6;
+  OPERATION_ACTION_RESTORE_CHECKPOINT = 7;
+  OPERATION_ACTION_DELETE_CHECKPOINT = 8;
+}
+enum OperationStatus {
+  OPERATION_STATUS_UNSPECIFIED = 0;
+  OPERATION_STATUS_PENDING = 1;
+  OPERATION_STATUS_RUNNING = 2;
+  OPERATION_STATUS_UNRESOLVED = 3;
+  OPERATION_STATUS_SUCCEEDED = 4;
+  OPERATION_STATUS_FAILED = 5;
+}
+message Operation {
+  string id = 1;
+  string machine_id = 2;
+  string checkpoint_id = 3;
+  OperationAction action = 4;
+  int64 generation = 5;
+  OperationStatus status = 6;
+  string error = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+enum CheckpointStatus {
+  CHECKPOINT_STATUS_UNSPECIFIED = 0;
+  CHECKPOINT_STATUS_PENDING = 1;
+  CHECKPOINT_STATUS_PUBLISHED = 2;
+  CHECKPOINT_STATUS_UNRESOLVED = 3;
+  CHECKPOINT_STATUS_FAILED = 4;
+  CHECKPOINT_STATUS_DELETING = 5;
+  CHECKPOINT_STATUS_DELETED = 6;
+}
+message Checkpoint {
+  string id = 1;
+  string kind = 2;
+  string source_machine_id = 3;
+  int64 source_generation = 4;
+  string host_id = 5;
+  Profile profile = 6;
+  google.protobuf.Timestamp created_at = 7;
+  CheckpointStatus status = 8;
+  string runtime_pin = 9;
+  map<string,string> labels = 10;
+}
+// Carried as a Connect error detail alongside a standard RPC status code.
+enum ErrorReason {
+  ERROR_REASON_UNSPECIFIED = 0;
+  ERROR_REASON_INVALID = 1;
+  ERROR_REASON_NOT_FOUND = 2;
+  ERROR_REASON_CONFLICT = 3;
+  ERROR_REASON_UNSUPPORTED = 4;
+  ERROR_REASON_PREREQUISITE = 5;
+  ERROR_REASON_CAPACITY = 6;
+  ERROR_REASON_UNAVAILABLE = 7;
+  ERROR_REASON_UNAUTHENTICATED = 8;
+  ERROR_REASON_PERMISSION_DENIED = 9;
+  ERROR_REASON_IDENTITY_MISMATCH = 10;
+  ERROR_REASON_ENGINE_MISMATCH = 11;
+  ERROR_REASON_EXPIRED = 12;
+  ERROR_REASON_NOT_RUNNING = 13;
+  ERROR_REASON_TOO_LARGE = 14;
+  ERROR_REASON_ALREADY_ATTACHED = 15;
+  ERROR_REASON_INTERNAL = 16;
+  ERROR_REASON_IDEMPOTENCY_CONFLICT = 17;
+  ERROR_REASON_NAME_CONFLICT = 18;
+  ERROR_REASON_OPERATION_PENDING = 19;
+  ERROR_REASON_DEPENDENCY = 20;
+  ERROR_REASON_CONFIGURATION = 21;
+  ERROR_REASON_RECONCILIATION_REQUIRED = 22;
+}
+message ErrorDetail {
+  ErrorReason reason = 1;
+  bool retryable = 2;
+  string resource_id = 3;
+  string operation_id = 4;
+  // Retryable never authorizes replaying uncertain terminal input.
+  string message = 5;
+}

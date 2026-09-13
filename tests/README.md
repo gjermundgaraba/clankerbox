@@ -34,9 +34,9 @@ commands fail locally before contacting the controller. Larger payload transfer
 is not supported by this adapter.
 
 `session-run --config FILE --expect-stopped MACHINE_ID` bypasses local readiness
-checks and makes an authenticated HTTP/1.1 session upgrade request. It succeeds
-only on HTTP 409 with error code `prerequisite`; transport/authentication errors,
-other responses and an accepted upgrade all fail. The lifecycle harness uses
+checks and makes an authenticated generated SessionService request over HTTP/2. It succeeds
+only on the typed `prerequisite` error; transport/authentication errors,
+other responses and an accepted attachment all fail. The lifecycle harness uses
 this probe after confirming the machine is stopped.
 
 Both live harnesses create `--result` exclusively and persist complete report
@@ -53,10 +53,15 @@ known, settled disposable machine unless `--keep` is set; checkpoint failures
 retain all named objects without automatic cleanup.
 
 `session-run --config FILE --expect-delete-dependency MACHINE_ID` makes one
-bearer-authenticated source-delete request and succeeds only on **HTTP 409 with
-error code `dependency`**. Authentication/transport errors, other status codes
-(including 503) and unexpectedly accepted operations fail qualification. The
+generated bearer-authenticated source-delete request and succeeds only on
+the typed `dependency` error. Authentication/transport errors, other error codes and unexpectedly accepted operations fail qualification. The
 checkpoint harness journals the probe intent first and records any unexpectedly
 accepted operation emitted by the adapter before failing. This is a destructive
 negative test: use only the explicitly retained disposable source with its live
 descendant, never an existing workload. It is not a product CLI/API command.
+
+`session-run --config FILE --describe-guest MACHINE_ID` checks the complete
+controller/host/guest route and returns the verified machine identity and manager
+incarnation as Protobuf JSON with snake_case fields. Cold starts retain machine
+identity and replace the incarnation; RAM forks/restores retain the incarnation
+and publish a fresh machine identity.

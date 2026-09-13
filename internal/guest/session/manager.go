@@ -41,7 +41,10 @@ const _ uint64 = uint64(endedRetention - createHorizon - createSkew)
 type Config struct {
 	StateDir string
 	// DefaultCwd is the initial directory when a session omits cwd.
-	DefaultCwd    string
+	DefaultCwd string
+	// Workload separates PTY credentials/environment from a privileged daemon.
+	// Nil preserves the ordinary same-user guest process behavior.
+	Workload      *Workload
 	Loader        *vt.Loader
 	Incarnation   string
 	DaemonVersion string
@@ -108,6 +111,16 @@ func (a *Attachment) Stop() {
 // New loads manifests, converts unfinished records to lost, and starts the
 // retention cleanup loop.
 func New(ctx context.Context, cfg Config) (*Manager, error) {
+	if cfg.Workload != nil {
+		if err := cfg.Workload.validate(); err != nil {
+			return nil, err
+		}
+		workload := *cfg.Workload
+		cfg.Workload = &workload
+		if cfg.DefaultCwd == "" {
+			cfg.DefaultCwd = workload.Home
+		}
+	}
 	if cfg.MaxSessions <= 0 {
 		cfg.MaxSessions = DefaultMaxSessions
 	}
@@ -129,6 +142,9 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 		records: make(map[string]manifest),
 		stop:    make(chan struct{}),
 		stopped: make(chan struct{}),
+	}
+	if cfg.Workload != nil {
+		m.user = cfg.Workload.User
 	}
 	manifests, err := readManifests(cfg.StateDir, cfg.Log)
 	if err != nil {
@@ -168,7 +184,6 @@ func (m *Manager) adoptManifest(record manifest) {
 func (m *Manager) Hello() protocol.Hello {
 	return protocol.Hello{
 		Event:         protocol.EventHello,
-		Protocol:      protocol.Revision,
 		Incarnation:   m.cfg.Incarnation,
 		BootID:        m.bootID,
 		DaemonVersion: m.cfg.DaemonVersion,
@@ -229,6 +244,7 @@ func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
 		record:      record,
 		fingerprint: fingerprint,
 		env:         args.Env,
+		workload:    m.cfg.Workload,
 		stateDir:    m.cfg.StateDir,
 		ringSize:    m.cfg.RingSize,
 		loader:      m.cfg.Loader,
@@ -246,6 +262,9 @@ func (m *Manager) newRecord(args protocol.CreateArgs) protocol.Session {
 	argv := args.Argv
 	if len(argv) == 0 {
 		argv = defaultShell()
+		if m.cfg.Workload != nil {
+			argv = []string{"/bin/sh", "-l"}
+		}
 	}
 	cwd := args.Cwd
 	if cwd == "" {
@@ -254,7 +273,11 @@ func (m *Manager) newRecord(args protocol.CreateArgs) protocol.Session {
 			cwd = homeDir()
 		}
 	} else if !filepath.IsAbs(cwd) {
-		cwd = filepath.Join(homeDir(), cwd)
+		home := homeDir()
+		if m.cfg.Workload != nil {
+			home = m.cfg.Workload.Home
+		}
+		cwd = filepath.Join(home, cwd)
 	}
 	return protocol.Session{
 		ID:           args.SessionID,

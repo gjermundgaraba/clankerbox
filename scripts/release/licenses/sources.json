@@ -1,0 +1,44 @@
+[
+  {
+    "component": "smol-machines/libkrun",
+    "ref": "f4cb46a5e6189872394d205494c14e9a6974816c",
+    "source": "https://github.com/smol-machines/libkrun/blob/f4cb46a5e6189872394d205494c14e9a6974816c/LICENSE",
+    "file": "libkrun-APACHE-2.0",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "component": "smol-machines/libkrunfw",
+    "ref": "55bb7c5273178826240b39e907475fb6011afd8e",
+    "source": "https://github.com/smol-machines/libkrunfw/blob/55bb7c5273178826240b39e907475fb6011afd8e/LICENSE-GPL-2.0-only",
+    "file": "libkrunfw-GPL-2.0-only",
+    "sha256": "f6b78c087c3ebdf0f3c13415070dd480a3f35d8fc76f3d02180a407c1c812f79"
+  },
+  {
+    "component": "smol-machines/libkrunfw",
+    "ref": "55bb7c5273178826240b39e907475fb6011afd8e",
+    "source": "https://github.com/smol-machines/libkrunfw/blob/55bb7c5273178826240b39e907475fb6011afd8e/LICENSE-LGPL-2.1-only",
+    "file": "libkrunfw-LGPL-2.1-only",
+    "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+  },
+  {
+    "component": "KhronosGroup/MoltenVK",
+    "ref": "main",
+    "source": "https://github.com/KhronosGroup/MoltenVK/blob/main/LICENSE",
+    "file": "MoltenVK-APACHE-2.0",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  {
+    "component": "anholt/libepoxy",
+    "ref": "master",
+    "source": "https://github.com/anholt/libepoxy/blob/master/COPYING",
+    "file": "libepoxy-MIT",
+    "sha256": "8d5144666f9c4df9bbd69b8900086d5979259152a1060421cdcc0fb9061a1c12"
+  },
+  {
+    "component": "virglrenderer",
+    "ref": "main",
+    "source": "https://gitlab.freedesktop.org/virgl/virglrenderer/-/raw/main/COPYING",
+    "file": "virglrenderer-COPYING",
+    "sha256": "3b32caf16e2402c2aff2b716858713f3e1feded85c25e71bf829816ee5009402"
+  }
+]

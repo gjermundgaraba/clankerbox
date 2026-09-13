@@ -2,10 +2,8 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/urfave/cli/v3"
 
@@ -15,48 +13,37 @@ import (
 func (streams commandStreams) addDevCommands(root *cli.Command) {
 	root.Commands = append(root.Commands, &cli.Command{
 		Name:        "dev",
-		Usage:       "Run a local controller and real terminal sessions on this computer",
-		Description: "Provides one local machine. Shells run as your user. Ctrl-C stops the controller; dev stop ends retained shells.",
+		Usage:       "Run an owned local VM environment",
+		Description: "Start a persistent native host service and foreground controller. Ctrl-C preserves VMs; dev stop stops VMs, and dev destroy deletes the owned environment.",
 		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:  "state-dir",
-				Value: dev.DefaultStateDir(),
-				Usage: "Retain the local environment in DIRECTORY",
-			},
-			&cli.StringFlag{
-				Name:  "workspace",
-				Usage: "Initial shell DIRECTORY (default: retained environment workspace)",
-			},
-			&cli.StringFlag{Name: "listen", Value: "127.0.0.1:4780", Usage: "Loopback HTTP ADDRESS"},
+			&cli.StringFlag{Name: "state-dir", Value: dev.DefaultStateDir(), Usage: "Owned environment DIRECTORY"},
+			&cli.StringFlag{Name: "listen", Value: "127.0.0.1:0", Usage: "Loopback controller ADDRESS"},
+			&cli.StringFlag{Name: "bundle", Usage: "Verified runtime bundle MANIFEST"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() != 0 {
-				return errors.New("dev takes no arguments; use dev stop to end retained shells")
+				return errors.New("dev takes no arguments")
 			}
 			return dev.Run(
 				ctx,
 				dev.Options{
-					StateDir:  cmd.String("state-dir"),
-					Workspace: cmd.String("workspace"),
-					Listen:    cmd.String("listen"),
+					StateDir: cmd.String("state-dir"),
+					Listen:   cmd.String("listen"),
+					Bundle:   cmd.String("bundle"),
 				},
-				func(conn dev.Connection) error {
+				func(c dev.Connection) error {
 					if cmd.Bool("json") {
-						return jsonOut(streams.Out, conn)
+						return jsonOut(streams.Out, c)
 					}
-					config, err := json.Marshal(conn.Target)
-					if err != nil {
-						return err
-					}
-					quoted := "'" + strings.ReplaceAll(string(config), "'", "'\"'\"'") + "'"
-					_, err = fmt.Fprintf(
+					_, err := fmt.Fprintf(
 						streams.Out,
-						"Local machine ready: %s\nController: %s\nWorkspace: %s\nShells run as your local user.\n\nFor clankerdesk, run in its server terminal:\nexport CLANKERDESK_CLANKERBOX=%s\n\nSelect the local machine and Use for terminals.\nCtrl-C stops this controller and preserves shells. Then run:\nclankerbox dev --state-dir %s stop\n",
-						conn.MachineID,
-						conn.URL,
-						conn.Workspace,
-						quoted,
-						"'"+strings.ReplaceAll(conn.StateDir, "'", "'\"'\"'")+"'",
+						"Local VM environment ready: %s\nController: %s\nCLI config: %s\nClankerdesk target: %s\nDefault host/profile: %s / %s\nCreate machines through the ordinary API or CLI. Ctrl-C preserves the host service and VMs.\n",
+						c.StateDir,
+						c.URL,
+						c.ClientConfig,
+						c.ClankerdeskConfig,
+						c.DefaultHost,
+						c.DefaultProfile,
 					)
 					return err
 				},
@@ -64,8 +51,8 @@ func (streams commandStreams) addDevCommands(root *cli.Command) {
 		},
 		Commands: []*cli.Command{
 			{
-				Name:  "stop",
-				Usage: "End retained local shells after stopping the dev controller",
+				Name:  stopCommandName,
+				Usage: "Stop retained VMs and host service",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					if cmd.NArg() != 0 {
 						return errors.New("dev stop takes no arguments")
@@ -73,19 +60,16 @@ func (streams commandStreams) addDevCommands(root *cli.Command) {
 					return dev.Stop(ctx, cmd.String("state-dir"))
 				},
 			},
-		},
-	}, &cli.Command{
-		Name:   "_dev-guest",
-		Hidden: true,
-		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "state-dir", Required: true},
-			&cli.StringFlag{Name: "workspace", Required: true},
-		},
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			if cmd.NArg() != 0 {
-				return errors.New("unexpected guest arguments")
-			}
-			return dev.ServeGuest(ctx, cmd.String("state-dir"), cmd.String("workspace"))
+			{
+				Name:  "destroy",
+				Usage: "Delete all owned VMs, checkpoints, and environment state",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.NArg() != 0 {
+						return errors.New("dev destroy takes no arguments")
+					}
+					return dev.Destroy(ctx, cmd.String("state-dir"))
+				},
+			},
 		},
 	})
 }

@@ -8,17 +8,6 @@ import (
 	"clankerbox/internal/model"
 )
 
-func resourceList(command string) any {
-	switch command {
-	case "profiles":
-		return &[]model.Profile{}
-	case "hosts":
-		return &[]model.HostStatus{}
-	default:
-		return &[]model.Machine{}
-	}
-}
-
 func (runner commandRunner) output(value any) error {
 	if runner.structured {
 		return jsonOut(runner.streams.Out, value)

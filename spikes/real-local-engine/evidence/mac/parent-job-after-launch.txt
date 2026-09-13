@@ -1,0 +1,78 @@
+gui/501/org.clankerbox.engine-gate.cbre-0bkjipap.parent = {
+	active count = 0
+	path = /private/tmp/cbre-0bkjipap/parent.plist
+	type = LaunchAgent
+	state = not running
+
+	program = /Users/example/ws/pers/clankerbox/.work/real-local-engine/target/debug/smolvm
+	arguments = {
+		/Users/example/ws/pers/clankerbox/.work/real-local-engine/target/debug/smolvm
+		machine
+		start
+		--name
+		gate-parent
+		--branchable
+	}
+
+	stdout path = /private/tmp/cbre-0bkjipap/launch-parent.log
+	stderr path = /private/tmp/cbre-0bkjipap/launch-parent.log
+	inherited environment = {
+		SSH_AUTH_SOCK => /var/run/com.apple.launchd.AsXG59ZBbd/Listeners
+	}
+
+	default environment = {
+		PATH => /usr/bin:/bin:/usr/sbin:/sbin
+	}
+
+	environment = {
+		OSLogRateLimit => 64
+		SMOLVM_EGRESS_FLOOR => strict
+		SMOLVM_BOOT_DEBUG => 1
+		DYLD_LIBRARY_PATH => /Users/example/ws/pers/clankerbox/.work/real-local-engine/smolvm-1.14.1-darwin-arm64/lib
+		XDG_CACHE_HOME => /private/tmp/cbre-0bkjipap/c
+		SMOLVM_AGENT_ROOTFS => /private/tmp/cbre-0bkjipap/agent-rootfs
+		DOCKER_CONFIG => /private/tmp/cbre-0bkjipap/empty-docker
+		XDG_DATA_HOME => /private/tmp/cbre-0bkjipap/d
+		RUST_LOG => smolvm=debug
+		SMOLVM_PUBLISH_ADDR => 127.0.0.1
+		HOME => /private/tmp/cbre-0bkjipap/h
+		XDG_RUNTIME_DIR => /private/tmp/cbre-0bkjipap/r
+		XDG_CONFIG_HOME => /private/tmp/cbre-0bkjipap/config
+		SMOLVM_LIB_DIR => /Users/example/ws/pers/clankerbox/.work/real-local-engine/smolvm-1.14.1-darwin-arm64/lib
+		XPC_SERVICE_NAME => org.clankerbox.engine-gate.cbre-0bkjipap.parent
+	}
+
+	domain = gui/501 [100026]
+	domain umask = 27
+	asid = 100026
+	minimum runtime = 10
+	exit timeout = 5
+	runs = 1
+	last exit code = 0
+
+	resource coalition = {
+		ID = 17749
+		type = resource
+		state = active
+		active count = 1
+		name = org.clankerbox.engine-gate.cbre-0bkjipap.parent
+	}
+
+	jetsam coalition = {
+		ID = 17750
+		type = jetsam
+		state = active
+		active count = 1
+		name = org.clankerbox.engine-gate.cbre-0bkjipap.parent
+	}
+
+	spawn type = daemon (3)
+	jetsam priority = 40
+	jetsam memory limit (active) = (unlimited)
+	jetsam memory limit (inactive) = (unlimited)
+	jetsamproperties category = daemon
+	jetsam thread limit = 32
+	cpumon = default
+
+	properties = abandon process group | inferred program
+}

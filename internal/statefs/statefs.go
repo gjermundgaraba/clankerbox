@@ -218,12 +218,7 @@ func (d *Dir) openEntry(name string, flags int) (*os.File, error) {
 	var descriptor int
 	var openErr error
 	err = connection.Control(func(fd uintptr) {
-		descriptor, openErr = unix.Openat(
-			int(fd),
-			name,
-			flags|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC,
-			privateFile,
-		)
+		descriptor, openErr = openRelativeEntry(int(fd), name, flags)
 	})
 	closeErr := directory.Close()
 	if err != nil || openErr != nil {
@@ -234,6 +229,22 @@ func (d *Dir) openEntry(name string, flags int) (*os.File, error) {
 		return nil, errors.Join(closeErr, file.Close())
 	}
 	return file, nil
+}
+
+// Concurrent non-exclusive O_CREAT opens can return ENOENT on macOS when
+// another opener creates the same entry. An exclusive create followed by a
+// separate existing-entry open makes that first-creation race explicit. Both
+// paths retain the kernel's no-symlink guarantee and descriptor validation.
+func openRelativeEntry(directory int, name string, flags int) (int, error) {
+	flags |= unix.O_NOFOLLOW | unix.O_NONBLOCK | unix.O_CLOEXEC
+	if flags&unix.O_CREAT == 0 || flags&unix.O_EXCL != 0 {
+		return unix.Openat(directory, name, flags, privateFile)
+	}
+	fd, err := unix.Openat(directory, name, flags|unix.O_EXCL, privateFile)
+	if !errors.Is(err, unix.EEXIST) {
+		return fd, err
+	}
+	return unix.Openat(directory, name, flags&^unix.O_CREAT, privateFile)
 }
 
 // Close releases the directory handle. It does not release separately held locks.
@@ -317,14 +328,14 @@ func (l *Lock) Close() error { return l.file.Close() }
 func (d *Dir) Lock(name string, nonblock bool) (*Lock, error) {
 	file, err := d.openFile(name, os.O_CREATE|os.O_RDWR, true)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open lock: %w", err)
 	}
 	operation := syscall.LOCK_EX
 	if nonblock {
 		operation |= syscall.LOCK_NB
 	}
 	if err = syscall.Flock(int(file.Fd()), operation); err != nil {
-		return nil, errors.Join(err, file.Close())
+		return nil, errors.Join(fmt.Errorf("flock: %w", err), file.Close())
 	}
 	return &Lock{file: file}, nil
 }

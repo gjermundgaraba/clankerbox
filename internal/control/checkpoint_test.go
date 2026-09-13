@@ -2,10 +2,7 @@ package control_test
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"clankerbox/internal/control"
@@ -17,7 +14,7 @@ func TestCheckpointIntentDuplicatesAndReservations(t *testing.T) {
 	c, tr, in, _ := setupControl(t)
 	defer closeTest(t, c)
 	ctx := context.Background()
-	child := model.ChildInput{Name: "child"}
+	child := model.ChildInput{Name: fixtureChild}
 	source, fork, cp := captureAfterReservedFork(t, c, tr, in, child)
 	// Stop the first child to make space for two independent restores.
 	mustMutate(t, c, fork.MachineID, "stop", "stop-child")
@@ -89,58 +86,18 @@ func TestCaptureMissingPublicationRemainsUnresolved(t *testing.T) {
 	_, err = c.Mutate(ctx, source.MachineID, "delete", "delete")
 	expectCode(t, err, "operation_pending")
 }
-func TestCheckpointHTTPRejectsPathsAndReportsResources(t *testing.T) {
-	t.Parallel()
-	c, _, in, _ := setupControl(t)
-	defer closeTest(t, c)
-	source := mustCreate(t, c, in, "create")
-	mustMutate(t, c, source.MachineID, "stop", "stop")
-	token := strings.Repeat("x", 32)
-	handler, err := c.Handler([]byte(token))
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := func(method, path, body string) *httptest.ResponseRecorder {
-		r := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
-		r.Header.Set("Authorization", "Bearer "+token)
-		r.Header.Set("Idempotency-Key", "http")
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, r)
-		return w
-	}
-	if w := request("POST", "/v1/machines/"+source.MachineID+"/checkpoint", `{"output":"/tmp/caller"}`); w.Code != 400 {
-		t.Fatal(w.Code, w.Body.String())
-	}
-	w := request("POST", "/v1/machines/"+source.MachineID+"/checkpoint", `{}`)
-	if w.Code != 202 {
-		t.Fatal(w.Code, w.Body.String())
-	}
-	var op model.Operation
-	if err = json.Unmarshal(w.Body.Bytes(), &op); err != nil || op.CheckpointID == "" {
-		t.Fatal(err, w.Body.String())
-	}
-	for _, path := range []string{"/v1/checkpoints", "/v1/checkpoints/" + op.CheckpointID} {
-		if response := request(
-			"GET",
-			path,
-			"",
-		); response.Code != 200 ||
-			!strings.Contains(response.Body.String(), op.CheckpointID) {
-			t.Fatal(response.Code, response.Body.String())
-		}
-	}
-}
+
 func TestLinuxControllerDependencyAndUnavailableSource(t *testing.T) {
 	t.Parallel()
 	cfg := config()
 	cfg.Profiles[0] = model.Profile{
-		ID:        "linux-v1",
+		ID:        fixtureLinuxProfile,
 		Runtime:   smolvmRuntime,
-		OS:        "linux",
-		Arch:      "amd64",
+		OS:        fixtureLinuxOS,
+		Arch:      fixtureAMD64,
 		CPU:       2,
 		RAMMiB:    2048,
-		ImagePath: "/opt/rootfs",
+		ImagePath: fixtureRootfs,
 	}
 	cfg.Hosts[0].ProfileIDs = []string{cfg.Profiles[0].ID}
 	c, tr, in, _ := setupControlConfig(t, cfg)
@@ -224,7 +181,7 @@ func captureAfterReservedFork(
 	}
 	tr.unavailable = false
 	changed := child
-	changed.Name = "different"
+	changed.Name = fixtureDifferent
 	if _, err = c.Derive(ctx, "fork", source.MachineID, "fork", changed); err == nil {
 		t.Fatal("idempotency accepted changed input")
 	}
@@ -271,7 +228,7 @@ func TestDerivationRejectsLabelsBeyondTheLimitAfterInheritance(t *testing.T) {
 	}
 	mustMutate(t, c, source.MachineID, "stop", "stop")
 	child := model.ChildInput{
-		Name:   "child",
+		Name:   fixtureChild,
 		Labels: map[string]string{"extra": "v"},
 	}
 	_, err := c.Derive(ctx, "fork", source.MachineID, "fork-overflow", child)
