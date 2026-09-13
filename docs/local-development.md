@@ -18,7 +18,8 @@ templates, a guest image and profiles.
 [Release packaging](../scripts/release/README.md) describes how bundles are
 assembled.
 
-A release archive places `clankerbox` beside `bundle.json`. Extract it with
+A [release archive](https://github.com/gjermundgaraba/clankerbox/releases)
+places `clankerbox` beside `bundle.json`. Extract it with
 permissions preserved into a directory that other users cannot modify:
 
 ```sh
@@ -34,13 +35,10 @@ takes the manifest explicitly:
 clankerbox dev --bundle /absolute/path/to/bundle.json
 ```
 
-A CLI built with `DefaultBundleURL` and `DefaultBundleSHA256` set downloads its
-archive over HTTPS, verifies the digest and caches the content. Without an
-adjacent, explicit or pinned bundle, `dev` fails rather than picking a runtime
-on its own.
+Without an adjacent or explicit bundle, `dev` fails rather than picking a
+runtime on its own.
 
-Every payload is checked against the manifest before starting, and extraction
-rejects path traversal and escaping links. On macOS the CLI checks the runtime's
+Every payload is checked against the manifest before starting. On macOS the CLI checks the runtime's
 hypervisor entitlement and that a launchd GUI session is logged in. On Linux it
 needs `/dev/kvm` and a running systemd user manager. A failing preflight has to
 be fixed; `dev` does not fall back to emulation or change host privileges.
@@ -65,7 +63,6 @@ is given; non-loopback addresses are refused. When ready, the CLI writes:
 | --- | --- |
 | `environment.json` | Ownership, namespace and the bundle digest. |
 | `client.json` | CLI config: origin, token file and default host/profile. |
-| `clankerdesk.json` | Connection target for an application server: origin, token path and creation defaults. |
 | `connection.json` | Readiness metadata and paths to the files above. |
 | `token` | Bearer token, readable only by the owner. |
 
@@ -126,7 +123,7 @@ without touching the environment.
 
 ## Testing
 
-Unit tests cover ownership, bundle extraction, state binding, supervision and
+Unit tests cover ownership, bundle verification, state binding, supervision and
 teardown ordering. The guest qualification in `protocol/test` and the live
 harnesses in [tests](../tests/README.md) exercise real VMs: workload isolation,
 PTY and memory continuity across RAM forks and restores, identity rebinding and

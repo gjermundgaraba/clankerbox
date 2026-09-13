@@ -27,7 +27,7 @@ func isolatedEnvironment(t *testing.T) *environment {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env, err := openEnvironment(t.Context(), Options{StateDir: filepath.Join(home, "env"), Bundle: makeBundle(t)}, true)
+	env, err := openEnvironment(Options{StateDir: filepath.Join(home, "env"), Bundle: makeBundle(t)}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,10 +44,10 @@ func TestEnvironmentRejectsDifferentBundleAndAcceptsRelocatedContent(t *testing.
 		t.Fatal(err)
 	}
 	env.close()
-	if _, err := openEnvironment(t.Context(), Options{StateDir: env.StateDir}, false); err == nil || !strings.Contains(err.Error(), env.BundleDigest) {
+	if _, err := openEnvironment(Options{StateDir: env.StateDir}, false); err == nil || !strings.Contains(err.Error(), env.BundleDigest) {
 		t.Fatalf("missing artifact did not identify required bundle: %v", err)
 	}
-	restored, err := openEnvironment(t.Context(), Options{StateDir: env.StateDir, Bundle: filepath.Join(next, bundleManifestName)}, false)
+	restored, err := openEnvironment(Options{StateDir: env.StateDir, Bundle: filepath.Join(next, bundleManifestName)}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestEnvironmentRejectsDifferentBundleAndAcceptsRelocatedContent(t *testing.
 	if err = os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = openEnvironment(t.Context(), Options{StateDir: env.StateDir, Bundle: path}, false)
+	_, err = openEnvironment(Options{StateDir: env.StateDir, Bundle: path}, false)
 	if err == nil || !strings.Contains(err.Error(), "explicit dev destroy") {
 		t.Fatalf("changed bundle accepted: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestInitializationPublishesEnvironmentProofAndResumes(t *testing.T) {
 	// This is the durable interruption point before prepare writes service config,
 	// copied guest, token, and controller config. Reopening resumes those steps.
 	env.close()
-	restored, err := openEnvironment(t.Context(), Options{StateDir: env.StateDir}, true)
+	restored, err := openEnvironment(Options{StateDir: env.StateDir}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestRelocationRepairsStoppedAndRunningServiceLocators(t *testing.T) {
 				t.Fatal(err)
 			}
 			env.close()
-			restored, err := openEnvironment(t.Context(), Options{StateDir: env.StateDir, Bundle: filepath.Join(next, bundleManifestName)}, false)
+			restored, err := openEnvironment(Options{StateDir: env.StateDir, Bundle: filepath.Join(next, bundleManifestName)}, false)
 			if err != nil {
 				t.Fatal(err)
 			}

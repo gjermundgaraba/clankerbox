@@ -1,38 +1,19 @@
 package dev
 
 import (
-	"archive/tar"
-	"compress/gzip"
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"clankerbox/internal/statefs"
 )
-
-// DefaultBundleURL pins the immutable runtime archive in release builds.
-//
-//nolint:gochecknoglobals // Release tooling supplies the immutable pin with Go linker -X.
-var DefaultBundleURL string
-
-// DefaultBundleSHA256 authenticates the entire pinned archive before extraction.
-//
-//nolint:gochecknoglobals // Release tooling supplies the immutable pin with Go linker -X.
-var DefaultBundleSHA256 string
-
-const maxArchiveBytes int64 = 16 << 30
-const maxExpandedBytes int64 = 32 << 30
 
 // BundleFile authenticates payload type, POSIX permissions, and file/link content.
 type BundleFile struct {
@@ -224,7 +205,7 @@ func (b Bundle) verifyEntrypoints(listed map[string]bool) error {
 	}
 	return nil
 }
-func resolveBundle(ctx context.Context, explicit string) (Bundle, error) {
+func resolveBundle(explicit string) (Bundle, error) {
 	if explicit != "" {
 		return verifyBundle(explicit)
 	}
@@ -244,213 +225,10 @@ func resolveBundle(ctx context.Context, explicit string) (Bundle, error) {
 	if !errors.Is(err, os.ErrNotExist) {
 		return Bundle{}, err
 	}
-	if DefaultBundleURL == "" || len(DefaultBundleSHA256) != sha256.Size*2 {
-		return Bundle{}, errors.New(
-			"no pinned runtime bundle; pass --bundle /path/to/bundle.json or install a release CLI",
-		)
-	}
-	parsed, err := url.Parse(DefaultBundleURL)
-	if err != nil || parsed.Scheme != httpsScheme || parsed.Host == "" || parsed.User != nil {
-		return Bundle{}, errors.New("release bundle requires a pinned HTTPS URL")
-	}
-	if _, err = hex.DecodeString(DefaultBundleSHA256); err != nil {
-		return Bundle{}, err
-	}
-	return cachedBundle(ctx, parsed.String())
-}
-func cachedBundle(ctx context.Context, source string) (Bundle, error) {
-	home, err := os.UserCacheDir()
-	if err != nil {
-		return Bundle{}, err
-	}
-	cachePath := filepath.Join(home, "clankerbox", "bundles")
-	cache, err := statefs.Open(cachePath)
-	if err != nil {
-		return Bundle{}, err
-	}
-	defer func() { _ = cache.Close() }()
-	lock, err := cache.Lock("download.lock", false)
-	if err != nil {
-		return Bundle{}, err
-	}
-	defer func() { _ = lock.Close() }()
-	final := filepath.Join(cachePath, strings.ToLower(DefaultBundleSHA256))
-	_, err = os.Lstat(final)
-	if err == nil {
-		return verifyBundle(filepath.Join(final, bundleManifestName))
-	}
-	if !errors.Is(err, os.ErrNotExist) {
-		return Bundle{}, err
-	}
-	tmp, err := os.MkdirTemp(cachePath, ".download-")
-	if err != nil {
-		return Bundle{}, err
-	}
-	defer func() { _ = os.RemoveAll(tmp) }()
-	archive := filepath.Join(tmp, "bundle.tgz")
-	if err = downloadBundle(ctx, source, archive); err != nil {
-		return Bundle{}, err
-	}
-	staging := filepath.Join(tmp, "expanded")
-	if err = os.Mkdir(staging, 0700); err != nil {
-		return Bundle{}, err
-	}
-	if err = extractBundle(archive, staging); err != nil {
-		return Bundle{}, err
-	}
-	verified, err := verifyBundle(filepath.Join(staging, bundleManifestName))
-	if err != nil {
-		return Bundle{}, err
-	}
-	if err = os.Rename(staging, final); err != nil {
-		return Bundle{}, err
-	}
-	if err = statefs.Sync(cachePath); err != nil {
-		return Bundle{}, err
-	}
-	verified.root = final
-	verified.manifest = filepath.Join(final, bundleManifestName)
-	return verified, nil
-}
-func downloadBundle(ctx context.Context, source, destination string) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
-	if err != nil {
-		return err
-	}
-	httpClient := &http.Client{
-		Timeout: downloadTimeout,
-		CheckRedirect: func(r *http.Request, via []*http.Request) error {
-			if len(via) > maxDownloadRedirects || r.URL.Scheme != httpsScheme || r.URL.User != nil {
-				return errors.New("unsafe release redirect")
-			}
-			return nil
-		},
-	}
-	response, err := httpClient.Do(request)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
-		return fmt.Errorf("bundle download HTTP %d", response.StatusCode)
-	}
-	//nolint:gosec // Destination is inside the newly created private download staging directory.
-	file, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-	if err != nil {
-		return err
-	}
-	hash := sha256.New()
-	size, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, maxArchiveBytes+1))
-	err = errors.Join(err, file.Close())
-	if err != nil {
-		return err
-	}
-	if size > maxArchiveBytes {
-		return errors.New("bundle archive exceeds size limit")
-	}
-	if hex.EncodeToString(hash.Sum(nil)) != strings.ToLower(DefaultBundleSHA256) {
-		return errors.New("release bundle SHA256 mismatch")
-	}
-	return nil
-}
-func extractBundle(archive, root string) error {
-	canonical, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		return err
-	}
-	//nolint:gosec // Archive is a SHA256-verified file in the private download staging directory.
-	file, err := os.Open(archive)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = file.Close() }()
-	compressed, err := gzip.NewReader(file)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = compressed.Close() }()
-	return unpackArchive(tar.NewReader(compressed), canonical)
-}
-func unpackArchive(reader *tar.Reader, root string) error {
-	seen := map[string]bool{}
-	var total int64
-	for {
-		header, err := reader.Next()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		name := strings.TrimSuffix(header.Name, "/")
-		if !relativePath(name) || seen[name] {
-			return fmt.Errorf("unsafe or duplicate archive path %q", name)
-		}
-		seen[name] = true
-		if header.Size < 0 || header.Size > maxExpandedBytes-total {
-			return errors.New("expanded bundle exceeds size limit")
-		}
-		total += header.Size
-		if err = extractEntry(reader, root, name, header); err != nil {
-			return err
-		}
-	}
-}
-func extractEntry(reader *tar.Reader, root, name string, header *tar.Header) error {
-	target := filepath.Join(root, name)
-	parent := filepath.Dir(target)
-	if err := os.MkdirAll(parent, 0700); err != nil {
-		return err
-	}
-	resolved, err := filepath.EvalSymlinks(parent)
-	if err != nil {
-		return err
-	}
-	if resolved != parent {
-		return errors.New("archive traverses symlink")
-	}
-	switch header.Typeflag {
-	case tar.TypeDir:
-		mode := os.FileMode(header.Mode & archiveModeMask)
-		if header.Mode&01000 != 0 {
-			mode |= os.ModeSticky
-		}
-		if err = os.MkdirAll(target, mode); err != nil {
-			return err
-		}
-		return os.Chmod(target, mode)
-	case tar.TypeReg:
-		return extractRegular(reader, target, header)
-	case tar.TypeSymlink:
-		//nolint:gosec // The canonical relative destination is checked immediately before the link is created.
-		dest := filepath.Clean(filepath.Join(filepath.Dir(name), header.Linkname))
-		if filepath.IsAbs(header.Linkname) || !relativePath(dest) {
-			return errors.New("archive symlink escapes root")
-		}
-		return os.Symlink(header.Linkname, target)
-	default:
-		return fmt.Errorf("unsupported archive entry %s", name)
-	}
-}
-func extractRegular(reader io.Reader, target string, header *tar.Header) error {
-	//nolint:gosec // Safe exclusive target inside private staging; guest rwx modes must survive host umask.
-	file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, os.FileMode(header.Mode&archiveModeMask))
-	if err != nil {
-		return err
-	}
-	if err = file.Chmod(os.FileMode(header.Mode & archiveModeMask)); err != nil {
-		return errors.Join(err, file.Close())
-	}
-	_, err = io.CopyN(file, reader, header.Size)
-	return errors.Join(err, file.Close())
+	return Bundle{}, errors.New("no runtime bundle; pass --bundle /path/to/bundle.json or run the CLI from a release archive")
 }
 
 const (
-	minimumProfileRAM    = 128
-	bundleManifestName   = "bundle.json"
-	httpsScheme          = "https"
-	downloadTimeout      = 30 * time.Minute
-	maxDownloadRedirects = 5
+	minimumProfileRAM  = 128
+	bundleManifestName = "bundle.json"
 )
-
-const archiveModeMask = 0777

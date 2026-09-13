@@ -1,8 +1,6 @@
 package dev
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -139,72 +137,21 @@ func TestBundleRejectsUnlistedAndEscapingSymlink(t *testing.T) {
 		})
 	}
 }
-func archiveFixture(t *testing.T, headers []*tar.Header) string {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "test.tgz")
-	//nolint:gosec // Test archive resides in this test’s private temporary directory.
-	f, err := os.Create(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	gz := gzip.NewWriter(f)
-	tw := tar.NewWriter(gz)
-	for _, h := range headers {
-		if err = tw.WriteHeader(h); err != nil {
-			t.Fatal(err)
-		}
-		if h.Size > 0 {
-			_, err = tw.Write([]byte(strings.Repeat("x", int(h.Size))))
-			if err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if err = tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err = gz.Close(); err != nil {
-		t.Fatal(err)
-	}
-	_ = f.Close()
-	return path
-}
-func TestSafeArchiveRejectsTraversalAndSymlinkAncestors(t *testing.T) {
-	t.Parallel()
-	cases := [][]*tar.Header{
-		{{Name: "../outside", Typeflag: tar.TypeReg, Size: 1}},
-		{{Name: "/outside", Typeflag: tar.TypeReg, Size: 1}},
-		{{Name: "escape", Typeflag: tar.TypeSymlink, Linkname: "../outside"}},
-		{
-			{Name: "dir", Typeflag: tar.TypeDir},
-			{Name: "alias", Typeflag: tar.TypeSymlink, Linkname: "dir"},
-			{Name: "alias/file", Typeflag: tar.TypeReg, Size: 1},
-		},
-		{{Name: "file", Typeflag: tar.TypeReg, Size: 1}, {Name: "file", Typeflag: tar.TypeReg, Size: 1}},
-		{{Name: "device", Typeflag: tar.TypeChar}},
-	}
-	for _, headers := range cases {
-		root := t.TempDir()
-		if err := extractBundle(archiveFixture(t, headers), root); err == nil {
-			t.Fatalf("unsafe archive accepted: %+v", headers)
-		}
-	}
-}
 func TestEnvironmentRefusesWorkspaceAndExclusiveOwnership(t *testing.T) {
 	t.Parallel()
 	workspace := t.TempDir()
 	_ = os.WriteFile(filepath.Join(workspace, "work.txt"), []byte("keep"), 0600)
-	if _, err := openEnvironment(t.Context(), Options{StateDir: workspace, Bundle: makeBundle(t)}, true); err == nil {
+	if _, err := openEnvironment(Options{StateDir: workspace, Bundle: makeBundle(t)}, true); err == nil {
 		t.Fatal("adopted populated workspace")
 	}
 	parent := t.TempDir()
 	state := filepath.Join(parent, "environment")
-	env, err := openEnvironment(t.Context(), Options{StateDir: state, Bundle: makeBundle(t)}, true)
+	env, err := openEnvironment(Options{StateDir: state, Bundle: makeBundle(t)}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer env.close()
-	if _, err = openEnvironment(t.Context(), Options{StateDir: state}, false); err == nil {
+	if _, err = openEnvironment(Options{StateDir: state}, false); err == nil {
 		t.Fatal("second environment admission acquired lock")
 	}
 	if namespace(state) == namespace(state+"-other") {
@@ -287,37 +234,6 @@ func TestDevListenRequiresLoopbackAndStopDoesNotCreateState(t *testing.T) {
 	}
 	if _, err := os.Stat(state); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("stop created missing state")
-	}
-}
-
-func TestSafeArchivePreservesGuestReadAndExecutePermissions(t *testing.T) {
-	t.Parallel()
-	root := t.TempDir()
-	headers := []*tar.Header{
-		{
-			Name:     fixtureImage,
-			Typeflag: tar.TypeDir,
-			Mode:     0755,
-		},
-		{Name: "image/tmp", Typeflag: tar.TypeDir, Mode: 01777},
-		{Name: fixtureInit, Typeflag: tar.TypeReg, Size: 1, Mode: 0755},
-		{Name: "image/passwd", Typeflag: tar.TypeReg, Size: 1, Mode: 0644},
-	}
-	if err := extractBundle(archiveFixture(t, headers), root); err != nil {
-		t.Fatal(err)
-	}
-	for name, want := range map[string]os.FileMode{fixtureImage: 0755, fixtureInit: 0755, "image/passwd": 0644} {
-		i, e := os.Stat(filepath.Join(root, name))
-		if e != nil || i.Mode().Perm() != want {
-			t.Fatalf("%s guest permissions %v, %v", name, i, e)
-		}
-	}
-	info, err := os.Stat(filepath.Join(root, "image/tmp"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode()&os.ModeSticky == 0 {
-		t.Fatal("guest temporary directory lost sticky bit")
 	}
 }
 

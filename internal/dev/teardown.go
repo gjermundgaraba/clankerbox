@@ -32,7 +32,7 @@ func Stop(ctx context.Context, opts Options) error { return teardown(ctx, opts, 
 // Destroy deletes dependency-ordered resources and exact owned environment roots.
 func Destroy(ctx context.Context, opts Options) error { return teardown(ctx, opts, true) }
 func teardown(ctx context.Context, opts Options, destroy bool) error {
-	env, err := openEnvironment(ctx, opts, false)
+	env, err := openEnvironment(opts, false)
 	if err != nil {
 		return err
 	}
@@ -366,7 +366,6 @@ func (e *environment) removeOwned() error {
 		"controller":             true,
 		"token":                  true,
 		"client.json":            true,
-		"clankerdesk.json":       true,
 		"connection.json":        true,
 		"controller-ready":       true,
 		"teardown.json":          true,

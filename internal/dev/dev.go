@@ -1,5 +1,5 @@
-// Package dev provisions an owned local appliance using the ordinary host and
-// controller binaries. It contains no guest transport or simulated machine.
+// Package dev runs a local development environment from the ordinary host and
+// controller binaries.
 package dev
 
 import (
@@ -45,13 +45,12 @@ type Options struct{ StateDir, Listen, Bundle string }
 
 // Connection publishes client configuration locations without embedding credentials.
 type Connection struct {
-	URL               string `json:"url"`
-	TokenPath         string `json:"tokenPath"`
-	DefaultHost       string `json:"defaultHost"`
-	DefaultProfile    string `json:"defaultProfile"`
-	StateDir          string `json:"stateDir"`
-	ClientConfig      string `json:"clientConfig"`
-	ClankerdeskConfig string `json:"clankerdeskConfig"`
+	URL            string `json:"url"`
+	TokenPath      string `json:"tokenPath"`
+	DefaultHost    string `json:"defaultHost"`
+	DefaultProfile string `json:"defaultProfile"`
+	StateDir       string `json:"stateDir"`
+	ClientConfig   string `json:"clientConfig"`
 }
 type environment struct {
 	Version      int    `json:"version"`
@@ -126,7 +125,7 @@ func token() string {
 	return hex.EncodeToString(bytes[:])
 }
 
-func openEnvironment(ctx context.Context, opts Options, create bool) (*environment, error) {
+func openEnvironment(opts Options, create bool) (*environment, error) {
 	state, e := canonicalState(opts.StateDir)
 	if e != nil {
 		return nil, e
@@ -158,7 +157,7 @@ func openEnvironment(ctx context.Context, opts Options, create bool) (*environme
 		if !create {
 			return nil, errors.New("not an owned dev environment")
 		}
-		e = env.initialize(ctx, state, opts.Bundle)
+		e = env.initialize(state, opts.Bundle)
 	case e != nil:
 		return nil, e
 	default:
@@ -172,7 +171,7 @@ func openEnvironment(ctx context.Context, opts Options, create bool) (*environme
 	return env, nil
 }
 
-func (e *environment) initialize(ctx context.Context, state, bundlePath string) error {
+func (e *environment) initialize(state, bundlePath string) error {
 	entries, err := e.dir.Entries()
 	if err != nil {
 		return err
@@ -182,7 +181,7 @@ func (e *environment) initialize(ctx context.Context, state, bundlePath string) 
 			return errors.New("refusing to adopt nonempty directory without environment manifest")
 		}
 	}
-	b, err := resolveBundle(ctx, bundlePath)
+	b, err := resolveBundle(bundlePath)
 	if err != nil {
 		return err
 	}
@@ -405,7 +404,7 @@ func Run(ctx context.Context, opts Options, onReady func(Connection) error) erro
 	if err := validateListen(opts.Listen); err != nil {
 		return err
 	}
-	env, err := openEnvironment(ctx, opts, true)
+	env, err := openEnvironment(opts, true)
 	if err != nil {
 		return err
 	}
@@ -433,13 +432,12 @@ func Run(ctx context.Context, opts Options, onReady func(Connection) error) erro
 	}
 	defer func() { _ = child.stop() }()
 	conn := Connection{
-		URL:               child.url,
-		TokenPath:         filepath.Join(env.StateDir, "token"),
-		DefaultHost:       localHostID,
-		DefaultProfile:    env.bundle.ProfileID,
-		StateDir:          env.StateDir,
-		ClientConfig:      filepath.Join(env.StateDir, "client.json"),
-		ClankerdeskConfig: filepath.Join(env.StateDir, "clankerdesk.json"),
+		URL:            child.url,
+		TokenPath:      filepath.Join(env.StateDir, "token"),
+		DefaultHost:    localHostID,
+		DefaultProfile: env.bundle.ProfileID,
+		StateDir:       env.StateDir,
+		ClientConfig:   filepath.Join(env.StateDir, "client.json"),
 	}
 	if err = jsonWrite(
 		env.dir,
@@ -449,17 +447,6 @@ func Run(ctx context.Context, opts Options, onReady func(Connection) error) erro
 			"token_file":      conn.TokenPath,
 			"default_host":    conn.DefaultHost,
 			"default_profile": conn.DefaultProfile,
-		},
-	); err != nil {
-		return err
-	}
-	if err = jsonWrite(
-		env.dir,
-		"clankerdesk.json",
-		map[string]any{
-			"url":       conn.URL,
-			"tokenPath": conn.TokenPath,
-			"machines":  map[string]string{"host": conn.DefaultHost, "profile": conn.DefaultProfile},
 		},
 	); err != nil {
 		return err

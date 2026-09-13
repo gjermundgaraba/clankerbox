@@ -37,11 +37,10 @@ func (streams commandStreams) addDevCommands(root *cli.Command) {
 					}
 					_, err := fmt.Fprintf(
 						streams.Out,
-						"Local VM environment ready: %s\nController: %s\nCLI config: %s\nClankerdesk target: %s\nDefault host/profile: %s / %s\nCreate machines through the ordinary API or CLI. Ctrl-C preserves the host service and VMs.\n",
+						"Local VM environment ready: %s\nController: %s\nCLI config: %s\nDefault host/profile: %s / %s\nCreate machines through the ordinary API or CLI. Ctrl-C preserves the host service and VMs.\n",
 						c.StateDir,
 						c.URL,
 						c.ClientConfig,
-						c.ClankerdeskConfig,
 						c.DefaultHost,
 						c.DefaultProfile,
 					)
