@@ -49,11 +49,12 @@ func bindingConfig(b rpcidentity.Binding) (*tls.Config, error) {
 	}
 	intermediates := x509.NewCertPool()
 	for _, raw := range cert.Certificate[1:] {
-		c, e := x509.ParseCertificate(raw)
-		if e != nil {
-			return nil, e
+		var intermediate *x509.Certificate
+		intermediate, err = x509.ParseCertificate(raw)
+		if err != nil {
+			return nil, err
 		}
-		intermediates.AddCert(c)
+		intermediates.AddCert(intermediate)
 	}
 	if _, err = leaf.Verify(
 		x509.VerifyOptions{Roots: roots, Intermediates: intermediates, DNSName: "guest.clankerbox.internal"},

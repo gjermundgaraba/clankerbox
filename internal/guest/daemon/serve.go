@@ -97,13 +97,14 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	s.identity = newIdentity(dir)
 	binding := opts.Binding
 	if binding == nil {
-		raw, e := dir.ReadFile("binding.json")
-		if e != nil {
-			return nil, e
+		var raw []byte
+		raw, err = dir.ReadFile("binding.json")
+		if err != nil {
+			return nil, err
 		}
 		binding = &rpcidentity.Binding{}
-		if e = json.Unmarshal(raw, binding); e != nil {
-			return nil, e
+		if err = json.Unmarshal(raw, binding); err != nil {
+			return nil, err
 		}
 	}
 	if err = s.identity.rebind(*binding); err != nil {

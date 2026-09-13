@@ -96,15 +96,16 @@ func (runner commandRunner) finishMutation(
 		return runner.output(operation)
 	}
 	if result == checkpointCommand {
-		cp, e := runner.api.Checkpoint(ctx, operation.CheckpointID)
-		if e != nil {
-			return operationError(operation, e)
+		var cp model.Checkpoint
+		cp, err = runner.api.Checkpoint(ctx, operation.CheckpointID)
+		if err != nil {
+			return operationError(operation, err)
 		}
 		return runner.output(cp)
 	}
-	m, e := runner.api.Resolve(ctx, operation.MachineID)
-	if e != nil {
-		return operationError(operation, e)
+	m, err := runner.api.Resolve(ctx, operation.MachineID)
+	if err != nil {
+		return operationError(operation, err)
 	}
 	return runner.output(m)
 }

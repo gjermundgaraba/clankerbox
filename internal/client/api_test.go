@@ -27,14 +27,14 @@ func testAPI(t *testing.T, url string) *apiFixture {
 	t.Helper()
 	dir := t.TempDir()
 	token := filepath.Join(dir, "token")
-	if e := os.WriteFile(token, []byte(testToken+"\n"), 0600); e != nil {
-		t.Fatal(e)
+	if err := os.WriteFile(token, []byte(testToken+"\n"), 0600); err != nil {
+		t.Fatal(err)
 	}
-	a, e := client.NewAPI(
+	a, err := client.NewAPI(
 		client.Config{URL: url, TokenFile: token},
 	)
-	if e != nil {
-		t.Fatal(e)
+	if err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(a.Close)
 	return &apiFixture{API: a, path: filepath.Join(dir, "config.json")}
@@ -42,7 +42,7 @@ func testAPI(t *testing.T, url string) *apiFixture {
 func TestTLSAndOriginValidation(t *testing.T) {
 	t.Parallel()
 	for _, raw := range []string{"http://example.com", "ftp://127.0.0.1", "https://user:pass@example.com", "https://example.com/path", "https://example.com?token=secret", "https://example.com#frag", "http://127.0.0.1:0", "http://[::1%25lo]"} {
-		if _, e := client.NewAPI(client.Config{URL: raw}); e == nil {
+		if _, err := client.NewAPI(client.Config{URL: raw}); err == nil {
 			t.Errorf("accepted %s", raw)
 		}
 	}
@@ -53,7 +53,7 @@ func TestTLSAndOriginValidation(t *testing.T) {
 	)
 	defer server.Close()
 	a := testAPI(t, server.URL)
-	if _, e := a.Machines(context.Background()); e == nil {
+	if _, err := a.Machines(context.Background()); err == nil {
 		t.Fatal("untrusted API TLS accepted")
 	}
 }

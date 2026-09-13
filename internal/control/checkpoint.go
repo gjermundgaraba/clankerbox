@@ -240,9 +240,10 @@ func derivationSource(
 	var source model.Machine
 	var cp *model.Checkpoint
 	if !sourceAction {
-		value, e := readCheckpoint(ctx, tx, id)
-		if e != nil {
-			return source, cp, e
+		var value model.Checkpoint
+		value, err = readCheckpoint(ctx, tx, id)
+		if err != nil {
+			return source, cp, err
 		}
 		cp = &value
 		if err = resourceIdle(ctx, tx, id, true); err != nil {

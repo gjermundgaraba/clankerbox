@@ -53,9 +53,10 @@ func (runner commandRunner) listSessions(ctx context.Context, name string) error
 		return err
 	}
 	for _, value := range response.Msg.GetSessions() {
-		record, e := rpcmodel.FromSession(value)
-		if e != nil {
-			return e
+		var record protocol.Session
+		record, err = rpcmodel.FromSession(value)
+		if err != nil {
+			return err
 		}
 		sessions = append(sessions, record)
 	}

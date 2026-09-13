@@ -19,9 +19,9 @@ func (a *API) SessionClient() clankerboxv1connect.SessionServiceClient { return 
 func (a *API) Machines(ctx context.Context) ([]model.Machine, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.ListMachines(ctx, connect.NewRequest(&v1.ListMachinesRequest{}))
-	if e != nil {
-		return nil, e
+	r, err := a.machine.ListMachines(ctx, connect.NewRequest(&v1.ListMachinesRequest{}))
+	if err != nil {
+		return nil, err
 	}
 	out := make([]model.Machine, 0, len(r.Msg.GetMachines()))
 	for _, v := range r.Msg.GetMachines() {
@@ -38,9 +38,9 @@ func (a *API) Machines(ctx context.Context) ([]model.Machine, error) {
 func (a *API) Hosts(ctx context.Context) ([]model.HostStatus, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.ListHosts(ctx, connect.NewRequest(&v1.ListHostsRequest{}))
-	if e != nil {
-		return nil, e
+	r, err := a.machine.ListHosts(ctx, connect.NewRequest(&v1.ListHostsRequest{}))
+	if err != nil {
+		return nil, err
 	}
 	out := make([]model.HostStatus, 0, len(r.Msg.GetHosts()))
 	for _, v := range r.Msg.GetHosts() {
@@ -57,9 +57,9 @@ func (a *API) Hosts(ctx context.Context) ([]model.HostStatus, error) {
 func (a *API) Profiles(ctx context.Context) ([]model.Profile, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.ListProfiles(ctx, connect.NewRequest(&v1.ListProfilesRequest{}))
-	if e != nil {
-		return nil, e
+	r, err := a.machine.ListProfiles(ctx, connect.NewRequest(&v1.ListProfilesRequest{}))
+	if err != nil {
+		return nil, err
 	}
 	out := make([]model.Profile, 0, len(r.Msg.GetProfiles()))
 	for _, v := range r.Msg.GetProfiles() {
@@ -76,9 +76,9 @@ func (a *API) Profiles(ctx context.Context) ([]model.Profile, error) {
 func (a *API) Checkpoints(ctx context.Context) ([]model.Checkpoint, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.ListCheckpoints(ctx, connect.NewRequest(&v1.ListCheckpointsRequest{}))
-	if e != nil {
-		return nil, e
+	r, err := a.machine.ListCheckpoints(ctx, connect.NewRequest(&v1.ListCheckpointsRequest{}))
+	if err != nil {
+		return nil, err
 	}
 	out := make([]model.Checkpoint, 0, len(r.Msg.GetCheckpoints()))
 	for _, v := range r.Msg.GetCheckpoints() {
@@ -98,24 +98,24 @@ func (a *API) Resolve(ctx context.Context, id string) (model.Machine, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.GetMachine(ctx, connect.NewRequest(&v1.GetMachineRequest{MachineId: id}))
-	if e != nil {
-		return model.Machine{}, e
+	r, err := a.machine.GetMachine(ctx, connect.NewRequest(&v1.GetMachineRequest{MachineId: id}))
+	if err != nil {
+		return model.Machine{}, err
 	}
-	m, e := rpcmodel.FromMachine(r.Msg)
-	if e == nil && ((model.ValidID(id) && m.ID != id) || (!model.ValidID(id) && (m.Name != id || m.Deleted))) {
-		e = errors.New("API machine identity mismatch")
+	m, err := rpcmodel.FromMachine(r.Msg)
+	if err == nil && ((model.ValidID(id) && m.ID != id) || (!model.ValidID(id) && (m.Name != id || m.Deleted))) {
+		err = errors.New("API machine identity mismatch")
 	}
-	return m, e
+	return m, err
 }
 
 // Operation reads a durable operation without replaying its request.
 func (a *API) Operation(ctx context.Context, id string) (model.Operation, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.GetOperation(ctx, connect.NewRequest(&v1.GetOperationRequest{OperationId: id}))
-	if e != nil {
-		return model.Operation{}, e
+	r, err := a.machine.GetOperation(ctx, connect.NewRequest(&v1.GetOperationRequest{OperationId: id}))
+	if err != nil {
+		return model.Operation{}, err
 	}
 	return rpcmodel.FromOperation(r.Msg)
 }
@@ -124,9 +124,9 @@ func (a *API) Operation(ctx context.Context, id string) (model.Operation, error)
 func (a *API) Checkpoint(ctx context.Context, id string) (model.Checkpoint, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.GetCheckpoint(ctx, connect.NewRequest(&v1.GetCheckpointRequest{CheckpointId: id}))
-	if e != nil {
-		return model.Checkpoint{}, e
+	r, err := a.machine.GetCheckpoint(ctx, connect.NewRequest(&v1.GetCheckpointRequest{CheckpointId: id}))
+	if err != nil {
+		return model.Checkpoint{}, err
 	}
 	return rpcmodel.FromCheckpoint(r.Msg)
 }
@@ -135,7 +135,7 @@ func (a *API) Checkpoint(ctx context.Context, id string) (model.Checkpoint, erro
 func (a *API) CreateMachine(ctx context.Context, key string, in model.CreateInput) (model.Operation, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.CreateMachine(
+	r, err := a.machine.CreateMachine(
 		ctx,
 		connect.NewRequest(
 			&v1.CreateMachineRequest{
@@ -147,8 +147,8 @@ func (a *API) CreateMachine(ctx context.Context, key string, in model.CreateInpu
 			},
 		),
 	)
-	if e != nil {
-		return model.Operation{}, e
+	if err != nil {
+		return model.Operation{}, err
 	}
 	return rpcmodel.FromOperation(r.Msg)
 }
@@ -157,9 +157,9 @@ func (a *API) CreateMachine(ctx context.Context, key string, in model.CreateInpu
 func (a *API) StartMachine(ctx context.Context, id, key string) (model.Operation, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.StartMachine(ctx, connect.NewRequest(&v1.StartMachineRequest{IdempotencyKey: key, MachineId: id}))
-	if e != nil {
-		return model.Operation{}, e
+	r, err := a.machine.StartMachine(ctx, connect.NewRequest(&v1.StartMachineRequest{IdempotencyKey: key, MachineId: id}))
+	if err != nil {
+		return model.Operation{}, err
 	}
 	return rpcmodel.FromOperation(r.Msg)
 }
@@ -168,9 +168,9 @@ func (a *API) StartMachine(ctx context.Context, id, key string) (model.Operation
 func (a *API) StopMachine(ctx context.Context, id, key string) (model.Operation, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.StopMachine(ctx, connect.NewRequest(&v1.StopMachineRequest{IdempotencyKey: key, MachineId: id}))
-	if e != nil {
-		return model.Operation{}, e
+	r, err := a.machine.StopMachine(ctx, connect.NewRequest(&v1.StopMachineRequest{IdempotencyKey: key, MachineId: id}))
+	if err != nil {
+		return model.Operation{}, err
 	}
 	return rpcmodel.FromOperation(r.Msg)
 }
@@ -179,12 +179,12 @@ func (a *API) StopMachine(ctx context.Context, id, key string) (model.Operation,
 func (a *API) DeleteMachine(ctx context.Context, id, key string) (model.Operation, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.DeleteMachine(
+	r, err := a.machine.DeleteMachine(
 		ctx,
 		connect.NewRequest(&v1.DeleteMachineRequest{IdempotencyKey: key, MachineId: id}),
 	)
-	if e != nil {
-		return model.Operation{}, e
+	if err != nil {
+		return model.Operation{}, err
 	}
 	return rpcmodel.FromOperation(r.Msg)
 }
@@ -193,14 +193,14 @@ func (a *API) DeleteMachine(ctx context.Context, id, key string) (model.Operatio
 func (a *API) ForkMachine(ctx context.Context, id, key string, in model.ChildInput) (model.Operation, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.ForkMachine(
+	r, err := a.machine.ForkMachine(
 		ctx,
 		connect.NewRequest(
 			&v1.ForkMachineRequest{IdempotencyKey: key, MachineId: id, Name: in.Name, Labels: in.Labels},
 		),
 	)
-	if e != nil {
-		return model.Operation{}, e
+	if err != nil {
+		return model.Operation{}, err
 	}
 	return rpcmodel.FromOperation(r.Msg)
 }
@@ -209,12 +209,12 @@ func (a *API) ForkMachine(ctx context.Context, id, key string, in model.ChildInp
 func (a *API) CaptureCheckpoint(ctx context.Context, id, key string) (model.Operation, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.CaptureCheckpoint(
+	r, err := a.machine.CaptureCheckpoint(
 		ctx,
 		connect.NewRequest(&v1.CaptureCheckpointRequest{IdempotencyKey: key, MachineId: id}),
 	)
-	if e != nil {
-		return model.Operation{}, e
+	if err != nil {
+		return model.Operation{}, err
 	}
 	return rpcmodel.FromOperation(r.Msg)
 }
@@ -223,14 +223,14 @@ func (a *API) CaptureCheckpoint(ctx context.Context, id, key string) (model.Oper
 func (a *API) RestoreCheckpoint(ctx context.Context, id, key string, in model.ChildInput) (model.Operation, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.RestoreCheckpoint(
+	r, err := a.machine.RestoreCheckpoint(
 		ctx,
 		connect.NewRequest(
 			&v1.RestoreCheckpointRequest{IdempotencyKey: key, CheckpointId: id, Name: in.Name, Labels: in.Labels},
 		),
 	)
-	if e != nil {
-		return model.Operation{}, e
+	if err != nil {
+		return model.Operation{}, err
 	}
 	return rpcmodel.FromOperation(r.Msg)
 }
@@ -239,12 +239,12 @@ func (a *API) RestoreCheckpoint(ctx context.Context, id, key string, in model.Ch
 func (a *API) DeleteCheckpoint(ctx context.Context, id, key string) (model.Operation, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.DeleteCheckpoint(
+	r, err := a.machine.DeleteCheckpoint(
 		ctx,
 		connect.NewRequest(&v1.DeleteCheckpointRequest{IdempotencyKey: key, CheckpointId: id}),
 	)
-	if e != nil {
-		return model.Operation{}, e
+	if err != nil {
+		return model.Operation{}, err
 	}
 	return rpcmodel.FromOperation(r.Msg)
 }
@@ -253,9 +253,9 @@ func (a *API) DeleteCheckpoint(ctx context.Context, id, key string) (model.Opera
 func (a *API) SetLabels(ctx context.Context, id string, labels map[string]string) (model.Machine, error) {
 	ctx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 	defer cancel()
-	r, e := a.machine.SetLabels(ctx, connect.NewRequest(&v1.SetLabelsRequest{MachineId: id, Labels: labels}))
-	if e != nil {
-		return model.Machine{}, e
+	r, err := a.machine.SetLabels(ctx, connect.NewRequest(&v1.SetLabelsRequest{MachineId: id, Labels: labels}))
+	if err != nil {
+		return model.Machine{}, err
 	}
 	return rpcmodel.FromMachine(r.Msg)
 }

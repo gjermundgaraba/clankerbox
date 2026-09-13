@@ -82,27 +82,27 @@ func (f *runnerFixture) AttachSession(
 	ctx context.Context,
 	s *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent],
 ) error {
-	r, e := s.Receive()
-	if e != nil {
-		return e
+	r, err := s.Receive()
+	if err != nil {
+		return err
 	}
 	id := r.GetOpen().GetSessionId()
 	for _, ev := range []*v1.AttachmentEvent{{Event: &v1.AttachmentEvent_Opened{Opened: &v1.Opened{Mode: v1.OpenMode_OPEN_MODE_RESUME}}}, {Event: &v1.AttachmentEvent_Output{Output: &v1.Output{NextOffset: 18, Data: []byte("SESSION_RUN_READY\n")}}}} {
-		if e = rpctransport.WriteEvent(ctx, s, ev); e != nil {
-			return e
+		if err = rpctransport.WriteEvent(ctx, s, ev); err != nil {
+			return err
 		}
 	}
-	input, e := s.Receive()
-	if e != nil {
-		return e
+	input, err := s.Receive()
+	if err != nil {
+		return err
 	}
 	if string(input.GetInput().GetData()) != "\n" {
 		panic("missing gate input")
 	}
 	code := int32(7)
 	for _, ev := range []*v1.AttachmentEvent{{Event: &v1.AttachmentEvent_Ack{Ack: &v1.Ack{Sequence: 1, Accepted: true}}}, {Event: &v1.AttachmentEvent_Output{Output: &v1.Output{NextOffset: 26, Data: []byte("one\ntwo\n")}}}, {Event: &v1.AttachmentEvent_SessionExited{SessionExited: &v1.SessionExited{Session: &v1.Session{Id: id, ExitCode: &code, Status: v1.SessionStatus_SESSION_STATUS_EXITED}}}}} {
-		if e = rpctransport.WriteEvent(ctx, s, ev); e != nil {
-			return e
+		if err = rpctransport.WriteEvent(ctx, s, ev); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -114,9 +114,9 @@ func runnerServer(t *testing.T, f *runnerFixture) string {
 	mux.Handle(p, h)
 	p, h = clankerboxv1connect.NewMachineServiceHandler(f)
 	mux.Handle(p, h)
-	ln, e := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
 	s := rpctransport.Server(rpctransport.Bearer(strings.Repeat("t", 32), mux), nil)
 	go func() { _ = s.Serve(ln) }()
@@ -126,23 +126,23 @@ func runnerServer(t *testing.T, f *runnerFixture) string {
 func TestSessionCommandOutputAndExit(t *testing.T) {
 	t.Parallel()
 	path := runnerServer(t, &runnerFixture{})
-	cfg, e := client.LoadConfig(path)
-	if e != nil {
-		t.Fatal(e)
+	cfg, err := client.LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	api, e := client.NewAPI(cfg)
-	if e != nil {
-		t.Fatal(e)
+	api, err := client.NewAPI(cfg)
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer api.Close()
-	script, e := commandScript([]string{"sh", "-c", "cat; exit 7"}, strings.NewReader("one\ntwo\n"))
-	if e != nil {
-		t.Fatal(e)
+	script, err := commandScript([]string{"sh", "-c", "cat; exit 7"}, strings.NewReader("one\ntwo\n"))
+	if err != nil {
+		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	code, e := execute(t.Context(), api, testMachineID, script, &out)
-	if e != nil || code != 7 || out.String() != "one\ntwo\n" {
-		t.Fatalf("code%d out%q err%v", code, out.String(), e)
+	code, err := execute(t.Context(), api, testMachineID, script, &out)
+	if err != nil || code != 7 || out.String() != "one\ntwo\n" {
+		t.Fatalf("code%d out%q err%v", code, out.String(), err)
 	}
 }
 func TestStoppedTypedPrerequisite(t *testing.T) {
@@ -151,9 +151,9 @@ func TestStoppedTypedPrerequisite(t *testing.T) {
 		t.Run(reason, func(t *testing.T) {
 			t.Parallel()
 			path := runnerServer(t, &runnerFixture{reason: reason})
-			e := runStoppedCheck(t.Context(), path, []string{testMachineID})
-			if (e == nil) != (reason == prerequisiteReason) {
-				t.Fatal(e)
+			err := runStoppedCheck(t.Context(), path, []string{testMachineID})
+			if (err == nil) != (reason == prerequisiteReason) {
+				t.Fatal(err)
 			}
 		})
 	}
@@ -166,9 +166,9 @@ func TestDeleteTypedDependencyAndAcceptanceRetention(t *testing.T) {
 			f := &runnerFixture{reason: reason}
 			path := runnerServer(t, f)
 			var out bytes.Buffer
-			e := runDeleteDependencyCheck(t.Context(), path, []string{testMachineID}, &out)
-			if (e == nil) != (reason == "dependency") {
-				t.Fatal(e)
+			err := runDeleteDependencyCheck(t.Context(), path, []string{testMachineID}, &out)
+			if (err == nil) != (reason == "dependency") {
+				t.Fatal(err)
 			}
 			if f.calls.Load() != 1 {
 				t.Fatal("mutation replayed")

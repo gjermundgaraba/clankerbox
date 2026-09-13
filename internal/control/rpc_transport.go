@@ -74,15 +74,7 @@ func (t *RPCTransport) Call(ctx context.Context, h model.Host, r model.Request) 
 	}
 	client := clients.host
 	if r.Action == "inspect" {
-		res, e := client.InspectMachine(
-			ctx,
-			connect.NewRequest(&v1.InspectMachineRequest{MachineId: r.MachineID, ExpectedGeneration: r.Generation}),
-		)
-		if e != nil {
-			return model.Response{}, e
-		}
-		o, e := rpcmodel.FromObservation(res.Msg)
-		return model.Response{Status: "succeeded", Observation: &o}, e
+		return inspectMachine(ctx, clients, r)
 	}
 	if r.Host != "" && r.Host != h.ID {
 		return model.Response{}, errors.New("controller request host differs from configured destination")
@@ -133,13 +125,25 @@ func waitHostResult(
 			return model.Response{}, ctx.Err()
 		case <-ticker.C:
 		}
-		state, e := client.GetHostOperation(
+		state, err := client.GetHostOperation(
 			ctx,
 			connect.NewRequest(&v1.GetHostOperationRequest{OperationId: operationID}),
 		)
-		if e != nil {
-			return model.Response{}, e
+		if err != nil {
+			return model.Response{}, err
 		}
 		op = state.Msg
 	}
+}
+
+func inspectMachine(ctx context.Context, clients *hostClients, r model.Request) (model.Response, error) {
+	res, err := clients.host.InspectMachine(
+		ctx,
+		connect.NewRequest(&v1.InspectMachineRequest{MachineId: r.MachineID, ExpectedGeneration: r.Generation}),
+	)
+	if err != nil {
+		return model.Response{}, err
+	}
+	o, err := rpcmodel.FromObservation(res.Msg)
+	return model.Response{Status: "succeeded", Observation: &o}, err
 }

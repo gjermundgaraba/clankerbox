@@ -25,20 +25,20 @@ import (
 
 func serveRPC(t *testing.T, h http.Handler) (*http.Client, string) {
 	t.Helper()
-	ln, e := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
 	s := rpctransport.Server(h, nil)
 	go func() { _ = s.Serve(ln) }()
 	t.Cleanup(func() { _ = s.Close() })
-	hc, origin, e := rpctransport.Client(
+	hc, origin, err := rpctransport.Client(
 		"http://"+ln.Addr().String(),
 		rpctransport.Credentials{},
 		strings.Repeat("t", 32),
 	)
-	if e != nil {
-		t.Fatal(e)
+	if err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(hc.CloseIdleConnections)
 	return hc, origin
@@ -47,9 +47,9 @@ func TestTypedPublicResourcesIdempotencyLabelsAndAuthentication(t *testing.T) {
 	t.Parallel()
 	c, _, in, _ := setupControl(t)
 	defer closeTest(t, c)
-	h, e := c.Handler([]byte(strings.Repeat("t", 32)))
-	if e != nil {
-		t.Fatal(e)
+	h, err := c.Handler([]byte(strings.Repeat("t", 32)))
+	if err != nil {
+		t.Fatal(err)
 	}
 	hc, origin := serveRPC(t, h)
 	rpc := clankerboxv1connect.NewMachineServiceClient(hc, origin)
@@ -60,49 +60,49 @@ func TestTypedPublicResourcesIdempotencyLabelsAndAuthentication(t *testing.T) {
 		ProfileId:      in.Profile,
 		Labels:         map[string]string{"suite": "rpc"},
 	}
-	first, e := rpc.CreateMachine(t.Context(), connect.NewRequest(request))
-	if e != nil {
-		t.Fatal(e)
+	first, err := rpc.CreateMachine(t.Context(), connect.NewRequest(request))
+	if err != nil {
+		t.Fatal(err)
 	}
 	if first.Msg.GetStatus() != v1.OperationStatus_OPERATION_STATUS_PENDING {
 		t.Fatal("mutation not durable pending")
 	}
-	repeat, e := rpc.CreateMachine(t.Context(), connect.NewRequest(request))
-	if e != nil || first.Msg.GetId() != repeat.Msg.GetId() {
-		t.Fatalf("duplicate mismatch %v", e)
+	repeat, err := rpc.CreateMachine(t.Context(), connect.NewRequest(request))
+	if err != nil || first.Msg.GetId() != repeat.Msg.GetId() {
+		t.Fatalf("duplicate mismatch %v", err)
 	}
 	request.Name = "different"
-	_, e = rpc.CreateMachine(t.Context(), connect.NewRequest(request))
-	detail, ok := rpcmodel.Detail(e)
+	_, err = rpc.CreateMachine(t.Context(), connect.NewRequest(request))
+	detail, ok := rpcmodel.Detail(err)
 	if !ok || detail.GetReason() != v1.ErrorReason_ERROR_REASON_IDEMPOTENCY_CONFLICT {
-		t.Fatalf("typed conflict lost %v", e)
+		t.Fatalf("typed conflict lost %v", err)
 	}
-	if e = c.ProcessOne(t.Context(), in.Host); e != nil {
-		t.Fatal(e)
+	if err = c.ProcessOne(t.Context(), in.Host); err != nil {
+		t.Fatal(err)
 	}
-	op, e := rpc.GetOperation(t.Context(), connect.NewRequest(&v1.GetOperationRequest{OperationId: first.Msg.GetId()}))
-	if e != nil || op.Msg.GetStatus() != v1.OperationStatus_OPERATION_STATUS_SUCCEEDED {
-		t.Fatalf("completion %v", e)
+	op, err := rpc.GetOperation(t.Context(), connect.NewRequest(&v1.GetOperationRequest{OperationId: first.Msg.GetId()}))
+	if err != nil || op.Msg.GetStatus() != v1.OperationStatus_OPERATION_STATUS_SUCCEEDED {
+		t.Fatalf("completion %v", err)
 	}
-	m, e := rpc.GetMachine(t.Context(), connect.NewRequest(&v1.GetMachineRequest{MachineId: in.Name}))
-	if e != nil || m.Msg.GetId() != first.Msg.GetMachineId() {
-		t.Fatalf("name resolution %v", e)
+	m, err := rpc.GetMachine(t.Context(), connect.NewRequest(&v1.GetMachineRequest{MachineId: in.Name}))
+	if err != nil || m.Msg.GetId() != first.Msg.GetMachineId() {
+		t.Fatalf("name resolution %v", err)
 	}
-	updated, e := rpc.SetLabels(
+	updated, err := rpc.SetLabels(
 		t.Context(),
 		connect.NewRequest(
 			&v1.SetLabelsRequest{MachineId: m.Msg.GetId(), Labels: map[string]string{"new": "value"}},
 		),
 	)
-	if e != nil || updated.Msg.GetLabels()["new"] != "value" {
-		t.Fatal(e)
+	if err != nil || updated.Msg.GetLabels()["new"] != "value" {
+		t.Fatal(err)
 	}
-	listed, e := rpc.ListMachines(
+	listed, err := rpc.ListMachines(
 		t.Context(),
 		connect.NewRequest(&v1.ListMachinesRequest{Labels: map[string]string{"new": "value"}}),
 	)
-	if e != nil || len(listed.Msg.GetMachines()) != 1 {
-		t.Fatal(e)
+	if err != nil || len(listed.Msg.GetMachines()) != 1 {
+		t.Fatal(err)
 	}
 	r := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
@@ -132,26 +132,26 @@ func TestTypedSessionsRefuseStoppedAndReservedSource(t *testing.T) {
 	defer closeTest(t, c)
 	created := mustCreate(t, c, in, "create")
 	mustMutate(t, c, created.MachineID, "stop", "stop")
-	h, e := c.Handler([]byte(strings.Repeat("t", 32)))
-	if e != nil {
-		t.Fatal(e)
+	h, err := c.Handler([]byte(strings.Repeat("t", 32)))
+	if err != nil {
+		t.Fatal(err)
 	}
 	hc, origin := serveRPC(t, h)
 	rpc := clankerboxv1connect.NewSessionServiceClient(hc, origin)
-	_, e = rpc.DescribeGuest(t.Context(), connect.NewRequest(&v1.DescribeGuestRequest{MachineId: created.MachineID}))
-	d, ok := rpcmodel.Detail(e)
+	_, err = rpc.DescribeGuest(t.Context(), connect.NewRequest(&v1.DescribeGuestRequest{MachineId: created.MachineID}))
+	d, ok := rpcmodel.Detail(err)
 	if !ok || d.GetReason() != v1.ErrorReason_ERROR_REASON_PREREQUISITE {
-		t.Fatalf("stopped eligibility lost: %v", e)
+		t.Fatalf("stopped eligibility lost: %v", err)
 	}
 	mustMutate(t, c, created.MachineID, "start", "start")
-	_, e = c.Derive(t.Context(), "fork", created.MachineID, "fork", model.ChildInput{Name: fixtureChild})
-	if e != nil {
-		t.Fatal(e)
+	_, err = c.Derive(t.Context(), "fork", created.MachineID, "fork", model.ChildInput{Name: fixtureChild})
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, e = rpc.ListSessions(t.Context(), connect.NewRequest(&v1.ListSessionsRequest{MachineId: created.MachineID}))
-	d, ok = rpcmodel.Detail(e)
+	_, err = rpc.ListSessions(t.Context(), connect.NewRequest(&v1.ListSessionsRequest{MachineId: created.MachineID}))
+	d, ok = rpcmodel.Detail(err)
 	if !ok || d.GetReason() != v1.ErrorReason_ERROR_REASON_OPERATION_PENDING {
-		t.Fatalf("source reservation gate lost: %v", e)
+		t.Fatalf("source reservation gate lost: %v", err)
 	}
 }
 
@@ -197,15 +197,15 @@ func (f *acceptedHost) GetHostOperation(
 func TestHostAcceptanceIsNotControllerCompletion(t *testing.T) {
 	t.Parallel()
 	//nolint:usetesting // macOS testing.TempDir paths exceed the native Unix socket limit.
-	dir, e := os.MkdirTemp("/tmp", "cb-rpc-")
-	if e != nil {
-		t.Fatal(e)
+	dir, err := os.MkdirTemp("/tmp", "cb-rpc-")
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	endpoint := "unix://" + filepath.Join(dir, "host.sock")
-	ln, e := rpctransport.Listen(t.Context(), endpoint)
-	if e != nil {
-		t.Fatal(e)
+	ln, err := rpctransport.Listen(t.Context(), endpoint)
+	if err != nil {
+		t.Fatal(err)
 	}
 	f := &acceptedHost{operation: model.NewID(), hostID: fixtureLocalHost}
 	_, h := clankerboxv1connect.NewHostServiceHandler(f)
@@ -223,13 +223,13 @@ func TestHostAcceptanceIsNotControllerCompletion(t *testing.T) {
 	defer cancel()
 	transport := &control.RPCTransport{}
 	defer transport.Close()
-	_, e = transport.Call(ctx, model.Host{ID: fixtureLocalHost, Endpoint: endpoint}, req)
-	if e == nil || ctx.Err() == nil || f.polls.Load() < 1 {
-		t.Fatalf("accepted considered complete: %v", e)
+	_, err = transport.Call(ctx, model.Host{ID: fixtureLocalHost, Endpoint: endpoint}, req)
+	if err == nil || ctx.Err() == nil || f.polls.Load() < 1 {
+		t.Fatalf("accepted considered complete: %v", err)
 	}
 	f.final.Store(true)
-	res, e := transport.Call(t.Context(), model.Host{ID: fixtureLocalHost, Endpoint: endpoint}, req)
-	if e != nil || res.Status != "succeeded" {
-		t.Fatalf("final result %v %+v", e, res)
+	res, err := transport.Call(t.Context(), model.Host{ID: fixtureLocalHost, Endpoint: endpoint}, req)
+	if err != nil || res.Status != "succeeded" {
+		t.Fatalf("final result %v %+v", err, res)
 	}
 }

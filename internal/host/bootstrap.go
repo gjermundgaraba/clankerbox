@@ -193,16 +193,17 @@ func (n *NativeRuntime) waitGuestIdentity(
 	client := clankerboxv1connect.NewSessionServiceClient(httpClient, "https://"+state.Endpoint)
 	deadline, cancel := context.WithTimeout(ctx, guestReadyTimeout)
 	defer cancel()
+	var result *connect.Response[v1.GuestDescription]
 	for {
 		call, done := context.WithTimeout(deadline, identityAttemptTimeout)
-		result, e := client.DescribeGuest(call, connect.NewRequest(&v1.DescribeGuestRequest{MachineId: m.ID}))
+		result, err = client.DescribeGuest(call, connect.NewRequest(&v1.DescribeGuestRequest{MachineId: m.ID}))
 		done()
-		if e == nil && result.Msg.GetMachineId() == m.ID && result.Msg.GetUser() == "clankerbox" {
+		if err == nil && result.Msg.GetMachineId() == m.ID && result.Msg.GetUser() == "clankerbox" {
 			return state.Endpoint, nil
 		}
 		select {
 		case <-deadline.Done():
-			return "", fmt.Errorf("guest TLS identity readiness: %w (last: %w)", deadline.Err(), e)
+			return "", fmt.Errorf("guest TLS identity readiness: %w (last: %w)", deadline.Err(), err)
 		case <-time.After(identityRetryInterval):
 		}
 	}

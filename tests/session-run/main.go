@@ -142,19 +142,19 @@ func runStoppedCheck(ctx context.Context, path string, args []string) error {
 	if len(args) != 1 || !model.ValidID(args[0]) {
 		return errors.New("--expect-stopped requires one MACHINE_ID")
 	}
-	config, e := client.LoadConfig(path)
-	if e != nil {
-		return e
+	config, err := client.LoadConfig(path)
+	if err != nil {
+		return err
 	}
-	api, e := client.NewAPI(config)
-	if e != nil {
-		return e
+	api, err := client.NewAPI(config)
+	if err != nil {
+		return err
 	}
 	defer api.Close()
-	_, e = api.SessionClient().DescribeGuest(ctx, connect.NewRequest(&v1.DescribeGuestRequest{MachineId: args[0]}))
-	detail, ok := rpcmodel.Detail(e)
+	_, err = api.SessionClient().DescribeGuest(ctx, connect.NewRequest(&v1.DescribeGuestRequest{MachineId: args[0]}))
+	detail, ok := rpcmodel.Detail(err)
 	if !ok || detail.GetReason() != v1.ErrorReason_ERROR_REASON_PREREQUISITE {
-		return fmt.Errorf("expected stopped-session prerequisite, got %w", e)
+		return fmt.Errorf("expected stopped-session prerequisite, got %w", err)
 	}
 	return nil
 }
@@ -162,37 +162,37 @@ func runDeleteDependencyCheck(ctx context.Context, path string, args []string, o
 	if len(args) != 1 || !model.ValidID(args[0]) {
 		return errors.New("--expect-delete-dependency requires one MACHINE_ID")
 	}
-	config, e := client.LoadConfig(path)
-	if e != nil {
-		return e
+	config, err := client.LoadConfig(path)
+	if err != nil {
+		return err
 	}
-	api, e := client.NewAPI(config)
-	if e != nil {
-		return e
+	api, err := client.NewAPI(config)
+	if err != nil {
+		return err
 	}
 	defer api.Close()
 	key := model.NewID()
-	op, e := api.DeleteMachine(ctx, args[0], key)
-	if e == nil {
+	op, err := api.DeleteMachine(ctx, args[0], key)
+	if err == nil {
 		if writeErr := json.NewEncoder(out).Encode(op); writeErr != nil {
 			return writeErr
 		}
 		return fmt.Errorf("unexpected accepted delete operation %s (idempotency key %s)", op.ID, key)
 	}
-	detail, ok := rpcmodel.Detail(e)
+	detail, ok := rpcmodel.Detail(err)
 	if !ok || detail.GetReason() != v1.ErrorReason_ERROR_REASON_DEPENDENCY {
-		return fmt.Errorf("delete probe idempotency key %s requires inspection: %w", key, e)
+		return fmt.Errorf("delete probe idempotency key %s requires inspection: %w", key, err)
 	}
 	return nil
 }
 func execute(ctx context.Context, api *client.API, machine, script string, out io.Writer) (int, error) {
 	service := api.SessionClient()
-	desc, e := service.DescribeGuest(ctx, connect.NewRequest(&v1.DescribeGuestRequest{MachineId: machine}))
-	if e != nil {
-		return 0, e
+	desc, err := service.DescribeGuest(ctx, connect.NewRequest(&v1.DescribeGuestRequest{MachineId: machine}))
+	if err != nil {
+		return 0, err
 	}
 	id := uuid.NewString()
-	_, e = service.CreateSession(
+	_, err = service.CreateSession(
 		ctx,
 		connect.NewRequest(
 			&v1.CreateSessionRequest{
@@ -205,8 +205,8 @@ func execute(ctx context.Context, api *client.API, machine, script string, out i
 			},
 		),
 	)
-	if e != nil {
-		return 0, e
+	if err != nil {
+		return 0, err
 	}
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
@@ -216,7 +216,7 @@ func execute(ctx context.Context, api *client.API, machine, script string, out i
 	stream := service.AttachSession(ctx)
 	defer func() { _ = stream.CloseRequest() }()
 	defer func() { _ = stream.CloseResponse() }()
-	e = stream.Send(
+	err = stream.Send(
 		&v1.AttachmentRequest{
 			Command: &v1.AttachmentRequest_Open{
 				Open: &v1.Open{
@@ -228,12 +228,12 @@ func execute(ctx context.Context, api *client.API, machine, script string, out i
 			},
 		},
 	)
-	if e != nil {
-		return 0, e
+	if err != nil {
+		return 0, err
 	}
-	first, e := stream.Receive()
-	if e != nil {
-		return 0, e
+	first, err := stream.Receive()
+	if err != nil {
+		return 0, err
 	}
 	opened := first.GetOpened()
 	if opened == nil || opened.GetMode() != v1.OpenMode_OPEN_MODE_RESUME {
@@ -250,15 +250,15 @@ func receiveCommand(
 	ready := false
 	var pending strings.Builder
 	for {
-		event, e := stream.Receive()
-		if e != nil {
-			return 0, e
+		event, err := stream.Receive()
+		if err != nil {
+			return 0, err
 		}
 		switch value := event.GetEvent().(type) {
 		case *v1.AttachmentEvent_Output:
-			ready, e = commandOutput(stream, value.Output.GetData(), out, &pending, ready)
-			if e != nil {
-				return 0, e
+			ready, err = commandOutput(stream, value.Output.GetData(), out, &pending, ready)
+			if err != nil {
+				return 0, err
 			}
 
 		case *v1.AttachmentEvent_Ack:

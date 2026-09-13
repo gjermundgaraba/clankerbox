@@ -59,15 +59,15 @@ func TestHostServiceOwnsLifetimeAndRecoversCrashSocket(t *testing.T) {
 			break
 		}
 		select {
-		case e := <-result:
-			t.Fatalf("service stopped: %v", e)
+		case stopErr := <-result:
+			t.Fatalf("service stopped: %v", stopErr)
 		case <-deadline:
 			t.Fatal(err)
 		case <-time.After(time.Millisecond):
 		}
 	}
-	if e := host.Serve(t.Context(), cfg); !errors.Is(e, syscall.EWOULDBLOCK) {
-		t.Fatalf("duplicate server error: %v", e)
+	if err = host.Serve(t.Context(), cfg); !errors.Is(err, syscall.EWOULDBLOCK) {
+		t.Fatalf("duplicate server error: %v", err)
 	}
 	_, err = rpc.DescribeHost(t.Context(), connect.NewRequest(&v1.DescribeHostRequest{}))
 	requireNoError(t, err)

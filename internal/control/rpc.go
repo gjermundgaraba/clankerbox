@@ -38,9 +38,9 @@ func (s *machineRPC) ListHosts(
 	ctx context.Context,
 	_ *connect.Request[v1.ListHostsRequest],
 ) (*connect.Response[v1.ListHostsResponse], error) {
-	hs, e := s.c.Hosts(ctx)
-	if e != nil {
-		return nil, rpcError(e)
+	hs, err := s.c.Hosts(ctx)
+	if err != nil {
+		return nil, rpcError(err)
 	}
 	out := &v1.ListHostsResponse{}
 	for _, h := range hs {
@@ -67,12 +67,13 @@ func (s *machineRPC) ListMachines(
 	if err := model.ValidateLabels(r.Msg.GetLabels()); err != nil {
 		return nil, rpcmodel.ToError(model.NewError(model.ReasonInvalid, err.Error(), false))
 	}
-	ms, e := s.c.List(ctx)
-	if e != nil {
-		return nil, rpcError(e)
+	ms, err := s.c.List(ctx)
+	if err != nil {
+		return nil, rpcError(err)
 	}
 	if r.Msg.GetIncludeDeleted() {
-		deleted, err := s.c.deletedMachines(ctx)
+		var deleted []model.Machine
+		deleted, err = s.c.deletedMachines(ctx)
 		if err != nil {
 			return nil, rpcError(err)
 		}
@@ -124,12 +125,12 @@ func (c *Controller) resolve(ctx context.Context, id string) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var resolved string
-	e := c.db.QueryRowContext(ctx, "SELECT id FROM machines WHERE name=? AND deleted=0", id).Scan(&resolved)
-	if errors.Is(e, sql.ErrNoRows) {
+	err := c.db.QueryRowContext(ctx, "SELECT id FROM machines WHERE name=? AND deleted=0", id).Scan(&resolved)
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", model.NewError(model.ReasonNotFound, "machine not found", false)
 	}
-	if e != nil {
-		return "", e
+	if err != nil {
+		return "", err
 	}
 	return resolved, nil
 }
@@ -138,19 +139,19 @@ func (s *machineRPC) GetMachine(
 	ctx context.Context,
 	r *connect.Request[v1.GetMachineRequest],
 ) (*connect.Response[v1.Machine], error) {
-	id, e := s.c.resolve(ctx, r.Msg.GetMachineId())
-	if e != nil {
-		return nil, rpcError(e)
+	id, err := s.c.resolve(ctx, r.Msg.GetMachineId())
+	if err != nil {
+		return nil, rpcError(err)
 	}
-	m, e := s.c.Inspect(ctx, id)
-	return machineResult(m, e)
+	m, err := s.c.Inspect(ctx, id)
+	return machineResult(m, err)
 }
 
 func (s *machineRPC) CreateMachine(
 	ctx context.Context,
 	r *connect.Request[v1.CreateMachineRequest],
 ) (*connect.Response[v1.Operation], error) {
-	o, e := s.c.Create(
+	o, err := s.c.Create(
 		ctx,
 		r.Msg.GetIdempotencyKey(),
 		model.CreateInput{
@@ -160,15 +161,15 @@ func (s *machineRPC) CreateMachine(
 			Labels:  r.Msg.GetLabels(),
 		},
 	)
-	return operationResult(o, e)
+	return operationResult(o, err)
 }
 func (s *machineRPC) mutate(ctx context.Context, id, action, key string) (*connect.Response[v1.Operation], error) {
-	id, e := s.c.resolve(ctx, id)
-	if e != nil {
-		return nil, rpcError(e)
+	id, err := s.c.resolve(ctx, id)
+	if err != nil {
+		return nil, rpcError(err)
 	}
-	o, e := s.c.Mutate(ctx, id, action, key)
-	return operationResult(o, e)
+	o, err := s.c.Mutate(ctx, id, action, key)
+	return operationResult(o, err)
 }
 
 func (s *machineRPC) StartMachine(
@@ -198,14 +199,14 @@ func (s *machineRPC) derive(
 	labels map[string]string,
 ) (*connect.Response[v1.Operation], error) {
 	if action == forkAction || action == createCheckpointAction {
-		var e error
-		id, e = s.c.resolve(ctx, id)
-		if e != nil {
-			return nil, rpcError(e)
+		var err error
+		id, err = s.c.resolve(ctx, id)
+		if err != nil {
+			return nil, rpcError(err)
 		}
 	}
-	o, e := s.c.Derive(ctx, action, id, key, model.ChildInput{Name: name, Labels: labels})
-	return operationResult(o, e)
+	o, err := s.c.Derive(ctx, action, id, key, model.ChildInput{Name: name, Labels: labels})
+	return operationResult(o, err)
 }
 
 func (s *machineRPC) ForkMachine(
@@ -254,9 +255,9 @@ func (s *machineRPC) ListCheckpoints(
 	ctx context.Context,
 	r *connect.Request[v1.ListCheckpointsRequest],
 ) (*connect.Response[v1.ListCheckpointsResponse], error) {
-	cs, e := s.c.Checkpoints(ctx)
-	if e != nil {
-		return nil, rpcError(e)
+	cs, err := s.c.Checkpoints(ctx)
+	if err != nil {
+		return nil, rpcError(err)
 	}
 	out := &v1.ListCheckpointsResponse{}
 	for _, c := range cs {
@@ -271,9 +272,9 @@ func (s *machineRPC) GetCheckpoint(
 	ctx context.Context,
 	r *connect.Request[v1.GetCheckpointRequest],
 ) (*connect.Response[v1.Checkpoint], error) {
-	c, e := s.c.Checkpoint(ctx, r.Msg.GetCheckpointId())
-	if e != nil {
-		return nil, rpcError(e)
+	c, err := s.c.Checkpoint(ctx, r.Msg.GetCheckpointId())
+	if err != nil {
+		return nil, rpcError(err)
 	}
 	return connect.NewResponse(rpcmodel.ToCheckpoint(c)), nil
 }
@@ -282,20 +283,20 @@ func (s *machineRPC) GetOperation(
 	ctx context.Context,
 	r *connect.Request[v1.GetOperationRequest],
 ) (*connect.Response[v1.Operation], error) {
-	o, e := s.c.Operation(ctx, r.Msg.GetOperationId())
-	return operationResult(o, e)
+	o, err := s.c.Operation(ctx, r.Msg.GetOperationId())
+	return operationResult(o, err)
 }
 
 func (s *machineRPC) SetLabels(
 	ctx context.Context,
 	r *connect.Request[v1.SetLabelsRequest],
 ) (*connect.Response[v1.Machine], error) {
-	id, e := s.c.resolve(ctx, r.Msg.GetMachineId())
-	if e != nil {
-		return nil, rpcError(e)
+	id, err := s.c.resolve(ctx, r.Msg.GetMachineId())
+	if err != nil {
+		return nil, rpcError(err)
 	}
-	m, e := s.c.SetLabels(ctx, id, r.Msg.GetLabels())
-	return machineResult(m, e)
+	m, err := s.c.SetLabels(ctx, id, r.Msg.GetLabels())
+	return machineResult(m, err)
 }
 
 // Handler exposes the generated machine and session services behind bearer authentication.

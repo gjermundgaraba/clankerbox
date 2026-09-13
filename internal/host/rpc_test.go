@@ -57,11 +57,11 @@ func TestHostRPCReportsAcceptanceBeforeCompletionAndPollsWithoutReplay(t *testin
 	close(held.release)
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		done, e := rpc.GetHostOperation(
+		done, getErr := rpc.GetHostOperation(
 			context.Background(),
 			connect.NewRequest(&v1.GetHostOperationRequest{OperationId: req.OperationID}),
 		)
-		requireNoError(t, e)
+		requireNoError(t, getErr)
 		if done.Msg.GetStatus() == v1.OperationStatus_OPERATION_STATUS_SUCCEEDED {
 			break
 		}

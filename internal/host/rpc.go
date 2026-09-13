@@ -89,7 +89,7 @@ func (r *RPC) InspectMachine(
 		return nil, rpcmodel.ToError(model.NewError(model.ReasonConflict, "machine generation mismatch", false))
 	}
 	if out.Observation.Prepared && out.Observation.State == model.Running {
-		if lease, e := r.Service.helper.leaseGuest(ctx, in.Msg.GetMachineId()); e == nil {
+		if lease, err := r.Service.helper.leaseGuest(ctx, in.Msg.GetMachineId()); err == nil {
 			_, _ = lease.describe()
 			lease.release()
 		}

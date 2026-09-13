@@ -57,9 +57,9 @@ func (s *sessionRPC) DescribeGuest(
 	ctx context.Context,
 	r *connect.Request[v1.DescribeGuestRequest],
 ) (*connect.Response[v1.GuestDescription], error) {
-	h, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
-	if e != nil {
-		return nil, e
+	h, err := s.c.sessionHost(ctx, r.Msg.GetMachineId())
+	if err != nil {
+		return nil, err
 	}
 	return h.DescribeGuest(ctx, connect.NewRequest(r.Msg))
 }
@@ -68,9 +68,9 @@ func (s *sessionRPC) CreateSession(
 	ctx context.Context,
 	r *connect.Request[v1.CreateSessionRequest],
 ) (*connect.Response[v1.Session], error) {
-	h, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
-	if e != nil {
-		return nil, e
+	h, err := s.c.sessionHost(ctx, r.Msg.GetMachineId())
+	if err != nil {
+		return nil, err
 	}
 	return h.CreateSession(ctx, connect.NewRequest(r.Msg))
 }
@@ -79,9 +79,9 @@ func (s *sessionRPC) ListSessions(
 	ctx context.Context,
 	r *connect.Request[v1.ListSessionsRequest],
 ) (*connect.Response[v1.ListSessionsResponse], error) {
-	h, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
-	if e != nil {
-		return nil, e
+	h, err := s.c.sessionHost(ctx, r.Msg.GetMachineId())
+	if err != nil {
+		return nil, err
 	}
 	return h.ListSessions(ctx, connect.NewRequest(r.Msg))
 }
@@ -90,9 +90,9 @@ func (s *sessionRPC) EndSession(
 	ctx context.Context,
 	r *connect.Request[v1.EndSessionRequest],
 ) (*connect.Response[v1.Session], error) {
-	h, e := s.c.sessionHost(ctx, r.Msg.GetMachineId())
-	if e != nil {
-		return nil, e
+	h, err := s.c.sessionHost(ctx, r.Msg.GetMachineId())
+	if err != nil {
+		return nil, err
 	}
 	return h.EndSession(ctx, connect.NewRequest(r.Msg))
 }
@@ -101,17 +101,17 @@ func (s *sessionRPC) AttachSession(
 	ctx context.Context,
 	down *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent],
 ) error {
-	first, e := down.Receive()
-	if e != nil {
-		return e
+	first, err := down.Receive()
+	if err != nil {
+		return err
 	}
 	open := first.GetOpen()
 	if open == nil {
 		return rpcmodel.ToError(model.NewError(model.ReasonInvalid, "attachment must start with Open", false))
 	}
-	h, e := s.c.sessionHost(ctx, open.GetMachineId())
-	if e != nil {
-		return e
+	h, err := s.c.sessionHost(ctx, open.GetMachineId())
+	if err != nil {
+		return err
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

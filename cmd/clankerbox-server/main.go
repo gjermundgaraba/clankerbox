@@ -114,17 +114,17 @@ func controllerTLS(cmd *cli.Command) (*tls.Config, error) {
 			},
 		)
 	} else if cmd.String("tls-cert") != "" || cmd.String("tls-key") != "" {
-		certData, e := statefs.ReadRegular(cmd.String("tls-cert"))
-		if e != nil {
-			return nil, e
+		certData, err := statefs.ReadRegular(cmd.String("tls-cert"))
+		if err != nil {
+			return nil, err
 		}
-		keyData, e := statefs.ReadPrivate(cmd.String("tls-key"))
-		if e != nil {
-			return nil, e
+		keyData, err := statefs.ReadPrivate(cmd.String("tls-key"))
+		if err != nil {
+			return nil, err
 		}
-		pair, e := tls.X509KeyPair(certData, keyData)
-		if e != nil {
-			return nil, e
+		pair, err := tls.X509KeyPair(certData, keyData)
+		if err != nil {
+			return nil, err
 		}
 		return &tls.Config{
 			MinVersion:   tls.VersionTLS13,

@@ -73,13 +73,14 @@ func newCommand(stdin io.Reader, _ io.Writer) *cli.Command {
 					}
 					var binding *rpcidentity.Binding
 					if path := c.String("binding-file"); path != "" {
-						raw, e := statefs.ReadPrivate(path)
-						if e != nil {
-							return e
+						var raw []byte
+						raw, err = statefs.ReadPrivate(path)
+						if err != nil {
+							return err
 						}
 						binding = &rpcidentity.Binding{}
-						if e = json.Unmarshal(raw, binding); e != nil {
-							return e
+						if err = json.Unmarshal(raw, binding); err != nil {
+							return err
 						}
 					}
 					return daemon.Serve(

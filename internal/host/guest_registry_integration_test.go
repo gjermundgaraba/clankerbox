@@ -297,7 +297,7 @@ func TestGuestLeaseRegistrationRechecksOnlyItsMachineEpoch(t *testing.T) {
 				err   error
 			}
 			done := make(chan result, 1)
-			go func() { l, e := f.helper.leaseGuest(t.Context(), m.ID); done <- result{l, e} }()
+			go func() { l, err := f.helper.leaseGuest(t.Context(), m.ID); done <- result{l, err} }()
 			registryAwait(t, f.native.inspectEntered)
 			target := f.machines[1]
 			if same {
@@ -343,11 +343,11 @@ func TestGuestRenewalOutlivesCanceledCallerAndFailedInstallRemainsFenced(t *test
 			caller, cancel := context.WithCancel(t.Context())
 			first := make(chan error, 1)
 			go func() {
-				l, e := f.helper.leaseGuest(caller, m.ID)
+				l, leaseErr := f.helper.leaseGuest(caller, m.ID)
 				if l != nil {
 					l.release()
 				}
-				first <- e
+				first <- leaseErr
 			}()
 			registryAwait(t, f.native.verifyEntered)
 			registryAwait(t, old.ctx.Done())
@@ -357,11 +357,11 @@ func TestGuestRenewalOutlivesCanceledCallerAndFailedInstallRemainsFenced(t *test
 			}
 			second := make(chan error, 1)
 			go func() {
-				l, e := f.helper.leaseGuest(t.Context(), m.ID)
+				l, leaseErr := f.helper.leaseGuest(t.Context(), m.ID)
 				if l != nil {
 					l.release()
 				}
-				second <- e
+				second <- leaseErr
 			}()
 			close(f.native.verifyRelease)
 			err = <-second

@@ -43,9 +43,9 @@ const certificatePEM = "CERTIFICATE"
 
 // NewAuthority creates a private authority for an isolated host.
 func NewAuthority() (*Authority, error) {
-	k, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if e != nil {
-		return nil, e
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
 	}
 	t := &x509.Certificate{
 		Subject:               pkix.Name{CommonName: "clankerbox guest transport authority"},
@@ -55,13 +55,13 @@ func NewAuthority() (*Authority, error) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
 	}
-	der, e := x509.CreateCertificate(rand.Reader, t, t, &k.PublicKey, k)
-	if e != nil {
-		return nil, e
+	der, err := x509.CreateCertificate(rand.Reader, t, t, &k.PublicKey, k)
+	if err != nil {
+		return nil, err
 	}
-	c, e := x509.ParseCertificate(der)
-	if e != nil {
-		return nil, e
+	c, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, err
 	}
 	return &Authority{
 		Certificate: pem.EncodeToMemory(&pem.Block{Type: certificatePEM, Bytes: der}),
@@ -70,13 +70,13 @@ func NewAuthority() (*Authority, error) {
 	}, nil
 }
 func (a *Authority) issue(uri string, server bool, expiry time.Time) (Credentials, error) {
-	k, e := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if e != nil {
-		return Credentials{}, e
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return Credentials{}, err
 	}
-	u, e := url.Parse(uri)
-	if e != nil {
-		return Credentials{}, e
+	u, err := url.Parse(uri)
+	if err != nil {
+		return Credentials{}, err
 	}
 	t := &x509.Certificate{
 		NotBefore:   time.Now().Add(-time.Hour),
@@ -89,13 +89,13 @@ func (a *Authority) issue(uri string, server bool, expiry time.Time) (Credential
 		t.DNSNames = []string{"guest.clankerbox.internal"}
 		t.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 	}
-	der, e := x509.CreateCertificate(rand.Reader, t, a.cert, &k.PublicKey, a.key)
-	if e != nil {
-		return Credentials{}, e
+	der, err := x509.CreateCertificate(rand.Reader, t, a.cert, &k.PublicKey, a.key)
+	if err != nil {
+		return Credentials{}, err
 	}
-	key, e := x509.MarshalPKCS8PrivateKey(k)
-	if e != nil {
-		return Credentials{}, e
+	key, err := x509.MarshalPKCS8PrivateKey(k)
+	if err != nil {
+		return Credentials{}, err
 	}
 	return Credentials{
 		Certificate: pem.EncodeToMemory(&pem.Block{Type: certificatePEM, Bytes: der}),
@@ -128,13 +128,14 @@ func (a *Authority) HostCredentials(id string) (Credentials, error) {
 		return c, err
 	}
 	if a.directory != nil {
+		var raw []byte
 		//nolint:gosec // Private credentials are persisted only through statefs mode 0600.
-		raw, e := json.Marshal(c)
-		if e != nil {
-			return c, e
+		raw, err = json.Marshal(c)
+		if err != nil {
+			return c, err
 		}
-		if e = a.directory.WriteFile("host-"+id+".json", raw); e != nil {
-			return c, e
+		if err = a.directory.WriteFile("host-"+id+".json", raw); err != nil {
+			return c, err
 		}
 	}
 	if a.hosts == nil {
@@ -149,21 +150,21 @@ func (a *Authority) Binding(machine, host string) (Binding, error) {
 	if !model.ValidID(machine) || !model.ValidName(host) {
 		return Binding{}, errors.New("invalid machine or host identity")
 	}
-	c, e := a.issue("spiffe://clankerbox/machine/"+machine, true, time.Now().Add(30*24*time.Hour))
+	c, err := a.issue("spiffe://clankerbox/machine/"+machine, true, time.Now().Add(30*24*time.Hour))
 	return Binding{
 		MachineID:   machine,
 		HostID:      host,
 		Certificate: c.Certificate,
 		PrivateKey:  c.PrivateKey,
 		Authority:   c.Authority,
-	}, e
+	}, err
 }
 
 // HTTPClient verifies both the guest certificate chain and exact machine identity.
 func (c Credentials) HTTPClient(machine string) (*http.Client, error) {
-	cert, e := tls.X509KeyPair(c.Certificate, c.PrivateKey)
-	if e != nil {
-		return nil, e
+	cert, err := tls.X509KeyPair(c.Certificate, c.PrivateKey)
+	if err != nil {
+		return nil, err
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(c.Authority) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 
 	"clankerbox/internal/statefs"
 
@@ -67,9 +68,10 @@ func (h *Helper) prepareGuestLease(ctx context.Context, id string) (*guestLease,
 	g.mu.Unlock()
 	owned := false
 	if candidate == nil || candidate.key != key {
-		client, e := credentials.HTTPClient(id)
-		if e != nil {
-			return nil, false, e
+		var client *http.Client
+		client, err = credentials.HTTPClient(id)
+		if err != nil {
+			return nil, false, err
 		}
 		candidate = &guestClient{key: key, http: client, rpc: clankerboxv1connect.NewSessionServiceClient(
 			client, "https://"+m.Endpoint, connect.WithReadMaxBytes(rpctransport.MaxMessage), connect.WithSendMaxBytes(rpctransport.MaxMessage))}

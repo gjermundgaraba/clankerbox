@@ -173,9 +173,9 @@ func (f *rpcFixture) SetLabels(
 }
 func startH2(t *testing.T, h http.Handler) string {
 	t.Helper()
-	ln, e := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
 	server := rpctransport.Server(h, nil)
 	go func() { _ = server.Serve(ln) }()
@@ -213,7 +213,7 @@ func TestTypedLifecycleWaitAndNoResubmission(t *testing.T) {
 			t.Parallel()
 			f := &rpcFixture{final: status}
 			a := newRPCFixture(t, f)
-			out, e := runCLI(
+			out, err := runCLI(
 				t,
 				a,
 				jsonFlag,
@@ -225,11 +225,11 @@ func TestTypedLifecycleWaitAndNoResubmission(t *testing.T) {
 				"40ms",
 			)
 			if status == fixtureSucceeded {
-				if e != nil || !strings.Contains(out, testID) {
-					t.Fatalf("%s %v", out, e)
+				if err != nil || !strings.Contains(out, testID) {
+					t.Fatalf("%s %v", out, err)
 				}
-			} else if e == nil || !strings.Contains(e.Error(), otherID) {
-				t.Fatalf("missing durable operation outcome: %v", e)
+			} else if err == nil || !strings.Contains(err.Error(), otherID) {
+				t.Fatalf("missing durable operation outcome: %v", err)
 			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
@@ -243,9 +243,9 @@ func TestTypedAsyncAndArgumentValidation(t *testing.T) {
 	t.Parallel()
 	f := &rpcFixture{}
 	a := newRPCFixture(t, f)
-	out, e := runCLI(t, a, jsonFlag, createCommand, testMachineName, "--async")
-	if e != nil || !strings.Contains(out, otherID) {
-		t.Fatalf("%s %v", out, e)
+	out, err := runCLI(t, a, jsonFlag, createCommand, testMachineName, "--async")
+	if err != nil || !strings.Contains(out, otherID) {
+		t.Fatalf("%s %v", out, err)
 	}
 	f.mu.Lock()
 	if f.submissions != 1 || f.polls != 0 {
@@ -253,7 +253,7 @@ func TestTypedAsyncAndArgumentValidation(t *testing.T) {
 	}
 	f.mu.Unlock()
 	for _, args := range [][]string{{createCommand, testMachineName, "--timeout", "0s"}, {createCommand, testMachineName, "--profile"}} {
-		if _, e = runCLI(t, a, args...); e == nil {
+		if _, err = runCLI(t, a, args...); err == nil {
 			t.Fatal("invalid flags accepted")
 		}
 	}
@@ -268,13 +268,13 @@ func TestTypedDiscoveryAliasesLabelsAndOutput(t *testing.T) {
 	f := &rpcFixture{}
 	a := newRPCFixture(t, f)
 	for _, args := range [][]string{{"hosts"}, {"profiles"}, {"machines"}, {inspectCommand, testMachineName}, {jsonFlag, inspectCommand, testID}, {jsonFlag, "labels", testMachineName, "suite=rpc"}} {
-		out, e := runCLI(t, a, args...)
-		if e != nil || out == "" {
-			t.Fatalf("%v %q %v", args, out, e)
+		out, err := runCLI(t, a, args...)
+		if err != nil || out == "" {
+			t.Fatalf("%v %q %v", args, out, err)
 		}
 	}
-	if _, e := a.Resolve(t.Context(), "missing"); connect.CodeOf(e) != connect.CodeNotFound {
-		t.Fatal(e)
+	if _, err := a.Resolve(t.Context(), "missing"); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatal(err)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -286,13 +286,13 @@ func TestTokenReadPerRequestAndRedirectRefusal(t *testing.T) {
 	t.Parallel()
 	f := &rpcFixture{}
 	a := newRPCFixture(t, f)
-	if _, e := a.Machines(t.Context()); e != nil {
-		t.Fatal(e)
+	if _, err := a.Machines(t.Context()); err != nil {
+		t.Fatal(err)
 	}
-	if e := os.WriteFile(a.Config.TokenFile, []byte(strings.Repeat("z", 32)), 0600); e != nil {
-		t.Fatal(e)
+	if err := os.WriteFile(a.Config.TokenFile, []byte(strings.Repeat("z", 32)), 0600); err != nil {
+		t.Fatal(err)
 	}
-	if _, e := a.Machines(t.Context()); e == nil {
+	if _, err := a.Machines(t.Context()); err == nil {
 		t.Fatal("token was cached")
 	}
 	var leaked atomic.Int32
@@ -302,7 +302,7 @@ func TestTokenReadPerRequestAndRedirectRefusal(t *testing.T) {
 		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
 	}))
 	b := testAPI(t, origin)
-	if _, e := b.Machines(t.Context()); e == nil {
+	if _, err := b.Machines(t.Context()); err == nil {
 		t.Fatal("redirect accepted")
 	}
 	if leaked.Load() != 0 {
@@ -327,8 +327,8 @@ func TestAPIRequestsBypassDefaultProxy(t *testing.T) {
 	tr.Proxy = http.ProxyURL(u)
 	defer func() { tr.Proxy = old }()
 	a := newRPCFixture(t, &rpcFixture{})
-	if _, e := a.Machines(t.Context()); e != nil {
-		t.Fatal(e)
+	if _, err := a.Machines(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 	if proxied.Load() != 0 {
 		t.Fatal("ambient proxy used")
@@ -339,9 +339,9 @@ func TestCanceledWaitRetainsIdentity(t *testing.T) {
 	a := newRPCFixture(t, &rpcFixture{final: fixturePending})
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	op, e := a.WaitOperation(ctx, model.Operation{ID: otherID, MachineID: testID, Status: fixturePending})
-	if e == nil || op.ID != otherID || op.MachineID != testID {
-		t.Fatalf("lost identity %+v %v", op, e)
+	op, err := a.WaitOperation(ctx, model.Operation{ID: otherID, MachineID: testID, Status: fixturePending})
+	if err == nil || op.ID != otherID || op.MachineID != testID {
+		t.Fatalf("lost identity %+v %v", op, err)
 	}
 }
 
@@ -454,9 +454,9 @@ func TestAllTypedLifecycleAndCheckpointCommands(t *testing.T) {
 			a := newRPCFixture(t, f)
 			args = append([]string{jsonFlag}, args...)
 			args = append(args, "--async", "--idempotency-key", "once")
-			out, e := runCLI(t, a, args...)
-			if e != nil || !strings.Contains(out, otherID) {
-				t.Fatalf("%s %v", out, e)
+			out, err := runCLI(t, a, args...)
+			if err != nil || !strings.Contains(out, otherID) {
+				t.Fatalf("%s %v", out, err)
 			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
@@ -467,9 +467,9 @@ func TestAllTypedLifecycleAndCheckpointCommands(t *testing.T) {
 	}
 	a := newRPCFixture(t, &rpcFixture{})
 	for _, args := range [][]string{{checkpointCommand, "list"}, {jsonFlag, checkpointCommand, inspectCommand, testID}} {
-		out, e := runCLI(t, a, args...)
-		if e != nil || !strings.Contains(out, testID) {
-			t.Fatalf("%s %v", out, e)
+		out, err := runCLI(t, a, args...)
+		if err != nil || !strings.Contains(out, testID) {
+			t.Fatalf("%s %v", out, err)
 		}
 	}
 }

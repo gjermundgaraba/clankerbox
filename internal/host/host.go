@@ -729,9 +729,9 @@ func (r *lifecycleAttempt) startRetained(ctx context.Context, state RuntimeState
 		return errors.New("start is ambiguous; refusing another cold boot")
 	}
 	r.machine.Branchable = r.machine.Profile.Runtime == runtimeSmolvm
-	endpoint, e := r.helper.runtime.Verify(ctx, r.machine)
-	if e != nil {
-		return e
+	endpoint, err := r.helper.runtime.Verify(ctx, r.machine)
+	if err != nil {
+		return err
 	}
 	r.machine.Endpoint = endpoint
 

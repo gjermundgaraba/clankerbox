@@ -65,9 +65,9 @@ func (runner commandRunner) inspectOperation(ctx context.Context, args []string)
 	if !model.ValidID(args[0]) {
 		return errors.New("operation requires an immutable operation ID")
 	}
-	out, e := runner.api.Operation(ctx, args[0])
-	if e != nil {
-		return e
+	out, err := runner.api.Operation(ctx, args[0])
+	if err != nil {
+		return err
 	}
 	return runner.output(out)
 }
@@ -77,25 +77,25 @@ func (runner commandRunner) createMachine(
 	name, profile, host, idem string,
 	wait *waitOptions,
 ) error {
-	var e error
 	if profile == "" {
 		return errors.New("create requires a profile (flag or config default)")
 	}
-	host, e = runner.api.selectHost(ctx, host, profile)
-	if e != nil {
-		return e
+	var err error
+	host, err = runner.api.selectHost(ctx, host, profile)
+	if err != nil {
+		return err
 	}
 	in := model.CreateInput{
 		Name:    name,
 		Profile: profile,
 		Host:    host,
 	}
-	if e = in.Validate(); e != nil {
-		return e
+	if err = in.Validate(); err != nil {
+		return err
 	}
-	id, e := requestKey(idem)
-	if e != nil {
-		return e
+	id, err := requestKey(idem)
+	if err != nil {
+		return err
 	}
 	operation, err := runner.api.CreateMachine(ctx, id, in)
 	return runner.finishMutation(ctx, operation, err, id, wait, createCommand)

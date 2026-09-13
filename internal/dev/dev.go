@@ -66,8 +66,8 @@ type environment struct {
 
 // DefaultStateDir returns the current project directory’s owned appliance path.
 func DefaultStateDir() string {
-	wd, e := os.Getwd()
-	if e != nil {
+	wd, err := os.Getwd()
+	if err != nil {
 		return ".clankerbox"
 	}
 	return filepath.Join(wd, ".clankerbox")
@@ -82,16 +82,16 @@ func canonicalState(path string) (string, error) {
 	if path == "" {
 		path = DefaultStateDir()
 	}
-	p, e := filepath.Abs(path)
-	if e != nil {
-		return "", e
+	p, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
 	}
 	if p == string(filepath.Separator) {
 		return "", errors.New("filesystem root cannot be an environment")
 	}
-	parent, e := filepath.EvalSymlinks(filepath.Dir(p))
-	if e != nil {
-		return "", e
+	parent, err := filepath.EvalSymlinks(filepath.Dir(p))
+	if err != nil {
+		return "", err
 	}
 	p = filepath.Join(parent, filepath.Base(p))
 	if i, statErr := os.Lstat(p); statErr == nil && i.Mode()&os.ModeSymlink != 0 {
@@ -110,34 +110,34 @@ func (e *environment) close() {
 }
 
 func jsonWrite(d *statefs.Dir, name string, value any) error {
-	raw, e := json.MarshalIndent(value, "", "  ")
-	if e != nil {
-		return e
+	raw, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
 	}
 	return d.WriteFile(name, append(raw, '\n'))
 }
 
 func token() string {
 	var bytes [32]byte
-	if _, e := rand.Read(bytes[:]); e != nil {
-		panic(e)
+	if _, err := rand.Read(bytes[:]); err != nil {
+		panic(err)
 	}
 	return hex.EncodeToString(bytes[:])
 }
 
 func openEnvironment(opts Options, create bool) (*environment, error) {
-	state, e := canonicalState(opts.StateDir)
-	if e != nil {
-		return nil, e
+	state, err := canonicalState(opts.StateDir)
+	if err != nil {
+		return nil, err
 	}
 	if !create {
-		if _, e = os.Lstat(state); e != nil {
-			return nil, e
+		if _, err = os.Lstat(state); err != nil {
+			return nil, err
 		}
 	}
-	d, e := statefs.Open(state)
-	if e != nil {
-		return nil, e
+	d, err := statefs.Open(state)
+	if err != nil {
+		return nil, err
 	}
 	env := &environment{dir: d}
 	ok := false
@@ -146,25 +146,25 @@ func openEnvironment(opts Options, create bool) (*environment, error) {
 			env.close()
 		}
 	}()
-	env.lock, e = d.Lock(environmentLock, true)
-	if e != nil {
-		return nil, fmt.Errorf("environment is active or teardown is already running: %w", e)
+	env.lock, err = d.Lock(environmentLock, true)
+	if err != nil {
+		return nil, fmt.Errorf("environment is active or teardown is already running: %w", err)
 	}
 
-	data, e := d.ReadFile(environmentManifest)
+	data, err := d.ReadFile(environmentManifest)
 	switch {
-	case errors.Is(e, os.ErrNotExist):
+	case errors.Is(err, os.ErrNotExist):
 		if !create {
 			return nil, errors.New("not an owned dev environment")
 		}
-		e = env.initialize(state, opts.Bundle)
-	case e != nil:
-		return nil, e
+		err = env.initialize(state, opts.Bundle)
+	case err != nil:
+		return nil, err
 	default:
-		e = env.restore(data, state, opts.Bundle)
+		err = env.restore(data, state, opts.Bundle)
 	}
-	if e != nil {
-		return nil, e
+	if err != nil {
+		return nil, err
 	}
 
 	ok = true

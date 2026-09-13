@@ -19,7 +19,7 @@ func TestPortLeasesCoordinateIndependentHostRoots(t *testing.T) {
 	}
 	out := make(chan result, 2)
 	for i, h := range []*Helper{a, b} {
-		go func() { p, e := h.port(context.Background(), ids[i]); out <- result{p, e} }()
+		go func() { p, err := h.port(context.Background(), ids[i]); out <- result{p, err} }()
 	}
 	x, y := <-out, <-out
 	if x.err != nil || y.err != nil {
@@ -28,23 +28,23 @@ func TestPortLeasesCoordinateIndependentHostRoots(t *testing.T) {
 	if x.port == y.port {
 		t.Fatal("independent roots reserved same port")
 	}
-	again, e := a.port(context.Background(), ids[0])
-	if e != nil {
-		t.Fatal(e)
+	again, err := a.port(context.Background(), ids[0])
+	if err != nil {
+		t.Fatal(err)
 	}
 	reopened := &Helper{cfg: a.cfg}
-	retained, e := reopened.port(context.Background(), ids[0])
-	if e != nil || retained != again {
-		t.Fatalf("retained lease differs: %d %d %v", again, retained, e)
+	retained, err := reopened.port(context.Background(), ids[0])
+	if err != nil || retained != again {
+		t.Fatalf("retained lease differs: %d %d %v", again, retained, err)
 	}
 	wrong := Manifest{ID: ids[1], Port: again}
 	wrong.Profile.Runtime = runtimeSmolvm
-	if e = a.releasePort(wrong); e == nil {
+	if err = a.releasePort(wrong); err == nil {
 		t.Fatal("released another machine lease")
 	}
 	own := wrong
 	own.ID = ids[0]
-	if e = a.releasePort(own); e != nil {
-		t.Fatal(e)
+	if err = a.releasePort(own); err != nil {
+		t.Fatal(err)
 	}
 }

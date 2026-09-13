@@ -143,9 +143,9 @@ func newMacSupervisorFixture(
 			}
 		case "bootstrap":
 			f.loaded = true
-			b, e := os.ReadFile(c.args[2])
-			if e != nil {
-				return nil, e
+			b, err := os.ReadFile(c.args[2])
+			if err != nil {
+				return nil, err
 			}
 			f.jobs = append(f.jobs, string(b))
 		case "bootout":

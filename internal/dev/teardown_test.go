@@ -64,9 +64,9 @@ func (f *teardownFixture) GetOperation(
 }
 func teardownRPC(t *testing.T, f *teardownFixture) clankerboxv1connect.MachineServiceClient {
 	t.Helper()
-	ln, e := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
 	path, handler := clankerboxv1connect.NewMachineServiceHandler(f)
 	mux := http.NewServeMux()
@@ -74,33 +74,33 @@ func teardownRPC(t *testing.T, f *teardownFixture) clankerboxv1connect.MachineSe
 	server := rpctransport.Server(mux, nil)
 	go func() { _ = server.Serve(ln) }()
 	t.Cleanup(func() { _ = server.Close() })
-	hc, url, e := rpctransport.Client("http://"+ln.Addr().String(), rpctransport.Credentials{}, "")
-	if e != nil {
-		t.Fatal(e)
+	hc, url, err := rpctransport.Client("http://"+ln.Addr().String(), rpctransport.Credentials{}, "")
+	if err != nil {
+		t.Fatal(err)
 	}
 	t.Cleanup(hc.CloseIdleConnections)
 	return clankerboxv1connect.NewMachineServiceClient(hc, url)
 }
 func TestTeardownLostAcknowledgementReusesDurableIntent(t *testing.T) {
 	t.Parallel()
-	dir, e := statefs.Open(filepath.Join(t.TempDir(), "state"))
-	if e != nil {
-		t.Fatal(e)
+	dir, err := statefs.Open(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer func() { _ = dir.Close() }()
 	env := &environment{dir: dir}
 	journal := teardownJournal{Intents: map[string]*teardownIntent{}}
 	fixture := &teardownFixture{loseReply: true}
 	rpc := teardownRPC(t, fixture)
-	if e = env.teardownMutation(t.Context(), rpc, &journal, "stop", "machine"); e == nil {
+	if err = env.teardownMutation(t.Context(), rpc, &journal, "stop", "machine"); err == nil {
 		t.Fatal("lost acknowledgement counted as completion")
 	}
 	key := journal.Intents["stop:machine"].Key
 	if key == "" || journal.Intents["stop:machine"].Done {
 		t.Fatal("unsafe missing durable intent")
 	}
-	if e = env.teardownMutation(t.Context(), rpc, &journal, "stop", "machine"); e != nil {
-		t.Fatal(e)
+	if err = env.teardownMutation(t.Context(), rpc, &journal, "stop", "machine"); err != nil {
+		t.Fatal(err)
 	}
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
@@ -113,9 +113,9 @@ func TestTeardownLostAcknowledgementReusesDurableIntent(t *testing.T) {
 }
 func TestTeardownCancellationRetainsOperationAndPollsWithoutResubmission(t *testing.T) {
 	t.Parallel()
-	dir, e := statefs.Open(filepath.Join(t.TempDir(), "state"))
-	if e != nil {
-		t.Fatal(e)
+	dir, err := statefs.Open(filepath.Join(t.TempDir(), "state"))
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer func() { _ = dir.Close() }()
 	env := &environment{dir: dir}
@@ -131,7 +131,7 @@ func TestTeardownCancellationRetainsOperationAndPollsWithoutResubmission(t *test
 		case <-ctx.Done():
 		}
 	}()
-	if e = env.teardownMutation(ctx, rpc, &journal, "stop", "machine"); e == nil {
+	if err = env.teardownMutation(ctx, rpc, &journal, "stop", "machine"); err == nil {
 		t.Fatal("pending acknowledgement counted as completion")
 	}
 	if journal.Intents["stop:machine"].OperationID != fixtureAcceptedOperation || journal.Intents["stop:machine"].Done {
@@ -140,8 +140,8 @@ func TestTeardownCancellationRetainsOperationAndPollsWithoutResubmission(t *test
 	fixture.mu.Lock()
 	fixture.pending = false
 	fixture.mu.Unlock()
-	if e = env.teardownMutation(t.Context(), rpc, &journal, "stop", "machine"); e != nil {
-		t.Fatal(e)
+	if err = env.teardownMutation(t.Context(), rpc, &journal, "stop", "machine"); err != nil {
+		t.Fatal(err)
 	}
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()

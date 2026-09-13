@@ -131,7 +131,7 @@ func (n *NativeRuntime) forkDarwin(ctx context.Context, child Manifest, branch s
 		return err
 	}
 	target := n.Config.LaunchdDomain + "/" + n.label(child)
-	if _, e := n.supervisor(ctx, child, "print", target); e == nil {
+	if _, err := n.supervisor(ctx, child, "print", target); err == nil {
 		return errors.New("branch launch job already exists; explicit inspection required")
 	}
 	if _, err := n.supervisor(ctx, child, "bootstrap", n.Config.LaunchdDomain, n.job(child)); err != nil {

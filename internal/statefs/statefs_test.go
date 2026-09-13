@@ -373,11 +373,11 @@ func TestConcurrentFirstLockCreation(t *testing.T) {
 	for _, d := range []*statefs.Dir{dir, other} {
 		go func() {
 			<-start
-			lock, e := d.Lock("first.lock", false)
-			if e == nil {
-				e = lock.Close()
+			lock, lockErr := d.Lock("first.lock", false)
+			if lockErr == nil {
+				lockErr = lock.Close()
 			}
-			results <- e
+			results <- lockErr
 		}()
 	}
 	close(start)

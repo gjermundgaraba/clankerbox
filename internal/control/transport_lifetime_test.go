@@ -38,17 +38,18 @@ func TestControllerReusesHostConnectionAcrossServices(t *testing.T) {
 	t.Cleanup(transport.Close)
 	host := model.Host{ID: "fixture", Endpoint: "http://" + listener.Addr().String()}
 	for range 3 {
-		clients, e := transport.client(host)
-		if e != nil {
-			t.Fatal(e)
+		var clients *hostClients
+		clients, err = transport.client(host)
+		if err != nil {
+			t.Fatal(err)
 		}
-		_, e = clients.host.DescribeHost(t.Context(), connect.NewRequest(&v1.DescribeHostRequest{}))
-		if connect.CodeOf(e) != connect.CodeUnimplemented {
-			t.Fatal(e)
+		_, err = clients.host.DescribeHost(t.Context(), connect.NewRequest(&v1.DescribeHostRequest{}))
+		if connect.CodeOf(err) != connect.CodeUnimplemented {
+			t.Fatal(err)
 		}
-		_, e = clients.sessions.ListSessions(t.Context(), connect.NewRequest(&v1.ListSessionsRequest{}))
-		if connect.CodeOf(e) != connect.CodeUnimplemented {
-			t.Fatal(e)
+		_, err = clients.sessions.ListSessions(t.Context(), connect.NewRequest(&v1.ListSessionsRequest{}))
+		if connect.CodeOf(err) != connect.CodeUnimplemented {
+			t.Fatal(err)
 		}
 	}
 	if count := connections.Load(); count != 1 {

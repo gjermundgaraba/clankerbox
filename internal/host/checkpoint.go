@@ -158,7 +158,7 @@ func (h *Helper) applyDerived(
 	var err error
 	// Accepted means no side effects have started. Everything from here is a single
 	// attempt. Persisting executing before the first side effect prevents replay.
-	unresolved := func(e error) model.Response { return h.unresolvedDerived(ctx, req, &m, &a, e) }
+	unresolved := func(err error) model.Response { return h.unresolvedDerived(ctx, req, &m, &a, err) }
 
 	a.Phase = req.Action
 	if err = h.save(ctx, m, a); err != nil {
@@ -226,9 +226,9 @@ func (h *Helper) derivedSource(ctx context.Context, req model.Request) (Manifest
 		!model.SameProfile(source.Profile, req.Profile) {
 		return Manifest{}, model.NewError(model.ReasonConflict, "source identity/profile/generation conflict", false)
 	}
-	state, e := h.runtime.Inspect(ctx, source)
-	if e != nil {
-		return Manifest{}, e
+	state, err := h.runtime.Inspect(ctx, source)
+	if err != nil {
+		return Manifest{}, err
 	}
 	want := model.Stopped
 	if source.Profile.Runtime == runtimeSmolvm {
@@ -244,12 +244,12 @@ func (h *Helper) derivedCheckpoint(ctx context.Context, req model.Request) (*own
 	if req.Checkpoint == nil || !model.ValidID(req.Checkpoint.ID) {
 		return nil, model.NewError(model.ReasonInvalid, "owned checkpoint ID required", false)
 	}
-	value, e := h.checkpoint(ctx, req.Checkpoint.ID)
-	if errors.Is(e, sql.ErrNoRows) {
+	value, err := h.checkpoint(ctx, req.Checkpoint.ID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, model.NewError(model.ReasonNotFound, "checkpoint not found", false)
 	}
-	if e != nil {
-		return nil, e
+	if err != nil {
+		return nil, err
 	}
 	cp := &value
 	expected := *req.Checkpoint
@@ -264,7 +264,7 @@ func (h *Helper) derivedCheckpoint(ctx context.Context, req model.Request) (*own
 			return nil, model.NewError(model.ReasonConfiguration, "checkpoint is incompatible with pinned host/runtime/profile", false)
 		}
 	}
-	if err := h.resourceIdle(ctx, cp.ID, true); err != nil {
+	if err = h.resourceIdle(ctx, cp.ID, true); err != nil {
 		return nil, err
 	}
 	return cp, nil
@@ -292,10 +292,10 @@ func (h *Helper) captureIdentity(
 		!model.SameProfile(value.Profile, req.Profile) {
 		return Manifest{}, nil, model.NewError(model.ReasonInvalid, "invalid checkpoint identity", false)
 	}
-	if _, e := h.checkpoint(ctx, value.ID); e == nil {
+	if _, err := h.checkpoint(ctx, value.ID); err == nil {
 		return Manifest{}, nil, model.NewError(model.ReasonConflict, "checkpoint identity already owned", false)
-	} else if !errors.Is(e, sql.ErrNoRows) {
-		return Manifest{}, nil, e
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return Manifest{}, nil, err
 	}
 	value.RuntimePin = h.runtimePin(value.Profile)
 	cp := &ownedCheckpoint{Checkpoint: value, Source: source}
@@ -313,10 +313,10 @@ func (h *Helper) childIdentity(
 	if req.Generation != 1 || !model.ValidName(req.Name) {
 		return Manifest{}, model.NewError(model.ReasonInvalid, "child requires a new generation-one identity/name", false)
 	}
-	if _, e := h.manifest(ctx, req.MachineID); e == nil {
+	if _, err := h.manifest(ctx, req.MachineID); err == nil {
 		return Manifest{}, model.NewError(model.ReasonConflict, "child identity already owned", false)
-	} else if !errors.Is(e, sql.ErrNoRows) {
-		return Manifest{}, e
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return Manifest{}, err
 	}
 	m := Manifest{
 		ID:              req.MachineID,
@@ -428,13 +428,13 @@ func (h *Helper) unresolvedDerived(
 	req model.Request,
 	m *Manifest,
 	a *accepted,
-	e error,
+	err error,
 ) model.Response {
 	if req.Action == actionFork || req.Action == actionRestore {
 		m.Prepared = false
 		m.Endpoint = ""
 	}
-	a.Response = model.Response{OperationID: req.OperationID, Status: statusUnresolved, Error: e.Error()}
+	a.Response = model.Response{OperationID: req.OperationID, Status: statusUnresolved, Error: err.Error()}
 	if a.Checkpoint != nil && req.Action == actionCapture {
 		a.Checkpoint.Status = statusUnresolved
 	}
@@ -492,8 +492,8 @@ func (h *Helper) resumeAcceptedDerived(ctx context.Context, req model.Request, a
 		if req.Checkpoint == nil {
 			return failure(req, errors.New("accepted checkpoint missing"))
 		}
-		value, e := h.checkpoint(ctx, req.Checkpoint.ID)
-		err = e
+		var value ownedCheckpoint
+		value, err = h.checkpoint(ctx, req.Checkpoint.ID)
 		cp = &value
 	}
 	if err != nil {

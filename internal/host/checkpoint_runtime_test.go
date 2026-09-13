@@ -358,16 +358,17 @@ func exerciseCapture(t *testing.T, interrupted bool) {
 		if err == nil {
 			t.Fatal("interruption succeeded")
 		}
-		if _, e := os.Stat(
+		if _, err = os.Stat(
 			filepath.Join(n.Config.Root, "checkpoints", cp.ID, "capture.smolcheckpoint"),
-		); e != nil {
+		); err != nil {
 			t.Fatal("discarded ambiguous artifact")
 		}
 	} else {
 		requireNoError(t, err)
-		info, e := os.Stat(filepath.Join(n.Config.Root, "checkpoints", cp.ID, "capture.smolcheckpoint"))
-		if e != nil || info.Mode().Perm() != 0600 {
-			t.Fatal("artifact not private", e)
+		var info os.FileInfo
+		info, err = os.Stat(filepath.Join(n.Config.Root, "checkpoints", cp.ID, "capture.smolcheckpoint"))
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatal("artifact not private", err)
 		}
 	}
 	if err = n.Capture(context.Background(), source, cp); err == nil || len(r.calls) != 1 {

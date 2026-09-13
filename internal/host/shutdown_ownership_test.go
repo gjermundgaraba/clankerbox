@@ -104,7 +104,7 @@ func assertShutdownRetainsOwnership(t *testing.T, h *Helper, requests *rpctransp
 		err  error
 	}
 	nextOwner := make(chan acquired, 1)
-	go func() { l, e := statefs.LockFile(lockPath, false); nextOwner <- acquired{l, e} }()
+	go func() { l, lockErr := statefs.LockFile(lockPath, false); nextOwner <- acquired{l, lockErr} }()
 	close(release)
 	select {
 	case result := <-nextOwner:
