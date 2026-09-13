@@ -4,7 +4,8 @@ Status: accepted
 
 ## Context
 
-Clankerbox serves one owner running coding agents in VMs that live for weeks.
+Clankerbox is single-tenant: one operator runs coding agents in VMs that live
+for weeks.
 Applications are independent consumers of the API, not parts of the product.
 Ephemeral-lifecycle orchestrators such as Orchard delete disks when a worker
 shuts down or loses its controller, which conflicts with long retention.

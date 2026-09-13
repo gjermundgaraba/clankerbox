@@ -85,7 +85,7 @@ func setup(t *testing.T) (*host.Helper, host.Config, *memoryRuntime, model.Reque
 		PortLeaseRoot: filepath.Join(root, "ports"),
 		Profiles:      []host.ProfileBinding{{Profile: p, ImagePath: "seed"}},
 		RuntimeDigest: "engine-content",
-		TartPath:      "/opt/homebrew/bin/tart",
+		TartPath:      "/usr/local/bin/tart",
 	}
 	rt := &memoryRuntime{}
 	h, err := host.Open(cfg, rt)

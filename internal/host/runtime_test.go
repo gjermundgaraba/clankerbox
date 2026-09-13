@@ -131,7 +131,7 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 		Root:          root,
 		SmolvmPath:    testSmolvmPath,
 		LibraryDir:    testSmolvmLibrary,
-		DNS:           "185.12.64.1",
+		DNS:           "9.9.9.9",
 	}
 	cfg.SmolvmPath = templateBundle(t)
 	requireNoError(t, cfg.Validate())
@@ -146,7 +146,7 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	}
 	create := runner.calls[1]
 	joined := strings.Join(create.args, " ")
-	for _, required := range []string{"machine create --name cb-", "--cpus 2 --mem 2048", "--net-backend virtio-net", "--port 22001:7443", "--dns 185.12.64.1 -- /bin/true"} {
+	for _, required := range []string{"machine create --name cb-", "--cpus 2 --mem 2048", "--net-backend virtio-net", "--port 22001:7443", "--dns 9.9.9.9 -- /bin/true"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("missing %s from %s", required, joined)
 		}

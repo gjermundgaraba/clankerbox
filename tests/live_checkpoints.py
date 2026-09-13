@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Fork/checkpoint acceptance using one explicitly retained disposable source."""
+
 import argparse
 from functools import partial
 import json
@@ -18,12 +19,18 @@ def main():
     parser.add_argument('--fork-only', action='store_true')
     args = parser.parse_args()
     source = json.loads(Path(args.lifecycle_result).read_text())
-    if (not source['name'].startswith('accept-') or source['status'] != 'passed'
-            or source.get('cleaned') or source.get('pending') or source.get('cleanup_error')):
+    if (
+        not source['name'].startswith('accept-')
+        or source['status'] != 'passed'
+        or source.get('cleaned')
+        or source.get('pending')
+        or source.get('cleanup_error')
+    ):
         raise ValueError('an uncleaned passed disposable lifecycle report is required')
-    evidence = Report(args.result,
-                      {'source': source['machine_id'], 'machines': [source['machine_id']],
-                       'events': [], 'status': 'running'})
+    evidence = Report(
+        args.result,
+        {'source': source['machine_id'], 'machines': [source['machine_id']], 'events': [], 'status': 'running'},
+    )
     report = evidence.data
     acceptance = Acceptance(args.binary, args.config, evidence)
     save, run, operation = evidence.save, acceptance.run, acceptance.operation
@@ -64,7 +71,7 @@ def main():
         write(mid, 'source-A')
         original_identity = describe_guest(args.session_runner, args.config, mid)
         if linux:
-            program = '''import http.server, json, os, time, uuid
+            program = """import http.server, json, os, time, uuid
 token = uuid.uuid4().hex
 started = time.monotonic()
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -74,10 +81,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
-'''
-            guest(mid, 'sh', '-se', data=f"cat > \"$HOME/{directory}/memory.py\" <<'PY'\n{program}PY\n"
+"""
+            guest(
+                mid,
+                'sh',
+                '-se',
+                data=f'cat > "$HOME/{directory}/memory.py" <<\'PY\'\n{program}PY\n'
                 + f'nohup python3 "$HOME/{directory}/memory.py" >"$HOME/{directory}/memory.log" 2>&1 </dev/null &\n'
-                + 'i=0; until curl -fsS http://127.0.0.1:18349/ >/dev/null; do i=$((i+1)); test "$i" -lt 30; sleep 1; done\n')
+                + 'i=0; until curl -fsS http://127.0.0.1:18349/ >/dev/null; do i=$((i+1)); test "$i" -lt 30; sleep 1; done\n',
+            )
             original_memory = memory(mid)
             report['original_memory'] = original_memory
             report['fork_identity'] = original_identity
@@ -93,14 +105,20 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
         if linux:
             for machine in (mid, child):
                 sample = memory(machine)
-                need(sample['token'] == original_memory['token'] and sample['pid'] == original_memory['pid'],
-                     'fork did not continue source RAM process')
+                need(
+                    sample['token'] == original_memory['token'] and sample['pid'] == original_memory['pid'],
+                    'fork did not continue source RAM process',
+                )
         write(child, 'child-B')
         stop(child)
         operation('start', child)
         need(read(child) == 'child-B', 'fork lost independent disk on cold restart')
         restarted_child = describe_guest(args.session_runner, args.config, child)
-        need(restarted_child['machine_id'] == child_identity['machine_id'] and restarted_child['incarnation'] != child_identity['incarnation'], 'cold restart identity invariant failed')
+        need(
+            restarted_child['machine_id'] == child_identity['machine_id']
+            and restarted_child['incarnation'] != child_identity['incarnation'],
+            'cold restart identity invariant failed',
+        )
         stop(child)
         if not linux:
             operation('start', mid)
@@ -119,8 +137,13 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
             return
         # The previous explicit Linux cold restart ended the memory fixture.
         if linux:
-            guest(mid, 'sh', '-se', data=f'nohup python3 "$HOME/{directory}/memory.py" >"$HOME/{directory}/memory.log" 2>&1 </dev/null &\n'
-                + 'i=0; until curl -fsS http://127.0.0.1:18349/ >/dev/null; do i=$((i+1)); test "$i" -lt 30; sleep 1; done\n')
+            guest(
+                mid,
+                'sh',
+                '-se',
+                data=f'nohup python3 "$HOME/{directory}/memory.py" >"$HOME/{directory}/memory.log" 2>&1 </dev/null &\n'
+                + 'i=0; until curl -fsS http://127.0.0.1:18349/ >/dev/null; do i=$((i+1)); test "$i" -lt 30; sleep 1; done\n',
+            )
             original_memory = memory(mid)
             report['capture_memory'] = original_memory
         else:
@@ -147,8 +170,10 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
                 need(identity['incarnation'] == capture_identity['incarnation'], 'RAM restore restarted guest manager')
             if linux:
                 sample = memory(machine)
-                need(sample['token'] == original_memory['token'] and sample['pid'] == original_memory['pid'],
-                     'restore cold-booted instead of continuing RAM')
+                need(
+                    sample['token'] == original_memory['token'] and sample['pid'] == original_memory['pid'],
+                    'restore cold-booted instead of continuing RAM',
+                )
                 report['events'].append({'restored_machine': machine, 'identity': identity, 'memory': sample})
                 save()
             write(machine, 'restore-' + str(index))

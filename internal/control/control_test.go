@@ -413,7 +413,7 @@ func TestControllerAndHostJournalsTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt := &integrationRuntime{}
-	hc := host.Config{HostOS: "darwin", Root: filepath.Join(root, "host"), RuntimeDigest: "engine-content", Profiles: []host.ProfileBinding{{Profile: cfg.Profiles[0], ImagePath: "seed"}}, TartPath: "/opt/homebrew/bin/tart"}
+	hc := host.Config{HostOS: "darwin", Root: filepath.Join(root, "host"), RuntimeDigest: "engine-content", Profiles: []host.ProfileBinding{{Profile: cfg.Profiles[0], ImagePath: "seed"}}, TartPath: "/usr/local/bin/tart"}
 	helper, err := host.Open(hc, rt)
 	if err != nil {
 		t.Fatal(err)

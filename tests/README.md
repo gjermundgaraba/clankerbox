@@ -17,7 +17,7 @@ python3 tests/live_checkpoints.py --binary "$PWD/bin/clankerbox" \
   --lifecycle-result RESULTS/linux-lifecycle.json --result RESULTS/linux-checkpoints.json
 ```
 
-Repeat with host `mac` and profile `mac-xcode-v3`. The checkpoint harness needs
+Repeat with a macOS host and profile. The checkpoint harness needs
 the machine the lifecycle harness kept with `--keep`. Failures leave named
 resources in place for inspection.
 

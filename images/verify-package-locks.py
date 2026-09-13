@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Validate frozen package locks, optionally against qualified image exports."""
+
 import argparse
 import hashlib
 import json
@@ -42,9 +43,11 @@ def automatic(image, final):
     for fields in paragraphs(image / 'var/lib/apt/extended_states'):
         if fields.get('Auto-Installed') != '1':
             continue
-        candidates = [name for name, (_, arch) in final.items()
-                      if name.split(':')[0] == fields['Package']
-                      and arch in (fields['Architecture'], 'all')]
+        candidates = [
+            name
+            for name, (_, arch) in final.items()
+            if name.split(':')[0] == fields['Package'] and arch in (fields['Architecture'], 'all')
+        ]
         assert len(candidates) == 1, fields
         result += candidates
     return sorted(result)

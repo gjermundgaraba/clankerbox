@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Explicit live acceptance against disposable machines, never existing targets."""
+
 import argparse
 from functools import partial
 import json
@@ -18,11 +19,13 @@ def main():
     parser.add_argument('--session-runner', required=True)
     parser.add_argument('--result', required=True)
     parser.add_argument('--keep', action='store_true', help='leave this new machine running for checkpoint acceptance')
-    parser.add_argument('--resume', action='store_true', help='resume the exact disposable machine recorded in --result')
+    parser.add_argument(
+        '--resume', action='store_true', help='resume the exact disposable machine recorded in --result'
+    )
     args = parser.parse_args()
-    evidence = Report(args.result,
-                      {'name': 'accept-' + uuid.uuid4().hex[:12], 'events': [], 'status': 'running'},
-                      resume=args.resume)
+    evidence = Report(
+        args.result, {'name': 'accept-' + uuid.uuid4().hex[:12], 'events': [], 'status': 'running'}, resume=args.resume
+    )
     report = evidence.data
     acceptance = Acceptance(args.binary, args.config, evidence, timeout=420)
     if args.resume:
@@ -38,12 +41,19 @@ def main():
 
     try:
         if not args.resume:
-            operation('create', report['name'], '--profile', args.profile,
-                      '--host', args.host,
-                      '--idempotency-key', report['name'])
+            operation(
+                'create',
+                report['name'],
+                '--profile',
+                args.profile,
+                '--host',
+                args.host,
+                '--idempotency-key',
+                report['name'],
+            )
         machine = report['machine_id']
         directory = 'workspace/' + report['name']
-        setup = f'''set -eu
+        setup = f"""set -eu
 mkdir -p "$HOME/{directory}"
 cd "$HOME/{directory}"
 git init -q
@@ -54,31 +64,38 @@ printf 'untracked\\n' > scratch
 chmod 755 scratch
 ln -sfn tracked link
 sync
-'''
+"""
         guest(machine, 'sh', '-se', data=setup)
-        check = f'''set -eu
+        check = f"""set -eu
 cd "$HOME/{directory}"
 git diff --cached --no-ext-diff
 git diff --no-ext-diff
 cat scratch
 test -x scratch
 readlink link
-'''
+"""
         before = guest(machine, 'sh', '-se', data=check)
         identity_before = describe_guest(args.session_runner, args.config, machine)
         operation('stop', machine)
         stopped = json.loads(run('inspect', machine))
         if stopped['state'] != 'stopped':
             raise RuntimeError(f'expected stopped: {stopped}')
-        denied = subprocess.run([args.session_runner, '--config', args.config, '--expect-stopped', machine],
-                                capture_output=True, text=True, timeout=100)
+        denied = subprocess.run(
+            [args.session_runner, '--config', args.config, '--expect-stopped', machine],
+            capture_output=True,
+            text=True,
+            timeout=100,
+        )
         if denied.returncode != 0:
             raise RuntimeError(f'stopped-session prerequisite check failed: {denied.stderr[-2048:]}')
         operation('start', machine)
         after = guest(machine, 'sh', '-se', data=check)
         identity_after = describe_guest(args.session_runner, args.config, machine)
-        if (before != after or identity_before['machine_id'] != identity_after['machine_id']
-                or identity_before['incarnation'] == identity_after['incarnation']):
+        if (
+            before != after
+            or identity_before['machine_id'] != identity_after['machine_id']
+            or identity_before['incarnation'] == identity_after['incarnation']
+        ):
             raise RuntimeError('workspace contents or guest cold-start identity invariant failed')
         report['events'].append({'retained_dirty_git_and_identity': True, 'stopped_session_rejected': True})
         report['status'] = 'passed'

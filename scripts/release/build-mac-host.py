@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build the production Mac host with its stable Local Network identity."""
+
 import argparse
 import pathlib
 import plistlib
@@ -23,14 +24,31 @@ def main():
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='cb-sign-', dir='/tmp') as directory:
         staging = pathlib.Path(directory)
-        info = plistlib.loads((ROOT/'scripts/release/inputs/HostInfo.plist').read_bytes())
+        info = plistlib.loads((ROOT / 'scripts/release/inputs/HostInfo.plist').read_bytes())
         info['CFBundleVersion'] = args.version
-        plist = staging/'HostInfo.plist'
+        plist = staging / 'HostInfo.plist'
         plist.write_bytes(plistlib.dumps(info))
-        binary = staging/'clankerbox-host'
+        binary = staging / 'clankerbox-host'
         flags = f"-linkmode external -extldflags '-Wl,-sectcreate,__TEXT,__info_plist,{plist}'"
-        subprocess.run(['go', 'build', '-trimpath', '-ldflags', flags, '-o', str(binary), './cmd/clankerbox-host'], cwd=ROOT, check=True)
-        subprocess.run(['codesign', '--force', '--sign', args.identity, '--identifier', 'org.clankerbox.host', '--options', 'runtime', str(binary)], check=True)
+        subprocess.run(
+            ['go', 'build', '-trimpath', '-ldflags', flags, '-o', str(binary), './cmd/clankerbox-host'],
+            cwd=ROOT,
+            check=True,
+        )
+        subprocess.run(
+            [
+                'codesign',
+                '--force',
+                '--sign',
+                args.identity,
+                '--identifier',
+                'org.clankerbox.host',
+                '--options',
+                'runtime',
+                str(binary),
+            ],
+            check=True,
+        )
         subprocess.run(['codesign', '--verify', '--strict', '-R', '=anchor apple generic', str(binary)], check=True)
         # Exclusive creation prevents replacing an installed executable accidentally.
         with output.open('xb') as destination:

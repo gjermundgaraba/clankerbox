@@ -50,8 +50,10 @@ xcrun swiftc /tmp/clankerbox-image.swift -o /tmp/clankerbox-image-check
 test "$(/tmp/clankerbox-image-check)" = CLANKERBOX_SWIFT_OK
 rm /tmp/clankerbox-image.swift /tmp/clankerbox-image-check
 test ! -e /etc/clankerbox
+# Use public resolvers inside the seed VM so the download below does not depend
+# on the host's DHCP configuration. Override with IMAGE_DNS_SERVERS.
+sudo -n /usr/sbin/networksetup -setdnsservers Ethernet ${IMAGE_DNS_SERVERS:-1.1.1.1 8.8.8.8}
 # Pin the upstream toolchain rather than the older Homebrew Node in the base.
-sudo -n /usr/sbin/networksetup -setdnsservers Ethernet 1.1.1.1 8.8.8.8
 node_archive=/tmp/node-v26.8.1-darwin-arm64.tar.gz
 curl -fL --connect-timeout 15 --max-time 180 --retry 3 https://nodejs.org/dist/v26.8.1/node-v26.8.1-darwin-arm64.tar.gz -o "$node_archive"
 printf '%s  %s\n' 6e577fd0d9db776db82306629e441a9dace416702622aebdd171c9dfaa41f4d2 "$node_archive" | shasum -a 256 -c -

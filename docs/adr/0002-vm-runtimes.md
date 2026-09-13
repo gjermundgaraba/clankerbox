@@ -7,12 +7,11 @@ Status: accepted
 Linux profiles need concurrent RAM forks (a running source plus several children
 resumed from the same captured memory), portable RAM checkpoints and retained
 machines. Candidates were exercised on real hosts. Cocoon with Firecracker
-branches memory correctly but captures disks inside the source pause window,
-leaves post-fork guest preparation best-effort, and adds a second engine.
-CubeSandbox passes RAM forks only with a fourteen-unit nested stack. Vetu
-retains disks but has no concurrent RAM forks. smolvm with libkrun passed the
-full concurrent RAM and checkpoint matrix once a libkrun memory-mapping defect
-was fixed.
+branched memory correctly but would have added a second engine, and its disk
+capture and post-fork guest preparation did not fit the retained-machine model.
+CubeSandbox and Vetu did not meet the concurrent RAM fork requirement in those
+tests. smolvm with libkrun passed the full concurrent RAM and checkpoint matrix
+once a libkrun memory-mapping defect was fixed.
 
 Xcode workloads need macOS guests. Apple's virtualization cannot resume captured
 memory into several concurrent guests, and Tart clones operate on stopped VMs.
