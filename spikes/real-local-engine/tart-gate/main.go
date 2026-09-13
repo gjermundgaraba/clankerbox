@@ -309,18 +309,33 @@ func (r *runner) probe(ctx context.Context) error {
 		return err
 	}
 	r.emit("sessions_after_host_restart", response.Msg)
-	lost, retained := false, false
-	for _, session := range response.Msg.Sessions {
-		if session.Id == proof.LostSession && session.Status == v1.SessionStatus_SESSION_STATUS_LOST {
-			lost = true
-		}
-		if session.Id == proof.Session.Id && session.Pid == proof.Session.Pid && session.Incarnation == proof.Session.Incarnation {
-			retained = true
-		}
-	}
-	if !lost || !retained {
-		return errors.New("retained session or cold-session LOST proof is absent")
+	if err = verifyRestartSessions(proof, response.Msg.Sessions); err != nil {
+		return err
 	}
 	_, err = r.attach(ctx, proof.Session, proof.Cursor, "printf 'CB_SUPERVISION:%s\\n' \"$(cat ~/tart-rpc-state)\"\n", "CB_SUPERVISION:"+proof.Token, true)
 	return err
+}
+
+// A cold stop may persist a graceful exit or leave an unfinished record that
+// becomes LOST after abrupt power-off. Neither outcome may retain a running PID.
+func verifyRestartSessions(proof probeProof, sessions []*v1.Session) error {
+	if proof.Session == nil || proof.LostSession == "" || proof.LostSession == proof.Session.Id {
+		return errors.New("distinct cold and retained session identities required")
+	}
+	cold, retained := false, false
+	for _, session := range sessions {
+		if session.Id == proof.LostSession {
+			_, endedErr := time.Parse(time.RFC3339Nano, session.GetEndedAt())
+			cold = endedErr == nil && (session.Status == v1.SessionStatus_SESSION_STATUS_LOST ||
+				(session.Status == v1.SessionStatus_SESSION_STATUS_EXITED && (session.ExitCode != nil || session.GetSignal() != "")))
+		}
+		if session.Id == proof.Session.Id {
+			retained = session.Status == v1.SessionStatus_SESSION_STATUS_RUNNING &&
+				session.Pid == proof.Session.Pid && session.Incarnation == proof.Session.Incarnation
+		}
+	}
+	if !cold || !retained {
+		return errors.New("running retained session or terminal cold-session proof is absent")
+	}
+	return nil
 }

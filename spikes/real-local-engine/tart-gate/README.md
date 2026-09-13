@@ -32,9 +32,11 @@ required. Follow the current personal-cloud runtime runbook for administrator
 and privacy interactions; never replay old gate installation wrappers.
 
 Run `tart-gate run ROOT`. It refuses an existing machine intent. A successful run
-writes explicit `probe.json`, including the retained session, token, lost cold
+writes explicit `probe.json`, including the retained session, token, cold
 session and resume cursor. After an administrator restarts only the gate host
-service, `tart-gate probe ROOT` requires that proof and verifies continuity. There
+service, `tart-gate probe ROOT` requires that proof and verifies the same running PID and incarnation. The cold session must be terminal:
+EXITED with completion metadata after graceful shutdown, or LOST after abrupt
+power-off. There
 are no hard-coded historical session IDs or cursor fallbacks. `resume` continues
 inspection of the existing named machine; inspect any ambiguous operation before
 continuing. Never replay `run` to resolve uncertainty.

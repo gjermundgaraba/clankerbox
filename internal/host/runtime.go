@@ -349,6 +349,11 @@ func (n *NativeRuntime) Start(ctx context.Context, m Manifest) error {
 		if err = n.validateRetainedStart(ctx, m); err != nil {
 			return err
 		}
+		// Supervisor files are derived locators; a verified bundle may have moved
+		// while this machine was running. Refresh only after retained-start checks.
+		if err = statefs.WritePrivate(n.job(m), n.jobContents(m)); err != nil {
+			return err
+		}
 		err = n.startTart(ctx, m)
 	} else {
 		err = n.startSmolvm(ctx, m)

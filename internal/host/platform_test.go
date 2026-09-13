@@ -47,8 +47,30 @@ func TestMacSmolvmBranchJobBecomesRetainedStartWithoutReplay(t *testing.T) {
 		!strings.Contains(f.jobs[0], "<key>AbandonProcessGroup</key><true/>") {
 		t.Fatalf("first branch launch: %v", f.jobs)
 	}
+	// Relocation may happen while the child remains running. Its old stored
+	// supervisor must not launch the now absent binary on the next cold start.
+	oldBinary := cfg.SmolvmPath
+	cfg.SmolvmPath = templateBundle(t)
+	cfg.LibraryDir = "/relocated/smolvm/lib"
+	if _, err := os.Stat(oldBinary); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("old fixture runtime path unexpectedly exists")
+	}
 	f.state = "stopped"
+	// Keep the already-loaded native job/state, but validate the new runtime
+	// command and environment through the relocated fixture.
+	relocated, relocatedRunner := newMacSupervisorFixture(t, cfg, child)
+	relocated.state, relocated.loaded = "stopped", true
+	n.Config, n.Runner = cfg, relocatedRunner
 	requireNoError(t, n.Start(context.Background(), child))
+	f.jobs = append(f.jobs, relocated.jobs...)
+	f.launched = append(f.launched, relocated.launched...)
+	if len(f.jobs) != 2 {
+		t.Fatalf("unexpected retained supervisor count: %d", len(f.jobs))
+	}
+	if !strings.Contains(f.jobs[1], cfg.SmolvmPath) ||
+		!strings.Contains(f.jobs[1], cfg.LibraryDir) || strings.Contains(f.jobs[1], oldBinary) {
+		t.Fatal("retained supervisor did not repair verified runtime locators")
+	}
 	if len(f.jobs) != 2 || !strings.Contains(f.jobs[1], "<string>start</string>") ||
 		strings.Contains(f.jobs[1], "<string>branch</string>") {
 		t.Fatalf("retained start replays branch: %v", f.jobs)
