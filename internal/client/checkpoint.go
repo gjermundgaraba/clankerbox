@@ -37,7 +37,7 @@ func (runner commandRunner) restoreCheckpoint(ctx context.Context, id, name, ide
 		return err
 	}
 	op, err := runner.api.RestoreCheckpoint(ctx, id, key, child)
-	return runner.finishMutation(ctx, op, err, key, wait, restoreCommand)
+	return runner.finishMutation(ctx, op, err, key, wait, "restore")
 }
 
 func (runner commandRunner) captureCheckpoint(ctx context.Context, target, idem string, wait *waitOptions) error {
@@ -62,7 +62,7 @@ func (runner commandRunner) deleteCheckpoint(ctx context.Context, id, idem strin
 		return err
 	}
 	op, err := runner.api.DeleteCheckpoint(ctx, id, key)
-	return runner.finishMutation(ctx, op, err, key, wait, deleteCommand)
+	return runner.finishMutation(ctx, op, err, key, wait, deleteCommandName)
 }
 
 func (runner commandRunner) inspectCheckpoint(ctx context.Context, id string) error {

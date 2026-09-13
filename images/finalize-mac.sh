@@ -3,12 +3,18 @@
 # Copies the existing Apple-signed host Xcode; never modifies the host installation.
 set -euo pipefail
 home=${1:?usage: finalize-mac.sh OWNED_TART_HOME}
-tart="$HOME/clankerbox/versions/tart-2.36.0/tart.app/Contents/MacOS/tart"
+tart=$(command -v "${TART_BIN:-tart}") || {
+  printf '%s\n' 'Tart not found; set TART_BIN or add Tart to PATH.' >&2
+  exit 1
+}
 seed='seed-macos26.6.2-xcode26.6'
 source=/Applications/Xcode.app
+home=$(cd "$home" && pwd -P)
+test "$(cat "$home/.clankerbox-inputs")" = clankerbox-mac-inputs-v1
+test -d "$home/vms/seed-e0721ddeae3c"
 export TART_HOME="$home" TART_NO_AUTO_PRUNE=1
 export PATH=/usr/local/libexec/clankerbox:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
-test "$home" = "$HOME/clankerbox/host/tart"
+test -x "$tart"
 test "$("$tart" --version)" = 2.36.0
 test "$(DEVELOPER_DIR="$source/Contents/Developer" /usr/bin/xcodebuild -version)" = $'Xcode 26.6\nBuild version 17F113'
 /usr/bin/codesign --verify --deep --strict "$source"

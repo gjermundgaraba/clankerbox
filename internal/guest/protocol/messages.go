@@ -3,7 +3,6 @@
 package protocol
 
 import (
-	"encoding/base64"
 	"fmt"
 	"regexp"
 	"strings"
@@ -49,19 +48,10 @@ const (
 	InputRefused  = "refused"
 )
 
-// Event names.
-const (
-	EventHello     = "hello"
-	EventSession   = "session"
-	EventResize    = "resize"
-	EventOutputGap = "output_gap"
-)
-
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 
-// Hello is the first event on every connection.
+// Hello describes the guest daemon.
 type Hello struct {
-	Event         string `json:"event"`
 	Incarnation   string `json:"incarnation"`
 	BootID        string `json:"boot_id"`
 	DaemonVersion string `json:"daemon_version"`
@@ -73,24 +63,19 @@ type Hello struct {
 
 // SessionEvent announces a changed session record on an attached connection.
 type SessionEvent struct {
-	Event   string  `json:"event"`
 	Session Session `json:"session"`
 }
 
 // ResizeEvent is the ordered grid change placed in the output stream.
 type ResizeEvent struct {
-	Event     string `json:"event"`
-	SessionID string `json:"session_id"`
-	Cols      uint16 `json:"cols"`
-	Rows      uint16 `json:"rows"`
-	Offset    uint64 `json:"offset"`
+	Cols   uint16 `json:"cols"`
+	Rows   uint16 `json:"rows"`
+	Offset uint64 `json:"offset"`
 }
 
 // GapEvent is the best-effort notice that a subscriber was dropped.
 type GapEvent struct {
-	Event     string `json:"event"`
-	SessionID string `json:"session_id"`
-	Reason    string `json:"reason"`
+	Reason string `json:"reason"`
 }
 
 // Session is the durable session record.
@@ -218,27 +203,6 @@ type View struct {
 	Bytes  uint64 `json:"bytes"`
 }
 
-// InputArgs are the arguments of session.input.
-type InputArgs struct {
-	SessionID string `json:"session_id"`
-	Data      string `json:"data"`
-}
-
-// Validate checks bounds and decodes the payload.
-func (a InputArgs) Validate() ([]byte, error) {
-	if err := (SessionArgs{SessionID: a.SessionID}).Validate(); err != nil {
-		return nil, err
-	}
-	data, err := base64.StdEncoding.DecodeString(a.Data)
-	if err != nil {
-		return nil, &model.Error{Reason: model.ReasonInvalid, Message: "data is not base64"}
-	}
-	if len(data) > MaxInputBytes {
-		return nil, &model.Error{Reason: model.ReasonTooLarge, Message: "data"}
-	}
-	return data, nil
-}
-
 // InputValue is the response of session.input.
 type InputValue struct {
 	Status string `json:"status"`
@@ -265,19 +229,6 @@ type Cursor struct {
 	X uint16 `json:"x"`
 	Y uint16 `json:"y"`
 }
-
-// SessionValue wraps one session.
-type SessionValue struct {
-	Session Session `json:"session"`
-}
-
-// SessionsValue wraps a session list.
-type SessionsValue struct {
-	Sessions []Session `json:"sessions"`
-}
-
-// Empty is the value of operations without data.
-type Empty struct{}
 
 func validateGrid(cols, rows uint16) error {
 	if cols < MinCols || cols > MaxCols || rows < MinRows || rows > MaxRows {

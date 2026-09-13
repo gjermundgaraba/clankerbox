@@ -14,8 +14,7 @@ import (
 
 type sessionRPC struct{ c *Controller }
 
-// Public eligibility and durable source reservations are checked independently
-// of the host's private execution/identity gate. Session calls never start VMs.
+// Check public eligibility and source reservations independently of host admission.
 func (c *Controller) sessionHost(
 	ctx context.Context,
 	id string,

@@ -3,10 +3,10 @@ package session_test
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"errors"
 	"log/slog"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -159,10 +159,7 @@ func eventually(t *testing.T, what string, cond func() bool) {
 
 func send(t *testing.T, m *session.Manager, id, text string) {
 	t.Helper()
-	value, err := m.Input(protocol.InputArgs{
-		SessionID: id,
-		Data:      base64.StdEncoding.EncodeToString([]byte(text)),
-	}, []byte(text))
+	value, err := m.Input(id, []byte(text))
 	if err != nil || value.Status != protocol.InputAccepted {
 		t.Fatalf("input %q: %v %+v", text, err, value)
 	}
@@ -398,13 +395,12 @@ func TestInputIsAdmissionOnly(t *testing.T) {
 	if _, err := m.End(record.ID); err != nil {
 		t.Fatalf("end: %v", err)
 	}
-	refused, err := m.Input(protocol.InputArgs{SessionID: record.ID, Data: "YQ=="}, []byte("a"))
+	refused, err := m.Input(record.ID, []byte("a"))
 	if err != nil || refused.Status != protocol.InputRefused || refused.Reason != string(model.ReasonNotRunning) {
 		t.Fatalf("input after exit: %v %+v", err, refused)
 	}
-	missing := protocol.InputArgs{SessionID: uuid.NewString(), Data: "YQ=="}
 	var typed *model.Error
-	if _, err = m.Input(missing, []byte("a")); !errors.As(err, &typed) || typed.Reason != model.ReasonNotFound {
+	if _, err = m.Input(uuid.NewString(), []byte("a")); !errors.As(err, &typed) || typed.Reason != model.ReasonNotFound {
 		t.Fatalf("unknown session: %v", err)
 	}
 }
@@ -623,7 +619,7 @@ done`)
 		t.Fatal("missing overflow notice")
 	}
 	gap, ok := slow.events[len(slow.events)-1].(protocol.GapEvent)
-	if !ok || gap.Reason != "overflow" || gap.SessionID != record.ID {
+	if !ok || gap.Reason != "overflow" {
 		t.Fatalf("missing final overflow notice: %+v", slow.events[len(slow.events)-1])
 	}
 }
@@ -776,5 +772,59 @@ func TestRecordFailuresAreLoggedNotHidden(t *testing.T) {
 	})
 	if err != nil || again.Status != protocol.StatusLost || again.PID != 0 {
 		t.Fatalf("a quarantined id must answer lost, not start: %v %+v", err, again)
+	}
+}
+
+// Same-user PTY tests use the production environment and cwd policy.
+func TestProcessEnvironmentAndWorkingDirectory(t *testing.T) {
+	t.Setenv("CLANKERBOX_DAEMON_SECRET", "private")
+	t.Setenv("HOME", filepath.Join(t.TempDir(), "wrong-home"))
+	t.Setenv("USER", "wrong-user")
+	t.Setenv("SHELL", "/missing-shell")
+	account, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ := newManager(t)
+	if m.Hello().User != account.Username {
+		t.Fatalf("description inherited daemon USER: %+v", m.Hello())
+	}
+	args := protocol.CreateArgs{
+		SessionID: uuid.NewString(), CreatedAt: stamp(), Cols: 80, Rows: 24,
+		Cwd: ".",
+		Argv: []string{shell, "-c", `
+[ -z "${CLANKERBOX_DAEMON_SECRET+x}" ] &&
+[ "$HOME" = "$EXPECTED_HOME" ] &&
+[ "$USER" = "$EXPECTED_USER" ] && [ "$LOGNAME" = "$EXPECTED_USER" ] &&
+[ "$SHELL" = /bin/sh ] && [ "$LANG" = C.UTF-8 ] &&
+[ "$PATH" = /usr/local/bin:/usr/bin:/bin ] &&
+[ "$TERM" = requested-term ] && [ "$EXPLICIT_VALUE" = supplied ]`},
+		Env: map[string]string{
+			"EXPECTED_HOME": account.HomeDir, "EXPECTED_USER": account.Username,
+			"TERM": "requested-term", "EXPLICIT_VALUE": "supplied",
+		},
+	}
+	record, err := m.Create(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Cwd != account.HomeDir {
+		t.Fatalf("relative cwd = %q, want account home %q", record.Cwd, account.HomeDir)
+	}
+	eventually(t, "environment assertions", func() bool {
+		return inspect(t, m, record.ID).Status == protocol.StatusExited
+	})
+	ended := inspect(t, m, record.ID)
+	if ended.ExitCode == nil || *ended.ExitCode != 0 {
+		t.Fatalf("child environment assertions failed: %+v", ended)
+	}
+
+	args.SessionID = uuid.NewString()
+	args.Cwd = filepath.Join(t.TempDir(), "missing")
+	if _, err = m.Create(args); err == nil {
+		t.Fatal("missing cwd was accepted")
+	}
+	if _, err = os.Stat(args.Cwd); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing cwd was created: %v", err)
 	}
 }

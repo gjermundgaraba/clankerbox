@@ -405,7 +405,7 @@ func (s *service) input(id string, input *v1.Input) *v1.Ack {
 		ack.Reason = "input too large"
 		return ack
 	}
-	result, err := s.manager.Input(protocol.InputArgs{SessionID: id}, input.GetData())
+	result, err := s.manager.Input(id, input.GetData())
 	if err != nil {
 		ack.Reason = err.Error()
 		return ack

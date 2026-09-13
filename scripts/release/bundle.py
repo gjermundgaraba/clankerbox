@@ -8,6 +8,7 @@ assembler hashes every payload file and link and refuses to replace an output.
 import argparse, hashlib, json, os, pathlib, shutil, stat, subprocess, tarfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+RUNTIME_TEMPLATES = ('storage-template.ext4.zst', 'overlay-template.ext4.zst')
 
 def sha(path):
     h = hashlib.sha256()
@@ -55,6 +56,26 @@ def verify_inputs(args):
         raise ValueError('image agent does not match qualified platform binary')
     if stat.S_IMODE(args.image.stat().st_mode) != 0o755:
         raise ValueError('image root must preserve guest mode 0755')
+    verify_runtime_assets(args.runtime_assets, args.os, args.arch)
+
+def verify_runtime_assets(root, os_name, arch):
+    pins = json.loads((ROOT/'scripts/release/inputs/runtime-artifacts.json').read_text())
+    expected = pins['platforms'][os_name + '-' + arch]['files']
+    # Only these inputs are shipped. In particular, inventory the complete library
+    # tree so an added loader dependency cannot be blessed by the output manifest.
+    paths = [root/'lib', *sorted((root/'lib').rglob('*')), *(root/name for name in RUNTIME_TEMPLATES)]
+    actual = []
+    for path in paths:
+        if not path.exists() and not path.is_symlink():
+            raise ValueError('missing qualified runtime artifact: ' + str(path))
+        record = entry(path, path.relative_to(root).as_posix())
+        # Ordinary modes vary with extraction umask; entry still rejects setid
+        # bits. The installed manifest binds the resulting POSIX modes.
+        del record['mode']
+        actual.append(record)
+    actual.sort(key=lambda record: record['path'])
+    if actual != expected:
+        raise ValueError('runtime artifacts do not match qualified platform inventory')
 
 def required_file(root, name):
     path = root / name
@@ -158,8 +179,9 @@ def main():
     runtime=out/'runtime';runtime.mkdir()
     shutil.copy2(args.engine,runtime/'smolvm')
     shutil.copytree(args.runtime_assets/'lib',runtime/'lib',symlinks=True)
-    for name in ['storage-template.ext4.zst','overlay-template.ext4.zst']:
+    for name in RUNTIME_TEMPLATES:
         shutil.copy2(args.runtime_assets/name,runtime/name)
+    verify_runtime_assets(runtime, args.os, args.arch)
     shutil.copytree(args.image,out/'image',symlinks=True)
     licenses=out/'licenses';licenses.mkdir()
     shutil.copy2(args.engine_source/'LICENSE', licenses/'smolvm-LICENSE')
@@ -168,7 +190,9 @@ def main():
     shutil.copytree(args.dependency_notices, licenses/'dependencies')
     verify_release_licenses(out)
     shutil.copy2(ROOT/'scripts/release/README.md',out/'RELEASE.md')
+    shutil.copy2(ROOT/'LICENSE',out/'LICENSE')
     shutil.copy2(ROOT/'scripts/release/inputs/pins.json',out/'engine-pins.json')
+    shutil.copy2(ROOT/'scripts/release/inputs/runtime-artifacts.json',out/'runtime-artifacts.json')
     shutil.copy2(ROOT/'scripts/release/inputs/runtime.patch',out/'runtime.patch')
     if args.os=='darwin':
         subprocess.run(['codesign','--verify','--strict',str(runtime/'smolvm')],check=True)

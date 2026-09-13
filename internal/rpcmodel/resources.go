@@ -17,9 +17,20 @@ import (
 // Schema is the one supported RPC package identity.
 const Schema = "clankerbox.v1"
 
+const (
+	actionCreate           = "create"
+	actionStart            = "start"
+	actionStop             = "stop"
+	actionDelete           = "delete"
+	actionFork             = "fork"
+	actionCapture          = "checkpoint-create"
+	actionRestore          = "restore"
+	actionDeleteCheckpoint = "checkpoint-delete"
+)
+
 // ToProfile derives discovery capabilities from the portable profile.
 //
-//nolint:gosec // Domain validation bounds outbound capacity, PID and exit-status values.
+//nolint:gosec // Profile validation bounds CPU, memory and storage values.
 func ToProfile(p model.Profile) *v1.Profile {
 	return &v1.Profile{
 		Id:           p.ID,
@@ -30,12 +41,8 @@ func ToProfile(p model.Profile) *v1.Profile {
 		Cpu:          uint32(p.CPU),
 		RamMib:       uint64(p.RAMMiB),
 		Capabilities: model.RuntimeCapabilities(p.Runtime, p.Arch),
-		StorageGib: uint64(
-			p.StorageGiB,
-		),
-		OverlayGib: uint64(
-			p.OverlayGiB,
-		),
+		StorageGib:   uint64(p.StorageGiB),
+		OverlayGib:   uint64(p.OverlayGiB),
 	}
 }
 
@@ -71,23 +78,15 @@ func FromProfile(p *v1.Profile) (model.Profile, error) {
 
 // ToHost projects public host capacity and reservation accounting.
 //
-//nolint:gosec // Domain validation bounds outbound capacity, PID and exit-status values.
+//nolint:gosec // Host validation bounds capacity and reservation values.
 func ToHost(h model.HostStatus) *v1.Host {
 	return &v1.Host{
-		Id:         h.ID,
-		ProfileIds: slices.Clone(h.ProfileIDs),
-		Cpu: uint32(
-			h.CPU,
-		),
-		RamMib: uint64(
-			h.RAMMiB,
-		),
-		UsedCpu: uint32(
-			h.UsedCPU,
-		),
-		UsedRamMib: uint64(
-			h.UsedRAMMiB,
-		),
+		Id:              h.ID,
+		ProfileIds:      slices.Clone(h.ProfileIDs),
+		Cpu:             uint32(h.CPU),
+		RamMib:          uint64(h.RAMMiB),
+		UsedCpu:         uint32(h.UsedCPU),
+		UsedRamMib:      uint64(h.UsedRAMMiB),
 		RemainingCpu:    int64(h.RemainingCPU),
 		RemainingRamMib: int64(h.RemainingRAMMiB),
 	}
@@ -390,12 +389,14 @@ func enumString[S comparable, E ~int32](values map[S]E, value E) (S, error) {
 	var zero S
 	return zero, fmt.Errorf("unknown enum value %d", value)
 }
+
 func timestamp(t time.Time) *timestamppb.Timestamp {
 	if t.IsZero() {
 		return nil
 	}
 	return timestamppb.New(t)
 }
+
 func timeValue(t *timestamppb.Timestamp) (time.Time, error) {
 	if t == nil {
 		return time.Time{}, nil
@@ -405,6 +406,7 @@ func timeValue(t *timestamppb.Timestamp) (time.Time, error) {
 	}
 	return t.AsTime(), nil
 }
+
 func timePointer(t *timestamppb.Timestamp) (*time.Time, error) {
 	if t == nil {
 		return nil, nil //nolint:nilnil // An absent optional timestamp remains absent.
@@ -415,12 +417,14 @@ func timePointer(t *timestamppb.Timestamp) (*time.Time, error) {
 	}
 	return &value, nil
 }
+
 func uintToInt(v uint64) (int, error) {
 	if v > uint64(^uint(0)>>1) {
 		return 0, fmt.Errorf("integer exceeds host range")
 	}
 	return int(v), nil
 }
+
 func intToInt(v int64) (int, error) {
 	out := int(v)
 	if int64(out) != v {
@@ -428,14 +432,3 @@ func intToInt(v int64) (int, error) {
 	}
 	return out, nil
 }
-
-const (
-	actionCreate           = "create"
-	actionStart            = "start"
-	actionStop             = "stop"
-	actionDelete           = "delete"
-	actionFork             = "fork"
-	actionCapture          = "checkpoint-create"
-	actionRestore          = "restore"
-	actionDeleteCheckpoint = "checkpoint-delete"
-)

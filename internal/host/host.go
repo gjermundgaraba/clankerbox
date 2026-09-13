@@ -90,6 +90,7 @@ func (c *Config) Validate() error {
 	}
 	return c.validateProfiles()
 }
+
 func (c *Config) validatePorts() error {
 	if c.PortLeaseRoot == "" {
 		home, err := os.UserHomeDir()
@@ -301,6 +302,7 @@ func (h *Helper) manifest(ctx context.Context, id string) (Manifest, error) {
 	}
 	return m, err
 }
+
 func (h *Helper) save(ctx context.Context, m Manifest, a accepted) error {
 	h.guests.mu.Lock()
 	err := h.saveJournal(ctx, m, a)
@@ -360,6 +362,7 @@ func (h *Helper) saveJournal(ctx context.Context, m Manifest, a accepted) (resul
 	}
 	return err
 }
+
 func (h *Helper) profile(p model.Profile) bool {
 	for _, local := range h.cfg.Profiles {
 		if local.ID == p.ID {
@@ -422,6 +425,7 @@ func (h *Helper) Inspect(ctx context.Context, id string) model.Response {
 	}
 	return model.Response{Status: statusSucceeded, Observation: obs}
 }
+
 func failure(req model.Request, err error) model.Response {
 	return model.Response{OperationID: req.OperationID, Status: statusFailed, Error: err.Error(), Cause: err}
 }
@@ -467,6 +471,7 @@ func (h *Helper) Execute(ctx context.Context, req model.Request) model.Response 
 	}
 	return response
 }
+
 func (h *Helper) executeLocked(ctx context.Context, req model.Request, acceptOnly bool) model.Response {
 	var a accepted
 	var raw []byte
@@ -526,6 +531,7 @@ func (r *lifecycleAttempt) persist(ctx context.Context, phase string) error {
 	r.operation.Phase = phase
 	return r.helper.save(ctx, r.machine, r.operation)
 }
+
 func (r *lifecycleAttempt) unresolved(ctx context.Context, err error) model.Response {
 	r.operation.Response = model.Response{
 		OperationID: r.operation.Request.OperationID,
@@ -537,6 +543,7 @@ func (r *lifecycleAttempt) unresolved(ctx context.Context, err error) model.Resp
 	}
 	return r.operation.Response
 }
+
 func (r *lifecycleAttempt) reject(ctx context.Context, err error) model.Response {
 	r.operation.Response = failure(r.operation.Request, err)
 	r.operation.Response.Observation, _ = r.helper.observation(ctx, r.machine)
@@ -545,10 +552,12 @@ func (r *lifecycleAttempt) reject(ctx context.Context, err error) model.Response
 	}
 	return r.operation.Response
 }
+
 func (h *Helper) reconcile(ctx context.Context, m Manifest, a accepted) model.Response {
 	attempt := lifecycleAttempt{helper: h, machine: m, operation: a}
 	return attempt.run(ctx)
 }
+
 func (r *lifecycleAttempt) run(ctx context.Context) model.Response {
 	state, err := r.helper.runtime.Inspect(ctx, r.machine)
 	if err != nil {
@@ -577,6 +586,7 @@ func (r *lifecycleAttempt) run(ctx context.Context) model.Response {
 	}
 	return r.complete(ctx)
 }
+
 func (r *lifecycleAttempt) complete(ctx context.Context) model.Response {
 	obs, err := r.helper.observation(ctx, r.machine)
 	if err != nil {
@@ -597,6 +607,7 @@ func (r *lifecycleAttempt) complete(ctx context.Context) model.Response {
 	}
 	return r.operation.Response
 }
+
 func (r *lifecycleAttempt) create(ctx context.Context, state RuntimeState) error {
 	if err := r.createRecord(ctx, state); err != nil {
 		return err
@@ -612,6 +623,7 @@ func (r *lifecycleAttempt) create(ctx context.Context, state RuntimeState) error
 	}
 	return r.prepareCreated(ctx)
 }
+
 func (r *lifecycleAttempt) createRecord(ctx context.Context, state RuntimeState) error {
 	var err error
 	switch r.operation.Phase {
@@ -710,20 +722,18 @@ func (r *lifecycleAttempt) prepareCreated(ctx context.Context) error {
 }
 
 func (r *lifecycleAttempt) startRetained(ctx context.Context, state RuntimeState) error {
-	var err error
-
 	if r.operation.Phase == phaseAccepted {
 		if !state.Exists || state.State != model.Stopped {
 			return rejectedOperationError{model.NewError(model.ReasonPrerequisite, "start requires an existing stopped runtime record", false)}
 		}
-		if err = r.persist(ctx, "starting"); err != nil {
+		if err := r.persist(ctx, "starting"); err != nil {
 			return err
 		}
-		if err = r.helper.runtime.Start(ctx, r.machine); err != nil {
+		if err := r.helper.runtime.Start(ctx, r.machine); err != nil {
 			return err
 		}
 	}
-	state, err = r.helper.runtime.Inspect(ctx, r.machine)
+	state, err := r.helper.runtime.Inspect(ctx, r.machine)
 	if err != nil {
 		return err
 	}
@@ -741,8 +751,6 @@ func (r *lifecycleAttempt) startRetained(ctx context.Context, state RuntimeState
 }
 
 func (r *lifecycleAttempt) stopRetained(ctx context.Context, state RuntimeState) error {
-	var err error
-
 	if !state.Exists || state.State == model.Unknown {
 		return errors.New("runtime state unknown; cannot stop")
 	}
@@ -750,16 +758,16 @@ func (r *lifecycleAttempt) stopRetained(ctx context.Context, state RuntimeState)
 		if state.State != model.Running {
 			return rejectedOperationError{model.NewError(model.ReasonPrerequisite, "stop requires running execution", false)}
 		}
-		if err = r.persist(ctx, "stopping"); err != nil {
+		if err := r.persist(ctx, "stopping"); err != nil {
 			return err
 		}
 	}
 	if state.State == model.Running {
-		if err = r.helper.runtime.Stop(ctx, r.machine); err != nil {
+		if err := r.helper.runtime.Stop(ctx, r.machine); err != nil {
 			return err
 		}
 	}
-	state, err = r.helper.runtime.Inspect(ctx, r.machine)
+	state, err := r.helper.runtime.Inspect(ctx, r.machine)
 	if err != nil {
 		return err
 	}
@@ -770,23 +778,21 @@ func (r *lifecycleAttempt) stopRetained(ctx context.Context, state RuntimeState)
 }
 
 func (r *lifecycleAttempt) deleteRetained(ctx context.Context, state RuntimeState) error {
-	var err error
-
 	if r.operation.Phase == phaseAccepted {
 		if !state.Exists || state.State != model.Stopped {
 			return rejectedOperationError{model.NewError(model.ReasonPrerequisite, "delete requires an inspected stopped owned runtime", false)}
 		}
-		if err = r.persist(ctx, "deleting"); err != nil {
+		if err := r.persist(ctx, "deleting"); err != nil {
 			return err
 		}
 	}
 	if state.Exists && state.State != model.Stopped {
 		return errors.New("runtime no longer stopped; refusing deletion")
 	}
-	if err = r.helper.runtime.Delete(ctx, r.machine); err != nil {
+	if err := r.helper.runtime.Delete(ctx, r.machine); err != nil {
 		return err
 	}
-	state, err = r.helper.runtime.Inspect(ctx, r.machine)
+	state, err := r.helper.runtime.Inspect(ctx, r.machine)
 	if err != nil {
 		return err
 	}
@@ -819,6 +825,7 @@ func validEndpoint(m Manifest, endpoint string) error {
 
 // All runtime names derive solely from immutable random IDs, never machine aliases.
 func machineDir(cfg Config, m Manifest) string { return filepath.Join(cfg.Root, "machines", m.ID) }
+
 func compactError(err error, stderr string) error {
 	stderr = strings.TrimSpace(stderr)
 	if len(stderr) > runtimeErrorLimit {
@@ -872,8 +879,6 @@ func (h *Helper) acceptLifecycle(
 }
 
 func (h *Helper) createIdentity(ctx context.Context, req model.Request, merr error) (Manifest, error) {
-	var err error
-
 	if merr != nil && !errors.Is(merr, sql.ErrNoRows) {
 		return Manifest{}, merr
 	}
@@ -885,6 +890,7 @@ func (h *Helper) createIdentity(ctx context.Context, req model.Request, merr err
 	}
 	m := Manifest{ID: req.MachineID, Name: req.Name, Profile: req.Profile}
 	if m.Profile.Runtime == runtimeSmolvm {
+		var err error
 		m.Port, err = h.port(ctx, req.MachineID)
 		if err != nil {
 			return Manifest{}, err
@@ -894,8 +900,6 @@ func (h *Helper) createIdentity(ctx context.Context, req model.Request, merr err
 }
 
 func (h *Helper) validateRetainedGeneration(ctx context.Context, req model.Request, m Manifest, merr error) error {
-	var err error
-
 	if merr != nil && !errors.Is(merr, sql.ErrNoRows) {
 		return merr
 	}
@@ -909,12 +913,12 @@ func (h *Helper) validateRetainedGeneration(ctx context.Context, req model.Reque
 		return model.NewError(model.ReasonConflict, "immutable machine identity conflict", false)
 	}
 	var last []byte
-	if err = h.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE machine_id=? AND generation=?", m.ID, m.Generation).
+	if err := h.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE machine_id=? AND generation=?", m.ID, m.Generation).
 		Scan(&last); err != nil {
 		return err
 	}
 	var previous accepted
-	if err = json.Unmarshal(last, &previous); err != nil {
+	if err := json.Unmarshal(last, &previous); err != nil {
 		return err
 	}
 	if previous.Response.Status != statusSucceeded && previous.Response.Status != statusFailed {
@@ -943,6 +947,7 @@ func (c *Config) validateProfiles() error {
 	}
 	return nil
 }
+
 func (c *Config) validateRuntimeProfile(p model.Profile) error {
 	switch p.Runtime {
 	case runtimeTart:

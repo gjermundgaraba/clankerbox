@@ -71,7 +71,7 @@ func TestTypedPublicResourcesIdempotencyLabelsAndAuthentication(t *testing.T) {
 	if e != nil || first.Msg.GetId() != repeat.Msg.GetId() {
 		t.Fatalf("duplicate mismatch %v", e)
 	}
-	request.Name = fixtureDifferent
+	request.Name = "different"
 	_, e = rpc.CreateMachine(t.Context(), connect.NewRequest(request))
 	detail, ok := rpcmodel.Detail(e)
 	if !ok || detail.GetReason() != v1.ErrorReason_ERROR_REASON_IDEMPOTENCY_CONFLICT {
@@ -91,15 +91,15 @@ func TestTypedPublicResourcesIdempotencyLabelsAndAuthentication(t *testing.T) {
 	updated, e := rpc.SetLabels(
 		t.Context(),
 		connect.NewRequest(
-			&v1.SetLabelsRequest{MachineId: m.Msg.GetId(), Labels: map[string]string{"new": fixtureLabelValue}},
+			&v1.SetLabelsRequest{MachineId: m.Msg.GetId(), Labels: map[string]string{"new": "value"}},
 		),
 	)
-	if e != nil || updated.Msg.GetLabels()["new"] != fixtureLabelValue {
+	if e != nil || updated.Msg.GetLabels()["new"] != "value" {
 		t.Fatal(e)
 	}
 	listed, e := rpc.ListMachines(
 		t.Context(),
-		connect.NewRequest(&v1.ListMachinesRequest{Labels: map[string]string{"new": fixtureLabelValue}}),
+		connect.NewRequest(&v1.ListMachinesRequest{Labels: map[string]string{"new": "value"}}),
 	)
 	if e != nil || len(listed.Msg.GetMachines()) != 1 {
 		t.Fatal(e)

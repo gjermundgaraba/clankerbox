@@ -181,7 +181,7 @@ func captureAfterReservedFork(
 	}
 	tr.unavailable = false
 	changed := child
-	changed.Name = fixtureDifferent
+	changed.Name = "different"
 	if _, err = c.Derive(ctx, "fork", source.MachineID, "fork", changed); err == nil {
 		t.Fatal("idempotency accepted changed input")
 	}

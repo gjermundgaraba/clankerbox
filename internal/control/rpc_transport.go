@@ -17,6 +17,8 @@ import (
 	"clankerbox/internal/rpctransport"
 )
 
+const hostPollInterval = 200 * time.Millisecond
+
 // RPCTransport waits for the host's durable final result, never treating its
 // acceptance acknowledgement as completion of the controller reservation.
 type RPCTransport struct {
@@ -85,8 +87,7 @@ func (t *RPCTransport) Call(ctx context.Context, h model.Host, r model.Request) 
 	if r.Host != "" && r.Host != h.ID {
 		return model.Response{}, errors.New("controller request host differs from configured destination")
 	}
-	// Controller journals reserve the destination on the machine/queue. Bind
-	// that durable routing identity explicitly into the typed host request.
+	// Use the destination reserved by the controller journal.
 	r.Host = h.ID
 	wire, err := rpcmodel.ToHostRequest(r)
 	if err != nil {
@@ -142,5 +143,3 @@ func waitHostResult(
 		op = state.Msg
 	}
 }
-
-const hostPollInterval = 200 * time.Millisecond

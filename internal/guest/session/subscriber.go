@@ -35,20 +35,19 @@ type item struct {
 // subscriber is one attached stream: an immutable bootstrap prefix captured
 // at the cut, a snapshot or retained bytes, then a bounded live tail.
 type subscriber struct {
-	sink      Sink
-	sessionID string
-	snapshot  bool
-	prefix    []byte
-	from      uint64
-	mu        sync.Mutex
-	queue     []item
-	queued    int
-	dropped   string
-	wake      chan struct{}
+	sink     Sink
+	snapshot bool
+	prefix   []byte
+	from     uint64
+	mu       sync.Mutex
+	queue    []item
+	queued   int
+	dropped  string
+	wake     chan struct{}
 }
 
-func newSubscriber(sink Sink, sessionID string) *subscriber {
-	return &subscriber{sink: sink, sessionID: sessionID, wake: make(chan struct{}, 1)}
+func newSubscriber(sink Sink) *subscriber {
+	return &subscriber{sink: sink, wake: make(chan struct{}, 1)}
 }
 
 func (s *subscriber) enqueueOutput(next uint64, data []byte) {
@@ -117,9 +116,7 @@ func (s *subscriber) run(onDone func(*subscriber)) {
 		}
 		if dropped != "" {
 			_ = s.sink.SendEvent(protocol.GapEvent{
-				Event:     protocol.EventOutputGap,
-				SessionID: s.sessionID,
-				Reason:    dropped,
+				Reason: dropped,
 			})
 			return
 		}

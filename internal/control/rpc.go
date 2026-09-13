@@ -16,6 +16,8 @@ import (
 	"clankerbox/internal/rpctransport"
 )
 
+const minimumBearerBytes = 32
+
 type machineRPC struct{ c *Controller }
 
 func rpcError(err error) error { return rpcmodel.ToError(err) }
@@ -312,5 +314,3 @@ func (c *Controller) Handler(token []byte) (http.Handler, error) {
 	mux.Handle(path, h)
 	return rpctransport.Bearer(string(token), rpctransport.WithWriteDeadline(mux)), nil
 }
-
-const minimumBearerBytes = 32

@@ -54,8 +54,7 @@ func (e *environment) repairBundleLocator(ctx context.Context, stop func(context
 		return err
 	}
 	if _, err = root.ReadFile(unit); err == nil {
-		// Re-register the identical executable at its new path. Ordinary host
-		// shutdown leaves native supervisors/VMs alive and releases service ownership.
+		// Release service ownership for re-registration without stopping native VMs.
 		if err = stop(ctx, false); err != nil {
 			return err
 		}

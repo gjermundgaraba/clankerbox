@@ -57,13 +57,12 @@ type Session struct {
 	waitDone chan struct{}
 }
 
-// spawnOptions carries everything needed to start a session.
 type spawnOptions struct {
 	ctx         context.Context //nolint:containedctx // The daemon context owns every wazero instance.
 	record      protocol.Session
 	fingerprint string
 	env         map[string]string
-	workload    *Workload
+	process     processIdentity
 	stateDir    string
 	ringSize    int
 	loader      *vt.Loader
@@ -107,22 +106,10 @@ func (s *Session) start(opts spawnOptions) error {
 		return fmt.Errorf("create terminal: %w", err)
 	}
 	s.term = term
-	if opts.workload == nil {
-		err = os.MkdirAll(s.record.Cwd, dirMode)
-	} else {
-		_, err = os.Stat(s.record.Cwd)
-	}
-	if err != nil {
-		_ = term.Close()
-		return fmt.Errorf("create working directory: %w", err)
-	}
 	argv := s.record.Argv
 	cmd := exec.CommandContext(context.WithoutCancel(opts.ctx), argv[0], argv[1:]...) //nolint:gosec // Shell-equivalent authority by contract.
 	cmd.Dir = s.record.Cwd
-	cmd.Env = buildEnv(opts.env)
-	if opts.workload != nil {
-		opts.workload.configure(cmd, opts.env)
-	}
+	opts.process.configure(cmd, opts.env)
 	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: s.record.Rows, Cols: s.record.Cols})
 	if err != nil {
 		_ = term.Close()
@@ -141,16 +128,6 @@ func (s *Session) start(opts spawnOptions) error {
 	go s.readLoop()
 	go s.waitLoop()
 	return nil
-}
-
-// buildEnv appends terminal defaults and requested overrides; exec keeps the
-// last value for a duplicated key.
-func buildEnv(extra map[string]string) []string {
-	env := append(os.Environ(), "TERM=xterm-256color")
-	for k, v := range extra {
-		env = append(env, k+"="+v)
-	}
-	return env
 }
 
 func (s *Session) timestamp() string {
@@ -232,7 +209,7 @@ func (s *Session) waitLoop() {
 	_ = s.master.Close()
 	<-s.writer.done
 	for _, sub := range subs {
-		sub.enqueueEvent(protocol.SessionEvent{Event: protocol.EventSession, Session: record})
+		sub.enqueueEvent(protocol.SessionEvent{Session: record})
 	}
 }
 
@@ -288,7 +265,7 @@ func (s *Session) open(
 		}
 		return value, &Attachment{sink: sink, final: s.final}, nil
 	}
-	sub := newSubscriber(sink, s.record.ID)
+	sub := newSubscriber(sink)
 	if s.resumable(args, incarnation) {
 		sub.prefix = s.ring.slice(*args.FromOffset)
 		sub.from = *args.FromOffset
@@ -315,7 +292,7 @@ func (s *Session) open(
 }
 
 // capture reads the final screen once: its announcement and the text bytes.
-// Nil when the terminal cannot be read, never an invented screen.
+// Returns nil when the terminal cannot be read.
 func capture(term *vt.Terminal) (*protocol.View, []byte) {
 	text, err := term.Text()
 	if err != nil {
@@ -383,11 +360,9 @@ func (s *Session) resize(cols, rows uint16) (protocol.Session, error) {
 	offset := s.record.Offset
 	s.record.LastResizeOffset = &offset
 	event := protocol.ResizeEvent{
-		Event:     protocol.EventResize,
-		SessionID: s.record.ID,
-		Cols:      cols,
-		Rows:      rows,
-		Offset:    offset,
+		Cols:   cols,
+		Rows:   rows,
+		Offset: offset,
 	}
 	for _, sub := range s.subs {
 		sub.enqueueEvent(event)

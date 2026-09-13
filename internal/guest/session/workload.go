@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"syscall"
 )
@@ -30,13 +31,38 @@ func (w Workload) validate() error {
 	return nil
 }
 
-func (w Workload) configure(cmd *exec.Cmd, extra map[string]string) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: w.UID, Gid: w.GID, Groups: []uint32{}}}
+// processIdentity gives every session the same shell and environment policy.
+// Only the credential switch differs for same-user test managers.
+type processIdentity struct {
+	home, user string
+	credential *syscall.Credential
+}
+
+func identityFor(workload *Workload) (processIdentity, error) {
+	if workload != nil {
+		if err := workload.validate(); err != nil {
+			return processIdentity{}, err
+		}
+		return processIdentity{
+			home:       workload.Home,
+			user:       workload.User,
+			credential: &syscall.Credential{Uid: workload.UID, Gid: workload.GID, Groups: []uint32{}},
+		}, nil
+	}
+	account, err := user.Current()
+	if err != nil {
+		return processIdentity{}, err
+	}
+	return processIdentity{home: account.HomeDir, user: account.Username}, nil
+}
+
+func (p processIdentity) configure(cmd *exec.Cmd, extra map[string]string) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: p.credential}
 	cmd.Env = []string{
 		"PATH=/usr/local/bin:/usr/bin:/bin",
-		"HOME=" + w.Home,
-		"USER=" + w.User,
-		"LOGNAME=" + w.User,
+		"HOME=" + p.home,
+		"USER=" + p.user,
+		"LOGNAME=" + p.user,
 		"SHELL=/bin/sh",
 		"TERM=xterm-256color",
 		"LANG=C.UTF-8",

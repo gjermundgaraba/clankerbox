@@ -29,12 +29,14 @@ func (h *Helper) checkpoint(ctx context.Context, id string) (ownedCheckpoint, er
 	}
 	return cp, err
 }
+
 func (h *Helper) runtimePin(p model.Profile) string {
 	return model.Hash(struct {
 		Profile      model.Profile
 		Runtime, DNS string
 	}{p, h.cfg.RuntimeDigest, h.cfg.DNS})
 }
+
 func (h *Helper) resourceIdle(ctx context.Context, id string, checkpoint bool) (resultErr error) {
 	rows, err := h.db.QueryContext(ctx, "SELECT body FROM operations")
 	if err != nil {
@@ -64,6 +66,7 @@ func (h *Helper) resourceIdle(ctx context.Context, id string, checkpoint bool) (
 	}
 	return rows.Err()
 }
+
 func (h *Helper) machineDependencies(ctx context.Context, m Manifest) (resultErr error) {
 	if m.Profile.Runtime != runtimeSmolvm {
 		return nil
@@ -307,8 +310,6 @@ func (h *Helper) childIdentity(
 	source Manifest,
 	cp *ownedCheckpoint,
 ) (Manifest, error) {
-	var err error
-
 	if req.Generation != 1 || !model.ValidName(req.Name) {
 		return Manifest{}, model.NewError(model.ReasonInvalid, "child requires a new generation-one identity/name", false)
 	}
@@ -329,6 +330,7 @@ func (h *Helper) childIdentity(
 		m.SourceMachineID = cp.SourceMachineID
 	}
 	if req.Profile.Runtime == runtimeSmolvm {
+		var err error
 		m.Port, err = h.port(ctx, req.MachineID)
 		if err != nil {
 			return Manifest{}, err

@@ -33,7 +33,7 @@ func NewHandler(s *Service) (string, http.Handler) {
 	return "/", mux
 }
 
-// DescribeHost handles the typed host RPC with owned machine admission.
+// DescribeHost returns host identity and supported profiles.
 func (r *RPC) DescribeHost(
 	context.Context,
 	*connect.Request[v1.DescribeHostRequest],
@@ -46,7 +46,7 @@ func (r *RPC) DescribeHost(
 	return connect.NewResponse(out), nil
 }
 
-// SubmitOperation handles the typed host RPC with owned machine admission.
+// SubmitOperation accepts a lifecycle operation for background execution.
 func (r *RPC) SubmitOperation(
 	ctx context.Context,
 	in *connect.Request[v1.SubmitOperationRequest],
@@ -64,7 +64,7 @@ func (r *RPC) SubmitOperation(
 	), nil
 }
 
-// GetHostOperation handles the typed host RPC with owned machine admission.
+// GetHostOperation reads the current journal entry for an operation.
 func (r *RPC) GetHostOperation(
 	ctx context.Context,
 	in *connect.Request[v1.GetHostOperationRequest],
@@ -76,7 +76,7 @@ func (r *RPC) GetHostOperation(
 	return connect.NewResponse(wireOperation(op)), nil
 }
 
-// InspectMachine handles the typed host RPC with owned machine admission.
+// InspectMachine observes a machine and checks the requested generation.
 func (r *RPC) InspectMachine(
 	ctx context.Context,
 	in *connect.Request[v1.InspectMachineRequest],

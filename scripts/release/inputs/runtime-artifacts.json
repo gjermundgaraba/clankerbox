@@ -1,0 +1,116 @@
+{
+  "platforms": {
+    "darwin-arm64": {
+      "provenance": {
+        "release": "v0.3.0",
+        "source_commit": "725122dcf5e2ee1466dc6bd8e09089c3e5861a74",
+        "archive_url": "https://github.com/gjermundgaraba/clankerbox/releases/download/v0.3.0/clankerbox-0.3.0-darwin-arm64.tar.gz",
+        "archive_sha256": "ea4cebfa2854db23e2ceb1c55945ca9a74305290329f0ede1cd90d08c6bd1bae",
+        "bundle_manifest_sha256": "195e41d6145b93e47bb83c3489ab0de45d477b0183404c4723e452efb86a28d6",
+        "qualification_record": "b788ca999cd525c916f7dc578bf0ca7943042e3b:docs/real-local-clean-break-plan.md"
+      },
+      "files": [
+        {
+          "path": "lib",
+          "type": "directory"
+        },
+        {
+          "path": "lib/libMoltenVK.dylib",
+          "type": "file",
+          "sha256": "945c9d86e886edc19a9cc3975336f4c67279d3ca884bf55638b041d8921fd16f"
+        },
+        {
+          "path": "lib/libepoxy.0.dylib",
+          "type": "file",
+          "sha256": "4907b7a0cf4ef3515bde843dc187f22482d142898f6c44f2859b59c6298e3324"
+        },
+        {
+          "path": "lib/libkrun.dylib",
+          "type": "file",
+          "sha256": "a50f17482e15aff553490e01405a0d238f5a715f3b0a68e4c42d8e873f39b821"
+        },
+        {
+          "path": "lib/libkrunfw.5.dylib",
+          "type": "file",
+          "sha256": "af0e3f5011d6735539b1c9b80e3fbf9672289921c070593b7955c9b8e0ef7c34"
+        },
+        {
+          "path": "lib/libkrunfw.dylib",
+          "type": "symlink",
+          "sha256": "876df6d4cdad366067a49aa13505dec0d07cd138c709946ba37bf83fd993e157"
+        },
+        {
+          "path": "lib/libvirglrenderer.1.dylib",
+          "type": "file",
+          "sha256": "6ad956b217da875edd64a25f799f3d2036c611626053d39b2cc4e36577645205"
+        },
+        {
+          "path": "overlay-template.ext4.zst",
+          "type": "file",
+          "sha256": "da11dd364a69bf45205c1d6fb91d5decf46fe01fc4338fe06d9e75bcbce28372"
+        },
+        {
+          "path": "storage-template.ext4.zst",
+          "type": "file",
+          "sha256": "6a98ac1f9fe4b00f6fb060989051437b0b5f74d7f9fdd6cfddd3d4cccbb8133a"
+        }
+      ]
+    },
+    "linux-amd64": {
+      "provenance": {
+        "release": "v0.3.0",
+        "source_commit": "725122dcf5e2ee1466dc6bd8e09089c3e5861a74",
+        "archive_url": "https://github.com/gjermundgaraba/clankerbox/releases/download/v0.3.0/clankerbox-0.3.0-linux-amd64.tar.gz",
+        "archive_sha256": "30d20580b488390419689431f4c81263242ba47ba263a1b0f0c099f67ae16a4e",
+        "bundle_manifest_sha256": "14d33ec2a6ed1cd16950f1c5f35f8504aceac8867f06d94c24fa6e0544b31c18",
+        "qualification_record": "b788ca999cd525c916f7dc578bf0ca7943042e3b:docs/real-local-clean-break-plan.md"
+      },
+      "files": [
+        {
+          "path": "lib",
+          "type": "directory"
+        },
+        {
+          "path": "lib/libkrun.provenance",
+          "type": "file",
+          "sha256": "1a9ca811f2cc2d35fefb60979dd11121bff0ce5303db7199ca3792ef96aea6bd"
+        },
+        {
+          "path": "lib/libkrun.so",
+          "type": "file",
+          "sha256": "3f021ac366152b33c7c329f893804fa9adda5d4352fac4b88214ae28fb89ebd0"
+        },
+        {
+          "path": "lib/libkrun.so.2",
+          "type": "symlink",
+          "sha256": "63ebc6f3625d3aad66c170f9e3689a5cb61989ba49c65d4fde49eee470d80c58"
+        },
+        {
+          "path": "lib/libkrunfw.so",
+          "type": "symlink",
+          "sha256": "47c3e75a6b509b4c91242343365ae03abec3927e272489e65cb1eaf453497e49"
+        },
+        {
+          "path": "lib/libkrunfw.so.5",
+          "type": "symlink",
+          "sha256": "c14051d517fe4fda865a65aafcf3bad4f6b5d872eda094f950e1efe6b7214b10"
+        },
+        {
+          "path": "lib/libkrunfw.so.5.5.0",
+          "type": "file",
+          "sha256": "767495f52bd786e6e0b0fa1b04adf40dea44b80019f6953ca6eb6394cc90d264"
+        },
+        {
+          "path": "overlay-template.ext4.zst",
+          "type": "file",
+          "sha256": "06dcda4c52a7d2d838ac171f31fb39b64c272caea030c55ab50b2e9ca64ca69a"
+        },
+        {
+          "path": "storage-template.ext4.zst",
+          "type": "file",
+          "sha256": "b88fcbfa86b3d722ec865fbbfb9b628945ae24093347e8c08872c1859f0ffcc5"
+        }
+      ]
+    }
+  }
+}

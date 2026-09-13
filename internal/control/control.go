@@ -120,6 +120,7 @@ func (c *Controller) Close() error {
 	c.clients.Close()
 	return errors.Join(c.db.Close(), c.lock.Close(), c.stateDir.Close())
 }
+
 func (c *Controller) host(id string) (model.Host, bool) {
 	for _, h := range c.cfg.Hosts {
 		if h.ID == id {
@@ -128,6 +129,7 @@ func (c *Controller) host(id string) (model.Host, bool) {
 	}
 	return model.Host{}, false
 }
+
 func (c *Controller) profile(id string) (model.Profile, bool) {
 	for _, p := range c.cfg.Profiles {
 		if p.ID == id {
@@ -167,6 +169,7 @@ func readMachine(ctx context.Context, q querier, id string) (model.Machine, erro
 	err = json.Unmarshal(b, &m)
 	return m, err
 }
+
 func machines(ctx context.Context, q querier) (_ []model.Machine, resultErr error) {
 	rows, err := q.QueryContext(ctx, "SELECT body FROM machines WHERE deleted=0 ORDER BY name")
 	if err != nil {
@@ -187,6 +190,7 @@ func machines(ctx context.Context, q querier) (_ []model.Machine, resultErr erro
 	}
 	return out, rows.Err()
 }
+
 func saveMachine(ctx context.Context, q executor, m model.Machine) error {
 	b, err := json.Marshal(m)
 	if err != nil {
@@ -202,6 +206,7 @@ func saveMachine(ctx context.Context, q executor, m model.Machine) error {
 	)
 	return err
 }
+
 func readOperation(ctx context.Context, q querier, id string) (model.Operation, error) {
 	var o model.Operation
 	var b []byte
@@ -217,6 +222,7 @@ func readOperation(ctx context.Context, q querier, id string) (model.Operation, 
 	o.Status = status
 	return o, err
 }
+
 func saveOperation(ctx context.Context, q executor, o model.Operation, next int64) error {
 	b, err := json.Marshal(o)
 	if err != nil {
@@ -239,6 +245,7 @@ func (c *Controller) Operation(ctx context.Context, id string) (model.Operation,
 	defer c.mu.Unlock()
 	return readOperation(ctx, c.db, id)
 }
+
 func (c *Controller) duplicate(ctx context.Context, tx *sql.Tx, key, fp string) (model.Operation, bool, error) {
 	var id, old string
 	err := tx.QueryRowContext(ctx, "SELECT id,fingerprint FROM operations WHERE idem=?", key).Scan(&id, &old)
@@ -288,6 +295,7 @@ func validKey(key string) error {
 	}
 	return nil
 }
+
 func capacity(ctx context.Context, tx *sql.Tx, h model.Host, p model.Profile, exclude string) error {
 	ms, err := machines(ctx, tx)
 	if err != nil {
@@ -299,6 +307,7 @@ func capacity(ctx context.Context, tx *sql.Tx, h model.Host, p model.Profile, ex
 	}
 	return nil
 }
+
 func insertOperation(ctx context.Context, tx *sql.Tx, key, fp string, o model.Operation, req model.Request) error {
 	b, _ := json.Marshal(o)
 	r, _ := json.Marshal(req)
@@ -489,9 +498,8 @@ func (c *Controller) Mutate(ctx context.Context, id, action, key string) (_ mode
 	return o, err
 }
 
-// completeStopped records an idempotent no-op only after fresh host observation
-// and ordinary reservation/generation admission. No host effect or generation
-// advance is necessary to establish the already-observed desired stopped state.
+// completeStopped records a no-op after observation and reservation/generation
+// checks establish that the machine is already stopped.
 func completeStopped(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -540,6 +548,7 @@ func applyObservation(m *model.Machine, obs *model.Observation) {
 	m.ObservationError = ""
 	m.Deleted = obs.Deleted
 }
+
 func validateObservation(id string, obs *model.Observation) error {
 	if obs == nil || obs.MachineID != id || obs.Generation < 1 || obs.ObservedAt.IsZero() {
 		return errors.New("invalid host observation")

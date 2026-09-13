@@ -1,7 +1,6 @@
 package protocol_test
 
 import (
-	"encoding/base64"
 	"errors"
 	"testing"
 
@@ -33,17 +32,6 @@ func TestValidation(t *testing.T) {
 	bad = good
 	bad.Argv = make([]string, protocol.MaxArgv+1)
 	assertValidation(t, bad.Validate(), model.ReasonTooLarge, "argv")
-	input := protocol.InputArgs{SessionID: good.SessionID, Data: "aGk="}
-	data, err := input.Validate()
-	if err != nil || string(data) != "hi" {
-		t.Fatalf("input decode: %q %v", data, err)
-	}
-	input.Data = "***"
-	_, err = input.Validate()
-	assertValidation(t, err, model.ReasonInvalid, "data is not base64")
-	input.Data = base64.StdEncoding.EncodeToString(make([]byte, protocol.MaxInputBytes+1))
-	_, err = input.Validate()
-	assertValidation(t, err, model.ReasonTooLarge, "data")
 }
 
 func assertValidation(t *testing.T, err error, code model.Reason, message string) {

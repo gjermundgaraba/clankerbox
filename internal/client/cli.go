@@ -19,7 +19,6 @@ type Streams struct {
 func jsonOut(w io.Writer, v any) error { return json.NewEncoder(w).Encode(v) }
 
 const (
-	deleteCommand     = deleteCommandName
 	checkpointCommand = "checkpoint"
 	forkCommand       = "fork"
 	createCommand     = "create"

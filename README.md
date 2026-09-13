@@ -1,43 +1,63 @@
 # Clankerbox
 
-API-first coding machines with retained workspaces, concurrent Linux RAM forks,
-explicit recovery points, and guest-owned terminal sessions. Applications use the
-bearer-authenticated session API. Clankerbox does not manage application credentials.
+Clankerbox runs long-lived coding machines behind an API. Machines are VMs that
+keep their disks until deleted, can be forked while running (Linux RAM forks),
+and can be captured as checkpoints and restored into new machines. Terminal
+access goes through guest-owned sessions on the same API; guests run no SSH.
 
-Applications and the CLI use generated `clankerbox.v1` Connect services. Private
-host and guest listeners use the same SessionService contract. See
-[terminal sessions](docs/terminal-sessions.md) and the
-[generated SDK](protocol/README.md) for consumer contracts.
+A deployment is three services:
 
-## Using machines
+- **controller** (`clankerbox-server`): the public API. Owns desired state,
+  admission and the durable operation queue.
+- **host** (`clankerbox-host`): runs VMs natively on one machine and journals
+  every mutation. Linux guests use a pinned smolvm/libkrun build on Apple
+  Silicon and on Linux with KVM; macOS guests use Tart.
+- **guest daemon** (`clankerbox-guest`): runs inside each VM and owns PTYs,
+  terminal state and session records.
 
-`clankerbox dev` manages a project-scoped environment with the real controller,
-persistent host service and Linux VMs. Apple Silicon hosts use the supported
-smolvm Linux/arm64 runtime; Linux/amd64 hosts use KVM. The control-plane services
-run locally and guest terminals stay inside their VM. See
-[local development](docs/local-development.md) for the installed runtime bundle,
-project configuration, environment lifecycle and Clankerdesk target.
+All three speak the generated `clankerbox.v1` Connect contract in
+[protocol/](protocol/README.md). The `clankerbox` CLI is one client of it.
 
-Create `~/.config/clankerbox/config.json` with your API origin and local files:
+## Quick start
+
+```sh
+make build
+```
+
+`clankerbox dev` runs a controller, a host service and Linux VMs on your
+workstation (Apple Silicon macOS, or Linux/amd64 with KVM). It needs a runtime
+bundle: the engine, guest image, profiles and service binaries that a release
+archive ships next to the CLI. A release CLI finds its bundle automatically; a
+source build takes the manifest explicitly:
+
+```sh
+bin/clankerbox dev --bundle /path/to/bundle.json
+```
+
+See [local development](docs/local-development.md) for the environment
+lifecycle and [release packaging](scripts/release/README.md) for how bundles
+are assembled.
+
+## Using a controller
+
+Create `~/.config/clankerbox/config.json`:
 
 ```json
 {
-  "url": "https://YOUR_CONTROLLER",
+  "url": "https://CONTROLLER",
   "token_file": "token",
   "default_profile": "linux-dev-v3"
 }
 ```
 
-Config file paths resolve relative to the config directory; `~/` expands to your
-home. Keep the bearer token file mode 0600. Optional `default_host` and
-`default_profile` supply omitted flags; `--host` and `--profile` override them.
-Without a host setting, create selects the sole host supporting the profile;
-ambiguity requires an explicit `--host`. Explicit or configured hosts go directly
-to the controller, which owns admission and returns previously accepted requests
-before checking current host/profile eligibility.
+Relative paths resolve against the config directory and `~/` expands to your
+home. Keep the token file mode 0600. `default_host` and `default_profile` fill
+in omitted `--host` and `--profile` flags; without a host, `create` picks the
+only host that supports the profile and refuses an ambiguous choice.
 
 ```sh
 clankerbox profiles
+clankerbox hosts
 clankerbox create dev
 clankerbox stop dev
 clankerbox start dev
@@ -48,77 +68,54 @@ clankerbox sessions dev
 clankerbox labels dev team=core purpose=review
 ```
 
-Create/start/stop/delete/fork and checkpoint create/delete/restore wait for their
-accepted operation, up to five minutes. `--timeout 10m` changes that positive
-bound. Success prints the machine or checkpoint summary; deletes print the
-completed operation. Failure, unresolved status, timeout or a lost operation read
-returns nonzero with the known operation and resource IDs. A timed-out operation
-may continue: inspect it before deciding to retry. Waiting never resubmits a
-mutation. Stopped machines require an explicit `start`; connecting never wakes
-them. Deletion requires a stopped machine. Runtime rules still apply: Tart macOS guest
-forks/captures require a stopped source.
+Lifecycle commands wait for their operation to finish, five minutes by default
+(`--timeout`). A timed-out operation may still complete: inspect it with
+`clankerbox operation ID` before retrying. Stopped machines need an explicit
+`start`, and `delete` requires a stopped machine. `clankerbox hosts` shows
+configured and reserved CPU and RAM per host; reservations come from the
+controller's accounting, not live utilization.
 
-Resource flags can appear before or after positionals, for example
-`create dev --profile mac-xcode-v3 --host mac`. Global flags precede the
-command. For automation:
+For automation, `--json` prints resources as JSON and `--async` returns the
+accepted operation without waiting:
 
 ```sh
 clankerbox --json create batch-dev --async --idempotency-key REQUEST_KEY
 clankerbox --json operation OPERATION_ID
-clankerbox --json inspect dev
-clankerbox --json checkpoint create dev --async
 ```
 
-`--json` prints structured resources, or the accepted operation with `--async`.
-Without `--async`, JSON mutations return machines (create/start/stop/fork/restore),
-a checkpoint (capture), or a completed operation (deletes). `operation` remains
-available for diagnostics. Use Clankerdesk or another session-API consumer for
-terminal interaction; `sessions` lists the retained sessions but is not an
-interactive terminal client.
+`clankerbox COMMAND --help` documents each command. The CLI lists sessions but
+is not a terminal client; terminal access is through `SessionService`, see
+[terminal sessions](docs/terminal-sessions.md).
 
-The binaries use urfave/cli for flag parsing
-and generated help. `clankerbox` with no arguments shows root help; use
-`clankerbox COMMAND --help` or `clankerbox help COMMAND` for command details.
-Help never requires configuration or starts services. Names are positional:
-`create NAME`, `fork SOURCE CHILD`, and `restore CHECKPOINT CHILD`.
-Errors go to stderr as text, including with `--json`; that flag controls resource
-output on stdout.
+## Running the services
 
-`clankerbox hosts` shows total, used and remaining CPU/RAM per host. Used
-capacity means controller reservations, not live CPU utilization or resident
-memory. Running, preparing and unknown machines reserve their pinned profile
-sizes; stopped machines release capacity unless a start is queued. Deleted
-machines are excluded. The command reads the same durable accounting used for
-admission without contacting hosts. Remaining capacity can be negative if host
-limits were reduced below existing reservations. `clankerbox hosts --json`
-includes `used_cpu`, `used_ram_mib`, `remaining_cpu` and `remaining_ram_mib`
-alongside configured totals `cpu` and `ram_mib`.
+`clankerbox-server` takes `--config` (hosts and profiles), `--state-dir`,
+`--token-file` and `--listen`. `clankerbox-host` takes `--config`, and
+`--init` prepares its state and guest authority once before first use. Both
+print their flags with `--help`.
 
-## Service architecture
+A listener without TLS must be a loopback address or a Unix socket. For a
+remote listener, supply `--tls-cert` and `--tls-key`; the controller then
+serves HTTP/2 over TLS 1.3 and clients verify the certificate against their
+trust roots. An authenticated ingress additionally takes `--tls-client-ca` and
+`--tls-client-peer-id`: the CA verifies client certificates, and the peer ID
+must match a URI in the ingress certificate, such as
+`spiffe://clankerbox/ingress/edge`. Bearer authentication is required in either
+mode, and private key files must be owned by the service user with mode 0600.
 
-The controller owns public admission, desired state, and the durable operation
-queue. One reconciliation worker per host dispatches native mutations. The host
-owns native execution and its journal; per-machine reservations keep conflicting
-session calls out while other machines remain accessible. Guest daemons own PTYs,
-terminal state and final session records.
+## Repository layout
 
-MachineService handles public lifecycle operations. HostService handles private
-native administration. A single SessionService schema is mounted at controller,
-host and guest endpoints, each with its own authorization. Clients and TLS
-connections live with the service or verified machine binding that owns them.
+| Path | Contents |
+| --- | --- |
+| `cmd/` | The CLI and the three service binaries. |
+| `internal/` | Controller, host, guest, client and shared packages. See [module contracts](docs/module-contracts.md). |
+| `protocol/` | Protobuf sources and the TypeScript SDK. Generated Go lives in `gen/`. |
+| `images/` | Linux guest image recipes and package locks. |
+| `scripts/release/` | Bundle assembly, engine pins and third-party notices. |
+| `tests/` | Live acceptance harnesses. |
+| `docs/adr/` | Architecture decision records. |
 
-Profiles carry portable compatibility fields and image content digests. Hosts
-resolve installation paths privately. Capabilities are derived from each profile.
-Linux guests use the pinned smolvm/libkrun build for RAM forks and checkpoints;
-Tart macOS guests support stopped-disk copies. Unknown or unresolved native state
-requires explicit inspection; requests never silently cold-boot a requested RAM
-restore or replay uncertain terminal input.
-
-This repository owns services, the generated SDK, image recipes, release inputs
-and acceptance tests. Deployment topology, secrets, network rules and operating
-procedures belong to the separate personal-cloud repository.
-
-## Build and verification
+## Development
 
 ```sh
 make build
@@ -126,20 +123,12 @@ make test
 make lint
 ```
 
-`make test` runs Go race tests and Python image/release/harness tests. SDK generation,
-build and schema checks are documented in [protocol/README.md](protocol/README.md).
-Lint uses golangci-lint v2.13.2 with correctness and security checks; formatting
-uses gofmt/goimports. Release builders require explicit pinned engine sources and
-dependency notices. See [release packaging](scripts/release/README.md).
+`make test` runs the Go tests with the race detector and the Python tests for
+image staging and release assembly. `make lint` needs golangci-lint v2.13.2.
+Regenerating the RPC code is described in [protocol/README.md](protocol/README.md).
 
-The controller owns its database and lock under a private `--state-dir`. See
-[module contracts](docs/module-contracts.md) for ownership and file boundaries,
-[terminal sessions](docs/terminal-sessions.md) for streaming semantics, and
-[local development](docs/local-development.md) for environment lifecycle.
+## License
 
-## Design decisions
-
-Architecture decision records under [docs/adr](docs/adr/README.md) explain the
-runtime choices, service ownership, wire contract and product boundaries. Release
-inputs live under `scripts/release/inputs/`. Private build trees, VM payloads and
-credentials stay outside source control.
+MIT, see [LICENSE](LICENSE). Release bundles redistribute third-party
+components under their own licenses; see
+[scripts/release/README.md](scripts/release/README.md).

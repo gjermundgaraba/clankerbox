@@ -1,68 +1,33 @@
-# Clankerbox generated RPC contracts
+# RPC contract and SDK
 
-The single supported wire package is `clankerbox.v1`. The checked-in Protobuf
-sources generate Go models under `gen/clankerbox/v1`, Go Connect handlers/clients
-under `gen/clankerbox/v1/clankerboxv1connect`, and TypeScript descriptors under
-`protocol/src/gen/clankerbox/v1`.
+The wire package is `clankerbox.v1`. The Protobuf sources under
+`clankerbox/v1/` generate Go messages in `gen/clankerbox/v1`, Go Connect
+handlers and clients in `gen/clankerbox/v1/clankerboxv1connect`, and TypeScript
+in `src/gen/clankerbox/v1`. Generated code is checked in.
 
-These contracts are separate from SQLite journal models. `internal/rpcmodel`
-translates the existing durable machine/checkpoint/operation and session records;
-this transport work does not rewrite journals. Public Profile, Host, Machine,
-and Checkpoint values omit image paths, private network endpoints, SSH fields,
-engine store paths and credentials. The host protocol also carries only portable profile identity; hosts resolve
-image paths from their own configuration after checking every compatibility field.
+The services:
 
-## Services
+- `MachineService`: discovery, resource reads, lifecycle mutations, operation
+  inspection and label replacement. Lifecycle mutations carry idempotency keys
+  and return durable Operations; clients poll `GetOperation` and never resubmit
+  a mutation because a wait timed out. `SetLabels` is the exception: it takes
+  no key and returns the updated `Machine` synchronously.
+- `SessionService`: terminal sessions, mounted on controller, host and guest
+  with endpoint-specific authorization.
+- `HostService`: private operation submission and status plus host and machine
+  inspection. Each action is a `oneof` payload.
 
-- `MachineService` provides discovery, resource reads, lifecycle mutations,
-  operation inspection and synchronous label replacement. Mutations carry caller
-  idempotency keys and return durable Operations; labels return the updated
-  Machine directly. Clients poll GetOperation with bounded waits and never
-  resubmit a mutation merely because a wait times out.
-- `SessionService` is mounted independently on controller, host and guest. Each
-  endpoint owns its authentication and machine admission.
-- `HostService` provides durable typed operation submission/status, host and
-  machine inspection. SubmitOperation
-  acknowledgement is distinct from final operation success. Each action is a
-  Protobuf oneof payload; there is no generic JSON command dispatcher.
+Public `Profile`, `Host`, `Machine` and `Checkpoint` messages omit image paths,
+private endpoints, engine store paths and credentials. `internal/rpcmodel`
+converts between these messages and the services' persisted records.
 
-Guest identity rebind is local administration outside the session service.
+Errors combine a Connect status code with a typed `ErrorDetail` reason.
+`retryable` describes the operation, not terminal input: a lost input
+acknowledgement must never be replayed. The streaming semantics of
+`AttachSession` are specified in
+[terminal sessions](../docs/terminal-sessions.md).
 
-The same AttachmentRequest/AttachmentEvent types cross each terminal relay.
-Exactly one Open comes first; subsequent Input/Resize controls are processed in
-stream order. Opened describes the atomic guest-selected snapshot/resume/final
-view and live subscription. `cut` is the session's live offset at that boundary;
-`start_offset` is the requested retained starting offset and can be earlier.
-SnapshotChunk/ViewChunk positions are attachment-local bootstrap positions.
-Partial snapshots never become committed resume state. Final views retain their
-cursor and can be unavailable. Output offsets and input sequences are uint64;
-TypeScript uses bigint and Protobuf JSON uses decimal strings.
-
-Opened is always first. ACKs may interleave with snapshot/view chunks or retained
-resume output; they acknowledge control admission independently of prefix progress.
-The immutable prefix finishes before any live terminal-state event. Input and
-resize retain their control sequence ordering, and all events share one bounded
-attachment queue. Clients that stop reading responses eventually backpressure
-control admission.
-
-Clean request EOF seals a finite drain boundary for queued responses and detaches
-after that boundary, without waiting for the shell or draining an unbounded live
-tail. Relays half-close the upstream request direction and continue receiving
-through clean upstream completion. Errors and cancellation cancel the attachment.
-
-Accepted input means admission to the bounded guest writer, not shell execution.
-Lost acknowledgements are uncertain and must not cause automatic input replay.
-Attachment cancellation detaches; EndSession independently ends the session.
-All relays must bound queues and stalled writes. The schema does not by itself
-implement these runtime obligations. Exact expected engine digest checks remain
-required before snapshot decoding.
-
-Errors combine standard Connect status codes with the typed ErrorDetail reason.
-Unsupported, prerequisite, capacity, unavailable, identity mismatch, and engine
-mismatch remain distinct. ErrorDetail.retryable is not permission to replay
-uncertain input.
-
-## Generation, checks, and packaging
+## Generation and packaging
 
 ```sh
 cd protocol
@@ -74,37 +39,27 @@ pnpm test
 pnpm pack
 ```
 
-Generation requires protoc 36.1 and installs pinned protoc-gen-go v1.36.12,
-protoc-gen-connect-go v1.21.0, and protoc-gen-es 2.15.0. Product runtime dependencies
-are Connect Go v1.21.0, protobuf Go v1.36.12, and x/net v0.59.0. Go's module
-selection additionally requires x/crypto v0.57.0 and x/sys v0.48.0.
+`generate` requires protoc 36.1 and installs pinned protoc-gen-go,
+protoc-gen-connect-go and protoc-gen-es into `.tools/`. Go dependency versions
+are in the root `go.mod`; JavaScript versions are in `package.json` and the
+lockfile. Regeneration must leave the checked-in output unchanged.
 
-The SDK pins @bufbuild/protobuf 2.15.0, @connectrpc/connect and connect-node 2.2.0,
-TypeScript 7.0.2, and pnpm 12.4.1. Versions were checked against their official
-registries/release API on 2026-09-12. Go module checksums and the pnpm lockfile
-are checked in; repeat generation must leave generated content unchanged.
+`pnpm pack` produces a `@clankerbox/sdk` tarball with JavaScript and
+declarations. It exports all descriptors at the root and per-file subpaths
+`/resources`, `/machine`, `/session` and `/host`. Node consumers use
+`createConnectTransport({httpVersion: "2", ...})` from
+`@connectrpc/connect-node`; browser fetch cannot carry the bidirectional
+attachment stream.
 
-`pnpm pack` builds a portable `@clankerbox/sdk` tarball containing JavaScript and
-declarations, without requiring consumers to understand TypeScript source or
-have the Clankerbox checkout. For coordinated local development, build this
-package then use `file:../clankerbox/protocol` or an appropriate workspace link.
-The SDK exports all descriptors at its root, with `/resources`, `/machine`,
-`/session` and `/host` subpaths. Server-side Node consumers use
-`createClient(Service, createConnectTransport({httpVersion: "2", ...}))` from
-Connect Node; browser Fetch is not a substitute for the bidirectional transport.
-
-Run DTO/error tests from the repository root:
+## Tests
 
 ```sh
 go test -race ./internal/rpcmodel ./gen/...
+cd protocol && pnpm test
 ```
 
-Tests cover domain round trips through serialized Protobuf, private-field
-redaction, retained private profile/input fingerprints, all operation actions
-and states, final views, resume cuts, creation retry identity, optional lifecycle
-fields, integer range checks, and typed errors over an actual RPC connection.
-The SDK tests exercise bigint/JSON precision, oneofs and service shapes. Generated
-contracts alone are not VM qualification; the live harnesses are described in
-[tests](../tests/README.md).
-`test/real-vm.mjs` drives explicit guest qualification against a selected running
-machine and is not part of the ordinary test glob.
+The Go tests cover conversion round trips, private-field redaction, every
+operation action and state, and typed errors over a real connection. The SDK
+tests cover bigint and JSON precision, oneofs and service shapes.
+`test/real-vm.mjs` and `test/public-session.mjs` drive a running machine and are
+not part of the default test glob; see [tests](../tests/README.md).

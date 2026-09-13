@@ -18,14 +18,11 @@ const (
 	ReasonPrerequisite           Reason = "prerequisite"
 	ReasonCapacity               Reason = "capacity"
 	ReasonUnavailable            Reason = "unavailable"
-	ReasonUnauthenticated        Reason = "unauthenticated"
-	ReasonPermissionDenied       Reason = "permission_denied"
 	ReasonIdentityMismatch       Reason = "identity_mismatch"
 	ReasonEngineMismatch         Reason = "engine_mismatch"
 	ReasonExpired                Reason = "expired"
 	ReasonNotRunning             Reason = "not_running"
 	ReasonTooLarge               Reason = "too_large"
-	ReasonAlreadyAttached        Reason = "already_attached"
 	ReasonInternal               Reason = "internal"
 )
 

@@ -63,7 +63,6 @@ type HostDescription struct {
 	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
 	Os            string                 `protobuf:"bytes,2,opt,name=os,proto3" json:"os,omitempty"`
 	Arch          string                 `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`
-	Version       string                 `protobuf:"bytes,4,opt,name=version,proto3" json:"version,omitempty"`
 	Profiles      []*Profile             `protobuf:"bytes,5,rep,name=profiles,proto3" json:"profiles,omitempty"`
 	Schema        string                 `protobuf:"bytes,6,opt,name=schema,proto3" json:"schema,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -117,13 +116,6 @@ func (x *HostDescription) GetOs() string {
 func (x *HostDescription) GetArch() string {
 	if x != nil {
 		return x.Arch
-	}
-	return ""
-}
-
-func (x *HostDescription) GetVersion() string {
-	if x != nil {
-		return x.Version
 	}
 	return ""
 }
@@ -1119,14 +1111,13 @@ var File_clankerbox_v1_host_proto protoreflect.FileDescriptor
 const file_clankerbox_v1_host_proto_rawDesc = "" +
 	"\n" +
 	"\x18clankerbox/v1/host.proto\x12\rclankerbox.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dclankerbox/v1/resources.proto\"\x15\n" +
-	"\x13DescribeHostRequest\"\xb4\x01\n" +
+	"\x13DescribeHostRequest\"\xa9\x01\n" +
 	"\x0fHostDescription\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x12\n" +
-	"\x04arch\x18\x03 \x01(\tR\x04arch\x12\x18\n" +
-	"\aversion\x18\x04 \x01(\tR\aversion\x122\n" +
+	"\x04arch\x18\x03 \x01(\tR\x04arch\x122\n" +
 	"\bprofiles\x18\x05 \x03(\v2\x16.clankerbox.v1.ProfileR\bprofiles\x12\x16\n" +
-	"\x06schema\x18\x06 \x01(\tR\x06schema\"\xd4\x01\n" +
+	"\x06schema\x18\x06 \x01(\tR\x06schemaJ\x04\b\x04\x10\x05R\aversion\"\xd4\x01\n" +
 	"\x11OperationIdentity\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x1d\n" +
 	"\n" +

@@ -209,7 +209,7 @@ func TestControllerDurableIntentReplyLossAndDuplicates(t *testing.T) {
 	if len(tr.calls) != 2 || model.Hash(tr.calls[0]) != model.Hash(tr.calls[1]) {
 		t.Fatal("retry did not replay exact persisted request")
 	}
-	in.Name = fixtureDifferent
+	in.Name = "different"
 	_, err = c.Create(t.Context(), "create-once", in)
 	expectCode(t, err, model.ReasonIdempotencyConflict)
 }
@@ -276,7 +276,7 @@ func TestPendingOperationPreventsNewMutation(t *testing.T) {
 	defer closeTest(t, c)
 	tr.lost = true
 	o := mustCreate(t, c, in, "create")
-	_, err := c.Mutate(context.Background(), o.MachineID, "stop", fixtureDifferent)
+	_, err := c.Mutate(context.Background(), o.MachineID, "stop", "different")
 	expectCode(t, err, model.ReasonOperationPending)
 }
 func TestConcurrentIdempotency(t *testing.T) {
@@ -413,7 +413,7 @@ func TestControllerAndHostJournalsTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt := &integrationRuntime{}
-	hc := host.Config{Root: filepath.Join(root, "host"), RuntimeDigest: "engine-content", Profiles: []host.ProfileBinding{{Profile: cfg.Profiles[0], ImagePath: "seed"}}, TartPath: "/opt/homebrew/bin/tart"}
+	hc := host.Config{HostOS: "darwin", Root: filepath.Join(root, "host"), RuntimeDigest: "engine-content", Profiles: []host.ProfileBinding{{Profile: cfg.Profiles[0], ImagePath: "seed"}}, TartPath: "/opt/homebrew/bin/tart"}
 	helper, err := host.Open(hc, rt)
 	if err != nil {
 		t.Fatal(err)

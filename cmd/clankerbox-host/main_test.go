@@ -44,12 +44,7 @@ func TestCommandValidation(t *testing.T) {
 		want string
 	}{
 		{"required flags", nil, "Required flag"},
-		{
-			"conflicting modes",
-			[]string{testConfigFlag, testConfigFile, "--connect", "machine", "--guest-prepare", "machine"},
-			unknownFlag,
-		},
-		{"unknown flag", []string{"--unknown"}, unknownFlag},
+		{"unknown flag", []string{"--unknown"}, "flag provided but not defined"},
 		{"unexpected argument", append(append([]string{}, required...), "extra"), "unexpected argument"},
 		{"missing value", []string{testConfigFlag}, "flag needs an argument"},
 	}
@@ -100,5 +95,3 @@ func TestCommandFlags(t *testing.T) {
 		}
 	}
 }
-
-const unknownFlag = "flag provided but not defined"

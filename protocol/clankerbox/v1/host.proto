@@ -15,10 +15,11 @@ service HostService {
 }
 message DescribeHostRequest {}
 message HostDescription {
+  reserved 4;
+  reserved "version";
   string host_id = 1;
   string os = 2;
   string arch = 3;
-  string version = 4;
   repeated Profile profiles = 5;
   string schema = 6;
 }

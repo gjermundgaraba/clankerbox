@@ -1,80 +1,66 @@
-# Acceptance
+# Acceptance tests
 
-Unit/race checks: `make test` and
-`python3 -m unittest discover -s tests -p 'test_*.py'`.
+`make test` runs the unit tests. The harnesses here run against a live
+deployment and create and delete disposable machines; do not point them at an
+existing workload.
 
-Build the test-only guest action adapter (not part of the installed CLI):
+Build the test-only session adapter, then run the lifecycle and checkpoint
+harnesses for each host:
 
 ```sh
 go build -o bin/session-run ./tests/session-run
 python3 tests/live_lifecycle.py --binary "$PWD/bin/clankerbox" \
   --session-runner "$PWD/bin/session-run" --config "$HOME/.config/clankerbox/config.json" \
-  --host linux --profile linux-dev-v3 --result /PRIVATE/linux-lifecycle.json --keep
+  --host linux --profile linux-dev-v3 --result RESULTS/linux-lifecycle.json --keep
 python3 tests/live_checkpoints.py --binary "$PWD/bin/clankerbox" \
   --session-runner "$PWD/bin/session-run" --config "$HOME/.config/clankerbox/config.json" \
-  --lifecycle-result /PRIVATE/linux-lifecycle.json --result /PRIVATE/linux-checkpoints.json
+  --lifecycle-result RESULTS/linux-lifecycle.json --result RESULTS/linux-checkpoints.json
 ```
 
-Repeat with host `mac`, profile `mac-xcode-v3`, and separate evidence paths.
-These scripts create and delete disposable resources. Checkpoints require the
-explicitly retained lifecycle source; failures leave named objects for inspection.
-Do not run against an existing workload or blindly retry unresolved operations.
+Repeat with host `mac` and profile `mac-xcode-v3`. The checkpoint harness needs
+the machine the lifecycle harness kept with `--keep`. Failures leave named
+resources in place for inspection.
 
-For the deployed public HTTPS streaming boundary, use Node 26.8.2 with the built
-SDK and an explicitly selected running disposable machine:
+Both harnesses create `--result` exclusively and update it atomically, recording
+accepted operation and resource IDs before polling. Unresolved operations,
+transport ambiguity and polling timeouts are recorded as pending, and neither
+harness replays a mutation to resolve uncertainty. `live_lifecycle.py --resume`
+reuses the disposable machine named in an existing report and refuses to
+continue past a pending mutation; inspect and reconcile before rerunning.
+Lifecycle cleans up its machine unless `--keep` is set; checkpoint failures keep
+everything.
+
+For the public HTTPS streaming boundary, use the built SDK against a running
+disposable machine:
 
 ```sh
-node protocol/test/public-session.mjs /PRIVATE/client.json DISPOSABLE_MACHINE_ID
+node protocol/test/public-session.mjs CLIENT_CONFIG_JSON MACHINE_ID
 ```
 
-This creates and ends its own session, sends 64 MiB without Connect compression,
-and verifies ordered controls, a healthy sibling alongside an unread viewer,
-bounded stalled-viewer disconnection, and cancellation/resume with the same shell.
-It does not stop or delete the selected machine. Keep controller and host
-restarts and lifecycle mutations outside this explicit test window.
+This creates and ends its own session, streams 64 MiB, and checks ordered
+controls, a healthy sibling beside an unread viewer, bounded disconnection of a
+stalled viewer, and cancel/resume on the same shell. It does not stop or delete
+the machine. Keep restarts and lifecycle mutations out of the test window.
 
-`session-run` uses bearer-authenticated terminal sessions. A gate
-installs output replay before the command starts; terminal echo/newline conversion
-is disabled and text stdin is passed through a pipe. Exit status and ordered output
-come from the guest protocol. It merges PTY stdout/stderr and is not a replacement
-product exec API. Interrupted actions require operator inspection; the test session
-is ended on completion or failure where the link remains usable.
+## session-run
 
-The adapter's shell gate, quoted command arguments and quoted text stdin must
-fit **one 4,096-byte protocol argument**. Shell quoting can expand apostrophes;
-there is no fixed raw-stdin allowance independent of the command. Oversize
-commands fail locally before contacting the controller. Larger payload transfer
-is not supported by this adapter.
+`session-run` runs one command in a bearer-authenticated terminal session and
+returns its exit status and ordered output through the guest protocol. It
+installs an output gate before the command starts, disables echo and newline
+conversion, and passes text stdin through a pipe. PTY stdout and stderr are
+merged. It is a test adapter, not an exec API. The gate, quoted arguments and
+quoted stdin must fit one 4096-byte protocol argument; oversize commands fail
+locally.
 
-`session-run --config FILE --expect-stopped MACHINE_ID` bypasses local readiness
-checks and makes an authenticated generated SessionService request over HTTP/2. It succeeds
-only on the typed `prerequisite` error; transport/authentication errors,
-other responses and an accepted attachment all fail. The lifecycle harness uses
-this probe after confirming the machine is stopped.
+Probes used by the harnesses:
 
-Both live harnesses create `--result` exclusively and persist complete report
-updates with atomic replacement and file/directory fsync. Accepted operation and
-resource IDs are recorded **before** polling. Failed operations are recorded;
-unresolved operations, transport ambiguity and polling timeouts retain a pending
-mutation for inspection. Neither harness replays a mutation to resolve uncertainty.
-
-Only lifecycle supports `--resume`: it reuses the exact uncleaned disposable
-machine in the report, never creates another one, and refuses a pending mutation.
-Inspect/reconcile ambiguous operations before attempting another qualification;
-do not remove pending evidence just to bypass this refusal. Lifecycle cleans its
-known, settled disposable machine unless `--keep` is set; checkpoint failures
-retain all named objects without automatic cleanup.
-
-`session-run --config FILE --expect-delete-dependency MACHINE_ID` makes one
-generated bearer-authenticated source-delete request and succeeds only on
-the typed `dependency` error. Authentication/transport errors, other error codes and unexpectedly accepted operations fail qualification. The
-checkpoint harness journals the probe intent first and records any unexpectedly
-accepted operation emitted by the adapter before failing. This is a destructive
-negative test: use only the explicitly retained disposable source with its live
-descendant, never an existing workload. It is not a product CLI/API command.
-
-`session-run --config FILE --describe-guest MACHINE_ID` checks the complete
-controller/host/guest route and returns the verified machine identity and manager
-incarnation as Protobuf JSON with snake_case fields. Cold starts retain machine
-identity and replace the incarnation; RAM forks/restores retain the incarnation
-and publish a fresh machine identity.
+- `--expect-stopped MACHINE_ID` makes an authenticated `SessionService` request
+  and succeeds only on the typed `prerequisite` error.
+- `--expect-delete-dependency MACHINE_ID` submits a delete of a checkpoint
+  source and succeeds only on the typed `dependency` error. The harness journals
+  the probe first and records any unexpectedly accepted operation. Use only the
+  retained disposable source with its live descendant.
+- `--describe-guest MACHINE_ID` walks the controller, host and guest route and
+  prints the machine identity and manager incarnation as Protobuf JSON. Cold
+  starts keep the machine identity and replace the incarnation; RAM forks and
+  restores keep the incarnation and publish a new machine identity.

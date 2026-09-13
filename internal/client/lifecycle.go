@@ -92,7 +92,7 @@ func (runner commandRunner) finishMutation(
 	if err != nil {
 		return err
 	}
-	if result == deleteCommand {
+	if result == deleteCommandName {
 		return runner.output(operation)
 	}
 	if result == checkpointCommand {

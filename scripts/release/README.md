@@ -1,124 +1,119 @@
-# Installed release bundles
+# Release bundles
 
-`bundle.py` assembles the qualified macOS/arm64 and Linux/amd64 releases. Each
-archive contains `clankerbox` beside `bundle.json`, ordinary controller/host/guest
-binaries, the patched smolvm engine, matching runtime libraries and Linux agent,
-compressed disk templates, and a generic Linux image. Extraction and `clankerbox
-dev` require no Go or Rust toolchain. Private GitHub release assets require the
-operator's normal repository access; no unauthenticated private URL is embedded.
+`bundle.py` assembles the macOS/arm64 and Linux/amd64 release archives. Each
+contains `clankerbox` beside `bundle.json`, the controller, host and guest
+binaries, the patched smolvm engine with its runtime libraries and Linux agent,
+compressed disk templates and a Linux guest image. Running a bundle needs no Go
+or Rust toolchain.
 
-Manifest format 2 enumerates every payload file, directory, and relative symlink,
-including POSIX permission modes and file/link SHA256. Startup rejects missing,
-extra, changed-type, or changed-mode entries before creating a VM.
-`runtime_digest` and `image_digest` use sorted relative content inventories, so
-installation paths and workstation accounts do not change checkpoint identity.
-Modes and directory metadata, including each component root, do affect identity.
-Extract under a private parent with `tar -xzpf` to preserve guest permissions;
-restrictive host umasks must not silently remove guest traversal or execute bits.
-The host expands disk templates in its private runtime cache. It never writes
-into the installed bundle. Archive SHA256 must be checked before extraction.
+The manifest (format 2) lists every payload file, directory and relative
+symlink with its POSIX mode and SHA256. Startup rejects missing, extra or
+changed entries before creating a VM. `runtime_digest` and `image_digest` are
+computed from sorted relative content inventories, so installation paths do not
+change checkpoint identity; modes and directory metadata do. Extract with
+`tar -xzpf` under a private parent so guest permissions survive. The host
+expands disk templates into its own runtime cache and never writes into the
+bundle.
 
 ## Build inputs
 
-1. Build the exact engine and static guest agent from
-   [the engine pins](inputs/pins.json) and
-   [qualified patch](inputs/runtime.patch). Preserve the
-   upstream runtime archive and source/build provenance. Replacing the engine
-   with a newer unqualified upstream binary is not a dependency update.
-2. Download the Ubuntu Base 26.04.1 and Node 26.8.2 archives for each architecture.
-   `images/stage-linux.py` checks their exact SHA256 pins and the supplied static
-   agent hash before creating a new image directory. It normalizes absolute
-   guest symlinks into relative links within the image, strips setuid/setgid,
-   and never creates host users or device nodes.
-3. Boot that directory as `SMOLVM_AGENT_ROOTFS` in an explicitly isolated,
-   disposable native VM (no `--image` OCI container). Mount a recipe directory
-   read-only and an empty export directory. Run `images/install-linux-tools.sh`
-   inside the guest through trusted native exec. Copy the adjacent `images/package-locks` directory too. The recipe verifies
-   the pristine base, pins the complete apt dependency closure, and checks the
-   qualified final package inventory. It records tool versions, locks root login, and leaves workload-user creation to trusted
-   per-machine bootstrap.
-4. Export the merged guest filesystem with `tar --one-file-system`, excluding
-   `proc`, `sys`, `dev`, `run`, `tmp`, `mnt`, `oldroot`, `storage`, `export`,
-   `recipe`, and `.smolvm`. Stop/delete only that exact disposable builder. Use
-   the staging script's safe extractor to normalize export symlinks; recreate
-   empty runtime mount directories and mode-1777 `tmp`.
-5. Generate Cargo metadata from the pinned engine source with `cargo metadata
-   --locked --format-version 1 --manifest-path ENGINE_SOURCE/Cargo.toml`, saving
-   stdout to a private JSON file. Collect notices explicitly:
+1. Build the engine and static guest agent from [the pins](inputs/pins.json)
+   and the [qualified patch](inputs/runtime.patch). Keep the upstream runtime
+   archive and build provenance. A newer unqualified upstream binary is not a
+   dependency update.
+2. Download the Ubuntu Base and Node archives for each architecture.
+   `images/stage-linux.py` checks their SHA256 pins and the agent hash before
+   creating an image directory. It rewrites absolute guest symlinks as relative
+   links, strips setuid/setgid bits, and creates no users or device nodes.
+3. Boot that directory as `SMOLVM_AGENT_ROOTFS` in a disposable native VM. Mount
+   a recipe directory read-only and an empty export directory, then run
+   `images/install-linux-tools.sh` inside the guest with `images/package-locks`
+   alongside it. The recipe verifies the pristine base, installs the locked apt
+   closure, checks the final package inventory, records tool versions and locks
+   root login. Workload users are created later by per-machine bootstrap.
+4. Export the guest filesystem with `tar --one-file-system`, excluding `proc`,
+   `sys`, `dev`, `run`, `tmp`, `mnt`, `oldroot`, `storage`, `export`, `recipe`
+   and `.smolvm`. Normalize the export's symlinks with the staging script's
+   `extract()`, then recreate the excluded runtime mount directories (`proc`,
+   `sys`, `dev/pts`, `run/smolvm/virtiofs`, `mnt/*`, `storage`) and a
+   mode-1777 `tmp`; the extractor does not create entries the archive omits.
+5. Generate Cargo metadata from the pinned engine source
+   (`cargo metadata --locked --format-version 1 --manifest-path
+   ENGINE_SOURCE/Cargo.toml`) and collect notices:
 
-```sh
-python3 scripts/release/notices.py --engine-source ENGINE_SOURCE \
-  --rust-metadata PRIVATE_CARGO_METADATA --output NEW_NOTICES_DIRECTORY
-```
+   ```sh
+   python3 scripts/release/notices.py --engine-source ENGINE_SOURCE \
+     --rust-metadata CARGO_METADATA_JSON --output NOTICES_DIRECTORY
+   ```
 
-The collector binds its Go module files, engine Cargo lock and metadata hash in
-`provenance.json`; `dependencies.json` enumerates packages and notice paths, and
-`inventory.json` binds every copied notice's bytes, type and mode. Workspace crates
-inherit the pinned engine license when they have none of their own. A third-party
-crate that declares a license but ships no notice file is explicitly recorded as
-`upstream-no-notice-file`; the collector does not invent its missing copyright
-notice. Inspect that list when assembling redistributable source material.
+   The collector records its Go module files, the engine Cargo lock and the
+   metadata hash in `provenance.json`, lists packages and notice paths in
+   `dependencies.json`, and binds every copied notice in `inventory.json`.
+   Workspace crates inherit the engine license when they have none; a crate
+   that declares a license but ships no notice file is recorded as
+   `upstream-no-notice-file` rather than given an invented one.
+6. Assemble. Before creating output or invoking Go, the assembler verifies
+   every shipped library and both compressed templates against the platform
+   [runtime artifact inventory](inputs/runtime-artifacts.json); missing
+   artifacts, extra library entries and changed types or content fail assembly,
+   and the copied artifacts are checked again before the manifest is written.
+   It also checks the engine `LICENSE` and `Cargo.lock` against
+   [source.json](inputs/source.json), verifies the notices and inventory,
+   cross-compiles the Go binaries, and checks the copied license inventory
+   again before writing the manifest:
 
-6. Build with explicit source and notice inputs. The assembler checks the required
-   engine `LICENSE` and `Cargo.lock` against [source provenance](inputs/source.json),
-   verifies all native notices and dependency inventory before invoking Go, and
-   checks the copied license inventory again before producing a manifest:
+   ```sh
+   python3 scripts/release/bundle.py --os darwin --arch arm64 --version VERSION \
+     --engine PATCHED_ENGINE --runtime-assets RUNTIME_DIRECTORY \
+     --image NORMALIZED_ARM64_IMAGE --engine-source ENGINE_SOURCE \
+     --dependency-notices NOTICES_DIRECTORY --output OUTPUT_DIRECTORY
+   ```
 
+Repeat for `--os linux --arch amd64`. `--no-archive` produces a local
+qualification candidate without the archive and checksum. On macOS the
+assembler preserves and verifies the engine's signature and virtualization
+entitlements and ad-hoc signs the Go executables; the builds are not notarized.
+Linux bundles include libkrun and libkrunfw and link against the host's glibc,
+loader and libgcc_s; musl-only distributions are not supported.
 
-```sh
-python3 scripts/release/bundle.py --os darwin --arch arm64 --version VERSION \
-  --engine PATCHED_ENGINE --runtime-assets VERIFIED_RUNTIME_DIRECTORY \
-  --image NORMALIZED_ARM64_IMAGE --engine-source ENGINE_SOURCE \
-  --dependency-notices NEW_NOTICES_DIRECTORY --output NEW_OUTPUT_DIRECTORY
-```
+## Redistribution
 
-Repeat for `--os linux --arch amd64`. `--no-archive` creates a local qualification
-candidate; release artifacts always include the compressed archive and checksum.
-The assembler cross-compiles Go binaries. It preserves and verifies the engine's
-macOS signature/virtualization entitlements and ad-hoc signs Go executables.
-These builds are not Developer ID notarized; do not describe them as notarized.
-Host qualification used macOS 26.6.2 and Ubuntu 26.04.1 amd64 with glibc 2.43.
-Linux bundles include the qualified libkrun/libkrunfw, while the host supplies
-the GNU loader, libc/libm and libgcc_s. Qualification does not establish support
-for musl-only distributions or older host releases.
+Bundles carry Clankerbox's own MIT `LICENSE` at the root, native component
+notices in `licenses/`, Go and Rust dependency notices with their inventory,
+image package copyright files under
+`image/usr/share/doc`, and Node's notices under `image/usr/local`. The shipped
+graphics libraries are pinned individually by `runtime-artifacts.json`, which
+ships beside `engine-pins.json`; the upstream runtime archive hash in the pins
+is provenance only.
 
-## Redistribution inventory
+- smolvm and libkrun: Apache-2.0. Retain the notices and identify the local
+  patch; source commits and the patch hash ship as `engine-pins.json`, a
+  copy of `inputs/pins.json`.
+- libkrunfw: GPL-2.0-only Linux plus LGPL-2.1-only components. Preserve both
+  license texts and provide corresponding source, build configuration and
+  patches with any redistribution. Its pinned Makefile selects Linux 6.12.95;
+  archive the matching libkrunfw and kernel sources alongside release artifacts
+  rather than linking to a moving branch.
+- MoltenVK: Apache-2.0. libepoxy and virglrenderer: their MIT-style notices.
+  All three ship unmodified from the pinned smolvm runtime distribution.
+- Ubuntu and Node packages: retain per-package copyright material and the exact
+  package inventory; source obligations follow each component's license.
 
-The release carries native component notices in `licenses/`, locked Go/Rust
-source notices and dependency inventory, and image package copyright files under
-`image/usr/share/doc`. Node's distribution notices remain in `image/usr/local`.
-The exact upstream runtime archive hash pins the shipped graphics libraries.
-
-- smolvm and libkrun: Apache-2.0; retain licenses/notices and identify the included
-  local patch. Source commits and patch hash are in `engine-pins.json`.
-- libkrunfw includes GPL-2.0-only Linux and LGPL-2.1-only components. Preserve both
-  license texts and provide corresponding source, build configuration, and
-  patches with redistributions. Its pinned Makefile selects Linux 6.12.95;
-  archive the matching libkrunfw repository and upstream kernel source alongside
-  release artifacts. Do not replace this with a link to a moving default branch.
-- MoltenVK: Apache-2.0; libepoxy and virglrenderer: their included MIT-style
-  notices, including component copyright notices. They are shipped unmodified
-  from the pinned smolvm runtime distribution.
-- Ubuntu and Node contain multiple licenses. Retain per-package copyright and
-  license material and the exact package/source inventory; source redistribution
-  requirements follow those component licenses.
-
-Authoritative sources: [libkrun](https://github.com/smol-machines/libkrun),
+Upstream: [libkrun](https://github.com/smol-machines/libkrun),
 [libkrunfw](https://github.com/smol-machines/libkrunfw),
 [MoltenVK](https://github.com/KhronosGroup/MoltenVK),
-[libepoxy](https://github.com/anholt/libepoxy), and
+[libepoxy](https://github.com/anholt/libepoxy),
 [virglrenderer](https://gitlab.freedesktop.org/virgl/virglrenderer).
 
-## Production Mac host
+## Signed macOS host
 
-Build the host with its stable `org.clankerbox.host` application identity and
-Local Network purpose string, using an existing Apple signing identity:
+`build-mac-host.py` builds the host with its `org.clankerbox.host` bundle
+identity and Local Network purpose string, embeds the versioned Info.plist,
+signs with the hardened runtime using an existing Apple signing identity and
+verifies the certificate chain. It does not install anything or change keychain
+or privacy settings. Bundle hosts stay ad-hoc signed.
 
 ```sh
-python3 scripts/release/build-mac-host.py --output NEW_HOST_BINARY \
+python3 scripts/release/build-mac-host.py --output HOST_BINARY \
   --version VERSION --identity APPLE_SIGNING_IDENTITY
 ```
-
-This embeds the versioned Info.plist, signs with hardened runtime, and verifies
-the Apple certificate chain. It does not install the executable or change
-keychain or privacy settings. Dev bundle hosts remain ad-hoc signed.

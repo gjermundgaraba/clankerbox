@@ -118,6 +118,8 @@ message Checkpoint {
 }
 // Carried as a Connect error detail alongside a standard RPC status code.
 enum ErrorReason {
+  reserved 15;
+  reserved "ERROR_REASON_ALREADY_ATTACHED";
   ERROR_REASON_UNSPECIFIED = 0;
   ERROR_REASON_INVALID = 1;
   ERROR_REASON_NOT_FOUND = 2;
@@ -133,7 +135,6 @@ enum ErrorReason {
   ERROR_REASON_EXPIRED = 12;
   ERROR_REASON_NOT_RUNNING = 13;
   ERROR_REASON_TOO_LARGE = 14;
-  ERROR_REASON_ALREADY_ATTACHED = 15;
   ERROR_REASON_INTERNAL = 16;
   ERROR_REASON_IDEMPOTENCY_CONFLICT = 17;
   ERROR_REASON_NAME_CONFLICT = 18;

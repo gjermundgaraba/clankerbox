@@ -21,13 +21,17 @@ func storeDir(cfg Config, m Manifest) string {
 	}
 	return machineDir(cfg, m)
 }
+
 func (n *NativeRuntime) checkpointDir(cp CheckpointSpec) string {
 	return filepath.Join(n.Config.Root, "checkpoints", cp.ID)
 }
+
 func (n *NativeRuntime) artifact(cp CheckpointSpec) string {
 	return filepath.Join(n.checkpointDir(cp), "capture.smolcheckpoint")
 }
+
 func checkpointMachine(cp CheckpointSpec) Manifest { return Manifest{ID: cp.ID, Profile: cp.Profile} }
+
 func regularNonempty(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -123,22 +127,20 @@ func (n *NativeRuntime) Fork(ctx context.Context, source, child Manifest) error 
 }
 
 func (n *NativeRuntime) forkDarwin(ctx context.Context, child Manifest, branch string) error {
-	var err error
-
-	if err = statefs.WritePrivate(n.job(child), n.smolvmPlist(child, strings.Fields(branch))); err != nil {
+	if err := statefs.WritePrivate(n.job(child), n.smolvmPlist(child, strings.Fields(branch))); err != nil {
 		return err
 	}
 	target := n.Config.LaunchdDomain + "/" + n.label(child)
 	if _, e := n.supervisor(ctx, child, "print", target); e == nil {
 		return errors.New("branch launch job already exists; explicit inspection required")
 	}
-	if _, err = n.supervisor(ctx, child, "bootstrap", n.Config.LaunchdDomain, n.job(child)); err != nil {
+	if _, err := n.supervisor(ctx, child, "bootstrap", n.Config.LaunchdDomain, n.job(child)); err != nil {
 		return err
 	}
-	if _, err = n.supervisor(ctx, child, "kickstart", target); err != nil {
+	if _, err := n.supervisor(ctx, child, "kickstart", target); err != nil {
 		return err
 	}
-	if err = n.waitState(ctx, child, model.Running, runtimeStartTimeout); err != nil {
+	if err := n.waitState(ctx, child, model.Running, runtimeStartTimeout); err != nil {
 		return err
 	}
 	// Replace only the job file for future execution. Unloading a live branch job could affect descendants.
@@ -194,6 +196,7 @@ func (n *NativeRuntime) Capture(ctx context.Context, source Manifest, cp Checkpo
 	}
 	return statefs.Sync(filepath.Dir(dir))
 }
+
 func syncTree(root string) error {
 	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -205,6 +208,7 @@ func syncTree(root string) error {
 		return statefs.Sync(path)
 	})
 }
+
 func (n *NativeRuntime) captureTart(ctx context.Context, source Manifest, cp CheckpointSpec) error {
 	if _, err := n.run(
 		ctx,
@@ -230,6 +234,7 @@ func (n *NativeRuntime) captureTart(ctx context.Context, source Manifest, cp Che
 
 	return nil
 }
+
 func (n *NativeRuntime) pendingRAMFiles(m Manifest) []string {
 	sum := sha256.Sum256([]byte(m.RuntimeName()))
 	dir := filepath.Join(

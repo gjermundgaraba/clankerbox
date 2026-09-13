@@ -57,6 +57,9 @@ def main():
     agent=a.output/'usr/local/bin/smolvm-agent';shutil.copyfile(a.agent,agent);agent.chmod(0o755)
     init=a.output/'usr/sbin/init';init.parent.mkdir(parents=True,exist_ok=True);init.symlink_to('../local/bin/smolvm-agent')
     (a.output/'tmp').chmod(0o1777)
+    # The pinned smolvm virtio-net gateway is also the guest DNS endpoint.
+    # This CGNAT address is runtime-owned, not a host or Tailscale resolver.
+    # Host config `dns` / smolvm --dns selects the gateway's upstream instead.
     resolver=a.output/'etc/resolv.conf'
     if resolver.is_symlink():resolver.unlink()
     resolver.write_text('nameserver 100.96.0.1\n');resolver.chmod(0o644)

@@ -105,6 +105,7 @@ func (n *NativeRuntime) env(m Manifest) []string {
 		"SMOLVM_EGRESS_FLOOR=strict",
 	)
 }
+
 func (n *NativeRuntime) run(ctx context.Context, m Manifest, args ...string) ([]byte, error) {
 	if err := n.validateRuntimeCache(m); err != nil {
 		return nil, err
@@ -115,6 +116,7 @@ func (n *NativeRuntime) run(ctx context.Context, m Manifest, args ...string) ([]
 	}
 	return n.Runner.Run(ctx, path, args, n.env(m), nil)
 }
+
 func (n *NativeRuntime) supervisor(ctx context.Context, _ Manifest, args ...string) ([]byte, error) {
 	path := n.Config.SystemctlPath
 	if n.hostOS() == hostDarwin {
@@ -234,7 +236,9 @@ func (n *NativeRuntime) Create(ctx context.Context, m Manifest) error {
 	_, err := n.run(ctx, m, append(args, "--", "/bin/true")...)
 	return err
 }
+
 func (n *NativeRuntime) label(m Manifest) string { return "clankerbox." + m.RuntimeName() }
+
 func (n *NativeRuntime) job(m Manifest) string {
 	suffix := ".service"
 	if n.hostOS() == hostDarwin {
@@ -242,11 +246,13 @@ func (n *NativeRuntime) job(m Manifest) string {
 	}
 	return filepath.Join(n.Config.Root, "jobs", n.label(m)+suffix)
 }
+
 func xmlText(s string) string {
 	var b bytes.Buffer
 	_ = xml.EscapeText(&b, []byte(s))
 	return b.String()
 }
+
 func (n *NativeRuntime) jobContents(m Manifest) []byte {
 	if m.Profile.Runtime == runtimeTart {
 		// Softnet's directional rules retain replies to host-initiated flows.
@@ -266,9 +272,7 @@ func (n *NativeRuntime) jobContents(m Manifest) []byte {
 		}
 		var b strings.Builder
 		b.WriteString(
-			`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>` + xmlText(
-				n.label(m),
-			) + `</string><key>ProgramArguments</key><array>`,
+			`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>` + xmlText(n.label(m)) + `</string><key>ProgramArguments</key><array>`,
 		)
 		for _, arg := range args {
 			b.WriteString("<string>" + xmlText(arg) + "</string>")
@@ -292,8 +296,7 @@ func (n *NativeRuntime) jobContents(m Manifest) []byte {
 }
 
 func (n *NativeRuntime) linuxJobContents(m Manifest, command string) []byte {
-	// The command detaches the VMM, but systemd retains its cgroup. No enable/boot target,
-	// no restart policy, and no timeout that could force-kill retained guests.
+	// The VMM detaches, so retain its cgroup without automatic restart or forced kill.
 	var b strings.Builder
 	b.WriteString(
 		"[Unit]\nDescription=Clankerbox " + m.RuntimeName() + "\n[Service]\nType=oneshot\nRemainAfterExit=yes\nRestart=no\nKillMode=control-group\nSendSIGKILL=no\nTimeoutStartSec=infinity\nTimeoutStopSec=infinity\n",
@@ -364,6 +367,7 @@ func (n *NativeRuntime) Start(ctx context.Context, m Manifest) error {
 
 	return n.waitState(ctx, m, model.Running, runtimeStartTimeout)
 }
+
 func (n *NativeRuntime) validateRetainedStart(ctx context.Context, m Manifest) error {
 	if m.Profile.Runtime != runtimeSmolvm {
 		return nil
@@ -385,6 +389,7 @@ func (n *NativeRuntime) validateRetainedStart(ctx context.Context, m Manifest) e
 	}
 	return nil
 }
+
 func (n *NativeRuntime) waitState(ctx context.Context, m Manifest, want model.State, limit time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
@@ -406,6 +411,7 @@ func (n *NativeRuntime) waitState(ctx context.Context, m Manifest, want model.St
 		}
 	}
 }
+
 func (n *NativeRuntime) guest(ctx context.Context, m Manifest, script string) ([]byte, error) {
 	// The pinned smolvm exec only connects to existing running guests. Probe
 	// first as well; never call its shell command, which can start guests.
@@ -597,16 +603,14 @@ func (n *NativeRuntime) startSmolvm(ctx context.Context, m Manifest) error {
 }
 
 func (n *NativeRuntime) deleteTart(ctx context.Context, m Manifest, exists bool) error {
-	var err error
-
 	target := n.Config.LaunchdDomain + "/" + n.label(m)
-	if _, err = n.supervisor(ctx, m, "print", target); err == nil {
+	if _, err := n.supervisor(ctx, m, "print", target); err == nil {
 		if _, err = n.supervisor(ctx, m, "bootout", target); err != nil {
 			return err
 		}
 	}
 	if exists {
-		if _, err = n.run(ctx, m, actionDelete, m.RuntimeName()); err != nil {
+		if _, err := n.run(ctx, m, actionDelete, m.RuntimeName()); err != nil {
 			return err
 		}
 	}
@@ -687,6 +691,7 @@ func (n *NativeRuntime) hostOS() string {
 	}
 	return runtime.GOOS
 }
+
 func (n *NativeRuntime) runtimeHome(m Manifest) string {
 	if n.hostOS() != hostDarwin {
 		return filepath.Join(storeDir(n.Config, m), "home")
@@ -694,30 +699,32 @@ func (n *NativeRuntime) runtimeHome(m Manifest) string {
 	// One private engine inventory per host; native names scope disks and sockets.
 	return filepath.Join(n.Config.Root, "runtime")
 }
+
 func (n *NativeRuntime) runtimeData(m Manifest) string {
 	if n.hostOS() == hostDarwin {
 		return filepath.Join(n.runtimeHome(m), "Library", "Application Support")
 	}
 	return filepath.Join(storeDir(n.Config, m), "d")
 }
+
 func (n *NativeRuntime) runtimeCache(m Manifest) string {
 	if n.hostOS() == hostDarwin {
 		return filepath.Join(n.runtimeHome(m), "Library", "Caches")
 	}
 	return filepath.Join(n.Config.Root, "runtime", "c")
 }
+
 func (n *NativeRuntime) libraryEnvironment() string {
 	if n.hostOS() == hostDarwin {
 		return "DYLD_LIBRARY_PATH=" + n.Config.LibraryDir
 	}
 	return "LD_LIBRARY_PATH=" + n.Config.LibraryDir
 }
+
 func (n *NativeRuntime) smolvmPlist(m Manifest, args []string) []byte {
 	var b strings.Builder
 	b.WriteString(
-		`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>` + xmlText(
-			n.label(m),
-		) + `</string><key>ProgramArguments</key><array>`,
+		`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>` + xmlText(n.label(m)) + `</string><key>ProgramArguments</key><array>`,
 	)
 	for _, a := range args {
 		b.WriteString("<string>" + xmlText(a) + "</string>")

@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"time"
 
@@ -44,14 +43,6 @@ func PathsIn(state string) Paths {
 		Log:    filepath.Join(state, "daemon.log"),
 		PID:    filepath.Join(state, "daemon.pid"),
 	}
-}
-
-// DefaultPaths returns the root-owned system guest location.
-func DefaultPaths() (Paths, error) {
-	if runtime.GOOS == "darwin" {
-		return PathsIn("/private/var/lib/clankerbox-guest"), nil
-	}
-	return PathsIn("/var/lib/clankerbox-guest"), nil
 }
 
 // Options specifies the workload privilege boundary and private transport binding.
@@ -161,9 +152,6 @@ func Serve(ctx context.Context, opts Options) (err error) {
 		return serveErr
 	}
 }
-
-// Address returns the actual bound guest transport address.
-func (s *Server) Address() string { return s.listener.Addr().String() }
 
 // Close uses the service shutdown bound. On failure resources remain owned
 // until background teardown completes; callers must report failure and exit.

@@ -8,6 +8,11 @@ import (
 	"clankerbox/internal/model"
 )
 
+const (
+	tableTabWidth = 4
+	tablePadding  = 2
+)
+
 func (runner commandRunner) output(value any) error {
 	if runner.structured {
 		return jsonOut(runner.streams.Out, value)
@@ -161,8 +166,3 @@ func (runner commandRunner) checkpoints(items []model.Checkpoint) error {
 	}
 	return w.Flush()
 }
-
-const (
-	tableTabWidth = 4
-	tablePadding  = 2
-)

@@ -6,7 +6,5 @@ const (
 	fixtureChild        = "child"
 	fixtureLinuxProfile = "linux-v1"
 	fixtureLinuxOS      = "linux"
-	fixtureDifferent    = "different"
-	fixtureLabelValue   = "value"
 	fixtureLocalHost    = "local"
 )

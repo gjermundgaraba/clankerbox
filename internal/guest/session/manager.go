@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -39,13 +38,11 @@ const (
 // Horizon plus skew must stay inside retention; a negative constant does not compile.
 const _ uint64 = uint64(endedRetention - createHorizon - createSkew)
 
-// Config configures a Manager.
+// Config supplies session storage, workload identity and resource limits.
 type Config struct {
 	StateDir string
-	// DefaultCwd is the initial directory when a session omits cwd.
-	DefaultCwd string
 	// Workload separates PTY credentials/environment from a privileged daemon.
-	// Nil preserves the ordinary same-user guest process behavior.
+	// Nil uses the current OS account without switching credentials for tests.
 	Workload      *Workload
 	Loader        *vt.Loader
 	Incarnation   string
@@ -63,7 +60,7 @@ type Manager struct {
 	ctx     context.Context //nolint:containedctx // Owns the wazero runtime lifetime.
 	cfg     Config
 	bootID  string
-	user    string
+	process processIdentity
 	mu      sync.Mutex
 	live    map[string]*Session
 	records map[string]manifest
@@ -115,15 +112,9 @@ func (a *Attachment) Stop() {
 // New loads manifests, converts unfinished records to lost, and starts the
 // retention cleanup loop.
 func New(ctx context.Context, cfg Config) (*Manager, error) {
-	if cfg.Workload != nil {
-		if err := cfg.Workload.validate(); err != nil {
-			return nil, err
-		}
-		workload := *cfg.Workload
-		cfg.Workload = &workload
-		if cfg.DefaultCwd == "" {
-			cfg.DefaultCwd = workload.Home
-		}
+	process, err := identityFor(cfg.Workload)
+	if err != nil {
+		return nil, err
 	}
 	if cfg.MaxSessions <= 0 {
 		cfg.MaxSessions = DefaultMaxSessions
@@ -141,15 +132,12 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 		ctx:     context.WithoutCancel(ctx),
 		cfg:     cfg,
 		bootID:  bootID(),
-		user:    currentUser(),
+		process: process,
 		live:    make(map[string]*Session),
 		records: make(map[string]manifest),
 		stop:    make(chan struct{}),
 		stopped: make(chan struct{}),
 		closed:  make(chan struct{}),
-	}
-	if cfg.Workload != nil {
-		m.user = cfg.Workload.User
 	}
 	manifests, err := readManifests(cfg.StateDir, cfg.Log)
 	if err != nil {
@@ -160,13 +148,6 @@ func New(ctx context.Context, cfg Config) (*Manager, error) {
 	}
 	go m.cleanup()
 	return m, nil
-}
-
-func currentUser() string {
-	if name := os.Getenv("USER"); name != "" {
-		return name
-	}
-	return "unknown"
 }
 
 // adoptManifest converts a previous daemon's record. Unfinished records become
@@ -188,12 +169,11 @@ func (m *Manager) adoptManifest(record manifest) {
 // Hello describes this daemon.
 func (m *Manager) Hello() protocol.Hello {
 	return protocol.Hello{
-		Event:         protocol.EventHello,
 		Incarnation:   m.cfg.Incarnation,
 		BootID:        m.bootID,
 		DaemonVersion: m.cfg.DaemonVersion,
 		OS:            runtime.GOOS,
-		User:          m.user,
+		User:          m.process.user,
 		WasmSHA256:    vt.AssetSHA256,
 		MaxSessions:   m.cfg.MaxSessions,
 	}
@@ -279,7 +259,7 @@ func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
 		record:      record,
 		fingerprint: fingerprint,
 		env:         args.Env,
-		workload:    m.cfg.Workload,
+		process:     m.process,
 		stateDir:    m.cfg.StateDir,
 		ringSize:    m.cfg.RingSize,
 		loader:      m.cfg.Loader,
@@ -296,23 +276,13 @@ func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
 func (m *Manager) newRecord(args protocol.CreateArgs) protocol.Session {
 	argv := args.Argv
 	if len(argv) == 0 {
-		argv = defaultShell()
-		if m.cfg.Workload != nil {
-			argv = []string{"/bin/sh", "-l"}
-		}
+		argv = []string{"/bin/sh", "-l"}
 	}
 	cwd := args.Cwd
 	if cwd == "" {
-		cwd = m.cfg.DefaultCwd
-		if cwd == "" {
-			cwd = homeDir()
-		}
+		cwd = m.process.home
 	} else if !filepath.IsAbs(cwd) {
-		home := homeDir()
-		if m.cfg.Workload != nil {
-			home = m.cfg.Workload.Home
-		}
-		cwd = filepath.Join(home, cwd)
+		cwd = filepath.Join(m.process.home, cwd)
 	}
 	return protocol.Session{
 		ID:           args.SessionID,
@@ -326,20 +296,6 @@ func (m *Manager) newRecord(args protocol.CreateArgs) protocol.Session {
 		Incarnation:  m.cfg.Incarnation,
 		RetainedFrom: 0,
 	}
-}
-
-func defaultShell() []string {
-	if shell := os.Getenv("SHELL"); shell != "" {
-		return []string{shell, "-l"}
-	}
-	return []string{"/bin/sh", "-l"}
-}
-
-func homeDir() string {
-	if home, err := os.UserHomeDir(); err == nil {
-		return home
-	}
-	return "/"
 }
 
 // createFingerprint identifies the immutable create arguments so a repeated
@@ -437,8 +393,8 @@ func (m *Manager) Open(args protocol.OpenArgs, sink Sink) (protocol.OpenValue, *
 }
 
 // Input admits bytes for a session.
-func (m *Manager) Input(args protocol.InputArgs, data []byte) (protocol.InputValue, error) {
-	s, err := m.liveSession(args.SessionID)
+func (m *Manager) Input(id string, data []byte) (protocol.InputValue, error) {
+	s, err := m.liveSession(id)
 	if err != nil {
 		return protocol.InputValue{}, err
 	}

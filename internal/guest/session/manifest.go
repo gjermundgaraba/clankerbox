@@ -62,7 +62,6 @@ func syncDir(path string) error {
 	return errors.Join(dir.Sync(), dir.Close())
 }
 
-// removeManifest deletes a session directory.
 func removeManifest(stateDir, id string) error {
 	if err := os.RemoveAll(sessionDir(stateDir, id)); err != nil {
 		return fmt.Errorf("remove session directory: %w", err)

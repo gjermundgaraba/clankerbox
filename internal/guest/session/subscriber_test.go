@@ -46,7 +46,7 @@ func TestSubscriberTailLimitsAndOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			sink := &subscriberSink{}
-			sub := newSubscriber(sink, "session")
+			sub := newSubscriber(sink)
 			sub.prefix = []byte("prefix")
 			sub.from = 10
 			next := sub.from + uint64(len(sub.prefix))
@@ -57,7 +57,6 @@ func TestSubscriberTailLimitsAndOrder(t *testing.T) {
 				want = append(want, item{next: next, data: tc.chunk})
 				// Resizes must retain their position among the output.
 				event := protocol.ResizeEvent{
-					Event:  protocol.EventResize,
 					Offset: next,
 					Cols:   uint16(80 + i%2),
 					Rows:   24,
@@ -82,7 +81,7 @@ func TestSubscriberTailLimitsAndOrder(t *testing.T) {
 				t.Fatalf("overflow not bounded: %q, %d items", sub.dropped, len(sub.queue))
 			}
 			want = append(want, item{event: protocol.GapEvent{
-				Event: protocol.EventOutputGap, SessionID: "session", Reason: "overflow",
+				Reason: "overflow",
 			}})
 			detached := false
 			sub.run(func(*subscriber) { detached = true })
@@ -111,7 +110,7 @@ func TestSubscriberReleasesBootstrap(t *testing.T) {
 			if tc.failure {
 				sink.err = errors.New("write failed")
 			}
-			sub := newSubscriber(sink, "session")
+			sub := newSubscriber(sink)
 			sub.snapshot = tc.snapshot
 			sub.from = 42
 			prefix := bytes.Repeat([]byte("x"), outputChunk+1)

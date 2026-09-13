@@ -12,7 +12,7 @@ import (
 
 // ToSession preserves session lifecycle metadata and optional completion fields.
 //
-//nolint:gosec // Domain validation bounds outbound capacity, PID and exit-status values.
+//nolint:gosec // Session validation bounds grid dimensions, PID and exit status.
 func ToSession(s protocol.Session) *v1.Session {
 	out := &v1.Session{
 		Id:               s.ID,
@@ -207,7 +207,7 @@ func FromOpened(value *v1.Opened) (protocol.OpenValue, error) {
 
 // ToGuestDescription projects the authenticated guest identity and engine handshake.
 //
-//nolint:gosec // Domain validation bounds outbound capacity, PID and exit-status values.
+//nolint:gosec // The session manager bounds the maximum session count.
 func ToGuestDescription(machineID string, h protocol.Hello) *v1.GuestDescription {
 	return &v1.GuestDescription{
 		MachineId:     machineID,
@@ -217,10 +217,8 @@ func ToGuestDescription(machineID string, h protocol.Hello) *v1.GuestDescription
 		Os:            h.OS,
 		User:          h.User,
 		EngineDigest:  h.WasmSHA256,
-		MaxSessions: uint32(
-			h.MaxSessions,
-		),
-		Schema: Schema,
+		MaxSessions:   uint32(h.MaxSessions),
+		Schema:        Schema,
 	}
 }
 
@@ -239,12 +237,14 @@ func FromResize(sessionID string, r *v1.Resize) (protocol.ResizeArgs, error) {
 	}
 	return out, nil
 }
+
 func grid(cols, rows uint32) (uint16, uint16, error) {
 	if cols < protocol.MinCols || cols > protocol.MaxCols || rows < protocol.MinRows || rows > protocol.MaxRows {
 		return 0, 0, fmt.Errorf("grid outside supported bounds")
 	}
 	return uint16(cols), uint16(rows), nil
 }
+
 func clonePointer[T any](value *T) *T {
 	if value == nil {
 		return nil

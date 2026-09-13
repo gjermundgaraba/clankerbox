@@ -144,7 +144,7 @@ func (l *guestLease) describe() (*connect.Response[v1.GuestDescription], error) 
 	return d, nil
 }
 
-// DescribeGuest handles the typed host RPC with owned machine admission.
+// DescribeGuest relays guest discovery after machine admission.
 func (r *RPC) DescribeGuest(
 	ctx context.Context,
 	in *connect.Request[v1.DescribeGuestRequest],
@@ -158,7 +158,7 @@ func (r *RPC) DescribeGuest(
 	return out, rpcmodel.ToError(err)
 }
 
-// CreateSession handles the typed host RPC with owned machine admission.
+// CreateSession relays session creation after machine admission.
 func (r *RPC) CreateSession(
 	ctx context.Context,
 	in *connect.Request[v1.CreateSessionRequest],
@@ -171,7 +171,7 @@ func (r *RPC) CreateSession(
 	return l.client.CreateSession(l.ctx, in)
 }
 
-// ListSessions handles the typed host RPC with owned machine admission.
+// ListSessions relays session listing after machine admission.
 func (r *RPC) ListSessions(
 	ctx context.Context,
 	in *connect.Request[v1.ListSessionsRequest],
@@ -184,7 +184,7 @@ func (r *RPC) ListSessions(
 	return l.client.ListSessions(l.ctx, in)
 }
 
-// EndSession handles the typed host RPC with owned machine admission.
+// EndSession relays session termination after machine admission.
 func (r *RPC) EndSession(
 	ctx context.Context,
 	in *connect.Request[v1.EndSessionRequest],
@@ -197,7 +197,7 @@ func (r *RPC) EndSession(
 	return l.client.EndSession(l.ctx, in)
 }
 
-// AttachSession handles the typed host RPC with owned machine admission.
+// AttachSession relays a session stream after machine admission.
 func (r *RPC) AttachSession(
 	ctx context.Context,
 	stream *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent],

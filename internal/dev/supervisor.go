@@ -33,6 +33,7 @@ func command(ctx context.Context, name string, args ...string) ([]byte, error) {
 	}
 	return out, nil
 }
+
 func preflight(ctx context.Context, b Bundle) error {
 	if os.Geteuid() == 0 {
 		return errors.New("dev must run as an ordinary user owning the native VM service")
@@ -73,51 +74,46 @@ func preflight(ctx context.Context, b Bundle) error {
 	}
 	return nil
 }
+
 func xmlString(value string) string {
 	var out bytes.Buffer
 	_ = xml.EscapeText(&out, []byte(value))
 	return "<string>" + out.String() + "</string>"
 }
+
 func systemdString(value string) string {
 	return `"` + strings.NewReplacer(`\`, `\\`, `"`, `\"`, `%`, `%%`, "\n", `\n`).Replace(value) + `"`
 }
+
 func (e *environment) unitPath() string {
 	if runtime.GOOS == macPlatform {
 		return filepath.Join(e.HostRoot, "service.plist")
 	}
 	return filepath.Join(e.HostRoot, e.Namespace+".service")
 }
+
 func (e *environment) serviceDefinition() []byte {
 	binary := e.bundle.path(e.bundle.Host)
 	config := filepath.Join(e.HostRoot, "service.json")
 	log := filepath.Join(e.HostRoot, "host.log")
 	if runtime.GOOS == macPlatform {
 		return []byte(
-			`<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key>` + xmlString(
-				e.Namespace,
-			) + `<key>ProgramArguments</key><array>` + xmlString(
-				binary,
-			) + xmlString(
-				"--config",
-			) + xmlString(
-				config,
-			) + `</array><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>5</integer><key>EnvironmentVariables</key><dict><key>PATH</key>` + xmlString(
-				"/usr/bin:/bin:/usr/sbin:/sbin",
-			) + `</dict><key>StandardOutPath</key>` + xmlString(
-				log,
-			) + `<key>StandardErrorPath</key>` + xmlString(
-				log,
-			) + `</dict></plist>`,
+			`<?xml version="1.0" encoding="UTF-8"?>` +
+				`<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">` +
+				`<plist version="1.0"><dict><key>Label</key>` + xmlString(e.Namespace) +
+				`<key>ProgramArguments</key><array>` + xmlString(binary) + xmlString("--config") + xmlString(config) + `</array>` +
+				`<key>RunAtLoad</key><true/><key>KeepAlive</key><true/>` +
+				`<key>ThrottleInterval</key><integer>5</integer>` +
+				`<key>EnvironmentVariables</key><dict><key>PATH</key>` + xmlString("/usr/bin:/bin:/usr/sbin:/sbin") + `</dict>` +
+				`<key>StandardOutPath</key>` + xmlString(log) +
+				`<key>StandardErrorPath</key>` + xmlString(log) + `</dict></plist>`,
 		)
 	}
 	return []byte(
-		"[Unit]\nDescription=Owned Clankerbox development host " + e.Namespace + "\n[Service]\nType=simple\nExecStart=" + systemdString(
-			binary,
-		) + " --config " + systemdString(
-			config,
-		) + "\nRestart=on-failure\nRestartSec=5\nKillMode=process\nTimeoutStopSec=45\nEnvironment=PATH=/usr/bin:/bin:/usr/sbin:/sbin\nStandardOutput=append:" + log + "\nStandardError=append:" + log + "\n",
+		"[Unit]\nDescription=Owned Clankerbox development host " + e.Namespace + "\n[Service]\nType=simple\nExecStart=" + systemdString(binary) + " --config " + systemdString(config) + "\nRestart=on-failure\nRestartSec=5\nKillMode=process\nTimeoutStopSec=45\nEnvironment=PATH=/usr/bin:/bin:/usr/sbin:/sbin\nStandardOutput=append:" + log + "\nStandardError=append:" + log + "\n",
 	)
 }
+
 func (e *environment) hostReady(ctx context.Context) error {
 	hc, origin, err := rpctransport.Client(e.hostConfig().Listen, rpctransport.Credentials{}, "")
 	if err != nil {
@@ -137,6 +133,7 @@ func (e *environment) hostReady(ctx context.Context) error {
 	}
 	return nil
 }
+
 func (e *environment) startHost(ctx context.Context) error {
 	if err := e.validateHostRoot(); err != nil {
 		return err
@@ -168,6 +165,7 @@ func (e *environment) startHost(ctx context.Context) error {
 	}
 	return e.waitHostReady(ctx)
 }
+
 func (e *environment) waitHostReady(ctx context.Context) error {
 	timer := time.NewTimer(serviceStartupTimeout)
 	defer timer.Stop()
@@ -188,6 +186,7 @@ func (e *environment) waitHostReady(ctx context.Context) error {
 		}
 	}
 }
+
 func (e *environment) stopHost(ctx context.Context, destroy bool) error {
 	if err := e.validateHostRoot(); err != nil {
 		return err
@@ -203,6 +202,7 @@ func (e *environment) stopHost(ctx context.Context, destroy bool) error {
 	}
 	return e.waitHostStopped(ctx)
 }
+
 func (e *environment) waitHostStopped(ctx context.Context) error {
 	root, err := statefs.Open(e.HostRoot)
 	if err != nil {
@@ -250,6 +250,7 @@ func (e *environment) startLaunchd(ctx context.Context) error {
 	}
 	return nil
 }
+
 func (e *environment) startSystemd(ctx context.Context) error {
 	path := e.unitPath()
 

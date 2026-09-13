@@ -93,10 +93,6 @@ func reason(value model.Reason) v1.ErrorReason {
 		return v1.ErrorReason_ERROR_REASON_CAPACITY
 	case model.ReasonUnavailable:
 		return v1.ErrorReason_ERROR_REASON_UNAVAILABLE
-	case model.ReasonUnauthenticated:
-		return v1.ErrorReason_ERROR_REASON_UNAUTHENTICATED
-	case model.ReasonPermissionDenied:
-		return v1.ErrorReason_ERROR_REASON_PERMISSION_DENIED
 	case model.ReasonIdentityMismatch:
 		return v1.ErrorReason_ERROR_REASON_IDENTITY_MISMATCH
 	case model.ReasonEngineMismatch:
@@ -107,8 +103,6 @@ func reason(value model.Reason) v1.ErrorReason {
 		return v1.ErrorReason_ERROR_REASON_NOT_RUNNING
 	case model.ReasonTooLarge:
 		return v1.ErrorReason_ERROR_REASON_TOO_LARGE
-	case model.ReasonAlreadyAttached:
-		return v1.ErrorReason_ERROR_REASON_ALREADY_ATTACHED
 	case model.ReasonInternal:
 		return v1.ErrorReason_ERROR_REASON_INTERNAL
 	default:
@@ -141,7 +135,6 @@ func StatusCode(reason v1.ErrorReason) connect.Code {
 		v1.ErrorReason_ERROR_REASON_ENGINE_MISMATCH,
 		v1.ErrorReason_ERROR_REASON_EXPIRED,
 		v1.ErrorReason_ERROR_REASON_NOT_RUNNING,
-		v1.ErrorReason_ERROR_REASON_ALREADY_ATTACHED,
 		v1.ErrorReason_ERROR_REASON_OPERATION_PENDING,
 		v1.ErrorReason_ERROR_REASON_DEPENDENCY,
 		v1.ErrorReason_ERROR_REASON_CONFIGURATION,

@@ -28,6 +28,18 @@ import (
 	"clankerbox/internal/statefs"
 )
 
+const (
+	environmentManifest = "environment.json"
+	environmentLock     = "environment.lock"
+	environmentPrefix   = "clankerbox-dev-"
+)
+
+const (
+	linuxPlatform = "linux"
+	macPlatform   = "darwin"
+	localHostID   = "local"
+)
+
 // Options selects the owned environment, loopback listener, and explicit bundle.
 type Options struct{ StateDir, Listen, Bundle string }
 
@@ -61,10 +73,12 @@ func DefaultStateDir() string {
 	}
 	return filepath.Join(wd, ".clankerbox")
 }
+
 func namespace(path string) string {
 	sum := sha256.Sum256([]byte(path))
 	return hex.EncodeToString(sum[:6])
 }
+
 func canonicalState(path string) (string, error) {
 	if path == "" {
 		path = DefaultStateDir()
@@ -86,6 +100,7 @@ func canonicalState(path string) (string, error) {
 	}
 	return p, nil
 }
+
 func (e *environment) close() {
 	if e.lock != nil {
 		_ = e.lock.Close()
@@ -94,6 +109,7 @@ func (e *environment) close() {
 		_ = e.dir.Close()
 	}
 }
+
 func jsonWrite(d *statefs.Dir, name string, value any) error {
 	raw, e := json.MarshalIndent(value, "", "  ")
 	if e != nil {
@@ -101,6 +117,7 @@ func jsonWrite(d *statefs.Dir, name string, value any) error {
 	}
 	return d.WriteFile(name, append(raw, '\n'))
 }
+
 func token() string {
 	var bytes [32]byte
 	if _, e := rand.Read(bytes[:]); e != nil {
@@ -154,6 +171,7 @@ func openEnvironment(ctx context.Context, opts Options, create bool) (*environme
 	ok = true
 	return env, nil
 }
+
 func (e *environment) initialize(ctx context.Context, state, bundlePath string) error {
 	entries, err := e.dir.Entries()
 	if err != nil {
@@ -186,6 +204,7 @@ func (e *environment) initialize(ctx context.Context, state, bundlePath string) 
 	e.bundle = b
 	return jsonWrite(e.dir, environmentManifest, e)
 }
+
 func (e *environment) restore(data []byte, state, bundlePath string) error {
 	if err := json.Unmarshal(data, e); err != nil {
 		return err
@@ -211,6 +230,7 @@ func (e *environment) restore(data []byte, state, bundlePath string) error {
 	}
 	return nil
 }
+
 func (e *environment) hostConfig() host.Config {
 	b := e.bundle
 	p := model.Profile{
@@ -236,6 +256,7 @@ func (e *environment) hostConfig() host.Config {
 		SystemdUser:   runtime.GOOS == linuxPlatform,
 	}
 }
+
 func (e *environment) prepare() error {
 	cfg := e.hostConfig()
 	if err := e.prepareHostRoot(cfg); err != nil {
@@ -295,6 +316,7 @@ func (e *environment) prepare() error {
 	}
 	return err
 }
+
 func (e *environment) prepareHostRoot(cfg host.Config) error {
 	_, statErr := os.Lstat(e.HostRoot)
 	if statErr == nil {
@@ -362,6 +384,7 @@ func (e *environment) validateHostRoot() error {
 	}
 	return nil
 }
+
 func validateListen(listen string) error {
 	host, _, err := net.SplitHostPort(listen)
 	if err != nil {
@@ -480,6 +503,7 @@ func (c *controllerProcess) stop() error {
 		return errors.New("controller required forced termination; retained state preserved")
 	}
 }
+
 func (e *environment) startController(ctx context.Context, listen, tokenName string) (*controllerProcess, error) {
 	ready := filepath.Join(e.StateDir, "controller-ready")
 	if err := os.Remove(ready); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -547,15 +571,3 @@ func (e *environment) startController(ctx context.Context, listen, tokenName str
 		}
 	}
 }
-
-const (
-	environmentManifest = "environment.json"
-	environmentLock     = "environment.lock"
-	environmentPrefix   = "clankerbox-dev-"
-)
-
-const (
-	linuxPlatform = "linux"
-	macPlatform   = "darwin"
-	localHostID   = "local"
-)

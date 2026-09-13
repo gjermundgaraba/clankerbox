@@ -1,4 +1,4 @@
-# 0004. Controller, host and guest own separate state
+# 0003. Controller, host and guest own separate state
 
 Status: accepted
 
@@ -16,11 +16,9 @@ desired state, the durable operation queue and capacity reservations, with one
 serial reconciliation worker per host. The host owns native execution and its
 journal, private image and runtime resolution, and per-machine guest admission
 and binding lifecycle; native mutations are serialized per host while guest
-admission uses a separate short lock. The guest daemon owns PTYs, terminal state,
-ordered control admission, snapshots and final session records. Each service owns
+admission uses a separate short lock. The guest daemon owns PTYs, terminal
+state, control admission, snapshots and final session records. Each service owns
 its resources through shutdown and never reads another service's journal.
-Deployment topology, secrets and operating procedures live in the personal-cloud
-repository.
 
 ## Consequences
 

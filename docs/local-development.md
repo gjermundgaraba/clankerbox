@@ -1,109 +1,76 @@
-# Real local development
+# Local development
 
-`clankerbox dev` starts a project-owned environment with the ordinary controller,
-persistent host service and real Linux VMs. It begins with an empty inventory;
-create machines through the normal CLI, generated API or Clankerdesk. Terminal
-PTYs, tools, files and process memory live in those VMs, not in a workstation
-shell substituted for a machine.
+`clankerbox dev` runs a controller, a persistent host service and Linux VMs on a
+workstation. It starts with an empty inventory; create machines through the CLI
+or the API. Terminals, tools, files and process memory live in those VMs.
 
-The supported local host targets are Apple Silicon macOS (`darwin/arm64`, using
-Hypervisor.framework) and Linux/amd64 with accessible KVM. Both use the pinned
-smolvm runtime for Linux guests. macOS/Xcode guests remain a separate Tart profile
-and do not imply RAM-copy support for macOS processes.
+Supported hosts are Apple Silicon macOS (Hypervisor.framework) and Linux/amd64
+with access to `/dev/kvm`. Both run Linux guests with the pinned smolvm runtime.
+The Linux engine links against glibc; musl-only distributions are not supported.
+Bundles ship a Linux guest image; macOS guests on Tart are a separate host
+profile and do not support RAM forks.
 
-Live host qualification used macOS 26.6.2 on Apple Silicon and Ubuntu 26.04.1
-amd64 (kernel 7.0.0-31, glibc 2.43). The Linux engine dynamically requires the
-system GNU loader, libc/libm and libgcc_s; this is not a musl-only distribution
-build. Other Linux distributions and older macOS releases have not been qualified.
+## Bundles
 
-## Install and start
+An environment runs from one verified bundle: a `bundle.json` manifest plus the
+controller, host and guest binaries, the smolvm engine and its libraries, disk
+templates, a guest image and profiles.
+[Release packaging](../scripts/release/README.md) describes how bundles are
+assembled.
 
-Download the self-contained archive and checksum for your host platform from
-[release 0.3.0](https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.3.0)
-using your normal private repository access. Verify SHA256 before extraction. The archive places
-`clankerbox` beside `bundle.json` and all verified controller, host, guest,
-smolvm/libkrun/agent, image and profile payloads. Add that extracted directory to
-PATH or invoke its CLI by absolute path. Keep the archive's directory layout and
-extract into a directory owned by you that other users cannot modify. Preserve
-the archive's permissions: guest programs must remain executable by unprivileged
-guest users. For example:
+A release archive places `clankerbox` beside `bundle.json`. Extract it with
+permissions preserved into a directory that other users cannot modify:
 
 ```sh
 umask 077
 mkdir clankerbox-release
-tar -xzpf /path/to/platform-release.tar.gz -C clankerbox-release
-```
-Running local development requires no repository checkout, Go compiler or Rust
-toolchain. The private release is not fetched through an unauthenticated default
-GitHub asset URL.
-
-Run as the ordinary user who owns the VM service, from the project directory:
-
-```sh
-cd /path/to/project
-/absolute/path/to/extracted-release/clankerbox dev
+tar -xzpf platform-release.tar.gz -C clankerbox-release
 ```
 
-The CLI locates the adjacent `bundle.json`, verifies the complete bundle and
-starts the environment. An explicitly supplied bundle is also supported:
+That CLI finds its adjacent bundle. Any other CLI, including a source build,
+takes the manifest explicitly:
 
 ```sh
 clankerbox dev --bundle /absolute/path/to/bundle.json
 ```
 
-Other distributors may build a CLI with an explicit pinned `DefaultBundleURL`
-and `DefaultBundleSHA256`. Only such a configured build downloads its HTTPS
-archive and verifies the embedded digest before extraction, then caches verified
-content by digest. A standalone CLI with neither an adjacent/explicit bundle nor
-those release pins fails clearly; it never selects a moving latest runtime or
-builds one on demand.
+A CLI built with `DefaultBundleURL` and `DefaultBundleSHA256` set downloads its
+archive over HTTPS, verifies the digest and caches the content. Without an
+adjacent, explicit or pinned bundle, `dev` fails rather than picking a runtime
+on its own.
 
-Every payload is checked against the manifest. Archive extraction rejects path
-traversal and escaping links; the manifest's host platform must match the current
-host. On macOS the CLI checks the signed runtime's hypervisor entitlement and a
-logged-in launchd GUI domain. On Linux it requires `/dev/kvm` access and a running
-systemd user manager. Fix a failing preflight before starting the environment;
-Clankerbox does not silently select emulation or modify host privileges.
+Every payload is checked against the manifest before starting, and extraction
+rejects path traversal and escaping links. On macOS the CLI checks the runtime's
+hypervisor entitlement and that a launchd GUI session is logged in. On Linux it
+needs `/dev/kvm` and a running systemd user manager. A failing preflight has to
+be fixed; `dev` does not fall back to emulation or change host privileges.
 
-The default profile is `linux-dev-v3`: 2 vCPUs and 1024 MiB RAM, with the bundle's
-explicit storage/overlay sizes. A profile declares resources and content pins; the API derives its capabilities.
-Host OS, guest OS and runtime engine are distinct: an Apple Silicon host can run
-a forkable Linux guest. Startup output reports readiness and connection paths;
-there is no promised download, boot or restore latency.
+The default profile is `linux-dev-v3`: 2 vCPUs and 1024 MiB RAM with the
+bundle's storage and overlay sizes.
 
-## Project ownership and connection files
+## Environment state
 
-The default private state directory is `<project>/.clankerbox`. Use an explicit
-path when needed:
+Run `dev` from the project directory as the user who will own the VMs. State
+goes to `<project>/.clankerbox` by default, or to `--state-dir`. Add it to the
+project's ignore rules: it holds credentials, controller state and ownership
+manifests. The host service gets a short private root under `~/.cb/` so native
+socket paths stay within platform limits. Each project has its own services,
+credentials, machine store and journals, and a lock keeps two foreground owners
+or teardowns from racing.
 
-```sh
-clankerbox dev --state-dir /absolute/path/to/environment
-```
-
-Add `.clankerbox/` to the project's ignore rules. It contains private credentials,
-controller state and ownership manifests, not distributable project content.
-The canonical state path derives a distinct host namespace and a short private
-host root under `~/.cb/`, keeping native socket paths within platform limits.
-Separate projects have separate services, credentials, machine stores and journals.
-A lock prevents two foreground owners or teardown operations from racing.
-
-The default controller listens on an available loopback port. `--listen
-127.0.0.1:PORT` selects a stable local port; non-loopback listeners are refused.
-Once ready, the CLI writes:
+The controller listens on a free loopback port unless `--listen 127.0.0.1:PORT`
+is given; non-loopback addresses are refused. When ready, the CLI writes:
 
 | File | Purpose |
 | --- | --- |
-| `environment.json` | Environment ownership, namespace and immutable bundle binding. |
-| `client.json` | Ordinary CLI origin, token file and default host/profile. |
-| `clankerdesk.json` | Desk origin, server-side token path and machine creation defaults. |
-| `connection.json` | Current readiness/connection metadata and paths to both consumer configs. |
-| `token` | Private bearer credential, readable only by the environment owner. |
+| `environment.json` | Ownership, namespace and the bundle digest. |
+| `client.json` | CLI config: origin, token file and default host/profile. |
+| `clankerdesk.json` | Connection target for an application server: origin, token path and creation defaults. |
+| `connection.json` | Readiness metadata and paths to the files above. |
+| `token` | Bearer token, readable only by the owner. |
 
-Read the generated paths printed by the CLI; do not infer endpoints from runtime
-internals. The port can change when the foreground controller restarts, so reread
-connection files. Do not commit or paste their token contents.
-
-In another terminal, ordinary lifecycle operations use the generated CLI config:
+The port can change when the foreground controller restarts, so reread these
+files rather than caching endpoints. In another terminal:
 
 ```sh
 clankerbox --config .clankerbox/client.json profiles
@@ -114,92 +81,53 @@ clankerbox --config .clankerbox/client.json fork first experiment
 clankerbox --config .clankerbox/client.json checkpoint create first
 ```
 
-Create and fork use normal durable operation admission. Unknown or unresolved
-outcomes retain their operation identity; inspect before resubmitting. Profiles
-control which lifecycle actions are available. Public resources do not expose
-host service credentials, guest endpoints or image paths.
-
-## Clankerdesk
-
-Start the desk server with the generated target, then run its normal Vite+ workflow:
-
-```sh
-export CLANKERDESK_CLANKERBOX="$(cat /absolute/path/to/project/.clankerbox/clankerdesk.json)"
-```
-
-Set that variable in the process launching Clankerdesk's server. The target holds
-only the URL, token-file path and creation defaults; the bearer file is read by
-the server per call. The browser never receives the controller credential.
-Clankerdesk's generated Node Connect client uses HTTP/2 for typed MachineService
-and SessionService calls, including bidirectional terminal attachment.
-
-Create a desk workspace and add a machine. There is no preseeded `local` VM to
-select. Add terminals to that machine through the usual UI. The desk catalog owns
-allocation identity, while the guest daemon owns the PTY, terminal parser and
-retained output. Closing a view or reloading the browser does not allocate another
-machine or terminate its sessions. See [the terminal contract](terminal-sessions.md)
-for snapshot/resume, engine identity and lost-ACK behavior.
-
-## Foreground exit, stop and destroy
-
-These operations have deliberately different lifetimes:
+## Stop and destroy
 
 | Action | Effect |
 | --- | --- |
-| Ctrl-C the foreground `dev` | Stops the foreground controller and releases its owner lock. The native host service, running VMs, live guest sessions and durable state remain. |
-| Run `dev` again for the same state directory | Verifies the retained bundle, reconnects the persistent host service and starts another ordinary controller. Refresh consumer connection files. |
-| `clankerbox dev stop` | Stops every owned VM through ordinary durable lifecycle operations, then stops the owned host service. Retained disks, checkpoints and journals remain. Sessions end with their VM. |
-| `clankerbox dev destroy` | Stops owned VMs, deletes machine/checkpoint dependencies in safe order, removes the owned service and then the validated environment state. |
+| Ctrl-C the foreground `dev` | Stops the controller and releases the owner lock. The host service, VMs, guest sessions and state remain. |
+| Run `dev` again | Verifies the bundle, reconnects the host service and starts a new controller. Reread the connection files. |
+| `clankerbox dev stop` | Stops every owned VM through ordinary operations, then the host service. Disks, checkpoints and journals remain. |
+| `clankerbox dev destroy` | Stops VMs, deletes machines and checkpoints in dependency order, removes the service and then the environment state. |
 
-For a nondefault environment, put its flag on `dev`:
-
-```sh
-clankerbox dev --state-dir /absolute/path/to/environment stop
-clankerbox dev --state-dir /absolute/path/to/environment destroy
-```
-
-First exit the foreground controller. Teardown takes the same ownership lock and
-uses its own private temporary controller/token, not a published competing API.
-It journals idempotency keys and accepted operation IDs before proceeding.
-Interrupted teardown can be repeated; ordinary `dev` startup is fenced until it
-finishes. Pending, unresolved, unexpected or uncertain resource state leaves the
-environment intact for inspection. Destroy never recursively removes a directory
-that lacks the matching ownership manifest, and it does not sweep unrelated VM
-stores, projects or the shared verified bundle cache.
-
-Do not remove an environment directory by hand to stop VMs. Do not edit or replace
-a retained bundle's files: startup verifies its manifest/content pin and rejects
-silent drift.
-
-## Bundle identity and replacement
-
-Each environment belongs to one verified bundle content digest. Ordinary restart
-uses that same bundle and preserves live VMs. Changing service, engine or image
-contents requires explicit destroy/recreate; dev VM contents are disposable when
-changing releases. Finish teardown with the old bundle before selecting the new one:
+Pass `--state-dir` to `dev` for a non-default environment:
 
 ```sh
-clankerbox dev --state-dir /absolute/path/to/environment destroy
-clankerbox dev --state-dir /absolute/path/to/environment --bundle /new/bundle.json
+clankerbox dev --state-dir /path/to/environment stop
+clankerbox dev --state-dir /path/to/environment destroy
 ```
 
-The bundle path is a locator. If an intact copy of the same bundle moved, supply
-its manifest with `--bundle` on startup, stop or destroy:
+Exit the foreground controller first. Teardown takes the ownership lock and runs
+a private temporary controller. It journals its idempotency keys and accepted
+operation IDs, so an interrupted teardown can be repeated, and `dev` refuses to
+start until it finishes. Pending, unresolved or unexpected resource state leaves
+the environment in place for inspection. Destroy only removes directories that
+carry a matching ownership manifest and never touches other projects, VM stores
+or the shared bundle cache.
+
+Do not delete an environment directory by hand to stop VMs, and do not edit a
+bundle in place: startup verifies its digest and refuses drift.
+
+## Changing bundles
+
+An environment is bound to one bundle digest. Restarting reuses it and keeps
+live VMs. Changing engine, service or image content means destroying the
+environment and creating a new one; local VM contents are disposable:
 
 ```sh
-clankerbox dev --state-dir /absolute/path/to/environment --bundle /relocated/bundle.json stop
+clankerbox dev --state-dir /path/to/environment destroy
+clankerbox dev --state-dir /path/to/environment --bundle /new/bundle.json
 ```
 
-Clankerbox verifies the exact content digest and repairs owned configuration and
-supervisor paths. A different digest is refused without deleting the environment.
-Keep an intact matching bundle available until teardown finishes.
+If an intact copy of the same bundle has moved, pass its new manifest path with
+`--bundle` on start, stop or destroy. The digest is verified and the owned
+configuration and supervisor paths are repaired. A different digest is refused
+without touching the environment.
 
-## Qualification
+## Testing
 
-Unit tests verify ownership, bundle extraction, state binding, supervision and
-teardown dependencies. The guest qualification in `protocol/test` and the live
+Unit tests cover ownership, bundle extraction, state binding, supervision and
+teardown ordering. The guest qualification in `protocol/test` and the live
 harnesses in [tests](../tests/README.md) exercise real VMs: workload isolation,
-PTY and memory continuity across RAM forks and restores, machine identity
-rebinding, cold lifecycle and checkpoints. These checks do not claim host-reboot
-durability, arbitrary CPU compatibility, production-domain routing or a
-startup-time guarantee.
+PTY and memory continuity across RAM forks and restores, identity rebinding and
+the cold lifecycle.

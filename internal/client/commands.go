@@ -96,7 +96,6 @@ func (streams commandStreams) command(name, usage, argsUsage string, count int, 
 	}
 }
 
-const restoreCommand = "restore"
 const childArgCount = 2
 
 func (streams commandStreams) checkpoints() *cli.Command {

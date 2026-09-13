@@ -282,7 +282,6 @@ const (
 	ErrorReason_ERROR_REASON_EXPIRED                 ErrorReason = 12
 	ErrorReason_ERROR_REASON_NOT_RUNNING             ErrorReason = 13
 	ErrorReason_ERROR_REASON_TOO_LARGE               ErrorReason = 14
-	ErrorReason_ERROR_REASON_ALREADY_ATTACHED        ErrorReason = 15
 	ErrorReason_ERROR_REASON_INTERNAL                ErrorReason = 16
 	ErrorReason_ERROR_REASON_IDEMPOTENCY_CONFLICT    ErrorReason = 17
 	ErrorReason_ERROR_REASON_NAME_CONFLICT           ErrorReason = 18
@@ -310,7 +309,6 @@ var (
 		12: "ERROR_REASON_EXPIRED",
 		13: "ERROR_REASON_NOT_RUNNING",
 		14: "ERROR_REASON_TOO_LARGE",
-		15: "ERROR_REASON_ALREADY_ATTACHED",
 		16: "ERROR_REASON_INTERNAL",
 		17: "ERROR_REASON_IDEMPOTENCY_CONFLICT",
 		18: "ERROR_REASON_NAME_CONFLICT",
@@ -335,7 +333,6 @@ var (
 		"ERROR_REASON_EXPIRED":                 12,
 		"ERROR_REASON_NOT_RUNNING":             13,
 		"ERROR_REASON_TOO_LARGE":               14,
-		"ERROR_REASON_ALREADY_ATTACHED":        15,
 		"ERROR_REASON_INTERNAL":                16,
 		"ERROR_REASON_IDEMPOTENCY_CONFLICT":    17,
 		"ERROR_REASON_NAME_CONFLICT":           18,
@@ -1301,7 +1298,7 @@ const file_clankerbox_v1_resources_proto_rawDesc = "" +
 	"\x1cCHECKPOINT_STATUS_UNRESOLVED\x10\x03\x12\x1c\n" +
 	"\x18CHECKPOINT_STATUS_FAILED\x10\x04\x12\x1e\n" +
 	"\x1aCHECKPOINT_STATUS_DELETING\x10\x05\x12\x1d\n" +
-	"\x19CHECKPOINT_STATUS_DELETED\x10\x06*\xe2\x05\n" +
+	"\x19CHECKPOINT_STATUS_DELETED\x10\x06*\xe4\x05\n" +
 	"\vErrorReason\x12\x1c\n" +
 	"\x18ERROR_REASON_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14ERROR_REASON_INVALID\x10\x01\x12\x1a\n" +
@@ -1318,15 +1315,14 @@ const file_clankerbox_v1_resources_proto_rawDesc = "" +
 	"\x1cERROR_REASON_ENGINE_MISMATCH\x10\v\x12\x18\n" +
 	"\x14ERROR_REASON_EXPIRED\x10\f\x12\x1c\n" +
 	"\x18ERROR_REASON_NOT_RUNNING\x10\r\x12\x1a\n" +
-	"\x16ERROR_REASON_TOO_LARGE\x10\x0e\x12!\n" +
-	"\x1dERROR_REASON_ALREADY_ATTACHED\x10\x0f\x12\x19\n" +
+	"\x16ERROR_REASON_TOO_LARGE\x10\x0e\x12\x19\n" +
 	"\x15ERROR_REASON_INTERNAL\x10\x10\x12%\n" +
 	"!ERROR_REASON_IDEMPOTENCY_CONFLICT\x10\x11\x12\x1e\n" +
 	"\x1aERROR_REASON_NAME_CONFLICT\x10\x12\x12\"\n" +
 	"\x1eERROR_REASON_OPERATION_PENDING\x10\x13\x12\x1b\n" +
 	"\x17ERROR_REASON_DEPENDENCY\x10\x14\x12\x1e\n" +
 	"\x1aERROR_REASON_CONFIGURATION\x10\x15\x12(\n" +
-	"$ERROR_REASON_RECONCILIATION_REQUIRED\x10\x16B+Z)clankerbox/gen/clankerbox/v1;clankerboxv1b\x06proto3"
+	"$ERROR_REASON_RECONCILIATION_REQUIRED\x10\x16\"\x04\b\x0f\x10\x0f*\x1dERROR_REASON_ALREADY_ATTACHEDB+Z)clankerbox/gen/clankerbox/v1;clankerboxv1b\x06proto3"
 
 var (
 	file_clankerbox_v1_resources_proto_rawDescOnce sync.Once
