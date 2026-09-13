@@ -103,12 +103,29 @@ func TestPublicMachineRoundTripAndRedaction(t *testing.T) {
 	source.StoreID = ""
 	source.Endpoint = ""
 	source.ProfileSpec.ImagePath = ""
+	source.ProfileSpec.Capabilities = model.RuntimeCapabilities(source.ProfileSpec.Runtime, source.ProfileSpec.Arch)
 	if !reflect.DeepEqual(source, restored) {
 		t.Fatalf("public fields changed:\nwant %#v\ngot %#v", source, restored)
 	}
 	wire.Labels["workspace"] = "mutated"
 	if restored.Labels["workspace"] != testName {
 		t.Fatal("labels alias wire storage")
+	}
+}
+func TestMachineDiscoveryRefreshesHistoricalCapabilitiesWithoutChangingBindings(t *testing.T) {
+	t.Parallel()
+	const retiredSSH = "ssh"
+	stored := profile()
+	legacyCapabilities := []string{testCreate, retiredSSH}
+	stored.Capabilities = append([]string(nil), legacyCapabilities...)
+	before := rpcmodel.ToProfileBinding(stored)
+	wire := rpcmodel.ToMachine(model.Machine{ProfileSpec: stored})
+	if !reflect.DeepEqual(wire.GetProfile().GetCapabilities(), model.RuntimeCapabilities(stored.Runtime, stored.Arch)) {
+		t.Fatalf("stale machine capabilities: %v", wire.GetProfile().GetCapabilities())
+	}
+	if !reflect.DeepEqual(stored.Capabilities, legacyCapabilities) ||
+		!proto.Equal(before, rpcmodel.ToProfileBinding(stored)) {
+		t.Fatal("public discovery changed the durable profile or private operation binding")
 	}
 }
 func TestProfilesHostsAndCheckpoints(t *testing.T) {

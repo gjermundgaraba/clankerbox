@@ -173,12 +173,16 @@ func FromGuestStatus(g *v1.GuestStatus) *model.GuestStatus {
 
 // ToMachine projects public machine identity and observation fields.
 func ToMachine(m model.Machine) *v1.Machine {
+	// Discovery reflects the installed implementation, while persisted profile
+	// snapshots and private operation bindings retain their historical values.
+	profile := m.ProfileSpec
+	profile.Capabilities = model.RuntimeCapabilities(profile.Runtime, profile.Arch)
 	out := &v1.Machine{
 		Id:                 m.ID,
 		Name:               m.Name,
 		ProfileId:          m.Profile,
 		HostId:             m.Host,
-		Profile:            ToProfile(m.ProfileSpec),
+		Profile:            ToProfile(profile),
 		State:              ToState(m.State),
 		DesiredState:       ToState(m.DesiredState),
 		Generation:         m.Generation,
