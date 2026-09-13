@@ -73,12 +73,15 @@ func TestHandlersWaitJoinsIOInterruption(t *testing.T) {
 	t.Parallel()
 	entered := make(chan struct{})
 	returned := make(chan struct{})
+	writer := &blockingDeadlineWriter{ResponseWriter: httptest.NewRecorder(), entered: make(chan struct{}), release: make(chan struct{})}
 	requests := &Handlers{Handler: http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		close(entered)
 		<-r.Context().Done()
+		// Return only once the interruption callback has started; a handler that
+		// returns first cancels the pending callback and nothing needs joining.
+		<-writer.entered
 		close(returned)
 	})}
-	writer := &blockingDeadlineWriter{ResponseWriter: httptest.NewRecorder(), entered: make(chan struct{}), release: make(chan struct{})}
 	serving := make(chan struct{})
 	go func() {
 		defer close(serving)

@@ -115,6 +115,7 @@ func (s *Session) start(opts spawnOptions) error {
 		_ = term.Close()
 		return fmt.Errorf("start process: %w", err)
 	}
+	unblock(master)
 	s.master = master
 	s.cmd = cmd
 	s.record.PID = cmd.Process.Pid
@@ -348,12 +349,11 @@ func (s *Session) resize(cols, rows uint16) (protocol.Session, error) {
 	if !s.running() {
 		return protocol.Session{}, errNotRunning
 	}
-	previous := pty.Winsize{Rows: s.record.Rows, Cols: s.record.Cols}
-	if err := pty.Setsize(s.master, &pty.Winsize{Rows: rows, Cols: cols}); err != nil {
+	if err := setSize(s.master, rows, cols); err != nil {
 		return protocol.Session{}, fmt.Errorf("resize pty: %w", err)
 	}
 	if err := s.term.Resize(cols, rows); err != nil {
-		_ = pty.Setsize(s.master, &previous)
+		_ = setSize(s.master, s.record.Rows, s.record.Cols)
 		return protocol.Session{}, fmt.Errorf("resize terminal: %w", err)
 	}
 	s.record.Cols, s.record.Rows = cols, rows
@@ -380,9 +380,9 @@ func (s *Session) end() protocol.Session {
 		return s.snapshot()
 	}
 	pid := s.record.PID
-	fd := int(s.master.Fd())
+	master := s.master
 	s.mu.Unlock()
-	if pgid, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP); err == nil && pgid > 0 {
+	if pgid := foregroundGroup(master); pgid > 0 {
 		if sid, sidErr := unix.Getsid(pgid); sidErr == nil && sid == pid {
 			_ = s.guardedKill(-pgid, syscall.SIGHUP)
 			if s.waitExit(endStepWait) {
@@ -423,4 +423,49 @@ func (s *Session) waitExit(d time.Duration) bool {
 	case <-time.After(d):
 		return false
 	}
+}
+
+// foregroundGroup reports the PTY's foreground process group. It avoids
+// [os.File.Fd], which moves the descriptor into blocking mode and leaves the
+// writer stuck in a write that Close can no longer interrupt.
+func foregroundGroup(master *os.File) int {
+	conn, err := master.SyscallConn()
+	if err != nil {
+		return 0
+	}
+	pgid := 0
+	_ = conn.Control(func(fd uintptr) {
+		pgid, err = unix.IoctlGetInt(int(fd), unix.TIOCGPGRP)
+	})
+	if err != nil {
+		return 0
+	}
+	return pgid
+}
+
+// unblock returns the PTY master to non-blocking mode. creack/pty issues its
+// ioctls through [os.File.Fd], which leaves the descriptor blocking, and a
+// blocking write stalled on a full slave buffer survives Close, so End would
+// never return. Masters the runtime cannot poll, such as on macOS, stay as
+// they are.
+func unblock(master *os.File) {
+	if master.SetWriteDeadline(time.Time{}) != nil {
+		return
+	}
+	if conn, err := master.SyscallConn(); err == nil {
+		_ = conn.Control(func(fd uintptr) { _ = syscall.SetNonblock(int(fd), true) })
+	}
+}
+
+// setSize resizes the PTY without moving the master into blocking mode.
+func setSize(master *os.File, rows, cols uint16) error {
+	conn, err := master.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var ioctlErr error
+	err = conn.Control(func(fd uintptr) {
+		ioctlErr = unix.IoctlSetWinsize(int(fd), unix.TIOCSWINSZ, &unix.Winsize{Row: rows, Col: cols})
+	})
+	return errors.Join(err, ioctlErr)
 }
