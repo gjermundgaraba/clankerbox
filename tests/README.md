@@ -9,7 +9,7 @@ Build the test-only guest action adapter (not part of the installed CLI):
 go build -o bin/session-run ./tests/session-run
 python3 tests/live_lifecycle.py --binary "$PWD/bin/clankerbox" \
   --session-runner "$PWD/bin/session-run" --config "$HOME/.config/clankerbox/config.json" \
-  --host linux --profile linux-dev-v2 --result /PRIVATE/linux-lifecycle.json --keep
+  --host linux --profile linux-dev-v3 --result /PRIVATE/linux-lifecycle.json --keep
 python3 tests/live_checkpoints.py --binary "$PWD/bin/clankerbox" \
   --session-runner "$PWD/bin/session-run" --config "$HOME/.config/clankerbox/config.json" \
   --lifecycle-result /PRIVATE/linux-lifecycle.json --result /PRIVATE/linux-checkpoints.json
@@ -19,6 +19,19 @@ Repeat with host `mac`, profile `mac-xcode-v3`, and separate evidence paths.
 These scripts create and delete disposable resources. Checkpoints require the
 explicitly retained lifecycle source; failures leave named objects for inspection.
 Do not run against an existing workload or blindly retry unresolved operations.
+
+For the deployed public HTTPS streaming boundary, use Node 26.8.2 with the built
+SDK and an explicitly selected running disposable machine:
+
+```sh
+node protocol/test/public-session.mjs /PRIVATE/client.json DISPOSABLE_MACHINE_ID
+```
+
+This creates and ends its own session, sends 64 MiB without Connect compression,
+and verifies ordered controls, a healthy sibling alongside an unread viewer,
+bounded stalled-viewer disconnection, and cancellation/resume with the same shell.
+It does not stop or delete the selected machine. Keep controller and host
+restarts and lifecycle mutations outside this explicit test window.
 
 `session-run` uses bearer-authenticated terminal sessions, not direct SSH. A gate
 installs output replay before the command starts; terminal echo/newline conversion

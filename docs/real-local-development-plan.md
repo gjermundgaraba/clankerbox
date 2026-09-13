@@ -1,6 +1,8 @@
 # Real local Clankerbox — clean-break architecture and plan
 
-Status: agreed design direction; implementation and live qualification pending.
+Status: implemented, deployed and live-qualified. See
+[the implementation record](real-local-development-implementation.md) for exact
+artifacts, platform evidence and retained-state handling.
 
 This document plans a replacement for the process-based `clankerbox dev`, and
 the corresponding production transport refactor. It is not an implementation
