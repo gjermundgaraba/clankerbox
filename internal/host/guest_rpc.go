@@ -216,5 +216,5 @@ func (r *RPC) AttachSession(
 	}
 	defer l.release()
 	upstream := l.client.AttachSession(l.ctx)
-	return rpctransport.Relay(ctx, l.cancel, stream, upstream, first)
+	return rpctransport.Relay(l.ctx, l.cancel, stream, upstream, first)
 }

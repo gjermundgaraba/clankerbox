@@ -1,110 +1,107 @@
-# Module contracts and state cutover
+# Module contracts
 
-Prefer external Go test packages for supported behavior; use internal policy tests
-where a public test would require long sleeps or oversized workloads. Production
-types do not expose journal accessors, private helper aliases, or test-only hooks.
-The HTTP, SSH, Unix socket, runtime command, and process boundaries remain real:
-they have distinct lifetimes and failure behavior.
-
-## Ownership change
-
-Before this refactor, private test access bypassed the behavior under test, and
-security policy was duplicated among client, controller, and host file helpers.
-The runtime lifecycle interface also omitted checkpoint support, which required
-a private optional interface and a journal-shaped argument.
+Clankerbox separates public admission, native execution, and terminal ownership.
+Each service owns its resources through shutdown; callers use the generated RPC
+contract rather than accessing another service's journal.
 
 ```mermaid
 flowchart LR
-  subgraph Before
-    T[Tests] -->|mutate private state| J[Host/controller journals]
-    T -->|call helper algorithms| C[Client helpers]
-    H[Host helper] --> R[Runtime lifecycle]
-    H -->|type assertion + journal record| X[Private checkpoint interface]
-    C --> F[Local file checks]
-    J --> G[Separate file checks]
-  end
-  subgraph After
-    E[External tests and callers] -->|Run / API| CL[Client: API requests and lifecycle waits]
-    E -->|Create / Derive / Inspect| CO[Controller: queue and journal]
-    E -->|Execute / Inspect / Connect| HO[Host: reconciliation and journal]
-    HO -->|runtime inputs| RT[Complete Runtime contract]
-    RT --> NR[Native runtime and command runner]
-    CL --> SF[Statefs: private files, locks, durable writes]
-    CO --> SF
-    HO --> SF
-  end
+  C[CLI / Clankerdesk] -->|MachineService + SessionService| CO[Controller]
+  CO -->|HostService + SessionService, mTLS| H[Host]
+  H -->|SessionService, machine-bound mTLS| G[Guest daemon]
+  H -->|serialized native effects| R[smolvm / Tart]
+  CO --- Q[Desired state and durable queue]
+  H --- J[Native journal and per-machine admission]
+  G --- S[PTYs, terminal state and final session records]
 ```
 
-## Public behavior
+The three SessionService mounts share a schema, with authorization enforced by
+each endpoint. The controller authenticates public consumers and routes machines;
+the host authenticates its controller and admits the owned machine; the guest
+checks its host, binding epoch and machine identity. Private credentials and native
+installation paths do not cross the public resource boundary.
 
-The client owns authenticated API requests, resource output and lifecycle waits.
-It has no forwarding owner, IPC leases, local listeners or SSH identity state.
-The controller owns the restricted SSH link to the guest session daemon.
+## Client and controller
 
-## Client command boundary
+`client.Run` takes output streams and a cancellation context. Each invocation
+builds a fresh urfave/cli command tree; help bypasses configuration and service
+startup. The client owns authenticated requests, resource formatting and operation
+waits. It rereads the token file per request, disables ambient proxies and redirects,
+and does not resubmit an uncertain mutation. After a successful wait, it reads the
+resource summary using the parent context; a failed summary read preserves the
+known successful operation outcome.
 
-`client.Run` takes output streams and a cancellation context. Each invocation builds
-a fresh urfave/cli command tree. The client, controller, and host binaries
-use native flag parsing and generated help; help bypasses configuration and
-service startup. Machine names are positional, with no `--name` alias. Resource
-output is human-readable by default; global `--json` selects structured stdout.
-Executable errors are plain text on stderr.
-CLI lifecycle and session-list commands use authenticated HTTP over the same
-verified transport, with ambient proxies and redirects disabled. Lifecycle waits
-poll operation status.
-An explicit creation host is sent directly to the controller. Only an omitted host
-requires discovery, so a discovery change cannot prevent an idempotent retry from
-returning its already accepted operation.
-The raw guest SSH endpoint and workstation connection commands do not exist.
-Tests exercise retained command behavior through HTTP and process boundaries.
+The controller owns desired state, durable acceptance, idempotency and capacity
+reservations. One reconciliation worker per host dispatches mutations and records
+their outcomes. An explicit creation host goes directly to admission; discovery is
+needed only when the caller omitted it. Previously accepted requests remain
+resolvable even when current host or profile eligibility changes.
 
-## Host and checkpoint boundary
+Domain errors carry a finite reason and retryable flag. The RPC boundary translates
+them into Connect errors; a missing row is distinct from a database failure or
+cancellation. Human-readable messages are not an error classification mechanism.
 
-Guest preparation and restricted connections share one readiness check: an owned,
-prepared machine, a succeeded current generation, and a running runtime with a
-valid endpoint. Preparation keeps its mutation lock; connections do not hold that
-lock for the lifetime of a stream. Runtime guest scripts travel on stdin on both
-platforms, including scripts that carry a child's private host key.
+## Host, profiles and checkpoints
 
-Checkpoint identity retains its captured profile and runtime pin. Restore requires
-the same physical profile and current runtime configuration; discovery-only
-capability changes do not rewrite or invalidate the captured identity. Pins are
-checked against the archived profile, not rehashed with current discovery metadata.
+The host owns native execution and its operation journal. Serialized mutation
+ownership is separate from the short guest-admission lock. Durable unfinished work
+reserves all affected sources and destinations; unrelated machines can keep using
+sessions. Binding preparation occurs outside admission, then rechecks the machine
+epoch and reservations before publishing a lease. Accepted work is presented as
+pending/running while its owner is active; interrupted unresolved work remains
+fenced for explicit reconciliation.
 
-RAM checkpoint deletion needs the configured owning host and its owned artifact
-directory, not a still-installed capture runtime or active profile. It retains
-exact checkpoint identity, dependency/reservation checks, the operation journal
-and the deleted record. Ambiguous deletion is never replayed automatically.
-Tart checkpoint deletion still needs compatible runtime placement and native
-stopped-clone checks because it invokes Tart rather than removing an artifact
-directory. No checkpoint migration or alternate legacy validation path is added.
+Profiles contain portable compatibility fields and image digests. Host configuration
+resolves local image paths, and capabilities are computed for public discovery.
+Runtime and image pins identify content, so moving an identical verified bundle
+does not change compatibility. Native supervisor files are derived from the current
+owned configuration and are refreshed for retained starts.
 
-## Guest session boundary
+Checkpoint identity retains its capture profile and runtime pin. Fork and restore
+check compatibility and backing dependencies. Deleting an owned checkpoint does
+not require its capture profile to remain active or unchanged. RAM deletion owns
+its artifact directory; Tart deletion uses the owning native runtime and its
+stopped-copy checks. Both retain operation journaling, identity checks and explicit
+outcome handling.
 
-`clankerbox-guest` runs inside a machine as the SSH user and is a new process
-boundary with its own lifetime: it outlives every consumer connection, the
-controller's SSH link, and the controller itself, and it ends only with the
-machine or an explicit daemon stop. `internal/guest/session` owns PTY, VT,
-ring, attach, input admission, and teardown policy; `internal/guest/daemon`
-owns the singleton lock, the private socket with peer-credential checks, and
-per-connection protocol handling; `internal/guest/protocol` is the wire
-contract shared with consumers, pinned by the conformance and messages
-fixtures under `protocol/`. The controller's `guestLink` registry owns link
-eligibility, suspension around copies, stream capacity, and materialized
-`guest` status; it bridges upgraded streams without parsing them and runs a
-protocol client only for listing and the readiness probe. Same-user processes
-in the guest are trusted; the terminal key restricts transport, not authority.
+## Guest sessions and transport lifetime
+
+The guest daemon owns its singleton, authenticated listeners and binding identity.
+`internal/guest/session` owns PTYs, terminal state, bounded history, control admission
+and final records. The workload runs as an unprivileged guest user; the privileged
+daemon keeps binding keys and administration inaccessible to that workload.
+Rebinding a copied guest retains its session manager while replacing its identity.
+
+An attachment has one control reader, one response writer and one bounded event
+queue. Opened is first. Control acknowledgements may interleave with the immutable
+bootstrap prefix; live terminal events follow that prefix. Clean request EOF drains
+a finite queued response boundary and detaches. Cancellation interrupts and joins
+stream I/O. Neither relays nor consumers replay uncertain terminal input. See
+[terminal sessions](terminal-sessions.md) for the complete streaming contract.
+
+Controller-to-host clients live with the controller. Guest transports live with
+verified machine bindings. The host owns credential renewal and fences replacement
+until installation is verified; caller cancellation cannot abandon renewal midway
+and expose an unverified binding. Common transport mechanics live in
+`internal/rpctransport`, while each endpoint retains its authorization policy.
+
+Shutdown first closes admission and cancels owned work, then joins handlers,
+stream workers and persistence before releasing databases, terminal state or locks.
+Guest shutdown terminates sessions concurrently and persists their final records.
+A shutdown deadline reports failure; it does not authorize freeing resources still
+used by background work. Controller and host restarts retain native VMs and PTYs.
+
+## Local development
+
+`clankerbox dev` starts the ordinary controller and persistent host service in a
+project-owned environment. Its manifest binds one immutable bundle identity and
+separate private host namespace. The CLI and Desk consume published configuration
+files. Stop/start retains that environment; moving identical bundle content repairs
+owned locators. Changing bundle content requires destroy/recreate. Teardown is
+resumable and acts only on resources recorded by that environment. See
+[local development](local-development.md).
 
 ## Private storage
-
-Local development uses the same controller and guest process boundaries through
-`clankerbox dev`. Its private local transport retains the one machine's operation
-journal and SSH identity, authenticates the controller's terminal key, and exposes
-only the guest proxy command. The detached guest outlives controller cancellation;
-explicit dev stop owns guest shutdown through a separate private Unix socket.
-Local sessions can select a default workspace without changing production guests'
-home-directory default or the guest wire protocol. See
-[local development](local-development.md).
 
 `statefs.Open(path)` owns creation and validation of a current-user-owned `0700`
 directory, returns a held directory handle, and rejects unsafe existing roots.
@@ -134,21 +131,9 @@ trusted; these checks are not a sandbox against that identity.
 The controller uses `controller.db` and `controller.lock`. The host retains
 `host.db`, its ownership marker, and its short initialization lock. The client has no durable pin or reservation state.
 
-## Retained-state cutover
+## Release boundary
 
-The controller command now requires `--state-dir`; `--db` has been removed.
-There is no dual-layout fallback. The repository records deployed infrastructure
-and retained journals, so this source refactor does not assume those can be reset.
-
-For an existing controller, stop the old service, retain a consistent SQLite
-backup, and place the retained database at `controller.db` inside the new private
-state directory. Preserve all committed WAL data when taking that backup; copying
-only the main file from a live database is not sufficient. Update the service to
-use `--state-dir`, and validate reopening and pending operations before removing
-the retained original. Database files and existing SQLite companions must be
-private regular files owned by the service user. Verify the containing directory
-and ancestors meet the contract above.
-
-No retained local journal or live deployment is moved by this code change.
-Historical spike commands using their own `--db` option are separate programs
-and retain their existing interfaces.
+The 0.3.0 format and RPC change requires empty application state and matching
+controller, host, guest and Desk releases. Deployment configuration and authorized
+reset procedures belong to personal-cloud. Ordinary subsequent service restarts
+retain journals, native machines and session identity; they are not resets.

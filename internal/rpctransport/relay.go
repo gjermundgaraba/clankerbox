@@ -65,17 +65,30 @@ func Relay(
 	up *connect.BidiStreamForClient[v1.AttachmentRequest, v1.AttachmentEvent],
 	first *v1.AttachmentRequest,
 ) error {
+	// An idle HTTP/2 request writer may still be reading Connect's io.Pipe
+	// after cancellation. Closing the pipe and response explicitly interrupts
+	// transport I/O so Receive can return and teardown can join its workers.
+	interrupted := make(chan struct{})
+	interrupt := func() {
+		defer close(interrupted)
+		_ = up.CloseRequest()
+		_ = up.CloseResponse()
+	}
+	stopInterrupt := context.AfterFunc(ctx, interrupt)
 	var controlsDone chan struct{}
 	defer func() {
-		// Cancel blocked sends before closing their request stream. CloseRequest
-		// may otherwise wait for a sender that is still waiting on flow control.
+		// Cancel transport writes and close both upstream directions before
+		// joining controls, including a send blocked on request flow control.
 		cancel()
+		if stopInterrupt() {
+			interrupt()
+		} else {
+			<-interrupted
+		}
 		_ = StopReading(ctx)
 		if controlsDone != nil {
 			<-controlsDone
 		}
-		_ = up.CloseRequest()
-		_ = up.CloseResponse()
 	}()
 	send := func(message *v1.AttachmentRequest) error {
 		timer := time.AfterFunc(StallTimeout, cancel)
