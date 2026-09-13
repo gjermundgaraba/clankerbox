@@ -14,7 +14,11 @@ surface.
 Applications run with credentials and configuration supplied by their users,
 inside the guest. Clankerbox stores no application credentials, performs no
 provider integration, and reports no activity or foreground-process metadata. The
-product surface is machines, checkpoints, operations and sessions.
+product surface is machines, checkpoints, operations and sessions. Forks and RAM
+restores resume inherited application processes as they are: Clankerbox neither
+quarantines their network traffic nor rotates application credentials, so a child
+may contact external services before preparation completes and duplicate external
+effects. Readiness gating covers Clankerbox identity, not application traffic.
 
 ## Consequences
 

@@ -17,11 +17,13 @@ schema is mounted on controller, host and guest listeners, each enforcing its ow
 authorization. Generated Go code and the TypeScript SDK are checked in. Guests
 report a single schema identifier; there is no version negotiation, fallback
 carrier or compatibility shim. A breaking contract change ships as one
-coordinated release of controller, host, guest and consumers, with application
-state reset while the product has no external users.
+coordinated release of controller, host, guest and consumers; mixed-version
+deployment is unsupported. Application state is reset only when persisted formats
+or runtime assumptions become incompatible, which the product accepts while it
+has no external users.
 
 ## Consequences
 
 Schema edits require regeneration and coordinated consumer updates. Private
-fields never appear in public messages. Mixed-version deployments are
-unsupported by design.
+fields never appear in public messages. A wire-only change keeps compatible
+journals, native machines and session identity across the coordinated restart.

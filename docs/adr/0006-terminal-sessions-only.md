@@ -23,5 +23,7 @@ credentials.
 
 Terminal interaction happens through Clankerdesk or another session-API consumer;
 the CLI lists sessions but is not a terminal client. Forks and RAM restores rebind
-guest identity and revoke inherited authentication before access is published.
-Bulk file transfer is not a product feature.
+guest identity and revoke inherited Clankerbox transport authentication before
+access is published; application processes and their credentials continue
+unchanged (see [0007](0007-no-application-credentials.md)). Bulk file transfer is
+not a product feature.
