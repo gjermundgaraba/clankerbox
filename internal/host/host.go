@@ -1,4 +1,4 @@
-// Package host owns the private host inventory and reconciles exact operation generations.
+// Package host runs machines natively on one host and journals every mutation.
 package host
 
 import (
@@ -438,22 +438,10 @@ func (h *Helper) Execute(ctx context.Context, req model.Request) model.Response 
 		}
 		return h.Inspect(ctx, req.MachineID)
 	}
-	if !model.ValidID(req.MachineID) || !model.ValidID(req.OperationID) || req.Generation < 1 {
-		return failure(req, model.NewError(model.ReasonInvalid, "invalid operation identity", false))
+	if err := validMutation(req); err != nil {
+		return failure(req, err)
 	}
-	switch req.Action {
-	case actionCreate,
-		actionStart,
-		actionStop,
-		actionDelete,
-		actionFork,
-		actionRestore,
-		actionCapture,
-		actionDeleteCheckpoint:
-	default:
-		return failure(req, model.NewError(model.ReasonUnsupported, "unsupported action", false))
-	}
-	// flock serializes separate stdin helper processes. A busy helper gives a retryable answer.
+	// Mutations run one at a time; a busy host answers with a retryable status.
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	lock, err := h.state.Lock(".lock", true)
@@ -823,7 +811,7 @@ func validEndpoint(m Manifest, endpoint string) error {
 	return nil
 }
 
-// All runtime names derive solely from immutable random IDs, never machine aliases.
+// machineDir is keyed by the machine ID, not its alias.
 func machineDir(cfg Config, m Manifest) string { return filepath.Join(cfg.Root, "machines", m.ID) }
 
 func compactError(err error, stderr string) error {

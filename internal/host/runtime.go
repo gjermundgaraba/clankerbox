@@ -337,13 +337,13 @@ func (n *NativeRuntime) Configure(ctx context.Context, m Manifest) error {
 }
 
 // Start starts the retained machine and waits for its observed running state.
+// After a host reboot it re-registers the supervisor unit without enabling boot startup.
 func (n *NativeRuntime) Start(ctx context.Context, m Manifest) error {
 	if m.Profile.Runtime == runtimeSmolvm {
 		if err := n.stageTemplates(m); err != nil {
 			return err
 		}
 	}
-	// Re-register retained units after a host reboot, without enabling boot startup.
 	if _, err := os.Stat(n.job(m)); err != nil {
 		return fmt.Errorf("persistent supervisor definition missing: %w", err)
 	}

@@ -1,4 +1,4 @@
-// Package model defines the version-one API and the private controller/helper protocol.
+// Package model defines the domain types shared by the services and the CLI.
 package model
 
 import (

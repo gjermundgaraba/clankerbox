@@ -1,5 +1,5 @@
-// Package protocol defines durable session values and manager operations.
-// Generated clankerbox.v1 messages define the transport contract.
+// Package protocol defines the session values and manager operations used
+// inside the guest.
 package protocol
 
 import (

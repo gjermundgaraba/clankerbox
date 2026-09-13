@@ -1,5 +1,5 @@
-// Package rpctransport owns authenticated HTTP/2 connections shared by colocated
-// and remote services. It never resolves an application-supplied relay endpoint.
+// Package rpctransport provides the authenticated HTTP/2 connections shared by
+// colocated and remote services.
 package rpctransport
 
 import (

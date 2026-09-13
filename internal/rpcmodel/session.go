@@ -11,8 +11,6 @@ import (
 )
 
 // ToSession preserves session lifecycle metadata and optional completion fields.
-//
-//nolint:gosec // Session validation bounds grid dimensions, PID and exit status.
 func ToSession(s protocol.Session) *v1.Session {
 	out := &v1.Session{
 		Id:               s.ID,
@@ -141,7 +139,7 @@ func FromOpen(r *v1.Open) (protocol.OpenArgs, error) {
 		out.FromOffset = clonePointer(&r.ResumeCursor.Offset)
 		out.FromIncarnation = r.GetResumeCursor().GetIncarnation()
 	}
-	// RPC offsets are full uint64. Do not apply the old JSON-number transport bound.
+	// Offsets are full uint64 and need no bound.
 	if err := (protocol.SessionArgs{SessionID: out.SessionID}).Validate(); err != nil {
 		return out, err
 	}
@@ -196,8 +194,8 @@ func FromOpened(value *v1.Opened) (protocol.OpenValue, error) {
 		}
 		out.View = &protocol.View{
 			Cursor: protocol.Cursor{
-				X: uint16(value.GetView().GetCursor().GetX()), //nolint:gosec // Cursor bounds checked above.
-				Y: uint16(value.GetView().GetCursor().GetY()), //nolint:gosec // Cursor bounds checked above.
+				X: uint16(value.GetView().GetCursor().GetX()),
+				Y: uint16(value.GetView().GetCursor().GetY()),
 			},
 			Bytes: value.GetView().GetBytes(),
 		}
@@ -206,8 +204,6 @@ func FromOpened(value *v1.Opened) (protocol.OpenValue, error) {
 }
 
 // ToGuestDescription projects the authenticated guest identity and engine handshake.
-//
-//nolint:gosec // The session manager bounds the maximum session count.
 func ToGuestDescription(machineID string, h protocol.Hello) *v1.GuestDescription {
 	return &v1.GuestDescription{
 		MachineId:     machineID,
