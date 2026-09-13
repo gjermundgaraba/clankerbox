@@ -5,7 +5,7 @@
   "runtime_patch_sha256": "8ec0f09eb799d1d8e6b0ec9d7dfbfe0b54c694c8621bf65adaea0be0ccd08af2",
   "hashes": {
     "release-mac.tar.gz": "27f2ae7057f235a67a58fd13d0657c268cf9a16f214f8b177427d29daab0ae2f",
-    "target/debug/smolvm": "3da18e546ed1a15ef54e4cfe7d994138a55a6f788e91ff2685f77f9549139a7d",
+    "target/release/smolvm": "6a8e4d6548f9db20389381a209d3ccbba187d8f584b50dc237ed08fece99d97d",
     "agent-target/aarch64-unknown-linux-musl/release/smolvm-agent": "4a865968574287f672d0b3b7e34ff3a8454caafa77ec812eb0d7de6a80d03880",
     "sentinel-arm64": "79bf74d14e89155685934717af80882445b15d64e02205ec6c4a32575d50e3bd",
     "sentinel-amd64": "1aa8d439de8f635c08355fb2efb14b549d1c02ff2d13d1276f77ea6db5186fc2",

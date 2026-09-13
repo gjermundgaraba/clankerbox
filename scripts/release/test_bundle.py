@@ -173,7 +173,7 @@ class RuntimeInputTests(unittest.TestCase):
             json.dumps(
                 {
                     'hashes': {
-                        'target/debug/smolvm': bundle.sha(self.args.engine),
+                        'target/release/smolvm': bundle.sha(self.args.engine),
                         'agent-target/aarch64-unknown-linux-musl/release/smolvm-agent': bundle.sha(agent),
                     },
                     'runtime_patch_sha256': bundle.sha(inputs / 'runtime.patch'),

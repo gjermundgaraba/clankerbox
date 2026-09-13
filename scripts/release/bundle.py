@@ -58,7 +58,7 @@ def content_digest(files):
 
 def verify_inputs(args):
     pins = json.loads((ROOT / 'scripts/release/inputs/pins.json').read_text())
-    expected_engine = pins['hashes']['target/debug/smolvm'] if args.os == 'darwin' else pins['linux_cli_sha256']
+    expected_engine = pins['hashes']['target/release/smolvm'] if args.os == 'darwin' else pins['linux_cli_sha256']
     if sha(args.engine) != expected_engine:
         raise ValueError('engine does not match qualified platform binary')
     if sha(ROOT / 'scripts/release/inputs/runtime.patch') != pins['runtime_patch_sha256']:
