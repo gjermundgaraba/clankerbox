@@ -25,7 +25,7 @@ Create `~/.config/clankerbox/config.json` with your API origin and local files:
 {
   "url": "https://YOUR_CONTROLLER",
   "token_file": "token",
-  "default_profile": "linux-dev-v2"
+  "default_profile": "linux-dev-v3"
 }
 ```
 
@@ -57,7 +57,7 @@ completed operation. Failure, unresolved status, timeout or a lost operation rea
 returns nonzero with the known operation and resource IDs. A timed-out operation
 may continue: inspect it before deciding to retry. Waiting never resubmits a
 mutation. Stopped machines require an explicit `start`; connecting never wakes
-them. Deletion requires a stopped machine. Runtime rules still apply: Mac
+them. Deletion requires a stopped machine. Runtime rules still apply: Tart macOS guest
 forks/captures require a stopped source.
 
 Resource flags can appear before or after positionals, for example

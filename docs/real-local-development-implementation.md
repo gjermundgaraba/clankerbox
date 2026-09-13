@@ -1,8 +1,10 @@
 # Real local development implementation record
 
 This is the implementation and qualification record for
-[the agreed plan](real-local-development-plan.md). Production cutover and release
-publication remain pending; candidate artifacts below are qualification builds.
+[the agreed plan](real-local-development-plan.md). Release [0.2.0](https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.2.0)
+is published from signed commit `a31ac754e0c81d0af3d75edef307fd5d26498e70`.
+Production cutover remains in progress; older candidate records below are
+qualification evidence.
 
 ## Implemented boundaries
 
@@ -41,8 +43,8 @@ identity, embedded usage description and an explicit per-user Local Network gran
 
 | Target / topology | Qualified behavior | Remaining work |
 |---|---|---|
-| macOS arm64 → smolvm Linux arm64 | Native retained lifecycle, RAM fork with independent memory/disks, portable RAM restore after source deletion, root/unprivileged boundary, real Desk terminal, live shell across controller/host replacement | Release publication |
-| Linux amd64 → smolvm Linux amd64 | Native retained lifecycle/fork/capture/restore, two concurrent installed environments, dirty Git/files/modes retained across cold restart, two real Desk browser viewers | Release publication |
+| macOS arm64 → smolvm Linux arm64 | Native retained lifecycle, RAM fork with independent memory/disks, portable RAM restore after source deletion, root/unprivileged boundary, real Desk terminal, live shell across controller/host replacement | Complete |
+| Linux amd64 → smolvm Linux amd64 | Native retained lifecycle/fork/capture/restore, two concurrent installed environments, dirty Git/files/modes retained across cold restart, two real Desk browser viewers | Complete |
 | macOS arm64 → Tart macOS arm64 | Isolated copied seed, typed TLS guest/session route, unprivileged shell, resize/resume, cold disk retention and LOST old sessions | Production installation and public topology verification |
 | Node/Go → HTTP/2 h2c, Unix and TLS | Full bidi before request EOF, 8 MiB chunked snapshots, offsets above 2^53, bounded slow reader, cancellation and negative trust/identity | Final production endpoint verification |
 | Actual edge Caddy 2.11.4 → isolated HTTP/2 test upstream | Verified TLS frontend and bidi/chunk/cancellation/slow-reader gates | Final production controller/host/guest topology |
@@ -153,8 +155,8 @@ TypeScript 2,900, and Protobuf 441. The retired JSON wire definitions remove
 other test helpers; the architecture trades old transports for real supervision,
 identity, packaging, and durable host service ownership.
 
-Release publication, production backups, fenced migration and live deployment
-verification are not complete. Signed Clankerbox source is pushed and the Clankerdesk signed source/image CI
+The release is published. Production backups, fenced migration and live deployment
+verification are still in progress. Signed Clankerbox source is pushed and the Clankerdesk signed source/image CI
 passed. The canonical 1Password Environment now works; the initially reported
 missing UniFi key was a transient read result, not an absent key.
 The isolated Tart system service passed after the user granted Local Network
@@ -164,8 +166,8 @@ was incorrect. Host replacement preserved live sessions and the permission grant
 A fresh cold cycle exposed and then verified a bounded read-only guest-agent
 readiness wait; no bootstrap mutation is retried by that wait. Tart restart,
 resize/resume, retained disks, new cold incarnation and LOST old sessions passed.
-The exact controller-to-Mac RPC firewall allow is installed; product services and
-retained production VMs have not yet been cut over.
+The exact controller-to-Mac RPC firewall allow is installed; the Linux host and retained active VM are now migrated, while final Mac startup
+and public/Desk admission are awaiting the administrator step.
 No qualification gap is represented as a deployed support claim.
 
 Candidate archive hashes and consumer extraction results are recorded separately
@@ -202,3 +204,72 @@ It retained dirty Git, file/mode/symlink state through cold start and rejected
 stopped-session access. The test-only session adapter was prebuilt separately;
 no product toolchain ran during installation. Evidence:
 `.work/real-local-release/mac-rc5-{consumer,lifecycle}.json`.
+
+## Published release
+
+Both final 0.2.0 archives passed checksum verification, clean extraction with no
+warnings, adjacent-manifest validation, installed `dev` readiness with no Go/Rust
+on PATH, empty initial inventory and complete environment/service cleanup.
+The actual full lifecycle/checkpoint and browser contracts above qualify the
+unchanged runtime/image identities. GNU archive headers preserve literal Unicode
+links without Apple normalization or GNU tar PAX warnings.
+
+| Platform | Published archive SHA256 |
+|---|---|
+| darwin-arm64 | `f4ab139fa8eab01e0a632a8b12d08b6f0e0c8ae9ae5121c3888e3f144e69c214` |
+| linux-amd64 | `cca239bd0e83a126a6b649aa8bcf9db2aca41fa90a9805076a41c465d365a4a9` |
+
+All eight uploaded assets matched local sizes and SHA256, including checksums
+and corresponding libkrun/libkrunfw/kernel source archives. Final consumer evidence
+is `.work/real-local-release/mac-shipping-consumer.json` and
+`.work/linux-shipping-consumer-smoke/`. Clankerdesk's signed commit
+`f7d566982209b5b6b04e41f1a8e7874ec1688375` passed quality and image CI; its
+published container digest is
+`sha256:e879e1fd7ab618d0e5d3b80cf72f2904ad0b4d7a0a56819308670440a3910d4d`.
+
+## Production cutover in progress — 2026-09-13
+
+The public Clankerbox route returns maintenance 503. The controller and Desk are
+stopped. All four consistent SQLite backup sets passed integrity checks, with
+separate verified controller/private-state and Desk ancillary archives. The exact
+active VM was gracefully stopped and its complete sparse native store copied and
+verified before native changes. Audit attempt: `rpc-20260913-cutover-final`.
+
+The bounded controller and Linux-host metadata stamps added retained image pin
+`498c31d409a93ab9a07fb2664650d4a2004f58a570d033d9a9e25cf95ef38f64` only to
+machine `ad8cd000ed13c8996c30fe8a7eace330`, preserving other rows, operation
+fingerprints and tombstones. That same machine/generation 3 now runs through
+port 22202 → guest 7443. Managed guest SSH is retired; root daemon and
+unprivileged UID/GID 32001 checks passed, including a second cold boot. Original
+workspace directories remain empty. Native startup grew the existing disk files
+in place to their declared 4/16 GiB sizes; original inodes and birth dates were
+retained. This is disk retention and a controlled cold transition, not RAM or
+byte-for-byte disk continuity.
+
+The Linux host service is active and controller-to-host mTLS/HTTP2 description
+and guest routing passed; missing client credentials and an untrusted server CA
+were rejected. Orphan `3170fea0cfbb72c9d7bb74d5d75b940b` remains running,
+quarantined and unchanged. Its live disks were deliberately not copied as a
+purported consistent backup.
+
+Mac candidate5 signed host, guest, profile pins and role credentials are promoted
+with preimages saved. Its production system service is not yet installed. The
+specific remaining administrator command is:
+
+```sh
+ssh -t mac-workstation 'sudo /Users/example/clankerbox-cutover/rpc-20260913-candidate5/finish-mac-cutover --install-and-start'
+```
+
+The wrapper removes only the empty qualification service, installs the pinned
+production metadata, and starts it as `gg`. After that step: verify both host
+identities, start the prepared controller, restore the verified RPC ingress,
+deploy the pinned Desk image, run actual public session/lifecycle/checkpoint and
+browser/restart acceptance, then retire only the inventoried managed host SSH
+artifacts and record completion. Do not restart the old controller/Desk against
+the new guest protocol as a shortcut; rollback has an explicit post-migration
+boundary and requires the matching backed-up state/configuration.
+
+The operator's `clankerbox` command now resolves to the published immutable
+macOS bundle under `~/.local/share/clankerbox/releases/v0.2.0/`. The previous CLI
+and config are backed up outside the checkout under personal-cloud's operator
+state. The new client defaults to `linux-dev-v3`; operator SSH keys are preserved.

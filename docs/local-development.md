@@ -18,8 +18,9 @@ build. Other Linux distributions and older macOS releases have not been qualifie
 
 ## Install and start
 
-Download the self-contained archive for your host platform from the private
-release using your normal repository access, then extract it. The archive places
+Download the self-contained archive and checksum for your host platform from
+[release 0.2.0](https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.2.0)
+using your normal private repository access. Verify SHA256 before extraction. The archive places
 `clankerbox` beside `bundle.json` and all verified controller, host, guest,
 smolvm/libkrun/agent, image and profile payloads. Add that extracted directory to
 PATH or invoke its CLI by absolute path. Keep the archive's directory layout and
