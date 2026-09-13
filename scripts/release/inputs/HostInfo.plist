@@ -9,7 +9,7 @@
 	<key>CFBundleName</key>
 	<string>Clankerbox Host</string>
 	<key>CFBundleVersion</key>
-	<string>0.2.0</string>
+	<string>0.3.0</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Clankerbox Host connects to your locally managed virtual machines to provide authenticated terminal sessions.</string>
 </dict>

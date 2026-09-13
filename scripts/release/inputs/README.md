@@ -20,7 +20,6 @@
 The runtime inventories were taken from the qualified v0.3.0 release archives,
 verified against their published SHA256 files and GitHub asset digests, and
 checked against each archive's `bundle.json`. Their provenance fields record the
-archive URL and hash, manifest hash, source commit and qualification record;
-assembly enforces only the `files` lists. Update them only from a separately
-qualified release: hashing whatever is in a proposed `--runtime-assets`
-directory does not establish qualification.
+archive URL and hash and the manifest hash; assembly enforces only the `files`
+lists. Update them only from a separately qualified release: hashing whatever
+is in a proposed `--runtime-assets` directory does not establish qualification.
