@@ -4,6 +4,7 @@ import pathlib
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 
@@ -24,6 +25,8 @@ class InventoryTests(unittest.TestCase):
             extracted = pathlib.Path(directory) / 'extracted'
             extracted.mkdir()
             subprocess.run(['tar', '-xzpf', str(archive), '-C', str(extracted)], check=True)
+            with tarfile.open(archive) as contents:
+                self.assertFalse(any('hdrcharset' in item.pax_headers for item in contents))
             self.assertEqual(os.readlink(extracted / 'link'), target)
             self.assertEqual((extracted / 'link').read_text(), 'certificate')
 

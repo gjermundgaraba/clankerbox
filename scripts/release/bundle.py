@@ -59,12 +59,12 @@ def package_archive(out):
     archive=out.with_name(out.name+'.tar.gz')
     if archive.exists():
         raise FileExistsError('refusing to replace archive: ' + str(archive))
-    with tarfile.open(archive,'w:gz',format=tarfile.PAX_FORMAT,dereference=False,compresslevel=3) as tar:
+    with tarfile.open(archive,'w:gz',format=tarfile.GNU_FORMAT,dereference=False,compresslevel=3) as tar:
         def normalize(info):
             info.uid=info.gid=0;info.uname=info.gname='';info.mtime=0
-            # Apple libarchive otherwise normalizes Unicode symlink targets.
-            # BINARY preserves literal path/link bytes on both host platforms.
-            info.pax_headers={'hdrcharset':'BINARY'}
+            # GNU headers preserve literal Unicode link bytes on Apple tar
+            # without PAX hdrcharset warnings on GNU tar.
+            info.pax_headers={}
             return info
         for path in sorted(out.iterdir()):tar.add(path,arcname=path.name,filter=normalize)
     checksum=sha(archive)
