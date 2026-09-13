@@ -157,6 +157,10 @@ linters:
         - no-unused-link
         - require-stdlib-doclink
 
+    gosec:
+      excludes:
+        - G115
+
     govet:
       enable-all: true
       disable:

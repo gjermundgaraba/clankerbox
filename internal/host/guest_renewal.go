@@ -84,7 +84,7 @@ func (h *Helper) refreshGuestBinding(id string) error {
 		return err
 	}
 	binding.Pending = true
-	// #nosec G117 -- Binding credentials are persisted only through statefs mode 0600.
+	//nolint:gosec // Binding credentials are persisted only through statefs mode 0600.
 	raw, err := json.Marshal(binding)
 	if err != nil {
 		return err

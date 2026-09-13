@@ -39,7 +39,7 @@ func testGuest(t *testing.T) (*identity, *session.Manager, *rpcidentity.Authorit
 	t.Helper()
 	state, err := filepath.EvalSymlinks(t.TempDir())
 	state = mustValue(t, state, err)
-	// #nosec G302 -- A private directory requires owner search permission.
+	//nolint:gosec // A private directory requires owner search permission.
 	if err = os.Chmod(state, 0700); err != nil {
 		t.Fatal(err)
 	}

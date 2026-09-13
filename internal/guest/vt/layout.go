@@ -69,7 +69,7 @@ func (l *layout) value(typeName, member string) (uint32, error) {
 	if !ok {
 		return 0, fmt.Errorf("missing Ghostty enum %s.%s", typeName, member)
 	}
-	return uint32(int32(v)), nil //nolint:gosec // Enum members are C ints; the wire value is their two's complement.
+	return uint32(int32(v)), nil
 }
 
 func (l *layout) field(typeName, name string) (fieldInfo, error) {

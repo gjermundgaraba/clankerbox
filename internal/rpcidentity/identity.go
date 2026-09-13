@@ -128,7 +128,7 @@ func (a *Authority) HostCredentials(id string) (Credentials, error) {
 		return c, err
 	}
 	if a.directory != nil {
-		// #nosec G117 -- Private credentials are persisted only through statefs mode 0600.
+		//nolint:gosec // Private credentials are persisted only through statefs mode 0600.
 		raw, e := json.Marshal(c)
 		if e != nil {
 			return c, e

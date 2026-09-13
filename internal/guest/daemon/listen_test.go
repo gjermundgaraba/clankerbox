@@ -25,7 +25,7 @@ func TestListenRejectsOversizedPathBeforeUnlink(t *testing.T) {
 	if err := s.listen(t.Context(), Options{Paths: Paths{Socket: path}, Listen: "127.0.0.1:0"}); err == nil {
 		t.Fatal("oversized socket path accepted")
 	}
-	// #nosec G304 -- path is a test-owned temporary file.
+	//nolint:gosec // path is a test-owned temporary file.
 	raw, err := os.ReadFile(path)
 	if err != nil || string(raw) != retained {
 		t.Fatalf("invalid socket path was modified: %q, %v", raw, err)

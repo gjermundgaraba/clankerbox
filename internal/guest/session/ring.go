@@ -48,7 +48,7 @@ func (r *ring) slice(from uint64) []byte {
 	if from < r.start || from > r.end {
 		return nil
 	}
-	skip := int(from - r.start) //nolint:gosec // Bounded by capacity.
+	skip := int(from - r.start)
 	n := r.size - skip
 	out := make([]byte, n)
 	pos := (r.head + skip) % len(r.buf)

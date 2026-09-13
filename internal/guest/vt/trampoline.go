@@ -33,7 +33,7 @@ const (
 // module tableModule and function "cbk" from module hostModule with the given
 // i32 parameter count and optional i32 result.
 func trampoline(tableModule, hostModule string, params int, returns bool) []byte {
-	sig := []byte{typeFunc, byte(params)} //nolint:gosec // Callback arity is at most four.
+	sig := []byte{typeFunc, byte(params)}
 	for range params {
 		sig = append(sig, valueI32)
 	}
@@ -61,7 +61,7 @@ func trampoline(tableModule, hostModule string, params int, returns bool) []byte
 
 	// install: (table.grow 0 (ref.func 0) (i32.const 1)) returns the old size.
 	body := []byte{0, opRefFunc, 0, opI32Const, 1, opPrefixFC, opTableGrow, 0, opEnd}
-	code := append([]byte{1, byte(len(body))}, body...) //nolint:gosec // The body is nine bytes.
+	code := append([]byte{1, byte(len(body))}, body...)
 
 	module := []byte(wasmMagicVersion)
 	module = append(module, wasmSection(sectionType, types)...)

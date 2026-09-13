@@ -16,8 +16,8 @@ func processStartTime(pid int) (uint64, error) {
 		return 0, fmt.Errorf("read process info: %w", err)
 	}
 	start := info.Proc.P_starttime
-	seconds := uint64(start.Sec)       //nolint:gosec // Timestamps are non-negative.
-	microseconds := uint64(start.Usec) //nolint:gosec // Timestamps are non-negative.
+	seconds := uint64(start.Sec)
+	microseconds := uint64(start.Usec)
 	return seconds*microsecondsPerSecond + microseconds, nil
 }
 

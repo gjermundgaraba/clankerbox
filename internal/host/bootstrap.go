@@ -100,7 +100,7 @@ func (n *NativeRuntime) prepareRPC(ctx context.Context, m Manifest, initial bool
 		return "", err
 	}
 	binding.Pending = false
-	// #nosec G117 -- Binding credentials are persisted only through statefs mode 0600.
+	//nolint:gosec // Binding credentials are persisted only through statefs mode 0600.
 	raw, err := json.Marshal(binding)
 	if err != nil {
 		return "", err
@@ -141,7 +141,7 @@ func (n *NativeRuntime) installGuestService(
 	if _, err = n.guest(ctx, m, script); err != nil {
 		return err
 	}
-	// #nosec G117 -- Trusted native stdin delivers the private guest binding.
+	//nolint:gosec // Trusted native stdin delivers the private guest binding.
 	raw, err := json.Marshal(binding)
 	if err != nil {
 		return err

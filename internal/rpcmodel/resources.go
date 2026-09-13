@@ -29,8 +29,6 @@ const (
 )
 
 // ToProfile derives discovery capabilities from the portable profile.
-//
-//nolint:gosec // Profile validation bounds CPU, memory and storage values.
 func ToProfile(p model.Profile) *v1.Profile {
 	return &v1.Profile{
 		Id:           p.ID,
@@ -77,8 +75,6 @@ func FromProfile(p *v1.Profile) (model.Profile, error) {
 }
 
 // ToHost projects public host capacity and reservation accounting.
-//
-//nolint:gosec // Host validation bounds capacity and reservation values.
 func ToHost(h model.HostStatus) *v1.Host {
 	return &v1.Host{
 		Id:              h.ID,

@@ -102,16 +102,15 @@ func (runner commandRunner) createMachine(
 }
 
 func (runner commandRunner) mutateMachine(ctx context.Context, command, target, idem string, wait *waitOptions) error {
-	m, resolveErr2 := runner.api.Resolve(ctx, target)
-	if resolveErr2 != nil {
-		return resolveErr2
+	m, err := runner.api.Resolve(ctx, target)
+	if err != nil {
+		return err
 	}
-	id, resolveErr2 := requestKey(idem)
-	if resolveErr2 != nil {
-		return resolveErr2
+	id, err := requestKey(idem)
+	if err != nil {
+		return err
 	}
 	var operation model.Operation
-	var err error
 	switch command {
 	case "start":
 		operation, err = runner.api.StartMachine(ctx, m.ID, id)

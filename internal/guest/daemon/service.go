@@ -44,17 +44,13 @@ func (s *service) CreateSession(
 		return nil, rpcmodel.ToError(err)
 	}
 	var record protocol.Session
-	var opErr error
-	err = s.identity.withIdentity(
-		ctx,
-		r.Msg.GetMachineId(),
-		func() error { record, opErr = s.manager.Create(a); return nil },
-	)
+	err = s.identity.withIdentity(ctx, r.Msg.GetMachineId(), func() error {
+		var createErr error
+		record, createErr = s.manager.Create(a)
+		return createErr
+	})
 	if err != nil {
 		return nil, rpcmodel.ToError(err)
-	}
-	if opErr != nil {
-		return nil, rpcmodel.ToError(opErr)
 	}
 	return connect.NewResponse(rpcmodel.ToSession(record)), nil
 }
@@ -80,13 +76,13 @@ func (s *service) EndSession(
 	ctx context.Context,
 	r *connect.Request[v1.EndSessionRequest],
 ) (*connect.Response[v1.Session], error) {
-	record, opErr := s.identity.acceptEnd(
+	record, err := s.identity.acceptEnd(
 		ctx,
 		r.Msg.GetMachineId(),
 		func() (protocol.Session, error) { return s.manager.End(r.Msg.GetSessionId()) },
 	)
-	if opErr != nil {
-		return nil, rpcmodel.ToError(opErr)
+	if err != nil {
+		return nil, rpcmodel.ToError(err)
 	}
 	return connect.NewResponse(rpcmodel.ToSession(record)), nil
 }
@@ -171,7 +167,6 @@ func (s *streamSink) SendSnapshot(data []byte) error {
 func (s *streamSink) SendOutput(next uint64, data []byte) error {
 	for len(data) > 0 {
 		n := min(len(data), chunkBytes)
-		// #nosec G115 -- n never exceeds len(data).
 		offset := next - uint64(len(data)-n)
 		if err := s.put(
 			&v1.AttachmentEvent{
@@ -251,17 +246,13 @@ func (s *service) AttachSession(
 	sink := &streamSink{ctx: ctx, cancel: cancel, queue: make(chan queued, sinkQueueSize)}
 	var value protocol.OpenValue
 	var attachment *session.Attachment
-	var opErr error
-	err = s.identity.withIdentity(
-		ctx,
-		open.GetMachineId(),
-		func() error { value, attachment, opErr = s.manager.Open(a, sink); return nil },
-	)
+	err = s.identity.withIdentity(ctx, open.GetMachineId(), func() error {
+		var openErr error
+		value, attachment, openErr = s.manager.Open(a, sink)
+		return openErr
+	})
 	if err != nil {
 		return rpcmodel.ToError(err)
-	}
-	if opErr != nil {
-		return rpcmodel.ToError(opErr)
 	}
 	if attachment != nil {
 		defer attachment.Stop()

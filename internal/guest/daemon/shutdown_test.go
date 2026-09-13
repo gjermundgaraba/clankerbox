@@ -16,7 +16,7 @@ func TestShutdownRetainsStateUntilHandlersJoin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// #nosec G302 -- Private state needs owner search permission.
+	//nolint:gosec // Private state needs owner search permission.
 	if err = os.Chmod(path, 0o700); err != nil {
 		t.Fatal(err)
 	}

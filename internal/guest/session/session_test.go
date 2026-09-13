@@ -490,14 +490,14 @@ func TestExitOutcomesAndLostOnRestart(t *testing.T) {
 func unfinishedManifest(t *testing.T, stateDir, id string) func() {
 	t.Helper()
 	manifestPath := filepath.Join(stateDir, "sessions", id, "manifest.json")
-	// #nosec G304 -- Test-owned temporary state and session UUID.
+	//nolint:gosec // Test-owned temporary state and session UUID.
 	unfinished, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return func() {
 		t.Helper()
-		// #nosec G703 -- Restore only the test-owned manifest read above.
+		//nolint:gosec // Restore only the test-owned manifest read above.
 		if writeErr := os.WriteFile(manifestPath, unfinished, 0o600); writeErr != nil {
 			t.Fatal(writeErr)
 		}

@@ -16,7 +16,7 @@ func TestRetainedAuthorityAndHostCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// #nosec G302 -- A private directory requires owner search permission.
+	//nolint:gosec // A private directory requires owner search permission.
 	if err = os.Chmod(root, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func TestIdentityNamesCannotEscapeCredentialDirectory(t *testing.T) {
 func TestCorruptAuthorityIsNeverReplaced(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	// #nosec G302 -- Directory search permission is required.
+	//nolint:gosec // Directory search permission is required.
 	if err := os.Chmod(root, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestCorruptAuthorityIsNeverReplaced(t *testing.T) {
 	if _, err := rpcidentity.LoadOrCreate(root); err == nil {
 		t.Fatal("corrupt retained authority accepted")
 	}
-	// #nosec G304 -- path is a test-owned temporary credential file.
+	//nolint:gosec // path is a test-owned temporary credential file.
 	raw, err := os.ReadFile(path)
 	if err != nil || string(raw) != "retained but corrupt" {
 		t.Fatal("corrupt authority silently replaced")

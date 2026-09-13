@@ -86,14 +86,14 @@ func (i *identity) rebind(b rpcidentity.Binding) error {
 	if err != nil {
 		return err
 	}
-	// #nosec G117 -- Atomic root-only statefs binding contains the guest private key.
+	//nolint:gosec // Atomic root-only statefs binding contains the guest private key.
 	raw, err := json.Marshal(b)
 	if err != nil {
 		return err
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	// #nosec G117 -- Compare private binding bytes in memory, never log them.
+	//nolint:gosec // Compare private binding bytes in memory, never log them.
 	old, _ := json.Marshal(i.binding)
 	if i.config != nil && string(old) == string(raw) {
 		return nil

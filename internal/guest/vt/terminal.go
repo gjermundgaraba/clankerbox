@@ -172,7 +172,7 @@ func (t *Terminal) loadLayout() error {
 	if err != nil {
 		return err
 	}
-	start := uint32(ptr) //nolint:gosec // wasm32 pointers fit in 32 bits.
+	start := uint32(ptr)
 	end := start
 	for {
 		b, ok := t.mem.ReadByte(end)
@@ -269,7 +269,7 @@ func (t *Terminal) bindCallback(id, option string, params int, fn any) error {
 	if err != nil {
 		return fmt.Errorf("install callback: %w", err)
 	}
-	if len(index) != 1 || int32(index[0]) < 0 { //nolint:gosec // table.grow reports -1 as failure.
+	if len(index) != 1 || int32(index[0]) < 0 {
 		return errTableGrow
 	}
 	t.callbacks[option] = index[0]
@@ -392,7 +392,7 @@ func (t *Terminal) encodeWithSizeQuery(encode func(ptr, capacity uint32) (uint64
 	if err != nil {
 		return nil, err
 	}
-	if code := int32(status); code != resultOutOfSpace && code != resultSuccess { //nolint:gosec // C int result.
+	if code := int32(status); code != resultOutOfSpace && code != resultSuccess {
 		return nil, fmt.Errorf("ghostty operation failed (%d)", code)
 	}
 	size, err := t.u32(t.scratch)
@@ -408,7 +408,7 @@ func (t *Terminal) encodeWithSizeQuery(encode func(ptr, capacity uint32) (uint64
 	if err != nil {
 		return nil, err
 	}
-	if code := int32(status); code != resultSuccess { //nolint:gosec // C int result.
+	if code := int32(status); code != resultSuccess {
 		return nil, fmt.Errorf("ghostty operation failed (%d)", code)
 	}
 	written, err := t.u32(t.scratch)
@@ -430,7 +430,7 @@ func (t *Terminal) Restore(snapshot []byte) error {
 	if t.closed {
 		return errClosed
 	}
-	size := uint32(max(len(snapshot), 1)) //nolint:gosec // Snapshots are bounded far below 4 GiB.
+	size := uint32(max(len(snapshot), 1))
 	ptr, err := t.alloc(size)
 	if err != nil {
 		return err
@@ -453,7 +453,7 @@ func (t *Terminal) Restore(snapshot []byte) error {
 		return err
 	}
 	defer func() { _ = t.call("ghostty_snapshot_decoder_free", uint64(decoder)) }()
-	replacement, err := t.decode(decoder, uint32(len(snapshot))) //nolint:gosec // Bounded above.
+	replacement, err := t.decode(decoder, uint32(len(snapshot)))
 	if err != nil {
 		return err
 	}
@@ -635,7 +635,7 @@ func (t *Terminal) formatterOptions() (allocation, error) {
 			return out, fieldErr
 		}
 		if w.byte {
-			if !t.mem.WriteByte(ptr+f.Offset, byte(w.value)) { //nolint:gosec // Boolean option fields hold 0 or 1.
+			if !t.mem.WriteByte(ptr+f.Offset, byte(w.value)) {
 				return out, errMemory
 			}
 		} else if !t.mem.WriteUint32Le(ptr+f.Offset, w.value) {
@@ -746,7 +746,7 @@ func (t *Terminal) checked(name string, args ...uint64) error {
 	if err != nil {
 		return err
 	}
-	if code := int32(status); code != resultSuccess { //nolint:gosec // C int result.
+	if code := int32(status); code != resultSuccess {
 		return fmt.Errorf("%s failed (%d)", name, code)
 	}
 	return nil
@@ -760,7 +760,7 @@ func (t *Terminal) alloc(size uint32) (uint32, error) {
 	if ptr == 0 {
 		return 0, errAllocation
 	}
-	return uint32(ptr), nil //nolint:gosec // wasm32 pointer.
+	return uint32(ptr), nil
 }
 
 func (t *Terminal) free(ptr, size uint32) {
