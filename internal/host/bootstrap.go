@@ -104,6 +104,9 @@ func (n *NativeRuntime) installGuestService(
 	binding rpcidentity.Binding,
 	initial bool,
 ) error {
+	if err := n.waitGuestExecution(ctx, m); err != nil {
+		return err
+	}
 	guestState := guestStatePath(m)
 	guestBinding := guestState + "/binding.json"
 	binary, err := (&Helper{cfg: n.Config}).guestBinary(m)
@@ -250,4 +253,35 @@ chown 0:0 "$state_dir"
 chmod 700 "$state_dir"
 `
 	return privilegedScript(m, s), nil
+}
+
+// Tart reports a running VM before its guest agent accepts exec requests.
+// Retry only a side-effect-free readiness command, never bootstrap mutations.
+func (n *NativeRuntime) waitGuestExecution(ctx context.Context, m Manifest) error {
+	if m.Profile.Runtime != runtimeTart {
+		return nil
+	}
+	const agentReadyTimeout = 90 * time.Second
+	ready, cancel := context.WithTimeout(ctx, agentReadyTimeout)
+	defer cancel()
+	var last error
+	for {
+		probe, done := context.WithTimeout(ready, connectionTimeout)
+		_, last = n.Runner.Run(
+			probe,
+			n.Config.TartPath,
+			[]string{runtimeExec, m.RuntimeName(), "/usr/bin/true"},
+			n.env(m),
+			nil,
+		)
+		done()
+		if last == nil {
+			return nil
+		}
+		select {
+		case <-ready.Done():
+			return fmt.Errorf("waiting for Tart guest execution: %w (last probe: %w)", ready.Err(), last)
+		case <-time.After(time.Second):
+		}
+	}
 }

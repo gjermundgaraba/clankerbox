@@ -33,8 +33,9 @@ POSIX modes. Semantic runtime/image hashes include metadata and exclude install
 paths. Generic Ubuntu/Node images contain no workstation identity or guest SSH
 service. Compressed disk templates expand only in owned runtime caches. Release
 assembly checks the qualified engine, agent and patch hashes, includes notices,
-and produces self-contained archives with checksums. macOS binaries use ad-hoc
-signatures; these are not Developer ID notarized releases.
+and produces self-contained archives with checksums. macOS development bundles use ad-hoc signatures; these are not Developer ID
+notarized releases. The production Tart host uses a stable Apple-issued signing
+identity, embedded usage description and an explicit per-user Local Network grant.
 
 ## Platform and transport evidence
 
@@ -42,7 +43,7 @@ signatures; these are not Developer ID notarized releases.
 |---|---|---|
 | macOS arm64 → smolvm Linux arm64 | Native retained lifecycle, RAM fork with independent memory/disks, portable RAM restore after source deletion, root/unprivileged boundary, real Desk terminal, live shell across controller/host replacement | Release publication |
 | Linux amd64 → smolvm Linux amd64 | Native retained lifecycle/fork/capture/restore, two concurrent installed environments, dirty Git/files/modes retained across cold restart, two real Desk browser viewers | Release publication |
-| macOS arm64 → Tart macOS arm64 | Isolated copied seed, typed TLS guest/session route, unprivileged shell, resize/resume, cold disk retention and LOST old sessions | System LaunchDaemon installation and retained supervision proof |
+| macOS arm64 → Tart macOS arm64 | Isolated copied seed, typed TLS guest/session route, unprivileged shell, resize/resume, cold disk retention and LOST old sessions | Production installation and public topology verification |
 | Node/Go → HTTP/2 h2c, Unix and TLS | Full bidi before request EOF, 8 MiB chunked snapshots, offsets above 2^53, bounded slow reader, cancellation and negative trust/identity | Final production endpoint verification |
 | Actual edge Caddy 2.11.4 → isolated HTTP/2 test upstream | Verified TLS frontend and bidi/chunk/cancellation/slow-reader gates | Final production controller/host/guest topology |
 
@@ -145,19 +146,26 @@ and makes no RAM-continuity claim. No production database or VM has been reset.
 ## Source size and remaining delivery
 
 Compared with the reviewed baseline, handwritten Go under `cmd` and `internal`
-(excluding tests) grew from 12,976 to 17,052 lines (+4,076); tests in those trees
-changed from 8,767 to 8,609 (-158). Generated Go adds 7,537 lines, generated
+(excluding tests) grew from 12,976 to 17,086 lines (+4,110); tests in those trees
+changed from 8,767 to 8,669 (-98). Generated Go adds 7,537 lines, generated
 TypeScript 2,900, and Protobuf 441. The retired JSON wire definitions remove
 544 lines. These counts intentionally exclude Python, documentation, spikes and
 other test helpers; the architecture trades old transports for real supervision,
 identity, packaging, and durable host service ownership.
 
-Publication, signed source commits, production backups, fenced migration and
-live deployment verification are not complete. The 1Password Environment mount
-and configured commit signer are unavailable until the user unlocks/allows them.
-The remote Mac needs administrator installation of the isolated qualification
-system daemon to complete Tart supervision; its disposable fixture is retained
-for that proof. macOS local-network privacy blocked the GUI LaunchAgent route.
+Release publication, production backups, fenced migration and live deployment
+verification are not complete. Signed Clankerbox source is pushed and the Clankerdesk signed source/image CI
+passed. The canonical 1Password Environment now works; the initially reported
+missing UniFi key was a transient read result, not an absent key.
+The isolated Tart system service passed after the user granted Local Network
+access to the explicitly signed `org.clankerbox.host` executable. A system daemon
+running as `gg` is not exempt from that permission: the earlier exemption claim
+was incorrect. Host replacement preserved live sessions and the permission grant.
+A fresh cold cycle exposed and then verified a bounded read-only guest-agent
+readiness wait; no bootstrap mutation is retried by that wait. Tart restart,
+resize/resume, retained disks, new cold incarnation and LOST old sessions passed.
+The exact controller-to-Mac RPC firewall allow is installed; product services and
+retained production VMs have not yet been cut over.
 No qualification gap is represented as a deployed support claim.
 
 Candidate archive hashes and consumer extraction results are recorded separately

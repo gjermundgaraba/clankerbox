@@ -95,7 +95,7 @@ func run() error {
 		}
 		return r.probe(ctx)
 	}
-	if os.Args[1] == "delete" {
+	if os.Args[1] == "delete" || os.Args[1] == "stop" {
 		raw, e = os.ReadFile(filepath.Join(root, "machine.json"))
 		if e != nil {
 			return e
@@ -104,7 +104,7 @@ func run() error {
 			return e
 		}
 		r.request.Generation++
-		return r.effect(ctx, "delete")
+		return r.effect(ctx, os.Args[1])
 	}
 	r.request = model.Request{Action: "create", Host: cfg.HostID, OperationID: model.NewID(), MachineID: model.NewID(), Name: "tart-rpc-proof", Generation: 1, Profile: cfg.Profiles[0]}
 	if os.Args[1] == "resume" {
@@ -280,6 +280,27 @@ func (r *runner) probe(ctx context.Context) error {
 	}
 	r.emit("sessions_after_host_restart", response.Msg)
 	session := &v1.Session{Id: "4210ccea-547a-4550-ae69-918e53d800fe", Pid: 768, Incarnation: "fd7d8f34-da7d-4122-a583-f12ecde17345"}
-	_, err = r.attach(ctx, session, &v1.ResumeCursor{Offset: 107, Incarnation: session.Incarnation}, "printf 'CB_SUPERVISION:%s\\n' \"$(cat ~/tart-rpc-state)\"\n", "CB_SUPERVISION:bc93f23644ef3a82d3595af79caab852", true)
+	token := "bc93f23644ef3a82d3595af79caab852"
+	if raw, readErr := os.ReadFile(filepath.Join(r.root, "probe.json")); readErr == nil {
+		var proof struct {
+			Session     *v1.Session `json:"session"`
+			Token       string      `json:"token"`
+			LostSession string      `json:"lost_session"`
+		}
+		if err = json.Unmarshal(raw, &proof); err != nil {
+			return err
+		}
+		session, token = proof.Session, proof.Token
+		lost := false
+		for _, old := range response.Msg.Sessions {
+			if old.Id == proof.LostSession && old.Status == v1.SessionStatus_SESSION_STATUS_LOST {
+				lost = true
+			}
+		}
+		if !lost {
+			return errors.New("cold session did not become LOST")
+		}
+	}
+	_, err = r.attach(ctx, session, &v1.ResumeCursor{Offset: 107, Incarnation: session.Incarnation}, "printf 'CB_SUPERVISION:%s\\n' \"$(cat ~/tart-rpc-state)\"\n", "CB_SUPERVISION:"+token, true)
 	return err
 }
