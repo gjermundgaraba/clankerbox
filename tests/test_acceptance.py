@@ -47,8 +47,7 @@ class EvidenceTests(unittest.TestCase):
         ]:
             with self.subTest(command=command):
                 self.evidence.data = {'events': [], 'machines': []}
-                op = {'id': 'accepted-id', 'machine_id': 'machine', 'checkpoint_id': 'checkpoint',
-                      'status': 'accepted'}
+                op = {'id': 'accepted-id', 'machine_id': 'machine', 'checkpoint_id': 'checkpoint', 'status': 'accepted'}
                 calls = []
 
                 def run(*argv):
@@ -125,12 +124,26 @@ class EvidenceTests(unittest.TestCase):
                     self.assertEqual(self.read()['events'][-1]['operation'], op)
 
     def test_lifecycle_refuses_overwrite_or_pending_resume_before_requests(self):
-        self.evidence.data.update(name='accept-owned', machine_id='owned-machine',
-                                  pending={'command': ['stop', 'owned-machine']})
+        self.evidence.data.update(
+            name='accept-owned', machine_id='owned-machine', pending={'command': ['stop', 'owned-machine']}
+        )
         self.evidence.save()
         before = self.path.read_bytes()
-        argv = ['live_lifecycle.py', '--binary', 'cli', '--config', 'config', '--host', 'linux',
-                '--profile', 'test', '--session-runner', 'runner', '--result', str(self.path)]
+        argv = [
+            'live_lifecycle.py',
+            '--binary',
+            'cli',
+            '--config',
+            'config',
+            '--host',
+            'linux',
+            '--profile',
+            'test',
+            '--session-runner',
+            'runner',
+            '--result',
+            str(self.path),
+        ]
         for extra, error in (([], FileExistsError), (['--resume'], RuntimeError)):
             with patch('sys.argv', argv + extra), patch('subprocess.run') as run:
                 with self.assertRaises(error):

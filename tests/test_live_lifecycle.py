@@ -32,7 +32,8 @@ class StoppedSessionAcceptanceTests(unittest.TestCase):
             action = command[4]
             if action in ('create', 'stop', 'start'):
                 state = 'stopped' if action == 'stop' else 'running'
-                if action in ('create', 'start'): incarnation += 1
+                if action in ('create', 'start'):
+                    incarnation += 1
                 operation = {'id': 'operation', 'machine_id': 'a' * 32, 'status': 'succeeded'}
                 value = operation
             elif action == 'operation':
@@ -45,11 +46,27 @@ class StoppedSessionAcceptanceTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             result = Path(directory) / 'evidence.json'
-            argv = ['live_lifecycle.py', '--binary', 'cli', '--config', 'config',
-                    '--host', 'linux', '--profile', 'test', '--session-runner', 'runner',
-                    '--result', str(result), '--keep']
-            with (patch('sys.argv', argv), patch.object(subprocess, 'run', run),
-                  contextlib.redirect_stdout(io.StringIO())):
+            argv = [
+                'live_lifecycle.py',
+                '--binary',
+                'cli',
+                '--config',
+                'config',
+                '--host',
+                'linux',
+                '--profile',
+                'test',
+                '--session-runner',
+                'runner',
+                '--result',
+                str(result),
+                '--keep',
+            ]
+            with (
+                patch('sys.argv', argv),
+                patch.object(subprocess, 'run', run),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
                 try:
                     live_lifecycle.main()
                 except (RuntimeError, subprocess.TimeoutExpired):

@@ -1,4 +1,5 @@
 """Image extraction preserves guest access even under a restrictive host umask."""
+
 import importlib.util
 import io
 import os
@@ -12,6 +13,7 @@ IMAGES = Path(__file__).resolve().parents[1] / 'images'
 spec = importlib.util.spec_from_file_location('stage_linux', IMAGES / 'stage-linux.py')
 staging = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(staging)
+
 
 class ImageStagingTests(unittest.TestCase):
     def test_guest_root_and_executable_modes_survive_umask(self):
@@ -35,6 +37,7 @@ class ImageStagingTests(unittest.TestCase):
             self.assertEqual(image.stat().st_mode & 0o7777, 0o755)
             self.assertEqual((image / 'shell').stat().st_mode & 0o7777, 0o755)
 
+
 class MacImageStagingTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
@@ -42,7 +45,7 @@ class MacImageStagingTests(unittest.TestCase):
         self.base = Path(self.directory.name)
         self.tart = self.base / 'tools with spaces' / 'tart'
         self.tart.parent.mkdir()
-        self.tart.write_text('''#!/bin/bash
+        self.tart.write_text("""#!/bin/bash
 set -eu
 printf '%s\\n' "$*" >> "$TART_TEST_LOG"
 case "$1" in
@@ -51,15 +54,16 @@ case "$1" in
   list) test -d "$TART_HOME/vms/seed-e0721ddeae3c" ;;
   *) exit 99 ;;
 esac
-''')
+""")
         self.tart.chmod(0o755)
         self.log = self.base / 'calls'
         self.env = dict(os.environ, TART_BIN=str(self.tart), TART_TEST_LOG=str(self.log))
         self.env.pop('TART_TEST_VERSION', None)
 
     def run_script(self, name, home):
-        return subprocess.run(['/bin/bash', str(IMAGES / name), str(home)],
-                              env=self.env, capture_output=True, text=True)
+        return subprocess.run(
+            ['/bin/bash', str(IMAGES / name), str(home)], env=self.env, capture_output=True, text=True
+        )
 
     def test_stage_in_arbitrary_home_with_explicit_binary_or_path(self):
         for lookup in ('explicit', 'path'):
@@ -70,8 +74,7 @@ esac
                 home = self.base / ('arbitrary home ' + lookup)
                 result = self.run_script('stage-mac.sh', home)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual((home / '.clankerbox-inputs').read_text(),
-                                 'clankerbox-mac-inputs-v1\n')
+                self.assertEqual((home / '.clankerbox-inputs').read_text(), 'clankerbox-mac-inputs-v1\n')
                 self.assertTrue((home / 'vms/seed-e0721ddeae3c').is_dir())
 
     def test_stage_rejects_wrong_tart_version_before_creating_home(self):
@@ -97,6 +100,7 @@ esac
         self.env['TART_TEST_VERSION'] = '0.0.0'
         self.assertNotEqual(self.run_script('finalize-mac.sh', home).returncode, 0)
         self.assertEqual(self.log.read_text(), '--version\n')
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,4 +1,5 @@
 """Local acceptance evidence and bounded operation handling; never replay mutations."""
+
 import json
 import os
 from pathlib import Path
@@ -8,8 +9,9 @@ import time
 
 
 def run_guest(runner, config, machine, *argv, data=None):
-    proc = subprocess.run([runner, '--config', config, machine, *argv],
-                          input=data or '', text=True, capture_output=True, timeout=100)
+    proc = subprocess.run(
+        [runner, '--config', config, machine, *argv], input=data or '', text=True, capture_output=True, timeout=100
+    )
     if proc.returncode:
         raise RuntimeError(f'session command failed: {proc.stderr[-2048:]} {proc.stdout[-2048:]}')
     return proc.stdout
@@ -60,8 +62,7 @@ class Acceptance:
         self.timeout = timeout
 
     def run(self, *command):
-        proc = subprocess.run(self.base + list(command), text=True,
-                              capture_output=True, timeout=90)
+        proc = subprocess.run(self.base + list(command), text=True, capture_output=True, timeout=90)
         if proc.returncode:
             raise RuntimeError(f'{command[0]} failed: {proc.stderr[-2048:]}')
         return proc.stdout
@@ -112,8 +113,12 @@ class Acceptance:
     def expect_delete_dependency(self, runner, config, machine):
         command = ('delete', machine)
         self.begin(command)
-        proc = subprocess.run([runner, '--config', config, '--expect-delete-dependency', machine],
-                              capture_output=True, text=True, timeout=100)
+        proc = subprocess.run(
+            [runner, '--config', config, '--expect-delete-dependency', machine],
+            capture_output=True,
+            text=True,
+            timeout=100,
+        )
         # The adapter emits any unexpectedly accepted operation even on failure.
         # Retain its identity before reporting a failed qualification; never wait,
         # retry or clean up following this potentially destructive acceptance.
@@ -127,8 +132,9 @@ class Acceptance:
 
 
 def describe_guest(runner, config, machine):
-    proc = subprocess.run([runner, '--config', config, '--describe-guest', machine],
-                          capture_output=True, text=True, timeout=100)
+    proc = subprocess.run(
+        [runner, '--config', config, '--describe-guest', machine], capture_output=True, text=True, timeout=100
+    )
     if proc.returncode:
         raise RuntimeError('guest description failed: ' + proc.stderr[-2048:])
     value = json.loads(proc.stdout)

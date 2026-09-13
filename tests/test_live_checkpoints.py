@@ -13,11 +13,24 @@ class CheckpointEvidenceTests(unittest.TestCase):
             source_path = Path(directory) / 'source.json'
             result = Path(directory) / 'result.json'
             source = {'name': 'accept-source', 'status': 'passed', 'machine_id': 'machine'}
-            argv = ['live_checkpoints.py', '--binary', 'cli', '--config', 'config',
-                    '--session-runner', 'runner', '--lifecycle-result', str(source_path),
-                    '--result', str(result)]
-            for extra in ({'cleaned': True}, {'pending': {'command': ['delete', 'machine']}},
-                          {'cleanup_error': 'unresolved'}):
+            argv = [
+                'live_checkpoints.py',
+                '--binary',
+                'cli',
+                '--config',
+                'config',
+                '--session-runner',
+                'runner',
+                '--lifecycle-result',
+                str(source_path),
+                '--result',
+                str(result),
+            ]
+            for extra in (
+                {'cleaned': True},
+                {'pending': {'command': ['delete', 'machine']}},
+                {'cleanup_error': 'unresolved'},
+            ):
                 with self.subTest(extra=extra):
                     source_path.write_text(json.dumps(dict(source, **extra)))
                     with patch('sys.argv', argv), patch('subprocess.run') as run:
