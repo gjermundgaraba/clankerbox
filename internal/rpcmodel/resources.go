@@ -138,7 +138,7 @@ func ToGuestStatus(g *model.GuestStatus) *v1.GuestStatus {
 	}
 }
 
-// FromGuestStatus restores readiness fields without legacy wire revision negotiation.
+// FromGuestStatus restores readiness fields from the wire message.
 func FromGuestStatus(g *v1.GuestStatus) *model.GuestStatus {
 	if g == nil {
 		return nil

@@ -598,7 +598,7 @@ type GuestStatus struct {
 	Incarnation   string                 `protobuf:"bytes,3,opt,name=incarnation,proto3" json:"incarnation,omitempty"`
 	DaemonVersion string                 `protobuf:"bytes,4,opt,name=daemon_version,json=daemonVersion,proto3" json:"daemon_version,omitempty"`
 	EngineDigest  string                 `protobuf:"bytes,5,opt,name=engine_digest,json=engineDigest,proto3" json:"engine_digest,omitempty"`
-	// The single supported RPC schema, not negotiation of legacy carriers.
+	// The supported RPC schema identifier.
 	Schema        string `protobuf:"bytes,6,opt,name=schema,proto3" json:"schema,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

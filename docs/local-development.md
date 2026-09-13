@@ -197,12 +197,9 @@ Keep an intact matching bundle available until teardown finishes.
 ## Qualification
 
 Unit tests verify ownership, bundle extraction, state binding, supervision and
-teardown dependencies. The transport gate separately proves actual Node/Go
-HTTP/2 duplex behavior, bounded handling, cancellation and exact uint64 values.
-The real guest proof covers copied PTY/memory continuity and machine identity
-rebinding on its recorded runtime/image combination. These checks do not claim
-host-reboot durability, arbitrary CPU compatibility, production-domain routing or
-a startup-time guarantee. See [the implementation plan](real-local-development-plan.md)
-for acceptance status and [RPC](archive/real-local/real-local-rpc.md),
-[proxy](archive/real-local/real-local-proxy.md), and
-[guest identity](archive/real-local/real-local-guest.md) proof boundaries.
+teardown dependencies. The guest qualification in `protocol/test` and the live
+harnesses in [tests](../tests/README.md) exercise real VMs: workload isolation,
+PTY and memory continuity across RAM forks and restores, machine identity
+rebinding, cold lifecycle and checkpoints. These checks do not claim host-reboot
+durability, arbitrary CPU compatibility, production-domain routing or a
+startup-time guarantee.

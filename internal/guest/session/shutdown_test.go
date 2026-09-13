@@ -77,7 +77,7 @@ func TestShutdownOwnsProcessAndFinalCaptureAfterCancellation(t *testing.T) {
 		}
 	}
 	cancel()
-	// Parent cancellation is no longer a subprocess kill or a terminal-call context.
+	// Cancelling the parent context leaves the terminal usable.
 	if _, err = s.resize(81, 25); err != nil {
 		t.Fatalf("cancelled parent invalidated terminal: %v", err)
 	}

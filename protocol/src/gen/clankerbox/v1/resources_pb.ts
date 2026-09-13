@@ -162,7 +162,7 @@ export type GuestStatus = Message<"clankerbox.v1.GuestStatus"> & {
   engineDigest: string;
 
   /**
-   * The single supported RPC schema, not negotiation of legacy carriers.
+   * The supported RPC schema identifier.
    *
    * @generated from field: string schema = 6;
    */

@@ -36,7 +36,7 @@ into the installed bundle. Archive SHA256 must be checked before extraction.
    inside the guest through trusted native exec. Copy the adjacent `images/package-locks` directory too. The recipe verifies
    the pristine base, pins the complete apt dependency closure, and checks the
    qualified final package inventory. It records tool versions, locks root login, and leaves workload-user creation to trusted
-   per-machine bootstrap. It installs no guest SSH server.
+   per-machine bootstrap.
 4. Export the merged guest filesystem with `tar --one-file-system`, excluding
    `proc`, `sys`, `dev`, `run`, `tmp`, `mnt`, `oldroot`, `storage`, `export`,
    `recipe`, and `.smolvm`. Stop/delete only that exact disposable builder. Use

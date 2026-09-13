@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -486,31 +483,6 @@ func TestCanceledDispatchPersistsUnresolvedOperation(t *testing.T) {
 	duplicate, err := controller.Create(t.Context(), "cancel-dispatch", input)
 	if err != nil || duplicate.ID != operation.ID {
 		t.Fatalf("canceled intent identity changed: %+v %v", duplicate, err)
-	}
-}
-
-func TestProviderAuthIsAbsentFromAPI(t *testing.T) {
-	t.Parallel()
-	c, _, in, _ := setupControl(t)
-	defer closeTest(t, c)
-	mustCreate(t, c, in, "machine-without-provider")
-	token := strings.Repeat("t", 32)
-	handler, err := c.Handler([]byte(token))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, route := range []struct{ method, path string }{
-		{http.MethodGet, "/v1/auth/status"},
-		{http.MethodPost, "/v1/auth/connections"},
-		{http.MethodDelete, "/v1/auth/connections/unused"},
-	} {
-		r := httptest.NewRequestWithContext(t.Context(), route.method, route.path, nil)
-		r.Header.Set("Authorization", "Bearer "+token)
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, r)
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("%s %s: got %d, want 404", route.method, route.path, w.Code)
-		}
 	}
 }
 

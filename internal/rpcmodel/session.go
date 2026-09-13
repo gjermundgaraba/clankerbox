@@ -224,25 +224,6 @@ func ToGuestDescription(machineID string, h protocol.Hello) *v1.GuestDescription
 	}
 }
 
-// FromGuestDescription checks the supported schema and restores guest handshake fields.
-func FromGuestDescription(h *v1.GuestDescription) (protocol.Hello, error) {
-	if h == nil {
-		return protocol.Hello{}, fmt.Errorf("guest description required")
-	}
-	if h.GetSchema() != Schema {
-		return protocol.Hello{}, fmt.Errorf("unsupported guest schema %q", h.GetSchema())
-	}
-	return protocol.Hello{
-		Incarnation:   h.GetIncarnation(),
-		BootID:        h.GetBootId(),
-		DaemonVersion: h.GetDaemonVersion(),
-		OS:            h.GetOs(),
-		User:          h.GetUser(),
-		WasmSHA256:    h.GetEngineDigest(),
-		MaxSessions:   int(h.GetMaxSessions()),
-	}, nil
-}
-
 // FromResize validates a typed resize for the attachment session.
 func FromResize(sessionID string, r *v1.Resize) (protocol.ResizeArgs, error) {
 	if r == nil {

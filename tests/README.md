@@ -33,7 +33,7 @@ bounded stalled-viewer disconnection, and cancellation/resume with the same shel
 It does not stop or delete the selected machine. Keep controller and host
 restarts and lifecycle mutations outside this explicit test window.
 
-`session-run` uses bearer-authenticated terminal sessions, not direct SSH. A gate
+`session-run` uses bearer-authenticated terminal sessions. A gate
 installs output replay before the command starts; terminal echo/newline conversion
 is disabled and text stdin is passed through a pipe. Exit status and ordered output
 come from the guest protocol. It merges PTY stdout/stderr and is not a replacement

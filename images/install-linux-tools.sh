@@ -60,7 +60,7 @@ npm --version >> /.clankerbox-image/tool-versions.txt
 git --version >> /.clankerbox-image/tool-versions.txt
 python3 --version >> /.clankerbox-image/tool-versions.txt
 # Disable login accounts; the root service drops to a separately provisioned
-# workload UID. There is no managed guest sshd or password authentication.
+# workload UID.
 passwd -l root
 rm -f /etc/machine-id
 : > /etc/machine-id

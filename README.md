@@ -7,8 +7,7 @@ bearer-authenticated session API. Clankerbox does not manage application credent
 Applications and the CLI use generated `clankerbox.v1` Connect services. Private
 host and guest listeners use the same SessionService contract. See
 [terminal sessions](docs/terminal-sessions.md) and the
-[generated SDK](protocol/README.md) for current consumer contracts. Historical
-spike and execution records below retain their original qualification boundaries.
+[generated SDK](protocol/README.md) for consumer contracts.
 
 ## Using machines
 
@@ -138,12 +137,9 @@ The controller owns its database and lock under a private `--state-dir`. See
 [terminal sessions](docs/terminal-sessions.md) for streaming semantics, and
 [local development](docs/local-development.md) for environment lifecycle.
 
-## Historical investigations
+## Design decisions
 
-The [runtime investigation](docs/concurrent-ram-forks.md),
-[recovery results](spikes/recovery/RESULTS.md),
-[Tart checks](spikes/tart-checkpoints/RESULTS.md), and
-[original real-local implementation record](docs/real-local-development-implementation.md)
-preserve their original qualification boundaries. They are historical evidence;
-current release inputs live under `scripts/release/inputs/`. Private build trees,
-VM payloads and credentials stay outside source control.
+Architecture decision records under [docs/adr](docs/adr/README.md) explain the
+runtime choices, service ownership, wire contract and product boundaries. Release
+inputs live under `scripts/release/inputs/`. Private build trees, VM payloads and
+credentials stay outside source control.

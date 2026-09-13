@@ -50,7 +50,6 @@ func TestCommandValidation(t *testing.T) {
 			unknownFlag,
 		},
 		{"unknown flag", []string{"--unknown"}, unknownFlag},
-		{"removed auth flag", []string{"--auth-prepare", "unused"}, unknownFlag},
 		{"unexpected argument", append(append([]string{}, required...), "extra"), "unexpected argument"},
 		{"missing value", []string{testConfigFlag}, "flag needs an argument"},
 	}

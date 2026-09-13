@@ -8,7 +8,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/tetratelabs/wazero v1.12.0
 	github.com/urfave/cli/v3 v3.11.0
-	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.58.0

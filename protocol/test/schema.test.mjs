@@ -54,9 +54,6 @@ test("shared typed attachment and service methods have the intended shapes", () 
   assert.equal(HostService.method.createSession, undefined);
   assert.equal(MachineService.method.setLabels.output.typeName, "clankerbox.v1.Machine");
   assert.equal(MachineService.method.createMachine.output.typeName, "clankerbox.v1.Operation");
-  for (const service of [MachineService, SessionService, HostService])
-    for (const method of Object.keys(service.method))
-      assert(!/report|activity|foreground|watchChanges|events/i.test(method));
   const frame = create(AttachmentRequestSchema, {
     command: { case: "input", value: { sequence: 18446744073709551615n, data: new Uint8Array([97]) } },
   });

@@ -57,7 +57,7 @@ func TestBundleRecomputesSemanticPins(t *testing.T) {
 	}
 }
 
-func TestLegacyBundleMetadataRejected(t *testing.T) {
+func TestUnsupportedManifestFormatRejected(t *testing.T) {
 	t.Parallel()
 	manifest := makeBundle(t)
 	b, err := readBundle(manifest)
@@ -73,7 +73,7 @@ func TestLegacyBundleMetadataRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err = verifyBundle(manifest); err == nil {
-		t.Fatal("legacy content-only manifest accepted")
+		t.Fatal("unsupported manifest format accepted")
 	}
 }
 

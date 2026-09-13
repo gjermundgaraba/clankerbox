@@ -6,6 +6,4 @@ static Linux agent. `linux-amd64-image-sources.json` binds the amd64 static agen
 and pristine image archives. `source.json` binds the required engine source
 license and Cargo lock file.
 
-Release assembly and native qualification consume these files directly. Historical
-qualification evidence belongs in `docs/archive/real-local/`; it is not an input
-source and never authorizes replaying an old migration.
+Release assembly and native qualification consume these files directly.

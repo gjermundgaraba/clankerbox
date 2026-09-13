@@ -16,7 +16,7 @@ clankerbox-server
   │ private HostService, authenticated HTTP/2
   ▼
 clankerbox-host (persistent journal, machine admission and guest routing)
-  │ private GuestService, mutually authenticated TLS + HTTP/2
+  │ private SessionService, mutually authenticated TLS + HTTP/2
   ▼
 clankerbox-guest (PTY ownership, Ghostty VT, bounded output ring)
 ```
@@ -275,12 +275,9 @@ These fixture tests do not establish production deployment or VM qualification.
 | Guest exits while consumer is away | Ended opening returns retained outcome and available final view. |
 | Engine mismatch | Refuse decoding, keep sessions alive, deploy a matching compatibility unit. |
 
-The transport gate records Go-to-Go and actual Node-to-Go HTTP/2 over h2c, Unix
-and verified TLS, including duplex operation, cancellation, large chunks,
-bounded slow readers and exact bigint values. The separate Caddy gate uses the
-actual edge binary on an isolated listener; it does not qualify production-domain
-routing. See [RPC gate](archive/real-local/real-local-rpc.md),
-[proxy gate](archive/real-local/real-local-proxy.md) and
-[real guest identity proof](archive/real-local/real-local-guest.md).
-Historical terminal and runtime records retain their original scope. A deployment
-must validate its matching guest binaries, image, runtime bundle and consumer SDK.
+Product tests in `internal/rpctransport`, `internal/rpcidentity` and
+`internal/guest` cover authentication, identity, transport lifetime, ordering,
+cancellation and bounded attachment queues. `protocol/test/public-session.mjs`
+exercises the deployed public streaming boundary, including backpressure, healthy
+siblings, cancellation and resume. A deployment must validate its matching guest
+binaries, image, runtime bundle and consumer SDK.

@@ -1,13 +1,5 @@
-# Disposable upstream checkouts, binaries, images and test outputs.
+# Disposable build outputs and local work trees.
 /.work/
 /bin/
-/spikes/*/.work/
-/spikes/*/.venv/
-/spikes/*/results/
-/spikes/recovery/*/.work/
-/spikes/recovery/*/results/
-/spikes/recovery/execute.lock
 __pycache__/
 *.pyc
-# Never stage credentials left in private experiment artifacts.
-/spikes/**/auth.json

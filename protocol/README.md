@@ -60,8 +60,7 @@ required before snapshot decoding.
 Errors combine standard Connect status codes with the typed ErrorDetail reason.
 Unsupported, prerequisite, capacity, unavailable, identity mismatch, and engine
 mismatch remain distinct. ErrorDetail.retryable is not permission to replay
-uncertain input. Activity/report/foreground observation and controller-wide
-change feeds are absent.
+uncertain input.
 
 ## Generation, checks, and packaging
 
@@ -104,7 +103,8 @@ Tests cover domain round trips through serialized Protobuf, private-field
 redaction, retained private profile/input fingerprints, all operation actions
 and states, final views, resume cuts, creation retry identity, optional lifecycle
 fields, integer range checks, and typed errors over an actual RPC connection.
-The SDK tests exercise bigint/JSON precision, oneofs and service shapes. Transport
-qualification lives separately in `spikes/real-local-rpc` and
-`spikes/real-local-proxy`; generated contracts alone are not product cutover or
-VM qualification.
+The SDK tests exercise bigint/JSON precision, oneofs and service shapes. Generated
+contracts alone are not VM qualification; the live harnesses are described in
+[tests](../tests/README.md).
+`test/real-vm.mjs` drives explicit guest qualification against a selected running
+machine and is not part of the ordinary test glob.
