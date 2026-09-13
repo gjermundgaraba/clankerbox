@@ -1,5 +1,6 @@
-# Disposable build outputs and local work trees.
+# Disposable build outputs, local work trees and the default dev environment.
 /.work/
 /bin/
+/.clankerbox/
 __pycache__/
 *.pyc
