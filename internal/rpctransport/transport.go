@@ -20,6 +20,8 @@ import (
 )
 
 const (
+	// MaxUnixSocketPath is the path byte limit shared by Darwin and Linux.
+	MaxUnixSocketPath = 103
 	// MaxMessage bounds decoded protobuf messages at every relay.
 	MaxMessage = 2 << 20
 	// StallTimeout bounds a blocked relay writer independently of stream life.
@@ -206,23 +208,33 @@ func Listen(ctx context.Context, endpoint string) (net.Listener, error) {
 		return nil, err
 	}
 	if u.Scheme == "unix" {
-		if u.Host != "" || u.Path == "" || len(u.Path) > 103 {
+		if u.Host != "" {
 			return nil, errors.New("invalid or oversized Unix endpoint path")
 		}
-		listener, listenErr := (&net.ListenConfig{}).Listen(ctx, "unix", u.Path)
-		if listenErr != nil {
-			return nil, listenErr
-		}
-		if err = os.Chmod(u.Path, 0600); err != nil {
-			_ = listener.Close()
-			return nil, err
-		}
-		return &peerListener{Listener: listener}, nil
+		return ListenUnix(ctx, u.Path)
 	}
 	if u.Scheme != "https" && (u.Scheme != "http" || !loopback(u.Hostname())) {
 		return nil, errors.New("network listener requires HTTPS or literal loopback HTTP")
 	}
 	return (&net.ListenConfig{}).Listen(ctx, "tcp", u.Host)
+}
+
+// ListenUnix opens a mode-0600 Unix socket admitting only same-UID peers.
+// Path is a filesystem path, not a URL. The caller must hold its service
+// ownership lock and explicitly remove any stale socket before calling.
+func ListenUnix(ctx context.Context, path string) (net.Listener, error) {
+	if path == "" || len(path) > MaxUnixSocketPath {
+		return nil, errors.New("invalid or oversized Unix endpoint path")
+	}
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "unix", path)
+	if err != nil {
+		return nil, err
+	}
+	if err = os.Chmod(path, 0600); err != nil {
+		_ = listener.Close()
+		return nil, err
+	}
+	return &peerListener{Listener: listener}, nil
 }
 
 // Server configures HTTP/2 without a whole-stream timeout. Each streaming
@@ -241,6 +253,8 @@ func Server(handler http.Handler, tlsConfig *tls.Config) *http.Server {
 	}
 }
 
+// peerListener admits only Unix connections whose peer credentials match
+// the current user's UID. It closes unverified connections and keeps accepting.
 type peerListener struct{ net.Listener }
 
 func (l *peerListener) Accept() (net.Conn, error) {

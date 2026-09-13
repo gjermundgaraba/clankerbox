@@ -234,21 +234,6 @@ func (s *Server) track(next http.Handler) http.Handler {
 	})
 }
 
-type peerListener struct{ net.Listener }
-
-func (l *peerListener) Accept() (net.Conn, error) {
-	for {
-		c, e := l.Listener.Accept()
-		if e != nil {
-			return nil, e
-		}
-		if samePeer(c) {
-			return c, nil
-		}
-		_ = c.Close()
-	}
-}
-
 // Rebind delivers credentials only to the local root-owned administration socket.
 func Rebind(ctx context.Context, paths Paths, body []byte) error {
 	if len(body) > bindingMaxBytes {
@@ -278,6 +263,9 @@ func Rebind(ctx context.Context, paths Paths, body []byte) error {
 }
 
 func (s *Server) listen(ctx context.Context, opts Options) error {
+	if len(opts.Paths.Socket) > rpctransport.MaxUnixSocketPath {
+		return errors.New("guest administrative socket path exceeds platform limit")
+	}
 	var err error
 	handlerPath, handler := clankerboxv1connect.NewSessionServiceHandler(
 		&service{identity: s.identity, manager: s.manager},
@@ -294,24 +282,18 @@ func (s *Server) listen(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	if len(opts.Paths.Socket) > unixPathMax {
-		return errors.New("guest administrative socket path exceeds platform limit")
-	}
 	// The exclusive lifetime lock proves any old socket cannot belong to a live
 	// manager. Never unlink before acquiring it.
 	if err = os.Remove(opts.Paths.Socket); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	s.adminListener, err = (&net.ListenConfig{}).Listen(ctx, "unix", opts.Paths.Socket)
+	s.adminListener, err = rpctransport.ListenUnix(ctx, opts.Paths.Socket)
 	if err != nil {
-		return err
-	}
-	if err = os.Chmod(opts.Paths.Socket, 0600); err != nil {
 		return err
 	}
 	s.admin = boundedServer(s.track(s.identity.adminHandler()))
 	go func() { s.failure <- s.public.Serve(tls.NewListener(s.listener, s.public.TLSConfig)) }()
-	go func() { s.failure <- s.admin.Serve(&peerListener{Listener: s.adminListener}) }()
+	go func() { s.failure <- s.admin.Serve(s.adminListener) }()
 	return nil
 }
 
@@ -320,7 +302,6 @@ const (
 	listenerCount   = 2
 	requestMaxBytes = 300 << 10
 	eventMaxBytes   = 128 << 10
-	unixPathMax     = 103
 	rebindTimeout   = 10 * time.Second
 	errorMaxBytes   = 4096
 )

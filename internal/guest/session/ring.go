@@ -13,6 +13,7 @@ type ring struct {
 	size  int
 }
 
+// newRing requires a positive capacity, enforced by the manager configuration.
 func newRing(capacity int) *ring {
 	return &ring{buf: make([]byte, capacity)}
 }
@@ -50,8 +51,8 @@ func (r *ring) slice(from uint64) []byte {
 	skip := int(from - r.start) //nolint:gosec // Bounded by capacity.
 	n := r.size - skip
 	out := make([]byte, n)
-	for i := range n {
-		out[i] = r.buf[(r.head+skip+i)%len(r.buf)]
-	}
+	pos := (r.head + skip) % len(r.buf)
+	first := copy(out, r.buf[pos:])
+	copy(out[first:], r.buf)
 	return out
 }

@@ -1,5 +1,7 @@
 package vt
 
+import "encoding/binary"
+
 // The pinned module imports nothing, so a Go callback cannot be named directly
 // in a Ghostty option. This file assembles a tiny module that imports Ghostty's
 // function table and one host function, re-exports the host function under a C
@@ -25,9 +27,6 @@ const (
 	opPrefixFC       = 0xfc
 	opTableGrow      = 0x0f
 	opEnd            = 0x0b
-	lebContinue      = 0x80
-	lebMask          = 0x7f
-	lebShift         = 7
 )
 
 // trampoline returns a module importing table "__indirect_function_table" from
@@ -74,22 +73,10 @@ func trampoline(tableModule, hostModule string, params int, returns bool) []byte
 }
 
 func wasmSection(id byte, payload []byte) []byte {
-	out := append([]byte{id}, uleb128(uint32(len(payload)))...) //nolint:gosec // Section payloads are tiny.
+	out := binary.AppendUvarint([]byte{id}, uint64(len(payload)))
 	return append(out, payload...)
 }
 
 func wasmName(s string) []byte {
-	return append(uleb128(uint32(len(s))), s...) //nolint:gosec // Names are short literals.
-}
-
-func uleb128(v uint32) []byte {
-	var out []byte
-	for {
-		b := byte(v & lebMask)
-		v >>= lebShift
-		if v == 0 {
-			return append(out, b)
-		}
-		out = append(out, b|lebContinue)
-	}
+	return append(binary.AppendUvarint(nil, uint64(len(s))), s...)
 }

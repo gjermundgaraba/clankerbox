@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
-	"math/big"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,18 +39,7 @@ type Credentials struct {
 	Authority   []byte `json:"authority"`
 }
 
-const (
-	serialBits     = 120
-	certificatePEM = "CERTIFICATE"
-)
-
-func serial() *big.Int {
-	v, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), serialBits))
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
+const certificatePEM = "CERTIFICATE"
 
 // NewAuthority creates a private authority for an isolated host.
 func NewAuthority() (*Authority, error) {
@@ -60,7 +48,6 @@ func NewAuthority() (*Authority, error) {
 		return nil, e
 	}
 	t := &x509.Certificate{
-		SerialNumber:          serial(),
 		Subject:               pkix.Name{CommonName: "clankerbox guest transport authority"},
 		NotBefore:             time.Now().Add(-time.Minute),
 		NotAfter:              time.Now().Add(3650 * 24 * time.Hour),
@@ -92,12 +79,11 @@ func (a *Authority) issue(uri string, server bool, expiry time.Time) (Credential
 		return Credentials{}, e
 	}
 	t := &x509.Certificate{
-		SerialNumber: serial(),
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     expiry,
-		URIs:         []*url.URL{u},
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		NotBefore:   time.Now().Add(-time.Hour),
+		NotAfter:    expiry,
+		URIs:        []*url.URL{u},
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
 	if server {
 		t.DNSNames = []string{"guest.clankerbox.internal"}
