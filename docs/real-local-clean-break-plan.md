@@ -1,7 +1,17 @@
 # Real-local correctness, simplification, and clean reset
 
-Status: implementation in progress after independent review and design assessment.
-The reset and deployment will follow qualification of the matching components.
+Status (2026-09-13): implementation and isolated qualification complete;
+[release v0.3.0](https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.3.0)
+published from `725122d`. Production reset and cutover are in progress; production
+acceptance is not yet complete.
+
+`make test`, lint, and vet passed. Native smolvm qualification passed on macOS
+arm64 and Linux amd64: lifecycle persistence, RAM forks, checkpoint capture,
+source deletion, two restores with independent disks, SDK session checks,
+same-bundle restart, and running/stopped bundle relocation. Final macOS checks
+confirmed clean host/controller shutdown with an active terminal stream and the
+same guest PTY after restart. Archive creation and extraction passed on both
+platforms. Isolated qualification environments were destroyed after testing.
 
 Baseline: clankerbox `d4c51205c6fc9c4b0cc5532e6a97bea6dcf312e6`.
 Scope: clankerbox, the affected Clankerdesk integration, and personal-cloud

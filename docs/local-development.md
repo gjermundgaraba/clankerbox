@@ -19,7 +19,7 @@ build. Other Linux distributions and older macOS releases have not been qualifie
 ## Install and start
 
 Download the self-contained archive and checksum for your host platform from
-[release 0.2.1](https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.2.1)
+[release 0.3.0](https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.3.0)
 using your normal private repository access. Verify SHA256 before extraction. The archive places
 `clankerbox` beside `bundle.json` and all verified controller, host, guest,
 smolvm/libkrun/agent, image and profile payloads. Add that extracted directory to
