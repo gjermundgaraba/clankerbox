@@ -5,7 +5,11 @@ import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { OpenMode, SessionStatus } from '../dist/gen/clankerbox/v1/session_pb.js';
 
-export const isolationScript = String.raw`import grp,json,os,platform,pwd,shutil,socket,subprocess
+export const inheritedEnvironmentCheck = String.raw`allowed={'PATH','HOME','USER','LOGNAME','SHELL','TERM','LANG','PWD','SHLVL','_','LC_CTYPE'}
+assert not set(sys.argv[1].splitlines()).difference(allowed), 'unexpected inherited daemon environment keys'
+`;
+
+export const isolationScript = String.raw`import grp,json,os,platform,pwd,shutil,socket,subprocess,sys
 uid=os.geteuid()
 assert uid!=0 and os.getuid()==uid, 'PTY retained root identity'
 assert pwd.getpwuid(uid).pw_name=='clankerbox', 'wrong workload account'
@@ -33,13 +37,14 @@ if sudo:
     for command in ('true','id'):
         result=subprocess.run([sudo,'-n',command],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=5)
         assert result.returncode!=0, 'workload can escalate through sudo'
-allowed={'PATH','HOME','USER','LOGNAME','SHELL','TERM','LANG','PWD','SHLVL','_','LC_CTYPE'}
-assert not set(os.environ).difference(allowed), 'unexpected inherited daemon environment keys'
+${inheritedEnvironmentCheck}
 print('GUEST_ISOLATION_RESULT='+json.dumps({'uid':uid,'user':pwd.getpwuid(uid).pw_name,'groups':sorted(groups),'os':platform.system(),'architecture':platform.machine(),'checks':['nonroot workload identity','no privileged supplementary groups','binding private key unreadable','private state inaccessible','admin socket inaccessible','guest binary not writable','sudo escalation unavailable','daemon environment filtered']}),flush=True)
 `;
 
 const quote = (value) => `'${value.replaceAll("'", "'\"'\"'")}'`;
-export const isolationCommand = `stty -echo -onlcr; read gate; exec python3 -c ${quote(isolationScript)}`;
+// Apple's python3 launcher adds developer-tool variables. Capture only key
+// names before invoking it so the check measures the guest's actual environment.
+export const isolationCommand = `stty -echo -onlcr; read gate; exec python3 -c ${quote(isolationScript)} "$(/usr/bin/env | /usr/bin/cut -d= -f1)"`;
 export const prefixBytes = 8 * 1024 * 1024;
 export const prefixCommand = `stty -echo -onlcr; python3 -c 'import base64,os,sys; [(sys.stdout.buffer.write(base64.b64encode(os.urandom(12288))),sys.stdout.buffer.flush()) for _ in range(512)]'; exec cat`;
 
