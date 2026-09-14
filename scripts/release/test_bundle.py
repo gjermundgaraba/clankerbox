@@ -450,6 +450,19 @@ class LicenseInputTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'engine source license/provenance mismatch: Cargo.lock'):
             bundle.verify_licenses(self.engine, self.notices)
 
+    def test_notice_reuse_requires_the_matching_checkout_go_sum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            other = pathlib.Path(directory) / 'checkout'
+            shutil.copytree(self.root, other)
+            (other / 'go.sum').write_text('same versions, different checksum coverage')
+            self.assertEqual((other / 'go.mod').read_bytes(), (self.root / 'go.mod').read_bytes())
+            with mock.patch.object(bundle, 'ROOT', other):
+                with self.assertRaisesRegex(ValueError, 'dependency notice provenance mismatch: go_sum_sha256'):
+                    bundle.verify_licenses(self.engine, self.notices)
+            # Neither changing cwd nor reusing source paths changes ownership:
+            # only the checkout whose module files match may use these notices.
+            bundle.verify_licenses(self.engine, self.notices)
+
 
 if __name__ == '__main__':
     unittest.main()

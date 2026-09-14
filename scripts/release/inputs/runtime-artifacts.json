@@ -19,12 +19,12 @@
         {
           "path": "lib/libkrun.dylib",
           "type": "file",
-          "sha256": "a50f17482e15aff553490e01405a0d238f5a715f3b0a68e4c42d8e873f39b821"
+          "sha256": "e47998f0263e58bdb4875f16fa2c3db15db25b66a710593e153bb76a664fc70f"
         },
         {
           "path": "lib/libkrunfw.5.dylib",
           "type": "file",
-          "sha256": "af0e3f5011d6735539b1c9b80e3fbf9672289921c070593b7955c9b8e0ef7c34"
+          "sha256": "819d9902587788859fcdc7ebe0ca38c8c493c58667d5aaa151fb935c0b7d74a5"
         },
         {
           "path": "lib/libkrunfw.dylib",
@@ -39,12 +39,12 @@
         {
           "path": "overlay-template.ext4.zst",
           "type": "file",
-          "sha256": "da11dd364a69bf45205c1d6fb91d5decf46fe01fc4338fe06d9e75bcbce28372"
+          "sha256": "1f18ca1a5b606af7702384bdabc10775e54513c912827a7aa5ab7b4f328ee0b0"
         },
         {
           "path": "storage-template.ext4.zst",
           "type": "file",
-          "sha256": "6a98ac1f9fe4b00f6fb060989051437b0b5f74d7f9fdd6cfddd3d4cccbb8133a"
+          "sha256": "2e52744bf3962e8fbd55d613666726d073c01e59bc26982d30da0ef845921204"
         }
       ]
     },
@@ -57,12 +57,12 @@
         {
           "path": "lib/libkrun.provenance",
           "type": "file",
-          "sha256": "1a9ca811f2cc2d35fefb60979dd11121bff0ce5303db7199ca3792ef96aea6bd"
+          "sha256": "93816f49d1b8f4fca0eb322b0006f8efb6ecb5c7856e3f2caddce37bd2053ef1"
         },
         {
           "path": "lib/libkrun.so",
           "type": "file",
-          "sha256": "3f021ac366152b33c7c329f893804fa9adda5d4352fac4b88214ae28fb89ebd0"
+          "sha256": "2a58b2fcd8975972c6c1eba0aa687ad0e7844069209d9e56e3bdb4afe6e9fbf7"
         },
         {
           "path": "lib/libkrun.so.2",
@@ -87,12 +87,12 @@
         {
           "path": "overlay-template.ext4.zst",
           "type": "file",
-          "sha256": "06dcda4c52a7d2d838ac171f31fb39b64c272caea030c55ab50b2e9ca64ca69a"
+          "sha256": "8765e298bffe6fa2b720c8ce2f4d5c3eea7466c83089ebe79b98de6c7a42ac60"
         },
         {
           "path": "storage-template.ext4.zst",
           "type": "file",
-          "sha256": "b88fcbfa86b3d722ec865fbbfb9b628945ae24093347e8c08872c1859f0ffcc5"
+          "sha256": "2b1cd7464d2bd9b5e773a150d449b6f402d75400a297b3c5b35104cec140d745"
         }
       ]
     }

@@ -1,0 +1,62 @@
+{
+  "description": "Only verified zero padding outside a 512 MiB ext4 filesystem was removed; filesystem bytes are unchanged. e2fsck -fn passed without repairs.",
+  "tools": {
+    "e2fsck": "1.47.4",
+    "zstd": "1.5.7",
+    "compression_arguments": [
+      "-19",
+      "-T1"
+    ]
+  },
+  "input_release": "https://github.com/gjermundgaraba/clankerbox/releases/tag/v0.3.0",
+  "input_release_archive_sha256": {
+    "darwin-arm64": "ea4cebfa2854db23e2ceb1c55945ca9a74305290329f0ede1cd90d08c6bd1bae",
+    "linux-amd64": "30d20580b488390419689431f4c81263242ba47ba263a1b0f0c099f67ae16a4e"
+  },
+  "templates": [
+    {
+      "platform": "darwin-arm64",
+      "file": "storage-template.ext4.zst",
+      "input_sha256": "6a98ac1f9fe4b00f6fb060989051437b0b5f74d7f9fdd6cfddd3d4cccbb8133a",
+      "input_logical_size": 21474836480,
+      "filesystem_bytes": 536870912,
+      "raw_sha256": "a97ae68dd45f9d64f35a1595bc12e7fd9fca49de39a12347712fe5adee92a27a",
+      "sha256": "2e52744bf3962e8fbd55d613666726d073c01e59bc26982d30da0ef845921204",
+      "zero_tail_verified": true,
+      "fsck_passed": true
+    },
+    {
+      "platform": "darwin-arm64",
+      "file": "overlay-template.ext4.zst",
+      "input_sha256": "da11dd364a69bf45205c1d6fb91d5decf46fe01fc4338fe06d9e75bcbce28372",
+      "input_logical_size": 10737418240,
+      "filesystem_bytes": 536870912,
+      "raw_sha256": "6f71b0989111cda4a4801c425e6fe5963590fb37d88ed1ef68f722f29ec91e4f",
+      "sha256": "1f18ca1a5b606af7702384bdabc10775e54513c912827a7aa5ab7b4f328ee0b0",
+      "zero_tail_verified": true,
+      "fsck_passed": true
+    },
+    {
+      "platform": "linux-amd64",
+      "file": "storage-template.ext4.zst",
+      "input_sha256": "b88fcbfa86b3d722ec865fbbfb9b628945ae24093347e8c08872c1859f0ffcc5",
+      "input_logical_size": 21474836480,
+      "filesystem_bytes": 536870912,
+      "raw_sha256": "857af66620d37488cebb50e2fa7af093a02bc683f9d0c8285300efc6d78539b9",
+      "sha256": "2b1cd7464d2bd9b5e773a150d449b6f402d75400a297b3c5b35104cec140d745",
+      "zero_tail_verified": true,
+      "fsck_passed": true
+    },
+    {
+      "platform": "linux-amd64",
+      "file": "overlay-template.ext4.zst",
+      "input_sha256": "06dcda4c52a7d2d838ac171f31fb39b64c272caea030c55ab50b2e9ca64ca69a",
+      "input_logical_size": 10737418240,
+      "filesystem_bytes": 536870912,
+      "raw_sha256": "c765a327a389f272287848dffcd9b3c568faf40eff105446c3541c52bdb9c6a3",
+      "sha256": "8765e298bffe6fa2b720c8ce2f4d5c3eea7466c83089ebe79b98de6c7a42ac60",
+      "zero_tail_verified": true,
+      "fsck_passed": true
+    }
+  ]
+}

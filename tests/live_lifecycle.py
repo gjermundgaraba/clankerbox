@@ -68,8 +68,8 @@ sync
         guest(machine, 'sh', '-se', data=setup)
         check = f"""set -eu
 cd "$HOME/{directory}"
-git diff --cached --no-ext-diff
-git diff --no-ext-diff
+git --no-pager diff --cached --no-ext-diff
+git --no-pager diff --no-ext-diff
 cat scratch
 test -x scratch
 readlink link

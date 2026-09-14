@@ -15,11 +15,14 @@ class StoppedSessionAcceptanceTests(unittest.TestCase):
         state = 'running'
         operation = None
         probes = []
+        scripts = []
         incarnation = 0
 
         def run(command, **kwargs):
             nonlocal state, operation, incarnation
             if command[0] == 'runner':
+                if kwargs.get('input'):
+                    scripts.append(kwargs['input'])
                 if '--describe-guest' in command:
                     value = {'machine_id': 'a' * 32, 'incarnation': str(incarnation)}
                     return subprocess.CompletedProcess(command, 0, json.dumps(value), '')
@@ -74,6 +77,11 @@ class StoppedSessionAcceptanceTests(unittest.TestCase):
             report = json.loads(result.read_text())
         self.assertEqual(len(probes), 1)
         self.assertEqual(probes[0][-2:], ['--expect-stopped', 'a' * 32])
+        diff_checks = [script for script in scripts if '--no-ext-diff' in script]
+        self.assertTrue(diff_checks)
+        for script in diff_checks:
+            self.assertIn('git --no-pager diff --cached --no-ext-diff', script)
+            self.assertIn('git --no-pager diff --no-ext-diff', script)
         return report
 
     def test_confirmed_prerequisite_passes(self):
