@@ -28,7 +28,7 @@ func TestNativeCreateRejectsEveryChangedCompatibilityFieldBeforeEffects(t *testi
 			t.Parallel()
 			runner := &recordingRunner{}
 			root := filepath.Join(t.TempDir(), "untouched")
-			runtime := &host.NativeRuntime{Config: host.Config{Root: root, Profiles: []host.ProfileBinding{{Profile: installed, ImagePath: "trusted-seed"}}}, Runner: runner}
+			runtime := host.NewNativeRuntime(host.Config{Root: root, Profiles: []host.ProfileBinding{{Profile: installed, ImagePath: "trusted-seed"}}}, runner)
 			requested := installed
 			mutate(&requested)
 			if err := runtime.Create(t.Context(), host.Manifest{ID: model.NewID(), Profile: requested}); err == nil {
@@ -48,7 +48,7 @@ func TestNativeImageLocatorChangeKeepsPortableIdentity(t *testing.T) {
 	t.Parallel()
 	profile := model.Profile{ID: "mac", OS: "macos", Arch: "arm64", Runtime: "tart", CPU: 2, RAMMiB: 2048, ImageDigest: "image"}
 	runner := &recordingRunner{}
-	runtime := &host.NativeRuntime{Config: host.Config{Root: t.TempDir(), TartPath: "/opt/tart", Profiles: []host.ProfileBinding{{Profile: profile, ImagePath: "relocated-seed"}}}, Runner: runner}
+	runtime := host.NewNativeRuntime(host.Config{Root: t.TempDir(), TartPath: "/opt/tart", Profiles: []host.ProfileBinding{{Profile: profile, ImagePath: "relocated-seed"}}}, runner)
 	if err := runtime.Create(t.Context(), host.Manifest{ID: model.NewID(), Profile: profile}); err != nil {
 		t.Fatal(err)
 	}

@@ -23,7 +23,7 @@ func TestMacRAMResumeDoesNotReloadOrUnloadLiveSupervisor(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &forbiddenRestoreRunner{}
-	n := NativeRuntime{Config: Config{Root: root, HostOS: hostDarwin, SmolvmPath: "/opt/smolvm"}, Runner: r}
+	n := NewNativeRuntime(Config{Root: root, HostOS: hostDarwin, SmolvmPath: "/opt/smolvm"}, r)
 	m := Manifest{ID: model.NewID(), PendingRAM: true, Profile: model.Profile{Runtime: runtimeSmolvm}}
 	if err := n.finishRAMRestore(context.Background(), m); err != nil {
 		t.Fatal(err)

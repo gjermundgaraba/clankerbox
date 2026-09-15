@@ -206,6 +206,9 @@ func (c *Controller) Derive(
 	if err == nil {
 		err = tx.Commit()
 	}
+	if err == nil {
+		c.notify(h.ID)
+	}
 	return o, err
 }
 

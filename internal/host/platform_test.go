@@ -40,7 +40,7 @@ func TestMacSmolvmBranchJobBecomesRetainedStartWithoutReplay(t *testing.T) {
 	requireNoError(t, os.WriteFile(db, nil, 0600))
 	requireNoError(t, os.MkdirAll(filepath.Join(root, "jobs"), 0700))
 	f, runner := newMacSupervisorFixture(t, cfg, child)
-	n := &host.NativeRuntime{Config: cfg, Runner: runner}
+	n := host.NewNativeRuntime(cfg, runner)
 	requireNoError(t, n.Prerequisite(context.Background(), "fork", parent, nil))
 	requireNoError(t, n.Fork(context.Background(), parent, child))
 	if len(f.jobs) != 1 || !strings.Contains(f.jobs[0], "<string>branch</string>") ||

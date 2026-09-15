@@ -30,7 +30,9 @@ reads the resource summary; a failed summary read still reports the operation's
 outcome.
 
 The controller owns desired state, durable acceptance, idempotency and capacity
-reservations, with one reconciliation worker per host. An explicit host goes
+reservations, with one wake-driven reconciliation worker per host. Committed
+submissions wake idle workers; startup scans and persisted retry deadlines keep
+the durable queue authoritative. An explicit host goes
 straight to admission; discovery runs only when the caller omitted it. Accepted
 requests stay resolvable even if host or profile eligibility later changes.
 
@@ -49,6 +51,9 @@ lease is published. Interrupted work stays fenced until explicitly reconciled.
 
 Profiles carry portable compatibility fields and image digests; the host
 resolves local image paths from its own configuration and derives capabilities.
+Prepared images own the guest executable, account and system permissions.
+Native binding, retained startup and live rebinding have distinct intent; live
+renewal never cold-starts a missing manager. See [ADR 0007](adr/0007-prepared-guest-images.md).
 Runtime and image pins identify content, so relocating an identical bundle does
 not change compatibility. Supervisor files are rendered from the current
 configuration and refreshed on retained starts.

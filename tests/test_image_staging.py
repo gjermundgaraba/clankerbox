@@ -61,8 +61,13 @@ esac
         self.env.pop('TART_TEST_VERSION', None)
 
     def run_script(self, name, home):
+        args = ['/bin/bash', str(IMAGES / name), str(home)]
+        if name == 'finalize-mac.sh':
+            guest = self.base / 'guest'
+            guest.write_bytes(b'guest')
+            args.append(str(guest))
         return subprocess.run(
-            ['/bin/bash', str(IMAGES / name), str(home)], env=self.env, capture_output=True, text=True
+            args, env=self.env, capture_output=True, text=True
         )
 
     def test_stage_in_arbitrary_home_with_explicit_binary_or_path(self):

@@ -2,7 +2,10 @@
 # Run on the Mac host after pulling the pinned input with stage-mac.sh.
 # Copies the existing Apple-signed host Xcode; never modifies the host installation.
 set -euo pipefail
-home=${1:?usage: finalize-mac.sh OWNED_TART_HOME}
+home=${1:?usage: finalize-mac.sh OWNED_TART_HOME DARWIN_GUEST_BINARY}
+guest=${2:?prepared image requires a freshly built clankerbox-guest-darwin-arm64}
+test -f "$guest"
+test ! -L "$guest"
 tart=$(command -v "${TART_BIN:-tart}") || {
   printf '%s\n' 'Tart not found; set TART_BIN or add Tart to PATH.' >&2
   exit 1
@@ -33,6 +36,7 @@ for _ in {1..90}; do
   sleep 2
 done
 test "$ready" = true
+"$tart" exec -i "$seed" sudo -n /bin/bash -c 'set -eu; test ! -e /usr/local/bin/clankerbox-guest; mkdir -p /usr/local/bin; cat > /usr/local/bin/clankerbox-guest; chown root:wheel /usr/local/bin/clankerbox-guest; chmod 755 /usr/local/bin/clankerbox-guest' < "$guest"
 "$tart" exec "$seed" sudo -n mkdir -p /Applications/Clankerbox-Toolchains
 /usr/bin/tar -cf - -C /Applications Xcode.app |
   "$tart" exec -i "$seed" sudo -n /usr/bin/tar -xf - -C /Applications/Clankerbox-Toolchains
@@ -50,6 +54,21 @@ xcrun swiftc /tmp/clankerbox-image.swift -o /tmp/clankerbox-image-check
 test "$(/tmp/clankerbox-image-check)" = CLANKERBOX_SWIFT_OK
 rm /tmp/clankerbox-image.swift /tmp/clankerbox-image-check
 test ! -e /etc/clankerbox
+test ! -e /private/var/lib/clankerbox-guest
+# Static guest account and binary are part of the image, never runtime repairs.
+test -z "$(dscl . -search /Users UniqueID 1001)"
+! id clankerbox >/dev/null 2>&1
+sudo -n dscl . -create /Users/clankerbox
+sudo -n dscl . -create /Users/clankerbox UniqueID 1001
+sudo -n dscl . -create /Users/clankerbox PrimaryGroupID 20
+sudo -n dscl . -create /Users/clankerbox UserShell /bin/zsh
+sudo -n dscl . -create /Users/clankerbox NFSHomeDirectory /Users/clankerbox
+sudo -n dscl . -create /Users/clankerbox Password '*'
+sudo -n mkdir -p /Users/clankerbox /usr/local/share/clankerbox
+sudo -n chown clankerbox:staff /Users/clankerbox
+sudo -n chmod 700 /Users/clankerbox
+printf '%s\n' clankerbox-prepared-v1 | sudo -n tee /usr/local/share/clankerbox/prepared >/dev/null
+sudo -n chmod 644 /usr/local/share/clankerbox/prepared
 # Use public resolvers inside the seed VM so the download below does not depend
 # on the host's DHCP configuration. Override with IMAGE_DNS_SERVERS.
 sudo -n /usr/sbin/networksetup -setdnsservers Ethernet ${IMAGE_DNS_SERVERS:-1.1.1.1 8.8.8.8}

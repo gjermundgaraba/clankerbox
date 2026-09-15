@@ -29,7 +29,7 @@ func nativeFixture(t *testing.T) (*host.NativeRuntime, *recordingRunner, host.Ma
 	requireNoError(t, os.MkdirAll(filepath.Join(cfg.Root, "jobs"), 0700))
 	requireNoError(t, os.MkdirAll(filepath.Join(cfg.Root, "checkpoints"), 0700))
 	r := &recordingRunner{}
-	n := &host.NativeRuntime{Config: cfg, Runner: r}
+	n := host.NewNativeRuntime(cfg, r)
 	m := host.Manifest{
 		ID:      model.NewID(),
 		Port:    22000,

@@ -7,6 +7,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -73,6 +74,12 @@ type NativeRuntime struct {
 	Config    Config
 	Runner    Runner
 	authority *rpcidentity.Authority
+	logger    *slog.Logger
+}
+
+// NewNativeRuntime initializes a runtime with one lifecycle timing logger.
+func NewNativeRuntime(cfg Config, runner Runner) *NativeRuntime {
+	return &NativeRuntime{Config: cfg, Runner: runner, logger: slog.New(slog.NewJSONHandler(os.Stderr, nil))}
 }
 
 func (n *NativeRuntime) env(m Manifest) []string {
@@ -170,8 +177,23 @@ func (n *NativeRuntime) Inspect(ctx context.Context, m Manifest) (RuntimeState, 
 	return result, nil
 }
 
+func (n *NativeRuntime) materializeImage(ctx context.Context, m Manifest, source, destination string) (err error) {
+	defer n.trace(ctx, m, "image-materialize")(&err)
+	args := []string{"-a"}
+	if n.hostOS() == hostDarwin {
+		args = append(args, "-c")
+	} else {
+		args = append(args, "--reflink=auto")
+	}
+	// Copy-on-write when the filesystem supports it; otherwise retain the same
+	// private-copy semantics. Never hardlink a mutable guest tree to its image.
+	_, err = n.Runner.Run(ctx, "/bin/cp", append(args, source, destination), n.env(m), nil)
+	return err
+}
+
 // Create creates one owned native machine without adopting an existing identity.
-func (n *NativeRuntime) Create(ctx context.Context, m Manifest) error {
+func (n *NativeRuntime) Create(ctx context.Context, m Manifest) (resultErr error) {
+	defer n.trace(ctx, m, "native-create")(&resultErr)
 	imagePath, resolutionErr := n.Config.imagePath(m.Profile)
 	if resolutionErr != nil {
 		return resolutionErr
@@ -201,7 +223,7 @@ func (n *NativeRuntime) Create(ctx context.Context, m Manifest) error {
 		return errors.New("rootfs destination exists after interrupted create; refusing replacement")
 	}
 	// Each machine gets its own writable copy of the supplied bare Ubuntu profile.
-	if _, err := n.Runner.Run(ctx, "/bin/cp", []string{"-a", imagePath, rootfs}, n.env(m), nil); err != nil {
+	if err := n.materializeImage(ctx, m, imagePath, rootfs); err != nil {
 		return err
 	}
 	storage, overlay := m.Profile.StorageGiB, m.Profile.OverlayGiB
@@ -338,7 +360,8 @@ func (n *NativeRuntime) Configure(ctx context.Context, m Manifest) error {
 
 // Start starts the retained machine and waits for its observed running state.
 // After a host reboot it re-registers the supervisor unit without enabling boot startup.
-func (n *NativeRuntime) Start(ctx context.Context, m Manifest) error {
+func (n *NativeRuntime) Start(ctx context.Context, m Manifest) (resultErr error) {
+	defer n.trace(ctx, m, "native-start")(&resultErr)
 	if m.Profile.Runtime == runtimeSmolvm {
 		if err := n.stageTemplates(m); err != nil {
 			return err
@@ -444,7 +467,8 @@ func (n *NativeRuntime) guest(ctx context.Context, m Manifest, script string) ([
 }
 
 // Stop requires native stop acknowledgement before stopping supervision.
-func (n *NativeRuntime) Stop(ctx context.Context, m Manifest) error {
+func (n *NativeRuntime) Stop(ctx context.Context, m Manifest) (resultErr error) {
+	defer n.trace(ctx, m, "native-stop")(&resultErr)
 	if m.Profile.Runtime == runtimeSmolvm {
 		// The pinned fork requires the guest's shutdown/sync acknowledgement
 		// before finalizing the host VMM. Kernel poweroff alone leaves it alive.
@@ -474,7 +498,8 @@ func (n *NativeRuntime) Stop(ctx context.Context, m Manifest) error {
 }
 
 // Delete removes stopped native execution before reclaiming its private files.
-func (n *NativeRuntime) Delete(ctx context.Context, m Manifest) error {
+func (n *NativeRuntime) Delete(ctx context.Context, m Manifest) (resultErr error) {
+	defer n.trace(ctx, m, "native-delete")(&resultErr)
 	state, err := n.Inspect(ctx, m)
 	if err != nil {
 		return err

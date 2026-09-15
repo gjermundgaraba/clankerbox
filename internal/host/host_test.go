@@ -42,7 +42,7 @@ func (r *memoryRuntime) Start(context.Context, host.Manifest) error {
 	}
 	return nil
 }
-func (r *memoryRuntime) Initialize(_ context.Context, _ host.Manifest) (string, error) {
+func (r *memoryRuntime) BindGuest(_ context.Context, _ host.Manifest) (string, error) {
 	r.prepares++
 	return testGuestEndpoint, nil
 }
@@ -321,7 +321,7 @@ func nextOperation(previous model.Request, action string) model.Request {
 	return previous
 }
 
-func (r *memoryRuntime) Verify(context.Context, host.Manifest) (string, error) {
+func (r *memoryRuntime) StartGuest(context.Context, host.Manifest) (string, error) {
 	return testGuestEndpoint, nil
 }
 
@@ -332,3 +332,7 @@ const (
 	archARM64  = "arm64"
 	testRootfs = "/opt/rootfs"
 )
+
+func (r *memoryRuntime) RebindGuest(ctx context.Context, m host.Manifest) (string, error) {
+	return r.StartGuest(ctx, m)
+}

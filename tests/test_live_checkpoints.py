@@ -8,6 +8,16 @@ import live_checkpoints
 
 
 class CheckpointEvidenceTests(unittest.TestCase):
+    def test_ram_continues_manager_but_disk_copies_start_new_managers(self):
+        source = {'machine_id': 'source', 'incarnation': 'original'}
+        for ram in (True, False):
+            valid = {'machine_id': 'child', 'incarnation': 'original' if ram else 'new'}
+            live_checkpoints.require_copy_identity(source, valid, ram=ram)
+            with self.assertRaisesRegex(RuntimeError, 'machine identity'):
+                live_checkpoints.require_copy_identity(source, dict(valid, machine_id='source'), ram=ram)
+            with self.assertRaisesRegex(RuntimeError, 'manager'):
+                live_checkpoints.require_copy_identity(source, valid, ram=not ram)
+
     def test_source_ambiguity_and_result_overwrite_fail_before_requests(self):
         with tempfile.TemporaryDirectory() as directory:
             source_path = Path(directory) / 'source.json'

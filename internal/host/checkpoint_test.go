@@ -47,13 +47,13 @@ func (r *branchRuntime) Stop(ctx context.Context, m host.Manifest) error {
 func (r *branchRuntime) Delete(ctx context.Context, m host.Manifest) error {
 	return r.machine(m).Delete(ctx, m)
 }
-func (r *branchRuntime) Initialize(ctx context.Context, m host.Manifest) (string, error) {
+func (r *branchRuntime) BindGuest(ctx context.Context, m host.Manifest) (string, error) {
 	r.preparations++
 	if r.fail == "preparation" {
 		return "", errors.New("preparation reply lost")
 	}
 
-	return r.machine(m).Initialize(ctx, m)
+	return r.machine(m).BindGuest(ctx, m)
 }
 func (r *branchRuntime) Prerequisite(context.Context, string, host.Manifest, *host.CheckpointSpec) error {
 	if r.fail == "prerequisite" {
@@ -352,7 +352,7 @@ func TestNativePrerequisitesAndPendingRAMGuard(t *testing.T) {
 	t.Parallel()
 	cfg := host.Config{HostOS: osLinux, Root: shortNativeRoot(t), DNS: "1.1.1.1"}
 	requireNoError(t, os.MkdirAll(filepath.Join(cfg.Root, "jobs"), 0700))
-	n := &host.NativeRuntime{Config: cfg, Runner: &recordingRunner{}}
+	n := host.NewNativeRuntime(cfg, &recordingRunner{})
 	source := host.Manifest{Profile: model.Profile{Runtime: runtimeSmolvm, Arch: archAMD64}}
 	if err := n.Prerequisite(context.Background(), actionCapture, source, nil); err == nil {
 		t.Fatal("custom DNS portable capture accepted")
@@ -480,6 +480,10 @@ func exerciseInterruptedChild(t *testing.T, phase string) {
 	}
 }
 
-func (r *branchRuntime) Verify(ctx context.Context, m host.Manifest) (string, error) {
-	return r.machine(m).Verify(ctx, m)
+func (r *branchRuntime) StartGuest(ctx context.Context, m host.Manifest) (string, error) {
+	return r.machine(m).StartGuest(ctx, m)
+}
+
+func (r *branchRuntime) RebindGuest(ctx context.Context, m host.Manifest) (string, error) {
+	return r.StartGuest(ctx, m)
 }

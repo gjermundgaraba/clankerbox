@@ -18,13 +18,11 @@ func TestTemplateExpansionCacheIsPrivateAndRejectsChangedBundle(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	n := &NativeRuntime{
-		Config: Config{
-			HostOS:     hostDarwin,
-			Root:       filepath.Join(root, "host"),
-			SmolvmPath: filepath.Join(bundle, "smolvm"),
-		},
-	}
+	n := NewNativeRuntime(Config{
+		HostOS:     hostDarwin,
+		Root:       filepath.Join(root, "host"),
+		SmolvmPath: filepath.Join(bundle, "smolvm"),
+	}, ExecRunner{})
 	m := Manifest{}
 	if err := n.stageTemplates(m); err != nil {
 		t.Fatal(err)

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	bundleManifestFormat = 2
+	bundleManifestFormat = 3
 	bundleRegularFile    = "file"
 	bundleDirectory      = "directory"
 )

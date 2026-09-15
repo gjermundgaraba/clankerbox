@@ -9,6 +9,14 @@ from pathlib import Path
 from acceptance import Acceptance, Report, run_guest, describe_guest
 
 
+def require_copy_identity(source, child, *, ram):
+    if child['machine_id'] == source['machine_id']:
+        raise RuntimeError('copy reused machine identity')
+    same_manager = child['incarnation'] == source['incarnation']
+    if same_manager != ram:
+        raise RuntimeError('RAM copy restarted manager' if ram else 'disk copy reused manager incarnation')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', required=True)
@@ -99,9 +107,9 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
         child = operation('fork', mid, name + '-fork')['machine_id']
         need(read(child) == 'source-A', 'fork lost source disk state')
         child_identity = describe_guest(args.session_runner, args.config, child)
-        need(child_identity['machine_id'] != original_identity['machine_id'], 'fork reused machine identity')
-        if linux:
-            need(child_identity['incarnation'] == original_identity['incarnation'], 'fork restarted guest manager')
+        require_copy_identity(original_identity, child_identity, ram=linux)
+        report['events'].append({'forked_machine': child, 'identity': child_identity})
+        save()
         if linux:
             for machine in (mid, child):
                 sample = memory(machine)
@@ -135,6 +143,7 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
             report['status'] = 'passed'
             report['cleaned'] = True
             return
+        capture_identity = describe_guest(args.session_runner, args.config, mid)
         # The previous explicit Linux cold restart ended the memory fixture.
         if linux:
             guest(
@@ -148,7 +157,6 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
             report['capture_memory'] = original_memory
         else:
             stop(mid)
-        capture_identity = describe_guest(args.session_runner, args.config, mid) if linux else None
         report['capture_identity'] = capture_identity
         save()
         cp = operation('checkpoint', 'create', mid)['checkpoint_id']
@@ -159,6 +167,7 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
         operation('delete', mid)
         restored = []
         identities = {original_identity['machine_id'], child_identity['machine_id']}
+        restored_incarnations = set()
         for index in range(2):
             machine = operation('restore', cp, name + '-restore-' + str(index))['machine_id']
             restored.append(machine)
@@ -166,8 +175,12 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
             identity = describe_guest(args.session_runner, args.config, machine)
             need(identity['machine_id'] not in identities, 'restore reused machine identity')
             identities.add(identity['machine_id'])
-            if linux:
-                need(identity['incarnation'] == capture_identity['incarnation'], 'RAM restore restarted guest manager')
+            require_copy_identity(capture_identity, identity, ram=linux)
+            if not linux:
+                need(identity['incarnation'] not in restored_incarnations, 'disk restores shared manager incarnation')
+                restored_incarnations.add(identity['incarnation'])
+                report['events'].append({'restored_machine': machine, 'identity': identity})
+                save()
             if linux:
                 sample = memory(machine)
                 need(

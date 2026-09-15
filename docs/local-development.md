@@ -18,6 +18,11 @@ templates, a guest image and profiles.
 [Release packaging](../scripts/release/README.md) describes how bundles are
 assembled.
 
+Supported bundles use manifest format 3 and include a prepared guest image.
+The workload UID is 32001; that UID cannot also own the host environment.
+Older disposable environments must be destroyed using their matching old CLI
+and bundle before switching; no runtime image upgrade is performed.
+
 A release archive places `clankerbox` beside `bundle.json`. Extract it with
 permissions preserved into a directory that other users cannot modify:
 
@@ -127,3 +132,5 @@ teardown ordering. The guest qualification in `protocol/test` and the live
 harnesses in [tests](../tests/README.md) exercise real VMs: workload isolation,
 PTY and memory continuity across RAM forks and restores, identity rebinding and
 the cold lifecycle.
+
+For phase diagnostics and repeatable timings, see [lifecycle performance](lifecycle-performance.md).

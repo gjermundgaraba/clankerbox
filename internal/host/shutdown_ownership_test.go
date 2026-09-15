@@ -21,7 +21,7 @@ type blockedRenewalRuntime struct {
 	release chan struct{}
 }
 
-func (r *blockedRenewalRuntime) Verify(ctx context.Context, m Manifest) (string, error) {
+func (r *blockedRenewalRuntime) RebindGuest(ctx context.Context, m Manifest) (string, error) {
 	close(r.entered)
 	// Model an uninterruptible native/filesystem call: ownership must survive the deadline.
 	<-r.release

@@ -124,6 +124,7 @@ func TestBundleMatchesPythonReleaseInventory(t *testing.T) {
 	}
 	script := `
 import importlib.util, json, pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
 spec=importlib.util.spec_from_file_location('builder',sys.argv[1])
 builder=importlib.util.module_from_spec(spec);spec.loader.exec_module(builder)
 manifest=pathlib.Path(sys.argv[2]);root=manifest.parent

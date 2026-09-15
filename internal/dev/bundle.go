@@ -78,7 +78,10 @@ func verifyBundle(manifest string) (Bundle, error) {
 	if err = b.verifyEntrypoints(listed); err != nil {
 		return b, err
 	}
-	return b, b.verifyComponentDigests()
+	if err = b.verifyComponentDigests(); err != nil {
+		return b, err
+	}
+	return b, b.verifyPreparedImage()
 }
 
 func readBundle(manifest string) (Bundle, error) {
@@ -106,7 +109,7 @@ func readBundle(manifest string) (Bundle, error) {
 }
 func (b Bundle) validateMetadata() error {
 	if b.ManifestFormat != bundleManifestFormat {
-		return errors.New("bundle requires manifest_format 2 with complete type and mode metadata")
+		return errors.New("bundle requires manifest_format 3 with a prepared guest image")
 	}
 	if b.Version == "" || b.OS != runtime.GOOS || b.Arch != runtime.GOARCH {
 		return errors.New("bundle version/platform does not match this host")
@@ -232,3 +235,29 @@ const (
 	minimumProfileRAM  = 128
 	bundleManifestName = "bundle.json"
 )
+
+func (b Bundle) verifyPreparedImage() error {
+	var deployed, installed, marker string
+	for _, entry := range b.Files {
+		if entry.Type != bundleRegularFile {
+			continue
+		}
+		if entry.Path == b.Guest {
+			deployed = entry.SHA256
+		}
+		if entry.Path == b.ImagePath+"/usr/local/bin/clankerbox-guest" && entry.Mode&0111 != 0 {
+			installed = entry.SHA256
+		}
+		if entry.Path == b.ImagePath+"/usr/local/share/clankerbox/prepared" {
+			marker = entry.SHA256
+		}
+	}
+	if installed == "" || !strings.EqualFold(installed, deployed) {
+		return errors.New("prepared image guest must match deployed guest binary")
+	}
+	sum := sha256.Sum256([]byte("clankerbox-prepared-v1\n"))
+	if !strings.EqualFold(marker, hex.EncodeToString(sum[:])) {
+		return errors.New("unsupported prepared image contract")
+	}
+	return nil
+}

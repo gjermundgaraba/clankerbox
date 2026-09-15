@@ -78,7 +78,7 @@ func (n *registryNative) Fork(ctx context.Context, _, _ Manifest) error {
 		return ctx.Err()
 	}
 }
-func (n *registryNative) Verify(ctx context.Context, m Manifest) (string, error) {
+func (n *registryNative) RebindGuest(ctx context.Context, m Manifest) (string, error) {
 	if n.verifyCount.Add(1) == 1 {
 		close(n.verifyEntered)
 	}

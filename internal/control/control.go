@@ -59,6 +59,7 @@ type Controller struct {
 	mu        sync.Mutex
 	workMu    sync.Mutex
 	busy      map[string]bool
+	wake      map[string]chan struct{}
 }
 
 // Open opens the durable queue in a private state directory and acquires its exclusive controller lock.
@@ -103,7 +104,12 @@ func Open(path string, cfg model.Config, transport Transport) (*Controller, erro
 	if !ok {
 		clients = &RPCTransport{}
 	}
+	wake := make(map[string]chan struct{}, len(cfg.Hosts))
+	for _, h := range cfg.Hosts {
+		wake[h.ID] = make(chan struct{}, 1)
+	}
 	return &Controller{
+		wake:      wake,
 		logger:    slog.New(slog.NewTextHandler(os.Stderr, nil)),
 		db:        db,
 		lock:      lock,
@@ -405,6 +411,9 @@ func (c *Controller) Create(
 	if err == nil {
 		err = tx.Commit()
 	}
+	if err == nil {
+		c.notify(h.ID)
+	}
 	return o, err
 }
 
@@ -494,6 +503,9 @@ func (c *Controller) Mutate(ctx context.Context, id, action, key string) (_ mode
 	}
 	if err == nil {
 		err = tx.Commit()
+	}
+	if err == nil {
+		c.notify(h.ID)
 	}
 	return o, err
 }
@@ -640,32 +652,59 @@ func (c *Controller) List(ctx context.Context) ([]model.Machine, error) {
 	return ms, nil
 }
 
-// Run starts one serial worker per configured host. A slow host cannot hold up another host.
-// Unresolved work is retried with the exact persisted request, including its original ID.
+// Run starts one wake-driven serial worker per host. Durable submissions wake
+// idle workers; startup and retry deadlines reconcile the persisted queue.
 func (c *Controller) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, h := range c.cfg.Hosts {
-		wg.Add(1)
-		go func(h model.Host) {
-			defer wg.Done()
-			ticker := time.NewTicker(time.Second)
-			defer ticker.Stop()
-			for {
-				if ctx.Err() != nil {
-					return
-				}
-				if err := c.ProcessOne(ctx, h.ID); err != nil && ctx.Err() == nil {
-					c.logger.ErrorContext(ctx, "reconcile host operation", "host", h.ID, "error", err)
-				}
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-				}
-			}
-		}(h)
+		wg.Go(func() { c.runHost(ctx, h.ID) })
 	}
 	wg.Wait()
+}
+
+func (c *Controller) notify(host string) {
+	select {
+	case c.wake[host] <- struct{}{}:
+	default:
+	}
+}
+
+func (c *Controller) runHost(ctx context.Context, host string) {
+	for ctx.Err() == nil {
+		worked, err := c.processOne(ctx, host)
+		if err == nil && worked {
+			continue // Drain eligible work without a tick between operations.
+		}
+		var delay time.Duration
+		var pending bool
+		if err == nil {
+			delay, pending, err = c.nextWork(ctx, host)
+		}
+		if errors.Is(err, errWorkerActive) {
+			err = nil
+		}
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			c.logger.ErrorContext(ctx, "reconcile host operation", "host", host, "error", err)
+			delay, pending = retryDelay, true
+		}
+		var deadline <-chan time.Time
+		var timer *time.Timer
+		if pending {
+			timer = time.NewTimer(delay)
+			deadline = timer.C
+		}
+		select {
+		case <-ctx.Done():
+		case <-c.wake[host]:
+		case <-deadline:
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+	}
 }
 
 func validateMutation(ctx context.Context, tx *sql.Tx, m model.Machine, action string) error {

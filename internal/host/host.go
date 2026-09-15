@@ -162,8 +162,9 @@ type Runtime interface {
 	Create(context.Context, Manifest) error
 	Configure(context.Context, Manifest) error
 	Start(context.Context, Manifest) error
-	Initialize(context.Context, Manifest) (string, error)
-	Verify(context.Context, Manifest) (string, error)
+	BindGuest(context.Context, Manifest) (string, error)
+	StartGuest(context.Context, Manifest) (string, error)
+	RebindGuest(context.Context, Manifest) (string, error)
 	Stop(context.Context, Manifest) error
 	Delete(context.Context, Manifest) error
 }
@@ -261,7 +262,7 @@ func Open(cfg Config, rt Runtime) (_ *Helper, resultErr error) {
 		return nil, errors.Join(err, db.Close())
 	}
 	if rt == nil {
-		rt = &NativeRuntime{Config: cfg, Runner: ExecRunner{}, authority: authority}
+		rt = NewNativeRuntime(cfg, ExecRunner{})
 	}
 	if native, ok := rt.(*NativeRuntime); ok {
 		native.authority = authority
@@ -432,6 +433,7 @@ func failure(req model.Request, err error) model.Response {
 
 // Execute serializes a generation transition and journals native effects before dispatch.
 func (h *Helper) Execute(ctx context.Context, req model.Request) model.Response {
+	ctx = context.WithValue(ctx, operationTimingKey{}, req.OperationID)
 	if req.Action == "inspect" {
 		if req.OperationID != "" || req.Generation != 0 {
 			return failure(req, model.NewError(model.ReasonInvalid, "inspect must not carry an operation generation", false))
@@ -696,7 +698,7 @@ func (r *lifecycleAttempt) prepareCreated(ctx context.Context) error {
 		if state.State != model.Running {
 			return errors.New("preparation interrupted; explicit reconciliation required before another boot")
 		}
-		r.machine.Endpoint, err = r.helper.runtime.Initialize(ctx, r.machine)
+		r.machine.Endpoint, err = r.helper.runtime.BindGuest(ctx, r.machine)
 		if err != nil {
 			return err
 		}
@@ -729,7 +731,7 @@ func (r *lifecycleAttempt) startRetained(ctx context.Context, state RuntimeState
 		return errors.New("start is ambiguous; refusing another cold boot")
 	}
 	r.machine.Branchable = r.machine.Profile.Runtime == runtimeSmolvm
-	endpoint, err := r.helper.runtime.Verify(ctx, r.machine)
+	endpoint, err := r.helper.runtime.StartGuest(ctx, r.machine)
 	if err != nil {
 		return err
 	}

@@ -56,10 +56,11 @@ class Report:
 
 
 class Acceptance:
-    def __init__(self, binary, config, report, *, timeout=480):
+    def __init__(self, binary, config, report, *, timeout=480, poll_interval=2):
         self.base = [str(Path(binary).resolve()), '--config', str(Path(config).resolve()), '--json']
         self.report = report
         self.timeout = timeout
+        self.poll_interval = poll_interval
 
     def run(self, *command):
         proc = subprocess.run(self.base + list(command), text=True, capture_output=True, timeout=90)
@@ -107,7 +108,7 @@ class Acceptance:
                 if op['status'] == 'succeeded':
                     return op
                 raise RuntimeError(f'operation requires inspection: {op}')
-            time.sleep(2)
+            time.sleep(self.poll_interval)
         raise RuntimeError(f'operation timeout; retained for inspection: {op}')
 
     def expect_delete_dependency(self, runner, config, machine):

@@ -40,7 +40,7 @@ func TestNativeTartArgumentsPrivateEnvironmentAndSupervisor(t *testing.T) {
 	defer closeHelper(t, h)
 	_ = cfg.Validate()
 	runner := &recordingRunner{}
-	n := &host.NativeRuntime{Config: cfg, Runner: runner}
+	n := host.NewNativeRuntime(cfg, runner)
 	m := host.Manifest{ID: req.MachineID, Profile: req.Profile}
 	requireNoError(t, n.Create(context.Background(), m))
 	requireNoError(t, n.Configure(context.Background(), m))
@@ -80,7 +80,7 @@ func TestNativeInventoryUsesObservedStateAndRejectsBadEndpoint(t *testing.T) {
 	h, cfg, _, req := setup(t)
 	defer closeHelper(t, h)
 	runner := &recordingRunner{}
-	n := &host.NativeRuntime{Config: cfg, Runner: runner}
+	n := host.NewNativeRuntime(cfg, runner)
 	m := host.Manifest{ID: req.MachineID, Profile: req.Profile}
 	state := stateRunning
 	ip := "192.168.64.5"
@@ -135,13 +135,13 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	}
 	cfg.SmolvmPath = templateBundle(t)
 	requireNoError(t, cfg.Validate())
-	n := &host.NativeRuntime{Config: cfg, Runner: runner}
+	n := host.NewNativeRuntime(cfg, runner)
 	m := host.Manifest{ID: model.NewID(), Profile: p, Port: 22001}
 	requireNoError(t, n.Create(context.Background(), m))
 	if len(runner.calls) != 2 {
 		t.Fatal("unexpected creation commands")
 	}
-	if runner.calls[0].path != "/bin/cp" || runner.calls[0].args[1] != cfg.Profiles[0].ImagePath {
+	if runner.calls[0].path != "/bin/cp" || runner.calls[0].args[2] != cfg.Profiles[0].ImagePath {
 		t.Fatal("creation did not resolve its image from host configuration")
 	}
 	create := runner.calls[1]
@@ -210,7 +210,7 @@ func TestSmolvmStopRequiresAcknowledgementBeforeSupervisorStop(t *testing.T) {
 		}
 		return []byte(`[{"name":"` + m.RuntimeName() + `","state":"` + state + `"}]`), nil
 	}
-	n := &host.NativeRuntime{Config: cfg, Runner: runner}
+	n := host.NewNativeRuntime(cfg, runner)
 	requireNoError(t, n.Stop(context.Background(), m))
 	runner.calls = nil
 	runner.reply = func(call commandCall) ([]byte, error) {

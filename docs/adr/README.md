@@ -12,3 +12,4 @@ supersede its record.
 | [0004](0004-generated-connect-contract.md) | One generated `clankerbox.v1` contract without negotiation |
 | [0005](0005-terminal-sessions-only.md) | Terminal access only through guest-owned sessions |
 | [0006](0006-no-application-credentials.md) | No application credential management or activity detection |
+| [0007](0007-prepared-guest-images.md) | Prepared images and explicit guest binding, startup and renewal |

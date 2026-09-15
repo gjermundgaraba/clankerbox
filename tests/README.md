@@ -19,7 +19,11 @@ python3 tests/live_checkpoints.py --binary "$PWD/bin/clankerbox" \
 
 Repeat with a macOS host and profile. The checkpoint harness needs
 the machine the lifecycle harness kept with `--keep`. Failures leave named
-resources in place for inspection.
+resources in place for inspection. RAM copies preserve manager incarnation;
+macOS disk copies must create fresh managers, including distinct incarnations
+for independent restores. See the
+[prepared Tart qualification](../scripts/release/inputs/tart-prepared-qualification.md)
+for the image and signed-host prerequisites.
 
 Both harnesses create `--result` exclusively and update it atomically, recording
 accepted operation and resource IDs before polling. Unresolved operations,
@@ -64,3 +68,10 @@ Probes used by the harnesses:
   prints the machine identity and manager incarnation as Protobuf JSON. Cold
   starts keep the machine identity and replace the incarnation; RAM forks and
   restores keep the incarnation and publish a new machine identity.
+
+## Lifecycle timings
+
+`benchmark_lifecycle.py` measures create, retained start, RAM fork, checkpoint,
+restore and cleanup through the ordinary APIs on new disposable Linux machines.
+See [lifecycle performance](../docs/lifecycle-performance.md) for invocation,
+evidence handling and the separate live acceptance requirements.

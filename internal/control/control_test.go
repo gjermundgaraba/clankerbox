@@ -363,7 +363,7 @@ func (r *integrationRuntime) Start(context.Context, host.Manifest) error {
 	r.state.State = model.Running
 	return nil
 }
-func (r *integrationRuntime) Initialize(context.Context, host.Manifest) (string, error) {
+func (r *integrationRuntime) BindGuest(context.Context, host.Manifest) (string, error) {
 	return "192.168.64.2:443", nil
 }
 func (r *integrationRuntime) Stop(context.Context, host.Manifest) error {
@@ -486,6 +486,10 @@ func TestCanceledDispatchPersistsUnresolvedOperation(t *testing.T) {
 	}
 }
 
-func (r *integrationRuntime) Verify(ctx context.Context, m host.Manifest) (string, error) {
-	return r.Initialize(ctx, m)
+func (r *integrationRuntime) StartGuest(ctx context.Context, m host.Manifest) (string, error) {
+	return r.BindGuest(ctx, m)
+}
+
+func (r *integrationRuntime) RebindGuest(ctx context.Context, m host.Manifest) (string, error) {
+	return r.StartGuest(ctx, m)
 }

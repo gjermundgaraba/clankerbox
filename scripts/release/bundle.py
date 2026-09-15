@@ -8,6 +8,8 @@ assembler hashes every payload file and link and refuses to replace an output.
 
 import argparse, hashlib, json, os, pathlib, shutil, stat, subprocess, tarfile
 
+from prepared_image import prepare as prepare_image
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 RUNTIME_TEMPLATES = ('storage-template.ext4.zst', 'overlay-template.ext4.zst')
 
@@ -240,6 +242,7 @@ def main():
         shutil.copy2(args.runtime_assets / name, runtime / name)
     verify_runtime_assets(runtime, args.os, args.arch)
     shutil.copytree(args.image, out / 'image', symlinks=True)
+    prepare_image(out / 'image', binaries / 'clankerbox-guest')
     licenses = out / 'licenses'
     licenses.mkdir()
     shutil.copy2(args.engine_source / 'LICENSE', licenses / 'smolvm-LICENSE')
@@ -262,7 +265,7 @@ def main():
         inventory(runtime) + [entry(out / 'image/usr/local/bin/smolvm-agent', 'smolvm-agent')]
     )
     manifest = {
-        'manifest_format': 2,
+        'manifest_format': 3,
         'version': args.version,
         'os': args.os,
         'arch': args.arch,

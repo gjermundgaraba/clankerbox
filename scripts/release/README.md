@@ -6,7 +6,7 @@ binaries, the patched smolvm engine with its runtime libraries and Linux agent,
 compressed disk templates and a Linux guest image. Running a bundle needs no Go
 or Rust toolchain.
 
-The manifest (format 2) lists every payload file, directory and relative
+The manifest (format 3) lists every payload file, directory and relative
 symlink with its POSIX mode and SHA256. Startup rejects missing, extra or
 changed entries before creating a VM. `runtime_digest` and `image_digest` are
 computed from sorted relative content inventories, so installation paths do not
@@ -55,7 +55,8 @@ provenance mismatch. The original working checkout remains untouched.
    `images/install-linux-tools.sh` inside the guest with `images/package-locks`
    alongside it. The recipe verifies the pristine base, installs the locked apt
    closure, checks the final package inventory, records tool versions and locks
-   root login. Workload users are created later by per-machine bootstrap.
+   root login. Keep this generic image free of workload users and private guest state;
+   the bundle assembler creates the prepared account and installs its own guest binary.
 4. Export the guest filesystem with `tar --one-file-system`, excluding `proc`,
    `sys`, `dev`, `run`, `tmp`, `mnt`, `oldroot`, `storage`, `export`, `recipe`
    and `.smolvm`. Normalize the export's symlinks with the staging script's
@@ -88,8 +89,9 @@ provenance mismatch. The original working checkout remains untouched.
    and the copied artifacts are checked again before the manifest is written.
    It also checks the engine `LICENSE` and `Cargo.lock` against
    [source.json](inputs/source.json), verifies the notices and inventory,
-   cross-compiles the Go binaries, and checks the copied license inventory
-   again before writing the manifest:
+   cross-compiles the Go binaries, finalizes the copied Linux image with its guest
+   binary, fixed workload account and system permissions, and checks the copied
+   license inventory again before writing the manifest:
 
    ```sh
    python3 "$CHECKOUT/scripts/release/bundle.py" --os darwin --arch arm64 --version VERSION \
@@ -203,3 +205,35 @@ or privacy settings. Bundle hosts stay ad-hoc signed.
 python3 scripts/release/build-mac-host.py --output HOST_BINARY \
   --version VERSION --identity APPLE_SIGNING_IDENTITY
 ```
+
+## Prepared images (format 3)
+
+`prepared_image.py`, invoked by the assembler on its **output copy**, installs
+`clankerbox-guest`, workload UID/GID 32001, a locked account and the image contract
+marker. The generic qualified input is never edited. The guest executable is
+part of `image_digest`; rebuilding it requires rebuilding the image and bundle.
+Hosts reject a colliding operator UID, old manifests, absent contracts and
+mismatching guest executables instead of repairing images at runtime.
+
+Preserve directory modes during staging and extraction. Preparation normalizes
+only explicit guest installation/state ancestors and `/tmp`; it does not
+recursively repair damaged system traversal modes or open private directories.
+See the [permission-correction qualification](inputs/prepared-permissions-qualification.md)
+for fresh and retained Linux/KVM workload access checks.
+
+For a separately deployed Tart profile, build the Darwin guest and supply it to
+`images/finalize-mac.sh OWNED_TART_HOME bin/clankerbox-guest-darwin-arm64`.
+Deploy that same binary in the host's guest artifact directory. Publish a new
+image digest; never relabel existing images/checkpoints or overwrite a live seed.
+
+See [the image contract](../../docs/adr/0007-prepared-guest-images.md) and
+[lifecycle qualification/benchmarking](../../docs/lifecycle-performance.md).
+Historical qualification records remain records of their original bundles;
+format-3 candidates require fresh live qualification.
+The [prepared-image qualification report](inputs/prepared-image-qualification.md)
+records the tested format-3 candidates and their same-runtime performance baseline.
+The [Tart qualification report](inputs/tart-prepared-qualification.md) covers the
+full macOS image finalizer and supervised signed-host lifecycle/session/disk-copy
+checks. A disposable signed host still needs operator-granted macOS Local Network
+access; do not bypass privacy policy or treat successful native exec as proof of
+guest RPC connectivity.

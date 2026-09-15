@@ -365,6 +365,7 @@ class RuntimeInputTests(unittest.TestCase):
             mock.patch('builtins.print'),
             mock.patch.object(bundle, 'verify_licenses', return_value={}),
             mock.patch.object(bundle, 'verify_release_licenses'),
+            mock.patch.object(bundle, 'prepare_image'),
             mock.patch.object(bundle.subprocess, 'run'),
         ):
             bundle.main()

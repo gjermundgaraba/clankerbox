@@ -32,7 +32,7 @@ func TestTartExecutionWaitIsReadOnlyAndBounded(t *testing.T) {
 	t.Parallel()
 	m := Manifest{ID: "0123456789abcdef0123456789abcdef", Profile: model.Profile{Runtime: runtimeTart}}
 	r := &readinessRunner{t: t, failures: 1}
-	n := NativeRuntime{Config: Config{Root: t.TempDir()}, Runner: r}
+	n := NewNativeRuntime(Config{Root: t.TempDir()}, r)
 	if err := n.waitGuestExecution(context.Background(), m); err != nil {
 		t.Fatal(err)
 	}

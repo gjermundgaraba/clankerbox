@@ -30,7 +30,7 @@ func makeBundle(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	b := Bundle{
-		ManifestFormat: 2,
+		ManifestFormat: 3,
 		Version:        "test-1",
 		OS:             runtime.GOOS,
 		Arch:           runtime.GOARCH,
@@ -48,13 +48,19 @@ func makeBundle(t *testing.T) string {
 		StorageGiB:     1,
 		OverlayGiB:     8,
 	}
-	for _, dir := range []string{"bin", fixtureRuntime, fixtureRuntimeLibrary, fixtureImage, "image/usr", "image/usr/local", "image/usr/local/bin"} {
+	for _, dir := range []string{"bin", fixtureRuntime, fixtureRuntimeLibrary, fixtureImage, "image/usr", "image/usr/local", "image/usr/local/bin", "image/usr/local/share", "image/usr/local/share/clankerbox"} {
 		if err := os.Mkdir(filepath.Join(root, dir), 0700); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{b.Controller, b.Host, b.Guest, b.Smolvm, "runtime/lib/library", fixtureInit, fixtureAgent} {
+	for _, name := range []string{b.Controller, b.Host, b.Guest, b.Smolvm, "runtime/lib/library", fixtureInit, fixtureAgent, "image/usr/local/bin/clankerbox-guest", "image/usr/local/share/clankerbox/prepared"} {
 		data := []byte("fixture " + name)
+		if name == "image/usr/local/bin/clankerbox-guest" {
+			data = []byte("fixture " + b.Guest)
+		}
+		if name == "image/usr/local/share/clankerbox/prepared" {
+			data = []byte("clankerbox-prepared-v1\n")
+		}
 		if err := os.WriteFile(filepath.Join(root, name), data, 0600); err != nil {
 			t.Fatal(err)
 		}
@@ -76,7 +82,7 @@ func makeBundle(t *testing.T) string {
 		b.Files,
 		BundleFile{Path: "image/link", Type: "symlink", Mode: 0777, SHA256: hex.EncodeToString(sum[:])},
 	)
-	for _, name := range []string{"bin", fixtureRuntime, fixtureRuntimeLibrary, fixtureImage, "image/usr", "image/usr/local", "image/usr/local/bin"} {
+	for _, name := range []string{"bin", fixtureRuntime, fixtureRuntimeLibrary, fixtureImage, "image/usr", "image/usr/local", "image/usr/local/bin", "image/usr/local/share", "image/usr/local/share/clankerbox"} {
 		b.Files = append(b.Files, BundleFile{Path: name, Type: "directory", Mode: 0700})
 	}
 	//nolint:gosec // Guest image root must permit the unprivileged workload to traverse it.

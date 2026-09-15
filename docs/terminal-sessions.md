@@ -145,8 +145,9 @@ restore. To request a fresh snapshot, omit the resume cursor. An ordered
 `DescribeGuest` and `Opened.guest` expose the schema identifier, machine ID,
 incarnation, boot ID, daemon version, workload user, engine digest and capacity.
 A consumer that decodes snapshots supplies its expected engine digest; a
-mismatch is reported without ending sessions. Installing a new guest binary does
-not hand off live PTYs; stop and start the machine to replace the daemon.
+mismatch is reported without ending sessions. The guest binary belongs to the
+prepared image; changing it requires a new image/bundle and is not a live PTY
+handoff. Retained starts do not install binaries.
 
 ### Input and replies
 

@@ -9,27 +9,42 @@ import (
 	"clankerbox/internal/model"
 )
 
+var errWorkerActive = errors.New("host reconciliation already active")
+
 const journalCompletionTimeout = 10 * time.Second
 
 // ProcessOne reconciles the oldest ready operation for a host, if any.
 func (c *Controller) ProcessOne(ctx context.Context, hostID string) error {
+	_, err := c.processOne(ctx, hostID)
+	if errors.Is(err, errWorkerActive) {
+		return nil
+	}
+	c.notify(hostID)
+	return err
+}
+
+func (c *Controller) processOne(ctx context.Context, hostID string) (bool, error) {
 	c.workMu.Lock()
 	if c.busy[hostID] {
 		c.workMu.Unlock()
-		return nil
+		return false, errWorkerActive
 	}
 	c.busy[hostID] = true
 	c.workMu.Unlock()
-	defer func() { c.workMu.Lock(); delete(c.busy, hostID); c.workMu.Unlock() }()
+	defer func() {
+		c.workMu.Lock()
+		delete(c.busy, hostID)
+		c.workMu.Unlock()
+	}()
 	req, op, found, err := c.claimWork(ctx, hostID)
 	if err != nil || !found {
-		return err
+		return false, err
 	}
 	resp, err := c.callHost(ctx, hostID, req, op)
 	// Once dispatched, cancellation cannot discard the durable ambiguity result.
 	completion, cancel := context.WithTimeout(context.WithoutCancel(ctx), journalCompletionTimeout)
 	defer cancel()
-	return c.completeWork(completion, req, op, resp, err)
+	return true, c.completeWork(completion, req, op, resp, err)
 }
 
 type queuedWork struct {
@@ -213,4 +228,31 @@ func (c *Controller) completeWork(
 		txErr = tx.Commit()
 	}
 	return txErr
+}
+
+// nextWork uses the same placement as claimWork for valid journal records,
+// including checkpoint deletion without a machine row. Other missing machines
+// are excluded here but fail claimWork; the worker retries those errors rather
+// than repairing or discarding the operations. Wake hints are not durable work.
+func (c *Controller) nextWork(ctx context.Context, host string) (time.Duration, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	rows, err := c.db.QueryContext(ctx, `SELECT o.next_attempt FROM operations o
+LEFT JOIN machines m ON m.id=o.machine_id
+WHERE o.status NOT IN ('succeeded','failed') AND
+CASE WHEN json_extract(o.request,'$.action')='checkpoint-delete'
+THEN json_extract(o.request,'$.host') ELSE json_extract(m.body,'$.host') END = ?
+ORDER BY o.next_attempt LIMIT 1`, host)
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return 0, false, rows.Err()
+	}
+	var next int64
+	if err = rows.Scan(&next); err != nil {
+		return 0, false, err
+	}
+	return max(time.Until(time.Unix(next, 0)), 0), true, nil
 }

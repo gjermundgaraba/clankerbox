@@ -61,13 +61,13 @@ func (h *Helper) readyMachine(ctx context.Context, id string) (Manifest, error) 
 }
 
 // guestBinary reads the deployed guest binary for the machine's platform.
-func (h *Helper) guestBinary(m Manifest) ([]byte, error) {
+func (n *NativeRuntime) guestBinary(m Manifest) ([]byte, error) {
 	goos := hostLinux
 	if m.Profile.Runtime == runtimeTart {
 		goos = hostDarwin
 	}
 	name := "clankerbox-guest-" + goos + "-" + m.Profile.Arch
-	path := filepath.Join(h.cfg.Root, guestBinaryDir, name)
+	path := filepath.Join(n.Config.Root, guestBinaryDir, name)
 	data, err := os.ReadFile(path) //nolint:gosec // Operator-deployed artifact under Root.
 	if err != nil {
 		return nil, fmt.Errorf("guest binary %s is not deployed: %w", name, err)
@@ -75,7 +75,7 @@ func (h *Helper) guestBinary(m Manifest) ([]byte, error) {
 	return data, nil
 }
 
-// guestInstall runs a fixed installer command with the binary on stdin.
+// guestInstall runs a fixed installer command with binding credentials on stdin.
 func (n *NativeRuntime) guestInstall(ctx context.Context, m Manifest, script string, payload []byte) error {
 	path := n.Config.SmolvmPath
 	var args []string
@@ -110,18 +110,6 @@ func guestDigestTool(m Manifest) string {
 func guestDigestScript(m Manifest) string {
 	script := "if [ -x " + guestBinaryPath + " ]; then " + guestDigestTool(m) + " " + guestBinaryPath +
 		" | cut -d' ' -f1; fi\n"
-	if m.Profile.Runtime == runtimeTart {
-		return "sudo -n /bin/bash -se <<'CLANKERBOX_GUEST_DIGEST'\n" + script + "CLANKERBOX_GUEST_DIGEST\n"
-	}
-	return script
-}
 
-// guestInstallScript validates stdin against the expected digest and renames
-// it into place atomically. A running daemon keeps its old inode.
-func guestInstallScript(m Manifest, digest string) string {
-	tmp := guestBinaryPath + ".tmp"
-	return "set -eu\numask 022\nmkdir -p /usr/local/bin\ncat > '" + tmp + "'\n" +
-		"actual=$(" + guestDigestTool(m) + " '" + tmp + "' | cut -d' ' -f1)\n" +
-		"if [ \"$actual\" != '" + digest + "' ]; then rm -f '" + tmp + "'; echo 'guest binary digest mismatch' >&2; exit 1; fi\n" +
-		"chmod 755 '" + tmp + "'\nchown 0:0 '" + tmp + "'\nmv -f '" + tmp + "' '" + guestBinaryPath + "'\n"
+	return script
 }

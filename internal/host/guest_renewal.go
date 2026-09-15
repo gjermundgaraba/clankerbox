@@ -92,6 +92,6 @@ func (h *Helper) refreshGuestBinding(id string) error {
 	if err = statefs.WritePrivate(bindingPath(h.cfg, m), raw); err != nil {
 		return err
 	}
-	_, err = h.runtime.Verify(ctx, m)
+	_, err = h.runtime.RebindGuest(ctx, m)
 	return err
 }

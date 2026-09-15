@@ -351,7 +351,7 @@ func (h *Helper) prepareDerivedChild(ctx context.Context, m *Manifest, a *accept
 	if err := h.save(ctx, *m, *a); err != nil {
 		return err
 	}
-	endpoint, prepareErr := h.runtime.Initialize(ctx, *m)
+	endpoint, prepareErr := h.runtime.BindGuest(ctx, *m)
 	if prepareErr != nil {
 		return prepareErr
 	}

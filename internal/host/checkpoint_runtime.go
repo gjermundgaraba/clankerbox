@@ -72,7 +72,8 @@ func (n *NativeRuntime) Prerequisite(ctx context.Context, action string, source 
 }
 
 // Fork creates a live child while retaining the source runtime store where required.
-func (n *NativeRuntime) Fork(ctx context.Context, source, child Manifest) error {
+func (n *NativeRuntime) Fork(ctx context.Context, source, child Manifest) (resultErr error) {
+	defer n.trace(ctx, child, "native-fork")(&resultErr)
 	if child.Profile.Runtime == runtimeSmolvm {
 		if err := n.stageTemplates(child); err != nil {
 			return err
@@ -148,7 +149,8 @@ func (n *NativeRuntime) forkDarwin(ctx context.Context, child Manifest, branch s
 }
 
 // Capture writes an immutable checkpoint and retains partial artifacts on failure.
-func (n *NativeRuntime) Capture(ctx context.Context, source Manifest, cp CheckpointSpec) error {
+func (n *NativeRuntime) Capture(ctx context.Context, source Manifest, cp CheckpointSpec) (resultErr error) {
+	defer n.trace(ctx, source, "native-capture")(&resultErr)
 	if source.Profile.Runtime == runtimeSmolvm {
 		if err := n.stageTemplates(source); err != nil {
 			return err
@@ -252,7 +254,8 @@ func (n *NativeRuntime) pendingRAMFiles(m Manifest) []string {
 }
 
 // Restore consumes a checkpoint into an independent machine and verifies RAM before starting.
-func (n *NativeRuntime) Restore(ctx context.Context, m Manifest, cp CheckpointSpec) error {
+func (n *NativeRuntime) Restore(ctx context.Context, m Manifest, cp CheckpointSpec) (resultErr error) {
+	defer n.trace(ctx, m, "native-restore")(&resultErr)
 	if err := os.Mkdir(machineDir(n.Config, m), 0700); err != nil {
 		return err
 	}
