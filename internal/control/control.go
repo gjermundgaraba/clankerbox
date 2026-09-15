@@ -35,6 +35,8 @@ const (
 	deleteCheckpointAction = "checkpoint-delete"
 	createCheckpointAction = "checkpoint-create"
 	publishedStatus        = "published"
+	deletingStatus         = "deleting"
+	deletedStatus          = "deleted"
 	pendingStatus          = "pending"
 	createAction           = "create"
 	deleteAction           = "delete"

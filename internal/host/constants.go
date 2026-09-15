@@ -13,6 +13,8 @@ const (
 	checkpointRAM          = "ram"
 	phaseDone              = "done"
 	phaseAccepted          = "accepted"
+	statusPublished        = "published"
+	statusDeleted          = "deleted"
 	actionFork             = "fork"
 	actionRestore          = "restore"
 	runtimeTart            = "tart"

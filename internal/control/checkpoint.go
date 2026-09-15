@@ -119,7 +119,7 @@ func validateCheckpointResponse(req model.Request, resp model.Response) error {
 	}
 	want, got := *req.Checkpoint, *resp.Checkpoint
 	if req.Action == deleteCheckpointAction {
-		want.Status = "deleted"
+		want.Status = deletedStatus
 	} else {
 		want.Status = publishedStatus
 		want.RuntimePin = got.RuntimePin
@@ -253,7 +253,7 @@ func derivationSource(
 			return source, cp, err
 		}
 		if cp.Status != publishedStatus {
-			return source, cp, model.NewError(model.ReasonPrerequisite, "checkpoint is not published", false)
+			return source, cp, model.NewError(model.ReasonPrerequisite, "checkpoint is deleted", false)
 		}
 		source = model.Machine{ID: cp.SourceMachineID, Host: cp.Host, Profile: cp.Profile.ID, ProfileSpec: cp.Profile}
 
@@ -339,7 +339,6 @@ func allocateDerivation(
 			Host:             h.ID,
 			Profile:          p,
 			CreatedAt:        now,
-			Status:           pendingStatus,
 			Labels:           source.Labels,
 		}
 		req.Checkpoint = cp
@@ -348,7 +347,7 @@ func allocateDerivation(
 		m.Generation++
 	default:
 		m = model.Machine{ID: cp.ID, Generation: 1}
-		cp.Status = "deleting"
+		cp.Status = deletingStatus
 	}
 
 	return m, req, nil
@@ -381,6 +380,9 @@ func (c *Controller) derivationPlacement(
 	return p, h, nil
 }
 
+// saveDerivedIntent records the machine and operation. A capture's checkpoint
+// is catalogued only once the host publishes it; until then the operation is
+// its only record. Deletion marks the existing row so readers see it leaving.
 func saveDerivedIntent(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -391,13 +393,11 @@ func saveDerivedIntent(
 ) error {
 	var err error
 	action := req.Action
-	child := action == forkAction || action == restoreAction
-	cp := req.Checkpoint
 	if action != deleteCheckpointAction {
 		err = saveMachine(ctx, tx, m)
 	}
-	if err == nil && !child {
-		err = saveCheckpoint(ctx, tx, *cp)
+	if err == nil && action == deleteCheckpointAction {
+		err = saveCheckpoint(ctx, tx, *req.Checkpoint)
 	}
 	if err == nil {
 		err = insertOperation(ctx, tx, key, fp, o, req)

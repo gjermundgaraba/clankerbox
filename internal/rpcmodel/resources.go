@@ -366,14 +366,15 @@ var operationStates = map[string]v1.OperationStatus{
 	"failed":     v1.OperationStatus_OPERATION_STATUS_FAILED,
 }
 
+// An empty status is the identity-only form a capture or deletion request
+// carries; only catalogued checkpoints have a status.
+//
 //nolint:gochecknoglobals // Immutable domain-to-wire enum vocabulary.
 var checkpointStates = map[string]v1.CheckpointStatus{
-	"pending":    v1.CheckpointStatus_CHECKPOINT_STATUS_PENDING,
-	"published":  v1.CheckpointStatus_CHECKPOINT_STATUS_PUBLISHED,
-	"unresolved": v1.CheckpointStatus_CHECKPOINT_STATUS_UNRESOLVED,
-	"failed":     v1.CheckpointStatus_CHECKPOINT_STATUS_FAILED,
-	"deleting":   v1.CheckpointStatus_CHECKPOINT_STATUS_DELETING,
-	"deleted":    v1.CheckpointStatus_CHECKPOINT_STATUS_DELETED,
+	"":          v1.CheckpointStatus_CHECKPOINT_STATUS_UNSPECIFIED,
+	"published": v1.CheckpointStatus_CHECKPOINT_STATUS_PUBLISHED,
+	"deleting":  v1.CheckpointStatus_CHECKPOINT_STATUS_DELETING,
+	"deleted":   v1.CheckpointStatus_CHECKPOINT_STATUS_DELETED,
 }
 
 func enumString[S comparable, E ~int32](values map[S]E, value E) (S, error) {

@@ -128,7 +128,7 @@ func (h *Helper) executeDerived(
 	}
 
 	if err = h.derivedPrerequisite(ctx, req, source, cp); err != nil {
-		return h.rejectDerivedPrerequisite(ctx, req, m, cp, err)
+		return h.rejectDerivedPrerequisite(ctx, req, m, err)
 	}
 
 	a = accepted{
@@ -156,8 +156,8 @@ func (h *Helper) applyDerived(
 	cp *ownedCheckpoint,
 ) model.Response {
 	var err error
-	// Accepted means no side effects have started. Everything from here is a single
-	// attempt. Persisting executing before the first side effect prevents replay.
+	// Accepted means no side effects have started. Persisting the executing phase
+	// before the first side effect fences later retries: see accepted.resumable.
 	unresolved := func(err error) model.Response { return h.unresolvedDerived(ctx, req, &m, &a, err) }
 
 	a.Phase = req.Action
@@ -182,9 +182,9 @@ func (h *Helper) applyDerived(
 			return unresolved(err)
 		}
 	} else {
-		cp.Status = "published"
+		cp.Status = statusPublished
 		if req.Action == actionDeleteCheckpoint {
-			cp.Status = "deleted"
+			cp.Status = statusDeleted
 		}
 		a.Checkpoint = cp
 	}
@@ -254,9 +254,9 @@ func (h *Helper) derivedCheckpoint(ctx context.Context, req model.Request) (*own
 	cp := &value
 	expected := *req.Checkpoint
 	expected.Status = cp.Status
-	if cp.Status != "published" || model.Hash(expected) != model.Hash(cp.Checkpoint) ||
+	if cp.Status != statusPublished || model.Hash(expected) != model.Hash(cp.Checkpoint) ||
 		!model.SameProfile(cp.Profile, req.Profile) {
-		return nil, model.NewError(model.ReasonConflict, "checkpoint is unpublished or its identity/profile does not match", false)
+		return nil, model.NewError(model.ReasonConflict, "checkpoint is deleted or its identity/profile does not match", false)
 	}
 	// RAM deletion uses only the owned artifact directory, not the current runtime.
 	if req.Action != actionDeleteCheckpoint || cp.Kind != checkpointRAM {
@@ -286,7 +286,7 @@ func (h *Helper) captureIdentity(
 	}
 	if !model.ValidID(value.ID) || value.Kind != kind || value.SourceMachineID != source.ID ||
 		value.SourceGeneration != source.Generation ||
-		value.Status != statusPending ||
+		value.Status != "" ||
 		value.Host != req.Host ||
 		value.CreatedAt.IsZero() ||
 		!model.SameProfile(value.Profile, req.Profile) {
@@ -404,21 +404,27 @@ func (h *Helper) derivedPrerequisite(
 	return h.runtime.Prerequisite(ctx, req.Action, source, spec)
 }
 
+// rejectDerivedPrerequisite settles a refused capture's source generation.
+// Nothing was captured, so the operation is the failure's only record.
 func (h *Helper) rejectDerivedPrerequisite(
 	ctx context.Context,
 	req model.Request,
 	m Manifest,
-	cp *ownedCheckpoint,
 	err error,
 ) model.Response {
 	if req.Action != actionCapture {
 		return failure(req, err)
 	}
-	cp.Status = statusFailed
-	a := accepted{Request: req, Phase: phaseDone, Checkpoint: cp, Response: failure(req, err)}
+	return h.failDerived(ctx, req, m, accepted{Request: req}, err)
+}
+
+// failDerived journals a terminal capture failure with a settled observation.
+func (h *Helper) failDerived(ctx context.Context, req model.Request, m Manifest, a accepted, err error) model.Response {
+	a.Phase = phaseDone
+	a.Response = failure(req, err)
 	a.Response.Observation, _ = h.observation(ctx, m)
-	if err = h.save(ctx, m, a); err != nil {
-		return model.Response{OperationID: req.OperationID, Status: statusUnresolved, Error: err.Error()}
+	if saveErr := h.save(ctx, m, a); saveErr != nil {
+		return model.Response{OperationID: req.OperationID, Status: statusUnresolved, Error: saveErr.Error()}
 	}
 	return a.Response
 }
@@ -434,10 +440,8 @@ func (h *Helper) unresolvedDerived(
 		m.Prepared = false
 		m.Endpoint = ""
 	}
+	a.Interrupted = err.Error()
 	a.Response = model.Response{OperationID: req.OperationID, Status: statusUnresolved, Error: err.Error()}
-	if a.Checkpoint != nil && req.Action == actionCapture {
-		a.Checkpoint.Status = statusUnresolved
-	}
 	if saveErr := h.save(ctx, *m, *a); saveErr != nil {
 		a.Response.Error += "; journal: " + saveErr.Error()
 	}
@@ -464,7 +468,8 @@ func (h *Helper) derivedIdentity(
 	}
 }
 
-// Only an accepted phase is effect-free. Later derived phases deliberately remain ambiguous.
+// resumeAcceptedDerived runs work whose journal shows no side effect yet, or a
+// checkpoint deletion, which replays safely. See accepted.resumable.
 func (h *Helper) resumeAcceptedDerived(ctx context.Context, req model.Request, a accepted) model.Response {
 	var m Manifest
 	var err error
@@ -505,16 +510,38 @@ func (h *Helper) resumeAcceptedDerived(ctx context.Context, req model.Request, a
 	return h.applyDerived(ctx, req, a, m, source, cp)
 }
 
+// retryDerived applies accepted.resumable to journalled derived work.
 func (h *Helper) retryDerived(ctx context.Context, req model.Request, a accepted, acceptOnly bool) model.Response {
 	if acceptOnly {
 		return a.Response
 	}
-	if a.Phase == phaseAccepted {
+	if !a.resumable() {
+		return model.Response{
+			OperationID: req.OperationID,
+			Status:      statusUnresolved,
+			Error:       "interrupted " + a.Phase + "; explicit operator inspection required; no automatic replay",
+		}
+	}
+	if a.Phase == phaseAccepted || req.Action == actionDeleteCheckpoint {
 		return h.resumeAcceptedDerived(ctx, req, a)
 	}
-	return model.Response{
-		OperationID: req.OperationID,
-		Status:      statusUnresolved,
-		Error:       "interrupted " + a.Phase + "; explicit operator inspection required; no automatic replay",
+	return h.discardInterruptedCapture(ctx, req, a)
+}
+
+// discardInterruptedCapture settles a capture that can never publish. The
+// journal keeps the original capture error and, while cleanup keeps failing,
+// the reason the artifact is still retained.
+func (h *Helper) discardInterruptedCapture(ctx context.Context, req model.Request, a accepted) model.Response {
+	m, err := h.manifest(ctx, req.MachineID)
+	if err != nil || m.Generation != req.Generation || a.Checkpoint == nil {
+		return failure(req, model.NewError(model.ReasonConflict, "accepted generation no longer current", false))
 	}
+	if err = h.runtime.DeleteCheckpoint(ctx, a.Checkpoint.runtimeSpec()); err != nil {
+		a.Response.Error = a.Interrupted + "; artifact retained: " + err.Error()
+		if saveErr := h.save(ctx, m, a); saveErr != nil {
+			a.Response.Error += "; journal: " + saveErr.Error()
+		}
+		return a.Response
+	}
+	return h.failDerived(ctx, req, m, a, errors.New("interrupted capture; artifact discarded: "+a.Interrupted))
 }

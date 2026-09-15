@@ -202,14 +202,13 @@ func (OperationStatus) EnumDescriptor() ([]byte, []int) {
 	return file_clankerbox_v1_resources_proto_rawDescGZIP(), []int{2}
 }
 
+// A listed checkpoint is a published artifact or its tombstone. A capture in
+// flight or one that failed is visible only through its operation.
 type CheckpointStatus int32
 
 const (
 	CheckpointStatus_CHECKPOINT_STATUS_UNSPECIFIED CheckpointStatus = 0
-	CheckpointStatus_CHECKPOINT_STATUS_PENDING     CheckpointStatus = 1
 	CheckpointStatus_CHECKPOINT_STATUS_PUBLISHED   CheckpointStatus = 2
-	CheckpointStatus_CHECKPOINT_STATUS_UNRESOLVED  CheckpointStatus = 3
-	CheckpointStatus_CHECKPOINT_STATUS_FAILED      CheckpointStatus = 4
 	CheckpointStatus_CHECKPOINT_STATUS_DELETING    CheckpointStatus = 5
 	CheckpointStatus_CHECKPOINT_STATUS_DELETED     CheckpointStatus = 6
 )
@@ -218,19 +217,13 @@ const (
 var (
 	CheckpointStatus_name = map[int32]string{
 		0: "CHECKPOINT_STATUS_UNSPECIFIED",
-		1: "CHECKPOINT_STATUS_PENDING",
 		2: "CHECKPOINT_STATUS_PUBLISHED",
-		3: "CHECKPOINT_STATUS_UNRESOLVED",
-		4: "CHECKPOINT_STATUS_FAILED",
 		5: "CHECKPOINT_STATUS_DELETING",
 		6: "CHECKPOINT_STATUS_DELETED",
 	}
 	CheckpointStatus_value = map[string]int32{
 		"CHECKPOINT_STATUS_UNSPECIFIED": 0,
-		"CHECKPOINT_STATUS_PENDING":     1,
 		"CHECKPOINT_STATUS_PUBLISHED":   2,
-		"CHECKPOINT_STATUS_UNRESOLVED":  3,
-		"CHECKPOINT_STATUS_FAILED":      4,
 		"CHECKPOINT_STATUS_DELETING":    5,
 		"CHECKPOINT_STATUS_DELETED":     6,
 	}
@@ -1290,15 +1283,12 @@ const file_clankerbox_v1_resources_proto_rawDesc = "" +
 	"\x18OPERATION_STATUS_RUNNING\x10\x02\x12\x1f\n" +
 	"\x1bOPERATION_STATUS_UNRESOLVED\x10\x03\x12\x1e\n" +
 	"\x1aOPERATION_STATUS_SUCCEEDED\x10\x04\x12\x1b\n" +
-	"\x17OPERATION_STATUS_FAILED\x10\x05*\xf4\x01\n" +
+	"\x17OPERATION_STATUS_FAILED\x10\x05*\xfa\x01\n" +
 	"\x10CheckpointStatus\x12!\n" +
-	"\x1dCHECKPOINT_STATUS_UNSPECIFIED\x10\x00\x12\x1d\n" +
-	"\x19CHECKPOINT_STATUS_PENDING\x10\x01\x12\x1f\n" +
-	"\x1bCHECKPOINT_STATUS_PUBLISHED\x10\x02\x12 \n" +
-	"\x1cCHECKPOINT_STATUS_UNRESOLVED\x10\x03\x12\x1c\n" +
-	"\x18CHECKPOINT_STATUS_FAILED\x10\x04\x12\x1e\n" +
+	"\x1dCHECKPOINT_STATUS_UNSPECIFIED\x10\x00\x12\x1f\n" +
+	"\x1bCHECKPOINT_STATUS_PUBLISHED\x10\x02\x12\x1e\n" +
 	"\x1aCHECKPOINT_STATUS_DELETING\x10\x05\x12\x1d\n" +
-	"\x19CHECKPOINT_STATUS_DELETED\x10\x06*\xe4\x05\n" +
+	"\x19CHECKPOINT_STATUS_DELETED\x10\x06\"\x04\b\x01\x10\x01\"\x04\b\x03\x10\x03\"\x04\b\x04\x10\x04*\x19CHECKPOINT_STATUS_PENDING*\x1cCHECKPOINT_STATUS_UNRESOLVED*\x18CHECKPOINT_STATUS_FAILED*\xe4\x05\n" +
 	"\vErrorReason\x12\x1c\n" +
 	"\x18ERROR_REASON_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14ERROR_REASON_INVALID\x10\x01\x12\x1a\n" +

@@ -173,6 +173,25 @@ type accepted struct {
 	Request    model.Request    `json:"request"`
 	Phase      string           `json:"phase"`
 	Response   model.Response   `json:"response"`
+	// Interrupted is the native error that stopped a phase, kept verbatim while
+	// later settlement attempts rewrite the presented response error.
+	Interrupted string `json:"interrupted,omitempty"`
+}
+
+func (a accepted) done() bool {
+	return a.Response.Status == statusSucceeded || a.Response.Status == statusFailed
+}
+
+// resumable reports whether unfinished journalled work may be executed again.
+// An accepted phase is effect-free. A capture past acceptance is settled by
+// discarding its artifact, and a checkpoint deletion replays because artifact
+// removal is idempotent. Children and lifecycle phases past acceptance stay
+// ambiguous: live effects are never blindly recreated.
+func (a accepted) resumable() bool {
+	if a.done() {
+		return false
+	}
+	return a.Phase == phaseAccepted || a.Request.Action == actionCapture || a.Request.Action == actionDeleteCheckpoint
 }
 
 // Helper reconciles requests against a durable generation and ownership journal.
@@ -339,7 +358,9 @@ func (h *Helper) saveJournal(ctx context.Context, m Manifest, a accepted) (resul
 			mb,
 		)
 	}
-	if err == nil && a.Checkpoint != nil {
+	// Only a completed effect is catalogued: publication inserts the row and
+	// deletion leaves its tombstone. Unfinished captures live in the journal alone.
+	if err == nil && a.Checkpoint != nil && a.Phase == phaseDone && a.Response.Status == statusSucceeded {
 		b, _ := json.Marshal(a.Checkpoint)
 		_, err = tx.ExecContext(ctx,
 			"INSERT INTO checkpoints(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",

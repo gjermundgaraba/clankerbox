@@ -17,6 +17,8 @@ type OperationRecord struct {
 	Response    model.Response
 	Phase       string
 	Fingerprint string
+	// Resumable means the worker may execute the unfinished record again.
+	Resumable bool
 }
 
 const operationTimeout = 6 * time.Minute
@@ -86,7 +88,7 @@ func (s *Service) Submit(ctx context.Context, req model.Request) (OperationRecor
 		if existing.Fingerprint != model.Hash(req) {
 			return OperationRecord{}, model.NewError(model.ReasonIdempotencyConflict, "operation ID input conflict", false)
 		}
-		if existing.Phase == phaseAccepted {
+		if existing.Resumable {
 			s.notify()
 		}
 		return s.presentOperation(existing), nil
@@ -161,16 +163,16 @@ func (h *Helper) Operation(ctx context.Context, id string) (OperationRecord, err
 	if err = json.Unmarshal(raw, &a); err != nil {
 		return OperationRecord{}, err
 	}
-	return OperationRecord{Response: a.Response, Phase: a.Phase, Fingerprint: fp}, nil
+	return OperationRecord{Response: a.Response, Phase: a.Phase, Fingerprint: fp, Resumable: a.resumable()}, nil
 }
 
-func (s *Service) pending() ([]model.Request, error) {
+func (s *Service) pending() ([]accepted, error) {
 	rows, err := s.helper.db.QueryContext(s.ctx, "SELECT body FROM operations ORDER BY rowid")
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	var result []model.Request
+	var result []accepted
 	for rows.Next() {
 		var raw []byte
 		var a accepted
@@ -180,12 +182,16 @@ func (s *Service) pending() ([]model.Request, error) {
 		if err = json.Unmarshal(raw, &a); err != nil {
 			return nil, err
 		}
-		if a.Response.Status != statusSucceeded && a.Response.Status != statusFailed {
-			result = append(result, a.Request)
+		if !a.done() {
+			result = append(result, a)
 		}
 	}
 	return result, rows.Err()
 }
+
+// work runs unfinished journal records once per wake. Ambiguous work is tried
+// once per process; resumable work runs again on every wake, which the
+// controller's paced resubmissions drive.
 func (s *Service) work() {
 	defer close(s.done)
 	attempted := map[string]bool{}
@@ -202,8 +208,9 @@ func (s *Service) work() {
 			}
 			return
 		}
-		for _, req := range requests {
-			if attempted[req.OperationID] {
+		for _, a := range requests {
+			req := a.Request
+			if attempted[req.OperationID] && !a.resumable() {
 				continue
 			}
 			if s.ctx.Err() != nil {

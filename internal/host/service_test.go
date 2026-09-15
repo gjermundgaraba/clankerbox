@@ -145,7 +145,72 @@ func TestAcceptedCheckpointDeletionNeedsNoMachineManifest(t *testing.T) {
 	if result.Response.Checkpoint == nil || result.Response.Checkpoint.Status != "deleted" {
 		t.Fatal("checkpoint tombstone was not published")
 	}
-	if rt.checkpointDeletes != 1 {
+	if rt.counts().checkpointDeletes != 1 {
 		t.Fatal("checkpoint deletion effects were lost or repeated")
+	}
+}
+
+func TestServiceSettlesInterruptedCaptureAndDeletionWithoutRestart(t *testing.T) {
+	t.Parallel()
+	h, _, rt, source := setupBranch(t)
+	defer closeHelper(t, h)
+	ctx := context.Background()
+	service := host.NewService(h)
+	defer func() { requireNoError(t, service.Shutdown(ctx)) }()
+	capture := captureRequest(source)
+	// Cleanup fails too, so queued wakes cannot settle the capture on their own.
+	rt.setFail("capture", actionDeleteCheckpoint)
+	_, err := service.Submit(ctx, capture)
+	requireNoError(t, err)
+	awaitInterrupted(t, h, capture.OperationID)
+	// The controller's resubmission, not a host restart, settles the capture.
+	// Wakes may retry cleanup any number of times; the capture never replays.
+	rt.setFail()
+	_, err = service.Submit(ctx, capture)
+	requireNoError(t, err)
+	awaitOperation(t, h, capture.OperationID, statusFailed)
+	settled := rt.counts()
+	if settled.captures != 1 || settled.checkpointDeletes == 0 {
+		t.Fatalf("capture settlement effects: %+v", settled)
+	}
+	published := h.Execute(ctx, captureRequest(capture))
+	requireStatus(t, published, statusSucceeded)
+	deletion := checkpointDeletion(published.Checkpoint)
+	rt.setFail(actionDeleteCheckpoint)
+	_, err = service.Submit(ctx, deletion)
+	requireNoError(t, err)
+	awaitInterrupted(t, h, deletion.OperationID)
+	rt.setFail()
+	_, err = service.Submit(ctx, deletion)
+	requireNoError(t, err)
+	awaitOperation(t, h, deletion.OperationID, statusSucceeded)
+	// Terminal results stop all further effects, even across extra wakes.
+	final := rt.counts()
+	_, err = service.Submit(ctx, deletion)
+	requireNoError(t, err)
+	_, err = service.Submit(ctx, capture)
+	requireNoError(t, err)
+	requireNoError(t, service.Shutdown(ctx))
+	if after := rt.counts(); after != final || after.captures != 2 {
+		t.Fatalf("effects after terminal completion: %+v -> %+v", final, after)
+	}
+}
+
+// awaitInterrupted waits until the journal records a native failure, which is
+// past acceptance: an accepted record is also unresolved but carries no error.
+func awaitInterrupted(t *testing.T, h *host.Helper, id string) {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		r, err := h.Operation(context.Background(), id)
+		requireNoError(t, err)
+		if r.Response.Status == statusUnresolved && r.Response.Error != "" {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("operation was not interrupted: %+v", r)
+		case <-time.After(time.Millisecond):
+		}
 	}
 }

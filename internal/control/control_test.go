@@ -12,6 +12,7 @@ import (
 	"clankerbox/internal/control"
 	"clankerbox/internal/host"
 	"clankerbox/internal/model"
+	"clankerbox/internal/rpcmodel"
 )
 
 const (
@@ -58,9 +59,17 @@ func (t *testTransport) Call(ctx context.Context, h model.Host, r model.Request)
 		t.cancelDispatch()
 		return model.Response{}, ctx.Err()
 	}
+	// Every dispatch and reply crosses the real wire model, as in production.
+	wire, err := rpcmodel.ToHostRequest(r)
+	if err != nil {
+		return model.Response{}, err
+	}
+	if r, err = rpcmodel.FromHostRequest(wire); err != nil {
+		return model.Response{}, err
+	}
 	t.calls = append(t.calls, r)
 	if resp, ok := t.responses[r.OperationID]; ok {
-		return resp, nil
+		return rpcmodel.FromHostResponse(rpcmodel.ToHostResponse(resp))
 	}
 	obs := t.observations[r.MachineID]
 	obs.MachineID = r.MachineID
@@ -79,6 +88,10 @@ func (t *testTransport) Call(ctx context.Context, h model.Host, r model.Request)
 	}
 	t.observations[r.MachineID] = obs
 	resp := model.Response{OperationID: r.OperationID, Status: succeededStatus, Observation: &obs}
+	if r.Action == "checkpoint-delete" {
+		// Deletion owns a checkpoint identity, not a machine: hosts observe nothing.
+		resp.Observation = nil
+	}
 	if r.Action == "checkpoint-create" || r.Action == "checkpoint-delete" {
 		cp := *r.Checkpoint
 		cp.Status = "published"
@@ -93,7 +106,7 @@ func (t *testTransport) Call(ctx context.Context, h model.Host, r model.Request)
 		t.lost = false
 		return model.Response{}, errors.New("reply lost after durable host completion")
 	}
-	return resp, nil
+	return rpcmodel.FromHostResponse(rpcmodel.ToHostResponse(resp))
 }
 func config() model.Config {
 	return model.Config{

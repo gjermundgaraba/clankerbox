@@ -261,7 +261,7 @@ func (s *machineRPC) ListCheckpoints(
 	}
 	out := &v1.ListCheckpointsResponse{}
 	for _, c := range cs {
-		if r.Msg.GetIncludeDeleted() || c.Status != "deleted" {
+		if r.Msg.GetIncludeDeleted() || c.Status != deletedStatus {
 			out.Checkpoints = append(out.Checkpoints, rpcmodel.ToCheckpoint(c))
 		}
 	}

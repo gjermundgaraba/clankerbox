@@ -95,12 +95,13 @@ message Operation {
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
 }
+// A listed checkpoint is a published artifact or its tombstone. A capture in
+// flight or one that failed is visible only through its operation.
 enum CheckpointStatus {
+  reserved 1, 3, 4;
+  reserved "CHECKPOINT_STATUS_PENDING", "CHECKPOINT_STATUS_UNRESOLVED", "CHECKPOINT_STATUS_FAILED";
   CHECKPOINT_STATUS_UNSPECIFIED = 0;
-  CHECKPOINT_STATUS_PENDING = 1;
   CHECKPOINT_STATUS_PUBLISHED = 2;
-  CHECKPOINT_STATUS_UNRESOLVED = 3;
-  CHECKPOINT_STATUS_FAILED = 4;
   CHECKPOINT_STATUS_DELETING = 5;
   CHECKPOINT_STATUS_DELETED = 6;
 }

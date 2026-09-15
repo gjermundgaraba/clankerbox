@@ -115,7 +115,7 @@ func captureRequestForKind(source model.Request, kind string) model.Request {
 	return request
 }
 
-func TestRAMDeletionPreservesOwnershipAndUnresolvedJournal(t *testing.T) {
+func TestRAMDeletionPreservesOwnershipAndReplaysInterruptedRemoval(t *testing.T) {
 	t.Parallel()
 	h, cfg, rt, source := checkpointSource(t, checkpointRAM)
 	response := h.Execute(t.Context(), captureRequestForKind(source, checkpointRAM))
@@ -137,7 +137,7 @@ func TestRAMDeletionPreservesOwnershipAndUnresolvedJournal(t *testing.T) {
 	if rt.checkpointDeletes != 0 {
 		t.Fatal("unowned deletion reached runtime")
 	}
-	rt.fail = actionDeleteCheckpoint
+	rt.setFail(actionDeleteCheckpoint)
 	deletion := checkpointDeletion(cp)
 	requireStatus(t, h.Execute(t.Context(), deletion), statusUnresolved)
 	closeHelper(t, h)
@@ -145,11 +145,16 @@ func TestRAMDeletionPreservesOwnershipAndUnresolvedJournal(t *testing.T) {
 	h, err := host.Open(cfg, rt)
 	requireNoError(t, err)
 	defer closeHelper(t, h)
-	rt.fail = ""
-	requireStatus(t, h.Execute(t.Context(), deletion), statusUnresolved)
+	// Artifact removal is idempotent, so the interrupted deletion settles on retry.
+	rt.setFail()
+	settled := h.Execute(t.Context(), deletion)
+	requireStatus(t, settled, statusSucceeded)
+	if rt.checkpointDeletes != 2 || settled.Checkpoint == nil || settled.Checkpoint.Status != "deleted" {
+		t.Fatalf("interrupted deletion not replayed: deletes=%d %+v", rt.checkpointDeletes, settled)
+	}
 	requireStatus(t, h.Execute(t.Context(), checkpointDeletion(cp)), statusFailed)
-	if rt.checkpointDeletes != 1 {
-		t.Fatal("replayed ambiguous deletion")
+	if rt.checkpointDeletes != 2 {
+		t.Fatal("deleted a tombstone")
 	}
 }
 
@@ -170,6 +175,8 @@ func TestRAMCheckpointDeletionNeedsOnlyOwnedDirectory(t *testing.T) {
 	if _, err := os.Lstat(dir); !os.IsNotExist(err) {
 		t.Fatal("artifact retained", err)
 	}
+	// Removal is idempotent so interrupted work can always be settled.
+	requireNoError(t, n.DeleteCheckpoint(t.Context(), cp))
 	target := t.TempDir()
 	sentinel := filepath.Join(target, "keep")
 	requireNoError(t, os.WriteFile(sentinel, []byte("retained"), 0600))
@@ -191,7 +198,7 @@ func TestRAMDeletionRetainsInterruptedRestoreReservation(t *testing.T) {
 	response := h.Execute(t.Context(), captureRequestForKind(source, checkpointRAM))
 	requireStatus(t, response, statusSucceeded)
 	restore := restoreRequest(source, response.Checkpoint)
-	rt.fail = actionRestore
+	rt.setFail(actionRestore)
 	requireStatus(t, h.Execute(t.Context(), restore), statusUnresolved)
 	closeHelper(t, h)
 	cfg.Profiles = nil
@@ -201,5 +208,33 @@ func TestRAMDeletionRetainsInterruptedRestoreReservation(t *testing.T) {
 	requireStatus(t, h.Execute(t.Context(), checkpointDeletion(response.Checkpoint)), statusFailed)
 	if rt.checkpointDeletes != 0 {
 		t.Fatal("deleted a checkpoint still reserved by an interrupted restore")
+	}
+}
+
+func TestDiskCheckpointDeletionToleratesMissingCloneOnly(t *testing.T) {
+	t.Parallel()
+	h, cfg, _, req := setup(t)
+	closeHelper(t, h)
+	requireNoError(t, cfg.Validate())
+	state := "[]"
+	runner := &recordingRunner{}
+	runner.reply = func(call commandCall) ([]byte, error) {
+		if len(call.args) > 0 && call.args[0] == "list" {
+			return []byte(state), nil
+		}
+		return nil, nil
+	}
+	n := host.NewNativeRuntime(cfg, runner)
+	cp := host.CheckpointSpec{ID: model.NewID(), Kind: checkpointDisk, Profile: req.Profile}
+	requireNoError(t, n.DeleteCheckpoint(t.Context(), cp))
+	for _, call := range runner.calls {
+		if call.args[0] != "list" {
+			t.Fatalf("deleted a clone that does not exist: %v", call.args)
+		}
+	}
+	clone := host.Manifest{ID: cp.ID, Profile: cp.Profile}.RuntimeName()
+	state = `[{"name":"` + clone + `","state":"running","source":"local"}]`
+	if err := n.DeleteCheckpoint(t.Context(), cp); err == nil {
+		t.Fatal("deleted a running clone")
 	}
 }

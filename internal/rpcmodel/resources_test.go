@@ -216,6 +216,10 @@ func TestHostTypedSubmissionsPreserveJournalInputs(t *testing.T) {
 			}
 			if action == testCapture || action == testRestore || action == testDeleteCheckpoint {
 				cp := checkpoint()
+				if action == testCapture {
+					// A capture intent identifies a checkpoint that is not catalogued yet.
+					cp.Status = ""
+				}
 				source.Checkpoint = &cp
 			}
 			wire, err := rpcmodel.ToHostRequest(source)
@@ -298,3 +302,15 @@ const testFork = "fork"
 const testDeleteCheckpoint = "checkpoint-delete"
 
 const testRestore = "restore"
+
+func TestCheckpointStatusVocabularyIsClosed(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{"", "published", "deleting", "deleted"} {
+		cp := checkpoint()
+		cp.Status = status
+		restored, err := rpcmodel.FromCheckpoint(cloneWire(t, rpcmodel.ToCheckpoint(cp), &v1.Checkpoint{}))
+		if err != nil || restored.Status != status {
+			t.Fatalf("status %q did not round trip: %+v %v", status, restored, err)
+		}
+	}
+}

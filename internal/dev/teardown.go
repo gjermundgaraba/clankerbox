@@ -115,8 +115,7 @@ func (e *environment) teardownResources(
 		return err
 	}
 	for _, cp := range checkpoints.Msg.GetCheckpoints() {
-		if cp.GetStatus() != v1.CheckpointStatus_CHECKPOINT_STATUS_PUBLISHED &&
-			cp.GetStatus() != v1.CheckpointStatus_CHECKPOINT_STATUS_FAILED {
+		if cp.GetStatus() != v1.CheckpointStatus_CHECKPOINT_STATUS_PUBLISHED {
 			return fmt.Errorf(
 				"checkpoint %s has unsettled state %s; retained environment preserved",
 				cp.GetId(),

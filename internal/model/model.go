@@ -293,6 +293,8 @@ func (in *ChildInput) Validate() error {
 }
 
 // Checkpoint describes an owned artifact. Paths are private helper inventory.
+// A catalogued checkpoint is published or leaving; a capture that has not
+// published yet is represented only by its operation.
 type Checkpoint struct {
 	ID               string    `json:"id"`
 	Kind             string    `json:"kind"`
@@ -301,7 +303,7 @@ type Checkpoint struct {
 	Host             string    `json:"host"`
 	Profile          Profile   `json:"profile"`
 	CreatedAt        time.Time `json:"created_at"`
-	Status           string    `json:"status"` // pending, published, unresolved, failed, deleting, deleted
+	Status           string    `json:"status"` // published, deleting, deleted
 	RuntimePin       string    `json:"runtime_pin,omitempty"`
 	// Labels are the source machine's labels at capture time.
 	Labels map[string]string `json:"labels,omitempty"`

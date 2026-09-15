@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,11 +15,45 @@ import (
 	"clankerbox/internal/model"
 )
 
+// branchRuntime is driven synchronously by most tests and by the service worker
+// in others, so its failure switch and counters are guarded.
 type branchRuntime struct {
+	mu                                                         sync.Mutex
 	machines                                                   map[string]*memoryRuntime
 	inputs                                                     map[string]host.Manifest
 	forks, captures, restores, checkpointDeletes, preparations int
-	fail                                                       string
+	fail                                                       map[string]bool
+	captureErr                                                 string
+}
+
+type branchCounts struct{ forks, captures, restores, checkpointDeletes int }
+
+// setFail replaces the set of native steps that fail until the next call.
+func (r *branchRuntime) setFail(modes ...string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fail = map[string]bool{}
+	for _, mode := range modes {
+		r.fail[mode] = true
+	}
+}
+
+func (r *branchRuntime) failing(mode string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.fail[mode]
+}
+
+func (r *branchRuntime) counts() branchCounts {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return branchCounts{r.forks, r.captures, r.restores, r.checkpointDeletes}
+}
+
+func (r *branchRuntime) count(n *int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	*n++
 }
 
 func (r *branchRuntime) machine(m host.Manifest) *memoryRuntime {
@@ -48,49 +83,54 @@ func (r *branchRuntime) Delete(ctx context.Context, m host.Manifest) error {
 	return r.machine(m).Delete(ctx, m)
 }
 func (r *branchRuntime) BindGuest(ctx context.Context, m host.Manifest) (string, error) {
-	r.preparations++
-	if r.fail == "preparation" {
+	r.count(&r.preparations)
+	if r.failing("preparation") {
 		return "", errors.New("preparation reply lost")
 	}
 
 	return r.machine(m).BindGuest(ctx, m)
 }
 func (r *branchRuntime) Prerequisite(context.Context, string, host.Manifest, *host.CheckpointSpec) error {
-	if r.fail == "prerequisite" {
+	if r.failing("prerequisite") {
 		return errors.New("unsupported prerequisite")
 	}
 	return nil
 }
 func (r *branchRuntime) Fork(_ context.Context, source, child host.Manifest) error {
-	r.forks++
+	r.count(&r.forks)
 	m := r.machine(child)
 	m.exists = true
 	m.state = model.Running
 	m.disk = r.machine(source).disk
-	if r.fail == actionFork {
+	if r.failing(actionFork) {
 		return errors.New("interrupted native branch")
 	}
 	return nil
 }
 func (r *branchRuntime) Capture(context.Context, host.Manifest, host.CheckpointSpec) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.captures++
-	if r.fail == "capture" {
+	if r.fail["capture"] {
+		if r.captureErr != "" {
+			return errors.New(r.captureErr)
+		}
 		return errors.New("interrupted SAVE; source may be paused")
 	}
 	return nil
 }
 func (r *branchRuntime) Restore(_ context.Context, m host.Manifest, _ host.CheckpointSpec) error {
-	r.restores++
+	r.count(&r.restores)
 	r.machine(m).exists = true
 	r.machine(m).state = model.Running
-	if r.fail == actionRestore {
+	if r.failing(actionRestore) {
 		return errors.New("interrupted RAM resume")
 	}
 	return nil
 }
 func (r *branchRuntime) DeleteCheckpoint(context.Context, host.CheckpointSpec) error {
-	r.checkpointDeletes++
-	if r.fail == actionDeleteCheckpoint {
+	r.count(&r.checkpointDeletes)
+	if r.failing(actionDeleteCheckpoint) {
 		return errors.New("deletion reply lost")
 	}
 	return nil
@@ -121,7 +161,6 @@ func captureRequest(source model.Request) model.Request {
 		Host:             "mac",
 		Profile:          source.Profile,
 		CreatedAt:        time.Now().UTC(),
-		Status:           "pending",
 	}
 	r := source
 	r.OperationID = model.NewID()
@@ -180,39 +219,60 @@ func TestHelperBranchIdentityDuplicatesAndSourceGeneration(t *testing.T) {
 		t.Fatal("cloned host key")
 	}
 }
-func TestHelperCaptureInterruptedNeverPublishesOrReplays(t *testing.T) {
+func TestHelperCaptureInterruptedDiscardsArtifactAndSettles(t *testing.T) {
 	t.Parallel()
 	h, cfg, rt, source := setupBranch(t)
 	ctx := context.Background()
 	cpReq := captureRequest(source)
-	rt.fail = "capture"
+	// Native errors are free text; one that echoes our own wording must survive.
+	const captureErr = "interrupted SAVE; artifact retained: by the runtime; source may be paused"
+	rt.captureErr = captureErr
+	rt.setFail("capture")
 	requireStatus(t, h.Execute(ctx, cpReq), statusUnresolved)
+	// An unpublished capture is neither restorable nor a reservation-free source.
 	invalidRestore := forkRequest(t, source)
 	invalidRestore.Action = actionRestore
 	invalidRestore.Checkpoint = cpReq.Checkpoint
 	invalidRestore.SourceMachineID, invalidRestore.SourceGeneration = "", 0
 	requireStatus(t, h.Execute(ctx, invalidRestore), statusFailed)
+	stop := source
+	stop.Action, stop.OperationID, stop.Generation = actionDelete, model.NewID(), cpReq.Generation+1
+	requireStatus(t, h.Execute(ctx, stop), statusFailed)
 	var err error
 	closeHelper(t, h)
 	h, err = host.Open(cfg, rt)
 	requireNoError(t, err)
 	defer closeHelper(t, h)
-	rt.fail = ""
+	// The retry discards the partial artifact instead of replaying the capture.
+	// While the discard itself fails the capture stays unresolved.
+	rt.setFail(actionDeleteCheckpoint)
 	requireStatus(t, h.Execute(ctx, cpReq), statusUnresolved)
-	if rt.captures != 1 {
-		t.Fatal("replayed interrupted SAVE")
+	requireStatus(t, h.Execute(ctx, cpReq), statusUnresolved)
+	record, err := h.Operation(ctx, cpReq.OperationID)
+	requireNoError(t, err)
+	if !record.Resumable || record.Response.Error != captureErr+"; artifact retained: deletion reply lost" {
+		t.Fatalf("journal does not explain retained artifact: %+v", record)
 	}
-	for _, action := range []string{actionStart, actionStop, actionDelete} {
-		r := source
-		r.Action = action
-		r.OperationID = model.NewID()
-		r.Generation = cpReq.Generation + 1
-		requireStatus(t, h.Execute(ctx, r), statusFailed)
+	rt.setFail()
+	resp := h.Execute(ctx, cpReq)
+	requireStatus(t, resp, statusFailed)
+	if rt.captures != 1 || rt.checkpointDeletes != 3 || resp.Checkpoint != nil {
+		t.Fatalf("interrupted capture not discarded: captures=%d deletes=%d %+v", rt.captures, rt.checkpointDeletes, resp)
 	}
+	if resp.Observation == nil || resp.Observation.Generation != cpReq.Generation ||
+		resp.Error != "interrupted capture; artifact discarded: "+captureErr {
+		t.Fatalf("failed capture did not settle source generation: %+v", resp)
+	}
+	requireStatus(t, h.Execute(ctx, cpReq), statusFailed)
+	if rt.checkpointDeletes != 3 {
+		t.Fatal("replayed artifact discard after terminal failure")
+	}
+	// The settled generation accepts new work.
 	next := captureRequest(cpReq)
-	requireStatus(t, h.Execute(ctx, next), statusFailed)
-	child := forkRequest(t, cpReq)
-	requireStatus(t, h.Execute(ctx, child), statusFailed)
+	requireStatus(t, h.Execute(ctx, next), statusSucceeded)
+	if rt.captures != 2 {
+		t.Fatal("fresh capture did not run")
+	}
 }
 func TestHelperInterruptedForkPreparationAndRestoreRemainUnresolved(t *testing.T) {
 	t.Parallel()
@@ -285,18 +345,23 @@ func TestCapturePrerequisiteFailureDoesNotStrandSourceGeneration(t *testing.T) {
 	h, _, rt, source := setupBranch(t)
 	defer closeHelper(t, h)
 	ctx := context.Background()
-	rt.fail = "prerequisite"
+	rt.setFail("prerequisite")
 	req := captureRequest(source)
 	resp := h.Execute(ctx, req)
 	requireStatus(t, resp, statusFailed)
 	if resp.Observation == nil || resp.Observation.Generation != req.Generation || rt.captures != 0 {
 		t.Fatal("prerequisite did not settle source generation")
 	}
-	rt.fail = ""
+	rt.setFail()
 	source.OperationID = model.NewID()
 	source.Action = actionStart
 	source.Generation = req.Generation + 1
 	requireStatus(t, h.Execute(ctx, source), statusSucceeded)
+	restore := restoreRequest(source, req.Checkpoint)
+	requireStatus(t, h.Execute(ctx, restore), statusFailed)
+	if rt.restores != 0 {
+		t.Fatal("restored a capture that never published")
+	}
 }
 
 func TestHostLinuxDependencyGuardPreservesOwnedStore(t *testing.T) {
@@ -435,7 +500,7 @@ func exerciseInterruptedChild(t *testing.T, phase string) {
 		req.SourceGeneration = 0
 		req.Checkpoint = resp.Checkpoint
 	}
-	rt.fail = phase
+	rt.setFail(phase)
 	requireStatus(t, h.Execute(ctx, req), statusUnresolved)
 	m := rt.inputs[req.MachineID]
 	var err error
@@ -446,7 +511,7 @@ func exerciseInterruptedChild(t *testing.T, phase string) {
 	h, err = host.Open(cfg, rt)
 	requireNoError(t, err)
 	defer closeHelper(t, h)
-	rt.fail = ""
+	rt.setFail()
 	requireStatus(t, h.Execute(ctx, req), statusUnresolved)
 
 	if rt.forks+rt.restores != 1 {

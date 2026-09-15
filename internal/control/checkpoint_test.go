@@ -79,12 +79,64 @@ func TestCaptureMissingPublicationRemainsUnresolved(t *testing.T) {
 	if err != nil || op.Status != unresolvedStatus {
 		t.Fatalf("partial capture succeeded: %+v %v", op, err)
 	}
-	cp, err := c.Checkpoint(t.Context(), op.CheckpointID)
-	if err != nil || cp.Status != unresolvedStatus {
-		t.Fatalf("partial artifact published: %+v %v", cp, err)
-	}
+	expectNoCheckpoint(t, c, op.CheckpointID)
 	_, err = c.Mutate(ctx, source.MachineID, "delete", "delete")
 	expectCode(t, err, model.ReasonOperationPending)
+}
+
+func TestFailedCaptureLeavesNoCheckpointAndReleasesSource(t *testing.T) {
+	t.Parallel()
+	c, tr, in, _ := setupControl(t)
+	defer closeTest(t, c)
+	ctx := context.Background()
+	source := mustCreate(t, c, in, "create")
+	mustMutate(t, c, source.MachineID, "stop", "stop")
+	op, err := c.Derive(ctx, "checkpoint-create", source.MachineID, "capture", model.ChildInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	obs := tr.observations[source.MachineID]
+	obs.Generation = op.Generation
+	tr.observations[source.MachineID] = obs
+	tr.responses[op.ID] = model.Response{
+		OperationID: op.ID,
+		Status:      "failed",
+		Error:       "interrupted capture; artifact discarded",
+		Observation: &obs,
+	}
+	processHost(t, c, "mac")
+	op, err = c.Operation(t.Context(), op.ID)
+	if err != nil || op.Status != "failed" {
+		t.Fatalf("capture did not fail: %+v %v", op, err)
+	}
+	// The operation is the failure's only record; nothing is left to delete.
+	expectNoCheckpoint(t, c, op.CheckpointID)
+	_, err = c.Derive(ctx, "checkpoint-delete", op.CheckpointID, "delete-failed", model.ChildInput{})
+	expectCode(t, err, model.ReasonNotFound)
+	// The source is free for new work at its settled generation.
+	capture := deriveOperation(t, c, "checkpoint-create", source.MachineID, "capture-again", model.ChildInput{})
+	processHost(t, c, "mac")
+	checkpointWithStatus(t, c, capture.CheckpointID, "published")
+	mustMutate(t, c, source.MachineID, "delete", "delete")
+	all, err := c.Checkpoints(ctx)
+	if err != nil || len(all) != 1 || all[0].ID != capture.CheckpointID {
+		t.Fatalf("catalog lists more than the published checkpoint: %+v %v", all, err)
+	}
+}
+
+func expectNoCheckpoint(t *testing.T, controller *control.Controller, id string) {
+	t.Helper()
+	_, err := controller.Checkpoint(t.Context(), id)
+	expectCode(t, err, model.ReasonNotFound)
+	all, err := controller.Checkpoints(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cp := range all {
+		if cp.ID == id {
+			t.Fatalf("unpublished checkpoint listed: %+v", cp)
+		}
+	}
 }
 
 func TestLinuxControllerDependencyAndUnavailableSource(t *testing.T) {
@@ -197,16 +249,13 @@ func captureAfterReservedFork(
 		t.Fatalf("child ancestry: %+v %v", m, err)
 	}
 	capture := deriveOperation(t, c, "checkpoint-create", source.MachineID, "capture", model.ChildInput{})
-	cp := checkpointWithStatus(t, c, capture.CheckpointID, "pending")
-	if cp.Kind != "disk" {
-		t.Fatalf("intent: %+v %v", cp, err)
-	}
-	if _, err = c.Derive(ctx, "restore", cp.ID, "partial", child); err == nil {
-		t.Fatal("restored unpublished capture")
-	}
+	// Until the host publishes, the operation is the capture's only record.
+	expectNoCheckpoint(t, c, capture.CheckpointID)
+	_, err = c.Derive(ctx, "restore", capture.CheckpointID, "partial", child)
+	expectCode(t, err, model.ReasonNotFound)
 	processHost(t, c, "mac")
-	cp = checkpointWithStatus(t, c, cp.ID, "published")
-	if cp.RuntimePin == "" {
+	cp := checkpointWithStatus(t, c, capture.CheckpointID, "published")
+	if cp.RuntimePin == "" || cp.Kind != "disk" {
 		t.Fatalf("publication: %+v %v", cp, err)
 	}
 

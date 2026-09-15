@@ -47,7 +47,11 @@ serialized per host; guest admission uses a separate short lock, so unrelated
 machines keep their sessions while a fork or checkpoint runs. Unfinished work
 reserves every affected source and destination. Binding preparation happens
 outside admission and rechecks the machine epoch and reservations before a
-lease is published. Interrupted work stays fenced until explicitly reconciled.
+lease is published. An interrupted capture discards its partial artifact and
+fails, an interrupted checkpoint deletion replays because artifact removal is
+idempotent, and an interrupted child stays fenced until explicitly reconciled.
+The checkpoint catalog lists only published artifacts and their tombstones; a
+capture in flight or one that failed is visible through its operation alone.
 
 Profiles carry portable compatibility fields and image digests; the host
 resolves local image paths from its own configuration and derives capabilities.

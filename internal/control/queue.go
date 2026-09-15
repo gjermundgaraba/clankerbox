@@ -204,18 +204,15 @@ func (c *Controller) completeWork(
 	if op.Status == failedStatus && m.State == model.Stopped && !m.ObservationStale {
 		m.DesiredState = model.Stopped
 	}
-	if req.Checkpoint != nil && (req.Action == createCheckpointAction || req.Action == deleteCheckpointAction) {
+	// A published or deleted checkpoint comes from the host. A refused deletion
+	// restores the row; a capture that did not publish leaves no row at all.
+	switch {
+	case req.Checkpoint == nil:
+	case op.Status == succeededStatus && (req.Action == createCheckpointAction || req.Action == deleteCheckpointAction):
+		txErr = saveCheckpoint(ctx, tx, *resp.Checkpoint)
+	case op.Status == failedStatus && req.Action == deleteCheckpointAction:
 		cp := *req.Checkpoint
-		switch {
-		case op.Status == succeededStatus:
-			cp = *resp.Checkpoint
-		case req.Action == createCheckpointAction:
-			cp.Status = op.Status
-		case op.Status == failedStatus:
-			cp.Status = publishedStatus
-		default:
-			cp.Status = "deleting"
-		}
+		cp.Status = publishedStatus
 		txErr = saveCheckpoint(ctx, tx, cp)
 	}
 	if txErr == nil && req.Action != deleteCheckpointAction {

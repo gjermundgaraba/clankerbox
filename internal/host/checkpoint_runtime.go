@@ -61,7 +61,7 @@ func (n *NativeRuntime) Prerequisite(ctx context.Context, action string, source 
 			if err != nil {
 				return err
 			}
-			if !state.Exists || state.State != model.Stopped {
+			if (!state.Exists && action == actionRestore) || (state.Exists && state.State != model.Stopped) {
 				return model.NewError(model.ReasonPrerequisite, "checkpoint clone must exist and remain stopped", false)
 			}
 		}
@@ -295,7 +295,8 @@ func (n *NativeRuntime) finishRAMRestore(ctx context.Context, m Manifest) error 
 	return err
 }
 
-// DeleteCheckpoint removes only the specified owned checkpoint artifact.
+// DeleteCheckpoint removes only the specified owned checkpoint artifact. It is
+// idempotent so interrupted captures and deletions can always be settled.
 func (n *NativeRuntime) DeleteCheckpoint(ctx context.Context, cp CheckpointSpec) error {
 	if cp.Kind == checkpointDisk {
 		if err := n.deleteDiskCheckpoint(ctx, cp); err != nil {
@@ -305,15 +306,18 @@ func (n *NativeRuntime) DeleteCheckpoint(ctx context.Context, cp CheckpointSpec)
 
 	dir := n.checkpointDir(cp)
 	info, err := os.Lstat(dir)
-	if err != nil {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
 		return err
-	}
-	if !info.IsDir() {
+	case !info.IsDir():
 		return errors.New("checkpoint directory ownership mismatch")
+	default:
+		if err = os.RemoveAll(dir); err != nil {
+			return err
+		}
 	}
-	if err = os.RemoveAll(dir); err != nil {
-		return err
-	}
+	// An earlier attempt may have removed the directory without a durable parent.
 	return statefs.Sync(filepath.Dir(dir))
 }
 
@@ -425,8 +429,11 @@ func (n *NativeRuntime) deleteDiskCheckpoint(ctx context.Context, cp CheckpointS
 	if err != nil {
 		return err
 	}
-	if !state.Exists || state.State != model.Stopped {
-		return errors.New("checkpoint is not an owned stopped clone")
+	if !state.Exists {
+		return nil
+	}
+	if state.State != model.Stopped {
+		return errors.New("checkpoint clone is not stopped")
 	}
 	if _, err = n.run(ctx, m, actionDelete, m.RuntimeName()); err != nil {
 		return err

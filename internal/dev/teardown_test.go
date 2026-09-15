@@ -20,11 +20,41 @@ import (
 type teardownFixture struct {
 	clankerboxv1connect.UnimplementedMachineServiceHandler
 
-	mu        sync.Mutex
-	keys      []string
-	loseReply bool
-	pending   bool
-	observed  chan struct{}
+	mu          sync.Mutex
+	keys        []string
+	loseReply   bool
+	pending     bool
+	observed    chan struct{}
+	checkpoints []*v1.Checkpoint
+}
+
+func (f *teardownFixture) ListMachines(
+	context.Context,
+	*connect.Request[v1.ListMachinesRequest],
+) (*connect.Response[v1.ListMachinesResponse], error) {
+	return connect.NewResponse(&v1.ListMachinesResponse{}), nil
+}
+
+func (f *teardownFixture) ListCheckpoints(
+	context.Context,
+	*connect.Request[v1.ListCheckpointsRequest],
+) (*connect.Response[v1.ListCheckpointsResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return connect.NewResponse(&v1.ListCheckpointsResponse{Checkpoints: f.checkpoints}), nil
+}
+
+func (f *teardownFixture) DeleteCheckpoint(
+	_ context.Context,
+	r *connect.Request[v1.DeleteCheckpointRequest],
+) (*connect.Response[v1.Operation], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keys = append(f.keys, r.Msg.GetIdempotencyKey())
+	f.checkpoints = nil
+	return connect.NewResponse(
+		&v1.Operation{Id: fixtureAcceptedOperation, Status: v1.OperationStatus_OPERATION_STATUS_PENDING},
+	), nil
 }
 
 func (f *teardownFixture) StopMachine(
@@ -147,5 +177,38 @@ func TestTeardownCancellationRetainsOperationAndPollsWithoutResubmission(t *test
 	defer fixture.mu.Unlock()
 	if len(fixture.keys) != 1 {
 		t.Fatalf("accepted operation resubmitted %d times", len(fixture.keys))
+	}
+}
+
+func TestTeardownDestroysPublishedCheckpointsAndRefusesLeavingOnes(t *testing.T) {
+	t.Parallel()
+	for _, status := range []v1.CheckpointStatus{
+		v1.CheckpointStatus_CHECKPOINT_STATUS_PUBLISHED,
+		v1.CheckpointStatus_CHECKPOINT_STATUS_DELETING,
+	} {
+		t.Run(status.String(), func(t *testing.T) {
+			t.Parallel()
+			dir, err := statefs.Open(filepath.Join(t.TempDir(), "state"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = dir.Close() }()
+			env := &environment{dir: dir}
+			journal := teardownJournal{Destroy: true, Intents: map[string]*teardownIntent{}}
+			fixture := &teardownFixture{checkpoints: []*v1.Checkpoint{{Id: "checkpoint", Status: status}}}
+			rpc := teardownRPC(t, fixture)
+			err = env.teardownResources(t.Context(), rpc, &journal)
+			fixture.mu.Lock()
+			defer fixture.mu.Unlock()
+			if status == v1.CheckpointStatus_CHECKPOINT_STATUS_PUBLISHED {
+				if err != nil || len(fixture.keys) != 1 || !journal.Intents["delete-checkpoint:checkpoint"].Done {
+					t.Fatalf("published checkpoint not destroyed: %v %+v", err, journal)
+				}
+				return
+			}
+			if err == nil || len(fixture.keys) != 0 {
+				t.Fatalf("leaving checkpoint mutated: %v %v", err, fixture.keys)
+			}
+		})
 	}
 }
