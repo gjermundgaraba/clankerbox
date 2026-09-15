@@ -103,6 +103,14 @@ must match a URI in the ingress certificate, such as
 `spiffe://clankerbox/ingress/edge`. Bearer authentication is required in either
 mode, and private key files must be owned by the service user with mode 0600.
 
+## TypeScript SDK
+
+[`@gjermundgaraba/clankerbox-sdk`](protocol/README.md) provides generated Protobuf
+messages and Connect RPC service descriptors, with compiled JavaScript and
+TypeScript declarations. See the [SDK README](protocol/README.md) for installation,
+transport requirements and controller compatibility, and
+[SDK publishing](docs/sdk-publishing.md) for npm release instructions.
+
 ## Repository layout
 
 | Path | Contents |

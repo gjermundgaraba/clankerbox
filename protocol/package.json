@@ -1,7 +1,19 @@
 {
-  "name": "@clankerbox/sdk",
+  "name": "@gjermundgaraba/clankerbox-sdk",
   "version": "0.2.0",
-  "private": true,
+  "description": "Generated Protobuf messages and Connect RPC service descriptors for Clankerbox",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjermundgaraba/clankerbox.git",
+    "directory": "protocol"
+  },
+  "homepage": "https://github.com/gjermundgaraba/clankerbox/tree/main/protocol#readme",
+  "bugs": "https://github.com/gjermundgaraba/clankerbox/issues",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "type": "module",
   "packageManager": "pnpm@12.4.1",
   "exports": {
@@ -28,14 +40,16 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "generate": "./scripts/generate.sh",
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "test": "node --test test/*.test.mjs",
-    "prepack": "pnpm build"
+    "test:package": "node scripts/test-package.mjs",
+    "prepack": "node scripts/prepare-package.mjs && pnpm build"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.15.0"

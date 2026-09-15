@@ -1,4 +1,31 @@
-# RPC contract and SDK
+# @gjermundgaraba/clankerbox-sdk
+
+Generated Protobuf messages, TypeScript types and Connect RPC service descriptors
+for Clankerbox. This ESM package includes compiled JavaScript and declarations;
+consumers do not need protoc, a Go toolchain, or a Clankerbox source checkout.
+
+```sh
+npm install @gjermundgaraba/clankerbox-sdk @connectrpc/connect @connectrpc/connect-node
+```
+
+```ts
+import { MachineService, SessionService } from "@gjermundgaraba/clankerbox-sdk";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-node";
+```
+
+The package supplies descriptors, not a transport or lifecycle coordinator.
+Node consumers supply Connect 2.x and use
+`createConnectTransport({httpVersion: "2", ...})`; browser fetch cannot carry
+the bidirectional attachment stream. `@bufbuild/protobuf` is included as a
+runtime dependency. All descriptors are exported at the root and through
+`/resources`, `/machine`, `/session` and `/host` subpaths.
+
+SDK **0.2.0** is qualified against Clankerbox **0.6.0**, including its
+artifact-only checkpoint contract. SDK and controller versions are independent;
+pin a qualified pair rather than assuming their version numbers match.
+
+## RPC contract
 
 The wire package is `clankerbox.v1`. The Protobuf sources under
 `clankerbox/v1/` generate Go messages in `gen/clankerbox/v1`, Go Connect
@@ -25,7 +52,7 @@ Errors combine a Connect status code with a typed `ErrorDetail` reason.
 `retryable` describes the operation, not terminal input: a lost input
 acknowledgement must never be replayed. The streaming semantics of
 `AttachSession` are specified in
-[terminal sessions](../docs/terminal-sessions.md).
+[terminal sessions](https://github.com/gjermundgaraba/clankerbox/blob/main/docs/terminal-sessions.md).
 
 ## Generation and packaging
 
@@ -36,6 +63,7 @@ pnpm generate
 pnpm build
 pnpm check
 pnpm test
+pnpm test:package
 pnpm pack
 ```
 
@@ -44,12 +72,14 @@ protoc-gen-connect-go and protoc-gen-es into `.tools/`. Go dependency versions
 are in the root `go.mod`; JavaScript versions are in `package.json` and the
 lockfile. Regeneration must leave the checked-in output unchanged.
 
-`pnpm pack` produces a `@clankerbox/sdk` tarball with JavaScript and
-declarations. It exports all descriptors at the root and per-file subpaths
-`/resources`, `/machine`, `/session` and `/host`. Node consumers use
-`createConnectTransport({httpVersion: "2", ...})` from
-`@connectrpc/connect-node`; browser fetch cannot carry the bidirectional
-attachment stream.
+`pnpm pack` clean-builds JavaScript and declarations and copies the repository's
+MIT license into the package. `pnpm test:package` packs and installs the artifact
+in a temporary consumer with lifecycle scripts disabled, then checks runtime
+imports, TypeScript declarations, package contents and license inclusion.
+
+Publishing uses dedicated `sdk-v<VERSION>` tags, not controller release tags.
+See [SDK publishing](https://github.com/gjermundgaraba/clankerbox/blob/main/docs/sdk-publishing.md)
+for first-publish setup and the tokenless GitHub Actions release workflow.
 
 ## Tests
 
@@ -62,4 +92,5 @@ The Go tests cover conversion round trips, private-field redaction, every
 operation action and state, and typed errors over a real connection. The SDK
 tests cover bigint and JSON precision, oneofs and service shapes.
 `test/real-vm.mjs` and `test/public-session.mjs` drive a running machine and are
-not part of the default test glob; see [tests](../tests/README.md).
+not part of the default test glob; see
+[tests](https://github.com/gjermundgaraba/clankerbox/blob/main/tests/README.md).

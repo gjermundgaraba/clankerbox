@@ -13,10 +13,12 @@ make lint    # golangci-lint run ./...
 The protobuf definitions and the TypeScript SDK live in `protocol/`:
 
 ```sh
-cd protocol && pnpm install --frozen-lockfile && pnpm check && pnpm build && pnpm test
+cd protocol && pnpm install --frozen-lockfile && pnpm check && pnpm build && pnpm test && pnpm test:package
 ```
 
-CI runs the Go tests on macOS and Linux, lint, and the protocol checks.
+CI runs the Go tests on macOS and Linux, lint, and the protocol checks, including
+installation of the packed SDK into a standalone consumer. See
+[SDK publishing](docs/sdk-publishing.md) for npm setup and releases.
 
 ## Protocol changes
 
