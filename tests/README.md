@@ -46,6 +46,23 @@ controls, a healthy sibling beside an unread viewer, bounded disconnection of a
 stalled viewer, and cancel/resume on the same shell. It does not stop or delete
 the machine. Keep restarts and lifecycle mutations out of the test window.
 
+## Root and terminal qualification
+
+Run the maintained checks against a disposable machine on each guest OS:
+
+```sh
+node protocol/test/real-vm.mjs CLIENT_CONFIG_JSON qualify MACHINE_ID
+```
+
+The `root` check verifies UID/GID 0, the root home and default cwd, root session
+environment, and filtered daemon environment. It installs and runs a uniquely
+named temporary executable in `/usr/local/bin`, removing it in `finally`, and
+never touches daemon files. The `prefix` check verifies retained output, input
+admission while response reads pause, and finite EOF without ending the shell.
+Use `root` or `prefix` in place of `qualify` to select one check. Both checks
+create and end their own sessions. Historical qualification reports describe
+their original images and do not qualify the prepared-v2 root contract.
+
 ## session-run
 
 `session-run` runs one command in a bearer-authenticated terminal session and

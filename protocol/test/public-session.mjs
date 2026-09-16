@@ -58,7 +58,9 @@ try {
   const stalledAt = Date.now();
   const marker = 'PUBLIC_DONE_' + randomUUID().replaceAll('-', '');
   const bytes = 64 * 1024 * 1024;
-  const script = `python3 -c 'import base64,os,sys,time; chunk=base64.b64encode(os.urandom(12288)); [(sys.stdout.buffer.write(chunk),sys.stdout.buffer.flush(),time.sleep(.01)) for _ in range(${bytes / 16384})]'; printf '\\n${marker}\\n'\n`;
+  // Pace against elapsed time so guest timer coalescing cannot accumulate
+  // thousands of delayed sleeps and exhaust the acceptance timeout.
+  const script = `python3 -c 'import base64,os,sys,time; chunk=base64.b64encode(os.urandom(12288)); start=time.monotonic(); [(sys.stdout.buffer.write(chunk),sys.stdout.buffer.flush(),time.sleep(max(0,start+(i+1)*.01-time.monotonic()))) for i in range(${bytes / 16384})]'; printf '\\n${marker}\\n'\n`;
   fastAbort = new AbortController();
   const fastSignal = AbortSignal.any([controller.signal, fastAbort.signal]);
   async function* commands() {

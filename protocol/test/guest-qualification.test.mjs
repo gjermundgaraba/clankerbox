@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import test from 'node:test';
-import { isolationCommand, isolationScript, inheritedEnvironmentCheck, prefixCommand, prefixBytes } from './guest-qualification.mjs';
+import { rootCommand, rootScript, inheritedEnvironmentCheck, prefixCommand, prefixBytes } from './guest-qualification.mjs';
 
 test('live qualification scripts fit the guest argv contract and parse without execution', () => {
-  for (const command of [isolationCommand, prefixCommand]) {
+  for (const command of [rootCommand, prefixCommand]) {
     assert(Buffer.byteLength(command) <= 4096, 'guest per-argument limit exceeded');
     const shell = spawnSync('/bin/sh', ['-n', '-c', command], { encoding: 'utf8' });
     assert.equal(shell.status, 0, shell.stderr);
   }
   const python = spawnSync('python3', ['-c', 'import ast,sys; ast.parse(sys.stdin.read())'], {
-    input: isolationScript, encoding: 'utf8',
+    input: rootScript, encoding: 'utf8',
   });
   assert.equal(python.status, 0, python.stderr);
 });
@@ -24,7 +24,7 @@ test('resume qualification generates exactly the bounded printable high-entropy 
   assert(/^[A-Za-z0-9+/]+$/.test(result.stdout.toString('ascii')));
 });
 
-test('isolation checks captured environment names while ignoring interpreter-added names', () => {
+test('root checks captured environment names while ignoring interpreter-added names', () => {
   // Model the macOS developer-tool launcher adding variables after the shell
   // captured its keys. Those additions cannot hide a leaked original key.
   const check = `import os,sys\nos.environ['SDKROOT']='launcher-added'\n${inheritedEnvironmentCheck}`;

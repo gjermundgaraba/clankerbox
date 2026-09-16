@@ -19,7 +19,9 @@ templates, a guest image and profiles.
 assembled.
 
 Supported bundles use manifest format 3 and include a prepared guest image.
-The workload UID is 32001; that UID cannot also own the host environment.
+Guest sessions run as root, with no workload-user setting; see the
+[guest trust model](terminal-sessions.md). Keep the bundle and machine storage
+private to the host operator.
 Older disposable environments must be destroyed using their matching old CLI
 and bundle before switching; no runtime image upgrade is performed.
 
@@ -129,7 +131,7 @@ without touching the environment.
 
 Unit tests cover ownership, bundle verification, state binding, supervision and
 teardown ordering. The guest qualification in `protocol/test` and the live
-harnesses in [tests](../tests/README.md) exercise real VMs: workload isolation,
+harnesses in [tests](../tests/README.md) exercise real VMs: root session identity and system-directory writes,
 PTY and memory continuity across RAM forks and restores, identity rebinding and
 the cold lifecycle.
 

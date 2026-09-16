@@ -25,7 +25,7 @@ def sha(path):
     return h.hexdigest()
 
 
-def entry(path, name):
+def entry(path, name, allow_setid=False):
     info = path.lstat()
     record = {'path': name, 'mode': stat.S_IMODE(info.st_mode)}
     if stat.S_ISLNK(info.st_mode):
@@ -36,14 +36,15 @@ def entry(path, name):
         record.update(type='file', sha256=sha(path))
     else:
         raise ValueError('unsupported payload type: ' + str(path))
-    if record['mode'] & 0o6000:
+    if not allow_setid and record['mode'] & 0o6000:
         raise ValueError('setuid/setgid payload: ' + str(path))
     return record
 
 
-def inventory(root, include_root=True):
+def inventory(root, include_root=True, image_root=None):
     paths = ([root] if include_root else []) + sorted(root.rglob('*'), key=lambda p: p.relative_to(root).as_posix())
-    return [entry(p, p.relative_to(root).as_posix()) for p in paths]
+    return [entry(p, p.relative_to(root).as_posix(),
+                  allow_setid=image_root is not None and p.is_relative_to(image_root)) for p in paths]
 
 
 def canonical_json(value):
@@ -72,8 +73,6 @@ def verify_inputs(args):
     )
     if sha(args.image / 'usr/local/bin/smolvm-agent') != expected_agent:
         raise ValueError('image agent does not match qualified platform binary')
-    if stat.S_IMODE(args.image.stat().st_mode) != 0o755:
-        raise ValueError('image root must preserve guest mode 0755')
     verify_runtime_assets(args.runtime_assets, args.os, args.arch)
 
 
@@ -260,9 +259,9 @@ def main():
         subprocess.run(['codesign', '--force', '--sign', '-', str(out / 'clankerbox')], check=True)
         for name in ['clankerbox-server', 'clankerbox-host']:
             subprocess.run(['codesign', '--force', '--sign', '-', str(binaries / name)], check=True)
-    image_digest = content_digest(inventory(out / 'image'))
+    image_digest = content_digest(inventory(out / 'image', image_root=out / 'image'))
     runtime_digest = content_digest(
-        inventory(runtime) + [entry(out / 'image/usr/local/bin/smolvm-agent', 'smolvm-agent')]
+        inventory(runtime) + [entry(out / 'image/usr/local/bin/smolvm-agent', 'smolvm-agent', allow_setid=True)]
     )
     manifest = {
         'manifest_format': 3,
@@ -282,7 +281,7 @@ def main():
         'profile_ram_mib': 1024,
         'storage_gib': 1,
         'overlay_gib': 8,
-        'files': inventory(out, include_root=False),
+        'files': inventory(out, include_root=False, image_root=out / 'image'),
     }
     (out / 'bundle.json').write_text(json.dumps(manifest, indent=2) + '\n')
     if args.no_archive:

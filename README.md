@@ -4,6 +4,8 @@ Clankerbox runs long-lived coding machines behind an API. Machines are VMs that
 keep their disks until deleted, can be forked while running (Linux RAM forks),
 and can be captured as checkpoints and restored into new machines. Terminal
 access goes through guest-owned sessions on the same API; guests run no SSH.
+Sessions run as root on Linux and macOS, with no workload-user setting.
+See [terminal sessions](docs/terminal-sessions.md) for the guest trust model.
 
 A deployment is three services:
 

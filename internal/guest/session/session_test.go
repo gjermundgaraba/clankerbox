@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -797,10 +798,13 @@ func TestProcessEnvironmentAndWorkingDirectory(t *testing.T) {
 [ "$HOME" = "$EXPECTED_HOME" ] &&
 [ "$USER" = "$EXPECTED_USER" ] && [ "$LOGNAME" = "$EXPECTED_USER" ] &&
 [ "$SHELL" = /bin/sh ] && [ "$LANG" = C.UTF-8 ] &&
-[ "$PATH" = /usr/local/bin:/usr/bin:/bin ] &&
+[ "$PATH" = /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin ] &&
+[ "$(id -u)" = "$EXPECTED_UID" ] && [ "$(id -g)" = "$EXPECTED_GID" ] &&
+[ "$(pwd -P)" = "$(cd "$EXPECTED_HOME" && pwd -P)" ] &&
 [ "$TERM" = requested-term ] && [ "$EXPLICIT_VALUE" = supplied ]`},
 		Env: map[string]string{
 			"EXPECTED_HOME": account.HomeDir, "EXPECTED_USER": account.Username,
+			"EXPECTED_UID": strconv.Itoa(os.Geteuid()), "EXPECTED_GID": strconv.Itoa(os.Getegid()),
 			"TERM": "requested-term", "EXPLICIT_VALUE": "supplied",
 		},
 	}

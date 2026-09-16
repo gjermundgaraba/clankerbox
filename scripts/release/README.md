@@ -55,8 +55,8 @@ provenance mismatch. The original working checkout remains untouched.
    `images/install-linux-tools.sh` inside the guest with `images/package-locks`
    alongside it. The recipe verifies the pristine base, installs the locked apt
    closure, checks the final package inventory, records tool versions and locks
-   root login. Keep this generic image free of workload users and private guest state;
-   the bundle assembler creates the prepared account and installs its own guest binary.
+   root login. Keep this generic image free of private guest state; the bundle
+   assembler installs its own guest binary and contract marker.
 4. Export the guest filesystem with `tar --one-file-system`, excluding `proc`,
    `sys`, `dev`, `run`, `tmp`, `mnt`, `oldroot`, `storage`, `export`, `recipe`
    and `.smolvm`. Normalize the export's symlinks with the staging script's
@@ -90,7 +90,7 @@ provenance mismatch. The original working checkout remains untouched.
    It also checks the engine `LICENSE` and `Cargo.lock` against
    [source.json](inputs/source.json), verifies the notices and inventory,
    cross-compiles the Go binaries, finalizes the copied Linux image with its guest
-   binary, fixed workload account and system permissions, and checks the copied
+   binary, contract marker and mode-1777 `/tmp`, and checks the copied
    license inventory again before writing the manifest:
 
    ```sh
@@ -209,17 +209,20 @@ python3 scripts/release/build-mac-host.py --output HOST_BINARY \
 ## Prepared images (format 3)
 
 `prepared_image.py`, invoked by the assembler on its **output copy**, installs
-`clankerbox-guest`, workload UID/GID 32001, a locked account and the image contract
-marker. The generic qualified input is never edited. The guest executable is
-part of `image_digest`; rebuilding it requires rebuilding the image and bundle.
-Hosts reject a colliding operator UID, old manifests, absent contracts and
-mismatching guest executables instead of repairing images at runtime.
+`clankerbox-guest` and the `clankerbox-prepared-v2` image contract
+marker. Sessions run as root on Linux and macOS; no workload account is created
+or configured. The generic qualified input is never edited. Bundle format 3 and
+archive packaging are unchanged. The guest executable is part of `image_digest`;
+rebuilding it requires rebuilding the image and bundle. Hosts reject old markers,
+absent contracts and mismatching guest executables instead of repairing images
+at runtime. No existing image, environment or checkpoint is migrated.
 
-Preserve directory modes during staging and extraction. Preparation normalizes
-only explicit guest installation/state ancestors and `/tmp`; it does not
-recursively repair damaged system traversal modes or open private directories.
-See the [permission-correction qualification](inputs/prepared-permissions-qualification.md)
-for fresh and retained Linux/KVM workload access checks.
+The base image supplies the root account, its home and ordinary system
+directories. Preparation preserves existing file and directory modes, including
+guest setid bits, and creates the marker's parent directory as needed.
+It sets `/tmp` to mode 1777 for normal shared temporary-directory behavior.
+Fresh Linux startup adjusts only the daemon state directory and
+its ancestors to satisfy state storage ownership requirements.
 
 For a separately deployed Tart profile, build the Darwin guest and supply it to
 `images/finalize-mac.sh OWNED_TART_HOME bin/clankerbox-guest-darwin-arm64`.
@@ -229,7 +232,9 @@ image digest; never relabel existing images/checkpoints or overwrite a live seed
 See [the image contract](../../docs/adr/0007-prepared-guest-images.md) and
 [lifecycle qualification/benchmarking](../../docs/lifecycle-performance.md).
 Historical qualification records remain records of their original bundles;
-format-3 candidates require fresh live qualification.
+prepared-v2 candidates require fresh live root-session qualification.
+The [root-session qualification report](inputs/root-session-qualification.md)
+records prepared-v2 Linux/KVM and macOS/Tart acceptance and startup measurements.
 The [prepared-image qualification report](inputs/prepared-image-qualification.md)
 records the tested format-3 candidates and their same-runtime performance baseline.
 The [Tart qualification report](inputs/tart-prepared-qualification.md) covers the

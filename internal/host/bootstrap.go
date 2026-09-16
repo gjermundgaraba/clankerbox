@@ -172,7 +172,7 @@ func (n *NativeRuntime) ensureGuestService(
 		if mode == guestRebind || (mode == guestBind && m.Profile.Runtime == runtimeSmolvm && m.SourceMachineID != "") {
 			return errors.New("live guest daemon is absent; refusing cold session substitution")
 		}
-		command := guestBinaryPath + " serve --state-dir " + guestState + " --binding-file " + guestBinding + " --listen 0.0.0.0:7443 --workload-user clankerbox"
+		command := guestBinaryPath + " serve --state-dir " + guestState + " --binding-file " + guestBinding + " --listen 0.0.0.0:7443"
 		launch := "set -eu\numask 077\nnohup " + command + " > " + guestState + "/daemon.log 2>&1 < /dev/null &\n"
 		if _, err = n.guest(ctx, m, privilegedScript(m, launch)); err != nil {
 			return err
@@ -208,8 +208,8 @@ func checkGuestIdentity(ctx context.Context, client clankerboxv1connect.SessionS
 	if err != nil {
 		return err
 	}
-	if result.Msg.GetMachineId() != machine || result.Msg.GetUser() != "clankerbox" {
-		return errors.New("guest identity or workload mismatch")
+	if result.Msg.GetMachineId() != machine {
+		return errors.New("guest identity mismatch")
 	}
 	return nil
 }
@@ -258,34 +258,22 @@ func privilegedScript(m Manifest, script string) string {
 }
 
 // Prepared images own static installation. Directory-image ownership still needs
-// a bounded guest-root cutover for private state ancestors and the executable.
+// a bounded guest-root cutover for private state ancestors.
 func guestPrivateStateScript(m Manifest) string {
-	home := "/home/clankerbox"
-	if m.Profile.Runtime == runtimeTart {
-		home = "/Users/clankerbox"
-	}
 	ownership := ""
 	if m.Profile.Runtime == runtimeSmolvm {
 		// The lower image inherits the host operator's UID. These few overlay
 		// metadata changes establish statefs trust without walking the image.
-		ownership = "chown 0:0 / /var /var/lib /tmp /usr/local/bin/clankerbox-guest\nchmod 755 / /var /var/lib\nchmod 1777 /tmp\n"
+		ownership = "chown 0:0 / /var /var/lib\nchmod 755 / /var /var/lib\n"
 	}
 	return privilegedScript(m, "set -eu\numask 077\n"+ownership+
-		"test ! -L "+home+"\ntest ! -L "+guestStatePath(m)+"\n"+
-		"mkdir -p "+home+" "+guestStatePath(m)+"\n"+
-		"chown clankerbox "+home+"\nchmod 700 "+home+"\n"+
+		"test ! -L "+guestStatePath(m)+"\n"+
+		"mkdir -p "+guestStatePath(m)+"\n"+
 		"chown 0:0 "+guestStatePath(m)+"\nchmod 700 "+guestStatePath(m)+"\n")
 }
 
 func preparedGuestScript(m Manifest) string {
-	s := "set -eu\ntest \"$(cat /usr/local/share/clankerbox/prepared)\" = clankerbox-prepared-v1\n"
-	if m.Profile.Runtime == runtimeSmolvm {
-		s += "test \"$(id -u clankerbox)\" = 32001\ntest \"$(id -g clankerbox)\" = 32001\ntest \"$(id -Gn clankerbox)\" = clankerbox\n"
-	} else {
-		s += "test \"$(id -u clankerbox)\" = 1001\n"
-		s += `for group in $(id -Gn clankerbox); do case "$group" in root|wheel|sudo|admin) echo 'workload account has privileged membership' >&2; exit 1;; esac; done
-`
-	}
+	s := "set -eu\ntest \"$(cat /usr/local/share/clankerbox/prepared)\" = clankerbox-prepared-v2\n"
 	return privilegedScript(m, s+guestDigestScript(m))
 }
 

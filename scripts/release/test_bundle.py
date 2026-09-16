@@ -109,6 +109,24 @@ class InventoryTests(unittest.TestCase):
             self.assertIn('.', records)
             self.assertNotIn('.', {row['path'] for row in bundle.inventory(root, include_root=False)})
 
+    def test_image_setid_modes_are_inventoried_but_host_setid_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            image = root / 'image'
+            image.mkdir()
+            payload = image / 'tool'
+            payload.write_bytes(b'guest tool')
+            payload.chmod(0o6755)
+            records = bundle.inventory(root, image_root=image)
+            self.assertEqual(next(r['mode'] for r in records if r['path'] == 'image/tool'), 0o6755)
+            guest_records = bundle.inventory(image, image_root=image)
+            self.assertEqual(next(r['mode'] for r in guest_records if r['path'] == 'tool'), 0o6755)
+            host = root / 'host'
+            host.write_bytes(b'host tool')
+            host.chmod(0o4755)
+            with self.assertRaisesRegex(ValueError, 'setuid'):
+                bundle.inventory(root, image_root=image)
+
     def test_rejects_special_files_and_privileged_modes(self):
         import os
 

@@ -59,8 +59,7 @@ node --version > /.clankerbox-image/tool-versions.txt
 npm --version >> /.clankerbox-image/tool-versions.txt
 git --version >> /.clankerbox-image/tool-versions.txt
 python3 --version >> /.clankerbox-image/tool-versions.txt
-# Disable login accounts; the root service drops to a separately provisioned
-# workload UID.
+# Disable password login; root sessions run through the guest service.
 passwd -l root
 rm -f /etc/machine-id
 : > /etc/machine-id

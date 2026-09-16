@@ -69,3 +69,14 @@ func TestListenAdminUsesPrivateFilesystemSocket(t *testing.T) {
 		t.Fatalf("same-user request did not reach admin handler: %s", resp.Status)
 	}
 }
+
+func TestStartRequiresRoot(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("requires an unprivileged test process")
+	}
+	_, err := Start(t.Context(), Options{Paths: PathsIn(t.TempDir())})
+	if err == nil || err.Error() != "guest service requires root" {
+		t.Fatalf("unprivileged daemon start: %v", err)
+	}
+}

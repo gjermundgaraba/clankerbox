@@ -1,10 +1,12 @@
 package dev
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -129,8 +131,8 @@ spec=importlib.util.spec_from_file_location('builder',sys.argv[1])
 builder=importlib.util.module_from_spec(spec);spec.loader.exec_module(builder)
 manifest=pathlib.Path(sys.argv[2]);root=manifest.parent
 value=json.loads(manifest.read_text())
-value['files']=[entry for entry in builder.inventory(root,include_root=False) if entry['path']!='bundle.json']
-value['image_digest']=builder.content_digest(builder.inventory(root/'image'))
+value['files']=[entry for entry in builder.inventory(root,include_root=False,image_root=root/'image') if entry['path']!='bundle.json']
+value['image_digest']=builder.content_digest(builder.inventory(root/'image',image_root=root/'image'))
 runtime=builder.inventory(root/'runtime')+[builder.entry(root/'image/usr/local/bin/smolvm-agent','smolvm-agent')]
 value['runtime_digest']=builder.content_digest(runtime)
 manifest.write_text(json.dumps(value))
@@ -142,5 +144,39 @@ manifest.write_text(json.dumps(value))
 	}
 	if _, err = verifyBundle(manifest); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBundleSetIDPermissionsAreGuestOnly(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"image/usr/bin/sudo", "bin/host"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, name)
+			if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.WriteFile(path, []byte("executable"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err = os.Chmod(path, 0755|os.ModeSetuid|os.ModeSetgid); err != nil {
+				t.Fatal(err)
+			}
+			b := Bundle{root: root, ImagePath: "image"}
+			entry := BundleFile{Path: name, Type: bundleRegularFile, Mode: 06755}
+			digest, err := b.entryDigest(entry.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry.SHA256 = hex.EncodeToString(digest)
+			err = b.verifyEntry(entry)
+			if (err == nil) != strings.HasPrefix(name, "image/") {
+				t.Fatalf("setid verification: %v", err)
+			}
+		})
 	}
 }

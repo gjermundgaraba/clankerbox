@@ -1,5 +1,5 @@
 // Maintained live-VM checks. Every probe uses ordinary SessionService authority,
-// creates only its own session, and attempts no writes to protected guest files.
+// creates only its own session and temporary executable; daemon files are untouched.
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -9,42 +9,36 @@ export const inheritedEnvironmentCheck = String.raw`allowed={'PATH','HOME','USER
 assert not set(sys.argv[1].splitlines()).difference(allowed), 'unexpected inherited daemon environment keys'
 `;
 
-export const isolationScript = String.raw`import grp,json,os,platform,pwd,shutil,socket,subprocess,sys
+export const rootScript = String.raw`import json,os,platform,pwd,subprocess,sys,tempfile
 uid=os.geteuid()
-assert uid!=0 and os.getuid()==uid, 'PTY retained root identity'
-assert pwd.getpwuid(uid).pw_name=='clankerbox', 'wrong workload account'
-groups={grp.getgrgid(gid).gr_name for gid in set(os.getgroups()+[os.getegid()])}
-assert not groups.intersection({'root','wheel','sudo','admin'}), 'privileged workload groups'
-state='/private/var/lib/clankerbox-guest' if platform.system()=='Darwin' else '/var/lib/clankerbox-guest'
-def denied(name,action):
-    try:
-        resource=action()
-    except PermissionError:
-        return
-    if isinstance(resource,int): os.close(resource)
-    elif resource is not None: resource.close()
-    raise AssertionError(name+' unexpectedly accessible')
-denied('binding private key',lambda: open(state+'/binding.json','rb'))
-denied('private service directory',lambda: os.open(state,os.O_RDONLY))
-with socket.socket(socket.AF_UNIX) as admin:
-    admin.settimeout(2)
-    denied('admin socket',lambda: admin.connect(state+'/admin.sock'))
-binary='/usr/local/bin/clankerbox-guest'
-assert os.stat(binary).st_uid==0, 'guest binary not root owned'
-denied('guest binary write',lambda: os.open(binary,os.O_WRONLY))
-sudo=shutil.which('sudo')
-if sudo:
-    for command in ('true','id'):
-        result=subprocess.run([sudo,'-n',command],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=5)
-        assert result.returncode!=0, 'workload can escalate through sudo'
+assert uid==0 and os.getuid()==0 and os.getegid()==0 and os.getgid()==0, 'PTY requires root identity'
+account=pwd.getpwuid(uid)
+assert account.pw_name=='root', 'wrong root account'
+home='/var/root' if platform.system()=='Darwin' else '/root'
+assert os.path.realpath(account.pw_dir)==os.path.realpath(home), 'wrong root account home'
+assert os.path.realpath(os.getcwd())==os.path.realpath(home), 'wrong default cwd'
+assert os.environ['HOME']==home, 'wrong HOME'
+assert os.environ['USER']==os.environ['LOGNAME']=='root', 'wrong root environment identity'
+assert os.environ['SHELL']=='/bin/sh', 'wrong default shell'
+assert os.environ['TERM']=='xterm-256color' and os.environ['LANG']=='C.UTF-8', 'wrong terminal environment'
+assert '/usr/local/bin' in os.environ['PATH'].split(':'), 'local executable directory missing from PATH'
 ${inheritedEnvironmentCheck}
-print('GUEST_ISOLATION_RESULT='+json.dumps({'uid':uid,'user':pwd.getpwuid(uid).pw_name,'groups':sorted(groups),'os':platform.system(),'architecture':platform.machine(),'checks':['nonroot workload identity','no privileged supplementary groups','binding private key unreadable','private state inaccessible','admin socket inaccessible','guest binary not writable','sudo escalation unavailable','daemon environment filtered']}),flush=True)
+fd,path=tempfile.mkstemp(prefix='clankerbox-root-qualification-',dir='/usr/local/bin')
+try:
+    with os.fdopen(fd,'w') as script:
+        script.write('#!/bin/sh\nprintf "CLANKERBOX_ROOT_EXECUTABLE_OK\\n"\n')
+    os.chmod(path,0o755)
+    result=subprocess.run([os.path.basename(path)],capture_output=True,text=True,timeout=5,check=True)
+    assert result.stdout=='CLANKERBOX_ROOT_EXECUTABLE_OK\n', 'installed executable failed'
+finally:
+    os.unlink(path)
+print('GUEST_ROOT_RESULT='+json.dumps({'uid':uid,'user':account.pw_name,'home':home,'cwd':os.getcwd(),'os':platform.system(),'architecture':platform.machine(),'checks':['root session identity','root home and cwd','root session environment','daemon environment filtered','system executable install and execution','temporary executable removed']}),flush=True)
 `;
 
 const quote = (value) => `'${value.replaceAll("'", "'\"'\"'")}'`;
 // Apple's python3 launcher adds developer-tool variables. Capture only key
 // names before invoking it so the check measures the guest's actual environment.
-export const isolationCommand = `stty -echo -onlcr; read gate; exec python3 -c ${quote(isolationScript)} "$(/usr/bin/env | /usr/bin/cut -d= -f1)"`;
+export const rootCommand = `stty -echo -onlcr; read gate; exec python3 -c ${quote(rootScript)} "$(/usr/bin/env | /usr/bin/cut -d= -f1)"`;
 export const prefixBytes = 8 * 1024 * 1024;
 export const prefixCommand = `stty -echo -onlcr; python3 -c 'import base64,os,sys; [(sys.stdout.buffer.write(base64.b64encode(os.urandom(12288))),sys.stdout.buffer.flush()) for _ in range(512)]'; exec cat`;
 
@@ -82,8 +76,8 @@ async function withSession(client, machineId, argv, signal, check) {
   }
 }
 
-export async function qualifyIsolation(client, machineId, guest, signal) {
-  return withSession(client, machineId, ['/bin/sh', '-c', isolationCommand], signal, async (sessionId) => {
+export async function qualifyRoot(client, machineId, guest, signal) {
+  return withSession(client, machineId, ['/bin/sh', '-c', rootCommand], signal, async (sessionId) => {
     const stop = new AbortController();
     const streamSignal = AbortSignal.any([signal, stop.signal]);
     async function* commands() {
@@ -101,28 +95,28 @@ export async function qualifyIsolation(client, machineId, guest, signal) {
         const event = message.event;
         if (event.case === 'opened') {
           assert.equal(opened, false);
-          assert.equal(event.value.mode, OpenMode.RESUME, 'isolation requires complete retained output');
+          assert.equal(event.value.mode, OpenMode.RESUME, 'root qualification requires complete retained output');
           opened = true;
           continue;
         }
         assert(opened, 'Opened must be first');
-        if (event.case === 'ack') assert.equal(event.value.accepted, true, 'isolation gate input refused');
+        if (event.case === 'ack') assert.equal(event.value.accepted, true, 'root qualification gate input refused');
         else if (event.case === 'output') {
           assert.equal(event.value.nextOffset, offset + BigInt(event.value.data.length));
           offset = event.value.nextOffset;
           output += Buffer.from(event.value.data).toString();
-          assert(output.length <= 64 * 1024, 'unexpected isolation output volume');
+          assert(output.length <= 64 * 1024, 'unexpected root qualification output volume');
           const lines = output.split('\n');
           lines.pop(); // A transport chunk may end halfway through the JSON line.
-          const line = lines.find((line) => line.startsWith('GUEST_ISOLATION_RESULT='));
-          if (line) report = JSON.parse(line.slice('GUEST_ISOLATION_RESULT='.length));
+          const line = lines.find((line) => line.startsWith('GUEST_ROOT_RESULT='));
+          if (line) report = JSON.parse(line.slice('GUEST_ROOT_RESULT='.length));
         } else if (event.case === 'sessionExited') {
-          assert.equal(event.value.session?.exitCode, 0, `guest isolation failed: ${output}`);
-          assert(report, 'guest exited without isolation evidence');
+          assert.equal(event.value.session?.exitCode, 0, `guest root qualification failed: ${output}`);
+          assert(report, 'guest exited without root qualification evidence');
           return { machineId, sessionId, ...report };
-        } else throw new Error(`unexpected isolation event ${event.case}`);
+        } else throw new Error(`unexpected root qualification event ${event.case}`);
       }
-      throw new Error('isolation attachment ended without process outcome');
+      throw new Error('root qualification attachment ended without process outcome');
     } finally { stop.abort(); }
   });
 }

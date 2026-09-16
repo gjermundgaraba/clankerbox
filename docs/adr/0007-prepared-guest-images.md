@@ -14,30 +14,31 @@ make guest-root state paths trusted.
 
 ## Decision
 
-Supported images contain the matching `clankerbox-guest` executable, the workload
-account, system directory permissions and a `clankerbox-prepared-v1` marker at
+Supported images contain the matching `clankerbox-guest` executable, the root
+home, system directory permissions and a `clankerbox-prepared-v2` marker at
 `/usr/local/share/clankerbox/prepared`. The host checks the contract and binary
 rather than installing or repairing an incompatible image. Bundle format 3
 requires the image guest to match the separately deployed guest executable.
-There is no format-2 provisioning fallback or image migration.
+Archive packaging is unchanged. There is no provisioning fallback or image
+migration.
 
-The Linux bundle assembler finalizes its copied generic input image. The workload
-UID/GID is 32001 with no supplementary groups. Image preparation refuses account
-or ownership collisions, escaping symlinks, setid files and private guest state.
-The host refuses to run this profile as UID 32001. Ordinary unprivileged bundle
-extraction assigns lower-image ownership to the operator, not the workload UID.
-Directory modes are preserved except for the explicit installation/state
-ancestors and `/tmp`: preparation must not open private directories or remove
-shared temporary-directory semantics. Generic input images must preserve their
-system traversal permissions during staging and extraction.
+Sessions run as root on Linux and macOS, without a workload-user setting or a
+separate workload account. See the [guest trust model](../terminal-sessions.md).
+The base image supplies the root account, its home and ordinary system
+directories. Supported images use `/root` on Linux and `/var/root` on macOS.
 
-A fresh Linux machine still initializes a bounded set of **private overlay
-metadata**: root ownership of `/`, `/var`, `/var/lib`, `/tmp`, the guest
-executable, its daemon state directory, and workload ownership of its home.
-This is necessary for statefs's
-trusted-ancestor checks and is not a recursive image repair. Retained starts and
-live renewals do not repeat it. The macOS image finalizer installs the Darwin
-guest and creates workload UID 1001 before publishing the seed.
+The Linux bundle assembler finalizes its copied generic input image. Preparation
+refuses escaping symlinks and private guest state. Existing file and directory
+modes are preserved, including setid bits, except `/tmp` is set to mode 1777
+so temporary files also work for programs launched as another guest user.
+Preparation installs the guest executable and marker, creating the marker's
+parent directory as needed.
+
+A fresh Linux machine initializes a bounded set of **private overlay metadata**:
+root ownership of `/`, `/var`, `/var/lib` and its daemon state directory. This supports statefs's trusted-ancestor
+checks and is not a recursive image repair. Retained starts and live renewals
+do not repeat it. The macOS image finalizer installs the Darwin guest and
+contract marker before publishing the seed.
 
 Native guest operations have distinct intent:
 

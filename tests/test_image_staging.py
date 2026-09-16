@@ -24,6 +24,10 @@ class ImageStagingTests(unittest.TestCase):
                 root = tarfile.TarInfo('.')
                 root.type, root.mode = tarfile.DIRTYPE, 0o755
                 tar.addfile(root)
+                for name, mode in [('tmp', 0o1777), ('shared', 0o2775)]:
+                    item = tarfile.TarInfo(name)
+                    item.type, item.mode = tarfile.DIRTYPE, mode
+                    tar.addfile(item)
                 executable = tarfile.TarInfo('shell')
                 executable.mode, executable.size = 0o4755, 4
                 tar.addfile(executable, io.BytesIO(b'test'))
@@ -35,7 +39,41 @@ class ImageStagingTests(unittest.TestCase):
             finally:
                 os.umask(previous)
             self.assertEqual(image.stat().st_mode & 0o7777, 0o755)
-            self.assertEqual((image / 'shell').stat().st_mode & 0o7777, 0o755)
+            self.assertEqual((image / 'tmp').stat().st_mode & 0o7777, 0o1777)
+            self.assertEqual((image / 'shared').stat().st_mode & 0o7777, 0o2775)
+            self.assertEqual((image / 'shell').stat().st_mode & 0o7777, 0o4755)
+
+    def test_rejects_external_parent_before_creating_host_directories(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            image, outside = base / 'image', base / 'outside'
+            image.mkdir()
+            outside.mkdir()
+            (image / 'link').symlink_to(outside)
+            archive = base / 'rootfs.tar'
+            with tarfile.open(archive, 'w') as tar:
+                item = tarfile.TarInfo('link/new/file')
+                item.size = 4
+                tar.addfile(item, io.BytesIO(b'test'))
+            with self.assertRaisesRegex(ValueError, 'parent escapes'):
+                staging.extract(archive, image)
+            self.assertEqual(list(outside.iterdir()), [])
+
+    def test_rejects_external_directory_before_changing_host_mode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            image, outside = base / 'image', base / 'outside'
+            image.mkdir()
+            outside.mkdir(mode=0o700)
+            (image / 'link').symlink_to(outside)
+            archive = base / 'rootfs.tar'
+            with tarfile.open(archive, 'w') as tar:
+                item = tarfile.TarInfo('link')
+                item.type, item.mode = tarfile.DIRTYPE, 0o777
+                tar.addfile(item)
+            with self.assertRaisesRegex(ValueError, 'directory escapes'):
+                staging.extract(archive, image)
+            self.assertEqual(outside.stat().st_mode & 0o7777, 0o700)
 
 
 class MacImageStagingTests(unittest.TestCase):

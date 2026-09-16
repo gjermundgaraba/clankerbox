@@ -59,7 +59,7 @@ func makeBundle(t *testing.T) string {
 			data = []byte("fixture " + b.Guest)
 		}
 		if name == "image/usr/local/share/clankerbox/prepared" {
-			data = []byte("clankerbox-prepared-v1\n")
+			data = []byte("clankerbox-prepared-v2\n")
 		}
 		if err := os.WriteFile(filepath.Join(root, name), data, 0600); err != nil {
 			t.Fatal(err)
@@ -84,15 +84,6 @@ func makeBundle(t *testing.T) string {
 	)
 	for _, name := range []string{"bin", fixtureRuntime, fixtureRuntimeLibrary, fixtureImage, "image/usr", "image/usr/local", "image/usr/local/bin", "image/usr/local/share", "image/usr/local/share/clankerbox"} {
 		b.Files = append(b.Files, BundleFile{Path: name, Type: "directory", Mode: 0700})
-	}
-	//nolint:gosec // Guest image root must permit the unprivileged workload to traverse it.
-	if err := os.Chmod(filepath.Join(root, fixtureImage), 0755); err != nil {
-		t.Fatal(err)
-	}
-	for index := range b.Files {
-		if b.Files[index].Path == fixtureImage {
-			b.Files[index].Mode = 0755
-		}
 	}
 	b.ImageDigest, _ = componentDigest(componentInventory(b.Files, b.ImagePath))
 	runtimeEntries := componentInventory(b.Files, fixtureRuntime)

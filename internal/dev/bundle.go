@@ -255,7 +255,7 @@ func (b Bundle) verifyPreparedImage() error {
 	if installed == "" || !strings.EqualFold(installed, deployed) {
 		return errors.New("prepared image guest must match deployed guest binary")
 	}
-	sum := sha256.Sum256([]byte("clankerbox-prepared-v1\n"))
+	sum := sha256.Sum256([]byte("clankerbox-prepared-v2\n"))
 	if !strings.EqualFold(marker, hex.EncodeToString(sum[:])) {
 		return errors.New("unsupported prepared image contract")
 	}

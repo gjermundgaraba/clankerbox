@@ -104,28 +104,6 @@ func TestPreparedImageMismatchFailsWithoutInstall(t *testing.T) {
 	}
 }
 
-func TestPreparedAccountChecksMatchRuntimeContract(t *testing.T) {
-	t.Parallel()
-	for _, platform := range []string{runtimeSmolvm, runtimeTart} {
-		t.Run(platform, func(t *testing.T) {
-			t.Parallel()
-			script := preparedGuestScript(Manifest{Profile: model.Profile{Runtime: platform}})
-			if platform == runtimeSmolvm {
-				for _, assertion := range []string{"test \"$(id -u clankerbox)\" = 32001", "test \"$(id -g clankerbox)\" = 32001", "test \"$(id -Gn clankerbox)\" = clankerbox"} {
-					if !strings.Contains(script, assertion) {
-						t.Fatalf("missing smolvm account assertion: %s", assertion)
-					}
-				}
-				if strings.Contains(script, "for group") || strings.Contains(script, "test 32001 !=") {
-					t.Fatal("smolvm repeats an established account invariant")
-				}
-			} else if !strings.Contains(script, "test \"$(id -u clankerbox)\" = 1001") ||
-				!strings.Contains(script, "root|wheel|sudo|admin") {
-				t.Fatal("Tart lost its workload account checks")
-			}
-		})
-	}
-}
 func TestRetainedGuestDoesNotRewriteBindingOrProvision(t *testing.T) {
 	t.Parallel()
 	n, m, r := preparedFixture(t)
@@ -136,7 +114,7 @@ func TestRetainedGuestDoesNotRewriteBindingOrProvision(t *testing.T) {
 		t.Fatal("rewrote unchanged binding")
 	}
 	for _, s := range r.scripts {
-		for _, forbidden := range []string{"useradd", "adduser", "find ", "mkdir ", "nohup"} {
+		for _, forbidden := range []string{"find ", "mkdir ", "nohup"} {
 			if strings.Contains(s, forbidden) {
 				t.Fatalf("retained guest mutated static state: %s", forbidden)
 			}
@@ -178,14 +156,13 @@ type preparedGuest struct {
 	clankerboxv1connect.UnimplementedSessionServiceHandler
 
 	machine     string
-	user        string
 	calls       atomic.Int32
 	connections atomic.Int32
 }
 
 func (g *preparedGuest) DescribeGuest(context.Context, *connect.Request[v1.DescribeGuestRequest]) (*connect.Response[v1.GuestDescription], error) {
 	g.calls.Add(1)
-	return connect.NewResponse(&v1.GuestDescription{MachineId: g.machine, User: g.user}), nil
+	return connect.NewResponse(&v1.GuestDescription{MachineId: g.machine}), nil
 }
 
 type noNativeEffects struct{}
@@ -193,7 +170,7 @@ type noNativeEffects struct{}
 func (noNativeEffects) Run(context.Context, string, []string, []string, []byte) ([]byte, error) {
 	return nil, errors.New("unexpected native effect")
 }
-func preparedIdentityFixture(t *testing.T, mismatch string) (*NativeRuntime, Manifest, *preparedGuest) {
+func preparedIdentityFixture(t *testing.T, wrongMachine bool) (*NativeRuntime, Manifest, *preparedGuest) {
 	t.Helper()
 	a, err := rpcidentity.NewAuthority()
 	if err != nil {
@@ -210,12 +187,9 @@ func preparedIdentityFixture(t *testing.T, mismatch string) (*NativeRuntime, Man
 	}
 	roots := x509.NewCertPool()
 	roots.AppendCertsFromPEM(a.Certificate)
-	guest := &preparedGuest{machine: m.ID, user: "clankerbox"}
-	switch mismatch {
-	case "machine":
+	guest := &preparedGuest{machine: m.ID}
+	if wrongMachine {
 		guest.machine = model.NewID()
-	case "workload":
-		guest.user = "root"
 	}
 	_, handler := clankerboxv1connect.NewSessionServiceHandler(guest)
 	server := httptest.NewUnstartedServer(handler)
@@ -266,7 +240,7 @@ func preparedIdentityFixture(t *testing.T, mismatch string) (*NativeRuntime, Man
 
 func TestHealthyVerificationIsReadOnly(t *testing.T) {
 	t.Parallel()
-	n, m, _ := preparedIdentityFixture(t, "")
+	n, m, _ := preparedIdentityFixture(t, false)
 	path := bindingPath(n.Config, m)
 	before, err := os.Stat(path)
 	if err != nil {
@@ -301,50 +275,45 @@ func TestRenewalCannotReplaceMissingLiveManager(t *testing.T) {
 
 func TestGuestIdentityMismatchFailsProbeAndRemainsInReadinessDiagnostics(t *testing.T) {
 	t.Parallel()
-	for _, mismatch := range []string{"machine", "workload"} {
-		t.Run(mismatch, func(t *testing.T) {
-			t.Parallel()
-			n, m, guest := preparedIdentityFixture(t, mismatch)
-			credentials, err := n.authority.HostCredentials("host")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err = n.probeGuestIdentity(t.Context(), m, credentials); err == nil ||
-				!strings.Contains(err.Error(), "guest identity or workload mismatch") {
-				t.Fatalf("probe accepted mismatch or lost diagnostic: %v", err)
-			}
-			// The fast path has no native effects; polling may inspect the inventory.
-			n.Runner = &preparedRunner{machine: m}
-			dir := filepath.Join(n.runtimeData(m), "smolvm", "server")
-			if err = os.MkdirAll(dir, 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err = os.WriteFile(filepath.Join(dir, "smolvm.db"), nil, 0600); err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-			defer cancel()
-			if _, err = n.waitGuestIdentity(ctx, m, credentials); !errors.Is(err, context.DeadlineExceeded) ||
-				!strings.Contains(err.Error(), "guest identity or workload mismatch") {
-				t.Fatalf("readiness accepted mismatch or lost diagnostic: %v", err)
-			}
-			if guest.calls.Load() < 3 || guest.connections.Load() != 2 {
-				t.Fatalf("expected one probe connection and one reused polling connection: %d calls, %d connections",
-					guest.calls.Load(), guest.connections.Load())
-			}
-		})
+	n, m, guest := preparedIdentityFixture(t, true)
+	credentials, err := n.authority.HostCredentials("host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = n.probeGuestIdentity(t.Context(), m, credentials); err == nil ||
+		!strings.Contains(err.Error(), "guest identity mismatch") {
+		t.Fatalf("probe accepted mismatch or lost diagnostic: %v", err)
+	}
+	// The fast path has no native effects; polling may inspect the inventory.
+	n.Runner = &preparedRunner{machine: m}
+	dir := filepath.Join(n.runtimeData(m), "smolvm", "server")
+	if err = os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "smolvm.db"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if _, err = n.waitGuestIdentity(ctx, m, credentials); !errors.Is(err, context.DeadlineExceeded) ||
+		!strings.Contains(err.Error(), "guest identity mismatch") {
+		t.Fatalf("readiness accepted mismatch or lost diagnostic: %v", err)
+	}
+	if guest.calls.Load() < 3 || guest.connections.Load() != 2 {
+		t.Fatalf("expected one probe connection and one reused polling connection: %d calls, %d connections",
+			guest.calls.Load(), guest.connections.Load())
 	}
 }
 
 func TestFreshDirectoryImageEstablishesBoundedRootOwnership(t *testing.T) {
 	t.Parallel()
 	script := guestPrivateStateScript(Manifest{Profile: model.Profile{Runtime: runtimeSmolvm}})
-	for _, required := range []string{"chown 0:0 / /var /var/lib /tmp /usr/local/bin/clankerbox-guest", "chmod 755 / /var /var/lib", "chmod 1777 /tmp", "chown 0:0 /var/lib/clankerbox-guest"} {
+	for _, required := range []string{"chown 0:0 / /var /var/lib", "chmod 755 / /var /var/lib", "chown 0:0 /var/lib/clankerbox-guest"} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("missing trusted guest ownership: %s", required)
 		}
 	}
-	for _, forbidden := range []string{"find ", "chown -R", "chmod -R", "useradd", "adduser"} {
+	for _, forbidden := range []string{"find ", "chown -R", "chmod -R"} {
 		if strings.Contains(script, forbidden) {
 			t.Fatalf("runtime image provisioning returned: %s", forbidden)
 		}

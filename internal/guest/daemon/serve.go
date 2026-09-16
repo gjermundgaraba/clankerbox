@@ -31,7 +31,7 @@ import (
 // ErrAlreadyRunning identifies a retained manager that must not be replaced.
 var ErrAlreadyRunning = errors.New("another guest daemon holds the lifetime lock")
 
-// Paths describes private root-owned guest state, separate from workload home.
+// Paths describes private root-owned guest state.
 type Paths struct{ State, Lock, Socket, Log, PID string }
 
 // PathsIn derives private daemon files from its state directory.
@@ -45,12 +45,11 @@ func PathsIn(state string) Paths {
 	}
 }
 
-// Options specifies the workload privilege boundary and private transport binding.
+// Options specifies the private transport binding and session limits.
 type Options struct {
 	Paths       Paths
 	Listen      string
 	Binding     *rpcidentity.Binding
-	Workload    *session.Workload
 	Version     string
 	MaxSessions int
 	RingSize    int
@@ -74,10 +73,10 @@ type Server struct {
 	handlers                sync.WaitGroup
 }
 
-// Start requires a privileged daemon and explicit unprivileged workload identity.
+// Start requires root so guest sessions inherit administrative authority.
 func Start(ctx context.Context, opts Options) (*Server, error) {
-	if os.Geteuid() != 0 || opts.Workload == nil {
-		return nil, errors.New("guest service requires root with an explicit unprivileged workload user")
+	if os.Geteuid() != 0 {
+		return nil, errors.New("guest service requires root")
 	}
 	dir, err := statefs.Open(opts.Paths.State)
 	if err != nil {
@@ -118,7 +117,6 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		ctx,
 		session.Config{
 			StateDir:      opts.Paths.State,
-			Workload:      opts.Workload,
 			Loader:        s.loader,
 			Incarnation:   uuid.NewString(),
 			DaemonVersion: opts.Version,

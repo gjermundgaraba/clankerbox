@@ -38,12 +38,9 @@ const (
 // Horizon plus skew must stay inside retention; a negative constant does not compile.
 const _ uint64 = uint64(endedRetention - createHorizon - createSkew)
 
-// Config supplies session storage, workload identity and resource limits.
+// Config supplies session storage and resource limits.
 type Config struct {
-	StateDir string
-	// Workload separates PTY credentials/environment from a privileged daemon.
-	// Nil uses the current OS account without switching credentials for tests.
-	Workload      *Workload
+	StateDir      string
 	Loader        *vt.Loader
 	Incarnation   string
 	DaemonVersion string
@@ -112,7 +109,7 @@ func (a *Attachment) Stop() {
 // New loads manifests, converts unfinished records to lost, and starts the
 // retention cleanup loop.
 func New(ctx context.Context, cfg Config) (*Manager, error) {
-	process, err := identityFor(cfg.Workload)
+	process, err := currentIdentity()
 	if err != nil {
 		return nil, err
 	}

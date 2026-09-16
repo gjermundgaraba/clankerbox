@@ -24,13 +24,20 @@ Applications address a machine ID and never receive guest endpoints,
 certificates, host credentials or image paths. Guest readiness comes from the
 host's observation and an authenticated `DescribeGuest`.
 
-The guest daemon runs privileged and starts terminal workloads under a separate
-unprivileged user. Binding files, service keys and the rebind socket are
-root-owned, so workloads cannot read credentials or rebind. The guest verifies
-the host certificate; the host verifies the guest certificate's machine identity
-against the requested machine. Workloads on one machine share a user and are
-not isolated from each other. The public bearer token grants shell access to
-machines, never access to the management identity.
+The guest daemon requires root on Linux and macOS; the session manager inherits
+the daemon's account for child processes. There is no workload-user setting or
+privilege boundary inside a guest: workloads can read machine binding keys,
+reach the admin socket and modify guest state. Treat
+a machine and its fork/checkpoint descendants as one trust lineage, since copies
+inherit disk contents and RAM copies also inherit process memory and secrets.
+
+The guest verifies the host certificate; the host verifies the guest
+certificate's machine identity against the requested machine. Rebinding gives
+a copy its own routing identity, but does not erase inherited secrets or make
+it safe for a less-trusted tenant. Host/controller credentials and files remain
+outside the guest, and private machine storage must never share writable backing
+with another machine. The public bearer token grants root shell access to its
+machines; it does not grant host or controller authority.
 
 A RAM fork keeps the live session manager, PTY masters and process memory.
 Before access is published, the host installs a new machine-scoped binding
@@ -60,8 +67,10 @@ Each session owns a PTY, a child process, a Ghostty VT and a bounded output
 ring. The default command is `/bin/sh -l`. The process gets a fixed
 environment (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL=/bin/sh`,
 `TERM=xterm-256color`, `LANG=C.UTF-8`) followed by the caller's `env` entries,
-which win for duplicate keys. An empty cwd means the workload home, a relative
-cwd is resolved against it, and the directory must already exist. The machine
+which win for duplicate keys. The default identity is `USER=LOGNAME=root` and
+`HOME` comes from root's account record; supported images use `/root` on Linux
+and `/var/root` on macOS. An empty cwd means that root home, a relative cwd is
+resolved against it, and the directory must already exist. The machine
 ID is not placed in the environment, because forked processes would keep the
 parent's value.
 
@@ -69,8 +78,8 @@ Session state lives under the guest's private state directory as
 `sessions/<id>/manifest.json`, written atomically with fsync. A session ID is
 durable before its process is published and stays taken even if a later write
 fails. Unreadable records become known `lost` IDs so a repeated create cannot
-spawn a second process. Children inherit no management sockets, locks or
-credentials.
+spawn a second process. Children inherit no management socket or lock descriptors, or daemon-only
+environment entries; guest root can still read on-disk credentials.
 
 States are `starting`, `running`, `exited` and `lost`. Exit code, signal, end
 time, PID and incarnation are recorded separately. On child exit the daemon
@@ -143,7 +152,7 @@ restore. To request a fresh snapshot, omit the resume cursor. An ordered
 `Resized` event changes the mirror grid at its output offset.
 
 `DescribeGuest` and `Opened.guest` expose the schema identifier, machine ID,
-incarnation, boot ID, daemon version, workload user, engine digest and capacity.
+incarnation, boot ID, daemon version, session user (`root`), engine digest and capacity.
 A consumer that decodes snapshots supplies its expected engine digest; a
 mismatch is reported without ending sessions. The guest binary belongs to the
 prepared image; changing it requires a new image/bundle and is not a live PTY

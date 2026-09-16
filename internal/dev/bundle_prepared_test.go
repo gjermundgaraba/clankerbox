@@ -12,7 +12,7 @@ func TestPreparedImageVerifiesRegularExecutableGuestAndContractMetadata(t *testi
 	for _, kind := range []string{"valid", "uppercase-marker", "uppercase-deployed", "uppercase-installed", "missing-marker", "wrong-marker", "symlink-marker", "directory-marker", "missing-guest", "wrong-guest", "nonexecutable-guest", "symlink-guest"} {
 		t.Run(kind, func(t *testing.T) {
 			t.Parallel()
-			sum := sha256.Sum256([]byte("clankerbox-prepared-v1\n"))
+			sum := sha256.Sum256([]byte("clankerbox-prepared-v2\n"))
 			guest := strings.Repeat("a", 64)
 			b := Bundle{Guest: "bin/guest", ImagePath: "image", Files: []BundleFile{
 				{Path: "bin/guest", Type: bundleRegularFile, Mode: 0755, SHA256: guest},

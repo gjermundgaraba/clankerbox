@@ -36,10 +36,12 @@ def extract(archive, root, strip=0):
             if '..' in parts or parts[0] == '/':
                 raise ValueError('unsafe archive path')
             dest = root.joinpath(*parts)
-            dest.parent.mkdir(parents=True, exist_ok=True)
             if not dest.parent.resolve().is_relative_to(root.resolve()):
                 raise ValueError('archive parent escapes image')
+            dest.parent.mkdir(parents=True, exist_ok=True)
             if member.isdir():
+                if not dest.resolve().is_relative_to(root.resolve()):
+                    raise ValueError('archive directory escapes image')
                 dest.mkdir(exist_ok=True)
                 dirs.append((dest, member.mode))
                 continue
@@ -64,10 +66,10 @@ def extract(archive, root, strip=0):
             elif member.isfile():
                 with tar.extractfile(member) as src, open(dest, 'wb') as out:
                     shutil.copyfileobj(src, out)
-                dest.chmod(member.mode & 0o777)  # no setuid/setgid workload escape
+                dest.chmod(member.mode & 0o7777)
             # Device nodes are supplied by the engine, never created on the host.
     for dest, mode in reversed(dirs):
-        dest.chmod(mode & 0o1777)
+        dest.chmod(mode & 0o7777)
 
 
 def main():

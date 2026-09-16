@@ -9,14 +9,11 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"os/user"
-	"strconv"
 	"syscall"
 
 	"github.com/urfave/cli/v3"
 
 	"clankerbox/internal/guest/daemon"
-	"clankerbox/internal/guest/session"
 	"clankerbox/internal/rpcidentity"
 	"clankerbox/internal/statefs"
 )
@@ -51,30 +48,16 @@ func newCommand(stdin io.Reader, _ io.Writer) *cli.Command {
 		Commands: []*cli.Command{
 			{
 				Name:  "serve",
-				Usage: "Serve guest RPC with a separate unprivileged workload identity",
+				Usage: "Serve guest RPC and terminal sessions as root",
 				Flags: []cli.Flag{
 					state(),
 					&cli.StringFlag{Name: "listen", Value: "0.0.0.0:7443"},
 					&cli.StringFlag{Name: "binding-file"},
-					&cli.StringFlag{Name: "workload-user", Required: true},
 				},
 				Action: func(ctx context.Context, c *cli.Command) error {
-					u, err := user.Lookup(c.String("workload-user"))
-					if err != nil {
-						return err
-					}
-					uid, err := strconv.ParseUint(u.Uid, 10, 32)
-					if err != nil {
-						return err
-					}
-					gid, err := strconv.ParseUint(u.Gid, 10, 32)
-					if err != nil {
-						return err
-					}
 					var binding *rpcidentity.Binding
 					if path := c.String("binding-file"); path != "" {
-						var raw []byte
-						raw, err = statefs.ReadPrivate(path)
+						raw, err := statefs.ReadPrivate(path)
 						if err != nil {
 							return err
 						}
@@ -89,12 +72,6 @@ func newCommand(stdin io.Reader, _ io.Writer) *cli.Command {
 							Paths:   daemon.PathsIn(c.String("state-dir")),
 							Listen:  c.String("listen"),
 							Binding: binding,
-							Workload: &session.Workload{
-								UID:  uint32(uid),
-								GID:  uint32(gid),
-								Home: u.HomeDir,
-								User: u.Username,
-							},
 							Version: version,
 						},
 					)

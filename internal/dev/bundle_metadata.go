@@ -51,11 +51,8 @@ func (b Bundle) verifyEntry(entry BundleFile) error {
 	if entry.Type != kind || kind == "" || entry.Mode != mode {
 		return fmt.Errorf("bundle type/mode mismatch: %s", entry.Path)
 	}
-	if mode&06000 != 0 {
+	if mode&06000 != 0 && entry.Path != b.ImagePath && !strings.HasPrefix(entry.Path, b.ImagePath+"/") {
 		return fmt.Errorf("bundle setuid/setgid permissions prohibited: %s", entry.Path)
-	}
-	if entry.Path == b.ImagePath && (kind != bundleDirectory || mode&0005 != 0005) {
-		return errors.New("image root must be readable and traversable by the workload user")
 	}
 	if kind == bundleDirectory {
 		if entry.SHA256 != "" {

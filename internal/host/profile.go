@@ -2,7 +2,6 @@ package host
 
 import (
 	"errors"
-	"os"
 
 	"clankerbox/internal/model"
 )
@@ -22,9 +21,6 @@ func (p ProfileBinding) Validate() error {
 	}
 	if p.ImagePath == "" {
 		return errors.New("host profile requires image_path")
-	}
-	if p.Runtime == runtimeSmolvm && os.Geteuid() == 32001 {
-		return errors.New("host operator UID 32001 conflicts with prepared image workload UID")
 	}
 	if p.Runtime == runtimeSmolvm && !model.SafePath(p.ImagePath) {
 		return errors.New("smolvm image_path must be an absolute bare agent-rootfs directory")

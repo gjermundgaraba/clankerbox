@@ -55,19 +55,8 @@ test "$(/tmp/clankerbox-image-check)" = CLANKERBOX_SWIFT_OK
 rm /tmp/clankerbox-image.swift /tmp/clankerbox-image-check
 test ! -e /etc/clankerbox
 test ! -e /private/var/lib/clankerbox-guest
-# Static guest account and binary are part of the image, never runtime repairs.
-test -z "$(dscl . -search /Users UniqueID 1001)"
-! id clankerbox >/dev/null 2>&1
-sudo -n dscl . -create /Users/clankerbox
-sudo -n dscl . -create /Users/clankerbox UniqueID 1001
-sudo -n dscl . -create /Users/clankerbox PrimaryGroupID 20
-sudo -n dscl . -create /Users/clankerbox UserShell /bin/zsh
-sudo -n dscl . -create /Users/clankerbox NFSHomeDirectory /Users/clankerbox
-sudo -n dscl . -create /Users/clankerbox Password '*'
-sudo -n mkdir -p /Users/clankerbox /usr/local/share/clankerbox
-sudo -n chown clankerbox:staff /Users/clankerbox
-sudo -n chmod 700 /Users/clankerbox
-printf '%s\n' clankerbox-prepared-v1 | sudo -n tee /usr/local/share/clankerbox/prepared >/dev/null
+sudo -n mkdir -p /usr/local/share/clankerbox
+printf '%s\n' clankerbox-prepared-v2 | sudo -n tee /usr/local/share/clankerbox/prepared >/dev/null
 sudo -n chmod 644 /usr/local/share/clankerbox/prepared
 # Use public resolvers inside the seed VM so the download below does not depend
 # on the host's DHCP configuration. Override with IMAGE_DNS_SERVERS.
