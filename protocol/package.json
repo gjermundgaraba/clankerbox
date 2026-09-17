@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerbox-sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Generated Protobuf messages and Connect RPC service descriptors for Clankerbox",
   "license": "MIT",
   "repository": {

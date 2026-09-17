@@ -5,8 +5,8 @@ Only compiled `dist/`, the package manifest, README and MIT license ship.
 Generated sources are checked in; publishing does not regenerate the protocol
 or require protoc or Go. Consumers need neither this repository nor build scripts.
 
-SDK versions are independent of Clankerbox binary releases. The current release pair is SDK **0.3.0**
-with Clankerbox **0.7.0**, including runtime-built profiles. Update the compatibility
+SDK versions are independent of Clankerbox binary releases. The current release pair is SDK **0.4.0**
+with Clankerbox **0.8.0**, including the attachment-owned session contract. Update the compatibility
 statement in `protocol/README.md` when qualifying a new pair. Published npm versions are
 immutable: changed package contents require a new SDK version.
 
@@ -28,12 +28,12 @@ pnpm build
 pnpm test
 pnpm pack
 # Substitute the version in package.json if it has changed.
-pnpm test:package ./gjermundgaraba-clankerbox-sdk-0.3.0.tgz
-npm publish ./gjermundgaraba-clankerbox-sdk-0.3.0.tgz --access public --ignore-scripts --dry-run
+pnpm test:package ./gjermundgaraba-clankerbox-sdk-0.4.0.tgz
+npm publish ./gjermundgaraba-clankerbox-sdk-0.4.0.tgz --access public --ignore-scripts --dry-run
 
 # These commands authenticate and actually publish; run them deliberately.
 npm login
-npm publish ./gjermundgaraba-clankerbox-sdk-0.3.0.tgz --access public --ignore-scripts
+npm publish ./gjermundgaraba-clankerbox-sdk-0.4.0.tgz --access public --ignore-scripts
 ```
 
 The local first publication does not have GitHub Actions provenance. Subsequent

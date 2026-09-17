@@ -21,9 +21,11 @@ the bidirectional attachment stream. `@bufbuild/protobuf` is included as a
 runtime dependency. All descriptors are exported at the root and through
 `/resources`, `/machine`, `/session` and `/host` subpaths.
 
-SDK **0.3.0** targets Clankerbox **0.7.0** and its runtime-built profile contract.
-Use this pair together; SDK and controller version numbers are independent.
-Older installations are not migrated to this contract.
+SDK **0.4.0** targets Clankerbox **0.8.0** and its attachment-owned session
+contract: sessions are created by `Open.create` inside `AttachSession`, and each
+`Input` is sent at the `input_offset` the guest last acknowledged. Use this pair
+together; SDK and controller version numbers are independent. Older
+installations and guest images are not migrated to this contract.
 
 ## RPC contract
 
@@ -49,8 +51,9 @@ private endpoints, engine store paths and credentials. `internal/rpcmodel`
 converts between these messages and the services' persisted records.
 
 Errors combine a Connect status code with a typed `ErrorDetail` reason.
-`retryable` describes the operation, not terminal input: a lost input
-acknowledgement must never be replayed. The streaming semantics of
+`retryable` describes the operation, not terminal input: input is addressed by
+offset, so repeating it on the same attachment is safe and carrying it to another
+is not. The streaming semantics of
 `AttachSession` are specified in
 [terminal sessions](https://github.com/gjermundgaraba/clankerbox/blob/main/docs/terminal-sessions.md).
 
