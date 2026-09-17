@@ -3,7 +3,9 @@
 Terminal sessions are guest-owned PTYs exposed through the generated
 `SessionService` in [session.proto](../protocol/clankerbox/v1/session.proto).
 The controller and host relay attachment messages without interpreting terminal
-bytes; only the guest holds terminal state.
+bytes; only the guest holds terminal state. A [pipe session](#pipe-sessions)
+runs a command on the same API without a PTY, and
+[`clankerbox shell`](#the-cli) is a client of both.
 
 ## Trust boundaries
 
@@ -56,7 +58,7 @@ cannot carry it, so keep the Connect client and the bearer token server-side.
 | --- | --- |
 | `ProfileService` | Recipe uploads, builds, logs, cancellation, bases and revision management. |
 | `MachineService` | Host and profile discovery, machine and checkpoint lifecycle, operation inspection, label replacement. |
-| `SessionService` | `DescribeGuest`, `CreateSession`, `ListSessions`, `EndSession`, `AttachSession`. |
+| `SessionService` | `DescribeGuest`, `ListSessions`, `EndSession`, `AttachSession`, which also creates sessions. |
 | `HostService` (private) | Operation submission and status, machine inspection, host description. |
 
 `SessionService` is mounted on controller, host and guest with the same schema
@@ -84,11 +86,20 @@ environment entries; guest root can still read on-disk credentials.
 
 States are `starting`, `running`, `exited` and `lost`. Exit code, signal, end
 time, PID and incarnation are recorded separately. On child exit the daemon
-drains the PTY to EOF or a bounded deadline, publishes the final record with the
-final screen text and cursor, and releases the terminal. Ended records are
+drains the output to its end, publishes the final record with the final screen
+text and cursor, and releases the terminal. A descendant that keeps the output
+open cannot hold the session: output that stays idle for two seconds is closed.
+Output a consumer is still working through is not idle, however slow the
+consumer. Ended records are
 retained for a week and still deduplicate a repeated create. Daemon loss,
 machine stop or reboot ends live ownership; network loss, controller or host
-restart, or closing a viewer only detaches consumers.
+restart, or closing a viewer only detaches consumers, unless the session was
+created with `end_on_detach`.
+
+`end_on_detach` makes the guest end the session when its last attachment
+closes, whatever closed it: a clean detach, a killed client, or a connection
+that a relay or the transport's keepalive declares dead. The guest owns this
+lifetime, so it holds when the client cannot run any cleanup.
 
 `EndSession` signals the foreground process group, then escalates against the
 child's process group with bounded waits. Its reply is not an output barrier:
@@ -97,26 +108,58 @@ an `ENDED` opening after reconnecting.
 
 ## Creating sessions
 
-`CreateSession` carries `machine_id`, a caller-minted `session_id`, label, cwd,
-argv, env, grid and the caller's RFC 3339 `created_at`. Repeating the same ID
-with the same cwd, argv and env returns the retained session for as long as its
-record exists; changing them is a conflict. Only a create the guest never
-started is subject to the horizon: one older than a day is expired and one more
-than an hour in the future is invalid. A client that lost the reply therefore
-retries with its original identity and timestamp.
+A session is created by the attachment that opens it: `Open.create` carries the
+label, cwd, argv, env, grid and the caller's RFC 3339 `created_at`, under the
+`Open`'s machine ID and caller-minted session ID. The guest registers the
+subscriber and then starts the process, so the opening is `RESUME` from offset
+zero with nothing to replay and no output, however brief the command, can
+precede its first reader. No resume cursor or `DescribeGuest` round trip is
+needed. There is no way to start a process nobody is attached to; a consumer
+that wants one detaches once the session is open.
 
-Unary failures return a Connect status plus an `ErrorDetail` with a stable
+Repeating the same ID with the same cwd, argv, env and options opens the session
+that exists, for as long as its record does; changing them is a conflict. Only a
+create the guest never started is subject to the horizon: one older than a day
+is expired and one more than an hour in the future is invalid. A client that
+lost the reply therefore repeats its `Open` with the original identity and
+timestamp and, for a retained range, its cursor.
+
+Failures return a Connect status plus an `ErrorDetail` with a stable
 `ErrorReason` and retryable flag. Classify on the reason, not the message. A
 prerequisite refusal means the machine is not ready for sessions: not running
 at its accepted generation, not prepared, or deleted. Attaching never starts a
 machine. An unavailable transport does not prove a mutation was refused.
 
+### Pipe sessions
+
+`create.pipes` runs the command with stdin, stdout and stderr as pipes: no PTY,
+no VT, no grid (`cols` and `rows` must be zero) and no `TERM`. It is the mode
+for programs that consume or produce data. `Output.stream` marks stderr;
+stdout leaves it unspecified. `Input` writes to stdin with no size limit across
+controls, and bytes pass unmodified in both directions. `CloseInput` delivers
+end of input after the input queued before it. It is final: repeating it changes
+nothing, and an `Input` after it is refused as `input_closed`. Its input admission budget is
+4 MiB instead of a terminal's 256 KiB, so a consumer sending ahead keeps the
+pipe busy across a round trip.
+
+A pipe session retains nothing, which shapes the rest of its contract: it
+implies `end_on_detach` and refuses a second attachment, a resume and `Resize`.
+Because there is nothing to resume from, its consumer is never dropped with a
+`Gap`: a full tail holds the guest's reader, and through the pipe the process,
+until the consumer catches up. That covers everything up to and including
+`SessionExited`, also when the process has already exited with output still in
+the pipe. The transport's stall limit still applies: a consumer that accepts
+nothing for 30 seconds is cut off like any other stalled stream, which ends the
+session.
+
 ## Attachment
 
-An `AttachmentRequest` is exactly one of `Open`, `Input` or `Resize`. `Open`
-comes first and only once, with the machine and session IDs, an optional
-expected engine digest and an optional `ResumeCursor {offset, incarnation}`.
-Later controls use strictly increasing positive sequence IDs.
+An `AttachmentRequest` is exactly one of `Open`, `Input`, `Resize` or
+`CloseInput`. `Open` comes first and only once, with the machine and session
+IDs, an optional expected engine digest, an optional
+`ResumeCursor {offset, incarnation}`, optional [create arguments](#creating-sessions)
+and the [terminal options](#queries-and-real-terminals) below. Later controls
+use strictly increasing positive sequence IDs.
 
 The first `AttachmentEvent` is `Opened`, with the guest description, session,
 mode, the atomic `cut`, `start_offset`, snapshot length and an optional final
@@ -155,18 +198,61 @@ restore. To request a fresh snapshot, omit the resume cursor. An ordered
 `DescribeGuest` and `Opened.guest` expose the schema identifier, machine ID,
 incarnation, boot ID, daemon version, session user (`root`), engine digest and capacity.
 A consumer that decodes snapshots supplies its expected engine digest; a
-mismatch is reported without ending sessions. The guest binary belongs to the
+mismatch is reported without ending sessions. A consumer that names no digest
+accepts whatever engine the guest runs, and must not decode a snapshot. The guest binary belongs to the
 prepared image; changing it requires a new image/bundle and is not a live PTY
 handoff. Retained starts do not install binaries.
 
+### Queries and real terminals
+
+Programs ask their terminal questions: device attributes, cursor position,
+colours, keyboard protocol. Measured at startup in a guest: plain shells, `less`
+and `top` ask nothing; `fish`, `vim`, `nvim`, `tmux`, `claude` and `codex` ask
+five to eleven each. The guest VT answers them on the PTY, at once and with
+nobody attached, and it is the only responder.
+
+A mirror renders cells and never shows those bytes to a terminal. A consumer
+that writes output straight into a real terminal does, and that terminal would
+answer too: the program receives a second reply, late, as if typed. Two `Open`
+fields make such a consumer safe without a second responder:
+
+- `omit_answered_queries` removes from this attachment's output exactly the
+  escape sequences the guest VT answered. Nothing lists what a query is: the
+  guest finds sequence boundaries, writes each terminating byte to the engine
+  alone and omits a sequence when the engine replied during that write, so the
+  set follows the pinned engine. A sequence longer than 4 KiB is passed through
+  as it arrives. Queries the guest does not answer still reach the terminal,
+  which answers them alone. Offsets stay in unfiltered coordinates:
+  `next_offset` may advance by more than `data` carries, and it is still the
+  cursor to resume from. A filtered resume replays the retained range without
+  the omitted sequences.
+- `terminal_profile` gives the attached terminal's default foreground and
+  background colours as `0xRRGGBB`. The guest VT answers colour
+  queries with them, so a program picks colours for the screen the user sees
+  rather than the guest's built-in dark theme. The latest attachment to supply
+  a profile decides; a mirror attached at the same time does not see the change
+  until its next snapshot.
+
 ### Input and replies
 
-An `Input` acknowledgement means the bytes were admitted to the bounded PTY
-writer, not that the shell ran them. A lost acknowledgement leaves the input
-uncertain; never replay it on another attachment. Repeated sequence IDs are
-refused. A `Resize` acknowledgement means the request was accepted; the mirror
-follows the ordered `Resized` event, which may arrive before or after the
-acknowledgement.
+An `Input` acknowledgement means the bytes were admitted to the bounded
+writer, not that the program read them. Repeated sequence IDs are refused. A
+`Resize` acknowledgement means the request was accepted; the mirror follows the
+ordered `Resized` event, which may arrive before or after the acknowledgement.
+
+Every `Input` names `offset`, the number of input bytes the guest has accepted
+from this attachment, and the guest refuses an `Input` at any other offset as
+`out_of_order`. Every acknowledgement reports that count as `input_offset`. Two
+things follow. A consumer can send ahead of acknowledgements instead of paying a
+round trip per `Input`: if one is refused for lack of room, everything sent
+behind it is at the wrong offset and refused too, so later bytes never overtake
+earlier ones, and the consumer continues from `input_offset` once its
+outstanding acknowledgements have arrived. And an `Input` repeated after a lost
+acknowledgement is safe on the same attachment: if the original was accepted,
+the repeat is at a stale offset and is refused rather than applied twice. The
+count belongs to the attachment, so never carry unacknowledged input over to
+another one. A consumer that prefers to drop refused input simply sends its next
+bytes at `input_offset`.
 
 One writer drains caller input and the VT's automatic replies (DA, DSR, CPR)
 without interleaving entries. Caller input has an admission budget and replies
@@ -179,7 +265,54 @@ Each subscriber has an immutable bootstrap prefix and a bounded live tail. A
 consumer that overflows its tail is dropped with a best-effort `Gap`; other
 consumers and the PTY continue. A clean request half-close stops control
 admission, drains the already-queued responses and detaches without waiting for
-the shell. Disconnecting never calls `EndSession`.
+the shell. Disconnecting never calls `EndSession`; only `end_on_detach` ties a
+session's life to its attachments.
+
+## The CLI
+
+`clankerbox shell MACHINE [-- COMMAND [ARG...]]` creates a session inside its
+attachment with `end_on_detach`, stays attached until the program exits, and
+exits with its status. It never creates or starts a machine.
+
+With a terminal on stdin and stdout the session is a PTY. The CLI asks the
+local terminal for its colours, sends them as the `terminal_profile`, sets
+`omit_answered_queries`, puts the terminal in raw mode and passes bytes through
+in both directions, so scrollback, selection and rendering stay the terminal's
+own. It follows window size changes with `Resize`. Ctrl-C is a byte for the
+remote program. Otherwise the session is a pipe session: stdout and stderr stay
+separate, stdin is forwarded to its end, and nothing is translated.
+
+What the session is does not depend on what is attached locally. `--tty` gives
+the command a terminal from a script or a pipeline, 80 by 24, with output passed
+through as it comes and no end of input, since a terminal has none. `--no-tty`
+uses pipes from a terminal. `--cwd`, `--env KEY=VALUE` and `--label` set the
+create arguments.
+
+Input is sent ahead of its acknowledgements, within a window below the guest's
+admission budget and [addressed by offset](#input-and-replies): a round trip
+delays neither typing nor a transfer, and refused input is sent again in order.
+A failure to read local input is not an end of input: the command fails with
+255 and the guest ends the session, so the program never succeeds on a prefix.
+Output waits for whatever reads it, so a slow pipeline loses nothing; one that
+reads nothing for 30 seconds, such as a pager left idle on a large output, hits
+the transport's stall limit and the command fails with 255.
+
+| Exit status | Meaning |
+| --- | --- |
+| the program's | It exited. |
+| 128 + signal | A signal ended it. |
+| 130 | The CLI was interrupted. |
+| 255 | Local or connection failure, including a machine that is not running. |
+
+The program can itself exit 255 or 130; with `--json` a CLI failure is one
+`{"error":{"message","code","reason","retryable"}}` object on stderr, which tells
+the two apart. A dropped connection ends the command with 255 and resets the
+terminal modes a cut-off program leaves behind; it does not reconnect. The
+guest then ends the session, at the latest when the transport's keepalive
+declares the connection dead.
+
+`clankerbox guest MACHINE` prints the guest description, and
+`clankerbox sessions MACHINE` lists sessions, including ended ones.
 
 ## Host routing
 
@@ -199,13 +332,14 @@ overriding matching keys. `ListMachines` filters on labels.
 
 | Event | Outcome |
 | --- | --- |
-| Viewer closes or a network hop fails | The PTY continues; the consumer resumes or restores a snapshot. |
+| Viewer closes or a network hop fails | The PTY continues; the consumer resumes or restores a snapshot. With `end_on_detach`, the guest ends the session once its last attachment is gone. |
 | Controller or host restart | Operations reconcile and routing reconnects. Accepted work is not canceled. |
 | RAM fork or restore | PTYs and memory continue; the new binding revokes inherited authentication before access is published. |
 | Cold copy, guest reboot or daemon restart | New incarnation; unfinished sessions become `lost`. |
-| Slow consumer | That attachment is shed; others and the PTY continue. |
-| Lost create reply | Repeat the same create with its original identity and timestamp; never allocate a replacement silently. |
-| Lost input or resize acknowledgement | Outcome uncertain; do not replay. |
+| Slow consumer | That attachment is shed; others and the PTY continue. A pipe session holds its process instead. |
+| Lost open reply while creating | Repeat the same `Open.create` with its original identity and timestamp; never allocate a replacement silently. |
+| Lost input acknowledgement | Repeat the `Input` on the same attachment; its offset keeps it from being applied twice. Never carry it to another attachment. |
+| Lost resize acknowledgement | Outcome uncertain; the ordered `Resized` event is the truth. |
 | Session ends while no one is attached | An `ENDED` opening returns the outcome and final view. |
 | Engine digest mismatch | Snapshot decoding is refused; sessions stay alive. |
 

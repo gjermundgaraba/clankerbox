@@ -14,3 +14,4 @@ supersede its record.
 | [0006](0006-no-application-credentials.md) | No application credential management or activity detection |
 | [0007](0007-prepared-guest-images.md) | Prepared images and explicit guest binding, startup and renewal |
 | [0008](0008-runtime-built-profiles.md) | Runtime-built profiles |
+| [0009](0009-attachment-owned-sessions.md) | Attachment-owned sessions and one client-informed responder |

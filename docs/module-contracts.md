@@ -70,8 +70,9 @@ Tart checkpoints are stopped-disk copies managed by the runtime.
 ## Guest sessions and transport lifetime
 
 The guest daemon owns its singleton lock, listeners and binding identity.
-`internal/guest/session` owns PTYs, terminal state, bounded history, control
-admission and final records. Sessions run as root on both guest operating
+`internal/guest/session` owns PTYs and pipe processes, terminal state, bounded
+history, control admission, final records, which output sequences the terminal
+answered, and the lifetime of a session created to end with its attachments. Sessions run as root on both guest operating
 systems; see the [guest trust model](terminal-sessions.md).
 Rebinding a copied guest replaces its routing identity while keeping the session
 manager. Machine storage uses private copies rather than shared writable backing.

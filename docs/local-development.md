@@ -99,6 +99,8 @@ clankerbox --config .clankerbox/client.json profile publish examples/profiles/li
 clankerbox --config .clankerbox/client.json profiles
 clankerbox --config .clankerbox/client.json create first --profile linux-tools
 clankerbox --config .clankerbox/client.json inspect first
+clankerbox --config .clankerbox/client.json shell first
+clankerbox --config .clankerbox/client.json shell first -- uname -a
 clankerbox --config .clankerbox/client.json sessions first
 clankerbox --config .clankerbox/client.json fork first experiment
 clankerbox --config .clankerbox/client.json checkpoint create first

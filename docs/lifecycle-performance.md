@@ -32,10 +32,9 @@ before running the benchmark. Do not run against somebody else's
 workloads or interpret a failed/ambiguous operation as permission to replay it.
 
 ```sh
-go build -o bin/session-run ./tests/session-run
 python3 tests/benchmark_lifecycle.py \
   --binary /candidate/clankerbox --config /disposable/environment/client.json \
-  --session-runner "$PWD/bin/session-run" --host local --profile linux-tools \
+  --host local --profile linux-tools \
   --samples 3 --result /new/private/results/benchmark.json
 ```
 

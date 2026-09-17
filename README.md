@@ -69,9 +69,17 @@ clankerbox start dev
 clankerbox fork dev experiment
 clankerbox checkpoint create dev
 clankerbox restore CHECKPOINT_ID recovered
+clankerbox shell dev
+clankerbox shell dev -- git status
+tar -c src | clankerbox shell dev -- tar -x -C /root
 clankerbox sessions dev
 clankerbox labels dev team=core purpose=review
 ```
+
+`clankerbox shell` runs a login shell or a command in a new session that ends
+with the command, and exits with its status. On a terminal it is interactive;
+otherwise stdin, stdout and stderr are pipes, binary-safe in both directions.
+`--tty` gives a command a terminal from a script, `--no-tty` pipes on a terminal.
 
 Lifecycle commands wait for their operation to finish, five minutes by default
 (`--timeout`). A timed-out operation may still complete: inspect it with
@@ -81,17 +89,19 @@ configured and reserved CPU and RAM per host; reservations come from the
 controller's accounting, not live utilization. Tart additionally admits at most
 two active macOS VM reservations per host, including profile builders.
 
-For automation, `--json` prints resources as JSON and `--async` returns the
-accepted operation without waiting:
+For automation, `--json` prints resources as JSON, a failure as one
+`{"error":{"message","code","reason","retryable"}}` object on stderr, and `--async`
+returns the accepted operation without waiting. Classify failures on `reason`:
 
 ```sh
 clankerbox --json create batch-dev --async --idempotency-key REQUEST_KEY
 clankerbox --json operation OPERATION_ID
 ```
 
-`clankerbox COMMAND --help` documents each command. The CLI lists sessions but
-is not a terminal client; terminal access is through `SessionService`, see
-[terminal sessions](docs/terminal-sessions.md).
+`clankerbox COMMAND --help` documents each command. `shell`, `sessions` and
+`guest` are clients of `SessionService`, the only path to a process in a guest;
+see [terminal sessions](docs/terminal-sessions.md) for its contract and for how
+`shell` behaves on a terminal, in a pipeline and when its connection drops.
 
 ## Running the services
 
