@@ -38,7 +38,7 @@ func checkpointDeletion(cp *model.Checkpoint) model.Request {
 func TestCheckpointDeletionAfterConfigurationChange(t *testing.T) {
 	t.Parallel()
 	for _, kind := range []string{checkpointRAM, checkpointDisk} {
-		for _, drift := range []string{"profile", "runtime", "retired-profile"} {
+		for _, drift := range []string{"base", "runtime", "retired-base"} {
 			t.Run(kind+"/"+drift, func(t *testing.T) {
 				t.Parallel()
 				testCheckpointDeletionDrift(t, kind, drift)
@@ -54,17 +54,21 @@ func testCheckpointDeletionDrift(t *testing.T, kind, drift string) {
 	requireStatus(t, response, statusSucceeded)
 	closeHelper(t, h)
 	switch drift {
-	case "profile":
-		cfg.Profiles[0].CPU++
+	case "base":
+		cfg.Bases[0].Digest += "-changed"
 	case "runtime":
 		cfg.RuntimeDigest += "-changed"
-	case "retired-profile":
-		cfg.Profiles = nil
+	case "retired-base":
+		cfg.Bases = nil
 	}
 	h, err := host.Open(cfg, rt)
 	requireNoError(t, err)
 	defer closeHelper(t, h)
-	requireStatus(t, h.Execute(t.Context(), restoreRequest(source, response.Checkpoint)), statusFailed)
+	restoreStatus := statusSucceeded
+	if drift == "runtime" {
+		restoreStatus = statusFailed
+	}
+	requireStatus(t, h.Execute(t.Context(), restoreRequest(source, response.Checkpoint)), restoreStatus)
 	deletion := checkpointDeletion(response.Checkpoint)
 	want := statusFailed
 	if kind == checkpointRAM || drift != "runtime" {
@@ -97,14 +101,16 @@ func checkpointSource(t *testing.T, kind string) (*host.Helper, host.Config, *br
 	requireNoError(t, err)
 	p := source.Profile
 	p.Runtime, p.OS, p.Arch = runtimeSmolvm, osLinux, archAMD64
+	p.StorageGiB, p.OverlayGiB = 4, 16
 	requireNoError(t, p.Validate())
-	cfg.Profiles = []host.ProfileBinding{{Profile: p, ImagePath: testRootfs}}
+	cfg.Bases = []host.BaseBinding{testBase(p, testRootfs)}
 	cfg.HostOS = osLinux
 	cfg.SmolvmPath, cfg.LibraryDir = testSmolvmPath, testSmolvmLibrary
 	source.Profile = p
 	rt := &branchRuntime{machines: map[string]*memoryRuntime{}}
 	h, err = host.Open(cfg, rt)
 	requireNoError(t, err)
+	seedRevision(t, cfg, p, cfg.Bases[0].ImagePath)
 	requireStatus(t, h.Execute(t.Context(), source), statusSucceeded)
 	return h, cfg, rt, source
 }
@@ -141,7 +147,7 @@ func TestRAMDeletionPreservesOwnershipAndReplaysInterruptedRemoval(t *testing.T)
 	deletion := checkpointDeletion(cp)
 	requireStatus(t, h.Execute(t.Context(), deletion), statusUnresolved)
 	closeHelper(t, h)
-	cfg.Profiles = nil
+	cfg.Bases = nil
 	h, err := host.Open(cfg, rt)
 	requireNoError(t, err)
 	defer closeHelper(t, h)
@@ -201,7 +207,7 @@ func TestRAMDeletionRetainsInterruptedRestoreReservation(t *testing.T) {
 	rt.setFail(actionRestore)
 	requireStatus(t, h.Execute(t.Context(), restore), statusUnresolved)
 	closeHelper(t, h)
-	cfg.Profiles = nil
+	cfg.Bases = nil
 	h, err := host.Open(cfg, rt)
 	requireNoError(t, err)
 	defer closeHelper(t, h)

@@ -6,6 +6,8 @@ import "google/protobuf/timestamp.proto";
 
 // Public resource DTOs never contain credentials, image paths, or private endpoints.
 message Profile {
+  reserved 10;
+  reserved "image_digest";
   string id = 1;
   string os = 2;
   string arch = 3;
@@ -15,11 +17,14 @@ message Profile {
   repeated string capabilities = 7;
   uint64 storage_gib = 8;
   uint64 overlay_gib = 9;
-  string image_digest = 10;
+  string revision_id = 13;
+  string host_id = 11;
+  string base_id = 12;
 }
 message Host {
+  reserved 2;
+  reserved "profile_ids";
   string id = 1;
-  repeated string profile_ids = 2;
   uint32 cpu = 3;
   uint64 ram_mib = 4;
   uint32 used_cpu = 5;

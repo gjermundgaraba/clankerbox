@@ -26,27 +26,27 @@ import (
 
 // Config pins the private storage root and trusted runtime installation paths.
 type Config struct {
-	RuntimeDigest string           `json:"runtime_digest,omitempty"`
-	PortLeaseRoot string           `json:"port_lease_root,omitempty"`
-	Listen        string           `json:"listen,omitempty"`
-	TLSCert       string           `json:"tls_cert,omitempty"`
-	TLSKey        string           `json:"tls_key,omitempty"`
-	TLSCA         string           `json:"tls_ca,omitempty"`
-	ControllerID  string           `json:"controller_id,omitempty"`
-	HostOS        string           `json:"host_os,omitempty"`
-	HostID        string           `json:"host_id,omitempty"`
-	Root          string           `json:"root"`
-	Profiles      []ProfileBinding `json:"profiles"`
-	TartPath      string           `json:"tart_path,omitempty"`
-	SmolvmPath    string           `json:"smolvm_path,omitempty"`
-	LibraryDir    string           `json:"library_dir,omitempty"`
-	DNS           string           `json:"dns,omitempty"`
-	LaunchctlPath string           `json:"launchctl_path,omitempty"`
-	LaunchdDomain string           `json:"launchd_domain,omitempty"`
-	SystemctlPath string           `json:"systemctl_path,omitempty"`
-	SystemdUser   bool             `json:"systemd_user,omitempty"`
-	PortMin       int              `json:"port_min,omitempty"`
-	PortMax       int              `json:"port_max,omitempty"`
+	RuntimeDigest string        `json:"runtime_digest,omitempty"`
+	PortLeaseRoot string        `json:"port_lease_root,omitempty"`
+	Listen        string        `json:"listen,omitempty"`
+	TLSCert       string        `json:"tls_cert,omitempty"`
+	TLSKey        string        `json:"tls_key,omitempty"`
+	TLSCA         string        `json:"tls_ca,omitempty"`
+	ControllerID  string        `json:"controller_id,omitempty"`
+	HostOS        string        `json:"host_os,omitempty"`
+	HostID        string        `json:"host_id,omitempty"`
+	Root          string        `json:"root"`
+	Bases         []BaseBinding `json:"bases"`
+	TartPath      string        `json:"tart_path,omitempty"`
+	SmolvmPath    string        `json:"smolvm_path,omitempty"`
+	LibraryDir    string        `json:"library_dir,omitempty"`
+	DNS           string        `json:"dns,omitempty"`
+	LaunchctlPath string        `json:"launchctl_path,omitempty"`
+	LaunchdDomain string        `json:"launchd_domain,omitempty"`
+	SystemctlPath string        `json:"systemctl_path,omitempty"`
+	SystemdUser   bool          `json:"systemd_user,omitempty"`
+	PortMin       int           `json:"port_min,omitempty"`
+	PortMax       int           `json:"port_max,omitempty"`
 }
 
 const (
@@ -88,7 +88,7 @@ func (c *Config) Validate() error {
 	if err := c.validatePorts(); err != nil {
 		return err
 	}
-	return c.validateProfiles()
+	return c.validateBases()
 }
 
 func (c *Config) validatePorts() error {
@@ -153,6 +153,7 @@ type CheckpointSpec struct {
 // Runtime performs host-local lifecycle effects. Errors may follow successful side
 // effects; the helper journals intent and never blindly replays ambiguous live work.
 type Runtime interface {
+	ProfileRuntime
 	Prerequisite(context.Context, string, Manifest, *CheckpointSpec) error
 	Fork(context.Context, Manifest, Manifest) error
 	Capture(context.Context, Manifest, CheckpointSpec) error
@@ -256,7 +257,7 @@ func Open(cfg Config, rt Runtime) (_ *Helper, resultErr error) {
 		}
 	}()
 
-	for _, name := range []string{"machines", "jobs", runtimeTart, "checkpoints"} {
+	for _, name := range []string{"machines", "jobs", runtimeTart, "checkpoints", "revisions", "builds", "uploads"} {
 		if childErr := statefs.EnsurePrivateDir(filepath.Join(cfg.Root, name)); childErr != nil {
 			return nil, childErr
 		}
@@ -273,6 +274,11 @@ func Open(cfg Config, rt Runtime) (_ *Helper, resultErr error) {
 	_, err = db.ExecContext(
 		context.Background(),
 		`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000;
+ CREATE TABLE IF NOT EXISTS profile_builds(id TEXT PRIMARY KEY, body BLOB NOT NULL, cancel INTEGER NOT NULL DEFAULT 0);
+ CREATE INDEX IF NOT EXISTS profile_builds_unfinished ON profile_builds(id) WHERE json_extract(body,'$.build.status') NOT IN `+terminalBuildStates+`;
+ CREATE INDEX IF NOT EXISTS profile_builds_upload ON profile_builds(json_extract(body,'$.build.upload_id'));
+ CREATE TABLE IF NOT EXISTS recipe_uploads(id TEXT PRIMARY KEY, size INTEGER NOT NULL, complete INTEGER NOT NULL, expires_at INTEGER NOT NULL, staging_removed INTEGER NOT NULL DEFAULT 0);
+ CREATE INDEX IF NOT EXISTS recipe_uploads_pending_cleanup ON recipe_uploads(expires_at) WHERE staging_removed=0;
  CREATE TABLE IF NOT EXISTS checkpoints(id TEXT PRIMARY KEY, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS machines(id TEXT PRIMARY KEY, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, machine_id TEXT NOT NULL, generation INTEGER NOT NULL, body BLOB NOT NULL, UNIQUE(machine_id,generation));`,
@@ -386,12 +392,8 @@ func (h *Helper) saveJournal(ctx context.Context, m Manifest, a accepted) (resul
 }
 
 func (h *Helper) profile(p model.Profile) bool {
-	for _, local := range h.cfg.Profiles {
-		if local.ID == p.ID {
-			return model.SameProfile(local.Profile, p)
-		}
-	}
-	return false
+	_, err := h.cfg.imagePath(p)
+	return err == nil
 }
 
 func (h *Helper) observation(ctx context.Context, m Manifest) (*model.Observation, error) {
@@ -938,21 +940,21 @@ func (h *Helper) validateRetainedGeneration(ctx context.Context, req model.Reque
 	return nil
 }
 
-func (c *Config) validateProfiles() error {
+func (c *Config) validateBases() error {
 	if c.RuntimeDigest == "" {
 		return errors.New("runtime_digest required")
 	}
 	seen := map[string]bool{}
-	for i := range c.Profiles {
-		p := &c.Profiles[i]
+	for i := range c.Bases {
+		p := &c.Bases[i]
 		if err := p.Validate(); err != nil {
 			return err
 		}
 		if seen[p.ID] {
-			return errors.New("duplicate profile")
+			return errors.New("duplicate base")
 		}
 		seen[p.ID] = true
-		if err := c.validateRuntimeProfile(p.Profile); err != nil {
+		if err := c.validateRuntimeProfile(model.Profile{Runtime: p.Runtime, OS: p.OS, Arch: p.Arch}); err != nil {
 			return err
 		}
 	}

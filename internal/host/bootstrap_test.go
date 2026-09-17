@@ -29,6 +29,8 @@ import (
 )
 
 type preparedRunner struct {
+	unsupportedStream
+
 	machine Manifest
 	scripts []string
 	inputs  int
@@ -165,7 +167,7 @@ func (g *preparedGuest) DescribeGuest(context.Context, *connect.Request[v1.Descr
 	return connect.NewResponse(&v1.GuestDescription{MachineId: g.machine}), nil
 }
 
-type noNativeEffects struct{}
+type noNativeEffects struct{ unsupportedStream }
 
 func (noNativeEffects) Run(context.Context, string, []string, []string, []byte) ([]byte, error) {
 	return nil, errors.New("unexpected native effect")

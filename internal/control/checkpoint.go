@@ -365,15 +365,12 @@ func (c *Controller) derivationPlacement(
 		}
 		return cp.Profile, h, nil
 	}
-	p, ok := c.profile(source.Profile)
-	if !ok || !model.SameProfile(p, source.ProfileSpec) {
-		return model.Profile{}, model.Host{}, model.NewError(model.ReasonConfiguration, "pinned profile changed", false)
-	}
+	p := source.ProfileSpec
 	if action == forkAction && !slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), forkAction) {
 		return model.Profile{}, model.Host{}, model.NewError(model.ReasonUnsupported, "profile does not support concurrent fork", false)
 	}
 	h, ok := c.host(source.Host)
-	if !ok || !slices.Contains(h.ProfileIDs, p.ID) {
+	if !ok || p.HostID != h.ID {
 		return model.Profile{}, model.Host{}, model.NewError(model.ReasonUnavailable, "pinned host/profile unavailable", true)
 	}
 

@@ -13,6 +13,8 @@ import (
 )
 
 type memoryRuntime struct {
+	unsupportedProfileRuntime
+
 	exists                                    bool
 	state                                     model.State
 	creates, starts, stops, deletes, prepares int
@@ -69,13 +71,13 @@ func setup(t *testing.T) (*host.Helper, host.Config, *memoryRuntime, model.Reque
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	requireNoError(t, err)
 	p := model.Profile{
-		ID:          "mac-v1",
-		OS:          "macos",
-		Arch:        archARM64,
-		Runtime:     runtimeTart,
-		CPU:         2,
-		RAMMiB:      2048,
-		ImageDigest: "image-content",
+		ID:         "mac-v1",
+		OS:         "macos",
+		Arch:       archARM64,
+		Runtime:    runtimeTart,
+		CPU:        2,
+		RAMMiB:     2048,
+		RevisionID: model.NewID(), BaseID: "base", HostID: "test-host",
 	}
 	if err = p.Validate(); err != nil {
 		t.Fatal(err)
@@ -83,13 +85,14 @@ func setup(t *testing.T) (*host.Helper, host.Config, *memoryRuntime, model.Reque
 	cfg := host.Config{HostOS: osDarwin,
 		Root:          filepath.Join(root, "state"),
 		PortLeaseRoot: filepath.Join(root, "ports"),
-		Profiles:      []host.ProfileBinding{{Profile: p, ImagePath: "seed"}},
+		Bases:         []host.BaseBinding{testBase(p, "seed")},
 		RuntimeDigest: "engine-content",
 		TartPath:      "/usr/local/bin/tart",
 	}
 	rt := &memoryRuntime{}
 	h, err := host.Open(cfg, rt)
 	requireNoError(t, err)
+	seedRevision(t, cfg, p, "seed")
 	req := model.Request{
 		Action:      actionCreate,
 		OperationID: model.NewID(),
@@ -268,7 +271,7 @@ func TestConcurrentHelperInitialization(t *testing.T) {
 			<-start
 			local := cfg
 			// Separate invocations decode independent profile records.
-			local.Profiles = append([]host.ProfileBinding(nil), cfg.Profiles...)
+			local.Bases = append([]host.BaseBinding(nil), cfg.Bases...)
 			helper, err := host.Open(local, rt)
 			if err == nil {
 				err = helper.Close()

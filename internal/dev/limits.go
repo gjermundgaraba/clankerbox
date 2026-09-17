@@ -10,5 +10,4 @@ const (
 	operationPollInterval     = 200 * time.Millisecond
 	hostShutdownTimeout       = 45 * time.Second
 	teardownTimeout           = 15 * time.Minute
-	defaultMachineSlots       = 2
 )

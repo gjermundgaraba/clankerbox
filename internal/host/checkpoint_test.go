@@ -18,6 +18,8 @@ import (
 // branchRuntime is driven synchronously by most tests and by the service worker
 // in others, so its failure switch and counters are guarded.
 type branchRuntime struct {
+	unsupportedProfileRuntime
+
 	mu                                                         sync.Mutex
 	machines                                                   map[string]*memoryRuntime
 	inputs                                                     map[string]host.Manifest
@@ -370,6 +372,7 @@ func TestHostLinuxDependencyGuardPreservesOwnedStore(t *testing.T) {
 	requireNoError(t, h.Close())
 	p := source.Profile
 	p.Runtime, p.OS, p.Arch = runtimeSmolvm, osLinux, archAMD64
+	p.StorageGiB, p.OverlayGiB = 4, 16
 	requireNoError(t, p.Validate())
 	root := filepath.Join("/tmp", model.NewID()[:8])
 	err := os.Mkdir(root, 0700)
@@ -381,13 +384,14 @@ func TestHostLinuxDependencyGuardPreservesOwnedStore(t *testing.T) {
 	})
 	cfg.Root, err = filepath.EvalSymlinks(root)
 	requireNoError(t, err)
-	cfg.Profiles = []host.ProfileBinding{{Profile: p, ImagePath: "/opt/profiles/rootfs"}}
+	cfg.Bases = []host.BaseBinding{testBase(p, "/opt/profiles/rootfs")}
 	cfg.HostOS = osLinux
 	cfg.SmolvmPath, cfg.LibraryDir = testSmolvmPath, testSmolvmLibrary
 	source.Profile = p
 	rt := &branchRuntime{machines: map[string]*memoryRuntime{}}
 	h, err = host.Open(cfg, rt)
 	requireNoError(t, err)
+	seedRevision(t, cfg, p, cfg.Bases[0].ImagePath)
 	defer func() {
 		if closeErr := h.Close(); closeErr != nil {
 			t.Error(closeErr)

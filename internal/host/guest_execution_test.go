@@ -11,6 +11,8 @@ import (
 )
 
 type readinessRunner struct {
+	unsupportedStream
+
 	calls    int
 	failures int
 	t        *testing.T

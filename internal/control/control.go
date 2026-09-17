@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"slices"
 	"sync"
 	"time"
 
@@ -46,6 +45,7 @@ const (
 
 // Transport dispatches typed lifecycle work to configured host services.
 type Transport interface {
+	ProfileTransport
 	Call(context.Context, model.Host, model.Request) (model.Response, error)
 }
 
@@ -93,6 +93,10 @@ func Open(path string, cfg model.Config, transport Transport) (*Controller, erro
 	}
 	db.SetMaxOpenConns(1)
 	_, err = db.ExecContext(ctx, `PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
+ CREATE TABLE IF NOT EXISTS recipe_uploads (id TEXT PRIMARY KEY, host_id TEXT NOT NULL, build_id TEXT NOT NULL DEFAULT '');
+ CREATE TABLE IF NOT EXISTS profiles (id TEXT PRIMARY KEY, body BLOB NOT NULL);
+ CREATE TABLE IF NOT EXISTS revisions (id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, deleting INTEGER NOT NULL DEFAULT 0, body BLOB NOT NULL);
+ CREATE TABLE IF NOT EXISTS profile_builds (id TEXT PRIMARY KEY, host_id TEXT NOT NULL, profile_id TEXT NOT NULL, status TEXT NOT NULL, cancel INTEGER NOT NULL DEFAULT 0, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS checkpoints (id TEXT PRIMARY KEY, body BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS machines (id TEXT PRIMARY KEY, name TEXT NOT NULL, deleted INTEGER NOT NULL, body BLOB NOT NULL);
  CREATE UNIQUE INDEX IF NOT EXISTS live_names ON machines(name) WHERE deleted=0;
@@ -136,15 +140,6 @@ func (c *Controller) host(id string) (model.Host, bool) {
 		}
 	}
 	return model.Host{}, false
-}
-
-func (c *Controller) profile(id string) (model.Profile, bool) {
-	for _, p := range c.cfg.Profiles {
-		if p.ID == id {
-			return p, true
-		}
-	}
-	return model.Profile{}, false
 }
 
 // rollbackTransaction releases an unfinished transaction and preserves cleanup failures.
@@ -309,7 +304,15 @@ func capacity(ctx context.Context, tx *sql.Tx, h model.Host, p model.Profile, ex
 	if err != nil {
 		return err
 	}
-	used := hostCapacity(h, ms, exclude)
+	used, tartSlots := machineCapacity(h, ms, exclude)
+	buildTartSlots, err := reserveBuildCapacity(ctx, tx, &used)
+	if err != nil {
+		return err
+	}
+	// Tart builders use a native macOS VM too, so they share machine slots.
+	if p.Runtime == "tart" && tartSlots+buildTartSlots >= tartConcurrentVMLimit {
+		return model.NewError(model.ReasonCapacity, "host Tart capacity is exhausted (two concurrent macOS VMs)", false)
+	}
 	if p.CPU > used.RemainingCPU || p.RAMMiB > used.RemainingRAMMiB {
 		return model.NewError(model.ReasonCapacity, "host CPU/RAM capacity is exhausted (unknown machines remain reserved)", false)
 	}
@@ -362,12 +365,15 @@ func (c *Controller) Create(
 		}
 		return duplicate, duplicateErr
 	}
-	p, ok := c.profile(in.Profile)
-	if !ok {
-		return model.Operation{}, model.NewError(model.ReasonInvalid, "unknown profile", false)
+	p, err := readProfile(ctx, tx, in.Profile)
+	if err != nil {
+		if isProfileReason(err, model.ReasonNotFound) {
+			return model.Operation{}, model.NewError(model.ReasonInvalid, "unknown profile", false)
+		}
+		return model.Operation{}, err
 	}
-	h, ok := c.host(in.Host)
-	if !ok || !slices.Contains(h.ProfileIDs, p.ID) {
+	h, ok := c.host(p.HostID)
+	if !ok || (in.Host != "" && in.Host != h.ID) {
 		return model.Operation{}, model.NewError(model.ReasonInvalid, "host does not provide profile", false)
 	}
 	if err = admitCreate(ctx, tx, h, p, in.Name); err != nil {
@@ -660,6 +666,7 @@ func (c *Controller) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, h := range c.cfg.Hosts {
 		wg.Go(func() { c.runHost(ctx, h.ID) })
+		wg.Go(func() { c.runProfileBuilds(ctx, h.ID) })
 	}
 	wg.Wait()
 }

@@ -39,12 +39,30 @@ func TestPortLeasesCoordinateIndependentHostRoots(t *testing.T) {
 	}
 	wrong := Manifest{ID: ids[1], Port: again}
 	wrong.Profile.Runtime = runtimeSmolvm
-	if err = a.releasePort(wrong); err == nil {
-		t.Fatal("released another machine lease")
+	if err = a.releasePort(wrong); err != nil {
+		t.Fatal(err)
 	}
+	registryCheck(t, a.withPortLeases(func(leases map[int]portLease) error {
+		if len(leases) != 2 || leases[again].MachineID != ids[0] {
+			t.Fatal("released another owner's lease", leases)
+		}
+		return nil
+	}))
 	own := wrong
 	own.ID = ids[0]
+	own.Port = 0
 	if err = a.releasePort(own); err != nil {
 		t.Fatal(err)
 	}
+	registryCheck(t, a.withPortLeases(func(leases map[int]portLease) error {
+		if len(leases) != 1 {
+			t.Fatal("owner cleanup did not preserve unrelated lease", leases)
+		}
+		for _, lease := range leases {
+			if lease.Root != b.cfg.Root || lease.MachineID != ids[1] {
+				t.Fatal("wrong remaining lease", lease)
+			}
+		}
+		return nil
+	}))
 }

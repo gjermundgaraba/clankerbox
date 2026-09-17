@@ -38,11 +38,6 @@ type Bundle struct {
 	Smolvm         string       `json:"smolvm"`
 	LibraryDir     string       `json:"library_dir"`
 	ImagePath      string       `json:"image_path"`
-	ProfileID      string       `json:"profile_id"`
-	ProfileCPU     int          `json:"profile_cpu"`
-	ProfileRAMMiB  int          `json:"profile_ram_mib"`
-	StorageGiB     int          `json:"storage_gib"`
-	OverlayGiB     int          `json:"overlay_gib"`
 	root           string
 	manifest       string
 	digest         string
@@ -124,10 +119,6 @@ func (b Bundle) validateMetadata() error {
 	}
 	if len(b.Files) == 0 {
 		return errors.New("empty bundle file manifest")
-	}
-	if b.ProfileID == "" || b.ProfileCPU < 1 || b.ProfileRAMMiB < minimumProfileRAM || b.StorageGiB < 1 ||
-		b.OverlayGiB < 1 {
-		return errors.New("bundle requires explicit profile and resource sizes")
 	}
 	return nil
 }
@@ -232,7 +223,6 @@ func resolveBundle(explicit string) (Bundle, error) {
 }
 
 const (
-	minimumProfileRAM  = 128
 	bundleManifestName = "bundle.json"
 )
 

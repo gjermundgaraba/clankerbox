@@ -137,11 +137,14 @@ func newRegistryFixture(t *testing.T, count int) *registryFixture {
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	root, err = filepath.EvalSymlinks(root)
 	registryCheck(t, err)
-	profile := model.Profile{ID: "linux", OS: "linux", Arch: "amd64", Runtime: runtimeSmolvm, CPU: 2, RAMMiB: 2048, ImageDigest: "image"}
-	cfg := Config{Root: root, HostOS: hostLinux, HostID: "test-host", RuntimeDigest: "runtime", PortLeaseRoot: filepath.Join(root, "ports"), SmolvmPath: "/bin/true", LibraryDir: "/tmp", Profiles: []ProfileBinding{{Profile: profile, ImagePath: "/tmp/image"}}}
+	profile := model.Profile{ID: "linux", OS: "linux", Arch: "amd64", Runtime: runtimeSmolvm, CPU: 2, RAMMiB: 2048, RevisionID: model.NewID(), BaseID: "base", HostID: "test-host"}
+	cfg := Config{Root: root, HostOS: hostLinux, HostID: "test-host", RuntimeDigest: "runtime", PortLeaseRoot: filepath.Join(root, "ports"), SmolvmPath: "/bin/true", LibraryDir: "/tmp", Bases: []BaseBinding{BaseBinding{ID: profile.BaseID, OS: profile.OS, Arch: profile.Arch, Runtime: profile.Runtime, Digest: "image", ImagePath: "/tmp/image"}}}
 	native := &registryNative{states: map[string]RuntimeState{}}
 	helper, err := Open(cfg, native)
 	registryCheck(t, err)
+	data, err := json.Marshal(preparedRevision{RuntimeDigest: cfg.RuntimeDigest, Profile: profile, Base: cfg.Bases[0].Base})
+	registryCheck(t, err)
+	registryCheck(t, os.WriteFile(cfg.revisionPath(profile.RevisionID), data, 0600))
 	native.helper = helper
 	f := &registryFixture{helper: helper, native: native}
 	t.Cleanup(func() { registryCheck(t, f.helper.Close()) })

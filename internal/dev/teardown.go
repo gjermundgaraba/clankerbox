@@ -13,6 +13,9 @@ import (
 
 	v1 "clankerbox/gen/clankerbox/v1"
 	"clankerbox/gen/clankerbox/v1/clankerboxv1connect"
+	"clankerbox/internal/control"
+	"clankerbox/internal/model"
+	"clankerbox/internal/rpcmodel"
 	"clankerbox/internal/rpctransport"
 )
 
@@ -26,7 +29,7 @@ type teardownJournal struct {
 	Intents map[string]*teardownIntent `json:"intents"`
 }
 
-// Stop settles ordinary stop operations before stopping the host service.
+// Stop settles profile builds and ordinary stop operations before stopping the host service.
 func Stop(ctx context.Context, opts Options) error { return teardown(ctx, opts, false) }
 
 // Destroy deletes dependency-ordered resources and exact owned environment roots.
@@ -44,6 +47,10 @@ func teardown(ctx context.Context, opts Options, destroy bool) error {
 		return err
 	}
 	journal, err := env.beginTeardown(destroy)
+	if err != nil {
+		return err
+	}
+	builds, err := env.cancelProfileBuilds(ctx)
 	if err != nil {
 		return err
 	}
@@ -69,7 +76,8 @@ func teardown(ctx context.Context, opts Options, destroy bool) error {
 	rpc := clankerboxv1connect.NewMachineServiceClient(hc, origin)
 	bounded, cancel := context.WithTimeout(ctx, teardownTimeout)
 	defer cancel()
-	if err = env.teardownResources(bounded, rpc, journal); err != nil {
+	profiles := clankerboxv1connect.NewProfileServiceClient(hc, origin)
+	if err = env.settleTeardownResources(bounded, rpc, profiles, journal, builds); err != nil {
 		return err
 	}
 	if err = child.stop(); err != nil {
@@ -80,6 +88,63 @@ func teardown(ctx context.Context, opts Options, destroy bool) error {
 	}
 	return env.finishTeardown(destroy)
 }
+
+// The environment lock excludes public admissions; opening the controller also
+// proves its previous process has released ownership. Cancellation is committed
+// before the private controller starts and can resume unfinished publications.
+func (e *environment) cancelProfileBuilds(ctx context.Context) ([]string, error) {
+	raw, err := e.dir.ReadFile("controller-config.json")
+	if err != nil {
+		return nil, err
+	}
+	var cfg model.Config
+	if err = json.Unmarshal(raw, &cfg); err != nil {
+		return nil, err
+	}
+	c, err := control.Open(filepath.Join(e.StateDir, "controller"), cfg, &control.RPCTransport{})
+	if err != nil {
+		return nil, err
+	}
+	ids, err := c.CancelProfileBuilds(ctx)
+	return ids, errors.Join(err, c.Close())
+}
+
+func (e *environment) settleTeardownResources(ctx context.Context, machines clankerboxv1connect.MachineServiceClient, profiles clankerboxv1connect.ProfileServiceClient, journal *teardownJournal, builds []string) error {
+	for _, id := range builds {
+		if err := waitProfileCleanup(ctx, profiles, id); err != nil {
+			return err
+		}
+	}
+	return e.teardownResources(ctx, machines, journal)
+}
+
+func waitProfileCleanup(ctx context.Context, rpc clankerboxv1connect.ProfileServiceClient, id string) error {
+	for {
+		response, err := rpc.GetProfileBuild(ctx, connect.NewRequest(&v1.GetProfileBuildRequest{BuildId: id}))
+		if err != nil {
+			return fmt.Errorf("profile build %s cleanup unconfirmed; retained environment preserved: %w", id, err)
+		}
+		b := response.Msg
+		if b.GetId() != id {
+			return fmt.Errorf("profile build %s returned a different identity; retained environment preserved", id)
+		}
+		status, err := rpcmodel.FromBuildStatus(b.GetStatus())
+		if err != nil {
+			return err
+		}
+		if status.Terminal() {
+			return nil
+		}
+		timer := time.NewTimer(operationPollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("profile build %s cleanup unconfirmed (%s: %s); retained environment preserved: %w", id, b.GetStatus(), b.GetError(), ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
 func (e *environment) beginTeardown(destroy bool) (*teardownJournal, error) {
 	journal := &teardownJournal{Destroy: destroy, Intents: map[string]*teardownIntent{}}
 	raw, err := e.dir.ReadFile(teardownManifest)

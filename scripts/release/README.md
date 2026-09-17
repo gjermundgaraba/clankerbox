@@ -138,6 +138,13 @@ Copy the resulting two `.zst` files into a **new build-only runtime-assets stagi
 directory** alongside the qualified libraries, then supply that directory to
 `bundle.py`. Never rewrite an installed bundle or an existing VM's template cache.
 
+### Disposable build storage
+
+Use [owned work runs](../WORK_RUNS.md) for new assembly/qualification scratch.
+Keep release archives, corresponding source and necessary build inputs in their
+intended retained location; remove extracted duplicates and compiler caches after
+qualification. Local historical build paths are not a required release interface.
+
 ### Reuse the retained 1.16.0 inputs
 
 The retained notices belong to the isolated qualification checkout, **not** the
@@ -150,14 +157,14 @@ INPUTS=$(cd "$(git rev-parse --show-toplevel)/.work/smolvm-1.16.0-update" && pwd
 CHECKOUT="$INPUTS/clankerbox-candidate"
 python3 "$CHECKOUT/scripts/release/bundle.py" \
   --os darwin --arch arm64 --version 0.4.0-smolvm1.16.0-candidate3 --no-archive \
-  --engine "$INPUTS/source/target/release/smolvm" \
+  --engine "$INPUTS/engines/darwin-arm64" \
   --runtime-assets "$INPUTS/runtime-darwin-arm64" --image "$INPUTS/image-darwin-arm64" \
   --engine-source "$INPUTS/source" --dependency-notices "$INPUTS/notices" \
   --output "$INPUTS/reassembled-darwin-arm64"
 ```
 
 For Linux, use `--os linux --arch amd64`, engine
-`$INPUTS/linux-target/x86_64-unknown-linux-gnu/release/smolvm`, the `linux-amd64`
+`$INPUTS/engines/linux-amd64`, the `linux-amd64`
 runtime/image directories and a distinct output directory. Do not substitute the
 main checkout's `bundle.py`: its unexpanded `go.sum` correctly rejects these
 notices. If the matching checkout is unavailable or has changed, use fresh
@@ -242,3 +249,7 @@ full macOS image finalizer and supervised signed-host lifecycle/session/disk-cop
 checks. A disposable signed host still needs operator-granted macOS Local Network
 access; do not bypass privacy policy or treat successful native exec as proof of
 guest RPC connectivity.
+
+### Runtime-built profiles
+
+Release manifests deploy the Linux base and its verified engine/guest integration. They no longer contain profile IDs or resource defaults. `dev` binds that image as `linux-base` and starts with an empty controller catalog. Operators explicitly publish recipes using `clankerbox profile publish`; service startup never builds a profile. Tart bases remain operator-installed local seeds. See [profile recipes](../../docs/profiles.md).

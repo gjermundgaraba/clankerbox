@@ -42,7 +42,7 @@ func newCommand() *cli.Command {
 		Usage:     "Serve the authenticated API and durable work queue",
 		UsageText: "clankerbox-server [options]",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "config", Usage: "JSON hosts/profiles configuration `FILE`", Required: true},
+			&cli.StringFlag{Name: "config", Usage: "JSON hosts configuration `FILE`", Required: true},
 			&cli.StringFlag{Name: "state-dir", Usage: "Private controller state `DIRECTORY`", Required: true},
 			&cli.StringFlag{Name: "token-file", Usage: "Bearer token `FILE` (at least 32 bytes)", Required: true},
 			&cli.StringFlag{

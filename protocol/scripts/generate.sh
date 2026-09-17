@@ -14,4 +14,4 @@ PATH="$PWD/.tools:$PWD/node_modules/.bin:$PATH" protoc -I . \
   --connect-go_out=../gen --connect-go_opt=paths=source_relative \
   --es_out=src/gen --es_opt=target=ts,import_extension=js \
   clankerbox/v1/resources.proto clankerbox/v1/machine.proto \
-  clankerbox/v1/session.proto clankerbox/v1/host.proto
+  clankerbox/v1/session.proto clankerbox/v1/host.proto clankerbox/v1/profile.proto

@@ -119,15 +119,14 @@ func TestTypedSessionsRefuseStoppedAndReservedSource(t *testing.T) {
 	t.Parallel()
 	cfg := config()
 	cfg.Profiles[0] = model.Profile{
-		ID:          fixtureLinuxProfile,
-		Runtime:     "smolvm",
-		OS:          fixtureLinuxOS,
-		Arch:        fixtureAMD64,
-		CPU:         2,
-		RAMMiB:      2048,
-		ImageDigest: "image-content",
+		ID:         fixtureLinuxProfile,
+		Runtime:    "smolvm",
+		OS:         fixtureLinuxOS,
+		Arch:       fixtureAMD64,
+		CPU:        2,
+		RAMMiB:     2048,
+		RevisionID: "00000000000000000000000000000001", HostID: "mac", BaseID: "base", StorageGiB: 8, OverlayGiB: 4,
 	}
-	cfg.Hosts[0].ProfileIDs = []string{fixtureLinuxProfile}
 	c, _, in, _ := setupControlConfig(t, cfg)
 	defer closeTest(t, c)
 	created := mustCreate(t, c, in, "create")

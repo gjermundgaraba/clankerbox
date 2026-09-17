@@ -2,6 +2,8 @@ package control
 
 import (
 	"database/sql"
+	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -56,6 +58,88 @@ func TestHostReservationStates(t *testing.T) {
 	}
 }
 
+func TestTartMachineSlotsUseCapacityReservationStates(t *testing.T) {
+	t.Parallel()
+	h := model.Host{ID: "host", CPU: 100, RAMMiB: 100000}
+	profile := func(runtime string) model.Profile {
+		return model.Profile{Runtime: runtime, CPU: 1, RAMMiB: 128}
+	}
+	ms := []model.Machine{
+		{ID: "running-tart", Host: h.ID, State: model.Running, DesiredState: model.Running, ProfileSpec: profile("tart")},
+		{ID: "unknown-tart", Host: h.ID, State: model.Unknown, DesiredState: model.Stopped, ProfileSpec: profile("tart")},
+		{ID: "stopped-tart", Host: h.ID, State: model.Stopped, DesiredState: model.Stopped, ProfileSpec: profile("tart")},
+		{ID: "running-linux", Host: h.ID, State: model.Running, DesiredState: model.Running, ProfileSpec: profile(smolvmRuntime)},
+		{ID: "deleted-tart", Host: h.ID, State: model.Running, DesiredState: model.Running, Deleted: true, ProfileSpec: profile("tart")},
+		{ID: "other-host", Host: "other", State: model.Running, DesiredState: model.Running, ProfileSpec: profile("tart")},
+	}
+	used, slots := machineCapacity(h, ms, "")
+	if slots != 2 || used.UsedCPU != 3 || used.UsedRAMMiB != 384 {
+		t.Fatalf("capacity %+v, Tart slots %d", used, slots)
+	}
+	_, slots = machineCapacity(h, ms, "unknown-tart")
+	if slots != 1 {
+		t.Fatalf("excluded start target retained a Tart slot: %d", slots)
+	}
+}
+
+func TestTartAdmissionCountsBuildSlotsAndLeavesSmolvmUnaffected(t *testing.T) {
+	t.Parallel()
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+	db.SetMaxOpenConns(1)
+	if _, err = db.ExecContext(t.Context(),
+		"CREATE TABLE machines (id TEXT PRIMARY KEY, name TEXT, deleted INTEGER, body BLOB); CREATE TABLE profile_builds (host_id TEXT, status TEXT, body BLOB)",
+	); err != nil {
+		t.Fatal(err)
+	}
+	h := model.Host{ID: "host", CPU: 100, RAMMiB: 100000}
+	tart := model.Profile{Runtime: "tart", CPU: 1, RAMMiB: 128}
+	linux := model.Profile{Runtime: smolvmRuntime, CPU: 1, RAMMiB: 128}
+	m := model.Machine{ID: "mac", Host: h.ID, State: model.Running, DesiredState: model.Running, ProfileSpec: tart}
+	if err = saveMachine(t.Context(), db, m); err != nil {
+		t.Fatal(err)
+	}
+	for _, build := range []model.ProfileBuild{
+		{ID: "active-tart", Status: "unresolved", Recipe: model.ProfileRecipe{HostID: h.ID, CPU: 1, RAMMiB: 128}, Base: model.Base{Runtime: tart.Runtime}},
+		{ID: "active-linux", Status: "running", Recipe: model.ProfileRecipe{HostID: h.ID, CPU: 1, RAMMiB: 128}, Base: model.Base{Runtime: linux.Runtime}},
+		{ID: "finished-tart", Status: "failed", Recipe: model.ProfileRecipe{HostID: h.ID, CPU: 1, RAMMiB: 128}, Base: model.Base{Runtime: tart.Runtime}},
+	} {
+		raw, marshalErr := json.Marshal(build)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		if _, err = db.ExecContext(t.Context(), "INSERT INTO profile_builds(host_id,status,body) VALUES(?,?,?)", h.ID, build.Status, raw); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tx, err := db.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err = capacity(t.Context(), tx, h, tart, ""); err == nil {
+		t.Fatal("third concurrent Tart VM admitted")
+	} else {
+		var detail *model.Error
+		if !errors.As(err, &detail) || detail.Reason != model.ReasonCapacity {
+			t.Fatalf("Tart slot rejection = %v", err)
+		}
+	}
+	if err = capacity(t.Context(), tx, h, linux, ""); err != nil {
+		t.Fatalf("Tart slots constrained smolvm admission: %v", err)
+	}
+	if err = capacity(t.Context(), tx, h, tart, m.ID); err != nil {
+		t.Fatalf("starting machine was not excluded from its prior reservation: %v", err)
+	}
+}
+
 func TestHostsSnapshotAndAdmission(t *testing.T) {
 	t.Parallel()
 	db, err := sql.Open("sqlite", ":memory:")
@@ -70,7 +154,7 @@ func TestHostsSnapshotAndAdmission(t *testing.T) {
 	db.SetMaxOpenConns(1)
 	if _, err = db.ExecContext(
 		t.Context(),
-		"CREATE TABLE machines (id TEXT PRIMARY KEY, name TEXT, deleted INTEGER, body BLOB)",
+		"CREATE TABLE machines (id TEXT PRIMARY KEY, name TEXT, deleted INTEGER, body BLOB); CREATE TABLE profile_builds (host_id TEXT, status TEXT, body BLOB)",
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +166,7 @@ func TestHostsSnapshotAndAdmission(t *testing.T) {
 	}
 	c := &Controller{
 		db:  db,
-		cfg: model.Config{Hosts: hosts, Profiles: []model.Profile{{ID: "profile", CPU: 1, RAMMiB: 128}}},
+		cfg: model.Config{Hosts: hosts},
 	}
 	for _, m := range []model.Machine{
 		{ID: "a", Name: "a", Host: "first", Profile: "profile", State: model.Running, ProfileSpec: model.Profile{CPU: 6, RAMMiB: 6144}},

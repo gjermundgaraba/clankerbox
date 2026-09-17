@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	v1 "clankerbox/gen/clankerbox/v1"
+	"clankerbox/internal/model"
 	"clankerbox/internal/statefs"
 )
 
@@ -42,11 +43,6 @@ func makeBundle(t *testing.T) string {
 		Smolvm:         "runtime/smolvm",
 		LibraryDir:     fixtureRuntimeLibrary,
 		ImagePath:      fixtureImage,
-		ProfileID:      "linux-dev",
-		ProfileCPU:     2,
-		ProfileRAMMiB:  1024,
-		StorageGiB:     1,
-		OverlayGiB:     8,
 	}
 	for _, dir := range []string{"bin", fixtureRuntime, fixtureRuntimeLibrary, fixtureImage, "image/usr", "image/usr/local", "image/usr/local/bin", "image/usr/local/share", "image/usr/local/share/clankerbox"} {
 		if err := os.Mkdir(filepath.Join(root, dir), 0700); err != nil {
@@ -241,4 +237,90 @@ func privateTemp(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func TestEnvironmentDeploysOnlyBase(t *testing.T) {
+	t.Parallel()
+	e, err := openEnvironment(Options{StateDir: filepath.Join(t.TempDir(), "environment"), Bundle: makeBundle(t)}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.close()
+	cfg := e.hostConfig()
+	if len(cfg.Bases) != 1 || cfg.Bases[0].ID != "linux-base" || cfg.Bases[0].Digest != e.bundle.ImageDigest {
+		t.Fatalf("unexpected base config: %+v", cfg.Bases)
+	}
+}
+
+func TestEnvironmentCapacityPersistsAcrossLaunchAndTeardown(t *testing.T) {
+	t.Setenv("HOME", isolatedHome(t))
+	env := isolatedEnvironment(t)
+	if env.CPU != min(runtime.NumCPU(), 4) || env.RAMMiB != 2048 {
+		t.Fatalf("unexpected defaults: %d CPUs, %d MiB", env.CPU, env.RAMMiB)
+	}
+	state := env.StateDir
+	env.close()
+	cpu, ram := 8, 8192
+	//nolint:paralleltest // Each transition uses the budget persisted by the preceding launch.
+	for _, step := range []struct {
+		name             string
+		launch           bool
+		cpu, ram         *int
+		wantCPU, wantRAM int
+	}{
+		{"explicit launch", true, &cpu, &ram, 8, 8192},
+		{"relaunch", true, nil, nil, 8, 8192},
+		{"partial override", true, new(6), nil, 6, 8192},
+		{"teardown ignores launch overrides", false, new(1), new(128), 6, 8192},
+		{"relaunch after teardown preparation", true, nil, nil, 6, 8192},
+	} {
+		t.Run(step.name, func(t *testing.T) {
+			current, err := openEnvironment(Options{StateDir: state, CPU: step.cpu, RAMMiB: step.ram}, step.launch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer current.close()
+			if err = current.prepare(); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := current.dir.ReadFile("controller-config.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cfg model.Config
+			if err = json.Unmarshal(raw, &cfg); err != nil {
+				t.Fatal(err)
+			}
+			if len(cfg.Hosts) != 1 || cfg.Hosts[0].CPU != step.wantCPU || cfg.Hosts[0].RAMMiB != step.wantRAM {
+				t.Fatalf("wrong controller budget: %+v", cfg.Hosts)
+			}
+		})
+	}
+}
+
+func TestEnvironmentRejectsInvalidCapacityWithoutChangingBudget(t *testing.T) {
+	t.Setenv("HOME", isolatedHome(t))
+	env := isolatedEnvironment(t)
+	state := env.StateDir
+	before, err := env.dir.ReadFile(environmentManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.close()
+	for _, opts := range []Options{
+		{CPU: new(0)}, {CPU: new(-1)}, {RAMMiB: new(0)}, {RAMMiB: new(127)},
+	} {
+		opts.StateDir = state
+		if current, openErr := openEnvironment(opts, true); openErr == nil {
+			current.close()
+			t.Fatal("invalid capacity accepted")
+		}
+	}
+	after, err := statefs.ReadPrivate(filepath.Join(state, environmentManifest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("invalid overrides changed persisted budget")
+	}
 }

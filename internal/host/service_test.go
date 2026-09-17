@@ -214,3 +214,31 @@ func awaitInterrupted(t *testing.T, h *host.Helper, id string) {
 		}
 	}
 }
+
+// Maintenance must not supply the controller's lifecycle retry authorization.
+func TestBuildRetryTimerDoesNotRetryLifecycleCleanup(t *testing.T) {
+	t.Parallel()
+	h, _, rt, source := setupBranch(t)
+	defer closeHelper(t, h)
+	ctx := context.Background()
+	service := host.NewService(h)
+	defer func() { requireNoError(t, service.Shutdown(ctx)) }()
+	capture := captureRequest(source)
+	rt.setFail("capture", actionDeleteCheckpoint)
+	_, err := service.Submit(ctx, capture)
+	requireNoError(t, err)
+	awaitInterrupted(t, h, capture.OperationID)
+	// Drain coalesced submission wakes before observing the timer.
+	time.Sleep(100 * time.Millisecond)
+	rt.setFail()
+	// Cross the five-second profile retry tick without a controller resubmission.
+	time.Sleep(6 * time.Second)
+	record, err := h.Operation(ctx, capture.OperationID)
+	requireNoError(t, err)
+	if record.Response.Status != statusUnresolved {
+		t.Fatalf("maintenance retried lifecycle cleanup: %+v", record)
+	}
+	_, err = service.Submit(ctx, capture)
+	requireNoError(t, err)
+	awaitOperation(t, h, capture.OperationID, statusFailed)
+}

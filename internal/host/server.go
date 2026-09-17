@@ -119,11 +119,6 @@ func validateService(cfg Config) error {
 	if cfg.RuntimeDigest == "" {
 		return errors.New("runtime_digest is required for the host service")
 	}
-	for _, p := range cfg.Profiles {
-		if p.ImageDigest == "" {
-			return errors.New("image_digest is required for every service profile")
-		}
-	}
 	if cfg.HostID == "" {
 		return errors.New("host_id is required for the private host service")
 	}

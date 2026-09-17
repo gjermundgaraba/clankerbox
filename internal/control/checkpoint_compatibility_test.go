@@ -38,24 +38,38 @@ func testCheckpointDeletionPlacement(t *testing.T, runtime, change string) {
 	}
 	processHost(t, c, in.Host)
 	cp := checkpointWithStatus(t, c, capture.CheckpointID, "published")
-	closeTest(t, c)
 	switch change {
 	case "cpu-change":
 		cfg.Profiles[0].CPU++
+		cfg.Profiles[0].RevisionID = model.NewID()
+		seedControllerProfile(t, path, cfg.Profiles[0])
 	case "retired-profile":
-		cfg.Profiles[0].ID = "replacement"
-		cfg.Hosts[0].ProfileIDs = []string{"replacement"}
+		if err = c.DeleteProfile(t.Context(), cfg.Profiles[0].ID); err != nil {
+			t.Fatal(err)
+		}
 	case missingHost:
 		cfg.Hosts = nil
 	}
-	c, err = control.Open(path, cfg, tr)
+	closeTest(t, c)
+	c, err = control.Open(path, cfg.Config, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeTest(t, c)
 	_, err = c.Derive(t.Context(), "restore", cp.ID, "restore", model.ChildInput{Name: "restore"})
-	if err == nil {
-		t.Fatal("restored with incompatible placement")
+	if change == missingHost {
+		if err == nil {
+			t.Fatal("restored without pinned host")
+		}
+	} else {
+		if err != nil {
+			t.Fatal("saved revision could not restore:", err)
+		}
+		processHost(t, c, in.Host)
+		sent := tr.calls[len(tr.calls)-1]
+		if sent.Profile != cp.Profile {
+			t.Fatal("restore changed pinned revision")
+		}
 	}
 	deletion, err := c.Derive(t.Context(), "checkpoint-delete", cp.ID, "delete", model.ChildInput{})
 	if change == missingHost {

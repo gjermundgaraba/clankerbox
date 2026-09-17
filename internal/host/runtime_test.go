@@ -22,6 +22,8 @@ type commandCall struct {
 	input     []byte
 }
 type recordingRunner struct {
+	unsupportedStream
+
 	calls []commandCall
 	reply func(commandCall) ([]byte, error)
 }
@@ -44,7 +46,7 @@ func TestNativeTartArgumentsPrivateEnvironmentAndSupervisor(t *testing.T) {
 	m := host.Manifest{ID: req.MachineID, Profile: req.Profile}
 	requireNoError(t, n.Create(context.Background(), m))
 	requireNoError(t, n.Configure(context.Background(), m))
-	if !slices.Equal(runner.calls[0].args, []string{"clone", "seed", m.RuntimeName()}) {
+	if !slices.Equal(runner.calls[0].args, []string{"clone", "profile-" + m.Profile.RevisionID, m.RuntimeName()}) {
 		t.Fatalf("clone argv: %+v", runner.calls[0])
 	}
 	if !slices.Contains(runner.calls[1].args, "--random-mac") ||
@@ -116,23 +118,25 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	root := shortNativeRoot(t)
 	runner := &recordingRunner{}
 	p := model.Profile{
-		ID:          "ubuntu-bare-v1",
-		OS:          osLinux,
-		Arch:        archAMD64,
-		Runtime:     runtimeSmolvm,
-		CPU:         2,
-		RAMMiB:      2048,
-		ImageDigest: "image-content",
+		ID:         "ubuntu-bare-v1",
+		OS:         osLinux,
+		Arch:       archAMD64,
+		Runtime:    runtimeSmolvm,
+		StorageGiB: 4, OverlayGiB: 16,
+		CPU:        2,
+		RAMMiB:     2048,
+		RevisionID: model.NewID(), BaseID: "base", HostID: "test-host",
 	}
 	cfg := host.Config{
 		RuntimeDigest: "engine-content",
-		Profiles:      []host.ProfileBinding{{Profile: p, ImagePath: "/opt/profiles/ubuntu-bare/agent-rootfs"}},
+		Bases:         []host.BaseBinding{testBase(p, "/opt/profiles/ubuntu-bare/agent-rootfs")},
 		HostOS:        osLinux,
 		Root:          root,
 		SmolvmPath:    testSmolvmPath,
 		LibraryDir:    testSmolvmLibrary,
 		DNS:           "9.9.9.9",
 	}
+	seedRevision(t, cfg, p, cfg.Bases[0].ImagePath)
 	cfg.SmolvmPath = templateBundle(t)
 	requireNoError(t, cfg.Validate())
 	n := host.NewNativeRuntime(cfg, runner)
@@ -141,12 +145,12 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	if len(runner.calls) != 2 {
 		t.Fatal("unexpected creation commands")
 	}
-	if runner.calls[0].path != "/bin/cp" || runner.calls[0].args[2] != cfg.Profiles[0].ImagePath {
+	if runner.calls[0].path != "/bin/cp" || runner.calls[0].args[2] != filepath.Join(cfg.Root, "revisions", p.RevisionID+".rootfs") {
 		t.Fatal("creation did not resolve its image from host configuration")
 	}
 	create := runner.calls[1]
 	joined := strings.Join(create.args, " ")
-	for _, required := range []string{"machine create --name cb-", "--cpus 2 --mem 2048", "--net-backend virtio-net", "--port 22001:7443", "--dns 9.9.9.9 -- /bin/true"} {
+	for _, required := range []string{"machine create --name cb-", "--cpus 2 --mem 2048", "--storage 4 --overlay 16", "--net-backend virtio-net", "--port 22001:7443", "--dns 9.9.9.9 -- /bin/true"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("missing %s from %s", required, joined)
 		}

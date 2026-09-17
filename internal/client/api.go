@@ -106,6 +106,7 @@ type API struct {
 	http     *http.Client
 	machine  clankerboxv1connect.MachineServiceClient
 	sessions clankerboxv1connect.SessionServiceClient
+	profile  clankerboxv1connect.ProfileServiceClient
 }
 
 // NewAPI constructs a client with verified TLS and loopback-only plain HTTP.
@@ -133,6 +134,7 @@ func NewAPI(c Config) (*API, error) {
 		connect.WithReadMaxBytes(rpctransport.MaxMessage),
 		connect.WithSendMaxBytes(rpctransport.MaxMessage),
 	)
+	a.profile = clankerboxv1connect.NewProfileServiceClient(client, origin, connect.WithReadMaxBytes(rpctransport.MaxMessage), connect.WithSendMaxBytes(rpctransport.MaxMessage))
 	return a, nil
 }
 

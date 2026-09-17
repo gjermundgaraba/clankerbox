@@ -25,6 +25,7 @@ import (
 
 // Runner executes a configured program with explicit arguments, environment and stdin.
 type Runner interface {
+	StreamingRunner
 	Run(context.Context, string, []string, []string, []byte) ([]byte, error)
 }
 
@@ -198,6 +199,10 @@ func (n *NativeRuntime) Create(ctx context.Context, m Manifest) (resultErr error
 	if resolutionErr != nil {
 		return resolutionErr
 	}
+	return n.createFromImage(ctx, m, imagePath)
+}
+
+func (n *NativeRuntime) createFromImage(ctx context.Context, m Manifest, imagePath string) error {
 	dir := machineDir(n.Config, m)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
@@ -226,13 +231,6 @@ func (n *NativeRuntime) Create(ctx context.Context, m Manifest) (resultErr error
 	if err := n.materializeImage(ctx, m, imagePath, rootfs); err != nil {
 		return err
 	}
-	storage, overlay := m.Profile.StorageGiB, m.Profile.OverlayGiB
-	if storage == 0 {
-		storage = 4
-	}
-	if overlay == 0 {
-		overlay = 16
-	}
 	args := []string{
 		smolvmMachineCommand,
 		actionCreate,
@@ -243,9 +241,9 @@ func (n *NativeRuntime) Create(ctx context.Context, m Manifest) (resultErr error
 		"--mem",
 		strconv.Itoa(m.Profile.RAMMiB),
 		"--storage",
-		strconv.Itoa(storage),
+		strconv.Itoa(m.Profile.StorageGiB),
 		"--overlay",
-		strconv.Itoa(overlay),
+		strconv.Itoa(m.Profile.OverlayGiB),
 		"--net",
 		"--net-backend",
 		"virtio-net",
@@ -628,11 +626,8 @@ func (n *NativeRuntime) startSmolvm(ctx context.Context, m Manifest) error {
 }
 
 func (n *NativeRuntime) deleteTart(ctx context.Context, m Manifest, exists bool) error {
-	target := n.Config.LaunchdDomain + "/" + n.label(m)
-	if _, err := n.supervisor(ctx, m, "print", target); err == nil {
-		if _, err = n.supervisor(ctx, m, "bootout", target); err != nil {
-			return err
-		}
+	if err := n.unloadLaunchdJob(ctx, m); err != nil {
+		return err
 	}
 	if exists {
 		if _, err := n.run(ctx, m, actionDelete, m.RuntimeName()); err != nil {
@@ -647,11 +642,8 @@ func (n *NativeRuntime) deleteSmolvm(ctx context.Context, m Manifest, exists boo
 	var err error
 
 	if n.hostOS() == hostDarwin {
-		target := n.Config.LaunchdDomain + "/" + n.label(m)
-		if _, err = n.supervisor(ctx, m, "print", target); err == nil {
-			if _, err = n.supervisor(ctx, m, "bootout", target); err != nil {
-				return err
-			}
+		if err = n.unloadLaunchdJob(ctx, m); err != nil {
+			return err
 		}
 		if exists {
 			_, err = n.run(ctx, m, "machine", "delete", "--name", m.RuntimeName(), "--force")
@@ -764,4 +756,18 @@ func (n *NativeRuntime) smolvmPlist(m Manifest, args []string) []byte {
 		"</dict><key>RunAtLoad</key><false/><key>KeepAlive</key><false/><key>AbandonProcessGroup</key><true/><key>StandardOutPath</key><string>" + log + "</string><key>StandardErrorPath</key><string>" + log + "</string></dict></plist>\n",
 	)
 	return []byte(b.String())
+}
+
+// unloadLaunchdJob treats only launchctl's explicit missing-service result as clean.
+func (n *NativeRuntime) unloadLaunchdJob(ctx context.Context, m Manifest) error {
+	target := n.Config.LaunchdDomain + "/" + n.label(m)
+	if _, err := n.supervisor(ctx, m, "print", target); err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 113 {
+			return nil
+		}
+		return err
+	}
+	_, err := n.supervisor(ctx, m, "bootout", target)
+	return err
 }

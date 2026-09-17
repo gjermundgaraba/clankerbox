@@ -28,7 +28,7 @@ make build
 
 `clankerbox dev` runs a controller, a host service and Linux VMs on your
 workstation (Apple Silicon macOS, or Linux/amd64 with KVM). It needs a runtime
-bundle: the engine, guest image, profiles and service binaries. A release
+bundle: the engine, base guest image and service binaries. A release
 archive ships the bundle next to the CLI, which finds it automatically; a
 source build takes the manifest explicitly:
 
@@ -48,16 +48,19 @@ Create `~/.config/clankerbox/config.json`:
 {
   "url": "https://CONTROLLER",
   "token_file": "token",
-  "default_profile": "linux-dev-v3"
+  "default_profile": "linux-tools"
 }
 ```
 
 Relative paths resolve against the config directory and `~/` expands to your
 home. Keep the token file mode 0600. `default_host` and `default_profile` fill
 in omitted `--host` and `--profile` flags; without a host, `create` picks the
-only host that supports the profile and refuses an ambiguous choice.
+host pinned by the published profile.
 
 ```sh
+clankerbox profile bases local
+# Edit examples/profiles/linux-tools/profile.json for your host/base.
+clankerbox profile publish examples/profiles/linux-tools --wait
 clankerbox profiles
 clankerbox hosts
 clankerbox create dev
@@ -75,7 +78,8 @@ Lifecycle commands wait for their operation to finish, five minutes by default
 `clankerbox operation ID` before retrying. Stopped machines need an explicit
 `start`, and `delete` requires a stopped machine. `clankerbox hosts` shows
 configured and reserved CPU and RAM per host; reservations come from the
-controller's accounting, not live utilization.
+controller's accounting, not live utilization. Tart additionally admits at most
+two active macOS VM reservations per host, including profile builders.
 
 For automation, `--json` prints resources as JSON and `--async` returns the
 accepted operation without waiting:
@@ -91,7 +95,7 @@ is not a terminal client; terminal access is through `SessionService`, see
 
 ## Running the services
 
-`clankerbox-server` takes `--config` (hosts and profiles), `--state-dir`,
+`clankerbox-server` takes `--config` (hosts), `--state-dir`,
 `--token-file` and `--listen`. `clankerbox-host` takes `--config`, and
 `--init` prepares its state and guest authority once before first use. Both
 print their flags with `--help`.
@@ -142,3 +146,5 @@ Regenerating the RPC code is described in [protocol/README.md](protocol/README.m
 MIT, see [LICENSE](LICENSE). Release bundles redistribute third-party
 components under their own licenses; see
 [scripts/release/README.md](scripts/release/README.md).
+
+Profiles are built on a running host without redeploying services. See [runtime-built profiles](docs/profiles.md) for recipes, build logs, cancellation and revision retention. A fresh controller has no profiles; publish one before creating machines.

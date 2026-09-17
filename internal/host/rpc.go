@@ -30,19 +30,18 @@ func NewHandler(s *Service) (string, http.Handler) {
 	mux.Handle(path, handler)
 	path, handler = clankerboxv1connect.NewSessionServiceHandler(rpc, options...)
 	mux.Handle(path, handler)
+	path, handler = clankerboxv1connect.NewHostProfileServiceHandler(rpc, options...)
+	mux.Handle(path, handler)
 	return "/", mux
 }
 
-// DescribeHost returns host identity and supported profiles.
+// DescribeHost returns host identity and deployed bases.
 func (r *RPC) DescribeHost(
 	context.Context,
 	*connect.Request[v1.DescribeHostRequest],
 ) (*connect.Response[v1.HostDescription], error) {
 	cfg := r.Service.helper.cfg
 	out := &v1.HostDescription{HostId: cfg.HostID, Os: cfg.HostOS, Arch: runtime.GOARCH, Schema: "clankerbox.v1"}
-	for _, p := range cfg.Profiles {
-		out.Profiles = append(out.Profiles, rpcmodel.ToProfile(p.Profile))
-	}
 	return connect.NewResponse(out), nil
 }
 

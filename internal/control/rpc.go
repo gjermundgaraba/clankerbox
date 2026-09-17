@@ -50,11 +50,15 @@ func (s *machineRPC) ListHosts(
 }
 
 func (s *machineRPC) ListProfiles(
-	context.Context,
-	*connect.Request[v1.ListProfilesRequest],
+	ctx context.Context,
+	_ *connect.Request[v1.ListProfilesRequest],
 ) (*connect.Response[v1.ListProfilesResponse], error) {
 	out := &v1.ListProfilesResponse{}
-	for _, p := range s.c.cfg.Profiles {
+	profiles, err := s.c.Profiles(ctx)
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	for _, p := range profiles {
 		out.Profiles = append(out.Profiles, rpcmodel.ToProfile(p))
 	}
 	return connect.NewResponse(out), nil
@@ -312,6 +316,8 @@ func (c *Controller) Handler(token []byte) (http.Handler, error) {
 	path, h := clankerboxv1connect.NewMachineServiceHandler(&machineRPC{c}, options...)
 	mux.Handle(path, h)
 	path, h = clankerboxv1connect.NewSessionServiceHandler(&sessionRPC{c}, options...)
+	mux.Handle(path, h)
+	path, h = clankerboxv1connect.NewProfileServiceHandler(&profileRPC{c}, options...)
 	mux.Handle(path, h)
 	return rpctransport.Bearer(string(token), rpctransport.WithWriteDeadline(mux)), nil
 }

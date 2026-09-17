@@ -63,7 +63,6 @@ type HostDescription struct {
 	HostId        string                 `protobuf:"bytes,1,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
 	Os            string                 `protobuf:"bytes,2,opt,name=os,proto3" json:"os,omitempty"`
 	Arch          string                 `protobuf:"bytes,3,opt,name=arch,proto3" json:"arch,omitempty"`
-	Profiles      []*Profile             `protobuf:"bytes,5,rep,name=profiles,proto3" json:"profiles,omitempty"`
 	Schema        string                 `protobuf:"bytes,6,opt,name=schema,proto3" json:"schema,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -118,13 +117,6 @@ func (x *HostDescription) GetArch() string {
 		return x.Arch
 	}
 	return ""
-}
-
-func (x *HostDescription) GetProfiles() []*Profile {
-	if x != nil {
-		return x.Profiles
-	}
-	return nil
 }
 
 func (x *HostDescription) GetSchema() string {
@@ -1111,13 +1103,12 @@ var File_clankerbox_v1_host_proto protoreflect.FileDescriptor
 const file_clankerbox_v1_host_proto_rawDesc = "" +
 	"\n" +
 	"\x18clankerbox/v1/host.proto\x12\rclankerbox.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1dclankerbox/v1/resources.proto\"\x15\n" +
-	"\x13DescribeHostRequest\"\xa9\x01\n" +
+	"\x13DescribeHostRequest\"\x85\x01\n" +
 	"\x0fHostDescription\x12\x17\n" +
 	"\ahost_id\x18\x01 \x01(\tR\x06hostId\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x12\n" +
-	"\x04arch\x18\x03 \x01(\tR\x04arch\x122\n" +
-	"\bprofiles\x18\x05 \x03(\v2\x16.clankerbox.v1.ProfileR\bprofiles\x12\x16\n" +
-	"\x06schema\x18\x06 \x01(\tR\x06schemaJ\x04\b\x04\x10\x05R\aversion\"\xd4\x01\n" +
+	"\x04arch\x18\x03 \x01(\tR\x04arch\x12\x16\n" +
+	"\x06schema\x18\x06 \x01(\tR\x06schemaJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06R\aversionR\bprofiles\"\xd4\x01\n" +
 	"\x11OperationIdentity\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x1d\n" +
 	"\n" +
@@ -1239,40 +1230,39 @@ var file_clankerbox_v1_host_proto_goTypes = []any{
 	(*GuestStatus)(nil),             // 22: clankerbox.v1.GuestStatus
 }
 var file_clankerbox_v1_host_proto_depIdxs = []int32{
-	17, // 0: clankerbox.v1.HostDescription.profiles:type_name -> clankerbox.v1.Profile
-	17, // 1: clankerbox.v1.OperationIdentity.profile:type_name -> clankerbox.v1.Profile
-	18, // 2: clankerbox.v1.CaptureHostCheckpoint.checkpoint:type_name -> clankerbox.v1.Checkpoint
-	18, // 3: clankerbox.v1.RestoreHostCheckpoint.checkpoint:type_name -> clankerbox.v1.Checkpoint
-	18, // 4: clankerbox.v1.DeleteHostCheckpoint.checkpoint:type_name -> clankerbox.v1.Checkpoint
-	2,  // 5: clankerbox.v1.SubmitOperationRequest.identity:type_name -> clankerbox.v1.OperationIdentity
-	3,  // 6: clankerbox.v1.SubmitOperationRequest.create:type_name -> clankerbox.v1.CreateHostMachine
-	4,  // 7: clankerbox.v1.SubmitOperationRequest.start:type_name -> clankerbox.v1.StartHostMachine
-	5,  // 8: clankerbox.v1.SubmitOperationRequest.stop:type_name -> clankerbox.v1.StopHostMachine
-	6,  // 9: clankerbox.v1.SubmitOperationRequest.delete:type_name -> clankerbox.v1.DeleteHostMachine
-	7,  // 10: clankerbox.v1.SubmitOperationRequest.fork:type_name -> clankerbox.v1.ForkHostMachine
-	8,  // 11: clankerbox.v1.SubmitOperationRequest.capture_checkpoint:type_name -> clankerbox.v1.CaptureHostCheckpoint
-	9,  // 12: clankerbox.v1.SubmitOperationRequest.restore_checkpoint:type_name -> clankerbox.v1.RestoreHostCheckpoint
-	10, // 13: clankerbox.v1.SubmitOperationRequest.delete_checkpoint:type_name -> clankerbox.v1.DeleteHostCheckpoint
-	14, // 14: clankerbox.v1.SubmitOperationResponse.operation:type_name -> clankerbox.v1.HostOperation
-	19, // 15: clankerbox.v1.HostOperation.status:type_name -> clankerbox.v1.OperationStatus
-	16, // 16: clankerbox.v1.HostOperation.observation:type_name -> clankerbox.v1.Observation
-	18, // 17: clankerbox.v1.HostOperation.checkpoint:type_name -> clankerbox.v1.Checkpoint
-	20, // 18: clankerbox.v1.Observation.state:type_name -> clankerbox.v1.MachineState
-	21, // 19: clankerbox.v1.Observation.observed_at:type_name -> google.protobuf.Timestamp
-	22, // 20: clankerbox.v1.Observation.guest:type_name -> clankerbox.v1.GuestStatus
-	0,  // 21: clankerbox.v1.HostService.DescribeHost:input_type -> clankerbox.v1.DescribeHostRequest
-	11, // 22: clankerbox.v1.HostService.SubmitOperation:input_type -> clankerbox.v1.SubmitOperationRequest
-	13, // 23: clankerbox.v1.HostService.GetHostOperation:input_type -> clankerbox.v1.GetHostOperationRequest
-	15, // 24: clankerbox.v1.HostService.InspectMachine:input_type -> clankerbox.v1.InspectMachineRequest
-	1,  // 25: clankerbox.v1.HostService.DescribeHost:output_type -> clankerbox.v1.HostDescription
-	12, // 26: clankerbox.v1.HostService.SubmitOperation:output_type -> clankerbox.v1.SubmitOperationResponse
-	14, // 27: clankerbox.v1.HostService.GetHostOperation:output_type -> clankerbox.v1.HostOperation
-	16, // 28: clankerbox.v1.HostService.InspectMachine:output_type -> clankerbox.v1.Observation
-	25, // [25:29] is the sub-list for method output_type
-	21, // [21:25] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	17, // 0: clankerbox.v1.OperationIdentity.profile:type_name -> clankerbox.v1.Profile
+	18, // 1: clankerbox.v1.CaptureHostCheckpoint.checkpoint:type_name -> clankerbox.v1.Checkpoint
+	18, // 2: clankerbox.v1.RestoreHostCheckpoint.checkpoint:type_name -> clankerbox.v1.Checkpoint
+	18, // 3: clankerbox.v1.DeleteHostCheckpoint.checkpoint:type_name -> clankerbox.v1.Checkpoint
+	2,  // 4: clankerbox.v1.SubmitOperationRequest.identity:type_name -> clankerbox.v1.OperationIdentity
+	3,  // 5: clankerbox.v1.SubmitOperationRequest.create:type_name -> clankerbox.v1.CreateHostMachine
+	4,  // 6: clankerbox.v1.SubmitOperationRequest.start:type_name -> clankerbox.v1.StartHostMachine
+	5,  // 7: clankerbox.v1.SubmitOperationRequest.stop:type_name -> clankerbox.v1.StopHostMachine
+	6,  // 8: clankerbox.v1.SubmitOperationRequest.delete:type_name -> clankerbox.v1.DeleteHostMachine
+	7,  // 9: clankerbox.v1.SubmitOperationRequest.fork:type_name -> clankerbox.v1.ForkHostMachine
+	8,  // 10: clankerbox.v1.SubmitOperationRequest.capture_checkpoint:type_name -> clankerbox.v1.CaptureHostCheckpoint
+	9,  // 11: clankerbox.v1.SubmitOperationRequest.restore_checkpoint:type_name -> clankerbox.v1.RestoreHostCheckpoint
+	10, // 12: clankerbox.v1.SubmitOperationRequest.delete_checkpoint:type_name -> clankerbox.v1.DeleteHostCheckpoint
+	14, // 13: clankerbox.v1.SubmitOperationResponse.operation:type_name -> clankerbox.v1.HostOperation
+	19, // 14: clankerbox.v1.HostOperation.status:type_name -> clankerbox.v1.OperationStatus
+	16, // 15: clankerbox.v1.HostOperation.observation:type_name -> clankerbox.v1.Observation
+	18, // 16: clankerbox.v1.HostOperation.checkpoint:type_name -> clankerbox.v1.Checkpoint
+	20, // 17: clankerbox.v1.Observation.state:type_name -> clankerbox.v1.MachineState
+	21, // 18: clankerbox.v1.Observation.observed_at:type_name -> google.protobuf.Timestamp
+	22, // 19: clankerbox.v1.Observation.guest:type_name -> clankerbox.v1.GuestStatus
+	0,  // 20: clankerbox.v1.HostService.DescribeHost:input_type -> clankerbox.v1.DescribeHostRequest
+	11, // 21: clankerbox.v1.HostService.SubmitOperation:input_type -> clankerbox.v1.SubmitOperationRequest
+	13, // 22: clankerbox.v1.HostService.GetHostOperation:input_type -> clankerbox.v1.GetHostOperationRequest
+	15, // 23: clankerbox.v1.HostService.InspectMachine:input_type -> clankerbox.v1.InspectMachineRequest
+	1,  // 24: clankerbox.v1.HostService.DescribeHost:output_type -> clankerbox.v1.HostDescription
+	12, // 25: clankerbox.v1.HostService.SubmitOperation:output_type -> clankerbox.v1.SubmitOperationResponse
+	14, // 26: clankerbox.v1.HostService.GetHostOperation:output_type -> clankerbox.v1.HostOperation
+	16, // 27: clankerbox.v1.HostService.InspectMachine:output_type -> clankerbox.v1.Observation
+	24, // [24:28] is the sub-list for method output_type
+	20, // [20:24] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_clankerbox_v1_host_proto_init() }

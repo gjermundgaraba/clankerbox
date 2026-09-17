@@ -24,12 +24,24 @@ func (runner commandRunner) output(value any) error {
 		return runner.output(*v)
 	case *[]model.Machine:
 		return runner.machines(*v)
+	case *[]model.ProfileRevision:
+		return runner.revisions(*v)
 	case *[]model.Profile:
 		return runner.profiles(*v)
 	case *[]model.HostStatus:
 		return runner.hosts(*v)
 	case *[]model.Checkpoint:
 		return runner.checkpoints(*v)
+	case model.ProfileBuild:
+		_, err := fmt.Fprintf(runner.streams.Out, "Build %s: %s (%s)\n%s", v.ID, v.Status, v.Phase, optionalLine(v.Error))
+		return err
+	case []model.Base:
+		for _, b := range v {
+			if _, err := fmt.Fprintf(runner.streams.Out, "%s\t%s/%s\t%s\t%s\n", b.ID, b.OS, b.Arch, b.Runtime, b.Digest); err != nil {
+				return err
+			}
+		}
+		return nil
 	case model.Machine:
 		_, err := fmt.Fprintf(
 			runner.streams.Out,
@@ -91,14 +103,14 @@ func (runner commandRunner) machines(items []model.Machine) error {
 }
 func (runner commandRunner) profiles(items []model.Profile) error {
 	w := tabwriter.NewWriter(runner.streams.Out, 0, tableTabWidth, tablePadding, ' ', 0)
-	if _, err := fmt.Fprintln(w, "PROFILE\tOS/ARCH\tRUNTIME\tCPU\tRAM MiB\tCAPABILITIES"); err != nil {
+	if _, err := fmt.Fprintln(w, "PROFILE\tHOST\tREVISION\tOS/ARCH\tRUNTIME\tCPU\tRAM MiB\tCAPABILITIES"); err != nil {
 		return err
 	}
 	for _, p := range items {
 		if _, err := fmt.Fprintf(
 			w,
-			"%s\t%s/%s\t%s\t%d\t%d\t%s\n",
-			p.ID,
+			"%s\t%s\t%s\t%s/%s\t%s\t%d\t%d\t%s\n",
+			p.ID, p.HostID, p.RevisionID,
 			p.OS,
 			p.Arch,
 			p.Runtime,
@@ -124,16 +136,15 @@ func (runner commandRunner) hosts(items []model.HostStatus) error {
 	w := tabwriter.NewWriter(runner.streams.Out, 0, tableTabWidth, tablePadding, ' ', 0)
 	if _, err := fmt.Fprintln(
 		w,
-		"HOST\tPROFILES\tCPU TOTAL\tUSED\tREMAINING\tRAM TOTAL\tUSED\tREMAINING",
+		"HOST\tCPU TOTAL\tUSED\tREMAINING\tRAM TOTAL\tUSED\tREMAINING",
 	); err != nil {
 		return err
 	}
 	for _, h := range items {
 		if _, err := fmt.Fprintf(
 			w,
-			"%s\t%s\t%d\t%d\t%d\t%s\t%s\t%s\n",
+			"%s\t%d\t%d\t%d\t%s\t%s\t%s\n",
 			h.ID,
-			strings.Join(h.ProfileIDs, ","),
 			h.CPU,
 			h.UsedCPU,
 			h.RemainingCPU,
@@ -161,6 +172,23 @@ func (runner commandRunner) checkpoints(items []model.Checkpoint) error {
 			c.SourceMachineID,
 			c.Host,
 		); err != nil {
+			return err
+		}
+	}
+	return w.Flush()
+}
+
+func (runner commandRunner) revisions(items []model.ProfileRevision) error {
+	w := tabwriter.NewWriter(runner.streams.Out, 0, tableTabWidth, tablePadding, ' ', 0)
+	if _, err := fmt.Fprintln(w, "PROFILE\tREVISION\tHOST\tSTATE"); err != nil {
+		return err
+	}
+	for _, r := range items {
+		state := "retained"
+		if r.Deleting {
+			state = "deleting"
+		}
+		if _, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.ID, r.RevisionID, r.HostID, state); err != nil {
 			return err
 		}
 	}

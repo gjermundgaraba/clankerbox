@@ -21,12 +21,13 @@ func (t *wakeTransport) Call(_ context.Context, _ model.Host, req model.Request)
 
 func workerFixture(t *testing.T) (*Controller, *wakeTransport, model.CreateInput) {
 	t.Helper()
-	p := model.Profile{ID: "linux", OS: "linux", Arch: "amd64", Runtime: "smolvm", CPU: 1, RAMMiB: 1024, ImageDigest: "image"}
+	p := model.Profile{ID: "linux", OS: "linux", Arch: "amd64", Runtime: "smolvm", StorageGiB: 4, OverlayGiB: 16, CPU: 1, RAMMiB: 1024, RevisionID: model.NewID(), HostID: "local", BaseID: "base"}
 	tr := &wakeTransport{calls: make(chan model.Request, 16)}
-	c, err := Open(filepath.Join(t.TempDir(), "controller"), model.Config{Profiles: []model.Profile{p}, Hosts: []model.Host{{ID: "local", Endpoint: "unix:///tmp/host.sock", ProfileIDs: []string{p.ID}, CPU: 16, RAMMiB: 16384}}}, tr)
+	c, err := Open(filepath.Join(t.TempDir(), "controller"), model.Config{Hosts: []model.Host{{ID: "local", Endpoint: "unix:///tmp/host.sock", CPU: 16, RAMMiB: 16384}}}, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedInternalProfile(t, c, p)
 	t.Cleanup(func() {
 		if closeErr := c.Close(); closeErr != nil {
 			t.Error(closeErr)
@@ -224,4 +225,40 @@ func TestWorkerWaitsForPersistedDeadlineWithoutNotification(t *testing.T) {
 		t.Fatal("completed operation was replayed")
 	case <-time.After(100 * time.Millisecond):
 	}
+}
+
+func seedInternalProfile(t *testing.T, c *Controller, p model.Profile) {
+	t.Helper()
+	raw, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.db.ExecContext(t.Context(), "INSERT INTO profiles(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body", p.ID, raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = c.db.ExecContext(t.Context(), "INSERT INTO revisions(id,profile_id,body) VALUES(?,?,?) ON CONFLICT(id) DO NOTHING", p.RevisionID, p.ID, raw); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (t *wakeTransport) UploadRecipe(context.Context, model.Host, string, uint64, []byte, bool) (uint64, error) {
+	panic("unexpected profile upload")
+}
+func (t *wakeTransport) PublishBuild(context.Context, model.Host, model.ProfileBuild) (model.ProfileBuild, error) {
+	panic("unexpected profile publish")
+}
+func (t *wakeTransport) GetBuild(context.Context, model.Host, string) (model.ProfileBuild, error) {
+	panic("unexpected profile lookup")
+}
+func (t *wakeTransport) CancelBuild(context.Context, model.Host, model.ProfileBuild) (model.ProfileBuild, error) {
+	panic("unexpected profile cancel")
+}
+func (t *wakeTransport) Bases(context.Context, model.Host) ([]model.Base, error) {
+	panic("unexpected base lookup")
+}
+func (t *wakeTransport) RemoveRevision(context.Context, model.Host, string) error {
+	panic("unexpected revision removal")
+}
+func (t *wakeTransport) BuildLog(context.Context, model.Host, string, uint64) ([]byte, uint64, bool, error) {
+	panic("unexpected build log lookup")
 }

@@ -21,3 +21,10 @@ lint:
 
 lint-fix:
 	golangci-lint run --fix ./...
+
+.PHONY: work-list work-clean
+work-list:
+	python3 scripts/work_runs.py list
+
+work-clean:
+	python3 scripts/work_runs.py clean --all

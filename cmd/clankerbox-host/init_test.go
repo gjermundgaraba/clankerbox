@@ -19,8 +19,8 @@ func initConfig(t *testing.T) (host.Config, string) {
 	t.Helper()
 	directory, err := filepath.EvalSymlinks(t.TempDir())
 	initCheck(t, err)
-	profile := model.Profile{ID: "mac", OS: "macos", Arch: "arm64", Runtime: "tart", CPU: 2, RAMMiB: 2048, ImageDigest: "image"}
-	cfg := host.Config{Root: filepath.Join(directory, "host"), HostOS: "darwin", HostID: "installer-test", RuntimeDigest: "runtime", PortLeaseRoot: filepath.Join(directory, "ports"), TartPath: "/missing-native-runtime", Listen: "unix://" + filepath.Join(directory, "host", "host.sock"), Profiles: []host.ProfileBinding{{Profile: profile, ImagePath: "unstaged-seed"}}}
+	base := model.Base{ID: "mac", OS: "macos", Arch: "arm64", Runtime: "tart", Digest: "image"}
+	cfg := host.Config{Root: filepath.Join(directory, "host"), HostOS: "darwin", HostID: "installer-test", RuntimeDigest: "runtime", PortLeaseRoot: filepath.Join(directory, "ports"), TartPath: "/missing-native-runtime", Listen: "unix://" + filepath.Join(directory, "host", "host.sock"), Bases: []host.BaseBinding{{Base: base, ImagePath: "unstaged-seed"}}}
 	path := filepath.Join(directory, "host-config.json")
 	raw, err := json.Marshal(cfg)
 	initCheck(t, err)

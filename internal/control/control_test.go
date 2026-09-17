@@ -24,6 +24,8 @@ const (
 )
 
 type testTransport struct {
+	testProfileTransport
+
 	cancelDispatch context.CancelFunc
 	mu             sync.Mutex
 	observations   map[string]model.Observation
@@ -108,18 +110,24 @@ func (t *testTransport) Call(ctx context.Context, h model.Host, r model.Request)
 	}
 	return rpcmodel.FromHostResponse(rpcmodel.ToHostResponse(resp))
 }
-func config() model.Config {
-	return model.Config{
+
+type fixtureConfig struct {
+	model.Config
+
+	Profiles []model.Profile
+}
+
+func config() fixtureConfig {
+	return fixtureConfig{
 		Profiles: []model.Profile{
-			{ID: "mac-v1", OS: "macos", Arch: "arm64", Runtime: tartRuntime, CPU: 2, RAMMiB: 2048, ImageDigest: "image-content"},
+			{ID: "mac-v1", OS: "macos", Arch: "arm64", Runtime: tartRuntime, CPU: 2, RAMMiB: 2048, RevisionID: "00000000000000000000000000000001", HostID: "mac", BaseID: "base"},
 		},
 		Hosts: []model.Host{
 			{
-				ID:         "mac",
-				Endpoint:   "unix:///tmp/clankerbox-test-host.sock",
-				ProfileIDs: []string{"mac-v1"},
-				CPU:        4,
-				RAMMiB:     4096,
+				ID:       "mac",
+				Endpoint: "unix:///tmp/clankerbox-test-host.sock",
+				CPU:      4,
+				RAMMiB:   4096,
 			},
 		},
 	}
@@ -131,7 +139,7 @@ func setupControl(t *testing.T) (*control.Controller, *testTransport, model.Crea
 
 func setupControlConfig(
 	t *testing.T,
-	cfg model.Config,
+	cfg fixtureConfig,
 ) (*control.Controller, *testTransport, model.CreateInput, string) {
 	t.Helper()
 	transport := &testTransport{
@@ -139,10 +147,11 @@ func setupControlConfig(
 		responses:    map[string]model.Response{},
 	}
 	path := filepath.Join(t.TempDir(), "state")
-	c, err := control.Open(path, cfg, transport)
+	c, err := control.Open(path, cfg.Config, transport)
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedControllerProfile(t, path, cfg.Profiles[0])
 	in := model.CreateInput{
 		Name:    machineName,
 		Profile: cfg.Profiles[0].ID,
@@ -203,7 +212,7 @@ func TestControllerDurableIntentReplyLossAndDuplicates(t *testing.T) {
 		t.Fatalf("ambiguous response: %+v", pending)
 	}
 	closeTest(t, c)
-	c, err = control.Open(path, config(), tr)
+	c, err = control.Open(path, config().Config, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,13 +341,17 @@ func TestFailedHostDoesNotBlockOtherHost(t *testing.T) {
 	other.ID = "other"
 	cfg.Hosts = append(cfg.Hosts, other)
 	var err error
-	c, err = control.Open(path, cfg, tr)
+	c, err = control.Open(path, cfg.Config, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer closeTest(t, c)
 	tr.failHost = "mac"
 	bad := mustCreate(t, c, in, "bad-host")
+	p := cfg.Profiles[0]
+	p.ID, p.HostID, p.RevisionID = "other-profile", "other", model.NewID()
+	seedControllerProfile(t, path, p)
+	in.Profile = p.ID
 	in.Host = "other"
 	in.Name = "healthy"
 	good := mustCreate(t, c, in, "good-host")
@@ -352,7 +365,7 @@ func TestDatabaseSingleController(t *testing.T) {
 	t.Parallel()
 	c, tr, _, path := setupControl(t)
 	defer closeTest(t, c)
-	if other, err := control.Open(path, config(), tr); err == nil {
+	if other, err := control.Open(path, config().Config, tr); err == nil {
 		closeTest(t, other)
 		t.Fatal("second controller opened same database")
 	}
@@ -405,6 +418,8 @@ func (r *integrationRuntime) DeleteCheckpoint(context.Context, host.CheckpointSp
 }
 
 type helperTransport struct {
+	testProfileTransport
+
 	helper *host.Helper
 	drop   bool
 }
@@ -426,17 +441,21 @@ func TestControllerAndHostJournalsTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt := &integrationRuntime{}
-	hc := host.Config{HostOS: "darwin", Root: filepath.Join(root, "host"), RuntimeDigest: "engine-content", Profiles: []host.ProfileBinding{{Profile: cfg.Profiles[0], ImagePath: "seed"}}, TartPath: "/usr/local/bin/tart"}
+	p := cfg.Profiles[0]
+	base := model.Base{ID: p.BaseID, OS: p.OS, Arch: p.Arch, Runtime: p.Runtime, Digest: "image-content"}
+	hc := host.Config{HostOS: "darwin", Root: filepath.Join(root, "host"), RuntimeDigest: "engine-content", Bases: []host.BaseBinding{{Base: base, ImagePath: "seed"}}, TartPath: "/usr/local/bin/tart"}
 	helper, err := host.Open(hc, rt)
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedHostRevision(t, hc.Root, p, base)
 	tr := &helperTransport{helper: helper, drop: true}
 	path := filepath.Join(t.TempDir(), "state")
-	c, err := control.Open(path, cfg, tr)
+	c, err := control.Open(path, cfg.Config, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
+	seedControllerProfile(t, path, cfg.Profiles[0])
 	in := model.CreateInput{
 		Name:    machineName,
 		Profile: cfg.Profiles[0].ID,
@@ -451,7 +470,7 @@ func TestControllerAndHostJournalsTogether(t *testing.T) {
 	}
 	defer closeTest(t, helper)
 	tr.helper = helper
-	c, err = control.Open(path, cfg, tr)
+	c, err = control.Open(path, cfg.Config, tr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,4 +524,44 @@ func (r *integrationRuntime) StartGuest(ctx context.Context, m host.Manifest) (s
 
 func (r *integrationRuntime) RebindGuest(ctx context.Context, m host.Manifest) (string, error) {
 	return r.StartGuest(ctx, m)
+}
+
+type testProfileTransport struct{}
+
+func (t *testProfileTransport) UploadRecipe(context.Context, model.Host, string, uint64, []byte, bool) (uint64, error) {
+	panic("unexpected profile upload")
+}
+func (t *testProfileTransport) PublishBuild(context.Context, model.Host, model.ProfileBuild) (model.ProfileBuild, error) {
+	panic("unexpected profile publish")
+}
+func (t *testProfileTransport) GetBuild(context.Context, model.Host, string) (model.ProfileBuild, error) {
+	panic("unexpected profile lookup")
+}
+func (t *testProfileTransport) CancelBuild(context.Context, model.Host, model.ProfileBuild) (model.ProfileBuild, error) {
+	panic("unexpected profile cancel")
+}
+func (t *testProfileTransport) Bases(context.Context, model.Host) ([]model.Base, error) {
+	panic("unexpected base lookup")
+}
+func (t *testProfileTransport) RemoveRevision(context.Context, model.Host, string) error {
+	panic("unexpected revision removal")
+}
+func (t *testProfileTransport) BuildLog(context.Context, model.Host, string, uint64) ([]byte, uint64, bool, error) {
+	panic("unexpected build log lookup")
+}
+
+func (*integrationRuntime) PrepareProfile(context.Context, host.Manifest, host.BaseBinding, string) error {
+	panic("unexpected profile prepare")
+}
+func (*integrationRuntime) RunProfileSetup(context.Context, host.Manifest, io.Writer) error {
+	panic("unexpected profile setup")
+}
+func (*integrationRuntime) CaptureProfile(context.Context, host.Manifest) error {
+	panic("unexpected profile capture")
+}
+func (*integrationRuntime) ValidateProfile(context.Context, host.Manifest, string) error {
+	panic("unexpected profile validation")
+}
+func (*integrationRuntime) RemoveProfileArtifact(context.Context, model.Profile) error {
+	panic("unexpected profile removal")
 }

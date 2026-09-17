@@ -13,6 +13,8 @@ import (
 )
 
 type copyRunner struct {
+	unsupportedStream
+
 	args []string
 	err  error
 }

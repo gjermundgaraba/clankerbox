@@ -5,7 +5,6 @@ package rpcmodel
 import (
 	"fmt"
 	"maps"
-	"slices"
 	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -32,7 +31,9 @@ const (
 func ToProfile(p model.Profile) *v1.Profile {
 	return &v1.Profile{
 		Id:           p.ID,
-		ImageDigest:  p.ImageDigest,
+		HostId:       p.HostID,
+		BaseId:       p.BaseID,
+		RevisionId:   p.RevisionID,
 		Os:           p.OS,
 		Arch:         p.Arch,
 		Runtime:      p.Runtime,
@@ -62,15 +63,17 @@ func FromProfile(p *v1.Profile) (model.Profile, error) {
 		return model.Profile{}, err
 	}
 	return model.Profile{
-		ID:          p.GetId(),
-		ImageDigest: p.GetImageDigest(),
-		OS:          p.GetOs(),
-		Arch:        p.GetArch(),
-		Runtime:     p.GetRuntime(),
-		CPU:         int(p.GetCpu()),
-		RAMMiB:      ram,
-		StorageGiB:  storage,
-		OverlayGiB:  overlay,
+		ID:         p.GetId(),
+		HostID:     p.GetHostId(),
+		BaseID:     p.GetBaseId(),
+		RevisionID: p.GetRevisionId(),
+		OS:         p.GetOs(),
+		Arch:       p.GetArch(),
+		Runtime:    p.GetRuntime(),
+		CPU:        int(p.GetCpu()),
+		RAMMiB:     ram,
+		StorageGiB: storage,
+		OverlayGiB: overlay,
 	}, nil
 }
 
@@ -78,7 +81,6 @@ func FromProfile(p *v1.Profile) (model.Profile, error) {
 func ToHost(h model.HostStatus) *v1.Host {
 	return &v1.Host{
 		Id:              h.ID,
-		ProfileIds:      slices.Clone(h.ProfileIDs),
 		Cpu:             uint32(h.CPU),
 		RamMib:          uint64(h.RAMMiB),
 		UsedCpu:         uint32(h.UsedCPU),
@@ -110,7 +112,7 @@ func FromHost(h *v1.Host) (model.HostStatus, error) {
 		return model.HostStatus{}, err
 	}
 	return model.HostStatus{
-		ID: h.GetId(), ProfileIDs: slices.Clone(h.GetProfileIds()), CPU: int(h.GetCpu()), RAMMiB: ram,
+		ID: h.GetId(), CPU: int(h.GetCpu()), RAMMiB: ram,
 		UsedCPU:         int(h.GetUsedCpu()),
 		UsedRAMMiB:      used,
 		RemainingCPU:    cpuLeft,

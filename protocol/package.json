@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerbox-sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Generated Protobuf messages and Connect RPC service descriptors for Clankerbox",
   "license": "MIT",
   "repository": {
@@ -36,6 +36,10 @@
     "./host": {
       "types": "./dist/gen/clankerbox/v1/host_pb.d.ts",
       "import": "./dist/gen/clankerbox/v1/host_pb.js"
+    },
+    "./profile": {
+      "types": "./dist/gen/clankerbox/v1/profile_pb.d.ts",
+      "import": "./dist/gen/clankerbox/v1/profile_pb.js"
     }
   },
   "files": [

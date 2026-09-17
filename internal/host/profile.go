@@ -1,39 +1,80 @@
 package host
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 
 	"clankerbox/internal/model"
+	"clankerbox/internal/statefs"
 )
 
-// ProfileBinding is a host-local installation of a portable profile.
-// Only the portable Profile travels through RPCs or durable resource records.
-type ProfileBinding struct {
-	model.Profile
+// BaseBinding describes a deployed base; prepared revisions are host journal state.
+type BaseBinding struct {
+	model.Base
 
 	ImagePath string `json:"image_path"`
 }
 
-// Validate checks portable compatibility and the host-owned image locator.
-func (p ProfileBinding) Validate() error {
-	if err := p.Profile.Validate(); err != nil {
+// Validate checks a deployment binding and its private image locator.
+func (b BaseBinding) Validate() error {
+	if err := b.Base.Validate(); err != nil {
 		return err
 	}
-	if p.ImagePath == "" {
-		return errors.New("host profile requires image_path")
+	if b.ImagePath == "" {
+		return errors.New("base requires image_path")
 	}
-	if p.Runtime == runtimeSmolvm && !model.SafePath(p.ImagePath) {
-		return errors.New("smolvm image_path must be an absolute bare agent-rootfs directory")
+	if b.Runtime == runtimeSmolvm && !model.SafePath(b.ImagePath) {
+		return errors.New("smolvm base image_path must be absolute")
 	}
 	return nil
 }
 
-// imagePath resolves only a fully compatible host-owned installation.
-func (c *Config) imagePath(p model.Profile) (string, error) {
-	for _, installed := range c.Profiles {
-		if installed.Profile == p {
-			return installed.ImagePath, nil
+type preparedRevision struct {
+	RuntimeDigest string        `json:"runtime_digest"`
+	Profile       model.Profile `json:"profile"`
+	Base          model.Base    `json:"base"`
+}
+
+func (c *Config) revisionPath(id string) string {
+	return filepath.Join(c.Root, "revisions", id+".json")
+}
+func (c *Config) revision(id string) (preparedRevision, error) {
+	var r preparedRevision
+	if !model.ValidID(id) {
+		return r, model.NewError(model.ReasonInvalid, "invalid revision ID", false)
+	}
+	raw, err := statefs.ReadRegular(c.revisionPath(id))
+	if errors.Is(err, os.ErrNotExist) {
+		return r, model.NewError(model.ReasonNotFound, "prepared revision not found", false)
+	}
+	if err != nil {
+		return r, err
+	}
+	if err = json.Unmarshal(raw, &r); err != nil {
+		return r, err
+	}
+	if r.Profile.RevisionID != id {
+		return r, errors.New("revision identity mismatch")
+	}
+	return r, nil
+}
+func (c *Config) base(id string) (BaseBinding, error) {
+	for _, b := range c.Bases {
+		if b.ID == id {
+			return b, nil
 		}
 	}
-	return "", model.NewError(model.ReasonConfiguration, "unknown or changed pinned profile", false)
+	return BaseBinding{}, model.NewError(model.ReasonConfiguration, "deployed base not found", false)
+}
+func (c *Config) imagePath(p model.Profile) (string, error) {
+	r, err := c.revision(p.RevisionID)
+	if err != nil {
+		return "", err
+	}
+	if r.Profile != p || r.RuntimeDigest != c.RuntimeDigest {
+		return "", model.NewError(model.ReasonConfiguration, "prepared revision or runtime compatibility changed", false)
+	}
+	return profileArtifact(*c, p), nil
 }

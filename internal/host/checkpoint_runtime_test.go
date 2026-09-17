@@ -33,9 +33,10 @@ func nativeFixture(t *testing.T) (*host.NativeRuntime, *recordingRunner, host.Ma
 	m := host.Manifest{
 		ID:      model.NewID(),
 		Port:    22000,
-		Profile: model.Profile{Runtime: runtimeSmolvm, OS: osLinux, Arch: archAMD64, ImageDigest: "image-content"},
+		Profile: model.Profile{Runtime: runtimeSmolvm, OS: osLinux, Arch: archAMD64, RevisionID: model.NewID(), BaseID: "base", HostID: "test-host"},
 	}
-	n.Config.Profiles = []host.ProfileBinding{{Profile: m.Profile, ImagePath: "/opt/profiles/rootfs"}}
+	n.Config.Bases = []host.BaseBinding{testBase(m.Profile, "/opt/profiles/rootfs")}
+	seedRevision(t, n.Config, m.Profile, n.Config.Bases[0].ImagePath)
 	return n, r, m
 }
 func nativeDB(t *testing.T, n *host.NativeRuntime, m host.Manifest) {
@@ -180,7 +181,7 @@ func (f *restoreFixture) command(call commandCall) ([]byte, error) {
 			call.args,
 			[]string{
 				"-a",
-				"/opt/profiles/rootfs",
+				filepath.Join(f.n.Config.Root, "revisions", f.m.Profile.RevisionID+".rootfs"),
 				filepath.Join(filepath.Join(f.n.Config.Root, "machines", f.m.ID), "agent-rootfs"),
 			},
 		) {

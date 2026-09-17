@@ -18,31 +18,32 @@ func (streams commandStreams) addDevCommands(root *cli.Command) {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "state-dir", Value: dev.DefaultStateDir(), Usage: "Owned environment DIRECTORY"},
 			&cli.StringFlag{Name: "listen", Value: "127.0.0.1:0", Usage: "Loopback controller ADDRESS"},
+			&cli.IntFlag{Name: "cpus", Value: dev.DefaultCPU(), Usage: "Environment CPU budget (retained on later launches unless specified)"},
+			&cli.IntFlag{Name: "ram-mib", Value: dev.DefaultRAMMiB, Usage: "Environment RAM budget in MiB (retained on later launches unless specified)"},
 			&cli.StringFlag{Name: "bundle", Usage: "Verified bundle MANIFEST (same digest for an existing environment)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.NArg() != 0 {
 				return errors.New("dev takes no arguments")
 			}
-			return dev.Run(
-				ctx,
-				dev.Options{
-					StateDir: cmd.String("state-dir"),
-					Listen:   cmd.String("listen"),
-					Bundle:   cmd.String("bundle"),
-				},
+			opts := dev.Options{StateDir: cmd.String("state-dir"), Listen: cmd.String("listen"), Bundle: cmd.String("bundle")}
+			if cmd.IsSet("cpus") {
+				opts.CPU = new(cmd.Int("cpus"))
+			}
+			if cmd.IsSet("ram-mib") {
+				opts.RAMMiB = new(cmd.Int("ram-mib"))
+			}
+			return dev.Run(ctx, opts,
 				func(c dev.Connection) error {
 					if cmd.Bool("json") {
 						return jsonOut(streams.Out, c)
 					}
 					_, err := fmt.Fprintf(
 						streams.Out,
-						"Local VM environment ready: %s\nController: %s\nCLI config: %s\nDefault host/profile: %s / %s\nCreate machines through the ordinary API or CLI. Ctrl-C preserves the host service and VMs.\n",
+						"Local VM environment ready: %s\nController: %s\nCLI config: %s\nPublish a profile before creating machines. Ctrl-C preserves the host service and VMs.\n",
 						c.StateDir,
 						c.URL,
 						c.ClientConfig,
-						c.DefaultHost,
-						c.DefaultProfile,
 					)
 					return err
 				},

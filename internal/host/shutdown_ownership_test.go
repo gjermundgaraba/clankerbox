@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"clankerbox/internal/model"
 	"clankerbox/internal/rpctransport"
 	"clankerbox/internal/statefs"
 )
@@ -48,7 +49,7 @@ func TestHostShutdownDeadlineRetainsOwnershipUntilRenewalReturns(t *testing.T) {
 	}()
 	registryAwait(t, blocked.entered)
 	requests := &rpctransport.Handlers{Handler: http.NotFoundHandler()}
-	assertShutdownRetainsOwnership(t, f.helper, requests, blocked.release)
+	assertShutdownRetainsOwnership(t, NewService(f.helper), requests, blocked.release)
 	registryAwait(t, finished)
 }
 
@@ -62,12 +63,31 @@ func TestHostShutdownDeadlineRetainsOwnershipUntilHandlerReturns(t *testing.T) {
 		requests.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	}()
 	registryAwait(t, entered)
-	assertShutdownRetainsOwnership(t, f.helper, requests, release)
+	assertShutdownRetainsOwnership(t, NewService(f.helper), requests, release)
 	registryAwait(t, finished)
 }
 
-func assertShutdownRetainsOwnership(t *testing.T, h *Helper, requests *rpctransport.Handlers, release chan struct{}) {
+func TestHostShutdownDeadlineRetainsOwnershipUntilProfileWorkerReturns(t *testing.T) {
+	t.Parallel()
+	h, rt, recipe := profileFixture(t)
+	rt.ignoreCancellation = true
+	service := buildService(t, h)
+	id := model.NewID()
+	_, err := service.PublishProfile(t.Context(), id, uploadFixture(t, service, 0), recipe, h.cfg.Bases[0].Base)
+	registryCheck(t, err)
+	registryAwait(t, rt.entered)
+	requests := &rpctransport.Handlers{Handler: http.NotFoundHandler()}
+	assertShutdownRetainsOwnership(t, service, requests, rt.release)
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	if len(rt.states) != 0 {
+		t.Fatal("shutdown released ownership before profile cleanup completed")
+	}
+}
+
+func assertShutdownRetainsOwnership(t *testing.T, service *Service, requests *rpctransport.Handlers, release chan struct{}) {
 	t.Helper()
+	h := service.helper
 	defer func() {
 		select {
 		case <-release:
@@ -75,7 +95,6 @@ func assertShutdownRetainsOwnership(t *testing.T, h *Helper, requests *rpctransp
 			close(release)
 		}
 	}()
-	service := NewService(h)
 	lockPath := filepath.Join(h.cfg.Root, ".service.lock")
 	lock, err := statefs.LockFile(lockPath, true)
 	registryCheck(t, err)
@@ -105,6 +124,15 @@ func assertShutdownRetainsOwnership(t *testing.T, h *Helper, requests *rpctransp
 	}
 	nextOwner := make(chan acquired, 1)
 	go func() { l, lockErr := statefs.LockFile(lockPath, false); nextOwner <- acquired{l, lockErr} }()
+	select {
+	case result := <-nextOwner:
+		if result.lock != nil {
+			_ = result.lock.Close()
+		}
+		t.Fatal("shutdown released ownership before blocked work returned", result.err)
+	case <-time.After(30 * time.Millisecond):
+	}
+	registryCheck(t, h.db.PingContext(t.Context()))
 	close(release)
 	select {
 	case result := <-nextOwner:
@@ -112,5 +140,8 @@ func assertShutdownRetainsOwnership(t *testing.T, h *Helper, requests *rpctransp
 		registryCheck(t, result.lock.Close())
 	case <-time.After(3 * time.Second):
 		t.Fatal("finished work retained native ownership")
+	}
+	if err = h.db.PingContext(t.Context()); err == nil {
+		t.Fatal("shutdown released ownership without closing the database")
 	}
 }

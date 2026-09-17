@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -32,30 +34,37 @@ var ErrOperationNotFound = model.NewError(model.ReasonNotFound, "host operation 
 // Service owns accepted work independently of any RPC request. One worker preserves
 // the host core's mutation serialization. Restarts reconcile the same journal.
 type Service struct {
-	helper  *Helper
-	ctx     context.Context
-	cancel  context.CancelFunc
-	wake    chan struct{}
-	done    chan struct{}
-	mu      sync.Mutex
-	closed  bool
-	active  map[string]bool
-	failure chan error
+	helper     *Helper
+	logger     *slog.Logger
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wake       chan struct{}
+	done       chan struct{} // Lifecycle and profile workers have all exited.
+	mu         sync.Mutex
+	closed     bool
+	active     map[string]bool
+	failure    chan error
+	uploadMu   sync.Mutex
+	buildTasks map[string]context.CancelFunc
+	buildWG    sync.WaitGroup
 }
 
 // NewService starts bounded reconciliation of the existing host journal.
 func NewService(h *Helper) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
-		helper:  h,
-		ctx:     ctx,
-		cancel:  cancel,
-		wake:    make(chan struct{}, 1),
-		done:    make(chan struct{}),
-		active:  make(map[string]bool),
-		failure: make(chan error, 1),
+		helper:     h,
+		logger:     slog.New(slog.NewJSONHandler(os.Stderr, nil)),
+		ctx:        ctx,
+		cancel:     cancel,
+		wake:       make(chan struct{}, 1),
+		done:       make(chan struct{}),
+		active:     make(map[string]bool),
+		failure:    make(chan error, 1),
+		buildTasks: make(map[string]context.CancelFunc),
 	}
 	go s.work()
+	s.recoverBuilds()
 	s.notify()
 	return s
 }
@@ -193,13 +202,33 @@ func (s *Service) pending() ([]accepted, error) {
 // once per process; resumable work runs again on every wake, which the
 // controller's paced resubmissions drive.
 func (s *Service) work() {
-	defer close(s.done)
+	defer func() {
+		// Close admission before waiting: no profile task may be added after
+		// the final worker has surrendered ownership of the helper.
+		s.mu.Lock()
+		s.closed = true
+		s.cancel()
+		s.mu.Unlock()
+		s.buildWG.Wait()
+		close(s.done)
+	}()
+	buildRetries := time.NewTicker(buildRetryInterval)
+	defer buildRetries.Stop()
+	maintenance := time.NewTicker(time.Hour)
+	defer maintenance.Stop()
+	s.expireUploadsLogged(time.Now())
 	attempted := map[string]bool{}
 	for {
 		select {
 		case <-s.ctx.Done():
 			return
 		case <-s.wake:
+		case <-buildRetries.C:
+			s.recoverBuilds()
+			continue
+		case now := <-maintenance.C:
+			s.expireUploadsLogged(now)
+			continue
 		}
 		requests, err := s.pending()
 		if err != nil {
@@ -285,4 +314,10 @@ func (s *Service) validateRequest(req model.Request) error {
 		return model.NewError(model.ReasonIdentityMismatch, "host identity mismatch", false)
 	}
 	return nil
+}
+
+func (s *Service) expireUploadsLogged(now time.Time) {
+	if err := s.expireUploads(s.ctx, now); err != nil && s.ctx.Err() == nil {
+		s.logger.ErrorContext(s.ctx, "expire recipe uploads", "error", err)
+	}
 }

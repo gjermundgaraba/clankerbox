@@ -16,19 +16,20 @@ const (
 func TestProfilesAndNames(t *testing.T) {
 	t.Parallel()
 	p := model.Profile{
-		ID:          "ubuntu-bare-v1",
-		OS:          linuxOS,
-		Arch:        archAMD64,
-		Runtime:     smolvmRuntime,
-		CPU:         2,
-		RAMMiB:      2048,
-		ImageDigest: "image-content",
+		ID:         "ubuntu-bare-v1",
+		OS:         linuxOS,
+		Arch:       archAMD64,
+		Runtime:    smolvmRuntime,
+		CPU:        2,
+		RAMMiB:     2048,
+		RevisionID: "image-content",
+		StorageGiB: 4, OverlayGiB: 16,
 	}
 	if err := p.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	missingDigest := p
-	missingDigest.ImageDigest = ""
+	missingDigest.RevisionID = ""
 	if err := missingDigest.Validate(); err == nil {
 		t.Fatal("accepted missing content identity")
 	}
@@ -51,13 +52,14 @@ func TestNamesAndIDs(t *testing.T) {
 func TestCheckpointCapabilitiesAndDerivedProfilePin(t *testing.T) {
 	t.Parallel()
 	p := model.Profile{
-		ID:          linuxOS,
-		Runtime:     smolvmRuntime,
-		OS:          linuxOS,
-		Arch:        archAMD64,
-		CPU:         2,
-		RAMMiB:      2048,
-		ImageDigest: "image-content",
+		ID:         linuxOS,
+		Runtime:    smolvmRuntime,
+		OS:         linuxOS,
+		Arch:       archAMD64,
+		CPU:        2,
+		RAMMiB:     2048,
+		RevisionID: "image-content",
+		StorageGiB: 4, OverlayGiB: 16,
 	}
 	configured := p
 	if err := p.Validate(); err != nil {
@@ -70,6 +72,7 @@ func TestCheckpointCapabilitiesAndDerivedProfilePin(t *testing.T) {
 		slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), "disk-checkpoint") {
 		t.Fatal("wrong Linux capability", model.RuntimeCapabilities(p.Runtime, p.Arch))
 	}
+	p.StorageGiB, p.OverlayGiB = 0, 0
 	p.Runtime = "tart"
 	p.OS = "macos"
 	p.Arch = "arm64"
@@ -80,6 +83,7 @@ func TestCheckpointCapabilitiesAndDerivedProfilePin(t *testing.T) {
 		!slices.Contains(model.RuntimeCapabilities(p.Runtime, p.Arch), "disk-checkpoint") {
 		t.Fatal("Mac emulates RAM", model.RuntimeCapabilities(p.Runtime, p.Arch))
 	}
+	p.StorageGiB, p.OverlayGiB = 4, 16
 	p.Runtime = smolvmRuntime
 	p.OS = linuxOS
 	if err := p.Validate(); err != nil {

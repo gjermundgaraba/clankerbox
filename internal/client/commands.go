@@ -34,6 +34,7 @@ func newCommand(streams Streams) *cli.Command {
 		OnUsageError:   returnUsageError,
 	}
 	commandStreams(streams).addResourceCommands(root)
+	commandStreams(streams).addProfileCommands(root)
 	commandStreams(streams).addLifecycleCommands(root)
 	commandStreams(streams).addSessionCommands(root)
 	commandStreams(streams).addDevCommands(root)

@@ -1,0 +1,64 @@
+syntax = "proto3";
+package clankerbox.v1;
+option go_package = "clankerbox/gen/clankerbox/v1;clankerboxv1";
+import "clankerbox/v1/resources.proto";
+import "google/protobuf/timestamp.proto";
+
+message Base { string id = 1; string os = 2; string arch = 3; string runtime = 4; string digest = 5; }
+message ProfileRecipe {
+ string id = 1; string host_id = 2; string base_id = 3;
+ uint32 cpu = 4; uint64 ram_mib = 5; uint64 storage_gib = 6; uint64 overlay_gib = 7;
+}
+enum ProfileBuildStatus {
+ PROFILE_BUILD_STATUS_UNSPECIFIED = 0;
+ PROFILE_BUILD_STATUS_PENDING = 1;
+ PROFILE_BUILD_STATUS_RUNNING = 2;
+ PROFILE_BUILD_STATUS_UNRESOLVED = 3;
+ PROFILE_BUILD_STATUS_SUCCEEDED = 4;
+ PROFILE_BUILD_STATUS_FAILED = 5;
+ PROFILE_BUILD_STATUS_CANCELLED = 6;
+}
+message ProfileBuild {
+ string id = 1; string upload_id = 2; ProfileRecipe recipe = 3; Base base = 4;
+ ProfileBuildStatus status = 6; string phase = 7; string error = 8;
+ google.protobuf.Timestamp created_at = 9; google.protobuf.Timestamp updated_at = 10;
+}
+// Upload a standard recipe tar in bounded chunks. Completion precedes publication.
+message UploadRecipeRequest { string host_id = 1; string upload_id = 2; uint64 offset = 3; bytes data = 4; bool complete = 5; }
+message UploadRecipeResponse { string upload_id = 1; uint64 size = 2; }
+message PublishProfileRequest { string build_id = 1; string upload_id = 2; ProfileRecipe recipe = 3; }
+message HostPublishProfileRequest { string build_id = 1; string upload_id = 2; ProfileRecipe recipe = 3; Base expected_base = 4; }
+message GetProfileBuildRequest { string build_id = 1; }
+message CancelProfileBuildRequest { string build_id = 1; }
+message HostCancelProfileBuildRequest { string build_id = 1; string upload_id = 2; ProfileRecipe recipe = 3; Base expected_base = 4; }
+message ReadProfileBuildLogRequest { string build_id = 1; uint64 offset = 2; }
+message ReadProfileBuildLogResponse { bytes data = 1; uint64 next_offset = 2; bool complete = 3; }
+message ListProfileRevisionsRequest { string profile_id = 1; }
+message ProfileRevision { Profile profile = 1; bool deleting = 2; }
+message ListProfileRevisionsResponse { repeated ProfileRevision revisions = 1; }
+message DeleteProfileRequest { string profile_id = 1; }
+message DeleteProfileRevisionRequest { string revision_id = 1; }
+message ProfileMutationResponse {}
+message ListBasesRequest { string host_id = 1; }
+message ListBasesResponse { repeated Base bases = 1; }
+
+service ProfileService {
+ rpc UploadRecipe(UploadRecipeRequest) returns (UploadRecipeResponse);
+ rpc PublishProfile(PublishProfileRequest) returns (ProfileBuild);
+ rpc GetProfileBuild(GetProfileBuildRequest) returns (ProfileBuild);
+ rpc CancelProfileBuild(CancelProfileBuildRequest) returns (ProfileBuild);
+ rpc ReadProfileBuildLog(ReadProfileBuildLogRequest) returns (ReadProfileBuildLogResponse);
+ rpc ListProfileRevisions(ListProfileRevisionsRequest) returns (ListProfileRevisionsResponse);
+ rpc DeleteProfile(DeleteProfileRequest) returns (ProfileMutationResponse);
+ rpc DeleteProfileRevision(DeleteProfileRevisionRequest) returns (ProfileMutationResponse);
+ rpc ListBases(ListBasesRequest) returns (ListBasesResponse);
+}
+service HostProfileService {
+ rpc UploadRecipe(UploadRecipeRequest) returns (UploadRecipeResponse);
+ rpc PublishProfile(HostPublishProfileRequest) returns (ProfileBuild);
+ rpc GetProfileBuild(GetProfileBuildRequest) returns (ProfileBuild);
+ rpc CancelProfileBuild(HostCancelProfileBuildRequest) returns (ProfileBuild);
+ rpc ReadProfileBuildLog(ReadProfileBuildLogRequest) returns (ReadProfileBuildLogResponse);
+ rpc DeleteProfileRevision(DeleteProfileRevisionRequest) returns (ProfileMutationResponse);
+ rpc ListBases(ListBasesRequest) returns (ListBasesResponse);
+}

@@ -98,27 +98,3 @@ func TestResourceFormattingPreservesReservationsAndRuntimeCapabilities(t *testin
 		}
 	}
 }
-
-type ambiguousHostsClient struct {
-	clankerboxv1connect.MachineServiceClient
-}
-
-func (ambiguousHostsClient) ListHosts(context.Context, *connect.Request[v1.ListHostsRequest]) (*connect.Response[v1.ListHostsResponse], error) {
-	return connect.NewResponse(&v1.ListHostsResponse{Hosts: []*v1.Host{
-		{Id: "one", ProfileIds: []string{"linux"}, Cpu: 2, RamMib: 1024},
-		{Id: "two", ProfileIds: []string{"linux"}, Cpu: 2, RamMib: 1024},
-	}}), nil
-}
-func TestAmbiguousHostSelectionRequiresExplicitHost(t *testing.T) {
-	t.Parallel()
-	api := &API{machine: ambiguousHostsClient{}}
-	if host, err := api.selectHost(t.Context(), "", "linux"); err == nil || host != "" || !strings.Contains(err.Error(), "2 eligible hosts") {
-		t.Fatalf("ambiguous host selection %q: %v", host, err)
-	}
-	if host, err := api.selectHost(t.Context(), "two", "linux"); err != nil || host != "two" {
-		t.Fatalf("explicit host selection %q: %v", host, err)
-	}
-	if _, err := api.selectHost(t.Context(), "", "missing"); err == nil || !strings.Contains(err.Error(), "0 eligible hosts") {
-		t.Fatalf("missing profile: %v", err)
-	}
-}

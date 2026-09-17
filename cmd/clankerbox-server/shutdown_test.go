@@ -72,9 +72,12 @@ func TestControllerShutdownRetainsResourcesUntilHandlerCompletes(t *testing.T) {
 	requireControllerLockReleased(t, root)
 }
 
+var _ control.ProfileTransport = (*blockedControllerTransport)(nil)
+
 type blockedControllerTransport struct {
 	entered chan struct{}
 	release chan struct{}
+	build   model.ProfileBuild
 }
 
 func (b *blockedControllerTransport) Call(ctx context.Context, _ model.Host, _ model.Request) (model.Response, error) {
@@ -87,12 +90,21 @@ func TestControllerShutdownJoinsWorkerBeforeClosingJournal(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "state")
 	cfg := model.Config{
-		Profiles: []model.Profile{{ID: "linux", OS: "linux", Arch: "amd64", Runtime: "smolvm", CPU: 1, RAMMiB: 512, ImageDigest: "seed"}},
-		Hosts:    []model.Host{{ID: "host", Endpoint: "unix:///tmp/controller-shutdown-host.sock", ProfileIDs: []string{"linux"}, CPU: 2, RAMMiB: 1024}},
+		Hosts: []model.Host{{ID: "host", Endpoint: "unix:///tmp/controller-shutdown-host.sock", CPU: 2, RAMMiB: 1024}},
 	}
 	transport := &blockedControllerTransport{entered: make(chan struct{}), release: make(chan struct{})}
 	controller, err := control.Open(root, cfg, transport)
 	if err != nil {
+		t.Fatal(err)
+	}
+	upload := model.NewID()
+	if _, err = controller.UploadRecipe(t.Context(), "host", upload, 0, []byte("fixture archive"), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = controller.PublishProfile(t.Context(), model.NewID(), upload, model.ProfileRecipe{ID: "linux", HostID: "host", BaseID: "base", CPU: 1, RAMMiB: 512, StorageGiB: 8, OverlayGiB: 4}); err != nil {
+		t.Fatal(err)
+	}
+	if err = controller.ProcessProfileBuild(t.Context(), "host"); err != nil {
 		t.Fatal(err)
 	}
 	operation, err := controller.Create(t.Context(), "create-key", model.CreateInput{Name: "shutdown", Profile: "linux", Host: "host"})
@@ -200,4 +212,32 @@ func requireControllerLockReleased(t *testing.T, root string) {
 		case <-time.After(time.Millisecond):
 		}
 	}
+}
+
+func (b *blockedControllerTransport) UploadRecipe(_ context.Context, _ model.Host, _ string, offset uint64, data []byte, _ bool) (uint64, error) {
+	return offset + uint64(len(data)), nil
+}
+func (b *blockedControllerTransport) Bases(context.Context, model.Host) ([]model.Base, error) {
+	return []model.Base{{ID: "base", OS: "linux", Arch: "amd64", Runtime: "smolvm", Digest: "base-digest"}}, nil
+}
+func (b *blockedControllerTransport) PublishBuild(_ context.Context, _ model.Host, build model.ProfileBuild) (model.ProfileBuild, error) {
+	build.Status = "succeeded"
+	b.build = build
+	return build, nil
+}
+func (b *blockedControllerTransport) GetBuild(context.Context, model.Host, string) (model.ProfileBuild, error) {
+	if b.build.ID == "" {
+		return b.build, model.NewError(model.ReasonNotFound, "build not found", false)
+	}
+	return b.build, nil
+}
+func (b *blockedControllerTransport) CancelBuild(context.Context, model.Host, model.ProfileBuild) (model.ProfileBuild, error) {
+	return b.build, nil
+}
+func (b *blockedControllerTransport) RemoveRevision(context.Context, model.Host, string) error {
+	return nil
+}
+
+func (b *blockedControllerTransport) BuildLog(context.Context, model.Host, string, uint64) ([]byte, uint64, bool, error) {
+	panic("unexpected build log lookup")
 }

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
-	"strings"
 	"time"
 
 	"clankerbox/internal/model"
@@ -108,29 +106,4 @@ func (runner commandRunner) finishMutation(
 		return operationError(operation, err)
 	}
 	return runner.output(m)
-}
-
-func (a *API) selectHost(ctx context.Context, host, profile string) (string, error) {
-	if host != "" {
-		return host, nil
-	}
-	hosts, err := a.Hosts(ctx)
-	if err != nil {
-		return "", err
-	}
-	var eligible []string
-	for _, h := range hosts {
-		if slices.Contains(h.ProfileIDs, profile) {
-			eligible = append(eligible, h.ID)
-		}
-	}
-	if len(eligible) != 1 {
-		return "", fmt.Errorf(
-			"profile %q has %d eligible hosts (%s); specify --host",
-			profile,
-			len(eligible),
-			strings.Join(eligible, ", "),
-		)
-	}
-	return eligible[0], nil
 }

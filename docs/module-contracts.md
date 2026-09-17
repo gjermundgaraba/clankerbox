@@ -107,3 +107,7 @@ rejection, advisory locks, SQLite companion-file validation and atomic
 replacement. Its package documentation describes the rules. The controller keeps
 `controller.db` and `controller.lock`; the host keeps `host.db`, its ownership
 marker and an initialization lock; the client has no durable state.
+
+## Runtime profile ownership
+
+The controller owns the mutable profile catalog, build admission and CPU/RAM reservations. The host owns deployed bases, uploaded staging, build execution/logs and prepared revision artifacts. Setup runs outside lifecycle serialization; preparation and finalization remain serialized. Create admission atomically pins the selected revision and its settings. Deleting a profile does not invalidate machines/checkpoints; referenced revisions cannot be deleted. See [ADR 0008](adr/0008-runtime-built-profiles.md).

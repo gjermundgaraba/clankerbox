@@ -50,7 +50,6 @@ func (f *rpcFixture) ListHosts(
 			Hosts: []*v1.Host{
 				{
 					Id:              fixtureHostID,
-					ProfileIds:      []string{fixtureLinux},
 					Cpu:             8,
 					RamMib:          8192,
 					UsedCpu:         2,
@@ -69,7 +68,7 @@ func (f *rpcFixture) ListProfiles(
 ) (*connect.Response[v1.ListProfilesResponse], error) {
 	return connect.NewResponse(
 		&v1.ListProfilesResponse{
-			Profiles: []*v1.Profile{{Id: fixtureLinux, Os: fixtureLinux, Arch: fixtureArch, Runtime: fixtureRuntime, ImageDigest: strings.Repeat("a", 64), Cpu: 2, RamMib: 1024, StorageGib: 1, OverlayGib: 8}},
+			Profiles: []*v1.Profile{{Id: fixtureLinux, Os: fixtureLinux, Arch: fixtureArch, Runtime: fixtureRuntime, HostId: fixtureHostID, BaseId: "linux-base", RevisionId: strings.Repeat("a", 64), Cpu: 2, RamMib: 1024, StorageGib: 1, OverlayGib: 8}},
 		},
 	), nil
 }
@@ -81,12 +80,12 @@ func fixtureMachine() *v1.Machine {
 			Profile: fixtureLinux,
 			Host:    fixtureHostID,
 			ProfileSpec: model.Profile{
-				ID:          fixtureLinux,
-				OS:          fixtureLinux,
-				Arch:        fixtureArch,
-				Runtime:     fixtureRuntime,
-				ImageDigest: strings.Repeat("a", 64),
-				CPU:         2, RAMMiB: 1024, StorageGiB: 1, OverlayGiB: 8,
+				ID:      fixtureLinux,
+				OS:      fixtureLinux,
+				Arch:    fixtureArch,
+				Runtime: fixtureRuntime,
+				HostID:  fixtureHostID, BaseID: "linux-base", RevisionID: strings.Repeat("a", 64),
+				CPU: 2, RAMMiB: 1024, StorageGiB: 1, OverlayGiB: 8,
 			},
 			State:              model.Running,
 			DesiredState:       model.Running,
@@ -213,6 +212,10 @@ func TestTypedLifecycleWaitAndNoResubmission(t *testing.T) {
 			t.Parallel()
 			f := &rpcFixture{final: status}
 			a := newRPCFixture(t, f)
+			timeout := "5s"
+			if status == fixturePending {
+				timeout = "40ms"
+			}
 			out, err := runCLI(
 				t,
 				a,
@@ -222,7 +225,7 @@ func TestTypedLifecycleWaitAndNoResubmission(t *testing.T) {
 				"--idempotency-key",
 				"once",
 				"--timeout",
-				"40ms",
+				timeout,
 			)
 			if status == fixtureSucceeded {
 				if err != nil || !strings.Contains(out, testID) {
@@ -233,7 +236,9 @@ func TestTypedLifecycleWaitAndNoResubmission(t *testing.T) {
 			}
 			f.mu.Lock()
 			defer f.mu.Unlock()
-			if f.submissions != 1 || f.key != "once" || f.polls < 1 {
+			// A pending wait can exhaust its deadline before the first poll reaches
+			// the server. Terminal outcomes must have been observed by polling.
+			if f.submissions != 1 || f.key != "once" || (status != fixturePending && f.polls < 1) {
 				t.Fatalf("submissions=%d polls=%d key=%q", f.submissions, f.polls, f.key)
 			}
 		})
@@ -421,12 +426,12 @@ func fixtureCheckpoint() *v1.Checkpoint {
 			Kind:            "disk",
 			Status:          "published",
 			Profile: model.Profile{
-				ID:          fixtureLinux,
-				OS:          fixtureLinux,
-				Arch:        fixtureArch,
-				Runtime:     fixtureRuntime,
-				ImageDigest: strings.Repeat("a", 64),
-				CPU:         2, RAMMiB: 1024, StorageGiB: 1, OverlayGiB: 8,
+				ID:      fixtureLinux,
+				OS:      fixtureLinux,
+				Arch:    fixtureArch,
+				Runtime: fixtureRuntime,
+				HostID:  fixtureHostID, BaseID: "linux-base", RevisionID: strings.Repeat("a", 64),
+				CPU: 2, RAMMiB: 1024, StorageGiB: 1, OverlayGiB: 8,
 			},
 		},
 	)

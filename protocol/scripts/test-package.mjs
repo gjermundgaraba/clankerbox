@@ -42,7 +42,7 @@ try {
     import assert from "node:assert/strict";
     import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
     import * as sdk from "${manifest.name}";
-    for (const subpath of ["resources", "machine", "session", "host"]) {
+    for (const subpath of ["resources", "machine", "session", "host", "profile"]) {
       const descriptors = await import("${manifest.name}/" + subpath);
       assert.ok(Object.keys(descriptors).length);
       for (const [name, value] of Object.entries(descriptors)) assert.equal(sdk[name], value);
@@ -62,10 +62,11 @@ try {
     import { MachineService } from "${manifest.name}/machine";
     import { SessionService } from "${manifest.name}/session";
     import { HostService } from "${manifest.name}/host";
+    import { ProfileService, HostProfileService } from "${manifest.name}/profile";
     const session: Session = create(SessionSchema, { offset: 1n });
     const offset: bigint = session.offset;
     const machineId: string = create(MachineSchema).id;
-    const services = [MachineService, SessionService, HostService];
+    const services = [MachineService, SessionService, HostService, ProfileService, HostProfileService];
     void [offset, machineId, services];
   `);
   writeFileSync(join(temporary, "tsconfig.json"), JSON.stringify({

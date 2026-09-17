@@ -40,20 +40,23 @@ const (
 	localHostID   = "local"
 )
 
-// Options selects the owned environment, loopback listener, and explicit bundle.
-type Options struct{ StateDir, Listen, Bundle string }
+// Options selects the owned environment, listener, bundle, and optional capacity overrides.
+type Options struct {
+	StateDir, Listen, Bundle string
+	CPU, RAMMiB              *int
+}
 
 // Connection publishes client configuration locations without embedding credentials.
 type Connection struct {
-	URL            string `json:"url"`
-	TokenPath      string `json:"tokenPath"`
-	DefaultHost    string `json:"defaultHost"`
-	DefaultProfile string `json:"defaultProfile"`
-	StateDir       string `json:"stateDir"`
-	ClientConfig   string `json:"clientConfig"`
+	URL          string `json:"url"`
+	TokenPath    string `json:"tokenPath"`
+	StateDir     string `json:"stateDir"`
+	ClientConfig string `json:"clientConfig"`
 }
 type environment struct {
 	Version      int    `json:"version"`
+	CPU          int    `json:"cpus"`
+	RAMMiB       int    `json:"ram_mib"`
 	StateDir     string `json:"state_dir"`
 	HostRoot     string `json:"host_root"`
 	Namespace    string `json:"namespace"`
@@ -167,6 +170,20 @@ func openEnvironment(opts Options, create bool) (*environment, error) {
 		return nil, err
 	}
 
+	if create {
+		if opts.CPU != nil {
+			env.CPU = *opts.CPU
+		}
+		if opts.RAMMiB != nil {
+			env.RAMMiB = *opts.RAMMiB
+		}
+		if env.CPU < 1 || env.RAMMiB < 128 {
+			return nil, errors.New("dev capacity requires at least 1 CPU and 128 MiB RAM")
+		}
+		if err = jsonWrite(env.dir, environmentManifest, env); err != nil {
+			return nil, err
+		}
+	}
 	ok = true
 	return env, nil
 }
@@ -194,14 +211,16 @@ func (e *environment) initialize(state, bundlePath string) error {
 	if _, err = os.Lstat(short); !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("short host root already exists without this environment: %s", short)
 	}
-	e.Version = 1
+	e.Version = 2
+	e.CPU = DefaultCPU()
+	e.RAMMiB = DefaultRAMMiB
 	e.StateDir = state
 	e.HostRoot = short
 	e.Namespace = environmentPrefix + name
 	e.BundlePath = b.manifest
 	e.BundleDigest = b.digest
 	e.bundle = b
-	return jsonWrite(e.dir, environmentManifest, e)
+	return nil
 }
 
 func (e *environment) restore(data []byte, state, bundlePath string) error {
@@ -212,7 +231,7 @@ func (e *environment) restore(data []byte, state, bundlePath string) error {
 	if err != nil {
 		return err
 	}
-	if e.Version != 1 || e.StateDir != state || e.HostRoot != filepath.Join(home, ".cb", namespace(state)) ||
+	if e.Version != 2 || e.CPU < 1 || e.RAMMiB < 128 || e.StateDir != state || e.HostRoot != filepath.Join(home, ".cb", namespace(state)) ||
 		e.Namespace != environmentPrefix+namespace(state) {
 		return errors.New("environment ownership manifest mismatch")
 	}
@@ -232,24 +251,14 @@ func (e *environment) restore(data []byte, state, bundlePath string) error {
 
 func (e *environment) hostConfig() host.Config {
 	b := e.bundle
-	p := model.Profile{
-		ID:          b.ProfileID,
-		OS:          linuxPlatform,
-		Arch:        runtime.GOARCH,
-		Runtime:     "smolvm",
-		CPU:         b.ProfileCPU,
-		RAMMiB:      b.ProfileRAMMiB,
-		StorageGiB:  b.StorageGiB,
-		OverlayGiB:  b.OverlayGiB,
-		ImageDigest: b.ImageDigest,
-	}
+	base := model.Base{ID: "linux-base", OS: linuxPlatform, Arch: runtime.GOARCH, Runtime: "smolvm", Digest: b.ImageDigest}
 	return host.Config{
 		RuntimeDigest: b.RuntimeDigest,
 		HostOS:        runtime.GOOS,
 		HostID:        localHostID,
 		Root:          e.HostRoot,
 		Listen:        "unix://" + filepath.Join(e.HostRoot, "host.sock"),
-		Profiles:      []host.ProfileBinding{{Profile: p, ImagePath: b.path(b.ImagePath)}},
+		Bases:         []host.BaseBinding{{Base: base, ImagePath: b.path(b.ImagePath)}},
 		SmolvmPath:    b.path(b.Smolvm),
 		LibraryDir:    b.path(b.LibraryDir),
 		SystemdUser:   runtime.GOOS == linuxPlatform,
@@ -287,26 +296,7 @@ func (e *environment) prepare() error {
 	if err = jsonWrite(root, "service.json", cfg); err != nil {
 		return err
 	}
-	profile := cfg.Profiles[0]
-	cpu := profile.CPU * defaultMachineSlots
-	if cpu > runtime.NumCPU() {
-		cpu = runtime.NumCPU()
-	}
-	if cpu < profile.CPU {
-		return errors.New("host has fewer CPUs than the pinned profile")
-	}
-	c := model.Config{
-		Profiles: []model.Profile{profile.Profile},
-		Hosts: []model.Host{
-			{
-				ID:         cfg.HostID,
-				Endpoint:   cfg.Listen,
-				ProfileIDs: []string{profile.ID},
-				CPU:        cpu,
-				RAMMiB:     profile.RAMMiB * defaultMachineSlots,
-			},
-		},
-	}
+	c := model.Config{Hosts: []model.Host{{ID: cfg.HostID, Endpoint: cfg.Listen, CPU: e.CPU, RAMMiB: e.RAMMiB}}}
 	if err = jsonWrite(e.dir, "controller-config.json", c); err != nil {
 		return err
 	}
@@ -432,21 +422,17 @@ func Run(ctx context.Context, opts Options, onReady func(Connection) error) erro
 	}
 	defer func() { _ = child.stop() }()
 	conn := Connection{
-		URL:            child.url,
-		TokenPath:      filepath.Join(env.StateDir, "token"),
-		DefaultHost:    localHostID,
-		DefaultProfile: env.bundle.ProfileID,
-		StateDir:       env.StateDir,
-		ClientConfig:   filepath.Join(env.StateDir, "client.json"),
+		URL:          child.url,
+		TokenPath:    filepath.Join(env.StateDir, "token"),
+		StateDir:     env.StateDir,
+		ClientConfig: filepath.Join(env.StateDir, "client.json"),
 	}
 	if err = jsonWrite(
 		env.dir,
 		"client.json",
 		map[string]string{
-			"url":             conn.URL,
-			"token_file":      conn.TokenPath,
-			"default_host":    conn.DefaultHost,
-			"default_profile": conn.DefaultProfile,
+			"url":        conn.URL,
+			"token_file": conn.TokenPath,
 		},
 	); err != nil {
 		return err
@@ -558,3 +544,9 @@ func (e *environment) startController(ctx context.Context, listen, tokenName str
 		}
 	}
 }
+
+// DefaultCPU is the initial local environment CPU budget.
+func DefaultCPU() int { return min(runtime.NumCPU(), 4) }
+
+// DefaultRAMMiB is the initial local environment memory budget.
+const DefaultRAMMiB = 2048

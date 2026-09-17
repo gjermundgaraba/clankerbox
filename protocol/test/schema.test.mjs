@@ -5,6 +5,7 @@ import {
   SessionSchema, SessionStatus, OpenSchema, OpenedSchema, OpenMode,
   AttachmentRequestSchema, AttachmentEventSchema, MachineService, HostService,
   SessionService, ErrorDetailSchema, ErrorReason,
+  ProfileService, HostProfileService, ProfileSchema, ProfileBuildStatus, ProfileBuildSchema, UploadRecipeRequestSchema,
 } from "../dist/index.js";
 
 test("generated uint64 uses bigint and protobuf JSON decimal strings", () => {
@@ -67,4 +68,22 @@ test("typed prerequisite, capacity and unsupported errors stay distinct", () => 
     const detail = create(ErrorDetailSchema, { reason, resourceId: "machine" });
     assert.equal(fromBinary(ErrorDetailSchema, toBinary(ErrorDetailSchema, detail)).reason, reason);
   }
+});
+
+
+test("profile builds preserve revision pins and chunk offsets", () => {
+  const build = create(ProfileBuildSchema, { id: "revision-a", recipe: { id: "dev", hostId: "local", baseId: "linux-base" }, base: { id: "linux-base", digest: "base-digest" }, status: ProfileBuildStatus.SUCCEEDED });
+  const restored = fromBinary(ProfileBuildSchema, toBinary(ProfileBuildSchema, build));
+  assert.equal(restored.id, "revision-a");
+  assert.equal(restored.recipe.hostId, "local");
+  assert.equal(restored.status, ProfileBuildStatus.SUCCEEDED);
+  assert.equal(restored.base.digest, "base-digest");
+  assert.notEqual(ProfileService.method.publishProfile.input, HostProfileService.method.publishProfile.input);
+  const chunk = create(UploadRecipeRequestSchema, { uploadId: "upload", offset: 9007199254741993n, data: new Uint8Array([1, 2]), complete: true });
+  assert.equal(fromBinary(UploadRecipeRequestSchema, toBinary(UploadRecipeRequestSchema, chunk)).offset, chunk.offset);
+  for (const service of [ProfileService, HostProfileService]) {
+    assert.equal(service.method.publishProfile.output.typeName, "clankerbox.v1.ProfileBuild");
+    assert.equal(service.method.uploadRecipe.methodKind, "unary");
+  }
+  assert.equal(ProfileService.method.listProfileRevisions.output.typeName, "clankerbox.v1.ListProfileRevisionsResponse");
 });

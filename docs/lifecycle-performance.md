@@ -3,7 +3,7 @@
 ## Supported implementation
 
 - Prepared images: account, binary and recursive permission work happen at image
-  assembly, not at machine start. See [ADR 0007](adr/0007-prepared-guest-images.md).
+  assembly; profile setup and capture run once per published revision, not at machine start. See [ADR 0008](adr/0008-runtime-built-profiles.md).
 - Explicit bind/start/rebind intent: healthy retained authentication is read-only;
   cold starts and live identity renewal cannot be confused.
 - Private copy-on-write rootfs materialization where available, without hardlinks.
@@ -27,14 +27,15 @@ failures can return sooner; a healthy retained guest needs no native mutation.
 ## Repeatable benchmark
 
 Use a **new disposable Linux environment** from the candidate bundle. It needs
-capacity for the running source and one child. Do not run against somebody else's
+capacity for the running source and one child. Publish the `linux-tools` recipe
+before running the benchmark. Do not run against somebody else's
 workloads or interpret a failed/ambiguous operation as permission to replay it.
 
 ```sh
 go build -o bin/session-run ./tests/session-run
 python3 tests/benchmark_lifecycle.py \
   --binary /candidate/clankerbox --config /disposable/environment/client.json \
-  --session-runner "$PWD/bin/session-run" --host local --profile linux-dev-v3 \
+  --session-runner "$PWD/bin/session-run" --host local --profile linux-tools \
   --samples 3 --result /new/private/results/benchmark.json
 ```
 
@@ -86,3 +87,8 @@ and cleanup. Tart was qualified for correctness, not benchmarked against a basel
 The subsequent [permission-correction qualification](../scripts/release/inputs/prepared-permissions-qualification.md)
 covers the revised directory-mode contract and lifecycle regression checks on
 Linux/KVM; it does not replace the original benchmark receipts.
+
+Runtime profile qualification must report build time separately from create time. Measure create/start/stop during setup with spare CPU/RAM; setup releases lifecycle serialization. Preparation, export and validation may queue lifecycle work, and their delay must be reported separately. Historical reports above predate runtime profiles and do not qualify them.
+
+See [runtime profile qualification](runtime-profile-qualification.md) for runtime-update and crash-recovery coverage, matched smolvm/Tart lifecycle
+measurements, and current qualification limits.

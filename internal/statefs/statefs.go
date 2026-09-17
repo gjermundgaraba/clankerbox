@@ -321,7 +321,16 @@ func (d *Dir) WriteFile(name string, data []byte) error {
 type Lock struct{ file *os.File }
 
 // Close releases the lock and its descriptor.
-func (l *Lock) Close() error { return l.file.Close() }
+func (l *Lock) Close() error {
+	// A concurrently forked child may retain this open file description until
+	// exec. Release ownership explicitly rather than waiting for its last close.
+	raw, err := l.file.SyscallConn()
+	var unlockErr error
+	if err == nil {
+		err = raw.Control(func(fd uintptr) { unlockErr = unix.Flock(int(fd), unix.LOCK_UN) })
+	}
+	return errors.Join(err, unlockErr, l.file.Close())
+}
 
 // Lock acquires an exclusive lock on a private regular file. With nonblock true,
 // contention returns an error matching [syscall.EWOULDBLOCK]; otherwise it waits.

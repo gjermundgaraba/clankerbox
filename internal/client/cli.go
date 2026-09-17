@@ -80,17 +80,12 @@ func (runner commandRunner) createMachine(
 	if profile == "" {
 		return errors.New("create requires a profile (flag or config default)")
 	}
-	var err error
-	host, err = runner.api.selectHost(ctx, host, profile)
-	if err != nil {
-		return err
-	}
 	in := model.CreateInput{
 		Name:    name,
 		Profile: profile,
 		Host:    host,
 	}
-	if err = in.Validate(); err != nil {
+	if err := in.Validate(); err != nil {
 		return err
 	}
 	id, err := requestKey(idem)

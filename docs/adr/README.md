@@ -13,3 +13,4 @@ supersede its record.
 | [0005](0005-terminal-sessions-only.md) | Terminal access only through guest-owned sessions |
 | [0006](0006-no-application-credentials.md) | No application credential management or activity detection |
 | [0007](0007-prepared-guest-images.md) | Prepared images and explicit guest binding, startup and renewal |
+| [0008](0008-runtime-built-profiles.md) | Runtime-built profiles |

@@ -21,9 +21,10 @@ the bidirectional attachment stream. `@bufbuild/protobuf` is included as a
 runtime dependency. All descriptors are exported at the root and through
 `/resources`, `/machine`, `/session` and `/host` subpaths.
 
-SDK **0.2.0** is qualified against Clankerbox **0.6.0**, including its
-artifact-only checkpoint contract. SDK and controller versions are independent;
-pin a qualified pair rather than assuming their version numbers match.
+SDK **0.3.0** targets this repository’s runtime-built profile contract and must
+be used with the matching controller implementation. It is not compatible with
+the published SDK 0.2.0 / Clankerbox 0.6.0 contract. SDK and controller versions
+are independent; qualify their pairing before release.
 
 ## RPC contract
 

@@ -1,5 +1,9 @@
 # Acceptance tests
 
+Provision disposable environments with [owned work runs](../scripts/WORK_RUNS.md).
+The live harnesses below operate on an existing endpoint; the provisioning driver
+owns service/VM teardown and scratch cleanup, including when a harness fails.
+
 `make test` runs the unit tests. The harnesses here run against a live
 deployment and create and delete disposable machines; do not point them at an
 existing workload.
@@ -92,3 +96,38 @@ Probes used by the harnesses:
 restore and cleanup through the ordinary APIs on new disposable Linux machines.
 See [lifecycle performance](../docs/lifecycle-performance.md) for invocation,
 evidence handling and the separate live acceptance requirements.
+
+
+## Runtime profile publication
+
+Use an explicitly disposable environment with a deployed base and spare capacity.
+The harness publishes two revisions, checks running/stopped machine pins, forks
+and checkpoints across updates, revision deletion dependencies, failed builds,
+cancellation, and lifecycle overlap during setup. It deletes its machines,
+checkpoints, profile and revisions on success. Failures retain
+recorded build and resource IDs for inspection; do not replay uncertain mutations.
+
+```sh
+python3 tests/live_profiles.py --binary bin/clankerbox --config CLIENT_CONFIG \
+  --session-runner bin/session-run --host local --base linux-base \
+  --result RESULTS/profiles.json
+```
+
+Setup recipes must follow the root-run tools contract described in
+[profiles](../docs/profiles.md). Run native lifecycle/checkpoint acceptance against
+a successfully published profile as well.
+
+Use `--cpu 4 --ram-mib 8192 --setup-delay 60` for the Tart fixture. Resource
+settings and the setup delay are configurable so the host has enough capacity
+and stop/start can finish while setup is still running. The suite stops the new
+machine before later build checks to stay within the native two-macOS-VM limit;
+run Tart qualification without unrelated macOS VMs competing for those slots. `--setup-script FILE`
+adds a real root-run package installation script to both successful recipes.
+`--keep-profile` retains the second revision for lifecycle and benchmark tests;
+the report records its profile name and revision ID. The caller must remove it
+after those checks. Unresolved builds continue polling until a terminal outcome
+or the build timeout (default one hour).
+
+Host/controller crash recovery, base retirement and upload-expiry checks require
+control of the disposable environment's services and state. They are performed
+by the environment qualification driver, not by exposing test-only product APIs.

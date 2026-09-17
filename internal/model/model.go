@@ -63,35 +63,47 @@ func RuntimeCapabilities(runtime, arch string) []string {
 	return append(out, "fork", "disk-branch", "disk-checkpoint")
 }
 
-// Profile describes a configured VM image and its resource requirements.
+// Profile is an immutable prepared revision and its resolved machine settings.
 type Profile struct {
-	ID          string `json:"id"`
-	OS          string `json:"os"`
-	Arch        string `json:"arch"`
-	Runtime     string `json:"runtime"`
-	CPU         int    `json:"cpu"`
-	RAMMiB      int    `json:"ram_mib"`
-	ImageDigest string `json:"image_digest"`
-	StorageGiB  int    `json:"storage_gib,omitempty"`
-	OverlayGiB  int    `json:"overlay_gib,omitempty"`
+	ID         string `json:"id"`
+	HostID     string `json:"host_id"`
+	BaseID     string `json:"base_id"`
+	OS         string `json:"os"`
+	Arch       string `json:"arch"`
+	Runtime    string `json:"runtime"`
+	CPU        int    `json:"cpu"`
+	RAMMiB     int    `json:"ram_mib"`
+	RevisionID string `json:"revision_id"`
+	StorageGiB int    `json:"storage_gib,omitempty"`
+	OverlayGiB int    `json:"overlay_gib,omitempty"`
 }
 
 // Validate checks portable configuration invariants.
 func (p *Profile) Validate() error {
-	if !ValidName(p.ID) || p.CPU < 1 || p.CPU > 255 || p.RAMMiB < 128 || p.ImageDigest == "" {
-		return errors.New("profile requires id, cpu (1..255), ram_mib >=128 and image_digest")
+	if !ValidName(p.ID) || p.CPU < 1 || p.CPU > 255 || p.RAMMiB < 128 || p.RevisionID == "" {
+		return errors.New("profile requires id, cpu (1..255), ram_mib >=128 and revision_id")
 	}
-	if p.Arch != archARM64 && p.Arch != archAMD64 {
-		return errors.New("unsupported architecture")
+	if err := validatePlatform(p.OS, p.Arch, p.Runtime); err != nil {
+		return err
 	}
-	if (p.Runtime != "tart" || p.OS != "macos" || p.Arch != archARM64) &&
-		(p.Runtime != smolvmRuntime || p.OS != "linux") {
-		return errors.New("unsupported OS/runtime combination")
+	if p.Runtime == smolvmRuntime && (p.StorageGiB < 1 || p.OverlayGiB < 1) {
+		return errors.New("smolvm requires positive storage_gib and overlay_gib")
 	}
-	if p.StorageGiB < 0 || p.OverlayGiB < 0 {
-		return errors.New("invalid disk sizes")
+	if p.Runtime == "tart" && (p.StorageGiB != 0 || p.OverlayGiB != 0) {
+		return errors.New("tart inherits seed disk settings; omit storage_gib and overlay_gib")
 	}
 
+	return nil
+}
+
+func validatePlatform(os, arch, runtime string) error {
+	if arch != archARM64 && arch != archAMD64 {
+		return errors.New("unsupported architecture")
+	}
+	if (runtime != "tart" || os != "macos" || arch != archARM64) &&
+		(runtime != smolvmRuntime || os != "linux") {
+		return errors.New("unsupported OS/runtime combination")
+	}
 	return nil
 }
 
@@ -100,15 +112,14 @@ func SameProfile(a, b Profile) bool { return a == b }
 
 // Host describes a private authenticated host service and its configured capacity.
 type Host struct {
-	ID         string   `json:"id"`
-	Endpoint   string   `json:"endpoint"`
-	TLSCA      string   `json:"tls_ca,omitempty"`
-	TLSCert    string   `json:"tls_cert,omitempty"`
-	TLSKey     string   `json:"tls_key,omitempty"`
-	PeerID     string   `json:"peer_id,omitempty"`
-	ProfileIDs []string `json:"profile_ids"`
-	CPU        int      `json:"cpu"`
-	RAMMiB     int      `json:"ram_mib"`
+	ID       string `json:"id"`
+	Endpoint string `json:"endpoint"`
+	TLSCA    string `json:"tls_ca,omitempty"`
+	TLSCert  string `json:"tls_cert,omitempty"`
+	TLSKey   string `json:"tls_key,omitempty"`
+	PeerID   string `json:"peer_id,omitempty"`
+	CPU      int    `json:"cpu"`
+	RAMMiB   int    `json:"ram_mib"`
 }
 
 // HostStatus adds current controller reservations to a configured host.
@@ -124,8 +135,8 @@ type HostStatus struct {
 
 // Validate checks portable configuration invariants.
 func (h Host) Validate() error {
-	if !ValidName(h.ID) || h.CPU < 1 || h.RAMMiB < 128 || len(h.ProfileIDs) == 0 {
-		return errors.New("invalid host identity, profiles or capacity")
+	if !ValidName(h.ID) || h.CPU < 1 || h.RAMMiB < 128 {
+		return errors.New("invalid host identity or capacity")
 	}
 	u, err := url.Parse(h.Endpoint)
 	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -149,39 +160,22 @@ func (h Host) Validate() error {
 	return nil
 }
 
-// Config lists the hosts and profiles available to the controller.
+// Config lists the controller's authenticated hosts. Profiles are runtime data.
 type Config struct {
-	Hosts    []Host    `json:"hosts"`
-	Profiles []Profile `json:"profiles"`
+	Hosts []Host `json:"hosts"`
 }
 
-// Validate checks portable configuration invariants.
+// Validate checks configured host identities and capacity.
 func (c *Config) Validate() error {
-	ps := map[string]bool{}
-	hs := map[string]bool{}
-	for i := range c.Profiles {
-		p := &c.Profiles[i]
-		if err := p.Validate(); err != nil {
-			return err
-		}
-		if ps[p.ID] {
-			return errors.New("duplicate profile")
-		}
-		ps[p.ID] = true
-	}
+	seen := map[string]bool{}
 	for _, h := range c.Hosts {
 		if err := h.Validate(); err != nil {
 			return err
 		}
-		if hs[h.ID] {
+		if seen[h.ID] {
 			return errors.New("duplicate host")
 		}
-		hs[h.ID] = true
-		for _, p := range h.ProfileIDs {
-			if !ps[p] {
-				return errors.New("host references unknown profile")
-			}
-		}
+		seen[h.ID] = true
 	}
 	return nil
 }
@@ -271,7 +265,7 @@ type CreateInput struct {
 
 // Validate checks portable configuration invariants.
 func (in *CreateInput) Validate() error {
-	if !ValidName(in.Name) || !ValidName(in.Profile) || !ValidName(in.Host) {
+	if !ValidName(in.Name) || !ValidName(in.Profile) || (in.Host != "" && !ValidName(in.Host)) {
 		return errors.New("name, profile and host must be valid names")
 	}
 	return ValidateLabels(in.Labels)

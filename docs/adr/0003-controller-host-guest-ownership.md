@@ -1,5 +1,7 @@
 # 0003. Controller, host and guest own separate state
 
+Profile ownership and prepared-image publication are superseded by [ADR 0008](0008-runtime-built-profiles.md). Base/runtime integration remains deployment-owned.
+
 Status: accepted
 
 ## Context

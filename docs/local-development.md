@@ -14,7 +14,7 @@ profile and do not support RAM forks.
 
 An environment runs from one verified bundle: a `bundle.json` manifest plus the
 controller, host and guest binaries, the smolvm engine and its libraries, disk
-templates, a guest image and profiles.
+templates and a base guest image.
 [Release packaging](../scripts/release/README.md) describes how bundles are
 assembled.
 
@@ -49,8 +49,27 @@ hypervisor entitlement and that a launchd GUI session is logged in. On Linux it
 needs `/dev/kvm` and a running systemd user manager. A failing preflight has to
 be fixed; `dev` does not fall back to emulation or change host privileges.
 
-The default profile is `linux-dev-v3`: 2 vCPUs and 1024 MiB RAM with the
-bundle's storage and overlay sizes.
+The deployed base is `linux-base`. Startup does not publish profiles or run setup. Publish `examples/profiles/linux-tools` (adjust its host/base metadata as needed) before creating a machine.
+
+## Capacity
+
+The development environment defaults to at most four host CPUs (limited by the
+workstation CPU count) and 2048 MiB RAM. These are admission budgets, not profile
+settings. Set a larger budget when publishing larger recipes:
+
+```sh
+clankerbox dev --cpus 8 --ram-mib 8192
+```
+
+The budget is saved with the environment. Later launches reuse it unless a flag
+explicitly changes that value; stop and destroy use the saved budget. Changes
+apply to admission when the controller restarts, not to existing VM settings.
+Allow capacity for both existing running machines and a builder when publishing
+an update. Generated controller configuration is derived from the saved budget.
+
+The runtime-profile release uses environment manifest version 2 and a new host
+schema. Disposable environments from earlier versions must be destroyed with
+their owning release and recreated; there is no state migration.
 
 ## Environment state
 
@@ -67,8 +86,8 @@ is given; non-loopback addresses are refused. When ready, the CLI writes:
 
 | File | Purpose |
 | --- | --- |
-| `environment.json` | Ownership, namespace and the bundle digest. |
-| `client.json` | CLI config: origin, token file and default host/profile. |
+| `environment.json` | Ownership, namespace, bundle digest and CPU/RAM budget. |
+| `client.json` | CLI config: origin, token file and default host. |
 | `connection.json` | Readiness metadata and paths to the files above. |
 | `token` | Bearer token, readable only by the owner. |
 
@@ -76,8 +95,9 @@ The port can change when the foreground controller restarts, so reread these
 files rather than caching endpoints. In another terminal:
 
 ```sh
+clankerbox --config .clankerbox/client.json profile publish examples/profiles/linux-tools --wait
 clankerbox --config .clankerbox/client.json profiles
-clankerbox --config .clankerbox/client.json create first
+clankerbox --config .clankerbox/client.json create first --profile linux-tools
 clankerbox --config .clankerbox/client.json inspect first
 clankerbox --config .clankerbox/client.json sessions first
 clankerbox --config .clankerbox/client.json fork first experiment

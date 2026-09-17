@@ -1,5 +1,7 @@
 # 0007. Prepared guest images and explicit service lifecycle
 
+Profile ownership and prepared-image publication are superseded by [ADR 0008](0008-runtime-built-profiles.md). Base/runtime integration remains deployment-owned.
+
 Status: accepted
 
 ## Context

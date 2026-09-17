@@ -54,6 +54,7 @@ cannot carry it, so keep the Connect client and the bearer token server-side.
 
 | Service | Methods |
 | --- | --- |
+| `ProfileService` | Recipe uploads, builds, logs, cancellation, bases and revision management. |
 | `MachineService` | Host and profile discovery, machine and checkpoint lifecycle, operation inspection, label replacement. |
 | `SessionService` | `DescribeGuest`, `CreateSession`, `ListSessions`, `EndSession`, `AttachSession`. |
 | `HostService` (private) | Operation submission and status, machine inspection, host description. |

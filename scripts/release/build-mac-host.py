@@ -22,7 +22,7 @@ def main():
     if output.exists() or output.is_symlink():
         parser.error('refusing to replace output: ' + str(output))
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='cb-sign-', dir='/tmp') as directory:
+    with tempfile.TemporaryDirectory(prefix='cb-sign-') as directory:
         staging = pathlib.Path(directory)
         info = plistlib.loads((ROOT / 'scripts/release/inputs/HostInfo.plist').read_bytes())
         info['CFBundleVersion'] = args.version

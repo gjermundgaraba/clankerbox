@@ -16,15 +16,15 @@ import (
 
 func profile() model.Profile {
 	return model.Profile{
-		ID:          "linux-dev-v2",
-		OS:          "linux",
-		Arch:        "arm64",
-		Runtime:     "smolvm",
-		CPU:         2,
-		RAMMiB:      2048,
-		ImageDigest: "image-content",
-		StorageGiB:  4,
-		OverlayGiB:  16,
+		ID:         "linux-dev-v2",
+		OS:         "linux",
+		Arch:       "arm64",
+		Runtime:    "smolvm",
+		CPU:        2,
+		RAMMiB:     2048,
+		RevisionID: "image-content",
+		StorageGiB: 4,
+		OverlayGiB: 16,
 	}
 }
 func checkpoint() model.Checkpoint {
@@ -143,7 +143,6 @@ func TestProfilesHostsAndCheckpoints(t *testing.T) {
 		Endpoint:        "private-target",
 		TLSCA:           "/private/helper",
 		TLSKey:          "/private/config",
-		ProfileIDs:      []string{"linux"},
 		CPU:             2,
 		RAMMiB:          1024,
 		UsedCPU:         4,

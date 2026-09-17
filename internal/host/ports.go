@@ -154,15 +154,15 @@ func (h *Helper) mergePortOwnership(owned map[int]portLease, deleted map[string]
 	})
 }
 func (h *Helper) releasePort(m Manifest) error {
-	if m.Profile.Runtime != runtimeSmolvm || m.Port == 0 {
+	if m.Profile.Runtime != runtimeSmolvm {
 		return nil
 	}
 	return h.withPortLeases(func(leases map[int]portLease) error {
-		if lease, ok := leases[m.Port]; ok {
-			if lease != (portLease{Root: h.cfg.Root, MachineID: m.ID}) {
-				return errors.New("refusing to release another machine's port")
+		owner := portLease{Root: h.cfg.Root, MachineID: m.ID}
+		for port, lease := range leases {
+			if lease == owner {
+				delete(leases, port)
 			}
-			delete(leases, m.Port)
 		}
 		return nil
 	})

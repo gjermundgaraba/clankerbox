@@ -375,7 +375,9 @@ type Profile struct {
 	Capabilities  []string               `protobuf:"bytes,7,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	StorageGib    uint64                 `protobuf:"varint,8,opt,name=storage_gib,json=storageGib,proto3" json:"storage_gib,omitempty"`
 	OverlayGib    uint64                 `protobuf:"varint,9,opt,name=overlay_gib,json=overlayGib,proto3" json:"overlay_gib,omitempty"`
-	ImageDigest   string                 `protobuf:"bytes,10,opt,name=image_digest,json=imageDigest,proto3" json:"image_digest,omitempty"`
+	RevisionId    string                 `protobuf:"bytes,13,opt,name=revision_id,json=revisionId,proto3" json:"revision_id,omitempty"`
+	HostId        string                 `protobuf:"bytes,11,opt,name=host_id,json=hostId,proto3" json:"host_id,omitempty"`
+	BaseId        string                 `protobuf:"bytes,12,opt,name=base_id,json=baseId,proto3" json:"base_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -473,9 +475,23 @@ func (x *Profile) GetOverlayGib() uint64 {
 	return 0
 }
 
-func (x *Profile) GetImageDigest() string {
+func (x *Profile) GetRevisionId() string {
 	if x != nil {
-		return x.ImageDigest
+		return x.RevisionId
+	}
+	return ""
+}
+
+func (x *Profile) GetHostId() string {
+	if x != nil {
+		return x.HostId
+	}
+	return ""
+}
+
+func (x *Profile) GetBaseId() string {
+	if x != nil {
+		return x.BaseId
 	}
 	return ""
 }
@@ -483,7 +499,6 @@ func (x *Profile) GetImageDigest() string {
 type Host struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	Id         string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	ProfileIds []string               `protobuf:"bytes,2,rep,name=profile_ids,json=profileIds,proto3" json:"profile_ids,omitempty"`
 	Cpu        uint32                 `protobuf:"varint,3,opt,name=cpu,proto3" json:"cpu,omitempty"`
 	RamMib     uint64                 `protobuf:"varint,4,opt,name=ram_mib,json=ramMib,proto3" json:"ram_mib,omitempty"`
 	UsedCpu    uint32                 `protobuf:"varint,5,opt,name=used_cpu,json=usedCpu,proto3" json:"used_cpu,omitempty"`
@@ -530,13 +545,6 @@ func (x *Host) GetId() string {
 		return x.Id
 	}
 	return ""
-}
-
-func (x *Host) GetProfileIds() []string {
-	if x != nil {
-		return x.ProfileIds
-	}
-	return nil
 }
 
 func (x *Host) GetCpu() uint32 {
@@ -1159,7 +1167,7 @@ var File_clankerbox_v1_resources_proto protoreflect.FileDescriptor
 
 const file_clankerbox_v1_resources_proto_rawDesc = "" +
 	"\n" +
-	"\x1dclankerbox/v1/resources.proto\x12\rclankerbox.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8b\x02\n" +
+	"\x1dclankerbox/v1/resources.proto\x12\rclankerbox.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xcf\x02\n" +
 	"\aProfile\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x0e\n" +
 	"\x02os\x18\x02 \x01(\tR\x02os\x12\x12\n" +
@@ -1171,20 +1179,21 @@ const file_clankerbox_v1_resources_proto_rawDesc = "" +
 	"\vstorage_gib\x18\b \x01(\x04R\n" +
 	"storageGib\x12\x1f\n" +
 	"\voverlay_gib\x18\t \x01(\x04R\n" +
-	"overlayGib\x12!\n" +
-	"\fimage_digest\x18\n" +
-	" \x01(\tR\vimageDigest\"\xf0\x01\n" +
+	"overlayGib\x12\x1f\n" +
+	"\vrevision_id\x18\r \x01(\tR\n" +
+	"revisionId\x12\x17\n" +
+	"\ahost_id\x18\v \x01(\tR\x06hostId\x12\x17\n" +
+	"\abase_id\x18\f \x01(\tR\x06baseIdJ\x04\b\n" +
+	"\x10\vR\fimage_digest\"\xe2\x01\n" +
 	"\x04Host\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1f\n" +
-	"\vprofile_ids\x18\x02 \x03(\tR\n" +
-	"profileIds\x12\x10\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
 	"\x03cpu\x18\x03 \x01(\rR\x03cpu\x12\x17\n" +
 	"\aram_mib\x18\x04 \x01(\x04R\x06ramMib\x12\x19\n" +
 	"\bused_cpu\x18\x05 \x01(\rR\ausedCpu\x12 \n" +
 	"\fused_ram_mib\x18\x06 \x01(\x04R\n" +
 	"usedRamMib\x12#\n" +
 	"\rremaining_cpu\x18\a \x01(\x03R\fremainingCpu\x12*\n" +
-	"\x11remaining_ram_mib\x18\b \x01(\x03R\x0fremainingRamMib\"\xc3\x01\n" +
+	"\x11remaining_ram_mib\x18\b \x01(\x03R\x0fremainingRamMibJ\x04\b\x02\x10\x03R\vprofile_ids\"\xc3\x01\n" +
 	"\vGuestStatus\x12\x16\n" +
 	"\x06status\x18\x01 \x01(\tR\x06status\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12 \n" +

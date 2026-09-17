@@ -276,11 +276,6 @@ def main():
         'image_path': 'image',
         'runtime_digest': runtime_digest,
         'image_digest': image_digest,
-        'profile_id': 'linux-dev-v3',
-        'profile_cpu': 2,
-        'profile_ram_mib': 1024,
-        'storage_gib': 1,
-        'overlay_gib': 8,
         'files': inventory(out, include_root=False, image_root=out / 'image'),
     }
     (out / 'bundle.json').write_text(json.dumps(manifest, indent=2) + '\n')

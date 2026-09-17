@@ -29,6 +29,7 @@ type RPCTransport struct {
 
 type hostClients struct {
 	host     clankerboxv1connect.HostServiceClient
+	profiles clankerboxv1connect.HostProfileServiceClient
 	sessions clankerboxv1connect.SessionServiceClient
 	http     *http.Client
 }
@@ -48,7 +49,7 @@ func (t *RPCTransport) client(h model.Host) (*hostClients, error) {
 		return nil, err
 	}
 	opts := []connect.ClientOption{connect.WithReadMaxBytes(rpctransport.MaxMessage), connect.WithSendMaxBytes(rpctransport.MaxMessage)}
-	c := &hostClients{host: clankerboxv1connect.NewHostServiceClient(client, origin, opts...), sessions: clankerboxv1connect.NewSessionServiceClient(client, origin, opts...), http: client}
+	c := &hostClients{profiles: clankerboxv1connect.NewHostProfileServiceClient(client, origin, opts...), host: clankerboxv1connect.NewHostServiceClient(client, origin, opts...), sessions: clankerboxv1connect.NewSessionServiceClient(client, origin, opts...), http: client}
 	if t.clients == nil {
 		t.clients = make(map[string]*hostClients)
 	}

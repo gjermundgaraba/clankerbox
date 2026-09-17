@@ -10,7 +10,11 @@ import (
 	"clankerbox/internal/model"
 )
 
-type forbiddenRestoreRunner struct{ calls int }
+type forbiddenRestoreRunner struct {
+	unsupportedStream
+
+	calls int
+}
 
 func (r *forbiddenRestoreRunner) Run(context.Context, string, []string, []string, []byte) ([]byte, error) {
 	r.calls++
