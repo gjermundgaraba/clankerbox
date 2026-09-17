@@ -106,9 +106,6 @@ type registryGuest struct {
 func (g *registryGuest) DescribeGuest(context.Context, *connect.Request[v1.DescribeGuestRequest]) (*connect.Response[v1.GuestDescription], error) {
 	return connect.NewResponse(&v1.GuestDescription{MachineId: g.machine}), nil
 }
-func (*registryGuest) CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-	return connect.NewResponse(&v1.Session{Id: "session"}), nil
-}
 func (*registryGuest) ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {
 	return connect.NewResponse(&v1.ListSessionsResponse{Sessions: []*v1.Session{{Id: "session"}}}), nil
 }
@@ -249,8 +246,6 @@ func TestGuestCallsRemainResponsiveDuringNativeForkAndReservationsSurviveRestart
 	defer hostServer.Close()
 	rpc := clankerboxv1connect.NewSessionServiceClient(hostServer.Client(), hostServer.URL)
 	for _, m := range []Manifest{a, b} {
-		_, err = rpc.CreateSession(ctx, connect.NewRequest(&v1.CreateSessionRequest{MachineId: m.ID}))
-		registryCheck(t, err)
 		_, err = rpc.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{MachineId: m.ID}))
 		registryCheck(t, err)
 		_, err = rpc.EndSession(ctx, connect.NewRequest(&v1.EndSessionRequest{MachineId: m.ID}))

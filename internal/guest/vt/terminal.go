@@ -208,6 +208,37 @@ func (t *Terminal) setLimits() error {
 	return nil
 }
 
+// Colors are default colours as 0xRRGGBB; nil leaves a colour unchanged.
+type Colors struct {
+	Foreground *uint32
+	Background *uint32
+}
+
+// SetColors replaces the default colours the terminal reports and renders with.
+func (t *Terminal) SetColors(colors Colors) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return errClosed
+	}
+	for option, color := range map[string]*uint32{
+		"COLOR_FOREGROUND": colors.Foreground,
+		"COLOR_BACKGROUND": colors.Background,
+	} {
+		if color == nil {
+			continue
+		}
+		rgb := []byte{byte(*color >> 16), byte(*color >> 8), byte(*color)}
+		if !t.mem.Write(t.scratch, rgb) {
+			return errMemory
+		}
+		if err := t.setOption(t.handle, option, uint64(t.scratch)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (t *Terminal) setColors() error {
 	colors := map[string][3]byte{
 		"COLOR_FOREGROUND": {defaultForegroundR, defaultForegroundG, defaultForegroundB},

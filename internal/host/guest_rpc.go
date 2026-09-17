@@ -160,19 +160,6 @@ func (r *RPC) DescribeGuest(
 	return out, rpcmodel.ToError(err)
 }
 
-// CreateSession relays session creation after machine admission.
-func (r *RPC) CreateSession(
-	ctx context.Context,
-	in *connect.Request[v1.CreateSessionRequest],
-) (*connect.Response[v1.Session], error) {
-	l, err := r.Service.helper.leaseGuest(ctx, in.Msg.GetMachineId())
-	if err != nil {
-		return nil, hostError(err)
-	}
-	defer l.release()
-	return l.client.CreateSession(l.ctx, in)
-}
-
 // ListSessions relays session listing after machine admission.
 func (r *RPC) ListSessions(
 	ctx context.Context,

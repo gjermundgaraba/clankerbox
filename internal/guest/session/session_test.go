@@ -40,6 +40,9 @@ type recorder struct {
 	events   []any
 	closed   chan struct{}
 	fail     bool
+	stderr   []byte
+	// filtered output advances offsets past omitted bytes.
+	filtered bool
 }
 
 func newRecorder() *recorder {
@@ -63,11 +66,19 @@ func (r *recorder) SendOutput(next uint64, data []byte) error {
 	if r.fail {
 		return errors.New("sink failed")
 	}
-	if r.next != 0 && next != r.next+uint64(len(data)) {
+	if !r.filtered && r.next != 0 && next != r.next+uint64(len(data)) {
 		return errors.New("non-contiguous output")
 	}
 	r.next = next
 	r.output = append(r.output, data...)
+	return nil
+}
+
+func (r *recorder) SendStderr(next uint64, data []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.next = next
+	r.stderr = append(r.stderr, data...)
 	return nil
 }
 
@@ -129,9 +140,19 @@ func newManager(t *testing.T) (*session.Manager, *vt.Loader) {
 	return m, loader
 }
 
+// createDetached creates a session the only way there is, inside an attachment,
+// and detaches at once: the session runs on with nobody attached.
+func createDetached(m *session.Manager, args protocol.CreateArgs) (protocol.Session, error) {
+	value, attachment, err := m.Open(protocol.OpenArgs{SessionID: args.SessionID, Create: &args}, newRecorder())
+	if attachment != nil {
+		attachment.Stop()
+	}
+	return value.Session, err
+}
+
 func create(t *testing.T, m *session.Manager, argv ...string) protocol.Session {
 	t.Helper()
-	record, err := m.Create(protocol.CreateArgs{
+	record, err := createDetached(m, protocol.CreateArgs{
 		SessionID: uuid.NewString(),
 		Argv:      argv,
 		Cwd:       t.TempDir(),
@@ -417,7 +438,7 @@ func TestExitOutcomesAndLostOnRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manager: %v", err)
 	}
-	exited, err := m.Create(protocol.CreateArgs{
+	exited, err := createDetached(m, protocol.CreateArgs{
 		SessionID: uuid.NewString(), Argv: []string{shell, "-c", "exit 7"}, Cols: 80, Rows: 24, CreatedAt: stamp(),
 	})
 	if err != nil {
@@ -427,7 +448,7 @@ func TestExitOutcomesAndLostOnRestart(t *testing.T) {
 		record := inspect(t, m, exited.ID)
 		return record.Status == protocol.StatusExited && record.ExitCode != nil && *record.ExitCode == 7
 	})
-	signalled, err := m.Create(protocol.CreateArgs{
+	signalled, err := createDetached(m, protocol.CreateArgs{
 		SessionID: uuid.NewString(), Argv: []string{shell, "-c", sleepForever}, Cols: 80, Rows: 24, CreatedAt: stamp(),
 	})
 	if err != nil {
@@ -444,7 +465,7 @@ func TestExitOutcomesAndLostOnRestart(t *testing.T) {
 		value.View == nil {
 		t.Fatalf("ended open with view: %v %+v", err, value)
 	}
-	running, err := m.Create(protocol.CreateArgs{
+	running, err := createDetached(m, protocol.CreateArgs{
 		SessionID: uuid.NewString(), Argv: []string{shell, "-c", sleepForever}, Cols: 80, Rows: 24, CreatedAt: stamp(),
 	})
 	if err != nil {
@@ -523,28 +544,28 @@ func TestCreateIdempotentAndCapacity(t *testing.T) {
 		Rows:      24,
 		CreatedAt: stamp(),
 	}
-	first, err := m.Create(args)
+	first, err := createDetached(m, args)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	t.Cleanup(func() { _, _ = m.End(first.ID) })
-	again, err := m.Create(args)
+	again, err := createDetached(m, args)
 	if err != nil || again.ID != first.ID || again.PID != first.PID {
 		t.Fatalf("repeat create must return the same session: %v %+v", err, again)
 	}
 	conflict := args
 	conflict.Argv = []string{shell, "-c", "sleep 31"}
-	if _, err = m.Create(conflict); err == nil {
+	if _, err = createDetached(m, conflict); err == nil {
 		t.Fatal("conflicting repeat accepted")
 	}
 	changedEnv := args
 	changedEnv.Env = map[string]string{"CHANGED": "yes"}
-	if _, err = m.Create(changedEnv); err == nil {
+	if _, err = createDetached(m, changedEnv); err == nil {
 		t.Fatal("repeat with a different environment accepted")
 	}
 	other := args
 	other.SessionID = uuid.NewString()
-	_, err = m.Create(other)
+	_, err = createDetached(m, other)
 	var typed *model.Error
 	if !errors.As(err, &typed) || typed.Reason != model.ReasonCapacity {
 		t.Fatalf("capacity not enforced: %v", err)
@@ -659,30 +680,30 @@ func TestEndedSessionsExpireAndStaleCreatesNeverStart(t *testing.T) {
 		Rows:      24,
 		CreatedAt: now.UTC().Format(time.RFC3339Nano),
 	}
-	record, err := m.Create(args)
+	record, err := createDetached(m, args)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	eventually(t, "exit", func() bool { return inspect(t, m, record.ID).Status == protocol.StatusExited })
 	advance(2 * 24 * time.Hour)
-	if again, createErr := m.Create(args); createErr != nil || again.PID != record.PID {
+	if again, createErr := createDetached(m, args); createErr != nil || again.PID != record.PID {
 		t.Fatalf("a remembered session must answer its stale create: %v %+v", createErr, again)
 	}
 	fresh := args
 	fresh.SessionID = uuid.NewString()
 	var typed *model.Error
-	if _, err = m.Create(fresh); !errors.As(err, &typed) || typed.Reason != model.ReasonExpired || typed.Retryable {
+	if _, err = createDetached(m, fresh); !errors.As(err, &typed) || typed.Reason != model.ReasonExpired || typed.Retryable {
 		t.Fatalf("an unknown stale create must be refused: %v", err)
 	}
 	// A create dated beyond the clock allowance can never expire, so it is never accepted.
 	future := fresh
 	future.CreatedAt = now.Add(2 * time.Hour).UTC().Format(time.RFC3339Nano)
-	if _, err = m.Create(future); !errors.As(err, &typed) || typed.Reason != model.ReasonInvalid {
+	if _, err = createDetached(m, future); !errors.As(err, &typed) || typed.Reason != model.ReasonInvalid {
 		t.Fatalf("a future-dated create must be refused: %v", err)
 	}
 	advance(6 * 24 * time.Hour)
 	eventually(t, "retention to remove the ended session", func() bool { return len(m.List()) == 0 })
-	if _, err = m.Create(args); !errors.As(err, &typed) || typed.Reason != model.ReasonExpired {
+	if _, err = createDetached(m, args); !errors.As(err, &typed) || typed.Reason != model.ReasonExpired {
 		t.Fatalf("a forgotten create must not start again: %v", err)
 	}
 }
@@ -768,7 +789,7 @@ func TestRecordFailuresAreLoggedNotHidden(t *testing.T) {
 	if len(statuses) != 2 || statuses[record.ID] != protocol.StatusLost || statuses[corrupt] != protocol.StatusLost {
 		t.Fatalf("unexpected records after restart: %+v", statuses)
 	}
-	again, err := restarted.Create(protocol.CreateArgs{
+	again, err := createDetached(restarted, protocol.CreateArgs{
 		SessionID: corrupt, Argv: []string{shell, "-c", "exit 0"}, Cols: 80, Rows: 24, CreatedAt: stamp(),
 	})
 	if err != nil || again.Status != protocol.StatusLost || again.PID != 0 {
@@ -808,7 +829,7 @@ func TestProcessEnvironmentAndWorkingDirectory(t *testing.T) {
 			"TERM": "requested-term", "EXPLICIT_VALUE": "supplied",
 		},
 	}
-	record, err := m.Create(args)
+	record, err := createDetached(m, args)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -825,7 +846,7 @@ func TestProcessEnvironmentAndWorkingDirectory(t *testing.T) {
 
 	args.SessionID = uuid.NewString()
 	args.Cwd = filepath.Join(t.TempDir(), "missing")
-	if _, err = m.Create(args); err == nil {
+	if _, err = createDetached(m, args); err == nil {
 		t.Fatal("missing cwd was accepted")
 	}
 	if _, err = os.Stat(args.Cwd); !errors.Is(err, os.ErrNotExist) {

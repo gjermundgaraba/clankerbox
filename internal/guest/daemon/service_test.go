@@ -95,26 +95,38 @@ func guestClient(
 	return clankerboxv1connect.NewSessionServiceClient(client, endpoint)
 }
 
+// createSession creates a session the only way there is, inside an attachment,
+// and detaches at once: the session runs on with nobody attached.
+func createSession(
+	ctx context.Context,
+	t *testing.T,
+	client clankerboxv1connect.SessionServiceClient,
+	id string,
+	argv ...string,
+) *v1.Session {
+	t.Helper()
+	stream := client.AttachSession(ctx)
+	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
+	if err := stream.Send(&v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
+		MachineId: testMachine, SessionId: id,
+		Create: &v1.NewSession{CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Cols: 80, Rows: 24, Argv: argv},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := stream.Receive()
+	if err != nil || opened.GetOpened() == nil {
+		t.Fatalf("create session: %v %v", opened, err)
+	}
+	return opened.GetOpened().GetSession()
+}
+
 func TestLiveRebindRetainsManagerAndFencesOldMachine(t *testing.T) {
 	t.Parallel()
 	ident, manager, auth, endpoint := testGuest(t)
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
 	client := guestClient(t, auth, testMachine, endpoint)
-	record, err := client.CreateSession(
-		ctx,
-		connect.NewRequest(
-			&v1.CreateSessionRequest{
-				MachineId: testMachine,
-				SessionId: uuid.NewString(),
-				CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-				Cols:      80,
-				Rows:      24,
-				Argv:      []string{"/bin/sh", "-c", "cat"},
-			},
-		),
-	)
-	record = mustValue(t, record, err)
+	record := createSession(ctx, t, client, uuid.NewString(), "/bin/sh", "-c", "cat")
 	before := manager.Hello().Incarnation
 	oldEpoch := context.WithValue(ctx, epochKey{}, ident.epoch)
 	binding, err := auth.Binding(childMachine, "host")
@@ -138,7 +150,7 @@ func TestLiveRebindRetainsManagerAndFencesOldMachine(t *testing.T) {
 	child := guestClient(t, auth, childMachine, endpoint)
 	listing, err := child.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{MachineId: childMachine}))
 	listing = mustValue(t, listing, err)
-	if len(listing.Msg.GetSessions()) != 1 || listing.Msg.GetSessions()[0].GetPid() != record.Msg.GetPid() ||
+	if len(listing.Msg.GetSessions()) != 1 || listing.Msg.GetSessions()[0].GetPid() != record.GetPid() ||
 		manager.Hello().Incarnation != before {
 		t.Fatal("live rebind replaced retained session")
 	}
@@ -155,22 +167,8 @@ func TestResumePrefixPrecedesLiveOutputWithInterleavedACK(t *testing.T) {
 	defer cancel()
 	client := guestClient(t, auth, testMachine, endpoint)
 	id := uuid.NewString()
-	_, err := client.CreateSession(
-		ctx,
-		connect.NewRequest(
-			&v1.CreateSessionRequest{
-				MachineId: testMachine,
-				SessionId: id,
-				CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-				Cols:      80,
-				Rows:      24,
-				Argv:      []string{"/bin/sh", "-c", "stty -echo; head -c 8388608 /dev/zero | tr '\\000' x; cat"},
-			},
-		),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	createSession(ctx, t, client, id, "/bin/sh", "-c", "stty -echo; head -c 8388608 /dev/zero | tr '\\000' x; cat")
+	var err error
 	waitForOffset(ctx, t, manager, 8388608)
 	stream := client.AttachSession(ctx)
 	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()

@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,7 +12,15 @@ import (
 // Run executes the CLI with isolated command state and caller-owned streams.
 func Run(ctx context.Context, args []string, streams Streams) error {
 	command := newCommand(streams)
-	return command.Run(ctx, append([]string{"clankerbox"}, args...))
+	err := command.Run(ctx, append([]string{"clankerbox"}, args...))
+	if err == nil {
+		return nil
+	}
+	// An exit status error was rendered where it was raised.
+	if _, exits := errors.AsType[cli.ExitCoder](err); exits {
+		return err
+	}
+	return &reportedError{cause: err, text: describeError(err, command.Bool("json"))}
 }
 
 type commandAction func(context.Context, commandRunner, *cli.Command) error
@@ -19,7 +28,7 @@ type commandAction func(context.Context, commandRunner, *cli.Command) error
 func newCommand(streams Streams) *cli.Command {
 	root := &cli.Command{
 		Name: "clankerbox", Usage: "Create and control machines",
-		Description: "Lifecycle changes wait for completion by default. Terminal sessions require a running machine.",
+		Description: "Lifecycle changes wait for completion by default. Sessions require a running machine.",
 		Writer:      streams.Out, ErrWriter: streams.Err,
 		Flags: []cli.Flag{
 			&cli.StringFlag{

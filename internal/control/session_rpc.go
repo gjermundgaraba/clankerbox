@@ -64,17 +64,6 @@ func (s *sessionRPC) DescribeGuest(
 	return h.DescribeGuest(ctx, connect.NewRequest(r.Msg))
 }
 
-func (s *sessionRPC) CreateSession(
-	ctx context.Context,
-	r *connect.Request[v1.CreateSessionRequest],
-) (*connect.Response[v1.Session], error) {
-	h, err := s.c.sessionHost(ctx, r.Msg.GetMachineId())
-	if err != nil {
-		return nil, err
-	}
-	return h.CreateSession(ctx, connect.NewRequest(r.Msg))
-}
-
 func (s *sessionRPC) ListSessions(
 	ctx context.Context,
 	r *connect.Request[v1.ListSessionsRequest],

@@ -6,15 +6,44 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
+import uuid
 
 
-def run_guest(runner, config, machine, *argv, data=None):
+def run_guest(binary, config, machine, *argv, data=None):
+    """Run argv in the machine through `clankerbox shell`: pipes, real end of input, its exit status."""
     proc = subprocess.run(
-        [runner, '--config', config, machine, *argv], input=data or '', text=True, capture_output=True, timeout=100
+        [binary, '--config', config, 'shell', machine, '--', *argv],
+        input=data or '',
+        text=True,
+        capture_output=True,
+        timeout=100,
     )
     if proc.returncode:
-        raise RuntimeError(f'session command failed: {proc.stderr[-2048:]} {proc.stdout[-2048:]}')
+        raise RuntimeError(
+            f'session command exited {proc.returncode}: {proc.stderr[-2048:]} {proc.stdout[-2048:]}'
+        )
     return proc.stdout
+
+
+def cli_error(stderr):
+    """The structured failure the CLI prints last on stderr under --json, or {}."""
+    lines = [line for line in stderr.splitlines() if line.strip()]
+    try:
+        error = json.loads(lines[-1])['error']
+    except (IndexError, ValueError, KeyError, TypeError):
+        return {}
+    return error if isinstance(error, dict) else {}
+
+
+def expect_refusal(binary, config, reason, *command):
+    """Require the API to refuse command with the stable reason; classify on it, not the message."""
+    proc = subprocess.run(
+        [binary, '--config', config, '--json', *command], capture_output=True, text=True, timeout=100
+    )
+    if proc.returncode == 0 or cli_error(proc.stderr).get('reason') != reason:
+        raise RuntimeError(
+            f'expected {reason} refusal of {command[0]}: exit {proc.returncode} {proc.stderr[-2048:]}'
+        )
 
 
 class Report:
@@ -111,30 +140,30 @@ class Acceptance:
             time.sleep(self.poll_interval)
         raise RuntimeError(f'operation timeout; retained for inspection: {op}')
 
-    def expect_delete_dependency(self, runner, config, machine):
-        command = ('delete', machine)
+    def expect_delete_dependency(self, machine):
+        # The key is journaled with the command before the request, and --async
+        # returns an accepted operation at once: an unexpected acceptance is
+        # destructive, so retain its identity and never wait, retry or clean up.
+        key = uuid.uuid4().hex
+        command = ('delete', '--async', '--idempotency-key', key, machine)
         self.begin(command)
-        proc = subprocess.run(
-            [runner, '--config', config, '--expect-delete-dependency', machine],
-            capture_output=True,
-            text=True,
-            timeout=100,
-        )
-        # The adapter emits any unexpectedly accepted operation even on failure.
-        # Retain its identity before reporting a failed qualification; never wait,
-        # retry or clean up following this potentially destructive acceptance.
-        if proc.stdout.strip():
+        proc = subprocess.run(self.base + list(command), capture_output=True, text=True, timeout=100)
+        if proc.returncode == 0:
             self.accepted(command, json.loads(proc.stdout))
-        if proc.returncode or proc.stdout.strip():
-            raise RuntimeError(f'dependency rejection check failed: {proc.stderr[-2048:]}')
+            raise RuntimeError(f'dependency rejection check failed: delete was accepted: {proc.stdout[-2048:]}')
+        if cli_error(proc.stderr).get('reason') != 'dependency':
+            raise RuntimeError(
+                f'dependency rejection check failed; idempotency key {key} requires inspection: '
+                f'{proc.stderr[-2048:]}'
+            )
         self.report.data.pop('pending')
         self.report.data['events'].append({'source_delete_dependency_rejected': machine})
         self.report.save()
 
 
-def describe_guest(runner, config, machine):
+def describe_guest(binary, config, machine):
     proc = subprocess.run(
-        [runner, '--config', config, '--describe-guest', machine], capture_output=True, text=True, timeout=100
+        [binary, '--config', config, '--json', 'guest', machine], capture_output=True, text=True, timeout=100
     )
     if proc.returncode:
         raise RuntimeError('guest description failed: ' + proc.stderr[-2048:])

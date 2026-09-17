@@ -26,7 +26,7 @@ def benchmark(args, evidence):
         item = {'phase': phase, 'operation_id': op['id'], 'controller_seconds': duration(op),
                 'client_seconds': time.monotonic() - started}
         if phase in ('create', 'retained-start', 'fork', 'restore'):
-            item['guest'] = describe_guest(args.session_runner, args.config, op['machine_id'])
+            item['guest'] = describe_guest(args.binary, args.config, op['machine_id'])
         report['timings'].append(item)
         evidence.save()
         return op
@@ -52,7 +52,7 @@ def benchmark(args, evidence):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('binary', 'config', 'session-runner', 'host', 'profile', 'result'):
+    for name in ('binary', 'config', 'host', 'profile', 'result'):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--samples', type=int, default=3)
     args = parser.parse_args()

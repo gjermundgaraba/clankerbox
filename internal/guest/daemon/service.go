@@ -35,26 +35,6 @@ func (s *service) DescribeGuest(
 	return connect.NewResponse(s.description(r.Msg.GetMachineId())), nil
 }
 
-func (s *service) CreateSession(
-	ctx context.Context,
-	r *connect.Request[v1.CreateSessionRequest],
-) (*connect.Response[v1.Session], error) {
-	a, err := rpcmodel.FromCreateSession(r.Msg)
-	if err != nil {
-		return nil, rpcmodel.ToError(err)
-	}
-	var record protocol.Session
-	err = s.identity.withIdentity(ctx, r.Msg.GetMachineId(), func() error {
-		var createErr error
-		record, createErr = s.manager.Create(a)
-		return createErr
-	})
-	if err != nil {
-		return nil, rpcmodel.ToError(err)
-	}
-	return connect.NewResponse(rpcmodel.ToSession(record)), nil
-}
-
 func (s *service) ListSessions(
 	ctx context.Context,
 	r *connect.Request[v1.ListSessionsRequest],
@@ -165,12 +145,20 @@ func (s *streamSink) SendSnapshot(data []byte) error {
 	return nil
 }
 func (s *streamSink) SendOutput(next uint64, data []byte) error {
+	return s.sendOutput(next, data, v1.OutputStream_OUTPUT_STREAM_UNSPECIFIED)
+}
+
+func (s *streamSink) SendStderr(next uint64, data []byte) error {
+	return s.sendOutput(next, data, v1.OutputStream_OUTPUT_STREAM_STDERR)
+}
+
+func (s *streamSink) sendOutput(next uint64, data []byte, stream v1.OutputStream) error {
 	for len(data) > 0 {
 		n := min(len(data), chunkBytes)
 		offset := next - uint64(len(data)-n)
 		if err := s.put(
 			&v1.AttachmentEvent{
-				Event: &v1.AttachmentEvent_Output{Output: &v1.Output{NextOffset: offset, Data: data[:n]}},
+				Event: &v1.AttachmentEvent_Output{Output: &v1.Output{NextOffset: offset, Data: data[:n], Stream: stream}},
 			},
 		); err != nil {
 			return err
@@ -229,16 +217,16 @@ func (s *service) AttachSession(
 	if open == nil {
 		return rpcmodel.ToError(model.NewError(model.ReasonInvalid, "first message must open attachment", false))
 	}
-	if open.GetExpectedEngineDigest() != s.manager.Hello().WasmSHA256 {
+	// Only a consumer that decodes snapshots depends on the engine; one that
+	// names no digest accepts whatever this guest runs.
+	if digest := open.GetExpectedEngineDigest(); digest != "" && digest != s.manager.Hello().WasmSHA256 {
 		return rpcmodel.ToError(model.NewError(model.ReasonEngineMismatch, "terminal engine mismatch", false))
 	}
-	a := protocol.OpenArgs{SessionID: open.GetSessionId()}
-	if open.GetResumeCursor() != nil {
-		offset := open.GetResumeCursor().GetOffset()
-		a.FromOffset = &offset
-		a.FromIncarnation = open.GetResumeCursor().GetIncarnation()
-	}
-	if err = a.Validate(); err != nil {
+	a, err := rpcmodel.FromOpen(open)
+	if err != nil {
+		if _, typed := errors.AsType[*model.Error](err); !typed {
+			err = model.NewError(model.ReasonInvalid, err.Error(), false)
+		}
 		return rpcmodel.ToError(err)
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -337,6 +325,7 @@ func (s *service) receiveControls(
 	open *v1.Open,
 ) {
 	var previous uint64
+	var cursor inputCursor
 	for {
 		control, err := stream.Receive()
 		if err != nil {
@@ -347,10 +336,7 @@ func (s *service) receiveControls(
 			}
 			return
 		}
-		seq := control.GetInput().GetSequence()
-		if control.GetResize() != nil {
-			seq = control.GetResize().GetSequence()
-		}
+		seq := controlSequence(control)
 		if seq == 0 || seq <= previous {
 			sink.fail(
 				rpcmodel.ToError(model.NewError(model.ReasonInvalid, "control sequence must strictly increase", false)),
@@ -362,7 +348,7 @@ func (s *service) receiveControls(
 		err = s.identity.withIdentity(
 			ctx,
 			open.GetMachineId(),
-			func() error { ack = s.applyControl(open.GetSessionId(), control); return nil },
+			func() error { ack = s.applyControl(open.GetSessionId(), control, &cursor); return nil },
 		)
 		if err != nil {
 			sink.fail(rpcmodel.ToError(err))
@@ -374,9 +360,58 @@ func (s *service) receiveControls(
 	}
 }
 func (s *streamSink) fail(err error) { s.cancel(err) }
-func (s *service) applyControl(id string, control *v1.AttachmentRequest) *v1.Ack {
+
+func controlSequence(control *v1.AttachmentRequest) uint64 {
+	switch {
+	case control.GetResize() != nil:
+		return control.GetResize().GetSequence()
+	case control.GetCloseInput() != nil:
+		return control.GetCloseInput().GetSequence()
+	default:
+		return control.GetInput().GetSequence()
+	}
+}
+
+// inputCursor admits an attachment's input only at the offset the guest has
+// accepted from it so far. A consumer may therefore send ahead of
+// acknowledgements: after one refusal everything behind it is at the wrong
+// offset and refused as well, and a repeated Input can never be applied twice.
+type inputCursor struct{ accepted uint64 }
+
+const reasonOutOfOrder = "out_of_order"
+
+func (c *inputCursor) admit(input *v1.Input, apply func() *v1.Ack) *v1.Ack {
+	if input.GetOffset() != c.accepted {
+		return &v1.Ack{Sequence: input.GetSequence(), Reason: reasonOutOfOrder}
+	}
+	ack := apply()
+	if ack.GetAccepted() {
+		c.accepted += uint64(len(input.GetData()))
+	}
+	return ack
+}
+
+// applyControl reports the attachment's accepted input with every acknowledgement.
+func (s *service) applyControl(id string, control *v1.AttachmentRequest, cursor *inputCursor) *v1.Ack {
+	ack := s.control(id, control, cursor)
+	ack.InputOffset = cursor.accepted
+	return ack
+}
+
+func (s *service) control(id string, control *v1.AttachmentRequest, cursor *inputCursor) *v1.Ack {
 	if input := control.GetInput(); input != nil {
-		return s.input(id, input)
+		return cursor.admit(input, func() *v1.Ack { return s.input(id, input) })
+	}
+	if closing := control.GetCloseInput(); closing != nil {
+		ack := &v1.Ack{Sequence: closing.GetSequence()}
+		result, err := s.manager.CloseInput(id)
+		if err != nil {
+			ack.Reason = err.Error()
+			return ack
+		}
+		ack.Accepted = result.Status == protocol.InputAccepted
+		ack.Reason = result.Reason
+		return ack
 	}
 	resize := control.GetResize()
 	ack := &v1.Ack{Sequence: resize.GetSequence()}

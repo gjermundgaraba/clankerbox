@@ -21,7 +21,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', required=True)
     parser.add_argument('--config', required=True)
-    parser.add_argument('--session-runner', required=True)
     parser.add_argument('--lifecycle-result', required=True)
     parser.add_argument('--result', required=True)
     parser.add_argument('--fork-only', action='store_true')
@@ -47,7 +46,7 @@ def main():
         if not condition:
             raise RuntimeError(message)
 
-    guest = partial(run_guest, args.session_runner, args.config)
+    guest = partial(run_guest, args.binary, args.config)
 
     def inspect(machine):
         return json.loads(run('inspect', machine))
@@ -77,7 +76,7 @@ def main():
         operation('start', mid)
         guest(mid, 'sh', '-se', data=f'mkdir -p "$HOME/{directory}"\n')
         write(mid, 'source-A')
-        original_identity = describe_guest(args.session_runner, args.config, mid)
+        original_identity = describe_guest(args.binary, args.config, mid)
         if linux:
             program = """import http.server, json, os, time, uuid
 token = uuid.uuid4().hex
@@ -106,7 +105,7 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
             stop(mid)
         child = operation('fork', mid, name + '-fork')['machine_id']
         need(read(child) == 'source-A', 'fork lost source disk state')
-        child_identity = describe_guest(args.session_runner, args.config, child)
+        child_identity = describe_guest(args.binary, args.config, child)
         require_copy_identity(original_identity, child_identity, ram=linux)
         report['events'].append({'forked_machine': child, 'identity': child_identity})
         save()
@@ -121,7 +120,7 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
         stop(child)
         operation('start', child)
         need(read(child) == 'child-B', 'fork lost independent disk on cold restart')
-        restarted_child = describe_guest(args.session_runner, args.config, child)
+        restarted_child = describe_guest(args.binary, args.config, child)
         need(
             restarted_child['machine_id'] == child_identity['machine_id']
             and restarted_child['incarnation'] != child_identity['incarnation'],
@@ -134,7 +133,7 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
         if linux:
             # A retained descendant prevents destructive source-store cleanup.
             stop(mid)
-            acceptance.expect_delete_dependency(args.session_runner, args.config, mid)
+            acceptance.expect_delete_dependency(mid)
             operation('start', mid)
         operation('delete', child)
         if args.fork_only:
@@ -143,7 +142,7 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
             report['status'] = 'passed'
             report['cleaned'] = True
             return
-        capture_identity = describe_guest(args.session_runner, args.config, mid)
+        capture_identity = describe_guest(args.binary, args.config, mid)
         # The previous explicit Linux cold restart ended the memory fixture.
         if linux:
             guest(
@@ -172,7 +171,7 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
             machine = operation('restore', cp, name + '-restore-' + str(index))['machine_id']
             restored.append(machine)
             need(read(machine) == 'source-A', 'restore did not roll disk back to capture')
-            identity = describe_guest(args.session_runner, args.config, machine)
+            identity = describe_guest(args.binary, args.config, machine)
             need(identity['machine_id'] not in identities, 'restore reused machine identity')
             identities.add(identity['machine_id'])
             require_copy_identity(capture_identity, identity, ram=linux)

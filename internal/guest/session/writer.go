@@ -7,12 +7,17 @@ import (
 
 const (
 	inputBudget = 256 * 1024
-	replyBudget = 64 * 1024
+	// pipeInputBudget lets a client that sends ahead keep a pipe busy across a
+	// round trip; a pipe session has no typing to keep responsive.
+	pipeInputBudget = 4 * 1024 * 1024
+	replyBudget     = 64 * 1024
 )
 
 type entry struct {
 	data  []byte
 	reply bool
+	// eof closes the input after every entry queued before it.
+	eof bool
 }
 
 // ptyWriter is the single ordered writer for one PTY. Entries are written
@@ -20,20 +25,38 @@ type entry struct {
 type ptyWriter struct {
 	mu      sync.Mutex
 	entries []entry
-	input   int
-	replies int
-	closed  bool
-	wake    chan struct{}
-	done    chan struct{}
+	budget  int
+	// inputClosed is set by the first end of input; nothing can follow it.
+	inputClosed bool
+	input       int
+	replies     int
+	closed      bool
+	wake        chan struct{}
+	done        chan struct{}
 }
 
-func newPtyWriter() *ptyWriter {
-	return &ptyWriter{wake: make(chan struct{}, 1), done: make(chan struct{})}
+func newPtyWriter(budget int) *ptyWriter {
+	return &ptyWriter{budget: budget, wake: make(chan struct{}, 1), done: make(chan struct{})}
 }
 
-// enqueueInput admits caller input within its budget.
-func (w *ptyWriter) enqueueInput(data []byte) bool {
-	return w.enqueue(data, false)
+// Reasons input is refused.
+const (
+	refusedQueueFull   = "queue_full"
+	refusedInputClosed = "input_closed"
+)
+
+// enqueueInput admits caller input within its budget, or names why not.
+func (w *ptyWriter) enqueueInput(data []byte) string {
+	w.mu.Lock()
+	closed := w.inputClosed
+	w.mu.Unlock()
+	switch {
+	case closed:
+		return refusedInputClosed
+	case !w.enqueue(data, false):
+		return refusedQueueFull
+	}
+	return ""
 }
 
 // enqueueReply admits a protocol reply within the reserved reply budget.
@@ -53,7 +76,7 @@ func (w *ptyWriter) enqueue(data []byte, reply bool) bool {
 		}
 		w.replies += len(data)
 	} else {
-		if w.input+len(data) > inputBudget {
+		if w.input+len(data) > w.budget {
 			return false
 		}
 		w.input += len(data)
@@ -64,6 +87,22 @@ func (w *ptyWriter) enqueue(data []byte, reply bool) bool {
 	default:
 	}
 	return true
+}
+
+// enqueueEOF closes the input once the entries queued so far are written.
+// Repeating it changes nothing, so it cannot grow the queue.
+func (w *ptyWriter) enqueueEOF() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed || w.inputClosed {
+		return
+	}
+	w.inputClosed = true
+	w.entries = append(w.entries, entry{eof: true})
+	select {
+	case w.wake <- struct{}{}:
+	default:
+	}
 }
 
 // close discards unwritten entries and stops the writer.
@@ -78,8 +117,9 @@ func (w *ptyWriter) close() {
 	}
 }
 
-// run writes entries until closed or the PTY fails.
-func (w *ptyWriter) run(pty io.Writer) {
+// run writes entries until closed or the PTY fails. closeInput serves an
+// end-of-input entry; a PTY has none.
+func (w *ptyWriter) run(pty io.Writer, closeInput func()) {
 	defer close(w.done)
 	for {
 		<-w.wake
@@ -101,6 +141,12 @@ func (w *ptyWriter) run(pty io.Writer) {
 				w.input -= len(next.data)
 			}
 			w.mu.Unlock()
+			if next.eof {
+				if closeInput != nil {
+					closeInput()
+				}
+				continue
+			}
 			if _, err := pty.Write(next.data); err != nil {
 				w.close()
 				return

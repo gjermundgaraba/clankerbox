@@ -103,25 +103,60 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(self.read()['pending']['operation'], op)
         self.assertEqual(self.read()['machine_id'], 'owned-machine')
 
-    def test_dependency_probe_requires_success_and_journals_unexpected_acceptance(self):
+    def test_dependency_probe_requires_typed_refusal_and_journals_unexpected_acceptance(self):
         op = {'id': 'unexpected-id', 'machine_id': 'source', 'status': 'accepted'}
-        for code, output in ((0, ''), (1, ''), (1, json.dumps(op)), (0, json.dumps(op))):
-            with self.subTest(code=code, output=output):
+
+        def refusal(reason):
+            return json.dumps({'error': {'message': 'refused', 'reason': reason, 'retryable': False}})
+
+        for code, output, diagnostics, passes in (
+            (1, '', refusal('dependency'), True),
+            (1, '', 'warning\n' + refusal('dependency') + '\n', True),
+            (1, '', refusal('conflict'), False),
+            (1, '', 'connection reset', False),
+            (0, json.dumps(op), '', False),
+            (0, json.dumps(op), refusal('dependency'), False),
+        ):
+            with self.subTest(code=code, output=output, diagnostics=diagnostics):
                 self.evidence.data = {'events': []}
-                proc = subprocess.CompletedProcess([], code, output, 'probe failed')
+                proc = subprocess.CompletedProcess([], code, output, diagnostics)
                 with patch('acceptance.subprocess.run', return_value=proc) as run:
-                    if code or output:
-                        with self.assertRaisesRegex(RuntimeError, 'dependency rejection check failed'):
-                            self.acceptance.expect_delete_dependency('runner', 'config', 'source')
-                        self.assertIn('pending', self.read())
-                    else:
-                        self.acceptance.expect_delete_dependency('runner', 'config', 'source')
+                    if passes:
+                        self.acceptance.expect_delete_dependency('source')
                         self.assertNotIn('pending', self.read())
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'dependency rejection check failed'):
+                            self.acceptance.expect_delete_dependency('source')
+                        self.assertIn('pending', self.read())
                     self.assertEqual(run.call_count, 1)
-                    self.assertEqual(run.call_args.args[0][-2:], ['--expect-delete-dependency', 'source'])
+                    command = run.call_args.args[0]
+                    # Never waits, and the key was journaled before the request.
+                    self.assertEqual(command[3:7], ['--json', 'delete', '--async', '--idempotency-key'])
+                    self.assertEqual(command[8:], ['source'])
+                    if not passes:
+                        self.assertEqual(self.read()['pending']['command'][3], command[7])
                 if output:
                     self.assertEqual(self.read()['pending']['operation'], op)
                     self.assertEqual(self.read()['events'][-1]['operation'], op)
+
+    def test_guest_helpers_use_the_cli(self):
+        import acceptance
+
+        proc = subprocess.CompletedProcess([], 0, 'output', '')
+        with patch('acceptance.subprocess.run', return_value=proc) as run:
+            self.assertEqual(acceptance.run_guest('cli', 'cfg', 'machine', 'sh', '-se', data='script'), 'output')
+        self.assertEqual(run.call_args.args[0], ['cli', '--config', 'cfg', 'shell', 'machine', '--', 'sh', '-se'])
+        self.assertEqual(run.call_args.kwargs['input'], 'script')
+        failed = subprocess.CompletedProcess([], 7, 'partial', 'diagnostic')
+        with patch('acceptance.subprocess.run', return_value=failed):
+            with self.assertRaisesRegex(RuntimeError, 'exited 7: diagnostic partial'):
+                acceptance.run_guest('cli', 'cfg', 'machine', 'false')
+        guest = {'machine_id': 'machine', 'incarnation': 'one'}
+        with patch('acceptance.subprocess.run', return_value=subprocess.CompletedProcess([], 0, json.dumps(guest), '')) as run:
+            self.assertEqual(acceptance.describe_guest('cli', 'cfg', 'machine'), guest)
+        self.assertEqual(run.call_args.args[0], ['cli', '--config', 'cfg', '--json', 'guest', 'machine'])
+        self.assertEqual(acceptance.cli_error('noise\n{"error": "text"}\n'), {})
+        self.assertEqual(acceptance.cli_error(''), {})
 
     def test_lifecycle_refuses_overwrite_or_pending_resume_before_requests(self):
         self.evidence.data.update(
@@ -139,8 +174,6 @@ class EvidenceTests(unittest.TestCase):
             'linux',
             '--profile',
             'test',
-            '--session-runner',
-            'runner',
             '--result',
             str(self.path),
         ]

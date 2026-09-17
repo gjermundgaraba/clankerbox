@@ -22,14 +22,17 @@ const (
 type Sink interface {
 	SendSnapshot(data []byte) error
 	SendOutput(next uint64, data []byte) error
+	// SendStderr carries a pipe session's standard error.
+	SendStderr(next uint64, data []byte) error
 	SendEvent(event any) error
 	Close()
 }
 
 type item struct {
-	event any
-	data  []byte
-	next  uint64
+	event  any
+	data   []byte
+	next   uint64
+	stderr bool
 }
 
 // subscriber is one attached stream: an immutable bootstrap prefix captured
@@ -38,16 +41,31 @@ type subscriber struct {
 	sink     Sink
 	snapshot bool
 	prefix   []byte
-	from     uint64
+	// pieces replace prefix for a filtered resume: each keeps its exact offset.
+	pieces []piece
+	from   uint64
+	// filtered receives output without the sequences the terminal answered.
+	filtered bool
+	// lossless makes a full tail hold the producer instead of dropping this
+	// subscriber: a pipe session retains nothing to resume from. It is fixed at
+	// construction and decides every admission, events included.
+	lossless bool
 	mu       sync.Mutex
 	queue    []item
 	queued   int
 	dropped  string
 	wake     chan struct{}
+	space    chan struct{}
 }
 
-func newSubscriber(sink Sink) *subscriber {
-	return &subscriber{sink: sink, wake: make(chan struct{}, 1)}
+func newSubscriber(sink Sink, lossless bool) *subscriber {
+	return &subscriber{sink: sink, lossless: lossless, wake: make(chan struct{}, 1), space: make(chan struct{}, 1)}
+}
+
+func (s *subscriber) enqueuePieces(pieces []piece) {
+	for _, p := range pieces {
+		s.enqueue(item{data: p.data, next: p.next})
+	}
 }
 
 func (s *subscriber) enqueueOutput(next uint64, data []byte) {
@@ -58,22 +76,33 @@ func (s *subscriber) enqueueEvent(event any) {
 	s.enqueue(item{event: event})
 }
 
-// enqueue admits output and events in order under the same bounded policy.
-// A full tail drops only this subscriber; producers never wait for its sink.
+// enqueue admits output and events in order under one bounded policy. A full
+// tail drops a lossy subscriber, whose producer never waits for its sink, and
+// holds the producer of a lossless one until there is room or it is dropped.
+// A lossless subscriber must not be offered items under the session mutex.
 func (s *subscriber) enqueue(it item) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.dropped != "" {
-		return
+	for {
+		s.mu.Lock()
+		full := s.queued+len(it.data) > tailLimit || len(s.queue) == tailItems
+		switch {
+		case s.dropped != "":
+			s.mu.Unlock()
+			return
+		case !full:
+			s.queue = append(s.queue, it)
+			s.queued += len(it.data)
+			s.signal()
+			s.mu.Unlock()
+			return
+		case !s.lossless:
+			s.dropped = "overflow"
+			s.signal()
+			s.mu.Unlock()
+			return
+		}
+		s.mu.Unlock()
+		<-s.space
 	}
-	if s.queued+len(it.data) > tailLimit || len(s.queue) == tailItems {
-		s.dropped = "overflow"
-		s.signal()
-		return
-	}
-	s.queue = append(s.queue, it)
-	s.queued += len(it.data)
-	s.signal()
 }
 
 func (s *subscriber) drop(reason string) {
@@ -83,6 +112,7 @@ func (s *subscriber) drop(reason string) {
 		s.dropped = reason
 	}
 	s.signal()
+	s.release()
 }
 
 func (s *subscriber) signal() {
@@ -92,11 +122,21 @@ func (s *subscriber) signal() {
 	}
 }
 
+// release wakes a producer waiting for room.
+func (s *subscriber) release() {
+	select {
+	case s.space <- struct{}{}:
+	default:
+	}
+}
+
 // run delivers the prefix and then the tail until the sink fails or the
 // subscriber is dropped. It closes the sink before returning.
 func (s *subscriber) run(onDone func(*subscriber)) {
 	defer onDone(s)
 	defer s.sink.Close()
+	// However delivery stops, a producer waiting for room must not wait on.
+	defer s.drop("closed")
 	if err := s.sendPrefix(); err != nil {
 		return
 	}
@@ -108,6 +148,7 @@ func (s *subscriber) run(onDone func(*subscriber)) {
 		s.queued = 0
 		dropped := s.dropped
 		s.mu.Unlock()
+		s.release()
 		for _, it := range batch {
 			if err := s.send(it); err != nil {
 				s.drop("write")
@@ -127,6 +168,9 @@ func (s *subscriber) send(it item) error {
 	if it.event != nil {
 		return s.sink.SendEvent(it.event)
 	}
+	if it.stderr {
+		return s.sink.SendStderr(it.next, it.data)
+	}
 	return s.sink.SendOutput(it.next, it.data)
 }
 
@@ -136,6 +180,12 @@ func (s *subscriber) sendPrefix() error {
 	if s.snapshot {
 		return s.sink.SendSnapshot(prefix)
 	}
+	for _, p := range s.pieces {
+		if err := s.sink.SendOutput(p.next, p.data); err != nil {
+			return err
+		}
+	}
+	s.pieces = nil
 	next := s.from
 	for len(prefix) > 0 {
 		chunk := prefix

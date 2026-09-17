@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { createClient, Code } from '@connectrpc/connect';
 import { createConnectTransport, Http2SessionManager } from '@connectrpc/connect-node';
 import { SessionService } from '../dist/gen/clankerbox/v1/session_pb.js';
+import { createSession } from './guest-qualification.mjs';
 const [path, machineId] = process.argv.slice(2);
 const config = JSON.parse(await readFile(path, 'utf8'));
 assert.equal(new URL(config.url).protocol, 'https:');
@@ -33,7 +34,7 @@ try {
   await assert.rejects(connect('invalid-' + randomUUID()).describeGuest({ machineId }, options), (e) => e.code === Code.Unauthenticated);
   report.checks.push('invalid bearer rejected');
   const guest = await client.describeGuest({ machineId }, options);
-  const session = await client.createSession({ machineId, sessionId, label: 'public-transport-acceptance',
+  const session = await createSession(client, machineId, sessionId, { label: 'public-transport-acceptance',
     createdAt: new Date().toISOString(), cols: 80, rows: 24,
     argv: ['/bin/sh', '-c', 'stty -echo; exec /bin/sh'] }, options);
   created = true;

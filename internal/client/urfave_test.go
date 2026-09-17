@@ -10,7 +10,7 @@ import (
 
 func TestCommandHelpWithoutConfiguration(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{nil, {"help"}, {helpFlag}, {"-h"}, {createCommand, helpFlag}, {checkpointCommand}, {checkpointCommand, deleteCommand, helpFlag}, {sessionsCommand, helpFlag}, {"help", sessionsCommand}} {
+	for _, args := range [][]string{nil, {"help"}, {helpFlag}, {"-h"}, {createCommand, helpFlag}, {checkpointCommand}, {checkpointCommand, deleteCommand, helpFlag}, {sessionsCommand, helpFlag}, {"help", sessionsCommand}, {shellCommand, helpFlag}, {"guest", helpFlag}} {
 		var out, diagnostics bytes.Buffer
 		err := client.Run(
 			t.Context(),
@@ -32,7 +32,7 @@ func TestCommandHelpWithoutConfiguration(t *testing.T) {
 
 func TestCLIRejectsInvalidArguments(t *testing.T) {
 	t.Parallel()
-	for _, args := range [][]string{{createCommand, "--name", childName}, {machinesCommand, "extra"}, {startCommand, testMachineName, timeoutFlag, "0s"}, {"unknown"}, {checkpointCommand, "--unknown"}, {sessionsCommand, "--unknown"}, {checkpointCommand, "unknown"}} {
+	for _, args := range [][]string{{createCommand, "--name", childName}, {machinesCommand, "extra"}, {startCommand, testMachineName, timeoutFlag, "0s"}, {"unknown"}, {checkpointCommand, "--unknown"}, {sessionsCommand, "--unknown"}, {checkpointCommand, "unknown"}, {shellCommand}, {shellCommand, "--env", "novalue", testMachineName}, {shellCommand, "-t", "-T", testMachineName}, {"guest"}} {
 		var out, diagnostics bytes.Buffer
 		err := client.Run(
 			t.Context(),

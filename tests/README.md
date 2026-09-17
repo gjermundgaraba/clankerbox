@@ -8,16 +8,15 @@ owns service/VM teardown and scratch cleanup, including when a harness fails.
 deployment and create and delete disposable machines; do not point them at an
 existing workload.
 
-Build the test-only session adapter, then run the lifecycle and checkpoint
-harnesses for each host:
+Run the lifecycle and checkpoint harnesses for each host. They drive only the
+product CLI, which must match the guest image of the machines it creates:
 
 ```sh
-go build -o bin/session-run ./tests/session-run
 python3 tests/live_lifecycle.py --binary "$PWD/bin/clankerbox" \
-  --session-runner "$PWD/bin/session-run" --config "$HOME/.config/clankerbox/config.json" \
+  --config "$HOME/.config/clankerbox/config.json" \
   --host linux --profile linux-dev-v3 --result RESULTS/linux-lifecycle.json --keep
 python3 tests/live_checkpoints.py --binary "$PWD/bin/clankerbox" \
-  --session-runner "$PWD/bin/session-run" --config "$HOME/.config/clankerbox/config.json" \
+  --config "$HOME/.config/clankerbox/config.json" \
   --lifecycle-result RESULTS/linux-lifecycle.json --result RESULTS/linux-checkpoints.json
 ```
 
@@ -67,28 +66,32 @@ Use `root` or `prefix` in place of `qualify` to select one check. Both checks
 create and end their own sessions. Historical qualification reports describe
 their original images and do not qualify the prepared-v2 root contract.
 
-## session-run
+## Guest commands and probes
 
-`session-run` runs one command in a bearer-authenticated terminal session and
-returns its exit status and ordered output through the guest protocol. It
-installs an output gate before the command starts, disables echo and newline
-conversion, and passes text stdin through a pipe. PTY stdout and stderr are
-merged. It is a test adapter, not an exec API. The gate, quoted arguments and
-quoted stdin must fit one 4096-byte protocol argument; oversize commands fail
-locally.
+The harnesses reach a guest the way a user does, through
+[`clankerbox shell`](../docs/terminal-sessions.md#the-cli) in its pipe mode:
+`run_guest` passes a script on stdin, reads stdout and fails on a non-zero
+exit status. Stdout and stderr stay separate, and nothing is quoted into an
+argument or limited by one.
 
-Probes used by the harnesses:
+Probes used by the harnesses, all in `acceptance.py`:
 
-- `--expect-stopped MACHINE_ID` makes an authenticated `SessionService` request
-  and succeeds only on the typed `prerequisite` error.
-- `--expect-delete-dependency MACHINE_ID` submits a delete of a checkpoint
-  source and succeeds only on the typed `dependency` error. The harness journals
-  the probe first and records any unexpectedly accepted operation. Use only the
-  retained disposable source with its live descendant.
-- `--describe-guest MACHINE_ID` walks the controller, host and guest route and
-  prints the machine identity and manager incarnation as Protobuf JSON. Cold
-  starts keep the machine identity and replace the incarnation; RAM forks and
-  restores keep the incarnation and publish a new machine identity.
+- `expect_refusal(binary, config, reason, command...)` runs a `--json` command
+  and succeeds only when it fails with that stable `reason`, read from the
+  structured error on stderr. The lifecycle harness requires `prerequisite`
+  from `guest MACHINE_ID` while the machine is stopped.
+- `Acceptance.expect_delete_dependency(MACHINE_ID)` submits
+  `delete --async --idempotency-key KEY` for a checkpoint source and succeeds
+  only on the typed `dependency` refusal. The key is journaled with the command
+  before the request and `--async` never waits, so an unexpectedly accepted
+  operation is recorded at once and never waited on, retried or cleaned up; any
+  other failure leaves the pending entry and names the key for inspection. Use
+  only the retained disposable source with its live descendant.
+- `describe_guest` runs `--json guest MACHINE_ID`, which walks the controller,
+  host and guest route and prints the machine identity and manager incarnation
+  as Protobuf JSON. Cold starts keep the machine identity and replace the
+  incarnation; RAM forks and restores keep the incarnation and publish a new
+  machine identity.
 
 ## Lifecycle timings
 
@@ -109,7 +112,7 @@ recorded build and resource IDs for inspection; do not replay uncertain mutation
 
 ```sh
 python3 tests/live_profiles.py --binary bin/clankerbox --config CLIENT_CONFIG \
-  --session-runner bin/session-run --host local --base linux-base \
+  --host local --base linux-base \
   --result RESULTS/profiles.json
 ```
 

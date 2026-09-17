@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"clankerbox/internal/guest/protocol"
 )
@@ -22,6 +23,11 @@ func (s *subscriberSink) SendSnapshot(data []byte) error {
 
 func (s *subscriberSink) SendOutput(next uint64, data []byte) error {
 	s.items = append(s.items, item{next: next, data: data})
+	return s.err
+}
+
+func (s *subscriberSink) SendStderr(next uint64, data []byte) error {
+	s.items = append(s.items, item{next: next, data: data, stderr: true})
 	return s.err
 }
 
@@ -46,7 +52,7 @@ func TestSubscriberTailLimitsAndOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			sink := &subscriberSink{}
-			sub := newSubscriber(sink)
+			sub := newSubscriber(sink, false)
 			sub.prefix = []byte("prefix")
 			sub.from = 10
 			next := sub.from + uint64(len(sub.prefix))
@@ -110,7 +116,7 @@ func TestSubscriberReleasesBootstrap(t *testing.T) {
 			if tc.failure {
 				sink.err = errors.New("write failed")
 			}
-			sub := newSubscriber(sink)
+			sub := newSubscriber(sink, false)
 			sub.snapshot = tc.snapshot
 			sub.from = 42
 			prefix := bytes.Repeat([]byte("x"), outputChunk+1)
@@ -133,4 +139,45 @@ func TestSubscriberReleasesBootstrap(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A lossless subscriber holds its producer at a full tail, for output and for
+// the event that ends the stream alike, and releases it when it is dropped.
+func TestLosslessSubscriberHoldsItsProducer(t *testing.T) {
+	t.Parallel()
+	sink := &subscriberSink{}
+	sub := newSubscriber(sink, true)
+	for range tailItems {
+		sub.enqueueOutput(0, []byte("x"))
+	}
+	admitted := make(chan struct{})
+	go func() {
+		defer close(admitted)
+		sub.enqueueEvent(protocol.SessionEvent{})
+	}()
+	select {
+	case <-admitted:
+		t.Fatal("the closing event did not wait for room")
+	case <-time.After(50 * time.Millisecond):
+	}
+	done := make(chan struct{})
+	go sub.run(func(*subscriber) { close(done) })
+	<-admitted
+	sub.drop("closed")
+	<-done
+	if len(sink.items) != tailItems+2 {
+		t.Fatalf("delivered %d items, want the output, the event and the closing gap", len(sink.items))
+	}
+	if _, ok := sink.items[tailItems].event.(protocol.SessionEvent); !ok {
+		t.Fatalf("the event after the output is %#v", sink.items[tailItems])
+	}
+
+	held := newSubscriber(&subscriberSink{}, true)
+	for range tailItems {
+		held.enqueueOutput(0, []byte("x"))
+	}
+	released := make(chan struct{})
+	go func() { defer close(released); held.enqueueOutput(0, []byte("y")) }()
+	held.drop("closed")
+	<-released
 }

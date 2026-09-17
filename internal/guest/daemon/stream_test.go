@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,13 +87,8 @@ func checkAttachmentEOF(t *testing.T, guest clankerboxv1connect.SessionServiceCl
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	id := uuid.NewString()
-	_, err := guest.CreateSession(ctx, connect.NewRequest(&v1.CreateSessionRequest{
-		MachineId: testMachine, SessionId: id, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Cols: 80, Rows: 24,
-		Argv: []string{"/bin/sh", "-c", "while :; do printf live; sleep 0.01; done"},
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	createSession(ctx, t, guest, id, "/bin/sh", "-c", "while :; do printf live; sleep 0.01; done")
+	var err error
 	stream := client.AttachSession(ctx)
 	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
 	if err = stream.Send(&v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
@@ -150,13 +146,8 @@ func TestEndedAttachmentJoinsBlockedReadersThroughRelays(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	id := uuid.NewString()
-	_, err := guest.CreateSession(ctx, connect.NewRequest(&v1.CreateSessionRequest{
-		MachineId: testMachine, SessionId: id, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Cols: 80, Rows: 24,
-		Argv: []string{"/bin/sh", "-c", "sleep 30"},
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
+	createSession(ctx, t, guest, id, "/bin/sh", "-c", "sleep 30")
+	var err error
 	if _, err = guest.EndSession(ctx, connect.NewRequest(&v1.EndSessionRequest{MachineId: testMachine, SessionId: id})); err != nil {
 		t.Fatal(err)
 	}
@@ -177,5 +168,161 @@ func TestEndedAttachmentJoinsBlockedReadersThroughRelays(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ended attachment did not complete: %v", err)
 		}
+	}
+}
+
+// A pipe session lives inside one attachment: created by its Open without an
+// engine digest, fed and closed through controls, and streamed by origin.
+func TestRunAttachmentThroughRelays(t *testing.T) {
+	t.Parallel()
+	_, _, auth, endpoint := testGuest(t)
+	client := relayClient(t, relayClient(t, guestClient(t, auth, testMachine, endpoint)))
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	id := uuid.NewString()
+	stream := client.AttachSession(ctx)
+	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
+	send := func(request *v1.AttachmentRequest) {
+		t.Helper()
+		if err := stream.Send(request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(&v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
+		MachineId: testMachine, SessionId: id,
+		Create: &v1.NewSession{
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Pipes: true,
+			Argv: []string{"/bin/sh", "-c", "cat; echo problem >&2; exit 4"},
+		},
+	}}})
+	send(&v1.AttachmentRequest{Command: &v1.AttachmentRequest_Input{Input: &v1.Input{Sequence: 1, Data: []byte("in\x00put")}}})
+	send(&v1.AttachmentRequest{Command: &v1.AttachmentRequest_CloseInput{CloseInput: &v1.CloseInput{Sequence: 2}}})
+	var stdout, stderr []byte
+	var exited *v1.Session
+	for {
+		event, err := stream.Receive()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch value := event.GetEvent().(type) {
+		case *v1.AttachmentEvent_Opened:
+			if value.Opened.GetMode() != v1.OpenMode_OPEN_MODE_RESUME || !value.Opened.GetSession().GetPipes() {
+				t.Fatalf("opened %v", value.Opened)
+			}
+		case *v1.AttachmentEvent_Ack:
+			if !value.Ack.GetAccepted() {
+				t.Fatalf("control refused: %v", value.Ack)
+			}
+		case *v1.AttachmentEvent_Output:
+			if value.Output.GetStream() == v1.OutputStream_OUTPUT_STREAM_STDERR {
+				stderr = append(stderr, value.Output.GetData()...)
+			} else {
+				stdout = append(stdout, value.Output.GetData()...)
+			}
+		case *v1.AttachmentEvent_SessionExited:
+			exited = value.SessionExited.GetSession()
+			_ = stream.CloseRequest()
+		}
+	}
+	if string(stdout) != "in\x00put" || string(stderr) != "problem\n" || exited.GetExitCode() != 4 {
+		t.Fatalf("stdout %q stderr %q exit %v", stdout, stderr, exited)
+	}
+}
+
+// The guest, not the client, ends a session created to end with its
+// attachment: an abandoned stream is all it takes.
+func TestAbandonedAttachmentEndsItsSessionThroughRelays(t *testing.T) {
+	t.Parallel()
+	_, manager, auth, endpoint := testGuest(t)
+	guest := guestClient(t, auth, testMachine, endpoint)
+	client := relayClient(t, relayClient(t, guest))
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	attach, abandon := context.WithCancel(ctx)
+	id := uuid.NewString()
+	stream := client.AttachSession(attach)
+	if err := stream.Send(&v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
+		MachineId: testMachine, SessionId: id, OmitAnsweredQueries: true,
+		Create: &v1.NewSession{
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Cols:      80, Rows: 24, EndOnDetach: true, Argv: []string{"/bin/sh", "-c", "sleep 30"},
+		},
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Receive(); err != nil {
+		t.Fatal(err)
+	}
+	requireRunning(ctx, t, guest, id)
+	// Like any real client, this one is reading when it goes away: Go's HTTP/2
+	// client acts on a cancelled context only from a stream read.
+	gone := make(chan struct{})
+	go func() {
+		defer close(gone)
+		for {
+			if _, err := stream.Receive(); err != nil {
+				return
+			}
+		}
+	}()
+	abandon()
+	<-gone
+	for {
+		for _, record := range manager.List() {
+			if record.ID == id && record.Status == "exited" {
+				return
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("the abandoned session kept running")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// Input is admitted only at the offset the guest has accepted, so input sent
+// ahead of acknowledgements cannot overtake a refusal or be applied twice.
+func TestInputIsAdmittedOnlyAtTheAcceptedOffset(t *testing.T) {
+	t.Parallel()
+	room := true
+	var applied []string
+	var cursor inputCursor
+	offer := func(sequence, offset uint64, data string) *v1.Ack {
+		input := &v1.Input{Sequence: sequence, Offset: offset, Data: []byte(data)}
+		return cursor.admit(input, func() *v1.Ack {
+			if room {
+				applied = append(applied, data)
+			}
+			return &v1.Ack{Sequence: sequence, Accepted: room, Reason: "queue_full"}
+		})
+	}
+	if ack := offer(1, 0, "ab"); !ack.GetAccepted() || cursor.accepted != 2 {
+		t.Fatalf("first input %v at %d", ack, cursor.accepted)
+	}
+	room = false
+	if ack := offer(2, 2, "cd"); ack.GetAccepted() || ack.GetReason() != "queue_full" || cursor.accepted != 2 {
+		t.Fatalf("refusal %v at %d", ack, cursor.accepted)
+	}
+	// Room appears, but what was sent behind the refused bytes must not overtake them.
+	room = true
+	if ack := offer(3, 4, "ef"); ack.GetAccepted() || ack.GetReason() != reasonOutOfOrder {
+		t.Fatalf("later input overtook a refusal: %v", ack)
+	}
+	if ack := offer(4, 2, "cd"); !ack.GetAccepted() {
+		t.Fatalf("continuing from the accepted offset: %v", ack)
+	}
+	// An Input repeated after a lost acknowledgement is not applied again.
+	if ack := offer(5, 2, "cd"); ack.GetAccepted() || ack.GetReason() != reasonOutOfOrder {
+		t.Fatalf("repeated input applied twice: %v", ack)
+	}
+	if ack := offer(6, 4, "ef"); !ack.GetAccepted() || cursor.accepted != 6 {
+		t.Fatalf("after the repeat %v at %d", ack, cursor.accepted)
+	}
+	if got := strings.Join(applied, ""); got != "abcdef" {
+		t.Fatalf("applied %q", got)
 	}
 }

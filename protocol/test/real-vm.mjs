@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { createClient } from '@connectrpc/connect';
 import { createConnectTransport, Http2SessionManager } from '@connectrpc/connect-node';
-import { qualifyRoot, qualifyPrefix } from './guest-qualification.mjs';
+import { createSession, qualifyRoot, qualifyPrefix } from './guest-qualification.mjs';
 import { SessionService } from '../dist/gen/clankerbox/v1/session_pb.js';
 
 const [configPath, action, machineId, sessionId, script] = process.argv.slice(2);
@@ -23,7 +23,7 @@ const print = (value) => console.log(JSON.stringify(value, (_, field) => typeof 
 try {
   if (action === 'describe') print(await client.describeGuest({ machineId }, options));
   else if (action === 'list') print(await client.listSessions({ machineId }, options));
-  else if (action === 'create') print(await client.createSession({ machineId, sessionId: randomUUID(), createdAt: new Date().toISOString(), cols: 80, rows: 24, argv: ['/bin/sh', '-c', 'stty -echo; exec /bin/sh'] }, options));
+  else if (action === 'create') print(await createSession(client, machineId, randomUUID(), { createdAt: new Date().toISOString(), cols: 80, rows: 24, argv: ['/bin/sh', '-c', 'stty -echo; exec /bin/sh'] }, options));
   else if (action === 'end') print(await client.endSession({ machineId, sessionId }, options));
   else if (['root', 'prefix', 'qualify'].includes(action)) {
     const guest = await client.describeGuest({ machineId }, options);

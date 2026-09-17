@@ -55,30 +55,46 @@ func TestSessionOptionalFieldsAndUint64RoundTrip(t *testing.T) {
 		t.Fatal("truncated grid accepted")
 	}
 }
-func TestCreationPreservesDeduplicationIdentity(t *testing.T) {
+func TestOpenCarriesCreationAndTerminalOptions(t *testing.T) {
 	t.Parallel()
-	source := protocol.CreateArgs{
-		SessionID: sessionRecord().ID,
-		CreatedAt: sessionRecord().CreatedAt,
-		Label:     "shell",
-		Cwd:       "/workspace",
-		Argv:      []string{"bash", "-l"},
-		Env:       map[string]string{"TERM": "xterm-256color"},
-		Cols:      80,
-		Rows:      24,
+	foreground, background := uint32(0x112233), uint32(0xFAFBFC)
+	wire := &v1.Open{
+		MachineId: testMachine, SessionId: sessionRecord().ID, OmitAnsweredQueries: true,
+		TerminalProfile: &v1.TerminalProfile{Foreground: &foreground, Background: &background},
+		Create: &v1.NewSession{
+			CreatedAt: sessionRecord().CreatedAt, Label: "shell", Cwd: "/workspace", Argv: []string{"bash", "-l"},
+			Env: map[string]string{"TERM": "xterm-256color"}, Cols: 80, Rows: 24, EndOnDetach: true,
+		},
 	}
-	restored, err := rpcmodel.FromCreateSession(
-		cloneWire(t, rpcmodel.ToCreateSession(testMachine, source), &v1.CreateSessionRequest{}),
-	)
-	if err != nil || !reflect.DeepEqual(source, restored) {
-		t.Fatalf("creation fingerprint changed: %#v %v", restored, err)
+	restored, err := rpcmodel.FromOpen(cloneWire(t, wire, &v1.Open{}))
+	want := protocol.CreateArgs{
+		SessionID: sessionRecord().ID, CreatedAt: sessionRecord().CreatedAt, Label: "shell", Cwd: "/workspace",
+		Argv: []string{"bash", "-l"}, Env: map[string]string{"TERM": "xterm-256color"}, Cols: 80, Rows: 24, EndOnDetach: true,
 	}
-	invalid := rpcmodel.ToCreateSession(testMachine, source)
-	invalid.CreatedAt = "yesterday"
-	if _, err = rpcmodel.FromCreateSession(invalid); err == nil {
-		t.Fatal("invalid deduplication creation time accepted")
+	if err != nil || !reflect.DeepEqual(*restored.Create, want) || !restored.OmitAnsweredQueries ||
+		*restored.Profile.Foreground != foreground || *restored.Profile.Background != background {
+		t.Fatalf("open changed: %#v %v", restored, err)
+	}
+	for name, spoil := range map[string]func(*v1.Open){
+		"creation time":    func(open *v1.Open) { open.Create.CreatedAt = "yesterday" },
+		"grid":             func(open *v1.Open) { open.Create.Cols = 1 },
+		"grid on a pipe":   func(open *v1.Open) { open.Create.Pipes = true },
+		"profile colour":   func(open *v1.Open) { *open.TerminalProfile.Background = 0x1000000 },
+		"session identity": func(open *v1.Open) { open.SessionId = "session" },
+	} {
+		invalid := cloneWire(t, wire, &v1.Open{})
+		spoil(invalid)
+		if _, err = rpcmodel.FromOpen(invalid); err == nil {
+			t.Fatalf("invalid %s accepted", name)
+		}
+	}
+	pipe := cloneWire(t, wire, &v1.Open{})
+	pipe.Create.Pipes, pipe.Create.Cols, pipe.Create.Rows = true, 0, 0
+	if restored, err = rpcmodel.FromOpen(pipe); err != nil || !restored.Create.Pipes || restored.Create.Cols != 0 {
+		t.Fatalf("pipe creation: %#v %v", restored.Create, err)
 	}
 }
+
 func TestResumeCutDiffersFromStartingOffsetAndFinalViewsSurvive(t *testing.T) {
 	t.Parallel()
 	for _, mode := range []string{protocol.ModeResume, protocol.ModeSnapshot, protocol.ModeUnavailable, protocol.ModeEnded} {
@@ -89,29 +105,25 @@ func TestResumeCutDiffersFromStartingOffsetAndFinalViewsSurvive(t *testing.T) {
 		if mode == protocol.ModeEnded {
 			source.View = &protocol.View{Cursor: protocol.Cursor{X: 119, Y: 39}, Bytes: 8388721}
 		}
-		wire := rpcmodel.ToOpened(&v1.GuestDescription{MachineId: testMachine, Schema: rpcmodel.Schema}, source)
+		wire := cloneWire(t, rpcmodel.ToOpened(&v1.GuestDescription{MachineId: testMachine, Schema: rpcmodel.Schema}, source), &v1.Opened{})
 		if wire.GetCut() != source.Session.Offset || wire.GetStartOffset() != source.Offset ||
-			wire.GetCut() == wire.GetStartOffset() {
+			wire.GetCut() == wire.GetStartOffset() || wire.GetSnapshotBytes() != source.SnapshotBytes {
 			t.Fatal("resume start conflated with atomic cut")
 		}
-		restored, err := rpcmodel.FromOpened(cloneWire(t, wire, &v1.Opened{}))
-		if err != nil || !reflect.DeepEqual(source, restored) {
-			t.Fatalf("open %s changed: %#v %v", mode, restored, err)
+		if (wire.GetView() != nil) != (source.View != nil) ||
+			(source.View != nil && (wire.GetView().GetBytes() != source.View.Bytes || wire.GetView().GetCursor().GetX() != 119)) {
+			t.Fatalf("final view of %s changed: %v", mode, wire.GetView())
 		}
 	}
 	offset := uint64(9007199254740993)
-	source := protocol.OpenArgs{
-		SessionID:       sessionRecord().ID,
-		FromOffset:      &offset,
-		FromIncarnation: "parent-incarnation",
-	}
-	restored, err := rpcmodel.FromOpen(cloneWire(t, rpcmodel.ToOpen("child-machine", "engine-pin", source), &v1.Open{}))
-	if err != nil || !reflect.DeepEqual(source, restored) {
+	restored, err := rpcmodel.FromOpen(cloneWire(t, &v1.Open{
+		MachineId: "child-machine", SessionId: sessionRecord().ID, ExpectedEngineDigest: "engine-pin",
+		ResumeCursor: &v1.ResumeCursor{Offset: offset, Incarnation: "parent-incarnation"},
+	}, &v1.Open{}))
+	if err != nil || *restored.FromOffset != offset || restored.FromIncarnation != "parent-incarnation" {
 		t.Fatalf("resume cursor changed: %#v %v", restored, err)
 	}
-	source.FromOffset = nil
-	source.FromIncarnation = ""
-	restored, err = rpcmodel.FromOpen(rpcmodel.ToOpen(testMachine, "pin", source))
+	restored, err = rpcmodel.FromOpen(&v1.Open{MachineId: testMachine, SessionId: sessionRecord().ID})
 	if err != nil || restored.FromOffset != nil {
 		t.Fatal("absent resume cursor became zero offset")
 	}

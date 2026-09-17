@@ -36,9 +36,6 @@ const (
 	// SessionServiceDescribeGuestProcedure is the fully-qualified name of the SessionService's
 	// DescribeGuest RPC.
 	SessionServiceDescribeGuestProcedure = "/clankerbox.v1.SessionService/DescribeGuest"
-	// SessionServiceCreateSessionProcedure is the fully-qualified name of the SessionService's
-	// CreateSession RPC.
-	SessionServiceCreateSessionProcedure = "/clankerbox.v1.SessionService/CreateSession"
 	// SessionServiceListSessionsProcedure is the fully-qualified name of the SessionService's
 	// ListSessions RPC.
 	SessionServiceListSessionsProcedure = "/clankerbox.v1.SessionService/ListSessions"
@@ -53,7 +50,6 @@ const (
 // SessionServiceClient is a client for the clankerbox.v1.SessionService service.
 type SessionServiceClient interface {
 	DescribeGuest(context.Context, *connect.Request[v1.DescribeGuestRequest]) (*connect.Response[v1.GuestDescription], error)
-	CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error)
 	ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
 	EndSession(context.Context, *connect.Request[v1.EndSessionRequest]) (*connect.Response[v1.Session], error)
 	AttachSession(context.Context) *connect.BidiStreamForClient[v1.AttachmentRequest, v1.AttachmentEvent]
@@ -74,12 +70,6 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			httpClient,
 			baseURL+SessionServiceDescribeGuestProcedure,
 			connect.WithSchema(sessionServiceMethods.ByName("DescribeGuest")),
-			connect.WithClientOptions(opts...),
-		),
-		createSession: connect.NewClient[v1.CreateSessionRequest, v1.Session](
-			httpClient,
-			baseURL+SessionServiceCreateSessionProcedure,
-			connect.WithSchema(sessionServiceMethods.ByName("CreateSession")),
 			connect.WithClientOptions(opts...),
 		),
 		listSessions: connect.NewClient[v1.ListSessionsRequest, v1.ListSessionsResponse](
@@ -106,7 +96,6 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 // sessionServiceClient implements SessionServiceClient.
 type sessionServiceClient struct {
 	describeGuest *connect.Client[v1.DescribeGuestRequest, v1.GuestDescription]
-	createSession *connect.Client[v1.CreateSessionRequest, v1.Session]
 	listSessions  *connect.Client[v1.ListSessionsRequest, v1.ListSessionsResponse]
 	endSession    *connect.Client[v1.EndSessionRequest, v1.Session]
 	attachSession *connect.Client[v1.AttachmentRequest, v1.AttachmentEvent]
@@ -115,11 +104,6 @@ type sessionServiceClient struct {
 // DescribeGuest calls clankerbox.v1.SessionService.DescribeGuest.
 func (c *sessionServiceClient) DescribeGuest(ctx context.Context, req *connect.Request[v1.DescribeGuestRequest]) (*connect.Response[v1.GuestDescription], error) {
 	return c.describeGuest.CallUnary(ctx, req)
-}
-
-// CreateSession calls clankerbox.v1.SessionService.CreateSession.
-func (c *sessionServiceClient) CreateSession(ctx context.Context, req *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-	return c.createSession.CallUnary(ctx, req)
 }
 
 // ListSessions calls clankerbox.v1.SessionService.ListSessions.
@@ -140,7 +124,6 @@ func (c *sessionServiceClient) AttachSession(ctx context.Context) *connect.BidiS
 // SessionServiceHandler is an implementation of the clankerbox.v1.SessionService service.
 type SessionServiceHandler interface {
 	DescribeGuest(context.Context, *connect.Request[v1.DescribeGuestRequest]) (*connect.Response[v1.GuestDescription], error)
-	CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error)
 	ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error)
 	EndSession(context.Context, *connect.Request[v1.EndSessionRequest]) (*connect.Response[v1.Session], error)
 	AttachSession(context.Context, *connect.BidiStream[v1.AttachmentRequest, v1.AttachmentEvent]) error
@@ -157,12 +140,6 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		SessionServiceDescribeGuestProcedure,
 		svc.DescribeGuest,
 		connect.WithSchema(sessionServiceMethods.ByName("DescribeGuest")),
-		connect.WithHandlerOptions(opts...),
-	)
-	sessionServiceCreateSessionHandler := connect.NewUnaryHandler(
-		SessionServiceCreateSessionProcedure,
-		svc.CreateSession,
-		connect.WithSchema(sessionServiceMethods.ByName("CreateSession")),
 		connect.WithHandlerOptions(opts...),
 	)
 	sessionServiceListSessionsHandler := connect.NewUnaryHandler(
@@ -187,8 +164,6 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		switch r.URL.Path {
 		case SessionServiceDescribeGuestProcedure:
 			sessionServiceDescribeGuestHandler.ServeHTTP(w, r)
-		case SessionServiceCreateSessionProcedure:
-			sessionServiceCreateSessionHandler.ServeHTTP(w, r)
 		case SessionServiceListSessionsProcedure:
 			sessionServiceListSessionsHandler.ServeHTTP(w, r)
 		case SessionServiceEndSessionProcedure:
@@ -206,10 +181,6 @@ type UnimplementedSessionServiceHandler struct{}
 
 func (UnimplementedSessionServiceHandler) DescribeGuest(context.Context, *connect.Request[v1.DescribeGuestRequest]) (*connect.Response[v1.GuestDescription], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("clankerbox.v1.SessionService.DescribeGuest is not implemented"))
-}
-
-func (UnimplementedSessionServiceHandler) CreateSession(context.Context, *connect.Request[v1.CreateSessionRequest]) (*connect.Response[v1.Session], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("clankerbox.v1.SessionService.CreateSession is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) ListSessions(context.Context, *connect.Request[v1.ListSessionsRequest]) (*connect.Response[v1.ListSessionsResponse], error) {

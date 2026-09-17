@@ -53,6 +53,16 @@ test("shared typed attachment and service methods have the intended shapes", () 
   }
   assert.equal(HostService.method.attachSession, undefined);
   assert.equal(HostService.method.createSession, undefined);
+  // A session is created by the attachment that opens it, never on its own.
+  assert.equal(SessionService.method.createSession, undefined);
+  const opening = create(AttachmentRequestSchema, {
+    command: { case: "open", value: { machineId: "m", sessionId: "s", create: { argv: ["sh"], pipes: true } } },
+  });
+  assert.equal(opening.command.value.create.pipes, true);
+  // Input names the offset the guest has accepted; like every offset it is a bigint.
+  assert.equal(create(AttachmentRequestSchema, {
+    command: { case: "input", value: { sequence: 1n, offset: 9007199254740993n } },
+  }).command.value.offset, 9007199254740993n);
   assert.equal(MachineService.method.setLabels.output.typeName, "clankerbox.v1.Machine");
   assert.equal(MachineService.method.createMachine.output.typeName, "clankerbox.v1.Operation");
   const frame = create(AttachmentRequestSchema, {

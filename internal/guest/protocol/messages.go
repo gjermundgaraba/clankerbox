@@ -97,6 +97,9 @@ type Session struct {
 	LastResizeOffset *uint64  `json:"last_resize_offset"`
 	Incarnation      string   `json:"incarnation"`
 	ReplyOverflow    uint64   `json:"reply_overflow"`
+	// Pipes marks a session without a PTY or terminal; its grid is zero.
+	Pipes       bool `json:"pipes,omitempty"`
+	EndOnDetach bool `json:"end_on_detach,omitempty"`
 }
 
 // CreateArgs are the arguments of session.create. CreatedAt is when the
@@ -112,6 +115,10 @@ type CreateArgs struct {
 	Cols      uint16            `json:"cols"`
 	Rows      uint16            `json:"rows"`
 	CreatedAt string            `json:"created_at"`
+	// EndOnDetach ends the session when its last attachment closes.
+	EndOnDetach bool `json:"end_on_detach,omitempty"`
+	// Pipes replaces the PTY and terminal with stdin, stdout and stderr pipes.
+	Pipes bool `json:"pipes,omitempty"`
 }
 
 // Created parses CreatedAt.
@@ -153,6 +160,12 @@ func (a CreateArgs) Validate() error {
 			return &model.Error{Reason: model.ReasonInvalid, Message: "env entry"}
 		}
 	}
+	if a.Pipes {
+		if a.Cols != 0 || a.Rows != 0 {
+			return &model.Error{Reason: model.ReasonInvalid, Message: "a pipe session has no grid"}
+		}
+		return nil
+	}
 	return validateGrid(a.Cols, a.Rows)
 }
 
@@ -174,12 +187,40 @@ type OpenArgs struct {
 	SessionID       string  `json:"session_id"`
 	FromOffset      *uint64 `json:"from_offset,omitempty"`
 	FromIncarnation string  `json:"from_incarnation,omitempty"`
+	// Create starts the session inside this open, after its subscriber exists.
+	Create *CreateArgs `json:"create,omitempty"`
+	// OmitAnsweredQueries removes the sequences the terminal answered from
+	// this attachment's output.
+	OmitAnsweredQueries bool `json:"omit_answered_queries,omitempty"`
+	// Profile describes the terminal this attachment renders into.
+	Profile *TerminalProfile `json:"terminal_profile,omitempty"`
 }
+
+// TerminalProfile carries the attached terminal's default colours as 0xRRGGBB.
+type TerminalProfile struct {
+	Foreground *uint32 `json:"foreground,omitempty"`
+	Background *uint32 `json:"background,omitempty"`
+}
+
+// MaxColor is the largest 0xRRGGBB value.
+const MaxColor = 0xFFFFFF
 
 // Validate checks bounds.
 func (a OpenArgs) Validate() error {
 	if err := (SessionArgs{SessionID: a.SessionID}).Validate(); err != nil {
 		return err
+	}
+	if a.Create != nil {
+		if err := a.Create.Validate(); err != nil {
+			return err
+		}
+	}
+	if a.Profile != nil {
+		for _, color := range []*uint32{a.Profile.Foreground, a.Profile.Background} {
+			if color != nil && *color > MaxColor {
+				return &model.Error{Reason: model.ReasonInvalid, Message: "terminal profile colours are 0xRRGGBB"}
+			}
+		}
 	}
 	return nil
 }

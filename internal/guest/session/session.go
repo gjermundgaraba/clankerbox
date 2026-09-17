@@ -7,7 +7,10 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"slices"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -29,6 +32,8 @@ const (
 
 var (
 	errNotRunning       = errors.New("session is not running")
+	errPipeAttached     = errors.New("a pipe session admits only its creating attachment")
+	errNoGrid           = errors.New("a pipe session has no grid")
 	errStale            = errors.New("process identity changed")
 	errSnapshotTooLarge = errors.New("snapshot exceeds the announced maximum")
 )
@@ -43,12 +48,25 @@ type Session struct {
 	now         func() time.Time
 	log         *slog.Logger
 
-	term   *vt.Terminal
-	ring   *ring
-	master *os.File
-	cmd    *exec.Cmd
-	writer *ptyWriter
-	subs   []*subscriber
+	// A PTY session owns term, ring and master; a pipe session owns stdin and
+	// outputs instead and retains nothing.
+	term    *vt.Terminal
+	ring    *ring
+	master  *os.File
+	stdin   *os.File
+	outputs []*os.File
+	cmd     *exec.Cmd
+	writer  *ptyWriter
+	subs    []*subscriber
+	filter  queryFilter
+	// replied is set by onReply inside one terminal write.
+	replied bool
+	// pipeMu orders the two pipe readers, including while one waits for the consumer.
+	pipeMu sync.Mutex
+	// ingested and delivering let drain tell output that is idle from output a
+	// consumer is still working through.
+	ingested   atomic.Uint64
+	delivering atomic.Bool
 	// The final screen, captured once at exit when the terminal is released.
 	view  *protocol.View
 	final []byte
@@ -70,18 +88,16 @@ type spawnOptions struct {
 	log         *slog.Logger
 }
 
-// spawn writes the starting manifest, starts the child on a PTY, and begins
-// the reader, writer, and wait loops. The manifest is removed only when the
-// child never existed: once it runs, its id stays taken whatever storage does.
-func spawn(opts spawnOptions) (*Session, error) {
+// prepare writes the starting manifest and creates the terminal, without a
+// child: an attachment can subscribe before launch produces any output.
+func prepare(opts spawnOptions) (*Session, error) {
 	s := &Session{
 		record:      opts.record,
 		fingerprint: opts.fingerprint,
 		stateDir:    opts.stateDir,
 		now:         opts.now,
 		log:         opts.log,
-		ring:        newRing(opts.ringSize),
-		writer:      newPtyWriter(),
+		writer:      newPtyWriter(inputBudget),
 		readDone:    make(chan struct{}),
 		waitDone:    make(chan struct{}),
 	}
@@ -89,45 +105,104 @@ func spawn(opts spawnOptions) (*Session, error) {
 	if err := writeManifest(s.stateDir, s.manifest()); err != nil {
 		return nil, err
 	}
-	if err := s.start(opts); err != nil {
-		_ = removeManifest(s.stateDir, s.record.ID)
-		return nil, err
+	if s.record.Pipes {
+		s.writer = newPtyWriter(pipeInputBudget)
+		return s, nil
 	}
-	return s, nil
-}
-
-func (s *Session) start(opts spawnOptions) error {
+	s.ring = newRing(opts.ringSize)
 	term, err := opts.loader.New(opts.ctx, vt.Options{
 		Cols:       s.record.Cols,
 		Rows:       s.record.Rows,
 		OnWritePTY: s.onReply,
 	})
 	if err != nil {
-		return fmt.Errorf("create terminal: %w", err)
+		_ = removeManifest(s.stateDir, s.record.ID)
+		return nil, fmt.Errorf("create terminal: %w", err)
 	}
 	s.term = term
+	return s, nil
+}
+
+// launch starts the child and begins the reader, writer, and wait loops. The
+// manifest is removed only when the child never existed: once it runs, its id
+// stays taken whatever storage does.
+func (s *Session) launch(opts spawnOptions) error {
 	argv := s.record.Argv
 	cmd := exec.CommandContext(context.WithoutCancel(opts.ctx), argv[0], argv[1:]...) //nolint:gosec // Shell-equivalent authority by contract.
 	cmd.Dir = s.record.Cwd
 	opts.process.configure(cmd, opts.env)
-	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: s.record.Rows, Cols: s.record.Cols})
-	if err != nil {
-		_ = term.Close()
+	start := s.startPTY
+	if s.record.Pipes {
+		start = s.startPipes
+	}
+	if err := start(cmd, opts.env); err != nil {
+		if s.term != nil {
+			_ = s.term.Close()
+		}
+		_ = removeManifest(s.stateDir, s.record.ID)
 		return fmt.Errorf("start process: %w", err)
 	}
-	unblock(master)
-	s.master = master
 	s.cmd = cmd
 	s.record.PID = cmd.Process.Pid
 	s.record.Status = protocol.StatusRunning
+	var err error
 	if s.startTime, err = processStartTime(cmd.Process.Pid); err != nil {
 		s.startTime = 0
 	}
 	// Like every later write: logged when it fails, the running record stays in memory.
 	s.persist()
-	go s.writer.run(master)
-	go s.readLoop()
+	if s.record.Pipes {
+		go s.writer.run(s.stdin, func() { _ = s.stdin.Close() })
+		go s.readPipes()
+	} else {
+		go s.writer.run(s.master, nil)
+		go s.readLoop()
+	}
 	go s.waitLoop()
+	return nil
+}
+
+func (s *Session) startPTY(cmd *exec.Cmd, _ map[string]string) error {
+	master, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: s.record.Rows, Cols: s.record.Cols})
+	if err != nil {
+		return err
+	}
+	unblock(master)
+	s.master = master
+	return nil
+}
+
+// startPipes gives the child three pipes and its own session, so End reaches
+// its whole process group as it does for a PTY child.
+func (s *Session) startPipes(cmd *exec.Cmd, env map[string]string) error {
+	if _, ok := env["TERM"]; !ok {
+		cmd.Env = slices.DeleteFunc(cmd.Env, func(entry string) bool { return strings.HasPrefix(entry, "TERM=") })
+	}
+	var files []*os.File
+	closeAll := func() {
+		for _, f := range files {
+			_ = f.Close()
+		}
+	}
+	for range 3 {
+		r, w, err := os.Pipe()
+		if err != nil {
+			closeAll()
+			return err
+		}
+		files = append(files, r, w)
+	}
+	stdinR, stdinW, outR, outW, errR, errW := files[0], files[1], files[2], files[3], files[4], files[5]
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdinR, outW, errW
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if err := cmd.Start(); err != nil {
+		closeAll()
+		return err
+	}
+	for _, child := range []*os.File{stdinR, outW, errW} {
+		_ = child.Close()
+	}
+	s.stdin, s.outputs = stdinW, []*os.File{outR, errR}
 	return nil
 }
 
@@ -149,9 +224,17 @@ func (s *Session) persist() {
 
 // onReply runs inside vt.Write, under the session mutex held by ingest.
 func (s *Session) onReply(data []byte) {
+	s.replied = true
 	if !s.writer.enqueueReply(data) {
 		s.record.ReplyOverflow++
 	}
+}
+
+// writeTerminal reports whether the terminal answered these bytes.
+func (s *Session) writeTerminal(data []byte) bool {
+	s.replied = false
+	_ = s.term.Write(data)
+	return s.replied
 }
 
 func (s *Session) readLoop() {
@@ -160,11 +243,42 @@ func (s *Session) readLoop() {
 	for {
 		n, err := s.master.Read(buf)
 		if n > 0 {
-			s.ingest(buf[:n])
+			s.deliver(n, func() { s.ingest(buf[:n]) })
 		}
 		if err != nil {
 			return
 		}
+	}
+}
+
+// deliver marks a reader as busy with n bytes, for drain.
+func (s *Session) deliver(n int, ingest func()) {
+	s.delivering.Store(true)
+	ingest()
+	s.ingested.Add(uint64(n))
+	s.delivering.Store(false)
+}
+
+// drain waits for the readers to reach the end of output after the child has
+// exited. A descendant that kept the output open would hold them forever, so
+// output that stays idle for drainTimeout is closed. A reader still delivering
+// is not idle: its consumer sets the pace, and the bytes behind it are read once
+// it catches up rather than discarded.
+func (s *Session) drain() {
+	seen := s.ingested.Load()
+	for {
+		select {
+		case <-s.readDone:
+			return
+		case <-time.After(drainTimeout):
+		}
+		if now := s.ingested.Load(); s.delivering.Load() || now != seen {
+			seen = now
+			continue
+		}
+		s.closeOutputs()
+		<-s.readDone
+		return
 	}
 }
 
@@ -173,41 +287,94 @@ func (s *Session) ingest(data []byte) {
 	chunk := append([]byte(nil), data...)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_ = s.term.Write(chunk)
+	filtered := s.filter.ingest(s.record.Offset, chunk, s.writeTerminal)
 	s.ring.append(chunk)
 	s.record.Offset += uint64(len(chunk))
 	s.record.RetainedFrom = s.ring.start
+	s.filter.prune(s.ring.start)
 	for _, sub := range s.subs {
-		sub.enqueueOutput(s.record.Offset, chunk)
+		if sub.filtered {
+			sub.enqueuePieces(filtered)
+		} else {
+			sub.enqueueOutput(s.record.Offset, chunk)
+		}
+	}
+}
+
+// readPipes drains stdout and stderr until both close.
+func (s *Session) readPipes() {
+	defer close(s.readDone)
+	var readers sync.WaitGroup
+	for index, output := range s.outputs {
+		readers.Go(func() {
+			buf := make([]byte, readChunk)
+			for {
+				n, err := output.Read(buf)
+				if n > 0 {
+					s.deliver(n, func() { s.ingestPipe(buf[:n], index == 1) })
+				}
+				if err != nil {
+					return
+				}
+			}
+		})
+	}
+	readers.Wait()
+}
+
+// ingestPipe delivers pipe output in one order across both streams. Nothing is
+// retained, so a full consumer holds the reader, and through it the child,
+// instead of being dropped.
+func (s *Session) ingestPipe(data []byte, stderr bool) {
+	chunk := append([]byte(nil), data...)
+	s.pipeMu.Lock()
+	defer s.pipeMu.Unlock()
+	s.mu.Lock()
+	s.record.Offset += uint64(len(chunk))
+	s.record.RetainedFrom = s.record.Offset
+	next := s.record.Offset
+	subs := slices.Clone(s.subs)
+	s.mu.Unlock()
+	for _, sub := range subs {
+		sub.enqueue(item{data: chunk, next: next, stderr: stderr})
 	}
 }
 
 func (s *Session) waitLoop() {
 	defer close(s.waitDone)
 	err := s.cmd.Wait()
-	select {
-	case <-s.readDone:
-	case <-time.After(drainTimeout):
-		_ = s.master.Close()
-		<-s.readDone
-	}
+	s.drain()
 	s.mu.Lock()
 	s.record.Status = protocol.StatusExited
 	ended := s.timestamp()
 	s.record.EndedAt = &ended
 	s.applyExit(err)
+	// A sequence the child never finished was withheld from filtered output.
+	unfinished := s.filter.flush(s.record.Offset)
+	for _, sub := range s.subs {
+		if sub.filtered {
+			sub.enqueuePieces(unfinished)
+		}
+	}
 	// An ended session is its record plus its final screen: the terminal and
 	// the ring are released here, since nothing resumes an ended session.
-	s.view, s.final = capture(s.term)
 	term := s.term
+	if term != nil {
+		s.view, s.final = capture(term)
+	}
 	s.term, s.ring = nil, nil
 	s.persist()
 	record := s.record
 	subs := s.subs
 	s.mu.Unlock()
-	_ = term.Close()
+	if term != nil {
+		_ = term.Close()
+	}
 	s.writer.close()
-	_ = s.master.Close()
+	s.closeOutputs()
+	if s.stdin != nil {
+		_ = s.stdin.Close()
+	}
 	<-s.writer.done
 	for _, sub := range subs {
 		sub.enqueueEvent(protocol.SessionEvent{Session: record})
@@ -235,6 +402,15 @@ func (s *Session) applyExit(err error) {
 	}
 	code := status.ExitStatus()
 	s.record.ExitCode = &code
+}
+
+func (s *Session) closeOutputs() {
+	if s.master != nil {
+		_ = s.master.Close()
+	}
+	for _, output := range s.outputs {
+		_ = output.Close()
+	}
 }
 
 // snapshot returns the public record.
@@ -266,9 +442,19 @@ func (s *Session) open(
 		}
 		return value, &Attachment{sink: sink, final: s.final}, nil
 	}
-	sub := newSubscriber(sink)
+	if s.record.Pipes {
+		return protocol.OpenValue{}, nil, errPipeAttached
+	}
+	s.applyProfile(args.Profile)
+	sub := newSubscriber(sink, false)
+	sub.filtered = args.OmitAnsweredQueries
 	if s.resumable(args, incarnation) {
-		sub.prefix = s.ring.slice(*args.FromOffset)
+		retained := s.ring.slice(*args.FromOffset)
+		if sub.filtered {
+			sub.pieces = s.filter.replay(*args.FromOffset, retained)
+		} else {
+			sub.prefix = retained
+		}
 		sub.from = *args.FromOffset
 		s.subs = append(s.subs, sub)
 		value := protocol.OpenValue{Mode: protocol.ModeResume, Offset: *args.FromOffset, Session: s.record}
@@ -290,6 +476,29 @@ func (s *Session) open(
 		Session:       s.record,
 		SnapshotBytes: uint64(len(snapshot)),
 	}, &Attachment{sub: sub, session: s}, nil
+}
+
+// subscribe registers the creating attachment of a prepared session, before
+// launch, so its stream starts at offset zero with nothing to replay.
+func (s *Session) subscribe(args protocol.OpenArgs, sink Sink) *Attachment {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.applyProfile(args.Profile)
+	sub := newSubscriber(sink, s.record.Pipes)
+	sub.filtered = args.OmitAnsweredQueries && !s.record.Pipes
+	s.subs = append(s.subs, sub)
+	return &Attachment{sub: sub, session: s}
+}
+
+// applyProfile makes the terminal answer colour queries for the attached
+// terminal. The latest attachment to supply a profile decides.
+func (s *Session) applyProfile(profile *protocol.TerminalProfile) {
+	if profile == nil || s.term == nil {
+		return
+	}
+	if err := s.term.SetColors(vt.Colors{Foreground: profile.Foreground, Background: profile.Background}); err != nil {
+		s.log.Error("apply terminal profile", "session", s.record.ID, "error", err)
+	}
 }
 
 // capture reads the final screen once: its announcement and the text bytes.
@@ -317,14 +526,18 @@ func (s *Session) resumable(args protocol.OpenArgs, incarnation string) bool {
 	return s.record.LastResizeOffset == nil || *s.record.LastResizeOffset < from
 }
 
+// detach unregisters a subscriber. A session created to end with its
+// attachments is ended here when the last one leaves, whatever closed it.
 func (s *Session) detach(sub *subscriber) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i, candidate := range s.subs {
-		if candidate == sub {
-			s.subs = append(s.subs[:i], s.subs[i+1:]...)
-			return
-		}
+	index := slices.Index(s.subs, sub)
+	if index >= 0 {
+		s.subs = slices.Delete(s.subs, index, index+1)
+	}
+	last := index >= 0 && len(s.subs) == 0 && s.record.EndOnDetach && s.running()
+	s.mu.Unlock()
+	if last {
+		go s.end()
 	}
 }
 
@@ -332,12 +545,26 @@ func (s *Session) detach(sub *subscriber) {
 func (s *Session) input(data []byte) protocol.InputValue {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.running() {
+		return protocol.InputValue{Status: protocol.InputRefused, Reason: string(model.ReasonNotRunning)}
+	}
+	if reason := s.writer.enqueueInput(data); reason != "" {
+		return protocol.InputValue{Status: protocol.InputRefused, Reason: reason}
+	}
+	return protocol.InputValue{Status: protocol.InputAccepted}
+}
+
+// closeInput delivers end of input to a pipe session after its queued input.
+func (s *Session) closeInput() protocol.InputValue {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	switch {
 	case !s.running():
 		return protocol.InputValue{Status: protocol.InputRefused, Reason: string(model.ReasonNotRunning)}
-	case !s.writer.enqueueInput(data):
-		return protocol.InputValue{Status: protocol.InputRefused, Reason: "queue_full"}
+	case !s.record.Pipes:
+		return protocol.InputValue{Status: protocol.InputRefused, Reason: "not_a_pipe_session"}
 	default:
+		s.writer.enqueueEOF()
 		return protocol.InputValue{Status: protocol.InputAccepted}
 	}
 }
@@ -348,6 +575,9 @@ func (s *Session) resize(cols, rows uint16) (protocol.Session, error) {
 	defer s.mu.Unlock()
 	if !s.running() {
 		return protocol.Session{}, errNotRunning
+	}
+	if s.record.Pipes {
+		return protocol.Session{}, errNoGrid
 	}
 	if err := setSize(s.master, rows, cols); err != nil {
 		return protocol.Session{}, fmt.Errorf("resize pty: %w", err)
@@ -429,6 +659,9 @@ func (s *Session) waitExit(d time.Duration) bool {
 // [os.File.Fd], which moves the descriptor into blocking mode and leaves the
 // writer stuck in a write that Close can no longer interrupt.
 func foregroundGroup(master *os.File) int {
+	if master == nil {
+		return 0
+	}
 	conn, err := master.SyscallConn()
 	if err != nil {
 		return 0

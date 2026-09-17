@@ -29,8 +29,6 @@ class CheckpointEvidenceTests(unittest.TestCase):
                 'cli',
                 '--config',
                 'config',
-                '--session-runner',
-                'runner',
                 '--lifecycle-result',
                 str(source_path),
                 '--result',

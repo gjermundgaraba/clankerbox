@@ -7,7 +7,7 @@ import json
 import subprocess
 import uuid
 
-from acceptance import Acceptance, Report, run_guest, describe_guest
+from acceptance import Acceptance, Report, run_guest, describe_guest, expect_refusal
 
 
 def main():
@@ -16,7 +16,6 @@ def main():
     parser.add_argument('--config', required=True)
     parser.add_argument('--profile', required=True)
     parser.add_argument('--host', required=True)
-    parser.add_argument('--session-runner', required=True)
     parser.add_argument('--result', required=True)
     parser.add_argument('--keep', action='store_true', help='leave this new machine running for checkpoint acceptance')
     parser.add_argument(
@@ -37,7 +36,7 @@ def main():
         evidence.save()
     save, run, operation = evidence.save, acceptance.run, acceptance.operation
 
-    guest = partial(run_guest, args.session_runner, args.config)
+    guest = partial(run_guest, args.binary, args.config)
 
     try:
         if not args.resume:
@@ -75,22 +74,15 @@ test -x scratch
 readlink link
 """
         before = guest(machine, 'sh', '-se', data=check)
-        identity_before = describe_guest(args.session_runner, args.config, machine)
+        identity_before = describe_guest(args.binary, args.config, machine)
         operation('stop', machine)
         stopped = json.loads(run('inspect', machine))
         if stopped['state'] != 'stopped':
             raise RuntimeError(f'expected stopped: {stopped}')
-        denied = subprocess.run(
-            [args.session_runner, '--config', args.config, '--expect-stopped', machine],
-            capture_output=True,
-            text=True,
-            timeout=100,
-        )
-        if denied.returncode != 0:
-            raise RuntimeError(f'stopped-session prerequisite check failed: {denied.stderr[-2048:]}')
+        expect_refusal(args.binary, args.config, 'prerequisite', 'guest', machine)
         operation('start', machine)
         after = guest(machine, 'sh', '-se', data=check)
-        identity_after = describe_guest(args.session_runner, args.config, machine)
+        identity_after = describe_guest(args.binary, args.config, machine)
         if (
             before != after
             or identity_before['machine_id'] != identity_after['machine_id']

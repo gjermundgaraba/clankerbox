@@ -16,7 +16,7 @@ class BenchmarkTests(unittest.TestCase):
     def test_measures_all_phases_and_cleans_only_its_own_resources(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Report(Path(directory) / 'report.json', {'events': [], 'machines': [], 'timings': []})
-            args = SimpleNamespace(binary='cli', config='cfg', session_runner='runner', samples=1,
+            args = SimpleNamespace(binary='cli', config='cfg', samples=1,
                                    host='local', profile='linux')
             calls = []
 
@@ -41,7 +41,7 @@ class BenchmarkTests(unittest.TestCase):
     def test_failure_does_not_guess_cleanup(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Report(Path(directory) / 'report.json', {'events': [], 'machines': [], 'timings': []})
-            args = SimpleNamespace(binary='cli', config='cfg', session_runner='runner', samples=1, host='local', profile='linux')
+            args = SimpleNamespace(binary='cli', config='cfg', samples=1, host='local', profile='linux')
             with patch('benchmark_lifecycle.Acceptance') as acceptance:
                 acceptance.return_value.operation.side_effect = RuntimeError('ambiguous')
                 with self.assertRaisesRegex(RuntimeError, 'ambiguous'):

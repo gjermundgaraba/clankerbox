@@ -3,7 +3,6 @@ package rpcmodel
 import (
 	"fmt"
 	"maps"
-	"math"
 	"slices"
 
 	v1 "clankerbox/gen/clankerbox/v1"
@@ -29,6 +28,8 @@ func ToSession(s protocol.Session) *v1.Session {
 		LastResizeOffset: clonePointer(s.LastResizeOffset),
 		Incarnation:      s.Incarnation,
 		ReplyOverflow:    s.ReplyOverflow,
+		Pipes:            s.Pipes,
+		EndOnDetach:      s.EndOnDetach,
 	}
 	if s.ExitCode != nil {
 		value := int32(*s.ExitCode)
@@ -43,8 +44,10 @@ func FromSession(s *v1.Session) (protocol.Session, error) {
 		return protocol.Session{}, fmt.Errorf("session required")
 	}
 	cols, rows, err := grid(s.GetCols(), s.GetRows())
-	// A quarantined unreadable record preserves only identity and lost status.
-	if err != nil && (s.GetStatus() != v1.SessionStatus_SESSION_STATUS_LOST || s.GetCols() != 0 || s.GetRows() != 0) {
+	// A quarantined unreadable record preserves only identity and lost status;
+	// a pipe session never had a grid.
+	gridless := s.GetPipes() || s.GetStatus() == v1.SessionStatus_SESSION_STATUS_LOST
+	if err != nil && (!gridless || s.GetCols() != 0 || s.GetRows() != 0) {
 		return protocol.Session{}, err
 	}
 	pid, err := intToInt(s.GetPid())
@@ -72,6 +75,8 @@ func FromSession(s *v1.Session) (protocol.Session, error) {
 		LastResizeOffset: clonePointer(s.LastResizeOffset),
 		Incarnation:      s.GetIncarnation(),
 		ReplyOverflow:    s.GetReplyOverflow(),
+		Pipes:            s.GetPipes(),
+		EndOnDetach:      s.GetEndOnDetach(),
 	}
 	if s.ExitCode != nil {
 		value := int(s.GetExitCode())
@@ -80,53 +85,28 @@ func FromSession(s *v1.Session) (protocol.Session, error) {
 	return out, nil
 }
 
-// ToCreateSession preserves caller-chosen identity and creation time for deduplication.
-func ToCreateSession(machineID string, args protocol.CreateArgs) *v1.CreateSessionRequest {
-	return &v1.CreateSessionRequest{
-		MachineId: machineID,
-		SessionId: args.SessionID,
-		Label:     args.Label,
-		Cwd:       args.Cwd,
-		Argv:      slices.Clone(args.Argv),
-		Env:       maps.Clone(args.Env),
-		Cols:      uint32(args.Cols),
-		Rows:      uint32(args.Rows),
-		CreatedAt: args.CreatedAt,
+// fromNewSession validates creation arguments before session-manager admission.
+func fromNewSession(sessionID string, r *v1.NewSession) (protocol.CreateArgs, error) {
+	var cols, rows uint16
+	var err error
+	// A pipe session has no grid; Validate refuses a non-zero one.
+	if !r.GetPipes() || r.GetCols() != 0 || r.GetRows() != 0 {
+		if cols, rows, err = grid(r.GetCols(), r.GetRows()); err != nil {
+			return protocol.CreateArgs{}, err
+		}
 	}
-}
-
-// FromCreateSession validates creation arguments before session-manager admission.
-func FromCreateSession(r *v1.CreateSessionRequest) (protocol.CreateArgs, error) {
-	if r == nil {
-		return protocol.CreateArgs{}, fmt.Errorf("create session request required")
-	}
-	cols, rows, err := grid(r.GetCols(), r.GetRows())
-	if err != nil {
-		return protocol.CreateArgs{}, err
-	}
-	out := protocol.CreateArgs{
-		SessionID: r.GetSessionId(),
-		Label:     r.GetLabel(),
-		Cwd:       r.GetCwd(),
-		Argv:      slices.Clone(r.GetArgv()),
-		Env:       maps.Clone(r.GetEnv()),
-		Cols:      cols,
-		Rows:      rows,
-		CreatedAt: r.GetCreatedAt(),
-	}
-	if err = out.Validate(); err != nil {
-		return out, err
-	}
-	return out, nil
-}
-
-// ToOpen preserves optional committed resume cursor and expected engine digest.
-func ToOpen(machineID, engineDigest string, args protocol.OpenArgs) *v1.Open {
-	out := &v1.Open{MachineId: machineID, SessionId: args.SessionID, ExpectedEngineDigest: engineDigest}
-	if args.FromOffset != nil {
-		out.ResumeCursor = &v1.ResumeCursor{Offset: *args.FromOffset, Incarnation: args.FromIncarnation}
-	}
-	return out
+	return protocol.CreateArgs{
+		SessionID:   sessionID,
+		Label:       r.GetLabel(),
+		Cwd:         r.GetCwd(),
+		Argv:        slices.Clone(r.GetArgv()),
+		Env:         maps.Clone(r.GetEnv()),
+		Cols:        cols,
+		Rows:        rows,
+		CreatedAt:   r.GetCreatedAt(),
+		EndOnDetach: r.GetEndOnDetach(),
+		Pipes:       r.GetPipes(),
+	}, nil
 }
 
 // FromOpen restores the committed cursor without a JavaScript-number offset limit.
@@ -134,13 +114,26 @@ func FromOpen(r *v1.Open) (protocol.OpenArgs, error) {
 	if r == nil {
 		return protocol.OpenArgs{}, fmt.Errorf("open required")
 	}
-	out := protocol.OpenArgs{SessionID: r.GetSessionId()}
+	out := protocol.OpenArgs{SessionID: r.GetSessionId(), OmitAnsweredQueries: r.GetOmitAnsweredQueries()}
 	if r.GetResumeCursor() != nil {
 		out.FromOffset = clonePointer(&r.ResumeCursor.Offset)
 		out.FromIncarnation = r.GetResumeCursor().GetIncarnation()
 	}
+	if r.GetCreate() != nil {
+		create, err := fromNewSession(r.GetSessionId(), r.GetCreate())
+		if err != nil {
+			return out, err
+		}
+		out.Create = &create
+	}
+	if profile := r.GetTerminalProfile(); profile != nil {
+		out.Profile = &protocol.TerminalProfile{
+			Foreground: clonePointer(profile.Foreground),
+			Background: clonePointer(profile.Background),
+		}
+	}
 	// Offsets are full uint64 and need no bound.
-	if err := (protocol.SessionArgs{SessionID: out.SessionID}).Validate(); err != nil {
+	if err := out.Validate(); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -163,44 +156,6 @@ func ToOpened(guest *v1.GuestDescription, value protocol.OpenValue) *v1.Opened {
 		}
 	}
 	return out
-}
-
-// FromOpened validates the live cut and restores bootstrap and final-view metadata.
-func FromOpened(value *v1.Opened) (protocol.OpenValue, error) {
-	if value == nil {
-		return protocol.OpenValue{}, fmt.Errorf("opened required")
-	}
-	s, err := FromSession(value.GetSession())
-	if err != nil {
-		return protocol.OpenValue{}, err
-	}
-	if value.GetCut() != s.Offset {
-		return protocol.OpenValue{}, fmt.Errorf("opened cut differs from atomic session offset")
-	}
-	mode, err := enumString(openModes, value.GetMode())
-	if err != nil {
-		return protocol.OpenValue{}, err
-	}
-	out := protocol.OpenValue{
-		Mode:          mode,
-		Offset:        value.GetStartOffset(),
-		Session:       s,
-		SnapshotBytes: value.GetSnapshotBytes(),
-	}
-	if value.GetView() != nil {
-		if value.GetView().GetCursor() == nil || value.GetView().GetCursor().GetX() > math.MaxUint16 ||
-			value.GetView().GetCursor().GetY() > math.MaxUint16 {
-			return out, fmt.Errorf("invalid final view cursor")
-		}
-		out.View = &protocol.View{
-			Cursor: protocol.Cursor{
-				X: uint16(value.GetView().GetCursor().GetX()),
-				Y: uint16(value.GetView().GetCursor().GetY()),
-			},
-			Bytes: value.GetView().GetBytes(),
-		}
-	}
-	return out, nil
 }
 
 // ToGuestDescription projects the authenticated guest identity and engine handshake.

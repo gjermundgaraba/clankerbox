@@ -10,10 +10,14 @@ import (
 	"clankerbox/internal/model"
 )
 
-// Streams supplies the command output and diagnostic destinations.
+// Streams supplies the command input, output and diagnostic destinations.
 type Streams struct {
+	// In feeds a session; nil means no input.
+	In  io.Reader
 	Out io.Writer
 	Err io.Writer
+	// Terminal is set when In and Out are one interactive terminal.
+	Terminal Terminal
 }
 
 func jsonOut(w io.Writer, v any) error { return json.NewEncoder(w).Encode(v) }

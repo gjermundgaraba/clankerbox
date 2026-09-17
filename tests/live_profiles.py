@@ -56,7 +56,7 @@ def qualify(args, report):
         return build
 
     def version(machine):
-        return run_guest(args.session_runner, args.config, machine,
+        return run_guest(args.binary, args.config, machine,
                          '/usr/local/bin/clankerbox-profile-check').strip()
 
     def create(suffix):
@@ -165,7 +165,7 @@ def qualify(args, report):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ('binary', 'config', 'session-runner', 'host', 'base', 'result'):
+    for name in ('binary', 'config', 'host', 'base', 'result'):
         parser.add_argument('--' + name, required=True)
     parser.add_argument('--cpu', type=int, default=2)
     parser.add_argument('--ram-mib', type=int, default=1024)

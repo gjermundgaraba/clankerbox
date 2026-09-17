@@ -209,49 +209,48 @@ func (m *Manager) Shutdown(ctx context.Context) error {
 	}
 }
 
-// Create starts a session or returns the existing one for a repeated id. A
+// admit applies creation's identity, horizon and capacity rules under the
+// manager mutex. A known id returns its record instead of spawn options. A
 // create this daemon does not remember is refused once it is older than the
 // retry horizon, never started.
-func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *Manager) admit(args protocol.CreateArgs) (spawnOptions, *manifest, error) {
 	if m.closing {
-		return protocol.Session{}, &model.Error{Reason: model.ReasonNotRunning, Message: "session manager is closing"}
+		return spawnOptions{}, nil, &model.Error{Reason: model.ReasonNotRunning, Message: "session manager is closing"}
 	}
 	record := m.newRecord(args)
 	fingerprint := createFingerprint(record, args.Env)
 	if existing, ok := m.lookup(args.SessionID); ok {
 		// A quarantined record has no fingerprint left to compare; the id is still taken.
 		if existing.Fingerprint != "" && existing.Fingerprint != fingerprint {
-			return protocol.Session{}, &model.Error{
+			return spawnOptions{}, nil, &model.Error{
 				Reason:  model.ReasonConflict,
 				Message: "session id exists with different arguments",
 			}
 		}
-		return existing.Session, nil
+		return spawnOptions{}, &existing, nil
 	}
 	created, err := args.Created()
 	if err != nil {
-		return protocol.Session{}, err
+		return spawnOptions{}, nil, err
 	}
 	now := m.cfg.Now()
 	if created.After(now.Add(createSkew)) {
-		return protocol.Session{}, &model.Error{Reason: model.ReasonInvalid, Message: "created_at is in the future"}
+		return spawnOptions{}, nil, &model.Error{Reason: model.ReasonInvalid, Message: "created_at is in the future"}
 	}
 	if now.Sub(created) > createHorizon {
-		return protocol.Session{}, &model.Error{
+		return spawnOptions{}, nil, &model.Error{
 			Reason:  model.ReasonExpired,
 			Message: "create is older than the retry horizon and was never started",
 		}
 	}
 	if m.runningCount() >= m.cfg.MaxSessions {
-		return protocol.Session{}, &model.Error{
+		return spawnOptions{}, nil, &model.Error{
 			Reason:    model.ReasonCapacity,
 			Message:   "session limit reached",
 			Retryable: true,
 		}
 	}
-	s, err := spawn(spawnOptions{
+	return spawnOptions{
 		ctx:         m.ctx,
 		record:      record,
 		fingerprint: fingerprint,
@@ -262,12 +261,7 @@ func (m *Manager) Create(args protocol.CreateArgs) (protocol.Session, error) {
 		loader:      m.cfg.Loader,
 		now:         m.cfg.Now,
 		log:         m.cfg.Log,
-	})
-	if err != nil {
-		return protocol.Session{}, &model.Error{Reason: model.ReasonInternal, Message: err.Error()}
-	}
-	m.live[record.ID] = s
-	return s.snapshot(), nil
+	}, nil, nil
 }
 
 func (m *Manager) newRecord(args protocol.CreateArgs) protocol.Session {
@@ -292,6 +286,9 @@ func (m *Manager) newRecord(args protocol.CreateArgs) protocol.Session {
 		CreatedAt:    m.cfg.Now().UTC().Format(time.RFC3339Nano),
 		Incarnation:  m.cfg.Incarnation,
 		RetainedFrom: 0,
+		Pipes:        args.Pipes,
+		// Nothing can attach to a pipe session again, so it ends with its creator.
+		EndOnDetach: args.EndOnDetach || args.Pipes,
 	}
 }
 
@@ -299,10 +296,12 @@ func (m *Manager) newRecord(args protocol.CreateArgs) protocol.Session {
 // create with a different environment is a conflict, without exposing values.
 func createFingerprint(record protocol.Session, env map[string]string) string {
 	raw, _ := json.Marshal(struct {
-		Cwd  string            `json:"cwd"`
-		Argv []string          `json:"argv"`
-		Env  map[string]string `json:"env"`
-	}{record.Cwd, record.Argv, env})
+		Cwd         string            `json:"cwd"`
+		Argv        []string          `json:"argv"`
+		Env         map[string]string `json:"env"`
+		Pipes       bool              `json:"pipes"`
+		EndOnDetach bool              `json:"end_on_detach"`
+	}{record.Cwd, record.Argv, env, record.Pipes, record.EndOnDetach})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
 }
@@ -372,6 +371,12 @@ func (m *Manager) inventory() []protocol.Session {
 // nil Attachment means nothing follows the reply. A record adopted from an
 // earlier daemon has no terminal, so it answers ended without a view.
 func (m *Manager) Open(args protocol.OpenArgs, sink Sink) (protocol.OpenValue, *Attachment, error) {
+	if args.Create != nil {
+		value, attachment, created, err := m.createOpen(args, sink)
+		if created || err != nil {
+			return value, attachment, err
+		}
+	}
 	m.mu.Lock()
 	s, live := m.live[args.SessionID]
 	record, known := m.records[args.SessionID]
@@ -387,6 +392,39 @@ func (m *Manager) Open(args protocol.OpenArgs, sink Sink) (protocol.OpenValue, *
 		return protocol.OpenValue{}, nil, mapError(err)
 	}
 	return value, attachment, nil
+}
+
+// createOpen creates the session inside its first attachment, the only way a
+// session begins: the subscriber exists before the child starts, so the stream
+// begins at offset zero and no output, however brief the command, precedes it.
+// A known id reports false and is opened like any other session, which is what
+// makes repeating an Open after a lost reply safe.
+func (m *Manager) createOpen(args protocol.OpenArgs, sink Sink) (protocol.OpenValue, *Attachment, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	opts, existing, err := m.admit(*args.Create)
+	if err != nil || existing != nil {
+		return protocol.OpenValue{}, nil, false, err
+	}
+	s, err := prepare(opts)
+	if err != nil {
+		return protocol.OpenValue{}, nil, false, &model.Error{Reason: model.ReasonInternal, Message: err.Error()}
+	}
+	attachment := s.subscribe(args, sink)
+	if err = s.launch(opts); err != nil {
+		return protocol.OpenValue{}, nil, false, &model.Error{Reason: model.ReasonInternal, Message: err.Error()}
+	}
+	m.live[opts.record.ID] = s
+	return protocol.OpenValue{Mode: protocol.ModeResume, Session: s.snapshot()}, attachment, true, nil
+}
+
+// CloseInput delivers end of input to a pipe session.
+func (m *Manager) CloseInput(id string) (protocol.InputValue, error) {
+	s, err := m.liveSession(id)
+	if err != nil {
+		return protocol.InputValue{}, err
+	}
+	return s.closeInput(), nil
 }
 
 // Input admits bytes for a session.
@@ -477,6 +515,12 @@ func expired(record protocol.Session, now time.Time) bool {
 func mapError(err error) error {
 	if errors.Is(err, errNotRunning) {
 		return &model.Error{Reason: model.ReasonNotRunning, Message: "session is not running"}
+	}
+	if errors.Is(err, errPipeAttached) {
+		return &model.Error{Reason: model.ReasonConflict, Message: err.Error()}
+	}
+	if errors.Is(err, errNoGrid) {
+		return &model.Error{Reason: model.ReasonInvalid, Message: err.Error()}
 	}
 	return &model.Error{Reason: model.ReasonInternal, Message: err.Error()}
 }

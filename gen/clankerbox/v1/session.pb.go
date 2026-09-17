@@ -131,6 +131,52 @@ func (OpenMode) EnumDescriptor() ([]byte, []int) {
 	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{1}
 }
 
+type OutputStream int32
+
+const (
+	OutputStream_OUTPUT_STREAM_UNSPECIFIED OutputStream = 0
+	OutputStream_OUTPUT_STREAM_STDERR      OutputStream = 1
+)
+
+// Enum value maps for OutputStream.
+var (
+	OutputStream_name = map[int32]string{
+		0: "OUTPUT_STREAM_UNSPECIFIED",
+		1: "OUTPUT_STREAM_STDERR",
+	}
+	OutputStream_value = map[string]int32{
+		"OUTPUT_STREAM_UNSPECIFIED": 0,
+		"OUTPUT_STREAM_STDERR":      1,
+	}
+)
+
+func (x OutputStream) Enum() *OutputStream {
+	p := new(OutputStream)
+	*p = x
+	return p
+}
+
+func (x OutputStream) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (OutputStream) Descriptor() protoreflect.EnumDescriptor {
+	return file_clankerbox_v1_session_proto_enumTypes[2].Descriptor()
+}
+
+func (OutputStream) Type() protoreflect.EnumType {
+	return &file_clankerbox_v1_session_proto_enumTypes[2]
+}
+
+func (x OutputStream) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use OutputStream.Descriptor instead.
+func (OutputStream) EnumDescriptor() ([]byte, []int) {
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{2}
+}
+
 // Authenticated private guest endpoint. Identical terminal messages across relays.
 type DescribeGuestRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -304,8 +350,11 @@ type Session struct {
 	LastResizeOffset *uint64 `protobuf:"varint,15,opt,name=last_resize_offset,json=lastResizeOffset,proto3,oneof" json:"last_resize_offset,omitempty"`
 	Incarnation      string  `protobuf:"bytes,16,opt,name=incarnation,proto3" json:"incarnation,omitempty"`
 	ReplyOverflow    uint64  `protobuf:"varint,17,opt,name=reply_overflow,json=replyOverflow,proto3" json:"reply_overflow,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Pipe session: no PTY or terminal; cols and rows are zero.
+	Pipes         bool `protobuf:"varint,18,opt,name=pipes,proto3" json:"pipes,omitempty"`
+	EndOnDetach   bool `protobuf:"varint,19,opt,name=end_on_detach,json=endOnDetach,proto3" json:"end_on_detach,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Session) Reset() {
@@ -457,36 +506,55 @@ func (x *Session) GetReplyOverflow() uint64 {
 	return 0
 }
 
-type CreateSessionRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	MachineId string                 `protobuf:"bytes,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
-	SessionId string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	Label     string                 `protobuf:"bytes,3,opt,name=label,proto3" json:"label,omitempty"`
-	Cwd       string                 `protobuf:"bytes,4,opt,name=cwd,proto3" json:"cwd,omitempty"`
-	Argv      []string               `protobuf:"bytes,5,rep,name=argv,proto3" json:"argv,omitempty"`
-	Env       map[string]string      `protobuf:"bytes,6,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Cols      uint32                 `protobuf:"varint,7,opt,name=cols,proto3" json:"cols,omitempty"`
-	Rows      uint32                 `protobuf:"varint,8,opt,name=rows,proto3" json:"rows,omitempty"`
+func (x *Session) GetPipes() bool {
+	if x != nil {
+		return x.Pipes
+	}
+	return false
+}
+
+func (x *Session) GetEndOnDetach() bool {
+	if x != nil {
+		return x.EndOnDetach
+	}
+	return false
+}
+
+// A session is created by the attachment that opens it; see Open.create.
+type NewSession struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Label string                 `protobuf:"bytes,1,opt,name=label,proto3" json:"label,omitempty"`
+	Cwd   string                 `protobuf:"bytes,2,opt,name=cwd,proto3" json:"cwd,omitempty"`
+	Argv  []string               `protobuf:"bytes,3,rep,name=argv,proto3" json:"argv,omitempty"`
+	Env   map[string]string      `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Cols  uint32                 `protobuf:"varint,5,opt,name=cols,proto3" json:"cols,omitempty"`
+	Rows  uint32                 `protobuf:"varint,6,opt,name=rows,proto3" json:"rows,omitempty"`
 	// Caller decision time for creation deduplication/retry-horizon enforcement.
-	CreatedAt     string `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	CreatedAt string `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// The guest ends the session when its last attachment closes, for any reason.
+	EndOnDetach bool `protobuf:"varint,8,opt,name=end_on_detach,json=endOnDetach,proto3" json:"end_on_detach,omitempty"`
+	// No PTY or terminal: stdin, stdout and stderr are pipes and the grid must be
+	// zero. Implies end_on_detach and admits no other attachment, resume or
+	// snapshot.
+	Pipes         bool `protobuf:"varint,9,opt,name=pipes,proto3" json:"pipes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *CreateSessionRequest) Reset() {
-	*x = CreateSessionRequest{}
+func (x *NewSession) Reset() {
+	*x = NewSession{}
 	mi := &file_clankerbox_v1_session_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *CreateSessionRequest) String() string {
+func (x *NewSession) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*CreateSessionRequest) ProtoMessage() {}
+func (*NewSession) ProtoMessage() {}
 
-func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
+func (x *NewSession) ProtoReflect() protoreflect.Message {
 	mi := &file_clankerbox_v1_session_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -498,72 +566,72 @@ func (x *CreateSessionRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use CreateSessionRequest.ProtoReflect.Descriptor instead.
-func (*CreateSessionRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use NewSession.ProtoReflect.Descriptor instead.
+func (*NewSession) Descriptor() ([]byte, []int) {
 	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *CreateSessionRequest) GetMachineId() string {
-	if x != nil {
-		return x.MachineId
-	}
-	return ""
-}
-
-func (x *CreateSessionRequest) GetSessionId() string {
-	if x != nil {
-		return x.SessionId
-	}
-	return ""
-}
-
-func (x *CreateSessionRequest) GetLabel() string {
+func (x *NewSession) GetLabel() string {
 	if x != nil {
 		return x.Label
 	}
 	return ""
 }
 
-func (x *CreateSessionRequest) GetCwd() string {
+func (x *NewSession) GetCwd() string {
 	if x != nil {
 		return x.Cwd
 	}
 	return ""
 }
 
-func (x *CreateSessionRequest) GetArgv() []string {
+func (x *NewSession) GetArgv() []string {
 	if x != nil {
 		return x.Argv
 	}
 	return nil
 }
 
-func (x *CreateSessionRequest) GetEnv() map[string]string {
+func (x *NewSession) GetEnv() map[string]string {
 	if x != nil {
 		return x.Env
 	}
 	return nil
 }
 
-func (x *CreateSessionRequest) GetCols() uint32 {
+func (x *NewSession) GetCols() uint32 {
 	if x != nil {
 		return x.Cols
 	}
 	return 0
 }
 
-func (x *CreateSessionRequest) GetRows() uint32 {
+func (x *NewSession) GetRows() uint32 {
 	if x != nil {
 		return x.Rows
 	}
 	return 0
 }
 
-func (x *CreateSessionRequest) GetCreatedAt() string {
+func (x *NewSession) GetCreatedAt() string {
 	if x != nil {
 		return x.CreatedAt
 	}
 	return ""
+}
+
+func (x *NewSession) GetEndOnDetach() bool {
+	if x != nil {
+		return x.EndOnDetach
+	}
+	return false
+}
+
+func (x *NewSession) GetPipes() bool {
+	if x != nil {
+		return x.Pipes
+	}
+	return false
 }
 
 type ListSessionsRequest struct {
@@ -758,19 +826,85 @@ func (x *ResumeCursor) GetIncarnation() string {
 	return ""
 }
 
+// Default colours of the terminal the attachment renders into, as 0xRRGGBB.
+// The guest VT answers colour queries with them; it remains the only responder.
+type TerminalProfile struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Foreground    *uint32                `protobuf:"varint,1,opt,name=foreground,proto3,oneof" json:"foreground,omitempty"`
+	Background    *uint32                `protobuf:"varint,2,opt,name=background,proto3,oneof" json:"background,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TerminalProfile) Reset() {
+	*x = TerminalProfile{}
+	mi := &file_clankerbox_v1_session_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalProfile) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalProfile) ProtoMessage() {}
+
+func (x *TerminalProfile) ProtoReflect() protoreflect.Message {
+	mi := &file_clankerbox_v1_session_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalProfile.ProtoReflect.Descriptor instead.
+func (*TerminalProfile) Descriptor() ([]byte, []int) {
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *TerminalProfile) GetForeground() uint32 {
+	if x != nil && x.Foreground != nil {
+		return *x.Foreground
+	}
+	return 0
+}
+
+func (x *TerminalProfile) GetBackground() uint32 {
+	if x != nil && x.Background != nil {
+		return *x.Background
+	}
+	return 0
+}
+
 type Open struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	MachineId            string                 `protobuf:"bytes,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
-	SessionId            string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
-	ExpectedEngineDigest string                 `protobuf:"bytes,3,opt,name=expected_engine_digest,json=expectedEngineDigest,proto3" json:"expected_engine_digest,omitempty"`
-	ResumeCursor         *ResumeCursor          `protobuf:"bytes,4,opt,name=resume_cursor,json=resumeCursor,proto3" json:"resume_cursor,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	MachineId string                 `protobuf:"bytes,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
+	SessionId string                 `protobuf:"bytes,2,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Empty skips the check; a consumer that decodes snapshots supplies it.
+	ExpectedEngineDigest string        `protobuf:"bytes,3,opt,name=expected_engine_digest,json=expectedEngineDigest,proto3" json:"expected_engine_digest,omitempty"`
+	ResumeCursor         *ResumeCursor `protobuf:"bytes,4,opt,name=resume_cursor,json=resumeCursor,proto3" json:"resume_cursor,omitempty"`
+	// Creates the session: the subscriber is registered before the process
+	// starts, so output begins at offset zero and cannot be missed. A session
+	// that already exists with the same arguments is opened as it is, which makes
+	// a repeated Open after a lost reply safe.
+	Create *NewSession `protobuf:"bytes,5,opt,name=create,proto3" json:"create,omitempty"`
+	// Omit from this attachment's output exactly the escape sequences the guest
+	// VT answered, so a real terminal downstream does not answer them again.
+	// Offsets stay in unfiltered coordinates: data may be shorter than the
+	// advance of next_offset.
+	OmitAnsweredQueries bool             `protobuf:"varint,6,opt,name=omit_answered_queries,json=omitAnsweredQueries,proto3" json:"omit_answered_queries,omitempty"`
+	TerminalProfile     *TerminalProfile `protobuf:"bytes,7,opt,name=terminal_profile,json=terminalProfile,proto3" json:"terminal_profile,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *Open) Reset() {
 	*x = Open{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[8]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -782,7 +916,7 @@ func (x *Open) String() string {
 func (*Open) ProtoMessage() {}
 
 func (x *Open) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[8]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -795,7 +929,7 @@ func (x *Open) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Open.ProtoReflect.Descriptor instead.
 func (*Open) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{8}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *Open) GetMachineId() string {
@@ -826,17 +960,44 @@ func (x *Open) GetResumeCursor() *ResumeCursor {
 	return nil
 }
 
+func (x *Open) GetCreate() *NewSession {
+	if x != nil {
+		return x.Create
+	}
+	return nil
+}
+
+func (x *Open) GetOmitAnsweredQueries() bool {
+	if x != nil {
+		return x.OmitAnsweredQueries
+	}
+	return false
+}
+
+func (x *Open) GetTerminalProfile() *TerminalProfile {
+	if x != nil {
+		return x.TerminalProfile
+	}
+	return nil
+}
+
+// offset is how many input bytes the guest has accepted from this attachment.
+// An Input at any other offset is refused, so input sent ahead of
+// acknowledgements can never be reordered or applied twice: after a refusal,
+// everything behind it is refused too, and the consumer continues from
+// Ack.input_offset.
 type Input struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Sequence      uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	Offset        uint64                 `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Input) Reset() {
 	*x = Input{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[9]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -848,7 +1009,7 @@ func (x *Input) String() string {
 func (*Input) ProtoMessage() {}
 
 func (x *Input) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[9]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -861,7 +1022,7 @@ func (x *Input) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Input.ProtoReflect.Descriptor instead.
 func (*Input) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{9}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *Input) GetSequence() uint64 {
@@ -878,6 +1039,13 @@ func (x *Input) GetData() []byte {
 	return nil
 }
 
+func (x *Input) GetOffset() uint64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
 type Resize struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Sequence      uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
@@ -889,7 +1057,7 @@ type Resize struct {
 
 func (x *Resize) Reset() {
 	*x = Resize{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[10]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -901,7 +1069,7 @@ func (x *Resize) String() string {
 func (*Resize) ProtoMessage() {}
 
 func (x *Resize) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[10]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -914,7 +1082,7 @@ func (x *Resize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Resize.ProtoReflect.Descriptor instead.
 func (*Resize) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{10}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Resize) GetSequence() uint64 {
@@ -938,6 +1106,51 @@ func (x *Resize) GetRows() uint32 {
 	return 0
 }
 
+// End of input for a pipe session. Refused for a PTY session.
+type CloseInput struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sequence      uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CloseInput) Reset() {
+	*x = CloseInput{}
+	mi := &file_clankerbox_v1_session_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CloseInput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CloseInput) ProtoMessage() {}
+
+func (x *CloseInput) ProtoReflect() protoreflect.Message {
+	mi := &file_clankerbox_v1_session_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CloseInput.ProtoReflect.Descriptor instead.
+func (*CloseInput) Descriptor() ([]byte, []int) {
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *CloseInput) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
 type AttachmentRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Exactly one Open first. Controls are processed in stream order thereafter.
@@ -947,6 +1160,7 @@ type AttachmentRequest struct {
 	//	*AttachmentRequest_Open
 	//	*AttachmentRequest_Input
 	//	*AttachmentRequest_Resize
+	//	*AttachmentRequest_CloseInput
 	Command       isAttachmentRequest_Command `protobuf_oneof:"command"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -954,7 +1168,7 @@ type AttachmentRequest struct {
 
 func (x *AttachmentRequest) Reset() {
 	*x = AttachmentRequest{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[11]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -966,7 +1180,7 @@ func (x *AttachmentRequest) String() string {
 func (*AttachmentRequest) ProtoMessage() {}
 
 func (x *AttachmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[11]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -979,7 +1193,7 @@ func (x *AttachmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachmentRequest.ProtoReflect.Descriptor instead.
 func (*AttachmentRequest) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{11}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *AttachmentRequest) GetCommand() isAttachmentRequest_Command {
@@ -1016,6 +1230,15 @@ func (x *AttachmentRequest) GetResize() *Resize {
 	return nil
 }
 
+func (x *AttachmentRequest) GetCloseInput() *CloseInput {
+	if x != nil {
+		if x, ok := x.Command.(*AttachmentRequest_CloseInput); ok {
+			return x.CloseInput
+		}
+	}
+	return nil
+}
+
 type isAttachmentRequest_Command interface {
 	isAttachmentRequest_Command()
 }
@@ -1032,11 +1255,17 @@ type AttachmentRequest_Resize struct {
 	Resize *Resize `protobuf:"bytes,3,opt,name=resize,proto3,oneof"`
 }
 
+type AttachmentRequest_CloseInput struct {
+	CloseInput *CloseInput `protobuf:"bytes,4,opt,name=close_input,json=closeInput,proto3,oneof"`
+}
+
 func (*AttachmentRequest_Open) isAttachmentRequest_Command() {}
 
 func (*AttachmentRequest_Input) isAttachmentRequest_Command() {}
 
 func (*AttachmentRequest_Resize) isAttachmentRequest_Command() {}
+
+func (*AttachmentRequest_CloseInput) isAttachmentRequest_Command() {}
 
 type Cursor struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1048,7 +1277,7 @@ type Cursor struct {
 
 func (x *Cursor) Reset() {
 	*x = Cursor{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[12]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1060,7 +1289,7 @@ func (x *Cursor) String() string {
 func (*Cursor) ProtoMessage() {}
 
 func (x *Cursor) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[12]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1073,7 +1302,7 @@ func (x *Cursor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cursor.ProtoReflect.Descriptor instead.
 func (*Cursor) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{12}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *Cursor) GetX() uint32 {
@@ -1100,7 +1329,7 @@ type View struct {
 
 func (x *View) Reset() {
 	*x = View{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[13]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1112,7 +1341,7 @@ func (x *View) String() string {
 func (*View) ProtoMessage() {}
 
 func (x *View) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[13]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1125,7 +1354,7 @@ func (x *View) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use View.ProtoReflect.Descriptor instead.
 func (*View) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{13}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *View) GetCursor() *Cursor {
@@ -1159,7 +1388,7 @@ type Opened struct {
 
 func (x *Opened) Reset() {
 	*x = Opened{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[14]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1171,7 +1400,7 @@ func (x *Opened) String() string {
 func (*Opened) ProtoMessage() {}
 
 func (x *Opened) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[14]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1184,7 +1413,7 @@ func (x *Opened) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Opened.ProtoReflect.Descriptor instead.
 func (*Opened) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{14}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Opened) GetGuest() *GuestDescription {
@@ -1248,7 +1477,7 @@ type SnapshotChunk struct {
 
 func (x *SnapshotChunk) Reset() {
 	*x = SnapshotChunk{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[15]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1260,7 +1489,7 @@ func (x *SnapshotChunk) String() string {
 func (*SnapshotChunk) ProtoMessage() {}
 
 func (x *SnapshotChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[15]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1273,7 +1502,7 @@ func (x *SnapshotChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SnapshotChunk.ProtoReflect.Descriptor instead.
 func (*SnapshotChunk) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{15}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *SnapshotChunk) GetPosition() uint64 {
@@ -1308,7 +1537,7 @@ type ViewChunk struct {
 
 func (x *ViewChunk) Reset() {
 	*x = ViewChunk{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[16]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1320,7 +1549,7 @@ func (x *ViewChunk) String() string {
 func (*ViewChunk) ProtoMessage() {}
 
 func (x *ViewChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[16]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1333,7 +1562,7 @@ func (x *ViewChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ViewChunk.ProtoReflect.Descriptor instead.
 func (*ViewChunk) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{16}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ViewChunk) GetPosition() uint64 {
@@ -1357,17 +1586,19 @@ func (x *ViewChunk) GetFinal() bool {
 	return false
 }
 
+// stream is set only by pipe sessions; PTY output and stdout leave it unspecified.
 type Output struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	NextOffset    uint64                 `protobuf:"varint,1,opt,name=next_offset,json=nextOffset,proto3" json:"next_offset,omitempty"`
 	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	Stream        OutputStream           `protobuf:"varint,3,opt,name=stream,proto3,enum=clankerbox.v1.OutputStream" json:"stream,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Output) Reset() {
 	*x = Output{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[17]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1379,7 +1610,7 @@ func (x *Output) String() string {
 func (*Output) ProtoMessage() {}
 
 func (x *Output) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[17]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1392,7 +1623,7 @@ func (x *Output) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Output.ProtoReflect.Descriptor instead.
 func (*Output) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{17}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *Output) GetNextOffset() uint64 {
@@ -1409,6 +1640,13 @@ func (x *Output) GetData() []byte {
 	return nil
 }
 
+func (x *Output) GetStream() OutputStream {
+	if x != nil {
+		return x.Stream
+	}
+	return OutputStream_OUTPUT_STREAM_UNSPECIFIED
+}
+
 type Resized struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Offset        uint64                 `protobuf:"varint,1,opt,name=offset,proto3" json:"offset,omitempty"`
@@ -1420,7 +1658,7 @@ type Resized struct {
 
 func (x *Resized) Reset() {
 	*x = Resized{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[18]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1432,7 +1670,7 @@ func (x *Resized) String() string {
 func (*Resized) ProtoMessage() {}
 
 func (x *Resized) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[18]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1445,7 +1683,7 @@ func (x *Resized) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Resized.ProtoReflect.Descriptor instead.
 func (*Resized) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{18}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *Resized) GetOffset() uint64 {
@@ -1473,16 +1711,18 @@ type Ack struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Sequence uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	// Accepted means bounded writer admission, never confirmed shell execution.
-	Accepted      bool         `protobuf:"varint,2,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	Reason        string       `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
-	Error         *ErrorDetail `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	Accepted bool         `protobuf:"varint,2,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	Reason   string       `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
+	Error    *ErrorDetail `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	// Input bytes accepted from this attachment, after this control.
+	InputOffset   uint64 `protobuf:"varint,5,opt,name=input_offset,json=inputOffset,proto3" json:"input_offset,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Ack) Reset() {
 	*x = Ack{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[19]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1494,7 +1734,7 @@ func (x *Ack) String() string {
 func (*Ack) ProtoMessage() {}
 
 func (x *Ack) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[19]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1507,7 +1747,7 @@ func (x *Ack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ack.ProtoReflect.Descriptor instead.
 func (*Ack) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{19}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *Ack) GetSequence() uint64 {
@@ -1538,6 +1778,13 @@ func (x *Ack) GetError() *ErrorDetail {
 	return nil
 }
 
+func (x *Ack) GetInputOffset() uint64 {
+	if x != nil {
+		return x.InputOffset
+	}
+	return 0
+}
+
 type SessionExited struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Session       *Session               `protobuf:"bytes,1,opt,name=session,proto3" json:"session,omitempty"`
@@ -1547,7 +1794,7 @@ type SessionExited struct {
 
 func (x *SessionExited) Reset() {
 	*x = SessionExited{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[20]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1559,7 +1806,7 @@ func (x *SessionExited) String() string {
 func (*SessionExited) ProtoMessage() {}
 
 func (x *SessionExited) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[20]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1572,7 +1819,7 @@ func (x *SessionExited) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SessionExited.ProtoReflect.Descriptor instead.
 func (*SessionExited) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{20}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SessionExited) GetSession() *Session {
@@ -1591,7 +1838,7 @@ type Gap struct {
 
 func (x *Gap) Reset() {
 	*x = Gap{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[21]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1603,7 +1850,7 @@ func (x *Gap) String() string {
 func (*Gap) ProtoMessage() {}
 
 func (x *Gap) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[21]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1616,7 +1863,7 @@ func (x *Gap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Gap.ProtoReflect.Descriptor instead.
 func (*Gap) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{21}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *Gap) GetReason() string {
@@ -1648,7 +1895,7 @@ type AttachmentEvent struct {
 
 func (x *AttachmentEvent) Reset() {
 	*x = AttachmentEvent{}
-	mi := &file_clankerbox_v1_session_proto_msgTypes[22]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1660,7 +1907,7 @@ func (x *AttachmentEvent) String() string {
 func (*AttachmentEvent) ProtoMessage() {}
 
 func (x *AttachmentEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_clankerbox_v1_session_proto_msgTypes[22]
+	mi := &file_clankerbox_v1_session_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1673,7 +1920,7 @@ func (x *AttachmentEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachmentEvent.ProtoReflect.Descriptor instead.
 func (*AttachmentEvent) Descriptor() ([]byte, []int) {
-	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{22}
+	return file_clankerbox_v1_session_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *AttachmentEvent) GetEvent() isAttachmentEvent_Event {
@@ -1825,7 +2072,7 @@ const file_clankerbox_v1_session_proto_rawDesc = "" +
 	"\x04user\x18\x06 \x01(\tR\x04user\x12#\n" +
 	"\rengine_digest\x18\a \x01(\tR\fengineDigest\x12!\n" +
 	"\fmax_sessions\x18\b \x01(\rR\vmaxSessions\x12\x16\n" +
-	"\x06schema\x18\t \x01(\tR\x06schema\"\xb9\x04\n" +
+	"\x06schema\x18\t \x01(\tR\x06schema\"\xf3\x04\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x10\n" +
@@ -1845,25 +2092,26 @@ const file_clankerbox_v1_session_proto_rawDesc = "" +
 	"\rretained_from\x18\x0e \x01(\x04R\fretainedFrom\x121\n" +
 	"\x12last_resize_offset\x18\x0f \x01(\x04H\x03R\x10lastResizeOffset\x88\x01\x01\x12 \n" +
 	"\vincarnation\x18\x10 \x01(\tR\vincarnation\x12%\n" +
-	"\x0ereply_overflow\x18\x11 \x01(\x04R\rreplyOverflowB\f\n" +
+	"\x0ereply_overflow\x18\x11 \x01(\x04R\rreplyOverflow\x12\x14\n" +
+	"\x05pipes\x18\x12 \x01(\bR\x05pipes\x12\"\n" +
+	"\rend_on_detach\x18\x13 \x01(\bR\vendOnDetachB\f\n" +
 	"\n" +
 	"_exit_codeB\t\n" +
 	"\a_signalB\v\n" +
 	"\t_ended_atB\x15\n" +
-	"\x13_last_resize_offset\"\xcf\x02\n" +
-	"\x14CreateSessionRequest\x12\x1d\n" +
+	"\x13_last_resize_offset\"\xb7\x02\n" +
 	"\n" +
-	"machine_id\x18\x01 \x01(\tR\tmachineId\x12\x1d\n" +
+	"NewSession\x12\x14\n" +
+	"\x05label\x18\x01 \x01(\tR\x05label\x12\x10\n" +
+	"\x03cwd\x18\x02 \x01(\tR\x03cwd\x12\x12\n" +
+	"\x04argv\x18\x03 \x03(\tR\x04argv\x124\n" +
+	"\x03env\x18\x04 \x03(\v2\".clankerbox.v1.NewSession.EnvEntryR\x03env\x12\x12\n" +
+	"\x04cols\x18\x05 \x01(\rR\x04cols\x12\x12\n" +
+	"\x04rows\x18\x06 \x01(\rR\x04rows\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x02 \x01(\tR\tsessionId\x12\x14\n" +
-	"\x05label\x18\x03 \x01(\tR\x05label\x12\x10\n" +
-	"\x03cwd\x18\x04 \x01(\tR\x03cwd\x12\x12\n" +
-	"\x04argv\x18\x05 \x03(\tR\x04argv\x12>\n" +
-	"\x03env\x18\x06 \x03(\v2,.clankerbox.v1.CreateSessionRequest.EnvEntryR\x03env\x12\x12\n" +
-	"\x04cols\x18\a \x01(\rR\x04cols\x12\x12\n" +
-	"\x04rows\x18\b \x01(\rR\x04rows\x12\x1d\n" +
-	"\n" +
-	"created_at\x18\t \x01(\tR\tcreatedAt\x1a6\n" +
+	"created_at\x18\a \x01(\tR\tcreatedAt\x12\"\n" +
+	"\rend_on_detach\x18\b \x01(\bR\vendOnDetach\x12\x14\n" +
+	"\x05pipes\x18\t \x01(\bR\x05pipes\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"4\n" +
@@ -1879,25 +2127,43 @@ const file_clankerbox_v1_session_proto_rawDesc = "" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\"H\n" +
 	"\fResumeCursor\x12\x16\n" +
 	"\x06offset\x18\x01 \x01(\x04R\x06offset\x12 \n" +
-	"\vincarnation\x18\x02 \x01(\tR\vincarnation\"\xbc\x01\n" +
+	"\vincarnation\x18\x02 \x01(\tR\vincarnation\"y\n" +
+	"\x0fTerminalProfile\x12#\n" +
+	"\n" +
+	"foreground\x18\x01 \x01(\rH\x00R\n" +
+	"foreground\x88\x01\x01\x12#\n" +
+	"\n" +
+	"background\x18\x02 \x01(\rH\x01R\n" +
+	"background\x88\x01\x01B\r\n" +
+	"\v_foregroundB\r\n" +
+	"\v_background\"\xee\x02\n" +
 	"\x04Open\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\tR\tmachineId\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x02 \x01(\tR\tsessionId\x124\n" +
 	"\x16expected_engine_digest\x18\x03 \x01(\tR\x14expectedEngineDigest\x12@\n" +
-	"\rresume_cursor\x18\x04 \x01(\v2\x1b.clankerbox.v1.ResumeCursorR\fresumeCursor\"7\n" +
+	"\rresume_cursor\x18\x04 \x01(\v2\x1b.clankerbox.v1.ResumeCursorR\fresumeCursor\x121\n" +
+	"\x06create\x18\x05 \x01(\v2\x19.clankerbox.v1.NewSessionR\x06create\x122\n" +
+	"\x15omit_answered_queries\x18\x06 \x01(\bR\x13omitAnsweredQueries\x12I\n" +
+	"\x10terminal_profile\x18\a \x01(\v2\x1e.clankerbox.v1.TerminalProfileR\x0fterminalProfile\"O\n" +
 	"\x05Input\x12\x1a\n" +
 	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"L\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\x12\x16\n" +
+	"\x06offset\x18\x03 \x01(\x04R\x06offset\"L\n" +
 	"\x06Resize\x12\x1a\n" +
 	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12\x12\n" +
 	"\x04cols\x18\x02 \x01(\rR\x04cols\x12\x12\n" +
-	"\x04rows\x18\x03 \x01(\rR\x04rows\"\xa8\x01\n" +
+	"\x04rows\x18\x03 \x01(\rR\x04rows\"(\n" +
+	"\n" +
+	"CloseInput\x12\x1a\n" +
+	"\bsequence\x18\x01 \x01(\x04R\bsequence\"\xe6\x01\n" +
 	"\x11AttachmentRequest\x12)\n" +
 	"\x04open\x18\x01 \x01(\v2\x13.clankerbox.v1.OpenH\x00R\x04open\x12,\n" +
 	"\x05input\x18\x02 \x01(\v2\x14.clankerbox.v1.InputH\x00R\x05input\x12/\n" +
-	"\x06resize\x18\x03 \x01(\v2\x15.clankerbox.v1.ResizeH\x00R\x06resizeB\t\n" +
+	"\x06resize\x18\x03 \x01(\v2\x15.clankerbox.v1.ResizeH\x00R\x06resize\x12<\n" +
+	"\vclose_input\x18\x04 \x01(\v2\x19.clankerbox.v1.CloseInputH\x00R\n" +
+	"closeInputB\t\n" +
 	"\acommand\"$\n" +
 	"\x06Cursor\x12\f\n" +
 	"\x01x\x18\x01 \x01(\rR\x01x\x12\f\n" +
@@ -1920,20 +2186,22 @@ const file_clankerbox_v1_session_proto_rawDesc = "" +
 	"\tViewChunk\x12\x1a\n" +
 	"\bposition\x18\x01 \x01(\x04R\bposition\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x14\n" +
-	"\x05final\x18\x03 \x01(\bR\x05final\"=\n" +
+	"\x05final\x18\x03 \x01(\bR\x05final\"r\n" +
 	"\x06Output\x12\x1f\n" +
 	"\vnext_offset\x18\x01 \x01(\x04R\n" +
 	"nextOffset\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"I\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\x123\n" +
+	"\x06stream\x18\x03 \x01(\x0e2\x1b.clankerbox.v1.OutputStreamR\x06stream\"I\n" +
 	"\aResized\x12\x16\n" +
 	"\x06offset\x18\x01 \x01(\x04R\x06offset\x12\x12\n" +
 	"\x04cols\x18\x02 \x01(\rR\x04cols\x12\x12\n" +
-	"\x04rows\x18\x03 \x01(\rR\x04rows\"\x87\x01\n" +
+	"\x04rows\x18\x03 \x01(\rR\x04rows\"\xaa\x01\n" +
 	"\x03Ack\x12\x1a\n" +
 	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12\x1a\n" +
 	"\baccepted\x18\x02 \x01(\bR\baccepted\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x120\n" +
-	"\x05error\x18\x04 \x01(\v2\x1a.clankerbox.v1.ErrorDetailR\x05error\"A\n" +
+	"\x05error\x18\x04 \x01(\v2\x1a.clankerbox.v1.ErrorDetailR\x05error\x12!\n" +
+	"\finput_offset\x18\x05 \x01(\x04R\vinputOffset\"A\n" +
 	"\rSessionExited\x120\n" +
 	"\asession\x18\x01 \x01(\v2\x16.clankerbox.v1.SessionR\asession\"\x1d\n" +
 	"\x03Gap\x12\x16\n" +
@@ -1960,10 +2228,12 @@ const file_clankerbox_v1_session_proto_rawDesc = "" +
 	"\x10OPEN_MODE_RESUME\x10\x01\x12\x16\n" +
 	"\x12OPEN_MODE_SNAPSHOT\x10\x02\x12\x19\n" +
 	"\x15OPEN_MODE_UNAVAILABLE\x10\x03\x12\x13\n" +
-	"\x0fOPEN_MODE_ENDED\x10\x042\xad\x03\n" +
+	"\x0fOPEN_MODE_ENDED\x10\x04*G\n" +
+	"\fOutputStream\x12\x1d\n" +
+	"\x19OUTPUT_STREAM_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14OUTPUT_STREAM_STDERR\x10\x012\xdf\x02\n" +
 	"\x0eSessionService\x12U\n" +
-	"\rDescribeGuest\x12#.clankerbox.v1.DescribeGuestRequest\x1a\x1f.clankerbox.v1.GuestDescription\x12L\n" +
-	"\rCreateSession\x12#.clankerbox.v1.CreateSessionRequest\x1a\x16.clankerbox.v1.Session\x12W\n" +
+	"\rDescribeGuest\x12#.clankerbox.v1.DescribeGuestRequest\x1a\x1f.clankerbox.v1.GuestDescription\x12W\n" +
 	"\fListSessions\x12\".clankerbox.v1.ListSessionsRequest\x1a#.clankerbox.v1.ListSessionsResponse\x12F\n" +
 	"\n" +
 	"EndSession\x12 .clankerbox.v1.EndSessionRequest\x1a\x16.clankerbox.v1.Session\x12U\n" +
@@ -1981,75 +2251,80 @@ func file_clankerbox_v1_session_proto_rawDescGZIP() []byte {
 	return file_clankerbox_v1_session_proto_rawDescData
 }
 
-var file_clankerbox_v1_session_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_clankerbox_v1_session_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
+var file_clankerbox_v1_session_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_clankerbox_v1_session_proto_msgTypes = make([]protoimpl.MessageInfo, 26)
 var file_clankerbox_v1_session_proto_goTypes = []any{
 	(SessionStatus)(0),           // 0: clankerbox.v1.SessionStatus
 	(OpenMode)(0),                // 1: clankerbox.v1.OpenMode
-	(*DescribeGuestRequest)(nil), // 2: clankerbox.v1.DescribeGuestRequest
-	(*GuestDescription)(nil),     // 3: clankerbox.v1.GuestDescription
-	(*Session)(nil),              // 4: clankerbox.v1.Session
-	(*CreateSessionRequest)(nil), // 5: clankerbox.v1.CreateSessionRequest
-	(*ListSessionsRequest)(nil),  // 6: clankerbox.v1.ListSessionsRequest
-	(*ListSessionsResponse)(nil), // 7: clankerbox.v1.ListSessionsResponse
-	(*EndSessionRequest)(nil),    // 8: clankerbox.v1.EndSessionRequest
-	(*ResumeCursor)(nil),         // 9: clankerbox.v1.ResumeCursor
-	(*Open)(nil),                 // 10: clankerbox.v1.Open
-	(*Input)(nil),                // 11: clankerbox.v1.Input
-	(*Resize)(nil),               // 12: clankerbox.v1.Resize
-	(*AttachmentRequest)(nil),    // 13: clankerbox.v1.AttachmentRequest
-	(*Cursor)(nil),               // 14: clankerbox.v1.Cursor
-	(*View)(nil),                 // 15: clankerbox.v1.View
-	(*Opened)(nil),               // 16: clankerbox.v1.Opened
-	(*SnapshotChunk)(nil),        // 17: clankerbox.v1.SnapshotChunk
-	(*ViewChunk)(nil),            // 18: clankerbox.v1.ViewChunk
-	(*Output)(nil),               // 19: clankerbox.v1.Output
-	(*Resized)(nil),              // 20: clankerbox.v1.Resized
-	(*Ack)(nil),                  // 21: clankerbox.v1.Ack
-	(*SessionExited)(nil),        // 22: clankerbox.v1.SessionExited
-	(*Gap)(nil),                  // 23: clankerbox.v1.Gap
-	(*AttachmentEvent)(nil),      // 24: clankerbox.v1.AttachmentEvent
-	nil,                          // 25: clankerbox.v1.CreateSessionRequest.EnvEntry
-	(*ErrorDetail)(nil),          // 26: clankerbox.v1.ErrorDetail
+	(OutputStream)(0),            // 2: clankerbox.v1.OutputStream
+	(*DescribeGuestRequest)(nil), // 3: clankerbox.v1.DescribeGuestRequest
+	(*GuestDescription)(nil),     // 4: clankerbox.v1.GuestDescription
+	(*Session)(nil),              // 5: clankerbox.v1.Session
+	(*NewSession)(nil),           // 6: clankerbox.v1.NewSession
+	(*ListSessionsRequest)(nil),  // 7: clankerbox.v1.ListSessionsRequest
+	(*ListSessionsResponse)(nil), // 8: clankerbox.v1.ListSessionsResponse
+	(*EndSessionRequest)(nil),    // 9: clankerbox.v1.EndSessionRequest
+	(*ResumeCursor)(nil),         // 10: clankerbox.v1.ResumeCursor
+	(*TerminalProfile)(nil),      // 11: clankerbox.v1.TerminalProfile
+	(*Open)(nil),                 // 12: clankerbox.v1.Open
+	(*Input)(nil),                // 13: clankerbox.v1.Input
+	(*Resize)(nil),               // 14: clankerbox.v1.Resize
+	(*CloseInput)(nil),           // 15: clankerbox.v1.CloseInput
+	(*AttachmentRequest)(nil),    // 16: clankerbox.v1.AttachmentRequest
+	(*Cursor)(nil),               // 17: clankerbox.v1.Cursor
+	(*View)(nil),                 // 18: clankerbox.v1.View
+	(*Opened)(nil),               // 19: clankerbox.v1.Opened
+	(*SnapshotChunk)(nil),        // 20: clankerbox.v1.SnapshotChunk
+	(*ViewChunk)(nil),            // 21: clankerbox.v1.ViewChunk
+	(*Output)(nil),               // 22: clankerbox.v1.Output
+	(*Resized)(nil),              // 23: clankerbox.v1.Resized
+	(*Ack)(nil),                  // 24: clankerbox.v1.Ack
+	(*SessionExited)(nil),        // 25: clankerbox.v1.SessionExited
+	(*Gap)(nil),                  // 26: clankerbox.v1.Gap
+	(*AttachmentEvent)(nil),      // 27: clankerbox.v1.AttachmentEvent
+	nil,                          // 28: clankerbox.v1.NewSession.EnvEntry
+	(*ErrorDetail)(nil),          // 29: clankerbox.v1.ErrorDetail
 }
 var file_clankerbox_v1_session_proto_depIdxs = []int32{
 	0,  // 0: clankerbox.v1.Session.status:type_name -> clankerbox.v1.SessionStatus
-	25, // 1: clankerbox.v1.CreateSessionRequest.env:type_name -> clankerbox.v1.CreateSessionRequest.EnvEntry
-	4,  // 2: clankerbox.v1.ListSessionsResponse.sessions:type_name -> clankerbox.v1.Session
-	9,  // 3: clankerbox.v1.Open.resume_cursor:type_name -> clankerbox.v1.ResumeCursor
-	10, // 4: clankerbox.v1.AttachmentRequest.open:type_name -> clankerbox.v1.Open
-	11, // 5: clankerbox.v1.AttachmentRequest.input:type_name -> clankerbox.v1.Input
-	12, // 6: clankerbox.v1.AttachmentRequest.resize:type_name -> clankerbox.v1.Resize
-	14, // 7: clankerbox.v1.View.cursor:type_name -> clankerbox.v1.Cursor
-	3,  // 8: clankerbox.v1.Opened.guest:type_name -> clankerbox.v1.GuestDescription
-	4,  // 9: clankerbox.v1.Opened.session:type_name -> clankerbox.v1.Session
-	1,  // 10: clankerbox.v1.Opened.mode:type_name -> clankerbox.v1.OpenMode
-	15, // 11: clankerbox.v1.Opened.view:type_name -> clankerbox.v1.View
-	26, // 12: clankerbox.v1.Ack.error:type_name -> clankerbox.v1.ErrorDetail
-	4,  // 13: clankerbox.v1.SessionExited.session:type_name -> clankerbox.v1.Session
-	16, // 14: clankerbox.v1.AttachmentEvent.opened:type_name -> clankerbox.v1.Opened
-	17, // 15: clankerbox.v1.AttachmentEvent.snapshot_chunk:type_name -> clankerbox.v1.SnapshotChunk
-	18, // 16: clankerbox.v1.AttachmentEvent.view_chunk:type_name -> clankerbox.v1.ViewChunk
-	19, // 17: clankerbox.v1.AttachmentEvent.output:type_name -> clankerbox.v1.Output
-	20, // 18: clankerbox.v1.AttachmentEvent.resized:type_name -> clankerbox.v1.Resized
-	21, // 19: clankerbox.v1.AttachmentEvent.ack:type_name -> clankerbox.v1.Ack
-	22, // 20: clankerbox.v1.AttachmentEvent.session_exited:type_name -> clankerbox.v1.SessionExited
-	23, // 21: clankerbox.v1.AttachmentEvent.gap:type_name -> clankerbox.v1.Gap
-	2,  // 22: clankerbox.v1.SessionService.DescribeGuest:input_type -> clankerbox.v1.DescribeGuestRequest
-	5,  // 23: clankerbox.v1.SessionService.CreateSession:input_type -> clankerbox.v1.CreateSessionRequest
-	6,  // 24: clankerbox.v1.SessionService.ListSessions:input_type -> clankerbox.v1.ListSessionsRequest
-	8,  // 25: clankerbox.v1.SessionService.EndSession:input_type -> clankerbox.v1.EndSessionRequest
-	13, // 26: clankerbox.v1.SessionService.AttachSession:input_type -> clankerbox.v1.AttachmentRequest
-	3,  // 27: clankerbox.v1.SessionService.DescribeGuest:output_type -> clankerbox.v1.GuestDescription
-	4,  // 28: clankerbox.v1.SessionService.CreateSession:output_type -> clankerbox.v1.Session
-	7,  // 29: clankerbox.v1.SessionService.ListSessions:output_type -> clankerbox.v1.ListSessionsResponse
-	4,  // 30: clankerbox.v1.SessionService.EndSession:output_type -> clankerbox.v1.Session
-	24, // 31: clankerbox.v1.SessionService.AttachSession:output_type -> clankerbox.v1.AttachmentEvent
-	27, // [27:32] is the sub-list for method output_type
-	22, // [22:27] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	28, // 1: clankerbox.v1.NewSession.env:type_name -> clankerbox.v1.NewSession.EnvEntry
+	5,  // 2: clankerbox.v1.ListSessionsResponse.sessions:type_name -> clankerbox.v1.Session
+	10, // 3: clankerbox.v1.Open.resume_cursor:type_name -> clankerbox.v1.ResumeCursor
+	6,  // 4: clankerbox.v1.Open.create:type_name -> clankerbox.v1.NewSession
+	11, // 5: clankerbox.v1.Open.terminal_profile:type_name -> clankerbox.v1.TerminalProfile
+	12, // 6: clankerbox.v1.AttachmentRequest.open:type_name -> clankerbox.v1.Open
+	13, // 7: clankerbox.v1.AttachmentRequest.input:type_name -> clankerbox.v1.Input
+	14, // 8: clankerbox.v1.AttachmentRequest.resize:type_name -> clankerbox.v1.Resize
+	15, // 9: clankerbox.v1.AttachmentRequest.close_input:type_name -> clankerbox.v1.CloseInput
+	17, // 10: clankerbox.v1.View.cursor:type_name -> clankerbox.v1.Cursor
+	4,  // 11: clankerbox.v1.Opened.guest:type_name -> clankerbox.v1.GuestDescription
+	5,  // 12: clankerbox.v1.Opened.session:type_name -> clankerbox.v1.Session
+	1,  // 13: clankerbox.v1.Opened.mode:type_name -> clankerbox.v1.OpenMode
+	18, // 14: clankerbox.v1.Opened.view:type_name -> clankerbox.v1.View
+	2,  // 15: clankerbox.v1.Output.stream:type_name -> clankerbox.v1.OutputStream
+	29, // 16: clankerbox.v1.Ack.error:type_name -> clankerbox.v1.ErrorDetail
+	5,  // 17: clankerbox.v1.SessionExited.session:type_name -> clankerbox.v1.Session
+	19, // 18: clankerbox.v1.AttachmentEvent.opened:type_name -> clankerbox.v1.Opened
+	20, // 19: clankerbox.v1.AttachmentEvent.snapshot_chunk:type_name -> clankerbox.v1.SnapshotChunk
+	21, // 20: clankerbox.v1.AttachmentEvent.view_chunk:type_name -> clankerbox.v1.ViewChunk
+	22, // 21: clankerbox.v1.AttachmentEvent.output:type_name -> clankerbox.v1.Output
+	23, // 22: clankerbox.v1.AttachmentEvent.resized:type_name -> clankerbox.v1.Resized
+	24, // 23: clankerbox.v1.AttachmentEvent.ack:type_name -> clankerbox.v1.Ack
+	25, // 24: clankerbox.v1.AttachmentEvent.session_exited:type_name -> clankerbox.v1.SessionExited
+	26, // 25: clankerbox.v1.AttachmentEvent.gap:type_name -> clankerbox.v1.Gap
+	3,  // 26: clankerbox.v1.SessionService.DescribeGuest:input_type -> clankerbox.v1.DescribeGuestRequest
+	7,  // 27: clankerbox.v1.SessionService.ListSessions:input_type -> clankerbox.v1.ListSessionsRequest
+	9,  // 28: clankerbox.v1.SessionService.EndSession:input_type -> clankerbox.v1.EndSessionRequest
+	16, // 29: clankerbox.v1.SessionService.AttachSession:input_type -> clankerbox.v1.AttachmentRequest
+	4,  // 30: clankerbox.v1.SessionService.DescribeGuest:output_type -> clankerbox.v1.GuestDescription
+	8,  // 31: clankerbox.v1.SessionService.ListSessions:output_type -> clankerbox.v1.ListSessionsResponse
+	5,  // 32: clankerbox.v1.SessionService.EndSession:output_type -> clankerbox.v1.Session
+	27, // 33: clankerbox.v1.SessionService.AttachSession:output_type -> clankerbox.v1.AttachmentEvent
+	30, // [30:34] is the sub-list for method output_type
+	26, // [26:30] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_clankerbox_v1_session_proto_init() }
@@ -2059,12 +2334,14 @@ func file_clankerbox_v1_session_proto_init() {
 	}
 	file_clankerbox_v1_resources_proto_init()
 	file_clankerbox_v1_session_proto_msgTypes[2].OneofWrappers = []any{}
-	file_clankerbox_v1_session_proto_msgTypes[11].OneofWrappers = []any{
+	file_clankerbox_v1_session_proto_msgTypes[8].OneofWrappers = []any{}
+	file_clankerbox_v1_session_proto_msgTypes[13].OneofWrappers = []any{
 		(*AttachmentRequest_Open)(nil),
 		(*AttachmentRequest_Input)(nil),
 		(*AttachmentRequest_Resize)(nil),
+		(*AttachmentRequest_CloseInput)(nil),
 	}
-	file_clankerbox_v1_session_proto_msgTypes[22].OneofWrappers = []any{
+	file_clankerbox_v1_session_proto_msgTypes[24].OneofWrappers = []any{
 		(*AttachmentEvent_Opened)(nil),
 		(*AttachmentEvent_SnapshotChunk)(nil),
 		(*AttachmentEvent_ViewChunk)(nil),
@@ -2079,8 +2356,8 @@ func file_clankerbox_v1_session_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_clankerbox_v1_session_proto_rawDesc), len(file_clankerbox_v1_session_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   24,
+			NumEnums:      3,
+			NumMessages:   26,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

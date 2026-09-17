@@ -7,7 +7,6 @@ import "clankerbox/v1/resources.proto";
 // arbitrary endpoint routing. All session methods address an immutable machine ID.
 service SessionService {
   rpc DescribeGuest(DescribeGuestRequest) returns (GuestDescription);
-  rpc CreateSession(CreateSessionRequest) returns (Session);
   rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
   rpc EndSession(EndSessionRequest) returns (Session);
   rpc AttachSession(stream AttachmentRequest) returns (stream AttachmentEvent);
@@ -51,34 +50,67 @@ message Session {
   optional uint64 last_resize_offset = 15;
   string incarnation = 16;
   uint64 reply_overflow = 17;
+  // Pipe session: no PTY or terminal; cols and rows are zero.
+  bool pipes = 18;
+  bool end_on_detach = 19;
 }
-message CreateSessionRequest {
-  string machine_id = 1;
-  string session_id = 2;
-  string label = 3;
-  string cwd = 4;
-  repeated string argv = 5;
-  map<string,string> env = 6;
-  uint32 cols = 7;
-  uint32 rows = 8;
+// A session is created by the attachment that opens it; see Open.create.
+message NewSession {
+  string label = 1;
+  string cwd = 2;
+  repeated string argv = 3;
+  map<string,string> env = 4;
+  uint32 cols = 5;
+  uint32 rows = 6;
   // Caller decision time for creation deduplication/retry-horizon enforcement.
-  string created_at = 9;
+  string created_at = 7;
+  // The guest ends the session when its last attachment closes, for any reason.
+  bool end_on_detach = 8;
+  // No PTY or terminal: stdin, stdout and stderr are pipes and the grid must be
+  // zero. Implies end_on_detach and admits no other attachment, resume or
+  // snapshot.
+  bool pipes = 9;
 }
 message ListSessionsRequest { string machine_id = 1; }
 message ListSessionsResponse { repeated Session sessions = 1; }
 message EndSessionRequest { string machine_id = 1; string session_id = 2; }
 message ResumeCursor { uint64 offset = 1; string incarnation = 2; }
+// Default colours of the terminal the attachment renders into, as 0xRRGGBB.
+// The guest VT answers colour queries with them; it remains the only responder.
+message TerminalProfile {
+  optional uint32 foreground = 1;
+  optional uint32 background = 2;
+}
 message Open {
   string machine_id = 1;
   string session_id = 2;
+  // Empty skips the check; a consumer that decodes snapshots supplies it.
   string expected_engine_digest = 3;
   ResumeCursor resume_cursor = 4;
+  // Creates the session: the subscriber is registered before the process
+  // starts, so output begins at offset zero and cannot be missed. A session
+  // that already exists with the same arguments is opened as it is, which makes
+  // a repeated Open after a lost reply safe.
+  NewSession create = 5;
+  // Omit from this attachment's output exactly the escape sequences the guest
+  // VT answered, so a real terminal downstream does not answer them again.
+  // Offsets stay in unfiltered coordinates: data may be shorter than the
+  // advance of next_offset.
+  bool omit_answered_queries = 6;
+  TerminalProfile terminal_profile = 7;
 }
-message Input { uint64 sequence = 1; bytes data = 2; }
+// offset is how many input bytes the guest has accepted from this attachment.
+// An Input at any other offset is refused, so input sent ahead of
+// acknowledgements can never be reordered or applied twice: after a refusal,
+// everything behind it is refused too, and the consumer continues from
+// Ack.input_offset.
+message Input { uint64 sequence = 1; bytes data = 2; uint64 offset = 3; }
 message Resize { uint64 sequence = 1; uint32 cols = 2; uint32 rows = 3; }
+// End of input for a pipe session. Refused for a PTY session.
+message CloseInput { uint64 sequence = 1; }
 message AttachmentRequest {
   // Exactly one Open first. Controls are processed in stream order thereafter.
-  oneof command { Open open = 1; Input input = 2; Resize resize = 3; }
+  oneof command { Open open = 1; Input input = 2; Resize resize = 3; CloseInput close_input = 4; }
 }
 enum OpenMode {
   OPEN_MODE_UNSPECIFIED = 0;
@@ -105,7 +137,12 @@ message SnapshotChunk {
   uint64 position = 1; bytes data = 2; bool final = 3;
 }
 message ViewChunk { uint64 position = 1; bytes data = 2; bool final = 3; }
-message Output { uint64 next_offset = 1; bytes data = 2; }
+enum OutputStream {
+  OUTPUT_STREAM_UNSPECIFIED = 0;
+  OUTPUT_STREAM_STDERR = 1;
+}
+// stream is set only by pipe sessions; PTY output and stdout leave it unspecified.
+message Output { uint64 next_offset = 1; bytes data = 2; OutputStream stream = 3; }
 message Resized { uint64 offset = 1; uint32 cols = 2; uint32 rows = 3; }
 message Ack {
   uint64 sequence = 1;
@@ -113,6 +150,8 @@ message Ack {
   bool accepted = 2;
   string reason = 3;
   ErrorDetail error = 4;
+  // Input bytes accepted from this attachment, after this control.
+  uint64 input_offset = 5;
 }
 message SessionExited { Session session = 1; }
 message Gap { string reason = 1; }

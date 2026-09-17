@@ -33,7 +33,7 @@ func TestShutdownJoinsExitedSessionsAndRefusesCreation(t *testing.T) {
 	if err = m.Shutdown(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("shutdown failed to retain pending work: %v", err)
 	}
-	if _, err = m.Create(protocol.CreateArgs{SessionID: uuid.NewString()}); err == nil {
+	if _, err = createDetached(m, protocol.CreateArgs{SessionID: uuid.NewString()}); err == nil {
 		t.Fatal("created after shutdown began")
 	}
 	close(s.waitDone)
@@ -63,7 +63,7 @@ func TestShutdownOwnsProcessAndFinalCaptureAfterCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(m.Close)
-	record, err := m.Create(protocol.CreateArgs{SessionID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Cwd: t.TempDir(), Cols: 80, Rows: 24, Argv: []string{"/bin/sh", "-c", "printf CAPTURE_READY; exec cat"}})
+	record, err := createDetached(m, protocol.CreateArgs{SessionID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Cwd: t.TempDir(), Cols: 80, Rows: 24, Argv: []string{"/bin/sh", "-c", "printf CAPTURE_READY; exec cat"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func closeAlongsideCreation(t *testing.T, m *Manager) {
 	for range 4 {
 		work.Go(func() {
 			<-start
-			_, err := m.Create(protocol.CreateArgs{SessionID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Cols: 80, Rows: 24, Argv: []string{"/bin/sh", "-c", "exit 0"}})
+			_, err := createDetached(m, protocol.CreateArgs{SessionID: uuid.NewString(), CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Cols: 80, Rows: 24, Argv: []string{"/bin/sh", "-c", "exit 0"}})
 			var typed *model.Error
 			if err != nil && (!errors.As(err, &typed) || typed.Reason != model.ReasonNotRunning) {
 				t.Errorf("concurrent create: %v", err)

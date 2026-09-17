@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file clankerbox/v1/session.proto.
  */
 export const file_clankerbox_v1_session: GenFile = /*@__PURE__*/
-  fileDesc("ChtjbGFua2VyYm94L3YxL3Nlc3Npb24ucHJvdG8SDWNsYW5rZXJib3gudjEiKgoURGVzY3JpYmVHdWVzdFJlcXVlc3QSEgoKbWFjaGluZV9pZBgBIAEoCSK7AQoQR3Vlc3REZXNjcmlwdGlvbhISCgptYWNoaW5lX2lkGAEgASgJEhMKC2luY2FybmF0aW9uGAIgASgJEg8KB2Jvb3RfaWQYAyABKAkSFgoOZGFlbW9uX3ZlcnNpb24YBCABKAkSCgoCb3MYBSABKAkSDAoEdXNlchgGIAEoCRIVCg1lbmdpbmVfZGlnZXN0GAcgASgJEhQKDG1heF9zZXNzaW9ucxgIIAEoDRIOCgZzY2hlbWEYCSABKAkioAMKB1Nlc3Npb24SCgoCaWQYASABKAkSDQoFbGFiZWwYAiABKAkSCwoDY3dkGAMgASgJEgwKBGFyZ3YYBCADKAkSDAoEY29scxgFIAEoDRIMCgRyb3dzGAYgASgNEiwKBnN0YXR1cxgHIAEoDjIcLmNsYW5rZXJib3gudjEuU2Vzc2lvblN0YXR1cxIWCglleGl0X2NvZGUYCCABKAVIAIgBARITCgZzaWduYWwYCSABKAlIAYgBARILCgNwaWQYCiABKAMSEgoKY3JlYXRlZF9hdBgLIAEoCRIVCghlbmRlZF9hdBgMIAEoCUgCiAEBEg4KBm9mZnNldBgNIAEoBBIVCg1yZXRhaW5lZF9mcm9tGA4gASgEEh8KEmxhc3RfcmVzaXplX29mZnNldBgPIAEoBEgDiAEBEhMKC2luY2FybmF0aW9uGBAgASgJEhYKDnJlcGx5X292ZXJmbG93GBEgASgEQgwKCl9leGl0X2NvZGVCCQoHX3NpZ25hbEILCglfZW5kZWRfYXRCFQoTX2xhc3RfcmVzaXplX29mZnNldCL/AQoUQ3JlYXRlU2Vzc2lvblJlcXVlc3QSEgoKbWFjaGluZV9pZBgBIAEoCRISCgpzZXNzaW9uX2lkGAIgASgJEg0KBWxhYmVsGAMgASgJEgsKA2N3ZBgEIAEoCRIMCgRhcmd2GAUgAygJEjkKA2VudhgGIAMoCzIsLmNsYW5rZXJib3gudjEuQ3JlYXRlU2Vzc2lvblJlcXVlc3QuRW52RW50cnkSDAoEY29scxgHIAEoDRIMCgRyb3dzGAggASgNEhIKCmNyZWF0ZWRfYXQYCSABKAkaKgoIRW52RW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASIpChNMaXN0U2Vzc2lvbnNSZXF1ZXN0EhIKCm1hY2hpbmVfaWQYASABKAkiQAoUTGlzdFNlc3Npb25zUmVzcG9uc2USKAoIc2Vzc2lvbnMYASADKAsyFi5jbGFua2VyYm94LnYxLlNlc3Npb24iOwoRRW5kU2Vzc2lvblJlcXVlc3QSEgoKbWFjaGluZV9pZBgBIAEoCRISCgpzZXNzaW9uX2lkGAIgASgJIjMKDFJlc3VtZUN1cnNvchIOCgZvZmZzZXQYASABKAQSEwoLaW5jYXJuYXRpb24YAiABKAkiggEKBE9wZW4SEgoKbWFjaGluZV9pZBgBIAEoCRISCgpzZXNzaW9uX2lkGAIgASgJEh4KFmV4cGVjdGVkX2VuZ2luZV9kaWdlc3QYAyABKAkSMgoNcmVzdW1lX2N1cnNvchgEIAEoCzIbLmNsYW5rZXJib3gudjEuUmVzdW1lQ3Vyc29yIicKBUlucHV0EhAKCHNlcXVlbmNlGAEgASgEEgwKBGRhdGEYAiABKAwiNgoGUmVzaXplEhAKCHNlcXVlbmNlGAEgASgEEgwKBGNvbHMYAiABKA0SDAoEcm93cxgDIAEoDSKTAQoRQXR0YWNobWVudFJlcXVlc3QSIwoEb3BlbhgBIAEoCzITLmNsYW5rZXJib3gudjEuT3BlbkgAEiUKBWlucHV0GAIgASgLMhQuY2xhbmtlcmJveC52MS5JbnB1dEgAEicKBnJlc2l6ZRgDIAEoCzIVLmNsYW5rZXJib3gudjEuUmVzaXplSABCCQoHY29tbWFuZCIeCgZDdXJzb3ISCQoBeBgBIAEoDRIJCgF5GAIgASgNIjwKBFZpZXcSJQoGY3Vyc29yGAEgASgLMhUuY2xhbmtlcmJveC52MS5DdXJzb3ISDQoFYnl0ZXMYAiABKAQi5gEKBk9wZW5lZBIuCgVndWVzdBgBIAEoCzIfLmNsYW5rZXJib3gudjEuR3Vlc3REZXNjcmlwdGlvbhInCgdzZXNzaW9uGAIgASgLMhYuY2xhbmtlcmJveC52MS5TZXNzaW9uEiUKBG1vZGUYAyABKA4yFy5jbGFua2VyYm94LnYxLk9wZW5Nb2RlEgsKA2N1dBgEIAEoBBIWCg5zbmFwc2hvdF9ieXRlcxgFIAEoBBIhCgR2aWV3GAYgASgLMhMuY2xhbmtlcmJveC52MS5WaWV3EhQKDHN0YXJ0X29mZnNldBgHIAEoBCI+Cg1TbmFwc2hvdENodW5rEhAKCHBvc2l0aW9uGAEgASgEEgwKBGRhdGEYAiABKAwSDQoFZmluYWwYAyABKAgiOgoJVmlld0NodW5rEhAKCHBvc2l0aW9uGAEgASgEEgwKBGRhdGEYAiABKAwSDQoFZmluYWwYAyABKAgiKwoGT3V0cHV0EhMKC25leHRfb2Zmc2V0GAEgASgEEgwKBGRhdGEYAiABKAwiNQoHUmVzaXplZBIOCgZvZmZzZXQYASABKAQSDAoEY29scxgCIAEoDRIMCgRyb3dzGAMgASgNImQKA0FjaxIQCghzZXF1ZW5jZRgBIAEoBBIQCghhY2NlcHRlZBgCIAEoCBIOCgZyZWFzb24YAyABKAkSKQoFZXJyb3IYBCABKAsyGi5jbGFua2VyYm94LnYxLkVycm9yRGV0YWlsIjgKDVNlc3Npb25FeGl0ZWQSJwoHc2Vzc2lvbhgBIAEoCzIWLmNsYW5rZXJib3gudjEuU2Vzc2lvbiIVCgNHYXASDgoGcmVhc29uGAEgASgJIv0CCg9BdHRhY2htZW50RXZlbnQSJwoGb3BlbmVkGAEgASgLMhUuY2xhbmtlcmJveC52MS5PcGVuZWRIABI2Cg5zbmFwc2hvdF9jaHVuaxgCIAEoCzIcLmNsYW5rZXJib3gudjEuU25hcHNob3RDaHVua0gAEi4KCnZpZXdfY2h1bmsYAyABKAsyGC5jbGFua2VyYm94LnYxLlZpZXdDaHVua0gAEicKBm91dHB1dBgEIAEoCzIVLmNsYW5rZXJib3gudjEuT3V0cHV0SAASKQoHcmVzaXplZBgFIAEoCzIWLmNsYW5rZXJib3gudjEuUmVzaXplZEgAEiEKA2FjaxgGIAEoCzISLmNsYW5rZXJib3gudjEuQWNrSAASNgoOc2Vzc2lvbl9leGl0ZWQYByABKAsyHC5jbGFua2VyYm94LnYxLlNlc3Npb25FeGl0ZWRIABIhCgNnYXAYCCABKAsyEi5jbGFua2VyYm94LnYxLkdhcEgAQgcKBWV2ZW50KpwBCg1TZXNzaW9uU3RhdHVzEh4KGlNFU1NJT05fU1RBVFVTX1VOU1BFQ0lGSUVEEAASGwoXU0VTU0lPTl9TVEFUVVNfU1RBUlRJTkcQARIaChZTRVNTSU9OX1NUQVRVU19SVU5OSU5HEAISGQoVU0VTU0lPTl9TVEFUVVNfRVhJVEVEEAMSFwoTU0VTU0lPTl9TVEFUVVNfTE9TVBAEKoMBCghPcGVuTW9kZRIZChVPUEVOX01PREVfVU5TUEVDSUZJRUQQABIUChBPUEVOX01PREVfUkVTVU1FEAESFgoST1BFTl9NT0RFX1NOQVBTSE9UEAISGQoVT1BFTl9NT0RFX1VOQVZBSUxBQkxFEAMSEwoPT1BFTl9NT0RFX0VOREVEEAQyrQMKDlNlc3Npb25TZXJ2aWNlElUKDURlc2NyaWJlR3Vlc3QSIy5jbGFua2VyYm94LnYxLkRlc2NyaWJlR3Vlc3RSZXF1ZXN0Gh8uY2xhbmtlcmJveC52MS5HdWVzdERlc2NyaXB0aW9uEkwKDUNyZWF0ZVNlc3Npb24SIy5jbGFua2VyYm94LnYxLkNyZWF0ZVNlc3Npb25SZXF1ZXN0GhYuY2xhbmtlcmJveC52MS5TZXNzaW9uElcKDExpc3RTZXNzaW9ucxIiLmNsYW5rZXJib3gudjEuTGlzdFNlc3Npb25zUmVxdWVzdBojLmNsYW5rZXJib3gudjEuTGlzdFNlc3Npb25zUmVzcG9uc2USRgoKRW5kU2Vzc2lvbhIgLmNsYW5rZXJib3gudjEuRW5kU2Vzc2lvblJlcXVlc3QaFi5jbGFua2VyYm94LnYxLlNlc3Npb24SVQoNQXR0YWNoU2Vzc2lvbhIgLmNsYW5rZXJib3gudjEuQXR0YWNobWVudFJlcXVlc3QaHi5jbGFua2VyYm94LnYxLkF0dGFjaG1lbnRFdmVudCgBMAFCK1opY2xhbmtlcmJveC9nZW4vY2xhbmtlcmJveC92MTtjbGFua2VyYm94djFiBnByb3RvMw", [file_clankerbox_v1_resources]);
+  fileDesc("ChtjbGFua2VyYm94L3YxL3Nlc3Npb24ucHJvdG8SDWNsYW5rZXJib3gudjEiKgoURGVzY3JpYmVHdWVzdFJlcXVlc3QSEgoKbWFjaGluZV9pZBgBIAEoCSK7AQoQR3Vlc3REZXNjcmlwdGlvbhISCgptYWNoaW5lX2lkGAEgASgJEhMKC2luY2FybmF0aW9uGAIgASgJEg8KB2Jvb3RfaWQYAyABKAkSFgoOZGFlbW9uX3ZlcnNpb24YBCABKAkSCgoCb3MYBSABKAkSDAoEdXNlchgGIAEoCRIVCg1lbmdpbmVfZGlnZXN0GAcgASgJEhQKDG1heF9zZXNzaW9ucxgIIAEoDRIOCgZzY2hlbWEYCSABKAkixgMKB1Nlc3Npb24SCgoCaWQYASABKAkSDQoFbGFiZWwYAiABKAkSCwoDY3dkGAMgASgJEgwKBGFyZ3YYBCADKAkSDAoEY29scxgFIAEoDRIMCgRyb3dzGAYgASgNEiwKBnN0YXR1cxgHIAEoDjIcLmNsYW5rZXJib3gudjEuU2Vzc2lvblN0YXR1cxIWCglleGl0X2NvZGUYCCABKAVIAIgBARITCgZzaWduYWwYCSABKAlIAYgBARILCgNwaWQYCiABKAMSEgoKY3JlYXRlZF9hdBgLIAEoCRIVCghlbmRlZF9hdBgMIAEoCUgCiAEBEg4KBm9mZnNldBgNIAEoBBIVCg1yZXRhaW5lZF9mcm9tGA4gASgEEh8KEmxhc3RfcmVzaXplX29mZnNldBgPIAEoBEgDiAEBEhMKC2luY2FybmF0aW9uGBAgASgJEhYKDnJlcGx5X292ZXJmbG93GBEgASgEEg0KBXBpcGVzGBIgASgIEhUKDWVuZF9vbl9kZXRhY2gYEyABKAhCDAoKX2V4aXRfY29kZUIJCgdfc2lnbmFsQgsKCV9lbmRlZF9hdEIVChNfbGFzdF9yZXNpemVfb2Zmc2V0IukBCgpOZXdTZXNzaW9uEg0KBWxhYmVsGAEgASgJEgsKA2N3ZBgCIAEoCRIMCgRhcmd2GAMgAygJEi8KA2VudhgEIAMoCzIiLmNsYW5rZXJib3gudjEuTmV3U2Vzc2lvbi5FbnZFbnRyeRIMCgRjb2xzGAUgASgNEgwKBHJvd3MYBiABKA0SEgoKY3JlYXRlZF9hdBgHIAEoCRIVCg1lbmRfb25fZGV0YWNoGAggASgIEg0KBXBpcGVzGAkgASgIGioKCEVudkVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiKQoTTGlzdFNlc3Npb25zUmVxdWVzdBISCgptYWNoaW5lX2lkGAEgASgJIkAKFExpc3RTZXNzaW9uc1Jlc3BvbnNlEigKCHNlc3Npb25zGAEgAygLMhYuY2xhbmtlcmJveC52MS5TZXNzaW9uIjsKEUVuZFNlc3Npb25SZXF1ZXN0EhIKCm1hY2hpbmVfaWQYASABKAkSEgoKc2Vzc2lvbl9pZBgCIAEoCSIzCgxSZXN1bWVDdXJzb3ISDgoGb2Zmc2V0GAEgASgEEhMKC2luY2FybmF0aW9uGAIgASgJImEKD1Rlcm1pbmFsUHJvZmlsZRIXCgpmb3JlZ3JvdW5kGAEgASgNSACIAQESFwoKYmFja2dyb3VuZBgCIAEoDUgBiAEBQg0KC19mb3JlZ3JvdW5kQg0KC19iYWNrZ3JvdW5kIoYCCgRPcGVuEhIKCm1hY2hpbmVfaWQYASABKAkSEgoKc2Vzc2lvbl9pZBgCIAEoCRIeChZleHBlY3RlZF9lbmdpbmVfZGlnZXN0GAMgASgJEjIKDXJlc3VtZV9jdXJzb3IYBCABKAsyGy5jbGFua2VyYm94LnYxLlJlc3VtZUN1cnNvchIpCgZjcmVhdGUYBSABKAsyGS5jbGFua2VyYm94LnYxLk5ld1Nlc3Npb24SHQoVb21pdF9hbnN3ZXJlZF9xdWVyaWVzGAYgASgIEjgKEHRlcm1pbmFsX3Byb2ZpbGUYByABKAsyHi5jbGFua2VyYm94LnYxLlRlcm1pbmFsUHJvZmlsZSI3CgVJbnB1dBIQCghzZXF1ZW5jZRgBIAEoBBIMCgRkYXRhGAIgASgMEg4KBm9mZnNldBgDIAEoBCI2CgZSZXNpemUSEAoIc2VxdWVuY2UYASABKAQSDAoEY29scxgCIAEoDRIMCgRyb3dzGAMgASgNIh4KCkNsb3NlSW5wdXQSEAoIc2VxdWVuY2UYASABKAQixQEKEUF0dGFjaG1lbnRSZXF1ZXN0EiMKBG9wZW4YASABKAsyEy5jbGFua2VyYm94LnYxLk9wZW5IABIlCgVpbnB1dBgCIAEoCzIULmNsYW5rZXJib3gudjEuSW5wdXRIABInCgZyZXNpemUYAyABKAsyFS5jbGFua2VyYm94LnYxLlJlc2l6ZUgAEjAKC2Nsb3NlX2lucHV0GAQgASgLMhkuY2xhbmtlcmJveC52MS5DbG9zZUlucHV0SABCCQoHY29tbWFuZCIeCgZDdXJzb3ISCQoBeBgBIAEoDRIJCgF5GAIgASgNIjwKBFZpZXcSJQoGY3Vyc29yGAEgASgLMhUuY2xhbmtlcmJveC52MS5DdXJzb3ISDQoFYnl0ZXMYAiABKAQi5gEKBk9wZW5lZBIuCgVndWVzdBgBIAEoCzIfLmNsYW5rZXJib3gudjEuR3Vlc3REZXNjcmlwdGlvbhInCgdzZXNzaW9uGAIgASgLMhYuY2xhbmtlcmJveC52MS5TZXNzaW9uEiUKBG1vZGUYAyABKA4yFy5jbGFua2VyYm94LnYxLk9wZW5Nb2RlEgsKA2N1dBgEIAEoBBIWCg5zbmFwc2hvdF9ieXRlcxgFIAEoBBIhCgR2aWV3GAYgASgLMhMuY2xhbmtlcmJveC52MS5WaWV3EhQKDHN0YXJ0X29mZnNldBgHIAEoBCI+Cg1TbmFwc2hvdENodW5rEhAKCHBvc2l0aW9uGAEgASgEEgwKBGRhdGEYAiABKAwSDQoFZmluYWwYAyABKAgiOgoJVmlld0NodW5rEhAKCHBvc2l0aW9uGAEgASgEEgwKBGRhdGEYAiABKAwSDQoFZmluYWwYAyABKAgiWAoGT3V0cHV0EhMKC25leHRfb2Zmc2V0GAEgASgEEgwKBGRhdGEYAiABKAwSKwoGc3RyZWFtGAMgASgOMhsuY2xhbmtlcmJveC52MS5PdXRwdXRTdHJlYW0iNQoHUmVzaXplZBIOCgZvZmZzZXQYASABKAQSDAoEY29scxgCIAEoDRIMCgRyb3dzGAMgASgNInoKA0FjaxIQCghzZXF1ZW5jZRgBIAEoBBIQCghhY2NlcHRlZBgCIAEoCBIOCgZyZWFzb24YAyABKAkSKQoFZXJyb3IYBCABKAsyGi5jbGFua2VyYm94LnYxLkVycm9yRGV0YWlsEhQKDGlucHV0X29mZnNldBgFIAEoBCI4Cg1TZXNzaW9uRXhpdGVkEicKB3Nlc3Npb24YASABKAsyFi5jbGFua2VyYm94LnYxLlNlc3Npb24iFQoDR2FwEg4KBnJlYXNvbhgBIAEoCSL9AgoPQXR0YWNobWVudEV2ZW50EicKBm9wZW5lZBgBIAEoCzIVLmNsYW5rZXJib3gudjEuT3BlbmVkSAASNgoOc25hcHNob3RfY2h1bmsYAiABKAsyHC5jbGFua2VyYm94LnYxLlNuYXBzaG90Q2h1bmtIABIuCgp2aWV3X2NodW5rGAMgASgLMhguY2xhbmtlcmJveC52MS5WaWV3Q2h1bmtIABInCgZvdXRwdXQYBCABKAsyFS5jbGFua2VyYm94LnYxLk91dHB1dEgAEikKB3Jlc2l6ZWQYBSABKAsyFi5jbGFua2VyYm94LnYxLlJlc2l6ZWRIABIhCgNhY2sYBiABKAsyEi5jbGFua2VyYm94LnYxLkFja0gAEjYKDnNlc3Npb25fZXhpdGVkGAcgASgLMhwuY2xhbmtlcmJveC52MS5TZXNzaW9uRXhpdGVkSAASIQoDZ2FwGAggASgLMhIuY2xhbmtlcmJveC52MS5HYXBIAEIHCgVldmVudCqcAQoNU2Vzc2lvblN0YXR1cxIeChpTRVNTSU9OX1NUQVRVU19VTlNQRUNJRklFRBAAEhsKF1NFU1NJT05fU1RBVFVTX1NUQVJUSU5HEAESGgoWU0VTU0lPTl9TVEFUVVNfUlVOTklORxACEhkKFVNFU1NJT05fU1RBVFVTX0VYSVRFRBADEhcKE1NFU1NJT05fU1RBVFVTX0xPU1QQBCqDAQoIT3Blbk1vZGUSGQoVT1BFTl9NT0RFX1VOU1BFQ0lGSUVEEAASFAoQT1BFTl9NT0RFX1JFU1VNRRABEhYKEk9QRU5fTU9ERV9TTkFQU0hPVBACEhkKFU9QRU5fTU9ERV9VTkFWQUlMQUJMRRADEhMKD09QRU5fTU9ERV9FTkRFRBAEKkcKDE91dHB1dFN0cmVhbRIdChlPVVRQVVRfU1RSRUFNX1VOU1BFQ0lGSUVEEAASGAoUT1VUUFVUX1NUUkVBTV9TVERFUlIQATLfAgoOU2Vzc2lvblNlcnZpY2USVQoNRGVzY3JpYmVHdWVzdBIjLmNsYW5rZXJib3gudjEuRGVzY3JpYmVHdWVzdFJlcXVlc3QaHy5jbGFua2VyYm94LnYxLkd1ZXN0RGVzY3JpcHRpb24SVwoMTGlzdFNlc3Npb25zEiIuY2xhbmtlcmJveC52MS5MaXN0U2Vzc2lvbnNSZXF1ZXN0GiMuY2xhbmtlcmJveC52MS5MaXN0U2Vzc2lvbnNSZXNwb25zZRJGCgpFbmRTZXNzaW9uEiAuY2xhbmtlcmJveC52MS5FbmRTZXNzaW9uUmVxdWVzdBoWLmNsYW5rZXJib3gudjEuU2Vzc2lvbhJVCg1BdHRhY2hTZXNzaW9uEiAuY2xhbmtlcmJveC52MS5BdHRhY2htZW50UmVxdWVzdBoeLmNsYW5rZXJib3gudjEuQXR0YWNobWVudEV2ZW50KAEwAUIrWiljbGFua2VyYm94L2dlbi9jbGFua2VyYm94L3YxO2NsYW5rZXJib3h2MWIGcHJvdG8z", [file_clankerbox_v1_resources]);
 
 /**
  * Authenticated private guest endpoint. Identical terminal messages across relays.
@@ -180,6 +180,18 @@ export type Session = Message<"clankerbox.v1.Session"> & {
    * @generated from field: uint64 reply_overflow = 17;
    */
   replyOverflow: bigint;
+
+  /**
+   * Pipe session: no PTY or terminal; cols and rows are zero.
+   *
+   * @generated from field: bool pipes = 18;
+   */
+  pipes: boolean;
+
+  /**
+   * @generated from field: bool end_on_detach = 19;
+   */
+  endOnDetach: boolean;
 };
 
 /**
@@ -190,62 +202,70 @@ export const SessionSchema: GenMessage<Session> = /*@__PURE__*/
   messageDesc(file_clankerbox_v1_session, 2);
 
 /**
- * @generated from message clankerbox.v1.CreateSessionRequest
+ * A session is created by the attachment that opens it; see Open.create.
+ *
+ * @generated from message clankerbox.v1.NewSession
  */
-export type CreateSessionRequest = Message<"clankerbox.v1.CreateSessionRequest"> & {
+export type NewSession = Message<"clankerbox.v1.NewSession"> & {
   /**
-   * @generated from field: string machine_id = 1;
-   */
-  machineId: string;
-
-  /**
-   * @generated from field: string session_id = 2;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: string label = 3;
+   * @generated from field: string label = 1;
    */
   label: string;
 
   /**
-   * @generated from field: string cwd = 4;
+   * @generated from field: string cwd = 2;
    */
   cwd: string;
 
   /**
-   * @generated from field: repeated string argv = 5;
+   * @generated from field: repeated string argv = 3;
    */
   argv: string[];
 
   /**
-   * @generated from field: map<string, string> env = 6;
+   * @generated from field: map<string, string> env = 4;
    */
   env: { [key: string]: string };
 
   /**
-   * @generated from field: uint32 cols = 7;
+   * @generated from field: uint32 cols = 5;
    */
   cols: number;
 
   /**
-   * @generated from field: uint32 rows = 8;
+   * @generated from field: uint32 rows = 6;
    */
   rows: number;
 
   /**
    * Caller decision time for creation deduplication/retry-horizon enforcement.
    *
-   * @generated from field: string created_at = 9;
+   * @generated from field: string created_at = 7;
    */
   createdAt: string;
+
+  /**
+   * The guest ends the session when its last attachment closes, for any reason.
+   *
+   * @generated from field: bool end_on_detach = 8;
+   */
+  endOnDetach: boolean;
+
+  /**
+   * No PTY or terminal: stdin, stdout and stderr are pipes and the grid must be
+   * zero. Implies end_on_detach and admits no other attachment, resume or
+   * snapshot.
+   *
+   * @generated from field: bool pipes = 9;
+   */
+  pipes: boolean;
 };
 
 /**
- * Describes the message clankerbox.v1.CreateSessionRequest.
- * Use `create(CreateSessionRequestSchema)` to create a new message.
+ * Describes the message clankerbox.v1.NewSession.
+ * Use `create(NewSessionSchema)` to create a new message.
  */
-export const CreateSessionRequestSchema: GenMessage<CreateSessionRequest> = /*@__PURE__*/
+export const NewSessionSchema: GenMessage<NewSession> = /*@__PURE__*/
   messageDesc(file_clankerbox_v1_session, 3);
 
 /**
@@ -327,6 +347,31 @@ export const ResumeCursorSchema: GenMessage<ResumeCursor> = /*@__PURE__*/
   messageDesc(file_clankerbox_v1_session, 7);
 
 /**
+ * Default colours of the terminal the attachment renders into, as 0xRRGGBB.
+ * The guest VT answers colour queries with them; it remains the only responder.
+ *
+ * @generated from message clankerbox.v1.TerminalProfile
+ */
+export type TerminalProfile = Message<"clankerbox.v1.TerminalProfile"> & {
+  /**
+   * @generated from field: optional uint32 foreground = 1;
+   */
+  foreground?: number | undefined;
+
+  /**
+   * @generated from field: optional uint32 background = 2;
+   */
+  background?: number | undefined;
+};
+
+/**
+ * Describes the message clankerbox.v1.TerminalProfile.
+ * Use `create(TerminalProfileSchema)` to create a new message.
+ */
+export const TerminalProfileSchema: GenMessage<TerminalProfile> = /*@__PURE__*/
+  messageDesc(file_clankerbox_v1_session, 8);
+
+/**
  * @generated from message clankerbox.v1.Open
  */
 export type Open = Message<"clankerbox.v1.Open"> & {
@@ -341,6 +386,8 @@ export type Open = Message<"clankerbox.v1.Open"> & {
   sessionId: string;
 
   /**
+   * Empty skips the check; a consumer that decodes snapshots supplies it.
+   *
    * @generated from field: string expected_engine_digest = 3;
    */
   expectedEngineDigest: string;
@@ -349,6 +396,31 @@ export type Open = Message<"clankerbox.v1.Open"> & {
    * @generated from field: clankerbox.v1.ResumeCursor resume_cursor = 4;
    */
   resumeCursor?: ResumeCursor | undefined;
+
+  /**
+   * Creates the session: the subscriber is registered before the process
+   * starts, so output begins at offset zero and cannot be missed. A session
+   * that already exists with the same arguments is opened as it is, which makes
+   * a repeated Open after a lost reply safe.
+   *
+   * @generated from field: clankerbox.v1.NewSession create = 5;
+   */
+  create?: NewSession | undefined;
+
+  /**
+   * Omit from this attachment's output exactly the escape sequences the guest
+   * VT answered, so a real terminal downstream does not answer them again.
+   * Offsets stay in unfiltered coordinates: data may be shorter than the
+   * advance of next_offset.
+   *
+   * @generated from field: bool omit_answered_queries = 6;
+   */
+  omitAnsweredQueries: boolean;
+
+  /**
+   * @generated from field: clankerbox.v1.TerminalProfile terminal_profile = 7;
+   */
+  terminalProfile?: TerminalProfile | undefined;
 };
 
 /**
@@ -356,9 +428,15 @@ export type Open = Message<"clankerbox.v1.Open"> & {
  * Use `create(OpenSchema)` to create a new message.
  */
 export const OpenSchema: GenMessage<Open> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 8);
+  messageDesc(file_clankerbox_v1_session, 9);
 
 /**
+ * offset is how many input bytes the guest has accepted from this attachment.
+ * An Input at any other offset is refused, so input sent ahead of
+ * acknowledgements can never be reordered or applied twice: after a refusal,
+ * everything behind it is refused too, and the consumer continues from
+ * Ack.input_offset.
+ *
  * @generated from message clankerbox.v1.Input
  */
 export type Input = Message<"clankerbox.v1.Input"> & {
@@ -371,6 +449,11 @@ export type Input = Message<"clankerbox.v1.Input"> & {
    * @generated from field: bytes data = 2;
    */
   data: Uint8Array;
+
+  /**
+   * @generated from field: uint64 offset = 3;
+   */
+  offset: bigint;
 };
 
 /**
@@ -378,7 +461,7 @@ export type Input = Message<"clankerbox.v1.Input"> & {
  * Use `create(InputSchema)` to create a new message.
  */
 export const InputSchema: GenMessage<Input> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 9);
+  messageDesc(file_clankerbox_v1_session, 10);
 
 /**
  * @generated from message clankerbox.v1.Resize
@@ -405,7 +488,26 @@ export type Resize = Message<"clankerbox.v1.Resize"> & {
  * Use `create(ResizeSchema)` to create a new message.
  */
 export const ResizeSchema: GenMessage<Resize> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 10);
+  messageDesc(file_clankerbox_v1_session, 11);
+
+/**
+ * End of input for a pipe session. Refused for a PTY session.
+ *
+ * @generated from message clankerbox.v1.CloseInput
+ */
+export type CloseInput = Message<"clankerbox.v1.CloseInput"> & {
+  /**
+   * @generated from field: uint64 sequence = 1;
+   */
+  sequence: bigint;
+};
+
+/**
+ * Describes the message clankerbox.v1.CloseInput.
+ * Use `create(CloseInputSchema)` to create a new message.
+ */
+export const CloseInputSchema: GenMessage<CloseInput> = /*@__PURE__*/
+  messageDesc(file_clankerbox_v1_session, 12);
 
 /**
  * @generated from message clankerbox.v1.AttachmentRequest
@@ -434,6 +536,12 @@ export type AttachmentRequest = Message<"clankerbox.v1.AttachmentRequest"> & {
      */
     value: Resize;
     case: "resize";
+  } | {
+    /**
+     * @generated from field: clankerbox.v1.CloseInput close_input = 4;
+     */
+    value: CloseInput;
+    case: "closeInput";
   } | { case: undefined; value?: undefined };
 };
 
@@ -442,7 +550,7 @@ export type AttachmentRequest = Message<"clankerbox.v1.AttachmentRequest"> & {
  * Use `create(AttachmentRequestSchema)` to create a new message.
  */
 export const AttachmentRequestSchema: GenMessage<AttachmentRequest> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 11);
+  messageDesc(file_clankerbox_v1_session, 13);
 
 /**
  * @generated from message clankerbox.v1.Cursor
@@ -464,7 +572,7 @@ export type Cursor = Message<"clankerbox.v1.Cursor"> & {
  * Use `create(CursorSchema)` to create a new message.
  */
 export const CursorSchema: GenMessage<Cursor> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 12);
+  messageDesc(file_clankerbox_v1_session, 14);
 
 /**
  * @generated from message clankerbox.v1.View
@@ -486,7 +594,7 @@ export type View = Message<"clankerbox.v1.View"> & {
  * Use `create(ViewSchema)` to create a new message.
  */
 export const ViewSchema: GenMessage<View> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 13);
+  messageDesc(file_clankerbox_v1_session, 15);
 
 /**
  * @generated from message clankerbox.v1.Opened
@@ -537,7 +645,7 @@ export type Opened = Message<"clankerbox.v1.Opened"> & {
  * Use `create(OpenedSchema)` to create a new message.
  */
 export const OpenedSchema: GenMessage<Opened> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 14);
+  messageDesc(file_clankerbox_v1_session, 16);
 
 /**
  * @generated from message clankerbox.v1.SnapshotChunk
@@ -566,7 +674,7 @@ export type SnapshotChunk = Message<"clankerbox.v1.SnapshotChunk"> & {
  * Use `create(SnapshotChunkSchema)` to create a new message.
  */
 export const SnapshotChunkSchema: GenMessage<SnapshotChunk> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 15);
+  messageDesc(file_clankerbox_v1_session, 17);
 
 /**
  * @generated from message clankerbox.v1.ViewChunk
@@ -593,9 +701,11 @@ export type ViewChunk = Message<"clankerbox.v1.ViewChunk"> & {
  * Use `create(ViewChunkSchema)` to create a new message.
  */
 export const ViewChunkSchema: GenMessage<ViewChunk> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 16);
+  messageDesc(file_clankerbox_v1_session, 18);
 
 /**
+ * stream is set only by pipe sessions; PTY output and stdout leave it unspecified.
+ *
  * @generated from message clankerbox.v1.Output
  */
 export type Output = Message<"clankerbox.v1.Output"> & {
@@ -608,6 +718,11 @@ export type Output = Message<"clankerbox.v1.Output"> & {
    * @generated from field: bytes data = 2;
    */
   data: Uint8Array;
+
+  /**
+   * @generated from field: clankerbox.v1.OutputStream stream = 3;
+   */
+  stream: OutputStream;
 };
 
 /**
@@ -615,7 +730,7 @@ export type Output = Message<"clankerbox.v1.Output"> & {
  * Use `create(OutputSchema)` to create a new message.
  */
 export const OutputSchema: GenMessage<Output> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 17);
+  messageDesc(file_clankerbox_v1_session, 19);
 
 /**
  * @generated from message clankerbox.v1.Resized
@@ -642,7 +757,7 @@ export type Resized = Message<"clankerbox.v1.Resized"> & {
  * Use `create(ResizedSchema)` to create a new message.
  */
 export const ResizedSchema: GenMessage<Resized> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 18);
+  messageDesc(file_clankerbox_v1_session, 20);
 
 /**
  * @generated from message clankerbox.v1.Ack
@@ -669,6 +784,13 @@ export type Ack = Message<"clankerbox.v1.Ack"> & {
    * @generated from field: clankerbox.v1.ErrorDetail error = 4;
    */
   error?: ErrorDetail | undefined;
+
+  /**
+   * Input bytes accepted from this attachment, after this control.
+   *
+   * @generated from field: uint64 input_offset = 5;
+   */
+  inputOffset: bigint;
 };
 
 /**
@@ -676,7 +798,7 @@ export type Ack = Message<"clankerbox.v1.Ack"> & {
  * Use `create(AckSchema)` to create a new message.
  */
 export const AckSchema: GenMessage<Ack> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 19);
+  messageDesc(file_clankerbox_v1_session, 21);
 
 /**
  * @generated from message clankerbox.v1.SessionExited
@@ -693,7 +815,7 @@ export type SessionExited = Message<"clankerbox.v1.SessionExited"> & {
  * Use `create(SessionExitedSchema)` to create a new message.
  */
 export const SessionExitedSchema: GenMessage<SessionExited> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 20);
+  messageDesc(file_clankerbox_v1_session, 22);
 
 /**
  * @generated from message clankerbox.v1.Gap
@@ -710,7 +832,7 @@ export type Gap = Message<"clankerbox.v1.Gap"> & {
  * Use `create(GapSchema)` to create a new message.
  */
 export const GapSchema: GenMessage<Gap> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 21);
+  messageDesc(file_clankerbox_v1_session, 23);
 
 /**
  * @generated from message clankerbox.v1.AttachmentEvent
@@ -778,7 +900,7 @@ export type AttachmentEvent = Message<"clankerbox.v1.AttachmentEvent"> & {
  * Use `create(AttachmentEventSchema)` to create a new message.
  */
 export const AttachmentEventSchema: GenMessage<AttachmentEvent> = /*@__PURE__*/
-  messageDesc(file_clankerbox_v1_session, 22);
+  messageDesc(file_clankerbox_v1_session, 24);
 
 /**
  * @generated from enum clankerbox.v1.SessionStatus
@@ -853,6 +975,27 @@ export const OpenModeSchema: GenEnum<OpenMode> = /*@__PURE__*/
   enumDesc(file_clankerbox_v1_session, 1);
 
 /**
+ * @generated from enum clankerbox.v1.OutputStream
+ */
+export enum OutputStream {
+  /**
+   * @generated from enum value: OUTPUT_STREAM_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: OUTPUT_STREAM_STDERR = 1;
+   */
+  STDERR = 1,
+}
+
+/**
+ * Describes the enum clankerbox.v1.OutputStream.
+ */
+export const OutputStreamSchema: GenEnum<OutputStream> = /*@__PURE__*/
+  enumDesc(file_clankerbox_v1_session, 2);
+
+/**
  * Public controller routing. Applications receive neither guest credentials nor
  * arbitrary endpoint routing. All session methods address an immutable machine ID.
  *
@@ -866,14 +1009,6 @@ export const SessionService: GenService<{
     methodKind: "unary";
     input: typeof DescribeGuestRequestSchema;
     output: typeof GuestDescriptionSchema;
-  },
-  /**
-   * @generated from rpc clankerbox.v1.SessionService.CreateSession
-   */
-  createSession: {
-    methodKind: "unary";
-    input: typeof CreateSessionRequestSchema;
-    output: typeof SessionSchema;
   },
   /**
    * @generated from rpc clankerbox.v1.SessionService.ListSessions

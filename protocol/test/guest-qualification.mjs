@@ -62,11 +62,31 @@ const waitForOffset = async (client, machineId, sessionId, minimum, signal) => {
   }
 };
 
+// A session is created by the attachment that opens it. This one leaves as soon
+// as the session is open, so the session runs on with nobody attached; repeating
+// it with the same identity opens the session that already exists.
+export async function createSession(client, machineId, sessionId, create, options = {}) {
+  const leave = new AbortController();
+  const signal = options.signal ? AbortSignal.any([options.signal, leave.signal]) : leave.signal;
+  async function* commands() {
+    yield { command: { case: 'open', value: { machineId, sessionId, create } } };
+    await new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+  }
+  try {
+    for await (const event of client.attachSession(commands(), { signal })) {
+      if (event.event.case === 'opened') return event.event.value.session;
+    }
+    throw new Error('the attachment closed before the session opened');
+  } finally {
+    leave.abort();
+  }
+}
+
 async function withSession(client, machineId, argv, signal, check) {
   const sessionId = randomUUID();
   // Treat a lost create reply as possibly admitted and clean up the same identity.
   try {
-    const session = await client.createSession({ machineId, sessionId,
+    const session = await createSession(client, machineId, sessionId, {
       label: 'guest-contract-qualification', createdAt: new Date().toISOString(),
       cols: 80, rows: 24, argv }, { signal });
     return await check(sessionId, session);
