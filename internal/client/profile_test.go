@@ -19,6 +19,7 @@ import (
 
 	v1 "clankerbox/gen/clankerbox/v1"
 	"clankerbox/gen/clankerbox/v1/clankerboxv1connect"
+	"clankerbox/internal/client"
 	"clankerbox/internal/model"
 	"clankerbox/internal/rpcmodel"
 	"clankerbox/internal/rpctransport"
@@ -35,6 +36,11 @@ type profileFixture struct {
 	states            []string
 	mutations         []profileMutation
 	mutationError     error
+	bases             []*v1.Base
+	baseHost          string
+	baseError         error
+	logError          error
+	logMode           string
 }
 
 type profileMutation struct {
@@ -47,6 +53,20 @@ func (f *profileFixture) recordMutation(method, id string) error {
 	defer f.mu.Unlock()
 	f.mutations = append(f.mutations, profileMutation{method, id})
 	return f.mutationError
+}
+
+func (f *profileFixture) ListBases(_ context.Context, req *connect.Request[v1.ListBasesRequest]) (*connect.Response[v1.ListBasesResponse], error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.baseHost = req.Msg.GetHostId()
+	if f.baseError != nil {
+		return nil, f.baseError
+	}
+	bases := f.bases
+	if f.build != nil {
+		bases = []*v1.Base{rpcmodel.ToBase(f.build.Base)}
+	}
+	return connect.NewResponse(&v1.ListBasesResponse{Bases: bases}), nil
 }
 
 func (f *profileFixture) GetProfileBuild(context.Context, *connect.Request[v1.GetProfileBuildRequest]) (*connect.Response[v1.ProfileBuild], error) {
@@ -185,7 +205,17 @@ func TestProfilePublishRejectsUnsafeInputsBeforeUpload(t *testing.T) {
 	}
 }
 
-func (f *profileFixture) ReadProfileBuildLog(_ context.Context, r *connect.Request[v1.ReadProfileBuildLogRequest]) (*connect.Response[v1.ReadProfileBuildLogResponse], error) {
+func (f *profileFixture) ReadProfileBuildLog(ctx context.Context, r *connect.Request[v1.ReadProfileBuildLogRequest]) (*connect.Response[v1.ReadProfileBuildLogResponse], error) {
+	if f.logMode == "stalled" {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if f.logMode == "growing" {
+		return connect.NewResponse(&v1.ReadProfileBuildLogResponse{Data: []byte("x"), NextOffset: r.Msg.GetOffset() + 1}), nil
+	}
+	if f.logError != nil {
+		return nil, f.logError
+	}
 	data := []byte("build output\n")
 	offset := r.Msg.GetOffset()
 	end := min(offset+4, uint64(len(data)))
@@ -203,11 +233,6 @@ func (f *profileFixture) ListProfileRevisions(context.Context, *connect.Request[
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return connect.NewResponse(&v1.ListProfileRevisionsResponse{Revisions: []*v1.ProfileRevision{rpcmodel.ToProfileRevision(model.ProfileRevision{Profile: f.build.Profile()})}}), nil
-}
-func (f *profileFixture) ListBases(context.Context, *connect.Request[v1.ListBasesRequest]) (*connect.Response[v1.ListBasesResponse], error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return connect.NewResponse(&v1.ListBasesResponse{Bases: []*v1.Base{rpcmodel.ToBase(f.build.Base)}}), nil
 }
 func (f *profileFixture) DeleteProfile(_ context.Context, r *connect.Request[v1.DeleteProfileRequest]) (*connect.Response[v1.ProfileMutationResponse], error) {
 	if err := f.recordMutation("delete", r.Msg.GetProfileId()); err != nil {
@@ -319,5 +344,62 @@ func TestProfileStagingFailureRemovesTemporaryArchive(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.chunks != 0 || f.publishes != 0 {
 		t.Fatal("failed staging uploaded a recipe")
+	}
+}
+
+func TestProfileWaitShowsProgressAndLogsOnce(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{"succeeded", "failed"} {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			a, f := newProfileFixture(t)
+			f.states = []string{"pending", "running", status}
+			var out, diagnostic bytes.Buffer
+			err := client.Run(t.Context(), []string{configFlag, a.path, "profile", "publish", recipeDirectory(t), "--build-id", testID, "--wait"}, client.Streams{Out: &out, Err: &diagnostic})
+			if (err != nil) != (status == "failed") {
+				t.Fatalf("status %s: %v", status, err)
+			}
+			log := diagnostic.String()
+			if !strings.Contains(log, "Build "+testID+": pending") || !strings.Contains(log, ": running") || strings.Count(log, "build output\n") != 1 {
+				t.Fatalf("progress/logs: %q", log)
+			}
+			if !strings.Contains(out.String(), status) {
+				t.Fatal(out.String())
+			}
+			if err != nil && !strings.Contains(err.Error(), "profile logs "+testID) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestProfileWaitLogFailureDoesNotHideBuildResult(t *testing.T) {
+	t.Parallel()
+	a, f := newProfileFixture(t)
+	f.logError = connect.NewError(connect.CodeUnavailable, errors.New("host restarting"))
+	var out, diagnostic bytes.Buffer
+	err := client.Run(t.Context(), []string{configFlag, a.path, "profile", "publish", recipeDirectory(t), "--wait"}, client.Streams{Out: &out, Err: &diagnostic})
+	if err != nil || !strings.Contains(out.String(), "succeeded") {
+		t.Fatalf("%s %v", out.String(), err)
+	}
+	if !strings.Contains(diagnostic.String(), "host restarting") || !strings.Contains(diagnostic.String(), "profile logs") {
+		t.Fatal(diagnostic.String())
+	}
+}
+
+func TestProfileWaitChecksStatusDespiteSlowOrGrowingLogs(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"stalled", "growing"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			a, f := newProfileFixture(t)
+			f.logMode = mode
+			f.states = []string{"running", "succeeded"}
+			var out bytes.Buffer
+			err := client.Run(t.Context(), []string{configFlag, a.path, "profile", "publish", recipeDirectory(t), "--wait", "--timeout", "2s"}, client.Streams{Out: &out, Err: io.Discard})
+			if err != nil || !strings.Contains(out.String(), "succeeded") {
+				t.Fatalf("logs prevented completion: %s: %v", out.String(), err)
+			}
+		})
 	}
 }

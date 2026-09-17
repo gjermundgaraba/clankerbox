@@ -183,7 +183,13 @@ func (streams commandStreams) addProfileCommands(root *cli.Command) {
 		}
 		return nil
 	}}}
-	group := &cli.Command{Name: "profile", Usage: "Publish and manage runtime-built profiles", Commands: []*cli.Command{publish}}
+	init := cmd("init", "Create a recipe directory for an installed base", "DIRECTORY", 1, initProfileCommand)
+	init.Flags = []cli.Flag{
+		&cli.StringFlag{Name: "host", Required: true, Usage: "Host with the installed base"},
+		&cli.StringFlag{Name: "base", Required: true, Usage: "Installed base ID"},
+		&cli.StringFlag{Name: "name", Usage: "Profile name (defaults to directory name)"},
+	}
+	group := &cli.Command{Name: "profile", Usage: "Publish and manage runtime-built profiles", Commands: []*cli.Command{init, publish}}
 	group.Commands = append(group.Commands,
 		cmd("list", "List current profiles", "", 0, func(ctx context.Context, r commandRunner, _ *cli.Command) error {
 			return r.listResources(ctx, "profiles")
@@ -271,44 +277,102 @@ func publishProfileCommand(ctx context.Context, r commandRunner, c *cli.Command)
 	if c.Bool("wait") {
 		waitCtx, cancel := context.WithTimeout(ctx, c.Duration("timeout"))
 		defer cancel()
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for !b.Terminal() {
-			select {
-			case <-waitCtx.Done():
-				return fmt.Errorf("build %s: %w; inspect with profile build %s", id, waitCtx.Err(), id)
-			case <-ticker.C:
-			}
-			b, err = r.api.ProfileBuild(waitCtx, id)
-			if err != nil {
-				return fmt.Errorf("build %s: %w", id, err)
-			}
+		b, err = r.waitProfileBuild(waitCtx, b)
+		if err != nil {
+			return err
 		}
 	}
+
 	if err = r.output(b); err != nil {
 		return err
 	}
 	if c.Bool("wait") && b.Status != model.BuildSucceeded {
-		return fmt.Errorf("build %s: %s: %s", id, b.Status, b.Error)
+		return fmt.Errorf("build %s: %s; inspect setup output with profile logs %s", id, b.Status, id)
 	}
 	return nil
 }
 
-func profileLogsCommand(ctx context.Context, r commandRunner, c *cli.Command) error {
+func (r commandRunner) waitProfileBuild(ctx context.Context, b model.ProfileBuild) (model.ProfileBuild, error) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
 	var offset uint64
+	var previous, logWarning string
+	for {
+		if err := r.profileProgress(ctx, b, &offset, &previous, &logWarning); err != nil {
+			return b, err
+		}
+
+		if b.Terminal() {
+			return b, nil
+		}
+		select {
+		case <-ctx.Done():
+			return b, fmt.Errorf("build %s: %w; inspect with profile build %s", b.ID, ctx.Err(), b.ID)
+		case <-ticker.C:
+		}
+		next, err := r.api.ProfileBuild(ctx, b.ID)
+		if err != nil {
+			return b, fmt.Errorf("build %s: %w; inspect with profile build %s", b.ID, err, b.ID)
+		}
+		b = next
+	}
+}
+
+func (r commandRunner) profileProgress(ctx context.Context, b model.ProfileBuild, offset *uint64, previous, logWarning *string) error {
+	if r.structured {
+		return nil
+	}
+	phase := fmt.Sprintf("Build %s: %s (%s)", b.ID, b.Status, b.Phase)
+	if !b.Terminal() && phase != *previous {
+		if _, err := fmt.Fprintln(r.streams.Err, phase); err != nil {
+			return err
+		}
+		*previous = phase
+	}
+	// Logs are best-effort: one drain must leave time for status polling,
+	// even when the endpoint stalls or output keeps growing.
+	budget := 250 * time.Millisecond
+	if deadline, ok := ctx.Deadline(); ok {
+		budget = min(budget, time.Until(deadline)/4)
+	}
+	logCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	var logErr error
+	*offset, logErr = r.readProfileLog(logCtx, b.ID, *offset, r.streams.Err)
+	warning := ""
+	if logErr != nil && connect.CodeOf(logErr) != connect.CodeNotFound {
+		warning = logErr.Error()
+	}
+	if warning != "" && warning != *logWarning {
+		if _, err := fmt.Fprintf(r.streams.Err, "Build log unavailable: %s; inspect with profile logs %s\n", warning, b.ID); err != nil {
+			return err
+		}
+	}
+	*logWarning = warning
+	return nil
+}
+
+func profileLogsCommand(ctx context.Context, r commandRunner, c *cli.Command) error {
+	_, err := r.readProfileLog(ctx, c.Args().First(), 0, r.streams.Out)
+	return err
+}
+
+// readProfileLog drains currently available output and returns the next unread offset.
+func (r commandRunner) readProfileLog(ctx context.Context, id string, offset uint64, out io.Writer) (uint64, error) {
 	for {
 		requestCtx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
-		v, err := r.api.profile.ReadProfileBuildLog(requestCtx, connect.NewRequest(&v1.ReadProfileBuildLogRequest{BuildId: c.Args().First(), Offset: offset}))
+		v, err := r.api.profile.ReadProfileBuildLog(requestCtx, connect.NewRequest(&v1.ReadProfileBuildLogRequest{BuildId: id, Offset: offset}))
 		cancel()
 		if err != nil {
-			return err
+			return offset, err
 		}
-		if _, err = r.streams.Out.Write(v.Msg.GetData()); err != nil {
-			return err
+		if _, err = out.Write(v.Msg.GetData()); err != nil {
+			return offset, err
 		}
-		if v.Msg.GetNextOffset() <= offset || v.Msg.GetComplete() {
-			return nil
+		next := v.Msg.GetNextOffset()
+		if next <= offset || v.Msg.GetComplete() {
+			return next, nil
 		}
-		offset = v.Msg.GetNextOffset()
+		offset = next
 	}
 }

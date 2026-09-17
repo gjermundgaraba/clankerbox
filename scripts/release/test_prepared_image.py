@@ -19,13 +19,16 @@ class PreparedImageTests(unittest.TestCase):
 
     def test_prepares_static_contract_without_machine_state(self):
         (self.root / 'usr').chmod(0o700)
-        (self.root / 'tmp').chmod(0o750)
+        for name in ('tmp', 'var/tmp'):
+            (self.root / name).mkdir(parents=True, exist_ok=True)
+            (self.root / name).chmod(0o775)
         prepare(self.root, self.guest)
         self.assertEqual((self.root / 'usr/local/bin/clankerbox-guest').read_bytes(), self.guest.read_bytes())
         self.assertEqual((self.root / 'usr/local/share/clankerbox/prepared').read_text(), CONTRACT)
         self.assertEqual((self.root / 'etc/passwd').read_text(), 'root:x:0:0::/root:/bin/sh\n')
         self.assertEqual((self.root / 'usr').stat().st_mode & 0o777, 0o700)
-        self.assertEqual((self.root / 'tmp').stat().st_mode & 0o7777, 0o1777)
+        for name in ('tmp', 'var/tmp'):
+            self.assertEqual((self.root / name).stat().st_mode & 0o7777, 0o1777)
         self.assertFalse((self.root / 'var/lib/clankerbox-guest').exists())
         with self.assertRaisesRegex(ValueError, 'already contains'):
             prepare(self.root, self.guest)

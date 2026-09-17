@@ -90,7 +90,7 @@ provenance mismatch. The original working checkout remains untouched.
    It also checks the engine `LICENSE` and `Cargo.lock` against
    [source.json](inputs/source.json), verifies the notices and inventory,
    cross-compiles the Go binaries, finalizes the copied Linux image with its guest
-   binary, contract marker and mode-1777 `/tmp`, and checks the copied
+   binary, contract marker and mode-1777 `/tmp` and `/var/tmp`, and checks the copied
    license inventory again before writing the manifest:
 
    ```sh
@@ -227,7 +227,7 @@ at runtime. No existing image, environment or checkpoint is migrated.
 The base image supplies the root account, its home and ordinary system
 directories. Preparation preserves existing file and directory modes, including
 guest setid bits, and creates the marker's parent directory as needed.
-It sets `/tmp` to mode 1777 for normal shared temporary-directory behavior.
+It sets `/tmp` and `/var/tmp` to mode 1777 for normal shared temporary-directory behavior.
 Fresh Linux startup adjusts only the daemon state directory and
 its ancestors to satisfy state storage ownership requirements.
 

@@ -8,6 +8,23 @@ Fresh controllers have no profiles. Machine creation never runs setup.
 
 ## Recipe
 
+Create a recipe from a base installed on a host:
+
+```sh
+clankerbox profile bases local
+clankerbox profile init ./linux-tools --host local --base linux-base
+# Edit setup.sh and add tools or inputs under files/.
+clankerbox profile publish ./linux-tools --wait
+```
+
+`init` requires controller access to validate the host/base. It creates
+`profile.json`, `setup.sh` and an empty `files/` directory without publishing.
+The destination may contain unrelated files, but `profile.json`, `setup.sh` and
+`files/` must not already exist. The directory name becomes the profile
+name; use `--name` to override it. Linux defaults to 2 CPUs, 1024 MiB RAM,
+1 GiB storage and 8 GiB overlay. Tart defaults to 4 CPUs and 8192 MiB RAM,
+with no disk fields. Review and edit these values before publishing.
+
 A directory contains `profile.json`, `setup.sh`, and optional `files/`. For example:
 
 ```json
@@ -60,7 +77,12 @@ clankerbox profile revisions linux-tools
 Build execution has a one-hour deadline, including preparation, capture and
 validation; cleanup receives its own allowance. Publish returns after durable
 acceptance by default. `--wait --timeout 1h` waits
-for an outcome; timing out does not cancel the build. Preserve the printed build
+for an outcome and prints phase changes plus setup output as it becomes available.
+Progress goes to stderr; `--json` keeps a quiet wait and emits only the final
+structured result on stdout. Log draining has a short time budget so slow or busy
+log endpoints do not monopolize status polling; use `profile logs BUILD_ID` for
+any remaining output. Failed builds include a `profile logs BUILD_ID` hint.
+Timing out does not cancel the build. Preserve the printed build
 ID after transport failures and retry with the same `--build-id`; an existing build ID returns its recorded build without reuploading or rerunning setup.
 Build IDs must be 32 lowercase hexadecimal characters; the CLI generates one by default. Use a new ID for a new attempt. Logs reads return
 currently available output; repeat to inspect a running build.

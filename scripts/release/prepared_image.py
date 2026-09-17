@@ -29,9 +29,10 @@ def prepare(root, guest):
                 raise ValueError('image symlink escapes image: ' + str(path))
         elif not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
             raise ValueError('unsupported prepared image entry: ' + str(path))
-    temporary = image_path(root, 'tmp')
-    temporary.mkdir(exist_ok=True)
-    temporary.chmod(0o1777)
+    for name in ('tmp', 'var/tmp'):
+        temporary = image_path(root, name)
+        temporary.mkdir(parents=True, exist_ok=True)
+        temporary.chmod(0o1777)
     target = image_path(root, 'usr/local/bin/clankerbox-guest')
     if target.exists():
         raise ValueError('guest binary already present in base image')
