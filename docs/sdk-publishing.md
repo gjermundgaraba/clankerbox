@@ -5,10 +5,9 @@ Only compiled `dist/`, the package manifest, README and MIT license ship.
 Generated sources are checked in; publishing does not regenerate the protocol
 or require protoc or Go. Consumers need neither this repository nor build scripts.
 
-SDK versions are independent of Clankerbox binary releases. The last released qualified
-pair is SDK **0.2.0** with Clankerbox **0.6.0**. SDK **0.3.0** introduces the
-runtime-built profile contract and requires a matching controller release. Update the compatibility statement
-in `protocol/README.md` when qualifying a new pair. Published npm versions are
+SDK versions are independent of Clankerbox binary releases. The current release pair is SDK **0.3.0**
+with Clankerbox **0.7.0**, including runtime-built profiles. Update the compatibility
+statement in `protocol/README.md` when qualifying a new pair. Published npm versions are
 immutable: changed package contents require a new SDK version.
 
 ## One-time account setup and first publication
