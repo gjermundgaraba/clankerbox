@@ -1,6 +1,6 @@
 # `clankerbox shell` and the attachment contract — completed implementation
 
-Status: implemented; not released.
+Status: released in Clankerbox 0.8.0 with SDK 0.4.0.
 
 One command creates, streams, uses and ends a guest session:
 `clankerbox shell MACHINE [-- COMMAND [ARG...]]`. The session API changed to
@@ -21,7 +21,7 @@ one. A dropped attachment ends the session and the command; it does not
 reconnect. `tests/session-run` is gone: the live harnesses drive only the
 product CLI, through `shell`, `guest` and typed `--json` errors.
 
-## Releasing it
+## Release notes
 
 - The session contract broke: `CreateSession` is removed, `Open.create` takes
   `NewSession`, and `Input` carries `offset`. Release the TypeScript SDK with it
