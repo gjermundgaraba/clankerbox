@@ -22,7 +22,7 @@ import (
 func TestHostServiceOwnsLifetimeAndRecoversCrashSocket(t *testing.T) {
 	t.Parallel()
 	//nolint:usetesting // macOS requires a short Unix socket path.
-	root, err := os.MkdirTemp("", "cbhs-")
+	root, err := os.MkdirTemp("", "clankerbox-hs-")
 	requireNoError(t, err)
 	defer func() { requireNoError(t, os.RemoveAll(root)) }()
 	root, err = filepath.EvalSymlinks(root)

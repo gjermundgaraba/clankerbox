@@ -110,7 +110,7 @@ func (e *environment) serviceDefinition() []byte {
 		)
 	}
 	return []byte(
-		"[Unit]\nDescription=Owned Clankerbox development host " + e.Namespace + "\n[Service]\nType=simple\nExecStart=" + systemdString(binary) + " --config " + systemdString(config) + "\nRestart=on-failure\nRestartSec=5\nKillMode=process\nTimeoutStopSec=45\nEnvironment=PATH=/usr/bin:/bin:/usr/sbin:/sbin\nStandardOutput=append:" + log + "\nStandardError=append:" + log + "\n",
+		"[Unit]\nDescription=owned clankerbox development host " + e.Namespace + "\n[Service]\nType=simple\nExecStart=" + systemdString(binary) + " --config " + systemdString(config) + "\nRestart=on-failure\nRestartSec=5\nKillMode=process\nTimeoutStopSec=45\nEnvironment=PATH=/usr/bin:/bin:/usr/sbin:/sbin\nStandardOutput=append:" + log + "\nStandardError=append:" + log + "\n",
 	)
 }
 

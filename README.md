@@ -1,6 +1,6 @@
-# Clankerbox
+# clankerbox
 
-Clankerbox runs long-lived coding machines behind an API. Machines are VMs that
+clankerbox runs long-lived coding machines behind an API. Machines are VMs that
 keep their disks until deleted, can be forked while running (Linux RAM forks),
 and can be captured as checkpoints and restored into new machines. Terminal
 access goes through guest-owned sessions on the same API; guests run no SSH.

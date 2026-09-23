@@ -18,7 +18,7 @@ func TestListenUnixPermissionsAndSameUserAdmission(t *testing.T) {
 	defer cancel()
 	// Keep the socket path below both platforms' limits, independently of test names.
 	//nolint:usetesting // macOS t.TempDir paths can exceed the Unix socket path limit.
-	dir, err := os.MkdirTemp("/tmp", "cbpeer-")
+	dir, err := os.MkdirTemp("/tmp", "clankerbox-peer-")
 	if err != nil {
 		t.Fatal(err)
 	}

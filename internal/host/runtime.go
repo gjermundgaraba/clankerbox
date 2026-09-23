@@ -257,7 +257,8 @@ func (n *NativeRuntime) createFromImage(ctx context.Context, m Manifest, imagePa
 	return err
 }
 
-func (n *NativeRuntime) label(m Manifest) string { return "clankerbox." + m.RuntimeName() }
+// label names the machine's launchd job or systemd unit after its VM.
+func (n *NativeRuntime) label(m Manifest) string { return m.RuntimeName() }
 
 func (n *NativeRuntime) job(m Manifest) string {
 	suffix := ".service"
@@ -319,7 +320,7 @@ func (n *NativeRuntime) linuxJobContents(m Manifest, command string) []byte {
 	// The VMM detaches, so retain its cgroup without automatic restart or forced kill.
 	var b strings.Builder
 	b.WriteString(
-		"[Unit]\nDescription=Clankerbox " + m.RuntimeName() + "\n[Service]\nType=oneshot\nRemainAfterExit=yes\nRestart=no\nKillMode=control-group\nSendSIGKILL=no\nTimeoutStartSec=infinity\nTimeoutStopSec=infinity\n",
+		"[Unit]\nDescription=clankerbox machine " + m.RuntimeName() + "\n[Service]\nType=oneshot\nRemainAfterExit=yes\nRestart=no\nKillMode=control-group\nSendSIGKILL=no\nTimeoutStartSec=infinity\nTimeoutStopSec=infinity\n",
 	)
 	env := n.env(m)
 	sort.Strings(env)
@@ -714,7 +715,8 @@ func (n *NativeRuntime) runtimeHome(m Manifest) string {
 		return filepath.Join(storeDir(n.Config, m), "home")
 	}
 	// One private engine inventory per host; native names scope disks and sockets.
-	return filepath.Join(n.Config.Root, "runtime")
+	// The name is short because the engine's socket paths bound the root's length.
+	return filepath.Join(n.Config.Root, "r")
 }
 
 func (n *NativeRuntime) runtimeData(m Manifest) string {

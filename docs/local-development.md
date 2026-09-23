@@ -76,10 +76,12 @@ their owning release and recreated; there is no state migration.
 Run `dev` from the project directory as the user who will own the VMs. State
 goes to `<project>/.clankerbox` by default, or to `--state-dir`. Add it to the
 project's ignore rules: it holds credentials, controller state and ownership
-manifests. The host service gets a short private root under `~/.cb/` so native
-socket paths stay within platform limits. Each project has its own services,
-credentials, machine store and journals, and a lock keeps two foreground owners
-or teardowns from racing.
+manifests. The host service gets a private root under `~/.clankerbox/`, beside
+the default port leases. Native socket paths limit its length, so the home
+directory path may be at most 20 bytes on macOS (`/Users/` and 13 characters)
+and 31 bytes on Linux. Each project has its own services, credentials, machine
+store and journals, and a lock keeps two foreground owners or teardowns from
+racing.
 
 The controller listens on a free loopback port unless `--listen 127.0.0.1:PORT`
 is given; non-loopback addresses are refused. When ready, the CLI writes:

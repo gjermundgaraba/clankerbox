@@ -1,4 +1,4 @@
-// Package client implements the local Clankerbox API and connection client.
+// Package client implements the local clankerbox API and connection client.
 package client
 
 import (

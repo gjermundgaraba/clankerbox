@@ -129,7 +129,7 @@ type registryFixture struct {
 func newRegistryFixture(t *testing.T, count int) *registryFixture {
 	t.Helper()
 	//nolint:usetesting // Runtime socket paths require a short canonical host root.
-	root, err := os.MkdirTemp("/tmp", "cbreg-")
+	root, err := os.MkdirTemp("/tmp", "clankerbox-reg-")
 	registryCheck(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(root) })
 	root, err = filepath.EvalSymlinks(root)

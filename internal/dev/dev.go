@@ -32,6 +32,9 @@ const (
 	environmentManifest = "environment.json"
 	environmentLock     = "environment.lock"
 	environmentPrefix   = "clankerbox-dev-"
+	// hostRootDir holds host roots beside the default port leases in the home
+	// directory. It is kept short: native socket paths bound the root's length.
+	hostRootDir = ".clankerbox"
 )
 
 const (
@@ -207,7 +210,7 @@ func (e *environment) initialize(state, bundlePath string) error {
 		return err
 	}
 	name := namespace(state)
-	short := filepath.Join(home, ".cb", name)
+	short := filepath.Join(home, hostRootDir, name)
 	if _, err = os.Lstat(short); !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("short host root already exists without this environment: %s", short)
 	}
@@ -231,7 +234,7 @@ func (e *environment) restore(data []byte, state, bundlePath string) error {
 	if err != nil {
 		return err
 	}
-	if e.Version != 2 || e.CPU < 1 || e.RAMMiB < 128 || e.StateDir != state || e.HostRoot != filepath.Join(home, ".cb", namespace(state)) ||
+	if e.Version != 2 || e.CPU < 1 || e.RAMMiB < 128 || e.StateDir != state || e.HostRoot != filepath.Join(home, hostRootDir, namespace(state)) ||
 		e.Namespace != environmentPrefix+namespace(state) {
 		return errors.New("environment ownership manifest mismatch")
 	}

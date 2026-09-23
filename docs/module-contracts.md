@@ -1,6 +1,6 @@
 # Module contracts
 
-Clankerbox is three services with exclusive ownership of their state. Callers
+clankerbox is three services with exclusive ownership of their state. Callers
 cross a service boundary only through the generated RPC contract.
 
 ```mermaid

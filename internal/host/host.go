@@ -132,7 +132,7 @@ type Manifest struct {
 }
 
 // RuntimeName returns the exact native identity reserved for this machine.
-func (m Manifest) RuntimeName() string { return "cb-" + m.ID }
+func (m Manifest) RuntimeName() string { return "clankerbox-" + m.ID }
 
 // RuntimeState reports observed native execution state, never desired state.
 type RuntimeState struct {
@@ -984,7 +984,7 @@ func (c *Config) validateRuntimeProfile(p model.Profile) error {
 		suffix := "/runtime/c/smolvm/vms/0000000000000000/control.sock"
 		limit := unixSocketPathLimit
 		if c.HostOS == hostDarwin {
-			suffix = "/runtime/Library/Caches/smolvm/vms/0000000000000000/control.sock"
+			suffix = "/r/Library/Caches/smolvm/vms/0000000000000000/control.sock"
 			limit = 104
 		}
 		if len(c.Root)+len(suffix) >= limit {

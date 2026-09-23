@@ -36,7 +36,7 @@ func TestMacSmolvmBranchJobBecomesRetainedStartWithoutReplay(t *testing.T) {
 	}
 	parent := host.Manifest{ID: model.NewID(), Profile: p}
 	child := host.Manifest{ID: model.NewID(), StoreID: parent.ID, Profile: p, Port: 48192}
-	db := filepath.Join(root, "runtime", "Library", "Application Support", "smolvm", "server", "smolvm.db")
+	db := filepath.Join(root, "r", "Library", "Application Support", "smolvm", "server", "smolvm.db")
 	requireNoError(t, os.MkdirAll(filepath.Dir(db), 0700))
 	requireNoError(t, os.WriteFile(db, nil, 0600))
 	requireNoError(t, os.MkdirAll(filepath.Join(root, "jobs"), 0700))
@@ -95,7 +95,7 @@ func TestHostPlatformConfigurationDoesNotFollowGuestEngine(t *testing.T) {
 	}
 	c := host.Config{
 		HostOS:        osDarwin,
-		Root:          "/Users/test/.cb/env",
+		Root:          "/Users/gg/.clankerbox/7594b2cc466d",
 		Bases:         []host.BaseBinding{testBase(p, testRootfs)},
 		RuntimeDigest: "engine-content",
 		SmolvmPath:    "/opt/smolvm/bin/smolvm",
@@ -103,7 +103,10 @@ func TestHostPlatformConfigurationDoesNotFollowGuestEngine(t *testing.T) {
 		SystemctlPath: "not-a-path",
 	}
 	requireNoError(t, c.Validate())
-	c.Root = "/Users/test/" + strings.Repeat("x", 60)
+	// 45 bytes plus the 58-byte engine socket suffix and NUL fill Darwin's 104.
+	c.Root = "/Users/ggggggggggggg/.clankerbox/7594b2cc466d"
+	requireNoError(t, c.Validate())
+	c.Root = "/Users/gggggggggggggg/.clankerbox/7594b2cc466d"
 	if err := c.Validate(); err == nil {
 		t.Fatal("oversized Mac socket root accepted")
 	}
@@ -126,7 +129,7 @@ func newMacSupervisorFixture(
 	runner := &recordingRunner{}
 	runner.reply = func(c commandCall) ([]byte, error) {
 		if c.path == cfg.SmolvmPath {
-			if !slices.Contains(c.env, "HOME="+filepath.Join(root, "runtime")) ||
+			if !slices.Contains(c.env, "HOME="+filepath.Join(root, "r")) ||
 				!slices.Contains(c.env, "DYLD_LIBRARY_PATH="+cfg.LibraryDir) {
 				t.Fatal("Mac engine environment is not private/platform-specific")
 			}

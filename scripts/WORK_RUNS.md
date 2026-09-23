@@ -100,9 +100,11 @@ into each run (APFS clones on macOS), then delete only the run's clones during
 teardown. Validate host/controller startup before expensive image work. A failed
 qualification must not force another download of its unchanged input.
 
-Tart's per-VM control socket also has a macOS path-length limit. If the repository
-path is too long, use `WorkRun('t', root=Path('/private/tmp/cbt'))`, record its full
-path in the qualification evidence, and manage it with
-`python3 scripts/work_runs.py --root /private/tmp/cbt list` (or `clean`). The same
-ownership, locking and teardown rules apply; the reusable seed stays in
-`.work/inputs/`. Validate the full native socket path before creating VMs.
+Tart's per-VM control socket, `<host root>/tart/vms/clankerbox-<32 hex>/control.sock`,
+also has a macOS path-length limit: the canonical host root may be at most 37
+bytes. A run's `scratch/` is too deep for that, so give a Tart host a private
+root such as `tempfile.mkdtemp(prefix='clankerbox-', dir='/private/tmp')`, record
+its full path in the run's evidence, and register its removal with
+`run.on_cleanup` before registering the callback that stops its VMs (callbacks
+run in reverse order). The reusable seed stays in `.work/inputs/`. Validate the
+full native socket path before creating VMs.

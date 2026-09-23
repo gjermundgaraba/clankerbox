@@ -27,7 +27,7 @@ func TestTemplateExpansionCacheIsPrivateAndRejectsChangedBundle(t *testing.T) {
 	if err := n.stageTemplates(m); err != nil {
 		t.Fatal(err)
 	}
-	cache := filepath.Join(n.Config.Root, "runtime", ".smolvm")
+	cache := filepath.Join(n.Config.Root, "r", ".smolvm")
 	if err := os.WriteFile(
 		filepath.Join(cache, "overlay-template.ext4"),
 		[]byte("expanded sparse backing"),

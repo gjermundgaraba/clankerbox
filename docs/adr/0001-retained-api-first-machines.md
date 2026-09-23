@@ -4,7 +4,7 @@ Status: accepted
 
 ## Context
 
-Clankerbox is single-tenant: one operator runs coding agents in VMs that live
+clankerbox is single-tenant: one operator runs coding agents in VMs that live
 for weeks.
 Applications are independent consumers of the API, not parts of the product.
 Ephemeral-lifecycle orchestrators such as Orchard delete disks when a worker
@@ -26,5 +26,5 @@ recovery feature.
 
 Callers handle pending and unresolved operations explicitly. Capacity accounting
 is reservation-based because retained machines hold their pinned sizes.
-Clankerbox owns VM identity and lifecycle instead of delegating to an
+clankerbox owns VM identity and lifecycle instead of delegating to an
 orchestrator.

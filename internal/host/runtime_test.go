@@ -150,7 +150,7 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	}
 	create := runner.calls[1]
 	joined := strings.Join(create.args, " ")
-	for _, required := range []string{"machine create --name cb-", "--cpus 2 --mem 2048", "--storage 4 --overlay 16", "--net-backend virtio-net", "--port 22001:7443", "--dns 9.9.9.9 -- /bin/true"} {
+	for _, required := range []string{"machine create --name clankerbox-", "--cpus 2 --mem 2048", "--storage 4 --overlay 16", "--net-backend virtio-net", "--port 22001:7443", "--dns 9.9.9.9 -- /bin/true"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("missing %s from %s", required, joined)
 		}
@@ -168,7 +168,7 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 	requireNoError(t, os.MkdirAll(filepath.Join(cfg.Root, "jobs"), 0700))
 	requireNoError(t, n.Configure(context.Background(), m))
 	unit := readSupervisor(t, n.Config.Root, m.ID)
-	for _, required := range []string{"Type=oneshot", "RemainAfterExit=yes", "Restart=no", "SendSIGKILL=no", "TimeoutStartSec=infinity", "ExecStart=" + cfg.SmolvmPath + " machine start --name cb-"} {
+	for _, required := range []string{"Type=oneshot", "RemainAfterExit=yes", "Restart=no", "SendSIGKILL=no", "TimeoutStartSec=infinity", "ExecStart=" + cfg.SmolvmPath + " machine start --name clankerbox-"} {
 		if !strings.Contains(unit, required) {
 			t.Fatalf("unit missing %s", required)
 		}

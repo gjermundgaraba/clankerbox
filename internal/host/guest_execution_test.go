@@ -20,7 +20,7 @@ type readinessRunner struct {
 
 func (r *readinessRunner) Run(_ context.Context, _ string, args, _ []string, input []byte) ([]byte, error) {
 	r.t.Helper()
-	if !reflect.DeepEqual(args, []string{"exec", "cb-0123456789abcdef0123456789abcdef", "/usr/bin/true"}) ||
+	if !reflect.DeepEqual(args, []string{"exec", "clankerbox-0123456789abcdef0123456789abcdef", "/usr/bin/true"}) ||
 		len(input) != 0 {
 		r.t.Fatalf("unsafe readiness command %v", args)
 	}

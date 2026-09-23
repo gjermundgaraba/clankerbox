@@ -1,6 +1,6 @@
 # `clankerbox shell` and the attachment contract — completed implementation
 
-Status: released in Clankerbox 0.8.0 with SDK 0.4.0.
+Status: released in clankerbox 0.8.0 with SDK 0.4.0.
 
 One command creates, streams, uses and ends a guest session:
 `clankerbox shell MACHINE [-- COMMAND [ARG...]]`. The session API changed to

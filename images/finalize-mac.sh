@@ -37,12 +37,12 @@ for _ in {1..90}; do
 done
 test "$ready" = true
 "$tart" exec -i "$seed" sudo -n /bin/bash -c 'set -eu; test ! -e /usr/local/bin/clankerbox-guest; mkdir -p /usr/local/bin; cat > /usr/local/bin/clankerbox-guest; chown root:wheel /usr/local/bin/clankerbox-guest; chmod 755 /usr/local/bin/clankerbox-guest' < "$guest"
-"$tart" exec "$seed" sudo -n mkdir -p /Applications/Clankerbox-Toolchains
+"$tart" exec "$seed" sudo -n mkdir -p /Applications/clankerbox-toolchains
 /usr/bin/tar -cf - -C /Applications Xcode.app |
-  "$tart" exec -i "$seed" sudo -n /usr/bin/tar -xf - -C /Applications/Clankerbox-Toolchains
+  "$tart" exec -i "$seed" sudo -n /usr/bin/tar -xf - -C /Applications/clankerbox-toolchains
 "$tart" exec -i "$seed" /bin/bash -se <<'GUEST'
 set -eu
-new=/Applications/Clankerbox-Toolchains/Xcode.app
+new=/Applications/clankerbox-toolchains/Xcode.app
 sudo -n /usr/bin/codesign --verify --deep --strict "$new"
 sudo -n /usr/bin/xcode-select -s "$new/Contents/Developer"
 sudo -n /usr/bin/xcodebuild -license accept

@@ -3,14 +3,14 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleDisplayName</key>
-	<string>Clankerbox Host</string>
+	<string>clankerbox host</string>
 	<key>CFBundleIdentifier</key>
 	<string>org.clankerbox.host</string>
 	<key>CFBundleName</key>
-	<string>Clankerbox Host</string>
+	<string>clankerbox host</string>
 	<key>CFBundleVersion</key>
 	<string>0.4.0</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Clankerbox Host connects to your locally managed virtual machines to provide authenticated terminal sessions.</string>
+	<string>clankerbox host connects to your locally managed virtual machines to provide authenticated terminal sessions.</string>
 </dict>
 </plist>

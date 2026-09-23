@@ -60,7 +60,7 @@ func (r *preparedRunner) Run(_ context.Context, _ string, args, _ []string, inpu
 func preparedFixture(t *testing.T) (*NativeRuntime, Manifest, *preparedRunner) {
 	t.Helper()
 	//nolint:usetesting // Native cache paths require short roots even with a fake runner.
-	root, err := os.MkdirTemp("/tmp", "cbprep-")
+	root, err := os.MkdirTemp("/tmp", "clankerbox-prep-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func preparedIdentityFixture(t *testing.T, wrongMachine bool) (*NativeRuntime, M
 		t.Fatal(err)
 	}
 	//nolint:usetesting // Native inventory tests require a short runtime cache path.
-	root, err := os.MkdirTemp("/tmp", "cbidentity-")
+	root, err := os.MkdirTemp("/tmp", "clankerbox-id-")
 	if err != nil {
 		t.Fatal(err)
 	}

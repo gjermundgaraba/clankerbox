@@ -196,7 +196,7 @@ func (f *acceptedHost) GetHostOperation(
 func TestHostAcceptanceIsNotControllerCompletion(t *testing.T) {
 	t.Parallel()
 	//nolint:usetesting // macOS testing.TempDir paths exceed the native Unix socket limit.
-	dir, err := os.MkdirTemp("/tmp", "cb-rpc-")
+	dir, err := os.MkdirTemp("/tmp", "clankerbox-rpc-")
 	if err != nil {
 		t.Fatal(err)
 	}

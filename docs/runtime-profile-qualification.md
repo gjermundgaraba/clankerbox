@@ -91,7 +91,7 @@ not override the two suite failures. See the separate local result below.
 A fresh local seed was prepared from the pinned vanilla image
 `ghcr.io/cirruslabs/macos-tahoe-vanilla@sha256:eeec54bfe1f076e27786c5d92b89187a05b1d109b5071eb2dcdf02d596e34640`.
 It runs macOS 26.6.2 / 25G83 without Xcode. Preparation installed the official Tart
-guest agent 0.14.1 and the current Clankerbox guest, configured public DNS/network
+guest agent 0.14.1 and the current clankerbox guest, configured public DNS/network
 time, and verified the guest clock before stopping it. The reusable input is
 retained under `.work/inputs/tart-local/` (about 24 GiB); tests use private APFS
 clones. Downloaded OCI staging was removed after preparation.

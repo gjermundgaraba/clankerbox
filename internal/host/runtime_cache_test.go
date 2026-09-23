@@ -10,7 +10,7 @@ import (
 
 func TestLinuxCacheUsesShortHostNamespace(t *testing.T) {
 	t.Parallel()
-	n := NewNativeRuntime(Config{Root: "/home/user/.cb/7594b2cc466d", HostOS: hostLinux}, ExecRunner{})
+	n := NewNativeRuntime(Config{Root: "/home/user/.clankerbox/7594b2cc466d", HostOS: hostLinux}, ExecRunner{})
 	a := Manifest{ID: model.NewID(), Profile: model.Profile{Runtime: runtimeSmolvm}}
 	b := a
 	b.ID = model.NewID()

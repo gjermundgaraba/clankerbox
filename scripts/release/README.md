@@ -173,7 +173,7 @@ runtime, image-agent, source or patch verification.
 
 ## Redistribution
 
-Bundles carry Clankerbox's own MIT `LICENSE` at the root, native component
+Bundles carry clankerbox's own MIT `LICENSE` at the root, native component
 notices in `licenses/`, Go and Rust dependency notices with their inventory,
 image package copyright files under
 `image/usr/share/doc`, and Node's notices under `image/usr/local`. The shipped

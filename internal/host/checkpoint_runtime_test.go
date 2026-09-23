@@ -405,7 +405,7 @@ func observeBranchSupervisor(
 func shortNativeRoot(t *testing.T) string {
 	t.Helper()
 	//nolint:usetesting // Native Unix sockets require bounded paths even in tests.
-	root, err := os.MkdirTemp("/tmp", "cbn-")
+	root, err := os.MkdirTemp("/tmp", "clankerbox-n-")
 	requireNoError(t, err)
 	root, err = filepath.EvalSymlinks(root)
 	requireNoError(t, err)

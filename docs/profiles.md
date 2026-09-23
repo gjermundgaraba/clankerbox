@@ -1,8 +1,8 @@
 # Runtime-built profiles
 
-A deployed base supplies the OS, engine and matching Clankerbox guest integration.
+A deployed base supplies the OS, engine and matching clankerbox guest integration.
 Publish a recipe to prepare tools on one host without deploying or restarting
-Clankerbox. Every build starts from its selected base. Success makes its immutable
+clankerbox. Every build starts from its selected base. Success makes its immutable
 revision current; failure or cancellation leaves the previous current revision.
 Fresh controllers have no profiles. Machine creation never runs setup.
 
@@ -56,7 +56,7 @@ Inputs are removed before publication.
 V1 recipes support root-run tools/packages. Linux capture preserves file contents,
 deletions, modes and links, but does not preserve arbitrary Linux UID/GID ownership,
 extended attributes or file capabilities. Do not rely on service-account ownership
-or file capabilities. Scripts must keep engine and Clankerbox guest integration
+or file capabilities. Scripts must keep engine and clankerbox guest integration
 operational. Downloads are operator-controlled; unpinned downloads are not
 reproducible. There is no secrets injection or arbitrary image import.
 

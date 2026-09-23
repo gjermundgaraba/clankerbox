@@ -1,8 +1,8 @@
 # @gjermundgaraba/clankerbox-sdk
 
 Generated Protobuf messages, TypeScript types and Connect RPC service descriptors
-for Clankerbox. This ESM package includes compiled JavaScript and declarations;
-consumers do not need protoc, a Go toolchain, or a Clankerbox source checkout.
+for clankerbox. This ESM package includes compiled JavaScript and declarations;
+consumers do not need protoc, a Go toolchain, or a clankerbox source checkout.
 
 ```sh
 npm install @gjermundgaraba/clankerbox-sdk @connectrpc/connect @connectrpc/connect-node
@@ -21,11 +21,12 @@ the bidirectional attachment stream. `@bufbuild/protobuf` is included as a
 runtime dependency. All descriptors are exported at the root and through
 `/resources`, `/machine`, `/session` and `/host` subpaths.
 
-SDK **0.4.0** targets Clankerbox **0.8.0** and its attachment-owned session
+SDK **0.4.1** targets clankerbox **0.9.0** and its attachment-owned session
 contract: sessions are created by `Open.create` inside `AttachSession`, and each
 `Input` is sent at the `input_offset` the guest last acknowledged. Use this pair
-together; SDK and controller version numbers are independent. Older
-installations and guest images are not migrated to this contract.
+together; SDK and controller version numbers are independent. The wire contract
+is unchanged from SDK 0.4.0 and clankerbox 0.8.0. Older installations and guest
+images are not migrated.
 
 ## RPC contract
 

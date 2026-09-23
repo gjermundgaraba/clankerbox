@@ -1,2 +1,2 @@
 #!/bin/sh
-printf '%s\n' 'Hello from a runtime-built Clankerbox profile.'
+printf '%s\n' 'Hello from a runtime-built clankerbox profile.'
