@@ -148,7 +148,7 @@ make lint
 ```
 
 `make test` runs the Go tests with the race detector and the Python tests for
-image staging and release assembly. `make lint` needs golangci-lint v2.13.2.
+image staging and release assembly. `make lint` needs golangci-lint v2.14.0.
 Regenerating the RPC code is described in [protocol/README.md](protocol/README.md).
 
 ## License

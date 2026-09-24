@@ -174,10 +174,8 @@ func TestDestructionOrderPreservesDependencies(t *testing.T) {
 		positions["fork"] >= positions[fixtureSource] {
 		t.Fatalf("unsafe order: %+v", order)
 	}
-	if _, err = destructionOrder(
-		[]*v1.Machine{{Id: "a", SourceMachineId: "b"}, {Id: "b", SourceMachineId: "a"}},
-		nil,
-	); err == nil {
+	_, err = destructionOrder([]*v1.Machine{{Id: "a", SourceMachineId: "b"}, {Id: "b", SourceMachineId: "a"}}, nil)
+	if err == nil {
 		t.Fatal("dependency cycle accepted")
 	}
 }

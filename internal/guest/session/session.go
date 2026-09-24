@@ -365,7 +365,7 @@ func (s *Session) waitLoop() {
 	s.term, s.ring = nil, nil
 	s.persist()
 	record := s.record
-	subs := s.subs
+	subs := slices.Clone(s.subs)
 	s.mu.Unlock()
 	if term != nil {
 		_ = term.Close()

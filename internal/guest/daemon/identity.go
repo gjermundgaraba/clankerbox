@@ -56,9 +56,8 @@ func bindingConfig(b rpcidentity.Binding) (*tls.Config, error) {
 		}
 		intermediates.AddCert(intermediate)
 	}
-	if _, err = leaf.Verify(
-		x509.VerifyOptions{Roots: roots, Intermediates: intermediates, DNSName: "guest.clankerbox.internal"},
-	); err != nil {
+	opts := x509.VerifyOptions{Roots: roots, Intermediates: intermediates, DNSName: "guest.clankerbox.internal"}
+	if _, err = leaf.Verify(opts); err != nil {
 		return nil, err
 	}
 	if !rpcidentity.HasURI(leaf, "spiffe://clankerbox/machine/"+b.MachineID) {

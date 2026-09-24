@@ -71,9 +71,10 @@ func (g *scriptedGuest) AttachSession(
 		return g.refuse
 	}
 	session := &v1.Session{Id: g.open.GetSessionId(), Status: v1.SessionStatus_SESSION_STATUS_RUNNING}
-	if err = stream.Send(&v1.AttachmentEvent{Event: &v1.AttachmentEvent_Opened{Opened: &v1.Opened{
+	opened := &v1.AttachmentEvent{Event: &v1.AttachmentEvent_Opened{Opened: &v1.Opened{
 		Session: session, Mode: v1.OpenMode_OPEN_MODE_RESUME,
-	}}}); err != nil {
+	}}}
+	if err = stream.Send(opened); err != nil {
 		return err
 	}
 	if g.script != nil {
@@ -257,9 +258,10 @@ func TestShellTerminalSession(t *testing.T) {
 				return err
 			}
 			typed = append(typed, control.GetInput().GetData()...)
-			if err = stream.Send(&v1.AttachmentEvent{
+			ack := &v1.AttachmentEvent{
 				Event: &v1.AttachmentEvent_Ack{Ack: &v1.Ack{Sequence: control.GetInput().GetSequence(), Accepted: true}},
-			}); err != nil {
+			}
+			if err = stream.Send(ack); err != nil {
 				return err
 			}
 		}

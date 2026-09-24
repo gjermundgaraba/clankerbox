@@ -164,9 +164,6 @@ linters:
       enable-all: true
       disable:
         - fieldalignment
-      settings:
-        shadow:
-          strict: true
 
     nakedret:
       max-func-lines: 0
@@ -183,6 +180,13 @@ linters:
     reassign:
       patterns:
         - ".*"
+
+    revive:
+      enable-default-rules: true
+      rules:
+        - name: marshal-receiver
+        - name: multiline-if-init
+        - name: use-slices-concat
 
     sloglint:
       no-global: all

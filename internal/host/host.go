@@ -926,8 +926,9 @@ func (h *Helper) validateRetainedGeneration(ctx context.Context, req model.Reque
 		return model.NewError(model.ReasonConflict, "immutable machine identity conflict", false)
 	}
 	var last []byte
-	if err := h.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE machine_id=? AND generation=?", m.ID, m.Generation).
-		Scan(&last); err != nil {
+	err := h.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE machine_id=? AND generation=?", m.ID, m.Generation).
+		Scan(&last)
+	if err != nil {
 		return err
 	}
 	var previous accepted

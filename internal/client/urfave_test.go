@@ -62,11 +62,8 @@ const missingConfig = "/missing/config"
 func TestDevHelpDescribesRealRetainedEnvironment(t *testing.T) {
 	t.Parallel()
 	var out, diagnostics bytes.Buffer
-	if err := client.Run(
-		t.Context(),
-		[]string{testMachineName, "--help"},
-		client.Streams{Out: &out, Err: &diagnostics},
-	); err != nil {
+	err := client.Run(t.Context(), []string{testMachineName, "--help"}, client.Streams{Out: &out, Err: &diagnostics})
+	if err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{"--state-dir", "--listen", "--bundle", "destroy", "stop", "VM"} {

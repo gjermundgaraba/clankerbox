@@ -359,9 +359,8 @@ func exerciseCapture(t *testing.T, interrupted bool) {
 		if err == nil {
 			t.Fatal("interruption succeeded")
 		}
-		if _, err = os.Stat(
-			filepath.Join(n.Config.Root, "checkpoints", cp.ID, "capture.smolcheckpoint"),
-		); err != nil {
+		_, err = os.Stat(filepath.Join(n.Config.Root, "checkpoints", cp.ID, "capture.smolcheckpoint"))
+		if err != nil {
 			t.Fatal("discarded ambiguous artifact")
 		}
 	} else {

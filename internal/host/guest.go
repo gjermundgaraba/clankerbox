@@ -35,8 +35,9 @@ func (h *Helper) readyMachine(ctx context.Context, id string) (Manifest, error) 
 		return Manifest{}, model.NewError(model.ReasonPrerequisite, "machine is not prepared", false)
 	}
 	var body []byte
-	if err = h.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE machine_id=? AND generation=?", id, m.Generation).
-		Scan(&body); err != nil {
+	err = h.db.QueryRowContext(ctx, "SELECT body FROM operations WHERE machine_id=? AND generation=?", id, m.Generation).
+		Scan(&body)
+	if err != nil {
 		return Manifest{}, err
 	}
 	var op accepted

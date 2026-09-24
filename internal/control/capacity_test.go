@@ -46,12 +46,8 @@ func TestHostReservationStates(t *testing.T) {
 				got.RemainingRAMMiB != h.RAMMiB-ram {
 				t.Fatalf("capacity: %+v", got)
 			}
-			if excluded := hostCapacity(
-				h,
-				[]model.Machine{m},
-				m.ID,
-			); excluded.UsedCPU != 0 ||
-				excluded.UsedRAMMiB != 0 {
+			excluded := hostCapacity(h, []model.Machine{m}, m.ID)
+			if excluded.UsedCPU != 0 || excluded.UsedRAMMiB != 0 {
 				t.Fatalf("excluded machine reserved capacity: %+v", excluded)
 			}
 		})
@@ -94,9 +90,10 @@ func TestTartAdmissionCountsBuildSlotsAndLeavesSmolvmUnaffected(t *testing.T) {
 		}
 	}()
 	db.SetMaxOpenConns(1)
-	if _, err = db.ExecContext(t.Context(),
+	_, err = db.ExecContext(t.Context(),
 		"CREATE TABLE machines (id TEXT PRIMARY KEY, name TEXT, deleted INTEGER, body BLOB); CREATE TABLE profile_builds (host_id TEXT, status TEXT, body BLOB)",
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
 	h := model.Host{ID: "host", CPU: 100, RAMMiB: 100000}
@@ -152,10 +149,11 @@ func TestHostsSnapshotAndAdmission(t *testing.T) {
 		}
 	}()
 	db.SetMaxOpenConns(1)
-	if _, err = db.ExecContext(
+	_, err = db.ExecContext(
 		t.Context(),
 		"CREATE TABLE machines (id TEXT PRIMARY KEY, name TEXT, deleted INTEGER, body BLOB); CREATE TABLE profile_builds (host_id TEXT, status TEXT, body BLOB)",
-	); err != nil {
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
 	const secondHost = "second"

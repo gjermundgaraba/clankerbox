@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -54,7 +55,7 @@ func TestCommandValidation(t *testing.T) {
 	}{
 		{"required flags", nil, "Required flag"},
 		{"unknown flag", []string{"--unknown"}, "flag provided but not defined"},
-		{"unexpected argument", append(append([]string{}, required...), "extra"), "unexpected argument"},
+		{"unexpected argument", append(slices.Clone(required), "extra"), "unexpected argument"},
 		{"missing value", []string{testConfigFlag}, "flag needs an argument"},
 	}
 	for _, tt := range tests {
@@ -95,10 +96,11 @@ func TestCommandFlags(t *testing.T) {
 			}
 			return nil
 		}
-		if err := cmd.Run(context.Background(), []string{
+		err := cmd.Run(context.Background(), []string{
 			"clankerbox-server", testConfigFlag, testConfigFile,
 			testStateDirFlag, "missing-state", testTokenFileFlag, "missing-token",
-		}); err != nil {
+		})
+		if err != nil {
 			t.Fatal(err)
 		}
 		if !called {

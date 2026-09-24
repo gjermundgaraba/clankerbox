@@ -300,8 +300,9 @@ func allocateDerivation(
 	switch {
 	case child:
 		var count int
-		if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM machines WHERE name=? AND deleted=0", in.Name).
-			Scan(&count); err != nil {
+		err = tx.QueryRowContext(ctx, "SELECT count(*) FROM machines WHERE name=? AND deleted=0", in.Name).
+			Scan(&count)
+		if err != nil {
 			return model.Machine{}, req, err
 		}
 		if count != 0 {

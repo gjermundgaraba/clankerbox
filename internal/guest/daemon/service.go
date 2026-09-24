@@ -156,11 +156,10 @@ func (s *streamSink) sendOutput(next uint64, data []byte, stream v1.OutputStream
 	for len(data) > 0 {
 		n := min(len(data), chunkBytes)
 		offset := next - uint64(len(data)-n)
-		if err := s.put(
-			&v1.AttachmentEvent{
-				Event: &v1.AttachmentEvent_Output{Output: &v1.Output{NextOffset: offset, Data: data[:n], Stream: stream}},
-			},
-		); err != nil {
+		output := &v1.AttachmentEvent{
+			Event: &v1.AttachmentEvent_Output{Output: &v1.Output{NextOffset: offset, Data: data[:n], Stream: stream}},
+		}
+		if err := s.put(output); err != nil {
 			return err
 		}
 		data = data[n:]
@@ -249,13 +248,10 @@ func (s *service) AttachSession(
 		sink.view = true
 	}
 
-	if err = rpctransport.WriteEvent(
-		ctx,
-		stream,
-		&v1.AttachmentEvent{
-			Event: &v1.AttachmentEvent_Opened{Opened: rpcmodel.ToOpened(s.description(open.GetMachineId()), value)},
-		},
-	); err != nil {
+	opened := &v1.AttachmentEvent{
+		Event: &v1.AttachmentEvent_Opened{Opened: rpcmodel.ToOpened(s.description(open.GetMachineId()), value)},
+	}
+	if err = rpctransport.WriteEvent(ctx, stream, opened); err != nil {
 		return err
 	}
 	if attachment == nil {

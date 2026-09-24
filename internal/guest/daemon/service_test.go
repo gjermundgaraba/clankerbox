@@ -107,10 +107,11 @@ func createSession(
 	t.Helper()
 	stream := client.AttachSession(ctx)
 	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
-	if err := stream.Send(&v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
+	open := &v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
 		MachineId: testMachine, SessionId: id,
 		Create: &v1.NewSession{CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Cols: 80, Rows: 24, Argv: argv},
-	}}}); err != nil {
+	}}}
+	if err := stream.Send(open); err != nil {
 		t.Fatal(err)
 	}
 	opened, err := stream.Receive()
@@ -134,17 +135,12 @@ func TestLiveRebindRetainsManagerAndFencesOldMachine(t *testing.T) {
 	if err = ident.rebind(binding); err != nil {
 		t.Fatal(err)
 	}
-	if err = ident.withIdentity(
-		oldEpoch,
-		testMachine,
-		func() error { t.Fatal("stale admission executed"); return nil },
-	); err == nil {
+	err = ident.withIdentity(oldEpoch, testMachine, func() error { t.Fatal("stale admission executed"); return nil })
+	if err == nil {
 		t.Fatal("old epoch accepted")
 	}
-	if _, err = client.ListSessions(
-		ctx,
-		connect.NewRequest(&v1.ListSessionsRequest{MachineId: testMachine}),
-	); err == nil {
+	_, err = client.ListSessions(ctx, connect.NewRequest(&v1.ListSessionsRequest{MachineId: testMachine}))
+	if err == nil {
 		t.Fatal("old TLS identity accepted child")
 	}
 	child := guestClient(t, auth, childMachine, endpoint)
@@ -173,25 +169,23 @@ func TestResumePrefixPrecedesLiveOutputWithInterleavedACK(t *testing.T) {
 	stream := client.AttachSession(ctx)
 	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
 	hello := manager.Hello()
-	if err = stream.Send(
-		&v1.AttachmentRequest{
-			Command: &v1.AttachmentRequest_Open{
-				Open: &v1.Open{
-					MachineId:            testMachine,
-					SessionId:            id,
-					ExpectedEngineDigest: hello.WasmSHA256,
-					ResumeCursor:         &v1.ResumeCursor{Incarnation: hello.Incarnation},
-				},
+	open := &v1.AttachmentRequest{
+		Command: &v1.AttachmentRequest_Open{
+			Open: &v1.Open{
+				MachineId:            testMachine,
+				SessionId:            id,
+				ExpectedEngineDigest: hello.WasmSHA256,
+				ResumeCursor:         &v1.ResumeCursor{Incarnation: hello.Incarnation},
 			},
 		},
-	); err != nil {
+	}
+	if err = stream.Send(open); err != nil {
 		t.Fatal(err)
 	}
-	if err = stream.Send(
-		&v1.AttachmentRequest{
-			Command: &v1.AttachmentRequest_Input{Input: &v1.Input{Sequence: 1, Data: []byte("after-prefix\n")}},
-		},
-	); err != nil {
+	input := &v1.AttachmentRequest{
+		Command: &v1.AttachmentRequest_Input{Input: &v1.Input{Sequence: 1, Data: []byte("after-prefix\n")}},
+	}
+	if err = stream.Send(input); err != nil {
 		t.Fatal(err)
 	}
 	first, err := stream.Receive()
@@ -231,11 +225,8 @@ func TestPersistenceFailureFencesAdmission(t *testing.T) {
 	if err = ident.rebind(binding); err == nil {
 		t.Fatal("write to closed durable state succeeded")
 	}
-	if err = ident.withIdentity(
-		ctx,
-		testMachine,
-		func() error { t.Fatal("uncertain binding admitted work"); return nil },
-	); err == nil {
+	err = ident.withIdentity(ctx, testMachine, func() error { t.Fatal("uncertain binding admitted work"); return nil })
+	if err == nil {
 		t.Fatal("failed persistence left transport usable")
 	}
 }

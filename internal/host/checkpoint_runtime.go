@@ -167,7 +167,7 @@ func (n *NativeRuntime) Capture(ctx context.Context, source Manifest, cp Checkpo
 			return err
 		}
 	case checkpointRAM:
-		if _, err := n.run(
+		_, err := n.run(
 			ctx,
 			source,
 			smolvmMachineCommand,
@@ -178,7 +178,8 @@ func (n *NativeRuntime) Capture(ctx context.Context, source Manifest, cp Checkpo
 			n.artifact(cp),
 			"--staging-dir",
 			filepath.Join(dir, "staging"),
-		); err != nil {
+		)
+		if err != nil {
 			return err
 		}
 		if err := regularNonempty(n.artifact(cp)); err != nil {
@@ -212,13 +213,8 @@ func syncTree(root string) error {
 }
 
 func (n *NativeRuntime) captureTart(ctx context.Context, source Manifest, cp CheckpointSpec) error {
-	if _, err := n.run(
-		ctx,
-		source,
-		"clone",
-		source.RuntimeName(),
-		checkpointMachine(cp).RuntimeName(),
-	); err != nil {
+	_, err := n.run(ctx, source, "clone", source.RuntimeName(), checkpointMachine(cp).RuntimeName())
+	if err != nil {
 		return err
 	}
 	state, err := n.Inspect(ctx, checkpointMachine(cp))
@@ -379,28 +375,21 @@ func (n *NativeRuntime) restoreRAM(ctx context.Context, m *Manifest, cp Checkpoi
 	}
 	// This machine's own bare rootfs remains available after checkpoint/ancestor
 	// deletion for retained cold starts and subsequent captures.
-	if _, err := n.Runner.Run(
+	_, err := n.Runner.Run(
 		ctx,
 		"/bin/cp",
 		[]string{"-a", imagePath, filepath.Join(machineDir(n.Config, *m), "agent-rootfs")},
 		n.env(*m),
 		nil,
-	); err != nil {
+	)
+	if err != nil {
 		return err
 	}
-	if _, err := n.run(
-		ctx,
-		*m,
-		smolvmMachineCommand,
-		actionCreate,
-		nameFlag,
-		m.RuntimeName(),
-		"--from",
-		n.artifact(cp),
-	); err != nil {
+	_, err = n.run(ctx, *m, smolvmMachineCommand, actionCreate, nameFlag, m.RuntimeName(), "--from", n.artifact(cp))
+	if err != nil {
 		return err
 	}
-	if _, err := n.run(
+	_, err = n.run(
 		ctx,
 		*m,
 		smolvmMachineCommand,
@@ -411,7 +400,8 @@ func (n *NativeRuntime) restoreRAM(ctx context.Context, m *Manifest, cp Checkpoi
 		strconv.Itoa(cp.SourcePort)+":7443",
 		"--port",
 		strconv.Itoa(m.Port)+":7443",
-	); err != nil {
+	)
+	if err != nil {
 		return err
 	}
 	m.PendingRAM = true

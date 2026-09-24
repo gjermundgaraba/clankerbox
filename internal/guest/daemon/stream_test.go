@@ -91,9 +91,10 @@ func checkAttachmentEOF(t *testing.T, guest clankerboxv1connect.SessionServiceCl
 	var err error
 	stream := client.AttachSession(ctx)
 	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
-	if err = stream.Send(&v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
+	open := &v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
 		MachineId: testMachine, SessionId: id, ExpectedEngineDigest: digest,
-	}}}); err != nil {
+	}}}
+	if err = stream.Send(open); err != nil {
 		t.Fatal(err)
 	}
 	first, err := stream.Receive()
@@ -153,9 +154,10 @@ func TestEndedAttachmentJoinsBlockedReadersThroughRelays(t *testing.T) {
 	}
 	stream := client.AttachSession(ctx)
 	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
-	if err = stream.Send(&v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
+	open := &v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
 		MachineId: testMachine, SessionId: id, ExpectedEngineDigest: manager.Hello().WasmSHA256,
-	}}}); err != nil {
+	}}}
+	if err = stream.Send(open); err != nil {
 		t.Fatal(err)
 	}
 	// Leave the request direction open. Server completion must interrupt and join
@@ -244,13 +246,14 @@ func TestAbandonedAttachmentEndsItsSessionThroughRelays(t *testing.T) {
 	attach, abandon := context.WithCancel(ctx)
 	id := uuid.NewString()
 	stream := client.AttachSession(attach)
-	if err := stream.Send(&v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
+	open := &v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: &v1.Open{
 		MachineId: testMachine, SessionId: id, OmitAnsweredQueries: true,
 		Create: &v1.NewSession{
 			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 			Cols:      80, Rows: 24, EndOnDetach: true, Argv: []string{"/bin/sh", "-c", "sleep 30"},
 		},
-	}}}); err != nil {
+	}}}
+	if err := stream.Send(open); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := stream.Receive(); err != nil {

@@ -339,7 +339,7 @@ func (n *NativeRuntime) linuxJobContents(m Manifest, command string) []byte {
 // Configure persists explicit-start supervision and configures machine resources.
 func (n *NativeRuntime) Configure(ctx context.Context, m Manifest) error {
 	if m.Profile.Runtime == runtimeTart {
-		if _, err := n.run(
+		_, err := n.run(
 			ctx,
 			m,
 			"set",
@@ -350,7 +350,8 @@ func (n *NativeRuntime) Configure(ctx context.Context, m Manifest) error {
 			strconv.Itoa(m.Profile.RAMMiB),
 			"--random-mac",
 			"--random-serial",
-		); err != nil {
+		)
+		if err != nil {
 			return err
 		}
 	}
@@ -665,15 +666,8 @@ func (n *NativeRuntime) deleteSmolvm(ctx context.Context, m Manifest, exists boo
 		}
 	}
 	if exists {
-		if _, err = n.run(
-			ctx,
-			m,
-			smolvmMachineCommand,
-			actionDelete,
-			nameFlag,
-			m.RuntimeName(),
-			"--force",
-		); err != nil {
+		_, err = n.run(ctx, m, smolvmMachineCommand, actionDelete, nameFlag, m.RuntimeName(), "--force")
+		if err != nil {
 			return err
 		}
 	}

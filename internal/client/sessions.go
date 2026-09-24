@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/urfave/cli/v3"
 
@@ -74,16 +73,14 @@ func (runner commandRunner) listSessions(ctx context.Context, name string) error
 	if runner.structured {
 		return jsonOut(runner.streams.Out, sessions)
 	}
-	w := tabwriter.NewWriter(runner.streams.Out, 0, 0, tablePadding, ' ', 0)
-	_, _ = fmt.Fprintln(w, "ID\tSTATUS\tSIZE\tLABEL")
-	for _, s := range sessions {
+	header := []string{"ID", "STATUS", "SIZE", "LABEL"}
+	return writeTable(runner.streams.Out, header, sessions, func(s protocol.Session) []string {
 		size := fmt.Sprintf("%dx%d", s.Cols, s.Rows)
 		if s.Pipes {
 			size = "pipes"
 		}
-		_, _ = fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", s.ID, s.Status, size, s.Label)
-	}
-	return w.Flush()
+		return []string{s.ID, s.Status, size, s.Label}
+	})
 }
 
 // describeGuest walks the controller, host and guest route and reports the

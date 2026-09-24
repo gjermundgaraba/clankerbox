@@ -189,9 +189,8 @@ func TestOperationActionsStatusesRoundTrip(t *testing.T) {
 			})
 		}
 	}
-	if _, err := rpcmodel.FromOperation(
-		&v1.Operation{Action: v1.OperationAction(999), Status: v1.OperationStatus_OPERATION_STATUS_PENDING},
-	); err == nil {
+	unknown := &v1.Operation{Action: v1.OperationAction(999), Status: v1.OperationStatus_OPERATION_STATUS_PENDING}
+	if _, err := rpcmodel.FromOperation(unknown); err == nil {
 		t.Fatal("unknown action accepted")
 	}
 }
@@ -237,9 +236,8 @@ func TestHostTypedSubmissionsPreserveJournalInputs(t *testing.T) {
 	if _, err := rpcmodel.ToHostRequest(model.Request{Action: "inspect"}); err == nil {
 		t.Fatal("inspect allowed through mutation oneof")
 	}
-	if _, err := rpcmodel.FromHostRequest(
-		&v1.SubmitOperationRequest{Identity: &v1.OperationIdentity{Profile: rpcmodel.ToProfile(profile())}},
-	); err == nil {
+	actionless := &v1.SubmitOperationRequest{Identity: &v1.OperationIdentity{Profile: rpcmodel.ToProfile(profile())}}
+	if _, err := rpcmodel.FromHostRequest(actionless); err == nil {
 		t.Fatal("missing action accepted")
 	}
 }

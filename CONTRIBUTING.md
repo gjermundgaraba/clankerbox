@@ -2,7 +2,7 @@
 
 ## Build and test
 
-Go 1.27, Python 3 and, for `make lint`, golangci-lint v2.13 are required.
+Go 1.27, Python 3 and, for `make lint`, golangci-lint v2.14 are required.
 
 ```sh
 make build   # CLI, controller, host and cross-compiled guest binaries into bin/

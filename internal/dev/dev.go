@@ -430,14 +430,15 @@ func Run(ctx context.Context, opts Options, onReady func(Connection) error) erro
 		StateDir:     env.StateDir,
 		ClientConfig: filepath.Join(env.StateDir, "client.json"),
 	}
-	if err = jsonWrite(
+	err = jsonWrite(
 		env.dir,
 		"client.json",
 		map[string]string{
 			"url":        conn.URL,
 			"token_file": conn.TokenPath,
 		},
-	); err != nil {
+	)
+	if err != nil {
 		return err
 	}
 	if err = jsonWrite(env.dir, "connection.json", conn); err != nil {

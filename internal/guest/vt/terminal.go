@@ -370,12 +370,8 @@ func (t *Terminal) Write(data []byte) error {
 		if !t.mem.Write(t.input, chunk) {
 			return errMemory
 		}
-		if err := t.call(
-			"ghostty_terminal_vt_write",
-			uint64(t.handle),
-			uint64(t.input),
-			uint64(len(chunk)),
-		); err != nil {
+		err := t.call("ghostty_terminal_vt_write", uint64(t.handle), uint64(t.input), uint64(len(chunk)))
+		if err != nil {
 			return err
 		}
 		data = data[len(chunk):]
@@ -390,8 +386,9 @@ func (t *Terminal) Resize(cols, rows uint16) error {
 	if t.closed {
 		return errClosed
 	}
-	if err := t.checked("ghostty_terminal_resize", uint64(t.handle), uint64(cols), uint64(rows),
-		defaultCellWidthPx, defaultCellHeightPx); err != nil {
+	err := t.checked("ghostty_terminal_resize", uint64(t.handle), uint64(cols), uint64(rows),
+		defaultCellWidthPx, defaultCellHeightPx)
+	if err != nil {
 		return err
 	}
 	t.cols, t.rows = cols, rows
@@ -470,13 +467,8 @@ func (t *Terminal) Restore(snapshot []byte) error {
 	if !t.mem.Write(ptr, snapshot) {
 		return errMemory
 	}
-	if err = t.call(
-		"ghostty_snapshot_decoder_new_buf",
-		0,
-		uint64(t.slot),
-		uint64(ptr),
-		uint64(len(snapshot)),
-	); err != nil {
+	err = t.call("ghostty_snapshot_decoder_new_buf", 0, uint64(t.slot), uint64(ptr), uint64(len(snapshot)))
+	if err != nil {
 		return err
 	}
 	decoder, err := t.u32(t.slot)
@@ -509,12 +501,8 @@ func (t *Terminal) decode(decoder, length uint32) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err = t.checked(
-		"ghostty_snapshot_decoder_set",
-		uint64(decoder),
-		uint64(retain),
-		uint64(t.scratch),
-	); err != nil {
+	err = t.checked("ghostty_snapshot_decoder_set", uint64(decoder), uint64(retain), uint64(t.scratch))
+	if err != nil {
 		return 0, err
 	}
 	if err = t.checked("ghostty_snapshot_decoder_decode", uint64(decoder), uint64(t.slot)); err != nil {
@@ -528,12 +516,8 @@ func (t *Terminal) decode(decoder, length uint32) (uint32, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err = t.checked(
-		"ghostty_snapshot_decoder_get",
-		uint64(decoder),
-		uint64(offsetKey),
-		uint64(t.scratch),
-	); err != nil {
+	err = t.checked("ghostty_snapshot_decoder_get", uint64(decoder), uint64(offsetKey), uint64(t.scratch))
+	if err != nil {
 		_ = t.call("ghostty_terminal_free", uint64(replacement))
 		return 0, err
 	}
@@ -591,13 +575,8 @@ func (t *Terminal) Text() (string, error) {
 		return "", err
 	}
 	defer t.free(options.ptr, options.size)
-	if err = t.call(
-		"ghostty_formatter_terminal_new",
-		0,
-		uint64(t.slot),
-		uint64(t.handle),
-		uint64(options.ptr),
-	); err != nil {
+	err = t.call("ghostty_formatter_terminal_new", 0, uint64(t.slot), uint64(t.handle), uint64(options.ptr))
+	if err != nil {
 		return "", err
 	}
 	formatter, err := t.u32(t.slot)
