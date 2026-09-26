@@ -3,6 +3,7 @@
 
 import argparse
 from functools import partial
+import hashlib
 import json
 from pathlib import Path
 
@@ -17,6 +18,32 @@ def require_copy_identity(source, child, *, ram):
         raise RuntimeError('RAM copy restarted manager' if ram else 'disk copy reused manager incarnation')
 
 
+# Freed ranges reaching the end of a raw disk must not shrink it: smolvm 1.16's
+# libkrun truncated them, and live forks then refused the short disk.
+TRIM_SCRIPT = '''set -eu
+dd if=/dev/urandom of=/storage/.trim-probe bs=1M count=64 status=none
+sync
+rm /storage/.trim-probe
+sync
+fstrim -av
+'''
+ENGINE_DISKS = ('storage.raw', 'overlay.raw')
+
+
+def engine_disk_dir(vms, machine_id):
+    """The smolvm data directory of a clankerbox machine: vms/<sha256(runtime name)[:8] hex>."""
+    return Path(vms) / hashlib.sha256(('clankerbox-' + machine_id).encode()).hexdigest()[:16]
+
+
+def disk_lengths(directory):
+    return {name: (Path(directory) / name).stat().st_size for name in ENGINE_DISKS}
+
+
+def require_unchanged_lengths(before, after):
+    if after != before:
+        raise RuntimeError(f'guest trim changed engine disk lengths: {before} -> {after}')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--binary', required=True)
@@ -24,7 +51,13 @@ def main():
     parser.add_argument('--lifecycle-result', required=True)
     parser.add_argument('--result', required=True)
     parser.add_argument('--fork-only', action='store_true')
+    parser.add_argument(
+        '--trim-before-fork', action='store_true', help='free /storage space and run fstrim -a before the live fork'
+    )
+    parser.add_argument('--engine-vms', help="host engine's smolvm/vms directory; asserts raw disk lengths across trim")
     args = parser.parse_args()
+    if args.engine_vms and not args.trim_before_fork:
+        raise ValueError('--engine-vms requires --trim-before-fork')
     source = json.loads(Path(args.lifecycle_result).read_text())
     if (
         not source['name'].startswith('accept-')
@@ -103,6 +136,16 @@ http.server.HTTPServer(('127.0.0.1', 18349), Handler).serve_forever()
             save()
         else:
             stop(mid)
+        if args.trim_before_fork:
+            need(linux, 'trim-before-fork requires a running Linux smolvm source')
+            disks = engine_disk_dir(args.engine_vms, mid) if args.engine_vms else None
+            before = disk_lengths(disks) if disks else None
+            trimmed = guest(mid, 'sh', '-se', data=TRIM_SCRIPT)
+            after = disk_lengths(disks) if disks else None
+            report['trim'] = {'fstrim': trimmed, 'engine_dir': str(disks) if disks else None, 'before': before, 'after': after}
+            save()
+            if disks:
+                require_unchanged_lengths(before, after)
         child = operation('fork', mid, name + '-fork')['machine_id']
         need(read(child) == 'source-A', 'fork lost source disk state')
         child_identity = describe_guest(args.binary, args.config, child)

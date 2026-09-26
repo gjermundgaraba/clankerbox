@@ -20,6 +20,12 @@ python3 tests/live_checkpoints.py --binary "$PWD/bin/clankerbox" \
   --lifecycle-result RESULTS/linux-lifecycle.json --result RESULTS/linux-checkpoints.json
 ```
 
+`--trim-before-fork` frees space on the Linux source's `/storage` and runs
+`fstrim -a` before the live fork. When the harness runs on the host, pass the
+engine's `smolvm/vms` directory as `--engine-vms` to also require that the
+source's `storage.raw` and `overlay.raw` keep their lengths. smolvm 1.16's
+libkrun truncated them on discard, so later live forks refused the short disks.
+
 Repeat with a macOS host and profile. The checkpoint harness needs
 the machine the lifecycle harness kept with `--keep`. Failures leave named
 resources in place for inspection. RAM copies preserve manager incarnation;

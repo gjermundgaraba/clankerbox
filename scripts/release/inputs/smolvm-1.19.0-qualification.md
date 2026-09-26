@@ -148,6 +148,38 @@ Live evidence receipt hashes (private journals/logs, not release inputs):
 | linux-amd64 | public-session | `495e81a0f74e44267eff6a99d12cbb05b580b58ce561b7553ac99a8fc264c5ab` |
 | linux-amd64 | teardown | `96c2c77824055e875d74feffa8e6175f6dfdf20703773a6d6434eb4bbe82715b` |
 
+### Trim-then-fork regression — 2026-09-26
+
+Incident: Linux smolvm 1.16 machines could not be forked after 30 minutes up.
+The guest agent's periodic `fstrim -a` made libkrun's vendored imago
+(`try_discard_by_truncate`) truncate raw disks whose discarded range reached EOF.
+In production, `storage.raw` was 939790336 bytes instead of 1 GiB, and the live
+fork failed with "block 'storage' replacement has 1835528 sectors, expected
+2097152". libkrun commit `696bcfbd`, contained in `2210fda7`, fixes it.
+
+`tests/live_checkpoints.py --trim-before-fork --engine-vms DIR` was run on the
+Linux/amd64 KVM host, next to the engine. It writes and deletes 64 MiB in
+`/storage`, runs `fstrim -a`, and requires both raw disk lengths to be
+unchanged. It then runs the normal live-fork, child and checkpoint checks.
+Each run used a fresh isolated `clankerbox dev` environment on a new
+`live_lifecycle` source (1 GiB storage / 8 GiB overlay).
+
+| Bundle | fstrim | storage.raw / overlay.raw after | Result |
+|---|---|---|---|
+| This candidate (1.19.0) | 990.6 MiB on vda, 7.9 GiB on vdb | 1073741824 / 8589934592 (unchanged) | fork, child, restart and checkpoint checks passed |
+| Released 0.9.0 (1.16.0) | 990.6 MiB on vda, 7.9 GiB on vdb | **939790336** / 8455716864 | failed at the length check, reproducing the incident |
+
+Both environments were destroyed, with no remaining host root, native job or
+process. During the 1.19 run, the production host service independently stopped
+and deleted its own machine `41f2a537…` through controller operations. Its service
+identity and hashes were unchanged; the 1.16 run's production fingerprint was
+identical before and after. Receipts (in `results/trim-smolvm-*/`):
+1.19 checkpoints `e19a3b79af4eddcbaf91a7d2d8d1db07b5d4aca67eef69888c11dba40a8d85fc`,
+lifecycle `43e4da57b9d4d38f8b36cd8995905e6d69b9ad480fb5beb5457d38d3bc9a63b1`,
+teardown `4822c3d3c038399e4b499fb2c2e3f7866503032ddd345ef2cfd38ab03de8b673`;
+1.16 checkpoints `8fa6a5d49a16624efcd102a0c48a50b4b94f5c1353ccc9f642bbbafbbf5b0b88`,
+teardown `74031a1343910a9a91a571170f097e1a3cf6ca3e61bd955190291c5c25941ca5`.
+
 ## Evidence and corresponding source
 
 Build inputs, the patched source checkout, Cargo metadata, regenerated notices
