@@ -10,9 +10,16 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"clankerbox/internal/model"
 	"clankerbox/internal/statefs"
+)
+
+// A failed oneshot start can return while systemd still stops the unit's cgroup.
+const (
+	branchSettleAttempts = 50
+	branchSettleInterval = 200 * time.Millisecond
 )
 
 func storeDir(cfg Config, m Manifest) string {
@@ -112,10 +119,13 @@ func (n *NativeRuntime) Fork(ctx context.Context, source, child Manifest) (resul
 	if err = statefs.WritePrivate(n.job(child), n.linuxJobContents(child, branch)); err != nil {
 		return err
 	}
-	for _, args := range [][]string{{"link", n.job(child)}, {"daemon-reload"}, {actionStart, n.label(child) + ".service"}} {
+	for _, args := range [][]string{{"link", n.job(child)}, {"daemon-reload"}} {
 		if _, err = n.supervisor(ctx, child, args...); err != nil {
 			return err
 		}
+	}
+	if _, err = n.supervisor(ctx, child, actionStart, n.label(child)+".service"); err != nil {
+		return n.abandonFailedBranch(ctx, source, child, err)
 	}
 	if err = n.waitState(ctx, child, model.Running, runtimeStartTimeout); err != nil {
 		return err
@@ -125,6 +135,56 @@ func (n *NativeRuntime) Fork(ctx context.Context, source, child Manifest) (resul
 	}
 	_, err = n.supervisor(ctx, child, "daemon-reload")
 	return err
+}
+
+// abandonFailedBranch settles a Linux branch whose oneshot unit failed to start.
+// systemd reports a unit failed only once its cgroup is empty, so a failed unit,
+// no child in the shared store's inventory and a still-running source prove the
+// branch left nothing behind. The child's unit, job and directory are then removed
+// and ErrBranchAbandoned is returned. Any other evidence keeps the original error,
+// which leaves the fork unresolved for inspection.
+func (n *NativeRuntime) abandonFailedBranch(ctx context.Context, source, child Manifest, startErr error) error {
+	unit := n.label(child) + ".service"
+	settled := false
+	for range branchSettleAttempts {
+		out, err := n.supervisor(ctx, child, "show", unit, "--property=ActiveState", "--value")
+		if err != nil {
+			return startErr
+		}
+		state := strings.TrimSpace(string(out))
+		if state == "failed" {
+			settled = true
+			break
+		}
+		if state != "deactivating" {
+			return startErr
+		}
+		select {
+		case <-ctx.Done():
+			return startErr
+		case <-time.After(branchSettleInterval):
+		}
+	}
+	if !settled {
+		return startErr
+	}
+	childState, err := n.Inspect(ctx, child)
+	if err != nil || childState.Exists {
+		return startErr
+	}
+	sourceState, err := n.Inspect(ctx, source)
+	if err != nil || !sourceState.Exists || sourceState.State != model.Running {
+		return startErr
+	}
+	for _, args := range [][]string{{"reset-failed", unit}, {"disable", unit}} {
+		if _, err = n.supervisor(ctx, child, args...); err != nil {
+			return errors.Join(startErr, err)
+		}
+	}
+	if err = n.reclaimMachineFiles(child); err != nil {
+		return errors.Join(startErr, err)
+	}
+	return fmt.Errorf("%w: %w", ErrBranchAbandoned, startErr)
 }
 
 func (n *NativeRuntime) forkDarwin(ctx context.Context, child Manifest, branch string) error {

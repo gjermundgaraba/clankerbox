@@ -3,6 +3,7 @@ package host_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,6 +107,10 @@ func (r *branchRuntime) Fork(_ context.Context, source, child host.Manifest) err
 	m.disk = r.machine(source).disk
 	if r.failing(actionFork) {
 		return errors.New("interrupted native branch")
+	}
+	if r.failing("abandon") {
+		m.exists = false
+		return fmt.Errorf("%w: exit status 1", host.ErrBranchAbandoned)
 	}
 	return nil
 }
@@ -284,6 +289,26 @@ func TestHelperInterruptedForkPreparationAndRestoreRemainUnresolved(t *testing.T
 			exerciseInterruptedChild(t, phase)
 		})
 	}
+}
+func TestHelperAbandonedForkFailsAndReleasesSource(t *testing.T) {
+	t.Parallel()
+	h, _, rt, source := setupBranch(t)
+	defer closeHelper(t, h)
+	ctx := context.Background()
+	req := forkRequest(t, source)
+	rt.setFail("abandon")
+	resp := h.Execute(ctx, req)
+	requireStatus(t, resp, statusFailed)
+	if resp.Observation == nil || !resp.Observation.Deleted || resp.Observation.Generation != req.Generation {
+		t.Fatalf("abandoned child not tombstoned: %+v", resp.Observation)
+	}
+	rt.setFail()
+	requireStatus(t, h.Execute(ctx, req), statusFailed)
+	if rt.counts().forks != 1 {
+		t.Fatal("replayed abandoned native branch")
+	}
+	// derivedSource refuses a source reserved by unsettled work.
+	requireStatus(t, h.Execute(ctx, forkRequest(t, source)), statusSucceeded)
 }
 func TestHelperCheckpointRestoreTwiceAndDeleteIndependently(t *testing.T) {
 	t.Parallel()

@@ -90,6 +90,85 @@ func TestNativeLiveBranchUsesOnePersistentUnitAndLineageStore(t *testing.T) {
 		t.Fatal("future unit does not retain ordinary explicit start")
 	}
 }
+func TestNativeFailedBranchIsAbandonedOnlyWithoutNativeEffect(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name         string
+		units        []string
+		sourceState  string
+		childListed  bool
+		wantAbandons bool
+	}{
+		{name: "settled", units: []string{"deactivating", "failed"}, sourceState: "running", wantAbandons: true},
+		{name: "child-listed", units: []string{"failed"}, sourceState: "running", childListed: true},
+		{name: "source-stopped", units: []string{"failed"}, sourceState: "stopped"},
+		{name: "unit-active", units: []string{"active"}, sourceState: "running"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			n, r, source := nativeFixture(t)
+			nativeDB(t, n, source)
+			child := source
+			child.ID = model.NewID()
+			child.Port++
+			child.StoreID = source.ID
+			startErr := errors.New("exit status 1: Job for " + child.RuntimeName() + ".service failed")
+			units := slices.Clone(tc.units)
+			started := false
+			r.reply = func(call commandCall) ([]byte, error) {
+				if call.path == n.Config.SystemctlPath {
+					switch {
+					case slices.Contains(call.args, actionStart):
+						started = true
+						return nil, startErr
+					case slices.Contains(call.args, "show"):
+						state := units[0]
+						if len(units) > 1 {
+							units = units[1:]
+						}
+						return []byte(state + "\n"), nil
+					}
+					return nil, nil
+				}
+				rows := `[{"name":"` + source.RuntimeName() + `","state":"` + tc.sourceState + `"}`
+				if tc.childListed && started {
+					rows += `,{"name":"` + child.RuntimeName() + `","state":"stopped"}`
+				}
+				return []byte(rows + `]`), nil
+			}
+			err := n.Fork(context.Background(), source, child)
+			if !errors.Is(err, startErr) {
+				t.Fatal("lost native branch failure:", err)
+			}
+			if errors.Is(err, host.ErrBranchAbandoned) != tc.wantAbandons {
+				t.Fatalf("abandoned=%v, want %v: %v", !tc.wantAbandons, tc.wantAbandons, err)
+			}
+			_, jobErr := os.Stat(filepath.Join(n.Config.Root, "jobs", child.RuntimeName()+".service"))
+			_, dirErr := os.Stat(filepath.Join(n.Config.Root, "machines", child.ID))
+			var cleanup [][]string
+			for _, call := range r.calls {
+				if call.path == n.Config.SystemctlPath &&
+					(slices.Contains(call.args, "reset-failed") || slices.Contains(call.args, "disable")) {
+					cleanup = append(cleanup, call.args)
+				}
+			}
+			if !tc.wantAbandons {
+				if jobErr != nil || dirErr != nil || len(cleanup) != 0 {
+					t.Fatal("removed ambiguous branch evidence")
+				}
+				return
+			}
+			if !errors.Is(jobErr, os.ErrNotExist) || !errors.Is(dirErr, os.ErrNotExist) {
+				t.Fatal("abandoned branch left its job or directory")
+			}
+			unit := child.RuntimeName() + ".service"
+			if !slices.EqualFunc(cleanup, [][]string{{"--user", "reset-failed", unit}, {"--user", "disable", unit}}, slices.Equal) &&
+				!slices.EqualFunc(cleanup, [][]string{{"reset-failed", unit}, {"disable", unit}}, slices.Equal) {
+				t.Fatal("abandoned branch unit not reset and unlinked:", cleanup)
+			}
+		})
+	}
+}
 func TestNativeRestoreConsumesRAMThenRetainsIndependentColdStart(t *testing.T) {
 	t.Parallel()
 	for _, missingRAM := range []bool{false, true} {

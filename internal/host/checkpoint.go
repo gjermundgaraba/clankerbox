@@ -9,6 +9,11 @@ import (
 	"clankerbox/internal/model"
 )
 
+// ErrBranchAbandoned marks a Runtime.Fork failure that provably created no child.
+// The runtime has confirmed the source still runs and has removed the child's
+// supervisor job and files, so the fork can fail instead of staying unresolved.
+var ErrBranchAbandoned = errors.New("native branch failed before creating a child")
+
 // The artifact path is derived by the helper from ID, never received from callers.
 type ownedCheckpoint struct {
 	model.Checkpoint
@@ -173,6 +178,9 @@ func (h *Helper) applyDerived(
 		err = h.runtime.Capture(ctx, source, cp.runtimeSpec())
 	case actionDeleteCheckpoint:
 		err = h.runtime.DeleteCheckpoint(ctx, cp.runtimeSpec())
+	}
+	if req.Action == actionFork && errors.Is(err, ErrBranchAbandoned) {
+		return h.abandonDerivedChild(ctx, req, m, a, err)
 	}
 	if err != nil {
 		return unresolved(err)
@@ -418,7 +426,7 @@ func (h *Helper) rejectDerivedPrerequisite(
 	return h.failDerived(ctx, req, m, accepted{Request: req}, err)
 }
 
-// failDerived journals a terminal capture failure with a settled observation.
+// failDerived journals a terminal capture or abandoned-fork failure with a settled observation.
 func (h *Helper) failDerived(ctx context.Context, req model.Request, m Manifest, a accepted, err error) model.Response {
 	a.Phase = phaseDone
 	a.Response = failure(req, err)
@@ -427,6 +435,16 @@ func (h *Helper) failDerived(ctx context.Context, req model.Request, m Manifest,
 		return model.Response{OperationID: req.OperationID, Status: statusUnresolved, Error: saveErr.Error()}
 	}
 	return a.Response
+}
+
+// abandonDerivedChild fails a fork whose runtime proved and removed an effect-free
+// branch. The child never existed natively, so it is tombstoned rather than left
+// as an unprepared record that could be neither started nor deleted.
+func (h *Helper) abandonDerivedChild(ctx context.Context, req model.Request, m Manifest, a accepted, err error) model.Response {
+	m.Deleted = true
+	m.Prepared = false
+	m.Endpoint = ""
+	return h.failDerived(ctx, req, m, a, err)
 }
 
 func (h *Helper) unresolvedDerived(

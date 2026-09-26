@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"clankerbox/internal/control"
 	"clankerbox/internal/model"
@@ -286,4 +287,40 @@ func TestDerivationRejectsLabelsBeyondTheLimitAfterInheritance(t *testing.T) {
 	if _, err = c.Derive(ctx, "fork", source.MachineID, "fork", child); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestAbandonedForkTombstonesChildAndReleasesSource(t *testing.T) {
+	t.Parallel()
+	c, tr, in, _ := setupControl(t)
+	defer closeTest(t, c)
+	ctx := t.Context()
+	source := mustCreate(t, c, in, "create")
+	mustMutate(t, c, source.MachineID, "stop", "stop")
+	child := model.ChildInput{Name: fixtureChild}
+	fork := deriveOperation(t, c, "fork", source.MachineID, "fork", child)
+	tr.responses[fork.ID] = model.Response{
+		OperationID: fork.ID,
+		Status:      "failed",
+		Error:       "native branch failed before creating a child: exit status 1",
+		Observation: &model.Observation{
+			MachineID:  fork.MachineID,
+			Generation: fork.Generation,
+			State:      model.Stopped,
+			Deleted:    true,
+			ObservedAt: time.Now().UTC(),
+		},
+	}
+	processHost(t, c, "mac")
+	done, err := c.Operation(ctx, fork.ID)
+	if err != nil || done.Status != "failed" {
+		t.Fatalf("abandoned fork: %+v %v", done, err)
+	}
+	m, err := c.Inspect(ctx, fork.MachineID)
+	if err != nil || !m.Deleted {
+		t.Fatalf("abandoned child not tombstoned: %+v %v", m, err)
+	}
+	// The failed fork neither reserves its source nor keeps the child's name.
+	mustMutate(t, c, source.MachineID, "start", "start")
+	mustMutate(t, c, source.MachineID, "stop", "stop-again")
+	deriveOperation(t, c, "fork", source.MachineID, "fork-again", child)
 }

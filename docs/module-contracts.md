@@ -50,6 +50,9 @@ outside admission and rechecks the machine epoch and reservations before a
 lease is published. An interrupted capture discards its partial artifact and
 fails, an interrupted checkpoint deletion replays because artifact removal is
 idempotent, and an interrupted child stays fenced until explicitly reconciled.
+The one exception is a Linux branch whose supervisor unit failed: when its
+cgroup is empty, the store lists no child and the source still runs, the host
+removes the unit and child files, and the fork fails with a tombstoned child.
 The checkpoint catalog lists only published artifacts and their tombstones; a
 capture in flight or one that failed is visible through its operation alone.
 
