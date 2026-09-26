@@ -3,6 +3,7 @@ package recipe
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -52,7 +53,8 @@ func TestRecipeRejectsLinksTraversalDuplicatesAndMissingSetup(t *testing.T) {
 	if err := Validate(bytes.NewReader(makeArchive(t))); err == nil {
 		t.Fatal("missing setup accepted")
 	}
-	if err := Validate(bytes.NewReader(makeArchive(t, setup, archiveEntry{header: tar.Header{Name: "files/data", Typeflag: tar.TypeReg}, data: "ok"}))); err != nil {
+	unit := archiveEntry{header: tar.Header{Name: `files/mnt-data\x2dvol.mount`, Typeflag: tar.TypeReg}, data: "[Mount]\n"}
+	if err := Validate(bytes.NewReader(makeArchive(t, setup, archiveEntry{header: tar.Header{Name: "files/data", Typeflag: tar.TypeReg}, data: "ok"}, unit))); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -67,6 +69,7 @@ func TestExtractRootfsPreservesModesLinksAndEmptyMountDirectories(t *testing.T) 
 		archiveEntry{header: tar.Header{Name: "./opt/hard", Typeflag: tar.TypeLink, Linkname: "./usr/local/bin/tool"}},
 		archiveEntry{header: tar.Header{Name: "./tmp", Typeflag: tar.TypeDir, Mode: 01777}},
 		archiveEntry{header: tar.Header{Name: "./dev/null", Typeflag: tar.TypeChar, Mode: 0666}},
+		archiveEntry{header: tar.Header{Name: `./usr/lib/systemd/system/system-systemd\x2dcryptsetup.slice`, Typeflag: tar.TypeReg, Mode: 0644}, data: "[Unit]\n"},
 	)
 	if err := ExtractRootfs(t.Context(), bytes.NewReader(data), root); err != nil {
 		t.Fatal(err)
@@ -100,6 +103,9 @@ func TestExtractRootfsPreservesModesLinksAndEmptyMountDirectories(t *testing.T) 
 	if _, err = os.Stat(filepath.Join(root, "dev/null")); !os.IsNotExist(err) {
 		t.Fatal("device imported")
 	}
+	if _, err = os.Stat(filepath.Join(root, `usr/lib/systemd/system/system-systemd\x2dcryptsetup.slice`)); err != nil {
+		t.Fatal(err)
+	}
 }
 func TestExtractRootfsRejectsEscapingPathsAndLinks(t *testing.T) {
 	t.Parallel()
@@ -108,6 +114,7 @@ func TestExtractRootfsRejectsEscapingPathsAndLinks(t *testing.T) {
 		{header: tar.Header{Name: "/escape", Typeflag: tar.TypeReg}, data: "bad"},
 		{header: tar.Header{Name: "opt/link", Typeflag: tar.TypeSymlink, Linkname: "../../outside"}},
 		{header: tar.Header{Name: "opt/hard", Typeflag: tar.TypeLink, Linkname: "../outside"}},
+		{header: tar.Header{Name: ".", Typeflag: tar.TypeReg}, data: "bad"},
 	} {
 		t.Run(entry.header.Name+entry.header.Linkname, func(t *testing.T) {
 			t.Parallel()
@@ -115,5 +122,12 @@ func TestExtractRootfsRejectsEscapingPathsAndLinks(t *testing.T) {
 				t.Fatal("escaping entry accepted")
 			}
 		})
+	}
+}
+func TestExtractRootfsRejectsRepeatedEntries(t *testing.T) {
+	t.Parallel()
+	entry := archiveEntry{header: tar.Header{Name: "./etc/hostname", Typeflag: tar.TypeReg, Mode: 0644}, data: "first\n"}
+	if err := ExtractRootfs(t.Context(), bytes.NewReader(makeArchive(t, entry, entry)), t.TempDir()); !errors.Is(err, fs.ErrExist) {
+		t.Fatal("repeated entry replaced an extracted file:", err)
 	}
 }

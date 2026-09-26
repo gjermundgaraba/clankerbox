@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -130,20 +131,32 @@ func (n *NativeRuntime) CaptureProfile(ctx context.Context, m Manifest) error {
 	if err != nil {
 		return err
 	}
+	return finishRootfs(ctx, artifact)
+}
+
+// finishRootfs adds guest mount points through [os.Root], so no guest-created
+// link can redirect these host writes, then syncs every directory.
+func finishRootfs(ctx context.Context, artifact string) (resultErr error) {
+	root, err := os.OpenRoot(artifact)
+	if err != nil {
+		return err
+	}
+	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
 	for _, name := range []string{"proc", "sys", "dev/pts", "run/smolvm/virtiofs", "tmp", "mnt/overlay", "mnt/storage", "mnt/newroot", "mnt/rosetta", "storage"} {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
-		//nolint:gosec // Guest filesystem directories require normal traversal modes.
-		if err = os.MkdirAll(filepath.Join(artifact, name), 0755); err != nil {
+		if err = root.MkdirAll(name, 0755); err != nil {
 			return err
 		}
 	}
-	if err = os.Chmod(filepath.Join(artifact, "tmp"), 0777|os.ModeSticky); err != nil {
+	if err = root.Chmod("tmp", 0777|os.ModeSticky); err != nil {
 		return err
 	}
 	// Persist directory entries before publishing the ready revision descriptor.
-	err = filepath.WalkDir(artifact, func(path string, entry os.DirEntry, walkErr error) error {
+	// Unlike root.FS(), filepath.WalkDir accepts non-UTF-8 Linux names, and it
+	// never follows links, so every opened path is a real directory.
+	return filepath.WalkDir(artifact, func(path string, entry fs.DirEntry, walkErr error) error {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return contextErr
 		}
@@ -160,7 +173,6 @@ func (n *NativeRuntime) CaptureProfile(ctx context.Context, m Manifest) error {
 		}
 		return errors.Join(f.Sync(), f.Close())
 	})
-	return err
 }
 
 // ValidateProfile binds only a disposable clone, leaving the stored seed untouched.

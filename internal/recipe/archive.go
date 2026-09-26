@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path"
@@ -45,7 +46,7 @@ func Validate(r io.Reader) error {
 	return nil
 }
 func validateRecipeHeader(h *tar.Header, name string, seen map[string]bool) error {
-	if !filepath.IsLocal(name) || strings.Contains(name, "\\") || path.Clean(name) != name || seen[name] {
+	if !filepath.IsLocal(name) || path.Clean(name) != name || seen[name] {
 		return errors.New("invalid or duplicate recipe archive path")
 	}
 	if name != "setup.sh" && name != "files" && !strings.HasPrefix(name, "files/") {
@@ -67,7 +68,7 @@ type imageDirectory struct {
 
 // ExtractRootfs preserves permissions and links, normalizes absolute symlinks,
 // and omits devices and owner/xattrs under the root-run recipe contract.
-// [os.Root] confines every operation, including archive-created symlinks.
+// [os.Root] confines every extraction operation, including through archive-created symlinks.
 func ExtractRootfs(ctx context.Context, r io.Reader, destination string) (resultErr error) {
 	root, err := os.OpenRoot(destination)
 	if err != nil {
@@ -75,7 +76,7 @@ func ExtractRootfs(ctx context.Context, r io.Reader, destination string) (result
 	}
 	defer func() { resultErr = errors.Join(resultErr, root.Close()) }()
 	tr := tar.NewReader(contextReader{ctx, r})
-	var directorys []imageDirectory
+	var directories []imageDirectory
 	for {
 		var h *tar.Header
 		h, err = tr.Next()
@@ -86,27 +87,14 @@ func ExtractRootfs(ctx context.Context, r io.Reader, destination string) (result
 			return err
 		}
 		name := path.Clean(h.Name)
-		if !safeImagePath(h.Name) {
-			return errors.New("unsafe rootfs archive path")
-		}
-		if err = root.MkdirAll(filepath.Dir(name), 0755); err != nil {
-			return err
-		}
 		if h.Typeflag == tar.TypeDir {
-			if err = root.MkdirAll(name, 0755); err != nil {
-				return err
-			}
-			directorys = append(directorys, imageDirectory{name, fileMode(h.Mode)})
-			continue
-		}
-		if name == "." {
-			return errors.New("root archive entry must be a directory")
+			directories = append(directories, imageDirectory{name, h.FileInfo().Mode()})
 		}
 		if err = extractImageEntry(root, tr, h, name); err != nil {
-			return err
+			return fmt.Errorf("rootfs entry %q: %w", h.Name, err)
 		}
 	}
-	for _, directory := range slices.Backward(directorys) {
+	for _, directory := range slices.Backward(directories) {
 		if err = ctx.Err(); err != nil {
 			return err
 		}
@@ -116,22 +104,21 @@ func ExtractRootfs(ctx context.Context, r io.Reader, destination string) (result
 	}
 	return nil
 }
-func safeImagePath(name string) bool {
-	return filepath.IsLocal(path.Clean(name)) && !strings.Contains(name, "\\") && !strings.Contains("/"+name+"/", "/../")
-}
+
+// Entries are never replaced: the destination starts empty, so a repeated
+// non-directory name fails with [os.ErrExist] instead of overwriting a file.
 func extractImageEntry(root *os.Root, r io.Reader, h *tar.Header, name string) error {
-	if err := root.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := root.MkdirAll(path.Dir(name), 0755); err != nil {
 		return err
 	}
 	switch h.Typeflag {
+	case tar.TypeDir:
+		return root.MkdirAll(name, 0755)
 	case tar.TypeReg:
 		return extractRegular(root, r, h, name)
 	case tar.TypeSymlink:
 		return extractSymlink(root, h.Linkname, name)
 	case tar.TypeLink:
-		if !safeImagePath(h.Linkname) {
-			return errors.New("unsafe rootfs hardlink")
-		}
 		return root.Link(path.Clean(h.Linkname), name)
 	default:
 		return nil // Runtime mount devices/FIFOs are reconstructed by the guest.
@@ -143,10 +130,15 @@ func extractRegular(root *os.Root, r io.Reader, h *tar.Header, name string) erro
 		return err
 	}
 	_, copyErr := io.CopyN(f, r, h.Size)
-	chmodErr := f.Chmod(fileMode(h.Mode))
+	chmodErr := f.Chmod(h.FileInfo().Mode())
 	syncErr := f.Sync()
 	return errors.Join(copyErr, chmodErr, syncErr, f.Close())
 }
+
+// extractSymlink rewrites absolute targets and rejects lexically escaping ones,
+// so ordinary image links resolve inside the image if host code follows them.
+// It does not resolve targets through other links, so it is hygiene, not a
+// security boundary.
 func extractSymlink(root *os.Root, target, name string) error {
 	if path.IsAbs(target) {
 		var err error
@@ -155,24 +147,10 @@ func extractSymlink(root *os.Root, target, name string) error {
 			return err
 		}
 	}
-
 	if !filepath.IsLocal(path.Join(path.Dir(name), target)) {
 		return errors.New("rootfs symlink escapes image")
 	}
 	return root.Symlink(target, name)
-}
-func fileMode(mode int64) os.FileMode {
-	out := os.FileMode(mode & 0777)
-	if mode&04000 != 0 {
-		out |= os.ModeSetuid
-	}
-	if mode&02000 != 0 {
-		out |= os.ModeSetgid
-	}
-	if mode&01000 != 0 {
-		out |= os.ModeSticky
-	}
-	return out
 }
 
 type contextReader struct {

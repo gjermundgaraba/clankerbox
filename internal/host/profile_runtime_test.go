@@ -86,3 +86,11 @@ func TestMissingLaunchdJobIsAlreadyCleanButOtherFailuresRemain(t *testing.T) {
 		})
 	}
 }
+func TestFinishRootfsSyncsNonUTF8Directories(t *testing.T) {
+	t.Parallel()
+	artifact := t.TempDir()
+	if err := os.Mkdir(filepath.Join(artifact, "latin1-\xe9"), 0700); err != nil {
+		t.Skip("filesystem rejects non-UTF-8 names:", err)
+	}
+	registryCheck(t, finishRootfs(t.Context(), artifact))
+}
