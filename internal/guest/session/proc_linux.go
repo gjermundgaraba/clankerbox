@@ -22,11 +22,11 @@ func processStartTime(pid int) (uint64, error) {
 		return 0, fmt.Errorf("read process stat: %w", err)
 	}
 	stat := string(raw)
-	end := strings.LastIndexByte(stat, ')')
-	if end < 0 {
+	_, afterComm, found := strings.CutLast(stat, ")")
+	if !found {
 		return 0, errProcStat
 	}
-	fields := strings.Fields(stat[end+1:])
+	fields := strings.Fields(afterComm)
 	if len(fields) < procStatFieldsAfterComm {
 		return 0, errProcStat
 	}
