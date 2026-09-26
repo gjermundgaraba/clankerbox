@@ -6,7 +6,7 @@ Generated sources are checked in; publishing does not regenerate the protocol
 or require protoc or Go. Consumers need neither this repository nor build scripts.
 
 SDK versions are independent of clankerbox binary releases. The current release pair is SDK **0.4.1**
-with clankerbox **0.9.0**, including the attachment-owned session contract. Update the compatibility
+with clankerbox **0.10.0**, including the attachment-owned session contract. Update the compatibility
 statement in `protocol/README.md` when qualifying a new pair. Published npm versions are
 immutable: changed package contents require a new SDK version.
 
