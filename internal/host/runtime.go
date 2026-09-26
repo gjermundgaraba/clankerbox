@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -582,21 +583,48 @@ func (n *NativeRuntime) runtimeEndpoint(ctx context.Context, m Manifest) (string
 
 func (n *NativeRuntime) startTart(ctx context.Context, m Manifest) error {
 	target := n.Config.LaunchdDomain + "/" + n.label(m)
-	if _, err := n.supervisor(ctx, m, "print", target); err == nil && m.Profile.Runtime == runtimeSmolvm {
-		// Start has confirmed native stopped state: reload future start arguments, never replay a branch command.
+	// A loaded job keeps the definition launchd read at bootstrap, but Start has
+	// just rewritten the plist with current runtime locators such as tart_path.
+	// Reload it rather than kickstarting a stale definition; smolvm must also
+	// never replay a branch command.
+	if status, err := n.supervisor(ctx, m, "print", target); err == nil {
+		if err = n.requireIdleTartJob(ctx, m, status); err != nil {
+			return err
+		}
 		if _, err = n.supervisor(ctx, m, "bootout", target); err != nil {
 			return err
 		}
 	}
-	if _, err := n.supervisor(ctx, m, "print", target); err != nil {
-		if _, err = n.supervisor(ctx, m, "bootstrap", n.Config.LaunchdDomain, n.job(m)); err != nil {
-			return err
-		}
+	if _, err := n.supervisor(ctx, m, "bootstrap", n.Config.LaunchdDomain, n.job(m)); err != nil {
+		return err
 	}
 	if _, err := n.supervisor(ctx, m, "kickstart", target); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+// launchdLivePID matches the top-level pid launchctl print reports for a running job.
+var launchdLivePID = regexp.MustCompile(`(?m)^\tpid = \d+$`)
+
+// requireIdleTartJob refuses to boot out a loaded Tart job that may own a live
+// VM: bootout terminates its tart run process. Smolvm retained starts are
+// already checked by validateRetainedStart.
+func (n *NativeRuntime) requireIdleTartJob(ctx context.Context, m Manifest, status []byte) error {
+	if m.Profile.Runtime != runtimeTart {
+		return nil
+	}
+	if launchdLivePID.Match(status) {
+		return errors.New("loaded Tart supervisor has a live process; refusing to replace its definition")
+	}
+	state, err := n.Inspect(ctx, m)
+	if err != nil {
+		return err
+	}
+	if !state.Exists || state.State != model.Stopped {
+		return errors.New("replacing a loaded Tart supervisor requires stopped retained runtime")
+	}
 	return nil
 }
 

@@ -164,3 +164,113 @@ func newMacSupervisorFixture(
 
 	return f, runner
 }
+
+// macTartSupervisor fakes Tart and launchctl for one Tart machine's retained start.
+type macTartSupervisor struct {
+	state, status string
+	loaded        bool
+	actions, jobs []string
+}
+
+func (f *macTartSupervisor) runner(t *testing.T, cfg host.Config, m host.Manifest) *recordingRunner {
+	t.Helper()
+	return &recordingRunner{reply: func(c commandCall) ([]byte, error) {
+		// Any Tart path: the test relocates Tart between Configure and Start.
+		if filepath.Base(c.path) == "tart" {
+			switch c.args[0] {
+			case "list":
+				return []byte(`[{"name":"` + m.RuntimeName() + `","state":"` + f.state + `","source":"local"}]`), nil
+			case "ip":
+				return []byte("192.168.64.9\n"), nil
+			}
+			return nil, nil
+		}
+		if c.path != cfg.LaunchctlPath {
+			t.Fatalf("unexpected program %s", c.path)
+		}
+		f.actions = append(f.actions, c.args[0])
+		switch c.args[0] {
+		case "print":
+			if !f.loaded {
+				return nil, errors.New("not loaded")
+			}
+			return []byte(f.status), nil
+		case "bootstrap":
+			if f.loaded {
+				return nil, errors.New("already loaded")
+			}
+			b, err := os.ReadFile(c.args[2])
+			if err != nil {
+				return nil, err
+			}
+			f.loaded = true
+			f.jobs = append(f.jobs, string(b))
+		case "bootout":
+			f.loaded = false
+		case "kickstart":
+			f.state = "running"
+		}
+		return nil, nil
+	}}
+}
+
+func TestMacTartStartReloadsChangedLoadedDefinition(t *testing.T) {
+	t.Parallel()
+	idle := "gui/501/clankerbox-x = {\n\tstate = not running\n\tprogram = /old/tart\n}\n"
+	for _, tc := range []struct {
+		name, state, status string
+		loaded              bool
+		actions             []string
+		refused             string
+	}{
+		{"unloaded job is bootstrapped", "stopped", "", false,
+			[]string{"print", "bootstrap", "kickstart"}, ""},
+		{"loaded stale definition is replaced", "stopped", idle, true,
+			[]string{"print", "bootout", "bootstrap", "kickstart"}, ""},
+		{"live launchd process is never booted out", "stopped",
+			"gui/501/clankerbox-x = {\n\tstate = running\n\tpid = 4242\n}\n", true,
+			[]string{"print"}, "live process"},
+		{"running Tart VM is never booted out", "running", idle, true,
+			[]string{"print"}, "requires stopped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := host.Config{
+				HostOS:        osDarwin,
+				Root:          shortNativeRoot(t),
+				TartPath:      "/opt/tart-2.36.0/tart",
+				LaunchctlPath: "/bin/launchctl",
+				LaunchdDomain: "gui/501",
+			}
+			requireNoError(t, os.MkdirAll(filepath.Join(cfg.Root, "jobs"), 0700))
+			p := model.Profile{
+				ID: "mac", OS: "macos", Arch: archARM64, Runtime: runtimeTart, CPU: 2, RAMMiB: 2048,
+				RevisionID: model.NewID(), BaseID: "base", HostID: "test-host",
+			}
+			m := host.Manifest{ID: model.NewID(), Profile: p, Port: 48193}
+			f := &macTartSupervisor{state: tc.state, status: tc.status, loaded: tc.loaded}
+			n := host.NewNativeRuntime(cfg, f.runner(t, cfg, m))
+			requireNoError(t, n.Configure(context.Background(), m))
+			// The operator moved Tart; launchd may still hold the old definition.
+			n.Config.TartPath = "/opt/tart-2.38.0/tart"
+			err := n.Start(context.Background(), m)
+			if !slices.Equal(f.actions, tc.actions) {
+				t.Fatalf("launchctl actions %v, want %v", f.actions, tc.actions)
+			}
+			if tc.refused != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.refused) {
+					t.Fatalf("expected refusal %q, got %v", tc.refused, err)
+				}
+				if !f.loaded || len(f.jobs) != 0 {
+					t.Fatal("refused start changed the loaded supervisor")
+				}
+				return
+			}
+			requireNoError(t, err)
+			if len(f.jobs) != 1 || !strings.Contains(f.jobs[0], "/opt/tart-2.38.0/tart") ||
+				strings.Contains(f.jobs[0], "/opt/tart-2.36.0/tart") {
+				t.Fatalf("bootstrapped definition does not use the current Tart path: %v", f.jobs)
+			}
+		})
+	}
+}
