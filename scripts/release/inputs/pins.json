@@ -1,19 +1,19 @@
 {
-  "smolvm": "e1dd54bf7be6d144ad6bdef4ebf310f57809a6a6",
-  "libkrun": "d1f79154fbfd7e8ecf9d4e259e2006524e6cf913",
+  "smolvm": "572bb694d7dc6857d5de012c9e24a6e4a857ca27",
+  "libkrun": "2210fda788c7fa13c23b592261a14db2f2cadc4a",
   "libkrunfw": "6ec329e11154814a4df9963a3f94f2a430f55723",
-  "runtime_patch_sha256": "b71af5a53159ca8db645e96a9a713fac2916c52a9e0f8a27f063eb678621e6da",
+  "runtime_patch_sha256": "2f159988d75bb0410745db1b69ad4e0e73471031874ddeb9272cc356350fdcc7",
   "hashes": {
-    "release-mac.tar.gz": "7be55af510b698bb95c9e9b103004c81f75cacfaa62b00aaf554441e9023353b",
-    "target/release/smolvm": "104d4c8ff3edd5cd78dce90a0f68fd9b3663157063e7b35db0f4d27bdda253c4",
-    "agent-target/aarch64-unknown-linux-musl/release/smolvm-agent": "269e68647654b26a8c8fe501bb91f221d339f336984804e8cd03b268347a8805",
-    "source/Cargo.lock": "35d173030b81db05ba4bb779d4cbca4af8279a4d376a0a9f939c288214e3f13c",
-    "smolvm-1.16.0-darwin-arm64/lib/libkrun.dylib": "e47998f0263e58bdb4875f16fa2c3db15db25b66a710593e153bb76a664fc70f",
-    "smolvm-1.16.0-darwin-arm64/lib/libkrunfw.5.dylib": "819d9902587788859fcdc7ebe0ca38c8c493c58667d5aaa151fb935c0b7d74a5"
+    "release-mac.tar.gz": "8b2eaafdf15734b87a9f92aa837c79afa8bb351e183b7cd4f2205ffcd0f0cc85",
+    "target/release/smolvm": "d09096f0077b0d05189399f994ad99ff3cb1694ab5a96b611ad95a53c7d67c4a",
+    "agent-target/aarch64-unknown-linux-musl/release/smolvm-agent": "d9ffe1e4760aacc308a7393d33f23c1a9df4575377105dde5e447040dbb15a9c",
+    "source/Cargo.lock": "7d4e2987f57254006b13a27b9a4f02eb1b40479ae8f17ee2e11b3bd38a905be4",
+    "smolvm-1.19.0-darwin-arm64/lib/libkrun.dylib": "7c7062c07b561c4ff6d34ba362ca913423dd20db38b86958a15cca6a8616b947",
+    "smolvm-1.19.0-darwin-arm64/lib/libkrunfw.5.dylib": "819d9902587788859fcdc7ebe0ca38c8c493c58667d5aaa151fb935c0b7d74a5"
   },
-  "mac": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "mac": "macOS-27.0-arm64-arm-64bit-Mach-O",
   "rust": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
   "zig": "0.16.0",
-  "linux_cli_sha256": "13c3c12b482a1a85440729a76a76f0e9bf32799bf92fe6224b43b96c61538e44",
-  "release_url": "https://github.com/smol-machines/smolvm/releases/download/v1.16.0/smolvm-1.16.0-darwin-arm64.tar.gz"
+  "linux_cli_sha256": "2377575548a7c8ffd7314e0b21113627b53d630a6c425c7485cfe0ef82ae8bfc",
+  "release_url": "https://github.com/smol-machines/smolvm/releases/download/v1.19.0/smolvm-1.19.0-darwin-arm64.tar.gz"
 }

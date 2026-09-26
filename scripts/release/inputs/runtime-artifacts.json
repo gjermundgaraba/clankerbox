@@ -19,7 +19,7 @@
         {
           "path": "lib/libkrun.dylib",
           "type": "file",
-          "sha256": "e47998f0263e58bdb4875f16fa2c3db15db25b66a710593e153bb76a664fc70f"
+          "sha256": "7c7062c07b561c4ff6d34ba362ca913423dd20db38b86958a15cca6a8616b947"
         },
         {
           "path": "lib/libkrunfw.5.dylib",
@@ -57,12 +57,12 @@
         {
           "path": "lib/libkrun.provenance",
           "type": "file",
-          "sha256": "93816f49d1b8f4fca0eb322b0006f8efb6ecb5c7856e3f2caddce37bd2053ef1"
+          "sha256": "eb61073a97eccf896720cc7cbd83407020fff026946c84fad60a78d0493c9847"
         },
         {
           "path": "lib/libkrun.so",
           "type": "file",
-          "sha256": "2a58b2fcd8975972c6c1eba0aa687ad0e7844069209d9e56e3bdb4afe6e9fbf7"
+          "sha256": "64aa19dcaf67e3fba981f6861cd08b9af341a7c06e7277f68d761cc4718fd393"
         },
         {
           "path": "lib/libkrun.so.2",

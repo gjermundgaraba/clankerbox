@@ -22,9 +22,11 @@ against each bundle's `bundle.json`. Assembly enforces the `files` lists. Update
 them only from a separately qualified build: hashing whatever is in a proposed
 `--runtime-assets` directory does not establish qualification.
 
-The current [smolvm 1.16.0 qualification record](smolvm-1.16.0-qualification.md)
-records the release-matched library pair, build/test evidence and compact disk
-templates. `template-provenance.json` records the verified zero-padding removal;
+The current [smolvm 1.19.0 qualification record](smolvm-1.19.0-qualification.md)
+records the release-matched library pair, the rebased patch and build/test evidence.
+The compact disk templates are unchanged since the historical
+[1.16.0 record](smolvm-1.16.0-qualification.md), which describes their preparation.
+`template-provenance.json` records the verified zero-padding removal;
 it is build provenance, while `runtime-artifacts.json` remains the enforced
 artifact authority. The compact 512 MiB templates avoid a host `resize2fs`
 dependency for supported profile sizes. Do not restore upstream's padded

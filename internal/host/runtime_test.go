@@ -160,7 +160,7 @@ func TestSmolvmBareCreationAndPersistentUnit(t *testing.T) {
 			t.Fatalf("unexpected runtime flag %s", forbidden)
 		}
 	}
-	for _, required := range []string{"SMOLVM_PUBLISH_ADDR=127.0.0.1", "SMOLVM_EGRESS_FLOOR=strict", "SMOLVM_AGENT_ROOTFS=" + filepath.Join(filepath.Join(cfg.Root, "machines", m.ID), "agent-rootfs"), "XDG_DATA_HOME=" + filepath.Join(filepath.Join(cfg.Root, "machines", m.ID), "d"), "SMOLVM_LIB_DIR=/opt/smolvm/lib"} {
+	for _, required := range []string{"SMOLVM_PUBLISH_ADDR=127.0.0.1", "SMOLVM_EGRESS_FLOOR=strict", "SMOLVM_DISABLE_READONLY_RESTORE=1", "SMOLVM_AGENT_ROOTFS=" + filepath.Join(filepath.Join(cfg.Root, "machines", m.ID), "agent-rootfs"), "XDG_DATA_HOME=" + filepath.Join(filepath.Join(cfg.Root, "machines", m.ID), "d"), "SMOLVM_LIB_DIR=/opt/smolvm/lib"} {
 		if !slices.Contains(create.env, required) {
 			t.Fatalf("missing private environment %s", required)
 		}

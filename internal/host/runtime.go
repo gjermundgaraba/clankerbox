@@ -111,6 +111,9 @@ func (n *NativeRuntime) env(m Manifest) []string {
 		n.libraryEnvironment(),
 		"SMOLVM_PUBLISH_ADDR=127.0.0.1",
 		"SMOLVM_EGRESS_FLOOR=strict",
+		// Root Linux engines otherwise stage restore RAM outside the pending
+		// directory that retained-start validation requires.
+		"SMOLVM_DISABLE_READONLY_RESTORE=1",
 	)
 }
 

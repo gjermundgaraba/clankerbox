@@ -1,8 +1,8 @@
 diff --git a/crates/smolvm-agent/src/main.rs b/crates/smolvm-agent/src/main.rs
-index 06952df..87de2ee 100644
+index 152e9ce..1b15795 100644
 --- a/crates/smolvm-agent/src/main.rs
 +++ b/crates/smolvm-agent/src/main.rs
-@@ -1105,6 +1105,12 @@ fn ensure_mount_dir(path: &str) {
+@@ -1108,6 +1108,12 @@ fn ensure_mount_dir(path: &str) {
      }
  }
  
@@ -15,7 +15,7 @@ index 06952df..87de2ee 100644
  /// Set up persistent rootfs overlay using overlayfs on /dev/vdb.
  ///
  /// If /dev/vdb exists (overlay disk attached by host), this function:
-@@ -1315,19 +1321,10 @@ fn setup_persistent_rootfs() {
+@@ -1318,19 +1324,10 @@ fn setup_persistent_rootfs() {
      let overlay_src = cstr("overlay");
      let newroot = cstr(NEWROOT);
      let overlay_type = cstr("overlay");
@@ -39,7 +39,7 @@ index 06952df..87de2ee 100644
      // SAFETY: mount overlayfs with the specified options
      let result = unsafe {
          libc::mount(
-@@ -7275,6 +7272,23 @@ mod bg_reap_tests {
+@@ -7486,6 +7483,23 @@ mod bg_reap_tests {
  
  #[cfg(test)]
  mod tests {
@@ -60,153 +60,21 @@ index 06952df..87de2ee 100644
 +        assert_eq!(flags.len(), 6);
 +    }
 +
-     use super::*;
- 
-     #[cfg(target_os = "linux")]
-diff --git a/src/agent/client.rs b/src/agent/client.rs
-index 1021a11..8e34184 100644
---- a/src/agent/client.rs
-+++ b/src/agent/client.rs
-@@ -1679,7 +1679,17 @@ impl AgentClient {
-             match serde_json::from_slice::<AgentResponse>(&body)
-                 .map_err(|error| Error::agent("shutdown ack", error.to_string()))?
-             {
--                AgentResponse::Ok { .. } => Ok(()),
-+                response @ AgentResponse::Ok { .. } => {
-+                    if std::env::var("SMOLVM_STOP_REQUIRE_ACK").as_deref() == Ok("1")
-+                        && !is_shutdown_ack(&response)
-+                    {
-+                        return Err(Error::agent(
-+                            "shutdown ack",
-+                            "guest response did not acknowledge shutdown",
-+                        ));
-+                    }
-+                    Ok(())
-+                }
-                 _ => Err(Error::agent("shutdown ack", "unexpected acknowledgment")),
-             }
-         })();
-@@ -4123,3 +4133,90 @@ mod flatten_timeout_tests {
-         }
-     }
- }
-+
-+// The matching guest sends this only after sync_and_unmount_storage().
-+fn is_shutdown_ack(response: &AgentResponse) -> bool {
-+    matches!(response, AgentResponse::Ok { data: Some(data) }
-+        if data.get("shutdown").and_then(serde_json::Value::as_bool) == Some(true))
-+}
-+
-+#[cfg(test)]
-+mod retained_shutdown_tests {
-+    use super::*;
-+
-+    // Run in separate processes with SMOLVM_STOP_REQUIRE_ACK=1 and unset.
-+    // Exercise the framed shutdown path without mutating the process environment.
-+    #[test]
-+    fn retained_shutdown_validates_wire_ack() {
-+        let require_ack = std::env::var("SMOLVM_STOP_REQUIRE_ACK").as_deref() == Ok("1");
-+        for (response, explicit_ack, is_ok) in [
-+            (
-+                AgentResponse::Ok {
-+                    data: Some(serde_json::json!({"shutdown": true})),
-+                },
-+                true,
-+                true,
-+            ),
-+            (AgentResponse::Ok { data: None }, false, true),
-+            (
-+                AgentResponse::Ok {
-+                    data: Some(serde_json::json!({"shutdown": false})),
-+                },
-+                false,
-+                true,
-+            ),
-+            (
-+                AgentResponse::Pong {
-+                    version: 1,
-+                    capabilities: vec![],
-+                },
-+                false,
-+                false,
-+            ),
-+        ] {
-+            let (client_stream, mut peer) = UdsStream::pair().unwrap();
-+            let server = std::thread::spawn(move || {
-+                let mut header = [0; 4];
-+                peer.read_exact(&mut header).unwrap();
-+                let mut request = vec![0; u32::from_be_bytes(header) as usize];
-+                peer.read_exact(&mut request).unwrap();
-+                let body = serde_json::to_vec(&response).unwrap();
-+                peer.write_all(&(body.len() as u32).to_be_bytes()).unwrap();
-+                peer.write_all(&body).unwrap();
-+            });
-+            let mut client = AgentClient::from_stream(client_stream);
-+            let result = client.shutdown_with_deadline(Duration::from_secs(2));
-+            server.join().unwrap();
-+            assert_eq!(
-+                result.is_ok(),
-+                is_ok && (!require_ack || explicit_ack),
-+                "{result:?}"
-+            );
-+            if require_ack && is_ok && !explicit_ack {
-+                assert!(result
-+                    .unwrap_err()
-+                    .to_string()
-+                    .contains("did not acknowledge shutdown"));
-+            }
-+        }
-+    }
-+
-+    #[test]
-+    fn retained_shutdown_accepts_only_explicit_ack() {
-+        assert!(is_shutdown_ack(&AgentResponse::Ok {
-+            data: Some(serde_json::json!({"shutdown": true})),
-+        }));
-+        for data in [
-+            None,
-+            Some(serde_json::json!({})),
-+            Some(serde_json::json!({"shutdown": false})),
-+            Some(serde_json::json!({"shutdown": "true"})),
-+        ] {
-+            assert!(!is_shutdown_ack(&AgentResponse::Ok { data }));
-+        }
-+        assert!(!is_shutdown_ack(&AgentResponse::Pong {
-+            version: 1,
-+            capabilities: vec![],
-+        }));
-+    }
-+}
+     /// A listing is what a caller uses to decide where to recurse and what to
+     /// download, so the shape matters: names only, sorted, with sizes only
+     /// where they mean something.
 diff --git a/src/agent/manager.rs b/src/agent/manager.rs
-index 8d309cd..d81be19 100644
+index 52e406d..9372d7a 100644
 --- a/src/agent/manager.rs
 +++ b/src/agent/manager.rs
-@@ -2719,6 +2719,18 @@ impl AgentManager {
-             false
-         };
- 
-+        // Retained controllers require confirmed guest sync before any live
-+        // VMM termination, even when its PID identity is known.
-+        if std::env::var("SMOLVM_STOP_REQUIRE_ACK").as_deref() == Ok("1")
-+            && !shutdown_acked
-+            && process::is_alive(pid)
-+        {
-+            return Err(Error::agent(
-+                "stop agent",
-+                "guest shutdown not acknowledged; retained VM was not terminated",
-+            ));
-+        }
-+
-         // Identity check: vsock acknowledgement OR strict PID start-time match OR
-         // an argv match on this VM's unique boot-config path. We intentionally do
-         // NOT use the lenient is_our_process() here because it treats any alive
-@@ -3440,6 +3452,42 @@ fn boot_failure_reason(
+@@ -3627,6 +3627,39 @@ fn boot_failure_reason(
  
  #[cfg(test)]
  mod tests {
-+    // Run separately with SMOLVM_STOP_REQUIRE_ACK=1 and with it absent.
++    // Retained controllers stop with SMOLVM_STOP_REQUIRE_ACK=1; the guard is
++    // upstream behavior in both modes. Run with the variable set and absent.
 +    // This is a disposable host sleep process, never a VM.
-+    #[cfg(target_os = "linux")]
++    #[cfg(any(target_os = "linux", target_os = "macos"))]
 +    #[test]
 +    fn retained_shutdown_orphan_preserves_live_process_and_markers() {
 +        use std::process::Command;
@@ -228,21 +96,17 @@ index 8d309cd..d81be19 100644
 +        let config_preserved = manager.config_file.exists();
 +        let _ = child.kill();
 +        let _ = child.wait();
-+        if std::env::var("SMOLVM_STOP_REQUIRE_ACK").as_deref() == Ok("1") {
-+            assert!(result.unwrap_err().to_string().contains("not acknowledged"));
-+            assert!(alive && pid_preserved && config_preserved);
-+        } else {
-+            result.unwrap();
-+            assert!(!alive && !pid_preserved && !config_preserved);
-+        }
++        let error = result.unwrap_err().to_string();
++        assert!(error.contains("left the VM alive"), "{error}");
++        assert!(alive && pid_preserved && config_preserved);
 +        // A dead process may always be cleaned up, even without an ACK.
 +        manager.stop().unwrap();
 +        assert!(!manager.pid_file.exists());
 +    }
 +
-     /// An explicit override must win even over a real default, and a rootfs
-     /// is only accepted when `sbin/init` is present — checked without following
-     /// the symlink, because in a real rootfs it points at a guest-only path.
+     #[test]
+     fn intercepted_machine_cannot_relaunch_without_an_interceptor() {
+         let temp = tempfile::tempdir().unwrap();
 diff --git a/src/agent/state_probe.rs b/src/agent/state_probe.rs
 index 1d6829a..d4490e3 100644
 --- a/src/agent/state_probe.rs
@@ -261,10 +125,10 @@ index 1d6829a..d4490e3 100644
          .unwrap_or(false)
      {
 diff --git a/src/cli/vm_common.rs b/src/cli/vm_common.rs
-index 432ae6a..4cd46f8 100644
+index 58f14f7..448f32e 100644
 --- a/src/cli/vm_common.rs
 +++ b/src/cli/vm_common.rs
-@@ -2213,6 +2213,12 @@ pub fn stop_vm_named(name: &str) -> smolvm::Result<()> {
+@@ -2369,6 +2369,12 @@ pub fn stop_vm_named(name: &str) -> smolvm::Result<()> {
      let resolved = smolvm::agent::state_probe::resolve_state(name, &record);
      match resolved {
          RecordState::Unreachable => {
@@ -277,7 +141,7 @@ index 432ae6a..4cd46f8 100644
              // Only past this point is the zombie confirmed dead. On
              // failure we return the error without claiming the machine
              // stopped and without detaching its volumes.
-@@ -2252,6 +2258,12 @@ pub fn stop_vm_named(name: &str) -> smolvm::Result<()> {
+@@ -2408,6 +2414,12 @@ pub fn stop_vm_named(name: &str) -> smolvm::Result<()> {
              // checkpoint only after confirming process death.
          }
          other => {
@@ -290,7 +154,7 @@ index 432ae6a..4cd46f8 100644
              // Not running. If a prior start mounted the layers volume but the
              // VM failed to boot, it could still be mounted — detach it. Safe:
              // resolve_state() probed liveness, so the process is confirmed dead.
-@@ -2266,7 +2278,9 @@ pub fn stop_vm_named(name: &str) -> smolvm::Result<()> {
+@@ -2422,7 +2434,9 @@ pub fn stop_vm_named(name: &str) -> smolvm::Result<()> {
              // never persisted). Check the on-disk PID file and, if the
              // process is alive and its argv matches this VM's boot config
              // path, kill it so the user doesn't have to hunt it manually.

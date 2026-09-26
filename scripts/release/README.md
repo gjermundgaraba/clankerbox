@@ -17,8 +17,12 @@ bundle.
 
 ## Build inputs
 
-The [smolvm 1.16.0 qualification record](inputs/smolvm-1.16.0-qualification.md)
-describes the release-matched libraries and compact disk templates. Raw upstream
+The [smolvm 1.19.0 qualification record](inputs/smolvm-1.19.0-qualification.md)
+describes the release-matched libraries and rebased patch; the compact disk
+templates are described by the [1.16.0 record](inputs/smolvm-1.16.0-qualification.md).
+Link the engine against a private copy of the darwin libraries: smolvm's build
+script re-signs `libkrun.dylib` in its `LIBKRUN_BUNDLE`, and the inventory pins the
+unmodified release bytes. Raw upstream
 templates are not interchangeable with the qualified runtime inventory.
 
 Run collection and assembly from the **same isolated checkout**. Select a committed
@@ -145,7 +149,7 @@ Keep release archives, corresponding source and necessary build inputs in their
 intended retained location; remove extracted duplicates and compiler caches after
 qualification. Local historical build paths are not a required release interface.
 
-### Reuse the retained 1.16.0 inputs
+### Reuse the retained 1.19.0 inputs
 
 The retained notices belong to the isolated qualification checkout, **not** the
 main working checkout. Where the private inputs are still available, this is a
@@ -153,18 +157,18 @@ guarded macOS/arm64 reassembly using their matching checkout. Run this block fro
 the original working checkout, not the new worktree (output must not exist):
 
 ```sh
-INPUTS=$(cd "$(git rev-parse --show-toplevel)/.work/smolvm-1.16.0-update" && pwd)
+INPUTS=$(cd "$(git rev-parse --show-toplevel)/.work/smolvm-1.19.0-update" && pwd)
 CHECKOUT="$INPUTS/clankerbox-candidate"
 python3 "$CHECKOUT/scripts/release/bundle.py" \
-  --os darwin --arch arm64 --version 0.4.0-smolvm1.16.0-candidate3 --no-archive \
-  --engine "$INPUTS/engines/darwin-arm64" \
+  --os darwin --arch arm64 --version 0.10.0-smolvm1.19.0-candidate1 --no-archive \
+  --engine "$INPUTS/built/smolvm-darwin-arm64" \
   --runtime-assets "$INPUTS/runtime-darwin-arm64" --image "$INPUTS/image-darwin-arm64" \
   --engine-source "$INPUTS/source" --dependency-notices "$INPUTS/notices" \
   --output "$INPUTS/reassembled-darwin-arm64"
 ```
 
 For Linux, use `--os linux --arch amd64`, engine
-`$INPUTS/engines/linux-amd64`, the `linux-amd64`
+`$INPUTS/built/smolvm-linux-amd64`, the `linux-amd64`
 runtime/image directories and a distinct output directory. Do not substitute the
 main checkout's `bundle.py`: its unexpanded `go.sum` correctly rejects these
 notices. If the matching checkout is unavailable or has changed, use fresh

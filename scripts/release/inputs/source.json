@@ -1,8 +1,8 @@
 {
   "component": "smol-machines/smolvm",
-  "commit": "e1dd54bf7be6d144ad6bdef4ebf310f57809a6a6",
+  "commit": "572bb694d7dc6857d5de012c9e24a6e4a857ca27",
   "files": {
     "LICENSE": "ac6a4050f2f415a02f3c223ddee932a07de627bc143059e9a1ea9df088e46909",
-    "Cargo.lock": "35d173030b81db05ba4bb779d4cbca4af8279a4d376a0a9f939c288214e3f13c"
+    "Cargo.lock": "7d4e2987f57254006b13a27b9a4f02eb1b40479ae8f17ee2e11b3bd38a905be4"
   }
 }
