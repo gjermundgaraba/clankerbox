@@ -87,7 +87,7 @@ class MacImageStagingTests(unittest.TestCase):
 set -eu
 printf '%s\\n' "$*" >> "$TART_TEST_LOG"
 case "$1" in
-  --version) printf '%s\\n' "${TART_TEST_VERSION:-2.36.0}" ;;
+  --version) printf '%s\\n' "${TART_TEST_VERSION:-2.38.0}" ;;
   clone) mkdir -p "$TART_HOME/vms/$3" ;;
   list) test -d "$TART_HOME/vms/seed-e0721ddeae3c" ;;
   *) exit 99 ;;

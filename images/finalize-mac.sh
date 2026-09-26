@@ -18,7 +18,7 @@ test -d "$home/vms/seed-e0721ddeae3c"
 export TART_HOME="$home" TART_NO_AUTO_PRUNE=1
 export PATH=/usr/local/libexec/clankerbox:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 test -x "$tart"
-test "$("$tart" --version)" = 2.36.0
+test "$("$tart" --version)" = 2.38.0
 test "$(DEVELOPER_DIR="$source/Contents/Developer" /usr/bin/xcodebuild -version)" = $'Xcode 26.6\nBuild version 17F113'
 /usr/bin/codesign --verify --deep --strict "$source"
 test ! -e "$home/vms/$seed"

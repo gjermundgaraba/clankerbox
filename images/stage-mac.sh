@@ -10,7 +10,7 @@ tart=$(command -v "${TART_BIN:-tart}") || {
 image=ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:e0721ddeae3c7c037b764c1aebd0b2d245495c16622413f5a567d7110d18d863
 test ! -e "$destination"
 test -x "$tart"
-test "$("$tart" --version)" = 2.36.0
+test "$("$tart" --version)" = 2.38.0
 umask 077
 mkdir -p "$destination"
 destination=$(cd "$destination" && pwd -P)
