@@ -110,6 +110,62 @@ before resuming controller reconciliation. Both wait for confirmed build cleanup
 before continuing teardown. If cleanup cannot finish, teardown fails and retains
 the environment and its recovery journal.
 
+## Machine preparation
+
+A recipe prepares every machine built from it by installing
+`/etc/clankerbox/machine.json` in the image:
+
+```sh
+# setup.sh
+mkdir -p /etc/clankerbox
+cp files/machine.json /etc/clankerbox/machine.json
+```
+
+```json
+{
+  "env": {"CODEX_REFRESH_TOKEN_URL_OVERRIDE": "https://creds.example/v1/codex/refresh"},
+  "start": {"command": "clankercreds sync", "timeout_seconds": 10}
+}
+```
+
+Both keys are optional, and so is the file. The build checks it right after
+`setup.sh`, and an invalid file fails the build with its reason in the build log.
+The image pins it like any other file: changing it means publishing a new
+revision. An edit inside a machine takes effect at that machine's next start; if
+the edit leaves the file invalid, that start ignores all of it, and the start
+session exits 1 showing why.
+
+`env` is the default environment of every session: a caller's own `env` entry
+for the same name replaces it for that session. The start command and everything
+these processes start inherit it. At most 64 variables; they do not count against
+a caller's own limit.
+
+`start.command` is a shell command run with `/bin/sh -c` whenever the daemon
+starts or comes to serve a new machine: on create, on every start of a stopped
+machine, on every fork and restore, including a RAM copy whose daemon keeps
+running, and when a daemon is relaunched on a running machine. Binding renewal
+does not run it, and builds never start the daemon. Profile validation boots a
+disposable copy of the new revision, which runs the command once; nothing from
+that copy is kept. The command runs as root in root's home with the network up
+and the same environment as any session.
+
+Creating a session waits until the command has ended: lifecycle operations do
+not wait for it, the machine's first sessions do. `timeout_seconds` defaults to 30
+and is at most 120; a command still running then is ended before waiting sessions
+start. A non-zero exit, a signal or a timeout does not stop the machine, so the
+command should leave existing state alone when it fails, and be idempotent. It
+runs as a session labelled `clankerbox-start`: `clankerbox sessions MACHINE` shows
+its exit status and `clankerbox sessions MACHINE SESSION_ID` its final 200x100
+screen. A checkpoint captures what it wrote on that machine. A fork or restore
+that inherits as many running sessions as a machine allows cannot run it; the
+guest daemon's log, `/var/lib/clankerbox-guest/daemon.log`, says so.
+
+Per-machine state should derive from `/var/lib/clankerbox/machine-id`, which is
+the same across stop and start and new for every fork and restore, instead of an
+identifier generated on first run and then copied by forks. The start command can
+already read it. Processes a RAM fork or restore inherits resume before their
+machine's command runs and keep whatever they read earlier (see ADR 0006).
+
 ## Retention
 
 Create admission pins the current revision and its resource settings atomically.

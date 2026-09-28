@@ -398,10 +398,12 @@ func TestGuestCommand(t *testing.T) {
 func TestShellJudgesArgumentsBeforeConfiguration(t *testing.T) {
 	t.Parallel()
 	for want, args := range map[string][]string{
-		"requires a machine":   {shellCommand},
-		"must be KEY=VALUE":    {shellCommand, "--env", "novalue", testMachineName},
-		"exclude each other":   {shellCommand, "-t", "-T", testMachineName},
-		"requires 1 arguments": {"guest"},
+		"usage: clankerbox shell MACHINE":                 {shellCommand},
+		"must be KEY=VALUE":                               {shellCommand, "--env", "novalue", testMachineName},
+		"exclude each other":                              {shellCommand, "-t", "-T", testMachineName},
+		"usage: clankerbox guest MACHINE":                 {"guest"},
+		"usage: clankerbox sessions MACHINE [SESSION_ID]": {"sessions", "a", "b", "c"},
+		"usage: clankerbox labels MACHINE [KEY=VALUE...]": {"labels"},
 	} {
 		err := client.Run(t.Context(), append([]string{configFlag, missingConfig}, args...), client.Streams{})
 		if err == nil || !strings.Contains(err.Error(), want) {

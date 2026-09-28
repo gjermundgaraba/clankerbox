@@ -19,6 +19,7 @@ import (
 type service struct {
 	identity *identity
 	manager  *session.Manager
+	starts   *starts
 }
 
 func (s *service) description(machine string) *v1.GuestDescription {
@@ -227,6 +228,13 @@ func (s *service) AttachSession(
 			err = model.NewError(model.ReasonInvalid, err.Error(), false)
 		}
 		return rpcmodel.ToError(err)
+	}
+	// Wait outside the identity lock, which a rebind needs. A binding published
+	// meanwhile closes this transport, and its sessions wait for its own run.
+	if a.Create != nil {
+		if err = s.starts.wait(ctx); err != nil {
+			return err
+		}
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)

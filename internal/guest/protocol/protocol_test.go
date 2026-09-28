@@ -32,6 +32,9 @@ func TestValidation(t *testing.T) {
 	bad = good
 	bad.Argv = make([]string, protocol.MaxArgv+1)
 	assertValidation(t, bad.Validate(), model.ReasonTooLarge, "argv")
+	bad = good
+	bad.Env = map[string]string{"A=B": "x"}
+	assertValidation(t, bad.Validate(), model.ReasonInvalid, `env entry "A=B"`)
 }
 
 func assertValidation(t *testing.T, err error, code model.Reason, message string) {

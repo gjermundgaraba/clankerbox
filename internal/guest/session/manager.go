@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -46,7 +47,10 @@ type Config struct {
 	DaemonVersion string
 	MaxSessions   int
 	RingSize      int
-	Now           func() time.Time
+	// Env is the machine image's environment. Every session gets it under the
+	// caller's entries, and it does not count against the caller's limit.
+	Env map[string]string
+	Now func() time.Time
 	// Log receives record persistence failures; the in-memory record stays
 	// authoritative until the daemon restarts. Defaults to slog.Default.
 	Log *slog.Logger
@@ -250,11 +254,14 @@ func (m *Manager) admit(args protocol.CreateArgs) (spawnOptions, *manifest, erro
 			Retryable: true,
 		}
 	}
+	env := make(map[string]string, len(m.cfg.Env)+len(args.Env))
+	maps.Copy(env, m.cfg.Env)
+	maps.Copy(env, args.Env)
 	return spawnOptions{
 		ctx:         m.ctx,
 		record:      record,
 		fingerprint: fingerprint,
-		env:         args.Env,
+		env:         env,
 		process:     m.process,
 		stateDir:    m.cfg.StateDir,
 		ringSize:    m.cfg.RingSize,
@@ -417,6 +424,34 @@ func (m *Manager) createOpen(args protocol.OpenArgs, sink Sink) (protocol.OpenVa
 	m.live[opts.record.ID] = s
 	return protocol.OpenValue{Mode: protocol.ModeResume, Session: s.snapshot()}, attachment, true, nil
 }
+
+// Run creates a session no client attaches to and waits for it to exit,
+// ending it once limit passes. The session must be neither a pipe session nor
+// set to end on detach, so stopping its only attachment leaves it running.
+func (m *Manager) Run(args protocol.CreateArgs, limit time.Duration) error {
+	_, attachment, err := m.Open(protocol.OpenArgs{SessionID: args.SessionID, Create: &args}, discard{})
+	if err != nil {
+		return err
+	}
+	attachment.Stop()
+	s, err := m.liveSession(args.SessionID)
+	if err != nil {
+		return err
+	}
+	if !s.waitExit(limit) {
+		s.end()
+	}
+	return nil
+}
+
+// discard is the subscriber of a session nobody watches.
+type discard struct{}
+
+func (discard) SendSnapshot([]byte) error       { return nil }
+func (discard) SendOutput(uint64, []byte) error { return nil }
+func (discard) SendStderr(uint64, []byte) error { return nil }
+func (discard) SendEvent(any) error             { return nil }
+func (discard) Close()                          {}
 
 // CloseInput delivers end of input to a pipe session.
 func (m *Manager) CloseInput(id string) (protocol.InputValue, error) {

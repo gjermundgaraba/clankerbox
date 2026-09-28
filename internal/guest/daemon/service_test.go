@@ -37,6 +37,12 @@ func mustValue[T any](t *testing.T, value T, err error) T {
 // The privileged Start boundary is separately qualified inside real Linux VMs.
 func testGuest(t *testing.T) (*identity, *session.Manager, *rpcidentity.Authority, string) {
 	t.Helper()
+	return testMachineGuest(t, preparation{})
+}
+
+// testMachineGuest serves a guest that prepares each machine it serves.
+func testMachineGuest(t *testing.T, machine preparation) (*identity, *session.Manager, *rpcidentity.Authority, string) {
+	t.Helper()
 	state, err := filepath.EvalSymlinks(t.TempDir())
 	state = mustValue(t, state, err)
 	//nolint:gosec // A private directory requires owner search permission.
@@ -50,35 +56,35 @@ func testGuest(t *testing.T) (*identity, *session.Manager, *rpcidentity.Authorit
 	auth = mustValue(t, auth, err)
 	binding, err := auth.Binding(testMachine, "host")
 	binding = mustValue(t, binding, err)
-	ident := newIdentity(dir)
-	if err = ident.rebind(binding); err != nil {
-		t.Fatal(err)
-	}
 	loader, err := vt.NewLoader(t.Context())
 	loader = mustValue(t, loader, err)
 	t.Cleanup(func() { _ = loader.Close(context.Background()) })
-	manager, err := session.New(
+	svc, err := newService(
 		t.Context(),
+		dir,
 		session.Config{StateDir: state, Loader: loader, Incarnation: uuid.NewString()},
+		machine,
+		filepath.Join(t.TempDir(), "clankerbox", "machine-id"),
+		binding,
 	)
-	manager = mustValue(t, manager, err)
-	t.Cleanup(manager.Close)
+	svc = mustValue(t, svc, err)
+	t.Cleanup(svc.manager.Close)
 	path, handler := clankerboxv1connect.NewSessionServiceHandler(
-		&service{identity: ident, manager: manager},
+		svc,
 		connect.WithReadMaxBytes(requestMaxBytes),
 		connect.WithSendMaxBytes(eventMaxBytes),
 	)
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
 	server := boundedServer(rpctransport.WithWriteDeadline(mux))
-	server.TLSConfig = ident.tlsConfig()
-	server.ConnContext = ident.connContext
-	server.ConnState = ident.connState
+	server.TLSConfig = svc.identity.tlsConfig()
+	server.ConnContext = svc.identity.connContext
+	server.ConnState = svc.identity.connState
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	listener = mustValue(t, listener, err)
 	go func() { _ = server.Serve(tls.NewListener(listener, server.TLSConfig)) }()
 	t.Cleanup(func() { _ = server.Close() })
-	return ident, manager, auth, "https://" + listener.Addr().String()
+	return svc.identity, svc.manager, auth, "https://" + listener.Addr().String()
 }
 
 func guestClient(

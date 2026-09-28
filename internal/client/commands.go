@@ -79,18 +79,17 @@ func waitFlags(c *cli.Command) *waitOptions {
 
 type commandStreams Streams
 
-func (streams commandStreams) command(name, usage, argsUsage string, count int, action commandAction) *cli.Command {
+// command takes least to most arguments; a negative most means no upper bound.
+func (streams commandStreams) command(
+	name, usage, argsUsage string,
+	least, most int,
+	action commandAction,
+) *cli.Command {
 	return &cli.Command{Name: name, Usage: usage, ArgsUsage: argsUsage,
 		OnUsageError: returnUsageError,
 		Action: func(ctx context.Context, cmd *cli.Command) error {
-			if count >= 0 && cmd.NArg() != count {
-				return fmt.Errorf(
-					"%s requires %d arguments; usage: %s %s",
-					cmd.FullName(),
-					count,
-					cmd.FullName(),
-					cmd.ArgsUsage,
-				)
+			if n := cmd.NArg(); n < least || (most >= 0 && n > most) {
+				return fmt.Errorf("wrong number of arguments; usage: %s %s", cmd.FullName(), cmd.ArgsUsage)
 			}
 			config, err := LoadConfig(cmd.String("config"))
 			if err != nil {
@@ -109,22 +108,22 @@ func (streams commandStreams) command(name, usage, argsUsage string, count int, 
 const childArgCount = 2
 
 func (streams commandStreams) checkpoints() *cli.Command {
-	create := streams.command("create", "Capture a machine checkpoint", "MACHINE", 1,
+	create := streams.command("create", "Capture a machine checkpoint", "MACHINE", 1, 1,
 		func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			return r.captureCheckpoint(ctx, c.Args().First(), c.String("idempotency-key"), waitFlags(c))
 		})
 	create.Flags = lifecycleFlags()
-	remove := streams.command("delete", "Delete a checkpoint", "CHECKPOINT_ID", 1,
+	remove := streams.command("delete", "Delete a checkpoint", "CHECKPOINT_ID", 1, 1,
 		func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			return r.deleteCheckpoint(ctx, c.Args().First(), c.String("idempotency-key"), waitFlags(c))
 		})
 	remove.Flags = lifecycleFlags()
 	return &cli.Command{Name: "checkpoint", Usage: "Manage machine checkpoints", OnUsageError: returnUsageError,
 		Commands: []*cli.Command{create, remove,
-			streams.command("list", "List checkpoints", " ", 0, func(ctx context.Context, r commandRunner, _ *cli.Command) error {
+			streams.command("list", "List checkpoints", " ", 0, 0, func(ctx context.Context, r commandRunner, _ *cli.Command) error {
 				return r.listCheckpoints(ctx)
 			}),
-			streams.command("inspect", "Inspect a checkpoint", "CHECKPOINT_ID", 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
+			streams.command("inspect", "Inspect a checkpoint", "CHECKPOINT_ID", 1, 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
 				return r.inspectCheckpoint(ctx, c.Args().First())
 			}),
 		},
@@ -136,7 +135,7 @@ func (streams commandStreams) addResourceCommands(root *cli.Command) {
 	for _, name := range []string{"profiles", "hosts", "machines"} {
 		root.Commands = append(
 			root.Commands,
-			command(name, "List "+name, " ", 0, func(ctx context.Context, r commandRunner, c *cli.Command) error {
+			command(name, "List "+name, " ", 0, 0, func(ctx context.Context, r commandRunner, c *cli.Command) error {
 				return r.listResources(ctx, c.Name)
 			}),
 		)
@@ -147,7 +146,7 @@ func (streams commandStreams) addResourceCommands(root *cli.Command) {
 			"inspect",
 			"Inspect a machine",
 			"MACHINE",
-			1,
+			1, 1,
 			func(ctx context.Context, r commandRunner, c *cli.Command) error {
 				return r.inspectMachine(ctx, c.Args().Slice())
 			},
@@ -156,7 +155,7 @@ func (streams commandStreams) addResourceCommands(root *cli.Command) {
 			"operation",
 			"Inspect an operation",
 			"ID",
-			1,
+			1, 1,
 			func(ctx context.Context, r commandRunner, c *cli.Command) error {
 				return r.inspectOperation(ctx, c.Args().Slice())
 			},
@@ -170,7 +169,7 @@ func (streams commandStreams) addLifecycleCommands(root *cli.Command) {
 		"create",
 		"Create a machine",
 		"NAME",
-		1,
+		1, 1,
 		func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			return r.createMachine(
 				ctx,
@@ -193,7 +192,7 @@ func (streams commandStreams) addLifecycleCommands(root *cli.Command) {
 			name,
 			name+" a machine",
 			"MACHINE",
-			1,
+			1, 1,
 			func(ctx context.Context, r commandRunner, c *cli.Command) error {
 				return r.mutateMachine(ctx, c.Name, c.Args().First(), c.String("idempotency-key"), waitFlags(c))
 			},
@@ -201,12 +200,12 @@ func (streams commandStreams) addLifecycleCommands(root *cli.Command) {
 		c.Flags = lifecycleFlags()
 		root.Commands = append(root.Commands, c)
 	}
-	fork := command("fork", "Fork a machine into a new child", "MACHINE CHILD", childArgCount,
+	fork := command("fork", "Fork a machine into a new child", "MACHINE CHILD", childArgCount, childArgCount,
 		func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			return r.forkMachine(ctx, c.Args().Get(0), c.Args().Get(1), c.String("idempotency-key"), waitFlags(c))
 		})
 	fork.Flags = lifecycleFlags()
-	restore := command("restore", "Restore a checkpoint into a new machine", "CHECKPOINT_ID CHILD", childArgCount,
+	restore := command("restore", "Restore a checkpoint into a new machine", "CHECKPOINT_ID CHILD", childArgCount, childArgCount,
 		func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			return r.restoreCheckpoint(ctx, c.Args().Get(0), c.Args().Get(1), c.String("idempotency-key"), waitFlags(c))
 		})

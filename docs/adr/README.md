@@ -15,3 +15,4 @@ supersede its record.
 | [0007](0007-prepared-guest-images.md) | Prepared images and explicit guest binding, startup and renewal |
 | [0008](0008-runtime-built-profiles.md) | Runtime-built profiles |
 | [0009](0009-attachment-owned-sessions.md) | Attachment-owned sessions and one client-informed responder |
+| [0010](0010-guest-machine-preparation.md) | Guest-run machine preparation and machine identity |

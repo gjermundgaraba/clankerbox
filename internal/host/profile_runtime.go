@@ -74,9 +74,13 @@ func (n *NativeRuntime) PrepareProfile(ctx context.Context, m Manifest, base Bas
 	return n.profileExec(ctx, m, "set -eu; umask 077; mkdir -p "+recipeDirectory+"; cd "+recipeDirectory+"; tar -xf -", archive, io.Discard)
 }
 
-// RunProfileSetup runs as root in the staged recipe directory, with live durable logs.
+// RunProfileSetup runs as root in the staged recipe directory, with live durable
+// logs. Setup ends by checking the machine configuration and logging why it is
+// invalid, so no machine from the image starts with a failed start run.
 func (n *NativeRuntime) RunProfileSetup(ctx context.Context, m Manifest, output io.Writer) error {
-	return n.profileExec(ctx, m, "cd "+recipeDirectory+" && export CLANKERBOX_RECIPE_DIR="+recipeDirectory+" && /bin/sh ./setup.sh 2>&1", nil, output)
+	script := "cd " + recipeDirectory + " && export CLANKERBOX_RECIPE_DIR=" + recipeDirectory +
+		" && /bin/sh ./setup.sh 2>&1 && " + guestBinaryPath + " check-machine 2>&1"
+	return n.profileExec(ctx, m, script, nil, output)
 }
 
 func profileArtifact(cfg Config, p model.Profile) string {

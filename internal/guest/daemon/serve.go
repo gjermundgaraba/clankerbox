@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -57,8 +58,7 @@ type Options struct {
 
 // Server owns one manager and replaceable guest network identity.
 type Server struct {
-	identity                *identity
-	manager                 *session.Manager
+	service                 *service
 	loader                  *vt.Loader
 	directory               *statefs.Dir
 	lock                    *statefs.Lock
@@ -93,7 +93,6 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 	if err != nil {
 		return nil, errors.Join(ErrAlreadyRunning, err)
 	}
-	s.identity = newIdentity(dir)
 	binding := opts.Binding
 	if binding == nil {
 		var raw []byte
@@ -106,24 +105,18 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 			return nil, err
 		}
 	}
-	if err = s.identity.rebind(*binding); err != nil {
-		return nil, err
-	}
 	s.loader, err = vt.NewLoader(context.WithoutCancel(ctx))
 	if err != nil {
 		return nil, err
 	}
-	s.manager, err = session.New(
-		ctx,
-		session.Config{
-			StateDir:      opts.Paths.State,
-			Loader:        s.loader,
-			Incarnation:   uuid.NewString(),
-			DaemonVersion: opts.Version,
-			MaxSessions:   opts.MaxSessions,
-			RingSize:      opts.RingSize,
-		},
-	)
+	s.service, err = newService(ctx, dir, session.Config{
+		StateDir:      opts.Paths.State,
+		Loader:        s.loader,
+		Incarnation:   uuid.NewString(),
+		DaemonVersion: opts.Version,
+		MaxSessions:   opts.MaxSessions,
+		RingSize:      opts.RingSize,
+	}, prepare(loadMachineConfig(machineConfigPath)), machineIDPath, *binding)
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +124,31 @@ func Start(ctx context.Context, opts Options) (*Server, error) {
 		return nil, err
 	}
 	good = true
+	return s, nil
+}
+
+// newService builds what the daemon serves, in the order admission depends on:
+// every session gets the image's variables, and the first binding prepares its
+// machine before any session can be admitted.
+func newService(
+	ctx context.Context,
+	dir *statefs.Dir,
+	sessions session.Config,
+	machine preparation,
+	idPath string,
+	binding rpcidentity.Binding,
+) (*service, error) {
+	sessions.Env = machine.env
+	manager, err := session.New(ctx, sessions)
+	if err != nil {
+		return nil, err
+	}
+	starts := newStarts(manager, machine, idPath, slog.Default())
+	s := &service{identity: newIdentity(dir, starts.adopt), manager: manager, starts: starts}
+	if err = s.identity.rebind(binding); err != nil {
+		manager.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -192,8 +210,8 @@ func (s *Server) release() {
 		_ = s.adminListener.Close()
 	}
 	s.handlers.Wait()
-	if s.manager != nil {
-		s.manager.Close()
+	if s.service != nil && s.service.manager != nil {
+		s.service.manager.Close()
 	}
 	if s.loader != nil {
 		s.closeErr = errors.Join(s.closeErr, s.loader.Close(context.Background()))
@@ -255,16 +273,16 @@ func (s *Server) listen(ctx context.Context, opts Options) error {
 	}
 	var err error
 	handlerPath, handler := clankerboxv1connect.NewSessionServiceHandler(
-		&service{identity: s.identity, manager: s.manager},
+		s.service,
 		connect.WithReadMaxBytes(requestMaxBytes),
 		connect.WithSendMaxBytes(eventMaxBytes),
 	)
 	mux := http.NewServeMux()
 	mux.Handle(handlerPath, handler)
 	s.public = boundedServer(s.track(rpctransport.WithWriteDeadline(mux)))
-	s.public.TLSConfig = s.identity.tlsConfig()
-	s.public.ConnContext = s.identity.connContext
-	s.public.ConnState = s.identity.connState
+	s.public.TLSConfig = s.service.identity.tlsConfig()
+	s.public.ConnContext = s.service.identity.connContext
+	s.public.ConnState = s.service.identity.connState
 	s.listener, err = (&net.ListenConfig{}).Listen(ctx, "tcp", opts.Listen)
 	if err != nil {
 		return err
@@ -278,7 +296,7 @@ func (s *Server) listen(ctx context.Context, opts Options) error {
 	if err != nil {
 		return err
 	}
-	s.admin = boundedServer(s.track(s.identity.adminHandler()))
+	s.admin = boundedServer(s.track(s.service.identity.adminHandler()))
 	go func() { s.failure <- s.public.Serve(tls.NewListener(s.listener, s.public.TLSConfig)) }()
 	go func() { s.failure <- s.admin.Serve(s.adminListener) }()
 	return nil

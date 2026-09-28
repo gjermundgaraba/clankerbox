@@ -19,16 +19,19 @@ import (
 
 type epochKey struct{}
 type identity struct {
-	mu          sync.Mutex
-	dir         *statefs.Dir
+	mu  sync.Mutex
+	dir *statefs.Dir
+	// adopt prepares a machine ID the daemon has not served before its
+	// binding admits a session, including at the first binding.
+	adopt       func(machineID string) error
 	binding     rpcidentity.Binding
 	config      *tls.Config
 	epoch       uint64
 	connections map[net.Conn]uint64
 }
 
-func newIdentity(dir *statefs.Dir) *identity {
-	return &identity{dir: dir, connections: make(map[net.Conn]uint64)}
+func newIdentity(dir *statefs.Dir, adopt func(machineID string) error) *identity {
+	return &identity{dir: dir, adopt: adopt, connections: make(map[net.Conn]uint64)}
 }
 
 func bindingConfig(b rpcidentity.Binding) (*tls.Config, error) {
@@ -80,7 +83,9 @@ func bindingConfig(b rpcidentity.Binding) (*tls.Config, error) {
 
 // rebind persists one complete binding before publishing it, and closes every
 // inherited transport while the admission lock is held. PTYs and manager stay
-// alive. Repeating the exact request does not disrupt new transports.
+// alive. A new machine ID is adopted first, so a failure leaves the previous
+// binding in place, and a retry after a failed write adopts it again. Repeating
+// the exact request does not disrupt new transports.
 func (i *identity) rebind(b rpcidentity.Binding) error {
 	cfg, err := bindingConfig(b)
 	if err != nil {
@@ -97,6 +102,11 @@ func (i *identity) rebind(b rpcidentity.Binding) error {
 	old, _ := json.Marshal(i.binding)
 	if i.config != nil && string(old) == string(raw) {
 		return nil
+	}
+	if b.MachineID != i.binding.MachineID {
+		if err = i.adopt(b.MachineID); err != nil {
+			return err
+		}
 	}
 	if err = i.dir.WriteFile("binding.json", raw); err != nil {
 		// Rename may have succeeded before directory fsync failed. Refuse all

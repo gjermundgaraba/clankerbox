@@ -20,7 +20,7 @@ func TestListenRejectsOversizedPathBeforeUnlink(t *testing.T) {
 	if err := os.WriteFile(path, []byte(retained), 0600); err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{identity: newIdentity(nil), closed: make(chan struct{})}
+	s := &Server{service: &service{identity: newIdentity(nil, nil)}, closed: make(chan struct{})}
 	t.Cleanup(func() { _ = s.Close() })
 	if err := s.listen(t.Context(), Options{Paths: Paths{Socket: path}, Listen: "127.0.0.1:0"}); err == nil {
 		t.Fatal("oversized socket path accepted")
@@ -39,7 +39,7 @@ func TestListenAdminUsesPrivateFilesystemSocket(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	const path = "admin?#%.sock"
-	s := &Server{identity: newIdentity(nil), failure: make(chan error, listenerCount), closed: make(chan struct{})}
+	s := &Server{service: &service{identity: newIdentity(nil, nil)}, failure: make(chan error, listenerCount), closed: make(chan struct{})}
 	t.Cleanup(func() { _ = s.Close() })
 	if err := s.listen(ctx, Options{Paths: Paths{Socket: path}, Listen: "127.0.0.1:0"}); err != nil {
 		t.Fatal(err)

@@ -73,6 +73,7 @@ clankerbox shell dev
 clankerbox shell dev -- git status
 tar -c src | clankerbox shell dev -- tar -x -C /root
 clankerbox sessions dev
+clankerbox sessions dev SESSION_ID
 clankerbox labels dev team=core purpose=review
 ```
 

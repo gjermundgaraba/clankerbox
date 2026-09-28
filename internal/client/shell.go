@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/sys/unix"
@@ -54,7 +53,7 @@ func (streams commandStreams) shell() *cli.Command {
 		"shell",
 		"Run a shell or command in a new session that ends with this command",
 		"MACHINE [-- COMMAND [ARG...]]",
-		-1,
+		1, -1,
 		func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			options, err := shellFlags(c)
 			if err != nil {
@@ -82,9 +81,6 @@ func (streams commandStreams) shell() *cli.Command {
 }
 
 func shellFlags(c *cli.Command) (shellOptions, error) {
-	if c.NArg() == 0 {
-		return shellOptions{}, fmt.Errorf("shell requires a machine; usage: %s %s", c.FullName(), c.ArgsUsage)
-	}
 	options := shellOptions{
 		machine: c.Args().First(),
 		argv:    c.Args().Tail(),
@@ -205,7 +201,7 @@ type shellSession struct {
 	pty      bool
 	terminal Terminal
 	input    *localInput
-	stream   *connect.BidiStreamForClient[v1.AttachmentRequest, v1.AttachmentEvent]
+	stream   *attachmentStream
 	// abandon ends the attachment from inside; inputFailure says why.
 	abandon      context.CancelFunc
 	inputFailure error
@@ -255,7 +251,7 @@ func (s *shellSession) run(ctx context.Context, open *v1.Open) (int, error) {
 		workers.Wait()
 	}()
 	if err := s.stream.Send(&v1.AttachmentRequest{Command: &v1.AttachmentRequest_Open{Open: open}}); err != nil {
-		return 0, s.streamError(err)
+		return 0, streamError(s.stream, err)
 	}
 	workers.Go(func() { s.pumpInput(ctx, typed) })
 	if s.terminal != nil {
@@ -276,10 +272,11 @@ func (s *shellSession) run(ctx context.Context, open *v1.Open) (int, error) {
 	return status, err
 }
 
-// streamError prefers the failure the server reported over the local symptom.
-func (s *shellSession) streamError(err error) error {
+// streamError prefers the failure the server reported over the local symptom
+// of a send on an attachment it already ended.
+func streamError(stream *attachmentStream, err error) error {
 	if errors.Is(err, io.EOF) {
-		if _, receiveErr := s.stream.Receive(); receiveErr != nil && !errors.Is(receiveErr, io.EOF) {
+		if _, receiveErr := stream.Receive(); receiveErr != nil && !errors.Is(receiveErr, io.EOF) {
 			return receiveErr
 		}
 	}

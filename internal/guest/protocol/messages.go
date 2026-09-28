@@ -5,6 +5,7 @@ package protocol
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -152,13 +153,8 @@ func (a CreateArgs) Validate() error {
 			return &model.Error{Reason: model.ReasonInvalid, Message: "argv entry"}
 		}
 	}
-	if len(a.Env) > MaxEnv {
-		return &model.Error{Reason: model.ReasonTooLarge, Message: "env"}
-	}
-	for k, v := range a.Env {
-		if k == "" || strings.ContainsRune(k, '\x00') || strings.ContainsRune(v, '\x00') || len(k)+len(v) > MaxArg {
-			return &model.Error{Reason: model.ReasonInvalid, Message: "env entry"}
-		}
+	if err := ValidateEnv(a.Env); err != nil {
+		return err
 	}
 	if a.Pipes {
 		if a.Cols != 0 || a.Rows != 0 {
@@ -167,6 +163,20 @@ func (a CreateArgs) Validate() error {
 		return nil
 	}
 	return validateGrid(a.Cols, a.Rows)
+}
+
+// ValidateEnv checks variables a session receives, whether a caller or the
+// machine's image supplies them.
+func ValidateEnv(env map[string]string) error {
+	if len(env) > MaxEnv {
+		return &model.Error{Reason: model.ReasonTooLarge, Message: "env"}
+	}
+	for k, v := range env {
+		if k == "" || strings.ContainsAny(k, "=\x00") || strings.ContainsRune(v, '\x00') || len(k)+len(v) > MaxArg {
+			return &model.Error{Reason: model.ReasonInvalid, Message: "env entry " + strconv.Quote(k)}
+		}
+	}
+	return nil
 }
 
 // SessionArgs identify one session.

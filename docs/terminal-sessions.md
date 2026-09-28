@@ -69,13 +69,17 @@ and endpoint-specific authorization.
 Each session owns a PTY, a child process, a Ghostty VT and a bounded output
 ring. The default command is `/bin/sh -l`. The process gets a fixed
 environment (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL=/bin/sh`,
-`TERM=xterm-256color`, `LANG=C.UTF-8`) followed by the caller's `env` entries,
-which win for duplicate keys. The default identity is `USER=LOGNAME=root` and
-`HOME` comes from root's account record; supported images use `/root` on Linux
-and `/var/root` on macOS. An empty cwd means that root home, a relative cwd is
-resolved against it, and the directory must already exist. The machine
-ID is not placed in the environment, because forked processes would keep the
-parent's value.
+`TERM=xterm-256color`, `LANG=C.UTF-8`), then the
+[profile's variables](profiles.md#machine-preparation), then the caller's `env`
+entries; a later value wins for a duplicate key, and a name may not contain `=`.
+The default identity is `USER=LOGNAME=root` and `HOME` comes from root's
+account record; supported images use `/root` on Linux and `/var/root` on
+macOS. An empty cwd means that root home, a relative cwd is resolved against
+it, and the directory must already exist. The machine ID is not placed in the
+environment, because forked processes would keep the parent's value; read
+`/var/lib/clankerbox/machine-id` instead. A profile's start command runs as the
+session labelled `clankerbox-start`. Both are described under
+[machine preparation](profiles.md#machine-preparation).
 
 Session state lives under the guest's private state directory as
 `sessions/<id>/manifest.json`, written atomically with fsync. A session ID is
@@ -312,7 +316,10 @@ guest then ends the session, at the latest when the transport's keepalive
 declares the connection dead.
 
 `clankerbox guest MACHINE` prints the guest description, and
-`clankerbox sessions MACHINE` lists sessions, including ended ones.
+`clankerbox sessions MACHINE` lists sessions, including ended ones, with their
+exit status or signal. `clankerbox sessions MACHINE SESSION_ID` shows one
+session and, once it has ended, the final screen the guest retains for it. A
+live session's screen is a snapshot for mirrors, which the CLI does not decode.
 
 ## Host routing
 

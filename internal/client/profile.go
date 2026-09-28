@@ -176,14 +176,14 @@ func (a *API) ProfileBuild(ctx context.Context, id string) (model.ProfileBuild, 
 
 func (streams commandStreams) addProfileCommands(root *cli.Command) {
 	cmd := streams.command
-	publish := cmd("publish", "Upload a recipe and build a revision", "DIRECTORY", 1, publishProfileCommand)
+	publish := cmd("publish", "Upload a recipe and build a revision", "DIRECTORY", 1, 1, publishProfileCommand)
 	publish.Flags = []cli.Flag{&cli.StringFlag{Name: "build-id", Usage: "Build ID; an existing ID resumes its original build (generated if omitted)"}, &cli.BoolFlag{Name: "wait", Usage: "Wait for the build result"}, &cli.DurationFlag{Name: "timeout", Value: time.Hour, Usage: "Maximum build wait", Validator: func(d time.Duration) error {
 		if d <= 0 {
 			return errors.New("--timeout must be positive")
 		}
 		return nil
 	}}}
-	init := cmd("init", "Create a recipe directory for an installed base", "DIRECTORY", 1, initProfileCommand)
+	init := cmd("init", "Create a recipe directory for an installed base", "DIRECTORY", 1, 1, initProfileCommand)
 	init.Flags = []cli.Flag{
 		&cli.StringFlag{Name: "host", Required: true, Usage: "Host with the installed base"},
 		&cli.StringFlag{Name: "base", Required: true, Usage: "Installed base ID"},
@@ -191,17 +191,17 @@ func (streams commandStreams) addProfileCommands(root *cli.Command) {
 	}
 	group := &cli.Command{Name: "profile", Usage: "Publish and manage runtime-built profiles", Commands: []*cli.Command{init, publish}}
 	group.Commands = append(group.Commands,
-		cmd("list", "List current profiles", "", 0, func(ctx context.Context, r commandRunner, _ *cli.Command) error {
+		cmd("list", "List current profiles", "", 0, 0, func(ctx context.Context, r commandRunner, _ *cli.Command) error {
 			return r.listResources(ctx, "profiles")
 		}),
-		cmd("build", "Inspect build status", "BUILD_ID", 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
+		cmd("build", "Inspect build status", "BUILD_ID", 1, 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			b, err := r.api.ProfileBuild(ctx, c.Args().First())
 			if err != nil {
 				return err
 			}
 			return r.output(b)
 		}),
-		cmd("cancel", "Cancel a build", "BUILD_ID", 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
+		cmd("cancel", "Cancel a build", "BUILD_ID", 1, 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			requestCtx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 			v, err := r.api.profile.CancelProfileBuild(requestCtx, connect.NewRequest(&v1.CancelProfileBuildRequest{BuildId: c.Args().First()}))
 			cancel()
@@ -214,8 +214,8 @@ func (streams commandStreams) addProfileCommands(root *cli.Command) {
 			}
 			return r.output(b)
 		}),
-		cmd("logs", "Read build output", "BUILD_ID", 1, profileLogsCommand),
-		cmd("revisions", "List retained revisions", "PROFILE_ID", 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
+		cmd("logs", "Read build output", "BUILD_ID", 1, 1, profileLogsCommand),
+		cmd("revisions", "List retained revisions", "PROFILE_ID", 1, 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			requestCtx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 			v, err := r.api.profile.ListProfileRevisions(requestCtx, connect.NewRequest(&v1.ListProfileRevisionsRequest{ProfileId: c.Args().First()}))
 			cancel()
@@ -232,19 +232,19 @@ func (streams commandStreams) addProfileCommands(root *cli.Command) {
 			}
 			return r.output(&out)
 		}),
-		cmd("delete", "Delete a profile name", "PROFILE_ID", 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
+		cmd("delete", "Delete a profile name", "PROFILE_ID", 1, 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			requestCtx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 			_, err := r.api.profile.DeleteProfile(requestCtx, connect.NewRequest(&v1.DeleteProfileRequest{ProfileId: c.Args().First()}))
 			cancel()
 			return err
 		}),
-		cmd("delete-revision", "Delete an unreferenced prepared revision", "REVISION_ID", 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
+		cmd("delete-revision", "Delete an unreferenced prepared revision", "REVISION_ID", 1, 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			requestCtx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 			_, err := r.api.profile.DeleteProfileRevision(requestCtx, connect.NewRequest(&v1.DeleteProfileRevisionRequest{RevisionId: c.Args().First()}))
 			cancel()
 			return err
 		}),
-		cmd("bases", "List deployed host bases", "HOST_ID", 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
+		cmd("bases", "List deployed host bases", "HOST_ID", 1, 1, func(ctx context.Context, r commandRunner, c *cli.Command) error {
 			requestCtx, cancel := context.WithTimeout(ctx, apiRequestTimeout)
 			v, err := r.api.profile.ListBases(requestCtx, connect.NewRequest(&v1.ListBasesRequest{HostId: c.Args().First()}))
 			cancel()

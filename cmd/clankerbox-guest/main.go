@@ -89,6 +89,13 @@ func newCommand(stdin io.Reader, _ io.Writer) *cli.Command {
 					return daemon.Rebind(ctx, daemon.PathsIn(c.String("state-dir")), raw)
 				},
 			},
+			{
+				Name:  "check-machine",
+				Usage: "Check the image's machine configuration the daemon reads when it starts",
+				Action: func(context.Context, *cli.Command) error {
+					return daemon.CheckMachineConfig()
+				},
+			},
 		},
 	}
 }
