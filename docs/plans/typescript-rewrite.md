@@ -101,7 +101,7 @@ packages/
 tools/
   release/              # bundle, prepared images, notices, SEA build + signing (replaces scripts/release, images/*.py)
   work-runs/            # run/list/clean with Effect Scope teardown (replaces scripts/work_runs.py)
-  oxlint/               # anti-slop copy
+  oxlint/               # anti-slop plugin, installed from upstream by the install-anti-slop skill
 tests/live/             # gated live acceptance project (replaces tests/*.py, protocol/test/*)
 images/                 # recipes and package locks (data only)
 ```
@@ -195,6 +195,7 @@ Product decisions are under [Decisions and open items](#decisions-and-open-items
 - **delete** `DesiredState`. Capacity becomes "not stopped, or has an active operation".
 - **collapse** Unknown/ObservationStale/ObservationError/Prepared/Preparing into `observation: Option<{state, prepared, at}>` plus `lastError`.
 - **keep** "an unknown machine stays reserved". Without it, Tart could be asked to start a third VM.
+- **collapse** reservations into one rule (D5): a resource is reserved while it has a pending operation or is `unknown`, and a fork source stays reserved while it has an `unknown` child. This deletes the `reconciliation_required` error.
 - **collapse** the profile, revision, build and upload tables into `builds` plus `profiles(name → build_id)`. A revision is a succeeded build, and the upload ID is the build ID. This deletes `ProfileRevision`/`ListProfileRevisions` and the `recipe_uploads` table, including its expiry, sweeper and claim checks.
 - **collapse** the build worker into the wake-driven queue model: one status type and no 200 ms idle polling. **keep** a separate fiber for builds; they can run for an hour and would otherwise block lifecycle work.
 - **delete** checkpoint tombstones, the `deleting`/`deleted` statuses, the restore-on-failure branch, and the unused list filters (`include_deleted`, labels).
@@ -215,6 +216,7 @@ Product decisions are under [Decisions and open items](#decisions-and-open-items
 - **keep** writing the phase before each native effect. Without it a RAM child gets cold-booted twice, or `create` adopts a foreign VM.
 - **collapse** the "one exception" Linux branch-failure rule into a general rule for every native failure. The operation fails and tombstones only when the inventory has no child, the supervisor has no live process and the source is intact; otherwise it is unresolved.
 - **keep** the proof behind that rule. Failing while a VMM might still be writing the shared store would corrupt the source's family.
+- **collapse** the way out of an unresolved operation into `stop` and `delete` (D5). The host admits both on an `unknown` machine, and both must cope with leftover native state, including a live orphan VM process. Today the host refuses every later operation on such a machine, delete included.
 - **collapse** re-inspection: each runtime operation returns a confirmed post-state, and lifecycle trusts it while it holds the mutation semaphore. Today a delete inspects four times and a start three.
 - **collapse** the supervisor matrix into `Supervisor.launch(label, argv, env)` with two implementations:
   - Linux: `systemd-run --user`, with no unit files and no daemon-reload.
@@ -243,14 +245,17 @@ Product decisions are under [Decisions and open items](#decisions-and-open-items
 - **collapse** PTY and pipe sessions into a tagged union: `{kind:"pty", cols, rows, endOnDetach} | {kind:"pipe"}`. This removes pipe special cases from about ten sites and double grid validation.
 - **collapse** the final screen into a unary `getSession → {session, screen?}` backed by `screen.txt` written at exit. This deletes `View`/`ViewChunk`/`Opened.view` and the "absent vs empty view" rule, and the screen now survives a daemon restart.
 - **delete** resume (D3): the output ring, resume cursors, incarnations, start offsets, `Opened.cut`/`start_offset` bookkeeping for resume and the UNAVAILABLE mode. Every reattach sends an engine snapshot; keep `expected_engine_digest`.
-- **collapse** input offsets, `Ack` and control `sequence`s into backpressure (D1). There is one `Input` in flight per attachment, batched up to the session budget, and the guest holds the reply until the budget frees. Output uses a credit window.
-- **delete** create idempotency: the 24 h horizon, 1 h skew and fingerprint. The only client never retries, so a known ID is a conflict.
+- **collapse** input offsets, `Ack` and control `sequence`s into backpressure (D1). There is one `Input` in flight per attachment, of up to 4 MiB. The guest writes every byte and then replies, with no budget and no queue. Output uses a credit window.
+- **collapse** create idempotency to the session ID alone: an unknown ID starts the session, and a known ID opens the existing one, whatever its state. Clankerdesk resends a create while its row is `pending` (`terminals.ts:292`), so a known ID must not be a conflict. This deletes the fingerprint, the 24 h horizon, the 1 h skew, `created_at` in the create arguments, and the `conflict` and `expired` errors for create. Two cases are accepted:
+  - The same ID with different arguments opens the old session. IDs are client-generated, so this is a client bug.
+  - A retry after the guest has forgotten an ended session (7 days) starts a fresh one.
 - **delete** the `STARTING` status (write `running` before spawning), fsync on every resize and offset change, `reply_overflow`, `GuestDescription.user`, the `binding.json` fallback, unused `MaxSessions`/`RingSize`/`Paths.Log`/`Paths.PID`, and the ~220 lines of `protocol.Session` duplication.
 - **collapse** the start-command machinery: it is `create(args, {attach: none})`, and an invalid `machine.json` writes an exited record whose screen is the error, with no fake `printf; exit 1` script.
-- **delete** Go-only workarounds: the `Fd()` avoidance helpers, relay deadlines, the wazero construction mutex, and `guardedKill` with start times (a synchronous `reaped` flag in the exit callback replaces it).
+- **delete** Go-only workarounds: the `Fd()` avoidance helpers, relay deadlines, and the wazero construction mutex.
+- **collapse** `guardedKill` and its per-OS start-time lookups into an exit flag. The flag is set in the exit callback and checked immediately before each signal, in the same synchronous step; the waits between HUP, TERM and KILL let queued exit callbacks run first. This is an identity guard, not a Go workaround, and it leaves a known gap: node-pty reaps on a native thread before the JavaScript callback runs. A wrong signal would need the PID counter to wrap fully inside that gap. We accept that: a start-time check needs `/proc` parsing on Linux and `ps` or native code on macOS, and is itself check-then-signal. Pipe sessions are exact, because Node's `child_process` reaps on the event-loop thread.
 - **keep** registering the subscriber before launch and the atomic cut. Without them, `echo hi` output is lost. In TS, reserve the session ID synchronously before any await.
 - **keep** the 2 s idle drain after exit. Without it, `sh -c 'sleep 999 &'` never reports exit.
-- **keep** one ordered writer with a separate reply budget. Without it, a DA/CPR reply can land inside a paste.
+- **keep** one write lock per session, with a separate bounded queue for terminal replies. Without it, a DA/CPR reply can land inside a paste.
 - **keep** the lossy tail plus Gap for PTY output. Without it, a slow attachment stalls the program. A Gap tells the client to reattach and take a fresh snapshot. Pipe sessions stay lossless.
 - **keep** guest-owned `end_on_detach`, with ping on every hop. Without it, a killed CLI leaves its shell running.
 - **keep** HUP → TERM → KILL end escalation.
@@ -258,7 +263,16 @@ Product decisions are under [Decisions and open items](#decisions-and-open-items
 
 ### CLI, dev and tooling
 
-- **collapse** dev teardown: stop the controller, have the host stop every VM and confirm none remain, then remove the owned roots. This deletes the teardown journal, the one-use token and the private controller. **keep** the "confirm none remain" check, so disks are never deleted under running VMs.
+- **collapse** dev teardown into two separate commands:
+  - `dev stop`: the host stops every VM and confirms none is running, then the host service stops. Everything on disk is kept.
+  - `dev destroy`: `dev stop`, then remove the owned roots.
+
+  This deletes the teardown journal, the one-use token, the private controller and the dependency-ordered deletion graph. Three requirements are loosened:
+  - Destroy doesn't delete machines and checkpoints through the API. Every Tart VM and the smolvm store live under the host root, so removing the root is safe once nothing is running.
+  - Stop doesn't settle operations or cancel builds first. It is a crash-safe shutdown, and the host journal handles interrupted work on the next start.
+  - The allow-list of known entries becomes an owner marker: destroy removes a root only if it carries the marker written at init, and init refuses a non-empty directory without one.
+
+  **keep** the "confirm none running" check, so disks are never deleted under running VMs.
 - **collapse** dev auth into `@gjermundgaraba/clankerauth-dev`. This deletes token generation, token files, the 32-byte/0600 checks, the bearer readiness probe and `teardown-token`.
 - **collapse** the two dev state roots into one. The default `--state-dir` is a fixed `~/.clankerbox/dev` rather than a per-project hash. The short runtime root is keyed by a hash of the state dir. **keep** the short path; macOS socket paths are limited.
 - **delete** bundle relocation repair, because units point at `process.execPath` of a fixed install.
@@ -305,11 +319,14 @@ Product decisions are under [Decisions and open items](#decisions-and-open-items
       survived; Input and Resize were answered 59/59 times; a dead peer was detected
       in about 6 s. Throughput was 674/431/285 MiB/s at +0/4/12 ms round trip, versus
       391/83/38 with RPC acks.
-    - **Input:** one unary `Input` in flight, batched up to the session's input
-      budget (4 MiB for pipe sessions, 256 KiB for PTY sessions, the same as the Go
-      guest). The guest holds each reply until the budget frees, so input is never
-      refused and needs no offsets or sequence numbers. This measured 114–122 MiB/s
-      at +4/12 ms. `Resize` and `CloseInput` are unary.
+    - **Input:** one unary `Input` in flight, of up to 4 MiB for both session
+      kinds (a schema limit). The handler takes the session's write lock, writes
+      every byte, then replies. There is no budget and no queue, so input is never
+      refused and needs no offsets or sequence numbers; a reply means the bytes
+      reached the kernel. `Resize` and `CloseInput` are unary.
+    - **Input evidence:** the transport measured 114–122 MiB/s at +4/12 ms with
+      4 MiB batches. The spike guests replied at once, so the held reply itself is
+      designed but not yet exercised. Phase 3 tests it against a real PTY and pipe.
     - **Guard:** the contract package carries a test that pins this rc.118 behaviour
       (acks on offer, the fixed ping). Re-run it at every Effect bump.
     - **Built in:** interrupts, typed errors and SchemaBinary serialization, all on
@@ -360,9 +377,26 @@ Product decisions are under [Decisions and open items](#decisions-and-open-items
 - **D4. Dev host under launchd/systemd. Decided:** keep it, so VMs survive Ctrl-C
   and a closed terminal. It gets smaller through the `Supervisor.launch` collapse
   and the fixed install path.
-- **D5. Operation "unresolved". Decided:** `pending | succeeded | failed` with
-  `uncertain: true`. The controller stops resubmitting every 5 s, matching ADR 0001
-  (inspect, don't retry). The reconcile hint goes away until a reconcile action exists.
+- **D5. Operation "unresolved". Decided:** the status is
+  `pending | succeeded | failed | unresolved`, and the reservation sits on the
+  resource. This replaces an earlier `failed` plus `uncertain: true` encoding: a
+  consumer that ignored the flag would have treated an unknown outcome as a plain
+  failure.
+  - **Statuses:** all but `pending` are final. `running` merges into `pending`.
+  - **No answer from the host:** the operation stays `pending`. The controller
+    dispatches it again when the host is reachable, and the host answers from its
+    journal by operation ID. The 5 s resubmit loop goes.
+  - **The host can't confirm the result:** the operation ends `unresolved`, and the
+    machine it touched becomes `unknown`.
+  - **Reservation:** a resource is reserved while it has a pending operation or is
+    `unknown`. A fork source stays reserved while it has an `unknown` child.
+  - **Way out:** an `unknown` machine admits only `stop` and `delete`. Either one
+    drives it to a confirmed state and releases it; `stop` keeps the disk. This is
+    the explicit reconcile action of ADR 0001 (inspect, don't retry), with no new
+    API. Today there is no way out: the host refuses every later operation,
+    delete included.
+  - **Not yet checked:** every host failure path. Host `stop` and `delete` must
+    cope with leftover native state; phase 4 verifies this per runtime.
 - **D6. Labels. Decided: delete them.** Nothing in clankerbox reads labels. The
   list filter and `clankerbox labels` have no caller. Clankerdesk's one use, a
   workspace ownership check (`terminals.ts:558`), moves to its own allocations table.
@@ -475,7 +509,13 @@ Each phase ends with `vp run ready` green. The live tests run where hardware all
    host, session unary) and the session RpcGroup (D1).
 3. **Guest.** Session manager, PTY and pipe sessions, VT and the query filter,
    machine preparation, and the stream endpoint. Tested in-process against real
-   PTYs.
+   PTYs and pipes. The tests must cover held input (D1):
+   - A child that never reads stdin: replies are held and memory stays flat.
+   - Detach or eviction interrupts a held `Input`.
+   - Ending the session works while an `Input` is held.
+   - `Resize` is answered while an `Input` is held.
+   - A terminal query reply never lands inside a batch.
+   - A repeated create with a known ID opens the existing session.
 4. **Host.**
    - Journal, lifecycle, the smolvm and Tart runtimes, the supervisor, builds and
      checkpoints.
@@ -496,7 +536,8 @@ Each phase ends with `vp run ready` green. The live tests run where hardware all
    - `clankerbox.ts`, `guest-terminal.ts` and `guest-mirror.ts` (snapshot-only reconnect)
    - the ownership check in `terminals.ts`, which moves from labels to its allocations table
    - checkpoint deletion (`checkpoints.ts:155`): `status === "deleted"` becomes `not_found`
-   - operation status (`checkpoint-client.tsx:190`): `unresolved` becomes `failed` with `uncertain: true` (D5)
+   - operation status (D5): `unresolved` stays a status and `running` merges into `pending`. The sites are `checkpoint-client.tsx:190`, `machine-recovery.ts:96`, `checkpoints.ts:231` and `machines.ts:363`. The close path can now stop and delete an `unknown` machine instead of refusing.
+   - session create: drop `created_at`, and drop `conflict` and `expired` from the "could not start" set (`terminals.ts:66-72`). The pending-retry loop stays as it is.
    - error-reason branches, updated to the tagged errors
    - the real-clankerbox harness, updated for the new dev mode and config files
 
@@ -521,6 +562,8 @@ Each phase ends with `vp run ready` green. The live tests run where hardware all
   - `shell` interactive, piped (binary-safe) and `--tty`
   - `end_on_detach` on a killed CLI
   - host and controller restart keeping VMs and PTYs
+  - `stop` and `delete` settling an `unknown` machine after an interrupted operation
+  - `dev stop` keeping disks and checkpoints, and `dev destroy` removing them
   - `--json` error classification
 - Clankerdesk's real-clankerbox suite passes against the TS release before merge.
 - Every live run goes through the `work-runs` tool, following AGENTS.md teardown
