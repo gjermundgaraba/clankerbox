@@ -4,3 +4,8 @@
 /.clankerbox/
 __pycache__/
 *.pyc
+
+# Spike dependencies and build output
+spikes/**/node_modules/
+spikes/**/dist/
+spikes/**/out/

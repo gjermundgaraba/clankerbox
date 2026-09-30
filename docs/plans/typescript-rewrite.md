@@ -41,7 +41,12 @@ both implementations ship.
 - **Live test machines:**
   - this Apple Silicon Mac: smolvm on macOS, and Tart
   - `ssh clanker@37.27.63.112`: Linux/amd64 with KVM, smolvm on Linux, and the
-    linux-amd64 binary
+    linux-amd64 binary. This is the production personal-cloud Linux host. You've
+    approved using it while its controller is down.
+    - Work stays under `~/clankerbox-rewrite/`.
+    - Never touch the production `~/clankerbox`, its `clankerbox-host.service` or
+      its VMs.
+    - Never restart `user@1000`.
 - **Reusable VM seeds:** reused from the main checkout's `.work/inputs`
   (`smolvm-1.19.0-images`, `tart-2.38.0`, `tart-local`), always on private clones.
 - **This plan:** deleted in the final commit before the cut-over merge.
@@ -89,7 +94,8 @@ packages/
   contract/             # Schemas, ActionGroups (machine, profile, host, session), session RpcGroup, errors
   controller/           # admission, queue, capacity, profile catalog, host client, session relay
   host/                 # journal, lifecycle, runtimes (smolvm, tart), supervisor, builds, guest link
-  guest/                # session manager, pty, pipe sessions, Ghostty VT, machine preparation
+  guest/                # session manager, pty, pipe sessions, machine preparation
+  terminal-core/        # published: pinned Ghostty VT WASM + wrapper, shared with Clankerdesk
   cli/                  # ActionCliClient commands + shell/sessions/dev
   state/                # private-dir rules, sqlite open, atomic replace, owner lock
 tools/
@@ -237,7 +243,7 @@ Product decisions are under [Decisions and open items](#decisions-and-open-items
 - **collapse** PTY and pipe sessions into a tagged union: `{kind:"pty", cols, rows, endOnDetach} | {kind:"pipe"}`. This removes pipe special cases from about ten sites and double grid validation.
 - **collapse** the final screen into a unary `getSession → {session, screen?}` backed by `screen.txt` written at exit. This deletes `View`/`ViewChunk`/`Opened.view` and the "absent vs empty view" rule, and the screen now survives a daemon restart.
 - **delete** resume (D3): the output ring, resume cursors, incarnations, start offsets, `Opened.cut`/`start_offset` bookkeeping for resume and the UNAVAILABLE mode. Every reattach sends an engine snapshot; keep `expected_engine_digest`.
-- **collapse** input offsets, `Ack` and control `sequence`s into backpressure (D1). Each control is a unary call, with one in flight per attachment, and the guest holds the reply until the per-session input budget frees.
+- **collapse** input offsets, `Ack` and control `sequence`s into backpressure (D1). There is one `Input` in flight per attachment, batched up to the session budget, and the guest holds the reply until the budget frees. Output uses a credit window.
 - **delete** create idempotency: the 24 h horizon, 1 h skew and fingerprint. The only client never retries, so a known ID is a conflict.
 - **delete** the `STARTING` status (write `running` before spawning), fsync on every resize and offset change, `reply_overflow`, `GuestDescription.user`, the `binding.json` fallback, unused `MaxSessions`/`RingSize`/`Paths.Log`/`Paths.PID`, and the ~220 lines of `protocol.Session` duplication.
 - **collapse** the start-command machinery: it is `create(args, {attach: none})`, and an invalid `machine.json` writes an exited record whose screen is the error, with no fake `printf; exit 1` script.
@@ -277,27 +283,44 @@ Product decisions are under [Decisions and open items](#decisions-and-open-items
 
 ## Decisions and open items
 
-- **D1. Terminal stream transport. Decided: Effect RPC (a).**
+- **D1. Terminal stream transport. Decided: Effect RPC with a credit-windowed `attach` stream** (spikes S3 and S3b, `spikes/s3-transport/RESULTS-stream.md`).
 
   Input offsets and acks exist because the guest *refuses* input when its bounded,
   per-session budget is full (`internal/guest/session/writer.go:79`). They are not
   there to fix ordering, since today's Connect stream is already ordered. Whatever
   replaces them must apply backpressure instead of refusing, on any transport. A
   session has at most one live attachment ([Feature scope](#feature-scope)).
-  - **(a) Chosen: Effect RPC over sockets, with one control in flight per
-    attachment.**
-    - `attach` is a streaming RPC. Input, Resize and CloseInput are unary calls; the
-      client sends the next only after the previous returns. The guest holds each
-      response until the per-session budget frees, which replaces refusal plus
-      offsets.
-    - Server→client chunks use RPC stream acks, which are on for the socket-server,
-      WebSocket and stdio protocols in rc.118. Buffering therefore stays bounded
-      through relays that pass bytes through without decoding.
-    - Built in: ping, interrupts, typed errors and SchemaBinary serialization. It
-      runs on the same Effect HTTP server as effect-actions.
-    - Cost: one round trip per input batch, invisible when typing. Spike S3 measures
-      its effect on pipe throughput.
-  - **(b) Fallback: hand-written duplex frames** over a WebSocket and exec stdio,
+  - **Chosen: Effect RPC with a credit window.**
+    - **Output:** `attach` is a real server→client stream with **Effect's RPC stream
+      acks turned off**, a one-line protocol override on client and server. The guest
+      sends output only while it holds credit. The client grants one credit per
+      consumed message with a fire-and-forget unary `Credit` call, so the socket
+      reader never blocks and pings keep flowing. Memory is bounded at window × 512
+      KiB.
+    - **Why:** in rc.118 the client acks a chunk when it is queued, not when it is
+      consumed (`RpcClient.ts:569-584`). A stalled consumer then blocks the only
+      socket reader, and the hard-coded 5 s ping (`:1218-1239`) drops the
+      connection. WebSocket-level pings are blocked the same way.
+    - **Measured over 3 local hops, with a 60 s consumer stall:** the stream
+      survived; Input and Resize were answered 59/59 times; a dead peer was detected
+      in about 6 s. Throughput was 674/431/285 MiB/s at +0/4/12 ms round trip, versus
+      391/83/38 with RPC acks.
+    - **Input:** one unary `Input` in flight, batched up to the session's input
+      budget (4 MiB for pipe sessions, 256 KiB for PTY sessions, the same as the Go
+      guest). The guest holds each reply until the budget frees, so input is never
+      refused and needs no offsets or sequence numbers. This measured 114–122 MiB/s
+      at +4/12 ms. `Resize` and `CloseInput` are unary.
+    - **Guard:** the contract package carries a test that pins this rc.118 behaviour
+      (acks on offer, the fixed ping). Re-run it at every Effect bump.
+    - **Built in:** interrupts, typed errors and SchemaBinary serialization, all on
+      the same Effect HTTP server as effect-actions. The relays still need
+      WebSocket keepalive (S3).
+  - **Rejected, with evidence:**
+    - long-poll `Read` (it is polling)
+    - a large client buffer (memory is unbounded)
+    - acks on take (the API doesn't allow it)
+    - relying on WebSocket pings (the reader blocks them too)
+  - **(b) Not needed: hand-written duplex frames** over a WebSocket and exec stdio,
     with a credit window. You own framing, credit in both directions, keepalive,
     half-close and error propagation. Effect's WebSocket writer ignores send
     backpressure, so credit must be end to end.
@@ -310,8 +333,19 @@ Product decisions are under [Decisions and open items](#decisions-and-open-items
   - This deletes the host CA, per-epoch certificates, renewal, bindings, rebinding,
     the per-user port registry and the guest network listener. A RAM child inherits
     nothing that authenticates it.
-  - It is gated on spike S3. Fallback: a guest network listener with an Ed25519
-    mutual challenge per binding.
+  - Spike S3 confirmed it on smolvm (macOS and Linux) and on Tart:
+    - echo round trips of 0.2–0.9 ms and bulk transfer of 70–250 MiB/s
+    - idle streams survive 11+ minutes
+    - streams survive a host-service restart and a RAM fork of their source
+  - **One exec process per attachment.** The first call costs about 150–215 ms on
+    smolvm and about 560 ms on Tart. A host restart drops attachments; guest
+    sessions persist.
+  - **New-machine call after every fork or restore.** A RAM child inherits the
+    source's exec'd relays as live orphans. The host immediately tells the child's
+    guest daemon it is a new machine, and the daemon closes every existing
+    connection. This is the same trigger as machine preparation (ADR 0010).
+  - **Tart:** `tart exec` runs as `admin`, so the relay into the root-only socket
+    runs under `sudo -n` (the prepared image allows it).
 - **D3. Reconnect catch-up for mirrors (Clankerdesk). Decided: snapshot only.**
   - **Chosen: snapshot only.** Delete resume, meaning the output ring, resume
     cursors, incarnations, start offsets and UNAVAILABLE retries. Every reconnect
@@ -336,9 +370,14 @@ Product decisions are under [Decisions and open items](#decisions-and-open-items
   keep it there, so admission works while a host is offline.
 - **D8. smolvm store layout. Decided:** one layout on both OSes, with templates
   staged once per runtime digest at startup.
-- **D9. macOS Local Network permission. Open; spike S4 decides.** Go embeds
-  `Info.plist` through the linker; a prebuilt Node binary can't. The choice is an
-  `.app` wrapper or re-signing with an embedded plist.
+- **D9. macOS Local Network permission. Resolved by S4.**
+  - Go needed it because the Mac host dialled Tart guests over vmnet; D2 removes
+    that.
+  - The only remaining local-network connection is the host reading clankerauth's
+    key list, and only if the issuer resolves to a LAN address.
+  - If it does, ship darwin as an `.app` wrapper; codesign binds its `Info.plist`.
+    Embedding a plist into the Mach-O breaks dyld.
+  - Check personal-cloud's route to the issuer in phase 9.
 
 ## Spikes (first, before building packages)
 
@@ -370,6 +409,60 @@ Product decisions are under [Decisions and open items](#decisions-and-open-items
    - the controller and a host both verify one multi-resource key through `Resource.make`
    - WebSocket `admit` and `watch` on the attach stream
    - checked against the SDK's `/testing` fake issuer and `clankerauth-dev`
+
+## Spike results
+
+The spikes ran on 2026-09-30. The code and full notes are under `spikes/`, and are
+deleted in the scaffold phase once folded in.
+
+- **S1, node-pty in the SEA: pass** on darwin-arm64, linux-arm64 and linux-amd64.
+  - `pty.node` (and `spawn-helper` on macOS) ship as SEA assets. At runtime they
+    are extracted to a 0700 directory and loaded with `process.dlopen`.
+  - Use only node-pty's native `fork` and `resize`. The JS wrapper forces
+    TERM/PWD, decodes UTF-8 and has an unbounded write queue.
+  - Reads use a read-only `tty.ReadStream`. Writes use `fs.writeSync` with an
+    EAGAIN timer backoff, because a TTY write stream blocks the event loop. On
+    Linux, EOF arrives as `EIO`.
+  - The guest daemon must never be PID 1, because Node can't reap orphans. Verify
+    each runtime's init in phase 3.
+- **S2, Ghostty VT in Node: pass.**
+  - One compile per process and one instance per terminal; about 7.4 MiB per
+    terminal with full scrollback.
+  - Replies are synchronous. The query filter and colour profile work.
+  - Snapshots restore exactly into Clankerdesk's engine, including split escape
+    sequences, split UTF-8 and the alternate screen.
+  - Snapshots are up to about 3.5 MB, so the attach protocol sends them in chunks.
+  - History can drift after a restore once scrollback evicts, so never compare
+    snapshot bytes for equality.
+  - Final screens keep the full scrollback, which you chose; that is up to about
+    680 KB.
+  - Guest memory never shrinks, so keep a per-guest session cap.
+  - `erasableSyntaxOnly` stays on.
+  - **Decided:** `packages/terminal-core` is published and shared with Clankerdesk,
+    so the Ghostty lockstep holds by construction.
+- **S3, exec-channel transport:** D2 passes (see D2). The relays need WebSocket
+  ping and timeout on the controller and host hops, so a silently vanished client
+  still fires `end_on_detach`. D1's RPC stream stalls under a slow consumer; see
+  D1: a credit window fixes it, and long-poll was rejected.
+- **S4, SEA build and signing: pass.**
+  - `node --build-sea` builds all three targets from one machine, given each
+    target's official Node binary. No postject is needed.
+  - Binaries are about 144–151 MB, and start in about 42 ms.
+  - darwin needs the hardened runtime with `allow-jit` and
+    `disable-library-validation`, the latter for the extracted `pty.node`.
+  - Linux guest images must ship glibc ≥ 2.34 (for `pty.node`), `libstdc++`,
+    `libatomic` and `libgcc_s`. Ubuntu 26.04 has them.
+  - Pin the Node archives by SHASUMS256.
+- **S5, clankerauth 0.11.0: pass (10/10).**
+  - A newly minted key is refused for up to about a minute, until the next
+    key-list read. Dev mode and live tests mint keys before the services first
+    read their list.
+  - Revocation takes about a minute for requests and about two for a watched
+    socket.
+  - Dev mode embeds `startDisposableIssuer` in-process, with `dataDir` and a fixed
+    port so keys survive restarts.
+  - Tests use the SDK's `startFakeIssuer` with a `Clock` override.
+  - Rate limiting belongs to clankerbox.
 
 ## Phases
 

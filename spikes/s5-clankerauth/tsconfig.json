@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "noEmit": true, "strict": true, "target": "es2024", "module": "nodenext", "moduleResolution": "nodenext",
+    "allowImportingTsExtensions": true, "verbatimModuleSyntax": true, "erasableSyntaxOnly": true,
+    "skipLibCheck": false, "types": ["node"]
+  },
+  "files": ["test.ts"]
+}

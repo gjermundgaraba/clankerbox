@@ -1,0 +1,55 @@
+{
+  "node": "v26.8.2",
+  "wasm": {
+    "bytes": 813202,
+    "compileMs": 2.5
+  },
+  "terminals": {
+    "count": 48,
+    "scrollbackRows": 9404,
+    "outputBytesEach": 828200,
+    "instantiateMs": {
+      "median": 0.41,
+      "max": 2.09
+    },
+    "fill10kLinesMs": {
+      "median": 2.3,
+      "max": 7.7
+    },
+    "maxSingle64KiBWriteMs": 2.03,
+    "rssMiB": {
+      "before": 98.2,
+      "after": 452.1,
+      "perTerminal": 7.4
+    },
+    "wasmLinearMemoryMiB": {
+      "total": 366,
+      "perTerminal": 7.6
+    }
+  },
+  "sizes": {
+    "snapshotBytes": 2709219,
+    "snapshotWithAltScreenBytes": 2711028,
+    "plainTextBytes": 678743,
+    "vtRepaintAllExtrasBytes": 854030
+  },
+  "worstCase200ColsStyledEveryCell": {
+    "scrollbackRows": 840,
+    "wasmLinearMemoryMiB": 34.4,
+    "snapshotBytes": 3469344,
+    "vtRepaintAllExtrasBytes": 4657194,
+    "blockingMs": {
+      "maxWriteOf100Lines": 4.3,
+      "snapshotEncode": 5.4,
+      "restoreIntoClankerdeskEngine": 21.1,
+      "vtRepaintFormat": 18.2
+    }
+  },
+  "blockingMs": {
+    "snapshotEncode": 3.8,
+    "plainFormat": 8.4,
+    "vtRepaintFormat": 7,
+    "restoreIntoGuestEngine": 7.6,
+    "restoreIntoClankerdeskEngine": 6.5
+  }
+}

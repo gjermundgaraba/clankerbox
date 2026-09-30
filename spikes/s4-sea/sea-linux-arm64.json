@@ -1,0 +1,1 @@
+{ "main": "main.cjs", "output": "out/linux-arm64/clankerbox", "executable": "/Users/gg/.herdr/worktrees/clankerbox/rewrite-to-effect/spikes/s4-sea/out/node/node-v26.8.2-linux-arm64/bin/node", "disableExperimentalSEAWarning": true, "useSnapshot": false, "useCodeCache": false }
