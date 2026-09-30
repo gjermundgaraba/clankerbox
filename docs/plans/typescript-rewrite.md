@@ -46,6 +46,36 @@ both implementations ship.
   (`smolvm-1.19.0-images`, `tart-2.38.0`, `tart-local`), always on private clones.
 - **This plan:** deleted in the final commit before the cut-over merge.
 
+### Test machine footprint and final cleanup
+
+Everything the rewrite creates on a test machine is removed when the work ends.
+This applies to both the Linux machine and this Mac. The rules:
+
+- **One owned root per machine.**
+  - Linux: `~/clankerbox-rewrite/`. The pre-existing `~/clankerbox` is not ours;
+    never touch it.
+  - Mac: this worktree's `.work/`.
+
+  Runs, scratch, Node toolchains, SEA builds, bundles, VM clones and dev
+  environments all live under that root. Nothing goes into shared locations such
+  as a global npm prefix or `/usr/local`.
+- **Every native resource is named and recorded.** Resources carry a
+  `clankerbox-rewrite` prefix: systemd user units, launchd jobs, smolvm machines,
+  Tart VMs and listening ports. Each one is recorded in its run's evidence, per
+  AGENTS.md, and a run's teardown stops its resources before scratch is deleted.
+- **Machine changes are kept in a ledger.** Every change outside the owned root
+  goes into `CLEANUP.md` under that root. So far there is one: `clanker` was added
+  to the `kvm` group on 2026-09-30. At the end, you decide whether each change is
+  reverted.
+- **Final cleanup, the last step of the whole effort:**
+  1. Stop every recorded process, unit, job and VM.
+  2. Confirm none remain, by name prefix and by the recorded IDs.
+  3. Delete both owned roots and any seed clones.
+  4. Walk the ledger with you.
+  5. Report what was removed, and anything deliberately kept, with size and reason.
+
+  Reusable seeds in the main checkout's `.work/inputs` are not ours to delete.
+
 ## Target layout
 
 ```
@@ -383,6 +413,8 @@ Each phase ends with `vp run ready` green. The live tests run where hardware all
    checkpoints on both hosts, deploy the TS release with clankerauth keys and host
    TLS server certificates, and republish the profiles (`linux-dev`, `mac-xcode`,
    `gg-linux-dev`).
+10. **Clean up the test machines,** following
+    [Test machine footprint and final cleanup](#test-machine-footprint-and-final-cleanup).
 
 ## Validation
 
