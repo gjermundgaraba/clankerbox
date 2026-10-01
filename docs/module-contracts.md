@@ -78,7 +78,8 @@ history, control admission, final records, which output sequences the terminal
 answered, and the lifetime of a session created to end with its attachments. Sessions run as root on both guest operating
 systems; see the [guest trust model](terminal-sessions.md).
 Rebinding a copied guest replaces its routing identity while keeping the session
-manager. Machine storage uses private copies rather than shared writable backing.
+manager. Machine storage uses private copies rather than shared writable backing,
+except that RAM fork children share their source's writable lower.
 
 An attachment has one control reader, one response writer and one bounded event
 queue. `Opened` comes first, acknowledgements may interleave with the bootstrap

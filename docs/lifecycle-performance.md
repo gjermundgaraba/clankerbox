@@ -56,9 +56,11 @@ benchmark specifically exercises RAM-capable Linux profiles, not Tart disk forks
 ## Follow-up decisions
 
 **Shared immutable lower root — not enabled.** The pinned engine/agent has
-persistent overlay support, but readiness fallback can write through `/oldroot`
-to the lower directory. Before sharing, move all boot markers and other mutable
-runtime state out of the lower image, enforce read-only access, then qualify
+persistent overlay support, but the guest can write the lower directory through
+`/oldroot`: smolvm mounts it read-write over virtiofs and has no read-only
+option. The per-machine copy is therefore an isolation boundary, not only a
+workaround for boot markers, and RAM fork children still share their source's
+copy. Before sharing, smolvm needs a read-only lower, then qualify
 concurrent boots, retained starts, source deletion, forks and independent restores
 on both host platforms. Do not just point `SMOLVM_AGENT_ROOTFS` at the bundle.
 
