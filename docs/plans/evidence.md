@@ -30,6 +30,7 @@ Checked 2026-10-01. Each row says what was actually exercised.
 | Tart | ≥ 2.40.1 | Audited in source at 2.40.1; S3 ran on 2.38.0. |
 | Softnet | 0.24.0 (needs macOS 26) | Audited. It runs its own DHCP server and advertises the gateway as DNS. |
 | tart-guest-agent | ≥ 0.15.0 | Audited. Its vsock sockets are close-on-exec. |
+| boat.dev API | v1 (`https://boat.dev/api/v1`) | Two spikes on 2026-10-02 against a trial account, calling the API directly (L:boat). Docs and `openapi/boat-v1.yaml` read the same day. |
 | Node | 26.10.0 | SEA built and run on darwin-arm64 and linux-x64 (R:q-sea-min). |
 | effect, @effect/platform-node | 4.0.0 (stable, published 2026-10-01 03:11 UTC) | A 666 KB Effect 4.0.0 bundle ran inside a SEA (R:q-sea-min). Nothing else yet. |
 | effect-actions | 0.9.0 (published 2026-10-01) | Not yet. Earlier work used 0.8.0. |
@@ -299,6 +300,108 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
 - **Cirrus images:** `cirruslabs/macos-image-templates` publishes
   `macos-{golden-gate,tahoe,sequoia,sonoma}-base` and `…-xcode:N`, the base with
   Xcode N and Flutter (its README, checked 2026-10-02).
+
+## boat claims (API v1)
+
+`D:` is docs.boat.dev and `docs.boat.dev/openapi/boat-v1.yaml`, read
+2026-10-02. Everything else was observed in L:boat, on a trial account with
+`type: small` and `noEnv: true`.
+
+- **Account limits (D:, observed):**
+  - The trial allows 2 active sandboxes and 5/25/75 starts per
+    minute/hour/day. Paid plans raise these (100 active on the $20 plan).
+  - Create, fork and resume each count as a start, and refused requests
+    counted too (4 → 6 per hour after two 429s).
+  - The trial refuses `ttlSeconds: null` with 400 `trial_auto_stop_required`
+    and caps the TTL at 2 h. Create and resume default to a 1 h TTL, and a
+    fork always does unless the call passes `ttlSeconds` (D:).
+- **Create (observed):** 202 in about 0.2 s, ready 0.1–2.2 s later. The machine
+  had booted 28 minutes before, from boat's pool. The body has no name field;
+  `PATCH {name}` sets a display name afterwards. `GET /sandboxes` filters by
+  state only.
+- **Refusals (D:, observed):**
+  - 429 `limit_reached` at the active limit, with and without `failFast`, and
+    nothing created.
+  - `failFast` answers within about 1.5 s, and when no machine is ready it
+    returns 503 `no_ready_machine` with nothing started (D:; not seen, the pool
+    was warm).
+  - A create or fork that finds no machine later ends in state `cancelled`;
+    the sandbox is reported once, then 404 (D:).
+  - 429 also covers `rate_limited` and `daily_limit_reached`; a size the plan
+    doesn't allow is 403 `trial_machine_class_not_allowed` (D:).
+- **Idempotency-Key (D:, observed):** on create and fork. Same key and body
+  return the same sandbox, also after it is ready. Another body is 409
+  `idempotency_key_reused`; a retry during creation is 409
+  `idempotency_in_progress`. Keys last 24 h, and a create that failed before
+  the sandbox existed releases its key within about 2 minutes (D:).
+- **noEnv (observed):** no GitHub credentials, `gh` config or model logins in
+  the guest, and `holdsCreatorLogins: false`. The guest still has an
+  `ASCII_TOKEN`, which D: says is confined to that sandbox.
+- **Access (D:, observed):**
+  - `POST /sshkey` authorizes a public key for `user`. Its key survives fork,
+    resume and named-snapshot deploys in `~/.ssh/authorized_keys`.
+  - `ip` is IPv6 or IPv4. `sshEndpoint` is a public IPv4 `host:port` relay to
+    port 22, set only when the machine has no IPv4 of its own (D:). All seven
+    machines had an IPv6 `ip` and a relay on a 190xx port.
+  - SSH streams stdin, returns the exit code, and a 650 s session through the
+    relay ran to the end. ssh joins argv into one string.
+  - `user` has passwordless `sudo -n`.
+- **Command API (D:, observed):** `POST /sandboxes/{id}/commands` runs a bash
+  string as `user` in `/home/user`. It returns `exitCode`, `signal`, `stdout`,
+  `stderr` and `timedOut`. `timeoutSeconds` is 1–600, and a timeout kills the
+  command (exit 143). `detached` returns a process ID to poll. There is no
+  stdin.
+- **Identity (observed):** every create, fork, resume and deploy is a new
+  machine, with new SSH host keys, hostname, machine-id and endpoint (seven of
+  seven). Snapshots exclude host keys and hostname (D:).
+- **Guest image (observed):** Ubuntu 24.04.4, x86_64, with systemd, sshd,
+  Docker, Node, Python and preinstalled coding agents. `ufw` is active. The
+  image is boat's and not digest-pinned. Sizes are fixed: `small`
+  2 vCPU/4 GB/12 GB, `default` 4/8/50, `large` 8/16/125, `xlarge` 16/32/251
+  ($100+ plan) (D:). `small` showed 3916 MiB.
+- **Firewall (D:):** boat's agent listens on TCP 8911, and its HTTPS routes use
+  a WireGuard tunnel. A guest rule that blocks either marks the sandbox
+  degraded.
+- **Snapshots (D:, observed):**
+  - Taken about once a minute while the sandbox runs, plus a final one on stop.
+    A stop whose snapshot fails is refused and the sandbox keeps running.
+  - Observed carried: `/home/user`, `/etc`, `/usr`, `/opt`, `/srv`, `/root`,
+    `/var/lib` (including the dpkg database) and `/var/opt`. Observed dropped:
+    `/tmp`, `/var/tmp`, `/var/cache`, `/var/log`, processes, and `ufw` rules.
+    D: lists a narrower set (`/var/lib` only for Docker volumes and the apt
+    database).
+  - Enabled systemd units start again after a restore.
+- **Fork (observed):**
+  - A fork of a running sandbox comes from its latest background snapshot. A
+    file written and synced 0.56 s before the fork was missing.
+  - Waiting until a snapshot attempt that began after the write had
+    `completed` (`lastSnapshotAttemptAt`, `lastSnapshotStatus`,
+    `snapshotCompletedAt`) took 40.8 s, and that fork had the file.
+  - The source keeps running. A fork is ready in 2.2–4.2 s, and a fork of a
+    stopped sandbox holds everything up to the stop.
+- **Stop and resume (observed):** stop took 2.3–18.9 s to `archived`. Resume
+  was ready in 2.4 s, on a new node.
+- **Lazy restore (observed):**
+  - At `ready`, the system binds (`/home/user`, `/etc`, `/usr`, `/opt`,
+    `/root`, `/srv`) are mounted. `/var/lib` and `/var/opt` land a few seconds
+    later, and enabled units start after that.
+  - 0.4 s after a resume reported ready, `/var/lib`, the dpkg record and the
+    unit's run were missing. The unit started 4 s after ready.
+  - `/var/lib/ascii-lazy/sys-done` was present whenever they were, but it is
+    undocumented. The documented signal is the `sandbox.hydrated` webhook
+    (D:), which needs a public receiver.
+- **Named snapshots (D:, observed):**
+  - Saving from a running sandbox took 126.7 s, and from a stopped one 0.2 s.
+  - A named snapshot is independent of its source: a deploy after the source
+    was deleted had every file.
+  - Names are account-wide, and an account keeps at most 10 (D:).
+- **Delete (D:, observed):**
+  - `DELETE` needs `X-Ascii-Confirm-Delete: <id>`. It returns 202 with an
+    operation, and the sandbox answers 404 within 0.2 s.
+  - The operation then purges data and sat `blocked` / `waiting_for_uploads`
+    with an `expectedBy` 6 h out.
+  - A repeated DELETE returns the same operation. Named snapshots survive
+    their sandbox's deletion (D:).
 
 ## Spike results
 
