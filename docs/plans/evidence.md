@@ -16,6 +16,9 @@ Notation:
   its driver scripts beside it. The run evidence (logs, status JSON) is under
   `.work/runs/` on this Mac and `~/clankerbox-rewrite/runs/` on the Linux host,
   until the final cleanup.
+- `L:<spike>` is a result file from after the tree was emptied, kept locally
+  only: `.work/spike-results/<spike>/RESULTS.md`, with its drivers. It is
+  deleted at the final cleanup, so this file carries the numbers.
 
 ## Dependency versions
 
@@ -23,7 +26,7 @@ Checked 2026-10-01. Each row says what was actually exercised.
 
 | Dependency | Pinned | Exercised |
 | --- | --- | --- |
-| smolvm | 1.22.0, plus a one-line `smolvm-bin` patch | Upstream 1.22.0 tarballs, unmodified: on this Mac (unprivileged) and on the Linux host (unprivileged and as root). The patch has not been compiled at 1.22.0; it applies with offsets only. |
+| smolvm | 1.22.2, upstream tarballs unmodified | 1.22.0 on this Mac (unprivileged) and on the Linux host (unprivileged and as root); 1.22.2 on this Mac (unprivileged). The Linux runs are not yet repeated on 1.22.2. |
 | Tart | ≥ 2.40.1 | Audited in source at 2.40.1; S3 ran on 2.38.0. |
 | Softnet | 0.24.0 (needs macOS 26) | Audited. It runs its own DHCP server and advertises the gateway as DNS. |
 | tart-guest-agent | ≥ 0.15.0 | Audited. Its vsock sockets are close-on-exec. |
@@ -209,13 +212,14 @@ Checked 2026-10-01. Each row says what was actually exercised.
 ## The smolvm patch
 
 The old `runtime.patch` touches 4 files with 7 hunks (R:q-runtime-patch). The
-whole patch applies to v1.22.0 with offsets only. Per part:
+whole patch applies to v1.22.0 with offsets only. **None of it is needed by the
+rewrite**, so clankerbox ships upstream tarballs unmodified. Per part:
 
 | Part | Verdict | Reason |
 | --- | --- | --- |
 | `crates/smolvm-agent/src/main.rs`: the persistent-root overlay mounts with `index=off,redirect_dir=off,metacopy=off`, plus a unit test | **drop** with stock images | It only matters for a mutable OS in the agent's persistent root, which was the old custom Ubuntu base. With stock images, workload writes go to the container overlay on ext4, which already uses `index=off` (S@1.22.0:crates/smolvm-agent/src/storage.rs:4545). |
 | `src/agent/manager.rs`: a regression test | **drop** | It only asserts upstream behaviour, unconditional since 1.19. |
-| `src/agent/state_probe.rs`: `has_frozen_fork_state` uses `restart_blocking_dependent_clones` instead of `db.dependent_clones` | **keep** in `smolvm-bin`, send upstream | Start lets a source with retained live-fork children cold-restart (S@1.22.0:src/agent/manager.rs:1828, fork.rs:658-690). The state probe counts every child (state_probe.rs:100-127). The restarted source then reads `frozen` (state_probe.rs:57-58), and `stop` refuses (vm_common.rs:2413-2422). |
+| `src/agent/state_probe.rs`: `has_frozen_fork_state` uses `restart_blocking_dependent_clones` instead of `db.dependent_clones` | **not needed**: it only affects `machine branch`, which clankerbox never calls (fork is a checkpoint + restore) | Still unfixed at 1.22.2. Start lets a source with retained live-fork children cold-restart (S@1.22.0:src/agent/manager.rs:1828, fork.rs:658-690). The state probe counts every child (state_probe.rs:100-127). The restarted source then reads `frozen` (state_probe.rs:57-58), and `stop` refuses (vm_common.rs:2413-2422). |
 | `src/cli/vm_common.rs`: `SMOLVM_STOP_REQUIRE_ACK` | **drop** | It does nothing without the env var, and it blocks the last-resort kill that "stop ends in a confirmed state" needs. |
 
 **ESTALE, on the Linux host with unmodified 1.22.0** (R:q-estale-linux):
@@ -354,6 +358,132 @@ whole patch applies to v1.22.0 with offsets only. Per part:
   30922:22 -p NEW:22`, then `start`, worked for both.
 - **Unprivileged, a guest could write the shared agent rootfs.** That is accepted
   for dev.
+
+**Fork as checkpoint + restore, single-file checkpoints** (L:fork-restore-mac,
+L:fork-restore-linux, 1.22.0, 2026-10-02). The procedure: `machine checkpoint` of
+the running source, `create --from`, port swap, `start`, then delete the
+checkpoint.
+
+- **Works on both OSes, unprivileged and as root.**
+  - Every child continued the source's RAM state: the same ticker process,
+    uptime and `boot_id`.
+  - Every child got a new SSH host key, machine-id and hostname. The inherited
+    sshd served the new key on OpenSSH 9.6p1.
+  - Children survived deletion of the checkpoint, then stop and cold start.
+- **No lineage:** with children kept (one running, one stopped), the source
+  cold-started to `running`, then stopped and deleted cleanly. The children
+  kept working. The same steps with `machine branch` reproduced `frozen`.
+- **Root uids:** children got fresh uids (2000001–2000003); a branch child
+  shares its source's (2000000) because it maps the source's memfd
+  (S@1.22.0:src/process.rs:1564-1610).
+- **Cost against `machine branch`:**
+
+  | | checkpoint + restore | `machine branch` |
+  | --- | --- | --- |
+  | Time per fork | 4.2–6 s | 0.65–1.5 s |
+  | Source pause, plain source | 0.44–0.92 s; 3.08 s for a 4 GiB guest after writing 1 GiB | 40–110 ms |
+  | Source pause, `--branchable` source | 39–112 ms (Mac), about 0.27 s (Linux) | — |
+  | Disk per child | 186–188 MiB (Linux), 514–522 MiB (Mac) | about 1 MiB (Linux) |
+  | Memory per child | Unprivileged: about +250 MiB `Shmem` (its own RAM copy). Root: reclaimable page cache. | 38–45 MiB |
+
+  - Only restores of the *same* checkpoint as root share RAM pages. Forks don't,
+    because each fork has its own checkpoint.
+  - On a plain source, the first capture pulls the whole guest RAM resident,
+    because the deferred save needs file-backed RAM. A `--branchable` source
+    has it and doesn't grow.
+  - smolvm marks every restored machine branchable.
+- **Single-file restore cache lease:** each restored machine holds a
+  `.pack-shared` pointer to `vms/_shared/<crc>/`. Deleting that directory by
+  hand made every later `pack prune` fail with "No such file or directory". On
+  macOS, a single-file restore extracts into the child's own data dir, so there
+  is no shared cache.
+- **Scopes:** restores under `SMOLVM_VM_USE_SCOPE=1` work.
+- **Unknown names:** `machine stop` on a name smolvm doesn't know returns "vm not
+  found" but leaves an empty `vms/<hash>/` directory.
+- **Clocks:** the source's guest clock falls about 0.48 s behind per capture,
+  until smolvm's 60-second time sync corrects it.
+
+**Restore tmpfs** (L:fork-restore-linux, root):
+
+- **What stages in tmpfs:** only `machine pause` + `machine resume`, never
+  `create --from`. As root, every restore still creates an empty
+  `/dev/shm/smolvm-restore` (S@1.22.0:src/portable_checkpoint.rs:55-82).
+- **What stays there:** a resumed VM keeps its RAM image in `Shmem` (+70 MiB
+  here) until it exits, and saves about 75 ms per resume.
+- **`SMOLVM_RESTORE_TMPFS=0`:** the directory is never created, and
+  `create --from`/`start` cost the same (0.765/0.147 s against 0.785/0.150 s).
+
+**Re-running `start` on a running machine** (L:fork-restore-mac):
+
+- `/etc/clankerbox/start` run via `exec --detach` (0.04–0.06 s) or plain `exec`
+  (0.05–0.12 s) starts sshd. Running it again leaves one listener, and after a
+  `pkill` it brings ssh back.
+- Processes started with `exec --detach` outlive the exec and the host `smolvm`
+  command (checked at 5 s and 30 s).
+- `pgrep -x sshd` also matches an open session's process. With a session open and
+  the listener killed, a script guarded by it did nothing.
+
+## smolvm 1.22.1 and 1.22.2
+
+Released 2026-10-01 and 2026-10-02. Release notes and `git diff v1.22.0 v1.22.2`:
+
+- **`state_probe.rs`, `fork.rs` and the agent's `main.rs`/`storage.rs` are
+  unchanged,** so the fork-state, ESTALE and `systemd-resolved` findings hold.
+- **RAM prefetch on restored starts** (#1497, #1502): the RAM file is read into
+  the page cache in the background during boot. The first commands after a
+  restore no longer fault RAM in from disk: about 0.6 s → 0.05 s for 2 GiB
+  (S@1.22.2:src/portable_checkpoint.rs, `prefetch_restore_memory`).
+- **`create --from … --keep-identity`** skips the identity re-mint ("a resumed or
+  rewound machine keeps its own"), for rewinding a machine as itself.
+- **libkrunfw moved to a guest kernel with conntrack marks** (#1493, #1494). The
+  runtime digest and the corresponding-source commit change.
+- The rest is `serve`/API work (mTLS client CN, closed API input, egress
+  amendments) and `machine update --outbound-localhost-only`, none of which
+  clankerbox uses.
+
+**`machine branch` depth limit** (L:smolvm-1222-mac):
+
+- **The limit:** `MAX_FORK_DISK_CHAIN_DEPTH = 32` and
+  `MAX_FORK_LINEAGE_DEPTH = 32` (S@1.22.2:src/agent/fork.rs:27, 1019).
+- **Each single-child branch adds one backing layer** to the source's storage
+  and overlay disks.
+  - Branches 1–32 took 0.25–0.31 s each.
+  - The 33rd failed in 0.05 s with nothing changed: "…/storage.qcow2 already has
+    32 qcow2 backing layers; the safe limit is 32. Stop and pack this machine
+    into a new root before creating another live fork".
+- **What doesn't reset it:** deleting the children, and stopping and
+  cold-starting the source. Checkpoint + restore doesn't flatten either: a
+  restore of a depth-32 source came back at depth 32, in both checkpoint modes.
+- **Batches:** a `--count` batch adds one layer per batch. Batches need
+  `smolvm-branch-ready` running in the source.
+- **The only reset:** stop (0.23 s), `pack create --from-vm` (1.44 s), then
+  `create --from` the pack (2.97 s) and start (0.65 s). That loses RAM and keeps
+  the old identity.
+- **The fork-state bug is still present at 1.22.2.**
+
+**Fork through the checkpoint store** (L:smolvm-1222-mac, 1 vCPU / 1 GiB, with
+the source started `--branchable`):
+
+- **Source pause:** 39 / 170 / 86 ms.
+- **Time per fork:** 1.63 / 1.90 / 2.38 s. The first exec ran 0.06 s after start.
+  A `machine branch` of the same machine took 0.3 s.
+- **Dedup:** the store grew 199 / 271 / 306 MiB, against 195 / 409 / 651 MiB as
+  standalone files. The 2nd capture saved 34% and the 3rd 53%, 38% overall.
+- **No lease:** a machine restored from a store checkpoint has no `.pack-shared`
+  file, no hard links into the store, and no symlinks.
+- **Delete and prune are safe:** after deleting every checkpoint directory and
+  running `checkpoint-prune`, the children kept running, answered exec and ssh,
+  and survived stop and cold start with their new identity.
+- **History:** with the default `--history 32`, deleting older checkpoints and
+  pruning reclaimed 0 MiB, and deleting the last one reclaimed 769 MiB. With
+  `--history 0`, each checkpoint's own objects are freed when it is deleted.
+- **Restore cache:** `vms/_restore-checkpoints` (3 entries, about 1.5 GiB real)
+  survived every smolvm command, including deleting every machine. Children
+  kept working after it was removed. `--restore-cache-entries 0` disables it.
+- **Disk per restored child:** 547–1112 MiB, of which the RAM file is
+  276–618 MiB and stays until the machine is deleted.
+- **Identity:** the SSH host key, machine-id and hostname are re-minted by
+  default.
 
 ## Defects in the Go implementation not to port
 
