@@ -88,6 +88,10 @@ and answer them again at every bump of that dependency:
   demonstrated common paths are shared (journal, setup, preparation, port
   allocation, supervision); fork, checkpoint and access stay runtime-specific
   where that is smaller.
+- **One runtime per host process.** Two runtimes on one machine are two host
+  processes, each with its own host ID, so the host never picks a runtime per
+  machine. A new provider is a new runtime module behind its own host, plus a
+  placement label.
 - **Guest contract:** setup and preparation over the runtime's exec. No
   clankerbox binary runs in a guest.
 - **Guest access:** each machine declares the guest ports it exposes. The host
@@ -407,8 +411,8 @@ listed to keep them from being ported):
 
 ### Setup and preparation
 
-Both are host-side scripts run as root over `Runtime.exec`, as part of the
-action. On Tart they run through `sudo -n` (see [Runtimes: Tart](#runtimes-tart)).
+Both are host-side scripts run over `Runtime.exec`, which runs as root in the
+guest (see [Other host rules](#other-host-rules)), as part of the action.
 
 **Setup** runs once, at create, after the first boot and before preparation:
 
@@ -426,19 +430,20 @@ create, start, fork and restore. In order:
 
 1. **Identity.** Each machine row gets a random `instance` value when it is
    inserted. Compare `/var/lib/clankerbox/instance` with it. On a mismatch:
-   - Re-mint the SSH host keys, if the guest has any, unless smolvm has just
-     restored this machine from a `ram` checkpoint: smolvm re-mints them on
-     disk on every such restore, and a smolvm fork is one. Everything else
-     needs it: a Tart clone, a machine restored from a `disk` checkpoint (a pack
-     keeps the source's keys), and a machine created from a base, whose keys
-     came from the image or from setup.
+   - Re-mint the SSH host keys, if the guest has any, on every runtime. A Tart
+     clone, a machine restored from a `disk` checkpoint (a pack keeps the
+     source's keys) and a machine created from a base (keys from the image or
+     from setup) need it. smolvm already re-mints on a `ram` restore, and so on
+     a fork; doing it again there keeps preparation free of runtime cases and
+     of a smolvm behaviour that every bump would have to re-check. P3 measures
+     what it adds to a fork.
    - Restart sshd if it is running. A sshd carried over in RAM can keep serving
      the old key until restarted (seen on OpenSSH 10.0).
    - Write `/var/lib/clankerbox/machine-id` (the ID), then the instance value
      **last**, so a crash before it repeats these steps.
    - The instance, not the ID, is compared because names are reused: deleting
-     `a` and restoring a checkpoint of `a` as `a` must still restart sshd after
-     smolvm's re-mint.
+     `a` and restoring a checkpoint of `a` as `a` must still re-mint and
+     restart sshd.
 2. **Start.** Run `/etc/clankerbox/start`, if it exists, on *every* activation,
    with plain exec (not `--detach`), and wait for it.
    - The contract: it is idempotent, it daemonizes whatever it launches (sshd
@@ -669,14 +674,17 @@ Two rules for every VM job:
   that a create, fork or restore has already made then stays, with
   `action.status = failed`. P11 checks what that refusal looks like.
 - **Guest agent:** stock Cirrus images run tart-guest-agent ≥ 0.15.0 as a
-  per-user LaunchAgent, which starts after auto-login. Setup and preparation
-  wait for `tart exec` to answer after boot, then run through
-  `sudo -n /bin/bash -s`. A base without passwordless sudo fails the create
-  loudly. P3 checks both on a current image.
+  per-user LaunchAgent, which starts after auto-login. Tart's `Runtime.exec`
+  waits for `tart exec` to answer after boot, then runs its command through
+  `sudo -n`. A base without passwordless sudo fails the create loudly. P3
+  checks both on a current image. The forwarder calls `tart exec` directly,
+  since `nc` needs no root.
 
 ### Other host rules
 
-- **One exec per runtime:** `Runtime.exec(machine, argv, stdio)`.
+- **One exec per runtime:** `Runtime.exec(machine, argv, stdio)` runs as root in
+  the guest. Each runtime gets there its own way: smolvm's exec already runs as
+  root, and Tart's adds `sudo -n`. Setup and preparation have no runtime cases.
 - **State dir:** a directory is ours if it holds our SQLite database. Init
   creates the database in one transaction and refuses a non-empty directory
   without one. There is no separate marker file and no temp-directory rename.
@@ -827,7 +835,7 @@ through the checkpoint store.
 | --- | --- |
 | **P1. Published ports on the tailnet.** On the Linux host as root (ask for approval first): a stock-image machine with `-p` on the tailnet address and `SMOLVM_EGRESS_FLOOR=strict`, then ssh, scp and rsync from another tailnet machine. Also over the tailnet: a fork (store checkpoint + restore) and two restores beside a running source, each with its swapped port and new host key, all under `SMOLVM_VM_USE_SCOPE=1` and on 1.22.2. Loopback and `127.0.0.2` already work, and restores under scopes do too. | guest access, or its fallback |
 | **P2. Tart forwarder.** Listener → `tart exec -i` → guest `nc 127.0.0.1 22`: ssh and rsync throughput, idle survival, and whether accepting on the tailnet interface needs Local Network permission. | guest access on Tart |
-| **P3. Setup and preparation.** Setup on a stock `ubuntu:24.04` image over plain exec: installing openssh-server with `--no-install-recommends` and a key, and how long it takes. On a current Cirrus image: how long until `tart exec` answers after boot, with no manual login, and does `sudo -n true` succeed? On smolvm, does a child started with `setsid -f` outlive the exec (sshd's own daemonizing already does)? Re-mint on Tart clones and on machines restored from a pack. How do ssh sessions and daemonized processes pick up the guest's environment (`/etc/environment` through PAM)? How long does a realistic `start` (sshd plus a clankercreds sync) take, to set its timeout? Re-running `start` on a running smolvm machine already works. | setup, preparation, Tart bases |
+| **P3. Setup and preparation.** Setup on a stock `ubuntu:24.04` image over plain exec: installing openssh-server with `--no-install-recommends` and a key, and how long it takes. On a current Cirrus image: how long until `tart exec` answers after boot, with no manual login, and does `sudo -n true` succeed? On smolvm, does a child started with `setsid -f` outlive the exec (sshd's own daemonizing already does)? Re-mint on Tart clones and on machines restored from a pack, and the time a second re-mint adds to a smolvm fork. How do ssh sessions and daemonized processes pick up the guest's environment (`/etc/environment` through PAM)? How long does a realistic `start` (sshd plus a clankercreds sync) take, to set its timeout? Re-running `start` on a running smolvm machine already works. | setup, preparation, Tart bases |
 | **P5. Pins.** Re-run S5 on clankerauth-sdk 0.12.0, and smoke-test effect-actions 0.9.0 on Effect 4.0.0 inside a SEA, including one unary call that runs past 300 s, to find any timeout of its own. | phase 1, long calls |
 | **P8. Disk sizing and install.** Which disk holds workload writes for a stock-image machine? Do sizes above or below smolvm's 20/10 GiB templates need host `resize2fs`? Can machines drop the overlay size and the compact templates? With smolvm installed under a prefix, does a stale `~/.smolvm` shadow its templates, and does the upstream wrapper find its libraries? | disk sizing, smolvm install |
 
