@@ -1,9 +1,10 @@
 # TypeScript/Effect rewrite: plan
 
-Status: planned, 2026-10-01. Every design decision below is closed. The phase-0
-spikes still gate details of guest access and disk sizing. The evidence behind
-the decisions is in [evidence.md](evidence.md). Both files are deleted in the
-last commit before the merge.
+Status: planned 2026-10-01, revised 2026-10-02 after two plan reviews. Every
+design decision below is closed. The phase-0 spikes still gate details of guest
+access, preparation and disk sizing. The evidence behind the decisions is in
+[evidence.md](evidence.md). Both files are deleted in the last commit before the
+merge.
 
 clankerbox is rewritten from scratch in TypeScript on Effect 4, as a clean break.
 No persisted state is migrated. Production is destroyed and redeployed at
@@ -38,15 +39,17 @@ there and don't restore it. evidence.md cites it as `G:path:line` at `c112847`.
 | Scope | The `clankerbox` binary (CLI and host), the SDK with its client library, release tooling and live tests. There is no controller and no guest daemon. |
 | Runtime | Node 26.10.0 (the latest patch at each release), shipped as Node SEA single-executable binaries. |
 | Effect | `effect` and `@effect/platform-node` **4.0.0**, the first stable release, published 2026-10-01. Before using `effect/http` and `effect/cli` (top-level modules in rc.118), check where they live at 4.0.0. |
-| Contract | [effect-actions](https://github.com/gjermundgaraba/effect-actions) **0.9.0** for every call. All calls are unary HTTP. Input is closed: undeclared fields are refused. |
+| Contract | [effect-actions](https://github.com/gjermundgaraba/effect-actions) **0.9.0** for every call. All calls are unary HTTP, and a mutation replies when its action has finished. Input is closed: undeclared fields are refused. |
 | SDK | `packages/contract` (Schemas, action groups, errors and the client library) is published as the next major of `@gjermundgaraba/clankerbox-sdk`, versioned with the binaries. `effect` is a peer dependency, `^4.0.0`, so a consumer has a single copy and Schema identity holds. There is no separate `sdk-v*` tag and no pairing table. |
 | Auth | clankerauth **0.12.0** offline API keys and JWTs on the host API, through `@gjermundgaraba/clankerauth-sdk` and `Resource.make`. Each host is one resource, and one client key can carry grants on several hosts. At 0.11.1 the behaviour was: an unknown key triggers a key-list read (at most one per 5 s), revocation takes about a minute, and the last list stays valid for 24 hours during an issuer outage. Re-check this at 0.12.0 (P5). Tests use the SDK's `/testing` fake issuer, and dev mode uses `clankerauth-dev`. |
 | Network | Hosts and clients share the operator's Tailscale tailnet (personal-cloud work, outside this plan). No hop uses TLS: the tailnet encrypts and authenticates, and clankerauth authorizes each request. A tailnet ACL should limit who can reach the host API port. |
-| State | SQLite through `node:sqlite`, on each host. No migrations, and no client-side state beyond configuration. |
-| Production | personal-cloud runs 0.11.0 with a Linux smolvm host (Hetzner) and a Mac Tart host. At cut-over, every 0.11.0 machine and checkpoint is destroyed, the new release is deployed, and the profiles are captured again. The Linux host runs smolvm as root. |
+| State | SQLite through `node:sqlite`, on each host. The schema is versioned with `PRAGMA user_version` and an ordered list of migrations, starting at version 1. Nothing is migrated from 0.11.0, and there is no client-side state beyond configuration. |
+| Production | personal-cloud runs 0.11.0 with a Linux smolvm host (Hetzner) and a Mac Tart host. At cut-over, every 0.11.0 machine and checkpoint is destroyed, the new release is deployed, and the profiles are captured again. |
+| Hosts | A Linux host always runs as root, in production, dev and CI. smolvm runs only on Linux hosts; Tart only on macOS hosts. |
+| Runtimes | smolvm and Tart are host prerequisites that the operator installs. The release ships neither. |
 | MCP | None. |
 | Tooling | vite-plus 1.0.0 (`vp`), pnpm 12, TypeScript 7.0.2, laid out like `/private/tmp/monorepo-example`. The lint setup (typeAware, typeCheck, the anti-slop plugin) mirrors clankerauth. Live runs use `scripts/work_runs.py`, restored unchanged in phase 0. |
-| Dependency floors | smolvm 1.22.2, the upstream release tarballs unmodified (see [Release](#release)), Tart ≥ 2.40.1, tart-guest-agent ≥ 0.15.0, Softnet 0.24.0 (macOS 26 hosts), Node 26.10.0, clankerauth-sdk 0.12.0. |
+| Dependency floors | smolvm exactly 1.22.2, upstream and unmodified (see [Runtimes: smolvm](#runtimes-smolvm)), Tart ≥ 2.40.1, tart-guest-agent ≥ 0.15.0, Softnet 0.24.0 (macOS 26 hosts), Node 26.10.0, clankerauth-sdk 0.12.0. |
 
 ## The design rule
 
@@ -72,15 +75,18 @@ and answer them again at every bump of that dependency:
   - The client library routes each call by the host part of the ID.
   - Lists fan out to every host. They return what reachable hosts answered and
     name the unreachable ones, rather than failing whole.
-  - Profiles pin their host, so `create` from a profile goes to that host.
+  - Profiles and bases pin their host, so `create` from either goes to that
+    host.
+  - There is no name lookup: every command takes an ID, so routing never needs
+    the network.
 - **Host:** owns everything durable for its machines: machines, checkpoints,
   profiles and their revisions, and port allocations. Machine state (`running`,
   `stopped`, `missing`) is always read from the runtime, never stored.
-- **Runtimes:** smolvm (Linux guests, RAM forks, checkpoints) through its CLI, and
-  Tart (macOS guests, disk copies). Each is one module behind a shared `Runtime`
-  interface. Only demonstrated common paths are shared (journal, preparation,
-  port allocation, supervision); fork, checkpoint and access stay
-  runtime-specific where that is smaller.
+- **Runtimes:** smolvm (Linux guests on Linux hosts, RAM forks, checkpoints)
+  through its CLI, and Tart (macOS guests on macOS hosts, disk copies). Each is
+  one module behind a shared `Runtime` interface. Only demonstrated common paths
+  are shared (journal, preparation, port allocation, supervision); fork,
+  checkpoint and access stay runtime-specific where that is smaller.
 - **Guest contract:** preparation over the runtime's exec. No clankerbox binary
   runs in a guest.
 - **Guest access:** the profile's. A profile declares the guest ports it
@@ -101,15 +107,12 @@ pnpm-workspace.yaml     # apps/*, packages/*, tools/*; catalog pins below
 vite.config.ts          # lint/fmt/staged/run.cache, as in clankerauth
 tsconfig.json
 apps/
-  clankerbox/           # the only binary: `clankerbox <cli…> | host`
+  clankerbox/           # the only binary: `clankerbox <cli…> | host`; the CLI commands, `ssh` and `dev` live here
 packages/
   contract/             # Schemas, action groups (machine, checkpoint, profile, host), errors, client library (host list, routing, fan-out)
-  host/                 # journal, lifecycle, runtimes (smolvm, tart), supervisor, profiles, checkpoints, preparation, ports, tart forwarder
-  cli/                  # commands, `ssh`, `dev`
-  state/                # private-dir rules, sqlite open, atomic replace, owner lock
+  host/                 # journal, claims, lifecycle, runtimes (smolvm, tart), supervisor, profiles, checkpoints, preparation, ports, tart forwarder, state dir and sqlite
 tools/
-  release/              # SEA build and signing, upstream smolvm tarballs, bundle, notices
-  tart-seed/            # prepares an operator Tart seed (tart-guest-agent as a root LaunchDaemon, prepared marker)
+  release/              # SEA build and signing, bundle, notices
   oxlint/               # anti-slop plugin, installed from upstream by the install-anti-slop skill
 scripts/work_runs.py    # restored unchanged from main, with WORK_RUNS.md
 tests/live/             # gated live acceptance project, TypeScript, using the SDK
@@ -132,87 +135,121 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
 
 **IDs and names**
 
-- Every machine, checkpoint and profile has an ID of the form `<host>_<name>`.
-  - The client chooses the name.
+- Every machine, checkpoint, profile and base has an ID of the form
+  `<host>_<name>`.
+  - The client chooses the name; the operator names bases in host config.
   - Names are unique per host and per resource type.
-  - Host IDs must not contain `_`, and the ID splits at the first `_`.
+  - Host IDs must not contain `_`, and the ID splits at the first `_`. Short
+    host IDs (`linux`, `mac`) keep IDs short to type.
   - The whole ID must match `^[A-Za-z0-9_-]{1,62}$`.
   - A name must start with a letter.
-  - The host passes the name, not the ID, to smolvm, Tart and systemd scope
-    names. Phase 2 checks that their name rules accept this grammar.
-- The separator is `_` and the 62-character limit applies because the ID is
-  written to `/var/lib/clankerbox/machine-id`. clankercreds accepts only that
-  pattern there, and on a mismatch silently falls back to an identity that forks
-  would share.
-- The CLI accepts a bare name and resolves it by fan-out. More than one match is
-  `Invalid`, and the error names the candidates.
+  - The host passes the name, not the ID, to smolvm and to systemd scope names,
+    and a kind-prefixed name to Tart (see [Runtimes: Tart](#runtimes-tart)).
+    Phase 2 checks that their name rules accept this grammar.
+- The separator is `_` and the 62-character limit apply because the ID is
+  written to `/var/lib/clankerbox/machine-id`. clankercreds uses it as the
+  machine's audit-log label, accepts only that pattern, and on a mismatch
+  silently falls back to a label that forks would share.
+- Every command takes IDs. `create NAME` takes only the name: the host comes
+  from the profile or base, and the reply carries the new ID.
 
 **No idempotency keys, no operations resource**
 
 - `create`, `fork`, `restore`, checkpoint `capture` and `profile capture` take
   the new resource's name. If that name already exists, the call fails with
   `Conflict{kind: "exists"}`. A client retrying after a lost reply reads the
-  resource by name and decides for itself whether it is its own.
+  resource by ID and decides for itself whether it is its own.
 - `start` on a running machine and `stop` on a stopped one succeed without doing
   anything, except that `start` on a running machine runs preparation again (the
-  repair path, see [Preparation](#preparation)). `delete` of a missing resource is `NotFound`, which clients treat as
-  done.
-- **Invariant: an error reply means nothing was written.** Validation and
-  admission finish before the host writes any row. Writing the row is the last
-  step that can fail before a success reply. Phase 3 proves this for every
-  mutation.
-- Mutations return the resource immediately, with `pending` set, and the work
-  continues in a fiber. Clients poll `get`. The CLI waits by default, up to
-  `--timeout`.
+  repair path, see [Preparation](#preparation)). `delete` of a missing resource
+  is `NotFound`, which clients treat as done.
+
+**Synchronous mutations**
+
+- A mutation replies when its action has finished: with the resource as it is
+  afterwards, or with a tagged error. Native refusals such as `Capacity` are
+  ordinary replies.
+- The action runs in a fiber forked into a scope that lives as long as the host
+  (a `FiberSet` in the host layer), not into the request's scope. A dropped
+  connection never interrupts native work, and the outcome is recorded on the
+  row either way.
+- The CLI's `--timeout` only stops waiting. On timeout the CLI reports that the
+  action is still running and exits 1. After a lost reply, a client reads the
+  resource.
+- Every action runs in this order (see [Journal and claims](#journal-and-claims)):
+  1. Validate the input.
+  2. Claim the rows in one transaction, inserting the new row.
+  3. Check runtime state, for example that a Tart source is stopped.
+  4. Only then call the runtime.
+
+  A failure in steps 1–3 releases the claims, removes the inserted row and
+  replies with the error. **Invariant: an error before the first runtime call
+  writes nothing.** A failure from step 4 on leaves the row with
+  `action.status = failed` and replies with the same tagged error; `delete`
+  cleans up. Phase 3 proves both for every mutation.
+- **Long calls:** Node's HTTP server ends a request after `requestTimeout`
+  (300 s by default), and the undici client behind `fetch` has its own header
+  and body timeouts (check their values at 26.10.0). A `pack create` of a large
+  disk can take longer, so phase 2 turns these off for mutation calls on both
+  sides, and P5 checks that effect-actions adds no timeout of its own.
 
 **Resources**
 
 - **Machine:**
-  - `id`, `name`, `host`, `runtime`
-  - `profile` (`{name, revision}`) or `base`
+  - `id`, `runtime`
+  - `profile` (`{id, revision}`, a label that may outlive the revision) or
+    `base`
   - `cpu`, `ramMib`, `diskGib`
   - `state`, read from the runtime: `running | stopped | missing`
-  - `pending?: {action}`
-  - `lastFailure?: {action, message}`
+  - `action?`
   - `endpoints: [{name, host, port}]`
   - `hostKey?`
-- **Checkpoint:** `id`, `name`, `machine`, `kind` (`ram | disk`, from the runtime),
-  `status` (`pending | ready | failed`), `lastFailure?`.
-- **Profile:** `id`, `name`, `host`, `runtime`, `current` revision, the revision
-  list, and the spec captured from the source machine (`cpu`, `ramMib`, disk
-  size, `expose`). A revision has a `status` (`pending | ready | failed`).
-- **Host:** `id`, `runtime`, `version`, bases.
+- **Checkpoint:** `id`, `machine`, `kind` (`ram | disk`, from the runtime),
+  `action?`.
+- **Profile:** `id`, `runtime`, `current` revision, the revision list, and the
+  spec captured from the source machine (`cpu`, `ramMib`, disk size, `expose`).
+  A revision has an `action?`.
+- **Host:** `id`, `runtime`, the clankerbox and runtime versions, and its bases.
+- No resource repeats its name or host: both are parts of the ID, and the client
+  library splits it.
+- **`action?: {name, status: "running" | "failed", error?: {tag, message}}`** is
+  the one field for work on a resource. It is `running` while an action holds
+  the row, `failed` with the error after a native failure, and absent after a
+  success. The next action overwrites it. A checkpoint or revision is ready once
+  it has no action.
 
 **Errors:** seven tagged errors:
 
 - `Invalid`
 - `NotFound`
-- `Conflict{kind}`, where `kind` is `exists`, `busy` or `references`
+- `Conflict{kind}`, where `kind` is `exists` or `busy`
 - `Precondition`
-- `Capacity` (a native refusal only)
-- `Unavailable` (the host is unreachable; the client may retry)
+- `Capacity` (Tart's two-VM limit)
+- `Unavailable` (the client couldn't reach the host; it may retry)
 - `Internal`
 
-`retryable` is derived from the tag. HTTP 401/403 carry authentication failures.
+`retryable` is derived from the tag, and for `Conflict` from its kind: `busy` is
+retryable and `exists` is not. HTTP 401/403 carry authentication failures.
 
 ## Feature scope
 
 Rule: a feature with no real consumer is deleted. The real consumers are the
 operator's CLI, the SDK's API clients, the production personal-cloud deployment,
-the `clankerbox-profiles` repository and clankercreds. A feature used only by
-tests, docs or harnesses doesn't count.
+the `clankerbox-profiles` repository, clankercreds, and cliamp-verify (an agent
+skill that drives the CLI against the `cliamp-dev` profile). A feature used only
+by tests, docs or harnesses doesn't count.
 
 **Kept:**
 
 | Area | Features |
 | --- | --- |
 | Lifecycle | create from a profile (its spec, unchanged) or from a base (with `cpu`, `ramMib`, disk size and `expose` given at create), start, stop, delete, RAM fork (smolvm) and stopped-disk fork (Tart), checkpoint capture/get/list/delete, restore |
-| Runtimes | smolvm (Linux guests) and Tart (macOS guests), both in production. smolvm on macOS for dev. |
-| Profiles | capture from a stopped machine, list, delete a profile or one unreferenced revision, point a profile at an older revision, list bases |
+| Runtimes | smolvm (Linux guests, on Linux hosts) and Tart (macOS guests, on macOS hosts), both in production |
+| Profiles | capture from a stopped machine, list, delete a profile or a revision, point a profile at an older revision |
 | Preparation | `/var/lib/clankerbox/machine-id` (clankercreds reads it), and `/etc/clankerbox/start` run after every activation |
 | Access | per machine, one endpoint `{name, host, port}` per exposed guest port, and the guest's SSH host public key |
-| CLI | `hosts`, `machines`, `create NAME (--profile P \| --base B --cpu N --ram-mib N --disk-gib N [--expose name=port]…)`, `start`, `stop`, `delete`, `fork`, `checkpoint capture/list/get/delete`, `restore`, `profile capture/list/delete/use/bases`, `ssh MACHINE [ssh args…]`; `--json`, `--timeout` |
-| Dev | `dev` (with `--state-dir`), `dev stop`, `dev destroy` |
+| CLI | `hosts` (with their bases), `machines`, `create NAME (--profile ID \| --base ID --cpu N --ram-mib N --disk-gib N [--expose name=port]…)`, `start`, `stop`, `delete`, `fork`, `checkpoint capture/list/get/delete`, `restore`, `profile capture/list/delete/use`, `ssh MACHINE [ssh args…]`; `--json`, `--timeout` |
+| Dev | `dev` and `dev destroy`, both with `--state-dir`, on Linux as root |
 
 **Not carried over from the Go implementation:**
 
@@ -221,7 +258,7 @@ tests, docs or harnesses doesn't count.
   catalog.
 - **Idempotency keys:** fingerprints, operations and the `operation` command.
   Also `--async`, `--idempotency-key`, the `uncertain` outcome and its replay
-  rules.
+  rules. Mutations reply with their outcome instead.
 - **Profile builds:** recipe uploads, builder and validation VMs, the build
   worker, build logs, cancel and the one-hour deadline. `profile init`,
   `profile revisions` and `publish --build-id`.
@@ -239,49 +276,73 @@ tests, docs or harnesses doesn't count.
   `created_at`, `source_machine_id`, `runtime_pin` and duplicated host and
   profile fields.
 - **`machine.json`:** its `env` (the profile writes guest environment itself) and
-  `start.timeout_seconds` (nothing waits for `start`).
+  `start.timeout_seconds` (preparation's own timeout replaces it).
 - **CLI exit-code contract:** the codes 255/130/128+n. The CLI exits 0 or 1. With
   `--json` it prints `{error: {message, tag, retryable}}`, and `ssh` exits with
   ssh's code.
+- **Name lookup:** the CLI takes IDs, so there is no resolution by fan-out.
 - **Host knobs:** `port_lease_root`, `port_min/max`, `dns`, `launchctl_path`,
   `launchd_domain`, `systemctl_path`, `tls_*`, `HostOS`, `ControllerID`, and
   `SystemdUser`/`LaunchdDomain`.
+- **Unprivileged and macOS smolvm:** `systemd-run --user` jobs and lingering,
+  launchd jobs per smolvm VM, home-directory smolvm paths and their socket-length
+  limit.
 - **Dev extras:** the dev host under launchd/systemd, bundle relocation, sticky
   `--cpus`/`--ram-mib`, per-project state-dir hashing, `--listen`, the teardown
-  journal and token, and dev's private controller.
-- **Our own Linux base image:** `images/stage-linux.py`, package locks, prepared
-  markers, compact-template reproduction and the per-machine 2.1 GiB rootfs copy.
-  smolvm bases are stock OCI images.
+  journal and token, dev's private controller, `dev stop`, the owner marker file
+  and the hashed runtime root.
+- **Shipping the runtimes:** the smolvm bundle, the runtime manifest and digest
+  directories, the runtime patch, and every notice and corresponding-source duty
+  for smolvm and its native libraries.
+- **Our own Linux base image pipeline:** `images/stage-linux.py`, package locks,
+  prepared markers, compact-template reproduction and the per-machine 2.1 GiB
+  rootfs copy. smolvm bases are digest-pinned OCI images, built with a
+  Dockerfile where the stock one isn't enough.
+- **Tart seed preparation:** `images/finalize-mac.sh` and its prepared marker.
+  Tart bases are stock Cirrus images.
 - **Historical docs, ADRs and qualification records:** a short design section in
   the README replaces them.
 
 ## Host
 
-### Journal and concurrency
+### Journal and claims
 
-- One owner lock for the process lifetime, and a `Semaphore(1)` for native
-  mutations (raising it is gated by P12).
-- **Write `pending = {action}` on the resource row when the mutation is
-  accepted,** before the reply and before any native effect. Without that write,
-  a host restart could replay the action: a RAM child gets cold-booted twice, or
-  `create` adopts a foreign VM.
-- **On host startup:** a pending row becomes
-  `lastFailure: {action, message: "host restarted during <action>"}`, and nothing
-  is replayed. The machine shows whatever the runtime reports, possibly
-  `missing`.
-- **Native errors:** every native error becomes `lastFailure` with the error's
-  message. Nothing is released without an explicit delete, so no failure needs a
-  proof that it left nothing behind.
-- **Busy rule:** one pending action per resource, so a second mutation is
-  `Conflict{kind: busy}`. Deleting a revision that machines or checkpoints still
-  reference is `Conflict{kind: references}`, enforced by foreign keys. Machines
-  have no lineage: a fork is an independent machine, so a source can be stopped
+- One owner lock for the process lifetime: a second host process on the same
+  state dir refuses to start.
+- **Claims:** an action claims every row it changes in one SQLite transaction.
+  It inserts the new row and, for fork, checkpoint capture and profile capture,
+  claims the source machine. A claimed row has `action.status = running`. If any
+  of them is already running, the call fails with `Conflict{kind: busy}` and
+  nothing is written.
+  - Ready checkpoints and revisions never change, so actions that only read them
+    don't claim them. Creates from one profile, and restores of one checkpoint,
+    run in parallel. Deleting a checkpoint or revision while a restore or create
+    reads it makes that action fail like any other native error.
+  - Runtime state checks run after the claim, so nothing changes between the
+    check and the use.
+  - Ports are recorded in the same transaction (see [Guest access](#guest-access)).
+- **No global native lock.** smolvm and Tart take their own locks. P12 checks
+  whether smolvm CLI calls on different machines need serializing; if they do, a
+  semaphore covers those calls only.
+- **The row comes before any native effect,** so that after a crash `delete` has
+  something to own. Nothing is ever replayed: a replay could cold-boot a RAM
+  child twice, or make `create` adopt a foreign VM.
+- **On host startup:** every `running` action becomes `failed` with "host
+  restarted during <name>". The machine shows whatever the runtime reports,
+  possibly `missing`. The smolvm forks area is wiped (see
+  [Runtimes: smolvm](#runtimes-smolvm)).
+- **Native errors** leave `action.status = failed`, and the same tagged error is
+  the call's reply. Nothing is released without an explicit delete, so no
+  failure needs a proof that it left nothing behind.
+- **No lineage:** a fork is an independent machine, so a source can be stopped
   or deleted while its forks run.
 - **Stop and delete after a failure:** they are never refused because of an
   earlier failure, and they cope with leftover native state, including a live
-  orphan VM process. They can still be refused while another action is pending.
+  orphan VM process. They are refused only while another action holds the row.
   Phase 3 verifies this per runtime.
 - **Completion is recorded even when the caller has gone away.**
+- **Schema:** `PRAGMA user_version` and an ordered list of migrations, starting
+  at version 1. A database newer than the binary is refused.
 
 ### Profiles
 
@@ -291,45 +352,67 @@ tests, docs or harnesses doesn't count.
      operator), and stops it.
   2. `profile capture NAME --from MACHINE` records a new revision and points
      `NAME` at it.
-  3. Rolling back is `profile use NAME REVISION`.
+  3. Rolling back is `profile use PROFILE REVISION`.
 - **smolvm capture:** `smolvm pack create --from-vm` of the stopped machine. The
   pack is self-contained, keeps uid/gid and modes, and drops all xattrs and file
   capabilities (spike P6). Profiles must not rely on file capabilities.
 - **Tart capture:** a clone of the stopped VM.
 - **Spec:** a revision records the source machine's spec (`cpu`, `ramMib`, disk
   size, `expose`). Machines created from the profile use it unchanged.
+- **Nothing depends on a revision once it is used.** A machine created from a
+  pack extracts it once, at create, and a Tart clone is a full copy. Deleting a
+  revision just removes its artifact, and a machine's `profile` field is a label
+  that may name a deleted revision.
 - **Capture copies the whole disk, including anything the machine fetched,**
   such as credentials synced by its `start`. Capture right after setup, before
   the machine has run `start` with credentials, or clean up first.
 - **No guard against the `systemd-resolved` bug** (see
   [smolvm](#runtimes-smolvm)). Capture can't look inside a stopped machine
   (`exec` refuses it), and the failure is loud anyway: the next start fails.
-- **Bases:** each host lists its bases in config.
-  - smolvm: an OCI image reference pinned by digest, for example
-    `ubuntu:24.04@sha256:…`.
-  - Tart: a prepared operator seed, booted only if it carries the prepared
-    marker.
+- **Bases:** each host lists its bases in config. A base ID is `<host>_<name>`,
+  like any other.
+  - smolvm: any OCI image reference pinned by digest. A stock image has no sshd,
+    so the operator's Linux base is a small image built from a Dockerfile in
+    clankerbox-profiles: `FROM ubuntu:24.04@sha256:…`, `openssh-server` installed
+    with `--no-install-recommends`, the operator's public key, and
+    `/etc/clankerbox/start`. CI builds it and pushes it to ghcr; a `docker save`
+    tarball on the host works too, since smolvm accepts either. If that proves
+    awkward, the fallback is `init` commands on the base in host config, passed
+    to `machine create --init` (run once, as root, on first start).
+  - Tart: a stock Cirrus image pinned by digest
+    (`ghcr.io/cirruslabs/macos-…-base@sha256:…`). It ships sshd and
+    tart-guest-agent.
 
 ### Preparation
 
 One host-side script, shipped inside the host binary, runs as root over
-`Runtime.exec` after every create, start, fork and restore. In order:
+`Runtime.exec` after every create, start, fork and restore, as part of that
+action. On Tart it runs through `sudo -n` (see [Runtimes: Tart](#runtimes-tart)).
+In order:
 
-1. **Identity.** Compare `/var/lib/clankerbox/machine-id` with the machine's ID.
-   On a mismatch:
+1. **Identity.** Each machine row gets a random `instance` value when it is
+   inserted. Compare `/var/lib/clankerbox/instance` with it. On a mismatch:
    - Re-mint the SSH host keys where the runtime didn't: a Tart clone, or a
      machine created from a smolvm pack. smolvm re-mints the keys on disk on
      every restore, and a smolvm fork is a restore.
    - Restart sshd if it is running. A sshd carried over in RAM can keep serving
      the old key until restarted (seen on OpenSSH 10.0 after `machine branch`).
-   - Write the machine ID **last** of these steps, so a crash before it repeats
-     them.
-2. **Start.** Launch `/etc/clankerbox/start` if it exists, detached, on *every*
-   activation. On smolvm this uses `smolvm machine exec --detach` (the agent is
-   PID 1 and there is no init); on Tart, the equivalent found in P3.
-   - The script must be idempotent: it launches sshd and anything else the
-     profile needs, and refreshes per-machine state. For example, clankercreds
-     sync must run after a fork or restore.
+   - Write `/var/lib/clankerbox/machine-id` (the ID), then the instance value
+     **last**, so a crash before it repeats these steps.
+   - The instance, not the ID, is compared because names are reused: deleting
+     `a` and restoring a checkpoint of `a` as `a` must still restart sshd after
+     smolvm's re-mint.
+2. **Start.** Run `/etc/clankerbox/start`, if it exists, on *every* activation,
+   with plain exec (not `--detach`), and wait for it.
+   - The contract: it is idempotent, it daemonizes whatever it launches (sshd
+     daemonizes itself; anything else uses `setsid -f`, or launchd on macOS),
+     and exiting 0 means the profile's services are up. It launches sshd and
+     anything else the profile needs, and refreshes per-machine state. For
+     example, clankercreds sync must run after a fork or restore.
+   - A non-zero exit, or running past the timeout, fails the action, and the
+     error carries the script's last lines of output. P3's measurements set the
+     timeout and its recorded reason.
+   - The claim on the machine means two runs never overlap.
    - Check for sshd's listener (`/run/sshd.pid`), not `pgrep -x sshd`: an open
      ssh session also matches `pgrep`, so a dead listener would never be
      relaunched.
@@ -348,9 +431,10 @@ A crashed preparation is simply run again on the next activation; no
 - **Expose:** the profile's spec carries `expose: {name: guestPort}`, for example
   `{"ssh": 22}`.
 - **smolvm:**
-  - A machine with a non-empty `expose` is created with
-    `--net --net-backend virtio-net` and `-p hostPort:guestPort` per entry. TSI
-    also serves `-p`, but checkpoints with published ports require virtio-net.
+  - Every machine is created with `--net --net-backend virtio-net`, plus
+    `-p hostPort:guestPort` per `expose` entry. `-p` alone doesn't turn on
+    outbound access, and setup needs the network. TSI also serves `-p`, but
+    checkpoints with published ports require virtio-net.
   - The VM job's environment sets `SMOLVM_PUBLISH_ADDR` (the host's tailnet
     address; unset in dev, so loopback) and `SMOLVM_EGRESS_FLOOR=strict`
     explicitly.
@@ -358,6 +442,8 @@ A crashed preparation is simply run again on the next activation; no
   - The host picks host ports from 10000–19999: below smolvm's fork range
     (20000–32000) and the Linux ephemeral range (32768 and up). It excludes the
     ports on its machine rows and confirms each one with a bind probe.
+  - Ports are recorded with the action's claim under a unique index, so two
+    actions can't take the same port; a collision just picks again.
   - A restore, and so a fork, keeps the checkpoint's ports. The host allocates
     new ones and applies them with `machine update --remove-port … -p …` before
     start. To read ports back, use `machine ls -v` or the VM's
@@ -369,7 +455,8 @@ A crashed preparation is simply run again on the next activation; no
     listens on `publishAddress:hostPort`. Each accepted connection runs
     `tart exec -i <vm> nc 127.0.0.1 <guestPort>`.
   - This needs no guest IP, no Softnet exception and no Local Network
-    permission.
+    permission. A host that dials guest IPs needs a fresh Local Network grant
+    for every new build, which would mean a manual step after every release.
   - Opening a connection costs about 560 ms. A host restart drops open Tart
     connections, whereas smolvm's listeners live in the VMM.
 - **Security:** anything on the tailnet can reach a published port. sshd's keys
@@ -381,44 +468,54 @@ A crashed preparation is simply run again on the next activation; no
 
 The smolvm CLI starts the VMM in the caller's cgroup, so without its own job a
 host restart would kill every VM. `Supervisor.launch(label, argv, env)` covers
-four cases:
+two cases:
 
-- **Linux production (root):** set `SMOLVM_VM_USE_SCOPE=1` on every `start`,
+- **smolvm (Linux, root):** set `SMOLVM_VM_USE_SCOPE=1` on every `start`,
   including a restored machine's first start. Each VM gets its own
   `system.slice/smolvm-vm-<name>.scope` and survives its launcher. No
-  `systemd-run` and no unit files. Verified for plain starts and restores.
-- **Linux dev (unprivileged):** `systemd-run --user --collect` with kill
-  properties, one per VM. Lingering is required.
-- **macOS smolvm (dev):** one launchd plist per VM, or one host job with
-  `AbandonProcessGroup` (P10).
+  `systemd-run` and no unit files. Verified for plain starts and restores. P13
+  checks the same on a GitHub-hosted runner; if scopes don't work there, dev in
+  CI runs without them, and its VMs then end with `dev`.
 - **Tart:** the plist is written once at create. Start runs `launchctl print`,
   then bootstrap if the job is absent, then `kickstart` without `-k`.
 
 Two rules for every VM job:
 
-- It references only smolvm or tart, installed under a directory keyed by
-  runtime digest, never the clankerbox binary. A release that doesn't change the
-  runtime then leaves running VMs alone.
+- It references only smolvm or tart at their versioned install paths, never the
+  clankerbox binary. A clankerbox release leaves running VMs alone, and a smolvm
+  upgrade goes into a new prefix.
 - Never set `SMOLVM_BOOT_BINARY`: it arms a parent-death watchdog.
 
 ### Runtimes: smolvm
 
-- **Inventory:** one smolvm inventory per host, on both OSes. Machine names are
-  unique per host, which the scope names need anyway. On Linux,
-  `SMOLVM_DATA_DIR` places it. On macOS, smolvm resolves paths from `HOME`, and
-  the root must stay short because socket paths are limited to 104 bytes.
-- **Machines:** run from a stock OCI image, on smolvm's own 48 MiB agent rootfs
-  (about 200 MiB of disk per machine).
-  - As root, each VM runs as its own uid (2000000 and up), so guests can't write
-    the shared agent rootfs.
-  - In unprivileged dev they can; that is accepted.
+- **Install:** the operator installs upstream smolvm with its own installer, at
+  the pinned version, into a versioned prefix:
+  `install.sh --version 1.22.2 --prefix /opt/smolvm/1.22.2`. Host config points
+  at that prefix.
+  - At startup the host compares `smolvm --version` with the version this
+    release was tested on, and refuses to start on a mismatch.
+  - smolvm looks for its templates in `~/.smolvm/` first, so a stale
+    `/root/.smolvm` would shadow the prefix's. P8 checks this, and that the
+    upstream wrapper finds its libraries from a prefix install.
+  - Nothing in the old `runtime.patch` is needed. The overlay `index=off` hunk
+    only mattered for the old custom base, the stop-ack and test-only hunks were
+    already gone, and the fork-state hunk only matters for `machine branch`,
+    which clankerbox never calls. evidence.md has the details.
+- **Inventory:** one smolvm inventory per host, placed by `SMOLVM_DATA_DIR`.
+  Machine names are unique per host, which the scope names need anyway. Socket
+  paths are limited to 108 bytes, so init refuses a data root long enough to
+  exceed that.
+- **Machines:** run from a digest-pinned OCI image, on smolvm's own 48 MiB agent
+  rootfs (about 200 MiB of disk per machine).
+  - Each VM runs as its own uid (2000000 and up), so guests can't write the
+    shared agent rootfs.
   - Restores, and so forks, get a fresh uid, so no two machines share one.
 - **Profile rule:** install packages with `--no-install-recommends`, or at least
   never install `systemd-resolved`. It turns `/etc/resolv.conf` into a symlink,
   and every later `machine start` then fails (an upstream bug).
 - **Trust smolvm's exit codes:**
   - `machine start` returns after the agent is ready.
-  - `stop` returns after the process is dead.
+  - `stop` returns after the process is dead, or fails (see Stop below).
   - `exec` refuses a stopped machine.
   - `delete` removes the record only after death and storage removal.
 
@@ -433,11 +530,17 @@ Two rules for every VM job:
   Restored machines are branchable anyway. `machine status --json` reports
   `branchable: false` regardless, so don't read it.
 - **Fork is a checkpoint plus a restore:**
-  1. Capture the running source into the host's checkpoint store.
-  2. `machine create --from` the checkpoint.
+  1. Capture the running source into a store of the fork's own,
+     `forks/<child-name>/`.
+  2. `machine create --from` that checkpoint.
   3. Swap the ports.
-  4. Start.
-  5. Delete the checkpoint directory, then run `checkpoint-prune`.
+  4. Start and prepare.
+  5. Remove `forks/<child-name>/` whole.
+
+  Step 5 runs whether the fork succeeded or failed (`Effect.ensuring`), and host
+  startup wipes the forks area, since nothing is in flight then. No prune is
+  needed: restored machines hold no reference into a store, and the restore
+  cache is off. P9 confirms deleting a whole store under running children.
 
   The child continues the source's RAM state, gets a fresh identity and its own
   uid, and has no lineage. It takes 1.6–2.4 s. The cost is disk: a restored
@@ -449,20 +552,24 @@ Two rules for every VM job:
     from it.
   - A cold-restarted source with a kept branch child reads `frozen` and refuses
     `stop` and `delete` (unfixed at 1.22.2).
-- **Stop:** graceful, then a bounded wait, then forced. Upstream `stop` requires
-  the guest's ack and hard-kills an unreachable VM or an orphaned VMM.
+- **Stop:** `machine stop`, and nothing else.
+  - smolvm hard-kills an unreachable agent or an orphaned VMM itself.
+  - A reachable guest that doesn't confirm its filesystem flush is left running,
+    and `stop` fails. Return that error rather than force the stop: killing the
+    VM then could lose writes.
+  - `delete` must still work on such a VM. When `machine stop` fails, delete
+    kills the VM's scope (`systemctl kill smolvm-vm-<name>.scope`), then runs
+    `machine delete -f`; `-f` only skips the prompt. Phase 3 verifies this.
 - **Checkpoints:**
-  - **Pin:** `(runtimeDigest, revisionId)`. smolvm enforces sizes, platform, CPU
-    contract and network, but not the engine build or the agent.
+  - **Pin:** the smolvm version and the platform, recorded at capture. A restore
+    under a different pin is refused with `Precondition`. smolvm enforces sizes,
+    platform, CPU contract and network, but not the engine build or the agent.
   - **Capture:** smolvm publishes a checkpoint durably or not at all. After a
     crash, the host discards the interrupted capture, and `checkpoint-prune`
     removes the staging that smolvm marked. Partial RAM artifacts are never
     published.
-  - **Pending RAM files:** an incomplete pending directory makes `start`
-    cold-boot silently. Check it once, on the path from
-    `smolvm machine data-dir`.
   - **Store mode:** checkpoints go into one store per host (`--store`, with
-    `--history 0`).
+    `--history 0`); forks use their own stores.
     - Repeated captures share unchanged chunks; a second and third capture saved
       34% and 53% of disk.
     - Each checkpoint directory is independent, and restored machines hold no
@@ -475,7 +582,7 @@ Two rules for every VM job:
     deleting every machine, and a fork restores each checkpoint only once.
   - **Root restore:** single-file restores as root shared RAM read-only and used
     a copy-on-write disk top (about 0.7 MiB of private disk, against 213 MiB
-    unprivileged). Measure the same for store restores in phase 3.
+    unprivileged). P9 measures the same for store restores.
 - **DNS:** no `DNS` knob. smolvm's gateway relays DNS, and smolvm refuses
   capturing a machine with custom DNS.
 - **Disk sizing:** one disk-size field per profile. P8 decides whether this needs
@@ -483,8 +590,13 @@ Two rules for every VM job:
 
 ### Runtimes: Tart
 
+- **Names:** native names carry the kind: `cbx-m-<name>` for machines,
+  `cbx-c-<name>` for checkpoints and `cbx-p-<name>-<revision>` for profile
+  revisions. Tart has one VM namespace, shared by all three kinds and by the
+  operator's own VMs; the prefix keeps them apart, and listings filter on it.
 - **Softnet:** `--net-softnet-block=@host`. Blocking `@host` also blocks gateway
-  DNS, which is why seeds pin public resolvers.
+  DNS, so the operator's setup sets public resolvers first, and profiles keep
+  them.
 - **Removed:** no `tart ip`, no `HOME=<root>` for tart (test the keychain when
   removing it), and no refusal to replace a live launchd job.
 - **Clone:** `tart set --random-serial` once per clone. No `--random-mac`, since
@@ -494,7 +606,8 @@ Two rules for every VM job:
   destination: map that to `Conflict{kind: exists}` and never pass
   `--overwrite`.
 - **Fork, checkpoint and capture need a stopped machine.** Tart's clone doesn't
-  require one, so that rule is ours. Refuse a running machine with
+  require one, so that rule is ours. It is checked after the source is claimed,
+  so a `start` can't slip in before the clone. A running machine is refused with
   `Precondition`.
 - **Delete:** exit 2 means missing; from 2.40.0 a running VM exits 1. No
   inspections around delete.
@@ -502,16 +615,18 @@ Two rules for every VM job:
   forced fallback.
 - **Capacity:** map Apple's two-VM refusal to `Capacity`. If P11 shows it hangs
   instead of refusing, add a count from `tart list` before launch.
-- **Guest agent:** tart-guest-agent ≥ 0.15.0 runs as a root LaunchDaemon in seed
-  preparation, so no `sudo -n` relay is needed.
+- **Guest agent:** stock Cirrus images run tart-guest-agent ≥ 0.15.0 as a
+  per-user LaunchAgent, which starts after auto-login. Preparation waits for
+  `tart exec` to answer after boot, then runs its script through
+  `sudo -n /bin/bash -s`, as the Go host did. A base without passwordless sudo
+  fails preparation loudly. P3 checks both on a current image.
 
 ### Other host rules
 
 - **One exec per runtime:** `Runtime.exec(machine, argv, stdio)`.
-- **State init:** build in a temp directory, then rename. The owner marker is
-  written at init.
-- **Runtime manifest:** `{version, platform, runtimeDigest, files}`, with full
-  digest verification, so a RAM checkpoint never restores on a different engine.
+- **State dir:** a directory is ours if it holds our SQLite database. Init
+  creates the database in one transaction and refuses a non-empty directory
+  without one. There is no separate marker file and no temp-directory rename.
 
 ## CLI and dev
 
@@ -519,26 +634,24 @@ Two rules for every VM job:
   endpoint and host key, writes a one-line known-hosts file, then execs the
   system `ssh`. Ports change on fork and restore, so typing them by hand isn't
   practical.
-- **Shared options:** `--json` and `--timeout`. Every mutation waits by default.
+- **IDs:** every command takes IDs. `create NAME` takes the host from its
+  profile or base and prints the new ID.
+- **Shared options:** `--json` and `--timeout`. A mutation returns when its
+  action has finished; `--timeout` only stops waiting.
 - **Client config:** one file holding the host list and the key path.
-- **`clankerbox dev`:**
+- **`clankerbox dev`** (Linux only, run as root):
   - Runs a host in the foreground with an embedded `clankerauth-dev` issuer
     (fixed `dataDir` and port, so keys survive restarts).
   - Publishes on loopback.
-  - Writes the client config.
-  - The state dir defaults to `~/.clankerbox/dev`, and a short runtime root is
-    keyed by its hash.
-  - VMs are supervised by their own jobs, so stopping `dev` leaves them running.
-- **`dev stop`:** stops every VM and confirms none is running. Everything on disk
-  is kept. It is a crash-safe shutdown: the journal handles interrupted work on
-  the next start.
-- **`dev destroy`:**
-  - Runs `dev stop`, then removes the owned roots, but only roots that carry the
-    owner marker. Init refuses a non-empty directory without one.
-  - Every Tart VM and the smolvm store live under the root, so removing it is
-    safe once nothing runs.
-  - The "confirm none running" check stays, so disks are never deleted under
-    running VMs.
+  - Takes `--state-dir`, defaulting to `/var/lib/clankerbox/dev`. The data root,
+    the client config and the key live under it. The client config and key are
+    owned by the invoking user (`SUDO_UID`), so the runner user in CI can use
+    what `sudo clankerbox dev` wrote.
+  - VMs run in their own scopes, so stopping `dev` leaves them running.
+- **`dev destroy`:** stops and deletes every machine, checkpoint and profile
+  recorded in the state dir's database, through the runtimes, confirms that no
+  VM runs, then removes the state dir. It refuses a directory without our
+  database.
 
 ## Release
 
@@ -556,34 +669,16 @@ Two rules for every VM job:
 
 Notarization isn't needed for curl/tar/scp installs.
 
-**smolvm:**
+**Runtimes are not shipped.** smolvm and Tart are host prerequisites (see
+[Runtimes: smolvm](#runtimes-smolvm)). The release carries no smolvm files, no
+runtime manifest, and no notices or corresponding source for smolvm and its
+native libraries.
 
-- **Upstream, unmodified:** ship the `smolvm-1.22.2-*` release tarballs as
-  they are: `smolvm-bin` (ad-hoc signed upstream with the entitlements it
-  needs), `agent-rootfs`, libkrun, libkrunfw and the templates. Pin the tarball
-  sha256 and the extracted file hashes. There is no smolvm build.
-  - Nothing in the old `runtime.patch` is needed. The overlay `index=off` hunk
-    only mattered for the old custom base. The stop-ack hunk and the test-only
-    hunk were already gone. The fork-state hunk only matters for
-    `machine branch`, which clankerbox never calls. evidence.md has the details.
-- **Unpacking:** extract with `tar --no-same-owner`, or the files keep the CI's
-  uid 1001.
+**Notices:** Node's LICENSE and the pnpm dependency notices.
 
-**Notices:**
-
-- The upstream tarballs carry no license files, so every redistribution duty is
-  ours: smolvm's license, Rust dependency notices from `cargo metadata`, and
-  native notices for libkrun, libkrunfw (GPL-2.0/LGPL-2.1), MoltenVK, epoxy and
-  virgl.
-- Corresponding source covers the libkrun and libkrunfw commits (with their
-  Linux kernel) that 1.22.2 pins. 1.22.1 moved libkrunfw to a new kernel, so
-  re-pin from the 1.22.0 values (libkrunfw b8c9994d, Linux 6.12.95, libkrun
-  3285db74).
-- Add Node's LICENSE and the pnpm dependency notices.
-- The old license texts are at `c112847:scripts/release/licenses/`.
-
-**Pins:** one `release-inputs.json` keyed by platform, including the Node SEA
-base binaries and the smolvm tarballs.
+**Pins:** one `release-inputs.json` keyed by platform, with the Node SEA base
+binaries. The smolvm version the release was tested on is a constant in the
+host.
 
 **CI:** one vite-plus job, plus a SEA build smoke test on both targets.
 `publish-sdk` publishes `packages/contract` on release tags.
@@ -602,23 +697,30 @@ Each phase ends with `vp run ready` green. Live tests run where hardware allows.
    hello world per role.
 2. **Contract.** Schemas, the tagged errors, `<host>_<name>` IDs, the action
    groups, and the client library (host list, routing, fan-out with partial
-   results, name resolution).
+   results). Long mutation calls: the client's and the server's timeouts off.
 3. **Host.**
-   - The journal and the error-reply invariant, lifecycle, the smolvm and Tart
-     runtimes, supervision, profiles (capture), checkpoints and preparation.
+   - The journal, claims and the error-reply invariant, the schema version,
+     lifecycle, the smolvm and Tart runtimes, supervision, profiles (capture),
+     checkpoints and preparation.
    - Port allocation, smolvm publishing and the Tart forwarder.
    - The clankerauth resource.
-   - `stop` and `delete` on every runtime after an interrupted operation.
-   - Spikes P10–P12, and store-mode restore as root (P9).
+   - `stop` and `delete` on every runtime after an interrupted operation, and
+     `delete` of a smolvm VM whose stop failed.
+   - The Linux base image: its Dockerfile in clankerbox-profiles, built by that
+     repository's CI. The live tests use it too.
+   - Spikes P9, P11, P12 and P13.
 
    Unit tests use a fake runtime layer; live tests use real VMs.
-4. **CLI and dev.** Commands, `ssh`, and `dev` with clankerauth-dev.
-5. **Release and live tests.** `tools/release` (SEA, upstream smolvm
-   tarballs, bundle, notices), `tools/tart-seed`, and `tests/live`. Then the README design
-   section and the bump skills (seeded from evidence.md).
+4. **CLI and dev.** Commands, `ssh`, and `dev` and `dev destroy` with
+   clankerauth-dev.
+5. **Release and live tests.** `tools/release` (SEA, bundle, notices) and
+   `tests/live`. Then the README design section and the bump skills (seeded from
+   evidence.md).
 6. **Cut over.**
-   - Run the full live acceptance suite on Apple Silicon (smolvm and Tart) and on
-     Linux/amd64 with KVM.
+   - Cut-over waits until every API consumer runs on the new SDK, or the
+     operator accepts that consumer's downtime.
+   - Run the full live acceptance suite on Apple Silicon (Tart) and on
+     Linux/amd64 with KVM (smolvm as root).
    - Release.
    - Publish the SDK major.
    - Delete these plans in the last commit before the merge.
@@ -627,6 +729,8 @@ Each phase ends with `vp run ready` green. Live tests run where hardware allows.
      controller.
    - Move the hosts onto the tailnet if not already done.
    - Delete the clankerbox WireGuard link, the PKI and the UniFi rule.
+   - Install smolvm 1.22.2 from upstream under `/opt/smolvm/1.22.2` on the Linux
+     host, and Tart ≥ 2.40.1 on the Mac.
    - Run the Linux host as root: system units, and host state out of
      `/home/clanker`. As root, smolvm adds others-execute to every directory
      above its data root.
@@ -637,11 +741,16 @@ Each phase ends with `vp run ready` green. Live tests run where hardware allows.
      tmpfs, and clankerbox uses neither. Without `=0`, every root restore still
      creates `/dev/shm/smolvm-restore`. Restores cost the same either way.
    - Deploy with clankerauth keys covering both hosts.
-   - Capture the profiles again (`linux-dev`, `mac-xcode`, `gg-linux-dev`) with
-     sshd, `expose` and an idempotent `/etc/clankerbox/start`. Move
-     `gg-linux-dev`'s `env` into the guest's environment (P3 checks the paths),
-     and update `clankercreds/docs/recipe.md`, which still documents
-     `machine.json`.
+   - Configure the bases: the Linux base image, and a digest-pinned Cirrus image
+     on the Mac.
+   - Capture the profiles again (`linux-dev`, `mac-xcode`, `gg-linux-dev`,
+     `cliamp-dev`) with sshd, `expose` and an idempotent
+     `/etc/clankerbox/start` that daemonizes what it launches. Move
+     `gg-linux-dev`'s `env` into the guest's environment (P3 checks the paths).
+   - Update the consumers' docs: `clankercreds/docs/recipe.md`, which still
+     documents `machine.json`, and cliamp-verify's `clankerbox.md`, where
+     `shell -T` becomes `ssh MACHINE -- cmd`, `profile publish` becomes capture,
+     and `operation` is gone.
 8. **Clean up the test machines,** following
    [Test machine footprint and final cleanup](#test-machine-footprint-and-final-cleanup).
 
@@ -658,15 +767,17 @@ The ones already done, with numbers, are in evidence.md:
 - on 1.22.2: the `machine branch` depth limit, and fork through the checkpoint
   store (former P9)
 
+P10 (macOS smolvm supervision) was dropped with smolvm on macOS.
+
 ### Phase 0
 
 | Spike | Gates |
 | --- | --- |
 | **P1. Published ports on the tailnet.** On the Linux host as root (ask for approval first): a stock-image machine with `-p` on the tailnet address and `SMOLVM_EGRESS_FLOOR=strict`, then ssh, scp and rsync from another tailnet machine. Also over the tailnet: a fork (store checkpoint + restore) and two restores beside a running source, each with its swapped port and new host key, all under `SMOLVM_VM_USE_SCOPE=1` and on 1.22.2. Loopback and `127.0.0.2` already work, and restores under scopes do too. | guest access, or its fallback |
 | **P2. Tart forwarder.** Listener → `tart exec -i` → guest `nc 127.0.0.1 22`: ssh and rsync throughput, idle survival, and whether accepting on the tailnet interface needs Local Network permission. | guest access on Tart |
-| **P3. Preparation.** The script over exec on both runtimes. Does `smolvm machine exec --detach` keep `start` alive, and what is the Tart equivalent (`tart exec` with `nohup`/`setsid`, or `launchctl submit`)? Re-mint on pack-created and Tart-cloned machines. How do ssh sessions and detached processes pick up the profile's environment (`/etc/environment` through PAM)? Re-running `start` on a running smolvm machine already works. | preparation |
-| **P5. Pins.** Re-run S5 on clankerauth-sdk 0.12.0, and smoke-test effect-actions 0.9.0 on Effect 4.0.0 inside a SEA. | phase 1 |
-| **P8. Disk sizing.** Which disk holds workload writes for a stock-image machine? Do sizes above or below smolvm's 20/10 GiB templates need host `resize2fs` (missing on macOS)? Can profiles drop the overlay size and the compact templates? | profiles, release |
+| **P3. Preparation.** The script over plain exec on both runtimes. On smolvm, does a child started with `setsid -f` outlive the exec (sshd's own daemonizing already does)? On a current Cirrus image, how long until `tart exec` answers after boot, with no manual login, and does `sudo -n true` succeed? Re-mint on pack-created and Tart-cloned machines. How do ssh sessions and daemonized processes pick up the profile's environment (`/etc/environment` through PAM)? How long does a realistic `start` (sshd plus a clankercreds sync) take, to set the timeout? Re-running `start` on a running smolvm machine already works. | preparation, Tart bases |
+| **P5. Pins.** Re-run S5 on clankerauth-sdk 0.12.0, and smoke-test effect-actions 0.9.0 on Effect 4.0.0 inside a SEA, including one unary call that runs past 300 s, to find any timeout of its own. | phase 1, long calls |
+| **P8. Disk sizing and install.** Which disk holds workload writes for a stock-image machine? Do sizes above or below smolvm's 20/10 GiB templates need host `resize2fs`? Can profiles drop the overlay size and the compact templates? With smolvm installed under a prefix, does a stale `~/.smolvm` shadow its templates, and does the upstream wrapper find its libraries? | profiles, smolvm install |
 
 **Fallback if P1 fails:** no published ports. `clankerbox pipe MACHINE PORT`
 carries bytes over `Runtime.exec` into the guest's `nc`, used as an ssh
@@ -677,10 +788,10 @@ call next to the unary ones. smolvm's `--expose-socket` is the other fallback.
 
 | Spike | Gates |
 | --- | --- |
-| P9. Store-mode restore as root: does it still share RAM read-only and use a copy-on-write disk top, as single-file restores did? Private disk and memory per restored machine with `--restore-cache-entries 0`. | checkpoint and fork cost |
-| P10. macOS smolvm: one host launchd job with `AbandonProcessGroup` versus one plist per VM. | dev supervision |
+| P9. Store-mode restore as root: does it still share RAM read-only and use a copy-on-write disk top, as single-file restores did? Private disk and memory per restored machine with `--restore-cache-entries 0`. Then delete a fork's whole store while its children run. | checkpoint and fork cost, fork cleanup |
 | P11. Tart third VM: a fast refusal, or a hang until timeout. | Tart capacity |
-| P12. Concurrent smolvm CLI calls against one inventory. | the native-call semaphore |
+| P12. Concurrent smolvm CLI calls on different machines in one inventory: do any need serializing? | a semaphore around those calls |
+| P13. Root smolvm on a GitHub-hosted runner (ask before pushing a workflow): a start and a restore under `SMOLVM_VM_USE_SCOPE=1`, each VM outliving its launching process. | dev in CI, with scopes or without |
 
 ## Test machine footprint and final cleanup
 
@@ -736,23 +847,29 @@ Everything the rewrite creates on a test machine is removed when the work ends.
 - Live acceptance, which must cover:
   - create/start/stop/delete;
   - RAM fork, and checkpoint capture, restore and delete;
-  - profile capture, then create from it, and `profile use` back to an older
-    revision;
+  - profile capture, then create from it, `profile use` back to an older
+    revision, and deleting a revision a running machine was created from;
   - `clankerbox ssh` into a machine on each runtime with the pinned host key, and
     scp and rsync of a binary file compared by hash;
   - a fork and two restores of one checkpoint: each gets its own port and host
     key, and ssh works into all of them while the source runs;
-  - `start` running after every activation, and the machine-ID file updated on
-    fork and restore;
+  - `start` running to completion after every activation, a failing `start`
+    failing the action with its output, and the instance and machine-ID files
+    updated on fork and restore, including a restore under a reused name;
   - a fork's source stopped, cold-started and deleted while its forks keep
-    running, and the checkpoint store pruned after a fork with no effect on the
+    running, and the fork's own store gone afterwards with no effect on the
     child;
   - a host restart keeping VMs, smolvm's published ports and the machine-ID
-    file, and Tart endpoints coming back after the forwarder restarts;
+    file, wiping the forks area, and Tart endpoints coming back after the
+    forwarder restarts;
   - `stop` and `delete` after an interrupted operation;
-  - a duplicate name refused with `Conflict{exists}`, and a lost-reply retry
-    resolved by reading the resource;
+  - a mutation whose client disconnects still finishing and recording its
+    outcome, and a call that runs past 300 s replying normally;
+  - a duplicate name refused with `Conflict{exists}`, a lost-reply retry
+    resolved by reading the resource, and a second action on a claimed machine
+    refused with `Conflict{busy}`;
+  - Tart's two-VM limit returned as `Capacity`;
   - list fan-out with one host down;
-  - `dev stop` keeping disks and checkpoints, and `dev destroy` removing them;
+  - `dev destroy` removing every resource and the state dir;
   - `--json` error tags.
 - Every live run goes through `scripts/work_runs.py`, following AGENTS.md.

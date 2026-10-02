@@ -26,7 +26,7 @@ Checked 2026-10-01. Each row says what was actually exercised.
 
 | Dependency | Pinned | Exercised |
 | --- | --- | --- |
-| smolvm | 1.22.2, upstream tarballs unmodified | 1.22.0 on this Mac (unprivileged) and on the Linux host (unprivileged and as root); 1.22.2 on this Mac (unprivileged). The Linux runs are not yet repeated on 1.22.2. |
+| smolvm | exactly 1.22.2, upstream and unmodified, installed by the operator | 1.22.0 on this Mac (unprivileged) and on the Linux host (unprivileged and as root); 1.22.2 on this Mac (unprivileged). The Linux runs are not yet repeated on 1.22.2. |
 | Tart | ≥ 2.40.1 | Audited in source at 2.40.1; S3 ran on 2.38.0. |
 | Softnet | 0.24.0 (needs macOS 26) | Audited. It runs its own DHCP server and advertises the gateway as DNS. |
 | tart-guest-agent | ≥ 0.15.0 | Audited. Its vsock sockets are close-on-exec. |
@@ -51,6 +51,11 @@ Checked 2026-10-01. Each row says what was actually exercised.
     (S@1.22.0:src/cli/vm_common.rs:2394-2396, 2448).
   - Since 1.19.1, a VM that exits after a failed ack counts as stopped, with the
     filesystem sync unconfirmed (S@1.22.0:src/agent/manager.rs:2860-2891).
+  - A reachable guest that doesn't acknowledge and doesn't exit is left alive,
+    and `stop` fails with "left the VM alive for retry"
+    (S@1.22.2:src/agent/manager.rs:2873-2884). smolvm never signals it.
+  - `machine stop` takes only `--name`, and `machine delete -f` only skips the
+    confirmation prompt (S@1.22.2:src/cli/machine.rs:5331-5335, 5388-5390).
 - **`exec`** refuses a stopped machine (S@1.19.0:vm_common.rs:67-127).
 - **`delete`** removes the record only after the process is dead and storage is
   removed.
@@ -70,10 +75,14 @@ Checked 2026-10-01. Each row says what was actually exercised.
 - **What smolvm records and enforces:** CPU, memory, disk sizes, platform, CPU
   contract and network (S@1.19.0:src/portable_checkpoint.rs:2802-2932). It does
   not check the engine build or the agent. The 1.19 qualification showed its ABI
-  string doesn't change when libkrun state does, so the runtime digest stays
-  ours.
-- **An incomplete pending RAM directory** makes `start` cold-boot silently
-  (S@1.19.0:vm_common.rs:1610-1612).
+  string doesn't change when libkrun state does, so the checkpoint pin stays
+  ours (now the smolvm version, since only upstream releases are used).
+- **Pending restore directory:** at 1.19.0 an incomplete one made `start`
+  cold-boot silently (S@1.19.0:vm_common.rs:1610-1612). At 1.22.2 it is built
+  under a `-partial` name, marked pending, then renamed into place, and a failed
+  create rolls the whole machine back
+  (S@1.22.2:src/portable_checkpoint.rs:4080, 4237, 4247). So no check is needed;
+  this stays a bump claim.
 - **Ports:**
   - A checkpoint with published ports refuses any backend but virtio-net
     (S@1.22.0:src/portable_checkpoint.rs:3507-3509).
@@ -131,7 +140,9 @@ Checked 2026-10-01. Each row says what was actually exercised.
   - Below it, the VM root is an overlay on smolvm's 48 MiB agent rootfs, shared
     read-write over virtiofs (S@1.22.0:src/agent/launcher.rs:1049).
 - **No init:** a service survives as an `exec --detach` child and must be
-  launched again on every boot. `machine create --init` runs only on first boot.
+  launched again on every boot. `machine create --init` runs only on first boot:
+  it sets `init_completed` (S@1.22.2:src/cli/vm_common.rs:1955-1968), although
+  its help text says "every VM start" (S@1.22.2:src/cli/machine.rs:3969).
 - **Status JSON:** `machine status --json` reports a port count, not the ports;
   `machine ls -v` and `agent.config.json` have them. It reports
   `branchable: false` after `start --branchable`, although branching works.
@@ -190,7 +201,7 @@ Checked 2026-10-01. Each row says what was actually exercised.
 - **Parent directories:** smolvm adds others-execute to every directory above
   its data root; `/home/clanker` went from 0750 to 0751.
 - **Release ownership:** extracting the release tarball as root keeps the CI
-  owner, uid 1001.
+  owner, uid 1001. Moot now that clankerbox doesn't ship smolvm.
 - **Egress:** guest traffic leaves as the VM's uid, so `meta skuid 1000` rules
   no longer match it.
 - **Published port:** with `SMOLVM_PUBLISH_ADDR=127.0.0.2`, the port listened on
@@ -213,7 +224,7 @@ Checked 2026-10-01. Each row says what was actually exercised.
 
 The old `runtime.patch` touches 4 files with 7 hunks (R:q-runtime-patch). The
 whole patch applies to v1.22.0 with offsets only. **None of it is needed by the
-rewrite**, so clankerbox ships upstream tarballs unmodified. Per part:
+rewrite**, so clankerbox runs upstream smolvm unmodified. Per part:
 
 | Part | Verdict | Reason |
 | --- | --- | --- |
@@ -259,7 +270,8 @@ rewrite**, so clankerbox ships upstream tarballs unmodified. Per part:
     epoxy and virgl on darwin;
   - `agent-rootfs/` (Alpine 3.19, 48 MB);
   - 20/10 GiB templates.
-- **No license or notice files.**
+- **No license or notice files.** clankerbox no longer redistributes smolvm, so
+  none of this needs a notice from us.
 - **Checksums:** darwin-arm64 `8e6f9d7a…`, linux-x86_64 `00d2f057…`.
 - **Templates:** at 1.22, a disk smaller than the template needs host
   `resize2fs` and fails without it (S@1.22.0:src/disk_utils.rs:110-119, 134-150).
@@ -356,8 +368,8 @@ rewrite**, so clankerbox ships upstream tarballs unmodified. Per part:
 - **Restores:** two restores of one checkpoint, each 1.2–1.4 s to create, both
   clashed on the checkpoint's port at start. `machine update --remove-port
   30922:22 -p NEW:22`, then `start`, worked for both.
-- **Unprivileged, a guest could write the shared agent rootfs.** That is accepted
-  for dev.
+- **Unprivileged, a guest could write the shared agent rootfs.** Moot now that
+  Linux hosts always run as root.
 
 **Fork as checkpoint + restore, single-file checkpoints** (L:fork-restore-mac,
 L:fork-restore-linux, 1.22.0, 2026-10-02). The procedure: `machine checkpoint` of
@@ -435,8 +447,7 @@ Released 2026-10-01 and 2026-10-02. Release notes and `git diff v1.22.0 v1.22.2`
   (S@1.22.2:src/portable_checkpoint.rs, `prefetch_restore_memory`).
 - **`create --from … --keep-identity`** skips the identity re-mint ("a resumed or
   rewound machine keeps its own"), for rewinding a machine as itself.
-- **libkrunfw moved to a guest kernel with conntrack marks** (#1493, #1494). The
-  runtime digest and the corresponding-source commit change.
+- **libkrunfw moved to a guest kernel with conntrack marks** (#1493, #1494).
 - The rest is `serve`/API work (mTLS client CN, closed API input, egress
   amendments) and `machine update --outbound-localhost-only`, none of which
   clankerbox uses.
@@ -484,6 +495,49 @@ the source started `--branchable`):
   276–618 MiB and stays until the machine is deleted.
 - **Identity:** the SSH host key, machine-id and hostname are re-minted by
   default.
+
+## Plan review findings (2026-10-02)
+
+Facts checked while answering two reviews of the plan. smolvm lines are at
+1.22.2.
+
+- **Outbound network:** `machine create --net` means "Enable outbound network
+  access" (S@1.22.2:src/cli/machine.rs:3872-3874). `resolve_egress_flags` turns
+  it on only for `--net` or an allow list; `-p` doesn't (machine.rs:102-134).
+- **Live checkpoint topology:** `create --from` a live checkpoint refuses `-p`,
+  `--net` and every other topology flag (machine.rs:4307-4344). That is why a
+  restore's ports are swapped with `machine update`.
+- **Pack-created machines:** the pack's layers are extracted into the machine's
+  own directory once, at create. Later starts don't need the `.smolmachine`
+  file; only finishing an interrupted create does
+  (S@1.22.2:src/agent/launcher.rs:395-412).
+- **smolvm's own locks:** `manager.rs`, `fork.rs` and `vm_common.rs` take
+  `flock`s. Whether concurrent CLI calls on different machines are safe is P12.
+- **Upstream installer:** `scripts/install.sh --version VERSION --prefix DIR`,
+  with `~/.smolvm` as the default prefix and links in `~/.local/bin`
+  (S@1.22.2:scripts/install.sh:11-26).
+- **Go's Tart exec:** `tart exec -i <vm> sudo -n /bin/bash -c <script>`
+  (G:internal/host/guest.go:85). Seeds were prepared by `images/finalize-mac.sh`,
+  which wrote the prepared marker (G:images/finalize-mac.sh:59). The old design
+  audit records that Cirrus images start tart-guest-agent as a per-user
+  LaunchAgent (88969a9:docs/plans/design-audit.md:476-479). Passwordless sudo on
+  current images is unverified (P3).
+- **Local Network permission:** personal-cloud's runbook for the 0.11.0 Mac host,
+  which dialed guest IPs, says a new host build needs a fresh Local Network grant
+  (`personal-cloud/hosts/clankerbox-runtime/README.md`).
+- **Production hosts:** the Mac host runs Tart only and the Linux host smolvm
+  only (`personal-cloud/hosts/clankerbox-runtime/{mac,linux}-host.json`).
+- **clankercreds:** it reads `/var/lib/clankerbox/machine-id` as the machine's
+  audit-log label and accepts only `^[A-Za-z0-9_-]{1,62}$`
+  (clankercreds `apps/cli/src/state.ts:10-18`).
+- **cliamp-verify:** its `clankerbox.md` drives the CLI against `cliamp-dev`:
+  `create`, `shell -T` with stdin, `fork`, `profile publish`/`logs` and
+  `operation`. The tracked recipes are `linux-dev` and `mac-xcode`
+  (personal-cloud), `gg-linux-dev` (clankerbox-profiles) and `cliamp-dev`
+  (cliamp-verify). The live profile catalog wasn't queried.
+- **Long calls:** Node's HTTP server `requestTimeout` defaults to 300 000 ms
+  (checked on Node 26.8.2). The undici client behind `fetch` has its own header
+  and body timeouts; check their values at 26.10.0.
 
 ## Defects in the Go implementation not to port
 
