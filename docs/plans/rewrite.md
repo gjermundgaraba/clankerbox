@@ -665,9 +665,9 @@ Two rules for every VM job:
   included. Every action that boots a VM (create, start, fork, restore) counts
   running VMs with `tart list` in step 3 and refuses with `Capacity` at two, so
   the refusal writes nothing and placement can move on. Apple's own refusal is
-  the backstop when two starts race: it maps to `Capacity` too, but a create's
-  clone then stays, with `action.status = failed`. P11 checks what that refusal
-  looks like.
+  the backstop when two starts race: it maps to `Capacity` too, but the clone
+  that a create, fork or restore has already made then stays, with
+  `action.status = failed`. P11 checks what that refusal looks like.
 - **Guest agent:** stock Cirrus images run tart-guest-agent ≥ 0.15.0 as a
   per-user LaunchAgent, which starts after auto-login. Setup and preparation
   wait for `tart exec` to answer after boot, then run through
@@ -918,7 +918,8 @@ Everything the rewrite creates on a test machine is removed when the work ends.
   - a duplicate name refused with `Conflict{exists}`, a lost-reply retry
     resolved by reading the resource, and a second action on a claimed machine
     refused with `Conflict{busy}`;
-  - Tart's two-VM limit returned as `Capacity`, with nothing written;
+  - Tart's two-VM limit refused with `Capacity` before any clone, with nothing
+    written;
   - list fan-out with one host down;
   - `dev destroy` removing every resource and the state dir;
   - `--json` error tags.
