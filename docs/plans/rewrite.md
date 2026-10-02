@@ -375,10 +375,12 @@ by tests, docs or harnesses doesn't count.
     so the operator's Linux base is a small image built from a Dockerfile in
     clankerbox-profiles: `FROM ubuntu:24.04@sha256:…`, `openssh-server` installed
     with `--no-install-recommends`, the operator's public key, and
-    `/etc/clankerbox/start`. CI builds it and pushes it to ghcr; a `docker save`
-    tarball on the host works too, since smolvm accepts either. If that proves
-    awkward, the fallback is `init` commands on the base in host config, passed
-    to `machine create --init` (run once, as root, on first start).
+    `/etc/clankerbox/start`. The host keys `openssh-server` generates at build
+    time may stay in the image, since preparation re-mints them per machine.
+    CI builds it and pushes it to ghcr; a `docker save` tarball on the host
+    works too, since smolvm accepts either. If that proves awkward, the
+    fallback is `init` commands on the base in host config, passed to
+    `machine create --init` (run once, as root, on first start).
   - Tart: a stock Cirrus image pinned by digest
     (`ghcr.io/cirruslabs/macos-…-base@sha256:…`). It ships sshd and
     tart-guest-agent.
@@ -392,9 +394,11 @@ In order:
 
 1. **Identity.** Each machine row gets a random `instance` value when it is
    inserted. Compare `/var/lib/clankerbox/instance` with it. On a mismatch:
-   - Re-mint the SSH host keys where the runtime didn't: a Tart clone, or a
-     machine created from a smolvm pack. smolvm re-mints the keys on disk on
-     every restore, and a smolvm fork is a restore.
+   - Re-mint the SSH host keys, unless smolvm has just restored this machine:
+     smolvm re-mints them on disk on every restore, and a smolvm fork is a
+     restore. Everything else needs it: a Tart clone, a machine created from a
+     smolvm pack, and one created from a base image, whose keys were generated
+     when the image was built.
    - Restart sshd if it is running. A sshd carried over in RAM can keep serving
      the old key until restarted (seen on OpenSSH 10.0 after `machine branch`).
    - Write `/var/lib/clankerbox/machine-id` (the ID), then the instance value
@@ -475,7 +479,8 @@ two cases:
   `system.slice/smolvm-vm-<name>.scope` and survives its launcher. No
   `systemd-run` and no unit files. Verified for plain starts and restores. P13
   checks the same on a GitHub-hosted runner; if scopes don't work there, dev in
-  CI runs without them, and its VMs then end with `dev`.
+  CI runs without them, and its VMs are then not supervised (they are detached
+  children in `dev`'s cgroup).
 - **Tart:** the plist is written once at create. Start runs `launchctl print`,
   then bootstrap if the job is absent, then `kickstart` without `-k`.
 
