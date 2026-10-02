@@ -30,7 +30,8 @@ Checked 2026-10-01. Each row says what was actually exercised.
 | Tart | ≥ 2.40.1 | Audited in source at 2.40.1; S3 ran on 2.38.0. |
 | Softnet | 0.24.0 (needs macOS 26) | Audited. It runs its own DHCP server and advertises the gateway as DNS. |
 | tart-guest-agent | ≥ 0.15.0 | Audited. Its vsock sockets are close-on-exec. |
-| boat.dev API | v1 (`https://boat.dev/api/v1`) | Two spikes on 2026-10-02 against a trial account, calling the API directly (L:boat). Docs and `openapi/boat-v1.yaml` read the same day. |
+| Ubuntu (smolvm base) | 26.04 LTS, `ubuntu:26.04` (resolute), digest-pinned in host config | On Docker Hub with amd64 and arm64 builds (index digest `sha256:3595d7fc…`, checked 2026-10-02). Not yet run on smolvm; the stock-image runs used 24.04 and 25.10. |
+| boat.dev API | v1 (`https://boat.dev/api/v1`) | Three spikes on 2026-10-02 against an account on boat's trial, calling the API directly (L:boat). Docs and `openapi/boat-v1.yaml` read the same day. |
 | Node | 26.10.0 | SEA built and run on darwin-arm64 and linux-x64 (R:q-sea-min). |
 | effect, @effect/platform-node | 4.0.0 (stable, published 2026-10-01 03:11 UTC) | A 666 KB Effect 4.0.0 bundle ran inside a SEA (R:q-sea-min). Nothing else yet. |
 | effect-actions | 0.9.0 (published 2026-10-01) | Not yet. Earlier work used 0.8.0. |
@@ -309,12 +310,16 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
 
 - **Account limits (D:, observed):**
   - The trial allows 2 active sandboxes and 5/25/75 starts per
-    minute/hour/day. Paid plans raise these (100 active on the $20 plan).
-  - Create, fork and resume each count as a start, and refused requests
-    counted too (4 → 6 per hour after two 429s).
-  - The trial refuses `ttlSeconds: null` with 400 `trial_auto_stop_required`
-    and caps the TTL at 2 h. Create and resume default to a 1 h TTL, and a
+    minute/hour/day. Paid plans raise these (100 active on the $20 plan). A
+    subscription in its 7-day trial keeps the trial limits until its first
+    payment.
+  - Create, fork and resume each count as a start. Two 429 refusals counted
+    too (4 → 6 per hour); 403 type refusals and idempotent repeats didn't.
+  - The trial refuses `ttlSeconds: null` and anything over 7200 with 400
+    `trial_auto_stop_required`. Create and resume default to a 1 h TTL, and a
     fork always does unless the call passes `ttlSeconds` (D:).
+  - Types: on the trial, `large` is 403 `trial_machine_class_not_allowed`.
+    `xlarge` is 403 `machine_class_plan_required` below the $100 plan.
 - **Create (observed):** 202 in about 0.2 s, ready 0.1–2.2 s later. The machine
   had booted 28 minutes before, from boat's pool. The body has no name field;
   `PATCH {name}` sets a display name afterwards. `GET /sandboxes` filters by
@@ -327,9 +332,11 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
     was warm).
   - A create or fork that finds no machine later ends in state `cancelled`;
     the sandbox is reported once, then 404 (D:).
-  - 429 also covers `rate_limited` and `daily_limit_reached`; a size the plan
-    doesn't allow is 403 `trial_machine_class_not_allowed` (D:).
-- **Idempotency-Key (D:, observed):** on create and fork. Same key and body
+  - 429 also covers `rate_limited` and `daily_limit_reached` (D:). The 403
+    type refusals above created nothing either.
+  - An 11th named snapshot is 409 `named_snapshot_limit`.
+- **Idempotency-Key (D:, observed):** on create (also with `from`) and fork.
+  Same key and body
   return the same sandbox, also after it is ready. Another body is 409
   `idempotency_key_reused`; a retry during creation is 409
   `idempotency_in_progress`. Keys last 24 h, and a create that failed before
@@ -345,7 +352,12 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
     machines had an IPv6 `ip` and a relay on a 190xx port.
   - SSH streams stdin, returns the exit code, and a 650 s session through the
     relay ran to the end. ssh joins argv into one string.
-  - `user` has passwordless `sudo -n`.
+  - `user` has passwordless `sudo -n`. sshd allows root with a key
+    (`permitrootlogin without-password`, no passwords), and its one host key
+    (ed25519), read through `POST /commands`, matched `ssh-keyscan`.
+- **Forwarding (observed):** a connection to a guest port by `ssh -W` through
+  the relay took 0.31–0.32 s to a full HTTP response, like a plain `ssh true`
+  (0.29–0.33 s). Over a ControlMaster connection it took 0.05–0.07 s.
 - **Command API (D:, observed):** `POST /sandboxes/{id}/commands` runs a bash
   string as `user` in `/home/user`. It returns `exitCode`, `signal`, `stdout`,
   `stderr` and `timedOut`. `timeoutSeconds` is 1–600, and a timeout kills the
@@ -358,7 +370,13 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
   Docker, Node, Python and preinstalled coding agents. `ufw` is active. The
   image is boat's and not digest-pinned. Sizes are fixed: `small`
   2 vCPU/4 GB/12 GB, `default` 4/8/50, `large` 8/16/125, `xlarge` 16/32/251
-  ($100+ plan) (D:). `small` showed 3916 MiB.
+  ($100+ plan) (D:). `small` showed 3916 MiB. D: lists the OS as Ubuntu
+  24.04 LTS with no other choice.
+- **Setup (observed):** as root over SSH, `apt-get update`, `openssh-server`
+  without recommends (already installed), a root key, a line in
+  `/etc/environment` and a `start` that `setsid -f`s a server took 5.8 s.
+  `/etc/resolv.conf` is the systemd-resolved stub. New SSH sessions saw the
+  `/etc/environment` line, and the server outlived the setup session.
 - **Firewall (D:):** boat's agent listens on TCP 8911, and its HTTPS routes use
   a WireGuard tunnel. A guest rule that blocks either marks the sandbox
   degraded.
@@ -376,22 +394,33 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
     file written and synced 0.56 s before the fork was missing.
   - Waiting until a snapshot attempt that began after the write had
     `completed` (`lastSnapshotAttemptAt`, `lastSnapshotStatus`,
-    `snapshotCompletedAt`) took 40.8 s, and that fork had the file.
-  - The source keeps running. A fork is ready in 2.2–4.2 s, and a fork of a
+    `snapshotCompletedAt`) took 40.8 s, and that fork had the file. After
+    writing 3 GiB, the wait took 101.8 s.
+  - The source keeps running. A fork is ready in 2.2–4.4 s, and a fork of a
     stopped sandbox holds everything up to the stop.
 - **Stop and resume (observed):** stop took 2.3–18.9 s to `archived`. Resume
-  was ready in 2.4 s, on a new node.
+  was ready in 2.4–2.5 s, on a new node.
 - **Lazy restore (observed):**
-  - At `ready`, the system binds (`/home/user`, `/etc`, `/usr`, `/opt`,
-    `/root`, `/srv`) are mounted. `/var/lib` and `/var/opt` land a few seconds
-    later, and enabled units start after that.
-  - 0.4 s after a resume reported ready, `/var/lib`, the dpkg record and the
-    unit's run were missing. The unit started 4 s after ready.
-  - `/var/lib/ascii-lazy/sys-done` was present whenever they were, but it is
-    undocumented. The documented signal is the `sandbox.hydrated` webhook
-    (D:), which needs a public receiver.
+  - At `ready`, the binds (`/home/user`, `/etc`, `/usr`, `/opt`, `/root`,
+    `/srv`) are mounted, and their files are fetched on first read. 2 GiB in
+    `/home/user` took 24–277 s to read after a restore.
+  - `/var/lib` and `/var/opt` are restored in full before
+    `/var/lib/ascii-lazy/sys-done` appears. A 1 GiB file in `/var/lib`
+    appeared in the same 0.25 s poll as the marker, 9–13 s after the first
+    SSH, on a fork, a resume and a restore. It read in about 1 s. Enabled units
+    start after that.
+  - With little data, 0.4 s after a resume reported ready, `/var/lib`, the
+    dpkg record and the unit's run were missing. The unit started 4 s after
+    ready.
+  - A fresh create had neither `sys-done` nor `hydration-done` within 60 s.
+    `hydration-done` hadn't appeared 300 s into the restores of 3 GiB.
+  - The marker is undocumented. The documented signal is the
+    `sandbox.hydrated` webhook (D:), which needs a public receiver.
 - **Named snapshots (D:, observed):**
-  - Saving from a running sandbox took 126.7 s, and from a stopped one 0.2 s.
+  - Saving from a running sandbox took 126.7 s. From a stopped one it took
+    0.2–1.3 s, and 21.1 s for the first save after writing 3 GiB.
+  - An 11th is refused with 409 `named_snapshot_limit`. Re-saving an existing
+    name at the cap works.
   - A named snapshot is independent of its source: a deploy after the source
     was deleted had every file.
   - Names are account-wide, and an account keeps at most 10 (D:).
@@ -455,7 +484,7 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
   can be replayed between the hosts it covers, which is acceptable when the
   hosts are equally trusted.
 
-**Stock image** (R:q-smolvm-stock, on this Mac):
+**Stock image** (R:q-smolvm-stock, on this Mac, `ubuntu:24.04`):
 
 - **Timings:** create 0.04 s; first start 21.6 s with a cold image pull, 1.15 s
   once cached.

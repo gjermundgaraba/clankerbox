@@ -1,10 +1,10 @@
 # TypeScript/Effect rewrite: plan
 
 Status: planned. Every design decision below is closed. The phase-0 spikes still
-gate details of guest access, setup, preparation and disk sizing, and P14 gates
-details of the boat runtime. The evidence behind the decisions is in
-[evidence.md](evidence.md). Both files are deleted in the last commit before the
-merge.
+gate details of guest access, setup, preparation and disk sizing, and P14 checks
+boat's auto-stop once the account is past its trial. The evidence behind the
+decisions is in [evidence.md](evidence.md). Both files are deleted in the last
+commit before the merge.
 
 clankerbox is rewritten from scratch in TypeScript on Effect 4, as a clean break.
 No persisted state is migrated. Production is destroyed and redeployed at
@@ -43,10 +43,11 @@ The Go implementation is deleted from this branch (`4898a3e`). Read it at `main`
 | Network | Hosts and clients share the operator's Tailscale tailnet (personal-cloud work, outside this plan). No hop of ours uses TLS: the tailnet encrypts and authenticates, and clankerauth authorizes each request. A tailnet ACL should limit who can reach the host API port. A boat host calls boat's API over HTTPS, and boat machines' SSH endpoints are public addresses (see [Runtimes: boat](#runtimes-boat)). |
 | State | SQLite through `node:sqlite`, on each host. The schema is versioned with `PRAGMA user_version` and an ordered list of migrations, starting at version 1. There is no client-side state beyond configuration and profile files. |
 | Placement | The client library places `create`: it reads every host's labels and bases, keeps the hosts that match the request, and tries them in the order of its host list. Every other call routes by ID. |
+| Linux guests | Ubuntu 26.04 LTS, the latest LTS, where we choose the image: smolvm bases are stock `ubuntu:26.04`. A runtime that ships its own image is used as it comes; boat's is Ubuntu 24.04. |
 | Profiles | Client-side files, never stored on a host. A machine is created from a base image the host names (a stock image, or boat's own), and the profile's setup script runs once, at create. |
 | Production | personal-cloud runs 0.11.0 with a Linux smolvm host (Hetzner) and a Mac Tart host. At cut-over, every 0.11.0 machine and checkpoint is destroyed, the new release is deployed with a boat host added, and the profiles are rewritten as profile files. |
 | Hosts | A smolvm host always runs as root, in production, dev and CI. smolvm runs only on Linux hosts and Tart only on macOS hosts. A boat host runs unprivileged on either. |
-| Runtimes | smolvm and Tart are host prerequisites that the operator installs. The release ships neither. boat is a cloud service: a boat host needs only a boat API key on a paid plan. |
+| Runtimes | smolvm and Tart are host prerequisites that the operator installs. The release ships neither. boat is a cloud service: a boat host needs only a boat API key, on an account past boat's trial. |
 | MCP | None. |
 | Tooling | vite-plus 1.0.0 (`vp`), pnpm 12, TypeScript 7.0.2, laid out like `/private/tmp/monorepo-example`. The lint setup (typeAware, typeCheck, the anti-slop plugin) mirrors clankerauth. Live runs use `scripts/work_runs.py`. |
 | Dependency floors | smolvm exactly 1.22.2, upstream and unmodified (see [Runtimes: smolvm](#runtimes-smolvm)), Tart ≥ 2.40.1, tart-guest-agent ≥ 0.15.0, Softnet 0.24.0 (macOS 26 hosts), boat API v1, Node 26.10.0, clankerauth-sdk 0.12.0. |
@@ -423,15 +424,17 @@ listed to keep them from being ported):
 - **Bases:** each host names its bases in config, mapping a name to an image,
   digest-pinned where the runtime allows. Hosts that offer the same image use
   the same name, and placement matches on it.
-  - smolvm: a stock OCI image, for example `ubuntu:24.04@sha256:…`. It has no
-    sshd; setup installs it.
+  - smolvm: a stock OCI image, `ubuntu:26.04@sha256:…`. It has no sshd; setup
+    installs it.
   - Tart: a stock Cirrus image, `ghcr.io/cirruslabs/macos-<version>-base` or
     `macos-<version>-xcode:N` (with Xcode), pinned by digest. Both ship sshd
     and tart-guest-agent.
   - boat: boat's one image (Ubuntu 24.04, x86_64, with sshd, Docker and
-    coding agents), which boat updates, so it can't be pinned. A boat host
-    names it apart from stock images. Sharing a name with a stock image is the
-    operator's call, and works only if the profile's setup handles both.
+    coding agents), which boat updates, so it can't be pinned. boat offers no
+    26.04 image, so a profile on `ubuntu:26.04` doesn't land on boat. A boat
+    host names its image apart from stock images. Sharing a name with a stock
+    image is the operator's call, and works only if the profile's setup handles
+    both.
 
 ### Setup and preparation
 
@@ -535,8 +538,9 @@ A crashed preparation is simply run again on the next activation; no
   - Guest port 22 is reached at boat's SSH relay (see
     [Runtimes: boat](#runtimes-boat)), with no host port.
   - Every other exposed port goes through the same forwarder. Each accepted
-    connection runs `ssh -W 127.0.0.1:<guestPort>` through the relay, with the
-    host's key and the pinned host key. P14 measures what opening one costs.
+    connection runs `ssh -W 127.0.0.1:<guestPort>` over the machine's shared
+    SSH connection (see [Runtimes: boat](#runtimes-boat)), about 0.06 s to
+    open.
 - **Security:** anything on the tailnet can reach a published port. sshd's keys
   and the pinned host key are the protection. smolvm's strict floor and Softnet
   keep guests away from private ranges. The guest can still reach the host's
@@ -722,8 +726,9 @@ Two rules for every VM job:
   - The host calls boat's HTTP API v1 directly, with Effect's HTTP client and
     Schemas for the endpoints it uses. It uses no boat SDK or CLI.
   - Host config holds a boat API key.
-  - The account needs a paid plan: the trial forces auto-stop within 2 hours
-    and allows 2 sandboxes.
+  - The account must be past boat's trial. The trial forces auto-stop
+    within 2 hours, allows 2 sandboxes and no `large` type, and a
+    subscription stays on it until its first payment.
 - **Every create, fork, resume and restore** sends:
   - `noEnv: true`, so no account secrets, GitHub token or model logins reach
     the guest. The guest still gets a boat token confined to itself.
@@ -750,32 +755,39 @@ Two rules for every VM job:
   - Anything else reads as `stopped`. A machine that boat stopped on its own
     reads `stopped`, and `start` resumes it.
 - **Sizes:** boat has four fixed machine types, from `small` (2 vCPU, 4 GiB,
-  12 GiB) to `xlarge` (16 vCPU, 32 GiB, 251 GiB, plan-gated).
+  12 GiB) to `xlarge` (16 vCPU, 32 GiB, 251 GiB, from the $100 plan).
   - The host picks the smallest type that covers `cpu`, `ramMib` and
     `diskGib`, and the machine reports that type's sizes.
   - A request that no type covers is refused with `Capacity` in step 3, not
     `Precondition`, so placement moves on to a host that can take it.
-- **Capacity:** boat refuses in three ways, and none of them leaves anything on
-  boat:
+- **Capacity:** none of these boat refusals leaves anything on boat:
   - 429 (`limit_reached`, `rate_limited`, `daily_limit_reached`);
   - 503 `no_ready_machine`, for a `failFast` call;
+  - 403 for a type the account's plan doesn't include
+    (`trial_machine_class_not_allowed`, `machine_class_plan_required`);
+  - 409 `named_snapshot_limit`, for an 11th checkpoint;
   - a create or fork that ends in state `cancelled` when boat finds no
     machine.
 
-  All three map to `Capacity` and roll back like a failure in step 3. Create,
-  which placement can move on from, sends `failFast`. Fork, restore and start
-  wait for a machine. Refused requests still count against boat's start
-  limits, so falling through spends some of the account's budget.
+  All of them map to `Capacity` and roll back like a failure in step 3.
+  Create, which placement can move on from, sends `failFast`. Fork, restore
+  and start wait for a machine. A 429 still counts against boat's start
+  limits (a 403 doesn't), so falling through spends some of the account's
+  budget.
 - **Ready:** boat reports `ready` before its lazy restore has finished.
-  `/var/lib` and `/var/opt` arrive a few seconds later, and enabled units start
-  after that.
+  - `/var/lib` and `/var/opt` are restored in full before boat's marker
+    `/var/lib/ascii-lazy/sys-done` appears: a few seconds after ready with
+    little data there, 10–14 s with 1 GiB. Enabled units start after that.
   - Preparation writes `/var/lib/clankerbox/`, so after a fork, start or
-    restore the runtime also waits, over exec, for
-    `/var/lib/ascii-lazy/sys-done`.
-  - That marker is undocumented. boat's documented signal, the
-    `sandbox.hydrated` webhook, can't reach a host on the tailnet.
-  - P14 confirms the marker and asks boat for a documented signal. Re-check it
-    at every change of boat's API or image.
+    restore the runtime also waits, over exec, for that marker. A fresh create
+    is not a restore, has no marker, and doesn't wait.
+  - The marker is undocumented. boat's documented signal, the
+    `sandbox.hydrated` webhook, can't reach a host on the tailnet. Ask boat
+    for a documented one, and re-check the marker at every change of boat's
+    API or image.
+  - Files under `/home/user`, `/etc`, `/usr`, `/opt`, `/root` and `/srv` are
+    there at ready but fetched on first read. 2 GiB in `/home/user` took
+    24–277 s to read after a restore.
 - **Exec:** SSH as `user`, through `sudo -n`.
   - The host owns one ed25519 key, generated at init, and authorizes it with
     `POST /sshkey` after create. Forks, resumes and restores carry it in
@@ -786,6 +798,9 @@ Two rules for every VM job:
     preparation, the pin is `Machine.hostKey`.
   - boat's command API is not the exec: it takes no stdin and caps a call at
     600 s. An SSH session has neither limit.
+  - The runtime keeps one SSH connection per running machine (an OpenSSH
+    ControlMaster), shared by exec and the forwarder. A forwarded connection
+    then opens in about 0.06 s, against 0.31 s for a new SSH connection.
 - **Endpoints:** guest port 22 is reached at boat's `sshEndpoint`, a public IPv4
   relay, or at `ip:22` when the machine has an IPv4 address of its own.
   - Host and port change on every start, so the host reads them with the
@@ -796,17 +811,17 @@ Two rules for every VM job:
   snapshot, which can be a minute old.
   - So the host first syncs the guest's filesystems and notes the time. It
     waits until a snapshot attempt that began after that time has completed
-    (about 40 s observed), then forks.
+    (41 s with little new data, 102 s after writing 3 GiB), then forks.
   - The source keeps running, and a stopped source forks at once.
   - Forks carry the disk only, never RAM.
 - **Checkpoints** are boat named snapshots, always `disk`, from a running or a
   stopped machine. Capture takes about two minutes from a running machine and
-  under a second from a stopped one.
+  0.2–21 s from a stopped one.
   - A restore creates a sandbox `from` the snapshot.
   - Named snapshots don't depend on their source and survive its deletion.
   - Names are account-wide, so the host uses `cbx-<host>-<name>`.
-  - boat keeps at most 10 per account, and the refusal at the cap is
-    `Capacity` (P14 checks its shape).
+  - boat keeps at most 10 per account. An 11th is refused with 409
+    `named_snapshot_limit`, which is `Capacity`.
 
   The alternative, checkpoints as stopped sandboxes, avoids the cap but costs
   a start per capture. It is not used.
@@ -827,6 +842,10 @@ Two rules for every VM job:
     over, and neither do `ufw` rules.
   - Leave boat's sshd, `user`'s `authorized_keys`, TCP port 8911 and boat's
     WireGuard tunnel alone. Blocking them cuts boat off from the guest.
+  - boat's sshd accepts root with a key, so setup can authorize the
+    operator's key for root. `/etc/environment` reaches SSH sessions. boat's
+    image already uses systemd-resolved; smolvm's rule against it doesn't
+    apply here.
 
 ### Other host rules
 
@@ -934,7 +953,8 @@ Every live run uses `scripts/work_runs.py`.
    - Cut-over waits until every API consumer runs on the new SDK, or the
      operator accepts that consumer's downtime.
    - Run the full live acceptance suite on Apple Silicon (Tart), on
-     Linux/amd64 with KVM (smolvm as root), and against boat on a paid plan.
+     Linux/amd64 with KVM (smolvm as root), and against boat on an account
+     past its trial.
    - Release.
    - Publish the SDK major.
    - Delete these plans in the last commit before the merge.
@@ -955,10 +975,11 @@ Every live run uses `scripts/work_runs.py`.
      tmpfs, and clankerbox uses neither. Without `=0`, every root restore still
      creates `/dev/shm/smolvm-restore`. Restores cost the same either way.
    - Add a boat host: a second host process on the Linux host, unprivileged,
-     with host ID `boat`, its own state dir, a boat API key on a paid plan, and
-     the `cloud` label. Clients list it last, so the local hosts are preferred.
+     with host ID `boat`, its own state dir, a boat API key on an account past
+     its trial, and the `cloud` label. Clients list it last, so the local hosts
+     are preferred.
    - Deploy with clankerauth keys covering all three hosts.
-   - Configure each host's bases (a digest-pinned stock Ubuntu image on Linux;
+   - Configure each host's bases (a digest-pinned stock `ubuntu:26.04` on Linux;
      digest-pinned Cirrus base and Xcode images on the Mac; boat's image on the
      boat host) and any operator labels.
    - Rewrite the profiles (`linux-dev`, `mac-xcode`, `gg-linux-dev`,
@@ -981,7 +1002,7 @@ S4 and its 26.10.0 re-run (SEA), S5 (clankerauth 0.11.0), the stock-image test
 (including `pack` and host keys), the ESTALE and fork-state runs on Linux, root
 mode on Linux, fork as checkpoint + restore on this Mac and on Linux as root
 with restore tmpfs, on 1.22.2 the `machine branch` depth limit and fork
-through the checkpoint store, and the two boat runs on a trial account.
+through the checkpoint store, and the three boat runs on a trial account.
 
 ### Phase 0
 
@@ -989,7 +1010,7 @@ through the checkpoint store, and the two boat runs on a trial account.
 | --- | --- |
 | **P1. Published ports on the tailnet.** On the Linux host as root (ask for approval first): a stock-image machine with `-p` on the tailnet address and `SMOLVM_EGRESS_FLOOR=strict`, then ssh, scp and rsync from another tailnet machine. Also over the tailnet: a fork (store checkpoint + restore) and two restores beside a running source, each with its swapped port and new host key, all under `SMOLVM_VM_USE_SCOPE=1` and on 1.22.2. Loopback and `127.0.0.2` already work, and restores under scopes do too. | guest access, or its fallback |
 | **P2. Tart forwarder.** Listener → `tart exec -i` → guest `nc 127.0.0.1 22`: ssh and rsync throughput, idle survival, and whether accepting on the tailnet interface needs Local Network permission. | guest access on Tart |
-| **P3. Setup and preparation.** Setup on a stock `ubuntu:24.04` image over plain exec: installing openssh-server with `--no-install-recommends` and a key, and how long it takes. On a current Cirrus image: how long until `tart exec` answers after boot, with no manual login, and does `sudo -n true` succeed? On smolvm, does a child started with `setsid -f` outlive the exec (sshd's own daemonizing already does)? Re-mint on Tart clones and on machines restored from a pack, and the time a second re-mint adds to a smolvm fork. How do ssh sessions and daemonized processes pick up the guest's environment (`/etc/environment` through PAM)? How long does a realistic `start` (sshd plus a clankercreds sync) take, to set its timeout? Re-running `start` on a running smolvm machine already works. | setup, preparation, Tart bases |
+| **P3. Setup and preparation.** Setup on a stock `ubuntu:26.04` image over plain exec (the earlier stock-image runs used 24.04 and 25.10): installing openssh-server with `--no-install-recommends` and a key, and how long it takes. On a current Cirrus image: how long until `tart exec` answers after boot, with no manual login, and does `sudo -n true` succeed? On smolvm, does a child started with `setsid -f` outlive the exec (sshd's own daemonizing already does)? Re-mint on Tart clones and on machines restored from a pack, and the time a second re-mint adds to a smolvm fork. How do ssh sessions and daemonized processes pick up the guest's environment (`/etc/environment` through PAM)? How long does a realistic `start` (sshd plus a clankercreds sync) take, to set its timeout? Re-running `start` on a running smolvm machine already works. | setup, preparation, Tart bases |
 | **P5. Pins.** Re-run S5 on clankerauth-sdk 0.12.0, and smoke-test effect-actions 0.9.0 on Effect 4.0.0 inside a SEA, including one unary call that runs past 300 s, to find any timeout of its own. | phase 1, long calls |
 | **P8. Disk sizing and install.** Which disk holds workload writes for a stock-image machine? Do sizes above or below smolvm's 20/10 GiB templates need host `resize2fs`? Can machines drop the overlay size and the compact templates? With smolvm installed under a prefix, does a stale `~/.smolvm` shadow its templates, and does the upstream wrapper find its libraries? | disk sizing, smolvm install |
 
@@ -1006,7 +1027,7 @@ call next to the unary ones. smolvm's `--expose-socket` is the other fallback.
 | P11. Tart's own refusal of a third VM: a fast refusal, or a hang until timeout. | the capacity backstop |
 | P12. Concurrent smolvm CLI calls on different machines in one inventory: do any need serializing? | a semaphore around those calls |
 | P13. Root smolvm on a GitHub-hosted runner (ask before pushing a workflow): a start and a restore under `SMOLVM_VM_USE_SCOPE=1`, each VM outliving its launching process. | dev in CI, with scopes or without |
-| P14. boat on a paid plan (ask before buying one). `ttlSeconds: null` on create, fork, resume and restore. The refusals for an 11th named snapshot and for `xlarge`. `/var/lib/ascii-lazy/sys-done` against the restored files on a fork, a resume and a restore of a machine with several GiB written, and whether a fresh create has it; ask boat for a documented signal. What opening a forwarded connection (`ssh -W` through the relay) costs. A setup script (sshd and a key) on boat's image. | boat's ready wait, checkpoint cap, forwarder |
+| P14. boat past its trial (after the subscription's first payment): `ttlSeconds: null` on create, fork, resume and restore, and a `large` create. The rest of P14 ran on the trial (evidence.md). | boat's auto-stop |
 
 ## Test machine footprint and final cleanup
 
@@ -1018,10 +1039,10 @@ Everything the rewrite creates on a test machine is removed when the work ends.
     personal-cloud Linux host. `clankerbox-host.service` (user unit) runs there
     and is never touched. Each root-mode run (`sudo`, system units, uids outside
     the owned root) needs the user's approval first;
-  - the operator's boat.dev account, on a trial now. Runs record every sandbox
-    ID and named snapshot as they create it, and their teardown deletes them.
-    A deleted sandbox answers 404 at once, while boat's deletion operation
-    purges its data later.
+  - the operator's boat.dev account, still on boat's trial. Runs record every
+    sandbox ID and named snapshot as they create it, and their teardown
+    deletes them. A deleted sandbox answers 404 at once, while boat's deletion
+    operation purges its data later.
 - **One owned root per machine:**
   - Linux: `~/clankerbox-rewrite/`. Never touch `~/clankerbox`, its service, its
     VMs or its smolvm state, and never restart `user@1000`.
@@ -1047,9 +1068,8 @@ Everything the rewrite creates on a test machine is removed when the work ends.
     `.work/spike-evidence/` (the S1 and S3 raw outputs).
   - `.work/upstream-smolvm/` belongs to the separate upstreaming work, not to
     these runs.
-  - boat: no sandboxes and no named snapshots. The first boat run's two
-    deletion operations were still purging data, expected by 23:00 UTC on
-    2026-10-02.
+  - boat: no sandboxes and no named snapshots. boat's deletion operations for
+    the runs' sandboxes purge their data on their own, within hours.
 - **Final cleanup, the last step of the whole effort:**
   1. Stop every recorded process, unit, job and VM.
   2. Confirm none remain, by name prefix and by the recorded IDs, including
