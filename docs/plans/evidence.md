@@ -35,7 +35,7 @@ Checked 2026-10-01. Each row says what was actually exercised.
 | Node | 26.10.0 | SEA built and run on darwin-arm64 and linux-x64 (R:q-sea-min). |
 | effect, @effect/platform-node | 4.0.0 (stable, published 2026-10-01 03:11 UTC) | A 666 KB Effect 4.0.0 bundle ran inside a SEA (R:q-sea-min). Nothing else yet. |
 | effect-actions | 0.9.0 (published 2026-10-01) | Not yet. Earlier work used 0.8.0. |
-| clankerauth-sdk, clankerauth-dev | 0.12.0 (published 2026-10-01) | Not yet. S5 passed on 0.11.0, and 0.11.1 was audited. |
+| clankerauth-sdk | 0.12.0 (published 2026-10-01) | Not yet. S5 passed on 0.11.0, and 0.11.1 was audited. |
 | vite-plus, TypeScript, pnpm | 1.0.0, 7.0.2, 12 | — |
 
 ## smolvm claims
@@ -487,9 +487,6 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
 
 **S5, clankerauth 0.11.0: 10/10.**
 
-- Dev mode embeds `startDisposableIssuer` in-process, with `dataDir` and a fixed
-  port.
-- Tests use `startFakeIssuer` with a `Clock` override.
 - One key can carry grants on several resources (clankerauth-sdk README:228). It
   can be replayed between the hosts it covers, which is acceptable when the
   hosts are equally trusted.

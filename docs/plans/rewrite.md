@@ -46,7 +46,7 @@ The Go implementation is deleted from this branch (`4898a3e`). Read it at `main`
 | Linux guests | Ubuntu 26.04 LTS, the latest LTS, where we choose the image: smolvm bases are stock `ubuntu:26.04`. A runtime that ships its own image is used as it comes; boat's is Ubuntu 24.04. |
 | Profiles | Client-side files, never stored on a host. A machine is created from a base image the host names (a stock image, or boat's own), and the profile's setup script runs once, at create. A smolvm host caches the result of a profile's setup (see [Setup cache](#setup-cache)). |
 | Production | personal-cloud runs 0.11.0 with a Linux smolvm host (Hetzner) and a Mac Tart host. garaba-home replaces personal-cloud. At cut-over, every 0.11.0 machine and checkpoint is destroyed, the new release is deployed from garaba-home with a boat host added, and the profiles are rewritten as profile files. |
-| Hosts | A smolvm host always runs as root, in production, dev and CI. smolvm runs only on Linux hosts and Tart only on macOS hosts. A boat host runs unprivileged on either. |
+| Hosts | A smolvm host always runs as root. smolvm runs only on Linux hosts and Tart only on macOS hosts. A boat host runs unprivileged on either. |
 | Runtimes | smolvm and Tart are host prerequisites that the operator installs. The release ships neither. boat is a cloud service: a boat host needs only a boat API key, on an account past boat's trial. |
 | MCP | None. |
 | Tooling | vite-plus 1.0.0 (`vp`), pnpm 12, TypeScript 7.0.2, laid out like `/private/tmp/monorepo-example`. The lint setup (typeAware, typeCheck, the anti-slop plugin) mirrors clankerauth. Live runs use `scripts/work_runs.py`. |
@@ -120,7 +120,7 @@ pnpm-workspace.yaml     # apps/*, packages/*, tools/*; catalog pins below
 vite.config.ts          # lint/fmt/staged/run.cache, as in clankerauth
 tsconfig.json
 apps/
-  clankerbox/           # the only binary: `clankerbox <cli…> | host`; the CLI commands, `ssh` and `dev` live here
+  clankerbox/           # the only binary: `clankerbox <cli…> | host`; the CLI commands and `ssh` live here
 packages/
   contract/             # Schemas, action groups (machine, checkpoint, host), errors, the profile file schema, client library (host list, routing, fan-out, placement, lost replies, recipe packing)
   host/                 # journal, claims, lifecycle, runtimes (smolvm, tart, boat), supervisor, setup, setup cache, preparation, checkpoints, ports, forwarder (Tart), state dir and sqlite
@@ -132,14 +132,19 @@ tests/live/             # gated live acceptance project, TypeScript, using the S
 ```
 
 Catalog: effect, @effect/platform-node, @gjermundgaraba/effect-actions,
-@gjermundgaraba/clankerauth-sdk, @gjermundgaraba/clankerauth-dev,
-typescript 7.0.2, vite-plus 1.0.0, @types/node 26. No native addons.
+@gjermundgaraba/clankerauth-sdk, typescript 7.0.2, vite-plus 1.0.0,
+@types/node 26. No native addons.
 
 **One multi-role SEA binary per platform**, about 150 MB each (about 45 MB
 gzipped):
 
 - darwin-arm64: CLI and host.
 - linux-amd64: CLI and host.
+
+Nearly all of each binary is Node itself (an Effect bundle run in one was
+666 KB), so separate CLI and host binaries would each be as large, and a host
+machine would carry both. One binary also keeps the CLI and the host on a
+machine at one version.
 
 Units run `process.execPath host`. VM jobs never reference this binary (see
 [Supervision](#supervision)).
@@ -330,7 +335,6 @@ by tests, docs or harnesses doesn't count.
 | Setup and preparation | setup once at create, and the smolvm setup cache; `/var/lib/clankerbox/machine-id` (clankercreds reads it), and `/etc/clankerbox/start` run after every activation |
 | Access | per machine, the SSH endpoint `{host, port}` and the guest's SSH host public key |
 | CLI | `hosts` (with their bases), `machines` (with each machine's age), `create NAME\|ID (--profile P [--fresh] \| --base NAME --cpu N --ram-mib N --disk-gib N [--setup FILE\|DIR --setup-timeout SECONDS])`, `start`, `stop`, `delete`, `fork`, `checkpoint capture/list/get/delete`, `restore`, `ssh MACHINE [ssh args…]`; `--json`, `--timeout` |
-| Dev | `dev` and `dev destroy`, both with `--state-dir`, on Linux as root |
 
 **Not carried over from the Go implementation** (read at `main`, so these are
 listed to keep them from being ported):
@@ -375,10 +379,12 @@ listed to keep them from being ported):
 - **Unprivileged and macOS smolvm:** `systemd-run --user` jobs and lingering,
   launchd jobs per smolvm VM, home-directory smolvm paths and their socket-length
   limit.
-- **Dev extras:** the dev host under launchd/systemd, bundle relocation, sticky
-  `--cpus`/`--ram-mib`, per-project state-dir hashing, `--listen`, the teardown
-  journal and token, dev's private controller, `dev stop`, the owner marker file
-  and the hashed runtime root.
+- **`dev`:** the one-command local host, with everything around it: the dev
+  host under launchd/systemd, bundle relocation, sticky `--cpus`/`--ram-mib`,
+  per-project state-dir hashing, `--listen`, the teardown journal and token,
+  dev's private controller, `dev stop` and `dev destroy`, the owner marker file
+  and the hashed runtime root. A consumer that wants a local host runs
+  `clankerbox host` with its own config and its own clankerauth issuer.
 - **Shipping the runtimes:** the smolvm bundle, the runtime manifest and digest
   directories, the runtime patch, and every notice and corresponding-source duty
   for smolvm and its native libraries.
@@ -605,8 +611,7 @@ otherwise happen on every create.
     needs the network. TSI also serves `-p`, but checkpoints with published
     ports require virtio-net.
   - The VM job's environment sets `SMOLVM_PUBLISH_ADDR` (the host's tailnet
-    address; unset in dev, so loopback) and `SMOLVM_EGRESS_FLOOR=strict`
-    explicitly.
+    address) and `SMOLVM_EGRESS_FLOOR=strict` explicitly.
 - **Port allocation** (smolvm and Tart; boat needs no host port):
   - The host picks one host port per machine from 10000–19999: below smolvm's
     fork range (20000–32000) and the Linux ephemeral range (32768 and up). It
@@ -653,10 +658,7 @@ runtimes:
 - **smolvm (Linux, root):** set `SMOLVM_VM_USE_SCOPE=1` on every `start`,
   including a restored machine's first start. Each VM gets its own
   `system.slice/smolvm-vm-<name>.scope` and survives its launcher. No
-  `systemd-run` and no unit files. Verified for plain starts and restores. P13
-  checks the same on a GitHub-hosted runner; if scopes don't work there, dev in
-  CI runs without them, and its VMs are then not supervised (they are detached
-  children in `dev`'s cgroup).
+  `systemd-run` and no unit files. Verified for plain starts and restores.
 - **Tart:** the plist is written once at create. Start runs `launchctl print`,
   then bootstrap if the job is absent, then `kickstart` without `-k`.
 
@@ -979,7 +981,7 @@ Two rules for every VM job:
   creates the database in one transaction and refuses a non-empty directory
   without one. There is no separate marker file and no temp-directory rename.
 
-## CLI and dev
+## CLI
 
 - **`clankerbox ssh MACHINE [ssh args…]`:** looks up the machine's `ssh`
   endpoint and host key, writes a one-line known-hosts file, then execs the
@@ -996,18 +998,6 @@ Two rules for every VM job:
   action has finished; `--timeout` only stops waiting.
 - **Client config:** one file holding the host list, in placement order, the
   key path, and an optional profiles directory.
-- **`clankerbox dev`** (Linux only, run as root):
-  - Runs a host in the foreground with an embedded `clankerauth-dev` issuer
-    (fixed `dataDir` and port, so keys survive restarts).
-  - Publishes on loopback.
-  - Takes `--state-dir`, defaulting to `/var/lib/clankerbox/dev`. The data root,
-    the client config and the key live under it. The client config and key are
-    owned by the invoking user (`SUDO_UID`), so the runner user in CI can use
-    what `sudo clankerbox dev` wrote.
-  - VMs run in their own scopes, so stopping `dev` leaves them running.
-- **`dev destroy`:** stops and deletes every machine and checkpoint recorded in
-  the state dir's database, through the runtimes, confirms that no VM runs,
-  then removes the state dir. It refuses a directory without our database.
 
 ## Release
 
@@ -1062,11 +1052,10 @@ tests use real VMs.
      preparation (with `start`'s guest-side lock), port allocation and
      publishing, the RAM budget, bases and the runtime in config, and the
      clankerauth resource.
-   - `dev` and `dev destroy` with clankerauth-dev.
    - `stop` and `delete` after an interrupted operation, including a crash
      between inserting the row and calling the runtime, and `delete` of a VM
      whose stop failed.
-   - Spikes P12 and P13. Live tests on Linux, through the CLI.
+   - Spike P12. Live tests on Linux, through the CLI.
 4. **smolvm checkpoints, fork and the setup cache.** Both checkpoint kinds,
    fork, and the [setup cache](#setup-cache). Spike P9.
 5. **Tart.** The runtime, its names, the forwarder and the two-VM count.
@@ -1167,7 +1156,6 @@ call next to the unary ones. smolvm's `--expose-socket` is the other fallback.
 | Spike | Gates |
 | --- | --- |
 | P12 (phase 3). Concurrent smolvm CLI calls on different machines in one inventory: do any need serializing? | a semaphore around those calls |
-| P13 (phase 3). Root smolvm on a GitHub-hosted runner (ask before pushing a workflow): a start and a restore under `SMOLVM_VM_USE_SCOPE=1`, each VM outliving its launching process. | dev in CI, with scopes or without |
 | P9 (phase 4). Restores as root. A store-mode `ram` restore: does it still share RAM read-only and use a copy-on-write disk top, as single-file restores did? Private disk and memory per restored machine with `--restore-cache-entries 0`. Then delete a fork's whole store while its children run. A `disk` restore: `create --from` a pack with `--net` and `-p`, its disk per machine, and the re-mint. | checkpoint and fork cost, fork cleanup, `disk` checkpoints, the setup cache's kind |
 | P11 (phase 5). Tart's own refusal of a third VM: a fast refusal, or a hang until timeout. | the capacity backstop |
 | P14 (phase 6). boat past its trial (after the subscription's first payment): `ttlSeconds: null` on create, fork, resume and restore, and a `large` create. Whether `POST /sshkey`'s `hostKey` is the current activation's. The rest of P14 ran on the trial (evidence.md). | boat's auto-stop, the host-key read |
@@ -1288,6 +1276,7 @@ Everything the rewrite creates on a test machine is removed when the work ends.
   - Tart's two-VM limit refused with `Capacity` before any clone, with nothing
     written;
   - list fan-out with one host down;
-  - `dev destroy` removing every resource and the state dir;
   - `--json` error tags.
 - Every live run goes through `scripts/work_runs.py`, following AGENTS.md.
+  It runs `clankerbox host` from its own config, with its own clankerauth
+  issuer, like any consumer.
