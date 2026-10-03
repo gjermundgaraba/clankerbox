@@ -321,9 +321,12 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
   - Types: on the trial, `large` is 403 `trial_machine_class_not_allowed`.
     `xlarge` is 403 `machine_class_plan_required` below the $100 plan.
 - **Create (observed):** 202 in about 0.2 s, ready 0.1–2.2 s later. The machine
-  had booted 28 minutes before, from boat's pool. The body has no name field;
-  `PATCH {name}` sets a display name afterwards. `GET /sandboxes` filters by
-  state only.
+  had booted 28 minutes before, from boat's pool. The body has no name, tag or
+  metadata field (D:, which lists `type`, `ttlSeconds`, `env`, `environment`, `noEnv`,
+  `snapshots`, `failFast`, `setupScript`, `org`); `PATCH {name}` sets a display
+  name afterwards. `GET /sandboxes` filters by state only. A sandbox echoes
+  nothing the client chose: until renamed it is `Box <time>`, and
+  `createdBy` is the account's user.
 - **Refusals (D:, observed):**
   - 429 `limit_reached` at the active limit, with and without `failFast`, and
     nothing created.
@@ -355,6 +358,13 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
   - `user` has passwordless `sudo -n`. sshd allows root with a key
     (`permitrootlogin without-password`, no passwords), and its one host key
     (ed25519), read through `POST /commands`, matched `ssh-keyscan`.
+  - `POST /sshkey`'s reply also carries the sandbox's `hostKey`, "to pin in
+    `known_hosts`" (D:; not tried).
+- **Hosted ports (D:, not tried):** `POST /sandboxes/{id}/host {port, public?}`
+  opens the sandbox firewall for the port and returns a stable
+  `https://<subdomain>-<port>.on.boat.dev` URL. It is HTTPS only, and gated by
+  a `_token` query parameter unless `public`. The docs don't say whether it
+  survives a stop or a fork.
 - **Forwarding (observed):** a connection to a guest port by `ssh -W` through
   the relay took 0.31–0.32 s to a full HTTP response, like a plain `ssh true`
   (0.29–0.33 s). Over a ControlMaster connection it took 0.05–0.07 s.
@@ -611,14 +621,33 @@ the source started `--branchable`):
   (clankercreds `apps/cli/src/state.ts:10-18`).
 - **cliamp-verify:** its `clankerbox.md` drives the CLI against `cliamp-dev`:
   `create`, `shell -T` with stdin, `fork`, `profile publish`/`logs` and
-  `operation`.
+  `operation`. Its fork (`clankerbox.md:96-104`) keeps the code shipped to
+  `/root/cliamp` for new runs, and no run survives a stop: it needs the disk,
+  not RAM.
 - **Profile recipes:** `linux-dev` and `mac-xcode` (personal-cloud),
   `gg-linux-dev` (clankerbox-profiles) and `cliamp-dev` (cliamp-verify). The
   live profile catalog wasn't queried, so a production profile without a
   tracked recipe would be missed when the profiles are rewritten.
-- **Long calls:** Node's HTTP server `requestTimeout` defaults to 300 000 ms
-  (checked on Node 26.8.2). The undici client behind `fetch` has its own header
-  and body timeouts; check their values at 26.10.0.
+  - `gg-linux-dev/setup.sh` is 137 lines. It installs vp, Node 26, pnpm, pi,
+    Codex, clankercreds, Claude Code, gh and fish, mostly at `latest`, and
+    installs `files/` (`clankercreds-config.json`, `clankercreds-key`,
+    `machine.json`; 306 bytes). It never runs `clankercreds sync`, so that the
+    image carries no credentials.
+  - `cliamp-dev` installs docker.io, golang-go, gcc, ffmpeg and PulseAudio.
+    cliamp-verify documents DNS in the VM failing intermittently, on the old
+    base.
+  - Neither setup has been timed.
+- **garaba-home** (checked 2026-10-02): its PLAN.md says it replaces
+  personal-cloud. `access.ts` denies anything it doesn't name: the admin
+  device reaches everything, and its one clankerbox rule lets `tag:apps`
+  reach `tag:agent-host` on 8444 for the controller's mTLS identity. PLAN.md
+  runs a clankerbox controller on the compute node and has it mint tailnet
+  keys for elevated agent profiles.
+- **Long calls** (checked on Node 26.8.2 on this Mac): `requestTimeout`
+  defaults to 300 000 ms and covers only receiving the request. With it at
+  2 s, a handler that replied 5 s after the body arrived returned 200. The
+  undici client behind `fetch` has its own header and body timeouts; check
+  their values at 26.10.0.
 
 ## Defects in the Go implementation not to port
 
