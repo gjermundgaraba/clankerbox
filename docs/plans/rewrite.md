@@ -122,7 +122,7 @@ tsconfig.json
 apps/
   clankerbox/           # the only binary: `clankerbox <cli…> | host`; the CLI commands and `ssh` live here
 packages/
-  contract/             # Schemas, action groups (machine, checkpoint, host), errors, the profile file schema, client library (host list, routing, fan-out, placement, lost replies, recipe packing)
+  contract/             # Schemas, action groups (machine, checkpoint, host), errors, the profile file schema, client library (host list, routing, fan-out, placement, recipe packing)
   host/                 # journal, claims, lifecycle, runtimes (smolvm, tart, boat), supervisor, setup, setup cache, preparation, checkpoints, ports, forwarder (Tart), state dir and sqlite
 tools/
   release/              # SEA build and signing, bundle, notices
@@ -193,22 +193,10 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
 - `create`, `fork`, `restore` and checkpoint `capture` take the new resource's
   name. If that name already exists on the host, the call fails with
   `Conflict{kind: "exists"}`.
-- **Lost replies:** the client library resolves them itself.
-  - Every mutation carries a random request ID, which the host stores as
-    `action.id` on each row the action claims. It is not an idempotency key:
-    the host never looks it up.
-  - When a reply is lost, the library reads the resource the call targeted,
-    by ID. If its `action.id` is the request's, the library waits while the
-    action is `running` and returns `done` or the failure.
-  - Otherwise the request never took effect, or was refused without writing
-    anything, and the library sends it once more, to the same host, and
-    returns that reply. A `create` is resent to the attempted ID, not placed
-    again. A `delete` that finds the resource gone is done.
-  - It can misreport only if another action replaced the record between the
-    lost reply and the read.
-  - If the host stays unreachable, the reply is `Unavailable`, naming the ID,
-    and is not retryable. A retry of a `create` goes to that ID, so it never
-    lands on another host.
+- **Lost replies:** the client library doesn't resolve them. A mutation whose
+  reply is lost returns `Unavailable`, naming the ID and saying that the action
+  may have run; the caller reads the resource to see. It is not retryable. A
+  retry of a `create` goes to that ID, so it never lands on another host.
 - `start` on a running machine and `stop` on a stopped one succeed without doing
   anything, except that `start` on a running machine runs preparation again (the
   repair path, see [Setup and preparation](#setup-and-preparation)). `delete` of
@@ -244,8 +232,7 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
   connection never interrupts native work, and the outcome is recorded on the
   row either way.
 - The CLI's `--timeout` only stops waiting. On timeout the CLI reports that the
-  action is still running and exits 1. A lost reply is resolved by the client
-  library (see Lost replies above).
+  action is still running and exits 1.
 - Every action runs in this order (see [Journal and claims](#journal-and-claims)):
   1. Validate the input.
   2. Claim the rows in one transaction, inserting the new row.
@@ -292,9 +279,9 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
   API version), and its base names.
 - No resource repeats its name or host: both are parts of the ID, and the client
   library splits it.
-- **`action: {id, name, status: "running" | "failed" | "done", error?: {tag,
+- **`action: {name, status: "running" | "failed" | "done", error?: {tag,
   message}}`** is the one field for work on a resource, and records its last
-  action. `id` is the request ID (see Lost replies). It is `running` while an
+  action. It is `running` while an
   action holds the row, `failed` with the error after a native failure, and
   `done` after a success. The next action replaces it. A checkpoint is ready
   once its action is `done`.
@@ -408,10 +395,8 @@ listed to keep them from being ported):
   already running, the call fails with `Conflict{kind: busy}` and nothing is
   written.
   - Ready checkpoints never change, so actions that only read them don't claim
-    them, and restores of one checkpoint run in parallel. The host counts the
-    restores reading each checkpoint, in memory (one process owns the state
-    dir, and none are in flight after a restart). A `delete` of a checkpoint
-    that a restore is reading fails with `Conflict{kind: busy}`.
+    them, and restores of one checkpoint run in parallel. A restore whose
+    checkpoint is deleted under it fails like any runtime failure.
   - Runtime state checks run after the claim, so nothing changes between the
     check and the use.
   - Ports are recorded in the same transaction (see [Guest access](#guest-access)).
@@ -419,10 +404,7 @@ listed to keep them from being ported):
   whether smolvm CLI calls on different machines need serializing; if they do, a
   semaphore covers those calls only.
 - **The row comes before any native effect,** so that after a crash `delete` has
-  something to own. Nothing is ever replayed: a replay could cold-boot a RAM
-  child twice, or make `create` adopt a foreign VM. The one repeated call is
-  boat's create, fork or restore whose sandbox ID was never recorded, made safe
-  by boat's idempotency key (see [Runtimes: boat](#runtimes-boat)).
+  something to own.
 - **Native IDs:** machine and checkpoint rows have one `native` column that the
   runtime owns. boat keeps its sandbox ID or snapshot name there. smolvm and
   Tart derive native names from the name and the instance (see IDs and names
@@ -430,8 +412,7 @@ listed to keep them from being ported):
 - **On host startup:** every `running` action becomes `failed` with "host
   restarted during <name>". The machine shows whatever the runtime reports,
   possibly `missing`. The smolvm forks area is wiped (see
-  [Runtimes: smolvm](#runtimes-smolvm)). A boat host then resolves rows whose
-  sandbox ID was never recorded (see [Runtimes: boat](#runtimes-boat)).
+  [Runtimes: smolvm](#runtimes-smolvm)).
 - **Native errors** leave `action.status = failed`, and the same tagged error is
   the call's reply. Nothing is released without an explicit delete, so no
   failure needs a proof that it left nothing behind. The one exception is the
@@ -541,13 +522,6 @@ create, start, fork and restore. In order:
    - A non-zero exit, or running past the timeout, fails the action, and the
      error carries the script's last lines of output. P3's measurements set the
      timeout and its recorded reason.
-   - **Two runs never overlap, enforced in the guest.** The claim on the
-     machine ends when the action fails or the host restarts, but a killed exec
-     may leave the guest's `start` running. So preparation runs `start` under a
-     guest-side lock and a guest-side timeout, and the transport's behaviour
-     doesn't matter. On Linux that is `flock` on a file under `/run` (gone at
-     boot, released when its holder dies) and `timeout`. macOS ships neither,
-     so P3 picks its tools.
    - Check for sshd's listener (`/run/sshd.pid`), not `pgrep -x sshd`: an open
      ssh session also matches `pgrep`, so a dead listener would never be
      relaunched.
@@ -587,12 +561,9 @@ otherwise happen on every create.
   the image never carries synced credentials.
   - The cache never fails a create. If the capture fails, or another create
     is already capturing that entry, the create carries on without it.
-  - After a capture, the host deletes the profile's other entries. It skips
-    one that a restore is reading (see [Journal and claims](#journal-and-claims)),
-    and the next capture for that profile deletes it.
+  - After a capture, the host deletes the profile's other entries.
 - **`--fresh`** skips the lookup, runs setup, and replaces the entry with that
-  key, for a recipe that installs `latest` versions. If a restore is reading
-  the entry, the create skips caching.
+  key, for a recipe that installs `latest` versions.
 - **Kind:** `ram`. It captures the running machine with a 40–170 ms pause, and
   a hit restores like a fork, port swap included. Each machine created from it
   keeps a RAM file of about 280–620 MiB for its life. If P9 shows that costs too
@@ -849,31 +820,17 @@ Two rules for every VM job:
   Snapshots stay on: stop, resume, fork and checkpoints depend on them.
 - **IDs:** boat assigns sandbox IDs (`bx_…`), kept in the row's `native`
   column. Create, fork and restore send an `Idempotency-Key` derived from the
-  row's `instance` value. Only a host crash or a long boat outage leaves a row
-  without its sandbox ID:
-  - **Deadline:** no call is repeated more than 23 hours after the row's
-    `createdAt`, which is just before the first attempt. After that, boat's
-    24-hour key window may have closed, and a repeat would create a second
-    sandbox.
+  row's `instance` value, so a repeat within boat's 24-hour key window returns
+  the original.
   - An unclear outcome of the call (a dropped connection, a 5xx) is retried
-    inside the action, with backoff and the same key and body, until boat
-    answers definitely or the deadline passes. The action stays `running`
-    meanwhile. Within the key window a repeat returns the original.
-  - If the host crashes before it records the ID, host startup repeats the
-    call before the deadline, after marking running actions failed. It records
-    the ID, deletes the sandbox, and the row stays `failed` until `delete`. A
-    repeat that fails leaves the row as it was, and the next startup tries
-    again.
-  - If the original never existed, the repeat may create a sandbox, which is
-    deleted after seconds of billing.
-  - A row still without an ID at the deadline is `failed` with "outcome
-    unknown: a sandbox may exist, created at `createdAt`". `delete` removes
-    only the row, and never repeats a call.
-  - That is the residual risk: one orphaned sandbox per such row, after a
-    crash or outage that outlasts the deadline. boat's create takes no name or
-    tag and a sandbox echoes nothing the client chose, so it can't be found
-    exactly; look on the dashboard for an unrenamed `Box <time>` sandbox
-    created around `createdAt`.
+    inside the action, with backoff and the same key and body, for up to 5
+    minutes: long enough to ride out a brief outage, and far inside the key
+    window. Then the action fails.
+  - A row without its sandbox ID (that failure, or a host crash before the ID
+    was recorded) is `failed` like on any runtime, and `delete` removes only
+    the row. A sandbox may exist. boat's create takes no name or tag and a
+    sandbox echoes nothing the client chose, so look on the dashboard for an
+    unrenamed `Box <time>` sandbox created around the row's `createdAt`.
   - After a create, fork or restore, the host sets boat's display name to the
     machine ID, for the operator's boat dashboard.
 - **State:** read with one `GET /sandboxes` per listing, filtered to the
@@ -1043,15 +1000,14 @@ tests use real VMs.
    hello world per role.
 2. **Contract and CLI.** Schemas, the tagged errors, `<host>_<name>` IDs, the
    action groups, the profile file schema, the client library (host list,
-   routing, fan-out with partial results, placement by base, lost replies,
-   recipe packing), and the CLI's commands and `ssh`. Long mutation calls: the
-   client's timeouts off.
+   routing, fan-out with partial results, placement by base, recipe packing),
+   and the CLI's commands and `ssh`. Long mutation calls: the client's timeouts
+   off.
 3. **smolvm, end to end.**
    - The journal, claims, the error-reply invariant and the refusal rule, the
      schema version, lifecycle, the smolvm runtime, supervision, setup and
-     preparation (with `start`'s guest-side lock), port allocation and
-     publishing, the RAM budget, bases and the runtime in config, and the
-     clankerauth resource.
+     preparation, port allocation and publishing, the RAM budget, bases and
+     the runtime in config, and the clankerauth resource.
    - `stop` and `delete` after an interrupted operation, including a crash
      between inserting the row and calling the runtime, and `delete` of a VM
      whose stop failed.
@@ -1061,11 +1017,9 @@ tests use real VMs.
 5. **Tart.** The runtime, its names, the forwarder and the two-VM count.
    `stop` and `delete` after an interrupted operation. Spike P11. Live tests
    on the Mac. Freeze the `Runtime` interface only after this slice.
-6. **boat.** The runtime, the machine-type choice, its refusals, and host
-   startup resolving a create interrupted before its ID was recorded. The
-   23-hour deadline, unit-tested with a fake clock: nothing repeats after it,
-   and the row reads "outcome unknown". `stop` and `delete` after an
-   interrupted operation. Spike P14. Live tests against boat.
+6. **boat.** The runtime, the machine-type choice, its refusals and its
+   bounded retry. `stop` and `delete` after an interrupted operation. Spike
+   P14. Live tests against boat.
 7. **Release and live tests.** `tools/release` (SEA, bundle, notices) and the
    full `tests/live`. Then the README design section and the bump skills
    (seeded from evidence.md).
@@ -1146,7 +1100,7 @@ through the checkpoint store, and the three boat runs on a trial account.
 | --- | --- |
 | **P1. Published ports on the tailnet.** On the Linux host as root (ask for approval first): a stock-image machine with `-p` on the tailnet address and `SMOLVM_EGRESS_FLOOR=strict`, then ssh, scp and rsync from another tailnet machine. Also over the tailnet: a fork (store checkpoint + restore) and two restores beside a running source, each with its swapped port and new host key, all under `SMOLVM_VM_USE_SCOPE=1` and on 1.22.2. Loopback and `127.0.0.2` already work, and restores under scopes do too. | guest access, or its fallback |
 | **P2. Tart forwarder.** Listener → `tart exec -i` → guest `nc 127.0.0.1 22`: ssh and rsync throughput, idle survival, and whether accepting on the tailnet interface needs Local Network permission. | guest access on Tart |
-| **P3. Setup and preparation.** Setup on a stock `ubuntu:26.04` image over plain exec (the earlier stock-image runs used 24.04 and 25.10): installing openssh-server with `--no-install-recommends` and a key, and how long it takes. On a current Cirrus image: how long until `tart exec` answers after boot, with no manual login, and does `sudo -n true` succeed? On smolvm, does a child started with `setsid -f` outlive the exec (sshd's own daemonizing already does)? Re-mint on Tart clones and on machines restored from a pack, and the time a second re-mint adds to a smolvm fork. How do ssh sessions and daemonized processes pick up the guest's environment (`/etc/environment` through PAM)? How long does a realistic `start` (sshd plus a clankercreds sync) take, to set its timeout? Re-running `start` on a running smolvm machine already works. How long does gg-linux-dev's real setup take, which sizes the setup cache's gain? `start`'s guest-side lock and timeout: kill the exec in the middle of a `start` on each runtime, start again, and check that the runs don't overlap; pick the macOS tools. | setup, preparation, Tart bases, the setup cache |
+| **P3. Setup and preparation.** Setup on a stock `ubuntu:26.04` image over plain exec (the earlier stock-image runs used 24.04 and 25.10): installing openssh-server with `--no-install-recommends` and a key, and how long it takes. On a current Cirrus image: how long until `tart exec` answers after boot, with no manual login, and does `sudo -n true` succeed? On smolvm, does a child started with `setsid -f` outlive the exec (sshd's own daemonizing already does)? Re-mint on Tart clones and on machines restored from a pack, and the time a second re-mint adds to a smolvm fork. How do ssh sessions and daemonized processes pick up the guest's environment (`/etc/environment` through PAM)? How long does a realistic `start` (sshd plus a clankercreds sync) take, to set its timeout? Re-running `start` on a running smolvm machine already works. How long does gg-linux-dev's real setup take, which sizes the setup cache's gain? | setup, preparation, Tart bases, the setup cache |
 | **P5. Pins.** Re-run S5 on clankerauth-sdk 0.12.0, and smoke-test effect-actions 0.9.0 on Effect 4.0.0 inside a SEA, including one unary call that runs past 300 s, to find any timeout of its own. | phase 1, long calls |
 | **P8. Disk sizing and install.** Which disk holds workload writes for a stock-image machine? Do sizes above or below smolvm's 20/10 GiB templates need host `resize2fs`? Can machines drop the overlay size and the compact templates? With smolvm installed under a prefix, does a stale `~/.smolvm` shadow its templates, and does the upstream wrapper find its libraries? | disk sizing, smolvm install |
 
@@ -1231,11 +1185,8 @@ Everything the rewrite creates on a test machine is removed when the work ends.
   - a recipe directory with `files/` packed and run as one script;
   - the setup cache on smolvm: a miss that runs setup and fills the entry, a
     hit that skips setup, `--fresh` rebuilding it, a changed script missing,
-    and none of the credentials `start` syncs in the entry;
-  - the setup cache under concurrency: a hit restoring its entry while a
-    create with a changed script captures a new entry and deletes the old
-    one, and the hit still getting its own recipe; a failed capture leaving
-    the create usable;
+    none of the credentials `start` syncs in the entry, and a failed capture
+    leaving the create usable;
   - a real recipe (gg-linux-dev) through a cache miss, a hit, then a stop and
     cold start of the hit's machine, with ssh and its services working after
     each;
@@ -1265,18 +1216,10 @@ Everything the rewrite creates on a test machine is removed when the work ends.
     file, wiping the forks area, and Tart's forwarded endpoints coming back
     after the forwarder restarts;
   - `stop` and `delete` after an interrupted operation on every runtime;
-  - a boat create interrupted before its ID was recorded, resolved at the next
-    host startup with no sandbox left;
   - a mutation whose client disconnects still finishing and recording its
     outcome, and a call that runs past 300 s replying normally;
   - a duplicate name refused with `Conflict{exists}`, and a second action on a
     claimed machine refused with `Conflict{busy}`;
-  - lost replies resolved by the request ID: a success, a lost
-    `Conflict{exists}` (not reported as success), a lost `Conflict{busy}` (not
-    reported as the other action's outcome), and a `start` that never reached
-    the host (sent again);
-  - a `delete` of a checkpoint that a restore is reading refused with
-    `Conflict{busy}`;
   - Tart's two-VM limit refused with `Capacity` before any clone, with nothing
     written;
   - list fan-out with one host down;
