@@ -1084,15 +1084,15 @@ tests use real VMs.
    - Move the hosts onto the tailnet if not already done.
    - Delete the clankerbox WireGuard link, the PKI and the UniFi rule.
    - In garaba-home's `access.ts`, replace the controller rule (`tag:apps` to
-     `tag:agent-host` on 8444, for the controller's mTLS identity) with the
-     host API port, opened to the clients that call hosts. A client other than
-     the admin device that runs `clankerbox ssh` also needs the published
-     range, 10000–19999. Drop the clankerbox
-     controller from the compute node's apps. Its PLAN.md has the controller
-     minting tailnet keys for elevated agent profiles. With no controller,
-     guests join the tailnet only when a profile does it: an elevated profile
-     carries a tagged, reusable, ephemeral pre-authorized key, which expires
-     within 90 days and is rotated by hand.
+     `tag:agent-host` on 8444, for the controller's mTLS identity) with the host
+     API ports (two on the Linux host, one on the Mac), opened to the clients
+     that call hosts. A client other than the admin device that runs
+     `clankerbox ssh` also needs the published range, 10000–19999. Drop the
+     clankerbox controller from the compute node's apps. Its PLAN.md has the
+     controller minting tailnet keys for elevated agent profiles. With no
+     controller, guests join the tailnet only when a profile does it: an
+     elevated profile carries a tagged, reusable, ephemeral pre-authorized key,
+     which expires within 90 days and is rotated by hand.
    - Install smolvm 1.22.2 from upstream under `/opt/smolvm/1.22.2` on the Linux
      host, and Tart ≥ 2.40.1 on the Mac.
    - Run the smolvm host as root: system units, and host state out of
@@ -1106,7 +1106,11 @@ tests use real VMs.
      creates `/dev/shm/smolvm-restore`. Restores cost the same either way.
    - Add a boat host: a second host process on the Linux host, unprivileged,
      with host ID `boat`, its own state dir, and a boat API key on an account
-     past its trial.
+     past its trial. Any always-on machine on the tailnet would do; the Linux
+     host is already deployed and reachable, so this needs no image or proxy,
+     only its port in the hosts' access rule. Nothing backs that machine up, so
+     a lost boat database leaves its sandboxes to be found by display name and
+     deleted by hand.
    - Check the smolvm host's RAM budget against everything else that runs
      there.
    - Deploy with clankerauth keys covering all three hosts.
