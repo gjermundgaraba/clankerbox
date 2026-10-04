@@ -452,6 +452,16 @@ listed to keep them from being ported):
   machine. A claimed row has `action.status = running`. If any of them is
   already running, the call fails with `Conflict{kind: busy}` and nothing is
   written.
+  - Fork and capture end with their outcome on both rows: the source's
+    `action` reads `fork` or `capture`, `done` or `failed`, like the new row's.
+  - A checkpoint row's `kind` follows the source's state, so capture reads
+    it before the claim to fill the row, and again in step 3; a kind that
+    changed between is `Precondition`. A source another action holds is
+    `Conflict{busy}` before that read, since a machine whose create is
+    running can read as missing.
+  - A checkpoint row also keeps the source's host port at capture, which a
+    `ram` restore comes up on, so the restore knows which port to swap
+    without reading ports back from smolvm.
   - Ready checkpoints never change, so actions that only read them don't claim
     them, and restores of one checkpoint run in parallel. A restore whose
     checkpoint is deleted under it fails like any runtime failure.
@@ -810,7 +820,8 @@ Two rules for every VM job:
   resident RAM doesn't grow.
   Restored machines are branchable anyway. `machine status --json` reports
   `branchable: false` regardless, so don't read it.
-- **Fork is a checkpoint plus a restore:**
+- **Fork is a checkpoint plus a restore:** of a running source only; a fork of
+  a stopped source is `Precondition` in step 3.
   1. Capture the running source into a store of the fork's own,
      `forks/<child-name>/`.
   2. `machine create --from` that checkpoint.
@@ -849,14 +860,27 @@ Two rules for every VM job:
     reset-failed` on the scope, since systemd keeps a failed scope until then.
     Phase 3 verified this live, on a guest whose frozen `/storage` made
     `machine stop` fail.
-- **Checkpoints:** the kind follows the machine's state at capture.
+- **Checkpoints:** the kind follows the machine's state at capture. They live
+  in the state dir: the one store at `<stateDir>/checkpoints/` (a checkpoint is
+  `<native>.checkpoint` there), each pack in its own directory
+  `<stateDir>/packs/<native>/` (smolvm writes a stub and the
+  `<native>.smolmachine` a restore reads, so delete removes the directory), and
+  fork stores under `<stateDir>/forks/<child native>/`. Startup makes the first
+  two and empties the third.
   - **`ram`, from a running machine:** a store checkpoint (below); smolvm
     captures only running machines. A restore continues the source's RAM state
     and keeps a RAM file (about 280–620 MiB) for its life.
   - **`disk`, from a stopped machine:** `pack create --from-vm` into the host's
     packs directory. A restore is `machine create --from` the pack, then a cold
     boot. The new machine extracts the pack once, at create, and never reads it
-    again, so delete just removes the file. A pack keeps uid/gid and modes but
+    again, so delete just removes the file. (P9 measured a leftover: the
+    extraction is shared per pack, in `vms/_shared/<crc>`, about 430 MiB, and
+    outlives the pack's last machine until `smolvm pack prune --all`. Nothing
+    removes it yet; see evidence.md, Phase 4.) (P9 and the phase-4 smoke: a pack
+    of a machine on smolvm's image seed, as every fresh `diskGib` 20 machine
+    is, fails with `krun_start_enter returned: -22`; the capture's error
+    carries that and says smolvm 1.22.2 can't pack such a machine. A
+    20 GiB machine restored from a `ram` checkpoint packs.) A pack keeps uid/gid and modes but
     drops all xattrs and file capabilities, so a machine that will be
     disk-checkpointed must not rely on file capabilities.
     - **Known smolvm leftover:** a failed `pack create --from-vm` leaks its
@@ -865,8 +889,9 @@ Two rules for every VM job:
       (evidence.md, P12). Manual cleanup: `systemctl reset-failed
       'smolvm-vm-pack-fromvm-*'`.
   - **Pin:** a `ram` checkpoint records the smolvm version and the platform at
-    capture, and a restore under a different pin is refused with
-    `Precondition`. smolvm enforces sizes, platform, CPU contract and network,
+    capture (`smolvm 1.22.2 linux-x64`), and a restore under a different pin is
+    refused with `Precondition`, writing nothing. The runtime names its pin; the
+    core compares it. smolvm enforces sizes, platform, CPU contract and network,
     but not the engine build or the agent. A `disk` checkpoint has no pin:
     smolvm stamps a format version into each pack and keeps reading older ones.
   - **Capture:** smolvm publishes a checkpoint durably or not at all. After a
@@ -886,8 +911,11 @@ Two rules for every VM job:
     (`vms/_restore-checkpoints`) survives every smolvm command, including
     deleting every machine, and a fork restores each checkpoint only once.
   - **Root restore:** single-file restores as root shared RAM read-only and used
-    a copy-on-write disk top (about 0.7 MiB of private disk). P9 measures the
-    same for store restores.
+    a copy-on-write disk top (about 0.7 MiB of private disk). P9 measured store
+    restores: still read-only RAM and copy-on-write tops, but each restore
+    materializes the checkpoint privately, about 725 MiB of disk and 25 MiB of
+    dirty memory plus page cache of its own RAM file per 1 GiB guest
+    (evidence.md, Phase 4).
 - **DNS:** no `DNS` knob. smolvm's gateway relays DNS, and smolvm refuses
   capturing a machine with custom DNS.
 - **Disk sizing:** one disk-size field per machine (`diskGib`), passed as

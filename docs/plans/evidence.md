@@ -978,6 +978,84 @@ path; the 45.3 MiB gzipped SEA uploaded at 0.67–0.94 MiB/s). Machines had
 - **Owned-root layout:** the state dir may be at most 52 bytes;
   `~/clankerbox-rewrite/runs/<4 chars>/scratch/s` is exactly that.
 
+## Phase 4 (2026-10-04)
+
+**P9, restores as root** (L:p9, smolvm 1.22.2 as root on the Linux host, 1 vCPU
+/ 1 GiB, `--storage 20`, `--restore-cache-entries 0`; run
+`.work/runs/p9-restores-root-76b9d642f3eb`, remote `~/clankerbox-rewrite/runs/p976`):
+
+- **Store `ram` restores** map their RAM read-only and get copy-on-write disk
+  tops, as single-file restores do, but share nothing with a sibling: each
+  restore materializes the checkpoint into its own directory
+  (S@1.22.2:src/agent/manager.rs:405-406, src/cli/machine.rs:4693-4700). Per
+  restore: about 725 MiB of private disk (an unlinked RAM file of 466 MiB plus
+  242 MiB of disk copies), about 25 MiB of private dirty memory plus page cache
+  of its own RAM file, create 0.95–0.98 s and start 0.43–0.47 s. `delete` frees
+  all of it; store mode leaves nothing behind, while single-file restores leave
+  `vms/_shared/<crc>`.
+- **Store capture needs `--branchable`:** a capture of a machine started
+  without it fails with `ENOTSUP … deferred durable save requires file-backed
+  guest RAM`.
+- **A fork's store deleted under its children:** about 3.1 s to a running child
+  (capture 1.66–1.71 s with a 0.32 s source pause). No child file, mapping or fd
+  pointed into the store; `rm -rf` of the stores freed 910 MiB with no
+  `checkpoint-prune`, and all 3 children then answered exec and ssh, stopped,
+  cold-started and served their keys.
+- **`disk` restores:** `machine create --from <pack>.smolmachine --net
+  --net-backend virtio-net -p` works (4 of 4; create 1.74–1.76 s for a pack's
+  first machine, 0.12 s for the next; start 0.59–0.69 s; no pull). Each served
+  its source's key until preparation re-minted it (5 of 5 distinct after). A
+  machine needs 5–7 MiB of its own plus one shared extraction per pack,
+  `vms/_shared/<crc>` (430 MiB). The pack file isn't needed after create, but
+  the extraction outlives the pack's last machine until `smolvm pack prune
+  --all` (src/cli/pack.rs:1474-1499). A pack doesn't carry its source's disk
+  size: an 8 GiB source's restores came up at 20 GiB.
+- **`pack create --from-vm` fails for a machine on smolvm's image seed** (every
+  fresh `--storage 20` machine; 4 of 4, `krun_start_enter returned: -22`): the
+  export helper attaches the source's disk as an extra disk, and smolvm mounts
+  the root-only seed only for a main disk's chain
+  (S@1.22.2:src/internal_boot.rs:240-243, src/pack_export.rs:454-471). Packs of
+  a 20 GiB machine restored from a `ram` checkpoint (4.59 s), of an 8 GiB
+  machine, and of a 20 GiB machine with `SMOLVM_IMAGE_SEEDS=0` worked.
+- **Image seeds:** only for `--storage` 20 or none, on a fresh image machine
+  (S@1.22.2:src/image_seed.rs:169-195); the seed key includes the template
+  file's identity, so a new prefix builds a new seed (one pull per upgrade).
+  `machine resize --storage` grows a seeded machine (stopped or live), and the
+  size survives a checkpoint and restore.
+
+**Phase 4 live smoke** (local run `.work/runs/p4-smoke-d12b3a00a9b6`, driver
+`.work/p4-smoke/`, remote `~/clankerbox-rewrite/runs/p4d1`, on `58436e7`). The
+linux-x64 SEA ran as root in a transient system unit on the Linux host,
+listening and publishing on its tailnet address (`publishAddress` left to its
+default), and the same binary's CLI drove it on that host, so only the 45.3 MiB
+gzipped SEA crossed the DERP relay (0.96 MiB/s). Machines had 1 vCPU, 1 GiB and
+`diskGib` 20; the source's setup installed sshd.
+
+- **All steps passed:** a `ram` capture of the running source (1.40 s through
+  the CLI), its restore (1.53 s), a fork (3.31 s), a `disk` capture (5.14 s) and
+  its restore (3.24 s). Each new machine ran, reported its own port, and
+  served the `hostKey` it reported (ssh-keyscan), distinct from the source's;
+  each had its own ID in `/var/lib/clankerbox/machine-id`. The `ram` restore
+  and the fork kept the source's tmpfs marker; the `disk` restore kept the disk
+  marker and lost the tmpfs one. The forks area was empty after the fork.
+- **The `disk` checkpoint** came from a 20 GiB machine restored from the `ram`
+  checkpoint and then stopped (P9's working case, no pull). smolvm accepted
+  `--storage 20` with the pack, and the restore came up at 20 GiB; another
+  size wasn't tried. A restored machine cold-started with
+  `--branchable` (0.70 s) and kept its key.
+- **A `disk` capture of a stopped, seeded 20 GiB create** failed in 0.33 s with
+  `krun_start_enter returned: -22`, plus the host's sentence that smolvm 1.22.2
+  can't pack a machine on its image seed. It leaked
+  `smolvm-vm-pack-fromvm-<pid>-<ns>.scope`, which the run stopped and reset;
+  `checkpoint delete` removed the failed row.
+- **Deletes:** both checkpoints' deletes left the store at 96 KiB and no pack
+  directory. After every machine was deleted, `vms/_shared` still held 430 MiB:
+  the `disk` restore's pack extraction, as P9 found.
+- **Counts:** 1 image pull (the image-seed build of the run's fresh inventory;
+  Docker Hub's IPv6 counter went 99 to 98); 0 pull markers in any output; 0
+  `smolvm-fork-ready` failures in 25 CLI calls and the host's journal. No
+  `/dev/shm/smolvm-restore` and no `vms/_restore-checkpoints`.
+
 ## Consumers and production
 
 - **Production hosts:** the Mac host runs Tart only and the Linux host smolvm
