@@ -968,6 +968,13 @@ path; the 45.3 MiB gzipped SEA uploaded at 0.67–0.94 MiB/s). Machines had
   the guest pulled the image, with no seed and no warning, then "crun create
   failed: open `…/merged/usr/local/bin/smolvm-fork-ready`: No such file or
   directory". 4 creates around a manual restart didn't reproduce it.
+- **Stop after a crash** (re-run `.work/runs/p3-live-1df82ead13ef`, remote
+  `~/clankerbox-rewrite/runs/p31d`, 22 of 22 on `6e19274`; the SEA uploaded
+  at 0.79 MiB/s over the DERP relay): after the host was SIGKILLed during
+  setup, `stop` on the `failed` row stopped the VM and recorded `stop`/`done`;
+  smolvm listed the machine `stopped` and no scope remained. After the crash
+  inside step 3, `stop` found the machine `missing` and left the row's
+  `create`/`failed` as it was.
 - **Owned-root layout:** the state dir may be at most 52 bytes;
   `~/clankerbox-rewrite/runs/<4 chars>/scratch/s` is exactly that.
 

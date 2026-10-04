@@ -471,7 +471,10 @@ listed to keep them from being ported):
 - **Stop and delete after a failure:** they are never refused because of an
   earlier failure, and they cope with leftover native state, including a live
   orphan VM process. They are refused only while another action holds the row.
-  Each runtime's phase verifies this.
+  Each runtime's phase verifies this. Phase 3 verified it live on smolvm:
+  after a host crash during setup, `stop` stopped the VM the create left
+  running; after a crash before the runtime's create, `stop` wrote nothing;
+  and `delete` removed both, and a VM whose stop failed.
 - **Completion is recorded even when the caller has gone away.**
 - **Schema:** `PRAGMA user_version` and an ordered list of migrations, starting
   at version 1. A database newer than the binary is refused.
