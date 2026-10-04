@@ -20,7 +20,7 @@ import {
   Precondition,
   Unavailable,
 } from "./errors.ts";
-import { formatId, HostId, isId, Name, parseId } from "./ids.ts";
+import { formatId, HostId, isId, parseId, parseName } from "./ids.ts";
 import { type Checkpoint, type Host, type Machine, MachineSpec } from "./resources.ts";
 
 /** One host a client talks to. `id` is the host part of every ID it holds. */
@@ -158,8 +158,6 @@ const withNote = (error: ClankerboxError, note: string): ClankerboxError => {
 
 const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
 
-const decodeName = Schema.decodeUnknownEffect(Name);
-
 /** Builds a client over `hosts`, in placement order. Making it sends nothing. */
 export const make = (
   hosts: ReadonlyArray<HostEntry>,
@@ -289,14 +287,7 @@ export const make = (
           return yield* createOn(host, name, spec);
         }
 
-        const name = yield* decodeName(target).pipe(
-          Effect.mapError(
-            () =>
-              new Invalid({
-                message: `name ${JSON.stringify(target)} must start with a letter, then letters, digits, '_' and '-'`,
-              }),
-          ),
-        );
+        const name = yield* parseName(target);
 
         if (options?.host !== undefined) {
           return yield* createOn(options.host, name, spec);

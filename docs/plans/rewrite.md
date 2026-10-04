@@ -163,6 +163,8 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
     host IDs (`linux`, `mac`) keep IDs short to type.
   - The whole ID must match `^[A-Za-z0-9_-]{1,62}$`.
   - A name must start with a letter.
+  - A name has no `--` and doesn't end in `-`: smolvm 1.22.2 refuses
+    consecutive and trailing hyphens in `<name>-<inst>` (`validate_vm_name`).
 - The separator is `_` and the 62-character limit apply because the ID is
   written to `/var/lib/clankerbox/machine-id`. clankercreds uses it as the
   machine's audit-log label, accepts only that pattern, and on a mismatch

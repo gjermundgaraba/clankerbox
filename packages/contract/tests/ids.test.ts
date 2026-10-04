@@ -1,6 +1,6 @@
 import { Effect, Exit, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
-import { formatId, Id, isId, parseId } from "../src/index.ts";
+import { formatId, Id, isId, Name, parseId, parseName } from "../src/index.ts";
 
 const parse = (id: string) => Effect.runSyncExit(parseId(id));
 
@@ -10,8 +10,18 @@ test("an ID splits at its first '_'", () => {
   expect(Effect.runSync(parseId("boat-1_a-b"))).toEqual({ host: "boat-1", name: "a-b" });
 });
 
-test("an ID is refused without a host, a name, or a name that starts with a letter", () => {
-  for (const id of ["", "linux", "_dev", "linux_", "linux_2dev", "linux__dev", "linux_-dev"]) {
+test("an ID is refused without a host, a name, or a valid name", () => {
+  for (const id of [
+    "",
+    "linux",
+    "_dev",
+    "linux_",
+    "linux_2dev",
+    "linux__dev",
+    "linux_-dev",
+    "linux_a--b",
+    "linux_box-",
+  ]) {
     expect(Exit.isFailure(parse(id)), id).toBe(true);
   }
 });
@@ -54,11 +64,55 @@ test("formatting and parsing round-trip", () => {
   expect(Effect.runSync(parseId(id))).toEqual({ host: "linux", name: "dev_box" });
 });
 
-test("the Id schema accepts exactly what parseId accepts", () => {
+test("the Id schema accepts full IDs and refuses the rest", () => {
   const isValid = Schema.is(Id);
 
-  for (const id of ["linux_dev", "linux", "linux_2dev", `h_${"a".repeat(61)}`, "a_b"]) {
-    expect(isValid(id), id).toBe(Exit.isSuccess(parse(id)));
+  for (const id of ["linux_dev", "a_b", "mac_dev_2", `h_${"a".repeat(60)}`]) {
+    expect(isValid(id), id).toBe(true);
+  }
+
+  for (const id of ["linux", "linux_2dev", "linux_a--b", `h_${"a".repeat(61)}`]) {
+    expect(isValid(id), id).toBe(false);
+  }
+});
+
+test("a name has no '--' and doesn't end in '-'", () => {
+  const isName = Schema.is(Name);
+
+  for (const name of ["dev", "a-b", "a_b", "dev_", "a-_b", "a_-b", "A1-b2-c3"]) {
+    expect(isName(name), name).toBe(true);
+    expect(Exit.isSuccess(Effect.runSyncExit(parseName(name))), name).toBe(true);
+  }
+
+  for (const name of ["a--b", "box-", "2dev", "-dev", "_dev", "", "d.v"]) {
+    expect(isName(name), name).toBe(false);
+    expect(Exit.isFailure(Effect.runSyncExit(parseName(name))), name).toBe(true);
+  }
+});
+
+/**
+ * smolvm 1.22.2's `validate_vm_name` (src/data/mod.rs:58-98): at most 128 characters,
+ * starting with a letter or digit, of letters, digits, '_' and '-', with no consecutive
+ * hyphens and no hyphen at the end.
+ */
+const smolvmAccepts = (name: string): boolean =>
+  name.length <= 128 &&
+  /^[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(name) &&
+  !name.includes("--") &&
+  !name.endsWith("-");
+
+test("smolvm accepts <name>-<inst> for valid names, and would refuse the names Name rules out", () => {
+  const instance = "0f3a9c1e";
+  const isName = Schema.is(Name);
+
+  for (const name of ["dev", "a-b", "a_b", "dev_", "a-_b", "Dev-2", "a".repeat(60)]) {
+    expect(isName(name), name).toBe(true);
+    expect(smolvmAccepts(`${name}-${instance}`), name).toBe(true);
+  }
+
+  for (const name of ["a--b", "box-"]) {
+    expect(isName(name), name).toBe(false);
+    expect(smolvmAccepts(`${name}-${instance}`), name).toBe(false);
   }
 });
 

@@ -14,7 +14,14 @@ const idPattern = /^[A-Za-z0-9_-]{1,62}$/u;
 
 const hostIdPattern = /^[A-Za-z0-9-]+$/u;
 
-const namePattern = /^[A-Za-z][A-Za-z0-9_-]*$/u;
+/**
+ * smolvm names a machine `<name>-<inst>` and refuses consecutive hyphens, so a name has no
+ * `--` and doesn't end in `-`.
+ */
+const namePattern = /^[A-Za-z][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*$/u;
+
+const nameRule =
+  "a name starts with a letter, then letters, digits, '_' and '-', with no '--' and no '-' at the end";
 
 /** A host's part of every ID it holds. It can't contain `_`, where IDs split. */
 export const HostId = Schema.String.check(
@@ -24,11 +31,7 @@ export const HostId = Schema.String.check(
 );
 
 /** A machine's or checkpoint's name, unique per host and per resource type. */
-export const Name = Schema.String.check(
-  Schema.isPattern(namePattern, {
-    message: "a name starts with a letter, then letters, digits, '_' and '-'",
-  }),
-);
+export const Name = Schema.String.check(Schema.isPattern(namePattern, { message: nameRule }));
 
 /** The parts of an ID: the host that holds the resource and the resource's name there. */
 export interface IdParts {
@@ -48,7 +51,7 @@ const describeId = (id: string): string | undefined => {
   }
 
   if (!namePattern.test(id.slice(at + 1))) {
-    return `ID ${JSON.stringify(id)} has a name that doesn't start with a letter`;
+    return `ID ${JSON.stringify(id)} has an invalid name: ${nameRule}`;
   }
 
   return undefined;
@@ -76,6 +79,12 @@ export const parseId = (id: string): Effect.Effect<IdParts, Invalid> => {
   return Effect.succeed({ host: id.slice(0, at), name: id.slice(at + 1) });
 };
 
+/** Checks a name on its own, before it is joined to a host. */
+export const parseName = (name: string): Effect.Effect<string, Invalid> =>
+  namePattern.test(name)
+    ? Effect.succeed(name)
+    : Effect.fail(new Invalid({ message: `name ${JSON.stringify(name)}: ${nameRule}` }));
+
 /** Joins a host ID and a name into the resource's ID, checking both parts and the whole. */
 export const formatId = (host: string, name: string): Effect.Effect<string, Invalid> => {
   if (!hostIdPattern.test(host)) {
@@ -86,15 +95,7 @@ export const formatId = (host: string, name: string): Effect.Effect<string, Inva
     );
   }
 
-  if (!namePattern.test(name)) {
-    return Effect.fail(
-      new Invalid({
-        message: `name ${JSON.stringify(name)} must start with a letter, then letters, digits, '_' and '-'`,
-      }),
-    );
-  }
-
   const id = `${host}${separator}${name}`;
 
-  return Effect.as(parseId(id), id);
+  return parseName(name).pipe(Effect.andThen(parseId(id)), Effect.as(id));
 };
