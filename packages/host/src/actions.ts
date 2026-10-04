@@ -90,15 +90,11 @@ export const claimsOn = (store: StoreInterface) => {
   const claimAndCheck = <B>(
     action: ActionName,
     rows: Rows,
-    check: (
-      join: (more: Rows) => Effect.Effect<void, HostError>,
-      claimed: Token,
-    ) => Effect.Effect<B, HostError>,
+    check: (join: (more: Rows) => Effect.Effect<void, HostError>) => Effect.Effect<B, HostError>,
   ): Effect.Effect<readonly [Token, B], HostError> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const first = yield* store.claim(action, rows);
-        const claimed = yield* Ref.make(first);
+        const claimed = yield* Ref.make(yield* store.claim(action, rows));
 
         const join = (more: Rows) =>
           Effect.uninterruptible(
@@ -109,7 +105,7 @@ export const claimsOn = (store: StoreInterface) => {
             ),
           );
 
-        const checked = yield* restore(check(join, first)).pipe(
+        const checked = yield* restore(check(join)).pipe(
           Effect.onError(() => Effect.flatMap(Ref.get(claimed), release)),
         );
 

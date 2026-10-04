@@ -503,12 +503,19 @@ listed to keep them from being ported):
   after a host crash during setup, `stop` stopped the VM the create left
   running; after a crash before the runtime's create, `stop` wrote nothing;
   and `delete` removed both, and a VM whose stop failed.
-- **No boot after a failed fork or restore:** a `start` of a stopped machine
-  whose last action is a failed `fork` or `restore` is `Precondition`, and it
-  says to delete the machine. A `ram` restore makes its VM on the source's
-  port and moves it before the first boot, so one that failed between, or a
-  host crash there, can leave it on another machine's port, and `start` never
-  re-applies ports.
+- **A failed fork or `ram` restore leaves no VM:** smolvm makes the VM on the
+  source's port and moves it to the new machine's own before the first boot,
+  and `machine start` never re-applies ports, so a VM left between would
+  publish on another machine's port. `start` can't repair it: `machine status
+  --json` and `machine ls --json` report only a port count
+  (S@1.22.2:src/cli/vm_common.rs:3102), so it can't know which port to remove,
+  although `machine update` is idempotent (src/cli/machine.rs:5917-5929). So
+  whatever fails in the restore's create, port move or first boot deletes the
+  VM, reading status first like `delete`. The row stays `failed`, the machine
+  reads `missing`, `start` says to delete it, and `delete` removes the row. A
+  host crash inside that window can still leave a VM on the source's port;
+  that is accepted. The fork's source ends `fork` `failed` like any fork's,
+  which blocks nothing.
 - **Completion is recorded even when the caller has gone away.**
 - **Schema:** `PRAGMA user_version` and an ordered list of migrations, starting
   at version 1. A database newer than the binary is refused.

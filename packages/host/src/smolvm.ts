@@ -320,10 +320,53 @@ export const make = (
     };
 
     /**
-     * Makes `machine` from a `ram` checkpoint, moves the source's port to its own, and boots it.
+     * Removes the machine's VM, coping with whatever an earlier failure left. It reads status
+     * first and touches nothing for a name smolvm doesn't know: a stop of an unknown name leaks
+     * an empty `vms/<hash>/`. When `machine stop` fails, the VM's scope is killed with the signal
+     * smolvm's own `kill_scope` uses, and reset once the machine is deleted.
+     */
+    const removeVm = (machine: MachineRef) =>
+      Effect.gen(function* () {
+        const native = nativeName(machine);
+        const scope = scopeName(native);
+        const observed = yield* state(native);
+
+        if (observed === "missing") {
+          return;
+        }
+
+        let killed = false;
+
+        if (observed === "running") {
+          const stopped = yield* smolvm(
+            ["machine", "stop", "--name", native],
+            `machine stop ${native}`,
+          );
+
+          if (stopped.exitCode !== 0) {
+            yield* Effect.logWarning(
+              `delete ${machine.id}: ${failure(`smolvm machine stop ${native}`, stopped).message}; killing ${scope}`,
+            );
+            yield* systemctl(["kill", "--signal=SIGKILL", scope], `kill ${scope}`);
+            killed = true;
+          }
+        }
+
+        yield* call(["machine", "delete", "--name", native, "--force"], `machine delete ${native}`);
+
+        if (killed) {
+          yield* Effect.ignore(systemctl(["reset-failed", scope], `reset-failed ${scope}`));
+        }
+      });
+
+    /**
+     * Makes `machine` from a checkpoint, moves the source's port to its own, and boots it.
      * smolvm refuses topology flags at a create from a live checkpoint and keeps its port, so
-     * the port is swapped before the first start. The restore cache is off: it survives every
-     * smolvm command, and a fork restores each checkpoint once.
+     * the port is swapped before the first start. A VM made but not moved sits on the source's
+     * port, and `machine start` never moves it, so whatever fails here deletes the VM: the row
+     * then reads missing, and delete is all it takes. A host crash in that window is accepted.
+     * The restore cache is off: it survives every smolvm command, and a fork restores each
+     * checkpoint once.
      */
     const restoreRam = (from: string, sourcePort: number | undefined, machine: MachineRef) =>
       Effect.gen(function* () {
@@ -357,7 +400,15 @@ export const make = (
         }
 
         yield* boot(native);
-      });
+      }).pipe(
+        Effect.onError(() =>
+          removeVm(machine).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(`restore ${machine.id}: couldn't delete its VM: ${error.message}`),
+            ),
+          ),
+        ),
+      );
 
     return {
       name: "smolvm",
@@ -474,42 +525,7 @@ export const make = (
 
         return Effect.asVoid(call(["machine", "stop", "--name", native], `machine stop ${native}`));
       },
-      delete: (machine) =>
-        Effect.gen(function* () {
-          const native = nativeName(machine);
-          const scope = scopeName(native);
-          const observed = yield* state(native);
-
-          if (observed === "missing") {
-            return;
-          }
-
-          let killed = false;
-
-          if (observed === "running") {
-            const stopped = yield* smolvm(
-              ["machine", "stop", "--name", native],
-              `machine stop ${native}`,
-            );
-
-            if (stopped.exitCode !== 0) {
-              yield* Effect.logWarning(
-                `delete ${machine.id}: ${failure(`smolvm machine stop ${native}`, stopped).message}; killing ${scope}`,
-              );
-              yield* systemctl(["kill", "--signal=SIGKILL", scope], `kill ${scope}`);
-              killed = true;
-            }
-          }
-
-          yield* call(
-            ["machine", "delete", "--name", native, "--force"],
-            `machine delete ${native}`,
-          );
-
-          if (killed) {
-            yield* Effect.ignore(systemctl(["reset-failed", scope], `reset-failed ${scope}`));
-          }
-        }),
+      delete: removeVm,
       exec: (machine, { argv, stdin }) =>
         Effect.gen(function* () {
           const native = nativeName(machine);

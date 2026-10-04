@@ -557,6 +557,11 @@ const ramCheckpoint: CheckpointRef = {
   port: 10_000,
 };
 
+const unknownCopy: Reply = {
+  exitCode: 1,
+  stderr: "Error: config operation failed: machine status: machine 'copy-abcdefab' not found\n",
+};
+
 /** A machine made from a checkpoint, on its own port. */
 const copy: MachineRef = {
   ...machine,
@@ -676,6 +681,70 @@ test("a ram restore that got its source's old port keeps it", async () => {
   expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["create", "start"]);
 });
 
+test("a restore whose port move fails deletes the VM it made, and returns the move's error", async () => {
+  const spawner = scripted((call) => {
+    if (call.args[1] === "update") {
+      return { exitCode: 1, stderr: "Error: database is locked\n" };
+    }
+
+    return call.args[1] === "status" ? status("created") : undefined;
+  });
+
+  const runtime = await runtimeOf(await prepared(), spawner);
+  const error = await Effect.runPromise(Effect.flip(runtime.restore(ramCheckpoint, copy)));
+
+  expect(error.message).toBe(
+    "smolvm machine update copy-abcdefab exited 1: Error: database is locked",
+  );
+  expect(smolvmArgs(spawner.calls).map((args) => args.slice(0, 2).join(" "))).toEqual([
+    "machine create",
+    "machine update",
+    "machine status",
+    "machine delete",
+  ]);
+});
+
+test("a restore whose create fails deletes nothing: smolvm rolled it back", async () => {
+  const spawner = scripted((call) => {
+    if (call.args[1] === "create") {
+      return { exitCode: 1, stderr: "Error: no space\n" };
+    }
+
+    return call.args[1] === "status" ? unknownCopy : undefined;
+  });
+
+  const runtime = await runtimeOf(await prepared(), spawner);
+  const error = await Effect.runPromise(Effect.flip(runtime.restore(ramCheckpoint, copy)));
+
+  expect(error.message).toBe("smolvm machine create copy-abcdefab exited 1: Error: no space");
+  expect(smolvmArgs(spawner.calls).map((args) => args.slice(0, 2).join(" "))).toEqual([
+    "machine create",
+    "machine status",
+  ]);
+});
+
+test("a restore whose boot fails deletes the VM it made", async () => {
+  const spawner = scripted((call) => {
+    if (call.args[1] === "start") {
+      return { exitCode: 1, stderr: "Error: crun create failed\n" };
+    }
+
+    return call.args[1] === "status" ? status("stopped") : undefined;
+  });
+
+  const runtime = await runtimeOf(await prepared(), spawner);
+
+  await Effect.runPromise(Effect.flip(runtime.restore(ramCheckpoint, copy)));
+
+  expect(smolvmArgs(spawner.calls).at(-1)).toEqual([
+    "machine",
+    "delete",
+    "--name",
+    "copy-abcdefab",
+    "--force",
+  ]);
+});
+
 /**
  * A spawner whose `machine checkpoint` makes its output in its store, as smolvm does, and whose
  * `machine create` answers `create`.
@@ -686,6 +755,10 @@ const forking = (create: Reply) =>
       mkdirSync(call.args[call.args.indexOf("--output") + 1] ?? "", { recursive: true });
 
       return {};
+    }
+
+    if (call.args[1] === "status") {
+      return unknownCopy;
     }
 
     return call.args[1] === "create" ? create : undefined;

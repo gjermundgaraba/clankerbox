@@ -18,7 +18,7 @@ import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
 import { type MachineRef, observeConcurrency, type Refusal, Runtime } from "./runtime.ts";
-import { type MachineRecord, type NewMachine, type Rows, Store, type Token } from "./store.ts";
+import { type MachineRecord, type NewMachine, type Rows, Store } from "./store.ts";
 
 export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Machine>, HostError>;
@@ -162,24 +162,6 @@ export const make = (
         }),
       );
 
-    /**
-     * A fork or `ram` restore makes its VM on the source's port and moves it to its own before
-     * the first boot, so one that failed between may sit on another machine's port, and a boot
-     * would publish it there. Such a machine is only stopped or deleted.
-     */
-    const bootable = (token: Token) => {
-      const replaced = token.held[0]?.before;
-
-      return replaced?.status === "failed" &&
-        (replaced.name === "fork" || replaced.name === "restore")
-        ? Effect.fail(
-            new Precondition({
-              message: `machine ${idOf(token.held[0]?.name ?? "")}'s ${replaced.name} failed, which can leave it on another machine's port, so it doesn't start; delete it`,
-            }),
-          )
-        : Effect.void;
-    };
-
     /** The new machine's spec and work, with the source a fork holds, read once it is held. */
     const resolve = (making: Making) =>
       "source" in making
@@ -250,7 +232,7 @@ export const make = (
         const name = yield* nameOf(id);
 
         const [token, { record, running }] = yield* admitted(
-          claimAndCheck("start", holding(name), (_join, claimed) =>
+          claimAndCheck("start", holding(name), () =>
             Effect.gen(function* () {
               const record = yield* rows.machine(name);
               const { state } = yield* runtime.observe(ref(record));
@@ -262,7 +244,6 @@ export const make = (
               }
 
               if (state !== "running") {
-                yield* bootable(claimed);
                 yield* admit("start", record);
               }
 
