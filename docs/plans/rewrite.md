@@ -120,7 +120,7 @@ and answer them again at every bump of that dependency:
 
 ```
 package.json            # vp scripts: ready = check + test + build
-pnpm-workspace.yaml     # apps/*, packages/*, tools/*; catalog pins below
+pnpm-workspace.yaml     # apps/*, packages/*, tools/*, tests/*; catalog pins below
 vite.config.ts          # lint/fmt/staged/run.cache, as in clankerauth
 tsconfig.json
 apps/
@@ -1166,8 +1166,7 @@ Everything the rewrite creates on a test machine is removed when the work ends.
 - **One owned root per machine:**
   - Linux: `~/clankerbox-rewrite/`. Never touch `~/clankerbox`, its service, its
     VMs or its smolvm state, and never restart `user@1000`.
-  - Mac: this worktree's `.work/`. `/.work/` is excluded in the repository's
-    `info/exclude` while the tree has no `.gitignore`.
+  - Mac: this worktree's `.work/`, which `.gitignore` excludes.
 - **Resource naming:** every native resource carries a `clankerbox-rewrite`
   prefix and is recorded in its run's evidence. On boat, a run's host ID
   carries the prefix, so each sandbox's display name (its machine ID) and each
