@@ -13,7 +13,7 @@ scratch/, evidence/), and runs it once per command:
                        an empty state, so the suite can run again
   teardown             stop the unit, then delete every VM of the run's inventory and stop every
                        scope of the run natively, by the run's own data dir, so it works with the
-                       host down; verify, and count image pulls and fork-ready failures
+                       host down; keep the host's journal, and verify
   finish               remove what the run added to the prefix, remove scratch, restore
                        directory modes, "after" snapshot and diff, mark the CLEANUP.md entries
 
@@ -283,7 +283,7 @@ def cmd_init(tailnet, smolvm_prefix):
     SCRATCH.mkdir(mode=0o700)
     EVIDENCE.mkdir(mode=0o700)
     root_log('(legend)', 'every sudo command of this run follows; "read-only" means it changed nothing')
-    save_state(address=tailnet, prefix=smolvm_prefix, started_epoch=int(time.time()), helper_units_before=helper_units())
+    save_state(address=tailnet, prefix=smolvm_prefix, helper_units_before=helper_units())
     if not (prefix() / 'READY').exists():
         sys.exit(f'{prefix()}/READY is missing')
     if list_units(f'smolvm-vm-{RUNS_PREFIX}*') or vm_uid_processes():
@@ -549,24 +549,6 @@ def host_stop():
 
 # ---------------------------------------------------------------- teardown and finish
 
-def counters():
-    """Image seed builds and the intermittent fork-ready start failure. The host keeps no smolvm
-    output from a call that succeeds, so seed builds are counted from what smolvm leaves: the seed
-    builder's scopes the journal saw start, and the inventory's image seeds."""
-    since = load_state()['started_epoch']
-    _, so, _ = sudo(['journalctl', '--since', f'@{since}', '--no-pager', '-o', 'cat', '-u', 'smolvm-vm-image-seed-*'])
-    seed_scopes = sorted({m for m in re.findall(r'smolvm-vm-image-seed-[0-9a-f]+-\d+\.scope', so)})
-    _, seeds, _ = sudo(['ls', '-A', str(DATA / '.cache/smolvm/image-seeds')])
-    host_log = journal()
-    found = {
-        'seed_builder_scopes': seed_scopes,
-        'image_seeds': seeds.split(),
-        'fork_ready_failures_in_host_journal': host_log.count('smolvm-fork-ready'),
-    }
-    (EVIDENCE / 'counters.json').write_text(json.dumps(found, indent=2) + '\n')
-    return found
-
-
 def attempt(report, what, action):
     """Runs one teardown item, best effort: a failure is recorded and the next item still runs."""
     try:
@@ -633,8 +615,8 @@ def remove_natives(report):
 def cmd_teardown():
     initialised()
     report = {'at': now(), 'steps': [], 'errors': []}
-    report['counters'] = attempt(report, 'counters', counters)
     clean = remove_natives(report)
+    attempt(report, 'keep the host\'s journal', journal)
     (EVIDENCE / 'teardown.json').write_text(json.dumps(report, indent=2) + '\n')
     if not clean:
         raise RuntimeError(f'teardown incomplete: {report}')
@@ -647,7 +629,7 @@ def cmd_reset():
     the suite can run again without pulling the image again."""
     initialised()
     report = {'at': now(), 'steps': [], 'errors': []}
-    report['counters'] = attempt(report, 'counters', counters)
+    attempt(report, 'keep the host\'s journal', journal)
     clean = remove_natives(report)
     with open(EVIDENCE / 'resets.jsonl', 'a') as f:
         f.write(json.dumps(report) + '\n')
