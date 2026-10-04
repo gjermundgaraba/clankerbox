@@ -1,7 +1,7 @@
 /** The resources a host reports: machines, checkpoints and the host itself. */
 import { Schema } from "effect";
 import { ErrorTag } from "./errors.ts";
-import { Id, Name } from "./ids.ts";
+import { HostId, Id, Name } from "./ids.ts";
 
 export const Runtime = Schema.Literals(["smolvm", "tart", "boat"]);
 
@@ -120,3 +120,21 @@ export const CreateRequest = Schema.Struct({ name: Name, ...specFields }).check(
 );
 
 export type CreateRequest = typeof CreateRequest.Type;
+
+/**
+ * A profile file: a client-side file that fills in a create request. `setup` is a script
+ * file or a recipe directory, relative to the profile file, and comes with its timeout: the
+ * profile's author sets it, and there is no default. `host` places the create on that host
+ * instead of by base.
+ */
+export const Profile = Schema.Struct({
+  base: specFields.base,
+  cpu: specFields.cpu,
+  ramMib: specFields.ramMib,
+  diskGib: specFields.diskGib,
+  setup: Schema.optionalKey(Schema.String),
+  setupTimeoutSeconds: specFields.setupTimeoutSeconds,
+  host: Schema.optionalKey(HostId),
+}).check(setupWithItsTimeout);
+
+export type Profile = typeof Profile.Type;
