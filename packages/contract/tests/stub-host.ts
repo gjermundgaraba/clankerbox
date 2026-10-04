@@ -5,6 +5,7 @@
 import { DateTime, Effect, Layer } from "effect";
 import { FetchHttpClient, type HttpClient, HttpRouter, HttpServer } from "effect/http";
 import {
+  type Checkpoint,
   CheckpointGroup,
   type CreateRequest,
   type HostError,
@@ -42,6 +43,7 @@ export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
 export const stubHost = (options: StubHostOptions) => {
   const runtime = options.runtime ?? "smolvm";
   const machines = new Map<string, Machine>();
+  const checkpoints = new Map<string, Checkpoint>();
   const creates: Array<CreateRequest> = [];
   const calls: Array<string> = [];
 
@@ -110,32 +112,47 @@ export const stubHost = (options: StubHostOptions) => {
       Effect.andThen(record("machine.restore"), add(machine(`${options.id}_${name}`))),
   });
 
+  const findCheckpoint = (id: string) => {
+    const found = checkpoints.get(id);
+
+    return found === undefined
+      ? Effect.fail(new NotFound({ message: `no checkpoint ${id}` }))
+      : Effect.succeed(found);
+  };
+
   const checkpointApp = CheckpointGroup.implement({
-    list: () => Effect.as(record("checkpoint.list"), []),
-    get: ({ id }) =>
-      Effect.andThen(
-        record("checkpoint.get"),
-        Effect.fail(new NotFound({ message: `no checkpoint ${id}` })),
-      ),
+    list: () => Effect.as(record("checkpoint.list"), [...checkpoints.values()]),
+    get: ({ id }) => Effect.andThen(record("checkpoint.get"), findCheckpoint(id)),
     capture: ({ machine: source, name }) =>
       Effect.andThen(
         record("checkpoint.capture"),
-        Effect.map(find(source), (found) => ({
-          id: `${options.id}_${name}`,
-          createdAt: found.createdAt,
-          machine: found.id,
-          kind: "disk" as const,
-          base: found.base,
-          cpu: found.cpu,
-          ramMib: found.ramMib,
-          diskGib: found.diskGib,
-          action: { name: "capture" as const, status: "done" as const },
-        })),
+        Effect.flatMap(find(source), (found) =>
+          Effect.sync(() => {
+            const made: Checkpoint = {
+              id: `${options.id}_${name}`,
+              createdAt: found.createdAt,
+              machine: found.id,
+              kind: "disk",
+              base: found.base,
+              cpu: found.cpu,
+              ramMib: found.ramMib,
+              diskGib: found.diskGib,
+              action: { name: "capture", status: "done" },
+            };
+
+            checkpoints.set(made.id, made);
+
+            return made;
+          }),
+        ),
       ),
     delete: ({ id }) =>
       Effect.andThen(
         record("checkpoint.delete"),
-        Effect.fail(new NotFound({ message: `no checkpoint ${id}` })),
+        Effect.andThen(
+          findCheckpoint(id),
+          Effect.sync(() => checkpoints.delete(id)),
+        ),
       ),
   });
 
