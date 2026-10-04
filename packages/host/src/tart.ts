@@ -84,7 +84,9 @@ const bootWait = Duration.minutes(3);
 const probePause = Duration.seconds(1);
 
 /**
- * How long the guest's own `shutdown -h now` may take before Tart's forced stop.
+ * How long the guest's own `shutdown -h now` may take before Tart's forced stop. Stock Cirrus
+ * guests stopped 2.3–7.8 s after it, and 25.6 s for one whose agent was still coming up, as the
+ * exec waits for it (phase 5, native).
  */
 const shutdownWait = Duration.minutes(1);
 

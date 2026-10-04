@@ -3,7 +3,8 @@
  * claims, setup and preparation are the core's; each runtime is a module that implements this
  * service. The core allocates a machine's host port when it claims the row, for a runtime that
  * has a `publishAddress`; the RAM budget is a helper a runtime's `admit` calls when it needs one.
- * The interface is frozen only after Tart (phase 5).
+ * The interface is frozen as of phase 5, once Tart fit it with no runtime cases in the core; a
+ * later change records its reason in the plan.
  */
 import type {
   ActionName,
