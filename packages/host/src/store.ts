@@ -1,7 +1,8 @@
 /**
  * The host's state: one SQLite database in its state dir, through `node:sqlite`. It holds one
- * row per machine with its spec, `instance`, `native`, `createdAt` and last `action`, and
- * nothing else: machine state is always read from the runtime, and no setup script is kept.
+ * row per machine with its spec, `instance`, `native`, `createdAt`, host `port`, `hostKey` and
+ * last `action`, and nothing else: machine state is always read from the runtime, and no setup
+ * script is kept.
  */
 import { DatabaseSync } from "node:sqlite";
 import {

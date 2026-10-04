@@ -13,6 +13,13 @@ const tailLines = 20;
 
 const tailCharacters = 4000;
 
+/**
+ * How much output the tail buffer keeps. `lastLines` trims trailing whitespace before it cuts,
+ * so the buffer holds more than it returns: output that ends in up to 12000 characters of
+ * whitespace still gives a full tail, and more only gives a shorter one.
+ */
+const keptCharacters = 4 * tailCharacters;
+
 /** The end of some output, as an error carries it: its last lines, without a trailing newline. */
 export const lastLines = (text: string): string =>
   text.trimEnd().split("\n").slice(-tailLines).join("\n").slice(-tailCharacters);
@@ -24,7 +31,7 @@ const outputTail = () => {
 
   return {
     push: (chunk: Uint8Array) => {
-      kept = (kept + decoder.decode(chunk, { stream: true })).slice(-4 * tailCharacters);
+      kept = (kept + decoder.decode(chunk, { stream: true })).slice(-keptCharacters);
     },
     /** The last lines, without a trailing newline. */
     text: () => lastLines(kept + decoder.decode()),

@@ -1,7 +1,7 @@
 /**
- * Host ports for guest port 22, a helper for the runtimes that publish one per machine
- * (smolvm and Tart). The range sits below smolvm's fork range (20000–32000) and the Linux
- * ephemeral range (32768 and up).
+ * Host ports for guest port 22. The core picks one when it inserts a machine's row, for a
+ * runtime with a `publishAddress` (smolvm and Tart). The range sits below smolvm's fork range
+ * (20000–32000) and the Linux ephemeral range (32768 and up).
  */
 import { createServer } from "node:net";
 import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";

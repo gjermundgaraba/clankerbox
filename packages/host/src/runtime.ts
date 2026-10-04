@@ -1,7 +1,8 @@
 /**
  * The one runtime a host process runs, behind the interface the host core needs. State,
  * claims, setup and preparation are the core's; each runtime is a module that implements this
- * service. Port allocation and the RAM budget are helpers a runtime calls when it needs them.
+ * service. The core allocates a machine's host port when it claims the row, for a runtime that
+ * has a `publishAddress`; the RAM budget is a helper a runtime's `admit` calls when it needs one.
  * The interface is frozen only after Tart (phase 5).
  */
 import type {
