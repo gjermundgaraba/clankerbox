@@ -1,0 +1,39 @@
+/**
+ * The RAM budget, a step-3 check that a runtime's `admit` calls: the smolvm host's machines
+ * must fit its budget, so the host refuses with `Capacity` before it boots one too many.
+ */
+import { type ActionName, Capacity, type HostError } from "@gjermundgaraba/clankerbox-sdk";
+import { Effect } from "effect";
+import type { Activation, MachineRef, Observed } from "./runtime.ts";
+
+/** The actions that boot a machine. A machine one of them holds is counted while it runs. */
+const booting: ReadonlySet<ActionName> = new Set(["create", "start", "fork", "restore"]);
+
+/**
+ * Sums the `ramMib` of every machine that is running or held by an action that boots it, each
+ * once, and refuses when the sum passes `budgetMib`. The target is already held, so it is in
+ * the sum; counting the held ones keeps two concurrent creates from both passing.
+ */
+export const checkRamBudget = (
+  budgetMib: number,
+  activation: Activation,
+  observe: (machine: MachineRef) => Effect.Effect<Observed, HostError>,
+): Effect.Effect<void, HostError> =>
+  Effect.gen(function* () {
+    const counted = yield* Effect.forEach(
+      activation.machines,
+      ({ machine, holder }) =>
+        holder !== undefined && booting.has(holder)
+          ? Effect.succeed(machine.ramMib)
+          : Effect.map(observe(machine), ({ state }) => (state === "running" ? machine.ramMib : 0)),
+      { concurrency: "unbounded" },
+    );
+
+    const total = counted.reduce((sum, ramMib) => sum + ramMib, 0);
+
+    if (total > budgetMib) {
+      return yield* new Capacity({
+        message: `${activation.action} ${activation.machine.id} would bring the host's machines to ${total} MiB of RAM, past its budget of ${budgetMib} MiB`,
+      });
+    }
+  });
