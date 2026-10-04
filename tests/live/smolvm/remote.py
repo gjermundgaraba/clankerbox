@@ -35,21 +35,17 @@ import sys
 import time
 
 OWNER = 'clankerbox-work-run-v1'
-IMAGE = 'ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7'
+# Pulled from the mirror by digest, so neither the image seed nor a guest pull reaches Docker Hub.
+IMAGE = 'mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7'
 TEMPLATES = ('storage-template.ext4', 'overlay-template.ext4')
 # Every live run's machines carry it; init refuses to start while any run's scope is there.
 RUNS_PREFIX = 'clankerbox-rewrite-'
-# smolvm's own helper VMs, whose scope names smolvm fixes (S@1.22.2:src/image_seed.rs:381,
-# src/pack_export.rs:419-426); a failed pack export leaks its helper's scope.
-HELPER_PATTERNS = ('smolvm-vm-image-seed-*', 'smolvm-vm-pack-fromvm-*')
+# The scopes of smolvm's image-seed builder VMs, whose names smolvm fixes (S@1.22.2:src/image_seed.rs:381).
+HELPER_PATTERNS = ('smolvm-vm-image-seed-*',)
 RAM_BUDGET_MIB = 8192
 PATH_ENV = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 LEDGER_TAG = 'live suite'
 SNAP_DIRS = ['/root', '/etc/systemd/system', '/run/systemd/transient', '/dev/shm', '/tmp', '/var/tmp']
-DOCKER_RATE = r'''
-T=$(curl -s --max-time 20 "https://auth.docker.io/token?service=registry.docker.io&scope=repository:ratelimitpreview/test:pull" | python3 -c "import sys,json;print(json.load(sys.stdin)['token'])")
-for f in 4 6; do curl -$f -s --max-time 20 --head -H "Authorization: Bearer $T" https://registry-1.docker.io/v2/ratelimitpreview/test/manifests/latest | grep -i -E "^ratelimit-limit|^ratelimit-remaining" | tr -d '\r' | tr '\n' ' '; echo; done
-'''
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--run', required=True)
@@ -274,12 +270,6 @@ def ledger_mark(key, status):
     note(f'ledger {key}: {status} ({n} line)')
 
 
-def docker_rate():
-    """Docker Hub's anonymous pull budget for this host's addresses; HEAD requests aren't counted."""
-    _, so, _ = run(['sh', '-c', DOCKER_RATE], timeout=90)
-    return so.strip().splitlines()
-
-
 # ---------------------------------------------------------------- init and setup
 
 def cmd_init(tailnet, smolvm_prefix):
@@ -302,17 +292,17 @@ def cmd_init(tailnet, smolvm_prefix):
     snap = snapshot('before')
     save_state(modes_before={d: v for d, v in snap['modes'].items()}, prefix_tree_before=snap['prefix_tree'],
                tailnet_listeners_before=snap['tailnet_listeners'],
-               shm_restore_before=os.path.exists('/dev/shm/smolvm-restore'), docker_rate_before=docker_rate())
+               shm_restore_before=os.path.exists('/dev/shm/smolvm-restore'))
     ledger_add('dirmodes', 'smolvm running as root adds others-execute to every ancestor of its data root and of '
                'its agent rootfs (S@1.22.2:src/agent/manager.rs:2398-2413, src/process.rs:1634-1648): the home '
                f'directory and, inside the owned root, the directories down to runs/{RID}/scratch and the prefix. '
                'Revert: chmod back to the recorded modes; verify stat and getfacl identical.')
     ledger_add('units', f'transient system unit {UNIT} (sudo systemd-run --collect) running the clankerbox host as '
                f'root; smolvm-created scopes {SCOPE_PATTERN}.scope (SMOLVM_VM_USE_SCOPE=1); and scopes of '
-               "smolvm's helper VMs whose names the run cannot prefix: smolvm-vm-image-seed-<key16>-<pid>.scope "
-               'and smolvm-vm-pack-fromvm-<pid>-<ns>.scope, which a failed export leaks (P12, P9). Revert: stop '
-               'the unit, delete every VM natively, stop/reset-failed the run\'s scopes and helper scopes that were '
-               'not there before; verify none listed by systemctl list-units --all.')
+               "smolvm's image-seed builder VMs, whose names the run cannot prefix: "
+               'smolvm-vm-image-seed-<key16>-<pid>.scope. Revert: stop the unit, delete every VM of the run\'s '
+               'inventory natively, stop/reset-failed the run\'s scopes and helper scopes that were not there '
+               'before; verify none listed by systemctl list-units --all.')
     ledger_add('shm', '/dev/shm/smolvm-restore: not expected (the host sets SMOLVM_RESTORE_TMPFS=0 on every smolvm '
                'call). Revert: remove it if this run created it.')
     ledger_add('procs', 'the root host process, root smolvm processes and VMM processes under per-VM uids 2000000+. '
@@ -493,8 +483,7 @@ def control(op, rest):
         must(sudo(['touch', str(leftover / 'leftover')], touched=f'makes a file in {leftover}'), 'touch')
     elif op == 'store':
         _, checkpoints, _ = sudo(['ls', '-A', str(STATE_DIR / 'checkpoints')])
-        _, packs, _ = sudo(['ls', '-A', str(STATE_DIR / 'packs')])
-        print(json.dumps({'checkpoints': checkpoints.split(), 'packs': packs.split()}))
+        print(json.dumps({'checkpoints': checkpoints.split()}))
     elif op == 'usage':
         print(json.dumps(usage(native_for(rest[0]))))
     elif op == 'probe':
@@ -530,8 +519,8 @@ def host_execs(name):
 
 
 def usage(native):
-    """A machine's own disk in KiB, from its smolvm directory, and the shared pack extractions'.
-    An unlinked file the VMM still holds, such as a restore's RAM file, isn't counted."""
+    """A machine's own disk in KiB, from its smolvm directory. An unlinked file the VMM still
+    holds, such as a restore's RAM file, isn't counted."""
     vms = DATA / '.cache/smolvm/vms'
     _, so, _ = sudo(['sh', '-c', f'for f in {vms}/*/name; do [ "$(cat "$f")" = {shlex.quote(native)} ] '
                                  '&& dirname "$f"; done; true'])
@@ -539,16 +528,15 @@ def usage(native):
     if len(dirs) != 1:
         raise RuntimeError(f'expected one smolvm directory for {native}, found {dirs}')
     _, own, _ = sudo(['du', '-sk', dirs[0]])
-    _, shared, _ = sudo(['sh', '-c', f'du -sk {vms}/_shared 2>/dev/null || echo 0'])
-    return {'native': native, 'own_kib': int(own.split()[0]), 'shared_kib': int(shared.split()[0])}
+    return {'native': native, 'own_kib': int(own.split()[0])}
 
 
 # ---------------------------------------------------------------- teardown and finish
 
 def counters():
-    """Image pulls and the intermittent fork-ready start failure. The host keeps no smolvm output
-    from a call that succeeds, so pulls are counted from what smolvm leaves: the seed builder's
-    scopes the journal saw start, the inventory's image seeds, and Docker Hub's counters."""
+    """Image seed builds and the intermittent fork-ready start failure. The host keeps no smolvm
+    output from a call that succeeds, so seed builds are counted from what smolvm leaves: the seed
+    builder's scopes the journal saw start, and the inventory's image seeds."""
     since = load_state()['started_epoch']
     _, so, _ = sudo(['journalctl', '--since', f'@{since}', '--no-pager', '-o', 'cat', '-u', 'smolvm-vm-image-seed-*'])
     seed_scopes = sorted({m for m in re.findall(r'smolvm-vm-image-seed-[0-9a-f]+-\d+\.scope', so)})
@@ -557,8 +545,6 @@ def counters():
     found = {
         'seed_builder_scopes': seed_scopes,
         'image_seeds': seeds.split(),
-        'docker_rate_before': load_state().get('docker_rate_before'),
-        'docker_rate_after': docker_rate(),
         'fork_ready_failures_in_host_journal': host_log.count('smolvm-fork-ready'),
     }
     (EVIDENCE / 'counters.json').write_text(json.dumps(found, indent=2) + '\n')
@@ -651,7 +637,7 @@ def cmd_reset():
         f.write(json.dumps(report) + '\n')
     if not clean:
         raise RuntimeError(f'reset incomplete: {report}')
-    for name in ('host.db', 'host.db-wal', 'host.db-shm', 'checkpoints', 'packs', 'forks'):
+    for name in ('host.db', 'host.db-wal', 'host.db-shm', 'checkpoints', 'forks'):
         sudo(['rm', '-rf', '--one-file-system', str(STATE_DIR / name)],
              touched=f'reset: removes {STATE_DIR / name}, the host\'s state but not its smolvm inventory')
     host_start()
@@ -667,7 +653,7 @@ def cmd_finish():
     st = load_state()
     result = {}
     units = list_units(SCOPE_PATTERN) + list_units(f'clankerbox-rewrite-{RID}*') + new_helper_units()
-    result['units'] = (f'REVERTED {now()} (no {UNIT}, no {SCOPE_PATTERN} scope and no image-seed or pack-fromvm '
+    result['units'] = (f'REVERTED {now()} (no {UNIT}, no {SCOPE_PATTERN} scope and no image-seed '
                        'helper scope that was not there before, per systemctl list-units --all)'
                        if not units else f'NOT REVERTED: {units}')
     shm = os.path.exists('/dev/shm/smolvm-restore')

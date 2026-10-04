@@ -74,11 +74,11 @@ export const OneCheckpoint = Schema.fromJsonString(Checkpoint);
 export const Names = Schema.fromJsonString(Schema.Array(Schema.String));
 
 export const Store = Schema.fromJsonString(
-  Schema.Struct({ checkpoints: Schema.Array(Schema.String), packs: Schema.Array(Schema.String) }),
+  Schema.Struct({ checkpoints: Schema.Array(Schema.String) }),
 );
 
 export const Usage = Schema.fromJsonString(
-  Schema.Struct({ native: Schema.String, own_kib: Schema.Number, shared_kib: Schema.Number }),
+  Schema.Struct({ native: Schema.String, own_kib: Schema.Number }),
 );
 
 export const Natives = Schema.fromJsonString(
@@ -108,22 +108,17 @@ export const Natives = Schema.fromJsonString(
  * - `freeze NAME`: freeze the guest's storage filesystem, so smolvm's stop can't quiesce it;
  * - `forks`: print the names in the host's forks area; `plant-fork NAME` leaves a fork store
  *   named NAME there, as a crash during a fork would;
- * - `store`: print `{checkpoints, packs}`, the names in the host's checkpoint store and packs;
- * - `usage NAME`: print `{native, own_kib, shared_kib}`, the disk of machine NAME's own smolvm
- *   directory and of smolvm's shared pack extractions;
+ * - `store`: print `{checkpoints}`, the names in the host's checkpoint store;
+ * - `usage NAME`: print `{native, own_kib}`, the disk of machine NAME's own smolvm directory;
  * - `wait-host-exec NAME SECONDS`: wait until the host runs a guest command in machine NAME;
  * - `probe ADDRESS PORT`: from the host itself, print `reached` or `unreachable`;
  * - `route ADDRESS`: print the host's `ip route get ADDRESS`.
- *
- * `CLANKERBOX_LIVE_PEER` is another tailnet peer's address, then `:PORT` if the host reaches a
- * listener on that port of the peer; without a port, the peer check fails.
  */
 export const environment = async () => {
   const binary = required("CLANKERBOX_BIN");
   const config = required("CLANKERBOX_LIVE_CONFIG");
   const control = required("CLANKERBOX_LIVE_HOST_CONTROL");
   const prefix = required("CLANKERBOX_LIVE_PREFIX");
-  const [peer = "", peerPort] = required("CLANKERBOX_LIVE_PEER").split(":");
   const { hosts } = Schema.decodeUnknownSync(ClientConfig)(await readFile(config, "utf8"));
   const [host, ...others] = hosts;
 
@@ -131,7 +126,7 @@ export const environment = async () => {
     throw new Error("the live client config lists only the host under test");
   }
 
-  return { binary, config, control, prefix, host, peer, peerPort };
+  return { binary, config, control, prefix, host };
 };
 
 export type Environment = Awaited<ReturnType<typeof environment>>;

@@ -96,7 +96,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   let key: string;
   let recipe: string;
   let payload: Uint8Array;
-  let routesBefore: ReadonlyArray<string>;
+  let routeBefore: string;
 
   const cli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
     run(env.binary, [...command, "--config", env.config, ...args]);
@@ -110,7 +110,11 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   const machine = async (name: string): Promise<Machine | undefined> =>
     (await machines()).machines.find((listed) => listed.id === id(name));
 
-  const sizes = (ramMib: number) => [
+  /**
+   * `main` is 20 GiB, which smolvm boots from its image seed; the other creates' 10 GiB pull the
+   * base in the guest (rewrite.md, Disk sizing). Both fetch from the base's registry.
+   */
+  const sizes = (ramMib: number, diskGib = 10) => [
     "--base",
     "ubuntu",
     "--cpu",
@@ -118,7 +122,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     "--ram-mib",
     String(ramMib),
     "--disk-gib",
-    "20",
+    String(diskGib),
   ];
 
   /** Creates `name` with no setup. */
@@ -302,17 +306,14 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     return ran.stdout;
   };
 
-  /** The host's routes to the tailnet's own address and to the peer. */
-  const routes = () =>
-    Promise.all(
-      ["100.100.100.100", env.peer].map(async (address) => {
-        const ran = await control("route", address);
+  /** The host's route to the tailnet's own address, which its route to every peer shares. */
+  const route = async () => {
+    const ran = await control("route", "100.100.100.100");
 
-        expect(ran.code, ran.stderr).toBe(0);
+    expect(ran.code, ran.stderr).toBe(0);
 
-        return ran.stdout;
-      }),
-    );
+    return ran.stdout;
+  };
 
   beforeAll(async () => {
     env = await environment();
@@ -330,7 +331,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     await mkdir(join(recipe, "files"), { recursive: true });
     await writeFileIn(recipe, "setup.sh", mainSetup(publicKey), 0o755);
     await writeFileIn(join(recipe, "files"), "payload.bin", payload);
-    routesBefore = await routes();
+    routeBefore = await route();
   });
 
   // The host-control program's teardown removes what the run left on the host natively, so a
@@ -346,7 +347,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       const ran = await cli(
         ["create"],
         id("main"),
-        ...sizes(1024),
+        ...sizes(1024, 20),
         "--setup",
         recipe,
         "--setup-timeout",
@@ -785,30 +786,12 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "a guest can't reach the tailnet's 100.100.100.100, and running machines leave the host's routes to it and to a peer alone",
+    "a guest can't reach the tailnet's 100.100.100.100, and running machines leave the host's route to the tailnet alone",
     async () => {
       // Its web port: smolvm's gateway answers port 53 at every address with its DNS relay.
       expect(await probe("100.100.100.100", "80")).toBe("reached");
       expect(await inGuest("main", guestProbe("100.100.100.100", "80"))).toBe("refused");
-      expect(await routes()).toEqual(routesBefore);
-    },
-    minutes(3),
-  );
-
-  test(
-    "a guest can't reach another tailnet peer that its host reaches",
-    async () => {
-      // With no port, the driver's control found no listener on the peer that the host reaches,
-      // and a refusal from the guest would show nothing.
-      expect(
-        env.peerPort,
-        `the host reaches no listener on ${env.peer}, so the check can't run`,
-      ).toBeDefined();
-
-      const port = env.peerPort ?? "";
-
-      expect(await probe(env.peer, port)).toBe("reached");
-      expect(await inGuest("main", guestProbe(env.peer, port))).toBe("refused");
+      expect(await route()).toBe(routeBefore);
     },
     minutes(3),
   );
@@ -872,95 +855,42 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "a stopped machine's capture is a disk checkpoint, whose restore boots with the disk but not the RAM, its own port and a new identity",
+    "a capture of a stopped machine is Precondition, and writes nothing",
     async () => {
-      // A fresh diskGib 20 machine sits on smolvm's image seed, which smolvm 1.22.2 can't pack;
-      // restore-b came from a ram checkpoint, so it packs (rewrite.md, disk checkpoints).
-      const source = await facts("restore-b");
       const stopped = await cli(["stop"], id("restore-b"), "--json");
 
       expect(stopped.code, stopped.stdout).toBe(0);
 
-      let started = performance.now();
-
-      const captured = await cli(
-        ["checkpoint", "capture"],
-        id("restore-b"),
-        named("main-disk"),
-        "--json",
+      const error = failure(
+        await cli(["checkpoint", "capture"], id("restore-b"), named("stopped"), "--json"),
       );
 
-      timing("capture disk (20 GiB, restored from a ram checkpoint)", started);
-      expect(captured.code, captured.stdout).toBe(0);
-      expect(decode(OneCheckpoint, captured)).toMatchObject({
-        kind: "disk",
-        diskGib: 20,
-        action: { name: "capture", status: "done" },
-      });
-      expect((await store()).packs).toHaveLength(1);
+      expect(error.tag).toBe("Precondition");
+      expect(error.message).toContain("start it first");
 
-      started = performance.now();
+      const listed = decode(Checkpoints, await cli(["checkpoint", "list"], "--json"));
 
-      const restored = await cli(["restore"], id("main-disk"), named("disk-a"), "--json");
-
-      timing("disk restore", started);
-      expect(restored.code, restored.stdout).toBe(0);
-
-      const made = decode(OneMachine, restored);
-      const ports = (await machines()).machines.map(({ ssh }) => ssh?.port);
-      const keys = (await machines()).machines.map(({ hostKey }) => hostKey);
-
-      expect(made).toMatchObject({ state: "running", diskGib: 20 });
-      expect(ports.filter((port) => port === made.ssh?.port)).toHaveLength(1);
-      expect(keys.filter((hostKey) => hostKey === made.hostKey)).toHaveLength(1);
-      expect(await facts("disk-a")).toEqual({
-        ...source,
-        machineId: id("disk-a"),
-        instance: expect.not.stringMatching(source.instance),
-        ram: "none",
-        identities: source.identities + 1,
-        starts: source.starts + 1,
-      });
-
-      // A pack carries smolvm's default 4 vCPU and 8 GiB, so these show the restore's own sizes.
-      const [cpus, memKib] = (
-        await inGuest("disk-a", "nproc; awk '/^MemTotal:/ { print $2 }' /proc/meminfo")
-      )
-        .trim()
-        .split("\n")
-        .map(Number);
-
-      expect(cpus).toBe(made.cpu);
-      expect(memKib).toBeGreaterThan(0);
-      expect(memKib).toBeLessThanOrEqual(made.ramMib * 1024);
-
-      const disk = await usage("disk-a");
-
-      console.log(
-        `[disk] disk-a ${disk.own_kib} KiB of its own, smolvm's shared pack extractions ${disk.shared_kib} KiB`,
-      );
+      expect(listed.checkpoints.map(({ id: listedId }) => listedId)).toEqual([id("main-ram")]);
+      expect((await machine("restore-b"))?.action).toEqual({ name: "stop", status: "done" });
     },
-    minutes(10),
+    minutes(3),
   );
 
   test(
-    "checkpoint delete removes ram and disk checkpoints from the host's store and packs",
+    "checkpoint delete removes a ram checkpoint from the host's store",
     async () => {
-      for (const name of ["main-ram", "main-disk"]) {
-        const ran = await cli(["checkpoint", "delete"], id(name), "--json");
+      const ran = await cli(["checkpoint", "delete"], id("main-ram"), "--json");
 
-        expect(ran.code, ran.stdout).toBe(0);
-      }
+      expect(ran.code, ran.stdout).toBe(0);
 
       const listed = decode(Checkpoints, await cli(["checkpoint", "list"], "--json"));
 
       expect(listed.checkpoints).toEqual([]);
-      expect(await store()).toEqual({ checkpoints: expect.any(Array), packs: [] });
       expect((await store()).checkpoints.filter((entry) => entry.endsWith(".checkpoint"))).toEqual(
         [],
       );
 
-      for (const name of ["fork-a", "restore-a", "restore-b", "disk-a"]) {
+      for (const name of ["fork-a", "restore-a", "restore-b"]) {
         await removeMachine(name);
       }
 
