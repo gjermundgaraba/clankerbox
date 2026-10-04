@@ -1199,6 +1199,23 @@ includes a relayed HTTP round trip. Machines had 1 vCPU, 512–1024 MiB and
   it passed, as the driver then exited inside its WorkRun. Timings: `ram`
   capture 1.30 s, fork 2.98 s, two concurrent restores 1.64 s, one restore
   1.56 s; one image-seed build, 0 `smolvm-fork-ready` failures.
+- **Rerun after the owner's phase-5 review** (run `live-smolvm-d959c4478a6e`,
+  remote `runs/ld95`, code at `c210248`: `made`, one smolvm delete path,
+  source-state refusals, bulk `observe`, and the harness fixes J–O; same host,
+  fresh inventory on the mirror base, SEA upload 0.95 MiB/s over the DERP
+  relay): all 24 tests passed in 228 s. Start, stop, fork and capture of the
+  crash test's unmade machine were `Precondition` ("was never made") with no
+  row, checkpoint or native machine; a fork and a capture of a stopped source
+  were `Precondition` ("start it first") with nothing native and an empty
+  forks area; one list read three running machines and one stopped. Both holds
+  caught the host's `machine start`, after 24 and 10 `pkill` attempts; the
+  copies read `failed`, `start` refused them, and their deletes killed the
+  VMM left in each loaded scope (systemd logged "Killed unit cgroup") before
+  the copy's port stopped answering. The unit's ExecStopPost read `exited 0`
+  after each SIGTERM and `killed KILL` after the crash test's SIGKILL. No
+  graceful stop left a scope loaded, so delete's kill of a scope with no
+  processes didn't run. Timings: `ram` capture 1.21 s, fork 2.91 s, two
+  concurrent restores 1.81 s, one restore 1.45 s.
 
 ## Phase 5 (2026-10-04)
 
