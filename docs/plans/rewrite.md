@@ -1,7 +1,8 @@
 # TypeScript/Effect rewrite: plan
 
-Status: planned. Every design decision below is closed. The phase-0 spikes still
-gate details of guest access, setup, preparation and disk sizing, and P14 checks
+Status: planned. Every design decision below is closed. The phase-0 spikes have
+run (evidence.md, "Phase 0 spikes"), except P1 over the tailnet, which waits
+until the Linux host joins it, and P3 on a stock Cirrus image. P14 checks
 boat's auto-stop once the account is past its trial. The evidence behind the
 decisions is in [evidence.md](evidence.md). Both files are deleted in the last
 commit before the merge.
@@ -260,10 +261,11 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
 - **Long calls:** a mutation's reply, headers included, comes only when its
   action has finished. Node's server `requestTimeout` (300 s by default) covers
   only receiving the request, so it doesn't limit an action. The undici client
-  behind `fetch` does: its header and body timeouts (check their values at
-  26.10.0) would end a long `pack create` or a profile's setup. Phase 2 turns
-  them off for mutation calls, and P5 checks that effect-actions adds no
-  timeout of its own.
+  behind `fetch` does: its header and body timeouts (300 s each at 26.10.0)
+  would end a long `pack create` or a profile's setup. Phase 2 turns them off
+  for mutation calls. effect-actions adds no timeout of its own (P5).
+  `NodeHttpClient.layerUndici` can't serve here: it forces a 1 h header
+  timeout.
 
 **Resources**
 
@@ -531,8 +533,10 @@ create, start, fork and restore. In order:
      anything else the machine needs, and refreshes per-machine state. For
      example, clankercreds sync must run after a fork or restore.
    - A non-zero exit, or running past the timeout, fails the action, and the
-     error carries the script's last lines of output. P3's measurements set the
-     timeout and its recorded reason.
+     error carries the script's last lines of output. The timeout is 60 s: P3
+     measured at most 0.55 s for re-mint plus an sshd restart and 1.5 s for a
+     failing clankercreds sync, so 60 s leaves room for a slow network. A
+     successful sync is not yet timed; re-check the value when it is.
    - Check for sshd's listener (`/run/sshd.pid`), not `pgrep -x sshd`: an open
      ssh session also matches `pgrep`, so a dead listener would never be
      relaunched.
@@ -581,8 +585,11 @@ A crashed preparation is simply run again on the next activation; no
   - This needs no guest IP, no Softnet exception and no Local Network
     permission. A host that dials guest IPs needs a fresh Local Network grant
     for every new build, which would mean a manual step after every release.
-  - Opening a connection costs about 560 ms. A host restart drops open Tart
-    connections, whereas smolvm's listeners live in the VMM.
+  - Opening a connection adds about 0.29 s (P2). A host restart drops open
+    Tart connections, whereas smolvm's listeners live in the VMM.
+  - The forwarder ends a connection by closing the exec's stdin. A killed
+    `tart exec` leaves the guest's `nc` and `sshd-session` running until the
+    session next writes.
 - **boat:** guest port 22 is reached at boat's SSH relay (see
   [Runtimes: boat](#runtimes-boat)), with no host port and no forwarder.
 - **Security:** a published port is reachable by whatever garaba-home's tailnet
@@ -619,13 +626,19 @@ Two rules for every VM job:
 
 - **Install:** the operator installs upstream smolvm with its own installer, at
   the pinned version, into a versioned prefix:
-  `install.sh --version 1.22.2 --prefix /opt/smolvm/1.22.2`. Host config points
-  at that prefix.
+  `HOME=/opt/smolvm/1.22.2 install.sh --version 1.22.2 --prefix /opt/smolvm/1.22.2 --no-modify-path`.
+  With `HOME` at the prefix, the installer's `~/.local/bin` link and agent
+  rootfs land inside it, and it doesn't refuse a prefix outside `HOME`. Host
+  config points at that prefix.
   - At startup the host compares `smolvm --version` with the version this
     release was tested on, and refuses to start on a mismatch.
-  - smolvm looks for its templates in `~/.smolvm/` first, so a stale
-    `/root/.smolvm` would shadow the prefix's. P8 checks this, and that the
-    upstream wrapper finds its libraries from a prefix install.
+  - Every smolvm call sets `SMOLVM_AGENT_ROOTFS=<prefix>/.local/share/smolvm/agent-rootfs`:
+    with `SMOLVM_DATA_DIR` set, smolvm moves `HOME` to the data dir and
+    doesn't find it otherwise. The wrapper finds its libraries from the prefix.
+  - smolvm looks for templates in `$SMOLVM_DATA_DIR/.smolvm` first, and a
+    stale one there is used silently. Nothing of ours writes there.
+  - Machines keep using their prefix (qcow2 backing files and the agent
+    rootfs), so an old prefix stays until its last machine is deleted.
 - **Inventory:** one smolvm inventory per host, placed by `SMOLVM_DATA_DIR`.
   Machine names are unique per host, which the scope names need anyway. Socket
   paths are limited to 108 bytes, so init refuses a data root long enough to
@@ -734,8 +747,10 @@ Two rules for every VM job:
     same for store restores.
 - **DNS:** no `DNS` knob. smolvm's gateway relays DNS, and smolvm refuses
   capturing a machine with custom DNS.
-- **Disk sizing:** one disk-size field per machine (`diskGib`). P8 decides
-  whether this needs smolvm's compact templates or host `resize2fs`.
+- **Disk sizing:** one disk-size field per machine (`diskGib`), passed as
+  `--storage <diskGib>`; the overlay keeps smolvm's default. Workload writes
+  land on the storage disk. Below the 20 GiB template smolvm uses host
+  `resize2fs`, which Ubuntu hosts have; no compact templates (P8).
 
 ### Runtimes: Tart
 
