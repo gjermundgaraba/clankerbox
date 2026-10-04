@@ -76,6 +76,16 @@ test("a host list that names a host twice is Invalid", async () => {
   expect(error.message).toContain("linux");
 });
 
+test("an empty host list is Invalid", async () => {
+  const error = await Effect.flip(Client.make([])).pipe(
+    Effect.provide(transport(new Map())),
+    Effect.runPromise,
+  );
+
+  expect(error._tag).toBe("Invalid");
+  expect(error.message).toContain("empty");
+});
+
 test("a malformed ID is Invalid and sends nothing", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 

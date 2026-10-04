@@ -185,14 +185,18 @@ const settle = <A>(
   );
 
 /**
- * Builds a client over `hosts`, in placement order. Making it sends nothing. A host ID that
- * appears twice is Invalid: IDs route by it.
+ * Builds a client over `hosts`, in placement order. Making it sends nothing. An empty list
+ * is Invalid, and so is a host ID that appears twice: IDs route by it.
  */
 export const make = (
   hosts: ReadonlyArray<HostEntry>,
   options?: Options,
 ): Effect.Effect<Interface, Invalid, HttpClient.HttpClient> =>
   Effect.gen(function* () {
+    if (hosts.length === 0) {
+      return yield* new Invalid({ message: "the host list is empty: a client needs a host" });
+    }
+
     const twice = hosts.find(
       ({ id }, index) => hosts.findIndex((other) => other.id === id) < index,
     );
