@@ -2,18 +2,21 @@
  * The smolvm runtime over a scripted process spawner: the calls it makes, their environment,
  * and how it reads smolvm's answers. No VM runs here.
  */
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
-import type { MachineRef } from "../src/runtime.ts";
+import type { CheckpointRef, MachineRef } from "../src/runtime.ts";
 import {
   controlSocket,
   environment,
   make,
   nativeName,
+  pathsIn,
+  pin,
   type Settings,
   stateOf,
   templates,
@@ -96,24 +99,23 @@ const scripted = (reply: (call: Call) => Reply | undefined) => {
   return { calls, layer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner) };
 };
 
-/** A prefix with its templates expanded, and a data root short enough for smolvm's sockets. */
+/**
+ * A prefix with its templates expanded, and a state dir short enough for smolvm's sockets: under
+ * `/tmp`, as the system's temporary directory can be too deep on macOS.
+ */
 const prepared = async (expanded: ReadonlyArray<string> = templates): Promise<Settings> => {
   const dir = await scratch(owned);
   const prefix = join(dir, "smolvm", testedVersion);
+  const stateDir = await mkdtemp("/tmp/cbx-");
 
+  owned.push(stateDir);
   await mkdir(prefix, { recursive: true });
 
   for (const template of expanded) {
     await writeFile(join(prefix, template), "");
   }
 
-  return {
-    prefix,
-    publishAddress: "100.95.240.37",
-    ramBudgetMib: 4096,
-    // Never created: no smolvm runs here.
-    dataDir: "/srv/clankerbox/state/smolvm",
-  };
+  return { prefix, publishAddress: "100.95.240.37", ramBudgetMib: 4096, stateDir };
 };
 
 const runtimeOf = (settings: Settings, spawner: ReturnType<typeof scripted>, uid = 0) =>
@@ -172,8 +174,8 @@ test("every smolvm call runs the prefix's wrapper in the spikes' environment, an
       args: ["--version"],
       env: {
         PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        HOME: settings.dataDir,
-        SMOLVM_DATA_DIR: settings.dataDir,
+        HOME: join(settings.stateDir, "smolvm"),
+        SMOLVM_DATA_DIR: join(settings.stateDir, "smolvm"),
         SMOLVM_AGENT_ROOTFS: join(settings.prefix, ".local/share/smolvm/agent-rootfs"),
         SMOLVM_RESTORE_TMPFS: "0",
         SMOLVM_VM_USE_SCOPE: "1",
@@ -198,9 +200,9 @@ test("a smolvm host refuses to start unless it runs as root", async () => {
 
 test("a smolvm host refuses a state dir too deep for smolvm's socket paths", async () => {
   const settings = await prepared();
-  const deep = { ...settings, dataDir: join("/", "d".repeat(60), "state", "smolvm") };
+  const deep = { ...settings, stateDir: join("/", "d".repeat(60), "state") };
 
-  expect(Buffer.byteLength(controlSocket(deep.dataDir))).toBe(122);
+  expect(Buffer.byteLength(controlSocket(pathsIn(deep.stateDir).dataDir))).toBe(122);
 
   const error = await startupError(
     deep,
@@ -543,4 +545,304 @@ test("admit refuses with Capacity when running machines would pass the RAM budge
   );
 
   expect(error._tag).toBe("Capacity");
+});
+
+const ramCheckpoint: CheckpointRef = {
+  id: "linux_snap",
+  name: "snap",
+  instance: "fedcba9876543210fedcba9876543210",
+  native: undefined,
+  kind: "ram",
+  port: 10_000,
+};
+
+const diskCheckpoint: CheckpointRef = { ...ramCheckpoint, kind: "disk" };
+
+/** A machine made from a checkpoint, on its own port. */
+const copy: MachineRef = {
+  ...machine,
+  id: "linux_copy",
+  name: "copy",
+  instance: "abcdefabcdefabcdefabcdefabcdefab",
+  port: 10_001,
+};
+
+test("a ram checkpoint pins the smolvm release and the platform", async () => {
+  const runtime = await runtimeOf(
+    await prepared(),
+    scripted(() => undefined),
+  );
+
+  expect(runtime.pin).toBe(pin);
+  expect(pin).toBe(`smolvm 1.22.2 ${process.platform}-${process.arch}`);
+});
+
+test("startup empties the forks area and makes the runtime's directories", async () => {
+  const settings = await prepared();
+  const paths = pathsIn(settings.stateDir);
+
+  const runtime = await runtimeOf(
+    settings,
+    scripted(() => undefined),
+  );
+
+  await mkdir(join(paths.forks, "old-01234567", "old-01234567.checkpoint"), { recursive: true });
+  await Effect.runPromise(runtime.startup);
+
+  expect(await readdir(paths.forks)).toEqual([]);
+  expect((await readdir(settings.stateDir)).sort()).toEqual(["checkpoints", "forks", "packs"]);
+});
+
+test("a capture's kind follows the machine's state: ram when running, disk when stopped", async () => {
+  let reply = status("running");
+  const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+  const runtime = await runtimeOf(await prepared(), spawner);
+
+  const running = await Effect.runPromise(runtime.captureKind(machine));
+
+  reply = status("stopped");
+
+  const stopped = await Effect.runPromise(runtime.captureKind(machine));
+
+  reply = unknown;
+
+  const missing = await Effect.runPromise(Effect.flip(runtime.captureKind(machine)));
+
+  expect([running, stopped]).toEqual(["ram", "disk"]);
+  expect(missing._tag).toBe("Precondition");
+});
+
+test("a ram capture goes into the host's one store, with no history", async () => {
+  const settings = await prepared();
+  const spawner = scripted(() => undefined);
+  const runtime = await runtimeOf(settings, spawner);
+  const store = join(settings.stateDir, "checkpoints");
+
+  await Effect.runPromise(runtime.capture(machine, ramCheckpoint));
+
+  expect(smolvmArgs(spawner.calls)).toEqual([
+    [
+      "machine",
+      "checkpoint",
+      "--name",
+      "dev-01234567",
+      "--store",
+      store,
+      "--output",
+      join(store, "snap-fedcba98.checkpoint"),
+      "--history",
+      "0",
+    ],
+  ]);
+});
+
+test("a disk capture packs the stopped machine into its own directory", async () => {
+  const settings = await prepared();
+  const spawner = scripted(() => undefined);
+  const runtime = await runtimeOf(settings, spawner);
+  const dir = join(settings.stateDir, "packs", "snap-fedcba98");
+
+  await Effect.runPromise(runtime.capture(machine, diskCheckpoint));
+
+  expect(smolvmArgs(spawner.calls)).toEqual([
+    ["pack", "create", "--from-vm", "dev-01234567", "--output", join(dir, "snap-fedcba98")],
+  ]);
+  expect(await readdir(dir)).toEqual([]);
+});
+
+test("a pack of a machine on smolvm's image seed fails with what smolvm can't do", async () => {
+  const spawner = scripted((call) =>
+    call.args[0] === "pack"
+      ? {
+          exitCode: 1,
+          stderr: "Error: export helper: krun_start_enter returned: -22 (EINVAL)\n",
+        }
+      : undefined,
+  );
+
+  const runtime = await runtimeOf(await prepared(), spawner);
+  const error = await Effect.runPromise(Effect.flip(runtime.capture(machine, diskCheckpoint)));
+
+  expect(error._tag).toBe("Internal");
+  expect(error.message).toBe(
+    [
+      "smolvm pack create dev-01234567 exited 1: Error: export helper: krun_start_enter returned: -22 (EINVAL)",
+      "smolvm 1.22.2 can't pack a machine whose disk sits on its image seed, as every machine created at diskGib 20 does, so it can't make this disk checkpoint",
+    ].join("\n"),
+  );
+});
+
+test("a ram restore creates from the store with no restore cache, moves the port, then boots", async () => {
+  const settings = await prepared();
+  const spawner = scripted(() => undefined);
+  const runtime = await runtimeOf(settings, spawner);
+
+  await Effect.runPromise(runtime.restore(ramCheckpoint, copy));
+
+  expect(smolvmArgs(spawner.calls)).toEqual([
+    [
+      "machine",
+      "create",
+      "--name",
+      "copy-abcdefab",
+      "--from",
+      join(settings.stateDir, "checkpoints", "snap-fedcba98.checkpoint"),
+      "--restore-cache-entries",
+      "0",
+    ],
+    ["machine", "update", "--name", "copy-abcdefab", "--remove-port", "10000:22", "-p", "10001:22"],
+    ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
+  ]);
+});
+
+test("a ram restore that got its source's old port keeps it", async () => {
+  const spawner = scripted(() => undefined);
+  const runtime = await runtimeOf(await prepared(), spawner);
+
+  await Effect.runPromise(runtime.restore(ramCheckpoint, { ...copy, port: 10_000 }));
+
+  expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["create", "start"]);
+});
+
+test("a disk restore creates from the pack with the network, a port and the disk size", async () => {
+  const settings = await prepared();
+  const spawner = scripted(() => undefined);
+  const runtime = await runtimeOf(settings, spawner);
+
+  await Effect.runPromise(runtime.restore(diskCheckpoint, copy));
+
+  expect(smolvmArgs(spawner.calls)).toEqual([
+    [
+      "machine",
+      "create",
+      "--name",
+      "copy-abcdefab",
+      "--from",
+      join(settings.stateDir, "packs", "snap-fedcba98", "snap-fedcba98.smolmachine"),
+      "--net",
+      "--net-backend",
+      "virtio-net",
+      "-p",
+      "10001:22",
+      "--storage",
+      "20",
+    ],
+    ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
+  ]);
+});
+
+/**
+ * A spawner whose `machine checkpoint` makes its output in its store, as smolvm does, and whose
+ * `machine create` answers `create`.
+ */
+const forking = (create: Reply) =>
+  scripted((call) => {
+    if (call.args[1] === "checkpoint") {
+      mkdirSync(call.args[call.args.indexOf("--output") + 1] ?? "", { recursive: true });
+
+      return {};
+    }
+
+    return call.args[1] === "create" ? create : undefined;
+  });
+
+test("a fork captures into a store of its own, restores from it, and removes the store", async () => {
+  const settings = await prepared();
+  const spawner = forking({});
+  const runtime = await runtimeOf(settings, spawner);
+  const store = join(settings.stateDir, "forks", "copy-abcdefab");
+
+  await Effect.runPromise(runtime.startup);
+  await Effect.runPromise(runtime.fork(machine, copy));
+
+  expect(smolvmArgs(spawner.calls)).toEqual([
+    [
+      "machine",
+      "checkpoint",
+      "--name",
+      "dev-01234567",
+      "--store",
+      store,
+      "--output",
+      join(store, "copy-abcdefab.checkpoint"),
+      "--history",
+      "0",
+    ],
+    [
+      "machine",
+      "create",
+      "--name",
+      "copy-abcdefab",
+      "--from",
+      join(store, "copy-abcdefab.checkpoint"),
+      "--restore-cache-entries",
+      "0",
+    ],
+    ["machine", "update", "--name", "copy-abcdefab", "--remove-port", "10000:22", "-p", "10001:22"],
+    ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
+  ]);
+  expect(await readdir(join(settings.stateDir, "forks"))).toEqual([]);
+});
+
+test("a fork that fails still removes its store", async () => {
+  const settings = await prepared();
+  const runtime = await runtimeOf(settings, forking({ exitCode: 1, stderr: "Error: no space\n" }));
+
+  await Effect.runPromise(runtime.startup);
+
+  const error = await Effect.runPromise(Effect.flip(runtime.fork(machine, copy)));
+
+  expect(error.message).toBe("smolvm machine create copy-abcdefab exited 1: Error: no space");
+  expect(await readdir(join(settings.stateDir, "forks"))).toEqual([]);
+});
+
+test("a fork of a machine that isn't running is refused before anything runs", async () => {
+  const spawner = scripted((call) => (call.args[1] === "status" ? status("stopped") : undefined));
+  const runtime = await runtimeOf(await prepared(), spawner);
+
+  const error = await Effect.runPromise(
+    Effect.flip(
+      runtime.admit({
+        action: "fork",
+        machine: copy,
+        source: machine,
+        machines: [
+          { machine, holder: "fork" },
+          { machine: copy, holder: "fork" },
+        ],
+      }),
+    ),
+  );
+
+  expect(error._tag).toBe("Precondition");
+  expect(error.message).toBe(
+    "a fork copies a running machine, RAM included, and linux_dev is stopped",
+  );
+});
+
+test("deleting a ram checkpoint removes its directory, then prunes the store", async () => {
+  const settings = await prepared();
+  const spawner = scripted(() => undefined);
+  const runtime = await runtimeOf(settings, spawner);
+  const store = join(settings.stateDir, "checkpoints");
+
+  await mkdir(join(store, "snap-fedcba98.checkpoint", "objects"), { recursive: true });
+  await Effect.runPromise(runtime.deleteCheckpoint(ramCheckpoint));
+
+  expect(await readdir(store)).toEqual([]);
+  expect(smolvmArgs(spawner.calls)).toEqual([["machine", "checkpoint-prune", "--store", store]]);
+});
+
+test("deleting a disk checkpoint removes its pack's directory and calls nothing", async () => {
+  const settings = await prepared();
+  const spawner = scripted(() => undefined);
+  const runtime = await runtimeOf(settings, spawner);
+  const packs = join(settings.stateDir, "packs");
+
+  await mkdir(join(packs, "snap-fedcba98"), { recursive: true });
+  await writeFile(join(packs, "snap-fedcba98", "snap-fedcba98.smolmachine"), "");
+  await Effect.runPromise(runtime.deleteCheckpoint(diskCheckpoint));
+
+  expect(await readdir(packs)).toEqual([]);
+  expect(smolvmArgs(spawner.calls)).toEqual([]);
 });

@@ -7,6 +7,7 @@
  */
 import type {
   ActionName,
+  Checkpoint,
   HostError,
   Machine,
   Runtime as RuntimeName,
@@ -35,6 +36,21 @@ export interface MachineRef {
 
 export type MachineState = Machine["state"];
 
+export type CheckpointKind = Checkpoint["kind"];
+
+/** A checkpoint as the runtime sees it. */
+export interface CheckpointRef {
+  /** `<host>_<name>`. */
+  readonly id: string;
+  readonly name: string;
+  /** The row's random hex value. Native names carry its first 8 characters. */
+  readonly instance: string;
+  readonly native: string | undefined;
+  readonly kind: CheckpointKind;
+  /** The source's host port at capture. A `ram` restore comes up on it. */
+  readonly port: number | undefined;
+}
+
 /**
  * How many machines' states the host reads at once, in a list or a RAM budget check. On smolvm
  * each read is a `machine status` process, so a host with many machines doesn't start them all
@@ -62,6 +78,8 @@ export interface Activation {
   readonly machine: MachineRef;
   /** Every machine on the host, the target included, with what holds each. */
   readonly machines: ReadonlyArray<Held>;
+  /** For a fork, the machine it copies, which the fork holds too. */
+  readonly source?: MachineRef | undefined;
 }
 
 /** A command run as root in the guest. */
@@ -98,6 +116,11 @@ export interface Interface {
    */
   readonly publishAddress: string | undefined;
   /**
+   * What a `ram` checkpoint records at capture, and must be restored under: RAM state restores
+   * only into the build that saved it. `undefined` on a runtime with no `ram` checkpoints.
+   */
+  readonly pin: string | undefined;
+  /**
    * The runtime's own cleanup at host startup, run after every interrupted action has been
    * marked failed and before the host serves.
    */
@@ -122,6 +145,31 @@ export interface Interface {
    * crash between inserting the row and the first runtime call.
    */
   readonly delete: (machine: MachineRef) => Effect.Effect<void, HostError>;
+  /**
+   * The kind of checkpoint a capture of the machine would make now, which can follow its
+   * state. A machine that can't be captured now is `Precondition`.
+   */
+  readonly captureKind: (machine: MachineRef) => Effect.Effect<CheckpointKind, HostError>;
+  /** Captures the machine into the checkpoint, of the checkpoint's kind. */
+  readonly capture: (
+    machine: MachineRef,
+    checkpoint: CheckpointRef,
+  ) => Effect.Effect<void, HostError | Refusal>;
+  /**
+   * Makes the machine from a ready checkpoint and boots it; it returns once exec works. A
+   * checkpoint deleted under it fails it like any runtime failure.
+   */
+  readonly restore: (
+    checkpoint: CheckpointRef,
+    machine: MachineRef,
+  ) => Effect.Effect<void, HostError | Refusal>;
+  /** Makes `machine` a copy of `source` and boots it; it returns once exec works. */
+  readonly fork: (
+    source: MachineRef,
+    machine: MachineRef,
+  ) => Effect.Effect<void, HostError | Refusal>;
+  /** Removes everything native the checkpoint's row could have made. */
+  readonly deleteCheckpoint: (checkpoint: CheckpointRef) => Effect.Effect<void, HostError>;
   /** Runs a command as root in a running guest. */
   readonly exec: (
     machine: MachineRef,

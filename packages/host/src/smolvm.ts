@@ -3,6 +3,12 @@
  * host that runs as root. smolvm's exit codes are trusted: `machine start` returns once the
  * agent answers, `stop` once the VM is dead, and nothing polls around them. Every call runs
  * with the same environment, the one the spikes ran smolvm in.
+ *
+ * Checkpoints follow the machine's state at capture: a running machine's is `ram`, a store
+ * checkpoint in the host's one store; a stopped machine's is `disk`, a pack. A fork is a `ram`
+ * checkpoint into a store of its own, restored, then the store is removed whole. `machine
+ * branch` is never called: each branch adds a backing layer to its source, and smolvm refuses
+ * the 33rd.
  */
 import { join } from "node:path";
 import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
@@ -12,6 +18,7 @@ import type { HostConfig, Smolvm } from "./config.ts";
 import { lastLines } from "./guest.ts";
 import { checkRamBudget } from "./ram-budget.ts";
 import {
+  type CheckpointRef,
   type Interface,
   type MachineRef,
   type MachineState,
@@ -25,18 +32,44 @@ import {
  */
 export const testedVersion = "1.22.2";
 
-/** What the runtime needs: the host config's smolvm settings, and where its inventory is. */
+/** What the runtime needs: the host config's smolvm settings, and the host's state dir. */
 export interface Settings extends Smolvm {
-  /** The host's one inventory (`SMOLVM_DATA_DIR`). */
-  readonly dataDir: string;
+  readonly stateDir: string;
 }
 
-/** The inventory lives in the host's state dir, so it is the host's alone. */
-const dataDirIn = (stateDir: string): string => join(stateDir, "smolvm");
+/**
+ * Where the runtime keeps its files, all in the host's state dir, so they are the host's alone:
+ * the one inventory (`SMOLVM_DATA_DIR`), the one checkpoint store for `ram` checkpoints, the
+ * packs of `disk` checkpoints, and each fork's own store while the fork runs.
+ */
+export const pathsIn = (stateDir: string) => ({
+  dataDir: join(stateDir, "smolvm"),
+  store: join(stateDir, "checkpoints"),
+  packs: join(stateDir, "packs"),
+  forks: join(stateDir, "forks"),
+});
 
-/** A machine's smolvm name: its name and the first 8 characters of its row's instance. */
-export const nativeName = (machine: Pick<MachineRef, "name" | "instance">): string =>
-  `${machine.name}-${machine.instance.slice(0, 8)}`;
+/**
+ * The pin a `ram` checkpoint records: the smolvm release and the platform. smolvm checks sizes,
+ * platform, CPU contract and network at restore, but not the engine build or the agent, so a
+ * RAM state is restored only under the release that saved it.
+ */
+export const pin = `smolvm ${testedVersion} ${process.platform}-${process.arch}`;
+
+/**
+ * A machine's or checkpoint's smolvm name: its name and the first 8 characters of its row's
+ * instance.
+ */
+export const nativeName = (resource: Pick<MachineRef, "name" | "instance">): string =>
+  `${resource.name}-${resource.instance.slice(0, 8)}`;
+
+/**
+ * What smolvm 1.22.2's `pack create --from-vm` fails with for a machine whose disk sits on smolvm's
+ * image seed, as every machine created at the default `--storage 20` does: the export helper
+ * reaches the root-only seed through no mount (S@1.22.2:src/internal_boot.rs:240-243,
+ * src/pack_export.rs:454-471; P9).
+ */
+const seededPackFailure = "krun_start_enter returned: -22";
 
 /** The systemd scope `SMOLVM_VM_USE_SCOPE=1` puts a VM in (S@1.22.2:src/systemd_scope.rs:151-163). */
 const scopeName = (native: string): string => `smolvm-vm-${native}.scope`;
@@ -71,8 +104,8 @@ const searchPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
  */
 export const environment = (settings: Settings) => ({
   PATH: searchPath,
-  HOME: settings.dataDir,
-  SMOLVM_DATA_DIR: settings.dataDir,
+  HOME: pathsIn(settings.stateDir).dataDir,
+  SMOLVM_DATA_DIR: pathsIn(settings.stateDir).dataDir,
   SMOLVM_AGENT_ROOTFS: join(settings.prefix, ".local", "share", "smolvm", "agent-rootfs"),
   SMOLVM_RESTORE_TMPFS: "0",
   SMOLVM_VM_USE_SCOPE: "1",
@@ -135,6 +168,7 @@ export const make = (
     const fs = yield* FileSystem.FileSystem;
     const binary = join(settings.prefix, "smolvm");
     const env = environment(settings);
+    const paths = pathsIn(settings.stateDir);
 
     const command = (file: string, args: ReadonlyArray<string>, stdin: ChildProcess.CommandInput) =>
       ChildProcess.make(file, args, { env, extendEnv: false, stdin });
@@ -169,17 +203,24 @@ export const make = (
     const systemctl = (args: ReadonlyArray<string>, what: string) =>
       Effect.flatMap(run("systemctl", args, `systemctl ${what}`), succeeded(`systemctl ${what}`));
 
+    /** A file system call of the runtime's own; `what` names it in errors. */
+    const files = <A>(what: string, effect: Effect.Effect<A, PlatformError.PlatformError>) =>
+      Effect.mapError(effect, (error) => new Internal({ message: `${what}: ${describe(error)}` }));
+
+    const removeAll = (path: string) =>
+      files(`couldn't remove ${path}`, fs.remove(path, { recursive: true, force: true }));
+
     if (uid !== 0) {
       return yield* new Precondition({
         message: `a smolvm host runs as root, and this one runs as uid ${uid ?? "unknown"}`,
       });
     }
 
-    const socket = controlSocket(settings.dataDir);
+    const socket = controlSocket(paths.dataDir);
 
     if (Buffer.byteLength(socket) > socketPathMax) {
       return yield* new Precondition({
-        message: `smolvm's sockets under ${settings.dataDir} would need ${Buffer.byteLength(socket)} bytes, past Linux's ${socketPathMax}: use a shorter state dir`,
+        message: `smolvm's sockets under ${paths.dataDir} would need ${Buffer.byteLength(socket)} bytes, past Linux's ${socketPathMax}: use a shorter state dir`,
       });
     }
 
@@ -243,13 +284,226 @@ export const make = (
     const boot = (native: string) =>
       call(["machine", "start", "--name", native, "--branchable"], `machine start ${native}`);
 
+    /** A fork copies RAM, which only a running machine has. */
+    const forkable = (source: MachineRef) =>
+      Effect.flatMap(state(nativeName(source)), (observed) =>
+        observed === "running"
+          ? Effect.void
+          : Effect.fail(
+              new Precondition({
+                message: `a fork copies a running machine, RAM included, and ${source.id} is ${observed}`,
+              }),
+            ),
+      );
+
+    /** A `ram` checkpoint's directory in the host's store. */
+    const checkpointDir = (checkpoint: CheckpointRef) =>
+      join(paths.store, `${nativeName(checkpoint)}.checkpoint`);
+
+    /** A `disk` checkpoint's pack: its directory, and the file a restore reads. */
+    const packOf = (checkpoint: CheckpointRef) => {
+      const native = nativeName(checkpoint);
+      const dir = join(paths.packs, native);
+
+      return { dir, output: join(dir, native), file: join(dir, `${native}.smolmachine`) };
+    };
+
+    const portOf = (machine: MachineRef) =>
+      machine.port === undefined
+        ? Effect.fail(new Internal({ message: `machine ${machine.id} has no host port` }))
+        : Effect.succeed(machine.port);
+
+    /**
+     * Captures a running machine's RAM and disks into `store`, with no history: smolvm would
+     * otherwise keep 32 generations, and deleting an older checkpoint would free nothing.
+     */
+    const captureRam = (machine: MachineRef, store: string, output: string) => {
+      const native = nativeName(machine);
+
+      return call(
+        [
+          "machine",
+          "checkpoint",
+          "--name",
+          native,
+          "--store",
+          store,
+          "--output",
+          output,
+          "--history",
+          "0",
+        ],
+        `machine checkpoint ${native}`,
+      );
+    };
+
+    /**
+     * Makes `machine` from a `ram` checkpoint, moves the source's port to its own, and boots it.
+     * smolvm refuses topology flags at a create from a live checkpoint and keeps its port, so
+     * the port is swapped before the first start. The restore cache is off: it survives every
+     * smolvm command, and a fork restores each checkpoint once.
+     */
+    const restoreRam = (from: string, sourcePort: number | undefined, machine: MachineRef) =>
+      Effect.gen(function* () {
+        const native = nativeName(machine);
+        const port = yield* portOf(machine);
+
+        yield* call(
+          ["machine", "create", "--name", native, "--from", from, "--restore-cache-entries", "0"],
+          `machine create ${native}`,
+        );
+
+        // A source deleted before the restore can leave its port to the new machine.
+        if (sourcePort !== port) {
+          if (sourcePort === undefined) {
+            return yield* new Internal({ message: `the checkpoint of ${machine.id} has no port` });
+          }
+
+          yield* call(
+            [
+              "machine",
+              "update",
+              "--name",
+              native,
+              "--remove-port",
+              `${sourcePort}:22`,
+              "-p",
+              `${port}:22`,
+            ],
+            `machine update ${native}`,
+          );
+        }
+
+        yield* boot(native);
+      });
+
     return {
       name: "smolvm",
       version: testedVersion,
       publishAddress: settings.publishAddress,
-      startup: Effect.void,
+      pin,
+      // Nothing is in flight at startup, so no fork's store is still needed.
+      startup: Effect.gen(function* () {
+        yield* removeAll(paths.forks);
+
+        for (const dir of [paths.store, paths.packs, paths.forks]) {
+          yield* files(
+            `couldn't create ${dir}`,
+            fs.makeDirectory(dir, { recursive: true, mode: 0o700 }),
+          );
+        }
+      }),
       observe,
-      admit: (activation) => checkRamBudget(settings.ramBudgetMib, activation, observe),
+      admit: ({ source, ...activation }) =>
+        Effect.andThen(
+          source === undefined ? Effect.void : forkable(source),
+          checkRamBudget(settings.ramBudgetMib, activation, observe),
+        ),
+      captureKind: (machine) =>
+        Effect.flatMap(state(nativeName(machine)), (observed) => {
+          if (observed === "missing") {
+            return Effect.fail(
+              new Precondition({
+                message: `machine ${machine.id} is missing from the smolvm runtime; delete it`,
+              }),
+            );
+          }
+
+          return Effect.succeed(observed === "running" ? "ram" : "disk");
+        }),
+      capture: (machine, checkpoint) => {
+        if (checkpoint.kind === "ram") {
+          return Effect.asVoid(captureRam(machine, paths.store, checkpointDir(checkpoint)));
+        }
+
+        const native = nativeName(machine);
+        const pack = packOf(checkpoint);
+        const what = `smolvm pack create ${native}`;
+
+        return Effect.gen(function* () {
+          yield* files(
+            `couldn't create ${pack.dir}`,
+            fs.makeDirectory(pack.dir, { recursive: true, mode: 0o700 }),
+          );
+
+          const ran = yield* smolvm(
+            ["pack", "create", "--from-vm", native, "--output", pack.output],
+            `pack create ${native}`,
+          );
+
+          if (ran.exitCode !== 0) {
+            const { message } = failure(what, ran);
+
+            return yield* new Internal({
+              message: ran.stderr.includes(seededPackFailure)
+                ? `${message}\nsmolvm ${testedVersion} can't pack a machine whose disk sits on its image seed, as every machine created at diskGib 20 does, so it can't make this disk checkpoint`
+                : message,
+            });
+          }
+        });
+      },
+      restore: (checkpoint, machine) => {
+        if (checkpoint.kind === "ram") {
+          return restoreRam(checkpointDir(checkpoint), checkpoint.port, machine);
+        }
+
+        return Effect.gen(function* () {
+          const native = nativeName(machine);
+          const port = yield* portOf(machine);
+
+          // A pack has no checkpoint manifest, so it takes topology flags like an image, and it
+          // doesn't carry its source's disk size.
+          yield* call(
+            [
+              "machine",
+              "create",
+              "--name",
+              native,
+              "--from",
+              packOf(checkpoint).file,
+              "--net",
+              "--net-backend",
+              "virtio-net",
+              "-p",
+              `${port}:22`,
+              "--storage",
+              String(machine.diskGib),
+            ],
+            `machine create ${native}`,
+          );
+
+          yield* boot(native);
+        });
+      },
+      fork: (source, machine) => {
+        const store = join(paths.forks, nativeName(machine));
+        const output = join(store, `${nativeName(machine)}.checkpoint`);
+
+        // Restored machines hold no reference into the store, so it goes whole, however the
+        // fork ended.
+        return Effect.andThen(
+          captureRam(source, store, output),
+          restoreRam(output, source.port, machine),
+        ).pipe(
+          Effect.ensuring(
+            removeAll(store).pipe(
+              Effect.catch((error) => Effect.logWarning(`fork ${machine.id}: ${error.message}`)),
+            ),
+          ),
+        );
+      },
+      deleteCheckpoint: (checkpoint) => {
+        if (checkpoint.kind === "disk") {
+          return removeAll(packOf(checkpoint).dir);
+        }
+
+        // Removing the directory drops the checkpoint's references; the prune frees what no
+        // other checkpoint shares, and staging that an interrupted capture left.
+        return Effect.andThen(
+          removeAll(checkpointDir(checkpoint)),
+          call(["machine", "checkpoint-prune", "--store", paths.store], "machine checkpoint-prune"),
+        );
+      },
       create: (machine, image) =>
         Effect.gen(function* () {
           const native = nativeName(machine);
@@ -358,7 +612,4 @@ export const layer = (
   HostError,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > =>
-  Layer.effect(
-    Runtime,
-    make({ ...config.smolvm, dataDir: dataDirIn(config.stateDir) }, process.getuid?.()),
-  );
+  Layer.effect(Runtime, make({ ...config.smolvm, stateDir: config.stateDir }, process.getuid?.()));
