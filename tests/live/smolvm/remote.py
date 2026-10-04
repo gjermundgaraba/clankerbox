@@ -37,9 +37,8 @@ import time
 OWNER = 'clankerbox-work-run-v1'
 IMAGE = 'ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7'
 TEMPLATES = ('storage-template.ext4', 'overlay-template.ext4')
-# Every native machine of the run carries it; init refuses to start while any scope has it.
-NAME_PREFIX = 'clankerbox-rewrite-'
-SCOPE_PATTERN = f'smolvm-vm-{NAME_PREFIX}*'
+# Every live run's machines carry it; init refuses to start while any run's scope is there.
+RUNS_PREFIX = 'clankerbox-rewrite-'
 # smolvm's own helper VMs, whose scope names smolvm fixes (S@1.22.2:src/image_seed.rs:381,
 # src/pack_export.rs:419-426); a failed pack export leaks its helper's scope.
 HELPER_PATTERNS = ('smolvm-vm-image-seed-*', 'smolvm-vm-pack-fromvm-*')
@@ -63,6 +62,9 @@ OWNED = RUN.parent.parent
 if not re.fullmatch(r'l[0-9a-f]{3}', RUN.name) or RUN.parent.name != 'runs' or RUN.is_symlink():
     sys.exit(f'refusing a run dir that is not <owned root>/runs/l<3 hex>: {RUN}')
 RID = RUN.name
+# This run's machines carry its ID, so its teardown stops only its own scopes.
+NAME_PREFIX = f'{RUNS_PREFIX}{RID}-'
+SCOPE_PATTERN = f'smolvm-vm-{NAME_PREFIX}*'
 LEDGER = OWNED / 'CLEANUP.md'
 SCRATCH = RUN / 'scratch'
 EVIDENCE = RUN / 'evidence'
@@ -184,8 +186,14 @@ def helper_units():
 
 
 def new_helper_units():
-    before = set(load_state().get('helper_units_before', []))
-    return [u for u in helper_units() if u not in before]
+    """Helper scopes that weren't there when the run started; none without that record."""
+    before = load_state().get('helper_units_before')
+    return [] if before is None else [u for u in helper_units() if u not in set(before)]
+
+
+def initialised():
+    if not load_state().get('initialised'):
+        sys.exit('the run was never initialised, so it owns nothing to tear down')
 
 
 def vm_uid_processes():
@@ -284,16 +292,16 @@ def cmd_init(tailnet, smolvm_prefix):
     SCRATCH.mkdir(mode=0o700)
     EVIDENCE.mkdir(mode=0o700)
     root_log('(legend)', 'every sudo command of this run follows; "read-only" means it changed nothing')
-    save_state(address=tailnet, prefix=smolvm_prefix, started_epoch=int(time.time()))
+    save_state(address=tailnet, prefix=smolvm_prefix, started_epoch=int(time.time()), helper_units_before=helper_units())
     if not (prefix() / 'READY').exists():
         sys.exit(f'{prefix()}/READY is missing')
     if len(str(STATE_DIR)) > 52:
         sys.exit(f'state dir {STATE_DIR} is past the 52 bytes smolvm\'s socket paths allow')
-    if list_units(SCOPE_PATTERN) or vm_uid_processes():
-        sys.exit(f'{SCOPE_PATTERN} scopes or VM-uid processes exist before the run; another run is live')
+    if list_units(f'smolvm-vm-{RUNS_PREFIX}*') or vm_uid_processes():
+        sys.exit(f'smolvm-vm-{RUNS_PREFIX}* scopes or VM-uid processes exist before the run; another run is live')
     snap = snapshot('before')
     save_state(modes_before={d: v for d, v in snap['modes'].items()}, prefix_tree_before=snap['prefix_tree'],
-               tailnet_listeners_before=snap['tailnet_listeners'], helper_units_before=helper_units(),
+               tailnet_listeners_before=snap['tailnet_listeners'],
                shm_restore_before=os.path.exists('/dev/shm/smolvm-restore'), docker_rate_before=docker_rate())
     ledger_add('dirmodes', 'smolvm running as root adds others-execute to every ancestor of its data root and of '
                'its agent rootfs (S@1.22.2:src/agent/manager.rs:2398-2413, src/process.rs:1634-1648): the home '
@@ -313,6 +321,7 @@ def cmd_init(tailnet, smolvm_prefix):
                f'listeners on {tailnet}:<port> (10000-19999), one per running machine; reachable by whatever the '
                "tailnet policy allows; guests' sshd accept only the run's ephemeral key. Revert: delete every VM "
                'and stop the host; verify the tailnet listener set equals the one recorded before the run.')
+    save_state(initialised=True)
     print(f'initialised {RUN}')
 
 
@@ -593,6 +602,7 @@ def remove_natives(report):
 
 
 def cmd_teardown():
+    initialised()
     report = {'at': now(), 'steps': [], 'counters': counters()}
     clean = remove_natives(report)
     (EVIDENCE / 'teardown.json').write_text(json.dumps(report, indent=2) + '\n')
@@ -605,6 +615,7 @@ def cmd_teardown():
 def cmd_reset():
     """Teardown that keeps the inventory, and so its image seed, then a host on an empty state:
     the suite can run again without pulling the image again."""
+    initialised()
     report = {'at': now(), 'steps': [], 'counters': counters()}
     clean = remove_natives(report)
     with open(EVIDENCE / 'resets.jsonl', 'a') as f:
@@ -618,6 +629,7 @@ def cmd_reset():
 
 
 def cmd_finish():
+    initialised()
     data = json.loads((RUN / 'manifest.json').read_text())
     if data.get('owner') != OWNER or data.get('id') != RID:
         sys.exit('not an owned run')

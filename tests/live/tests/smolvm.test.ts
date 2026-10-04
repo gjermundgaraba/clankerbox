@@ -18,7 +18,6 @@ import {
   Failure,
   Machines,
   Names,
-  namePrefix,
   Natives,
   OneCheckpoint,
   OneMachine,
@@ -102,7 +101,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   const cli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
     run(env.binary, [...command, "--config", env.config, ...args]);
 
-  const id = (name: string) => `${env.host.id}_${namePrefix}${name}`;
+  const id = (name: string) => `${env.host.id}_${env.prefix}${name}`;
 
   const control = (...args: ReadonlyArray<string>) => run(env.control, args);
 
@@ -204,7 +203,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   };
 
   const natives = async (name: string) => {
-    const ran = await control("natives", `${namePrefix}${name}-`);
+    const ran = await control("natives", `${env.prefix}${name}-`);
 
     expect(ran.code, ran.stderr).toBe(0);
 
@@ -234,7 +233,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     (await inGuest(name, `cat /var/lib/clankerbox-live/${file}`)).split("\n").length;
 
   /** A new resource's name, which carries the run's prefix like every other. */
-  const named = (name: string) => `${namePrefix}${name}`;
+  const named = (name: string) => `${env.prefix}${name}`;
 
   /** What a machine shows of its identity, and of what a copy carried over. */
   const facts = async (name: string) => {
@@ -609,7 +608,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       expect(error.message).toContain("setup ran past its 5s timeout");
       expect(error.message).toContain("overrun-started");
 
-      const seen = await control("guest", `${namePrefix}overrun`, "ps -eo args");
+      const seen = await control("guest", `${env.prefix}overrun`, "ps -eo args");
 
       expect(seen.code, seen.stderr).toBe(0);
       expect(seen.stdout).not.toContain("sleep 600");
@@ -1025,7 +1024,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
           }
 
           return (
-            (await control("guest", `${namePrefix}crash`, "test -e /root/setup-started")).code === 0
+            (await control("guest", `${env.prefix}crash`, "test -e /root/setup-started")).code === 0
           );
         },
         180,
@@ -1049,7 +1048,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
         },
       });
 
-      const seen = await control("guest", `${namePrefix}crash`, "ps -eo args");
+      const seen = await control("guest", `${env.prefix}crash`, "ps -eo args");
 
       expect(seen.code, seen.stderr).toBe(0);
       expect(seen.stdout).not.toContain("sleep 300");
@@ -1073,7 +1072,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   test(
     "a native machine that already carries a machine's name is left alone by that machine's create and delete",
     async () => {
-      const decoy = await control("decoy", `${namePrefix}decoy`);
+      const decoy = await control("decoy", `${env.prefix}decoy`);
 
       expect(decoy.code, decoy.stderr).toBe(0);
 
@@ -1098,7 +1097,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       const created = await createBare("stuck");
 
       expect(created.code, created.stdout).toBe(0);
-      expect((await control("freeze", `${namePrefix}stuck`)).code).toBe(0);
+      expect((await control("freeze", `${env.prefix}stuck`)).code).toBe(0);
 
       const error = failure(await cli(["stop"], id("stuck"), "--json"));
       const row = await machine("stuck");

@@ -10,12 +10,6 @@ import { join } from "node:path";
 import { Checkpoint, ErrorTag, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 
-/**
- * Every native resource a live run makes carries this prefix, so a test machine's teardown can
- * find, and only find, what the run made (rewrite.md, "Test machine footprint").
- */
-export const namePrefix = "clankerbox-rewrite-";
-
 export interface Ran {
   readonly code: number;
   readonly stdout: string;
@@ -96,10 +90,12 @@ export const Natives = Schema.fromJsonString(
 
 /**
  * The live environment: `CLANKERBOX_BIN`, the binary under test; `CLANKERBOX_LIVE_CONFIG`, a
- * client config whose one host is the host under test; and `CLANKERBOX_LIVE_HOST_CONTROL`, a
- * program run as `CONTROL OP ARGS…` on this machine that acts on the host under test.
- * `smolvm/driver.py` provides all three, and its teardown removes what the run left on the
- * host. The program's ops:
+ * client config whose one host is the host under test; `CLANKERBOX_LIVE_HOST_CONTROL`, a
+ * program run as `CONTROL OP ARGS…` on this machine that acts on the host under test; and
+ * `CLANKERBOX_LIVE_PREFIX`, which every machine name of the run starts with. It carries the
+ * run's ID, so the run's teardown finds, and only finds, what the run made (rewrite.md, "Test
+ * machine footprint"). `smolvm/driver.py` provides all four, and its teardown removes what the
+ * run left on the host. The program's ops:
  *
  * - `host-stop`, `host-start`: stop the host process (SIGTERM) or start it;
  * - `host-kill`: SIGKILL the host process, as a crash;
@@ -126,6 +122,7 @@ export const environment = async () => {
   const binary = required("CLANKERBOX_BIN");
   const config = required("CLANKERBOX_LIVE_CONFIG");
   const control = required("CLANKERBOX_LIVE_HOST_CONTROL");
+  const prefix = required("CLANKERBOX_LIVE_PREFIX");
   const [peer = "", peerPort] = required("CLANKERBOX_LIVE_PEER").split(":");
   const { hosts } = Schema.decodeUnknownSync(ClientConfig)(await readFile(config, "utf8"));
   const [host, ...others] = hosts;
@@ -134,7 +131,7 @@ export const environment = async () => {
     throw new Error("the live client config lists only the host under test");
   }
 
-  return { binary, config, control, host, peer, peerPort };
+  return { binary, config, control, prefix, host, peer, peerPort };
 };
 
 export type Environment = Awaited<ReturnType<typeof environment>>;

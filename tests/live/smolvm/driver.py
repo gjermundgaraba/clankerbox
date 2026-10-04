@@ -84,7 +84,10 @@ def main():
         rdir = f'{options.root}/runs/{rid}'
         remote_py = f'{rdir}/remote.py'
         host_id = f'clankerbox-rewrite-{rid}'
-        state = {'remote_created': False, 'remote_clean': False}
+        # remote.py's NAME_PREFIX: every machine of the run carries the run's ID.
+        name_prefix = f'{host_id}-'
+        # The remote dir holds evidence from its creation; only an initialised run owns more.
+        state = {'remote_dir': False, 'initialised': False, 'remote_clean': False}
         darwin_bin = run.scratch / 'clankerbox'
         client_config = run.scratch / 'client.json'
         control_bin = run.scratch / 'host-control'
@@ -150,7 +153,11 @@ def main():
 
         def collect_and_finish():
             try:
-                if not state['remote_created']:
+                if not state['remote_dir']:
+                    return
+                if not state['initialised']:
+                    collect()
+                    log(f'init did not complete, so nothing remote was torn down; {rdir} keeps its evidence')
                     return
                 if collect() != 0:
                     raise RuntimeError('evidence collection failed; remote scratch retained')
@@ -173,7 +180,7 @@ def main():
         run.on_cleanup(collect_and_finish)
 
         def remote_teardown():
-            if not state['remote_created']:
+            if not state['initialised']:
                 return
             upload_remote_program()
             remote('teardown', 'teardown')
@@ -208,15 +215,16 @@ def main():
             remote(f'set-binary-sha {sha}', 'set-sha', timeout=60)
 
         record(remote_host=options.ssh, remote_run=rdir, host_id=host_id, unit=f'clankerbox-rewrite-{rid}-host.service',
-               machine_prefix='clankerbox-rewrite-', scope_prefix='smolvm-vm-clankerbox-rewrite-',
+               machine_prefix=name_prefix, scope_prefix=f'smolvm-vm-{name_prefix}',
                state_dir=f'{rdir}/scratch/s', inventory=f'{rdir}/scratch/s/smolvm', smolvm_prefix=options.smolvm_prefix,
                address=options.address)
         log(f'local run {run.path.name}; remote run {rdir}; host {host_id}')
         linux, sha = build()
         sh(ssh + [f'mkdir -p {options.root}/runs && mkdir -m 700 {rdir}'], 'mkdir', timeout=60)
-        state['remote_created'] = True
+        state['remote_dir'] = True
         upload_remote_program()
         remote(f'init {shlex.quote(options.address)} {shlex.quote(options.smolvm_prefix)}', 'init', timeout=600)
+        state['initialised'] = True
         upload(linux, sha)
         remote(f'setup {host_id}', 'setup', timeout=900)
         subprocess.run(scp + [f'{options.ssh}:{rdir}/state.json', str(run.scratch / 'remote-state.json')], check=True)
@@ -257,7 +265,7 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
 
         suite_env = dict(os.environ, CLANKERBOX_LIVE='1', CLANKERBOX_BIN=str(darwin_bin),
                          CLANKERBOX_LIVE_CONFIG=str(client_config), CLANKERBOX_LIVE_HOST_CONTROL=str(control_bin),
-                         CLANKERBOX_LIVE_PEER=peer)
+                         CLANKERBOX_LIVE_PREFIX=name_prefix, CLANKERBOX_LIVE_PEER=peer)
         queue = list(options.steps)
         processed = 0
         last = time.time()
