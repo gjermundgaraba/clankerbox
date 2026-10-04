@@ -1000,9 +1000,10 @@ Two rules for every VM job:
   homes ran with one MAC and one IP, with no warning (P11).
 - **Sizes:** create passes `--cpu`, `--memory` (MiB) and `--disk-size` with
   the clone's `tart set`. Tart sizes disks in GB, so `diskGib` is rounded up
-  to whole GB, and it only grows a disk: a `diskGib` below the base's (50 GB
-  on the Cirrus images) fails the create, and `delete` cleans up. The stock
-  Cirrus guest grew its APFS container to the new size at boot (phase 5).
+  to whole GB, and it only grows a disk (evidence.md, Tart claims): a
+  `diskGib` below the base's (50 GB on the pinned Cirrus image) fails the
+  create, and `delete` cleans up. The stock Cirrus guest grew its APFS
+  container to the new size at boot (phase 5).
 - **Trust Tart's clone:** it builds in a temp directory under a lock and
   garbage-collects interrupted clones. Since 2.40.1, clone refuses an existing
   destination, and the instance in the name means it never meets one. Never

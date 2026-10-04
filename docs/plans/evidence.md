@@ -291,6 +291,15 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
   - It regenerates a colliding MAC (Clone.swift:101-103).
 - **Names:** a local VM name only has to be free of `/`
   (T:Commands/Clone.swift:43-46).
+- **Disk size:** `tart set --disk-size` only grows a disk. A size below the
+  current one throws "new disk size … should be larger than the current disk
+  size" for raw and ASIF disks (T:VMDirectory.swift:287-301, 303-319); a
+  stacked disk grows only its writable overlay and refuses a shrink
+  (DiskImageStack.swift:186-201). Read from source, not run. The pinned
+  Cirrus base, ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3aa5c…, has a
+  raw disk of 50000000000 bytes: its manifest's uncompressed-disk-size
+  annotation, the seed's `disk.img` and its `config.json` (`"diskFormat":
+  "raw"`), recorded in the seed's PROVENANCE.
 - **Delete:** on a missing VM it exits 2. From 2.40.0 a running VM exits 1
   instead.
 - **Two-VM limit:** enforced by Apple, system-wide, including VMs outside
