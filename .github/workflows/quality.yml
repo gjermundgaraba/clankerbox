@@ -1,0 +1,36 @@
+name: Quality
+on: [push, pull_request]
+jobs:
+  ready:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 26.10.0
+      - run: npm install -g "$(node -p "require('./package.json').packageManager")"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm ready
+  sea:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            target: darwin-arm64
+          - runner: ubuntu-24.04
+            target: linux-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 26.10.0
+      - run: npm install -g "$(node -p "require('./package.json').packageManager")"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - uses: actions/cache@v6.1.0
+        with:
+          path: tools/release/cache
+          key: sea-node-${{ matrix.target }}-${{ hashFiles('tools/release/release-inputs.json') }}
+      - run: pnpm sea:build ${{ matrix.target }}
+      - run: pnpm sea:smoke
