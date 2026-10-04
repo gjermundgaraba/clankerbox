@@ -386,9 +386,11 @@ listed to keep them from being ported):
   (`createdAt` stays.)
 - **`machine.json`:** its `env` (setup writes the guest's environment) and
   `start.timeout_seconds` (preparation's own timeout replaces it).
-- **CLI exit-code contract:** the codes 255/130/128+n. The CLI exits 0 or 1. With
-  `--json` it prints `{error: {message, tag, retryable}}`, and `ssh` exits with
-  ssh's code.
+- **CLI exit-code contract:** the codes 255/130/128+n. The CLI exits 0 or 1,
+  except that an interrupt such as Ctrl-C exits 130, the shell's convention.
+  With `--json` a clankerbox error prints `{error: {message, tag, retryable}}`;
+  a usage error prints effect/cli's usual output, and its non-zero exit is the
+  contract. `ssh` exits with ssh's code.
 - **Name lookup:** the CLI takes IDs, so there is no resolution by fan-out.
 - **Host knobs:** `port_lease_root`, `port_min/max`, `dns`, `launchctl_path`,
   `launchd_domain`, `systemctl_path`, `tls_*`, `HostOS`, `ControllerID`, and

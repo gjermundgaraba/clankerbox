@@ -126,7 +126,7 @@ test("ssh pins the machine's host key in a one-line known-hosts file and passes 
   expect(existsSync(spawned?.knownHostsFile ?? "")).toBe(false);
 });
 
-test("ssh exits with ssh's exit code", async () => {
+test("ssh exits with ssh's exit code, through Exited's errorExitCode and the default teardown", async () => {
   const { config, endpoints } = await setup();
 
   const { code } = await cli(["ssh", "linux_dev", "--config", config], {

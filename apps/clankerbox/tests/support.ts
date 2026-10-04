@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ConfigProvider, Effect, Layer } from "effect";
+import { ConfigProvider, Effect, Layer, Runtime } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { TestConsole } from "effect/testing";
 import {
@@ -11,7 +11,7 @@ import {
   type StubHost,
   transport,
 } from "../../../packages/contract/tests/stub-host.ts";
-import { dispatch, exitCode } from "../src/roles.ts";
+import { dispatch } from "../src/roles.ts";
 
 export const url = (id: string) => `http://${id}.test`;
 
@@ -46,6 +46,7 @@ export const writeConfig = async (
 };
 
 export interface CliRun {
+  /** The exit code the default `runMain` teardown gives the run. */
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;
@@ -70,7 +71,13 @@ export const cli = (args: ReadonlyArray<string>, options?: CliOptions): Promise<
     const stdout = yield* TestConsole.logLines;
     const stderr = yield* TestConsole.errorLines;
 
-    return { code: exitCode(exit), stdout: stdout.join("\n"), stderr: stderr.join("\n") };
+    let code = -1;
+
+    Runtime.defaultTeardown(exit, (exitCode) => {
+      code = exitCode;
+    });
+
+    return { code, stdout: stdout.join("\n"), stderr: stderr.join("\n") };
   });
 
   return program.pipe(
