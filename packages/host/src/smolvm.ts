@@ -497,12 +497,22 @@ export const make = (
           return removeAll(packOf(checkpoint).dir);
         }
 
+        const objects = join(paths.store, "objects");
+
         // Removing the directory drops the checkpoint's references; the prune frees what no
-        // other checkpoint shares, and staging that an interrupted capture left.
-        return Effect.andThen(
-          removeAll(checkpointDir(checkpoint)),
-          call(["machine", "checkpoint-prune", "--store", paths.store], "machine checkpoint-prune"),
-        );
+        // other checkpoint shares, and staging that an interrupted capture left. A store that no
+        // capture has written yet has nothing to prune, and smolvm's prune fails on it: it reads
+        // `objects/` (S@1.22.2:crates/smolvm-checkpoint/src/store.rs:1317-1319).
+        return Effect.gen(function* () {
+          yield* removeAll(checkpointDir(checkpoint));
+
+          if (yield* files(`couldn't check ${objects}`, fs.exists(objects))) {
+            yield* call(
+              ["machine", "checkpoint-prune", "--store", paths.store],
+              "machine checkpoint-prune",
+            );
+          }
+        });
       },
       create: (machine, image) =>
         Effect.gen(function* () {

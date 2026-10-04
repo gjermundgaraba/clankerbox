@@ -827,9 +827,10 @@ test("deleting a ram checkpoint removes its directory, then prunes the store", a
   const store = join(settings.stateDir, "checkpoints");
 
   await mkdir(join(store, "snap-fedcba98.checkpoint", "objects"), { recursive: true });
+  await mkdir(join(store, "objects"));
   await Effect.runPromise(runtime.deleteCheckpoint(ramCheckpoint));
 
-  expect(await readdir(store)).toEqual([]);
+  expect(await readdir(store)).toEqual(["objects"]);
   expect(smolvmArgs(spawner.calls)).toEqual([["machine", "checkpoint-prune", "--store", store]]);
 });
 
@@ -844,5 +845,16 @@ test("deleting a disk checkpoint removes its pack's directory and calls nothing"
   await Effect.runPromise(runtime.deleteCheckpoint(diskCheckpoint));
 
   expect(await readdir(packs)).toEqual([]);
+  expect(smolvmArgs(spawner.calls)).toEqual([]);
+});
+
+test("deleting a ram checkpoint from a store no capture has written prunes nothing", async () => {
+  const settings = await prepared();
+  const spawner = scripted(() => undefined);
+  const runtime = await runtimeOf(settings, spawner);
+
+  await Effect.runPromise(runtime.startup);
+  await Effect.runPromise(runtime.deleteCheckpoint(ramCheckpoint));
+
   expect(smolvmArgs(spawner.calls)).toEqual([]);
 });
