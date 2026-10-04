@@ -572,7 +572,9 @@ listed to keep them from being ported):
     (`ubuntu:26.04` on 2026-10-04, the same digest as Docker Hub's). It has no
     sshd; setup installs it. On mirror.gcr.io neither the host's image-seed
     build nor a guest's own pull touches Docker Hub and its anonymous limit of
-    100 pulls an hour per address (P12). The reference has no tag: smolvm
+    100 pulls an hour per address (P12). The mirror is named in the reference,
+    because smolvm's own `docker.io` mirror setting breaks `machine start` at
+    1.22.2 (P9). The reference has no tag: smolvm
     can't parse tag plus digest and then pulls the image inside every guest
     (about 7 s per create), while `…/ubuntu@sha256:…` builds a host-side copy
     once and later creates take 1.36 s (P8).
