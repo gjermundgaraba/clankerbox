@@ -430,3 +430,23 @@ test("a create name that isn't a valid name is Invalid", async () => {
   expect(error._tag).toBe("Invalid");
   expect(linux.calls).toEqual([]);
 });
+
+test("a spec that doesn't encode is Invalid, sends nothing, and never carries its script", async () => {
+  const linux = host({ id: "linux", bases: ["ubuntu"] });
+  const marker = "setup-text-marker";
+
+  const error = await withClient([["linux", linux]], (client) =>
+    Effect.flip(
+      client.create("linux_dev", {
+        ...spec,
+        cpu: 0,
+        setup: { script: `#!/bin/sh\necho ${marker}\n`, timeoutSeconds: 60 },
+      }),
+    ),
+  );
+
+  expect(error._tag).toBe("Invalid");
+  expect(error.message).toContain("create linux_dev");
+  expect(error.message.includes(marker)).toBe(false);
+  expect(linux.calls).toEqual([]);
+});

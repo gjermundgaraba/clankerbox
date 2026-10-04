@@ -125,6 +125,18 @@ test("a read whose connection drops partway through the reply is Unavailable and
   expect(error.retryable).toBe(true);
 });
 
+test("a reply that parses but isn't the action's success is Internal", async () => {
+  const url = await answering((response) => {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end('{"id":"linux_dev"}');
+  });
+
+  const error = await onLinux(url, (client) => Effect.flip(client.start("linux_dev")));
+
+  expect(error._tag).toBe("Internal");
+  expect(error.message).toContain("host linux's reply didn't decode");
+});
+
 test("a reply that arrives whole and doesn't parse is Internal", async () => {
   const url = await answering((response) => {
     response.writeHead(200, { "content-type": "application/json" });

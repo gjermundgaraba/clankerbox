@@ -88,7 +88,21 @@ export class Client extends Context.Service<Client, Interface>()(
   "@gjermundgaraba/clankerbox-sdk/Client",
 ) {}
 
-const makeHostApi = (url: string) => HttpApiClient.make(Http.api, { baseUrl: url });
+/**
+ * A client for one host. Its reply decoding is the only step `transformResponse` wraps, so a
+ * reply that doesn't decode is `Internal` here, and a `SchemaError` that reaches `settle` came
+ * from encoding the request.
+ */
+const makeHostApi = (entry: HostEntry) =>
+  HttpApiClient.make(Http.api, {
+    baseUrl: entry.url,
+    transformResponse: (reply) =>
+      Effect.mapError(reply, (error) =>
+        Schema.isSchemaError(error)
+          ? new Internal({ message: `host ${entry.id}'s reply didn't decode: ${error.message}` })
+          : error,
+      ),
+  });
 
 type HostApi = Effect.Success<ReturnType<typeof makeHostApi>>;
 
@@ -173,10 +187,11 @@ const settle = <A>(
         ),
       ),
     ),
+    // Schema issues never carry the rejected values, so a setup script never reaches the message.
     Effect.catchTag("SchemaError", (error) =>
       Effect.fail(
-        new Internal({
-          message: `host ${context.host.id}'s answer to ${context.action} didn't decode: ${error.message}`,
+        new Invalid({
+          message: `${context.action}: the request doesn't match the action's input: ${error.message}`,
         }),
       ),
     ),
@@ -211,7 +226,7 @@ export const make = (
     }
 
     const routed: ReadonlyArray<Route> = yield* Effect.forEach(hosts, (entry) =>
-      Effect.map(makeHostApi(entry.url), (api) => ({ entry, api })),
+      Effect.map(makeHostApi(entry), (api) => ({ entry, api })),
     );
 
     const routes = new Map(routed.map((route) => [route.entry.id, route]));

@@ -342,6 +342,10 @@ Units run `process.execPath host --config PATH`. VM jobs never reference this bi
 retryable and `exists` is not. `Unavailable` is retryable for reads, and not
 for a mutation, whose request may have reached the host.
 
+In the client library, a request that fails to encode, such as a spec with
+`cpu: 0`, is `Invalid` and sends nothing; a reply that fails to decode is
+`Internal`.
+
 ## Feature scope
 
 Rule: a feature with no real consumer is deleted. The real consumers are the
