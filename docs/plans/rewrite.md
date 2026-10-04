@@ -859,6 +859,11 @@ Two rules for every VM job:
     again, so delete just removes the file. A pack keeps uid/gid and modes but
     drops all xattrs and file capabilities, so a machine that will be
     disk-checkpointed must not rely on file capabilities.
+    - **Known smolvm leftover:** a failed `pack create --from-vm` leaks its
+      helper's scope, `smolvm-vm-pack-fromvm-<pid>-<ns>.scope`, whose name
+      carries no machine name, so no row owns it and the host leaves it
+      (evidence.md, P12). Manual cleanup: `systemctl reset-failed
+      'smolvm-vm-pack-fromvm-*'`.
   - **Pin:** a `ram` checkpoint records the smolvm version and the platform at
     capture, and a restore under a different pin is refused with
     `Precondition`. smolvm enforces sizes, platform, CPU contract and network,
