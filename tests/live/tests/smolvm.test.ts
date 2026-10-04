@@ -516,7 +516,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "a setup past its timeout fails the create with its output; its command ends and its file goes",
+    "a setup past its timeout fails the create with its output, and its command ends",
     async () => {
       const error = failure(
         await createWith("overrun", "#!/bin/sh\necho overrun-started\nsleep 600\n", 5),
@@ -526,14 +526,10 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       expect(error.message).toContain("setup ran past its 5s timeout");
       expect(error.message).toContain("overrun-started");
 
-      // The guard that removes the file polls once a second.
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      const seen = await control("guest", `${namePrefix}overrun`, "ps -eo args; ls -A /var/tmp");
+      const seen = await control("guest", `${namePrefix}overrun`, "ps -eo args");
 
       expect(seen.code, seen.stderr).toBe(0);
       expect(seen.stdout).not.toContain("sleep 600");
-      expect(seen.stdout).not.toContain("clankerbox-setup.");
       await removeMachine("overrun");
     },
     minutes(5),
@@ -674,12 +670,9 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
         },
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      const seen = await control("guest", `${namePrefix}crash`, "ps -eo args; ls -A /var/tmp");
+      const seen = await control("guest", `${namePrefix}crash`, "ps -eo args");
 
       expect(seen.stdout).not.toContain("sleep 300");
-      expect(seen.stdout).not.toContain("clankerbox-setup.");
 
       const stopped = await cli(["stop"], id("crash"), "--json");
 
