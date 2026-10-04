@@ -607,8 +607,9 @@ export const make = (
             }
           }
 
+          // A fork holds its source too, which stays stopped.
           for (const { machine: held, holder } of machines) {
-            if (holder !== undefined && bootingActions.has(holder)) {
+            if (holder !== undefined && bootingActions.has(holder) && held.id !== source?.id) {
               counted.add(vmOf(held));
             }
           }

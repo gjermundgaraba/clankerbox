@@ -588,7 +588,10 @@ test("a fork's source and a capture's machine must be stopped, and a capture is 
       runtime.admit({
         action: "fork",
         machine: copy,
-        machines: [{ machine: copy, holder: "fork" }],
+        machines: [
+          { machine: source, holder: "fork" },
+          { machine: copy, holder: "fork" },
+        ],
         source,
       }),
     ),
@@ -607,6 +610,27 @@ test("a fork's source and a capture's machine must be stopped, and a capture is 
   mac.vms.set(vmOf(source), "stopped");
 
   expect(await Effect.runPromise(runtime.captureKind(source))).toBe("disk");
+
+  // The fork holds its stopped source as the core passes it, and only the copy boots.
+  const forking = {
+    action: "fork" as const,
+    machine: copy,
+    machines: [
+      { machine: source, holder: "fork" as const },
+      { machine: copy, holder: "fork" as const },
+    ],
+    source,
+  };
+
+  mac.vms.set("operators-own", "running");
+  await Effect.runPromise(runtime.admit(forking));
+
+  mac.vms.set("operators-other", "running");
+
+  expect((await Effect.runPromise(Effect.flip(runtime.admit(forking))))._tag).toBe("Capacity");
+
+  mac.vms.delete("operators-own");
+  mac.vms.delete("operators-other");
 
   mac.vms.delete(vmOf(source));
 
