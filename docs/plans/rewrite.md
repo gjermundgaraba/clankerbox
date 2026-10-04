@@ -503,6 +503,12 @@ listed to keep them from being ported):
   after a host crash during setup, `stop` stopped the VM the create left
   running; after a crash before the runtime's create, `stop` wrote nothing;
   and `delete` removed both, and a VM whose stop failed.
+- **No boot after a failed fork or restore:** a `start` of a stopped machine
+  whose last action is a failed `fork` or `restore` is `Precondition`, and it
+  says to delete the machine. A `ram` restore makes its VM on the source's
+  port and moves it before the first boot, so one that failed between, or a
+  host crash there, can leave it on another machine's port, and `start` never
+  re-applies ports.
 - **Completion is recorded even when the caller has gone away.**
 - **Schema:** `PRAGMA user_version` and an ordered list of migrations, starting
   at version 1. A database newer than the binary is refused.

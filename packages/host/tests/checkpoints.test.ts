@@ -149,6 +149,34 @@ test("a fork that fails natively leaves both rows failed, and the new one deleta
   expect(Object.keys(await actions(linux))).toEqual(["dev"]);
 });
 
+test("a stopped machine whose fork or restore failed doesn't start, and is deleted", async () => {
+  const linux = await withSource();
+
+  await linux.run(linux.checkpoints.capture("linux_dev", "snap"));
+
+  for (const [name, operation, make] of [
+    ["forked", "fork", () => linux.machines.fork("linux_dev", "forked")],
+    ["restored", "restore", () => linux.machines.restore("linux_snap", "restored")],
+  ] as const) {
+    linux.fake.failNext(operation, new Internal({ message: "port swap failed" }));
+    await failure(linux, make());
+    // As smolvm leaves a VM created from a checkpoint whose port swap failed: made, not booted.
+    linux.fake.machines.set(name, { state: "stopped", root: join(linux.dir, name) });
+    linux.fake.calls.length = 0;
+
+    const error = await failure(linux, linux.machines.start(`linux_${name}`));
+
+    expect(error).toBeInstanceOf(Precondition);
+    expect(error.message).toContain(`linux_${name}'s ${operation} failed`);
+    expect(linux.fake.calls).toEqual([]);
+    expect((await actions(linux))[name]).toMatchObject({ name: operation, status: "failed" });
+
+    await linux.run(linux.machines.delete(`linux_${name}`));
+  }
+
+  expect(Object.keys(await actions(linux))).toEqual(["dev"]);
+});
+
 test("a fork to a taken name is Conflict{exists}, and the source isn't claimed", async () => {
   const linux = await withSource();
 

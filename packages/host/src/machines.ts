@@ -5,6 +5,7 @@
  */
 import {
   type ActionName,
+  type ActionRecord,
   type CreateRequest,
   formatId,
   type HostError,
@@ -50,6 +51,11 @@ export class Machines extends Context.Service<Machines, Interface>()("@clankerbo
 /** What a new machine is made with: its base, label and sizes. */
 interface Spec extends Pick<MachineRecord, "base" | "cpu" | "ramMib" | "diskGib"> {
   readonly profile?: string | undefined;
+}
+
+/** A row an action has claimed, with the action its claim replaced. */
+interface ClaimedRow extends MachineRecord {
+  readonly replaced: ActionRecord;
 }
 
 /** What a fork holds: the new machine and its source. */
@@ -159,10 +165,10 @@ export const make = (
     const claimExisting = (
       name: string,
       action: ActionName,
-    ): Effect.Effect<Claim<MachineRecord>, HostError> =>
+    ): Effect.Effect<Claim<ClaimedRow>, HostError> =>
       Effect.map(store.claim(name, action), (before) => ({
         action,
-        record: { ...before, action: holding(action) },
+        record: { ...before, action: holding(action), replaced: before.action },
         release: store.record(name, { action: before.action }),
         end: (outcome, hostKey) => store.record(name, { action: outcome, hostKey }),
       }));
@@ -210,6 +216,21 @@ export const make = (
           source: source === undefined ? undefined : ref(source),
         }),
       );
+
+    /**
+     * A fork or `ram` restore makes its VM on the source's port and moves it to its own before
+     * the first boot, so one that failed between may sit on another machine's port, and a boot
+     * would publish it there. Such a machine is only stopped or deleted.
+     */
+    const bootable = (record: ClaimedRow) =>
+      record.replaced.status === "failed" &&
+      (record.replaced.name === "fork" || record.replaced.name === "restore")
+        ? Effect.fail(
+            new Precondition({
+              message: `machine ${idOf(record.name)}'s ${record.replaced.name} failed, which can leave it on another machine's port, so it doesn't start; delete it`,
+            }),
+          )
+        : Effect.void;
 
     const create = (request: CreateRequest) =>
       Effect.gen(function* () {
@@ -266,7 +287,7 @@ export const make = (
 
             return state === "running"
               ? Effect.succeed(true)
-              : Effect.as(admit("start", record), false);
+              : Effect.as(Effect.andThen(bootable(record), admit("start", record)), false);
           }),
         );
 
