@@ -917,14 +917,19 @@ Two rules for every VM job:
   - A reachable guest that doesn't confirm its filesystem flush is left running,
     and `stop` fails. Return that error rather than force the stop: killing the
     VM then could lose writes.
-  - `delete` must still work on such a VM. It reads status first and touches
-    nothing for a name smolvm doesn't know. When `machine stop` fails, delete
-    kills the VM's scope (`systemctl kill --signal=SIGKILL
-    smolvm-vm-<name>.scope`, the signal smolvm's own `kill_scope` uses), then
-    runs `machine delete -f` (`-f` only skips the prompt), then `systemctl
-    reset-failed` on the scope, since systemd keeps a failed scope until then.
-    Phase 3 verified this live, on a guest whose frozen `/storage` made
-    `machine stop` fail.
+  - `delete` must still work on such a VM, and on a live orphan VMM, such as
+    one a host SIGKILLed mid-boot leaves: the boot started the VMM before
+    smolvm recorded its pid, so smolvm reads the VM as stopped, and its
+    `machine delete` alone would delete the record while the VMM kept its
+    port, outside any RAM budget (phase 4, live). There is one delete path:
+    `machine status` (touching nothing for a name smolvm doesn't know), a
+    graceful `machine stop` if it runs (a failure is logged), then, if the
+    scope is still loaded (`systemctl show --property=LoadState`), `systemctl
+    kill --signal=SIGKILL smolvm-vm-<name>.scope` (the signal smolvm's own
+    `kill_scope` uses), then `machine delete -f` (`-f` only skips the
+    prompt), then `systemctl reset-failed` on a killed scope, since systemd
+    keeps a failed scope until then. Phase 3 verified the kill live, on a
+    guest whose frozen `/storage` made `machine stop` fail.
 - **Checkpoints:** always `ram`, a running machine's RAM and disks; smolvm
   captures only running machines. A capture of a stopped machine is refused
   with `Precondition` ("start it first") like a fork's source.

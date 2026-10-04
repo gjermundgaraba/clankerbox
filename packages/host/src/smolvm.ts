@@ -288,10 +288,14 @@ export const make = (
     };
 
     /**
-     * Removes the machine's VM, coping with whatever an earlier failure left. It reads status
-     * first and touches nothing for a name smolvm doesn't know: a stop of an unknown name leaks
-     * an empty `vms/<hash>/`. When `machine stop` fails, the VM's scope is killed with the signal
-     * smolvm's own `kill_scope` uses, and reset once the machine is deleted.
+     * Removes the machine's VM, coping with whatever an earlier failure left, the one delete path
+     * for every machine. It reads status first and touches nothing for a name smolvm doesn't
+     * know: a stop of an unknown name leaks an empty `vms/<hash>/`. A running VM is stopped
+     * gracefully. A scope still loaded then holds a VMM that `machine delete` would leave
+     * running, on the machine's port and outside the RAM budget: one whose stop failed, or one
+     * whose boot was cut short, as by a host killed mid-boot, before smolvm recorded its pid, so
+     * that smolvm reads it as stopped (phase 4, live). It is killed with the signal smolvm's own
+     * `kill_scope` uses, and reset once the machine is deleted.
      */
     const removeVm = (machine: MachineRef) =>
       Effect.gen(function* () {
@@ -303,8 +307,6 @@ export const make = (
           return;
         }
 
-        let killed = false;
-
         if (observed === "running") {
           const stopped = yield* smolvm(
             ["machine", "stop", "--name", native],
@@ -313,30 +315,10 @@ export const make = (
 
           if (stopped.exitCode !== 0) {
             yield* Effect.logWarning(
-              `delete ${machine.id}: ${failure(`smolvm machine stop ${native}`, stopped).message}; killing ${scope}`,
+              `delete ${machine.id}: ${failure(`smolvm machine stop ${native}`, stopped).message}`,
             );
-            yield* systemctl(["kill", "--signal=SIGKILL", scope], `kill ${scope}`);
-            killed = true;
           }
         }
-
-        yield* call(["machine", "delete", "--name", native, "--force"], `machine delete ${native}`);
-
-        if (killed) {
-          yield* Effect.ignore(systemctl(["reset-failed", scope], `reset-failed ${scope}`));
-        }
-      });
-
-    /**
-     * Removes a VM whose first boot may have been cut short. Such a boot can leave its VMM
-     * running in the VM's scope before smolvm records its pid, and smolvm's delete then leaves
-     * that VMM running, on the machine's port, with no record (a host stopped mid-fork, in the
-     * phase-4 live rerun). So a loaded scope is killed first, as `removeVm` does after a failed
-     * stop.
-     */
-    const discardVm = (machine: MachineRef) =>
-      Effect.gen(function* () {
-        const scope = scopeName(nativeName(machine));
 
         const loaded = yield* systemctl(
           ["show", "--property=LoadState", "--value", scope],
@@ -349,7 +331,7 @@ export const make = (
           yield* systemctl(["kill", "--signal=SIGKILL", scope], `kill ${scope}`);
         }
 
-        yield* removeVm(machine);
+        yield* call(["machine", "delete", "--name", native, "--force"], `machine delete ${native}`);
 
         if (killed) {
           yield* Effect.ignore(systemctl(["reset-failed", scope], `reset-failed ${scope}`));
@@ -400,7 +382,7 @@ export const make = (
         yield* boot(native);
       }).pipe(
         Effect.onError(() =>
-          discardVm(machine).pipe(
+          removeVm(machine).pipe(
             Effect.catch((error) =>
               Effect.logWarning(`restore ${machine.id}: couldn't delete its VM: ${error.message}`),
             ),
