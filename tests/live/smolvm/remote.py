@@ -14,8 +14,10 @@ scratch/, evidence/), and runs it once per command:
   teardown             stop the unit, then delete every VM of the run's inventory and stop every
                        scope of the run natively, by the run's own data dir, so it works with the
                        host down; keep the host's journal, and verify
-  finish               remove what the run added to the prefix, remove scratch, restore
-                       directory modes, "after" snapshot and diff, mark the CLEANUP.md entries
+  finish               check that no unit, process or listener of the run is left, then remove
+                       what the run added to the prefix, remove scratch, restore directory
+                       modes, "after" snapshot and diff, mark the CLEANUP.md entries; a check
+                       that fails marks its entry NOT REVERTED and stops before any deletion
 
 Every root command goes to evidence/root-runs.log with what it touched. Nothing here reads,
 prints or stores a setup script or the preparation script: the host gets them from the CLI over
@@ -654,12 +656,6 @@ def cmd_finish():
     result['units'] = (f'REVERTED {now()} (no {UNIT}, no {SCOPE_PATTERN} scope and no image-seed '
                        'helper scope that was not there before, per systemctl list-units --all)'
                        if not units else f'NOT REVERTED: {units}')
-    shm = os.path.exists('/dev/shm/smolvm-restore')
-    if shm and not st.get('shm_restore_before'):
-        sudo(['rmdir', '/dev/shm/smolvm-restore'], touched='removes /dev/shm/smolvm-restore, made during the run')
-    result['shm'] = (f'REVERTED {now()} (never made; verified absent)' if not shm
-                     else f'REVERTED {now()} (made during the run; removed)'
-                     if not os.path.exists('/dev/shm/smolvm-restore') else 'NOT REVERTED: present')
     procs = vm_uid_processes() + run_processes()
     result['procs'] = (f'REVERTED {now()} (no process names the run; no uid>=2000000 process)'
                        if not procs else f'NOT REVERTED: {procs}')
@@ -667,6 +663,15 @@ def cmd_finish():
     result['published'] = (f'REVERTED {now()} (tailnet listeners identical to before the run: {listeners})'
                            if listeners == st.get('tailnet_listeners_before')
                            else f'NOT REVERTED: before {st.get("tailnet_listeners_before")}, now {listeners}')
+    # Something of the run may still use scratch or the prefix: delete nothing.
+    stop_unless_reverted(data, result)
+    shm = os.path.exists('/dev/shm/smolvm-restore')
+    if shm and not st.get('shm_restore_before'):
+        sudo(['rmdir', '/dev/shm/smolvm-restore'], touched='removes /dev/shm/smolvm-restore, made during the run')
+    result['shm'] = (f'REVERTED {now()} (never made; verified absent)' if not shm
+                     else f'REVERTED {now()} (made during the run; removed)'
+                     if not os.path.exists('/dev/shm/smolvm-restore') else 'NOT REVERTED: present')
+    stop_unless_reverted(data, result)
     # What the run added inside the prefix: the expanded templates, and anything root smolvm wrote.
     before = {line.split(' ', 4)[4] for line in st.get('prefix_tree_before', []) if len(line.split(' ', 4)) == 5}
     removed, new_dirs = [], []
@@ -730,6 +735,19 @@ def cmd_finish():
     print(json.dumps({'result': result, 'diff': diff}, indent=2))
     if not reverted:
         sys.exit('NOT REVERTED: see CLEANUP.md and evidence/snapshot-diff.json')
+
+
+def stop_unless_reverted(manifest, result):
+    """Marks the ledger and stops `finish` once a revert failed, before it deletes anything more;
+    the entries it hasn't checked stay pending."""
+    failed = {key: value for key, value in result.items() if value.startswith('NOT REVERTED')}
+    if not failed:
+        return
+    for key, value in result.items():
+        ledger_mark(key, value)
+    manifest.update(state='not_reverted', stopped_at=now())
+    (RUN / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    sys.exit(f'NOT REVERTED, so scratch and the prefix are kept: {failed}')
 
 
 def main():
