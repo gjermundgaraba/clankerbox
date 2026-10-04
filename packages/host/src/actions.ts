@@ -11,57 +11,27 @@
  * Each mutation runs in a fiber of the host's own, so a dropped connection never interrupts it
  * and its outcome is recorded either way.
  */
-import { randomBytes } from "node:crypto";
 import {
   type ActionName,
   type ActionRecord,
   type HostError,
   Internal,
-  Invalid,
-  NotFound,
-  parseId,
+  type NotFound,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber, FiberSet, Option } from "effect";
+import { idOn, type Kind, notFoundOn } from "./ids.ts";
 import { type CheckpointRef, type MachineRef, Refusal } from "./runtime.ts";
 import type { CheckpointRecord, MachineRecord, Interface as StoreInterface } from "./store.ts";
 
-/** The bytes of a row's `instance`: 32 hex characters. */
-const instanceBytes = 16;
-
-/** A new row's `instance`, which its native names carry. */
-export const newInstance = (): string => randomBytes(instanceBytes).toString("hex");
-
-/**
- * The name an ID gives on host `host`: the whole ID is checked, and an ID for another host is
- * the caller's mistake. A new machine's ID goes through here too, so the ID a row's machine
- * reports always fits clankercreds' pattern.
- */
-export const nameOn =
-  (host: string) =>
-  (id: string): Effect.Effect<string, Invalid> =>
-    Effect.flatMap(parseId(id), (parts) =>
-      parts.host === host
-        ? Effect.succeed(parts.name)
-        : Effect.fail(
-            new Invalid({ message: `${id} names host ${parts.host}, and this is host ${host}` }),
-          ),
-    );
-
-/** The ID of the resource named `name` on host `host`, a name that is already checked. */
-export const idOn =
-  (host: string) =>
-  (name: string): string =>
-    `${host}_${name}`;
-
 /** The rows of host `host`'s store by name; a missing one is NotFound. */
 export const rowsOn = (store: StoreInterface, host: string) => {
-  const idOf = idOn(host);
+  const notFound = notFoundOn(host);
 
   const present =
-    (kind: string, name: string) =>
+    (kind: Kind, name: string) =>
     <A>(found: Option.Option<A>): Effect.Effect<A, NotFound> =>
       Option.match(found, {
-        onNone: () => Effect.fail(new NotFound({ message: `no ${kind} ${idOf(name)}` })),
+        onNone: () => Effect.fail(notFound(kind, name)),
         onSome: Effect.succeed,
       });
 

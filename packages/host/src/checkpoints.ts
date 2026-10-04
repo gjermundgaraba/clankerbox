@@ -17,14 +17,12 @@ import {
   claimAndCheck,
   detacher,
   done,
-  idOn,
   machineRef,
-  nameOn,
   native,
-  newInstance,
   rowsOn,
 } from "./actions.ts";
 import type { HostConfig } from "./config.ts";
+import { idOn, nameOn, newInstance } from "./ids.ts";
 import { Runtime } from "./runtime.ts";
 import { type CheckpointRecord, type MachineRecord, type NewCheckpoint, Store } from "./store.ts";
 

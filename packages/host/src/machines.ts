@@ -19,14 +19,12 @@ import {
   claimAndCheck,
   detacher,
   done,
-  idOn,
   machineRef,
-  nameOn,
   native,
-  newInstance,
   rowsOn,
 } from "./actions.ts";
 import type { HostConfig } from "./config.ts";
+import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
 import { observeConcurrency, type Refusal, Runtime } from "./runtime.ts";

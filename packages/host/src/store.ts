@@ -11,11 +11,11 @@ import {
   Checkpoint,
   Conflict,
   Internal,
-  NotFound,
+  type NotFound,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, FileSystem, Option, Result, Schema, type Scope } from "effect";
-import { idOn } from "./actions.ts";
+import { idOn, type Kind, notFoundOn } from "./ids.ts";
 
 /** The database's file in the state dir. */
 export const databaseFile = "host.db";
@@ -411,6 +411,7 @@ export const open = (
     yield* migrate(db, file);
 
     const id = idOn(hostId);
+    const notFound = notFoundOn(hostId);
 
     const selectAll = db.prepare("SELECT * FROM machines ORDER BY created_at, name");
     const selectOne = db.prepare("SELECT * FROM machines WHERE name = ?");
@@ -481,13 +482,13 @@ export const open = (
      * holds is busy; otherwise `hold` marks it, and the row comes back as it was.
      */
     const claimRow = <R extends { readonly action: ActionRecord }>(
-      kind: "machine" | "checkpoint",
+      kind: Kind,
       name: string,
       found: R | undefined,
       hold: () => void,
     ): Result.Result<R, NotFound | Conflict> => {
       if (found === undefined) {
-        return Result.fail(new NotFound({ message: `no ${kind} ${id(name)}` }));
+        return Result.fail(notFound(kind, name));
       }
 
       if (found.action.status === "running") {
