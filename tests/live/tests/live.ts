@@ -77,10 +77,6 @@ export const Store = Schema.fromJsonString(
   Schema.Struct({ checkpoints: Schema.Array(Schema.String) }),
 );
 
-export const Usage = Schema.fromJsonString(
-  Schema.Struct({ native: Schema.String, own_kib: Schema.Number }),
-);
-
 export const Natives = Schema.fromJsonString(
   Schema.Struct({
     machines: Schema.Array(Schema.Struct({ name: Schema.String, state: Schema.String })),
@@ -101,15 +97,14 @@ export const Natives = Schema.fromJsonString(
  * - `host-kill`: SIGKILL the host process, as a crash;
  * - `natives PREFIX`: print `{machines: [{name, state}], scopes}` for the runtime's machines and
  *   systemd scopes whose names start with PREFIX;
- * - `guest NAME COMMAND`: run COMMAND with `/bin/sh -c` as root in the guest of machine NAME
- *   (or of a native name), through the runtime, printing its output;
+ * - `guest NAME COMMAND`: run COMMAND with `/bin/sh -c` as root in the guest of machine NAME,
+ *   through the runtime, printing its output;
  * - `decoy NAME`: make and boot a native machine `NAME-<8 hex>` the host didn't make, and
  *   print its native name; `remove-native NATIVE` removes it;
  * - `freeze NAME`: freeze the guest's storage filesystem, so smolvm's stop can't quiesce it;
  * - `forks`: print the names in the host's forks area; `plant-fork NAME` leaves a fork store
  *   named NAME there, as a crash during a fork would;
  * - `store`: print `{checkpoints}`, the names in the host's checkpoint store;
- * - `usage NAME`: print `{native, own_kib}`, the disk of machine NAME's own smolvm directory;
  * - `wait-host-exec NAME SECONDS`: wait until the host runs a guest command in machine NAME;
  * - `probe ADDRESS PORT`: from the host itself, print `reached` or `unreachable`;
  * - `route ADDRESS`: print the host's `ip route get ADDRESS`.

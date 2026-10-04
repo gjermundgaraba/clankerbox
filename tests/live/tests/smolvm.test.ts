@@ -3,7 +3,7 @@
  * access, claims, the RAM budget, fork and checkpoints, crashes and restarts. The tests run in
  * order and share one machine, `main`, whose setup installs sshd and the run's own key, and
  * some of its copies; the test that made any other machine deletes it. Timings print as
- * `[timing]` lines, and disk use as `[disk]` lines.
+ * `[timing]` lines.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rm } from "node:fs/promises";
@@ -25,7 +25,6 @@ import {
   run,
   Store,
   scratch,
-  Usage,
   writeFileIn,
 } from "./live.ts";
 
@@ -300,8 +299,6 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     (await store()).checkpoints.some((entry) =>
       new RegExp(`^${named(name)}-[0-9a-f]{8}\\.checkpoint$`, "u").test(entry),
     );
-
-  const usage = (name: string) => controlled(Usage, "usage", named(name));
 
   /** Whether the host itself reaches `address:port`. */
   const probe = async (address: string, port: string) => {
@@ -764,10 +761,6 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
 
       expect(new Set([source.instance, ...instances]).size).toBe(4);
       expect(await facts("main")).toEqual(source);
-
-      for (const name of copies) {
-        console.log(`[disk] ${name} ${(await usage(name)).own_kib} KiB of its own`);
-      }
     },
     minutes(10),
   );

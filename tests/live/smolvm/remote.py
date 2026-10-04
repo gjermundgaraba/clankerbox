@@ -286,8 +286,6 @@ def cmd_init(tailnet, smolvm_prefix):
     save_state(address=tailnet, prefix=smolvm_prefix, started_epoch=int(time.time()), helper_units_before=helper_units())
     if not (prefix() / 'READY').exists():
         sys.exit(f'{prefix()}/READY is missing')
-    if len(str(STATE_DIR)) > 52:
-        sys.exit(f'state dir {STATE_DIR} is past the 52 bytes smolvm\'s socket paths allow')
     if list_units(f'smolvm-vm-{RUNS_PREFIX}*') or vm_uid_processes():
         sys.exit(f'smolvm-vm-{RUNS_PREFIX}* scopes or VM-uid processes exist before the run; another run is live')
     snap = snapshot('before')
@@ -439,7 +437,7 @@ def control(op, rest):
         print(json.dumps({'machines': found, 'scopes': list_units(f'smolvm-vm-{rest[0]}*')}))
     elif op == 'guest':
         name, command = rest
-        native = name if re.search(r'-[0-9a-f]{8}$', name) else native_for(name)
+        native = native_for(name)
         rc, so, se = smol('machine', 'exec', '--name', native, '--', '/bin/sh', '-c', command,
                           touched=f'runs a command in guest {native}', timeout=120)
         sys.stdout.write(so)
@@ -485,8 +483,6 @@ def control(op, rest):
     elif op == 'store':
         checkpoints = must(sudo(['ls', '-A', str(STATE_DIR / 'checkpoints')]), 'ls checkpoints')
         print(json.dumps({'checkpoints': checkpoints.split()}))
-    elif op == 'usage':
-        print(json.dumps(usage(native_for(rest[0]))))
     elif op == 'probe':
         try:
             with socket.create_connection((rest[0], int(rest[1])), timeout=5):
@@ -501,35 +497,17 @@ def control(op, rest):
 
 
 def host_execs(name):
-    """Whether a process under the host runs `smolvm machine exec` in the machine NAME-<8 hex>."""
+    """Whether the host runs `smolvm machine exec` in the machine NAME-<8 hex>, as its child.
+    Only pgrep's PIDs are read: an exec's arguments can carry the preparation script."""
+    if not re.fullmatch(r'[a-z0-9-]+', name):
+        raise RuntimeError(f'unexpected machine name {name}')
     host = host_main_pid()
-    pattern = re.compile(rf'machine\0exec\0--name\0{re.escape(name)}-[0-9a-f]{{8}}\0'.encode())
-    for pid in filter(str.isdigit, os.listdir('/proc')):
-        try:
-            if not pattern.search(Path(f'/proc/{pid}/cmdline').read_bytes()):
-                continue
-            ancestor = pid
-            while ancestor not in ('0', '1'):
-                if host is not None and ancestor == str(host):
-                    return True
-                status = Path(f'/proc/{ancestor}/status').read_text()
-                ancestor = re.search(r'^PPid:\s+(\d+)', status, re.M).group(1)
-        except (OSError, AttributeError):
-            continue
-    return False
-
-
-def usage(native):
-    """A machine's own disk in KiB, from its smolvm directory. An unlinked file the VMM still
-    holds, such as a restore's RAM file, isn't counted."""
-    vms = DATA / '.cache/smolvm/vms'
-    _, so, _ = sudo(['sh', '-c', f'for f in {vms}/*/name; do [ "$(cat "$f")" = {shlex.quote(native)} ] '
-                                 '&& dirname "$f"; done; true'])
-    dirs = so.split()
-    if len(dirs) != 1:
-        raise RuntimeError(f'expected one smolvm directory for {native}, found {dirs}')
-    _, own, _ = sudo(['du', '-sk', dirs[0]])
-    return {'native': native, 'own_kib': int(own.split()[0])}
+    if host is None:
+        return False
+    rc, so, se = run(['pgrep', '-P', str(host), '-f', f'machine exec --name {name}-[0-9a-f]{{8}} '])
+    if rc not in (0, 1):
+        raise RuntimeError(f'pgrep failed rc={rc}: {se.strip()}')
+    return bool(so.split())
 
 
 # ---------------------------------------------------------------- teardown and finish
