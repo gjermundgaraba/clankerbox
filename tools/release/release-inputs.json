@@ -1,0 +1,11 @@
+{
+  "node": "26.10.0",
+  "platforms": {
+    "darwin-arm64": {
+      "sha256": "f222f7e85cc1d5a3d84786aa86836ec3d41c4dcdf59a40e4a9d719b6b0ae28af"
+    },
+    "linux-x64": {
+      "sha256": "ca70e9e349de048b9522abb3adc05b3bd6f43c5ffd3ec57916c7da292f59f022"
+    }
+  }
+}
