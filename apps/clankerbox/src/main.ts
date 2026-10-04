@@ -1,6 +1,10 @@
+import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect } from "effect";
-import { main } from "./roles.ts";
+import { Effect, Layer } from "effect";
+import { main, teardown } from "./roles.ts";
 
-main.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain);
+main.pipe(
+  Effect.provide(Layer.merge(NodeServices.layer, NodeHttpClient.layerNodeHttp)),
+  NodeRuntime.runMain({ teardown }),
+);
