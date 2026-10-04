@@ -835,7 +835,7 @@ the old pipeline's `macos-tahoe-vanilla` seed with tart-guest-agent 0.14.1):
   address, another machine's published port and the guest's own. The IPv4
   refusal is the strict floor's CGNAT rule
   (S@1.22.2:crates/smolvm-network/src/egress.rs:205-213); the IPv6 (ULA)
-  refusal was observed only. `1.1.1.1:443` was reached.
+  refusal is its fc00::/7 rule (egress.rs:228-229). `1.1.1.1:443` was reached.
 - **Production's guard** (`meta skuid 1000 … fib daddr type local reject`, and
   its IPv6 twin) also refuses the host's own uid-1000 processes connecting to
   published ports on the tailnet address.
@@ -1106,8 +1106,9 @@ includes a relayed HTTP round trip. Machines had 1 vCPU, 512–1024 MiB and
   Mac (10 ports timed out, among them the driver's own listener and an sshd
   listening on the Mac's tailnet address), so the control failed and the
   suite skipped it. The phase-4 review dropped the check: the strict floor
-  refuses all of 100.64.0.0/10 by source (S@1.22.2:crates/smolvm-network/src/egress.rs:205-213),
-  and every tailnet IPv4 address is in it.
+  refuses every destination in 100.64.0.0/10
+  (S@1.22.2:crates/smolvm-network/src/egress.rs:205-213), which holds every
+  tailnet IPv4 address, and in fc00::/7 (egress.rs:228-229).
 - **A smolvm stop of a `ram`-restored machine failed once in 24** ("orphan
   process still alive … still alive after stop attempts"); its scope ended
   0.1 ms after smolvm gave up, so the machine was stopped while `stop`

@@ -1401,10 +1401,11 @@ Everything the rewrite creates on a test machine is removed when the work ends.
     and the host's routes to the tailnet unchanged by running machines. The
     case of another tailnet peer follows from the strict floor's CGNAT rule
     (S@1.22.2:crates/smolvm-network/src/egress.rs:205-213): every tailnet
-    IPv4 address is in 100.64.0.0/10, and live, a guest was refused the
-    host's own tailnet address and 100.100.100.100, and ULA IPv6 too
-    (evidence.md, P1 over the tailnet and Phase 4 live), so the suite has no
-    peer check;
+    IPv4 address is in 100.64.0.0/10, which the floor refuses as a
+    destination, as it does fc00::/7, which holds Tailscale's IPv6 range
+    (egress.rs:228-229). Live, a guest was refused the host's own tailnet
+    address, 100.100.100.100 and the host's ULA IPv6 address (evidence.md, P1
+    over the tailnet and Phase 4 live), so the suite has no peer check;
   - smolvm's RAM budget refusing with `Capacity`, and of two concurrent
     creates that each fit only alone, exactly one passing;
   - RAM fork, `ram` checkpoint capture, restore and delete on smolvm, a
