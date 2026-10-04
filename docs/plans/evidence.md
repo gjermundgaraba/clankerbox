@@ -19,6 +19,9 @@ Notation:
 - `L:<spike>` is a result file from after the tree was emptied, kept locally
   only: `.work/spike-results/<spike>/RESULTS.md`, with its drivers. It is
   deleted at the final cleanup, so this file carries the numbers.
+- `N@v26.10.0:path:line` is Node's source at that tag, `E@4.0.0:` effect,
+  `PN@4.0.0:` @effect/platform-node (both from their npm tarballs) and
+  `EA@v0.9.0:` effect-actions.
 
 ## Dependency versions
 
@@ -26,16 +29,16 @@ Checked 2026-10-01. Each row says what was actually exercised.
 
 | Dependency | Pinned | Exercised |
 | --- | --- | --- |
-| smolvm | exactly 1.22.2, upstream and unmodified, installed by the operator | 1.22.0 on this Mac (unprivileged) and on the Linux host (unprivileged and as root); 1.22.2 on this Mac (unprivileged). The Linux runs are not yet repeated on 1.22.2. |
-| Tart | ≥ 2.40.1 | Audited in source at 2.40.1; S3 ran on 2.38.0. |
+| smolvm | exactly 1.22.2, upstream and unmodified, installed by the operator | 1.22.0 on this Mac (unprivileged) and on the Linux host (unprivileged and as root); 1.22.2 on this Mac (unprivileged) and on the Linux host as root (phase 0: P1, P3, P8). |
+| Tart | ≥ 2.40.1 | Audited in source at 2.40.1; S3 ran on 2.38.0; P2 ran on 2.40.1 (release tarball, checksum verified). |
 | Softnet | 0.24.0 (needs macOS 26) | Audited. It runs its own DHCP server and advertises the gateway as DNS. |
-| tart-guest-agent | ≥ 0.15.0 | Audited. Its vsock sockets are close-on-exec. |
-| Ubuntu (smolvm base) | 26.04 LTS, `ubuntu:26.04` (resolute), digest-pinned in host config | On Docker Hub with amd64 and arm64 builds (index digest `sha256:3595d7fc…`, checked 2026-10-02). Not yet run on smolvm; the stock-image runs used 24.04 and 25.10. |
+| tart-guest-agent | ≥ 0.15.0 | Audited. Its vsock sockets are close-on-exec. P2 ran on 0.14.1 (the old pipeline's seed); 0.15.0 not yet run. |
+| Ubuntu (smolvm base) | 26.04 LTS, `ubuntu:26.04` (resolute), digest-pinned in host config | On Docker Hub with amd64 and arm64 builds. The tag moved: index digest `sha256:3595d7fc…` on 2026-10-02, `sha256:f144425f…59f7` on 2026-10-04. Run on smolvm 1.22.2 as root in phase 0 (guest reports 26.04.1 LTS). |
 | boat.dev API | v1 (`https://boat.dev/api/v1`) | Three spikes on 2026-10-02 against an account on boat's trial, calling the API directly (L:boat). Docs and `openapi/boat-v1.yaml` read the same day. |
 | Node | 26.10.0 | SEA built and run on darwin-arm64 and linux-x64 (R:q-sea-min). |
-| effect, @effect/platform-node | 4.0.0 (stable, published 2026-10-01 03:11 UTC) | A 666 KB Effect 4.0.0 bundle ran inside a SEA (R:q-sea-min). Nothing else yet. |
-| effect-actions | 0.9.0 (published 2026-10-01) | Not yet. Earlier work used 0.8.0. |
-| vite-plus, TypeScript, pnpm | 1.0.0, 7.0.2, 12 | — |
+| effect, @effect/platform-node | 4.0.0 (stable, published 2026-10-01 03:11 UTC) | A 666 KB Effect 4.0.0 bundle ran inside a SEA (R:q-sea-min). P5: an effect-actions server and client in a SEA on both targets. |
+| effect-actions | 0.9.0 (published 2026-10-01) | P5, inside a SEA, including 330 s calls. |
+| vite-plus, TypeScript, pnpm | 1.0.0, 7.0.2, 12 | P5: `vp pack` bundled the spike, tsc 7.0.2 strict, pnpm 12.5.1. |
 
 ## smolvm claims
 
@@ -601,6 +604,191 @@ the source started `--branchable`):
   276–618 MiB and stays until the machine is deleted.
 - **Identity:** the SSH host key, machine-id and hostname are re-minted by
   default.
+
+## Phase 0 spikes (2026-10-04)
+
+Run with `scripts/work_runs.py`. smolvm ran as root on the Linux host, from a
+1.22.2 prefix install (L:smolvm-install, L:p8-disk, L:p1-ports, L:p3-smolvm).
+Tart ran on this Mac (L:p2-tart-forwarder), and the SEA on both (L:p5-pins).
+Single samples unless a count is given.
+
+**P5, pins and long calls** (L:p5-pins):
+
+- **Versions:** pnpm 12.5.1 resolved effect 4.0.0, @effect/platform-node 4.0.0
+  and effect-actions 0.9.0 exactly. effect-actions has no dependencies; its
+  peers are `effect ^4.0.0` and an optional MCP client. platform-node depends on
+  undici 8.11.2 and declares `redis >=5 <7` as a required peer, so pnpm installs
+  redis 6.3.0; subpath imports keep it out of the bundle.
+- **Module layout at effect 4.0.0:** `effect/http`, `effect/http-api` and
+  `effect/cli` are top-level subpaths of `effect` (its `package.json` exports).
+- **No timeout of effect-actions' own:** a 330 s unary call replied 200 after
+  330.01–330.02 s, through `HttpApiClient` and through `ActionHttpClient.promise`,
+  once the transport's timeouts were off. EA@v0.9.0:src/ has no timer outside
+  its MCP module.
+- **Node 26.10.0's fetch** bundles undici 8.10.2, with `headersTimeout` and
+  `bodyTimeout` both 300 000 ms (N@v26.10.0:deps/undici/src/lib/dispatcher/client.js:316-317);
+  0 disables them. With defaults the 330 s call failed at 300.9 s with
+  `UND_ERR_HEADERS_TIMEOUT`, and the server interrupted the handler at the same
+  moment (499).
+- **Turning them off:** Node has no public API for it. Observed working at
+  330 s: a per-request or global undici `Agent({headersTimeout: 0,
+  bodyTimeout: 0})` from npm undici pinned to `process.versions.undici`; a
+  wrapper around Node's undocumented `undici.globalDispatcher` symbol; and
+  `NodeHttpClient.layerNodeHttp` (`node:http`), which sets no timeout at all
+  (PN@4.0.0:src/NodeHttpClient.ts:402-470). `NodeHttpClient.layerUndici` forces
+  `headersTimeout` to 1 h after the caller's options
+  (PN@4.0.0:src/NodeHttpClient.ts:152-170), so it can't run a longer mutation.
+- **Server defaults at 26.10.0:** `requestTimeout` 300 000, `headersTimeout`
+  60 000, `keepAliveTimeout` 5 000 and `timeout` 0
+  (N@v26.10.0:lib/_http_server.js:537-562, 665). 330 s handlers replied under
+  them.
+- **Closed input:** effect-actions decodes with `onExcessProperty: "error"`
+  (EA@v0.9.0:src/ActionHttp.ts:187-192). The Effect client refuses an
+  undeclared field before sending. On the wire, a group without a `schemaError`
+  policy answers 400 with an empty body; a group whose policy maps to a tagged
+  `Invalid` (status 400) answers `{"_tag":"Invalid","message":…}`.
+- **Client disconnect:** an aborted request interrupts the handler in the same
+  millisecond (PN@4.0.0:src/NodeHttpServer.ts:213-215); effect-actions doesn't
+  shield it (EA@v0.9.0:src/internal/implementation.ts:93-110).
+- **SEA:** `vp pack` made one 3.4 MB ESM bundle (773 KB gzipped) with
+  `deps.alwaysBundle` and code splitting off, since platform-node imports its
+  undici module dynamically. SEAs were 148.3 MB (darwin-arm64) and 153.5 MB
+  (linux-x64), built in 1.5–2.4 s. Short calls took 11–16 ms in process (35 of
+  35 OK on darwin; 32–40 ms on the Linux host). `NODE_OPTIONS` was ignored.
+- **Pins:** `node-v26.10.0-darwin-arm64.tar.xz` sha256 `f222f7e8…28af` and
+  `node-v26.10.0-linux-x64.tar.xz` sha256 `ca70e9e3…f022`, matching
+  SHASUMS256.txt and R:q-sea-min.
+
+**smolvm install** (L:smolvm-install, L:p8-disk):
+
+- **The installer as written doesn't fit a root host.** `install.sh` aborts
+  non-interactively for a prefix outside `$HOME`
+  (S@1.22.2:scripts/install.sh:422-438), always links `$HOME/.local/bin/smolvm`
+  (:26, 612-615), edits shell rc files unless `--no-modify-path` (:623-668), and
+  puts the agent rootfs in `${XDG_DATA_HOME:-$HOME/.local/share}/smolvm/agent-rootfs`,
+  never in the prefix (:558-581).
+- **The form that worked,** unprivileged, with nothing written outside the
+  prefix: `env -i PATH=… HOME=<prefix> TMPDIR=<scratch> bash install.sh
+  --version 1.22.2 --prefix <prefix> --no-modify-path`. 1.60 s, 114 MiB. The
+  tarball's sha256 `95d62621…b582` matched the release checksums.
+- **The agent rootfs must be passed:** with `SMOLVM_DATA_DIR` set, smolvm sets
+  `HOME` to the data dir and strips `XDG_*` (S@1.22.2:src/main.rs:132-136), so
+  a start without `SMOLVM_AGENT_ROOTFS=<prefix>/.local/share/smolvm/agent-rootfs`
+  failed with "agent rootfs not found". The wrapper finds its libraries from the
+  prefix (`LD_LIBRARY_PATH=<prefix>/lib`, scripts/smolvm-wrapper.sh:40-46).
+- **The prefix is written at runtime:** the first root start expands the
+  templates into 20 GiB and 10 GiB sparse files in the prefix
+  (crates/smolvm-pack/src/assets.rs:412-440).
+- **Machines depend on their prefix:** default-size disks and every overlay are
+  qcow2 files backed on the prefix's template files by absolute path, and
+  running VMs read the prefix's agent rootfs. An old prefix must outlive every
+  machine created under it.
+- **Template shadowing** comes from `$SMOLVM_DATA_DIR/.smolvm`, not
+  `/root/.smolvm`, and is silent: a bogus template there booted with exit 0. A
+  bogus `$HOME/.smolvm` alone was ignored (assets.rs:363-405).
+
+**P8, disk sizing** (L:p8-disk):
+
+- **Workload writes land on the storage disk** (`/dev/vda`): 1 GiB written to
+  `/root` grew `storage.qcow2` by 1024.4 MiB and the overlay disk by 0.3 MiB.
+  `/tmp` and `/run` are tmpfs.
+- **Sizes:** below the 20/10 GiB templates, smolvm makes a sparse copy and runs
+  host `resize2fs -f` (about 10 ms; present on the host); above them, a sparse
+  copy and a guest-side resize at boot; exactly the default, a qcow2 backed on
+  the template (S@1.22.2:src/storage.rs:629-651, src/disk_utils.rs:76-188). The
+  host's ext4 has no FICLONE, so the copy is a 2.6 MiB sparse file.
+- **Mapping:** `diskGib` → `--storage <diskGib>`, with `--overlay` left at its
+  default (a 3 MiB qcow2 that grew at most 0.3 MiB). No compact templates. The
+  guest's `/` is 1.6–2% smaller than `diskGib` (5 → 4.90, 40 → 39.35 GiB).
+- **A full disk:** `dd` hit ENOSPC at 5 132 451 840 bytes on 5 GiB. Stop then
+  succeeded, but the next start failed with "crun create failed".
+- **Image references:** `ubuntu:26.04@sha256:…` (tag plus digest) is rejected by
+  smolvm's registry parser (S@1.22.2:src/registry.rs:575-587), which then pulls
+  in the guest on every create: 26.1 s on the first start, 7.0–7.2 s on each new
+  machine. `ubuntu@sha256:…` builds a host seed: 9.31 s first, 1.36 s for the
+  next machine.
+- **Timings:** create 0.025–0.03 s, stop 0.50 s, cold start 0.49 s. Each VM had
+  its own uid and `smolvm-vm-<name>.scope`.
+
+**P1, published ports** (L:p1-ports). The tailnet half is blocked: the Linux
+host is not on the tailnet, and installing Tailscale there is outside the
+rules for these runs. The rest ran with `SMOLVM_PUBLISH_ADDR=127.0.0.2`:
+
+- **Listeners:** `127.0.0.2:PORT` and `[::1]:PORT`. ssh, scp and rsync from this
+  Mac through `ssh -J` worked into a source, a fork and two restores, each on
+  its own swapped port, with pinned host keys; a wrong pin was refused.
+- **Throughput,** 256 MiB, 2 samples: 28 MiB/s up and 17 MiB/s down from the Mac
+  through the jump host; 45–49 up and 18–19 down on the host itself.
+- **Fork on Linux as root** (store checkpoint, `create --from`, port swap,
+  start, start script): 6.87 s, with a 0.744 s source pause; the store was
+  1813 MiB with `--history 0`. Restores from the store: create 2.84–2.86 s,
+  start 0.44–0.49 s.
+- **Duplicate host keys after RAM restores:** a RAM restore clones the guest's
+  CRNG, and the guest has no vmgenid or hwrng. smolvm's re-mint only stirs the
+  pool (S@1.22.2:src/fork.rs:3176, 3245-3250). Distinct keys across restores of
+  one RAM state: smolvm's own re-mint 4 of 20; a second `ssh-keygen -A` 5 of 7
+  (a fork and a restore got the same new key); stirring 4 of 5; stirring plus
+  `RNDRESEEDCRNG` 8 of 8. A cold boot (a `disk` restore) gets fresh keys. The
+  inherited OpenSSH 10.2p1 sshd kept serving the source's key until restarted.
+- **Re-mint plus sshd restart:** 0.15–0.55 s in the guest (26 samples).
+- **Probes from a guest:** `127.0.0.1`, `127.0.0.2` and other VMs' published
+  ports were refused. Root-owned listeners on the host's public IPv4 and IPv6
+  addresses were reachable, and so was the host's sshd on :22. Listeners owned by
+  uid 1000 timed out, consistent with production's `meta skuid 1000` rule
+  (ruleset read, not changed).
+
+**P3, setup and preparation on smolvm** (L:p3-smolvm):
+
+- **openssh-server without recommends** on stock 26.04: `apt-get update`
+  2.22–2.70 s, install 4.71–6.69 s (5 machines); ssh answered 8–9.5 s after the
+  first start. 18 packages, no `systemd-resolved` (with recommends: 107,
+  including it). `/etc/resolv.conf` stayed a regular file across a cold start.
+- **`setsid -f` under plain exec** outlives the exec (checked at 5 s and 30 s).
+  With stdio redirected the exec returned in 0.054 s; with inherited pipes, only
+  after 5.05 s.
+- **Environment:** `/etc/environment` reaches ssh sessions, and daemons launched
+  from them, through `pam_env` (`/etc/pam.d/sshd:44`). It does not reach
+  `/etc/clankerbox/start` under exec, the daemons it launches, or plain exec.
+- **Pack restore:** `pack create --from-vm` 4.69 s (46 MiB stub, 86 MiB
+  sidecar), `create --from` 1.70 s, start 0.47 s. It keeps the source's host
+  key; re-mint plus restart took 0.35–0.49 s and gave distinct keys (3 samples).
+- **gg-linux-dev** fails unmodified on stock 26.04 after 35.1 s: node can't load
+  `libatomic.so.1`. With `libatomic1` installed first (2.53 s), the unmodified
+  recipe took 81.1 s; create to set-up machine about 98.5 s, using 2.31 GB.
+  Stop, cold start and start took 1.26/0.67/0.16 s, and its tools worked after
+  the cold start. The recipe installs no sshd, key or `start`.
+- **A realistic `start`:** the sshd guard 0.027 s and launching sshd 0.066 s in
+  the guest (5 samples each). A clankercreds sync could not be timed: the
+  service answered HTTP 530 (Cloudflare) from the guest and from this Mac on
+  2026-10-04; failing syncs took 0.64–1.47 s (12 samples).
+- **Recipe packing on macOS:** `tar` adds AppleDouble `._*` files; the packer
+  needs `COPYFILE_DISABLE=1` or to exclude them.
+
+**P2, Tart forwarder** (L:p2-tart-forwarder, Tart 2.40.1, on an APFS clone of
+the old pipeline's `macos-tahoe-vanilla` seed with tart-guest-agent 0.14.1):
+
+- **Latency,** 10 samples: `ssh … true` through the forwarder took a median of
+  0.397 s, against 0.103 s direct to the guest IP, so the forwarder adds about
+  0.29 s per connection. A bare `tart exec true` takes 0.05 s back to back and
+  0.25–0.31 s after an idle gap.
+- **Throughput,** 1 GiB through the forwarder: scp 185 up / 165 down MiB/s,
+  rsync 202 / 106 (direct: 269 / 227 / 257 / 147). sha256 matched in all 11
+  transfers, so `tart exec -i` with `nc` streamed cleanly on 0.14.1.
+- **Idle:** 3 of 3 sessions survived 11.5 minutes idle with keepalives off.
+- **Tailnet address:** a forwarder bound to this Mac's tailnet address, from a
+  shell and as a LaunchAgent, accepted 46 connections with no prompt and nothing
+  in the unified log about Local Network. They came from this Mac itself; a
+  connection from another tailnet machine is unverified.
+- **Ending a connection:** when the ssh client dies, the forwarder closes the
+  exec's stdin and everything exits in 0.05 s. When `tart exec` itself is
+  killed (a host restart), the guest's `nc` and `sshd-session` stay until the
+  session next writes (T:ControlSocket.swift:98-113, not verified on 0.15.0).
+- **Memory:** a raw 1 GiB upload through `tart exec -i` peaked at 2.0–2.4 GiB
+  RSS in the host's tart process (stdin is read into an unbounded stream,
+  T:Commands/Exec.swift:100-160). Through the forwarder ssh's window kept it at
+  18–22 MiB.
+- **Boot** (old seed, not the P3 answer for stock images): `tart exec` answered
+  25.1 s after `tart run`; `sudo -n true` succeeded for `admin`.
 
 ## Consumers and production
 
