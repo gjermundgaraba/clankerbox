@@ -110,7 +110,7 @@ const settle = <A>(
                   access: "read",
                 })
               : new Unavailable({
-                  message: `lost host ${context.host.id}'s reply to ${context.action} (${causeDetail(error)}); the action may have run: read ${context.target ?? "the resource"} to see`,
+                  message: `no reply from host ${context.host.id} to ${context.action} (${causeDetail(error)}); the action may have run: read ${context.target ?? "the resource"} to see`,
                   access: "write",
                 }),
           ),
