@@ -1,9 +1,8 @@
 # TypeScript/Effect rewrite: plan
 
 Status: planned. Every design decision below is closed. The phase-0 spikes have
-run (evidence.md, "Phase 0 spikes"), except P1 over the tailnet, which waits
-until the Linux host joins it, and P3 on a stock Cirrus image. P14 checks
-boat's auto-stop once the account is past its trial. The evidence behind the
+run (evidence.md, "Phase 0 spikes"). P14 checks boat's auto-stop once the
+account is past its trial. The evidence behind the
 decisions is in [evidence.md](evidence.md). Both files are deleted in the last
 commit before the merge.
 
@@ -467,7 +466,8 @@ listed to keep them from being ported):
     self-extracting script: a base64 tar that unpacks into a temporary
     directory, then runs `setup.sh` from there. Stock Ubuntu, macOS and boat's
     image all have `base64` and `tar`.
-  - The packer sets `COPYFILE_DISABLE=1`, so macOS `tar` adds no `._*` files.
+  - The packer sets `COPYFILE_DISABLE=1` and passes `--no-xattrs`, so macOS
+    `tar` adds no `._*` files and no provenance headers.
   - SDK clients pass a script's text or use the same packer.
   - A packed recipe can carry secrets, such as gg-linux-dev's clankercreds
     key. The host never stores a setup script.
@@ -512,9 +512,10 @@ guest (see [Other host rules](#other-host-rules)), as part of the action.
   carry its results.
 - A typical setup installs sshd and the operator's public key, sets the guest's
   environment, and writes `/etc/clankerbox/start`.
-- `/etc/environment` reaches ssh sessions only, through `pam_env` (P3).
-  `start`, and whatever it launches, runs under exec and must read the file
-  itself.
+- On Linux, `/etc/environment` reaches ssh sessions only, through `pam_env`
+  (P3). On macOS there is no `pam_env`; ssh sessions read `/etc/zshenv`.
+  Either way `start`, and whatever it launches, runs under exec and must read
+  the environment file itself.
 
 **Preparation** is one script, shipped inside the host binary, run after every
 create, start, fork and restore. In order:
@@ -522,9 +523,12 @@ create, start, fork and restore. In order:
 1. **Identity.** Each machine row gets a random `instance` value when it is
    inserted. Compare `/var/lib/clankerbox/instance` with it. On a mismatch:
    - Reseed the guest's kernel RNG, before anything else. The host writes a
-     fresh random seed into `/dev/urandom`, then, on Linux guests, issues
+     fresh random seed into `/dev/random`, then, on Linux guests, issues
      `RNDRESEEDCRNG` (with `perl`, which stock Ubuntu ships as `perl-base`).
      Tart and boat guests cold-boot, so the seed write is enough there.
+     macOS refuses writes to `/dev/urandom` and reseeds on a write to
+     `/dev/random` (P3); Linux handles writes to both nodes alike, and P1
+     tested `/dev/urandom` there, so phase 3 checks `/dev/random` live.
      - Why: a RAM restore, and so a fork, clones the guest's CRNG, and the
        guest has no vmgenid or hwrng. smolvm's own re-mint only stirs the pool
        (S@1.22.2:src/fork.rs:3245-3250). Across restores of one RAM state, it
@@ -562,9 +566,9 @@ create, start, fork and restore. In order:
      example, clankercreds sync must run after a fork or restore.
    - A non-zero exit, or running past the timeout, fails the action, and the
      error carries the script's last lines of output. The timeout is 60 s: P3
-     measured at most 0.55 s for re-mint plus an sshd restart and 1.5 s for a
-     failing clankercreds sync, so 60 s leaves room for a slow network. A
-     successful sync is not yet timed; re-check the value when it is.
+     measured at most 0.55 s for re-mint plus an sshd restart, and at most
+     1.52 s for a `start` that runs a successful clankercreds sync right after
+     a cold start, so 60 s leaves room for a slow network.
    - Check for sshd's listener (`/run/sshd.pid`), not `pgrep -x sshd`: an open
      ssh session also matches `pgrep`, so a dead listener would never be
      relaunched.
@@ -705,7 +709,7 @@ Two rules for every VM job:
   directory.
 - **Every smolvm machine starts with `--branchable`.** Store capture requires it.
   It gives the guest file-backed RAM, so capture pauses the source for
-  40–170 ms instead of 0.5–3 s (on this Mac, 1 vCPU / 1 GiB; 0.72–0.74 s on the
+  40–170 ms instead of 0.5–3 s (on this Mac, 1 vCPU / 1 GiB; 0.72–1.30 s on the
   Linux host as root, 2 vCPU / 2 GiB after package installs), and the source's
   resident RAM doesn't grow.
   Restored machines are branchable anyway. `machine status --json` reports
@@ -725,8 +729,9 @@ Two rules for every VM job:
 
   The child continues the source's RAM state, gets a fresh identity and its own
   uid, and has no lineage. It took 1.6–2.4 s on this Mac (1 vCPU / 1 GiB,
-  unprivileged) and 6.87 s on the Linux host as root (2 vCPU / 2 GiB, one
-  sample: a 3.34 s capture and a 2.81 s create). The cost is disk: a restored
+  unprivileged) and 6.87–7.32 s on the Linux host as root (2 vCPU / 2 GiB, two
+  samples; in the first, a 3.34 s capture and a 2.81 s create). The cost is
+  disk: a restored
   machine keeps its RAM file (about 280–620 MiB) for its life.
 - **Never call `machine branch`:**
   - Each branch adds a backing layer to the source, and smolvm refuses the 33rd.
@@ -820,8 +825,10 @@ Two rules for every VM job:
 - **Guest agent:** stock Cirrus images run tart-guest-agent ≥ 0.15.0 as a
   per-user LaunchAgent, which starts after auto-login. Tart's `Runtime.exec`
   waits for `tart exec` to answer after boot, then runs its command through
-  `sudo -n`. A base without passwordless sudo fails the create loudly. P3
-  checks both on a current image. The forwarder calls `tart exec` directly,
+  `sudo -n`. A base without passwordless sudo fails the create loudly. On
+  `macos-tahoe-base` the agent is 0.15.0, `admin` has passwordless sudo, and
+  exec first answered 18.5–32.3 s after `tart run` (P3), so the wait allows a
+  minute. The forwarder calls `tart exec` directly,
   since `nc` needs no root.
 
 ### Runtimes: boat
