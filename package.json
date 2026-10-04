@@ -9,6 +9,7 @@
     "ready": "vp run check && vp run -r test && vp run -r build"
   },
   "devDependencies": {
+    "@oxlint/plugins": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
