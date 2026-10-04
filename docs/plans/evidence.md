@@ -114,7 +114,8 @@ Checked 2026-10-01. Each row says what was actually exercised.
 - **Custom DNS:** smolvm refuses capturing a machine that has it
   (S@1.19.0:src/portable_checkpoint.rs:2258).
 
-**Packs**
+**Packs** (no design of ours uses them since smolvm `disk` checkpoints were
+dropped in the phase-4 review; kept as smolvm's behaviour at 1.22.2)
 
 - **`pack create --from-vm`:**
   - It keeps uid/gid, setuid/setgid and modes.
@@ -909,7 +910,8 @@ Linux host, 1.22.2, machines 1 vCPU / 1 GiB, 6 per batch):
 - **`pack create --from-vm` fails for a `--storage 20` machine** (`krun_start_enter
   returned: -22`), 36 of 36, and works at `--storage 8`. A failed export leaks
   its helper's scope, `smolvm-vm-pack-fromvm-<pid>-<ns>.scope`, whose name
-  can't carry a prefix. Phase 4 meets this with `disk` checkpoints.
+  can't carry a prefix. Phase 4 met this with `disk` checkpoints, which the
+  phase-4 review then dropped, so nothing of ours runs `pack create`.
 - **Timings,** concurrent ×6 wall / sequential ×6: first start at 20 GiB
   1.75 / 9.27 s, stop 0.41 / 1.40 s, capture into one store 1.76 / 4.32 s.
 
@@ -979,6 +981,9 @@ path; the 45.3 MiB gzipped SEA uploaded at 0.67–0.94 MiB/s). Machines had
   `~/clankerbox-rewrite/runs/<4 chars>/scratch/s` is exactly that.
 
 ## Phase 4 (2026-10-04)
+
+smolvm `disk` checkpoints were dropped in the phase-4 review, after these runs:
+a smolvm checkpoint is always `ram`. Their `disk` results stay as the record.
 
 **P9, restores as root** (L:p9, smolvm 1.22.2 as root on the Linux host, 1 vCPU
 / 1 GiB, `--storage 20`, `--restore-cache-entries 0`; run

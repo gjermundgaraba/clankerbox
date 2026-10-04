@@ -57,8 +57,9 @@ Before building any mechanism that wraps a dependency, answer five questions,
 and answer them again at every bump of that dependency:
 
 1. **Duplicated bookkeeping.** Does the dependency already track this? Example:
-   smolvm stamps a format version into every pack, so `disk` checkpoints need
-   no pin of ours.
+   smolvm records and enforces a checkpoint's sizes, platform, CPU contract
+   and network, so our pin covers only what it doesn't: the engine build and
+   the agent.
 2. **Owning what the dependency owns.** Are we deleting its files or managing its
    processes, and so needing proofs it doesn't need?
 3. **Unrecorded choices.** Every layout choice, limit and timeout carries a
@@ -85,8 +86,8 @@ and answer them again at every bump of that dependency:
   read from the runtime, never stored. A machine and its checkpoints stay on
   the host that created them; nothing moves between hosts.
 - **Runtimes:**
-  - smolvm: Linux guests on Linux hosts, with RAM forks and `ram` and `disk`
-    checkpoints, through its CLI.
+  - smolvm: Linux guests on Linux hosts, with RAM forks and `ram` checkpoints,
+    through its CLI.
   - Tart: macOS guests on macOS hosts, with disk copies, through its CLI.
   - boat: Linux guests in boat.dev's cloud, with disk forks and checkpoints,
     through its HTTP API. boat is extra capacity that is picked on purpose:
@@ -265,7 +266,7 @@ Units run `process.execPath host --config PATH`. VM jobs never reference this bi
   host that outlasts it as unreachable, and placement skips one.
 - Every action runs in this order (see [State and claims](#state-and-claims)):
   1. Validate the input.
-  2. Claim the rows in one transaction, inserting the new row.
+  2. Claim the rows, inserting the new row.
   3. Check runtime state, for example that a Tart source is stopped, that Tart
      has room for another VM, that a smolvm host's RAM budget has room, or that
      a boat machine type fits.
@@ -287,7 +288,7 @@ Units run `process.execPath host --config PATH`. VM jobs never reference this bi
   action has finished. Node's server `requestTimeout` (300 s by default) covers
   only receiving the request, so it doesn't limit an action. The undici client
   behind `fetch` does: its header and body timeouts (300 s each at 26.10.0)
-  would end a long `pack create` or a profile's setup. Phase 2 turns them off
+  would end a long Tart clone or a profile's setup. Phase 2 turns them off
   for mutation calls. effect-actions adds no timeout of its own (P5).
   - The client library uses `NodeHttpClient.layerNodeHttp`, which sets no
     timeout. `fetch` has no public way to turn its timeouts off at 26.10.0,
@@ -317,7 +318,8 @@ Units run `process.execPath host --config PATH`. VM jobs never reference this bi
 - **Fork** copies a machine to a new name on the same host. What it keeps
   depends on the runtime: smolvm copies a running machine, RAM included; Tart
   copies a stopped machine's disk; boat copies the disk, waiting for a fresh
-  snapshot if the source runs. A checkpoint is always `disk` on Tart and boat.
+  snapshot if the source runs. A checkpoint's kind follows the runtime: always
+  `ram` on smolvm, of a running machine, and `disk` on Tart and boat.
 - No resource repeats its name or host: both are parts of the ID, and the client
   library splits it.
 - **`action: {name, status: "running" | "failed" | "done", error?: {tag,
@@ -361,7 +363,7 @@ features (guest sessions, `dev`); the cut-over gate in phase 8 is the only link.
 
 | Area | Features |
 | --- | --- |
-| Lifecycle | create (placed by base, or on the host a full ID names; from a profile file, or from a base with `cpu`, `ramMib`, `diskGib` and an optional setup script), start, stop, delete, RAM fork (smolvm), stopped-disk fork (Tart) and disk fork (boat), checkpoint capture (`ram` or `disk`)/get/list/delete, restore |
+| Lifecycle | create (placed by base, or on the host a full ID names; from a profile file, or from a base with `cpu`, `ramMib`, `diskGib` and an optional setup script), start, stop, delete, RAM fork (smolvm), stopped-disk fork (Tart) and disk fork (boat), checkpoint capture (`ram` on smolvm, `disk` on Tart and boat)/get/list/delete, restore |
 | Runtimes | smolvm (Linux guests, on Linux hosts), Tart (macOS guests, on macOS hosts) and boat (Linux guests in boat.dev's cloud), all three in production |
 | Placement | the host a full ID or the profile names, or else the first host in the host list that offers the base |
 | Profiles | client-side files: base, sizes, a setup script or recipe directory with its timeout, and an optional host |
@@ -447,18 +449,23 @@ listed to keep them from being ported):
   also holds its host `port` (see [Guest access](#guest-access)) and `hostKey`,
   the key the last successful preparation printed. Checkpoint rows arrive with
   phase 4, as the second migration; phase 3 has no action that writes one.
-- **Claims:** an action claims every row it changes in one SQLite transaction.
-  It inserts the new row and, for fork and checkpoint capture, claims the source
-  machine. A claimed row has `action.status = running`. If any of them is
-  already running, the call fails with `Conflict{kind: busy}` and nothing is
-  written.
+- **Claims:** the store has one claim primitive: hold these rows, insert this
+  one, return a token, in one SQLite transaction. A claimed row has
+  `action.status = running`. A missing row is `NotFound`, one already running
+  `Conflict{kind: busy}` and a taken new name `Conflict{kind: exists}` (the
+  primary key's refusal), and then nothing is written. A claim can join an
+  earlier token, so an action can claim in steps; `release(token)` (remove
+  the inserted rows, put back each held row's last `action`) and
+  `end(token, outcome)` each write every row of the token in one transaction.
+  A release that fails is logged; its rows stay held until the next startup
+  marks them failed.
+  - Fork and capture claim their source first, then insert the new row into
+    the same claim: a fork with the source's spec, a capture once it has read
+    the source's state once for the kind. A host crash between the two leaves
+    the source's action `failed` and no new row; that is accepted.
   - Fork and capture end with their outcome on both rows: the source's
     `action` reads `fork` or `capture`, `done` or `failed`, like the new row's.
-  - A checkpoint row's `kind` follows the source's state, so capture reads
-    it before the claim to fill the row, and again in step 3; a kind that
-    changed between is `Precondition`. A source another action holds is
-    `Conflict{busy}` before that read, since a machine whose create is
-    running can read as missing.
+    The host key preparation read goes on the new machine only.
   - A checkpoint row also keeps the source's host port at capture, which a
     `ram` restore comes up on, so the restore knows which port to swap
     without reading ports back from smolvm.
@@ -634,9 +641,8 @@ instance and the machine's ID, and a fresh 64-byte seed arrives on stdin. The
        seeded before the fork stay duplicated; a profile resets those in its
        `new-identity` hook.
    - Re-mint the SSH host keys, if the guest has any, on every runtime. A Tart
-     clone, a machine restored from a `disk` checkpoint (a pack keeps the
-     source's keys) and a machine created from a base (keys from the image or
-     from setup) need it. smolvm already re-mints on a `ram` restore, and so on
+     clone, so also a machine restored from a Tart `disk` checkpoint, and a
+     machine created from a base (keys from the image or from setup) need it. smolvm already re-mints on a `ram` restore, and so on
      a fork; doing it again there keeps preparation free of runtime cases and
      of a smolvm behaviour that every bump would have to re-check. P3 measures
      what it adds to a fork. On boat every activation is a new machine with
@@ -717,10 +723,6 @@ A crashed preparation is simply run again on the next activation; no
     new one and applies it with `machine update --remove-port … -p …` before
     start. To read ports back, use `machine ls -v` or the VM's
     `agent.config.json`; `machine status --json` reports only a count.
-  - A `disk` restore takes `--net` and a fresh `-p` flag at create, like a
-    machine created from a base, and `--cpus`, `--mem` and `--storage` too: a
-    pack carries smolvm's default sizes (4 vCPU, 8192 MiB), not its source's
-    (P9).
 - **Tart:**
   - Tart has no port publishing, and the guest's Softnet address is reachable
     only from the Mac.
@@ -880,45 +882,28 @@ Two rules for every VM job:
     reset-failed` on the scope, since systemd keeps a failed scope until then.
     Phase 3 verified this live, on a guest whose frozen `/storage` made
     `machine stop` fail.
-- **Checkpoints:** the kind follows the machine's state at capture. They live
-  in the state dir: the one store at `<stateDir>/checkpoints/` (a checkpoint is
-  `<native>.checkpoint` there), each pack in its own directory
-  `<stateDir>/packs/<native>/` (smolvm writes a stub and the
-  `<native>.smolmachine` a restore reads, so delete removes the directory), and
-  fork stores under `<stateDir>/forks/<child native>/`. Startup makes the first
-  two and empties the third.
-  - **`ram`, from a running machine:** a store checkpoint (below); smolvm
-    captures only running machines. A restore continues the source's RAM state
+- **Checkpoints:** always `ram`, a running machine's RAM and disks; smolvm
+  captures only running machines. A capture of a stopped machine is
+  `Precondition` ("start it first"), read in step 3 like a fork's source.
+  `disk` checkpoints (packs) were dropped in the phase-4 review: what is lost
+  is a checkpoint that outlives a smolvm upgrade, which the pin below already
+  refuses to restore. They live in the state dir: the one store at
+  `<stateDir>/checkpoints/` (a checkpoint is `<native>.checkpoint` there), and
+  fork stores under `<stateDir>/forks/<child native>/`. Startup makes the store
+  and empties the forks area.
+  - A store checkpoint (below). A restore continues the source's RAM state
     and keeps a RAM file (about 280–620 MiB) for its life.
-  - **`disk`, from a stopped machine:** `pack create --from-vm` into the host's
-    packs directory. A restore is `machine create --from` the pack, then a cold
-    boot. The new machine extracts the pack once, at create, and never reads it
-    again, so delete just removes the file. (P9 measured a leftover: the
-    extraction is shared per pack, in `vms/_shared/<crc>`, about 430 MiB, and
-    outlives the pack's last machine until `smolvm pack prune --all`. Nothing
-    removes it yet; see evidence.md, Phase 4.) (P9 and the phase-4 smoke: a pack
-    of a machine on smolvm's image seed, as every fresh `diskGib` 20 machine
-    is, fails with `krun_start_enter returned: -22`; the capture's error
-    carries that and says smolvm 1.22.2 can't pack such a machine. A
-    20 GiB machine restored from a `ram` checkpoint packs.) A pack keeps uid/gid and modes but
-    drops all xattrs and file capabilities, so a machine that will be
-    disk-checkpointed must not rely on file capabilities.
-    - **Known smolvm leftover:** a failed `pack create --from-vm` leaks its
-      helper's scope, `smolvm-vm-pack-fromvm-<pid>-<ns>.scope`, whose name
-      carries no machine name, so no row owns it and the host leaves it
-      (evidence.md, P12). Manual cleanup: `systemctl reset-failed
-      'smolvm-vm-pack-fromvm-*'`.
   - **Pin:** a `ram` checkpoint records the smolvm version and the platform at
     capture (`smolvm 1.22.2 linux-x64`), and a restore under a different pin is
     refused with `Precondition`, writing nothing. The runtime names its pin; the
     core compares it. smolvm enforces sizes, platform, CPU contract and network,
-    but not the engine build or the agent. A `disk` checkpoint has no pin:
-    smolvm stamps a format version into each pack and keeps reading older ones.
+    but not the engine build or the agent. The core keeps the pin check for
+    `ram` checkpoints only: Tart's and boat's `disk` checkpoints have none.
   - **Capture:** smolvm publishes a checkpoint durably or not at all. After a
     crash, the host discards the interrupted capture, and `checkpoint-prune`
     removes the staging that smolvm marked. Partial RAM artifacts are never
     published.
-  - **Store mode:** `ram` checkpoints go into one store per host (`--store`,
+  - **Store mode:** checkpoints go into one store per host (`--store`,
     with `--history 0`); forks use their own stores.
     - Repeated captures share unchanged chunks; a second and third capture saved
       34% and 53% of disk.
@@ -1228,7 +1213,7 @@ tests use real VMs.
      between inserting the row and calling the runtime, and `delete` of a VM
      whose stop failed.
    - Spike P12. Live tests on Linux, through the CLI.
-4. **smolvm checkpoints and fork.** Both checkpoint kinds and fork. Spike P9.
+4. **smolvm checkpoints and fork.** `ram` checkpoints and fork. Spike P9.
 5. **Tart.** The runtime, its names, the forwarder and the two-VM count.
    `stop` and `delete` after an interrupted operation. Spike P11. Live tests
    on the Mac. Freeze the `Runtime` interface only after this slice.
@@ -1337,7 +1322,7 @@ call next to the unary ones. smolvm's `--expose-socket` is the other fallback.
 | Spike | Gates |
 | --- | --- |
 | P12 (phase 3). Concurrent smolvm CLI calls on different machines in one inventory: do any need serializing? | a semaphore around those calls |
-| P9 (phase 4). Restores as root. A store-mode `ram` restore: does it still share RAM read-only and use a copy-on-write disk top, as single-file restores did? Private disk and memory per restored machine with `--restore-cache-entries 0`. Then delete a fork's whole store while its children run. A `disk` restore: `create --from` a pack with `--net` and `-p`, its disk per machine, and the re-mint. | checkpoint and fork cost, fork cleanup, `disk` checkpoints |
+| P9 (phase 4). Restores as root. A store-mode `ram` restore: does it still share RAM read-only and use a copy-on-write disk top, as single-file restores did? Private disk and memory per restored machine with `--restore-cache-entries 0`. Then delete a fork's whole store while its children run. A `disk` restore: `create --from` a pack with `--net` and `-p`, its disk per machine, and the re-mint. | checkpoint and fork cost, fork cleanup (smolvm `disk` checkpoints, since dropped) |
 | P11 (phase 5). Tart's own refusal of a third VM: a fast refusal, or a hang until timeout. | the capacity backstop |
 | P14 (phase 6). boat past its trial (after the subscription's first payment): `ttlSeconds: null` on create, fork, resume and restore, and a `large` create. Whether `POST /sshkey`'s `hostKey` is the current activation's. The rest of P14 ran on the trial (evidence.md). | boat's auto-stop, the host-key read |
 
@@ -1419,8 +1404,9 @@ Everything the rewrite creates on a test machine is removed when the work ends.
     the host reaches some peer;
   - smolvm's RAM budget refusing with `Capacity`, and of two concurrent
     creates that each fit only alone, exactly one passing;
-  - RAM fork, `ram` and `disk` checkpoint capture, restore and delete on
-    smolvm, and `disk` checkpoints on Tart;
+  - RAM fork, `ram` checkpoint capture, restore and delete on smolvm, a
+    capture of a stopped smolvm machine refused with `Precondition`, and
+    `disk` checkpoints on Tart;
   - on boat:
     - a stop and start that bring a new endpoint and host key;
     - a fork of a running machine that holds a file written just before the
