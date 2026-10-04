@@ -103,10 +103,8 @@ export const ssh = Command.make(
   },
   (flags) =>
     Effect.gen(function* () {
-      const target = yield* withClient(
-        flags,
-        { access: "read", action: `ssh ${flags.machine}`, read: "" },
-        (client) => Effect.flatMap(client.machine(flags.machine), targetOf),
+      const target = yield* withClient(flags, (client) =>
+        Effect.flatMap(client.machine(flags.machine), targetOf),
       );
 
       const code = yield* runSsh(target, flags.args).pipe(

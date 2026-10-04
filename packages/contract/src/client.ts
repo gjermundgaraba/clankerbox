@@ -1,10 +1,11 @@
 /**
  * The client library: a host list in placement order, routing by ID, list fan-out and
- * create placement. Nothing here retries: a mutation whose reply is lost is `Unavailable`,
- * and the caller reads the resource to see what happened.
+ * create placement. Nothing here retries: a mutation whose reply is lost, or that outlasts
+ * the client's timeout, is `Unavailable`, and the caller reads the resource to see what
+ * happened.
  */
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import { Context, Effect, Layer, Match, Result, Schema } from "effect";
+import { Context, Duration, Effect, Layer, Match, Result, Schema } from "effect";
 import type { HttpClient, HttpClientError } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 import { Http } from "./api.ts";
@@ -38,6 +39,15 @@ export interface Unreachable {
 export interface Gathered<A> {
   readonly answers: ReadonlyArray<A>;
   readonly unreachable: ReadonlyArray<Unreachable>;
+}
+
+export interface Options {
+  /**
+   * How long to wait for each request's reply, unbounded by default. It only stops the
+   * wait: a mutation keeps running on its host. A fan-out bounds each host's request on its own,
+   * so a host that doesn't answer in time is named among the unreachable.
+   */
+  readonly timeout?: Duration.Duration | undefined;
 }
 
 export interface CreateOptions {
@@ -85,6 +95,7 @@ type CallError = HostError | HttpClientError.HttpClientError | Schema.SchemaErro
 /** Which call met an error, for its message and for whether it is retryable. */
 interface CallContext {
   readonly host: HostEntry;
+  readonly timeout: Duration.Duration | undefined;
   readonly access: Access;
   /** What the call does, such as `start linux_dev` or `list machines`. */
   readonly action: string;
@@ -95,11 +106,37 @@ interface CallContext {
 const causeDetail = (error: HttpClientError.HttpClientError): string =>
   error.cause instanceof Error ? error.cause.message : error.message;
 
+const timedOut = (context: CallContext, timeout: Duration.Duration): Unavailable =>
+  context.access === "read"
+    ? new Unavailable({
+        message: `host ${context.host.id} (${context.host.url}) didn't answer ${context.action} within ${Duration.format(timeout)}`,
+        access: "read",
+      })
+    : new Unavailable({
+        message: `stopped waiting for host ${context.host.id} after ${Duration.format(timeout)}; ${context.action} is still running: read ${context.target ?? "the resource"} to see how it ends`,
+        access: "write",
+      });
+
+/** Bounds the wait for the reply; the clock starts when the request is sent. */
+const bounded = <A>(
+  call: Effect.Effect<A, CallError>,
+  context: CallContext,
+): Effect.Effect<A, CallError | Unavailable> => {
+  const { timeout } = context;
+
+  return timeout === undefined
+    ? call
+    : Effect.timeoutOrElse(call, {
+        duration: timeout,
+        orElse: () => Effect.fail(timedOut(context, timeout)),
+      });
+};
+
 const settle = <A>(
   call: Effect.Effect<A, CallError>,
   context: CallContext,
 ): Effect.Effect<A, ClankerboxError> =>
-  call.pipe(
+  bounded(call, context).pipe(
     Effect.catchTag("HttpClientError", (error) =>
       Effect.fail(
         Match.value(error.reason).pipe(
@@ -161,6 +198,7 @@ const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
 /** Builds a client over `hosts`, in placement order. Making it sends nothing. */
 export const make = (
   hosts: ReadonlyArray<HostEntry>,
+  options?: Options,
 ): Effect.Effect<Interface, never, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const routes = new Map<string, { readonly entry: HostEntry; readonly api: HostApi }>();
@@ -168,6 +206,8 @@ export const make = (
     for (const entry of hosts) {
       routes.set(entry.id, { entry, api: yield* makeHostApi(entry.url) });
     }
+
+    const timeout = options?.timeout;
 
     const route = (host: string) => {
       const found = routes.get(host);
@@ -192,7 +232,13 @@ export const make = (
         const { host } = yield* parseId(id);
         const { entry, api } = yield* route(host);
 
-        return yield* settle(call(api), { host: entry, access, action, target: made ?? id });
+        return yield* settle(call(api), {
+          host: entry,
+          timeout,
+          access,
+          action,
+          target: made ?? id,
+        });
       });
 
     /** Asks every host at once; a host that fails is named rather than failing the whole. */
@@ -207,7 +253,7 @@ export const make = (
 
           return api === undefined
             ? Effect.succeed(Result.succeed<ReadonlyArray<A>>([]))
-            : Effect.result(settle(call(api), { host: entry, access: "read", action }));
+            : Effect.result(settle(call(api), { host: entry, timeout, access: "read", action }));
         },
         { concurrency: "unbounded" },
       ).pipe(
@@ -236,6 +282,7 @@ export const make = (
 
         return yield* settle(api.machine.create({ payload: { ...spec, name } }), {
           host: entry,
+          timeout,
           access: "write",
           action: `create ${id}`,
           target: id,
@@ -361,6 +408,9 @@ export const make = (
     } satisfies Interface;
   });
 
-/** The client over Node's `http` module, which sets no timeout: a mutation can run for hours. */
-export const layer = (hosts: ReadonlyArray<HostEntry>): Layer.Layer<Client> =>
-  Layer.effect(Client, make(hosts)).pipe(Layer.provide(NodeHttpClient.layerNodeHttp));
+/**
+ * The client over Node's `http` module, which sets no timeout of its own: a mutation can run
+ * for hours.
+ */
+export const layer = (hosts: ReadonlyArray<HostEntry>, options?: Options): Layer.Layer<Client> =>
+  Layer.effect(Client, make(hosts, options)).pipe(Layer.provide(NodeHttpClient.layerNodeHttp));

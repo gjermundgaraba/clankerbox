@@ -188,11 +188,22 @@ export const stubHost = (options: StubHostOptions) => {
 
 export type StubHost = ReturnType<typeof stubHost>;
 
-/** How a host behaves on the network: served, down, or losing every reply after running it. */
-export type Endpoint = StubHost | "down" | { readonly lost: StubHost };
+/**
+ * How a host behaves on the network: served, down, never answering, or losing every reply
+ * after running it.
+ */
+export type Endpoint = StubHost | "down" | "silent" | { readonly lost: StubHost };
 
 const requestUrl = (input: string | URL | Request): URL =>
   new URL(input instanceof Request ? input.url : input);
+
+/** A request that never gets an answer, until the client gives up on it. */
+const unanswered = (signal: AbortSignal | null | undefined) =>
+  new Promise<Response>((_resolve, reject) => {
+    signal?.addEventListener("abort", () => {
+      reject(new Error("aborted"));
+    });
+  });
 
 /**
  * An HTTP client whose requests go to the stub named by their URL's origin, through the
@@ -206,6 +217,10 @@ export const transport = (
 
     if (endpoint === undefined || endpoint === "down") {
       throw new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED") });
+    }
+
+    if (endpoint === "silent") {
+      return unanswered(init?.signal);
     }
 
     if ("lost" in endpoint) {

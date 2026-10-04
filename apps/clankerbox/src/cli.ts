@@ -3,15 +3,12 @@
  * ID. A mutation returns when its action has finished; `--timeout` only stops waiting.
  */
 import {
-  type Access,
   type ClankerboxError,
   Client,
   Invalid,
-  isId,
   loadProfile,
   type MachineSpec,
   readSetup,
-  Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Console, DateTime, Duration, Effect, FileSystem, Option, Path } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
@@ -38,7 +35,13 @@ export const clientFlags = {
     Flag.withDefault(false),
   ),
   timeout: Flag.Int("timeout").pipe(
-    Flag.withDescription("Stop waiting after SECONDS. The action keeps running on its host."),
+    Flag.withDescription(
+      "Stop waiting for a host's reply after SECONDS. The action keeps running on its host.",
+    ),
+    Flag.filter(
+      (seconds) => seconds > 0,
+      (seconds) => `--timeout must be a positive number of seconds, not ${seconds}`,
+    ),
     Flag.optional,
   ),
   config: Flag.String("config").pipe(
@@ -49,69 +52,32 @@ export const clientFlags = {
   ),
 };
 
-export interface ClientFlags {
-  readonly json: boolean;
-  readonly timeout: Option.Option<number>;
-  readonly config: Option.Option<string>;
-}
+type ClientFlags = Command.Command.Config.Infer<typeof clientFlags>;
 
-/** What a command waits for, for the message when `--timeout` stops the wait. */
-export interface Waiting {
-  readonly access: Access;
-  readonly action: string;
-  /** What to read to see how a mutation ends. */
-  readonly read: string;
-}
-
-export type Services =
+type Services =
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner
   | HttpClient.HttpClient;
 
-const timedOut = (seconds: number, waiting: Waiting): ClankerboxError =>
-  waiting.access === "read"
-    ? new Unavailable({
-        message: `stopped waiting for ${waiting.action} after ${seconds}s`,
-        access: "read",
-      })
-    : new Unavailable({
-        message: `stopped waiting after ${seconds}s; ${waiting.action} is still running: read ${waiting.read} to see how it ends`,
-        access: "write",
-      });
-
 /**
  * Runs a command against the configured hosts. Its failure is printed, and the process exits
- * 1. `--timeout` ends only the wait: the host's action runs on.
+ * 1. `--timeout` bounds the wait for each host's reply, and ends only the wait: the host's
+ * action runs on.
  */
 export const withClient = <A, R>(
   flags: ClientFlags,
-  waiting: Waiting,
   body: (client: Client.Interface, config: LoadedConfig) => Effect.Effect<A, ClankerboxError, R>,
-): Effect.Effect<A, Exited, R | Services> => {
-  const work = Effect.gen(function* () {
+): Effect.Effect<A, Exited, R | Services> =>
+  Effect.gen(function* () {
     const config = yield* loadConfig(flags.config);
-    const client = yield* Client.make(config.hosts);
+
+    const client = yield* Client.make(config.hosts, {
+      timeout: Option.getOrUndefined(Option.map(flags.timeout, Duration.seconds)),
+    });
 
     return yield* body(client, config);
-  });
-
-  const bounded = Option.match(flags.timeout, {
-    onNone: () => work,
-    onSome: (seconds) =>
-      work.pipe(
-        Effect.timeoutOption(Duration.seconds(seconds)),
-        Effect.flatMap(
-          Option.match({
-            onNone: () => Effect.fail(timedOut(seconds, waiting)),
-            onSome: Effect.succeed,
-          }),
-        ),
-      ),
-  });
-
-  return Effect.catch(bounded, fail(flags.json));
-};
+  }).pipe(Effect.catch(fail(flags.json)));
 
 const print = (json: boolean, document: () => object, text: () => string) =>
   json ? Console.log(JSON.stringify(document())) : Console.log(text());
@@ -125,7 +91,7 @@ const nameArgument = Argument.String("name").pipe(
 );
 
 const hosts = Command.make("hosts", clientFlags, (flags) =>
-  withClient(flags, { access: "read", action: "hosts", read: "" }, (client) =>
+  withClient(flags, (client) =>
     Effect.gen(function* () {
       const { answers, unreachable } = yield* client.hosts;
 
@@ -146,7 +112,7 @@ const hosts = Command.make("hosts", clientFlags, (flags) =>
 ).pipe(Command.withDescription("List every host, with its runtime, versions and bases."));
 
 const machines = Command.make("machines", clientFlags, (flags) =>
-  withClient(flags, { access: "read", action: "machines", read: "" }, (client) =>
+  withClient(flags, (client) =>
     Effect.gen(function* () {
       const { answers, unreachable } = yield* client.machines;
       const now = yield* DateTime.now;
@@ -259,24 +225,17 @@ const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
   });
 
 const create = Command.make("create", createFlags, (flags) =>
-  withClient(
-    flags,
-    {
-      access: "write",
-      action: `create ${flags.target}`,
-      read: isId(flags.target) ? flags.target : "`clankerbox machines`",
-    },
-    (client, config) =>
-      Effect.gen(function* () {
-        const { spec, host } = yield* createRequest(flags, config);
-        const machine = yield* client.create(flags.target, spec, { host });
+  withClient(flags, (client, config) =>
+    Effect.gen(function* () {
+      const { spec, host } = yield* createRequest(flags, config);
+      const machine = yield* client.create(flags.target, spec, { host });
 
-        yield* print(
-          flags.json,
-          () => encodeMachine(machine),
-          () => machine.id,
-        );
-      }),
+      yield* print(
+        flags.json,
+        () => encodeMachine(machine),
+        () => machine.id,
+      );
+    }),
   ),
 ).pipe(
   Command.withDescription(
@@ -291,17 +250,14 @@ const machineAction = (
   call: (client: Client.Interface, id: string) => ReturnType<Client.Interface["start"]>,
 ) =>
   Command.make(name, { ...clientFlags, machine: machineArgument }, (flags) =>
-    withClient(
-      flags,
-      { access: "write", action: `${name} ${flags.machine}`, read: flags.machine },
-      (client) =>
-        Effect.flatMap(call(client, flags.machine), (machine) =>
-          print(
-            flags.json,
-            () => encodeMachine(machine),
-            () => `${machine.id} ${machine.state}`,
-          ),
+    withClient(flags, (client) =>
+      Effect.flatMap(call(client, flags.machine), (machine) =>
+        print(
+          flags.json,
+          () => encodeMachine(machine),
+          () => `${machine.id} ${machine.state}`,
         ),
+      ),
     ),
   ).pipe(Command.withDescription(description));
 
@@ -338,11 +294,7 @@ const deleteMachine = Command.make(
   "delete",
   { ...clientFlags, machine: machineArgument },
   (flags) =>
-    withClient(
-      flags,
-      { access: "write", action: `delete ${flags.machine}`, read: flags.machine },
-      (client) => deleted(flags.json, flags.machine, client.delete(flags.machine)),
-    ),
+    withClient(flags, (client) => deleted(flags.json, flags.machine, client.delete(flags.machine))),
 ).pipe(
   Command.withDescription("Delete a machine. A machine that is already gone counts as deleted."),
 );
@@ -351,21 +303,14 @@ const fork = Command.make(
   "fork",
   { ...clientFlags, machine: machineArgument, name: nameArgument },
   (flags) =>
-    withClient(
-      flags,
-      {
-        access: "write",
-        action: `fork ${flags.machine}`,
-        read: "`clankerbox machines`",
-      },
-      (client) =>
-        Effect.flatMap(client.fork(flags.machine, flags.name), (machine) =>
-          print(
-            flags.json,
-            () => encodeMachine(machine),
-            () => machine.id,
-          ),
+    withClient(flags, (client) =>
+      Effect.flatMap(client.fork(flags.machine, flags.name), (machine) =>
+        print(
+          flags.json,
+          () => encodeMachine(machine),
+          () => machine.id,
         ),
+      ),
     ),
 ).pipe(Command.withDescription("Copy a machine to a new name on its host. Prints the new ID."));
 
@@ -379,21 +324,14 @@ const restore = Command.make(
     name: nameArgument,
   },
   (flags) =>
-    withClient(
-      flags,
-      {
-        access: "write",
-        action: `restore ${flags.checkpoint}`,
-        read: "`clankerbox machines`",
-      },
-      (client) =>
-        Effect.flatMap(client.restore(flags.checkpoint, flags.name), (machine) =>
-          print(
-            flags.json,
-            () => encodeMachine(machine),
-            () => machine.id,
-          ),
+    withClient(flags, (client) =>
+      Effect.flatMap(client.restore(flags.checkpoint, flags.name), (machine) =>
+        print(
+          flags.json,
+          () => encodeMachine(machine),
+          () => machine.id,
         ),
+      ),
     ),
 ).pipe(
   Command.withDescription(
@@ -409,21 +347,14 @@ const capture = Command.make(
   "capture",
   { ...clientFlags, machine: machineArgument, name: nameArgument },
   (flags) =>
-    withClient(
-      flags,
-      {
-        access: "write",
-        action: `capture ${flags.machine}`,
-        read: "`clankerbox checkpoint list`",
-      },
-      (client) =>
-        Effect.flatMap(client.capture(flags.machine, flags.name), (checkpoint) =>
-          print(
-            flags.json,
-            () => encodeCheckpoint(checkpoint),
-            () => checkpoint.id,
-          ),
+    withClient(flags, (client) =>
+      Effect.flatMap(client.capture(flags.machine, flags.name), (checkpoint) =>
+        print(
+          flags.json,
+          () => encodeCheckpoint(checkpoint),
+          () => checkpoint.id,
         ),
+      ),
     ),
 ).pipe(
   Command.withDescription(
@@ -432,7 +363,7 @@ const capture = Command.make(
 );
 
 const listCheckpoints = Command.make("list", clientFlags, (flags) =>
-  withClient(flags, { access: "read", action: "checkpoint list", read: "" }, (client) =>
+  withClient(flags, (client) =>
     Effect.gen(function* () {
       const { answers, unreachable } = yield* client.checkpoints;
       const now = yield* DateTime.now;
@@ -457,20 +388,17 @@ const getCheckpoint = Command.make(
   "get",
   { ...clientFlags, checkpoint: checkpointArgument },
   (flags) =>
-    withClient(
-      flags,
-      { access: "read", action: `checkpoint get ${flags.checkpoint}`, read: "" },
-      (client) =>
-        Effect.gen(function* () {
-          const checkpoint = yield* client.checkpoint(flags.checkpoint);
-          const now = yield* DateTime.now;
+    withClient(flags, (client) =>
+      Effect.gen(function* () {
+        const checkpoint = yield* client.checkpoint(flags.checkpoint);
+        const now = yield* DateTime.now;
 
-          yield* print(
-            flags.json,
-            () => encodeCheckpoint(checkpoint),
-            () => table(checkpointRows([checkpoint], now)),
-          );
-        }),
+        yield* print(
+          flags.json,
+          () => encodeCheckpoint(checkpoint),
+          () => table(checkpointRows([checkpoint], now)),
+        );
+      }),
     ),
 ).pipe(Command.withDescription("Read one checkpoint."));
 
@@ -478,10 +406,8 @@ const deleteCheckpoint = Command.make(
   "delete",
   { ...clientFlags, checkpoint: checkpointArgument },
   (flags) =>
-    withClient(
-      flags,
-      { access: "write", action: `delete ${flags.checkpoint}`, read: flags.checkpoint },
-      (client) => deleted(flags.json, flags.checkpoint, client.deleteCheckpoint(flags.checkpoint)),
+    withClient(flags, (client) =>
+      deleted(flags.json, flags.checkpoint, client.deleteCheckpoint(flags.checkpoint)),
     ),
 ).pipe(
   Command.withDescription(

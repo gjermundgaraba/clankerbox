@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Duration, Effect } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import { Capacity, Client, type MachineSpec } from "../src/index.ts";
 import { type Endpoint, machine, type StubHost, stubHost, transport } from "./stub-host.ts";
@@ -23,12 +23,13 @@ const url = (id: string) => `http://${id}.test`;
 const withClient = <A, E>(
   endpoints: ReadonlyArray<readonly [string, Endpoint]>,
   use: (client: Client.Interface) => Effect.Effect<A, E>,
+  options?: Client.Options,
 ) => {
   const hosts: Array<Client.HostEntry> = endpoints.map(([id]) => ({ id, url: url(id) }));
   const network = new Map(endpoints.map(([id, endpoint]) => [new URL(url(id)).origin, endpoint]));
 
   return Effect.runPromise(
-    Effect.flatMap(Client.make(hosts), use).pipe(Effect.provide(transport(network))),
+    Effect.flatMap(Client.make(hosts, options), use).pipe(Effect.provide(transport(network))),
   );
 };
 
@@ -288,6 +289,69 @@ test("a fork whose reply is lost names the new machine's ID", async () => {
   expect(error.retryable).toBe(false);
   expect(error.message).toContain("read linux_copy");
   expect(linux.calls).toEqual(["machine.fork"]);
+});
+
+const briefly = { timeout: Duration.millis(50) };
+
+test("with a timeout, a fan-out names the host that didn't answer in time and keeps the rest", async () => {
+  const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_dev")] });
+
+  const { answers, unreachable } = await withClient(
+    [
+      ["mac", "silent"],
+      ["linux", linux],
+    ],
+    (client) => client.machines,
+    briefly,
+  );
+
+  expect(answers.map(({ id }) => id)).toEqual(["linux_dev"]);
+  expect(unreachable.map(({ host, error }) => [host, error._tag, error.retryable])).toEqual([
+    ["mac", "Unavailable", true],
+  ]);
+});
+
+test("placement skips a host that didn't answer in time, and the create is still sent", async () => {
+  const linux = host({ id: "linux", bases: ["ubuntu"] });
+
+  const made = await withClient(
+    [
+      ["mac", "silent"],
+      ["linux", linux],
+    ],
+    (client) => client.create("dev", spec),
+    briefly,
+  );
+
+  expect(made.id).toBe("linux_dev");
+  expect(linux.creates).toHaveLength(1);
+});
+
+test("a mutation that outlasts the timeout is Unavailable, still running, and names the ID to read", async () => {
+  const linux = host({ id: "linux", bases: ["ubuntu"], create: () => Effect.never });
+
+  const error = await withClient(
+    [["linux", linux]],
+    (client) => Effect.flip(client.create("dev", spec)),
+    briefly,
+  );
+
+  expect(error._tag).toBe("Unavailable");
+  expect(error.retryable).toBe(false);
+  expect(error.message).toContain("still running");
+  expect(error.message).toContain("read linux_dev");
+  expect(linux.creates).toHaveLength(1);
+});
+
+test("a read that outlasts the timeout is Unavailable and retryable", async () => {
+  const error = await withClient(
+    [["linux", "silent"]],
+    (client) => Effect.flip(client.machine("linux_dev")),
+    briefly,
+  );
+
+  expect(error._tag).toBe("Unavailable");
+  expect(error.retryable).toBe(true);
 });
 
 test("a read that can't reach its host is Unavailable and retryable", async () => {
