@@ -1,0 +1,22 @@
+{
+  "name": "@clankerbox/clankerbox",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vp pack",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "@clankerbox/host": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "@gjermundgaraba/clankerbox-sdk": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
