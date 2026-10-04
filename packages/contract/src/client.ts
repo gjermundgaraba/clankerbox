@@ -22,7 +22,7 @@ import {
   Unavailable,
 } from "./errors.ts";
 import { formatId, HostId, isId, parseId, parseName } from "./ids.ts";
-import { type Checkpoint, type Host, type Machine, MachineSpec } from "./resources.ts";
+import type { Checkpoint, Host, Machine, MachineSpec } from "./resources.ts";
 
 /** One host a client talks to. `id` is the host part of every ID it holds. */
 export const HostEntry = Schema.Struct({ id: HostId, url: Schema.String });
@@ -210,8 +210,6 @@ const withNote = (error: ClankerboxError, note: string): ClankerboxError => {
   );
 };
 
-const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
-
 /**
  * Builds a client over `hosts`, in placement order. Making it sends nothing. A host ID that
  * appears twice is Invalid: IDs route by it.
@@ -364,12 +362,8 @@ export const make = (
         });
       });
 
-    const create = (target: string, input: MachineSpec, options?: CreateOptions) =>
+    const create = (target: string, spec: MachineSpec, options?: CreateOptions) =>
       Effect.gen(function* () {
-        const spec = yield* decodeSpec(input, { onExcessProperty: "error" }).pipe(
-          Effect.mapError((error) => new Invalid({ message: error.message })),
-        );
-
         if (isId(target)) {
           const { host, name } = yield* parseId(target);
 

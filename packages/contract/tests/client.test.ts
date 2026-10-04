@@ -415,18 +415,6 @@ test("a read that can't reach its host is Unavailable and retryable", async () =
   expect(error.retryable).toBe(true);
 });
 
-test("a spec with an undeclared field is Invalid and sends nothing", async () => {
-  const linux = host({ id: "linux", bases: ["ubuntu"] });
-  const loose: MachineSpec = Object.assign({ labels: ["x"] }, spec);
-
-  const error = await withClient([["linux", linux]], (client) =>
-    Effect.flip(client.create("linux_dev", loose)),
-  );
-
-  expect(error._tag).toBe("Invalid");
-  expect(linux.calls).toEqual([]);
-});
-
 test("a create name that isn't a valid name is Invalid", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 
