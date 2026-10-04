@@ -627,7 +627,6 @@ def remove_natives(report):
             sudo(['systemctl', 'stop', UNIT], touched=f'stops {UNIT}')
             wait_unit_gone()
             report['steps'].append(f'unit stopped: {host_exit()}')
-        wait_unit_gone()
 
     attempt(report, 'stop the host unit', stop_unit)
     for m in attempt(report, 'list the inventory', machines) or []:
