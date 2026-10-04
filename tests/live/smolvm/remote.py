@@ -427,20 +427,10 @@ def control(op, rest):
         host_stop()
     elif op == 'stop-host-at':
         name, limit = rest
-        deadline = time.monotonic() + float(limit)
-        while True:
-            caught = [(verb, pid) for verb in ('update', 'start') for pid in host_calls(name, verb)]
-            if caught:
-                break
-            if time.monotonic() > deadline:
-                raise RuntimeError(f'the host made no VM for {name} within {limit}s')
-            time.sleep(0.02)
-        verb, pid = caught[0]
+        verb, pid = hold_host_call(name, float(limit))
+        note(f'held the host\'s machine {verb} of {name} (pid {pid})')
         # Held, so the stop lands while the VM is made but not booted; systemd's SIGTERM comes
         # with a SIGCONT, so the held call then ends like the rest of the host's.
-        must(sudo(['kill', '-STOP', pid], touched=f'holds the host\'s smolvm machine {verb} of {name} (pid {pid})'),
-             'kill -STOP')
-        note(f'held the host\'s machine {verb} of {name}')
         host_stop()
     elif op == 'host-kill':
         pid = host_main_pid()
@@ -513,18 +503,56 @@ def control(op, rest):
     return 0
 
 
-def host_calls(name, verb):
-    """The PIDs of the host's own `smolvm machine VERB` calls for the machine NAME-<8 hex>. Only
-    pgrep's PIDs are read: an exec's arguments can carry the preparation script."""
+def call_pattern(name, verb):
+    """The command line of the host's own `smolvm machine VERB` call for the machine NAME-<8 hex>."""
     if not re.fullmatch(r'[a-z0-9-]+', name):
         raise RuntimeError(f'unexpected machine name {name}')
+    return f'machine {verb} --name {name}-[0-9a-f]{{8}}( |$)'
+
+
+def host_calls(name, verb):
+    """The PIDs of the host's own `smolvm machine VERB` calls for NAME. Only pgrep's PIDs are
+    read: an exec's arguments can carry the preparation script."""
     host = host_main_pid()
     if host is None:
         return []
-    rc, so, se = run(['pgrep', '-P', str(host), '-f', f'machine {verb} --name {name}-[0-9a-f]{{8}}( |$)'])
+    rc, so, se = run(['pgrep', '-P', str(host), '-f', call_pattern(name, verb)])
     if rc not in (0, 1):
         raise RuntimeError(f'pgrep failed rc={rc}: {se.strip()}')
     return so.split()
+
+
+def stopped(pid):
+    """Whether process PID is in the stopped state, not ended and not a zombie."""
+    try:
+        stat = Path(f'/proc/{pid}/stat').read_text()
+    except OSError:
+        return False
+    return stat[stat.rindex(')') + 2] == 'T'
+
+
+def hold_host_call(name, limit):
+    """SIGSTOPs the host's `smolvm machine update` or `start` of NAME, whichever comes first, and
+    returns its verb and PID. The call can end between finding and signalling it, so each attempt
+    finds and signals in one pkill, and only a process left stopped counts."""
+    host = host_main_pid()
+    if host is None:
+        raise RuntimeError('the host is not running')
+    deadline = time.monotonic() + limit
+    attempts = 0
+    while time.monotonic() < deadline:
+        for verb in ('update', 'start'):
+            attempts += 1
+            rc, so, se = sudo(['pkill', '-e', '--signal', 'STOP', '-P', str(host), '-f', call_pattern(name, verb)],
+                              touched=f'SIGSTOPs the host\'s smolvm machine {verb} of {name}, if it runs')
+            if rc not in (0, 1):
+                raise RuntimeError(f'pkill failed rc={rc}: {se.strip()}')
+            held = [pid for pid in re.findall(r'\(pid (\d+)\)', so) if stopped(pid)]
+            if held:
+                note(f'{attempts} pkill attempts')
+                return verb, held[0]
+        time.sleep(0.02)
+    raise RuntimeError(f'the host made no VM for {name} within {limit}s ({attempts} pkill attempts)')
 
 
 def host_stop():
