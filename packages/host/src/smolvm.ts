@@ -11,10 +11,10 @@
  */
 import { join } from "node:path";
 import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, FileSystem, Layer, type PlatformError, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { Effect, FileSystem, Layer, Schema } from "effect";
+import type { ChildProcessSpawner } from "effect/process";
+import { cliIn, expect, failure, files, portOf } from "./cli.ts";
 import type { Smolvm, SmolvmHost } from "./config.ts";
-import { lastLines } from "./guest.ts";
 import { checkRamBudget } from "./ram-budget.ts";
 import {
   type CheckpointRef,
@@ -131,20 +131,6 @@ const alive: ReadonlySet<RecordState> = new Set(["running", "pausing", "unreacha
 export const stateOf = (state: RecordState): MachineState =>
   alive.has(state) ? "running" : "stopped";
 
-/**
- * A spawn failure, without the command line: an exec's arguments carry the preparation
- * script, which nothing logs.
- */
-const describe = (error: PlatformError.PlatformError): string =>
-  `${error.reason._tag}: ${error.reason.method}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`;
-
-/** A finished CLI call. */
-interface Ran {
-  readonly exitCode: number;
-  readonly stdout: string;
-  readonly stderr: string;
-}
-
 export const make = (
   settings: Settings,
   uid: number | undefined,
@@ -154,48 +140,21 @@ export const make = (
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > =>
   Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fs = yield* FileSystem.FileSystem;
     const binary = join(settings.prefix, "smolvm");
-    const env = environment(settings);
     const paths = pathsIn(settings.stateDir);
-
-    const command = (file: string, args: ReadonlyArray<string>, stdin: ChildProcess.CommandInput) =>
-      ChildProcess.make(file, args, { env, extendEnv: false, stdin });
-
-    /** Runs a CLI call to its end; `what` names it in errors. */
-    const run = (file: string, args: ReadonlyArray<string>, what: string) =>
-      Effect.scoped(
-        Effect.flatMap(spawner.spawn(command(file, args, "ignore")), (handle) =>
-          Effect.all(
-            {
-              exitCode: handle.exitCode,
-              stdout: Stream.mkString(Stream.decodeText(handle.stdout)),
-              stderr: Stream.mkString(Stream.decodeText(handle.stderr)),
-            },
-            { concurrency: "unbounded" },
-          ),
-        ),
-      ).pipe(Effect.mapError((error) => new Internal({ message: `${what}: ${describe(error)}` })));
+    const { run, exec } = yield* cliIn(environment(settings));
 
     const smolvm = (args: ReadonlyArray<string>, what: string) =>
       run(binary, args, `smolvm ${what}`);
 
-    const failure = (what: string, ran: Ran) =>
-      new Internal({ message: `${what} exited ${ran.exitCode}: ${lastLines(ran.stderr)}` });
-
-    const succeeded = (what: string) => (ran: Ran) =>
-      ran.exitCode === 0 ? Effect.succeed(ran) : Effect.fail(failure(what, ran));
-
     const call = (args: ReadonlyArray<string>, what: string) =>
-      Effect.flatMap(smolvm(args, what), succeeded(`smolvm ${what}`));
+      Effect.flatMap(smolvm(args, what), (ran) => expect(ran, `smolvm ${what}`));
 
     const systemctl = (args: ReadonlyArray<string>, what: string) =>
-      Effect.flatMap(run("systemctl", args, `systemctl ${what}`), succeeded(`systemctl ${what}`));
-
-    /** A file system call of the runtime's own; `what` names it in errors. */
-    const files = <A>(what: string, effect: Effect.Effect<A, PlatformError.PlatformError>) =>
-      Effect.mapError(effect, (error) => new Internal({ message: `${what}: ${describe(error)}` }));
+      Effect.flatMap(run("systemctl", args, `systemctl ${what}`), (ran) =>
+        expect(ran, `systemctl ${what}`),
+      );
 
     const removeAll = (path: string) =>
       files(`couldn't remove ${path}`, fs.remove(path, { recursive: true, force: true }));
@@ -217,13 +176,7 @@ export const make = (
     for (const template of templates) {
       const file = join(settings.prefix, template);
 
-      const present = yield* fs
-        .exists(file)
-        .pipe(
-          Effect.mapError(
-            (error) => new Internal({ message: `couldn't check ${file}: ${describe(error)}` }),
-          ),
-        );
+      const present = yield* files(`couldn't check ${file}`, fs.exists(file));
 
       if (!present) {
         return yield* new Precondition({
@@ -289,11 +242,6 @@ export const make = (
     /** A checkpoint's directory in the host's store. */
     const checkpointDir = (checkpoint: CheckpointRef) =>
       join(paths.store, `${nativeName(checkpoint)}.checkpoint`);
-
-    const portOf = (machine: MachineRef) =>
-      machine.port === undefined
-        ? Effect.fail(new Internal({ message: `machine ${machine.id} has no host port` }))
-        : Effect.succeed(machine.port);
 
     /**
      * Captures a running machine's RAM and disks into `store`, with no history: smolvm would
@@ -557,29 +505,16 @@ export const make = (
         return Effect.asVoid(call(["machine", "stop", "--name", native], `machine stop ${native}`));
       },
       delete: removeVm,
-      exec: (machine, { argv, stdin }) =>
-        Effect.gen(function* () {
-          const native = nativeName(machine);
-          const what = `smolvm machine exec ${native}`;
+      exec: (machine, { argv, stdin }) => {
+        const native = nativeName(machine);
 
-          const failed = (error: PlatformError.PlatformError) =>
-            new Internal({ message: `${what}: ${describe(error)}` });
-
-          const handle = yield* spawner
-            .spawn(
-              command(
-                binary,
-                ["machine", "exec", "--name", native, "-i", "--", ...argv],
-                stdin === undefined ? "ignore" : Stream.make(stdin),
-              ),
-            )
-            .pipe(Effect.mapError(failed));
-
-          return {
-            output: Stream.mapError(handle.all, failed),
-            exitCode: Effect.mapError(handle.exitCode, failed),
-          };
-        }),
+        return exec(
+          binary,
+          ["machine", "exec", "--name", native, "-i", "--", ...argv],
+          stdin,
+          `smolvm machine exec ${native}`,
+        );
+      },
     } satisfies Interface;
   });
 

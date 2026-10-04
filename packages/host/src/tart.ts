@@ -19,14 +19,13 @@ import {
   FileSystem,
   Layer,
   Option,
-  type PlatformError,
   Predicate,
   Schedule,
   Schema,
   type Scope,
-  Stream,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import type { ChildProcessSpawner } from "effect/process";
+import { cliIn, expect, files, portOf } from "./cli.ts";
 import type { Tart, TartHost } from "./config.ts";
 import * as Forwarder from "./forwarder.ts";
 import { lastLines } from "./guest.ts";
@@ -218,20 +217,6 @@ const printed = (output: string, key: string): string | undefined =>
 /** A boot whose guest agent doesn't answer yet. */
 class Booting extends Data.TaggedError("Booting")<{}> {}
 
-/**
- * A spawn failure, without the command line: an exec's arguments carry the preparation
- * script, which nothing logs.
- */
-const describe = (error: PlatformError.PlatformError): string =>
-  `${error.reason._tag}: ${error.reason.method}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`;
-
-/** A finished CLI call. */
-interface Ran {
-  readonly exitCode: number;
-  readonly stdout: string;
-  readonly stderr: string;
-}
-
 export const make = (
   settings: Settings,
 ): Effect.Effect<
@@ -240,9 +225,9 @@ export const make = (
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Scope.Scope
 > =>
   Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const fs = yield* FileSystem.FileSystem;
     const env = environment(settings);
+    const { command, run, exec } = yield* cliIn(env);
     const jobs = jobsDir(settings.stateDir);
 
     if (settings.uid === undefined) {
@@ -254,31 +239,6 @@ export const make = (
     const vmOf = (machine: MachineRef) => machineName(settings.hostId, machine);
     const checkpointVm = (checkpoint: CheckpointRef) => checkpointName(settings.hostId, checkpoint);
 
-    const command = (file: string, args: ReadonlyArray<string>, stdin: ChildProcess.CommandInput) =>
-      ChildProcess.make(file, args, { env, extendEnv: false, stdin });
-
-    /** Runs a CLI call to its end; `what` names it in errors. */
-    const run = (file: string, args: ReadonlyArray<string>, what: string) =>
-      Effect.scoped(
-        Effect.flatMap(spawner.spawn(command(file, args, "ignore")), (handle) =>
-          Effect.all(
-            {
-              exitCode: handle.exitCode,
-              stdout: Stream.mkString(Stream.decodeText(handle.stdout)),
-              stderr: Stream.mkString(Stream.decodeText(handle.stderr)),
-            },
-            { concurrency: "unbounded" },
-          ),
-        ),
-      ).pipe(Effect.mapError((error) => new Internal({ message: `${what}: ${describe(error)}` })));
-
-    const failure = (what: string, ran: Ran) =>
-      new Internal({ message: `${what} exited ${ran.exitCode}: ${lastLines(ran.stderr)}` });
-
-    /** A call that succeeds with one of the exit codes `ok`. */
-    const expect = (ran: Ran, what: string, ok: ReadonlyArray<number> = [0]) =>
-      ok.includes(ran.exitCode) ? Effect.succeed(ran) : Effect.fail(failure(what, ran));
-
     const tart = (args: ReadonlyArray<string>, what: string) =>
       run(settings.binary, args, `tart ${what}`);
 
@@ -287,10 +247,6 @@ export const make = (
 
     const launchctl = (args: ReadonlyArray<string>, what: string) =>
       run("/bin/launchctl", args, `launchctl ${what}`);
-
-    /** A file system call of the runtime's own; `what` names it in errors. */
-    const files = <A>(what: string, effect: Effect.Effect<A, PlatformError.PlatformError>) =>
-      Effect.mapError(effect, (error) => new Internal({ message: `${what}: ${describe(error)}` }));
 
     const reported = (yield* call(["--version"], "--version")).stdout.trim();
 
@@ -342,20 +298,11 @@ export const make = (
       );
     };
 
-    const portOf = (machine: MachineRef) =>
-      machine.port === undefined
-        ? Effect.fail(new Internal({ message: `machine ${machine.id} has no host port` }))
-        : Effect.succeed(machine.port);
-
     /** Listens for the machine's SSH connections; each one runs `nc` in the guest. */
     const listen = (machine: MachineRef) =>
       Effect.flatMap(portOf(machine), (port) =>
         forwarder.listen(port, (input) =>
-          ChildProcess.make(
-            settings.binary,
-            ["exec", "-i", vmOf(machine), "nc", "127.0.0.1", "22"],
-            { env, extendEnv: false, stdin: input },
-          ),
+          command(settings.binary, ["exec", "-i", vmOf(machine), "nc", "127.0.0.1", "22"], input),
         ),
       );
 
@@ -676,29 +623,16 @@ export const make = (
         Effect.asVoid(
           call(["delete", checkpointVm(checkpoint)], `delete ${checkpointVm(checkpoint)}`, [0, 2]),
         ),
-      exec: (machine, { argv, stdin }) =>
-        Effect.gen(function* () {
-          const vm = vmOf(machine);
-          const what = `tart exec ${vm}`;
+      exec: (machine, { argv, stdin }) => {
+        const vm = vmOf(machine);
 
-          const failed = (error: PlatformError.PlatformError) =>
-            new Internal({ message: `${what}: ${describe(error)}` });
-
-          const handle = yield* spawner
-            .spawn(
-              command(
-                settings.binary,
-                ["exec", "-i", vm, "sudo", "-n", "--", ...argv],
-                stdin === undefined ? "ignore" : Stream.make(stdin),
-              ),
-            )
-            .pipe(Effect.mapError(failed));
-
-          return {
-            output: Stream.mapError(handle.all, failed),
-            exitCode: Effect.mapError(handle.exitCode, failed),
-          };
-        }),
+        return exec(
+          settings.binary,
+          ["exec", "-i", vm, "sudo", "-n", "--", ...argv],
+          stdin,
+          `tart exec ${vm}`,
+        );
+      },
     } satisfies Interface;
   });
 
