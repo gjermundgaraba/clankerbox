@@ -75,9 +75,6 @@ cp /run/sshd.pid /var/lib/clankerbox-live/setup-sshd-pid
 const guestProbe = (address: string, port: string) =>
   `timeout 5 bash -c 'echo >/dev/tcp/${address}/${port}' 2>/dev/null && echo reached || echo refused`;
 
-/** Whether the driver's control showed the host reaching a listener on the peer. */
-const peerReached = process.env["CLANKERBOX_LIVE_PEER"]?.includes(":") === true;
-
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 const timing = (label: string, started: number) => {
@@ -799,9 +796,16 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     minutes(3),
   );
 
-  test.skipIf(!peerReached)(
+  test(
     "a guest can't reach another tailnet peer that its host reaches",
     async () => {
+      // With no port, the driver's control found no listener on the peer that the host reaches,
+      // and a refusal from the guest would show nothing.
+      expect(
+        env.peerPort,
+        `the host reaches no listener on ${env.peer}, so the check can't run`,
+      ).toBeDefined();
+
       const port = env.peerPort ?? "";
 
       expect(await probe(env.peer, port)).toBe("reached");

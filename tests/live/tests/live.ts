@@ -120,7 +120,7 @@ export const Natives = Schema.fromJsonString(
  * - `route ADDRESS`: print the host's `ip route get ADDRESS`.
  *
  * `CLANKERBOX_LIVE_PEER` is another tailnet peer's address, then `:PORT` if the host reaches a
- * listener on that port of the peer.
+ * listener on that port of the peer; without a port, the peer check fails.
  */
 export const environment = async () => {
   const binary = required("CLANKERBOX_BIN");

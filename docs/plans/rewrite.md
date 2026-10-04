@@ -1400,6 +1400,11 @@ Everything the rewrite creates on a test machine is removed when the work ends.
   - a `new-identity` hook running on create, fork and restore and not on
     `start`, and a failing hook failing the action;
   - a guest refused when it calls its own host's API port;
+  - a guest refused when it calls another tailnet peer on a port its host
+    reaches, with the host's own connection as the control. Not yet run: the
+    tailnet policy drops the Linux host's connections to the Mac that ran
+    the phase-4 suite (evidence.md, Phase 4 live), and the check fails until
+    the host reaches some peer;
   - smolvm's RAM budget refusing with `Capacity`, and of two concurrent
     creates that each fit only alone, exactly one passing;
   - RAM fork, `ram` and `disk` checkpoint capture, restore and delete on

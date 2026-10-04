@@ -9,7 +9,8 @@ remote.py, and runs the suite with the darwin one as the CLI.
 OWNED_ROOT is the test host's directory for this work (runs/ and CLEANUP.md live there), and
 PREFIX the smolvm 1.22.2 install the host uses. The driver listens on a free port of the peer
 address, this machine's own tailnet address, for the run's life; if the test host reaches it,
-the suite checks that a guest can't (CLANKERBOX_LIVE_PEER is ADDRESS:PORT, otherwise ADDRESS).
+the suite checks that a guest can't (CLANKERBOX_LIVE_PEER is ADDRESS:PORT), and otherwise that
+check fails (CLANKERBOX_LIVE_PEER is ADDRESS).
 
 Steps run in order, then the ones appended to the local run's `control` file, one per line,
 until `done` or 3 idle hours:
