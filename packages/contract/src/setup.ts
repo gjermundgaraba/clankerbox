@@ -45,8 +45,6 @@ const selfExtracting = (archive: string): string =>
     "",
   ].join("\n");
 
-const concat = (chunks: Iterable<Uint8Array>): Uint8Array => Buffer.concat([...chunks]);
-
 /**
  * Packs a recipe directory into one self-extracting script: a base64 tar that unpacks into a
  * temporary directory, then runs `setup.sh` from there. `COPYFILE_DISABLE=1` and
@@ -83,7 +81,11 @@ export const packRecipe = (
     );
 
     const [archive, errors, code] = yield* Effect.all(
-      [Stream.runCollect(tar.stdout), Stream.mkString(Stream.decodeText(tar.stderr)), tar.exitCode],
+      [
+        Stream.mkUint8Array(tar.stdout),
+        Stream.mkString(Stream.decodeText(tar.stderr)),
+        tar.exitCode,
+      ],
       { concurrency: "unbounded" },
     );
 
@@ -93,7 +95,9 @@ export const packRecipe = (
       });
     }
 
-    return selfExtracting(Buffer.from(concat(archive)).toString("base64"));
+    return selfExtracting(
+      Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength).toString("base64"),
+    );
   }).pipe(
     Effect.scoped,
     Effect.catchTag("PlatformError", (error) =>

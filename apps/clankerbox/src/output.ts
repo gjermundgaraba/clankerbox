@@ -39,7 +39,7 @@ const units: ReadonlyArray<readonly [string, number]> = [
 ];
 
 /** How long ago `createdAt` was, in its largest whole unit: `45s`, `12m`, `5h`, `3d`. */
-export const age = (createdAt: DateTime.Utc, now: DateTime.Utc): string => {
+const age = (createdAt: DateTime.Utc, now: DateTime.Utc): string => {
   const seconds = Math.max(0, Math.floor(Duration.toSeconds(DateTime.distance(createdAt, now))));
 
   for (const [unit, size] of units) {

@@ -82,56 +82,69 @@ export const withClient = <A, R>(
 const print = (json: boolean, document: () => object, text: () => string) =>
   json ? Console.log(JSON.stringify(document())) : Console.log(text());
 
-const machineArgument = Argument.String("machine").pipe(
+export const machineArgument = Argument.String("machine").pipe(
   Argument.withDescription("The machine's ID, <host>_<name>."),
+);
+
+const checkpointArgument = Argument.String("checkpoint").pipe(
+  Argument.withDescription("The checkpoint's ID, <host>_<name>."),
 );
 
 const nameArgument = Argument.String("name").pipe(
   Argument.withDescription("The new resource's name, on the same host."),
 );
 
-const hosts = Command.make("hosts", clientFlags, (flags) =>
-  withClient(flags, (client) =>
-    Effect.gen(function* () {
-      const { answers, unreachable } = yield* client.hosts;
+/**
+ * A list over every host: a table, or with `--json` the answers under `key`. The hosts that
+ * didn't answer go to stderr, or to `unreachable` with `--json`.
+ */
+const listCommand = <A, Encoded>(options: {
+  readonly name: string;
+  readonly description: string;
+  readonly key: string;
+  readonly read: (client: Client.Interface) => Effect.Effect<Client.Gathered<A>>;
+  readonly encode: (answer: A) => Encoded;
+  readonly rows: (answers: ReadonlyArray<A>, now: DateTime.Utc) => Array<Array<string>>;
+}) =>
+  Command.make(options.name, clientFlags, (flags) =>
+    withClient(flags, (client) =>
+      Effect.gen(function* () {
+        const { answers, unreachable } = yield* options.read(client);
+        const now = yield* DateTime.now;
 
-      yield* print(
-        flags.json,
-        () => ({
-          hosts: answers.map((host) => encodeHost(host)),
-          unreachable: unreachableDocument(unreachable),
-        }),
-        () => table(hostRows(answers)),
-      );
+        yield* print(
+          flags.json,
+          () => ({
+            [options.key]: answers.map((answer) => options.encode(answer)),
+            unreachable: unreachableDocument(unreachable),
+          }),
+          () => table(options.rows(answers, now)),
+        );
 
-      if (!flags.json) {
-        yield* warnUnreachable(unreachable);
-      }
-    }),
-  ),
-).pipe(Command.withDescription("List every host, with its runtime, versions and bases."));
+        if (!flags.json) {
+          yield* warnUnreachable(unreachable);
+        }
+      }),
+    ),
+  ).pipe(Command.withDescription(options.description));
 
-const machines = Command.make("machines", clientFlags, (flags) =>
-  withClient(flags, (client) =>
-    Effect.gen(function* () {
-      const { answers, unreachable } = yield* client.machines;
-      const now = yield* DateTime.now;
+const hosts = listCommand({
+  name: "hosts",
+  description: "List every host, with its runtime, versions and bases.",
+  key: "hosts",
+  read: (client) => client.hosts,
+  encode: encodeHost,
+  rows: (answers) => hostRows(answers),
+});
 
-      yield* print(
-        flags.json,
-        () => ({
-          machines: answers.map((machine) => encodeMachine(machine)),
-          unreachable: unreachableDocument(unreachable),
-        }),
-        () => table(machineRows(answers, now)),
-      );
-
-      if (!flags.json) {
-        yield* warnUnreachable(unreachable);
-      }
-    }),
-  ),
-).pipe(Command.withDescription("List every host's machines, with each machine's age."));
+const machines = listCommand({
+  name: "machines",
+  description: "List every host's machines, with each machine's age.",
+  key: "machines",
+  read: (client) => client.machines,
+  encode: encodeMachine,
+  rows: machineRows,
+});
 
 const createFlags = {
   ...clientFlags,
@@ -158,15 +171,7 @@ const createFlags = {
   ),
 };
 
-interface CreateFlags {
-  readonly profile: Option.Option<string>;
-  readonly base: Option.Option<string>;
-  readonly cpu: Option.Option<number>;
-  readonly ramMib: Option.Option<number>;
-  readonly diskGib: Option.Option<number>;
-  readonly setup: Option.Option<string>;
-  readonly setupTimeout: Option.Option<number>;
-}
+type CreateFlags = Command.Command.Config.Infer<typeof createFlags>;
 
 /** The spec and host a create asks for, from a profile file or from the flags. */
 const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
@@ -318,9 +323,7 @@ const restore = Command.make(
   "restore",
   {
     ...clientFlags,
-    checkpoint: Argument.String("checkpoint").pipe(
-      Argument.withDescription("The checkpoint's ID, <host>_<name>."),
-    ),
+    checkpoint: checkpointArgument,
     name: nameArgument,
   },
   (flags) =>
@@ -337,10 +340,6 @@ const restore = Command.make(
   Command.withDescription(
     "Create a machine from a checkpoint, on the checkpoint's host. Prints the new ID.",
   ),
-);
-
-const checkpointArgument = Argument.String("checkpoint").pipe(
-  Argument.withDescription("The checkpoint's ID, <host>_<name>."),
 );
 
 const capture = Command.make(
@@ -362,27 +361,14 @@ const capture = Command.make(
   ),
 );
 
-const listCheckpoints = Command.make("list", clientFlags, (flags) =>
-  withClient(flags, (client) =>
-    Effect.gen(function* () {
-      const { answers, unreachable } = yield* client.checkpoints;
-      const now = yield* DateTime.now;
-
-      yield* print(
-        flags.json,
-        () => ({
-          checkpoints: answers.map((checkpoint) => encodeCheckpoint(checkpoint)),
-          unreachable: unreachableDocument(unreachable),
-        }),
-        () => table(checkpointRows(answers, now)),
-      );
-
-      if (!flags.json) {
-        yield* warnUnreachable(unreachable);
-      }
-    }),
-  ),
-).pipe(Command.withDescription("List every host's checkpoints."));
+const listCheckpoints = listCommand({
+  name: "list",
+  description: "List every host's checkpoints.",
+  key: "checkpoints",
+  read: (client) => client.checkpoints,
+  encode: encodeCheckpoint,
+  rows: checkpointRows,
+});
 
 const getCheckpoint = Command.make(
   "get",

@@ -3,18 +3,18 @@
  * writes a one-line known-hosts file, and runs the system `ssh` against it with strict host
  * key checking. Ports change on fork and restore, and on boat at every start.
  */
-import { type Machine, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import { type Machine, Precondition, type SshEndpoint } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path } from "effect";
 import { Argument, Command } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { clientFlags, withClient } from "./cli.ts";
+import { clientFlags, machineArgument, withClient } from "./cli.ts";
 import { Exited, fail } from "./output.ts";
 
 /**
  * The known-hosts line pinning the machine's host key under its ID: ssh looks the key up by
  * `HostKeyAlias`, so the line doesn't depend on the endpoint, which changes.
  */
-export const knownHostsLine = (id: string, hostKey: string): string => {
+const knownHostsLine = (id: string, hostKey: string): string => {
   const [type = "", key = ""] = hostKey.trim().split(/\s+/u);
 
   return `${id} ${type} ${key}\n`;
@@ -27,9 +27,9 @@ export const knownHostsLine = (id: string, hostKey: string): string => {
  * after the destination, where OpenSSH still reads options (`-l root`, `-L …`) before a
  * remote command.
  */
-export const sshArguments = (
+const sshArguments = (
   id: string,
-  endpoint: NonNullable<Machine["ssh"]>,
+  endpoint: SshEndpoint,
   knownHosts: string,
   extra: ReadonlyArray<string>,
 ): Array<string> => [
@@ -51,7 +51,7 @@ export const sshArguments = (
 
 interface Target {
   readonly id: string;
-  readonly endpoint: NonNullable<Machine["ssh"]>;
+  readonly endpoint: SshEndpoint;
   readonly hostKey: string;
 }
 
@@ -93,9 +93,7 @@ export const ssh = Command.make(
   "ssh",
   {
     ...clientFlags,
-    machine: Argument.String("machine").pipe(
-      Argument.withDescription("The machine's ID, <host>_<name>."),
-    ),
+    machine: machineArgument,
     args: Argument.String("ssh-args").pipe(
       Argument.withDescription("Arguments for ssh, after `--`: options, then a remote command."),
       Argument.variadic(),
