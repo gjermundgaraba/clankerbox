@@ -324,6 +324,11 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
 2026-10-02. Everything else was observed in L:boat, on a trial account with
 `type: small` and `noEnv: true`.
 
+The owner decided (2026-10-04) that boat is built and tested on its trial.
+P14's paid-only checks are dropped, not deferred: `ttlSeconds: null` on
+create, fork, resume and restore, a `large` create, and whether
+`POST /sshkey`'s `hostKey` is the current activation's.
+
 - **Account limits (D:, observed):**
   - The trial allows 2 active sandboxes and 5/25/75 starts per
     minute/hour/day. Paid plans raise these (100 active on the $20 plan). A

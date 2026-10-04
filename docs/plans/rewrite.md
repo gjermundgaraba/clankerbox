@@ -1,8 +1,8 @@
 # TypeScript/Effect rewrite: plan
 
 Status: planned. Every design decision below is closed. The phase-0 spikes have
-run (evidence.md, "Phase 0 spikes"). P14 checks boat's auto-stop once the
-account is past its trial. The evidence behind the
+run (evidence.md, "Phase 0 spikes"). boat is built and tested on its trial.
+The evidence behind the
 decisions is in [evidence.md](evidence.md). Both files are deleted in the last
 commit before the merge.
 
@@ -46,7 +46,7 @@ The Go implementation is deleted from this branch (`4898a3e`). Read it at `main`
 | Profiles | Client-side files, never stored on a host. A machine is created from a base image the host names (a stock image, or boat's own), and the profile's setup script runs once, at create. A profile can also name its host. |
 | Production | personal-cloud runs 0.11.0 with a Linux smolvm host (Hetzner) and a Mac Tart host. garaba-home replaces personal-cloud. At cut-over, every 0.11.0 machine and checkpoint is destroyed, the new release is deployed from garaba-home with a boat host added, and the profiles are rewritten as profile files. |
 | Hosts | A smolvm host always runs as root. smolvm runs only on Linux hosts and Tart only on macOS hosts. A boat host runs unprivileged on either. |
-| Runtimes | smolvm and Tart are host prerequisites that the operator installs. The release ships neither. boat is a cloud service: a boat host needs only a boat API key, on an account past boat's trial. |
+| Runtimes | smolvm and Tart are host prerequisites that the operator installs. The release ships neither. boat is a cloud service: a boat host needs only a boat API key, and works within boat's trial. |
 | MCP | None. |
 | Tooling | vite-plus 1.0.0 (`vp`), pnpm 12, TypeScript 7.0.2, laid out like `/private/tmp/monorepo-example`. The lint setup (typeAware, typeCheck, the anti-slop plugin) mirrors clankerauth's. Live runs use `scripts/work_runs.py`. |
 | Dependency floors | smolvm exactly 1.22.2, upstream and unmodified (see [Runtimes: smolvm](#runtimes-smolvm)), Tart ≥ 2.40.1, tart-guest-agent ≥ 0.15.0, Softnet 0.24.0 (macOS 26 hosts), boat API v1, Node 26.10.0. |
@@ -980,14 +980,16 @@ Two rules for every VM job:
   - The host calls boat's HTTP API v1 directly, with Effect's HTTP client and
     Schemas for the endpoints it uses. It uses no boat SDK or CLI.
   - Host config holds a boat API key.
-  - The account must be past boat's trial. The trial forces auto-stop
-    within 2 hours, allows 2 sandboxes and no `large` type, and a
-    subscription stays on it until its first payment.
+  - The design is for boat's trial, which every check can run on: auto-stop
+    within at most 2 hours, 2 active sandboxes, and no `large` type (a
+    subscription stays on the trial until its first payment). Checks that
+    need a paid plan are dropped, not deferred.
 - **Every create, fork, resume and restore** sends:
   - `noEnv: true`, so no account secrets, GitHub token or model logins reach
     the guest. The guest still gets a boat token confined to itself.
-  - `ttlSeconds: null`, so boat never stops it on a timer. A fork otherwise
-    defaults to one hour.
+  - `ttlSeconds: 7200`, the trial's longest auto-stop; a fork otherwise
+    defaults to one hour. A machine boat stopped reads `stopped`, and `start`
+    resumes it.
 
   Snapshots stay on: stop, resume, fork and checkpoints depend on them.
 - **IDs:** boat assigns sandbox IDs (`bx_…`), kept in the row's `native`
@@ -1050,8 +1052,7 @@ Two rules for every VM job:
   - Before its first SSH to a new activation, the host reads the guest's host
     keys through boat's command API, over HTTPS, and pins them. After
     preparation, the pin is `Machine.hostKey`. `POST /sshkey`'s reply also
-    carries a `hostKey`; P14 checks whether it is the current activation's,
-    which would make the command-API read unnecessary.
+    carries a `hostKey`, which the host doesn't use.
   - boat's command API is not the exec: it takes no stdin and caps a call at
     600 s. An SSH session has neither limit.
   - Each exec opens its own SSH connection, about 0.3 s. There is no shared
@@ -1218,8 +1219,8 @@ tests use real VMs.
    `stop` and `delete` after an interrupted operation. Spike P11. Live tests
    on the Mac. Freeze the `Runtime` interface only after this slice.
 6. **boat.** The runtime, the machine-type choice, its refusals and its
-   bounded retry. `stop` and `delete` after an interrupted operation. Spike
-   P14. Live tests against boat.
+   bounded retry. `stop` and `delete` after an interrupted operation. Built
+   and tested on boat's trial, live tests included.
 7. **Release and live tests.** `tools/release` (SEA, bundle, notices) and the
    full `tests/live`. Then the README design section and the bump skills
    (seeded from evidence.md).
@@ -1227,8 +1228,7 @@ tests use real VMs.
    - Cut-over waits until every API consumer runs on the new SDK, or the
      operator accepts that consumer's downtime.
    - Run the full live acceptance suite on Apple Silicon (Tart), on
-     Linux/amd64 with KVM (smolvm as root), and against boat on an account
-     past its trial.
+     Linux/amd64 with KVM (smolvm as root), and against boat on the trial.
    - Release.
    - Publish the SDK major.
    - Delete these plans in the last commit before the merge.
@@ -1262,8 +1262,7 @@ tests use real VMs.
    - `SMOLVM_RESTORE_TMPFS=0` needs no deploy step: the host sets it on every
      smolvm call (see Guest access).
    - Add a boat host: a second host process on the Linux host, unprivileged,
-     with host ID `boat`, its own state dir, and a boat API key on an account
-     past its trial. Any always-on machine on the tailnet would do; the Linux
+     with host ID `boat`, its own state dir, and a boat API key. Any always-on machine on the tailnet would do; the Linux
      host is already deployed and reachable, so this needs no image or proxy,
      only its port in the hosts' access rule. Nothing backs that machine up, so
      a lost boat database leaves its sandboxes to be found by display name and
@@ -1324,7 +1323,6 @@ call next to the unary ones. smolvm's `--expose-socket` is the other fallback.
 | P12 (phase 3). Concurrent smolvm CLI calls on different machines in one inventory: do any need serializing? | a semaphore around those calls |
 | P9 (phase 4). Restores as root. A store-mode `ram` restore: does it still share RAM read-only and use a copy-on-write disk top, as single-file restores did? Private disk and memory per restored machine with `--restore-cache-entries 0`. Then delete a fork's whole store while its children run. A `disk` restore: `create --from` a pack with `--net` and `-p`, its disk per machine, and the re-mint. | checkpoint and fork cost, fork cleanup (smolvm `disk` checkpoints, since dropped) |
 | P11 (phase 5). Tart's own refusal of a third VM: a fast refusal, or a hang until timeout. | the capacity backstop |
-| P14 (phase 6). boat past its trial (after the subscription's first payment): `ttlSeconds: null` on create, fork, resume and restore, and a `large` create. Whether `POST /sshkey`'s `hostKey` is the current activation's. The rest of P14 ran on the trial (evidence.md). | boat's auto-stop, the host-key read |
 
 ## Test machine footprint and final cleanup
 
