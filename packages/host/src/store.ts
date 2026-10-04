@@ -256,10 +256,12 @@ export interface Interface {
   readonly insertCheckpoint: (
     record: NewCheckpoint,
   ) => Effect.Effect<MachineRecord, NotFound | Conflict | Internal>;
-  /** Claims a checkpoint row, as `claim` does a machine's. */
+  /**
+   * Claims a checkpoint row for its delete, as `claim` does a machine's: delete is the only
+   * action that changes a ready checkpoint.
+   */
   readonly claimCheckpoint: (
     name: string,
-    action: ActionName,
   ) => Effect.Effect<CheckpointRecord, NotFound | Conflict | Internal>;
   readonly recordCheckpoint: (name: string, action: ActionRecord) => Effect.Effect<void, Internal>;
   readonly removeCheckpoint: (name: string) => Effect.Effect<void, Internal>;
@@ -474,36 +476,39 @@ export const open = (
         name,
       );
 
-    /** A row another action holds is busy. */
-    const busy = (kind: string, name: string, action: ActionRecord) =>
-      action.status === "running"
-        ? new Conflict({
-            message: `${kind} ${id(name)} is busy: ${action.name} is running`,
-            kind: "busy",
-          })
-        : undefined;
-
-    /** The claim of a machine row, inside a transaction. */
-    const claimSync = (
+    /**
+     * The claim of a row, inside a transaction: a missing row is NotFound and one another action
+     * holds is busy; otherwise `hold` marks it, and the row comes back as it was.
+     */
+    const claimRow = <R extends { readonly action: ActionRecord }>(
+      kind: "machine" | "checkpoint",
       name: string,
-      action: ActionName,
-    ): Result.Result<MachineRecord, NotFound | Conflict> => {
-      const found = findSync(name);
-
+      found: R | undefined,
+      hold: () => void,
+    ): Result.Result<R, NotFound | Conflict> => {
       if (found === undefined) {
-        return Result.fail(new NotFound({ message: `no machine ${id(name)}` }));
+        return Result.fail(new NotFound({ message: `no ${kind} ${id(name)}` }));
       }
 
-      const held = busy("machine", name, found.action);
-
-      if (held !== undefined) {
-        return Result.fail(held);
+      if (found.action.status === "running") {
+        return Result.fail(
+          new Conflict({
+            message: `${kind} ${id(name)} is busy: ${found.action.name} is running`,
+            kind: "busy",
+          }),
+        );
       }
 
-      writeAction(name, { action: { name: action, status: "running" } });
+      hold();
 
       return Result.succeed(found);
     };
+
+    /** The claim of a machine row, inside a transaction. */
+    const claimSync = (name: string, action: ActionName) =>
+      claimRow("machine", name, findSync(name), () => {
+        writeAction(name, { action: { name: action, status: "running" } });
+      });
 
     /** The insert of a machine row, inside a transaction. */
     const insertSync = (record: NewMachine): Result.Result<void, Conflict> => {
@@ -596,27 +601,11 @@ export const open = (
             Result.map(insertCheckpointSync(record), () => before),
           ),
         ),
-      claimCheckpoint: (name, action) =>
-        transaction(
-          db,
-          `claim checkpoint ${id(name)}`,
-          (): Result.Result<CheckpointRecord, NotFound | Conflict> => {
-            const found = findCheckpointSync(name);
-
-            if (found === undefined) {
-              return Result.fail(new NotFound({ message: `no checkpoint ${id(name)}` }));
-            }
-
-            const held = busy("checkpoint", name, found.action);
-
-            if (held !== undefined) {
-              return Result.fail(held);
-            }
-
-            writeCheckpointAction(name, { name: action, status: "running" });
-
-            return Result.succeed(found);
-          },
+      claimCheckpoint: (name) =>
+        transaction(db, `claim checkpoint ${id(name)}`, () =>
+          claimRow("checkpoint", name, findCheckpointSync(name), () => {
+            writeCheckpointAction(name, { name: "delete", status: "running" });
+          }),
         ),
       recordCheckpoint: (name, action) =>
         sql(`record ${action.name} on checkpoint ${id(name)}`, () => {

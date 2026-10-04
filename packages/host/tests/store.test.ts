@@ -376,8 +376,8 @@ test("a claimed checkpoint is busy; a missing one is NotFound; startup fails its
       yield* store.record("dev", { action: { name: "create", status: "done" } });
       yield* store.insertCheckpoint(checkpoint("snap"));
 
-      const busy = yield* Effect.flip(store.claimCheckpoint("snap", "delete"));
-      const missing = yield* Effect.flip(store.claimCheckpoint("gone", "delete"));
+      const busy = yield* Effect.flip(store.claimCheckpoint("snap"));
+      const missing = yield* Effect.flip(store.claimCheckpoint("gone"));
 
       yield* store.failInterrupted;
 

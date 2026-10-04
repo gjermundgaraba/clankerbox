@@ -161,7 +161,7 @@ export const make = (
         const name = yield* nameOf(id);
 
         const [claimed] = yield* claimAndCheck(
-          Effect.map(store.claimCheckpoint(name, "delete"), (before): Claim<CheckpointRecord> => ({
+          Effect.map(store.claimCheckpoint(name), (before): Claim<CheckpointRecord> => ({
             action: "delete",
             record: { ...before, action: { name: "delete", status: "running" } },
             release: store.recordCheckpoint(name, before.action),
