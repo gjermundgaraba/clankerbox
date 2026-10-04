@@ -102,8 +102,7 @@ export const CrashWatch = Schema.fromJsonString(
  *   (or of a native name), through the runtime, printing its output;
  * - `decoy NAME`: make and boot a native machine `NAME-<8 hex>` the host didn't make, and
  *   print its native name; `remove-native NATIVE` removes it;
- * - `freeze NAME`: freeze the guest's storage filesystem, so smolvm's stop can't quiesce it;
- * - `scope NATIVE`: print systemd's view of the machine's scope.
+ * - `freeze NAME`: freeze the guest's storage filesystem, so smolvm's stop can't quiesce it.
  */
 export const environment = async () => {
   const binary = required("CLANKERBOX_BIN");
