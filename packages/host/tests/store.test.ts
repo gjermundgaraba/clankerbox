@@ -3,16 +3,19 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Conflict } from "@gjermundgaraba/clankerbox-sdk";
+import { Conflict, NotFound } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Option } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import {
   applicationId,
   databaseFile,
+  type Interface,
+  migrations,
   type NewCheckpoint,
   type NewMachine,
-  migrations,
   open,
+  type RowRef,
+  type Rows,
 } from "../src/store.ts";
 import { removeScratch, scratch } from "./scratch.ts";
 
@@ -50,7 +53,6 @@ const record = (name: string, fields?: Partial<NewMachine>): NewMachine => ({
   diskGib: 10,
   port: undefined,
   hostKey: undefined,
-  action: "create",
   ...fields,
 });
 
@@ -71,6 +73,21 @@ const checkpoint = (name: string, fields?: Partial<NewCheckpoint>): NewCheckpoin
   ...fields,
 });
 
+const machine = (name: string): RowRef => ({ table: "machines", name });
+
+const inserting = (made: NewMachine): Rows => ({ insert: { table: "machines", record: made } });
+
+const capturing = (made: NewCheckpoint): Rows => ({
+  hold: [machine(made.machine)],
+  insert: { table: "checkpoints", record: made },
+});
+
+/** Inserts a machine row whose create is done. */
+const planted = (store: Interface, made: NewMachine) =>
+  Effect.flatMap(store.claim("create", inserting(made)), (token) =>
+    store.end(token, { action: { name: "create", status: "done" } }),
+  );
+
 test("init makes the state dir and a database at the binary's schema version", async () => {
   const stateDir = join(await scratch(owned), "state");
 
@@ -87,7 +104,7 @@ test("rows round-trip, and a reopened database keeps them", async () => {
   const stateDir = join(await scratch(owned), "state");
   const made = record("dev", { profile: "small", port: 10_000, hostKey: "ssh-ed25519 AAAA" });
 
-  await withStore(stateDir, (store) => store.insert(made));
+  await withStore(stateDir, (store) => store.claim("create", inserting(made)));
 
   const found = await withStore(stateDir, (store) => store.find("dev"));
 
@@ -190,11 +207,11 @@ test("a taken name is Conflict{exists}, and the unique index refuses a taken por
 
   const [name, port, names] = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
-      yield* store.insert(record("dev", { port: 10_000 }));
+      yield* store.claim("create", inserting(record("dev", { port: 10_000 })));
 
       return [
-        yield* Effect.flip(store.insert(record("dev", { port: 10_001 }))),
-        yield* Effect.flip(store.insert(record("other", { port: 10_000 }))),
+        yield* Effect.flip(store.claim("create", inserting(record("dev", { port: 10_001 })))),
+        yield* Effect.flip(store.claim("create", inserting(record("other", { port: 10_000 })))),
         (yield* store.list).map((row) => row.name),
       ] as const;
     }),
@@ -202,7 +219,7 @@ test("a taken name is Conflict{exists}, and the unique index refuses a taken por
 
   expect(name).toEqual(new Conflict({ message: "machine linux_dev exists", kind: "exists" }));
   expect(port._tag).toBe("Internal");
-  expect(port.message).toContain("insert linux_other");
+  expect(port.message).toContain("claim linux_other for create");
   expect(names).toEqual(["dev"]);
 });
 
@@ -211,28 +228,120 @@ test("a claimed row is busy until its action ends; a missing row is NotFound", a
 
   const [busy, missing, claimed] = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
-      yield* store.insert(record("dev"));
+      const created = yield* store.claim("create", inserting(record("dev")));
 
-      const busy = yield* Effect.flip(store.claim("dev", "start"));
-      const missing = yield* Effect.flip(store.claim("gone", "start"));
+      const busy = yield* Effect.flip(store.claim("start", { hold: [machine("dev")] }));
+      const missing = yield* Effect.flip(store.claim("start", { hold: [machine("gone")] }));
 
-      yield* store.record("dev", { action: { name: "create", status: "done" } });
+      yield* store.end(created, { action: { name: "create", status: "done" } });
 
-      const before = yield* store.claim("dev", "stop");
+      const stopping = yield* store.claim("stop", { hold: [machine("dev")] });
       const after = yield* store.find("dev");
 
-      return [busy, missing, [before.action, Option.getOrUndefined(after)?.action]] as const;
+      return [busy, missing, [stopping.held, Option.getOrUndefined(after)?.action]] as const;
     }),
   );
 
   expect(busy).toEqual(
     new Conflict({ message: "machine linux_dev is busy: create is running", kind: "busy" }),
   );
-  expect(missing._tag).toBe("NotFound");
+  expect(missing).toEqual(new NotFound({ message: "no machine linux_gone" }));
   expect(claimed).toEqual([
-    { name: "create", status: "done" },
+    [{ table: "machines", name: "dev", before: { name: "create", status: "done" } }],
     { name: "stop", status: "running" },
   ]);
+});
+
+test("a release removes the rows its claim inserted and puts back what it replaced, at once", async () => {
+  const stateDir = join(await scratch(owned), "state");
+
+  const rows = await withStore(stateDir, (store) =>
+    Effect.gen(function* () {
+      yield* planted(store, record("dev"));
+
+      const token = yield* store.claim("fork", {
+        hold: [machine("dev")],
+        ...inserting(record("copy", { port: 10_001 })),
+      });
+
+      yield* store.release(token);
+
+      return (yield* store.list).map(({ name, action }) => [name, action]);
+    }),
+  );
+
+  expect(rows).toEqual([["dev", { name: "create", status: "done" }]]);
+});
+
+test("an end records the outcome on every claimed row, and the host key on its subject only", async () => {
+  const stateDir = join(await scratch(owned), "state");
+
+  const rows = await withStore(stateDir, (store) =>
+    Effect.gen(function* () {
+      yield* planted(store, record("dev"));
+
+      const fork = yield* store.claim("fork", {
+        hold: [machine("dev")],
+        ...inserting(record("copy", { port: 10_001 })),
+      });
+
+      yield* store.end(fork, { action: { name: "fork", status: "done" }, hostKey: "copy key" });
+
+      const start = yield* store.claim("start", { hold: [machine("dev")] });
+
+      yield* store.end(start, {
+        action: { name: "start", status: "failed", error: { tag: "Internal", message: "no" } },
+      });
+
+      return (yield* store.list).map(({ name, action, hostKey }) => [name, action, hostKey]);
+    }),
+  );
+
+  expect(rows).toEqual([
+    ["copy", { name: "fork", status: "done" }, "copy key"],
+    [
+      "dev",
+      { name: "start", status: "failed", error: { tag: "Internal", message: "no" } },
+      undefined,
+    ],
+  ]);
+});
+
+test("a claim joining another covers both rows, and a joining claim that fails writes nothing", async () => {
+  const stateDir = join(await scratch(owned), "state");
+
+  const [taken, held, released] = await withStore(stateDir, (store) =>
+    Effect.gen(function* () {
+      yield* planted(store, record("dev"));
+      yield* planted(store, record("other", { port: 10_001 }));
+
+      const source = yield* store.claim("capture", { hold: [machine("dev")] });
+
+      const taken = yield* Effect.flip(
+        store.claim("capture", inserting(record("other", { port: 10_002 })), source),
+      );
+
+      const held = Option.getOrUndefined(yield* store.find("dev"))?.action;
+
+      const joined = yield* store.claim(
+        "capture",
+        { insert: { table: "checkpoints", record: checkpoint("snap") } },
+        source,
+      );
+
+      yield* store.release(joined);
+
+      return [
+        taken,
+        held,
+        [Option.getOrUndefined(yield* store.find("dev"))?.action, yield* store.checkpoints],
+      ] as const;
+    }),
+  );
+
+  expect(taken).toEqual(new Conflict({ message: "machine linux_other exists", kind: "exists" }));
+  expect(held).toEqual({ name: "capture", status: "running" });
+  expect(released).toEqual([{ name: "create", status: "done" }, []]);
 });
 
 test("startup marks every running action failed: the host restarted during it", async () => {
@@ -240,9 +349,8 @@ test("startup marks every running action failed: the host restarted during it", 
 
   const actions = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
-      yield* store.insert(record("a"));
-      yield* store.insert(record("b"));
-      yield* store.record("b", { action: { name: "create", status: "done" } });
+      yield* store.claim("create", inserting(record("a")));
+      yield* planted(store, record("b", { port: 10_001 }));
       yield* store.failInterrupted;
 
       return (yield* store.list).map(({ name, action }) => [name, action]);
@@ -290,20 +398,23 @@ test("checkpoint rows round-trip, and a capture claims its source in the same tr
   const stateDir = join(await scratch(owned), "state");
   const made = checkpoint("snap", { profile: "small" });
 
-  const [before, source, busy, found] = await withStore(stateDir, (store) =>
+  const [token, source, busy, found] = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
-      yield* store.insert(record("dev"));
-      yield* store.record("dev", { action: { name: "create", status: "done" } });
+      yield* planted(store, record("dev"));
 
-      const before = yield* store.insertCheckpoint(made);
+      const token = yield* store.claim("capture", capturing(made));
       const source = yield* store.find("dev");
-      const busy = yield* Effect.flip(store.insertCheckpoint(checkpoint("other")));
+      const busy = yield* Effect.flip(store.claim("capture", capturing(checkpoint("other"))));
 
-      return [before, source, busy, yield* store.findCheckpoint("snap")] as const;
+      return [token, source, busy, yield* store.findCheckpoint("snap")] as const;
     }),
   );
 
-  expect(before.action).toEqual({ name: "create", status: "done" });
+  expect(token).toEqual({
+    action: "capture",
+    inserted: [{ table: "checkpoints", name: "snap" }],
+    held: [{ table: "machines", name: "dev", before: { name: "create", status: "done" } }],
+  });
   expect(Option.getOrUndefined(source)?.action).toEqual({ name: "capture", status: "running" });
   expect(busy).toEqual(
     new Conflict({ message: "machine linux_dev is busy: capture is running", kind: "busy" }),
@@ -319,16 +430,18 @@ test("a taken new name rolls back the source's claim with it", async () => {
 
   const [fork, capture, source] = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
-      yield* store.insert(record("dev"));
-      yield* store.record("dev", { action: { name: "create", status: "done" } });
-      yield* store.insert(record("copy", { port: 10_001 }));
-      yield* store.insertCheckpoint(checkpoint("snap"));
-      yield* store.recordCheckpoint("snap", { name: "capture", status: "done" });
-      yield* store.record("dev", { action: { name: "capture", status: "done" } });
+      yield* planted(store, record("dev"));
+      yield* planted(store, record("copy", { port: 10_001 }));
+
+      const captured = yield* store.claim("capture", capturing(checkpoint("snap")));
+
+      yield* store.end(captured, { action: { name: "capture", status: "done" } });
 
       return [
-        yield* Effect.flip(store.insertFrom(record("copy", { action: "fork" }), "dev")),
-        yield* Effect.flip(store.insertCheckpoint(checkpoint("snap"))),
+        yield* Effect.flip(
+          store.claim("fork", { hold: [machine("dev")], ...inserting(record("copy")) }),
+        ),
+        yield* Effect.flip(store.claim("capture", capturing(checkpoint("snap")))),
         yield* store.find("dev"),
       ] as const;
     }),
@@ -343,24 +456,20 @@ test("a taken new name rolls back the source's claim with it", async () => {
 
 test("a fork inserts its row and claims its source; a missing source is NotFound", async () => {
   const stateDir = join(await scratch(owned), "state");
+  const forking: Rows = { hold: [machine("dev")], ...inserting(record("copy", { port: 10_001 })) };
 
-  const [missing, before, rows] = await withStore(stateDir, (store) =>
+  const [missing, rows] = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
-      const missing = yield* Effect.flip(
-        store.insertFrom(record("copy", { action: "fork" }), "dev"),
-      );
+      const missing = yield* Effect.flip(store.claim("fork", forking));
 
-      yield* store.insert(record("dev"));
-      yield* store.record("dev", { action: { name: "create", status: "done" } });
+      yield* planted(store, record("dev"));
+      yield* store.claim("fork", forking);
 
-      const before = yield* store.insertFrom(record("copy", { action: "fork" }), "dev");
-
-      return [missing, before, (yield* store.list).map(({ name, action }) => [name, action])];
+      return [missing, (yield* store.list).map(({ name, action }) => [name, action])];
     }),
   );
 
-  expect(missing._tag).toBe("NotFound");
-  expect(before.action).toEqual({ name: "create", status: "done" });
+  expect(missing).toEqual(new NotFound({ message: "no machine linux_dev" }));
   expect(rows).toEqual([
     ["copy", { name: "fork", status: "running" }],
     ["dev", { name: "fork", status: "running" }],
@@ -369,15 +478,15 @@ test("a fork inserts its row and claims its source; a missing source is NotFound
 
 test("a claimed checkpoint is busy; a missing one is NotFound; startup fails its interrupted capture", async () => {
   const stateDir = join(await scratch(owned), "state");
+  const snap = (name: string): Rows => ({ hold: [{ table: "checkpoints", name }] });
 
   const [busy, missing, actions] = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
-      yield* store.insert(record("dev"));
-      yield* store.record("dev", { action: { name: "create", status: "done" } });
-      yield* store.insertCheckpoint(checkpoint("snap"));
+      yield* planted(store, record("dev"));
+      yield* store.claim("capture", capturing(checkpoint("snap")));
 
-      const busy = yield* Effect.flip(store.claimCheckpoint("snap"));
-      const missing = yield* Effect.flip(store.claimCheckpoint("gone"));
+      const busy = yield* Effect.flip(store.claim("delete", snap("snap")));
+      const missing = yield* Effect.flip(store.claim("delete", snap("gone")));
 
       yield* store.failInterrupted;
 
@@ -388,7 +497,7 @@ test("a claimed checkpoint is busy; a missing one is NotFound; startup fails its
   expect(busy).toEqual(
     new Conflict({ message: "checkpoint linux_snap is busy: capture is running", kind: "busy" }),
   );
-  expect(missing._tag).toBe("NotFound");
+  expect(missing).toEqual(new NotFound({ message: "no checkpoint linux_gone" }));
   expect(actions).toEqual([
     {
       name: "capture",

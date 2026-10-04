@@ -5,7 +5,6 @@
  */
 import {
   type ActionName,
-  type ActionRecord,
   type CreateRequest,
   formatId,
   type HostError,
@@ -13,22 +12,13 @@ import {
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Layer, type Scope, Semaphore } from "effect";
-import {
-  type Claim,
-  checkpointRef,
-  claimAndCheck,
-  detacher,
-  done,
-  machineRef,
-  native,
-  rowsOn,
-} from "./actions.ts";
+import { checkpointRef, claimsOn, detacher, machineRef, rowsOn } from "./actions.ts";
 import type { HostConfig } from "./config.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
 import { observeConcurrency, type Refusal, Runtime } from "./runtime.ts";
-import { type MachineRecord, type NewMachine, Store } from "./store.ts";
+import { type MachineRecord, type NewMachine, type Rows, Store, type Token } from "./store.ts";
 
 export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Machine>, HostError>;
@@ -52,19 +42,6 @@ interface Spec extends Pick<MachineRecord, "base" | "cpu" | "ramMib" | "diskGib"
   readonly profile?: string | undefined;
 }
 
-/** A row an action has claimed, with the action its claim replaced. */
-interface ClaimedRow extends MachineRecord {
-  readonly replaced: ActionRecord;
-}
-
-/** What a fork holds: the new machine and its source. */
-interface Forking {
-  readonly machine: MachineRecord;
-  readonly source: MachineRecord;
-}
-
-const holding = (action: ActionName) => ({ name: action, status: "running" }) as const;
-
 /**
  * Builds the actions. Before it returns, every action the last host process left running is
  * marked failed and the runtime runs its own startup cleanup, so nothing is served before.
@@ -84,7 +61,8 @@ export const make = (
     const idOf = idOn(config.id);
     const nameOf = nameOn(config.id);
     const rows = rowsOn(store, config.id);
-    const ref = (record: MachineRecord) => machineRef(config.id, record);
+    const { claimAndCheck, native, done } = claimsOn(store);
+    const ref = (record: NewMachine) => machineRef(config.id, record);
 
     /** Runs native work that may need the runtime, such as preparation. */
     const withRuntime = <A>(work: Effect.Effect<A, HostError | Refusal, Runtime>) =>
@@ -123,7 +101,7 @@ export const make = (
     const read = (name: string) => Effect.flatMap(rows.machine(name), resource);
 
     /** A new row, with the lowest port that no row holds and nothing listens on. */
-    const newRow = (name: string, action: ActionName, spec: Spec) =>
+    const newRow = (name: string, spec: Spec) =>
       Effect.gen(function* () {
         const address = runtime.publishAddress;
 
@@ -139,49 +117,14 @@ export const make = (
           diskGib: spec.diskGib,
           port: address === undefined ? undefined : yield* pickPort(address, yield* store.ports),
           hostKey: undefined,
-          action,
         };
 
         return row;
       });
 
-    const claimNew = (row: NewMachine): Effect.Effect<Claim<MachineRecord>, HostError> =>
-      Effect.as(store.insert(row), {
-        action: row.action,
-        record: { ...row, action: holding(row.action) },
-        release: store.remove(row.name),
-        end: (action, hostKey) => store.record(row.name, { action, hostKey }),
-      });
+    const inserting = (row: NewMachine): Rows => ({ insert: { table: "machines", record: row } });
 
-    const claimExisting = (
-      name: string,
-      action: ActionName,
-    ): Effect.Effect<Claim<ClaimedRow>, HostError> =>
-      Effect.map(store.claim(name, action), (before) => ({
-        action,
-        record: { ...before, action: holding(action), replaced: before.action },
-        release: store.record(name, { action: before.action }),
-        end: (outcome, hostKey) => store.record(name, { action: outcome, hostKey }),
-      }));
-
-    /** Inserts the fork's row and claims its source; both end with the fork's outcome. */
-    const claimFork = (row: NewMachine, source: string): Effect.Effect<Claim<Forking>, HostError> =>
-      Effect.map(store.insertFrom(row, source), (before) => ({
-        action: row.action,
-        record: {
-          machine: { ...row, action: holding(row.action) },
-          source: { ...before, action: holding(row.action) },
-        },
-        release: Effect.andThen(
-          store.remove(row.name),
-          store.record(source, { action: before.action }),
-        ),
-        end: (outcome, hostKey) =>
-          Effect.andThen(
-            store.record(row.name, { action: outcome, hostKey }),
-            store.record(source, { action: outcome }),
-          ),
-      }));
+    const holding = (name: string): Rows => ({ hold: [{ table: "machines", name }] });
 
     /**
      * Steps 2 and 3 for an action that boots a machine or allocates a port, one at a time. The
@@ -189,17 +132,14 @@ export const make = (
      * once would each count the other, and both could be refused although one fits. One at a
      * time, exactly one of two that fit only alone passes, and no two pick the same port.
      */
-    const claimAndAdmit = <R, B>(
-      claim: Effect.Effect<Claim<R>, HostError>,
-      check: (record: R) => Effect.Effect<B, HostError>,
-    ) => admission.withPermits(1)(claimAndCheck(claim, check));
+    const admitted = admission.withPermits(1);
 
     /** Step 3 for an action that boots a machine: the runtime's own checks, over every row. */
-    const admit = (action: ActionName, record: MachineRecord, source?: MachineRecord) =>
+    const admit = (action: ActionName, machine: NewMachine, source?: MachineRecord) =>
       Effect.flatMap(store.list, (records) =>
         runtime.admit({
           action,
-          machine: ref(record),
+          machine: ref(machine),
           machines: records.map((held) => ({
             machine: ref(held),
             holder: held.action.status === "running" ? held.action.name : undefined,
@@ -213,15 +153,18 @@ export const make = (
      * the first boot, so one that failed between may sit on another machine's port, and a boot
      * would publish it there. Such a machine is only stopped or deleted.
      */
-    const bootable = (record: ClaimedRow) =>
-      record.replaced.status === "failed" &&
-      (record.replaced.name === "fork" || record.replaced.name === "restore")
+    const bootable = (token: Token) => {
+      const replaced = token.held[0]?.before;
+
+      return replaced?.status === "failed" &&
+        (replaced.name === "fork" || replaced.name === "restore")
         ? Effect.fail(
             new Precondition({
-              message: `machine ${idOf(record.name)}'s ${record.replaced.name} failed, which can leave it on another machine's port, so it doesn't start; delete it`,
+              message: `machine ${idOf(token.held[0]?.name ?? "")}'s ${replaced.name} failed, which can leave it on another machine's port, so it doesn't start; delete it`,
             }),
           )
         : Effect.void;
+    };
 
     const create = (request: CreateRequest) =>
       Effect.gen(function* () {
@@ -234,15 +177,16 @@ export const make = (
           });
         }
 
-        const [claimed] = yield* claimAndAdmit(
-          Effect.flatMap(newRow(name, "create", request), claimNew),
-          (record) => admit("create", record),
+        const [token, row] = yield* admitted(
+          Effect.flatMap(newRow(name, request), (row) =>
+            claimAndCheck("create", inserting(row), () => Effect.as(admit("create", row), row)),
+          ),
         );
 
-        const machine = ref(claimed.record);
+        const machine = ref(row);
 
         const hostKey = yield* native(
-          claimed,
+          token,
           `create ${machine.id}`,
           withRuntime(
             Effect.gen(function* () {
@@ -257,7 +201,7 @@ export const make = (
           ),
         );
 
-        yield* done(claimed, hostKey);
+        yield* done(token, hostKey);
 
         return yield* read(name);
       });
@@ -266,33 +210,39 @@ export const make = (
       Effect.gen(function* () {
         const name = yield* nameOf(id);
 
-        const [claimed, running] = yield* claimAndAdmit(claimExisting(name, "start"), (record) =>
-          Effect.flatMap(runtime.observe(ref(record)), ({ state }) => {
-            if (state === "missing") {
-              return Effect.fail(
-                new Precondition({
-                  message: `machine ${id} is missing from the ${runtime.name} runtime; delete it`,
-                }),
-              );
-            }
+        const [token, { record, running }] = yield* admitted(
+          claimAndCheck("start", holding(name), (_join, claimed) =>
+            Effect.gen(function* () {
+              const record = yield* rows.machine(name);
+              const { state } = yield* runtime.observe(ref(record));
 
-            return state === "running"
-              ? Effect.succeed(true)
-              : Effect.as(Effect.andThen(bootable(record), admit("start", record)), false);
-          }),
+              if (state === "missing") {
+                return yield* new Precondition({
+                  message: `machine ${id} is missing from the ${runtime.name} runtime; delete it`,
+                });
+              }
+
+              if (state !== "running") {
+                yield* bootable(claimed);
+                yield* admit("start", record);
+              }
+
+              return { record, running: state === "running" };
+            }),
+          ),
         );
 
-        const machine = ref(claimed.record);
+        const machine = ref(record);
 
         const hostKey = yield* native(
-          claimed,
+          token,
           `start ${id}`,
           withRuntime(
             Effect.andThen(running ? Effect.void : runtime.start(machine), prepare(machine)),
           ),
         );
 
-        yield* done(claimed, hostKey);
+        yield* done(token, hostKey);
 
         return yield* read(name);
       });
@@ -301,15 +251,17 @@ export const make = (
       Effect.gen(function* () {
         const name = yield* nameOf(id);
 
-        const [claimed, { state }] = yield* claimAndCheck(claimExisting(name, "stop"), (record) =>
-          runtime.observe(ref(record)),
+        const [token, { record, state }] = yield* claimAndCheck("stop", holding(name), () =>
+          Effect.flatMap(rows.machine(name), (record) =>
+            Effect.map(runtime.observe(ref(record)), ({ state }) => ({ record, state })),
+          ),
         );
 
         if (state === "running") {
-          yield* native(claimed, `stop ${id}`, runtime.stop(ref(claimed.record)));
-          yield* done(claimed);
+          yield* native(token, `stop ${id}`, runtime.stop(ref(record)));
+          yield* done(token);
         } else {
-          yield* claimed.release;
+          yield* store.release(token);
         }
 
         return yield* read(name);
@@ -318,10 +270,13 @@ export const make = (
     const remove = (id: string) =>
       Effect.gen(function* () {
         const name = yield* nameOf(id);
-        const [claimed] = yield* claimAndCheck(claimExisting(name, "delete"), () => Effect.void);
 
-        yield* native(claimed, `delete ${id}`, runtime.delete(ref(claimed.record)));
-        yield* store.remove(name);
+        const [token, record] = yield* claimAndCheck("delete", holding(name), () =>
+          rows.machine(name),
+        );
+
+        yield* native(token, `delete ${id}`, runtime.delete(ref(record)));
+        yield* store.remove({ table: "machines", name });
       });
 
     const fork = (sourceId: string, name: string) =>
@@ -331,22 +286,28 @@ export const make = (
         // A row's spec never changes, so the new row can copy it before the claim.
         const spec = yield* rows.machine(sourceName);
 
-        const [claimed] = yield* claimAndAdmit(
-          Effect.flatMap(newRow(name, "fork", spec), (row) => claimFork(row, sourceName)),
-          ({ machine, source }) => admit("fork", machine, source),
-        );
-
-        const machine = ref(claimed.record.machine);
-
-        const hostKey = yield* native(
-          claimed,
-          `fork ${id}`,
-          withRuntime(
-            Effect.andThen(runtime.fork(ref(claimed.record.source), machine), prepare(machine)),
+        const [token, { row, source }] = yield* admitted(
+          Effect.flatMap(newRow(name, spec), (row) =>
+            claimAndCheck(
+              "fork",
+              { hold: [{ table: "machines", name: sourceName }], insert: inserting(row).insert },
+              () =>
+                Effect.flatMap(rows.machine(sourceName), (source) =>
+                  Effect.as(admit("fork", row, source), { row, source }),
+                ),
+            ),
           ),
         );
 
-        yield* done(claimed, hostKey);
+        const machine = ref(row);
+
+        const hostKey = yield* native(
+          token,
+          `fork ${id}`,
+          withRuntime(Effect.andThen(runtime.fork(ref(source), machine), prepare(machine))),
+        );
+
+        yield* done(token, hostKey);
 
         return yield* read(name);
       });
@@ -380,15 +341,16 @@ export const make = (
         const id = yield* formatId(config.id, name);
         const checkpoint = yield* ready(checkpointId);
 
-        const [claimed] = yield* claimAndAdmit(
-          Effect.flatMap(newRow(name, "restore", checkpoint), claimNew),
-          (record) => admit("restore", record),
+        const [token, row] = yield* admitted(
+          Effect.flatMap(newRow(name, checkpoint), (row) =>
+            claimAndCheck("restore", inserting(row), () => Effect.as(admit("restore", row), row)),
+          ),
         );
 
-        const machine = ref(claimed.record);
+        const machine = ref(row);
 
         const hostKey = yield* native(
-          claimed,
+          token,
           `restore ${id}`,
           withRuntime(
             Effect.andThen(
@@ -398,7 +360,7 @@ export const make = (
           ),
         );
 
-        yield* done(claimed, hostKey);
+        yield* done(token, hostKey);
 
         return yield* read(name);
       });

@@ -2,7 +2,7 @@
  * What every action shares. Every mutation runs in this order:
  *
  * 1. Validate the input.
- * 2. Claim the rows in one transaction, inserting the new row.
+ * 2. Claim the rows, inserting the new row.
  * 3. Check runtime state, including the runtime's own `admit`.
  * 4. Only then call the runtime.
  *
@@ -13,15 +13,20 @@
  */
 import {
   type ActionName,
-  type ActionRecord,
   type HostError,
   Internal,
   type NotFound,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Fiber, FiberSet, Option } from "effect";
+import { Effect, Fiber, FiberSet, Option, Ref } from "effect";
 import { idOn, type Kind, notFoundOn } from "./ids.ts";
 import { type CheckpointRef, type MachineRef, Refusal } from "./runtime.ts";
-import type { CheckpointRecord, MachineRecord, Interface as StoreInterface } from "./store.ts";
+import type {
+  CheckpointRecord,
+  MachineRecord,
+  Rows,
+  Interface as StoreInterface,
+  Token,
+} from "./store.ts";
 
 /** The rows of host `host`'s store by name; a missing one is NotFound. */
 export const rowsOn = (store: StoreInterface, host: string) => {
@@ -42,7 +47,7 @@ export const rowsOn = (store: StoreInterface, host: string) => {
   };
 };
 
-export const machineRef = (host: string, record: MachineRecord): MachineRef => ({
+export const machineRef = (host: string, record: Omit<MachineRecord, "action">): MachineRef => ({
   id: idOn(host)(record.name),
   name: record.name,
   instance: record.instance,
@@ -53,7 +58,10 @@ export const machineRef = (host: string, record: MachineRecord): MachineRef => (
   port: record.port,
 });
 
-export const checkpointRef = (host: string, record: CheckpointRecord): CheckpointRef => ({
+export const checkpointRef = (
+  host: string,
+  record: Omit<CheckpointRecord, "action">,
+): CheckpointRef => ({
   id: idOn(host)(record.name),
   name: record.name,
   instance: record.instance,
@@ -62,65 +70,89 @@ export const checkpointRef = (host: string, record: CheckpointRecord): Checkpoin
   port: record.port,
 });
 
-/** An action's hold on its rows, and how to give them back or end it. */
-export interface Claim<R> {
-  readonly action: ActionName;
-  /** The row the action works on, as the action holds it. */
-  readonly record: R;
-  /** Removes the row the action inserted, and puts back the action it replaced on any other. */
-  readonly release: Effect.Effect<void, Internal>;
-  /** Records the action's outcome on every row it holds, and the host key it read, if any. */
-  readonly end: (action: ActionRecord, hostKey?: string) => Effect.Effect<void, Internal>;
-}
+/** How the actions claim, check, call the runtime and end, over the store `store`. */
+export const claimsOn = (store: StoreInterface) => {
+  /** A release that fails leaves its rows held until the next host start marks them failed. */
+  const release = (token: Token) =>
+    store
+      .release(token)
+      .pipe(
+        Effect.catch((error) =>
+          Effect.logWarning(`couldn't release the rows of a ${token.action}: ${error.message}`),
+        ),
+      );
 
-/**
- * Steps 2 and 3: claims, then checks. A check that fails, or is interrupted, releases the claim,
- * so nothing is written.
- */
-export const claimAndCheck = <R, B>(
-  claim: Effect.Effect<Claim<R>, HostError>,
-  check: (record: R) => Effect.Effect<B, HostError>,
-): Effect.Effect<readonly [Claim<R>, B], HostError> =>
-  Effect.uninterruptibleMask((restore) =>
-    Effect.flatMap(claim, (claimed) =>
-      restore(check(claimed.record)).pipe(
-        Effect.onError(() => Effect.ignore(claimed.release)),
-        Effect.map((checked) => [claimed, checked] as const),
+  /**
+   * Steps 2 and 3: claims `rows` for `action`, then runs `check`, which can claim more rows
+   * through `join`, each joining the claim before, so one token covers them all. A check that
+   * fails, or is interrupted, releases every row claimed so far, so nothing is written.
+   */
+  const claimAndCheck = <B>(
+    action: ActionName,
+    rows: Rows,
+    check: (
+      join: (more: Rows) => Effect.Effect<void, HostError>,
+      claimed: Token,
+    ) => Effect.Effect<B, HostError>,
+  ): Effect.Effect<readonly [Token, B], HostError> =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const first = yield* store.claim(action, rows);
+        const claimed = yield* Ref.make(first);
+
+        const join = (more: Rows) =>
+          Effect.uninterruptible(
+            Effect.flatMap(Ref.get(claimed), (token) =>
+              Effect.flatMap(store.claim(action, more, token), (joined) =>
+                Ref.set(claimed, joined),
+              ),
+            ),
+          );
+
+        const checked = yield* restore(check(join, first)).pipe(
+          Effect.onError(() => Effect.flatMap(Ref.get(claimed), release)),
+        );
+
+        return [yield* Ref.get(claimed), checked] as const;
+      }),
+    );
+
+  /**
+   * Step 4 on; `what` names the action in a defect's error. A runtime `Refusal` releases the
+   * claim like a failed check; any other failure ends the action failed with the error the call
+   * replies with. A defect is recorded as `Internal`, so the rows stay deletable.
+   */
+  const native = <A>(
+    token: Token,
+    what: string,
+    work: Effect.Effect<A, HostError | Refusal>,
+  ): Effect.Effect<A, HostError> =>
+    work.pipe(
+      Effect.catchDefect((defect) =>
+        Effect.fail(new Internal({ message: `${what} died: ${String(defect)}` })),
       ),
-    ),
-  );
+      Effect.catch((error) =>
+        error instanceof Refusal
+          ? Effect.andThen(store.release(token), Effect.fail(error.error))
+          : Effect.andThen(
+              store.end(token, {
+                action: {
+                  name: token.action,
+                  status: "failed",
+                  error: { tag: error._tag, message: error.message },
+                },
+              }),
+              Effect.fail(error),
+            ),
+      ),
+    );
 
-/**
- * Step 4 on; `what` names the action in a defect's error. A runtime `Refusal` releases the claim like a failed
- * check; any other failure ends the action failed with the error the call replies with. A defect
- * is recorded as `Internal`, so the rows stay deletable.
- */
-export const native = <A, R>(
-  claimed: Claim<R>,
-  what: string,
-  work: Effect.Effect<A, HostError | Refusal>,
-): Effect.Effect<A, HostError> =>
-  work.pipe(
-    Effect.catchDefect((defect) =>
-      Effect.fail(new Internal({ message: `${what} died: ${String(defect)}` })),
-    ),
-    Effect.catch((error) =>
-      error instanceof Refusal
-        ? Effect.andThen(claimed.release, Effect.fail(error.error))
-        : Effect.andThen(
-            claimed.end({
-              name: claimed.action,
-              status: "failed",
-              error: { tag: error._tag, message: error.message },
-            }),
-            Effect.fail(error),
-          ),
-    ),
-  );
+  /** Ends the action done on every row it holds, with the host key it read, if any. */
+  const done = (token: Token, hostKey?: string) =>
+    store.end(token, { action: { name: token.action, status: "done" }, hostKey });
 
-/** Ends the action done on every row it holds. */
-export const done = <R>(claimed: Claim<R>, hostKey?: string) =>
-  claimed.end({ name: claimed.action, status: "done" }, hostKey);
+  return { claimAndCheck, native, done };
+};
 
 /** Runs mutations in the host's own fiber set; the caller only waits for each. */
 export const detacher = Effect.map(

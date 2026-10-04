@@ -11,20 +11,11 @@ import {
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Layer, type Scope } from "effect";
-import {
-  type Claim,
-  checkpointRef,
-  claimAndCheck,
-  detacher,
-  done,
-  machineRef,
-  native,
-  rowsOn,
-} from "./actions.ts";
+import { checkpointRef, claimsOn, detacher, machineRef, rowsOn } from "./actions.ts";
 import type { HostConfig } from "./config.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { Runtime } from "./runtime.ts";
-import { type CheckpointRecord, type MachineRecord, type NewCheckpoint, Store } from "./store.ts";
+import { type CheckpointRecord, type NewCheckpoint, Store } from "./store.ts";
 
 export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Checkpoint>, HostError>;
@@ -38,12 +29,6 @@ export class Checkpoints extends Context.Service<Checkpoints, Interface>()(
   "@clankerbox/host/Checkpoints",
 ) {}
 
-/** What a capture holds: the new checkpoint and its source. */
-interface Capturing {
-  readonly checkpoint: CheckpointRecord;
-  readonly source: MachineRecord;
-}
-
 export const make = (
   config: Pick<HostConfig, "id">,
 ): Effect.Effect<Interface, HostError, Store | Runtime | Scope.Scope> =>
@@ -55,6 +40,7 @@ export const make = (
     const idOf = idOn(config.id);
     const nameOf = nameOn(config.id);
     const rows = rowsOn(store, config.id);
+    const { claimAndCheck, native, done } = claimsOn(store);
 
     const resource = (record: CheckpointRecord): Checkpoint => {
       const checkpoint: Checkpoint = {
@@ -71,25 +57,6 @@ export const make = (
 
       return record.profile === undefined ? checkpoint : { ...checkpoint, profile: record.profile };
     };
-
-    /** Inserts the checkpoint's row and claims its source; both end with the capture's outcome. */
-    const claimCapture = (row: NewCheckpoint): Effect.Effect<Claim<Capturing>, HostError> =>
-      Effect.map(store.insertCheckpoint(row), (before) => ({
-        action: "capture",
-        record: {
-          checkpoint: { ...row, action: { name: "capture", status: "running" } },
-          source: { ...before, action: { name: "capture", status: "running" } },
-        },
-        release: Effect.andThen(
-          store.removeCheckpoint(row.name),
-          store.record(row.machine, { action: before.action }),
-        ),
-        end: (outcome) =>
-          Effect.andThen(
-            store.recordCheckpoint(row.name, outcome),
-            store.record(row.machine, { action: outcome }),
-          ),
-      }));
 
     /**
      * The kind follows the source's state, which the row records, so it is read before the
@@ -129,27 +96,30 @@ export const make = (
           diskGib: source.diskGib,
         };
 
-        const [claimed] = yield* claimAndCheck(claimCapture(row), (held) =>
-          Effect.flatMap(runtime.captureKind(machineRef(config.id, held.source)), (now) =>
-            now === kind
-              ? Effect.void
-              : Effect.fail(
-                  new Precondition({
-                    message: `machine ${machineId} changed state as its capture began; capture it again`,
-                  }),
-                ),
-          ),
+        const [token] = yield* claimAndCheck(
+          "capture",
+          {
+            hold: [{ table: "machines", name: sourceName }],
+            insert: { table: "checkpoints", record: row },
+          },
+          () =>
+            Effect.flatMap(runtime.captureKind(machineRef(config.id, source)), (now) =>
+              now === kind
+                ? Effect.void
+                : Effect.fail(
+                    new Precondition({
+                      message: `machine ${machineId} changed state as its capture began; capture it again`,
+                    }),
+                  ),
+            ),
         );
 
         yield* native(
-          claimed,
+          token,
           `capture ${id}`,
-          runtime.capture(
-            machineRef(config.id, claimed.record.source),
-            checkpointRef(config.id, claimed.record.checkpoint),
-          ),
+          runtime.capture(machineRef(config.id, source), checkpointRef(config.id, row)),
         );
-        yield* done(claimed);
+        yield* done(token);
 
         return resource(yield* rows.checkpoint(name));
       });
@@ -158,22 +128,18 @@ export const make = (
       Effect.gen(function* () {
         const name = yield* nameOf(id);
 
-        const [claimed] = yield* claimAndCheck(
-          Effect.map(store.claimCheckpoint(name), (before): Claim<CheckpointRecord> => ({
-            action: "delete",
-            record: { ...before, action: { name: "delete", status: "running" } },
-            release: store.recordCheckpoint(name, before.action),
-            end: (outcome) => store.recordCheckpoint(name, outcome),
-          })),
-          () => Effect.void,
+        const [token, record] = yield* claimAndCheck(
+          "delete",
+          { hold: [{ table: "checkpoints", name }] },
+          () => rows.checkpoint(name),
         );
 
         yield* native(
-          claimed,
+          token,
           `delete ${id}`,
-          runtime.deleteCheckpoint(checkpointRef(config.id, claimed.record)),
+          runtime.deleteCheckpoint(checkpointRef(config.id, record)),
         );
-        yield* store.removeCheckpoint(name);
+        yield* store.remove({ table: "checkpoints", name });
       });
 
     return {

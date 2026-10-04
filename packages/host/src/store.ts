@@ -101,6 +101,14 @@ export interface CheckpointRecord extends Resource {
   readonly port: number | undefined;
 }
 
+/** The columns every row keeps its last action in. */
+const ActionColumns = Schema.Struct({
+  action_name: ActionRecord.fields.name,
+  action_status: ActionRecord.fields.status,
+  action_error_tag: Schema.NullOr(Schema.String),
+  action_error_message: Schema.NullOr(Schema.String),
+});
+
 /** The columns both tables have. */
 const columns = {
   name: Schema.String,
@@ -112,10 +120,7 @@ const columns = {
   cpu: Schema.Int,
   ram_mib: Schema.Int,
   disk_gib: Schema.Int,
-  action_name: ActionRecord.fields.name,
-  action_status: ActionRecord.fields.status,
-  action_error_tag: Schema.NullOr(Schema.String),
-  action_error_message: Schema.NullOr(Schema.String),
+  ...ActionColumns.fields,
 };
 
 const Columns = Schema.Struct(columns);
@@ -138,9 +143,11 @@ const decodeRow = Schema.decodeUnknownSync(Row);
 
 const decodeCheckpointRow = Schema.decodeUnknownSync(CheckpointRow);
 
+const decodeActionColumns = Schema.decodeUnknownSync(ActionColumns);
+
 const decodeAction = Schema.decodeUnknownSync(ActionRecord);
 
-const actionOf = (row: typeof Columns.Type): ActionRecord =>
+const actionOf = (row: typeof ActionColumns.Type): ActionRecord =>
   decodeAction(
     row.action_error_tag === null || row.action_error_message === null
       ? { name: row.action_name, status: row.action_status }
@@ -192,24 +199,50 @@ const columnParameters = (record: Omit<Resource, "action">, action: ActionName) 
   action_name: action,
 });
 
-/** The parameters that record an action on a row. */
-const actionParameters = (name: string, action: ActionRecord) => ({
-  name,
-  action_name: action.name,
-  action_status: action.status,
-  action_error_tag: action.error?.tag ?? null,
-  action_error_message: action.error?.message ?? null,
-});
+/** A new machine row. Its claim's action holds it from the start. */
+export type NewMachine = Omit<MachineRecord, "action">;
 
-/** A new row: its fields, and the action that holds it from the start. */
-export interface NewMachine extends Omit<MachineRecord, "action"> {
-  readonly action: ActionName;
-}
-
-/** A new checkpoint row, held by its capture from the start. */
+/** A new checkpoint row. Its claim's action holds it from the start. */
 export type NewCheckpoint = Omit<CheckpointRecord, "action">;
 
-/** What an action records on its row when it ends: its outcome, and the host key it read. */
+export type Table = "machines" | "checkpoints";
+
+/** A row, by its table and name. */
+export interface RowRef {
+  readonly table: Table;
+  readonly name: string;
+}
+
+/** A row for a claim to insert. */
+export type NewRow =
+  | { readonly table: "machines"; readonly record: NewMachine }
+  | { readonly table: "checkpoints"; readonly record: NewCheckpoint };
+
+/** What a claim takes: existing rows to hold, then a new row to insert. */
+export interface Rows {
+  readonly hold?: ReadonlyArray<RowRef> | undefined;
+  readonly insert?: NewRow | undefined;
+}
+
+/** A row a claim holds, and the action the claim replaced on it. */
+export interface HeldRow extends RowRef {
+  readonly before: ActionRecord;
+}
+
+/**
+ * An action's claim: every row it inserted and every row it holds. A release removes the first
+ * and puts back each held row's `before`; an end records the action's outcome on all of them.
+ */
+export interface Token {
+  readonly action: ActionName;
+  readonly inserted: ReadonlyArray<RowRef>;
+  readonly held: ReadonlyArray<HeldRow>;
+}
+
+/**
+ * What an action records when it ends: its outcome, on every row it claimed, and the host key
+ * it read, on its subject: the machine row it inserted, or else the one it holds.
+ */
 export interface Outcome {
   readonly action: ActionRecord;
   readonly hostKey?: string | undefined;
@@ -220,50 +253,29 @@ export interface Interface {
   readonly find: (name: string) => Effect.Effect<Option.Option<MachineRecord>, Internal>;
   /** The ports every machine row holds. */
   readonly ports: Effect.Effect<ReadonlySet<number>, Internal>;
-  /**
-   * Inserts a new row, held by its running action. A taken name is `Conflict{exists}`. Actions
-   * pick ports one at a time, so the port's unique index is only a backstop.
-   */
-  readonly insert: (record: NewMachine) => Effect.Effect<void, Conflict | Internal>;
-  /**
-   * Inserts a new row made from the machine named `source`, such as a fork, and claims `source`
-   * for the same action, in one transaction. It returns the source as it was.
-   */
-  readonly insertFrom: (
-    record: NewMachine,
-    source: string,
-  ) => Effect.Effect<MachineRecord, NotFound | Conflict | Internal>;
-  /**
-   * Claims an existing row for `action`, and returns the row as it was, so the claim can be
-   * released by putting its action back. A row another action holds is `Conflict{busy}`.
-   */
-  readonly claim: (
-    name: string,
-    action: ActionName,
-  ) => Effect.Effect<MachineRecord, NotFound | Conflict | Internal>;
-  /** Records an action's outcome on its row, or puts back the action a released claim replaced. */
-  readonly record: (name: string, outcome: Outcome) => Effect.Effect<void, Internal>;
-  readonly remove: (name: string) => Effect.Effect<void, Internal>;
   readonly checkpoints: Effect.Effect<ReadonlyArray<CheckpointRecord>, Internal>;
   readonly findCheckpoint: (
     name: string,
   ) => Effect.Effect<Option.Option<CheckpointRecord>, Internal>;
   /**
-   * Inserts a new checkpoint row, held by its capture, and claims its source machine for the
-   * capture, in one transaction. It returns the source as it was.
+   * Claims rows for `action` in one transaction: holds each row in `rows.hold`, then inserts
+   * `rows.insert`, held by the action from the start. A missing row is NotFound, one another
+   * action holds `Conflict{busy}` and a taken new name `Conflict{exists}`, and then nothing is
+   * written. The token covers `joining`'s rows too, so an action can claim in steps and still
+   * release or end everything at once. Actions pick ports one at a time, so the port's unique
+   * index is only a backstop.
    */
-  readonly insertCheckpoint: (
-    record: NewCheckpoint,
-  ) => Effect.Effect<MachineRecord, NotFound | Conflict | Internal>;
-  /**
-   * Claims a checkpoint row for its delete, as `claim` does a machine's: delete is the only
-   * action that changes a ready checkpoint.
-   */
-  readonly claimCheckpoint: (
-    name: string,
-  ) => Effect.Effect<CheckpointRecord, NotFound | Conflict | Internal>;
-  readonly recordCheckpoint: (name: string, action: ActionRecord) => Effect.Effect<void, Internal>;
-  readonly removeCheckpoint: (name: string) => Effect.Effect<void, Internal>;
+  readonly claim: (
+    action: ActionName,
+    rows: Rows,
+    joining?: Token,
+  ) => Effect.Effect<Token, NotFound | Conflict | Internal>;
+  /** Gives back a claim in one transaction: its inserted rows go, its held rows get `before`. */
+  readonly release: (token: Token) => Effect.Effect<void, Internal>;
+  /** Ends a claim in one transaction, recording `outcome` on its rows. */
+  readonly end: (token: Token, outcome: Outcome) => Effect.Effect<void, Internal>;
+  /** Removes a row, as a successful delete does. */
+  readonly remove: (row: RowRef) => Effect.Effect<void, Internal>;
   /** At startup: every action still running was cut off by the last host process's end. */
   readonly failInterrupted: Effect.Effect<void, Internal>;
 }
@@ -415,42 +427,51 @@ export const open = (
     const id = idOn(hostId);
     const notFound = notFoundOn(hostId);
 
+    const kinds = {
+      machines: "machine",
+      checkpoints: "checkpoint",
+    } as const satisfies { readonly [T in Table]: Kind };
+
     const selectAll = db.prepare("SELECT * FROM machines ORDER BY created_at, name");
     const selectOne = db.prepare("SELECT * FROM machines WHERE name = ?");
     const selectPorts = db.prepare("SELECT port FROM machines WHERE port IS NOT NULL");
+    const selectCheckpoints = db.prepare("SELECT * FROM checkpoints ORDER BY created_at, name");
+    const selectCheckpoint = db.prepare("SELECT * FROM checkpoints WHERE name = ?");
 
-    const insertRow = db.prepare(
+    const insertMachine = db.prepare(
       `INSERT INTO machines (name, instance, native, created_at, base, profile, cpu, ram_mib,
         disk_gib, port, host_key, action_name, action_status)
        VALUES ($name, $instance, $native, $created_at, $base, $profile, $cpu, $ram_mib,
         $disk_gib, $port, $host_key, $action_name, 'running')`,
     );
 
-    const updateAction = db.prepare(
-      `UPDATE machines SET action_name = $action_name, action_status = $action_status,
-        action_error_tag = $action_error_tag, action_error_message = $action_error_message,
-        host_key = coalesce($host_key, host_key) WHERE name = $name`,
-    );
-
-    const deleteRow = db.prepare("DELETE FROM machines WHERE name = ?");
-
-    const selectCheckpoints = db.prepare("SELECT * FROM checkpoints ORDER BY created_at, name");
-    const selectCheckpoint = db.prepare("SELECT * FROM checkpoints WHERE name = ?");
-
-    const insertCheckpointRow = db.prepare(
+    const insertCheckpoint = db.prepare(
       `INSERT INTO checkpoints (name, instance, native, created_at, machine, kind, pin, port, base,
         profile, cpu, ram_mib, disk_gib, action_name, action_status)
        VALUES ($name, $instance, $native, $created_at, $machine, $kind, $pin, $port, $base,
         $profile, $cpu, $ram_mib, $disk_gib, $action_name, 'running')`,
     );
 
-    const updateCheckpointAction = db.prepare(
-      `UPDATE checkpoints SET action_name = $action_name, action_status = $action_status,
-        action_error_tag = $action_error_tag, action_error_message = $action_error_message
-       WHERE name = $name`,
-    );
+    const updateHostKey = db.prepare("UPDATE machines SET host_key = ? WHERE name = ?");
 
-    const deleteCheckpointRow = db.prepare("DELETE FROM checkpoints WHERE name = ?");
+    /** The statements that read, record and remove a row's action, per table. */
+    const statementsOf = (table: Table) => ({
+      action: db.prepare(
+        `SELECT action_name, action_status, action_error_tag, action_error_message
+         FROM ${table} WHERE name = ?`,
+      ),
+      record: db.prepare(
+        `UPDATE ${table} SET action_name = $action_name, action_status = $action_status,
+          action_error_tag = $action_error_tag, action_error_message = $action_error_message
+         WHERE name = $name`,
+      ),
+      remove: db.prepare(`DELETE FROM ${table} WHERE name = ?`),
+    });
+
+    const statements = {
+      machines: statementsOf("machines"),
+      checkpoints: statementsOf("checkpoints"),
+    };
 
     const findSync = (name: string) => {
       const row = selectOne.get(name);
@@ -464,90 +485,118 @@ export const open = (
       return row === undefined ? undefined : fromCheckpointRow(decodeCheckpointRow(row));
     };
 
-    const writeAction = (name: string, { action, hostKey }: Outcome) =>
-      updateAction.run({ ...actionParameters(name, action), host_key: hostKey ?? null });
-
-    const writeCheckpointAction = (name: string, action: ActionRecord) =>
-      updateCheckpointAction.run(actionParameters(name, action));
-
-    /**
-     * Runs an insert inside a transaction. The primary key refuses a taken name, which is
-     * `Conflict{exists}`; the port's unique index is only a backstop, so its refusal is SQLite's.
-     */
-    const inserted = (
-      kind: Kind,
-      name: string,
-      insert: () => void,
-    ): Result.Result<void, Conflict> => {
-      try {
-        insert();
-
-        return Result.void;
-      } catch (cause) {
-        if (isSqliteError(cause) && cause.errcode === sqlitePrimaryKey) {
-          return Result.fail(
-            new Conflict({ message: `${kind} ${id(name)} exists`, kind: "exists" }),
-          );
-        }
-
-        throw cause;
-      }
+    const record = (row: RowRef, action: ActionRecord) => {
+      statements[row.table].record.run({
+        name: row.name,
+        action_name: action.name,
+        action_status: action.status,
+        action_error_tag: action.error?.tag ?? null,
+        action_error_message: action.error?.message ?? null,
+      });
     };
 
-    /**
-     * The claim of a row, inside a transaction: a missing row is NotFound and one another action
-     * holds is busy; otherwise `hold` marks it, and the row comes back as it was.
-     */
-    const claimRow = <R extends { readonly action: ActionRecord }>(
-      kind: Kind,
-      name: string,
-      found: R | undefined,
-      hold: () => void,
-    ): Result.Result<R, NotFound | Conflict> => {
+    /** Holds a row inside a transaction, unless it is missing or another action holds it. */
+    const holdSync = (
+      action: ActionName,
+      row: RowRef,
+    ): Result.Result<HeldRow, NotFound | Conflict> => {
+      const kind = kinds[row.table];
+      const found = statements[row.table].action.get(row.name);
+
       if (found === undefined) {
-        return Result.fail(notFound(kind, name));
+        return Result.fail(notFound(kind, row.name));
       }
 
-      if (found.action.status === "running") {
+      const before = actionOf(decodeActionColumns(found));
+
+      if (before.status === "running") {
         return Result.fail(
           new Conflict({
-            message: `${kind} ${id(name)} is busy: ${found.action.name} is running`,
+            message: `${kind} ${id(row.name)} is busy: ${before.name} is running`,
             kind: "busy",
           }),
         );
       }
 
-      hold();
+      record(row, { name: action, status: "running" });
 
-      return Result.succeed(found);
+      return Result.succeed({ table: row.table, name: row.name, before });
     };
 
-    /** The claim of a machine row, inside a transaction. */
-    const claimSync = (name: string, action: ActionName) =>
-      claimRow("machine", name, findSync(name), () => {
-        writeAction(name, { action: { name: action, status: "running" } });
-      });
+    /**
+     * Inserts a row inside a transaction. The primary key refuses a taken name, which is
+     * `Conflict{exists}`; the port's unique index is only a backstop, so its refusal is SQLite's.
+     */
+    const insertSync = (action: ActionName, row: NewRow): Result.Result<RowRef, Conflict> => {
+      const columns = columnParameters(row.record, action);
 
-    /** The insert of a machine row, inside a transaction. */
-    const insertSync = (record: NewMachine) =>
-      inserted("machine", record.name, () => {
-        insertRow.run({
-          ...columnParameters(record, record.action),
-          port: record.port ?? null,
-          host_key: record.hostKey ?? null,
-        });
-      });
+      try {
+        if (row.table === "machines") {
+          insertMachine.run({
+            ...columns,
+            port: row.record.port ?? null,
+            host_key: row.record.hostKey ?? null,
+          });
+        } else {
+          insertCheckpoint.run({
+            ...columns,
+            machine: row.record.machine,
+            kind: row.record.kind,
+            pin: row.record.pin ?? null,
+            port: row.record.port ?? null,
+          });
+        }
+      } catch (cause) {
+        if (isSqliteError(cause) && cause.errcode === sqlitePrimaryKey) {
+          return Result.fail(
+            new Conflict({
+              message: `${kinds[row.table]} ${id(row.record.name)} exists`,
+              kind: "exists",
+            }),
+          );
+        }
 
-    const insertCheckpointSync = (record: NewCheckpoint) =>
-      inserted("checkpoint", record.name, () => {
-        insertCheckpointRow.run({
-          ...columnParameters(record, "capture"),
-          machine: record.machine,
-          kind: record.kind,
-          pin: record.pin ?? null,
-          port: record.port ?? null,
-        });
-      });
+        throw cause;
+      }
+
+      return Result.succeed({ table: row.table, name: row.record.name });
+    };
+
+    /** Holds then inserts, as `claim` describes, inside a transaction. */
+    const claimSync = (
+      action: ActionName,
+      rows: Rows,
+      joining: Token | undefined,
+    ): Result.Result<Token, NotFound | Conflict> => {
+      const held = [...(joining?.held ?? [])];
+      const inserted = [...(joining?.inserted ?? [])];
+
+      for (const row of rows.hold ?? []) {
+        const result = holdSync(action, row);
+
+        if (Result.isFailure(result)) {
+          return Result.fail(result.failure);
+        }
+
+        held.push(result.success);
+      }
+
+      if (rows.insert !== undefined) {
+        const result = insertSync(action, rows.insert);
+
+        if (Result.isFailure(result)) {
+          return Result.fail(result.failure);
+        }
+
+        inserted.push(result.success);
+      }
+
+      return Result.succeed({ action, inserted, held });
+    };
+
+    /** The rows a token names, for errors. */
+    const named = (token: Token) =>
+      [...token.inserted, ...token.held].map((row) => id(row.name)).join(", ");
 
     const store: Interface = {
       list: sql("list machines", () => selectAll.all().map((row) => fromRow(decodeRow(row)))),
@@ -561,46 +610,46 @@ export const open = (
             ).map(({ port }) => port),
           ),
       ),
-      insert: (record) => transaction(db, `insert ${id(record.name)}`, () => insertSync(record)),
-      insertFrom: (record, source) =>
-        transaction(db, `insert ${id(record.name)} from ${id(source)}`, () =>
-          Result.flatMap(claimSync(source, record.action), (before) =>
-            Result.map(insertSync(record), () => before),
-          ),
-        ),
-      claim: (name, action) => transaction(db, `claim ${id(name)}`, () => claimSync(name, action)),
-      record: (name, outcome) =>
-        sql(`record ${outcome.action.name} on ${id(name)}`, () => {
-          writeAction(name, outcome);
-        }),
-      remove: (name) =>
-        sql(`remove ${id(name)}`, () => {
-          deleteRow.run(name);
-        }),
       checkpoints: sql("list checkpoints", () =>
         selectCheckpoints.all().map((row) => fromCheckpointRow(decodeCheckpointRow(row))),
       ),
       findCheckpoint: (name) =>
         sql(`read checkpoint ${id(name)}`, () => Option.fromNullishOr(findCheckpointSync(name))),
-      insertCheckpoint: (record) =>
-        transaction(db, `insert checkpoint ${id(record.name)}`, () =>
-          Result.flatMap(claimSync(record.machine, "capture"), (before) =>
-            Result.map(insertCheckpointSync(record), () => before),
-          ),
+      claim: (action, rows, joining) =>
+        transaction(
+          db,
+          `claim ${[...(rows.hold ?? []), ...(rows.insert === undefined ? [] : [{ name: rows.insert.record.name }])].map((row) => id(row.name)).join(", ")} for ${action}`,
+          () => claimSync(action, rows, joining),
         ),
-      claimCheckpoint: (name) =>
-        transaction(db, `claim checkpoint ${id(name)}`, () =>
-          claimRow("checkpoint", name, findCheckpointSync(name), () => {
-            writeCheckpointAction(name, { name: "delete", status: "running" });
-          }),
-        ),
-      recordCheckpoint: (name, action) =>
-        sql(`record ${action.name} on checkpoint ${id(name)}`, () => {
-          writeCheckpointAction(name, action);
+      release: (token) =>
+        transaction(db, `release ${named(token)} from ${token.action}`, () => {
+          for (const row of token.inserted) {
+            statements[row.table].remove.run(row.name);
+          }
+
+          for (const row of token.held) {
+            record(row, row.before);
+          }
+
+          return Result.void;
         }),
-      removeCheckpoint: (name) =>
-        sql(`remove checkpoint ${id(name)}`, () => {
-          deleteCheckpointRow.run(name);
+      end: (token, { action, hostKey }) =>
+        transaction(db, `record ${action.name} on ${named(token)}`, () => {
+          for (const row of [...token.inserted, ...token.held]) {
+            record(row, action);
+          }
+
+          const subject = token.inserted[0] ?? token.held[0];
+
+          if (hostKey !== undefined && subject?.table === "machines") {
+            updateHostKey.run(hostKey, subject.name);
+          }
+
+          return Result.void;
+        }),
+      remove: (row) =>
+        sql(`remove ${kinds[row.table]} ${id(row.name)}`, () => {
+          statements[row.table].remove.run(row.name);
         }),
       failInterrupted: sql("fail interrupted actions", () => {
         for (const table of ["machines", "checkpoints"]) {
