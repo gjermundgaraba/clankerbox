@@ -1189,6 +1189,16 @@ includes a relayed HTTP round trip. Machines had 1 vCPU, 512–1024 MiB and
     which it doesn't count);
   - timings: `ram` capture 1.20 s, fork 2.77 s, two concurrent restores
     1.75 s, one restore 1.30 s; 0 `smolvm-fork-ready` failures.
+- **Rerun after the phase-5 review fixes** (run `live-smolvm-8b783f2661cf`,
+  remote `runs/l8b7`, code at `eeb2a9d`: step 3's booting machines kept by the
+  core, create and restore claiming their row first, the shared CLI module;
+  same host and relay, fresh inventory on the mirror base): all 24 tests
+  passed in 262 s, among them the RAM budget's Capacity and its two
+  concurrent creates, and the host stopped mid-fork and mid-restore. The
+  run's manifest read `outcome: succeeded`; `l651`'s read `failed` although
+  it passed, as the driver then exited inside its WorkRun. Timings: `ram`
+  capture 1.30 s, fork 2.98 s, two concurrent restores 1.64 s, one restore
+  1.56 s; one image-seed build, 0 `smolvm-fork-ready` failures.
 
 ## Phase 5 (2026-10-04)
 
