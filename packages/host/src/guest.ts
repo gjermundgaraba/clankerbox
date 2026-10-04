@@ -13,6 +13,10 @@ const tailLines = 20;
 
 const tailCharacters = 4000;
 
+/** The end of some output, as an error carries it: its last lines, without a trailing newline. */
+export const lastLines = (text: string): string =>
+  text.trimEnd().split("\n").slice(-tailLines).join("\n").slice(-tailCharacters);
+
 /** Keeps the end of a stream of output, so a long setup's log never piles up in memory. */
 const outputTail = () => {
   const decoder = new TextDecoder();
@@ -23,13 +27,7 @@ const outputTail = () => {
       kept = (kept + decoder.decode(chunk, { stream: true })).slice(-4 * tailCharacters);
     },
     /** The last lines, without a trailing newline. */
-    text: () =>
-      (kept + decoder.decode())
-        .trimEnd()
-        .split("\n")
-        .slice(-tailLines)
-        .join("\n")
-        .slice(-tailCharacters),
+    text: () => lastLines(kept + decoder.decode()),
   };
 };
 

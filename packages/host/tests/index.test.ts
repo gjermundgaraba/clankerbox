@@ -109,7 +109,7 @@ test("the host fails the actions its last process left running before it serves"
   });
 });
 
-test("a second host on the same state dir refuses to start", async () => {
+test("a second host on the same state dir refuses to start, before it builds its runtime", async () => {
   const dir = await scratch(owned);
   const first = config(dir, await loopbackPort());
   const second = config(dir, await loopbackPort());
@@ -126,6 +126,7 @@ test("a second host on the same state dir refuses to start", async () => {
 
   expect(error._tag).toBe("Precondition");
   expect(error.message).toContain("another host process holds state dir");
+  expect(secondFake.stubs()).toBeUndefined();
 });
 
 test("a host whose address is taken says where it couldn't listen", async () => {

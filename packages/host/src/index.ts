@@ -33,8 +33,12 @@ export const hostLayer = <E, R>(
       ),
     ),
     Layer.provide(Machines.layer(config)),
+    // The runtime is built only once the store holds the state dir's owner lock: a runtime may
+    // write there (smolvm creates its inventory), and a second host must not touch it at all.
     Layer.provide(
-      Layer.merge(Layer.effect(Store.Store, Store.open(config.stateDir, config.id)), runtime),
+      runtime.pipe(
+        Layer.provideMerge(Layer.effect(Store.Store, Store.open(config.stateDir, config.id))),
+      ),
     ),
   );
 
