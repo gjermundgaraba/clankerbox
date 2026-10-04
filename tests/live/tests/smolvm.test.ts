@@ -1,8 +1,9 @@
 /**
- * Phase 3's live acceptance on a smolvm host, through the CLI: lifecycle, setup and
- * preparation, guest access, claims, the RAM budget, crashes and restarts. The tests run in
- * order and share one machine, `main`, whose setup installs sshd and the run's own key; every
- * other machine is deleted by the test that made it. Timings print as `[timing]` lines.
+ * Live acceptance on a smolvm host, through the CLI: lifecycle, setup and preparation, guest
+ * access, claims, the RAM budget, fork and checkpoints, crashes and restarts. The tests run in
+ * order and share one machine, `main`, whose setup installs sshd and the run's own key, and
+ * some of its copies; the test that made any other machine deletes it. Timings print as
+ * `[timing]` lines, and disk use as `[disk]` lines.
  */
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rm } from "node:fs/promises";
@@ -11,16 +12,21 @@ import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 import {
+  Checkpoints,
   type Environment,
   environment,
   Failure,
   Machines,
+  Names,
   namePrefix,
   Natives,
+  OneCheckpoint,
   OneMachine,
   type Ran,
   run,
+  Store,
   scratch,
+  Usage,
   writeFileIn,
 } from "./live.ts";
 
@@ -65,6 +71,13 @@ mkdir -p /run/sshd
 cp /run/sshd.pid /var/lib/clankerbox-live/setup-sshd-pid
 `;
 
+/** A guest command that prints whether a TCP connection to `address:port` opens. */
+const guestProbe = (address: string, port: string) =>
+  `timeout 5 bash -c 'echo >/dev/tcp/${address}/${port}' 2>/dev/null && echo reached || echo refused`;
+
+/** Whether the driver's control showed the host reaching a listener on the peer. */
+const peerReached = process.env["CLANKERBOX_LIVE_PEER"]?.includes(":") === true;
+
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 const timing = (label: string, started: number) => {
@@ -87,6 +100,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   let key: string;
   let recipe: string;
   let payload: Uint8Array;
+  let routesBefore: ReadonlyArray<string>;
 
   const cli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
     run(env.binary, [...command, "--config", env.config, ...args]);
@@ -222,6 +236,88 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   const count = async (name: string, file: string) =>
     (await inGuest(name, `cat /var/lib/clankerbox-live/${file}`)).split("\n").length;
 
+  /** A new resource's name, which carries the run's prefix like every other. */
+  const named = (name: string) => `${namePrefix}${name}`;
+
+  /** What a machine shows of its identity, and of what a copy carried over. */
+  const facts = async (name: string) => {
+    const [machineId, instance, ram, disk, identities, starts] = (
+      await inGuest(
+        name,
+        [
+          "cat /var/lib/clankerbox/machine-id /var/lib/clankerbox/instance",
+          "cat /run/live-ram 2>/dev/null || echo none",
+          "cat /root/live-disk 2>/dev/null || echo none",
+          "wc -l </var/lib/clankerbox-live/identities",
+          "wc -l </var/lib/clankerbox-live/starts",
+        ].join("; "),
+      )
+    ).split("\n");
+
+    return {
+      machineId,
+      instance,
+      ram,
+      disk,
+      identities: Number(identities),
+      starts: Number(starts),
+    };
+  };
+
+  /**
+   * The RAM budget left over the running machines, read from a create too large for any
+   * budget, which is refused with Capacity and writes nothing.
+   */
+  const remainingBudget = async () => {
+    const huge = failure(await createBare("huge", 1_048_576));
+
+    expect(huge.tag).toBe("Capacity");
+    expect(await machine("huge")).toBeUndefined();
+
+    const budget = Number(/budget of (\d+) MiB/u.exec(huge.message)?.[1]);
+
+    const running = (await machines()).machines
+      .filter(({ state }) => state === "running")
+      .reduce((sum, { ramMib }) => sum + ramMib, 0);
+
+    return budget - running;
+  };
+
+  const controlled = async <A>(schema: Schema.Codec<A, string>, ...args: ReadonlyArray<string>) => {
+    const ran = await control(...args);
+
+    expect(ran.code, ran.stderr).toBe(0);
+
+    return decode(schema, ran);
+  };
+
+  const forks = () => controlled(Names, "forks");
+
+  const store = () => controlled(Store, "store");
+
+  const usage = (name: string) => controlled(Usage, "usage", named(name));
+
+  /** Whether the host itself reaches `address:port`. */
+  const probe = async (address: string, port: string) => {
+    const ran = await control("probe", address, port);
+
+    expect(ran.code, ran.stderr).toBe(0);
+
+    return ran.stdout;
+  };
+
+  /** The host's routes to the tailnet's own address and to the peer. */
+  const routes = () =>
+    Promise.all(
+      ["100.100.100.100", env.peer].map(async (address) => {
+        const ran = await control("route", address);
+
+        expect(ran.code, ran.stderr).toBe(0);
+
+        return ran.stdout;
+      }),
+    );
+
   beforeAll(async () => {
     env = await environment();
     dir = await scratch();
@@ -238,6 +334,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     await mkdir(join(recipe, "files"), { recursive: true });
     await writeFileIn(recipe, "setup.sh", mainSetup(publicKey), 0o755);
     await writeFileIn(join(recipe, "files"), "payload.bin", payload);
+    routesBefore = await routes();
   });
 
   // The host-control program's teardown removes what the run left on the host natively, so a
@@ -476,12 +573,9 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   test("a guest can't reach its own host's API port on the tailnet address", async () => {
     const api = new URL(env.host.url);
 
-    const probe = (address: string, port: string) =>
-      `timeout 5 bash -c 'echo >/dev/tcp/${address}/${port}' 2>/dev/null && echo reached || echo refused`;
-
-    expect(await inGuest("main", probe(api.hostname, api.port))).toBe("refused");
+    expect(await inGuest("main", guestProbe(api.hostname, api.port))).toBe("refused");
     // The same probe reaches the internet, so the refusal is the host's address.
-    expect(await inGuest("main", probe("1.1.1.1", "443"))).toBe("reached");
+    expect(await inGuest("main", guestProbe("1.1.1.1", "443"))).toBe("reached");
   });
 
   test(
@@ -555,18 +649,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   test(
     "the RAM budget refuses with Capacity, writing nothing, and of two concurrent creates that each fit only alone exactly one passes",
     async () => {
-      const huge = failure(await createBare("huge", 1_048_576));
-
-      expect(huge.tag).toBe("Capacity");
-      expect(await machine("huge")).toBeUndefined();
-
-      const budget = Number(/budget of (\d+) MiB/u.exec(huge.message)?.[1]);
-
-      const running = (await machines()).machines
-        .filter(({ state }) => state === "running")
-        .reduce((sum, { ramMib }) => sum + ramMib, 0);
-
-      const each = budget - running;
+      const each = await remainingBudget();
 
       expect(each).toBeGreaterThanOrEqual(512);
 
@@ -594,13 +677,346 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "a host restart keeps running machines, their published ports and machine IDs",
+    "a ram capture, a fork and two restores of one checkpoint: each copy gets its own port, host key and identity, keeps the RAM, and answers ssh while the source runs",
+    async () => {
+      const marker = randomBytes(8).toString("hex");
+
+      await inGuest("main", `echo ${marker} >/run/live-ram; echo ${marker} >/root/live-disk; sync`);
+
+      const source = await facts("main");
+      const before = await machine("main");
+
+      let started = performance.now();
+
+      const captured = await cli(
+        ["checkpoint", "capture"],
+        id("main"),
+        named("main-ram"),
+        "--json",
+      );
+
+      timing("capture ram (1 GiB, running)", started);
+      expect(captured.code, captured.stdout).toBe(0);
+      expect(decode(OneCheckpoint, captured)).toMatchObject({
+        id: id("main-ram"),
+        machine: id("main"),
+        kind: "ram",
+        action: { name: "capture", status: "done" },
+      });
+
+      started = performance.now();
+
+      const forked = await cli(["fork"], id("main"), named("fork-a"), "--json");
+
+      timing("fork (1 GiB, running source)", started);
+      expect(forked.code, forked.stdout).toBe(0);
+      expect(await forks()).toEqual([]);
+
+      // Restores of one checkpoint don't claim it, so these run side by side.
+      started = performance.now();
+
+      const restored = await Promise.all(
+        ["restore-a", "restore-b"].map((name) =>
+          cli(["restore"], id("main-ram"), named(name), "--json"),
+        ),
+      );
+
+      timing("two concurrent ram restores of one checkpoint", started);
+
+      for (const ran of restored) {
+        expect(ran.code, ran.stdout).toBe(0);
+      }
+
+      const copies = ["fork-a", "restore-a", "restore-b"];
+      const all = await Promise.all(["main", ...copies].map(machine));
+
+      expect(new Set(all.map((listed) => listed?.ssh?.port)).size).toBe(4);
+      expect(new Set(all.map((listed) => listed?.hostKey)).size).toBe(4);
+      expect(all[0]?.hostKey).toBe(before?.hostKey);
+      expect(all[0]?.action).toEqual({ name: "fork", status: "done" });
+
+      for (const [index, name] of copies.entries()) {
+        expect(all[index + 1]).toMatchObject({
+          state: "running",
+          ramMib: 1024,
+          diskGib: 20,
+          action: { name: index === 0 ? "fork" : "restore", status: "done" },
+        });
+
+        // clankerbox ssh pins the copy's hostKey, so this also shows sshd serves the new key.
+        const copy = await facts(name);
+
+        expect(copy).toEqual({
+          machineId: id(name),
+          instance: expect.not.stringMatching(source.instance),
+          ram: marker,
+          disk: marker,
+          identities: source.identities + 1,
+          starts: source.starts + 1,
+        });
+      }
+
+      const instances = await Promise.all(copies.map(async (name) => (await facts(name)).instance));
+
+      expect(new Set([source.instance, ...instances]).size).toBe(4);
+      expect(await facts("main")).toEqual(source);
+
+      for (const name of copies) {
+        console.log(`[disk] ${name} ${(await usage(name)).own_kib} KiB of its own`);
+      }
+    },
+    minutes(10),
+  );
+
+  test(
+    "start on a fork and on a restore runs start again, and not new-identity",
+    async () => {
+      for (const name of ["fork-a", "restore-a"]) {
+        const before = await facts(name);
+        const stopped = await cli(["stop"], id(name), "--json");
+        const started = await cli(["start"], id(name), "--json");
+
+        expect(stopped.code, stopped.stdout).toBe(0);
+        expect(started.code, started.stdout).toBe(0);
+        expect(await facts(name)).toEqual({
+          ...before,
+          ram: "none",
+          starts: before.starts + 1,
+        });
+      }
+    },
+    minutes(5),
+  );
+
+  test(
+    "a guest can't reach the tailnet's 100.100.100.100, and running machines leave the host's routes to it and to a peer alone",
+    async () => {
+      // Its web port: smolvm's gateway answers port 53 at every address with its DNS relay.
+      expect(await probe("100.100.100.100", "80")).toBe("reached");
+      expect(await inGuest("main", guestProbe("100.100.100.100", "80"))).toBe("refused");
+      expect(await routes()).toEqual(routesBefore);
+    },
+    minutes(3),
+  );
+
+  test.skipIf(!peerReached)(
+    "a guest can't reach another tailnet peer that its host reaches",
+    async () => {
+      const port = env.peerPort ?? "";
+
+      expect(await probe(env.peer, port)).toBe("reached");
+      expect(await inGuest("main", guestProbe(env.peer, port))).toBe("refused");
+    },
+    minutes(3),
+  );
+
+  test(
+    "a fork's source is stopped, cold-started and deleted while its fork runs, and a restore under the source's reused name gets a new identity",
+    async () => {
+      expect((await cli(["fork"], id("main"), named("src"), "--json")).code).toBe(0);
+      expect(
+        (await cli(["checkpoint", "capture"], id("src"), named("src-ram"), "--json")).code,
+      ).toBe(0);
+
+      const forked = await cli(["fork"], id("src"), named("child"), "--json");
+
+      expect(forked.code, forked.stdout).toBe(0);
+      expect(await forks()).toEqual([]);
+
+      const child = await facts("child");
+      const source = await facts("src");
+      const old = await machine("src");
+
+      for (const step of ["stop", "start"]) {
+        const ran = await cli([step], id("src"), "--json");
+
+        expect(ran.code, ran.stdout).toBe(0);
+        expect(await facts("child")).toEqual(child);
+      }
+
+      expect((await machine("src"))?.hostKey).toBe(old?.hostKey);
+      await removeMachine("src");
+      expect(await facts("child")).toEqual(child);
+
+      // The name comes back, and with it maybe the port; the instance tells the new machine
+      // from the old, so preparation still re-mints and restarts sshd.
+      const started = performance.now();
+      const again = await cli(["restore"], id("src-ram"), named("src"), "--json");
+
+      timing("ram restore", started);
+      expect(again.code, again.stdout).toBe(0);
+
+      const reused = decode(OneMachine, again);
+
+      console.log(
+        `[port] the restore under src's name got ${reused.ssh?.port === old?.ssh?.port ? "its old port" : "another port"}`,
+      );
+      expect(reused.hostKey).toBeDefined();
+      expect(reused.hostKey).not.toBe(old?.hostKey);
+      expect(await facts("src")).toEqual({
+        ...source,
+        instance: expect.not.stringMatching(source.instance),
+        identities: source.identities + 1,
+        starts: source.starts + 1,
+      });
+
+      await removeMachine("src");
+      await removeMachine("child");
+      expect((await cli(["checkpoint", "delete"], id("src-ram"), "--json")).code).toBe(0);
+      expect((await store()).checkpoints).not.toContainEqual(expect.stringContaining("src-ram"));
+    },
+    minutes(10),
+  );
+
+  test(
+    "a stopped machine's capture is a disk checkpoint, whose restore boots with the disk but not the RAM, its own port and a new identity",
+    async () => {
+      // A fresh diskGib 20 machine sits on smolvm's image seed, which smolvm 1.22.2 can't pack;
+      // restore-b came from a ram checkpoint, so it packs (rewrite.md, disk checkpoints).
+      const source = await facts("restore-b");
+      const stopped = await cli(["stop"], id("restore-b"), "--json");
+
+      expect(stopped.code, stopped.stdout).toBe(0);
+
+      let started = performance.now();
+
+      const captured = await cli(
+        ["checkpoint", "capture"],
+        id("restore-b"),
+        named("main-disk"),
+        "--json",
+      );
+
+      timing("capture disk (20 GiB, restored from a ram checkpoint)", started);
+      expect(captured.code, captured.stdout).toBe(0);
+      expect(decode(OneCheckpoint, captured)).toMatchObject({
+        kind: "disk",
+        diskGib: 20,
+        action: { name: "capture", status: "done" },
+      });
+      expect((await store()).packs).toHaveLength(1);
+
+      started = performance.now();
+
+      const restored = await cli(["restore"], id("main-disk"), named("disk-a"), "--json");
+
+      timing("disk restore", started);
+      expect(restored.code, restored.stdout).toBe(0);
+
+      const made = decode(OneMachine, restored);
+      const ports = (await machines()).machines.map(({ ssh }) => ssh?.port);
+      const keys = (await machines()).machines.map(({ hostKey }) => hostKey);
+
+      expect(made).toMatchObject({ state: "running", diskGib: 20 });
+      expect(ports.filter((port) => port === made.ssh?.port)).toHaveLength(1);
+      expect(keys.filter((hostKey) => hostKey === made.hostKey)).toHaveLength(1);
+      expect(await facts("disk-a")).toEqual({
+        ...source,
+        machineId: id("disk-a"),
+        instance: expect.not.stringMatching(source.instance),
+        ram: "none",
+        identities: source.identities + 1,
+        starts: source.starts + 1,
+      });
+
+      const disk = await usage("disk-a");
+
+      console.log(
+        `[disk] disk-a ${disk.own_kib} KiB of its own, smolvm's shared pack extractions ${disk.shared_kib} KiB`,
+      );
+    },
+    minutes(10),
+  );
+
+  test(
+    "the RAM budget refuses a fork and a restore with Capacity, writing nothing",
+    async () => {
+      const left = await remainingBudget();
+
+      expect(left).toBeGreaterThan(1024);
+
+      // What it leaves is less than the 1 GiB a copy of main needs.
+      const filler = await createBare("filler", left - 512);
+
+      expect(filler.code, filler.stdout).toBe(0);
+
+      const before = await machine("main");
+      const fork = failure(await cli(["fork"], id("main"), named("over-fork"), "--json"));
+
+      const restore = failure(
+        await cli(["restore"], id("main-ram"), named("over-restore"), "--json"),
+      );
+
+      expect(fork.tag).toBe("Capacity");
+      expect(restore.tag).toBe("Capacity");
+      expect(await machine("over-fork")).toBeUndefined();
+      expect(await machine("over-restore")).toBeUndefined();
+      expect((await machine("main"))?.action).toEqual(before?.action);
+      expect(await natives("over-fork")).toEqual({ machines: [], scopes: [] });
+      expect(await natives("over-restore")).toEqual({ machines: [], scopes: [] });
+      await removeMachine("filler");
+    },
+    minutes(5),
+  );
+
+  test(
+    "a ram checkpoint saved under another pin is refused with Precondition, writing nothing",
+    async () => {
+      expect((await control("host-stop")).code).toBe(0);
+
+      const edited = await control("set-pin", named("main-ram"), "smolvm 0.0.0 linux-x64");
+
+      expect((await control("host-start")).code).toBe(0);
+      expect(edited.code, edited.stderr).toBe(0);
+
+      const error = failure(await cli(["restore"], id("main-ram"), named("pinned"), "--json"));
+
+      expect(error.tag).toBe("Precondition");
+      expect(error.message).toContain("smolvm 0.0.0 linux-x64");
+      expect(await machine("pinned")).toBeUndefined();
+      expect(await natives("pinned")).toEqual({ machines: [], scopes: [] });
+    },
+    minutes(5),
+  );
+
+  test(
+    "checkpoint delete removes ram and disk checkpoints from the host's store and packs",
+    async () => {
+      for (const name of ["main-ram", "main-disk"]) {
+        const ran = await cli(["checkpoint", "delete"], id(name), "--json");
+
+        expect(ran.code, ran.stdout).toBe(0);
+      }
+
+      const listed = decode(Checkpoints, await cli(["checkpoint", "list"], "--json"));
+
+      expect(listed.checkpoints).toEqual([]);
+      expect(await store()).toEqual({ checkpoints: expect.any(Array), packs: [] });
+      expect((await store()).checkpoints.filter((entry) => entry.endsWith(".checkpoint"))).toEqual(
+        [],
+      );
+
+      for (const name of ["fork-a", "restore-a", "restore-b", "disk-a"]) {
+        await removeMachine(name);
+      }
+
+      expect((await machines()).machines.map(({ id: listedId }) => listedId)).toEqual([id("main")]);
+    },
+    minutes(5),
+  );
+
+  test(
+    "a host restart keeps running machines, their published ports and machine IDs, and empties the forks area",
     async () => {
       const before = await machine("main");
       const uptime = Number((await inGuest("main", "cut -d ' ' -f 1 /proc/uptime")).trim());
 
+      // As a host that crashed during a fork would leave it.
+      expect((await control("plant-fork", named("leftover"))).code).toBe(0);
+      expect(await forks()).toEqual([named("leftover")]);
       expect((await control("host-stop")).code).toBe(0);
       expect((await control("host-start")).code).toBe(0);
+      expect(await forks()).toEqual([]);
 
       const after = await machine("main");
 

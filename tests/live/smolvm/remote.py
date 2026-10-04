@@ -9,6 +9,8 @@ scratch/, evidence/), and runs it once per command:
   setup HOSTID         check the binary, expand the prefix's disk templates, write the host
                        config, start the host unit
   control OP [ARGS]    what the live suite asks of the host (tests/live/tests/live.ts)
+  reset                as teardown, but the inventory and its image seed stay; then a host on
+                       an empty state, so the suite can run again
   teardown             stop the unit, then delete every VM of the run's inventory and stop every
                        scope of the run natively, by the run's own data dir, so it works with the
                        host down; verify, and count image pulls and fork-ready failures
@@ -459,9 +461,63 @@ def control(op, rest):
                           'fsfreeze -f /storage && echo frozen', touched=f'freezes /storage in guest {native}',
                           timeout=10)
         note(f'freeze exec rc={rc} {so.strip()} {se.strip()[-300:]}')
+    elif op == 'forks':
+        _, so, _ = sudo(['ls', '-A', str(STATE_DIR / 'forks')])
+        print(json.dumps(so.split()))
+    elif op == 'plant-fork':
+        leftover = STATE_DIR / 'forks' / rest[0]
+        if not rest[0].startswith(NAME_PREFIX):
+            raise RuntimeError(f'refusing to plant {rest[0]}')
+        must(sudo(['mkdir', str(leftover)], touched=f'makes {leftover}, a leftover fork store in the run\'s state dir'),
+             'mkdir')
+        must(sudo(['touch', str(leftover / 'leftover')], touched=f'makes a file in {leftover}'), 'touch')
+    elif op == 'set-pin':
+        if unit_active():
+            raise RuntimeError('the host holds its database while it runs; stop it first')
+        name, pin = rest
+        must(sudo(['python3', '-c', SET_PIN, str(STATE_DIR / 'host.db'), name, pin],
+                  touched=f'sets the pin of checkpoint {name} in the run\'s host database'), 'set-pin')
+    elif op == 'store':
+        _, checkpoints, _ = sudo(['ls', '-A', str(STATE_DIR / 'checkpoints')])
+        _, packs, _ = sudo(['ls', '-A', str(STATE_DIR / 'packs')])
+        print(json.dumps({'checkpoints': checkpoints.split(), 'packs': packs.split()}))
+    elif op == 'usage':
+        print(json.dumps(usage(native_for(rest[0]))))
+    elif op == 'probe':
+        try:
+            with socket.create_connection((rest[0], int(rest[1])), timeout=5):
+                print('reached')
+        except OSError:
+            print('unreachable')
+    elif op == 'route':
+        print(must(run(['ip', 'route', 'get', rest[0]]), 'ip route get').strip())
     else:
         raise RuntimeError(f'unknown control op {op}')
     return 0
+
+
+# The checkpoint's row in the host's database; sqlite3 holds no other lock on it.
+SET_PIN = """
+import sqlite3, sys
+db = sqlite3.connect(sys.argv[1])
+changed = db.execute('UPDATE checkpoints SET pin = ? WHERE name = ?', (sys.argv[3], sys.argv[2])).rowcount
+db.commit()
+sys.exit(0 if changed == 1 else f'{changed} rows')
+"""
+
+
+def usage(native):
+    """A machine's own disk in KiB, from its smolvm directory, and the shared pack extractions'.
+    An unlinked file the VMM still holds, such as a restore's RAM file, isn't counted."""
+    vms = DATA / '.cache/smolvm/vms'
+    _, so, _ = sudo(['sh', '-c', f'for f in {vms}/*/name; do [ "$(cat "$f")" = {shlex.quote(native)} ] '
+                                 '&& dirname "$f"; done; true'])
+    dirs = so.split()
+    if len(dirs) != 1:
+        raise RuntimeError(f'expected one smolvm directory for {native}, found {dirs}')
+    _, own, _ = sudo(['du', '-sk', dirs[0]])
+    _, shared, _ = sudo(['sh', '-c', f'du -sk {vms}/_shared 2>/dev/null || echo 0'])
+    return {'native': native, 'own_kib': int(own.split()[0]), 'shared_kib': int(shared.split()[0])}
 
 
 # ---------------------------------------------------------------- teardown and finish
@@ -486,13 +542,13 @@ def counters():
     return found
 
 
-def cmd_teardown():
-    report = {'at': now(), 'steps': []}
+def remove_natives(report):
+    """Stops the host, then deletes every VM of the run's inventory and stops the run's scopes,
+    natively; what is left goes into `report`."""
     if unit_active():
         sudo(['systemctl', 'stop', UNIT], touched=f'stops {UNIT}')
         report['steps'].append('unit stopped')
     wait_unit_gone()
-    report['counters'] = counters()
     for m in machines():
         name = str(m.get('name'))
         if not name.startswith(NAME_PREFIX):
@@ -518,11 +574,33 @@ def cmd_teardown():
     report.update(machines_left=left, scopes_left=list_units(SCOPE_PATTERN) + new_helper_units(),
                   units_left=list_units(f'clankerbox-rewrite-{RID}*'), vm_uid_processes=vm_uid_processes(),
                   run_processes=run_processes(), tailnet_listeners=tailnet_listeners())
+    return not (left or report['scopes_left'] or report['units_left'] or report['vm_uid_processes']
+                or report['run_processes'])
+
+
+def cmd_teardown():
+    report = {'at': now(), 'steps': [], 'counters': counters()}
+    clean = remove_natives(report)
     (EVIDENCE / 'teardown.json').write_text(json.dumps(report, indent=2) + '\n')
-    if left or report['scopes_left'] or report['units_left'] or report['vm_uid_processes'] or report['run_processes']:
+    if not clean:
         raise RuntimeError(f'teardown incomplete: {report}')
     (EVIDENCE / 'teardown-verified.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
+
+
+def cmd_reset():
+    """Teardown that keeps the inventory, and so its image seed, then a host on an empty state:
+    the suite can run again without pulling the image again."""
+    report = {'at': now(), 'steps': [], 'counters': counters()}
+    clean = remove_natives(report)
+    with open(EVIDENCE / 'resets.jsonl', 'a') as f:
+        f.write(json.dumps(report) + '\n')
+    if not clean:
+        raise RuntimeError(f'reset incomplete: {report}')
+    for name in ('host.db', 'host.db-wal', 'host.db-shm', 'checkpoints', 'packs', 'forks'):
+        sudo(['rm', '-rf', '--one-file-system', str(STATE_DIR / name)],
+             touched=f'reset: removes {STATE_DIR / name}, the host\'s state but not its smolvm inventory')
+    host_start()
 
 
 def cmd_finish():
@@ -623,6 +701,8 @@ def main():
         sys.exit(control(args.args[0], args.args[1:]))
     if args.cmd == 'teardown':
         return cmd_teardown()
+    if args.cmd == 'reset':
+        return cmd_reset()
     if args.cmd == 'finish':
         return cmd_finish()
     sys.exit(f'unknown command {args.cmd}')

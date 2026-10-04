@@ -4,15 +4,21 @@ host, over the tailnet: builds both SEAs, runs the linux one as root on the test
 remote.py, and runs the suite with the darwin one as the CLI.
 
   python3 tests/live/smolvm/driver.py --ssh USER@HOST --address TAILNET_ADDRESS \\
-    --root OWNED_ROOT --smolvm-prefix PREFIX [STEP ...]
+    --root OWNED_ROOT --smolvm-prefix PREFIX --peer THIS_MAC_TAILNET_ADDRESS [STEP ...]
 
 OWNED_ROOT is the test host's directory for this work (runs/ and CLEANUP.md live there), and
-PREFIX the smolvm 1.22.2 install the host uses. Steps run in order, then the ones appended to the
-local run's `control` file, one per line, until `done` or 3 idle hours:
+PREFIX the smolvm 1.22.2 install the host uses. The driver listens on a free port of the peer
+address, this machine's own tailnet address, for the run's life; if the test host reaches it,
+the suite checks that a guest can't (CLANKERBOX_LIVE_PEER is ADDRESS:PORT, otherwise ADDRESS).
+
+Steps run in order, then the ones appended to the local run's `control` file, one per line,
+until `done` or 3 idle hours:
 
   suite[:VP TEST ARGS]  run the suite
   redeploy              rebuild and upload the SEA and remote.py, then restart the host;
                         machines stay
+  reset                 remove every VM and the host's state, keeping the inventory and its
+                        image seed, and start the host again, so the suite can run again
 
 The run owns a local WorkRun (scripts/WORK_RUNS.md) and one remote run directory,
 OWNED_ROOT/runs/l<3 hex>, whose 4 characters keep the host's state dir within the 52 bytes
@@ -31,6 +37,7 @@ from pathlib import Path
 import shlex
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -58,6 +65,7 @@ def main():
     parser.add_argument('--address', required=True, help="the test host's tailnet address")
     parser.add_argument('--root', required=True, help='the owned root on the test host')
     parser.add_argument('--smolvm-prefix', required=True, help='the smolvm 1.22.2 install prefix there')
+    parser.add_argument('--peer', required=True, help="this machine's tailnet address")
     parser.add_argument('steps', nargs='*')
     options = parser.parse_args()
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
@@ -115,6 +123,11 @@ def main():
 
         def remote(cmd, label, timeout=1800):
             return sh(ssh + [f'python3 {remote_py} --run {rdir} {cmd}'], label, timeout=timeout)
+
+        def remote_output(cmd):
+            ran = subprocess.run(ssh + [f'python3 {remote_py} --run {rdir} {cmd}'], capture_output=True, text=True,
+                                 stdin=subprocess.DEVNULL, timeout=120, check=True)
+            return ran.stdout.strip()
 
         def upload_remote_program():
             subprocess.run(scp + [str(HERE / 'remote.py'), f'{options.ssh}:{remote_py}.tmp'], check=True, timeout=120)
@@ -222,8 +235,28 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
 ''')
         control_bin.chmod(0o755)
 
+        listener = []
+
+        def close_listener():
+            for sock in listener:
+                sock.close()
+            log(f'peer listener closed ({len(listener)})')
+
+        run.on_cleanup(close_listener)
+        # Accepting isn't needed: the kernel completes a connection into the backlog.
+        sock = socket.socket()
+        listener.append(sock)
+        sock.bind((options.peer, 0))
+        sock.listen(8)
+        peer_port = sock.getsockname()[1]
+        reached = remote_output(f'control probe {shlex.quote(options.peer)} {peer_port}')
+        log(f'test host to {options.peer}:{peer_port}, the control for the peer check: {reached}')
+        peer = f'{options.peer}:{peer_port}' if reached == 'reached' else options.peer
+        record(peer_listener=f'{options.peer}:{peer_port}', peer_control=reached)
+
         suite_env = dict(os.environ, CLANKERBOX_LIVE='1', CLANKERBOX_BIN=str(darwin_bin),
-                         CLANKERBOX_LIVE_CONFIG=str(client_config), CLANKERBOX_LIVE_HOST_CONTROL=str(control_bin))
+                         CLANKERBOX_LIVE_CONFIG=str(client_config), CLANKERBOX_LIVE_HOST_CONTROL=str(control_bin),
+                         CLANKERBOX_LIVE_PEER=peer)
         queue = list(options.steps)
         processed = 0
         last = time.time()
@@ -251,6 +284,8 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
                             cwd=REPO / 'tests' / 'live', timeout=5400, check=False)
                     text = (run.evidence / f'suite-{n}.log').read_text(errors='replace')
                     record(**{f'suite_{n}': {'rc': rc, 'fork_ready_failures': text.count('smolvm-fork-ready')}})
+                elif name == 'reset':
+                    remote('reset', f'reset-{n}', timeout=900)
                 elif name == 'redeploy':
                     linux, sha = build()
                     upload_remote_program()
