@@ -72,6 +72,8 @@ DATA = STATE_DIR / 'smolvm'
 BINARY = SCRATCH / 'clankerbox'
 CONFIG = SCRATCH / 'host.json'
 ROOTLOG = EVIDENCE / 'root-runs.log'
+# The host unit's ExecStopPost writes how its process ended: systemd's $EXIT_CODE and $EXIT_STATUS.
+HOST_EXIT = EVIDENCE / 'host-exit'
 UNIT = f'clankerbox-rewrite-{RID}-host.service'
 os.chdir('/')
 
@@ -371,9 +373,12 @@ def host_start():
     port = load_state()['api_port']
     check_binary()
     sudo(['systemctl', 'reset-failed', UNIT], touched=f'clears {UNIT} if it is left failed')
+    # $$ passes a literal $ through systemd's own expansion to the shell.
+    record_exit = f'/bin/sh -c \'echo "$$EXIT_CODE $$EXIT_STATUS" >{shlex.quote(str(HOST_EXIT))}\''
     # A global flag before `host`, which mustn't change the exit code host-stop checks.
     must(sudo(['systemd-run', f'--unit={UNIT}', '--collect', '--property=Type=exec',
                f'--property=WorkingDirectory={SCRATCH}', '--property=KillMode=control-group',
+               f'--property=ExecStopPost={record_exit}',
                str(BINARY), '--log-level', 'info', 'host', '--config', str(CONFIG)],
               touched=f'starts transient system unit {UNIT} (the clankerbox host as root)'), 'systemd-run')
     deadline = time.monotonic() + 60
@@ -434,9 +439,13 @@ def control(op, rest):
         host_stop()
     elif op == 'host-kill':
         pid = host_main_pid()
+        HOST_EXIT.unlink(missing_ok=True)
         must(sudo(['systemctl', 'kill', '--signal=SIGKILL', '--kill-whom=main', UNIT],
                   touched=f'SIGKILLs the main process of {UNIT} (pid {pid})'), 'systemctl kill')
         wait_unit_gone()
+        ended = host_exit()
+        if ended != 'killed KILL':
+            raise RuntimeError(f'the host\'s exit after SIGKILL reads {ended!r}, not killed KILL')
         note(f'host pid {pid} killed; unit gone')
     elif op == 'natives':
         found = [{'name': m.get('name'), 'state': m.get('state')} for m in machines()
@@ -555,26 +564,26 @@ def hold_host_call(name, limit):
     raise RuntimeError(f'the host made no VM for {name} within {limit}s ({attempts} pkill attempts)')
 
 
+def host_exit():
+    """How the host's last process ended, as its unit's ExecStopPost wrote it, if it did."""
+    try:
+        return HOST_EXIT.read_text().strip()
+    except FileNotFoundError:
+        return None
+
+
 def host_stop():
-    """Stops the host with SIGTERM, as its unit's stop does, and checks it exited 0."""
-    since = int(time.time())
+    """Stops the host with SIGTERM, as its unit's stop does, and checks it exited 0: systemd
+    counts a death by SIGTERM as a clean stop too, so only the exit status shows the host
+    handled the signal."""
     t0 = time.monotonic()
+    HOST_EXIT.unlink(missing_ok=True)
     must(sudo(['systemctl', 'stop', UNIT], touched=f'stops {UNIT} (SIGTERM)'), 'systemctl stop')
     wait_unit_gone()
-    note(f'host stopped in {time.monotonic() - t0:.2f}s')
-    # The unit is collected once it stops, so its result is read from systemd's journal lines.
-    deadline = time.monotonic() + 10
-    while True:
-        _, so, _ = sudo(['journalctl', '-u', UNIT, '--since', f'@{since}', '--no-pager', '-o', 'cat'])
-        ended = [line for line in so.splitlines()
-                 if line.startswith(f'{UNIT}: ') and re.search(r'Deactivated|Failed|Main process', line)]
-        clean = any('Deactivated successfully' in line for line in ended)
-        failed = any('Failed' in line for line in ended)
-        if clean or failed or time.monotonic() > deadline:
-            break
-        time.sleep(0.5)
-    if failed or not clean:
-        raise RuntimeError(f'the host did not exit 0 on SIGTERM: {ended}')
+    ended = host_exit()
+    note(f'host stopped in {time.monotonic() - t0:.2f}s: {ended}')
+    if ended != 'exited 0':
+        raise RuntimeError(f'the host\'s exit after SIGTERM reads {ended!r}, not exited 0')
 
 
 # ---------------------------------------------------------------- teardown and finish
@@ -610,8 +619,10 @@ def remove_natives(report):
     natively, each item best effort; what is left, and every failure, goes into `report`."""
     def stop_unit():
         if unit_active():
+            HOST_EXIT.unlink(missing_ok=True)
             sudo(['systemctl', 'stop', UNIT], touched=f'stops {UNIT}')
-            report['steps'].append('unit stopped')
+            wait_unit_gone()
+            report['steps'].append(f'unit stopped: {host_exit()}')
         wait_unit_gone()
 
     attempt(report, 'stop the host unit', stop_unit)

@@ -93,9 +93,9 @@ export const Natives = Schema.fromJsonString(
  * machine footprint"). `smolvm/driver.py` provides all four, and its teardown removes what the
  * run left on the host. The program's ops:
  *
- * - `host-stop`, `host-start`: stop the host process (SIGTERM), failing unless it exits 0, or
- *   start it;
- * - `host-kill`: SIGKILL the host process, as a crash;
+ * - `host-stop`, `host-start`: stop the host process (SIGTERM), failing unless its exit status,
+ *   as its unit records it, is 0, or start it;
+ * - `host-kill`: SIGKILL the host process, as a crash, failing unless that is how it ended;
  * - `natives PREFIX`: print `{machines: [{name, state}], scopes}` for the runtime's machines and
  *   systemd scopes whose names start with PREFIX;
  * - `guest NAME COMMAND`: run COMMAND with `/bin/sh -c` as root in the guest of machine NAME,
