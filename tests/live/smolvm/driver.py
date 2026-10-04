@@ -124,10 +124,6 @@ def main():
         def remote(cmd, label, timeout=1800):
             return sh(ssh + [f'python3 {q_remote_py} --run {q_rdir} {cmd}'], label, timeout=timeout)
 
-        def upload_remote_program():
-            subprocess.run(scp + [str(HERE / 'remote.py'), f'{options.ssh}:{remote_py}.tmp'], check=True, timeout=120)
-            subprocess.run(ssh + [f'mv -f {shlex.quote(remote_py + ".tmp")} {q_remote_py}'], check=True, timeout=60)
-
         def collect():
             dest = run.evidence / 'remote'
             dest.mkdir(exist_ok=True)
@@ -211,7 +207,7 @@ def main():
         linux, sha = build()
         sh(ssh + [f'mkdir -p {q_root}/runs && mkdir -m 700 {q_rdir}'], 'mkdir', timeout=60)
         state['remote_dir'] = True
-        upload_remote_program()
+        subprocess.run(scp + [str(HERE / 'remote.py'), f'{options.ssh}:{remote_py}'], check=True, timeout=120)
         remote(f'init {shlex.quote(options.address)} {shlex.quote(options.smolvm_prefix)}', 'init', timeout=600)
         state['initialised'] = True
         upload(linux, sha)
