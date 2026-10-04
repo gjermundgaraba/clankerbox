@@ -478,12 +478,6 @@ def control(op, rest):
         must(sudo(['mkdir', str(leftover)], touched=f'makes {leftover}, a leftover fork store in the run\'s state dir'),
              'mkdir')
         must(sudo(['touch', str(leftover / 'leftover')], touched=f'makes a file in {leftover}'), 'touch')
-    elif op == 'set-pin':
-        if unit_active():
-            raise RuntimeError('the host holds its database while it runs; stop it first')
-        name, pin = rest
-        must(sudo(['python3', '-c', SET_PIN, str(STATE_DIR / 'host.db'), name, pin],
-                  touched=f'sets the pin of checkpoint {name} in the run\'s host database'), 'set-pin')
     elif op == 'store':
         _, checkpoints, _ = sudo(['ls', '-A', str(STATE_DIR / 'checkpoints')])
         _, packs, _ = sudo(['ls', '-A', str(STATE_DIR / 'packs')])
@@ -520,16 +514,6 @@ def host_execs(name):
         except (OSError, AttributeError):
             continue
     return False
-
-
-# The checkpoint's row in the host's database; sqlite3 holds no other lock on it.
-SET_PIN = """
-import sqlite3, sys
-db = sqlite3.connect(sys.argv[1])
-changed = db.execute('UPDATE checkpoints SET pin = ? WHERE name = ?', (sys.argv[3], sys.argv[2])).rowcount
-db.commit()
-sys.exit(0 if changed == 1 else f'{changed} rows')
-"""
 
 
 def usage(native):

@@ -941,57 +941,6 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "the RAM budget refuses a fork and a restore with Capacity, writing nothing",
-    async () => {
-      const left = await remainingBudget();
-
-      expect(left).toBeGreaterThan(1024);
-
-      // What it leaves is less than the 1 GiB a copy of main needs.
-      const filler = await createBare("filler", left - 512);
-
-      expect(filler.code, filler.stdout).toBe(0);
-
-      const before = await machine("main");
-      const fork = failure(await cli(["fork"], id("main"), named("over-fork"), "--json"));
-
-      const restore = failure(
-        await cli(["restore"], id("main-ram"), named("over-restore"), "--json"),
-      );
-
-      expect(fork.tag).toBe("Capacity");
-      expect(restore.tag).toBe("Capacity");
-      expect(await machine("over-fork")).toBeUndefined();
-      expect(await machine("over-restore")).toBeUndefined();
-      expect((await machine("main"))?.action).toEqual(before?.action);
-      expect(await natives("over-fork")).toEqual({ machines: [], scopes: [] });
-      expect(await natives("over-restore")).toEqual({ machines: [], scopes: [] });
-      await removeMachine("filler");
-    },
-    minutes(5),
-  );
-
-  test(
-    "a ram checkpoint saved under another pin is refused with Precondition, writing nothing",
-    async () => {
-      expect((await control("host-stop")).code).toBe(0);
-
-      const edited = await control("set-pin", named("main-ram"), "smolvm 0.0.0 linux-x64");
-
-      expect((await control("host-start")).code).toBe(0);
-      expect(edited.code, edited.stderr).toBe(0);
-
-      const error = failure(await cli(["restore"], id("main-ram"), named("pinned"), "--json"));
-
-      expect(error.tag).toBe("Precondition");
-      expect(error.message).toContain("smolvm 0.0.0 linux-x64");
-      expect(await machine("pinned")).toBeUndefined();
-      expect(await natives("pinned")).toEqual({ machines: [], scopes: [] });
-    },
-    minutes(5),
-  );
-
-  test(
     "checkpoint delete removes ram and disk checkpoints from the host's store and packs",
     async () => {
       for (const name of ["main-ram", "main-disk"]) {

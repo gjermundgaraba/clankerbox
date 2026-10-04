@@ -112,7 +112,6 @@ export const Natives = Schema.fromJsonString(
  * - `freeze NAME`: freeze the guest's storage filesystem, so smolvm's stop can't quiesce it;
  * - `forks`: print the names in the host's forks area; `plant-fork NAME` leaves a fork store
  *   named NAME there, as a crash during a fork would;
- * - `set-pin NAME PIN`: with the host stopped, change the pin checkpoint NAME's row records;
  * - `store`: print `{checkpoints, packs}`, the names in the host's checkpoint store and packs;
  * - `usage NAME`: print `{native, own_kib, shared_kib}`, the disk of machine NAME's own smolvm
  *   directory and of smolvm's shared pack extractions;
