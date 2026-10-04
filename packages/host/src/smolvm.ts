@@ -67,10 +67,12 @@ const searchPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
  * The environment of every smolvm call, and so of every VM job. With `SMOLVM_DATA_DIR` set,
  * smolvm moves `HOME` to the data root anyway (S@1.22.2:src/main.rs:132-136); passing it there
  * keeps the original from being read at all. `SMOLVM_AGENT_ROOTFS` is needed for the same
- * reason. `NO_COLOR` keeps ANSI colours out of smolvm's log lines, which errors carry: its
- * tracing-subscriber 0.3.23 colours them even into a pipe unless `NO_COLOR` is set
- * (tracing-subscriber src/fmt/fmt_layer.rs:739-743). `SMOLVM_BOOT_BINARY` is never set: it
- * arms a parent-death watchdog.
+ * reason. `SMOLVM_RESTORE_TMPFS=0` keeps every root restore from leaving
+ * `/dev/shm/smolvm-restore` behind, at no cost (rewrite.md, Guest access). `NO_COLOR` keeps
+ * ANSI colours out of smolvm's log lines, which errors carry: its tracing-subscriber 0.3.23
+ * colours them even into a pipe unless `NO_COLOR` is set (tracing-subscriber
+ * src/fmt/fmt_layer.rs:739-743). `SMOLVM_BOOT_BINARY` is never set: it arms a parent-death
+ * watchdog.
  */
 export const environment = (settings: Settings) => ({
   PATH: searchPath,

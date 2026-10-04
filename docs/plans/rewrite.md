@@ -649,7 +649,11 @@ A crashed preparation is simply run again on the next activation; no
     needs the network. TSI also serves `-p`, but checkpoints with published
     ports require virtio-net.
   - The VM job's environment sets `SMOLVM_PUBLISH_ADDR` (the host's tailnet
-    address) and `SMOLVM_EGRESS_FLOOR=strict` explicitly.
+    address) and `SMOLVM_EGRESS_FLOOR=strict` explicitly. It also sets
+    `SMOLVM_RESTORE_TMPFS=0`: only `machine pause`/`resume` stage memory in
+    tmpfs, and clankerbox uses neither, but without `=0` every root restore
+    still creates `/dev/shm/smolvm-restore` and leaves it. Restores cost the
+    same either way (evidence.md, Restore tmpfs).
 - **Port allocation** (smolvm and Tart; boat needs no host port):
   - The host picks one host port per machine from 10000–19999: below smolvm's
     fork range (20000–32000) and the Linux ephemeral range (32768 and up). It
@@ -1191,9 +1195,8 @@ tests use real VMs.
      IPv6 alike. Until then, a guest can reach services on the host's public
      addresses: in P1 guests reached root-owned listeners on both, and the
      host's sshd on :22.
-   - Set `SMOLVM_RESTORE_TMPFS=0`. Only `machine pause`/`resume` stage memory in
-     tmpfs, and clankerbox uses neither. Without `=0`, every root restore still
-     creates `/dev/shm/smolvm-restore`. Restores cost the same either way.
+   - `SMOLVM_RESTORE_TMPFS=0` needs no deploy step: the host sets it on every
+     smolvm call (see Guest access).
    - Add a boat host: a second host process on the Linux host, unprivileged,
      with host ID `boat`, its own state dir, and a boat API key on an account
      past its trial. Any always-on machine on the tailnet would do; the Linux
