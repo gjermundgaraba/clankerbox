@@ -10,7 +10,7 @@ import { Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
-import type { CheckpointRef, MachineRef } from "../src/runtime.ts";
+import { type CheckpointRef, type MachineRef, Refusal } from "../src/runtime.ts";
 import {
   controlSocket,
   environment,
@@ -559,44 +559,55 @@ test("startup empties the forks area and makes the runtime's directories", async
   expect((await readdir(settings.stateDir)).sort()).toEqual(["checkpoints", "forks"]);
 });
 
-test("a capture is ram, of a running machine only: a stopped one is started first", async () => {
-  let reply = status("running");
+test("a capture or a fork of a machine that isn't running is refused before anything native", async () => {
+  let reply = status("stopped");
+
   const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
   const runtime = await runtimeOf(await prepared(), spawner);
 
-  const running = await Effect.runPromise(runtime.captureKind(machine));
-
-  reply = status("stopped");
-
-  const stopped = await Effect.runPromise(Effect.flip(runtime.captureKind(machine)));
+  const capture = await Effect.runPromise(Effect.flip(runtime.capture(machine, ramCheckpoint)));
+  const fork = await Effect.runPromise(Effect.flip(runtime.fork(machine, copy)));
 
   reply = unknown;
 
-  const missing = await Effect.runPromise(Effect.flip(runtime.captureKind(machine)));
+  const missing = await Effect.runPromise(Effect.flip(runtime.capture(machine, ramCheckpoint)));
 
-  expect(running).toBe("ram");
-  expect(stopped).toEqual(
-    new Precondition({
-      message:
-        "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",
+  expect(capture).toEqual(
+    new Refusal({
+      error: new Precondition({
+        message:
+          "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",
+      }),
+    }),
+  );
+  expect(fork).toEqual(
+    new Refusal({
+      error: new Precondition({
+        message:
+          "a fork copies a running machine, RAM included, and linux_dev is stopped: start it first",
+      }),
     }),
   );
   expect(missing).toEqual(
-    new Precondition({
-      message: "machine linux_dev is missing from the smolvm runtime; delete it",
+    new Refusal({
+      error: new Precondition({
+        message: "machine linux_dev is missing from the smolvm runtime; delete it",
+      }),
     }),
   );
+  expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["status", "status", "status"]);
 });
 
 test("a ram capture goes into the host's one store, with no history", async () => {
   const settings = await prepared();
-  const spawner = scripted(() => undefined);
+  const spawner = scripted((call) => (call.args[1] === "status" ? status("running") : undefined));
   const runtime = await runtimeOf(settings, spawner);
   const store = join(settings.stateDir, "checkpoints");
 
   await Effect.runPromise(runtime.capture(machine, ramCheckpoint));
 
   expect(smolvmArgs(spawner.calls)).toEqual([
+    ["machine", "status", "--name", "dev-01234567", "--json"],
     [
       "machine",
       "checkpoint",
@@ -739,7 +750,8 @@ test("a restore whose boot is cut short kills the VMM its scope still holds, the
 
 /**
  * A spawner whose `machine checkpoint` makes its output in its store, as smolvm does, whose
- * `machine create` answers `create`, and whose `machine status` knows no copy.
+ * `machine create` answers `create`, and whose `machine status` reads the source running and
+ * knows no copy.
  */
 const forking = (create: Reply) =>
   scripted((call) => {
@@ -750,7 +762,7 @@ const forking = (create: Reply) =>
     }
 
     if (call.args[1] === "status") {
-      return unknownCopy;
+      return call.args[3] === "dev-01234567" ? status("running") : unknownCopy;
     }
 
     return call.args[1] === "create" ? create : undefined;
@@ -766,6 +778,7 @@ test("a fork captures into a store of its own, restores from it, and removes the
   await Effect.runPromise(runtime.fork(machine, copy));
 
   expect(smolvmArgs(spawner.calls)).toEqual([
+    ["machine", "status", "--name", "dev-01234567", "--json"],
     [
       "machine",
       "checkpoint",
@@ -804,30 +817,6 @@ test("a fork that fails still removes its store", async () => {
 
   expect(error.message).toBe("smolvm machine create copy-abcdefab exited 1: Error: no space");
   expect(await readdir(join(settings.stateDir, "forks"))).toEqual([]);
-});
-
-test("a fork of a machine that isn't running is refused before anything runs", async () => {
-  const spawner = scripted((call) => (call.args[1] === "status" ? status("stopped") : undefined));
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  const error = await Effect.runPromise(
-    Effect.flip(
-      runtime.admit({
-        action: "fork",
-        machine: copy,
-        source: machine,
-        machines: [
-          { machine, booting: false },
-          { machine: copy, booting: true },
-        ],
-      }),
-    ),
-  );
-
-  expect(error._tag).toBe("Precondition");
-  expect(error.message).toBe(
-    "a fork copies a running machine, RAM included, and linux_dev is stopped",
-  );
 });
 
 test("deleting a ram checkpoint removes its directory, then prunes the store", async () => {

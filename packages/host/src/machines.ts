@@ -172,7 +172,7 @@ export const make = (
      * an entry removed before the end could let another action past its check while this one
      * still boots.
      */
-    const admit = (action: ActionName, machine: NewMachine, source?: MachineRecord) =>
+    const admit = (action: ActionName, machine: NewMachine) =>
       Effect.gen(function* () {
         const records = yield* store.list;
         const boots = new Set([machine.name, ...Array.from(booting, ({ name }) => name)]);
@@ -181,7 +181,6 @@ export const make = (
           action,
           machine: ref(machine),
           machines: records.map((held) => ({ machine: ref(held), booting: boots.has(held.name) })),
-          source: source === undefined ? undefined : ref(source),
         });
 
         yield* Effect.acquireRelease(
@@ -212,7 +211,7 @@ export const make = (
                     const row = yield* newRow(name, source);
 
                     yield* join(inserting(row));
-                    yield* admit(action, row, source);
+                    yield* admit(action, row);
 
                     return {
                       row,

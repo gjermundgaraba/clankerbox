@@ -153,6 +153,18 @@ test("a fork refused in its check writes nothing: no new row, and the source's a
   expect(await actions(linux)).toEqual({ dev: { name: "create", status: "done" } });
 });
 
+test("a fork of a source the runtime doesn't copy is refused and writes nothing", async () => {
+  const linux = await withSource();
+
+  await linux.run(linux.machines.stop("linux_dev"));
+
+  const error = await failure(linux, linux.machines.fork("linux_dev", "copy"));
+
+  expect(error).toEqual(new Precondition({ message: "linux_dev is stopped: start it first" }));
+  expect(await actions(linux)).toEqual({ dev: { name: "stop", status: "done" } });
+  expect(linux.fake.calls.filter((call) => call.startsWith("fork"))).toEqual(["fork linux_copy"]);
+});
+
 test("a fork that fails natively leaves both rows failed, and the new one deletable", async () => {
   const linux = await withSource();
 

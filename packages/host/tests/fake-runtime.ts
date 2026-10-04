@@ -20,7 +20,7 @@ import {
   type MachineRef,
   type MachineState,
   type Observed,
-  type Refusal,
+  Refusal,
   Runtime,
 } from "../src/runtime.ts";
 
@@ -47,8 +47,8 @@ export interface FakeOptions {
   /** What `ram` checkpoints record. Default: `fake 1`. */
   readonly pin?: string | undefined;
   /**
-   * The kind of every checkpoint. `ram`, the default, captures only a running machine, as
-   * smolvm does; `disk` captures one in any state, as boat does.
+   * The kind of every checkpoint. `ram`, the default, captures and forks only a running
+   * machine, as smolvm does; `disk` captures and forks one in any state, as boat does.
    */
   readonly checkpointKind?: CheckpointKind | undefined;
 }
@@ -175,6 +175,38 @@ export const fakeRuntime = (options: FakeOptions) => {
       catch: (cause) => new Internal({ message: `copy into ${machine.id}: ${String(cause)}` }),
     });
 
+  /**
+   * A fork or capture of a machine the fake doesn't have, or on a `ram` runtime of one that
+   * isn't running, is refused, as smolvm refuses it.
+   */
+  const copyable = (machine: MachineRef) => {
+    const state = machines.get(machine.name)?.state ?? "missing";
+
+    if (state === "running" || (state === "stopped" && options.checkpointKind === "disk")) {
+      return Effect.void;
+    }
+
+    return Effect.fail(
+      new Refusal({
+        error: new Precondition({
+          message:
+            state === "missing"
+              ? `machine ${machine.id} is missing`
+              : `${machine.id} is stopped: start it first`,
+        }),
+      }),
+    );
+  };
+
+  /** The machine's guest root, whichever its state. */
+  const rootOf = (machine: MachineRef) => {
+    const found = machines.get(machine.name);
+
+    return found === undefined
+      ? Effect.fail(new Internal({ message: `no machine ${machine.id}` }))
+      : Effect.succeed(found.root);
+  };
+
   const running = (machine: MachineRef) => {
     const found = machines.get(machine.name);
 
@@ -196,6 +228,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         version: "fake",
         publishAddress,
         pin: options.pin ?? "fake 1",
+        checkpointKind: options.checkpointKind ?? "ram",
         startup: () => Effect.sync(() => calls.push("startup")),
         observe,
         admit: (activation: Activation) =>
@@ -248,31 +281,14 @@ export const fakeRuntime = (options: FakeOptions) => {
               machines.delete(machine.name);
             }),
           ),
-        captureKind: (machine) => {
-          const state = machines.get(machine.name)?.state;
-          const kind = options.checkpointKind ?? "ram";
-
-          if (state === undefined) {
-            return Effect.fail(new Precondition({ message: `machine ${machine.id} is missing` }));
-          }
-
-          return state === "running" || kind === "disk"
-            ? Effect.succeed(kind)
-            : Effect.fail(
-                new Precondition({ message: `${machine.id} is stopped: start it first` }),
-              );
-        },
         capture: (machine, checkpoint) =>
           Effect.andThen(
             enterRefusable("capture", checkpoint),
-            Effect.flatMap(
-              Effect.sync(() => machines.get(machine.name)),
-              (found) =>
-                found === undefined
-                  ? Effect.fail(new Internal({ message: `capture: no machine ${machine.id}` }))
-                  : Effect.promise(() =>
-                      cp(found.root, checkpointRoot(checkpoint), { recursive: true }),
-                    ),
+            Effect.andThen(
+              copyable(machine),
+              Effect.flatMap(rootOf(machine), (root) =>
+                Effect.promise(() => cp(root, checkpointRoot(checkpoint), { recursive: true })),
+              ),
             ),
           ),
         restore: (checkpoint, machine) =>
@@ -283,7 +299,10 @@ export const fakeRuntime = (options: FakeOptions) => {
         fork: (source, machine) =>
           Effect.andThen(
             enterRefusable("fork", machine),
-            Effect.flatMap(running(source), (found) => copyInto(found.root, machine)),
+            Effect.andThen(
+              copyable(source),
+              Effect.flatMap(rootOf(source), (root) => copyInto(root, machine)),
+            ),
           ),
         deleteCheckpoint: (checkpoint) =>
           Effect.andThen(

@@ -9,10 +9,11 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { connect, createServer } from "node:net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
-import type { Interface, MachineRef } from "../src/runtime.ts";
+import { type Interface, type MachineRef, Refusal } from "../src/runtime.ts";
 import {
   checkpointName,
   diskGb,
@@ -632,41 +633,46 @@ test("the two-VM count takes every running VM, the operator's too, and machines 
   );
 });
 
-test("a fork's source and a capture's machine must be stopped, and a capture is disk", async () => {
+test("a fork's source and a capture's machine must be stopped: anything else is refused before a clone", async () => {
   const { mac, runtime } = await runtimeOn();
   const [source, copy] = await Promise.all([machineOn("src"), machineOn("copy")]);
 
+  const checkpoint = {
+    id: "mac_snap",
+    name: "snap",
+    instance: "fedcba9876543210fedcba9876543210",
+    native: undefined,
+    kind: "disk" as const,
+    port: source.port,
+  };
+
   mac.vms.set(vmOf(source), "running");
 
-  const fork = await Effect.runPromise(
-    Effect.flip(
-      runtime.admit({
-        action: "fork",
-        machine: copy,
-        machines: [
-          { machine: source, booting: false },
-          { machine: copy, booting: true },
-        ],
-        source,
-      }),
+  const fork = await Effect.runPromise(Effect.flip(runtime.fork(source, copy)));
+  const capture = await Effect.runPromise(Effect.flip(runtime.capture(source, checkpoint)));
+
+  mac.vms.delete(vmOf(source));
+
+  const missing = await Effect.runPromise(Effect.flip(runtime.capture(source, checkpoint)));
+
+  const refused = (message: string) => new Refusal({ error: new Precondition({ message }) });
+
+  expect(runtime.checkpointKind).toBe("disk");
+  expect([fork, capture, missing]).toEqual([
+    refused("a Tart fork copies a stopped machine's disk, and mac_src is running: stop it first"),
+    refused(
+      "a Tart checkpoint copies a stopped machine's disk, and mac_src is running: stop it first",
     ),
-  );
+    refused("machine mac_src is missing from the tart runtime; delete it"),
+  ]);
+  expect(calls(mac)).toEqual([]);
+  expect(existsSync(join(jobsDir(mac.settings.stateDir), `${vmOf(copy)}.plist`))).toBe(false);
+});
 
-  const capture = await Effect.runPromise(Effect.flip(runtime.captureKind(source)));
+test("a fork counts only the copy as booting, not its stopped source", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const [source, copy] = await Promise.all([machineOn("src"), machineOn("copy")]);
 
-  expect([fork._tag, capture._tag]).toEqual(["Precondition", "Precondition"]);
-  expect(fork.message).toBe(
-    "a Tart fork copies a stopped machine's disk, and mac_src is running: stop it first",
-  );
-  expect(capture.message).toBe(
-    "a Tart checkpoint copies a stopped machine's disk, and mac_src is running: stop it first",
-  );
-
-  mac.vms.set(vmOf(source), "stopped");
-
-  expect(await Effect.runPromise(runtime.captureKind(source))).toBe("disk");
-
-  // The fork holds its stopped source, and only the copy boots.
   const forking = {
     action: "fork" as const,
     machine: copy,
@@ -674,24 +680,15 @@ test("a fork's source and a capture's machine must be stopped, and a capture is 
       { machine: source, booting: false },
       { machine: copy, booting: true },
     ],
-    source,
   };
 
+  mac.vms.set(vmOf(source), "stopped");
   mac.vms.set("operators-own", "running");
   await Effect.runPromise(runtime.admit(forking));
 
   mac.vms.set("operators-other", "running");
 
   expect((await Effect.runPromise(Effect.flip(runtime.admit(forking))))._tag).toBe("Capacity");
-
-  mac.vms.delete("operators-own");
-  mac.vms.delete("operators-other");
-
-  mac.vms.delete(vmOf(source));
-
-  expect((await Effect.runPromise(Effect.flip(runtime.captureKind(source)))).message).toBe(
-    "machine mac_src is missing from the tart runtime; delete it",
-  );
 });
 
 test("capture clones the machine to the checkpoint's name; fork and restore clone into the new machine", async () => {

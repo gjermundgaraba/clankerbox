@@ -77,8 +77,6 @@ export interface Activation {
   readonly machine: MachineRef;
   /** Every machine on the host, the target included, and whether an action is booting each. */
   readonly machines: ReadonlyArray<Held>;
-  /** For a fork, the machine it copies, which the fork holds too. */
-  readonly source?: MachineRef | undefined;
 }
 
 /** A command run as root in the guest. */
@@ -119,6 +117,8 @@ export interface Interface {
    * only into the build that saved it. `undefined` on a runtime with no `ram` checkpoints.
    */
   readonly pin: string | undefined;
+  /** The kind of every checkpoint the runtime captures: `ram` on smolvm, `disk` on Tart and boat. */
+  readonly checkpointKind: CheckpointKind;
   /**
    * The runtime's own work at host startup, over every machine the host has, run after every
    * interrupted action has been marked failed and before the host serves: smolvm's cleanup, or
@@ -135,9 +135,9 @@ export interface Interface {
     machines: ReadonlyArray<MachineRef>,
   ) => Effect.Effect<ReadonlyArray<Observed>, HostError>;
   /**
-   * Step 3 of an action that boots a machine: the runtime's own checks, such as the smolvm
-   * host's RAM budget. A failure here writes nothing. Not called for `start` on a running
-   * machine.
+   * Step 3 of an action that boots a machine: the runtime's capacity checks, such as the smolvm
+   * host's RAM budget or Tart's two-VM count. A failure here writes nothing. Not called for
+   * `start` on a running machine.
    */
   readonly admit: (activation: Activation) => Effect.Effect<void, HostError>;
   /** Makes the machine from `image` and boots it; it returns once exec works. */
@@ -153,12 +153,10 @@ export interface Interface {
    */
   readonly delete: (machine: MachineRef) => Effect.Effect<void, HostError>;
   /**
-   * The kind of checkpoint a capture of the machine makes, which follows the runtime: `ram` on
-   * smolvm, of a running machine only, and `disk` on Tart and boat. It reads the machine's
-   * state, and a machine that can't be captured now is `Precondition`.
+   * Captures the machine into the checkpoint, of the runtime's `checkpointKind`. A machine in a
+   * state the runtime doesn't capture is a `Refusal` with `Precondition`, read before anything
+   * native: smolvm captures only a running machine, and Tart only a stopped one.
    */
-  readonly captureKind: (machine: MachineRef) => Effect.Effect<CheckpointKind, HostError>;
-  /** Captures the machine into the checkpoint, of the checkpoint's kind. */
   readonly capture: (
     machine: MachineRef,
     checkpoint: CheckpointRef,
@@ -171,7 +169,10 @@ export interface Interface {
     checkpoint: CheckpointRef,
     machine: MachineRef,
   ) => Effect.Effect<void, HostError | Refusal>;
-  /** Makes `machine` a copy of `source` and boots it; it returns once exec works. */
+  /**
+   * Makes `machine` a copy of `source` and boots it; it returns once exec works. A source in a
+   * state the runtime doesn't copy is a `Refusal` with `Precondition`, as for `capture`.
+   */
   readonly fork: (
     source: MachineRef,
     machine: MachineRef,

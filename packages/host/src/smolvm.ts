@@ -22,6 +22,7 @@ import {
   type MachineRef,
   type MachineState,
   type Observed,
+  Refusal,
   Runtime,
 } from "./runtime.ts";
 
@@ -236,17 +237,27 @@ export const make = (
     const boot = (native: string) =>
       call(["machine", "start", "--name", native, "--branchable"], `machine start ${native}`);
 
-    /** A fork copies RAM, which only a running machine has. */
-    const forkable = (source: MachineRef) =>
-      Effect.flatMap(state(nativeName(source)), (observed) =>
-        observed === "running"
-          ? Effect.void
-          : Effect.fail(
-              new Precondition({
-                message: `a fork copies a running machine, RAM included, and ${source.id} is ${observed}`,
-              }),
-            ),
-      );
+    /**
+     * A fork and a capture copy RAM, which only a running machine has. Any other state is
+     * refused before anything native.
+     */
+    const copyable = (machine: MachineRef, stopped: string) =>
+      Effect.flatMap(state(nativeName(machine)), (observed) => {
+        if (observed === "running") {
+          return Effect.void;
+        }
+
+        return Effect.fail(
+          new Refusal({
+            error: new Precondition({
+              message:
+                observed === "missing"
+                  ? `machine ${machine.id} is missing from the smolvm runtime; delete it`
+                  : stopped,
+            }),
+          }),
+        );
+      });
 
     /** A checkpoint's directory in the host's store. */
     const checkpointDir = (checkpoint: CheckpointRef) =>
@@ -415,31 +426,16 @@ export const make = (
           }
         }),
       observe,
-      admit: ({ source, ...activation }) =>
-        Effect.andThen(
-          source === undefined ? Effect.void : forkable(source),
-          checkRamBudget(settings.ramBudgetMib, activation, observe),
-        ),
-      captureKind: (machine) =>
-        Effect.flatMap(state(nativeName(machine)), (observed) => {
-          if (observed === "missing") {
-            return Effect.fail(
-              new Precondition({
-                message: `machine ${machine.id} is missing from the smolvm runtime; delete it`,
-              }),
-            );
-          }
-
-          return observed === "running"
-            ? Effect.succeed("ram")
-            : Effect.fail(
-                new Precondition({
-                  message: `a smolvm checkpoint holds a running machine's RAM, and ${machine.id} is stopped: start it first`,
-                }),
-              );
-        }),
+      checkpointKind: "ram",
+      admit: (activation) => checkRamBudget(settings.ramBudgetMib, activation, observe),
       capture: (machine, checkpoint) =>
-        Effect.asVoid(captureRam(machine, paths.store, checkpointDir(checkpoint))),
+        Effect.andThen(
+          copyable(
+            machine,
+            `a smolvm checkpoint holds a running machine's RAM, and ${machine.id} is stopped: start it first`,
+          ),
+          captureRam(machine, paths.store, checkpointDir(checkpoint)),
+        ),
       restore: (checkpoint, machine) =>
         restoreRam(checkpointDir(checkpoint), checkpoint.port, machine),
       fork: (source, machine) => {
@@ -449,12 +445,18 @@ export const make = (
         // Restored machines hold no reference into the store, so it goes whole, however the
         // fork ended.
         return Effect.andThen(
-          captureRam(source, store, output),
-          restoreRam(output, source.port, machine),
-        ).pipe(
-          Effect.ensuring(
-            removeAll(store).pipe(
-              Effect.catch((error) => Effect.logWarning(`fork ${machine.id}: ${error.message}`)),
+          copyable(
+            source,
+            `a fork copies a running machine, RAM included, and ${source.id} is stopped: start it first`,
+          ),
+          Effect.andThen(
+            captureRam(source, store, output),
+            restoreRam(output, source.port, machine),
+          ).pipe(
+            Effect.ensuring(
+              removeAll(store).pipe(
+                Effect.catch((error) => Effect.logWarning(`fork ${machine.id}: ${error.message}`)),
+              ),
             ),
           ),
         );

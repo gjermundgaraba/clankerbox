@@ -35,6 +35,7 @@ import {
   type MachineRef,
   type MachineState,
   type Observed,
+  Refusal,
   Runtime,
 } from "./runtime.ts";
 
@@ -496,30 +497,34 @@ export const make = (
       });
     };
 
-    /** A fork and a capture copy a stopped machine's disk: Tart's clone doesn't require one. */
-    const copyable = (what: string, machine: MachineRef, observed: MachineState) => {
-      if (observed === "missing") {
+    /**
+     * A fork and a capture copy a stopped machine's disk: Tart's clone doesn't require one. Any
+     * other state is refused before anything native.
+     */
+    const copyable = (what: string, machine: MachineRef) =>
+      Effect.flatMap(state(vmOf(machine)), (observed) => {
+        if (observed === "stopped") {
+          return Effect.void;
+        }
+
         return Effect.fail(
-          new Precondition({
-            message: `machine ${machine.id} is missing from the tart runtime; delete it`,
+          new Refusal({
+            error: new Precondition({
+              message:
+                observed === "missing"
+                  ? `machine ${machine.id} is missing from the tart runtime; delete it`
+                  : `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is running: stop it first`,
+            }),
           }),
         );
-      }
-
-      return observed === "stopped"
-        ? Effect.void
-        : Effect.fail(
-            new Precondition({
-              message: `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is running: stop it first`,
-            }),
-          );
-    };
+      });
 
     return {
       name: "tart",
       version: reported,
       publishAddress: settings.publishAddress,
       pin: undefined,
+      checkpointKind: "disk",
       startup: (machines) =>
         Effect.gen(function* () {
           yield* files(
@@ -550,18 +555,13 @@ export const make = (
           }),
         ),
       /**
-       * A fork's source must be stopped, and the Mac must have room: every running VM in the
-       * Tart home counts, the operator's included, and so does every machine an action is
-       * booting, the target too, since its VM runs only once its job has started.
+       * The Mac must have room: every running VM in the Tart home counts, the operator's
+       * included, and so does every machine an action is booting, the target too, since its VM
+       * runs only once its job has started.
        */
-      admit: ({ action, machine, machines, source }) =>
+      admit: ({ action, machine, machines }) =>
         Effect.gen(function* () {
           const vms = yield* list;
-
-          if (source !== undefined) {
-            yield* copyable("fork", source, vms.get(vmOf(source)) ?? "missing");
-          }
-
           const counted = new Set<string>();
 
           for (const [vm, observed] of vms) {
@@ -610,19 +610,17 @@ export const make = (
             yield* files(`couldn't remove ${path}`, fs.remove(path, { force: true }));
           }
         }),
-      captureKind: (machine) =>
-        Effect.flatMap(state(vmOf(machine)), (observed) =>
-          Effect.as(copyable("checkpoint", machine, observed), "disk" as const),
-        ),
       capture: (machine, checkpoint) =>
-        Effect.asVoid(
+        Effect.andThen(
+          copyable("checkpoint", machine),
           call(
             ["clone", vmOf(machine), checkpointVm(checkpoint)],
             `clone ${checkpointVm(checkpoint)}`,
           ),
         ),
       restore: (checkpoint, machine) => cloneInto(checkpointVm(checkpoint), machine, []),
-      fork: (source, machine) => cloneInto(vmOf(source), machine, []),
+      fork: (source, machine) =>
+        Effect.andThen(copyable("fork", source), cloneInto(vmOf(source), machine, [])),
       deleteCheckpoint: (checkpoint) =>
         Effect.asVoid(
           call(["delete", checkpointVm(checkpoint)], `delete ${checkpointVm(checkpoint)}`, [0, 2]),

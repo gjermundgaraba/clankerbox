@@ -267,9 +267,8 @@ Units run `process.execPath host --config PATH`. VM jobs never reference this bi
 - Every action runs in this order (see [State and claims](#state-and-claims)):
   1. Validate the input.
   2. Claim the rows, inserting the new row.
-  3. Check runtime state, for example that a Tart source is stopped, that Tart
-     has room for another VM, that a smolvm host's RAM budget has room, or that
-     a boat machine type fits.
+  3. Check runtime state, for example that Tart has room for another VM, that
+     a smolvm host's RAM budget has room, or that a boat machine type fits.
   4. Only then call the runtime.
 
   A failure in steps 1–3 releases the claims, removes the inserted row and
@@ -282,8 +281,11 @@ Units run `process.execPath host --config PATH`. VM jobs never reference this bi
 
   **Refusal rule:** a runtime error that the runtime knows created nothing
   native is handled like a failure in steps 1–3. Each runtime lists the errors
-  it classifies this way; today only boat has any (see
-  [Runtimes: boat](#runtimes-boat)). Any other runtime error keeps the row.
+  it classifies this way: on smolvm and Tart, a fork's source or a capture's
+  machine in a state the runtime doesn't copy (see their runtimes), which the
+  runtime's fork or capture reads after the claim, before anything native;
+  and boat's (see [Runtimes: boat](#runtimes-boat)). Any other runtime error
+  keeps the row.
 - **Long calls:** a mutation's reply, headers included, comes only when its
   action has finished. Node's server `requestTimeout` (300 s by default) covers
   only receiving the request, so it doesn't limit an action. The undici client
@@ -460,8 +462,9 @@ listed to keep them from being ported):
   A release that fails is logged; its rows stay held until the next startup
   marks them failed.
   - Fork and capture claim their source first, then insert the new row into
-    the same claim: a fork with the source's spec, a capture once it has read
-    the source's state once for the kind. A host crash between the two leaves
+    the same claim: a fork with the source's spec, a capture with the
+    runtime's checkpoint kind, which is constant per runtime, like its pin. A
+    host crash between the two leaves
     the source's action `failed` and no new row; that is accepted.
   - Fork and capture end with their outcome on both rows: the source's
     `action` reads `fork` or `capture`, `done` or `failed`, like the new row's.
@@ -880,8 +883,10 @@ Two rules for every VM job:
   resident RAM doesn't grow.
   Restored machines are branchable anyway. `machine status --json` reports
   `branchable: false` regardless, so don't read it.
-- **Fork is a checkpoint plus a restore:** of a running source only; a fork of
-  a stopped source is `Precondition` in step 3.
+- **Fork is a checkpoint plus a restore:** of a running source only. The
+  runtime's fork reads the source's state after the claim and refuses any
+  other with `Precondition` under the refusal rule, before anything native, so
+  the refusal writes nothing.
   1. Capture the running source into a store of the fork's own,
      `forks/<child native>/`.
   2. `machine create --from` that checkpoint.
@@ -921,8 +926,8 @@ Two rules for every VM job:
     Phase 3 verified this live, on a guest whose frozen `/storage` made
     `machine stop` fail.
 - **Checkpoints:** always `ram`, a running machine's RAM and disks; smolvm
-  captures only running machines. A capture of a stopped machine is
-  `Precondition` ("start it first"), read in step 3 like a fork's source.
+  captures only running machines. A capture of a stopped machine is refused
+  with `Precondition` ("start it first") like a fork's source.
   `disk` checkpoints (packs) were dropped in the phase-4 review: what is lost
   is a checkpoint that outlives a smolvm upgrade, which the pin below already
   refuses to restore. They live in the state dir: the one store at
@@ -1011,9 +1016,10 @@ Two rules for every VM job:
   destination, and the instance in the name means it never meets one. Never
   pass `--overwrite`.
 - **Fork and checkpoint need a stopped machine.** Tart's clone doesn't require
-  one, so that rule is ours. It is checked after the source is claimed, so a
-  `start` can't slip in before the clone. A running machine is refused with
-  `Precondition`. Tart checkpoints are always `disk`.
+  one, so that rule is ours. The runtime's fork and capture check it after the
+  source is claimed, so a `start` can't slip in before the clone, and refuse
+  a running machine with `Precondition` under the refusal rule, before anything
+  native. Tart checkpoints are always `disk`.
 - **Delete:** exit 2 means missing; from 2.40.0 a running VM exits 1. No
   inspections around delete: exit 1 forces the VM off (`tart stop --timeout
   0`), then deletes again. Then the job is booted out (exit 3: launchd
@@ -1314,6 +1320,11 @@ tests use real VMs.
        RAM budget N `machine status` calls under the admission permit. Tart
        now answers with one `tart list` and boat with one `GET /sandboxes`;
        smolvm reads each machine inside its runtime, at its own bound of 8.
+     - The checkpoint kind is the runtime's constant `checkpointKind`, like
+       `pin`, in place of `captureKind`, and a fork's or capture's source
+       state is a `Refusal` from the runtime's `fork` or `capture`, after the
+       claim (phase-5 review). `admit` keeps capacity only: `Activation` lost
+       its `source`, and a capture one `observe`.
 6. **boat.** The runtime, the machine-type choice, its refusals and its
    bounded retry. `stop` and `delete` after an interrupted operation. Built
    and tested on boat's trial, live tests included.

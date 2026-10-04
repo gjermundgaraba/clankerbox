@@ -53,9 +53,9 @@ export const make = (
     };
 
     /**
-     * Claims the source, reads its state once for the kind, then inserts the checkpoint's row
-     * into the same claim. A host crash between the two leaves the source's capture failed and
-     * no checkpoint row.
+     * Claims the source, then inserts the checkpoint's row, of the runtime's kind, into the same
+     * claim. A host crash between the two leaves the source's capture failed and no checkpoint
+     * row. The runtime refuses a source in a state it doesn't capture.
      */
     const capture = (machineId: string, name: string) =>
       Effect.gen(function* () {
@@ -66,7 +66,7 @@ export const make = (
           store.claim("capture", { hold: { table: "machines", name: sourceName } }),
           (source, join) =>
             Effect.gen(function* () {
-              const kind = yield* runtime.captureKind(machineRef(config.id, source));
+              const kind = runtime.checkpointKind;
 
               const row: NewCheckpoint = {
                 name,
