@@ -279,23 +279,26 @@ export const make = (
         yield* store.remove({ table: "machines", name });
       });
 
+    /**
+     * Claims the source, then, under the permit, inserts the new row with the source's spec into
+     * the same claim and admits it.
+     */
     const fork = (sourceId: string, name: string) =>
       Effect.gen(function* () {
         const sourceName = yield* nameOf(sourceId);
         const id = yield* formatId(config.id, name);
-        // A row's spec never changes, so the new row can copy it before the claim.
-        const spec = yield* rows.machine(sourceName);
 
         const [token, { row, source }] = yield* admitted(
-          Effect.flatMap(newRow(name, spec), (row) =>
-            claimAndCheck(
-              "fork",
-              { hold: [{ table: "machines", name: sourceName }], insert: inserting(row).insert },
-              () =>
-                Effect.flatMap(rows.machine(sourceName), (source) =>
-                  Effect.as(admit("fork", row, source), { row, source }),
-                ),
-            ),
+          claimAndCheck("fork", holding(sourceName), (join) =>
+            Effect.gen(function* () {
+              const source = yield* rows.machine(sourceName);
+              const row = yield* newRow(name, source);
+
+              yield* join(inserting(row));
+              yield* admit("fork", row, source);
+
+              return { row, source };
+            }),
           ),
         );
 

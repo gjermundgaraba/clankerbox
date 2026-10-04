@@ -190,6 +190,19 @@ test("a fork to a taken name is Conflict{exists}, and the source isn't claimed",
   expect(linux.fake.calls).toEqual([]);
 });
 
+test("a capture to a taken name is Conflict{exists}, and the source's action is put back", async () => {
+  const linux = await withSource();
+
+  await linux.run(linux.checkpoints.capture("linux_dev", "snap"));
+
+  const before = (await actions(linux))["dev"];
+  const error = await failure(linux, linux.checkpoints.capture("linux_dev", "snap"));
+
+  expect(error).toEqual(new Conflict({ message: "checkpoint linux_snap exists", kind: "exists" }));
+  expect((await actions(linux))["dev"]).toEqual(before);
+  expect(await checkpointActions(linux)).toEqual({ snap: { name: "capture", status: "done" } });
+});
+
 test("IDs are checked whole: another host's source or checkpoint, or a new ID too long, is Invalid", async () => {
   const linux = await withSource();
   const long = "a".repeat(57);

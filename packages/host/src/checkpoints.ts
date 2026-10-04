@@ -3,13 +3,7 @@
  * describes. A capture claims its source machine and inserts the checkpoint's row; restores,
  * which only read a ready checkpoint, are machine actions.
  */
-import {
-  type Checkpoint,
-  Conflict,
-  formatId,
-  type HostError,
-  Precondition,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { type Checkpoint, formatId, type HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Layer, type Scope } from "effect";
 import { checkpointRef, claimsOn, detacher, machineRef, rowsOn } from "./actions.ts";
 import type { HostConfig } from "./config.ts";
@@ -59,59 +53,43 @@ export const make = (
     };
 
     /**
-     * The kind follows the source's state, which the row records, so it is read before the
-     * claim. The claim keeps every action of ours off the source, and step 3 reads it again: a
-     * kind that changed between is refused.
+     * Claims the source, reads its state once for the kind, then inserts the checkpoint's row
+     * into the same claim. A host crash between the two leaves the source's capture failed and
+     * no checkpoint row.
      */
     const capture = (machineId: string, name: string) =>
       Effect.gen(function* () {
         const sourceName = yield* nameOf(machineId);
         const id = yield* formatId(config.id, name);
 
-        const source = yield* rows.machine(sourceName);
-
-        // Another action's machine can read as missing before its VM exists.
-        if (source.action.status === "running") {
-          return yield* new Conflict({
-            message: `machine ${machineId} is busy: ${source.action.name} is running`,
-            kind: "busy",
-          });
-        }
-
-        const kind = yield* runtime.captureKind(machineRef(config.id, source));
-
-        const row: NewCheckpoint = {
-          name,
-          instance: newInstance(),
-          native: undefined,
-          createdAt: yield* DateTime.now,
-          machine: sourceName,
-          kind,
-          pin: kind === "ram" ? runtime.pin : undefined,
-          port: source.port,
-          base: source.base,
-          profile: source.profile,
-          cpu: source.cpu,
-          ramMib: source.ramMib,
-          diskGib: source.diskGib,
-        };
-
-        const [token] = yield* claimAndCheck(
+        const [token, { source, row }] = yield* claimAndCheck(
           "capture",
-          {
-            hold: [{ table: "machines", name: sourceName }],
-            insert: { table: "checkpoints", record: row },
-          },
-          () =>
-            Effect.flatMap(runtime.captureKind(machineRef(config.id, source)), (now) =>
-              now === kind
-                ? Effect.void
-                : Effect.fail(
-                    new Precondition({
-                      message: `machine ${machineId} changed state as its capture began; capture it again`,
-                    }),
-                  ),
-            ),
+          { hold: [{ table: "machines", name: sourceName }] },
+          (join) =>
+            Effect.gen(function* () {
+              const source = yield* rows.machine(sourceName);
+              const kind = yield* runtime.captureKind(machineRef(config.id, source));
+
+              const row: NewCheckpoint = {
+                name,
+                instance: newInstance(),
+                native: undefined,
+                createdAt: yield* DateTime.now,
+                machine: sourceName,
+                kind,
+                pin: kind === "ram" ? runtime.pin : undefined,
+                port: source.port,
+                base: source.base,
+                profile: source.profile,
+                cpu: source.cpu,
+                ramMib: source.ramMib,
+                diskGib: source.diskGib,
+              };
+
+              yield* join({ insert: { table: "checkpoints", record: row } });
+
+              return { source, row };
+            }),
         );
 
         yield* native(
