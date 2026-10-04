@@ -6,11 +6,9 @@ run directory, <owned root>/runs/l<3 hex>/, which has the work-run layout (manif
 scratch/, evidence/), and runs it once per command:
 
   init ADDRESS PREFIX  manifest, "before" snapshot, CLEANUP.md entries
-  setup HOSTID         check the binary, expand the prefix's disk templates, write the host
+  setup                check the binary, expand the prefix's disk templates, write the host
                        config, start the host unit
   control OP [ARGS]    what the live suite asks of the host (tests/live/tests/live.ts)
-  reset                as teardown, but the inventory and its image seed stay; then a host on
-                       an empty state, so the suite can run again
   teardown             stop the unit, then delete every VM of the run's inventory and stop every
                        scope of the run natively, by the run's own data dir, so it works with the
                        host down; keep the host's journal, and verify
@@ -19,7 +17,8 @@ scratch/, evidence/), and runs it once per command:
                        modes, "after" snapshot and diff, mark the CLEANUP.md entries; a check
                        that fails marks its entry NOT REVERTED and stops before any deletion
 
-Every root command goes to evidence/root-runs.log with what it touched. Nothing here reads,
+state.json carries what the driver reads: the host's ID, unit, machine prefix, scope pattern,
+state dir and API port. Every root command goes to evidence/root-runs.log with what it touched. Nothing here reads,
 prints or stores a setup script or the preparation script: the host gets them from the CLI over
 HTTP, and the control ops see only guest command output.
 """
@@ -61,8 +60,9 @@ OWNED = RUN.parent.parent
 if not re.fullmatch(r'l[0-9a-f]{3}', RUN.name) or RUN.parent.name != 'runs' or RUN.is_symlink():
     sys.exit(f'refusing a run dir that is not <owned root>/runs/l<3 hex>: {RUN}')
 RID = RUN.name
+HOST_ID = f'{RUNS_PREFIX}{RID}'
 # This run's machines carry its ID, so its teardown stops only its own scopes.
-NAME_PREFIX = f'{RUNS_PREFIX}{RID}-'
+NAME_PREFIX = f'{HOST_ID}-'
 SCOPE_PATTERN = f'smolvm-vm-{NAME_PREFIX}*'
 LEDGER = OWNED / 'CLEANUP.md'
 SCRATCH = RUN / 'scratch'
@@ -288,7 +288,9 @@ def cmd_init(tailnet, smolvm_prefix):
     SCRATCH.mkdir(mode=0o700)
     EVIDENCE.mkdir(mode=0o700)
     root_log('(legend)', 'every sudo command of this run follows; "read-only" means it changed nothing')
-    save_state(address=tailnet, prefix=smolvm_prefix, helper_units_before=helper_units())
+    save_state(address=tailnet, prefix=smolvm_prefix, helper_units_before=helper_units(), host_id=HOST_ID,
+               unit=UNIT, machine_prefix=NAME_PREFIX, scope_pattern=SCOPE_PATTERN, state_dir=str(STATE_DIR),
+               inventory=str(DATA))
     if not (prefix() / 'READY').exists():
         sys.exit(f'{prefix()}/READY is missing')
     if list_units(f'{RUNS_PREFIX}*') or list_units(f'smolvm-vm-{RUNS_PREFIX}*') or vm_uid_processes():
@@ -348,7 +350,7 @@ def check_binary():
     os.chmod(BINARY, 0o755)
 
 
-def cmd_setup(host_id):
+def cmd_setup():
     # Outside 10000-19999 (machine ports), smolvm's 20000-32000 and the ephemeral range.
     port = next(p for p in range(9460, 9500) if port_free(p))
     check_binary()
@@ -362,12 +364,12 @@ def cmd_setup(host_id):
             must(run(['zstd', '-q', '-d', '--sparse', f'{target}.zst', '-o', target], timeout=600), f'zstd {name}')
             note(f'expanded {name} in {time.monotonic() - t0:.2f}s')
     CONFIG.write_text(json.dumps({
-        'id': host_id, 'runtime': 'smolvm', 'listen': {'address': address(), 'port': port}, 'stateDir': 's',
+        'id': HOST_ID, 'runtime': 'smolvm', 'listen': {'address': address(), 'port': port}, 'stateDir': 's',
         'bases': {'ubuntu': IMAGE},
         'smolvm': {'prefix': str(prefix()), 'ramBudgetMib': RAM_BUDGET_MIB},
     }, indent=2) + '\n')
     (EVIDENCE / 'host.json').write_text(CONFIG.read_text())
-    save_state(api_port=port, host_id=host_id)
+    save_state(api_port=port)
     host_start()
 
 
@@ -674,23 +676,6 @@ def cmd_teardown():
     print(json.dumps(report, indent=2))
 
 
-def cmd_reset():
-    """Teardown that keeps the inventory, and so its image seed, then a host on an empty state:
-    the suite can run again without pulling the image again."""
-    initialised()
-    report = {'at': now(), 'steps': [], 'errors': []}
-    attempt(report, 'keep the host\'s journal', journal)
-    clean = remove_natives(report)
-    with open(EVIDENCE / 'resets.jsonl', 'a') as f:
-        f.write(json.dumps(report) + '\n')
-    if not clean:
-        raise RuntimeError(f'reset incomplete: {report}')
-    for name in ('host.db', 'host.db-wal', 'host.db-shm', 'checkpoints', 'forks'):
-        sudo(['rm', '-rf', '--one-file-system', str(STATE_DIR / name)],
-             touched=f'reset: removes {STATE_DIR / name}, the host\'s state but not its smolvm inventory')
-    host_start()
-
-
 def cmd_finish():
     initialised()
     data = json.loads((RUN / 'manifest.json').read_text())
@@ -804,13 +789,11 @@ def main():
     if args.cmd == 'set-binary-sha':
         return save_state(binary_sha256=args.args[0])
     if args.cmd == 'setup':
-        return cmd_setup(*args.args)
+        return cmd_setup()
     if args.cmd == 'control':
         sys.exit(control(args.args[0], args.args[1:]))
     if args.cmd == 'teardown':
         return cmd_teardown()
-    if args.cmd == 'reset':
-        return cmd_reset()
     if args.cmd == 'finish':
         return cmd_finish()
     sys.exit(f'unknown command {args.cmd}')

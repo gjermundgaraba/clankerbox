@@ -4,21 +4,11 @@ host, over the tailnet: builds both SEAs, runs the linux one as root on the test
 remote.py, and runs the suite with the darwin one as the CLI.
 
   python3 tests/live/smolvm/driver.py --ssh USER@HOST --address TAILNET_ADDRESS \\
-    --root OWNED_ROOT --smolvm-prefix PREFIX [--suite-args 'VP TEST ARGS'] [--loop [STEP ...]]
+    --root OWNED_ROOT --smolvm-prefix PREFIX [--suite-args 'VP TEST ARGS']
 
 OWNED_ROOT is the test host's directory for this work (runs/ and CLEANUP.md live there), and
-PREFIX the smolvm 1.22.2 install the host uses; both absolute.
-
-By default the driver runs the suite once, tears down, and exits with the suite's code. With
---loop, for debugging, it runs the STEPs in order instead, then the ones appended to the local
-run's `control` file, one per line, until `done` or 3 idle hours, and exits non-zero if any
-failed:
-
-  suite[:VP TEST ARGS]  run the suite
-  redeploy              rebuild and upload the SEA and remote.py, then restart the host;
-                        machines stay
-  reset                 remove every VM and the host's state, keeping the inventory and its
-                        image seed, and start the host again, so the suite can run again
+PREFIX the smolvm 1.22.2 install the host uses; both absolute. The driver runs the suite once,
+tears down, and exits with the suite's code.
 
 The run owns a local WorkRun (scripts/WORK_RUNS.md) and one remote run directory,
 OWNED_ROOT/runs/l<3 hex>, short because smolvm's socket paths limit the host's state dir (the
@@ -26,6 +16,8 @@ host refuses one too long). Teardown, registered before what it owns, runs in re
 remote `teardown` stops the host and removes the run's VMs and scopes natively, by the run's own
 data dir, so it works after a test left the host down; then the remote evidence is copied here,
 and remote `finish` removes scratch and reverts what the run changed outside the owned root.
+The host's ID, unit, machine prefix, scope pattern and state dir come from the remote run's
+state.json, which remote.py writes.
 The suite's own key and scripts stay in its local temporary directory, which it removes.
 """
 import argparse
@@ -47,7 +39,6 @@ from scripts.work_runs import WorkRun  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 DIST = REPO / 'tools' / 'release' / 'dist'
-IDLE_LIMIT = 3 * 3600
 
 
 class Stop(Exception):
@@ -55,7 +46,7 @@ class Stop(Exception):
 
 
 class Failed(Exception):
-    """A failed suite or step, raised inside the WorkRun so its manifest's outcome reads failed."""
+    """A failed suite, raised inside the WorkRun so its manifest's outcome reads failed."""
 
     def __init__(self, code):
         super().__init__(f'exit code {code}')
@@ -72,12 +63,8 @@ def main():
     parser.add_argument('--address', required=True, help="the test host's tailnet address")
     parser.add_argument('--root', required=True, help='the owned root on the test host')
     parser.add_argument('--smolvm-prefix', required=True, help='the smolvm 1.22.2 install prefix there')
-    parser.add_argument('--suite-args', default='', help='arguments for the one suite run, such as -t PATTERN')
-    parser.add_argument('--loop', action='store_true', help='run STEPs, then the control file\'s (see above)')
-    parser.add_argument('steps', nargs='*')
+    parser.add_argument('--suite-args', default='', help='arguments for the suite run, such as -t PATTERN')
     options = parser.parse_args()
-    if options.steps and not options.loop:
-        parser.error('STEPs need --loop')
     if not (options.root.startswith('/') and options.smolvm_prefix.startswith('/')):
         parser.error('--root and --smolvm-prefix must be absolute')
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
@@ -96,15 +83,11 @@ def main():
         remote_py = f'{rdir}/remote.py'
         # Quoted for the remote shell.
         q_rdir, q_root, q_remote_py = shlex.quote(rdir), shlex.quote(options.root), shlex.quote(remote_py)
-        host_id = f'clankerbox-rewrite-{rid}'
-        # remote.py's NAME_PREFIX: every machine of the run carries the run's ID.
-        name_prefix = f'{host_id}-'
         # The remote dir holds evidence from its creation; only an initialised run owns more.
         state = {'remote_dir': False, 'initialised': False, 'remote_clean': False}
         darwin_bin = run.scratch / 'clankerbox'
         client_config = run.scratch / 'client.json'
         control_bin = run.scratch / 'host-control'
-        control_file = run.path / 'control'
 
         def log(msg):
             line = f'{time.strftime("%Y-%m-%dT%H:%M:%S")} {msg}'
@@ -192,7 +175,6 @@ def main():
         def remote_teardown():
             if not state['initialised']:
                 return
-            upload_remote_program()
             remote('teardown', 'teardown')
             state['remote_clean'] = True
             log('remote teardown verified')
@@ -224,11 +206,8 @@ def main():
             subprocess.run(ssh + [f'gunzip -f {q_rdir}/scratch/clankerbox.gz'], check=True, timeout=300)
             remote(f'set-binary-sha {sha}', 'set-sha', timeout=60)
 
-        record(remote_host=options.ssh, remote_run=rdir, host_id=host_id, unit=f'clankerbox-rewrite-{rid}-host.service',
-               machine_prefix=name_prefix, scope_prefix=f'smolvm-vm-{name_prefix}',
-               state_dir=f'{rdir}/scratch/s', inventory=f'{rdir}/scratch/s/smolvm', smolvm_prefix=options.smolvm_prefix,
-               address=options.address)
-        log(f'local run {run.path.name}; remote run {rdir}; host {host_id}')
+        record(remote_host=options.ssh, remote_run=rdir, smolvm_prefix=options.smolvm_prefix, address=options.address)
+        log(f'local run {run.path.name}; remote run {rdir}')
         linux, sha = build()
         sh(ssh + [f'mkdir -p {q_root}/runs && mkdir -m 700 {q_rdir}'], 'mkdir', timeout=60)
         state['remote_dir'] = True
@@ -236,11 +215,13 @@ def main():
         remote(f'init {shlex.quote(options.address)} {shlex.quote(options.smolvm_prefix)}', 'init', timeout=600)
         state['initialised'] = True
         upload(linux, sha)
-        remote(f'setup {host_id}', 'setup', timeout=900)
+        remote('setup', 'setup', timeout=900)
         subprocess.run(scp + [f'{options.ssh}:{rdir}/state.json', str(run.scratch / 'remote-state.json')], check=True)
-        port = json.loads((run.scratch / 'remote-state.json').read_text())['api_port']
-        record(api_port=port)
-        client_config.write_text(json.dumps({'hosts': [{'id': host_id, 'url': f'http://{options.address}:{port}'}]},
+        remote_state = json.loads((run.scratch / 'remote-state.json').read_text())
+        record(**{key: remote_state[key] for key in ('host_id', 'unit', 'machine_prefix', 'scope_pattern',
+                                                       'state_dir', 'inventory', 'api_port')})
+        client_config.write_text(json.dumps({'hosts': [{'id': remote_state['host_id'],
+                                                        'url': f'http://{options.address}:{remote_state["api_port"]}'}]},
                                             indent=2) + '\n')
         remote_control = f'python3 {q_remote_py} --run {q_rdir} control '
         control_bin.write_text(f'''#!/usr/bin/env python3
@@ -256,71 +237,15 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
 
         suite_env = dict(os.environ, CLANKERBOX_LIVE='1', CLANKERBOX_BIN=str(darwin_bin),
                          CLANKERBOX_LIVE_CONFIG=str(client_config), CLANKERBOX_LIVE_HOST_CONTROL=str(control_bin),
-                         CLANKERBOX_LIVE_PREFIX=name_prefix)
-        failed = []
-        code = 0
-
-        def fail(message, rc=1):
-            nonlocal code
-            failed.append(message)
-            code = code or rc
-            log(message)
-
-        def suite(n, args):
-            # Verbose, so the evidence names every test's result and keeps its [timing] lines.
-            rc = sh(['vp', 'test', '--reporter=verbose', *shlex.split(args)], f'suite-{n}', env=suite_env,
-                    cwd=REPO / 'tests' / 'live', timeout=5400, check=False)
-            record(**{f'suite_{n}': {'rc': rc}})
-            if rc != 0:
-                fail(f'suite {n}: rc={rc}; see evidence/suite-{n}.log', rc)
-
-        if not options.loop:
-            suite(1, options.suite_args)
-            if code:
-                raise Failed(code)
-            return
-
-        queue = list(options.steps)
-        processed = 0
-        last = time.time()
-        n = 0
-        while True:
-            if not queue and control_file.exists():
-                lines = [line.strip() for line in control_file.read_text().splitlines() if line.strip()]
-                queue, processed = lines[processed:], len(lines)
-            if not queue:
-                if time.time() - last > IDLE_LIMIT:
-                    log('idle limit reached')
-                    break
-                time.sleep(2)
-                continue
-            step = queue.pop(0)
-            last = time.time()
-            if step == 'done':
-                break
-            n += 1
-            log(f'== step {n}: {step}')
-            name, _, rest = step.partition(':')
-            try:
-                if name == 'suite':
-                    suite(n, rest)
-                elif name == 'reset':
-                    remote('reset', f'reset-{n}', timeout=900)
-                elif name == 'redeploy':
-                    linux, sha = build()
-                    upload_remote_program()
-                    remote('control host-stop', f'redeploy-stop-{n}', timeout=300)
-                    upload(linux, sha)
-                    remote('control host-start', f'redeploy-start-{n}', timeout=300)
-                else:
-                    fail(f'step {n}: unknown step {step}')
-            except Stop:
-                raise
-            except Exception as error:  # noqa: BLE001 - a failed step is logged; teardown still runs
-                fail(f'step {n} ({step}): {error}')
-        # Teardown still runs on the way out.
-        if code:
-            raise Failed(code)
+                         CLANKERBOX_LIVE_PREFIX=remote_state['machine_prefix'])
+        # Verbose, so the evidence names every test's result and keeps its [timing] lines.
+        rc = sh(['vp', 'test', '--reporter=verbose', *shlex.split(options.suite_args)], 'suite', env=suite_env,
+                cwd=REPO / 'tests' / 'live', timeout=5400, check=False)
+        record(suite={'rc': rc})
+        if rc != 0:
+            log(f'suite: rc={rc}; see evidence/suite.log')
+            # Teardown still runs on the way out.
+            raise Failed(rc)
 
 
 if __name__ == '__main__':
