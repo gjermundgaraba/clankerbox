@@ -1009,10 +1009,13 @@ Two rules for every VM job:
     SUID bit only when its stdout is a terminal (Run.swift:431-433), never
     under launchd: the operator installs Softnet with its SUID bit or a
     sudoers entry beforehand, which needs root.
-  - Softnet isn't installed on the MacBook Pro where phase 5 develops, so phase
-    5's native check ran the runtime without it, on Tart's NAT; the live
-    acceptance through the CLI waits on the owner's decision about installing
-    it there.
+  - On the MacBook Pro where phase 5 develops, the owner installs Softnet
+    0.24.0 from the release, staged with its provenance in
+    `.work/inputs/softnet-0.24.0/`: `sudo install -o root -g wheel -m 4755
+    <that dir>/softnet /usr/local/bin/softnet`. Nothing of ours installs,
+    changes or removes it. Phase 5's native check ran without it, on Tart's
+    NAT; Tart's live acceptance runs through the CLI once `ls -l
+    /usr/local/bin/softnet` shows `-rwsr-xr-x root wheel`.
 - **Removed:** no `tart ip`, no `HOME=<root>` for tart, and no refusal to
   replace a live launchd job. Tart reads registry credentials from the
   keychain only on an auth challenge, and a failed lookup isn't fatal
@@ -1385,7 +1388,10 @@ tests use real VMs.
      tailnet, never its setup, and its `new-identity` hook removes the tailnet
      node state, so every fork and restore joins as a new node.
    - Install smolvm 1.22.2 from upstream under `/opt/smolvm/1.22.2` on the Linux
-     host, and Tart ≥ 2.40.1 on the Mac. Production's Tart host is
+     host, and Tart ≥ 2.40.1 on the Mac, with Softnet installed as on the
+     MacBook Pro: 0.24.0 from the release, SUID root, in `/usr/local/bin`
+     (`sudo install -o root -g wheel -m 4755 softnet /usr/local/bin/softnet`).
+     Production's Tart host is
      macbook-workstation (100.73.230.122, `tag:agent-host`), not the MacBook
      Pro (100.122.69.11) where phase 5 develops and tests. Its pf passes the
      Tart host's API port and 10000–19999 on its tailnet address. Pull the
@@ -1500,6 +1506,10 @@ Everything the rewrite creates on a test machine is removed when the work ends.
 - **Ledger:** `~/clankerbox-rewrite/CLEANUP.md` records every change outside the
   owned root. `clanker` is still in the `kvm` group (added 2026-09-30); every
   other recorded change is reverted.
+- **Outside the owned root on the Mac:** `/usr/local/bin/softnet` (Softnet
+  0.24.0, SUID root), which the owner installed for Tart's live acceptance
+  (see [Runtimes: Tart](#runtimes-tart)). It is the owner's to keep or remove
+  in phase 10; to revert, `sudo rm /usr/local/bin/softnet`.
 - **Seeds:** reusable VM seeds go into the main checkout's `.work/inputs`, with
   provenance and a ready marker, and are always used through private clones.
   They are not ours to delete.

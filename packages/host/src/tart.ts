@@ -101,8 +101,8 @@ const stopPause = Duration.millis(500);
 
 /**
  * The search path of every tart call and VM job. Tart finds `softnet` (and `sudo`) on it
- * (T:Network/Softnet.swift:86-94, Utils.swift:30-45), and Homebrew installs Softnet in
- * `/opt/homebrew/bin`.
+ * (T:Network/Softnet.swift:86-94, Utils.swift:30-45): the operator installs Softnet, SUID root,
+ * in `/usr/local/bin`, and Homebrew in `/opt/homebrew/bin`.
  */
 const searchPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
