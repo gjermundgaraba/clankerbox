@@ -1118,6 +1118,15 @@ includes a relayed HTTP round trip. Machines had 1 vCPU, 512–1024 MiB and
   the suite logs and the host's journal. smolvm's per-VM `agent-console.log`
   records each guest command's arguments, so the preparation script's text
   (not its seed, which goes on stdin) is in every machine's log until delete.
+- **Rerun after the review fixes** (run `live-smolvm-dc551f1bc155`, remote
+  `runs/ldc5`, code as of `3d34da5`; same host, relay and sizes): 23 of 24
+  tests passed in 189 s. A `disk` restore of a 1 vCPU / 1 GiB checkpoint,
+  now created with `--cpus` and `--mem`, reported 1 CPU and at most 1 GiB of
+  MemTotal in the guest; P9's pack restores without them came up at 4 vCPU and
+  8192 MiB. The peer check failed, as it now does when its control fails:
+  the host again reached no listener on this Mac. Counts: 1 image-seed build
+  (Docker Hub's IPv6 counter 100 to 99), no other pull, 0
+  `smolvm-fork-ready` failures.
 
 ## Consumers and production
 
