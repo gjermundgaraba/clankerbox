@@ -747,6 +747,9 @@ A crashed preparation is simply run again on the next activation; no
   - The forwarder ends a connection by closing the exec's stdin. A killed
     `tart exec` leaves the guest's `nc` and `sshd-session` running until the
     session next writes.
+  - A machine's listener opens once its boot has answered `tart exec`, closes
+    when it stops or is deleted, and at host startup opens again for every
+    machine that runs.
 - **boat:** guest port 22 is reached at boat's SSH relay (see
   [Runtimes: boat](#runtimes-boat)), with no host port and no forwarder.
 - **Security:** a published port is reachable by whatever garaba-home's tailnet
@@ -772,6 +775,19 @@ runtimes:
   `systemd-run` and no unit files. Verified for plain starts and restores.
 - **Tart:** the plist is written once at create. Start runs `launchctl print`,
   then bootstrap if the job is absent, then `kickstart` without `-k`.
+  - One LaunchAgent per VM in the user's `gui/<uid>` domain, labelled with the
+    VM's name, running `tart run --no-graphics --net-softnet-block=@host <vm>`
+    with `RunAtLoad` and `KeepAlive` false. The plist and the job's log are in
+    the state dir's `launchd/`, not `~/Library/LaunchAgents`: nothing loads
+    them at login, and a test host's jobs stay apart from production's. After
+    a reboot, `start` bootstraps the job again.
+  - The job's environment is the one every tart call of the host gets: a fixed
+    `PATH` (with `/opt/homebrew/bin`, where Tart looks for `softnet`), `HOME`,
+    and the host's own `TART_HOME` if it has one, so the job finds the VM the
+    host made. Production sets none and uses `~/.tart`.
+  - `kickstart` returns before Tart has started the VM (P11), so a boot waits
+    for `tart exec` to answer, and a job that exits instead fails it with its
+    log, which each boot empties first.
 
 Two rules for every VM job:
 
@@ -953,10 +969,31 @@ Two rules for every VM job:
   on it.
 - **Softnet:** `--net-softnet-block=@host`. Blocking `@host` also blocks gateway
   DNS, so setup sets public resolvers first.
-- **Removed:** no `tart ip`, no `HOME=<root>` for tart (test the keychain when
-  removing it), and no refusal to replace a live launchd job.
+  - The option implies `--net-softnet` (T:Commands/Run.swift:325-327). Tart
+    finds `softnet` on `PATH` (T:Network/Softnet.swift:86-94), and sets up its
+    SUID bit only when its stdout is a terminal (Run.swift:431-433), never
+    under launchd: the operator installs Softnet with its SUID bit or a
+    sudoers entry beforehand, which needs root.
+  - Softnet isn't installed on the MacBook Pro where phase 5 develops, so phase
+    5's native check ran the runtime without it, on Tart's NAT; the live
+    acceptance through the CLI waits on the owner's decision about installing
+    it there.
+- **Removed:** no `tart ip`, no `HOME=<root>` for tart, and no refusal to
+  replace a live launchd job. Tart reads registry credentials from the
+  keychain only on an auth challenge, and a failed lookup isn't fatal
+  (T:OCI/Registry.swift:440-460). Phase 5 checked it with the user's real
+  `HOME`: a pull of a missing tag on ghcr.io, from a shell and from a
+  LaunchAgent, got its anonymous token and failed only on the 404 manifest,
+  with no lookup failure (evidence.md, Phase 5).
 - **Clone:** `tart set --random-serial` once per clone. No `--random-mac`, since
-  clone already regenerates a colliding MAC.
+  clone already regenerates a colliding MAC. That holds within one Tart home
+  only (T:Commands/Clone.swift:109, Run.swift:421-424): two VMs in separate
+  homes ran with one MAC and one IP, with no warning (P11).
+- **Sizes:** create passes `--cpu`, `--memory` (MiB) and `--disk-size` with
+  the clone's `tart set`. Tart sizes disks in GB, so `diskGib` is rounded up
+  to whole GB, and it only grows a disk: a `diskGib` below the base's (50 GB
+  on the Cirrus images) fails the create, and `delete` cleans up. The stock
+  Cirrus guest grew its APFS container to the new size at boot (phase 5).
 - **Trust Tart's clone:** it builds in a temp directory under a lock and
   garbage-collects interrupted clones. Since 2.40.1, clone refuses an existing
   destination, and the instance in the name means it never meets one. Never
@@ -966,23 +1003,40 @@ Two rules for every VM job:
   `start` can't slip in before the clone. A running machine is refused with
   `Precondition`. Tart checkpoints are always `disk`.
 - **Delete:** exit 2 means missing; from 2.40.0 a running VM exits 1. No
-  inspections around delete.
+  inspections around delete: exit 1 forces the VM off (`tart stop --timeout
+  0`), then deletes again. Then the job is booted out (exit 3: launchd
+  doesn't hold it) and its plist and log removed.
 - **Stop:** in-guest `shutdown -h now`, then `tart stop --timeout 0` as the
-  forced fallback.
+  forced fallback once the VM hasn't stopped within a minute. Stock Cirrus
+  guests stopped 2.3–7.8 s after the shutdown, and 25.6 s for one whose agent
+  was still starting (phase 5). `tart stop` returning doesn't mean the VM has
+  gone (P11), so both wait for `tart list` to read it stopped.
 - **Capacity:** Apple allows two running macOS VMs per Mac, the operator's own
   included. Every action that boots a VM (create, start, fork, restore) counts
   running VMs with `tart list` in step 3 and refuses with `Capacity` at two, so
-  the refusal writes nothing. Apple's own refusal is the backstop when two
+  the refusal writes nothing. The count also takes every machine a booting
+  action holds, the target included, as the RAM budget does: a VM reads
+  running only once its job has started it, so two creates checked one after
+  the other would otherwise both pass. Apple's own refusal is the backstop when two
   starts race: it maps to `Capacity` too, but the clone that a create, fork or
   restore has already made then stays, with `action.status = failed`, like any
-  other failure from step 4. P11 checks what that refusal looks like.
+  other failure from step 4.
+  - P11: `tart run` of a third VM exits 1 within 0.3–0.6 s with "The number of
+    VMs exceeds the system limit"; it never hangs. Under launchd the job just
+    exits, so the boot reads the job's state and log.
+  - `tart list` sees only its own Tart home (P11). Production's host uses
+    `~/.tart`, so the count covers the operator's Tart VMs there, but not VMs
+    in another home or another app; for those, Apple's refusal is the guard.
 - **Guest agent:** stock Cirrus images run tart-guest-agent ≥ 0.15.0 as a
   per-user LaunchAgent, which starts after auto-login. Tart's `Runtime.exec`
   waits for `tart exec` to answer after boot, then runs its command through
   `sudo -n`. A base without passwordless sudo fails the create loudly. On
   `macos-tahoe-base` the agent is 0.15.0, `admin` has passwordless sudo, and
-  exec first answered 18.5–32.3 s after `tart run` (P3), so the wait allows a
-  minute. The forwarder calls `tart exec` directly,
+  exec first answered 18.5–32.3 s after `tart run` (P3), but about 61 and 93 s
+  after it when two VMs booted together (P11), and two is as many as Apple
+  runs. So the wait allows three minutes. An exec sent while the guest boots
+  blocks until the agent is up, or fails after about 30 s if it isn't
+  (P11), so the wait retries. The forwarder calls `tart exec` directly,
   since `nc` needs no root.
 
 ### Runtimes: boat
@@ -1131,7 +1185,9 @@ Two rules for every VM job:
   - It holds `id`, `runtime`, `listen: {address, port}`, `stateDir` (relative
     to the config file), `bases` (name to image) and the runtime's own
     settings, for smolvm `smolvm: {prefix, publishAddress?, ramBudgetMib?}`.
-    Unknown keys are refused, as in every input.
+    Unknown keys are refused, as in every input. For Tart:
+    `tart: {binary, publishAddress?}`, where `binary` is the `tart` executable
+    of a versioned install, which VM jobs run.
   - `listen.address` and `publishAddress` must be a tailnet address
     (100.64.0.0/10 or fd7a:115c:a1e0::/48, Tailscale's ranges:
     tailscale.com/kb/1015, kb/1033) or a loopback address. The tailnet is the
@@ -1229,6 +1285,10 @@ tests use real VMs.
 5. **Tart.** The runtime, its names, the forwarder and the two-VM count.
    `stop` and `delete` after an interrupted operation. Spike P11. Live tests
    on the Mac. Freeze the `Runtime` interface only after this slice.
+   - The `Runtime` interface is frozen as of this phase
+     (`packages/host/src/runtime.ts`). Tart needed one change to it: `startup`
+     receives the host's machines, so the forwarder listens again for those
+     that run. A later change records its reason here.
 6. **boat.** The runtime, the machine-type choice, its refusals and its
    bounded retry. `stop` and `delete` after an interrupted operation. Built
    and tested on boat's trial, live tests included.

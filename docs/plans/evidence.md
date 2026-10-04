@@ -30,7 +30,7 @@ Checked 2026-10-01. Each row says what was actually exercised.
 | Dependency | Pinned | Exercised |
 | --- | --- | --- |
 | smolvm | exactly 1.22.2, upstream and unmodified, installed by the operator | 1.22.0 on this Mac (unprivileged) and on the Linux host (unprivileged and as root); 1.22.2 on this Mac (unprivileged) and on the Linux host as root (phase 0: P1, P3, P8). |
-| Tart | ≥ 2.40.1 | Audited in source at 2.40.1; S3 ran on 2.38.0; P2 ran on 2.40.1 (release tarball, checksum verified). |
+| Tart | ≥ 2.40.1 | Audited in source at 2.40.1; S3 ran on 2.38.0; P2, P3, P11 and phase 5's native check of the runtime module ran on 2.40.1 (release tarball, checksum verified). |
 | Softnet | 0.24.0 (needs macOS 26) | Audited. It runs its own DHCP server and advertises the gateway as DNS. |
 | tart-guest-agent | ≥ 0.15.0 | Audited. Its vsock sockets are close-on-exec. P2 ran on 0.14.1 (the old pipeline's seed), P3 on 0.15.0 (stock Cirrus image). |
 | Ubuntu (smolvm base) | 26.04 LTS, `ubuntu:26.04` (resolute), digest-pinned in host config, from `mirror.gcr.io/library/ubuntu` | On Docker Hub with amd64 and arm64 builds. The tag moved: index digest `sha256:3595d7fc…` on 2026-10-02, `sha256:f144425f…59f7` on 2026-10-04. Run on smolvm 1.22.2 as root in phase 0 (guest reports 26.04.1 LTS), pulled from Docker Hub. mirror.gcr.io answered an anonymous manifest request for `sha256:f144425f…59f7` with 200, and its `26.04` tag carried that digest, on 2026-10-04. In P9 (L:p9, z9) that full reference as a `--storage 8` base pulled in the guest from the mirror: first start 6.92 s, Ubuntu 26.04.1, Docker Hub's counter unchanged. smolvm's seed build from it hasn't run yet. smolvm's own `docker.io` mirror setting (`[images.registries."docker.io"] mirror`) pulled from the mirror, then failed the start with `image not found: docker.io/library/ubuntu@sha256:…`: the CLI rewrites the reference before the pull (S@1.22.2:src/agent/client.rs:1374-1386). |
@@ -1180,6 +1180,102 @@ includes a relayed HTTP round trip. Machines had 1 vCPU, 512–1024 MiB and
     which it doesn't count);
   - timings: `ram` capture 1.20 s, fork 2.77 s, two concurrent restores
     1.75 s, one restore 1.30 s; 0 `smolvm-fork-ready` failures.
+
+## Phase 5 (2026-10-04)
+
+On this Mac (macOS 27.0), Tart 2.40.1 from the checked release tarball, guests
+on private APFS clones of the stock `macos-tahoe-base@sha256:87f3aa5c…` seed
+(P3) in a private Tart home; Softnet not installed, no `sudo`.
+
+**P11, Tart's refusal of a third VM** (L:p11, run `.work/runs/p11-tart-7983af5bae7b`):
+
+- **A fast refusal:** with two VMs running, `tart run` of a third exited 1
+  after 0.28–0.57 s, 4 of 4, with "The number of VMs exceeds the system limit
+  (other running VMs: …)" on stderr. Tart catches
+  `VZError.virtualMachineLimitExceeded` (T:Commands/Run.swift:537-559,
+  VMStorageHelper.swift:146-147) and exits (Run.swift:596-599). The limit is
+  system-wide: a third VM in another Tart home was refused the same way, but
+  the hint lists only the same home's VMs (Run.swift:542-551).
+- Nothing lingered: no `tart run`, no `control.sock`, and `tart list` read the
+  VM stopped. For 0.19–0.40 s Tart held the refused VM's lock, and `tart list`
+  read it `running` in that window.
+- **Under launchd** (`RunAtLoad` and `KeepAlive` false, bootstrap, then
+  `kickstart` without `-k`, 3 trials): `kickstart` returned 0 in
+  0.010–0.045 s, before Tart decided. The refusal showed 0.51–4.17 s later as
+  `state = not running`, `last exit code = 1` in `launchctl print`, and the
+  same line in the job's log. A second `kickstart` within 10 s of the spawn
+  blocked 6.06–10.02 s (`minimum runtime = 10`).
+- **`tart list` sees one Tart home only,** so it can't count VMs in another
+  home or app. Counting `com.apple.Virtualization.VirtualMachine` processes
+  instead would count Linux guests too, and a refusal briefly adds one.
+- **The control socket** is bound and dialled by the relative name
+  `control.sock` after a change into the VM's directory
+  (T:ControlSocket.swift:30-35, 46; Commands/Exec.swift:44-48, 66), so the
+  home's path length doesn't matter: homes of 60, 90 and 106 bytes (socket
+  paths up to 158 bytes) worked for `tart exec`, `exec -i` and `tart ip
+  --resolver agent`. `scripts/WORK_RUNS.md`'s 37-byte rule was arithmetic, not
+  a measurement, and is gone.
+- **`tart list --format json`:** `Source`, `Name`, `Disk` (can be null),
+  `Size`, `Accessed`, `Running` (kept for backwards compatibility,
+  T:Formatter/Format.swift:27-31) and `State` (`running`, `suspended`,
+  `stopped`). Median 0.047 s with 3 VMs.
+- **Exec while booting:** an exec whose agent wasn't up after about 30 s
+  failed with `GRPCConnectionPoolError … is the Tart Guest Agent running?`
+  (4 times); the next attempt succeeded. Two VMs booted together answered
+  after about 61 and 93 s (≤ 62.1 and ≤ 95.4 s for their partners), against
+  30.4 s alone.
+- **MACs:** Tart's collision check covers one home only (Run.swift:421-424,
+  Clone.swift:109): two VMs from separate homes ran with the seed's MAC and
+  both got 192.168.64.67.
+- **`tart stop` returning doesn't mean the VM is gone:** once `tart run` took
+  about 32 s to exit after a default `tart stop` returned in 0.43 s.
+
+**The runtime module, natively** (driver and script in
+`.work/spike-results/p5-tart-native/`, run
+`.work/runs/p5-tart-native-e9221d1b17b8`). A driver called
+`packages/host/src/tart.ts` and the shared setup and preparation directly,
+not through `clankerbox host`, with `network` empty instead of
+`--net-softnet-block=@host` (Tart's NAT), host ID `clankerbox-rewrite-p5`,
+4 vCPU / 8192 MiB / 60 GiB, at most two VMs at once. Single samples:
+
+- **create** (clone, `set` with the sizes, job, boot until exec answered)
+  23.4 s; setup over exec through `sudo -n` 5.3 s; preparation 1.1 s, which
+  re-minted the host key and wrote the machine ID and instance; preparation
+  again 0.09 s, keeping the key. The plist passed `plutil -lint`, and
+  `launchctl print` showed the job running `tart run` with only `PATH`,
+  `HOME` and `TART_HOME` set. `tart get` read 4 CPUs, 8192 MiB and a 65 GB
+  disk; the guest's APFS container had grown to 64.5 GB, and `df` showed 60
+  GiB. exec ran as uid 0.
+- **ssh through the forwarder** with the pinned key: `ssh … true` 0.15–0.45 s
+  (15 samples over three machines); 64 MiB through `ssh … cat` up 0.59–0.84 s
+  and down 0.66–1.07 s, hashes matching; a wrong pin refused.
+- **Host restart:** with the runtime's scope closed, the port refused
+  connections; a new runtime's `startup` listened again for the running
+  machine, and ssh worked.
+- **stop** (in-guest `shutdown -h now`) 2.3–7.8 s, no forced stop; the port
+  then refused connections. **start** of a stopped machine 19.4 s with its job
+  held, 21.3 s after a `bootout`, which it bootstrapped again; the host key
+  stayed the same.
+- **Disk checkpoint and copies:** capture (a clone of the stopped machine)
+  0.044 s; fork 25.8 s and restore 29.7 s, each with its own new host key;
+  capture and fork of a running machine were `Precondition`.
+- **The two-VM count** against real `tart list`: with two VMs running, a
+  start of a third was `Capacity`, and so was a create with one running and
+  two held by creates.
+- **After an interrupted operation:** a create interrupted 3 s after its VM
+  ran left it booting; `stop` took 25.6 s (the shutdown exec waited for the
+  agent), and `delete` 0.90 s. `delete` of a running VM 0.92 s (exit 1, forced
+  off, deleted, job booted out, `launchctl print` 113), of stopped ones
+  0.85 s, and of a machine with nothing native 0.045 s. Checkpoint delete
+  0.87 s, then again (missing) 0.04 s.
+- **The keychain without `HOME=<root>`:** `tart pull` of a missing tag on
+  ghcr.io, from a shell and from a LaunchAgent with `HOME` and `TART_HOME`,
+  got its anonymous token and failed only on the 404 manifest; no credential
+  lookup failure was printed.
+- An earlier run (`p5-tart-native-1f33ecd80d40`) failed its first ssh: the
+  driver ran ssh synchronously in the process that hosts the forwarder.
+- Teardown: no VM, job (`launchctl print` 113) or process left; the seed's
+  checksums unchanged.
 
 ## Consumers and production
 
