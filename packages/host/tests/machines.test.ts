@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { Capacity, Conflict, Internal } from "@gjermundgaraba/clankerbox-sdk";
@@ -404,19 +404,24 @@ test("a failing setup fails the create with its last lines of output, never its 
   });
 });
 
-test("a setup that runs past its timeout fails the create with the output so far", async () => {
+test("a setup that runs past its timeout fails the create with the output so far, and its file goes", async () => {
   const linux = await host();
-  const script = `#!/bin/sh\n# ${marker}\necho before the wait\nsleep 30\n`;
+  const script = `#!/bin/sh\n# ${marker}\necho "running as $0"\nsleep 30\n`;
 
   const error = await failure(
     linux,
     linux.machines.create(request("dev", { setup: { script, timeoutSeconds: 1 } })),
   );
 
+  const file = /running as (\S+)/u.exec(error.message)?.[1] ?? "";
+
+  await settle();
+
   expect(error._tag).toBe("Precondition");
   expect(error.message).toContain("setup ran past its 1s timeout");
-  expect(error.message).toContain("before the wait");
   expect(error.message.includes(marker)).toBe(false);
+  expect(file).toMatch(/^\/var\/tmp\/clankerbox-setup\./u);
+  await expect(stat(file)).rejects.toThrow();
 });
 
 test("the RAM budget counts running machines and refuses with Capacity, writing nothing", async () => {

@@ -91,12 +91,14 @@ const succeeded = (what: string, timeout: Duration.Duration, ran: Ran) =>
 /**
  * Runs a setup script that arrives on stdin, so it never appears in a process list. It runs
  * as its own file, honouring its `#!` line, with stdin closed. The file is under `/var/tmp`,
- * which nothing mounts `noexec`, and is removed however setup ends.
+ * which nothing mounts `noexec`, and is removed however setup ends: a signal that ends the
+ * shell runs its exit trap too.
  */
 const setupRunner = [
   "set -eu",
   "script=$(mktemp /var/tmp/clankerbox-setup.XXXXXX)",
   `trap 'rm -f "$script"' EXIT`,
+  "trap 'exit 1' HUP INT TERM",
   `cat >"$script"`,
   `chmod 700 "$script"`,
   `"$script" </dev/null`,
