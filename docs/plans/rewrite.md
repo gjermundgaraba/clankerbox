@@ -518,7 +518,10 @@ listed to keep them from being ported):
   (S@1.22.2:src/cli/vm_common.rs:3102), so it can't know which port to remove,
   although `machine update` is idempotent (src/cli/machine.rs:5917-5929). So
   whatever fails in the restore's create, port move or first boot deletes the
-  VM, reading status first like `delete`. The row stays `failed`, the machine
+  VM, reading status first like `delete`. A first boot cut short can leave
+  its VMM in the VM's scope before smolvm records its pid, and smolvm's delete
+  then leaves it running (evidence.md, Phase 4 live), so a scope still loaded
+  is killed before the delete. The row stays `failed`, the machine
   reads `missing`, `start` says to delete it, and `delete` removes the row. A
   host crash inside that window can still leave a VM on the source's port;
   that is accepted. The fork's source ends `fork` `failed` like any fork's,

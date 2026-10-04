@@ -704,6 +704,7 @@ test("a restore whose port move fails deletes the VM it made, and returns the mo
   expect(smolvmArgs(spawner.calls).map((args) => args.slice(0, 2).join(" "))).toEqual([
     "machine create",
     "machine update",
+    "systemctl show",
     "machine status",
     "machine delete",
   ]);
@@ -724,6 +725,7 @@ test("a restore whose create fails deletes nothing: smolvm rolled it back", asyn
   expect(error.message).toBe("smolvm machine create copy-abcdefab exited 1: Error: no space");
   expect(smolvmArgs(spawner.calls).map((args) => args.slice(0, 2).join(" "))).toEqual([
     "machine create",
+    "systemctl show",
     "machine status",
   ]);
 });
@@ -747,6 +749,33 @@ test("a restore whose boot fails deletes the VM it made", async () => {
     "--name",
     "copy-abcdefab",
     "--force",
+  ]);
+});
+
+test("a restore whose boot is cut short kills the VMM its scope still holds, then deletes the VM", async () => {
+  const spawner = scripted((call) => {
+    if (call.args[1] === "start") {
+      return { exitCode: 143 };
+    }
+
+    if (call.file === "systemctl" && call.args[0] === "show") {
+      return { stdout: "loaded\n" };
+    }
+
+    // smolvm recorded no pid for the cut-short boot, so it reads the VM as stopped.
+    return call.args[1] === "status" ? status("stopped") : undefined;
+  });
+
+  const runtime = await runtimeOf(await prepared(), spawner);
+
+  await Effect.runPromise(Effect.flip(runtime.restore(ramCheckpoint, copy)));
+
+  expect(smolvmArgs(spawner.calls).slice(3)).toEqual([
+    ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-copy-abcdefab.scope"],
+    ["systemctl", "kill", "--signal=SIGKILL", "smolvm-vm-copy-abcdefab.scope"],
+    ["machine", "status", "--name", "copy-abcdefab", "--json"],
+    ["machine", "delete", "--name", "copy-abcdefab", "--force"],
+    ["systemctl", "reset-failed", "smolvm-vm-copy-abcdefab.scope"],
   ]);
 });
 

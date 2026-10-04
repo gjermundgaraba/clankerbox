@@ -360,11 +360,41 @@ export const make = (
       });
 
     /**
+     * Removes a VM whose first boot may have been cut short. Such a boot can leave its VMM
+     * running in the VM's scope before smolvm records its pid, and smolvm's delete then leaves
+     * that VMM running, on the machine's port, with no record (a host stopped mid-fork, in the
+     * phase-4 live rerun). So a loaded scope is killed first, as `removeVm` does after a failed
+     * stop.
+     */
+    const discardVm = (machine: MachineRef) =>
+      Effect.gen(function* () {
+        const scope = scopeName(nativeName(machine));
+
+        const loaded = yield* systemctl(
+          ["show", "--property=LoadState", "--value", scope],
+          `show ${scope}`,
+        );
+
+        const killed = loaded.stdout.trim() === "loaded";
+
+        if (killed) {
+          yield* systemctl(["kill", "--signal=SIGKILL", scope], `kill ${scope}`);
+        }
+
+        yield* removeVm(machine);
+
+        if (killed) {
+          yield* Effect.ignore(systemctl(["reset-failed", scope], `reset-failed ${scope}`));
+        }
+      });
+
+    /**
      * Makes `machine` from a checkpoint, moves the source's port to its own, and boots it.
      * smolvm refuses topology flags at a create from a live checkpoint and keeps its port, so
      * the port is swapped before the first start. A VM made but not moved sits on the source's
-     * port, and `machine start` never moves it, so whatever fails here deletes the VM: the row
-     * then reads missing, and delete is all it takes. A host crash in that window is accepted.
+     * port, and `machine start` never moves it, so whatever fails here, or interrupts it,
+     * discards the VM: the row then reads missing, and delete is all it takes. A host crash in
+     * that window is accepted.
      * The restore cache is off: it survives every smolvm command, and a fork restores each
      * checkpoint once.
      */
@@ -402,7 +432,7 @@ export const make = (
         yield* boot(native);
       }).pipe(
         Effect.onError(() =>
-          removeVm(machine).pipe(
+          discardVm(machine).pipe(
             Effect.catch((error) =>
               Effect.logWarning(`restore ${machine.id}: couldn't delete its VM: ${error.message}`),
             ),
