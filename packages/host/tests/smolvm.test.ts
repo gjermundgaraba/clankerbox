@@ -704,7 +704,7 @@ test("a ram restore that got its source's old port keeps it", async () => {
   expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["create", "start"]);
 });
 
-test("a disk restore creates from the pack with the network, a port and the disk size", async () => {
+test("a disk restore creates from the pack with the machine's sizes, the network and a port", async () => {
   const settings = await prepared();
   const spawner = scripted(() => undefined);
   const runtime = await runtimeOf(settings, spawner);
@@ -719,6 +719,10 @@ test("a disk restore creates from the pack with the network, a port and the disk
       "copy-abcdefab",
       "--from",
       join(settings.stateDir, "packs", "snap-fedcba98", "snap-fedcba98.smolmachine"),
+      "--cpus",
+      "2",
+      "--mem",
+      "2048",
       "--net",
       "--net-backend",
       "virtio-net",

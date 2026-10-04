@@ -700,7 +700,9 @@ A crashed preparation is simply run again on the next activation; no
     start. To read ports back, use `machine ls -v` or the VM's
     `agent.config.json`; `machine status --json` reports only a count.
   - A `disk` restore takes `--net` and a fresh `-p` flag at create, like a
-    machine created from a base.
+    machine created from a base, and `--cpus`, `--mem` and `--storage` too: a
+    pack carries smolvm's default sizes (4 vCPU, 8192 MiB), not its source's
+    (P9).
 - **Tart:**
   - Tart has no port publishing, and the guest's Softnet address is reachable
     only from the Mac.

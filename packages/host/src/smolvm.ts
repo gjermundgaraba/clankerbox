@@ -451,8 +451,8 @@ export const make = (
           const native = nativeName(machine);
           const port = yield* portOf(machine);
 
-          // A pack has no checkpoint manifest, so it takes topology flags like an image, and it
-          // doesn't carry its source's disk size.
+          // A pack has no checkpoint manifest, so it takes topology flags like an image. It
+          // carries smolvm's default sizes, not its source's (P9), so every size is passed.
           yield* call(
             [
               "machine",
@@ -461,6 +461,10 @@ export const make = (
               native,
               "--from",
               packOf(checkpoint).file,
+              "--cpus",
+              String(machine.cpu),
+              "--mem",
+              String(machine.ramMib),
               "--net",
               "--net-backend",
               "virtio-net",

@@ -919,6 +919,18 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
         starts: source.starts + 1,
       });
 
+      // A pack carries smolvm's default 4 vCPU and 8 GiB, so these show the restore's own sizes.
+      const [cpus, memKib] = (
+        await inGuest("disk-a", "nproc; awk '/^MemTotal:/ { print $2 }' /proc/meminfo")
+      )
+        .trim()
+        .split("\n")
+        .map(Number);
+
+      expect(cpus).toBe(made.cpu);
+      expect(memKib).toBeGreaterThan(0);
+      expect(memKib).toBeLessThanOrEqual(made.ramMib * 1024);
+
       const disk = await usage("disk-a");
 
       console.log(
