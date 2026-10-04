@@ -746,8 +746,8 @@ test("a restore whose boot fails deletes the VM it made", async () => {
 });
 
 /**
- * A spawner whose `machine checkpoint` makes its output in its store, as smolvm does, and whose
- * `machine create` answers `create`.
+ * A spawner whose `machine checkpoint` makes its output in its store, as smolvm does, whose
+ * `machine create` answers `create`, and whose `machine status` knows no copy.
  */
 const forking = (create: Reply) =>
   scripted((call) => {

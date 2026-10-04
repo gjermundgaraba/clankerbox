@@ -56,10 +56,7 @@ type Making =
       readonly work: (machine: MachineRef, source: MachineRef) => Work;
     };
 
-/**
- * Builds the actions. Before it returns, every action the last host process left running is
- * marked failed and the runtime runs its own startup cleanup, so nothing is served before.
- */
+/** Builds the actions, once the host's startup step has run (`index.ts`). */
 export const make = (
   config: Pick<HostConfig, "id" | "bases">,
 ): Effect.Effect<Interface, HostError, Store | Runtime | Scope.Scope> =>
@@ -68,9 +65,6 @@ export const make = (
     const runtime = yield* Runtime;
     const detached = yield* detacher;
     const admission = yield* Semaphore.make(1);
-
-    yield* store.failInterrupted;
-    yield* runtime.startup;
 
     const idOf = idOn(config.id);
     const nameOf = nameOn(config.id);

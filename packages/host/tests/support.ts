@@ -7,6 +7,7 @@ import type { CreateRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer, Logger, ManagedRuntime } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import * as Checkpoints from "../src/checkpoints.ts";
+import { startup } from "../src/index.ts";
 import * as Machines from "../src/machines.ts";
 import { routes } from "../src/server.ts";
 import * as Store from "../src/store.ts";
@@ -39,11 +40,13 @@ export const cleanup = async (owned: Array<string>, hosts: Array<TestHost>) => {
 };
 
 /**
- * The store and the actions over `fake`, on the state dir `stateDir`. Failed actions log no
+ * The store and the actions over `fake`, on the state dir `stateDir`, after the host's startup
+ * step. Failed actions log no
  * warnings here: the tests read their errors.
  */
 export const coreLayer = (stateDir: string, fake: FakeRuntime) =>
   Layer.merge(Machines.layer(hostConfig(stateDir)), Checkpoints.layer(hostConfig(stateDir))).pipe(
+    Layer.provide(startup),
     Layer.provideMerge(
       Layer.merge(Layer.effect(Store.Store, Store.open(stateDir, "linux")), fake.layer),
     ),
