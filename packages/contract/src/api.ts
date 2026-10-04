@@ -100,7 +100,7 @@ export const CheckpointGroup = ActionGroup.make(
   }),
   Action.make("capture", {
     description:
-      "Capture a checkpoint of a machine. Its kind follows the runtime: ram from a running smolvm machine, otherwise disk.",
+      "Capture a checkpoint of a machine. Its kind follows the runtime: ram on smolvm, which captures only a running machine, and disk on Tart and boat.",
     input: FromMachine,
     success: Checkpoint,
     access: "write",

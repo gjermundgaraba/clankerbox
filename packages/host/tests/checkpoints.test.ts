@@ -210,13 +210,9 @@ test("IDs are checked whole: another host's source or checkpoint, or a new ID to
   expect(linux.fake.calls).toEqual([]);
 });
 
-test("a capture of a running machine is ram, of a stopped one disk, with the source's spec", async () => {
+test("a capture of a running machine is ram, with the source's spec and the runtime's pin", async () => {
   const linux = await withSource();
   const ram = await linux.run(linux.checkpoints.capture("linux_dev", "hot"));
-
-  await linux.run(linux.machines.stop("linux_dev"));
-
-  const disk = await linux.run(linux.checkpoints.capture("linux_dev", "cold"));
   const rows = await linux.run(linux.store.checkpoints);
 
   expect(ram).toMatchObject({
@@ -230,13 +226,33 @@ test("a capture of a running machine is ram, of a stopped one disk, with the sou
     diskGib: 10,
     action: { name: "capture", status: "done" },
   });
-  expect(disk).toMatchObject({ id: "linux_cold", kind: "disk" });
-  expect(rows.map(({ name, pin }) => [name, pin])).toEqual([
-    ["hot", "fake 1"],
-    ["cold", undefined],
-  ]);
+  expect(rows.map(({ name, pin }) => [name, pin])).toEqual([["hot", "fake 1"]]);
   expect((await actions(linux))["dev"]).toEqual({ name: "capture", status: "done" });
-  expect(await linux.run(linux.checkpoints.list)).toEqual([ram, disk]);
+  expect(await linux.run(linux.checkpoints.list)).toEqual([ram]);
+});
+
+test("a capture of a stopped machine on a ram runtime is Precondition, and writes nothing", async () => {
+  const linux = await withSource();
+
+  await linux.run(linux.machines.stop("linux_dev"));
+
+  const error = await failure(linux, linux.checkpoints.capture("linux_dev", "cold"));
+
+  expect(error).toEqual(new Precondition({ message: "linux_dev is stopped: start it first" }));
+  expect(await checkpointActions(linux)).toEqual({});
+  expect((await actions(linux))["dev"]).toEqual({ name: "stop", status: "done" });
+});
+
+test("a disk runtime's capture of a stopped machine is disk, with no pin", async () => {
+  const linux = await withSource({ runtime: { checkpointKind: "disk" } });
+
+  await linux.run(linux.machines.stop("linux_dev"));
+
+  const disk = await linux.run(linux.checkpoints.capture("linux_dev", "cold"));
+  const rows = await linux.run(linux.store.checkpoints);
+
+  expect(disk).toMatchObject({ id: "linux_cold", kind: "disk" });
+  expect(rows.map(({ name, pin }) => [name, pin])).toEqual([["cold", undefined]]);
 });
 
 test("a capture of a machine another action holds is Conflict{busy}, and writes nothing", async () => {
@@ -375,12 +391,10 @@ test("a restore of a checkpoint that isn't ready is Precondition; of none, NotFo
   expect(Object.keys(await actions(linux))).toEqual(["dev"]);
 });
 
-test("a ram checkpoint restores only under its pin; a disk checkpoint under any", async () => {
+test("a ram checkpoint restores only under its pin, and writes nothing otherwise", async () => {
   const first = await withSource();
 
   await first.run(first.checkpoints.capture("linux_dev", "hot"));
-  await first.run(first.machines.stop("linux_dev"));
-  await first.run(first.checkpoints.capture("linux_dev", "cold"));
   await first.dispose();
 
   const upgraded = await host({
@@ -389,7 +403,6 @@ test("a ram checkpoint restores only under its pin; a disk checkpoint under any"
   });
 
   const refused = await failure(upgraded, upgraded.machines.restore("linux_hot", "copy"));
-  const restored = await upgraded.run(upgraded.machines.restore("linux_cold", "copy"));
 
   expect(refused).toEqual(
     new Precondition({
@@ -397,6 +410,24 @@ test("a ram checkpoint restores only under its pin; a disk checkpoint under any"
         "checkpoint linux_hot holds RAM state saved under fake 1, and this host runs fake 2; it restores only under the same one",
     }),
   );
+  expect(upgraded.fake.calls).toEqual(["startup"]);
+  expect(Object.keys(await actions(upgraded))).toEqual(["dev"]);
+});
+
+test("a disk checkpoint restores under any pin", async () => {
+  const first = await withSource({ runtime: { checkpointKind: "disk" } });
+
+  await first.run(first.machines.stop("linux_dev"));
+  await first.run(first.checkpoints.capture("linux_dev", "cold"));
+  await first.dispose();
+
+  const upgraded = await host({
+    dir: first.dir,
+    fake: fakeRuntime({ dir: first.dir, pin: "fake 2", checkpointKind: "disk" }),
+  });
+
+  const restored = await upgraded.run(upgraded.machines.restore("linux_cold", "copy"));
+
   expect(restored.action).toEqual({ name: "restore", status: "done" });
   expect(upgraded.fake.calls).toEqual([
     "startup",

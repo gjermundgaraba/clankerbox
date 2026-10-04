@@ -15,6 +15,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { checkRamBudget } from "../src/ram-budget.ts";
 import {
   type Activation,
+  type CheckpointKind,
   type CheckpointRef,
   type MachineRef,
   type MachineState,
@@ -45,6 +46,11 @@ export interface FakeOptions {
   readonly ramBudgetMib?: number | undefined;
   /** What `ram` checkpoints record. Default: `fake 1`. */
   readonly pin?: string | undefined;
+  /**
+   * The kind of every checkpoint. `ram`, the default, captures only a running machine, as
+   * smolvm does; `disk` captures one in any state, as boat does.
+   */
+  readonly checkpointKind?: CheckpointKind | undefined;
 }
 
 /**
@@ -235,12 +241,17 @@ export const fakeRuntime = (options: FakeOptions) => {
           ),
         captureKind: (machine) => {
           const state = machines.get(machine.name)?.state;
+          const kind = options.checkpointKind ?? "ram";
 
           if (state === undefined) {
             return Effect.fail(new Precondition({ message: `machine ${machine.id} is missing` }));
           }
 
-          return Effect.succeed(state === "running" ? "ram" : "disk");
+          return state === "running" || kind === "disk"
+            ? Effect.succeed(kind)
+            : Effect.fail(
+                new Precondition({ message: `${machine.id} is stopped: start it first` }),
+              );
         },
         capture: (machine, checkpoint) =>
           Effect.andThen(

@@ -146,8 +146,9 @@ export interface Interface {
    */
   readonly delete: (machine: MachineRef) => Effect.Effect<void, HostError>;
   /**
-   * The kind of checkpoint a capture of the machine would make now, which can follow its
-   * state. A machine that can't be captured now is `Precondition`.
+   * The kind of checkpoint a capture of the machine makes, which follows the runtime: `ram` on
+   * smolvm, of a running machine only, and `disk` on Tart and boat. It reads the machine's
+   * state, and a machine that can't be captured now is `Precondition`.
    */
   readonly captureKind: (machine: MachineRef) => Effect.Effect<CheckpointKind, HostError>;
   /** Captures the machine into the checkpoint, of the checkpoint's kind. */

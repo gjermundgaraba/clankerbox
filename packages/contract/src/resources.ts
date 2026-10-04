@@ -67,6 +67,7 @@ export const Checkpoint = Schema.Struct({
   createdAt: Schema.DateTimeUtcFromString,
   /** The ID of the machine it was captured from. */
   machine: Id,
+  /** What it holds, by runtime: `ram` (RAM and disks) on smolvm, `disk` on Tart and boat. */
   kind: Schema.Literals(["ram", "disk"]),
   base: Schema.String,
   profile: Schema.optionalKey(Schema.String),

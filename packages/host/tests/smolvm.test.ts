@@ -6,6 +6,7 @@ import { mkdirSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
@@ -556,8 +557,6 @@ const ramCheckpoint: CheckpointRef = {
   port: 10_000,
 };
 
-const diskCheckpoint: CheckpointRef = { ...ramCheckpoint, kind: "disk" };
-
 /** A machine made from a checkpoint, on its own port. */
 const copy: MachineRef = {
   ...machine,
@@ -589,10 +588,10 @@ test("startup empties the forks area and makes the runtime's directories", async
   await Effect.runPromise(runtime.startup);
 
   expect(await readdir(paths.forks)).toEqual([]);
-  expect((await readdir(settings.stateDir)).sort()).toEqual(["checkpoints", "forks", "packs"]);
+  expect((await readdir(settings.stateDir)).sort()).toEqual(["checkpoints", "forks"]);
 });
 
-test("a capture's kind follows the machine's state: ram when running, disk when stopped", async () => {
+test("a capture is ram, of a running machine only: a stopped one is started first", async () => {
   let reply = status("running");
   const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
   const runtime = await runtimeOf(await prepared(), spawner);
@@ -601,14 +600,24 @@ test("a capture's kind follows the machine's state: ram when running, disk when 
 
   reply = status("stopped");
 
-  const stopped = await Effect.runPromise(runtime.captureKind(machine));
+  const stopped = await Effect.runPromise(Effect.flip(runtime.captureKind(machine)));
 
   reply = unknown;
 
   const missing = await Effect.runPromise(Effect.flip(runtime.captureKind(machine)));
 
-  expect([running, stopped]).toEqual(["ram", "disk"]);
-  expect(missing._tag).toBe("Precondition");
+  expect(running).toBe("ram");
+  expect(stopped).toEqual(
+    new Precondition({
+      message:
+        "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",
+    }),
+  );
+  expect(missing).toEqual(
+    new Precondition({
+      message: "machine linux_dev is missing from the smolvm runtime; delete it",
+    }),
+  );
 });
 
 test("a ram capture goes into the host's one store, with no history", async () => {
@@ -633,42 +642,6 @@ test("a ram capture goes into the host's one store, with no history", async () =
       "0",
     ],
   ]);
-});
-
-test("a disk capture packs the stopped machine into its own directory", async () => {
-  const settings = await prepared();
-  const spawner = scripted(() => undefined);
-  const runtime = await runtimeOf(settings, spawner);
-  const dir = join(settings.stateDir, "packs", "snap-fedcba98");
-
-  await Effect.runPromise(runtime.capture(machine, diskCheckpoint));
-
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    ["pack", "create", "--from-vm", "dev-01234567", "--output", join(dir, "snap-fedcba98")],
-  ]);
-  expect(await readdir(dir)).toEqual([]);
-});
-
-test("a pack of a machine on smolvm's image seed fails with what smolvm can't do", async () => {
-  const spawner = scripted((call) =>
-    call.args[0] === "pack"
-      ? {
-          exitCode: 1,
-          stderr: "Error: export helper: krun_start_enter returned: -22 (EINVAL)\n",
-        }
-      : undefined,
-  );
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-  const error = await Effect.runPromise(Effect.flip(runtime.capture(machine, diskCheckpoint)));
-
-  expect(error._tag).toBe("Internal");
-  expect(error.message).toBe(
-    [
-      "smolvm pack create dev-01234567 exited 1: Error: export helper: krun_start_enter returned: -22 (EINVAL)",
-      "smolvm 1.22.2 can't pack a machine whose disk sits on its image seed, as every machine created at diskGib 20 does, so it can't make this disk checkpoint",
-    ].join("\n"),
-  );
 });
 
 test("a ram restore creates from the store with no restore cache, moves the port, then boots", async () => {
@@ -701,37 +674,6 @@ test("a ram restore that got its source's old port keeps it", async () => {
   await Effect.runPromise(runtime.restore(ramCheckpoint, { ...copy, port: 10_000 }));
 
   expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["create", "start"]);
-});
-
-test("a disk restore creates from the pack with the machine's sizes, the network and a port", async () => {
-  const settings = await prepared();
-  const spawner = scripted(() => undefined);
-  const runtime = await runtimeOf(settings, spawner);
-
-  await Effect.runPromise(runtime.restore(diskCheckpoint, copy));
-
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    [
-      "machine",
-      "create",
-      "--name",
-      "copy-abcdefab",
-      "--from",
-      join(settings.stateDir, "packs", "snap-fedcba98", "snap-fedcba98.smolmachine"),
-      "--cpus",
-      "2",
-      "--mem",
-      "2048",
-      "--net",
-      "--net-backend",
-      "virtio-net",
-      "-p",
-      "10001:22",
-      "--storage",
-      "20",
-    ],
-    ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
-  ]);
 });
 
 /**
@@ -835,20 +777,6 @@ test("deleting a ram checkpoint removes its directory, then prunes the store", a
 
   expect(await readdir(store)).toEqual(["objects"]);
   expect(smolvmArgs(spawner.calls)).toEqual([["machine", "checkpoint-prune", "--store", store]]);
-});
-
-test("deleting a disk checkpoint removes its pack's directory and calls nothing", async () => {
-  const settings = await prepared();
-  const spawner = scripted(() => undefined);
-  const runtime = await runtimeOf(settings, spawner);
-  const packs = join(settings.stateDir, "packs");
-
-  await mkdir(join(packs, "snap-fedcba98"), { recursive: true });
-  await writeFile(join(packs, "snap-fedcba98", "snap-fedcba98.smolmachine"), "");
-  await Effect.runPromise(runtime.deleteCheckpoint(diskCheckpoint));
-
-  expect(await readdir(packs)).toEqual([]);
-  expect(smolvmArgs(spawner.calls)).toEqual([]);
 });
 
 test("deleting a ram checkpoint from a store no capture has written prunes nothing", async () => {

@@ -4,11 +4,10 @@
  * agent answers, `stop` once the VM is dead, and nothing polls around them. Every call runs
  * with the same environment, the one the spikes ran smolvm in.
  *
- * Checkpoints follow the machine's state at capture: a running machine's is `ram`, a store
- * checkpoint in the host's one store; a stopped machine's is `disk`, a pack. A fork is a `ram`
- * checkpoint into a store of its own, restored, then the store is removed whole. `machine
- * branch` is never called: each branch adds a backing layer to its source, and smolvm refuses
- * the 33rd.
+ * A checkpoint is always `ram`: a running machine's RAM and disks, as a store checkpoint in the
+ * host's one store. A fork is such a checkpoint into a store of its own, restored, then the
+ * store is removed whole. `machine branch` is never called: each branch adds a backing layer to
+ * its source, and smolvm refuses the 33rd.
  */
 import { join } from "node:path";
 import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
@@ -39,13 +38,12 @@ export interface Settings extends Smolvm {
 
 /**
  * Where the runtime keeps its files, all in the host's state dir, so they are the host's alone:
- * the one inventory (`SMOLVM_DATA_DIR`), the one checkpoint store for `ram` checkpoints, the
- * packs of `disk` checkpoints, and each fork's own store while the fork runs.
+ * the one inventory (`SMOLVM_DATA_DIR`), the one checkpoint store, and each fork's own store
+ * while the fork runs.
  */
 export const pathsIn = (stateDir: string) => ({
   dataDir: join(stateDir, "smolvm"),
   store: join(stateDir, "checkpoints"),
-  packs: join(stateDir, "packs"),
   forks: join(stateDir, "forks"),
 });
 
@@ -62,14 +60,6 @@ export const pin = `smolvm ${testedVersion} ${process.platform}-${process.arch}`
  */
 export const nativeName = (resource: Pick<MachineRef, "name" | "instance">): string =>
   `${resource.name}-${resource.instance.slice(0, 8)}`;
-
-/**
- * What smolvm 1.22.2's `pack create --from-vm` fails with for a machine whose disk sits on smolvm's
- * image seed, as every machine created at the default `--storage 20` does: the export helper
- * reaches the root-only seed through no mount (S@1.22.2:src/internal_boot.rs:240-243,
- * src/pack_export.rs:454-471; P9).
- */
-const seededPackFailure = "krun_start_enter returned: -22";
 
 /** The systemd scope `SMOLVM_VM_USE_SCOPE=1` puts a VM in (S@1.22.2:src/systemd_scope.rs:151-163). */
 const scopeName = (native: string): string => `smolvm-vm-${native}.scope`;
@@ -296,17 +286,9 @@ export const make = (
             ),
       );
 
-    /** A `ram` checkpoint's directory in the host's store. */
+    /** A checkpoint's directory in the host's store. */
     const checkpointDir = (checkpoint: CheckpointRef) =>
       join(paths.store, `${nativeName(checkpoint)}.checkpoint`);
-
-    /** A `disk` checkpoint's pack: its directory, and the file a restore reads. */
-    const packOf = (checkpoint: CheckpointRef) => {
-      const native = nativeName(checkpoint);
-      const dir = join(paths.packs, native);
-
-      return { dir, output: join(dir, native), file: join(dir, `${native}.smolmachine`) };
-    };
 
     const portOf = (machine: MachineRef) =>
       machine.port === undefined
@@ -386,7 +368,7 @@ export const make = (
       startup: Effect.gen(function* () {
         yield* removeAll(paths.forks);
 
-        for (const dir of [paths.store, paths.packs, paths.forks]) {
+        for (const dir of [paths.store, paths.forks]) {
           yield* files(
             `couldn't create ${dir}`,
             fs.makeDirectory(dir, { recursive: true, mode: 0o700 }),
@@ -409,76 +391,18 @@ export const make = (
             );
           }
 
-          return Effect.succeed(observed === "running" ? "ram" : "disk");
+          return observed === "running"
+            ? Effect.succeed("ram")
+            : Effect.fail(
+                new Precondition({
+                  message: `a smolvm checkpoint holds a running machine's RAM, and ${machine.id} is stopped: start it first`,
+                }),
+              );
         }),
-      capture: (machine, checkpoint) => {
-        if (checkpoint.kind === "ram") {
-          return Effect.asVoid(captureRam(machine, paths.store, checkpointDir(checkpoint)));
-        }
-
-        const native = nativeName(machine);
-        const pack = packOf(checkpoint);
-        const what = `smolvm pack create ${native}`;
-
-        return Effect.gen(function* () {
-          yield* files(
-            `couldn't create ${pack.dir}`,
-            fs.makeDirectory(pack.dir, { recursive: true, mode: 0o700 }),
-          );
-
-          const ran = yield* smolvm(
-            ["pack", "create", "--from-vm", native, "--output", pack.output],
-            `pack create ${native}`,
-          );
-
-          if (ran.exitCode !== 0) {
-            const { message } = failure(what, ran);
-
-            return yield* new Internal({
-              message: ran.stderr.includes(seededPackFailure)
-                ? `${message}\nsmolvm ${testedVersion} can't pack a machine whose disk sits on its image seed, as every machine created at diskGib 20 does, so it can't make this disk checkpoint`
-                : message,
-            });
-          }
-        });
-      },
-      restore: (checkpoint, machine) => {
-        if (checkpoint.kind === "ram") {
-          return restoreRam(checkpointDir(checkpoint), checkpoint.port, machine);
-        }
-
-        return Effect.gen(function* () {
-          const native = nativeName(machine);
-          const port = yield* portOf(machine);
-
-          // A pack has no checkpoint manifest, so it takes topology flags like an image. It
-          // carries smolvm's default sizes, not its source's (P9), so every size is passed.
-          yield* call(
-            [
-              "machine",
-              "create",
-              "--name",
-              native,
-              "--from",
-              packOf(checkpoint).file,
-              "--cpus",
-              String(machine.cpu),
-              "--mem",
-              String(machine.ramMib),
-              "--net",
-              "--net-backend",
-              "virtio-net",
-              "-p",
-              `${port}:22`,
-              "--storage",
-              String(machine.diskGib),
-            ],
-            `machine create ${native}`,
-          );
-
-          yield* boot(native);
-        });
-      },
+      capture: (machine, checkpoint) =>
+        Effect.asVoid(captureRam(machine, paths.store, checkpointDir(checkpoint))),
+      restore: (checkpoint, machine) =>
+        restoreRam(checkpointDir(checkpoint), checkpoint.port, machine),
       fork: (source, machine) => {
         const store = join(paths.forks, nativeName(machine));
         const output = join(store, `${nativeName(machine)}.checkpoint`);
@@ -497,10 +421,6 @@ export const make = (
         );
       },
       deleteCheckpoint: (checkpoint) => {
-        if (checkpoint.kind === "disk") {
-          return removeAll(packOf(checkpoint).dir);
-        }
-
         const objects = join(paths.store, "objects");
 
         // Removing the directory drops the checkpoint's references; the prune frees what no
@@ -521,10 +441,7 @@ export const make = (
       create: (machine, image) =>
         Effect.gen(function* () {
           const native = nativeName(machine);
-
-          if (machine.port === undefined) {
-            return yield* new Internal({ message: `machine ${machine.id} has no host port` });
-          }
+          const port = yield* portOf(machine);
 
           yield* call(
             [
@@ -542,7 +459,7 @@ export const make = (
               "--net-backend",
               "virtio-net",
               "-p",
-              `${machine.port}:22`,
+              `${port}:22`,
               "--storage",
               String(machine.diskGib),
             ],
