@@ -20,6 +20,8 @@ export const ActionName = Schema.Literals([
   "capture",
 ]);
 
+export type ActionName = typeof ActionName.Type;
+
 /**
  * A resource's last action: `running` while it holds the row, `failed` with its error
  * after a native failure, `done` after a success. The next action replaces it.
