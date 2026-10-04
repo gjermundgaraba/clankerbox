@@ -163,8 +163,10 @@ def main():
                     raise RuntimeError('evidence collection failed; remote scratch retained')
                 if not state['remote_clean']:
                     raise RuntimeError('teardown not verified; remote scratch and outside changes retained')
-                remote('finish', 'finish')
-                collect()
+                try:
+                    remote('finish', 'finish')
+                finally:
+                    collect()
                 subprocess.run(scp + [f'{options.ssh}:{options.root}/CLEANUP.md', str(run.evidence / 'CLEANUP.md')],
                                timeout=120)
                 sh(ssh + [f'test ! -e {rdir}/scratch && echo "remote scratch absent"; du -sh {rdir}; '
@@ -267,6 +269,12 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
                          CLANKERBOX_LIVE_CONFIG=str(client_config), CLANKERBOX_LIVE_HOST_CONTROL=str(control_bin),
                          CLANKERBOX_LIVE_PREFIX=name_prefix, CLANKERBOX_LIVE_PEER=peer)
         queue = list(options.steps)
+        failed = []
+
+        def fail(message):
+            failed.append(message)
+            log(message)
+
         processed = 0
         last = time.time()
         n = 0
@@ -291,6 +299,8 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
                 if name == 'suite':
                     rc = sh(['vp', 'test', *shlex.split(rest)], f'suite-{n}', env=suite_env,
                             cwd=REPO / 'tests' / 'live', timeout=5400, check=False)
+                    if rc != 0:
+                        fail(f'step {n} ({step}): suite rc={rc}')
                     text = (run.evidence / f'suite-{n}.log').read_text(errors='replace')
                     record(**{f'suite_{n}': {'rc': rc, 'fork_ready_failures': text.count('smolvm-fork-ready')}})
                 elif name == 'reset':
@@ -302,11 +312,14 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
                     upload(linux, sha)
                     remote('control host-start', f'redeploy-start-{n}', timeout=300)
                 else:
-                    log(f'unknown step {step}')
+                    fail(f'step {n}: unknown step {step}')
             except Stop:
                 raise
             except Exception as error:  # noqa: BLE001 - a failed step is logged; teardown still runs
-                log(f'step {step} failed: {error}')
+                fail(f'step {n} ({step}): {error}')
+        if failed:
+            # Teardown still runs on the way out; the driver exits non-zero.
+            sys.exit(f'{len(failed)} step(s) failed: {"; ".join(failed)}')
 
 
 if __name__ == '__main__':

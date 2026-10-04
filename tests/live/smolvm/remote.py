@@ -565,45 +565,73 @@ def counters():
     return found
 
 
+def attempt(report, what, action):
+    """Runs one teardown item, best effort: a failure is recorded and the next item still runs."""
+    try:
+        return action()
+    except Exception as error:  # noqa: BLE001 - recorded; teardown goes on with the rest
+        report['errors'].append(f'{what}: {error}')
+        return None
+
+
+def remove_machine(report, name):
+    stopped = smol('machine', 'stop', '--name', name, touched=f'teardown: stops leftover {name}')
+    deleted = smol('machine', 'delete', '--name', name, '--force', touched=f'teardown: deletes leftover {name}')
+    report['steps'].append({'leftover': name, 'stop': stopped[0], 'delete': deleted[0]})
+    if deleted[0] != 0:
+        scope = f'smolvm-vm-{name}.scope'
+        sudo(['systemctl', 'kill', '--signal=SIGKILL', scope], touched=f'teardown: kills the run\'s scope {scope}')
+        deleted = smol('machine', 'delete', '--name', name, '--force', touched=f'teardown: deletes leftover {name}')
+        report['steps'].append({'leftover': name, 'scope_killed': scope, 'delete_retry': deleted[0]})
+
+
+def stop_scope(report, unit):
+    sudo(['systemctl', 'stop', unit], touched=f'teardown: stops the run\'s scope {unit}')
+    sudo(['systemctl', 'reset-failed', unit], touched=f'teardown: resets the run\'s scope {unit}')
+    report['steps'].append({'scope': unit})
+
+
 def remove_natives(report):
     """Stops the host, then deletes every VM of the run's inventory and stops the run's scopes,
-    natively; what is left goes into `report`."""
-    if unit_active():
-        sudo(['systemctl', 'stop', UNIT], touched=f'stops {UNIT}')
-        report['steps'].append('unit stopped')
-    wait_unit_gone()
-    for m in machines():
+    natively, each item best effort; what is left, and every failure, goes into `report`."""
+    def stop_unit():
+        if unit_active():
+            sudo(['systemctl', 'stop', UNIT], touched=f'stops {UNIT}')
+            report['steps'].append('unit stopped')
+        wait_unit_gone()
+
+    attempt(report, 'stop the host unit', stop_unit)
+    for m in attempt(report, 'list the inventory', machines) or []:
         name = str(m.get('name'))
         if not name.startswith(NAME_PREFIX):
-            raise RuntimeError(f'unexpected machine in the run inventory: {name}')
-        stopped = smol('machine', 'stop', '--name', name, touched=f'teardown: stops leftover {name}')
-        deleted = smol('machine', 'delete', '--name', name, '--force', touched=f'teardown: deletes leftover {name}')
-        report['steps'].append({'leftover': name, 'stop': stopped[0], 'delete': deleted[0]})
-        if deleted[0] != 0:
-            scope = f'smolvm-vm-{name}.scope'
-            sudo(['systemctl', 'kill', '--signal=SIGKILL', scope], touched=f'teardown: kills the run\'s scope {scope}')
-            deleted = smol('machine', 'delete', '--name', name, '--force', touched=f'teardown: deletes leftover {name}')
-            report['steps'].append({'leftover': name, 'scope_killed': scope, 'delete_retry': deleted[0]})
-    left = [m.get('name') for m in machines()]
-    for unit in list_units(SCOPE_PATTERN) + new_helper_units():
-        sudo(['systemctl', 'stop', unit], touched=f'teardown: stops the run\'s scope {unit}')
-        sudo(['systemctl', 'reset-failed', unit], touched=f'teardown: resets the run\'s scope {unit}')
-        report['steps'].append({'scope': unit})
-    for unit in list_units(f'clankerbox-rewrite-{RID}*'):
-        sudo(['systemctl', 'reset-failed', unit], touched=f'teardown: resets {unit}')
+            report['errors'].append(f'left alone: {name} in the run inventory lacks {NAME_PREFIX}')
+            continue
+        attempt(report, f'remove {name}', lambda: remove_machine(report, name))
+    scopes = attempt(report, 'list the run\'s scopes', lambda: list_units(SCOPE_PATTERN) + new_helper_units())
+    for unit in scopes or []:
+        attempt(report, f'stop {unit}', lambda: stop_scope(report, unit))
+    for unit in attempt(report, 'list the run\'s units', lambda: list_units(f'clankerbox-rewrite-{RID}*')) or []:
+        attempt(report, f'reset {unit}',
+                lambda: sudo(['systemctl', 'reset-failed', unit], touched=f'teardown: resets {unit}'))
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline and (vm_uid_processes() or run_processes()):
         time.sleep(1)
-    report.update(machines_left=left, scopes_left=list_units(SCOPE_PATTERN) + new_helper_units(),
-                  units_left=list_units(f'clankerbox-rewrite-{RID}*'), vm_uid_processes=vm_uid_processes(),
-                  run_processes=run_processes(), tailnet_listeners=tailnet_listeners())
-    return not (left or report['scopes_left'] or report['units_left'] or report['vm_uid_processes']
-                or report['run_processes'])
+    left = attempt(report, 'list the inventory again', lambda: [m.get('name') for m in machines()])
+    report.update(machines_left=left,
+                  scopes_left=attempt(report, 'list the run\'s scopes again',
+                                      lambda: list_units(SCOPE_PATTERN) + new_helper_units()),
+                  units_left=attempt(report, 'list the run\'s units again',
+                                     lambda: list_units(f'clankerbox-rewrite-{RID}*')),
+                  vm_uid_processes=vm_uid_processes(), run_processes=run_processes(),
+                  tailnet_listeners=tailnet_listeners())
+    return not (report['errors'] or left or report['scopes_left'] or report['units_left']
+                or report['vm_uid_processes'] or report['run_processes'])
 
 
 def cmd_teardown():
     initialised()
-    report = {'at': now(), 'steps': [], 'counters': counters()}
+    report = {'at': now(), 'steps': [], 'errors': []}
+    report['counters'] = attempt(report, 'counters', counters)
     clean = remove_natives(report)
     (EVIDENCE / 'teardown.json').write_text(json.dumps(report, indent=2) + '\n')
     if not clean:
@@ -616,7 +644,8 @@ def cmd_reset():
     """Teardown that keeps the inventory, and so its image seed, then a host on an empty state:
     the suite can run again without pulling the image again."""
     initialised()
-    report = {'at': now(), 'steps': [], 'counters': counters()}
+    report = {'at': now(), 'steps': [], 'errors': []}
+    report['counters'] = attempt(report, 'counters', counters)
     clean = remove_natives(report)
     with open(EVIDENCE / 'resets.jsonl', 'a') as f:
         f.write(json.dumps(report) + '\n')
@@ -711,9 +740,12 @@ def cmd_finish():
                           if modes_ok and diff['prefix_identical'] else 'NOT REVERTED: see evidence/snapshot-diff.json')
     for key, value in result.items():
         ledger_mark(key, value)
-    data.update(state='cleaned', cleaned_at=now())
+    reverted = not any(value.startswith('NOT REVERTED') for value in result.values())
+    data.update(state='cleaned' if reverted else 'not_reverted', cleaned_at=now())
     (RUN / 'manifest.json').write_text(json.dumps(data, indent=2) + '\n')
     print(json.dumps({'result': result, 'diff': diff}, indent=2))
+    if not reverted:
+        sys.exit('NOT REVERTED: see CLEANUP.md and evidence/snapshot-diff.json')
 
 
 def main():
