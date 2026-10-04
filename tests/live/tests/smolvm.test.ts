@@ -5,7 +5,7 @@
  * other machine is deleted by the test that made it. Timings print as `[timing]` lines.
  */
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { type Machine, version } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
@@ -250,6 +250,9 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     )) {
       await cli(["delete"], left.id);
     }
+
+    // It holds the run's private key and its setup scripts.
+    await rm(dir, { recursive: true, force: true });
   }, minutes(5));
 
   test("hosts names the host under test with its runtime, versions and bases, and the host that is down", async () => {
