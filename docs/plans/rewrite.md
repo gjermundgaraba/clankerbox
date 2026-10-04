@@ -831,11 +831,11 @@ Two rules for every VM job:
 - **Fork is a checkpoint plus a restore:** of a running source only; a fork of
   a stopped source is `Precondition` in step 3.
   1. Capture the running source into a store of the fork's own,
-     `forks/<child-name>/`.
+     `forks/<child native>/`.
   2. `machine create --from` that checkpoint.
   3. Swap the ports.
   4. Start and prepare.
-  5. Remove `forks/<child-name>/` whole.
+  5. Remove `forks/<child native>/` whole.
 
   Step 5 runs whether the fork succeeded or failed (`Effect.ensuring`), and host
   startup wipes the forks area, since nothing is in flight then. No prune is
