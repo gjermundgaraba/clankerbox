@@ -913,6 +913,64 @@ Linux host, 1.22.2, machines 1 vCPU / 1 GiB, 6 per batch):
 - **Timings,** concurrent ×6 wall / sequential ×6: first start at 20 GiB
   1.75 / 9.27 s, stop 0.41 / 1.40 s, capture into one store 1.76 / 4.32 s.
 
+**Phase 3 live** (local run `.work/runs/p3-live-83a307cd65ff`, drivers in
+`.work/p3-live/`, remote run `~/clankerbox-rewrite/runs/p383`). The host's linux-x64 SEA ran as root in a
+transient system unit on the Linux host, listening on and publishing to its
+tailnet address, with `ramBudgetMib` 3072. `tests/live/tests/smolvm.test.ts`
+ran from this Mac through the CLI, over Tailscale's DERP relay (no direct
+path; the 45.3 MiB gzipped SEA uploaded at 0.67–0.94 MiB/s). Machines had
+1 vCPU, 512–1024 MiB and `diskGib` 20.
+
+- **Result:** 22 of 22 in the final run, on the committed host and suite. Two
+  earlier full runs each failed one test on the smolvm start failure below.
+- **Timings,** 3 runs, from the Mac, so each includes a relayed HTTP round
+  trip: create with setup (`apt-get install openssh-server rsync`, a packed
+  recipe) 10.1–11.8 s; stop 0.67–0.86 s; cold start with preparation
+  0.91–0.93 s; start of a running machine (preparation only) 0.30–0.38 s;
+  delete of a running machine 0.69–0.72 s; delete after a failed stop
+  2.61–2.63 s, of which smolvm's own wait is 2 s. The first create on a fresh
+  inventory, which builds the image seed, took 20.4 s.
+- **Reseed:** the `/dev/random` write and `RNDRESEEDCRNG` succeed as root in a
+  smolvm guest (every create's identity step ran them under `set -e`).
+- **SIGHUP:** with sshd started by setup, preparation's re-mint left the
+  listener's pid unchanged, and `clankerbox ssh`, pinned to `Machine.hostKey`,
+  logged in; a forced re-mint on a running machine changed `hostKey`, the new
+  pin worked and the old one was refused.
+- **Guest `/var/tmp`** is on the container's overlay root, executable; `/tmp`
+  and `/run` are tmpfs.
+- **A killed exec:** smolvm SIGKILLs the guest command and every process
+  descended from it when its `machine exec` client is signalled. Setup's exit
+  trap never ran, and `/var/tmp/clankerbox-setup.*` stayed after a timeout. A
+  `setsid -f` child, whose parent exits at once, survived; a background child
+  that called `setsid()` while its parent lived did not. Fixed with a guard
+  forked out of the tree (`ada19ec`).
+- **ANSI colour:** smolvm's log lines, which errors carry, were coloured into a
+  pipe until `NO_COLOR=1` (tracing-subscriber 0.3.23, `fmt_layer.rs:739-743`;
+  `e154141`).
+- **A refused stop:** `/storage` (ext4 on `/dev/vda`) is mounted read-write in
+  the container. After `fsfreeze -f /storage` there (that exec never returns),
+  `machine stop` failed after about 2 s with "freeze /storage: Resource busy"
+  and "guest did not confirm filesystem synchronization; left the VM alive for
+  retry". `delete` then killed the scope, deleted the machine and reset the
+  scope: no scope, no VM-uid process and no `vms/<hash>` left.
+- **Crashes:** a host SIGKILLed during setup came back with the row `failed`
+  ("host restarted during create") and the VM running; the setup command and
+  file were gone. A host SIGKILLed inside step 3's `machine status` of another
+  machine (5 times, by a root watcher on the host's children, 0.67–0.83 s
+  after arming) left a `failed` row and nothing native; `delete` removed the
+  row. A graceful restart kept VMs running (guest uptime kept rising), with
+  the same ports, host keys and machine IDs.
+- **Isolation:** a guest's connection to its host's API port on the tailnet
+  address was refused, while `1.1.1.1:443` was reached. A decoy native
+  `<name>-<8 hex>` stayed running through that name's create and delete.
+- **Unexplained smolvm start failure:** 2 of 77 create requests (both the
+  first create after the restart test) failed in the first `machine start`:
+  the guest pulled the image, with no seed and no warning, then "crun create
+  failed: open `…/merged/usr/local/bin/smolvm-fork-ready`: No such file or
+  directory". 4 creates around a manual restart didn't reproduce it.
+- **Owned-root layout:** the state dir may be at most 52 bytes;
+  `~/clankerbox-rewrite/runs/<4 chars>/scratch/s` is exactly that.
+
 ## Consumers and production
 
 - **Production hosts:** the Mac host runs Tart only and the Linux host smolvm

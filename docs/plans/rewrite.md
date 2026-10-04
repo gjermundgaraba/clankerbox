@@ -544,6 +544,12 @@ guest (see [Other host rules](#other-host-rules)), as part of the action.
 - The script arrives on exec's stdin, so it never appears in a process list,
   and runs as its own file under `/var/tmp`, honouring its `#!` line, with
   stdin closed. The file is removed however setup ends.
+  - An exit trap covers what the shell sees. A killed exec (a timeout, or a
+    host crash) gives it no chance: smolvm SIGKILLs the guest command and
+    every process descended from it, which left the file behind (phase 3,
+    live). So `perl` forks a guard out of that tree, into a session of its
+    own, before the file holds anything; it removes the file once the
+    setup's shell is gone.
 - A failing or overrunning setup, `new-identity`, `start` or preparation fails
   the action with `Precondition`: the guest refused, not the host. The error
   carries the last 20 lines of the output, at most 4000 characters.
@@ -569,7 +575,8 @@ instance and the machine's ID, and a fresh 64-byte seed arrives on stdin. The
      Tart and boat guests cold-boot, so the seed write is enough there.
      macOS refuses writes to `/dev/urandom` and reseeds on a write to
      `/dev/random` (P3); Linux handles writes to both nodes alike, and P1
-     tested `/dev/urandom` there, so phase 3 checks `/dev/random` live.
+     tested `/dev/urandom` there. Phase 3 checked `/dev/random` live: the
+     seed write and `RNDRESEEDCRNG` succeed as root in a smolvm guest.
      - Why: a RAM restore, and so a fork, clones the guest's CRNG, and the
        guest has no vmgenid or hwrng. smolvm's own re-mint only stirs the pool
        (S@1.22.2:src/fork.rs:3245-3250). Across restores of one RAM state, it
@@ -593,10 +600,9 @@ instance and the machine's ID, and a fresh 64-byte seed arrives on stdin. The
        itself with the new keys and keep its listener, under whatever
        launched it: a `start` script, or boat's systemd unit. macOS has no
        `/run/sshd.pid`; launchd starts sshd per connection.
-     - The spikes restarted sshd by killing the listener and running `start`
-       (L:p1-tailnet), so SIGHUP is unverified live. The live tests check
-       that the key served after a re-mint under a running sshd equals
-       `Machine.hostKey`.
+     - Phase 3's live tests verified SIGHUP on a smolvm guest (OpenSSH on
+       stock 26.04): after a re-mint under a running sshd, the listener kept
+       its pid and served the new key, which equals `Machine.hostKey`.
    - Write `/var/lib/clankerbox/machine-id` (the ID).
    - Run `/etc/clankerbox/new-identity`, if the profile installed one. It
      resets per-machine state that the copy carried over, such as tailnet
@@ -814,7 +820,8 @@ Two rules for every VM job:
     smolvm-vm-<name>.scope`, the signal smolvm's own `kill_scope` uses), then
     runs `machine delete -f` (`-f` only skips the prompt), then `systemctl
     reset-failed` on the scope, since systemd keeps a failed scope until then.
-    Phase 3 verifies this.
+    Phase 3 verified this live, on a guest whose frozen `/storage` made
+    `machine stop` fail.
 - **Checkpoints:** the kind follows the machine's state at capture.
   - **`ram`, from a running machine:** a store checkpoint (below); smolvm
     captures only running machines. A restore continues the source's RAM state
