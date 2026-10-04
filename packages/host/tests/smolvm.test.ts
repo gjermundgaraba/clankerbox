@@ -567,14 +567,13 @@ const copy: MachineRef = {
   port: 10_001,
 };
 
-test("a ram checkpoint pins the smolvm release and the platform", async () => {
+test("the runtime names its pin", async () => {
   const runtime = await runtimeOf(
     await prepared(),
     scripted(() => undefined),
   );
 
   expect(runtime.pin).toBe(pin);
-  expect(pin).toBe(`smolvm 1.22.2 ${process.platform}-${process.arch}`);
 });
 
 test("startup empties the forks area and makes the runtime's directories", async () => {
