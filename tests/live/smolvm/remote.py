@@ -160,8 +160,12 @@ def smol(*a, timeout=600, touched=SMOL_TOUCH):
 
 
 def machines():
-    """The run's inventory, read natively: the host may be down."""
+    """The run's inventory, read natively: the host may be down. Every smolvm call makes its data
+    dir, and the host's runtime calls smolvm before it makes forks/, so forks/ without DATA means
+    DATA no longer matches the host's (smolvm.ts `pathsIn`), and the VMs can't be found here."""
     if not DATA.exists():
+        if (STATE_DIR / 'forks').exists():
+            raise RuntimeError(f'the host ran but {DATA} is missing: remote.py\'s copy of smolvm.ts pathsIn is stale')
         return []
     rc, so, se = smol('machine', 'ls', '--json', touched='read-only')
     if rc != 0:
