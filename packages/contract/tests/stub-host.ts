@@ -61,6 +61,14 @@ export const stubHost = (options: StubHostOptions) => {
       : Effect.succeed(found);
   };
 
+  const findCheckpoint = (id: string) => {
+    const found = checkpoints.get(id);
+
+    return found === undefined
+      ? Effect.fail(new NotFound({ message: `no checkpoint ${id}` }))
+      : Effect.succeed(found);
+  };
+
   const add = (made: Machine) =>
     Effect.sync(() => {
       machines.set(made.id, made);
@@ -108,17 +116,23 @@ export const stubHost = (options: StubHostOptions) => {
         record("machine.fork"),
         Effect.flatMap(find(source), (found) => add({ ...found, id: `${options.id}_${name}` })),
       ),
-    restore: ({ name }) =>
-      Effect.andThen(record("machine.restore"), add(machine(`${options.id}_${name}`))),
+    restore: ({ checkpoint, name }) =>
+      Effect.andThen(
+        record("machine.restore"),
+        Effect.flatMap(findCheckpoint(checkpoint), (found) =>
+          add(
+            machine(`${options.id}_${name}`, {
+              runtime,
+              base: found.base,
+              cpu: found.cpu,
+              ramMib: found.ramMib,
+              diskGib: found.diskGib,
+              action: { name: "restore", status: "done" },
+            }),
+          ),
+        ),
+      ),
   });
-
-  const findCheckpoint = (id: string) => {
-    const found = checkpoints.get(id);
-
-    return found === undefined
-      ? Effect.fail(new NotFound({ message: `no checkpoint ${id}` }))
-      : Effect.succeed(found);
-  };
 
   const checkpointApp = CheckpointGroup.implement({
     list: () => Effect.as(record("checkpoint.list"), [...checkpoints.values()]),

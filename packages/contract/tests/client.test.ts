@@ -303,6 +303,26 @@ test("a fork whose reply is lost names the new machine's ID", async () => {
   expect(linux.calls).toEqual(["machine.fork"]);
 });
 
+test("restore sends the checkpoint to its host and makes the machine from it", async () => {
+  const linux = host({
+    id: "linux",
+    bases: ["ubuntu"],
+    machines: [machine("linux_src", { base: "ubuntu-dev", cpu: 4 })],
+  });
+
+  const restored = await withClient([["linux", linux]], (client) =>
+    Effect.andThen(client.capture("linux_src", "snap"), client.restore("linux_snap", "again")),
+  );
+
+  const missing = await withClient([["linux", linux]], (client) =>
+    Effect.flip(client.restore("linux_gone", "other")),
+  );
+
+  expect(restored).toMatchObject({ id: "linux_again", base: "ubuntu-dev", cpu: 4 });
+  expect(missing._tag).toBe("NotFound");
+  expect(linux.calls).toEqual(["checkpoint.capture", "machine.restore", "machine.restore"]);
+});
+
 const briefly = { timeout: Duration.millis(50) };
 
 test("with a timeout, a fan-out names the host that didn't answer in time and keeps the rest", async () => {

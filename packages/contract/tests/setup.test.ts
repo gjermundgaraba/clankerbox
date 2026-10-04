@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -28,7 +28,10 @@ const scratch = async () => {
 const pack = (directory: string) =>
   packRecipe(directory).pipe(Effect.provide(NodeServices.layer), Effect.runPromise);
 
-/** A recipe whose setup.sh records where it ran and copies its files into $OUT. */
+/**
+ * A recipe whose setup.sh records where it ran and copies its files into $OUT. It holds an
+ * executable helper whose name has a space.
+ */
 const recipe = async (setup: string) => {
   const dir = await scratch();
 
@@ -36,6 +39,8 @@ const recipe = async (setup: string) => {
   await writeFile(join(dir, "setup.sh"), setup);
   await writeFile(join(dir, "files", "greeting"), "hello from files/\n");
   await writeFile(join(dir, "files", "nested", "data.bin"), Buffer.from([0, 1, 2, 255]));
+  await writeFile(join(dir, "files", "run me.sh"), '#!/bin/sh\necho helper ran >"$OUT/helper"\n');
+  await chmod(join(dir, "files", "run me.sh"), 0o755);
 
   // An extended attribute is what makes macOS tar add a `._greeting` file unless told not to.
   if (process.platform === "darwin") {
@@ -51,6 +56,7 @@ const copyingSetup = [
   'pwd >"$OUT/ran-in"',
   'cp files/greeting "$OUT/greeting"',
   'cp files/nested/data.bin "$OUT/data.bin"',
+  '"./files/run me.sh"',
   "",
 ].join("\n");
 
@@ -80,6 +86,7 @@ test("a recipe directory packs into one script that recreates its files and runs
   expect(exitCode).toBe(0);
   expect(await readFile(join(out, "greeting"), "utf8")).toBe("hello from files/\n");
   expect([...(await readFile(join(out, "data.bin")))]).toEqual([0, 1, 2, 255]);
+  expect(await readFile(join(out, "helper"), "utf8")).toBe("helper ran\n");
 
   const ranIn = (await readFile(join(out, "ran-in"), "utf8")).trim();
 
