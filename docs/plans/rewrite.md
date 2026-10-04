@@ -562,13 +562,12 @@ guest (see [Other host rules](#other-host-rules)), as part of the action.
   `action.status = failed`, until `delete`.
 - The script arrives on exec's stdin, so it never appears in a process list,
   and runs as its own file under `/var/tmp`, honouring its `#!` line, with
-  stdin closed. The file is removed however setup ends.
-  - An exit trap covers what the shell sees. A killed exec (a timeout, or a
-    host crash) gives it no chance: smolvm SIGKILLs the guest command and
-    every process descended from it, which left the file behind (phase 3,
-    live). So `perl` forks a guard out of that tree, into a session of its
-    own, before the file holds anything; it removes the file once the
-    setup's shell is gone.
+  stdin closed. An exit trap removes the file when the shell exits.
+  - A setup killed by its timeout or by a host crash may leave its script, or
+    a packed recipe's files, in the guest: smolvm SIGKILLs the guest command
+    and every process descended from it, so no trap runs (phase 3, live).
+    Nothing guards against that. Only Linux's reseed uses `perl`, so Tart
+    guests don't need it.
 - A failing or overrunning setup, `new-identity`, `start` or preparation fails
   the action with `Precondition`: the guest refused, not the host. The error
   carries the last 20 lines of the output, at most 4000 characters.

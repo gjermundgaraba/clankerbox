@@ -43,11 +43,7 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
 
   const stubs: ReadonlyArray<readonly [string, string]> = [
     ["uname", `echo ${uname}`],
-    // Only preparation's reseed is stubbed; setup's guard runs the real perl.
-    [
-      "perl",
-      `case "$2" in *RNDRESEEDCRNG*) echo "perl $3" >>"$CLANKERBOX_ROOT/calls" ;; *) exec /usr/bin/perl "$@" ;; esac`,
-    ],
+    ["perl", `echo "perl $3" >>"$CLANKERBOX_ROOT/calls"`],
     [
       "ssh-keygen",
       [

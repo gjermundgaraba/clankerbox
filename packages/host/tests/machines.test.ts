@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, rm, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { Capacity, Conflict, type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
@@ -42,12 +42,6 @@ const rows = (host: TestHost) => host.run(host.store.list);
 
 /** Between polls of a row. */
 const pause = () => new Promise((resolve) => setTimeout(resolve, 50));
-
-const exists = (file: string) =>
-  stat(file).then(
-    () => true,
-    () => false,
-  );
 
 /** A setup that installs a `start` hook into the guest root, as a profile's setup would. */
 const installsStart = {
@@ -461,7 +455,22 @@ test("a failing setup fails the create with its last lines of output, never its 
   });
 });
 
-test("a setup that runs past its timeout fails the create with the output so far, and its file goes", async () => {
+test("a setup that exits removes its file", async () => {
+  const linux = await host();
+  const script = `#!/bin/sh\necho "running as $0"\nexit 3\n`;
+
+  const error = await failure(
+    linux,
+    linux.machines.create(request("dev", { setup: { script, timeoutSeconds: 30 } })),
+  );
+
+  const file = /running as (\S+)/u.exec(error.message)?.[1] ?? "";
+
+  expect(file).toMatch(/^\/var\/tmp\/clankerbox-setup\./u);
+  await expect(stat(file)).rejects.toThrow();
+});
+
+test("a setup that runs past its timeout fails the create with the output so far", async () => {
   const linux = await host();
   const script = `#!/bin/sh\n# ${marker}\necho "running as $0"\nsleep 30\n`;
 
@@ -472,16 +481,15 @@ test("a setup that runs past its timeout fails the create with the output so far
 
   const file = /running as (\S+)/u.exec(error.message)?.[1] ?? "";
 
-  // The guard polls once a second for the killed shell.
-  for (let waited = 0; waited < 3000 && (await exists(file)); waited += 100) {
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
+  expect(file).toMatch(/^\/var\/tmp\/clankerbox-setup\./u);
+
+  // The killed setup leaves its file, as on smolvm; the fake's guest shares this host's
+  // /var/tmp.
+  await rm(file, { force: true });
 
   expect(error._tag).toBe("Precondition");
   expect(error.message).toContain("setup ran past its 1s timeout");
   expect(error.message.includes(marker)).toBe(false);
-  expect(file).toMatch(/^\/var\/tmp\/clankerbox-setup\./u);
-  await expect(stat(file)).rejects.toThrow();
 });
 
 test("the RAM budget counts running machines and refuses with Capacity, writing nothing", async () => {
