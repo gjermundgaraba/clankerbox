@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Layer, type PlatformError, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import type { HostConfig } from "./config.ts";
+import type { HostConfig, Smolvm } from "./config.ts";
 import { lastLines } from "./guest.ts";
 import { checkRamBudget } from "./ram-budget.ts";
 import {
@@ -25,13 +25,8 @@ import {
  */
 export const testedVersion = "1.22.2";
 
-/** What the runtime needs from the host config. */
-export interface Settings {
-  /** The versioned install prefix. */
-  readonly prefix: string;
-  /** Where guest port 22 is published (`SMOLVM_PUBLISH_ADDR`). */
-  readonly publishAddress: string;
-  readonly ramBudgetMib: number;
+/** What the runtime needs: the host config's smolvm settings, and where its inventory is. */
+export interface Settings extends Smolvm {
   /** The host's one inventory (`SMOLVM_DATA_DIR`). */
   readonly dataDir: string;
 }

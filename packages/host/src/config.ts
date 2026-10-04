@@ -66,16 +66,12 @@ const HostConfigFile = Schema.Struct({
 type HostConfigFile = typeof HostConfigFile.Type;
 
 /** The smolvm settings with their defaults applied. */
-export interface Smolvm {
-  readonly prefix: string;
-  readonly publishAddress: string;
-  readonly ramBudgetMib: number;
-}
+export type Smolvm = Required<typeof SmolvmSettings.Type>;
 
 /** The host config as the host uses it: paths resolved and defaults applied. */
 export interface HostConfig {
   readonly id: string;
-  readonly runtime: "smolvm";
+  readonly runtime: HostConfigFile["runtime"];
   readonly listen: { readonly address: string; readonly port: number };
   readonly stateDir: string;
   readonly bases: ReadonlyMap<string, string>;
