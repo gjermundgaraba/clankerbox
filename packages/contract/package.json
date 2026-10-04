@@ -35,6 +35,7 @@
     "@gjermundgaraba/effect-actions": "catalog:"
   },
   "devDependencies": {
+    "@effect/platform-node": "catalog:",
     "@types/node": "catalog:",
     "effect": "catalog:",
     "typescript": "catalog:",
@@ -42,6 +43,7 @@
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
+    "@effect/platform-node": "^4.0.0",
     "effect": "^4.0.0"
   },
   "engines": {
