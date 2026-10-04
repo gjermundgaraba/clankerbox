@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ErrorTag, Host, Machine } from "@gjermundgaraba/clankerbox-sdk";
+import { ErrorTag, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 
 /**
@@ -69,10 +69,6 @@ export const Machines = Schema.fromJsonString(
   Schema.Struct({ machines: Schema.Array(Machine), unreachable: Unreachable }),
 );
 
-export const Hosts = Schema.fromJsonString(
-  Schema.Struct({ hosts: Schema.Array(Host), unreachable: Unreachable }),
-);
-
 export const OneMachine = Schema.fromJsonString(Machine);
 
 export const Natives = Schema.fromJsonString(
@@ -84,8 +80,7 @@ export const Natives = Schema.fromJsonString(
 
 /**
  * The live environment: `CLANKERBOX_BIN`, the binary under test; `CLANKERBOX_LIVE_CONFIG`, a
- * client config whose first host is the host under test and whose other hosts don't answer;
- * and `CLANKERBOX_LIVE_HOST_CONTROL`, a program run as `CONTROL OP ARGS…` on this machine
+ * client config whose one host is the host under test; and `CLANKERBOX_LIVE_HOST_CONTROL`, a program run as `CONTROL OP ARGS…` on this machine
  * that acts on the host under test:
  *
  * - `host-stop`, `host-start`: stop the host process (SIGTERM) or start it;
@@ -105,13 +100,11 @@ export const environment = async () => {
   const { hosts } = Schema.decodeUnknownSync(ClientConfig)(await readFile(config, "utf8"));
   const [host, ...others] = hosts;
 
-  if (host === undefined || others.length === 0) {
-    throw new Error(
-      "the live client config lists the host under test first, then a host that is down",
-    );
+  if (host === undefined || others.length > 0) {
+    throw new Error("the live client config lists only the host under test");
   }
 
-  return { binary, config, control, host, down: others };
+  return { binary, config, control, host };
 };
 
 export type Environment = Awaited<ReturnType<typeof environment>>;

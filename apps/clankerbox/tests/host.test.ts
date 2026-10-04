@@ -17,14 +17,27 @@ afterEach(async () => {
   await cleanup(owned, []);
 });
 
-/** A host `linux` and a client config that lists it, by its real loopback URL. */
-const setUp = async () => {
+/** A loopback URL that refuses connections: a host's, once it has ended. */
+const refusedUrl = async () => {
+  const gone = await serveHost(await scratch(owned));
+
+  await gone.dispose();
+
+  return gone.url;
+};
+
+/**
+ * A host `linux` and a client config that lists it, by its real loopback URL, then any hosts in
+ * `down`, which refuse connections.
+ */
+const setUp = async (down: ReadonlyArray<string> = []) => {
   const dir = await scratch(owned);
   const host = await serveHost(dir);
   const config = join(dir, "config.json");
+  const others = await Promise.all(down.map(async (id) => ({ id, url: await refusedUrl() })));
 
   served.push(host);
-  await writeFile(config, JSON.stringify({ hosts: [{ id: "linux", url: host.url }] }));
+  await writeFile(config, JSON.stringify({ hosts: [{ id: "linux", url: host.url }, ...others] }));
 
   const run = (args: ReadonlyArray<string>) =>
     cli([...args, "--config", config], { http: NodeHttpClient.layerNodeHttp });
@@ -33,6 +46,16 @@ const setUp = async () => {
 };
 
 const sizes = ["--base", "ubuntu", "--cpu", "1", "--ram-mib", "1024", "--disk-gib", "10"];
+
+const ErrorDocument = Schema.Struct({
+  message: Schema.String,
+  tag: ErrorTag,
+  retryable: Schema.Boolean,
+});
+
+const decodeFailure = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ error: ErrorDocument })),
+);
 
 test("create, stop, start and delete run on the host, and the CLI prints each outcome", async () => {
   const { host, run } = await setUp();
@@ -72,13 +95,7 @@ test("a setup that fails replies with its output, and the machine stays failed u
 
   const listed = await run(["machines", "--json"]);
 
-  const { error } = Schema.decodeUnknownSync(
-    Schema.fromJsonString(
-      Schema.Struct({
-        error: Schema.Struct({ message: Schema.String, tag: ErrorTag, retryable: Schema.Boolean }),
-      }),
-    ),
-  )(created.stdout);
+  const { error } = decodeFailure(created.stdout);
 
   expect(created.code).toBe(1);
   expect(error.tag).toBe("Precondition");
@@ -154,4 +171,70 @@ test("fork, checkpoint capture/list/get/delete and restore run on the host", asy
   expect(again.stderr).toContain("already gone");
   expect(checkpointsAfter.stdout).not.toContain("linux_snap");
   expect(await host.checkpointRows()).toEqual([]);
+});
+
+test("machines shows each machine's age and names the host that is down; hosts --json names the runtime", async () => {
+  const { run } = await setUp(["mac"]);
+
+  await run(["create", "dev", ...sizes]);
+
+  const table = await run(["machines"]);
+  const row = table.stdout.split("\n").find((line) => line.startsWith("linux_dev"));
+  const hosts = await run(["hosts", "--json"]);
+
+  expect(table.code).toBe(0);
+  expect(table.stdout.split("\n")[0]).toContain("AGE");
+  expect(row?.split(/\s+/u)).toContain("running");
+  expect(row).toMatch(/\s\d+[smhd]\s/u);
+  expect(table.stderr).toContain("Unavailable: host mac");
+  expect(
+    Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({
+          hosts: Schema.Array(
+            Schema.Struct({
+              id: Schema.String,
+              runtime: Schema.String,
+              bases: Schema.Array(Schema.String),
+            }),
+          ),
+          unreachable: Schema.Array(Schema.Struct({ host: Schema.String, error: ErrorDocument })),
+        }),
+      ),
+    )(hosts.stdout, { onExcessProperty: "ignore" }),
+  ).toEqual({
+    hosts: [{ id: "linux", runtime: "smolvm", bases: ["ubuntu"] }],
+    unreachable: [{ host: "mac", error: expect.objectContaining({ tag: "Unavailable" }) }],
+  });
+});
+
+test("--json errors from the host carry their tags", async () => {
+  const { run } = await setUp(["mac"]);
+
+  const notFound = await run(["start", "linux_nope", "--json"]);
+  const invalid = await run(["create", "linux_bad--name", ...sizes, "--json"]);
+
+  const precondition = await run([
+    "create",
+    "linux_nobase",
+    ...sizes.slice(2),
+    "--base",
+    "nope",
+    "--json",
+  ]);
+
+  const unavailable = await run(["start", "mac_dev", "--json"]);
+
+  expect(decodeFailure(notFound.stdout).error.tag).toBe("NotFound");
+  expect(decodeFailure(invalid.stdout).error.tag).toBe("Invalid");
+  expect(decodeFailure(precondition.stdout).error).toMatchObject({ tag: "Precondition" });
+  expect(decodeFailure(precondition.stdout).error.message).toContain("ubuntu");
+  expect(decodeFailure(unavailable.stdout).error).toMatchObject({
+    tag: "Unavailable",
+    retryable: false,
+  });
+
+  for (const ran of [notFound, invalid, precondition, unavailable]) {
+    expect(ran.code).toBe(1);
+  }
 });

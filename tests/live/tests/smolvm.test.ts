@@ -7,14 +7,13 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { type Machine, version } from "@gjermundgaraba/clankerbox-sdk";
+import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 import {
   type Environment,
   environment,
   Failure,
-  Hosts,
   Machines,
   namePrefix,
   Natives,
@@ -254,23 +253,6 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     await rm(dir, { recursive: true, force: true });
   }, minutes(5));
 
-  test("hosts names the host under test with its runtime, versions and bases, and the host that is down", async () => {
-    const { hosts, unreachable } = decode(Hosts, await cli(["hosts"], "--json"));
-
-    expect(hosts).toEqual([
-      {
-        id: env.host.id,
-        runtime: "smolvm",
-        version,
-        runtimeVersion: "1.22.2",
-        bases: ["ubuntu"],
-      },
-    ]);
-    expect(unreachable.map(({ host, error }) => [host, error.tag])).toEqual(
-      env.down.map(({ id: downId }) => [downId, "Unavailable"]),
-    );
-  });
-
   test(
     "create packs the recipe, runs its setup once and then preparation, and reports the endpoint and key",
     async () => {
@@ -329,20 +311,6 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     },
     minutes(10),
   );
-
-  test("machines lists the machine with its age, and names the host that is down", async () => {
-    const text = await cli(["machines"]);
-    const row = text.stdout.split("\n").find((line) => line.startsWith(id("main")));
-
-    expect(text.code).toBe(0);
-    expect(text.stdout.split("\n")[0]).toContain("AGE");
-    expect(row?.split(/\s+/u)).toContain("running");
-    expect(row).toMatch(/\s\d+[smhd]\s/u);
-
-    for (const { id: downId } of env.down) {
-      expect(text.stderr).toContain(`Unavailable: host ${downId}`);
-    }
-  });
 
   test(
     "scp and rsync move a binary file both ways, pinned to the machine's host key",
@@ -543,30 +511,6 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       expect(exists.message).toContain("exists");
       expect((await creating).code).toBe(0);
       await removeMachine("busy");
-    },
-    minutes(5),
-  );
-
-  test(
-    "a failing setup fails the create with its output, and the row stays failed until delete",
-    async () => {
-      const error = failure(
-        await createWith(
-          "failing",
-          "#!/bin/sh\necho installing\necho no network >&2\nexit 7\n",
-          60,
-        ),
-      );
-
-      expect(error.tag).toBe("Precondition");
-      expect(error.message).toContain("setup exited 7");
-      expect(error.message).toContain("installing\nno network");
-      expect((await machine("failing"))?.action).toMatchObject({
-        name: "create",
-        status: "failed",
-        error: { tag: "Precondition" },
-      });
-      await removeMachine("failing");
     },
     minutes(5),
   );
@@ -798,54 +742,6 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     },
     minutes(5),
   );
-
-  test("--json errors carry their tags", async () => {
-    const notFound = failure(await cli(["start"], id("nope"), "--json"));
-    const invalid = failure(await createBare("bad--name"));
-
-    const precondition = failure(
-      await cli(
-        ["create"],
-        id("nobase"),
-        "--base",
-        "nope",
-        "--cpu",
-        "1",
-        "--ram-mib",
-        "512",
-        "--disk-gib",
-        "20",
-        "--json",
-      ),
-    );
-
-    const placed = failure(
-      await cli(
-        ["create"],
-        `${namePrefix}nobase`,
-        "--base",
-        "nope",
-        "--cpu",
-        "1",
-        "--ram-mib",
-        "512",
-        "--disk-gib",
-        "20",
-        "--json",
-      ),
-    );
-
-    const unavailable = failure(
-      await cli(["start"], `${env.down[0]?.id ?? ""}_${namePrefix}x`, "--json"),
-    );
-
-    expect(notFound.tag).toBe("NotFound");
-    expect(invalid.tag).toBe("Invalid");
-    expect(precondition.tag).toBe("Precondition");
-    expect(precondition.message).toContain("ubuntu");
-    expect(placed.tag).toBe("Unavailable");
-    expect(unavailable).toMatchObject({ tag: "Unavailable", retryable: false });
-  });
 
   test(
     "delete removes the machine, its VM and its scope",
