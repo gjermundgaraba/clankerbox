@@ -86,6 +86,21 @@ test("an empty host list is Invalid", async () => {
   expect(error.message).toContain("empty");
 });
 
+test("a host entry whose URL isn't a URL, or whose ID isn't a host ID, is Invalid", async () => {
+  for (const entry of [
+    { id: "linux", url: "//linux.test:8484/" },
+    { id: "linux", url: "not a url" },
+    { id: "Linux", url: url("linux") },
+  ]) {
+    const error = await Effect.flip(Client.make([entry])).pipe(
+      Effect.provide(transport(new Map())),
+      Effect.runPromise,
+    );
+
+    expect(error._tag, entry.url).toBe("Invalid");
+  }
+});
+
 test("a malformed ID is Invalid and sends nothing", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 

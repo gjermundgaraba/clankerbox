@@ -22,7 +22,12 @@ import { formatId, HostId, isId, parseId, parseName } from "./ids.ts";
 import type { Checkpoint, Host, Machine, MachineSpec } from "./resources.ts";
 
 /** One host a client talks to. `id` is the host part of every ID it holds. */
-export const HostEntry = Schema.Struct({ id: HostId, url: Schema.String });
+export const HostEntry = Schema.Struct({
+  id: HostId,
+  url: Schema.String.check(
+    Schema.makeFilter((url: string) => URL.canParse(url) || "a URL, such as http://linux:8484"),
+  ),
+});
 
 export type HostEntry = typeof HostEntry.Type;
 
@@ -159,13 +164,6 @@ const settle = <A>(
             },
             () => unanswered(context, causeDetail(error)),
           ),
-          Match.tag(
-            "InvalidUrlError",
-            () =>
-              new Invalid({
-                message: `host ${context.host.id}'s URL ${JSON.stringify(context.host.url)} is invalid`,
-              }),
-          ),
           Match.orElse(
             () =>
               new Internal({
@@ -184,9 +182,12 @@ const settle = <A>(
     ),
   );
 
+/** Every entry is checked here, so a call never meets a malformed URL. */
+const decodeHosts = Schema.decodeUnknownEffect(Schema.Array(HostEntry));
+
 /**
  * Builds a client over `hosts`, in placement order. Making it sends nothing. An empty list
- * is Invalid, and so is a host ID that appears twice: IDs route by it.
+ * is Invalid, and so is a malformed entry or a host ID that appears twice: IDs route by it.
  */
 export const make = (
   hosts: ReadonlyArray<HostEntry>,
@@ -196,6 +197,10 @@ export const make = (
     if (hosts.length === 0) {
       return yield* new Invalid({ message: "the host list is empty: a client needs a host" });
     }
+
+    yield* decodeHosts(hosts).pipe(
+      Effect.mapError((error) => new Invalid({ message: `host list: ${error.message}` })),
+    );
 
     const twice = hosts.find(
       ({ id }, index) => hosts.findIndex((other) => other.id === id) < index,
