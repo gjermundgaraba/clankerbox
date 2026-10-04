@@ -548,7 +548,8 @@ export const make = (
       /**
        * The Mac must have room: every running VM in the Tart home counts, the operator's
        * included, and so does every machine an action is booting, the target too, since its VM
-       * runs only once its job has started.
+       * runs only once its job has started. The operator's Linux VMs count too, which Apple
+       * doesn't limit, so the count is conservative; Apple's own refusal is the real guard.
        */
       admit: ({ action, machine, machines }) =>
         Effect.gen(function* () {

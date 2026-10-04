@@ -1065,6 +1065,10 @@ Two rules for every VM job:
   - `tart list` sees only its own Tart home (P11). Production's host uses
     `~/.tart`, so the count covers the operator's Tart VMs there, but not VMs
     in another home or another app; for those, Apple's refusal is the guard.
+  - The count also takes the operator's running Linux VMs in that home,
+    which Apple doesn't limit, since `tart list` doesn't tell the OS apart.
+    That is accepted (phase-5 review): the pre-count is conservative, and
+    Apple's own refusal remains the real guard.
 - **Guest agent:** stock Cirrus images run tart-guest-agent ≥ 0.15.0 as a
   per-user LaunchAgent, which starts after auto-login. Tart's `Runtime.exec`
   waits for `tart exec` to answer after boot, then runs its command through
