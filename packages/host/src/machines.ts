@@ -18,7 +18,7 @@ import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
 import { type MachineRef, observeConcurrency, type Refusal, Runtime } from "./runtime.ts";
-import { type MachineRecord, type NewMachine, type Rows, Store } from "./store.ts";
+import { type MachineRecord, type NewMachine, type Holding, type NewRow, Store } from "./store.ts";
 
 export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Machine>, HostError>;
@@ -137,9 +137,11 @@ export const make = (
         return row;
       });
 
-    const inserting = (row: NewMachine): Rows => ({ insert: { table: "machines", record: row } });
+    const inserting = (row: NewMachine): NewRow => ({ table: "machines", record: row });
 
-    const holding = (name: string): Rows => ({ hold: [{ table: "machines", name }] });
+    const holding = (name: string): Holding<"machines"> => ({
+      hold: { table: "machines", name },
+    });
 
     /**
      * Steps 2 and 3 for an action that boots a machine or allocates a port, one at a time. The
@@ -190,9 +192,8 @@ export const make = (
         Effect.gen(function* () {
           const [token, { row, work }] = yield* admitted(
             "source" in making
-              ? claimAndCheck(action, holding(making.source), (join) =>
+              ? claimAndCheck(store.claim(action, holding(making.source)), (source, join) =>
                   Effect.gen(function* () {
-                    const source = yield* rows.machine(making.source);
                     const row = yield* newRow(name, source);
 
                     yield* join(inserting(row));
@@ -205,7 +206,7 @@ export const make = (
                   }),
                 )
               : Effect.flatMap(newRow(name, making.spec), (row) =>
-                  claimAndCheck(action, inserting(row), () =>
+                  claimAndCheck(store.claim(action, { insert: inserting(row) }), () =>
                     Effect.as(admit(action, row), { row, work: making.work }),
                   ),
                 ),
@@ -219,7 +220,7 @@ export const make = (
             withRuntime(Effect.andThen(work(machine), prepare(machine))),
           );
 
-          yield* done(token, hostKey);
+          yield* done(token, { prepared: { name, hostKey } });
 
           return yield* read(name);
         }),
@@ -252,9 +253,8 @@ export const make = (
           const name = yield* nameOf(id);
 
           const [token, { record, running }] = yield* admitted(
-            claimAndCheck("start", holding(name), () =>
+            claimAndCheck(store.claim("start", holding(name)), (record) =>
               Effect.gen(function* () {
-                const record = yield* rows.machine(name);
                 const { state } = yield* runtime.observe(ref(record));
 
                 if (state === "missing") {
@@ -282,7 +282,7 @@ export const make = (
             ),
           );
 
-          yield* done(token, hostKey);
+          yield* done(token, { prepared: { name, hostKey } });
 
           return yield* read(name);
         }),
@@ -292,10 +292,9 @@ export const make = (
       Effect.gen(function* () {
         const name = yield* nameOf(id);
 
-        const [token, { record, state }] = yield* claimAndCheck("stop", holding(name), () =>
-          Effect.flatMap(rows.machine(name), (record) =>
-            Effect.map(runtime.observe(ref(record)), ({ state }) => ({ record, state })),
-          ),
+        const [token, { record, state }] = yield* claimAndCheck(
+          store.claim("stop", holding(name)),
+          (record) => Effect.map(runtime.observe(ref(record)), ({ state }) => ({ record, state })),
         );
 
         if (state === "running") {
@@ -312,8 +311,9 @@ export const make = (
       Effect.gen(function* () {
         const name = yield* nameOf(id);
 
-        const [token, record] = yield* claimAndCheck("delete", holding(name), () =>
-          rows.machine(name),
+        const [token, record] = yield* claimAndCheck(
+          store.claim("delete", holding(name)),
+          Effect.succeed,
         );
 
         yield* native(token, `delete ${id}`, runtime.delete(ref(record)));

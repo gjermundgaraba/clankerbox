@@ -11,19 +11,16 @@
  * Each mutation runs in a fiber of the host's own, so a dropped connection never interrupts it
  * and its outcome is recorded either way.
  */
-import {
-  type ActionName,
-  type HostError,
-  Internal,
-  type NotFound,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { type HostError, Internal, type NotFound } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber, FiberSet, Option, Ref } from "effect";
 import { idOn, type Kind, notFoundOn } from "./ids.ts";
 import { type CheckpointRef, type MachineRef, Refusal } from "./runtime.ts";
 import type {
   CheckpointRecord,
+  Claim,
   MachineRecord,
-  Rows,
+  NewRow,
+  Outcome,
   Interface as StoreInterface,
   Token,
 } from "./store.ts";
@@ -83,29 +80,33 @@ export const claimsOn = (store: StoreInterface) => {
       );
 
   /**
-   * Steps 2 and 3: claims `rows` for `action`, then runs `check`, which can claim more rows
-   * through `join`, each joining the claim before, so one token covers them all. A check that
-   * fails, or is interrupted, releases every row claimed so far, so nothing is written.
+   * Steps 2 and 3: runs `claim`, then `check` with the record of the row it held, if any. The
+   * check can insert a row through `join`, which joins the claim, so one token covers them all.
+   * A check that fails, or is interrupted, releases every row claimed so far, so nothing is
+   * written.
    */
-  const claimAndCheck = <B, R>(
-    action: ActionName,
-    rows: Rows,
-    check: (join: (more: Rows) => Effect.Effect<void, HostError>) => Effect.Effect<B, HostError, R>,
+  const claimAndCheck = <H, B, R>(
+    claim: Effect.Effect<Claim<H>, HostError>,
+    check: (
+      held: H,
+      join: (row: NewRow) => Effect.Effect<void, HostError>,
+    ) => Effect.Effect<B, HostError, R>,
   ): Effect.Effect<readonly [Token, B], HostError, R> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const claimed = yield* Ref.make(yield* store.claim(action, rows));
+        const { token, held } = yield* claim;
+        const claimed = yield* Ref.make(token);
 
-        const join = (more: Rows) =>
+        const join = (row: NewRow) =>
           Effect.uninterruptible(
-            Effect.flatMap(Ref.get(claimed), (token) =>
-              Effect.flatMap(store.claim(action, more, token), (joined) =>
-                Ref.set(claimed, joined),
+            Effect.flatMap(Ref.get(claimed), (joining) =>
+              Effect.flatMap(store.claim(joining.action, { insert: row }, joining), (joined) =>
+                Ref.set(claimed, joined.token),
               ),
             ),
           );
 
-        const checked = yield* restore(check(join)).pipe(
+        const checked = yield* restore(check(held, join)).pipe(
           Effect.onError(() => Effect.flatMap(Ref.get(claimed), release)),
         );
 
@@ -143,9 +144,9 @@ export const claimsOn = (store: StoreInterface) => {
       ),
     );
 
-  /** Ends the action done on every row it holds, with the host key it read, if any. */
-  const done = (token: Token, hostKey?: string) =>
-    store.end(token, { action: { name: token.action, status: "done" }, hostKey });
+  /** Ends the action done on every row it holds, with what else it recorded. */
+  const done = (token: Token, recorded?: Omit<Outcome, "action">) =>
+    store.end(token, { ...recorded, action: { name: token.action, status: "done" } });
 
   return { claimAndCheck, native, done };
 };

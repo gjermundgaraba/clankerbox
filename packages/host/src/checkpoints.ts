@@ -63,11 +63,9 @@ export const make = (
         const id = yield* formatId(config.id, name);
 
         const [token, { source, row }] = yield* claimAndCheck(
-          "capture",
-          { hold: [{ table: "machines", name: sourceName }] },
-          (join) =>
+          store.claim("capture", { hold: { table: "machines", name: sourceName } }),
+          (source, join) =>
             Effect.gen(function* () {
-              const source = yield* rows.machine(sourceName);
               const kind = yield* runtime.captureKind(machineRef(config.id, source));
 
               const row: NewCheckpoint = {
@@ -86,7 +84,7 @@ export const make = (
                 diskGib: source.diskGib,
               };
 
-              yield* join({ insert: { table: "checkpoints", record: row } });
+              yield* join({ table: "checkpoints", record: row });
 
               return { source, row };
             }),
@@ -107,9 +105,8 @@ export const make = (
         const name = yield* nameOf(id);
 
         const [token, record] = yield* claimAndCheck(
-          "delete",
-          { hold: [{ table: "checkpoints", name }] },
-          () => rows.checkpoint(name),
+          store.claim("delete", { hold: { table: "checkpoints", name } }),
+          Effect.succeed,
         );
 
         yield* native(

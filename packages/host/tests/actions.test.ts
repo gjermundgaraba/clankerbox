@@ -1,10 +1,10 @@
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Logger } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import { claimsOn } from "../src/actions.ts";
-import { type NewMachine, open } from "../src/store.ts";
+import { type Interface, type NewMachine, open } from "../src/store.ts";
 import { removeScratch, scratch } from "./scratch.ts";
 
 const owned: Array<string> = [];
@@ -25,23 +25,22 @@ const row: NewMachine = {
   hostKey: undefined,
 };
 
-test("a release that fails after a failed check is logged, and the check's error is the reply", async () => {
+/** Runs `use` with the claims over a store whose release fails, and what it logged. */
+const withFailingRelease = async <A>(
+  use: (claims: ReturnType<typeof claimsOn>, store: Interface) => Effect.Effect<A, HostError>,
+) => {
   const stateDir = join(await scratch(owned), "state");
   const logged: Array<unknown> = [];
 
-  const error = await Effect.gen(function* () {
+  const result = await Effect.gen(function* () {
     const store = yield* open(stateDir, "linux");
 
-    const { claimAndCheck } = claimsOn({
+    const claims = claimsOn({
       ...store,
       release: () => Effect.fail(new Internal({ message: "disk full" })),
     });
 
-    return yield* Effect.flip(
-      claimAndCheck("create", { insert: { table: "machines", record: row } }, () =>
-        Effect.fail(new Precondition({ message: "no room" })),
-      ),
-    );
+    return yield* Effect.flip(use(claims, store));
   }).pipe(
     Effect.scoped,
     Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))])),
@@ -49,6 +48,16 @@ test("a release that fails after a failed check is logged, and the check's error
     Effect.runPromise,
   );
 
-  expect(error).toEqual(new Precondition({ message: "no room" }));
+  return { result, logged };
+};
+
+test("a release that fails after a failed check is logged, and the check's error is the reply", async () => {
+  const { result, logged } = await withFailingRelease(({ claimAndCheck }, store) =>
+    claimAndCheck(store.claim("create", { insert: { table: "machines", record: row } }), () =>
+      Effect.fail(new Precondition({ message: "no room" })),
+    ),
+  );
+
+  expect(result).toEqual(new Precondition({ message: "no room" }));
   expect(logged).toEqual([["couldn't release the rows of a create: disk full"]]);
 });

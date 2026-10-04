@@ -143,8 +143,6 @@ const decodeRow = Schema.decodeUnknownSync(Row);
 
 const decodeCheckpointRow = Schema.decodeUnknownSync(CheckpointRow);
 
-const decodeActionColumns = Schema.decodeUnknownSync(ActionColumns);
-
 const decodeAction = Schema.decodeUnknownSync(ActionRecord);
 
 const actionOf = (row: typeof ActionColumns.Type): ActionRecord =>
@@ -207,9 +205,15 @@ export type NewCheckpoint = Omit<CheckpointRecord, "action">;
 
 export type Table = "machines" | "checkpoints";
 
+/** Each table's records. */
+export interface Records {
+  readonly machines: MachineRecord;
+  readonly checkpoints: CheckpointRecord;
+}
+
 /** A row, by its table and name. */
-export interface RowRef {
-  readonly table: Table;
+export interface RowRef<T extends Table = Table> {
+  readonly table: T;
   readonly name: string;
 }
 
@@ -218,10 +222,23 @@ export type NewRow =
   | { readonly table: "machines"; readonly record: NewMachine }
   | { readonly table: "checkpoints"; readonly record: NewCheckpoint };
 
-/** What a claim takes: existing rows to hold, then a new row to insert. */
-export interface Rows {
-  readonly hold?: ReadonlyArray<RowRef> | undefined;
+/** What a claim takes: an existing row to hold, then a new row to insert. */
+export interface Rows<T extends Table = Table> {
+  readonly hold?: RowRef<T> | undefined;
   readonly insert?: NewRow | undefined;
+}
+
+/** Reads a row of each table by name, inside a transaction. */
+type Finders = { readonly [T in Table]: (name: string) => Records[T] | undefined };
+
+/** A claim that holds an existing row, and may insert a new one. */
+export interface Holding<T extends Table> extends Rows<T> {
+  readonly hold: RowRef<T>;
+}
+
+/** A claim that only inserts a new row. */
+export interface Inserting {
+  readonly insert: NewRow;
 }
 
 /** A row a claim holds, and the action the claim replaced on it. */
@@ -239,13 +256,20 @@ export interface Token {
   readonly held: ReadonlyArray<HeldRow>;
 }
 
-/**
- * What an action records when it ends: its outcome, on every row it claimed, and the host key
- * it read, on its subject: the machine row it inserted, or else the one it holds.
- */
+/** What a claim returns: its token, and the record of the row it held, as the claim left it. */
+export interface Claim<A> {
+  readonly token: Token;
+  readonly held: A;
+}
+
+/** What an action records when it ends: its outcome, on every row it claimed. */
 export interface Outcome {
   readonly action: ActionRecord;
-  readonly hostKey?: string | undefined;
+  /**
+   * The machine a preparation ran on, and the host key it printed, which goes on that row. A
+   * preparation that printed none leaves the row's key as it was.
+   */
+  readonly prepared?: { readonly name: string; readonly hostKey: string | undefined } | undefined;
 }
 
 export interface Interface {
@@ -258,18 +282,25 @@ export interface Interface {
     name: string,
   ) => Effect.Effect<Option.Option<CheckpointRecord>, Internal>;
   /**
-   * Claims rows for `action` in one transaction: holds each row in `rows.hold`, then inserts
-   * `rows.insert`, held by the action from the start. A missing row is NotFound, one another
-   * action holds `Conflict{busy}` and a taken new name `Conflict{exists}`, and then nothing is
-   * written. The token covers `joining`'s rows too, so an action can claim in steps and still
-   * release or end everything at once. Actions pick ports one at a time, so the port's unique
-   * index is only a backstop.
+   * Claims rows for `action` in one transaction: holds `rows.hold`, then inserts `rows.insert`,
+   * held by the action from the start. A missing row is NotFound, one another action holds
+   * `Conflict{busy}` and a taken new name `Conflict{exists}`, and then nothing is written. The
+   * token covers `joining`'s rows too, so an action can claim in steps and still release or end
+   * everything at once. Actions pick ports one at a time, so the port's unique index is only a
+   * backstop.
    */
-  readonly claim: (
-    action: ActionName,
-    rows: Rows,
-    joining?: Token,
-  ) => Effect.Effect<Token, NotFound | Conflict | Internal>;
+  readonly claim: {
+    <T extends Table>(
+      action: ActionName,
+      rows: Holding<T>,
+      joining?: Token,
+    ): Effect.Effect<Claim<Records[T]>, NotFound | Conflict | Internal>;
+    (
+      action: ActionName,
+      rows: Inserting,
+      joining?: Token,
+    ): Effect.Effect<Claim<undefined>, Conflict | Internal>;
+  };
   /** Gives back a claim in one transaction: its inserted rows go, its held rows get `before`. */
   readonly release: (token: Token) => Effect.Effect<void, Internal>;
   /** Ends a claim in one transaction, recording `outcome` on its rows. */
@@ -454,12 +485,8 @@ export const open = (
 
     const updateHostKey = db.prepare("UPDATE machines SET host_key = ? WHERE name = ?");
 
-    /** The statements that read, record and remove a row's action, per table. */
+    /** The statements that record a row's action and remove the row, per table. */
     const statementsOf = (table: Table) => ({
-      action: db.prepare(
-        `SELECT action_name, action_status, action_error_tag, action_error_message
-         FROM ${table} WHERE name = ?`,
-      ),
       record: db.prepare(
         `UPDATE ${table} SET action_name = $action_name, action_status = $action_status,
           action_error_tag = $action_error_tag, action_error_message = $action_error_message
@@ -485,6 +512,11 @@ export const open = (
       return row === undefined ? undefined : fromCheckpointRow(decodeCheckpointRow(row));
     };
 
+    const finders: Finders = {
+      machines: findSync,
+      checkpoints: findCheckpointSync,
+    };
+
     const record = (row: RowRef, action: ActionRecord) => {
       statements[row.table].record.run({
         name: row.name,
@@ -495,19 +527,25 @@ export const open = (
       });
     };
 
-    /** Holds a row inside a transaction, unless it is missing or another action holds it. */
-    const holdSync = (
+    /**
+     * Holds a row inside a transaction, unless it is missing or another action holds it, and
+     * returns its record as the hold leaves it.
+     */
+    const holdSync = <T extends Table>(
       action: ActionName,
-      row: RowRef,
-    ): Result.Result<HeldRow, NotFound | Conflict> => {
+      row: RowRef<T>,
+    ): Result.Result<
+      { readonly row: HeldRow; readonly record: Records[T] },
+      NotFound | Conflict
+    > => {
       const kind = kinds[row.table];
-      const found = statements[row.table].action.get(row.name);
+      const found = finders[row.table](row.name);
 
       if (found === undefined) {
         return Result.fail(notFound(kind, row.name));
       }
 
-      const before = actionOf(decodeActionColumns(found));
+      const before = found.action;
 
       if (before.status === "running") {
         return Result.fail(
@@ -518,9 +556,14 @@ export const open = (
         );
       }
 
-      record(row, { name: action, status: "running" });
+      const running: ActionRecord = { name: action, status: "running" };
 
-      return Result.succeed({ table: row.table, name: row.name, before });
+      record(row, running);
+
+      return Result.succeed({
+        row: { table: row.table, name: row.name, before },
+        record: { ...found, action: running },
+      });
     };
 
     /**
@@ -563,22 +606,24 @@ export const open = (
     };
 
     /** Holds then inserts, as `claim` describes, inside a transaction. */
-    const claimSync = (
+    const claimSync = <T extends Table>(
       action: ActionName,
-      rows: Rows,
+      rows: Rows<T>,
       joining: Token | undefined,
-    ): Result.Result<Token, NotFound | Conflict> => {
+    ): Result.Result<Claim<Records[T] | undefined>, NotFound | Conflict> => {
       const held = [...(joining?.held ?? [])];
       const inserted = [...(joining?.inserted ?? [])];
+      let holding: Records[T] | undefined;
 
-      for (const row of rows.hold ?? []) {
-        const result = holdSync(action, row);
+      if (rows.hold !== undefined) {
+        const result = holdSync(action, rows.hold);
 
         if (Result.isFailure(result)) {
           return Result.fail(result.failure);
         }
 
-        held.push(result.success);
+        held.push(result.success.row);
+        holding = result.success.record;
       }
 
       if (rows.insert !== undefined) {
@@ -591,14 +636,34 @@ export const open = (
         inserted.push(result.success);
       }
 
-      return Result.succeed({ action, inserted, held });
+      return Result.succeed({ token: { action, inserted, held }, held: holding });
     };
 
     /** The rows a claim takes, for errors. */
     const claimed = (rows: Rows) =>
-      [...(rows.hold ?? []), ...(rows.insert === undefined ? [] : [rows.insert.record])]
-        .map((row) => id(row.name))
+      [rows.hold?.name, rows.insert?.record.name]
+        .flatMap((name) => (name === undefined ? [] : [id(name)]))
         .join(", ");
+
+    function claim<T extends Table>(
+      action: ActionName,
+      rows: Holding<T>,
+      joining?: Token,
+    ): Effect.Effect<Claim<Records[T]>, NotFound | Conflict | Internal>;
+    function claim(
+      action: ActionName,
+      rows: Inserting,
+      joining?: Token,
+    ): Effect.Effect<Claim<undefined>, Conflict | Internal>;
+    function claim<T extends Table>(
+      action: ActionName,
+      rows: Rows<T>,
+      joining?: Token,
+    ): Effect.Effect<Claim<Records[T] | undefined>, NotFound | Conflict | Internal> {
+      return transaction(db, `claim ${claimed(rows)} for ${action}`, () =>
+        claimSync(action, rows, joining),
+      );
+    }
 
     /** The rows a token names, for errors. */
     const named = (token: Token) =>
@@ -621,10 +686,7 @@ export const open = (
       ),
       findCheckpoint: (name) =>
         sql(`read checkpoint ${id(name)}`, () => Option.fromNullishOr(findCheckpointSync(name))),
-      claim: (action, rows, joining) =>
-        transaction(db, `claim ${claimed(rows)} for ${action}`, () =>
-          claimSync(action, rows, joining),
-        ),
+      claim,
       release: (token) =>
         transaction(db, `release ${named(token)} from ${token.action}`, () => {
           for (const row of token.inserted) {
@@ -637,16 +699,14 @@ export const open = (
 
           return Result.void;
         }),
-      end: (token, { action, hostKey }) =>
+      end: (token, { action, prepared }) =>
         transaction(db, `record ${action.name} on ${named(token)}`, () => {
           for (const row of [...token.inserted, ...token.held]) {
             record(row, action);
           }
 
-          const subject = token.inserted[0] ?? token.held[0];
-
-          if (hostKey !== undefined && subject?.table === "machines") {
-            updateHostKey.run(hostKey, subject.name);
+          if (prepared?.hostKey !== undefined) {
+            updateHostKey.run(prepared.hostKey, prepared.name);
           }
 
           return Result.void;
