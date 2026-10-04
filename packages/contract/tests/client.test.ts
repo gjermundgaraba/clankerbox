@@ -276,26 +276,6 @@ test("Capacity from the chosen host is the reply; placement never moves on", asy
   expect(spare.creates).toHaveLength(0);
 });
 
-test("an error from the chosen host names the hosts placement skipped", async () => {
-  const full = host({
-    id: "linux",
-    bases: ["ubuntu"],
-    create: () => Effect.fail(new Capacity({ message: "RAM budget is full" })),
-  });
-
-  const error = await withClient(
-    [
-      ["mac", "down"],
-      ["linux", full],
-    ],
-    (client) => Effect.flip(client.create("dev", spec)),
-  );
-
-  expect(error._tag).toBe("Capacity");
-  expect(error.message).toContain("RAM budget is full");
-  expect(error.message).toContain("mac");
-});
-
 test("a mutation whose reply is lost is Unavailable, names the ID, and is not retried", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 

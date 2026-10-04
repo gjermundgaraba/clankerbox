@@ -225,11 +225,11 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
 - A full ID, or else a profile's `host`, sends the create to that host.
   Otherwise the client library reads every host's bases, in parallel, and sends
   the create to the first host in its host list that offers the base. A host
-  that doesn't answer is skipped and named in any error. Whatever that host
-  replies, `Capacity` included, is the reply; placement never moves on to
-  another host.
-- With no host offering the base, the reply is `Unavailable` if a host didn't
-  answer, and otherwise `Precondition`, listing each host's bases.
+  that doesn't answer is skipped. Whatever the chosen host replies, `Capacity`
+  included, is the reply; placement never moves on to another host.
+- With no host offering the base, the reply is `Unavailable`, naming the hosts
+  that didn't answer, if any didn't, and otherwise `Precondition`, listing
+  each host's bases.
 - The base picks the host. In production each base lives on one host: Ubuntu on
   the Linux host, the Cirrus images on the Mac, and boat's image on the boat
   host. To choose among hosts that share a base, `create` takes a full ID, or

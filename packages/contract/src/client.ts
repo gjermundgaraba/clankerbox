@@ -11,13 +11,10 @@ import { HttpApiClient } from "effect/http-api";
 import { Http } from "./api.ts";
 import {
   type Access,
-  Capacity,
   type ClankerboxError,
-  Conflict,
   type HostError,
   Internal,
   Invalid,
-  NotFound,
   Precondition,
   Unavailable,
 } from "./errors.ts";
@@ -187,23 +184,6 @@ const settle = <A>(
     ),
   );
 
-/** Adds a note to an error's message, keeping its tag and fields. */
-const withNote = (error: ClankerboxError, note: string): ClankerboxError => {
-  const message = `${error.message}; ${note}`;
-
-  return Match.value(error).pipe(
-    Match.tagsExhaustive({
-      Invalid: () => new Invalid({ message }),
-      NotFound: () => new NotFound({ message }),
-      Conflict: ({ kind }) => new Conflict({ message, kind }),
-      Precondition: () => new Precondition({ message }),
-      Capacity: () => new Capacity({ message }),
-      Unavailable: ({ access }) => new Unavailable({ message, access }),
-      Internal: () => new Internal({ message }),
-    }),
-  );
-};
-
 /**
  * Builds a client over `hosts`, in placement order. Making it sends nothing. A host ID that
  * appears twice is Invalid: IDs route by it.
@@ -330,11 +310,10 @@ export const make = (
       Effect.gen(function* () {
         const { answers, unreachable } = yield* listed;
 
-        const skipped = unreachable.map(({ host }) => host);
         const chosen = answers.find(({ host }) => host.bases.includes(base));
 
         if (chosen !== undefined) {
-          return { host: chosen.entry.id, skipped };
+          return chosen.entry.id;
         }
 
         if (unreachable.length > 0) {
@@ -370,18 +349,7 @@ export const make = (
           return yield* createOn(options.host, name, spec);
         }
 
-        const { host, skipped } = yield* place(spec.base);
-
-        return yield* createOn(host, name, spec).pipe(
-          Effect.mapError((error) =>
-            skipped.length > 0
-              ? withNote(
-                  error,
-                  `placement skipped hosts whose bases couldn't be read: ${skipped.join(", ")}`,
-                )
-              : error,
-          ),
-        );
+        return yield* createOn(yield* place(spec.base), name, spec);
       });
 
     /** The ID a call that makes a resource on `source`'s host gives it. */
