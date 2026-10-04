@@ -403,6 +403,8 @@ listed to keep them from being ported):
   `start.timeout_seconds` (preparation's own timeout replaces it).
 - **CLI exit-code contract:** the codes 255/130/128+n. The CLI exits 0 or 1,
   except that an interrupt such as Ctrl-C exits 130, the shell's convention.
+  The host role exits 0 when a signal stops it, as a unit's SIGTERM does, so
+  consumers' units need no `SuccessExitStatus`.
   With `--json` a clankerbox error prints `{error: {message, tag, retryable}}`;
   a usage error prints effect/cli's usual output, and its non-zero exit is the
   contract. `ssh` exits with ssh's code.
