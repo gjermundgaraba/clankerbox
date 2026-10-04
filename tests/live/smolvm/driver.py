@@ -259,8 +259,9 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
             log(message)
 
         def suite(n, args):
-            rc = sh(['vp', 'test', *shlex.split(args)], f'suite-{n}', env=suite_env, cwd=REPO / 'tests' / 'live',
-                    timeout=5400, check=False)
+            # Verbose, so the evidence names every test's result and keeps its [timing] lines.
+            rc = sh(['vp', 'test', '--reporter=verbose', *shlex.split(args)], f'suite-{n}', env=suite_env,
+                    cwd=REPO / 'tests' / 'live', timeout=5400, check=False)
             record(**{f'suite_{n}': {'rc': rc}})
             if rc != 0:
                 fail(f'suite {n}: rc={rc}; see evidence/suite-{n}.log', rc)
