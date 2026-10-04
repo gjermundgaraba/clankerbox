@@ -57,8 +57,12 @@ test("the publish address defaults to the listen address, and a set one is kept"
     smolvm: { ...config.smolvm, publishAddress: "100.100.1.2" },
   });
 
-  expect((await Effect.runPromise(defaulted.loaded)).smolvm.publishAddress).toBe("100.95.240.37");
-  expect((await Effect.runPromise(set.loaded)).smolvm.publishAddress).toBe("100.100.1.2");
+  await expect(Effect.runPromise(defaulted.loaded)).resolves.toMatchObject({
+    smolvm: { publishAddress: "100.95.240.37" },
+  });
+  await expect(Effect.runPromise(set.loaded)).resolves.toMatchObject({
+    smolvm: { publishAddress: "100.100.1.2" },
+  });
 });
 
 test("a set RAM budget is kept, even above physical RAM", async () => {
@@ -67,7 +71,53 @@ test("a set RAM budget is kept, even above physical RAM", async () => {
     smolvm: { ...config.smolvm, ramBudgetMib: 1_000_000 },
   });
 
-  expect((await Effect.runPromise(loaded)).smolvm.ramBudgetMib).toBe(1_000_000);
+  await expect(Effect.runPromise(loaded)).resolves.toMatchObject({
+    smolvm: { ramBudgetMib: 1_000_000 },
+  });
+});
+
+const tart = {
+  id: "mac",
+  runtime: "tart",
+  listen: { address: "100.122.69.11", port: 8484 },
+  stateDir: "state",
+  bases: { tahoe: "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3" },
+  tart: { binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart" },
+};
+
+test("a Tart host config names its tart binary, and its publish address defaults to the listen address", async () => {
+  const { file, loaded } = await load(tart);
+
+  expect(await Effect.runPromise(loaded)).toEqual({
+    id: "mac",
+    runtime: "tart",
+    listen: { address: "100.122.69.11", port: 8484 },
+    stateDir: join(file, "..", "state"),
+    bases: new Map([["tahoe", "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3"]]),
+    tart: {
+      binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart",
+      publishAddress: "100.122.69.11",
+    },
+  });
+
+  const published = await load({ ...tart, tart: { ...tart.tart, publishAddress: "127.0.0.1" } });
+
+  await expect(Effect.runPromise(published.loaded)).resolves.toMatchObject({
+    tart: { publishAddress: "127.0.0.1" },
+  });
+});
+
+test("a Tart host config takes only Tart's settings, on a tailnet or loopback address", async () => {
+  for (const contents of [
+    { ...tart, smolvm: config.smolvm },
+    { ...tart, tart: { ...tart.tart, ramBudgetMib: 4096 } },
+    { ...tart, tart: { ...tart.tart, publishAddress: "0.0.0.0" } },
+    { ...tart, tart: {} },
+  ]) {
+    const { loaded } = await load(contents);
+
+    expect((await Effect.runPromise(Effect.flip(loaded)))._tag).toBe("Invalid");
+  }
 });
 
 test("a host listens and publishes only on a tailnet or loopback address", async () => {

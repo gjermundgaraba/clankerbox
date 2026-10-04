@@ -8,6 +8,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import type { HostConfig } from "./config.ts";
 import type { Runtime } from "./runtime.ts";
 import * as Smolvm from "./smolvm.ts";
+import * as Tart from "./tart.ts";
 
 export const runtimeLayer = (
   config: HostConfig,
@@ -16,7 +17,9 @@ export const runtimeLayer = (
   HostError,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > =>
-  Match.value(config.runtime).pipe(
-    Match.when("smolvm", () => Smolvm.layer(config)),
-    Match.exhaustive,
+  Match.value(config).pipe(
+    Match.discriminatorsExhaustive("runtime")({
+      smolvm: (smolvm) => Smolvm.layer(smolvm),
+      tart: (tart) => Tart.layer(tart),
+    }),
   );

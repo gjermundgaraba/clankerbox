@@ -52,31 +52,63 @@ const SmolvmSettings = Schema.Struct({
   ramBudgetMib: Schema.optionalKey(Size),
 });
 
-const HostConfigFile = Schema.Struct({
+/** The Tart runtime's settings. */
+const TartSettings = Schema.Struct({
+  /**
+   * The `tart` executable of a versioned install, such as
+   * `/opt/tart/2.40.1/tart.app/Contents/MacOS/tart`. VM jobs run it from there, so an upgrade goes
+   * into a new directory.
+   */
+  binary: Schema.String,
+  /** Where the forwarder listens for machines' guest port 22. Default: `listen.address`. */
+  publishAddress: Schema.optionalKey(Address),
+});
+
+/** What every host config holds, whatever its runtime. */
+const common = {
   id: HostId,
-  runtime: Schema.Literal("smolvm"),
   listen: Schema.Struct({ address: Address, port: Port }),
   /** Relative to the config file. */
   stateDir: Schema.String,
   /** Base name to image. Hosts that offer the same image use the same name. */
   bases: Schema.Record(Schema.String, Schema.String),
-  smolvm: SmolvmSettings,
-});
+};
+
+const HostConfigFile = Schema.Union([
+  Schema.Struct({ ...common, runtime: Schema.Literal("smolvm"), smolvm: SmolvmSettings }),
+  Schema.Struct({ ...common, runtime: Schema.Literal("tart"), tart: TartSettings }),
+]);
 
 type HostConfigFile = typeof HostConfigFile.Type;
 
 /** The smolvm settings with their defaults applied. */
 export type Smolvm = Required<typeof SmolvmSettings.Type>;
 
-/** The host config as the host uses it: paths resolved and defaults applied. */
-export interface HostConfig {
+/** The Tart settings with their defaults applied. */
+export type Tart = Required<typeof TartSettings.Type>;
+
+/** What every host config holds, as the host uses it: paths resolved. */
+interface Common {
   readonly id: string;
-  readonly runtime: HostConfigFile["runtime"];
   readonly listen: { readonly address: string; readonly port: number };
   readonly stateDir: string;
   readonly bases: ReadonlyMap<string, string>;
+}
+
+/** A smolvm host's config. */
+export interface SmolvmHost extends Common {
+  readonly runtime: "smolvm";
   readonly smolvm: Smolvm;
 }
+
+/** A Tart host's config. */
+export interface TartHost extends Common {
+  readonly runtime: "tart";
+  readonly tart: Tart;
+}
+
+/** The host config as the host uses it: paths resolved and defaults applied. */
+export type HostConfig = SmolvmHost | TartHost;
 
 const mib = 1024 * 1024;
 
@@ -92,6 +124,25 @@ const resolveConfig = (
 ): Effect.Effect<HostConfig, Invalid, Path.Path> =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
+
+    const common: Common = {
+      id: decoded.id,
+      listen: decoded.listen,
+      stateDir: path.resolve(directory, decoded.stateDir),
+      bases: new Map(Object.entries(decoded.bases)),
+    };
+
+    if (decoded.runtime === "tart") {
+      return {
+        ...common,
+        runtime: decoded.runtime,
+        tart: {
+          ...decoded.tart,
+          publishAddress: decoded.tart.publishAddress ?? decoded.listen.address,
+        },
+      };
+    }
+
     const ramBudgetMib = decoded.smolvm.ramBudgetMib ?? Math.floor(totalmem() / mib) - reservedMib;
 
     if (ramBudgetMib <= 0) {
@@ -101,11 +152,8 @@ const resolveConfig = (
     }
 
     return {
-      id: decoded.id,
+      ...common,
       runtime: decoded.runtime,
-      listen: decoded.listen,
-      stateDir: path.resolve(directory, decoded.stateDir),
-      bases: new Map(Object.entries(decoded.bases)),
       smolvm: {
         ...decoded.smolvm,
         publishAddress: decoded.smolvm.publishAddress ?? decoded.listen.address,

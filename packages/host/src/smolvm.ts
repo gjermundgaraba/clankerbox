@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Layer, type PlatformError, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import type { HostConfig, Smolvm } from "./config.ts";
+import type { Smolvm, SmolvmHost } from "./config.ts";
 import { lastLines } from "./guest.ts";
 import { checkRamBudget } from "./ram-budget.ts";
 import {
@@ -584,7 +584,7 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<HostConfig, "stateDir" | "smolvm">,
+  config: Pick<SmolvmHost, "stateDir" | "smolvm">,
 ): Layer.Layer<
   Runtime,
   HostError,
