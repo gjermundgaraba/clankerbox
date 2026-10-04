@@ -89,12 +89,18 @@ const succeeded = (what: string, timeout: Duration.Duration, ran: Ran) =>
 /**
  * Runs a setup script that arrives on stdin, so it never appears in a process list. It runs
  * as its own file, honouring its `#!` line, with stdin closed. The file is under `/var/tmp`,
- * which nothing mounts `noexec`, and is removed however setup ends: a signal that ends the
- * shell runs its exit trap too.
+ * which nothing mounts `noexec`, and is removed however setup ends. The exit trap covers an
+ * exit or a signal the shell sees. A killed exec gives it no chance: smolvm then SIGKILLs the
+ * guest command and every process descended from it (phase 3, live). So a guard that has left
+ * that tree removes the file once the shell is gone: `perl` forks it, the parent exits so the
+ * guest's init adopts it, and it takes a session of its own. The shell waits for that parent,
+ * so the guard runs before the file holds anything. `perl` is stock Ubuntu's `perl-base`, as
+ * preparation's reseed uses.
  */
 const setupRunner = [
   "set -eu",
   "script=$(mktemp /var/tmp/clankerbox-setup.XXXXXX)",
+  `perl -e 'use POSIX; fork and exit; POSIX::setsid(); exec @ARGV' /bin/sh -c 'while kill -0 "$1" 2>/dev/null; do sleep 1; done; rm -f "$2"' clankerbox-setup-guard "$$" "$script" </dev/null >/dev/null 2>&1`,
   `trap 'rm -f "$script"' EXIT`,
   "trap 'exit 1' HUP INT TERM",
   `cat >"$script"`,

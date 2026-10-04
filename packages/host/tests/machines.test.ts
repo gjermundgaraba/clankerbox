@@ -43,6 +43,12 @@ const rows = (host: TestHost) => host.run(host.store.list);
 /** Lets a held runtime call start, so the action is past its claim. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
 
+const exists = (file: string) =>
+  stat(file).then(
+    () => true,
+    () => false,
+  );
+
 /** A setup that installs a `start` hook into the guest root, as a profile's setup would. */
 const installsStart = {
   script: [
@@ -415,7 +421,10 @@ test("a setup that runs past its timeout fails the create with the output so far
 
   const file = /running as (\S+)/u.exec(error.message)?.[1] ?? "";
 
-  await settle();
+  // The guard polls once a second for the killed shell.
+  for (let waited = 0; waited < 3000 && (await exists(file)); waited += 100) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 
   expect(error._tag).toBe("Precondition");
   expect(error.message).toContain("setup ran past its 1s timeout");

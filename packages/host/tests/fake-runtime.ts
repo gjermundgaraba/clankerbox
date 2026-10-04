@@ -45,7 +45,11 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
 
   const stubs: ReadonlyArray<readonly [string, string]> = [
     ["uname", `echo ${uname}`],
-    ["perl", `echo "perl $3" >>"$CLANKERBOX_ROOT/calls"`],
+    // Only preparation's reseed is stubbed; setup's guard runs the real perl.
+    [
+      "perl",
+      `case "$2" in *RNDRESEEDCRNG*) echo "perl $3" >>"$CLANKERBOX_ROOT/calls" ;; *) exec /usr/bin/perl "$@" ;; esac`,
+    ],
     [
       "ssh-keygen",
       [
@@ -214,6 +218,8 @@ export const fakeRuntime = (options: FakeOptions) => {
                 ChildProcess.make(file, args, {
                   env: { CLANKERBOX_ROOT: root, PATH: `${bin}:${process.env["PATH"] ?? ""}` },
                   extendEnv: true,
+                  // smolvm SIGKILLs a killed exec's guest command, so no trap runs.
+                  killSignal: "SIGKILL",
                   stdin:
                     command.stdin === undefined
                       ? "ignore"
