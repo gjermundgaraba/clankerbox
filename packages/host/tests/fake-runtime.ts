@@ -30,8 +30,6 @@ export interface FakeOptions {
   readonly publishAddress?: string | undefined;
   /** When set, `admit` checks the RAM budget like smolvm. */
   readonly ramBudgetMib?: number | undefined;
-  /** What the stubbed `uname -s` says. Default: Linux. */
-  readonly uname?: string | undefined;
 }
 
 /**
@@ -80,13 +78,10 @@ interface FakeMachine {
 /** What a test injects into the next call of an operation. */
 type Injection =
   | { readonly kind: "fail"; readonly error: HostError }
-  | { readonly kind: "hold"; readonly until: Promise<void> };
+  | { readonly kind: "hold"; readonly entered: () => void; readonly until: Promise<void> };
 
 /** The calls a runtime can refuse. */
 type Refusable = "create" | "start";
-
-/** The native name, as smolvm would make it. */
-const nativeName = (machine: MachineRef) => `${machine.name}-${machine.instance.slice(0, 8)}`;
 
 export const fakeRuntime = (options: FakeOptions) => {
   const machines = new Map<string, FakeMachine>();
@@ -112,6 +107,8 @@ export const fakeRuntime = (options: FakeOptions) => {
       }
 
       if (injection.kind === "hold") {
+        injection.entered();
+
         return yield* Effect.promise(() => injection.until);
       }
 
@@ -131,7 +128,7 @@ export const fakeRuntime = (options: FakeOptions) => {
 
   const observe = (machine: MachineRef): Effect.Effect<Observed> =>
     Effect.sync(() => {
-      const state = machines.get(nativeName(machine))?.state ?? "missing";
+      const state = machines.get(machine.name)?.state ?? "missing";
 
       return machine.port === undefined || publishAddress === undefined
         ? { state }
@@ -139,7 +136,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     });
 
   const running = (machine: MachineRef) => {
-    const found = machines.get(nativeName(machine));
+    const found = machines.get(machine.name);
 
     return found?.state === "running"
       ? Effect.succeed(found)
@@ -150,7 +147,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     Runtime,
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const bin = yield* Effect.sync(() => writeStubs(options.dir, options.uname));
+      const bin = yield* Effect.sync(() => writeStubs(options.dir));
 
       stubs = bin;
 
@@ -171,17 +168,18 @@ export const fakeRuntime = (options: FakeOptions) => {
           Effect.andThen(
             enterRefusable("create", machine),
             Effect.promise(async () => {
-              const root = join(options.dir, "roots", nativeName(machine));
+              // A machine made again under the same name gets a fresh root.
+              const root = join(options.dir, "roots", machine.instance);
 
               await mkdir(join(root, "dev"), { recursive: true });
-              machines.set(nativeName(machine), { state: "running", root });
+              machines.set(machine.name, { state: "running", root });
             }),
           ),
         start: (machine) =>
           Effect.andThen(
             enterRefusable("start", machine),
             Effect.sync(() => {
-              const found = machines.get(nativeName(machine));
+              const found = machines.get(machine.name);
 
               if (found !== undefined) {
                 found.state = "running";
@@ -192,7 +190,7 @@ export const fakeRuntime = (options: FakeOptions) => {
           Effect.andThen(
             enter("stop", machine),
             Effect.sync(() => {
-              const found = machines.get(nativeName(machine));
+              const found = machines.get(machine.name);
 
               if (found !== undefined) {
                 found.state = "stopped";
@@ -203,7 +201,7 @@ export const fakeRuntime = (options: FakeOptions) => {
           Effect.andThen(
             enter("delete", machine),
             Effect.sync(() => {
-              machines.delete(nativeName(machine));
+              machines.delete(machine.name);
             }),
           ),
         exec: (machine, command) =>
@@ -248,9 +246,8 @@ export const fakeRuntime = (options: FakeOptions) => {
     /** Every runtime call, as `<operation> <machine ID>`, and `startup`. */
     calls,
     /** The guest root of the machine named `name`, while the fake holds it. */
-    root: (name: string) =>
-      [...machines].find(([native]) => native.slice(0, -9) === name)?.[1].root,
-    /** The fake's machines by native name, with their state. */
+    root: (name: string) => machines.get(name)?.root,
+    /** The fake's machines by name, with their state. */
     machines,
     stubs: () => stubs,
     failNext: (operation: Operation, error: HostError) => {
@@ -259,17 +256,17 @@ export const fakeRuntime = (options: FakeOptions) => {
     refuseNext: (operation: Refusable, refusal: Refusal) => {
       refusals.set(operation, [...(refusals.get(operation) ?? []), refusal]);
     },
-    /** Holds the next call of `operation` until the returned function is called. */
+    /**
+     * Holds the next call of `operation` until `release` is called. `entered` resolves once
+     * that call has started, so the action holding it is past its claim.
+     */
     holdNext: (operation: Operation) => {
-      let release: () => void = () => {};
+      const until = Promise.withResolvers<void>();
+      const entered = Promise.withResolvers<void>();
 
-      const until = new Promise<void>((resolve) => {
-        release = resolve;
-      });
+      inject(operation, { kind: "hold", entered: entered.resolve, until: until.promise });
 
-      inject(operation, { kind: "hold", until });
-
-      return release;
+      return { release: until.resolve, entered: entered.promise };
     },
   };
 };

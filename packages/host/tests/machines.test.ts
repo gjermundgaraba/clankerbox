@@ -40,8 +40,8 @@ const failure = <A, E>(host: TestHost, effect: Effect.Effect<A, E>) =>
 
 const rows = (host: TestHost) => host.run(host.store.list);
 
-/** Lets a held runtime call start, so the action is past its claim. */
-const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+/** Between polls of a row. */
+const pause = () => new Promise((resolve) => setTimeout(resolve, 50));
 
 const exists = (file: string) =>
   stat(file).then(
@@ -311,10 +311,10 @@ test("start of a machine the runtime no longer has is Precondition and writes no
 
 test("a second action on a claimed machine is Conflict{busy}", async () => {
   const linux = await host();
-  const release = linux.fake.holdNext("create");
+  const { release, entered } = linux.fake.holdNext("create");
   const create = Effect.runFork(linux.machines.create(request("dev")));
 
-  await settle();
+  await entered;
 
   const [start, remove] = await Promise.all([
     failure(linux, linux.machines.start("linux_dev")),
@@ -335,10 +335,10 @@ test("a second action on a claimed machine is Conflict{busy}", async () => {
 
 test("a caller that goes away doesn't interrupt the action, and its outcome is recorded", async () => {
   const linux = await host();
-  const release = linux.fake.holdNext("create");
+  const { release, entered } = linux.fake.holdNext("create");
   const caller = Effect.runFork(linux.machines.create(request("dev")));
 
-  await settle();
+  await entered;
   await Effect.runPromise(Fiber.interrupt(caller));
   release();
 
@@ -349,7 +349,7 @@ test("a caller that goes away doesn't interrupt the action, and its outcome is r
       break;
     }
 
-    await settle();
+    await pause();
   }
 
   const [row] = await rows(linux);
@@ -361,9 +361,10 @@ test("a caller that goes away doesn't interrupt the action, and its outcome is r
 test("host startup fails every action the last host process left running", async () => {
   const linux = await host();
 
-  linux.fake.holdNext("create");
+  const { entered } = linux.fake.holdNext("create");
+
   Effect.runFork(linux.machines.create(request("dev")));
-  await settle();
+  await entered;
   await linux.dispose();
 
   const restarted = await host({ fake: linux.fake, dir: linux.dir });
@@ -456,15 +457,15 @@ test("the RAM budget counts running machines and refuses with Capacity, writing 
 
 test("two concurrent creates that would each fit alone don't both pass", async () => {
   const linux = await host({ runtime: { ramBudgetMib: 1536 } });
-  const releases = [linux.fake.holdNext("admit"), linux.fake.holdNext("admit")];
+  const holds = [linux.fake.holdNext("admit"), linux.fake.holdNext("admit")];
 
   const creates = [request("x"), request("y")].map((made) =>
     Effect.runFork(Effect.result(linux.machines.create(made))),
   );
 
-  await settle();
+  await Promise.all(holds.map(({ entered }) => entered));
 
-  for (const release of releases) {
+  for (const { release } of holds) {
     release();
   }
 

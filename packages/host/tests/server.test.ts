@@ -89,7 +89,7 @@ const settled = async (rows: () => Promise<ReadonlyArray<MachineRecord>>) => {
 
 test("a create whose client disconnects still finishes and records its outcome", async () => {
   const { url, fake, rows } = await serve();
-  const release = fake.holdNext("create");
+  const { release, entered } = fake.holdNext("create");
   const abort = new AbortController();
 
   const sent = fetch(`${url}/api/machine/create`, {
@@ -99,7 +99,7 @@ test("a create whose client disconnects still finishes and records its outcome",
     signal: abort.signal,
   }).catch((cause: Error) => cause.name);
 
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await entered;
   abort.abort();
 
   expect(await sent).toBe("AbortError");
