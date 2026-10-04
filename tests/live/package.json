@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@gjermundgaraba/clankerbox-sdk": "workspace:*"
+    "@gjermundgaraba/clankerbox-sdk": "workspace:*",
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",
