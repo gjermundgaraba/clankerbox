@@ -145,6 +145,13 @@ export const make = (
           listeners.set(port, server);
           resume(Effect.void);
         });
+
+        // Interrupted before it listens, the server is no listener's yet, so nothing else closes it.
+        return Effect.sync(() => {
+          if (listeners.get(port) !== server) {
+            server.close();
+          }
+        });
       });
 
     return { listen, close };

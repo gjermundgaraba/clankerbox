@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises";
 import { connect, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Exit, Schema, Scope, type Stream } from "effect";
+import { Effect, Exit, Fiber, Schema, Scope, type Stream } from "effect";
 import { ChildProcess } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
 import { type Forwarder, make } from "../src/forwarder.ts";
@@ -215,4 +215,26 @@ test("a port something else holds is Internal, naming the address", async () => 
       holder.close(resolve);
     });
   }
+});
+
+test("a listen interrupted before it listens leaves the port free, and a later listen takes it", async () => {
+  const marker = join(await scratch(owned), "marker");
+  const port = await freePort();
+  const forwarding = await forwarder();
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(forwarding.listen(port, echo(marker)), {
+        startImmediately: true,
+      });
+
+      yield* Fiber.interrupt(fiber);
+    }),
+  );
+
+  await expect(connected(port)).rejects.toMatchObject({ code: "ECONNREFUSED" });
+
+  await Effect.runPromise(forwarding.listen(port, echo(marker)));
+
+  expect((await roundTrip(port, Buffer.from("again"))).toString()).toBe("again");
 });
