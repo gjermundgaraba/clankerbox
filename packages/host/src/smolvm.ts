@@ -37,14 +37,14 @@ export interface Settings {
 }
 
 /** The inventory lives in the host's state dir, so it is the host's alone. */
-export const dataDirIn = (stateDir: string): string => join(stateDir, "smolvm");
+const dataDirIn = (stateDir: string): string => join(stateDir, "smolvm");
 
 /** A machine's smolvm name: its name and the first 8 characters of its row's instance. */
 export const nativeName = (machine: Pick<MachineRef, "name" | "instance">): string =>
   `${machine.name}-${machine.instance.slice(0, 8)}`;
 
 /** The systemd scope `SMOLVM_VM_USE_SCOPE=1` puts a VM in (S@1.22.2:src/systemd_scope.rs:151-163). */
-export const scopeName = (native: string): string => `smolvm-vm-${native}.scope`;
+const scopeName = (native: string): string => `smolvm-vm-${native}.scope`;
 
 /** The disk templates smolvm would otherwise expand into the prefix on first use, racing itself. */
 export const templates = ["storage-template.ext4", "overlay-template.ext4"] as const;

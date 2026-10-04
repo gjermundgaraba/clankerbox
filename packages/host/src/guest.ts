@@ -197,7 +197,7 @@ export const preparationScript = [
  * restart and 1.52 s for a `start` with a clankercreds sync right after a cold start; 60 s
  * leaves room for a slow network.
  */
-export const preparationTimeout = Duration.seconds(60);
+const preparationTimeout = Duration.seconds(60);
 
 /** The seed preparation writes into the guest's `/dev/random`, as `RNDRESEEDCRNG` expects. */
 const seedBytes = 64;

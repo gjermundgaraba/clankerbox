@@ -28,7 +28,7 @@ for (const [network, prefix, family] of subnets) {
 
 const addressRule = "a tailnet address (100.64.0.0/10, fd7a:115c:a1e0::/48) or a loopback address";
 
-export const Address = Schema.String.check(
+const Address = Schema.String.check(
   Schema.makeFilter((address: string) => {
     const family = isIP(address);
 
@@ -43,7 +43,7 @@ const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }))
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
 /** The smolvm runtime's settings. */
-export const SmolvmSettings = Schema.Struct({
+const SmolvmSettings = Schema.Struct({
   /** The versioned install prefix, such as `/opt/smolvm/1.22.2`. */
   prefix: Schema.String,
   /** Where machines' guest port 22 is published (`SMOLVM_PUBLISH_ADDR`). */
@@ -52,7 +52,7 @@ export const SmolvmSettings = Schema.Struct({
   ramBudgetMib: Schema.optionalKey(Size),
 });
 
-export const HostConfigFile = Schema.Struct({
+const HostConfigFile = Schema.Struct({
   id: HostId,
   runtime: Schema.Literal("smolvm"),
   listen: Schema.Struct({ address: Address, port: Port }),
@@ -63,7 +63,7 @@ export const HostConfigFile = Schema.Struct({
   smolvm: SmolvmSettings,
 });
 
-export type HostConfigFile = typeof HostConfigFile.Type;
+type HostConfigFile = typeof HostConfigFile.Type;
 
 /** The smolvm settings with their defaults applied. */
 export interface Smolvm {
@@ -90,7 +90,7 @@ const reservedMib = 2048;
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(HostConfigFile));
 
 /** Applies defaults and resolves `stateDir` against the config file's directory. */
-export const resolveConfig = (
+const resolveConfig = (
   decoded: HostConfigFile,
   directory: string,
 ): Effect.Effect<HostConfig, Invalid, Path.Path> =>

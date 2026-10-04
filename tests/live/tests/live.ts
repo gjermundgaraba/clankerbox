@@ -55,7 +55,7 @@ const ClientConfig = Schema.fromJsonString(
   Schema.Struct({ hosts: Schema.Array(Schema.Struct({ id: Schema.String, url: Schema.String })) }),
 );
 
-export const ErrorDocument = Schema.Struct({
+const ErrorDocument = Schema.Struct({
   message: Schema.String,
   tag: ErrorTag,
   retryable: Schema.Boolean,

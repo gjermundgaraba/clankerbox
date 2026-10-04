@@ -8,12 +8,6 @@ import { runtimeLayer } from "./runtimes.ts";
 import { serve } from "./server.ts";
 import * as Store from "./store.ts";
 
-export * from "./config.ts";
-
-export * from "./runtime.ts";
-
-export { checkRamBudget } from "./ram-budget.ts";
-
 /**
  * The whole host over `runtime`: the state dir's database with its owner lock, startup
  * recovery, then the API. The server binds only after recovery.
