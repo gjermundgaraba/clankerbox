@@ -561,7 +561,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "the RAM budget refuses with Capacity, writing nothing, even for two concurrent creates that each fit alone",
+    "the RAM budget refuses with Capacity, writing nothing, and of two concurrent creates that each fit only alone exactly one passes",
     async () => {
       const huge = failure(await createBare("huge", 1_048_576));
 
@@ -581,7 +581,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       const results = await Promise.all([createBare("ram-a", each), createBare("ram-b", each)]);
       const passed = results.filter(({ code }) => code === 0);
 
-      expect(passed.length).toBeLessThan(2);
+      expect(passed).toHaveLength(1);
 
       for (const refused of results.filter(({ code }) => code !== 0)) {
         expect(failure(refused).tag).toBe("Capacity");

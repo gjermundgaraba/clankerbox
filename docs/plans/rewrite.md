@@ -1392,8 +1392,8 @@ Everything the rewrite creates on a test machine is removed when the work ends.
   - a `new-identity` hook running on create, fork and restore and not on
     `start`, and a failing hook failing the action;
   - a guest refused when it calls its own host's API port;
-  - smolvm's RAM budget refusing with `Capacity`, including two concurrent
-    creates that would each fit alone;
+  - smolvm's RAM budget refusing with `Capacity`, and of two concurrent
+    creates that each fit only alone, exactly one passing;
   - RAM fork, `ram` and `disk` checkpoint capture, restore and delete on
     smolvm, and `disk` checkpoints on Tart;
   - on boat:
