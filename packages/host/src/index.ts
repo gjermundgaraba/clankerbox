@@ -4,21 +4,11 @@ import { Effect, type FileSystem, Layer } from "effect";
 import * as Checkpoints from "./checkpoints.ts";
 import { type HostConfig, loadConfig } from "./config.ts";
 import * as Machines from "./machines.ts";
-import { Runtime } from "./runtime.ts";
+import type { Runtime } from "./runtime.ts";
 import { runtimeLayer } from "./runtimes.ts";
 import { serve } from "./server.ts";
+import { startup } from "./startup.ts";
 import * as Store from "./store.ts";
-
-/**
- * The host's one startup step, before the actions are built: every action the last host process
- * left running is marked failed, then the runtime runs its own startup cleanup.
- */
-export const startup = Layer.effectDiscard(
-  Effect.gen(function* () {
-    yield* (yield* Store.Store).failInterrupted;
-    yield* (yield* Runtime).startup;
-  }),
-);
 
 /**
  * The whole host over `runtime`: the state dir's database with its owner lock, startup

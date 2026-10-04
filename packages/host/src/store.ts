@@ -594,6 +594,12 @@ export const open = (
       return Result.succeed({ action, inserted, held });
     };
 
+    /** The rows a claim takes, for errors; a claim that takes none joins rows later. */
+    const claimed = (rows: Rows) =>
+      [...(rows.hold ?? []), ...(rows.insert === undefined ? [] : [rows.insert.record])]
+        .map((row) => id(row.name))
+        .join(", ") || "no rows yet";
+
     /** The rows a token names, for errors. */
     const named = (token: Token) =>
       [...token.inserted, ...token.held].map((row) => id(row.name)).join(", ");
@@ -616,10 +622,8 @@ export const open = (
       findCheckpoint: (name) =>
         sql(`read checkpoint ${id(name)}`, () => Option.fromNullishOr(findCheckpointSync(name))),
       claim: (action, rows, joining) =>
-        transaction(
-          db,
-          `claim ${[...(rows.hold ?? []), ...(rows.insert === undefined ? [] : [{ name: rows.insert.record.name }])].map((row) => id(row.name)).join(", ")} for ${action}`,
-          () => claimSync(action, rows, joining),
+        transaction(db, `claim ${claimed(rows)} for ${action}`, () =>
+          claimSync(action, rows, joining),
         ),
       release: (token) =>
         transaction(db, `release ${named(token)} from ${token.action}`, () => {
