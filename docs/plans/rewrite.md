@@ -1066,9 +1066,11 @@ Two rules for every VM job:
   the guest. Each runtime gets there its own way: smolvm's exec already runs as
   root, and Tart's and boat's add `sudo -n`. Setup and preparation have no
   runtime cases.
-- **State dir:** a directory is ours if it holds our SQLite database. Init
-  creates the database in one transaction and refuses a non-empty directory
-  without one. There is no separate marker file and no temp-directory rename.
+- **State dir:** the host's SQLite database is its only marker. Init creates
+  the database in one transaction and leaves other files in the directory
+  alone, as a mount point holds `lost+found`: `application_id` refuses a
+  foreign database, and the owner lock a second host. There is no separate
+  marker file and no temp-directory rename.
   - The database is `host.db`, marked with `PRAGMA application_id` `0x63627868`
     ("cbxh"). An empty `host.db`, as a crash during init leaves, is
     initialized; any other SQLite file under that name is refused.

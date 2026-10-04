@@ -126,17 +126,14 @@ test("a database newer than the binary is refused", async () => {
   expect(error.message).toContain("newer than this binary");
 });
 
-test("a non-empty directory without our database is refused, and left alone", async () => {
+test("a directory that holds other files, as a mount point holds lost+found, is used", async () => {
   const stateDir = join(await scratch(owned), "state");
 
-  await mkdir(stateDir);
+  await mkdir(join(stateDir, "lost+found"), { recursive: true });
   await writeFile(join(stateDir, "notes.txt"), "mine\n");
 
-  const error = await opening(stateDir);
-
-  expect(error._tag).toBe("Precondition");
-  expect(error.message).toContain("isn't empty");
-  expect(await readdir(stateDir)).toEqual(["notes.txt"]);
+  await expect(withStore(stateDir, (store) => store.list)).resolves.toEqual([]);
+  expect((await readdir(stateDir)).sort()).toEqual([databaseFile, "lost+found", "notes.txt"]);
 });
 
 test("another SQLite database under our file name is refused", async () => {

@@ -15,11 +15,8 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, FileSystem, Option, Result, Schema, type Scope } from "effect";
 
-/** A directory is ours if it holds this database; there is no other marker. */
+/** The database's file in the state dir. */
 export const databaseFile = "host.db";
-
-/** SQLite's own files beside the database. */
-const journalFile = `${databaseFile}-journal`;
 
 /** `PRAGMA application_id`, "cbxh": tells our database from any other SQLite file. */
 export const applicationId = 0x63_62_78_68;
@@ -258,8 +255,9 @@ const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, Preconditi
   });
 
 /**
- * Opens the state dir's database for the scope: creates the directory if needed, refuses a
- * non-empty one without our database, takes the owner lock and migrates.
+ * Opens the state dir's database for the scope: creates the directory if needed, takes the
+ * owner lock and migrates. Other files in the directory, such as a mount point's `lost+found`,
+ * are left alone: `application_id` refuses a foreign database, and the lock a second host.
  */
 export const open = (
   stateDir: string,
@@ -269,20 +267,14 @@ export const open = (
     const fs = yield* FileSystem.FileSystem;
     const file = `${stateDir}/${databaseFile}`;
 
-    const failed = (what: string) => (error: { readonly message: string }) =>
-      new Internal({ message: `couldn't ${what} state dir ${stateDir}: ${error.message}` });
-
     yield* fs
       .makeDirectory(stateDir, { recursive: true, mode: 0o700 })
-      .pipe(Effect.mapError(failed("create")));
-
-    const entries = yield* fs.readDirectory(stateDir).pipe(Effect.mapError(failed("read")));
-
-    if (!entries.includes(databaseFile) && entries.some((entry) => entry !== journalFile)) {
-      return yield* new Precondition({
-        message: `state dir ${stateDir} isn't empty and holds no ${databaseFile}: give the host an empty or its own directory`,
-      });
-    }
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new Internal({ message: `couldn't create state dir ${stateDir}: ${error.message}` }),
+        ),
+      );
 
     const db = yield* Effect.acquireRelease(
       sql(`open ${file}`, () => new DatabaseSync(file, { timeout: 0 })),
