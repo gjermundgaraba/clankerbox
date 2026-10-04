@@ -9,7 +9,7 @@ import { afterEach, expect, test } from "vite-plus/test";
 import {
   applicationId,
   databaseFile,
-  type MachineRecord,
+  type NewMachine,
   migrations,
   open,
   PortTaken,
@@ -38,7 +38,7 @@ const opening = (stateDir: string) =>
     Effect.runPromise,
   );
 
-const record = (name: string, fields?: Partial<MachineRecord>): MachineRecord => ({
+const record = (name: string, fields?: Partial<NewMachine>): NewMachine => ({
   name,
   instance: "0123456789abcdef0123456789abcdef",
   native: undefined,
@@ -50,7 +50,7 @@ const record = (name: string, fields?: Partial<MachineRecord>): MachineRecord =>
   diskGib: 10,
   port: undefined,
   hostKey: undefined,
-  action: { name: "create", status: "running" },
+  action: "create",
   ...fields,
 });
 
@@ -74,7 +74,10 @@ test("rows round-trip, and a reopened database keeps them", async () => {
 
   const found = await withStore(stateDir, (store) => store.find("dev"));
 
-  expect(Option.getOrUndefined(found)).toEqual(made);
+  expect(Option.getOrUndefined(found)).toEqual({
+    ...made,
+    action: { name: "create", status: "running" },
+  });
 });
 
 test("a second owner of the state dir is refused while the first holds it", async () => {

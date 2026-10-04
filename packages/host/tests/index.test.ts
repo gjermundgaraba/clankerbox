@@ -92,7 +92,7 @@ test("the host fails the actions its last process left running before it serves"
       diskGib: 10,
       port: undefined,
       hostKey: undefined,
-      action: { name: "create", status: "running" },
+      action: "create",
     }),
   ).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
 

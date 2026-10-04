@@ -28,7 +28,7 @@ import type { HostConfig } from "./config.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
 import { type MachineRef, Refusal, Runtime } from "./runtime.ts";
-import { type MachineRecord, Store } from "./store.ts";
+import { type MachineRecord, type NewMachine, Store } from "./store.ts";
 
 export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Machine>, HostError>;
@@ -144,7 +144,7 @@ export const make = (
           const port =
             address === undefined ? undefined : yield* pickPort(address, yield* store.ports);
 
-          const record: MachineRecord = {
+          const row: NewMachine = {
             name: request.name,
             instance,
             native: undefined,
@@ -156,16 +156,19 @@ export const make = (
             diskGib: request.diskGib,
             port,
             hostKey: undefined,
-            action: { name: "create", status: "running" },
+            action: "create",
           };
 
-          const inserted = yield* store.insert(record).pipe(
+          const inserted = yield* store.insert(row).pipe(
             Effect.as(true),
             Effect.catchTag("PortTaken", () => Effect.succeed(false)),
           );
 
           if (inserted) {
-            return { record, release: store.remove(record.name) };
+            return {
+              record: { ...row, action: { name: row.action, status: "running" } },
+              release: store.remove(row.name),
+            };
           }
         }
       });

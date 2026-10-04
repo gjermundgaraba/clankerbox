@@ -110,6 +110,11 @@ const fromRow = (row: typeof Row.Type): MachineRecord => ({
   ),
 });
 
+/** A new row: its fields, and the action that holds it from the start. */
+export interface NewMachine extends Omit<MachineRecord, "action"> {
+  readonly action: ActionName;
+}
+
 /** Another row already holds the port a new row asked for. */
 export class PortTaken extends Data.TaggedError("PortTaken")<{ readonly port: number }> {}
 
@@ -128,7 +133,7 @@ export interface Interface {
    * Inserts a new row, held by its running action. A taken name is `Conflict{exists}`; a port
    * another row holds is `PortTaken`, and the caller picks again.
    */
-  readonly insert: (record: MachineRecord) => Effect.Effect<void, Conflict | PortTaken | Internal>;
+  readonly insert: (record: NewMachine) => Effect.Effect<void, Conflict | PortTaken | Internal>;
   /**
    * Claims an existing row for `action`, and returns the row as it was, so the claim can be
    * released by putting its action back. A row another action holds is `Conflict{busy}`.
@@ -351,7 +356,7 @@ export const open = (
                 record.diskGib,
                 record.port ?? null,
                 record.hostKey ?? null,
-                record.action.name,
+                record.action,
               );
 
               return undefined;
