@@ -15,7 +15,7 @@ test("--help lists the CLI's commands next to host", async () => {
   expect(code).toBe(0);
   expect(stdout).toContain("clankerbox <subcommand> [flags]");
 
-  for (const command of ["hosts", "machines", "create", "checkpoint", "restore", "host"]) {
+  for (const command of ["hosts", "machines", "create", "checkpoint", "restore", "ssh", "host"]) {
     expect(stdout).toContain(command);
   }
 });
