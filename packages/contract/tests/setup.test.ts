@@ -144,6 +144,25 @@ test("a directory without setup.sh is refused with Invalid", async () => {
   expect(error.message).toContain("setup.sh");
 });
 
+test("a setup.sh that isn't a file is refused, and an empty one packs like a file", async () => {
+  const directory = await scratch();
+  const empty = await scratch();
+
+  await mkdir(join(directory, "setup.sh"));
+  await writeFile(join(empty, "setup.sh"), "");
+
+  const error = await packRecipe(directory).pipe(
+    Effect.flip,
+    Effect.provide(NodeServices.layer),
+    Effect.runPromise,
+  );
+
+  const { exitCode } = await runPacked(await pack(empty));
+
+  expect(error.message).toContain("has no setup.sh");
+  expect(exitCode).toBe(0);
+});
+
 test("a single file is sent as its text", async () => {
   const dir = await scratch();
   const file = join(dir, "setup.sh");

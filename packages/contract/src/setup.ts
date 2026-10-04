@@ -60,14 +60,12 @@ export const packRecipe = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
 
-    const setup = yield* fs
-      .stat(`${directory}/setup.sh`)
-      .pipe(Effect.mapError(() => new Invalid({ message: `recipe ${directory} has no setup.sh` })));
+    const noSetup = new Invalid({ message: `recipe ${directory} has no setup.sh` });
 
-    if (setup.type !== "File" || setup.size === 0n) {
-      return yield* new Invalid({
-        message: `recipe ${directory}'s setup.sh must be a nonempty file`,
-      });
+    const setup = yield* fs.stat(`${directory}/setup.sh`).pipe(Effect.mapError(() => noSetup));
+
+    if (setup.type !== "File") {
+      return yield* noSetup;
     }
 
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
