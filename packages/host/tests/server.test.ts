@@ -58,18 +58,41 @@ test("the SDK's client drives a machine's lifecycle on a served host", async () 
   expect(gone._tag).toBe("NotFound");
 });
 
-test("fork and restore answer Precondition until phase 4", async () => {
-  const { url } = await serve();
+test("the SDK's client forks, captures, restores and deletes checkpoints on a served host", async () => {
+  const { url, checkpointRows } = await serve();
 
-  const [fork, restore] = await withClient(url, (client) =>
-    Effect.all([
-      Effect.flip(client.fork("linux_dev", "copy")),
-      Effect.flip(client.restore("linux_snap", "again")),
-    ]),
+  const [copy, captured, listed, got, restored] = await withClient(url, (client) =>
+    Effect.gen(function* () {
+      yield* client.create("dev", spec, {});
+
+      return [
+        yield* client.fork("linux_dev", "copy"),
+        yield* client.capture("linux_dev", "snap"),
+        yield* client.checkpoints,
+        yield* client.checkpoint("linux_snap"),
+        yield* client.restore("linux_snap", "again"),
+      ] as const;
+    }),
   );
 
-  expect(fork._tag).toBe("Precondition");
-  expect(restore._tag).toBe("Precondition");
+  const gone = await withClient(url, (client) =>
+    Effect.andThen(
+      client.deleteCheckpoint("linux_snap"),
+      Effect.flip(client.checkpoint("linux_snap")),
+    ),
+  );
+
+  expect(copy).toMatchObject({ id: "linux_copy", state: "running", action: { name: "fork" } });
+  expect(captured).toMatchObject({ id: "linux_snap", machine: "linux_dev", kind: "ram" });
+  expect(listed.answers).toEqual([captured]);
+  expect(got).toEqual(captured);
+  expect(restored).toMatchObject({
+    id: "linux_again",
+    state: "running",
+    action: { name: "restore" },
+  });
+  expect(gone._tag).toBe("NotFound");
+  expect(await checkpointRows()).toEqual([]);
 });
 
 /** Posts a create for `id` straight to the host, as a caller without the SDK would. */

@@ -6,6 +6,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { CreateRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer, Logger, ManagedRuntime } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
+import * as Checkpoints from "../src/checkpoints.ts";
 import * as Machines from "../src/machines.ts";
 import { routes } from "../src/server.ts";
 import * as Store from "../src/store.ts";
@@ -42,7 +43,7 @@ export const cleanup = async (owned: Array<string>, hosts: Array<TestHost>) => {
  * warnings here: the tests read their errors.
  */
 export const coreLayer = (stateDir: string, fake: FakeRuntime) =>
-  Machines.layer(hostConfig(stateDir)).pipe(
+  Layer.merge(Machines.layer(hostConfig(stateDir)), Checkpoints.layer(hostConfig(stateDir))).pipe(
     Layer.provideMerge(
       Layer.merge(Layer.effect(Store.Store, Store.open(stateDir, "linux")), fake.layer),
     ),
@@ -55,8 +56,11 @@ export interface TestHost {
   readonly dir: string;
   readonly fake: FakeRuntime;
   readonly stateDir: string;
-  readonly run: <A, E>(effect: Effect.Effect<A, E, Machines.Machines | Store.Store>) => Promise<A>;
+  readonly run: <A, E>(
+    effect: Effect.Effect<A, E, Machines.Machines | Checkpoints.Checkpoints | Store.Store>,
+  ) => Promise<A>;
   readonly machines: Machines.Interface;
+  readonly checkpoints: Checkpoints.Interface;
   readonly store: Store.Interface;
   /** Ends the host: its fibers are interrupted and the state dir's lock released. */
   readonly dispose: () => Promise<void>;
@@ -71,8 +75,9 @@ export const startHost = async (
   const stateDir = join(dir, "state");
   const runtime = ManagedRuntime.make(coreLayer(stateDir, fake));
 
-  const run = <A, E>(effect: Effect.Effect<A, E, Machines.Machines | Store.Store>) =>
-    runtime.runPromise(effect);
+  const run = <A, E>(
+    effect: Effect.Effect<A, E, Machines.Machines | Checkpoints.Checkpoints | Store.Store>,
+  ) => runtime.runPromise(effect);
 
   return {
     dir,
@@ -80,6 +85,7 @@ export const startHost = async (
     stateDir,
     run,
     machines: await run(Effect.service(Machines.Machines)),
+    checkpoints: await run(Effect.service(Checkpoints.Checkpoints)),
     store: await run(Effect.service(Store.Store)),
     dispose: () => runtime.dispose(),
   };
@@ -91,6 +97,8 @@ export interface ServedHost {
   readonly fake: FakeRuntime;
   /** The host's machine rows. */
   readonly rows: () => Promise<ReadonlyArray<Store.MachineRecord>>;
+  /** The host's checkpoint rows. */
+  readonly checkpointRows: () => Promise<ReadonlyArray<Store.CheckpointRecord>>;
   readonly dispose: () => Promise<void>;
 }
 
@@ -113,6 +121,8 @@ export const serveHost = async (dir: string): Promise<ServedHost> => {
     fake,
     rows: () =>
       runtime.runPromise(Effect.flatMap(Effect.service(Store.Store), (store) => store.list)),
+    checkpointRows: () =>
+      runtime.runPromise(Effect.flatMap(Effect.service(Store.Store), (store) => store.checkpoints)),
     dispose: () => runtime.dispose(),
   };
 };

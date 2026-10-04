@@ -1,6 +1,7 @@
 /** The host role: one runtime, its machines' state, and the API on the host's own address. */
 import { type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, type FileSystem, Layer } from "effect";
+import * as Checkpoints from "./checkpoints.ts";
 import { type HostConfig, loadConfig } from "./config.ts";
 import * as Machines from "./machines.ts";
 import type { Runtime } from "./runtime.ts";
@@ -26,7 +27,7 @@ export const hostLayer = <E, R>(
         ),
       ),
     ),
-    Layer.provide(Machines.layer(config)),
+    Layer.provide(Layer.merge(Machines.layer(config), Checkpoints.layer(config))),
     // The runtime is built only once the store holds the state dir's owner lock: a runtime may
     // write there (smolvm creates its inventory), and a second host must not touch it at all.
     Layer.provide(

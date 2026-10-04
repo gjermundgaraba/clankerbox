@@ -1,25 +1,19 @@
-/**
- * The host API: the contract's action groups over the machine actions, served on the
- * configured address. Fork and restore are phase 4; until then they answer `Precondition`.
- * The checkpoint group isn't mounted yet, as effect-actions serves only the groups it is given.
- */
+/** The host API: the contract's action groups over the host's actions, served on the configured address. */
 import { createServer } from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import {
+  CheckpointGroup,
   HostGroup,
   Http,
   MachineGroup,
-  Precondition,
   version,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer } from "effect";
 import { HttpRouter } from "effect/http";
+import { Checkpoints } from "./checkpoints.ts";
 import type { HostConfig } from "./config.ts";
 import { Machines } from "./machines.ts";
 import { Runtime } from "./runtime.ts";
-
-const notYet = (action: string) =>
-  Effect.fail(new Precondition({ message: `${action} isn't supported by this host yet` }));
 
 const machineApp = MachineGroup.implement(
   Effect.gen(function* () {
@@ -32,8 +26,21 @@ const machineApp = MachineGroup.implement(
       start: ({ id }) => machines.start(id),
       stop: ({ id }) => machines.stop(id),
       delete: ({ id }) => machines.delete(id),
-      fork: () => notYet("fork"),
-      restore: () => notYet("restore"),
+      fork: ({ machine, name }) => machines.fork(machine, name),
+      restore: ({ checkpoint, name }) => machines.restore(checkpoint, name),
+    };
+  }),
+);
+
+const checkpointApp = CheckpointGroup.implement(
+  Effect.gen(function* () {
+    const checkpoints = yield* Checkpoints;
+
+    return {
+      list: () => checkpoints.list,
+      get: ({ id }) => checkpoints.get(id),
+      capture: ({ machine, name }) => checkpoints.capture(machine, name),
+      delete: ({ id }) => checkpoints.delete(id),
     };
   }),
 );
@@ -58,7 +65,7 @@ const hostApp = (config: Pick<HostConfig, "id" | "bases">) =>
 
 /** The API's routes, for any HTTP server. */
 export const routes = (config: Pick<HostConfig, "id" | "bases">) =>
-  Http.layer([machineApp, hostApp(config)]);
+  Http.layer([machineApp, checkpointApp, hostApp(config)]);
 
 /** Serves the API on `config.listen`, the host's tailnet or loopback address. */
 export const serve = (config: Pick<HostConfig, "id" | "bases" | "listen">) =>

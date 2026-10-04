@@ -562,44 +562,6 @@ test("a config with an unknown key or a duplicate host is Invalid", async () => 
   }
 });
 
-test("delete, checkpoint capture/list/get/delete and restore go through the real routes", async () => {
-  const dir = await scratch(owned);
-  const config = await writeConfig(dir, ["linux"]);
-  const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_dev")] });
-  const endpoints = [["linux", linux]] as const;
-  const run = (args: ReadonlyArray<string>) => cli([...args, "--config", config], { endpoints });
-
-  const captured = await run(["checkpoint", "capture", "linux_dev", "snap"]);
-  const listed = await run(["checkpoint", "list"]);
-  const got = await run(["checkpoint", "get", "linux_snap", "--json"]);
-  const restored = await run(["restore", "linux_snap", "again"]);
-  const removed = await run(["delete", "linux_dev"]);
-  const machines = await run(["machines"]);
-  const checkpointRemoved = await run(["checkpoint", "delete", "linux_snap", "--json"]);
-  const checkpointsAfter = await run(["checkpoint", "list"]);
-
-  expect(captured).toMatchObject({ code: 0, stdout: "linux_snap" });
-  expect(listed.code).toBe(0);
-  expect(listed.stdout).toContain("linux_snap");
-  expect(got.code).toBe(0);
-  expect(
-    Schema.decodeUnknownSync(
-      Schema.fromJsonString(Schema.Struct({ id: Schema.String, machine: Schema.String })),
-    )(got.stdout, { onExcessProperty: "ignore" }),
-  ).toEqual({ id: "linux_snap", machine: "linux_dev" });
-  expect(restored).toMatchObject({ code: 0, stdout: "linux_again" });
-  expect(removed).toMatchObject({ code: 0, stdout: "linux_dev", stderr: "" });
-  expect(machines.stdout).not.toContain("linux_dev");
-  expect(machines.stdout).toContain("linux_again");
-  expect(checkpointRemoved).toMatchObject({
-    code: 0,
-    stdout: JSON.stringify({ deleted: "linux_snap" }),
-  });
-  expect(checkpointsAfter.stdout).not.toContain("linux_snap");
-  expect(linux.calls).toContain("machine.delete");
-  expect(linux.calls).toContain("checkpoint.delete");
-});
-
 test("a host URL with a trailing slash still reaches its routes", async () => {
   const dir = await scratch(owned);
   const config = join(dir, "config.json");

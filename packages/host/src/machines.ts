@@ -1,44 +1,34 @@
 /**
- * The machine actions. Every mutation runs in this order:
- *
- * 1. Validate the input.
- * 2. Claim the rows in one transaction, inserting the new row.
- * 3. Check runtime state, including the runtime's own `admit`.
- * 4. Only then call the runtime.
- *
- * A failure in steps 1–3, or a runtime `Refusal`, releases the claim and writes nothing; any
- * later failure leaves the row's action `failed` with the error the call replies with. Each
- * mutation runs in a fiber of the host's own, so a dropped connection never interrupts it and
- * its outcome is recorded either way.
+ * The machine actions: create, start, stop and delete, and fork and restore, which make a
+ * machine from another machine or from a checkpoint. They run in the order `actions.ts`
+ * describes.
  */
-import { randomBytes } from "node:crypto";
 import {
   type ActionName,
   type CreateRequest,
+  formatId,
   type HostError,
-  Internal,
-  Invalid,
   type Machine,
   NotFound,
-  parseId,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
+import { Context, DateTime, Effect, Layer, Option, type Scope, Semaphore } from "effect";
 import {
-  Context,
-  DateTime,
-  Effect,
-  Fiber,
-  FiberSet,
-  Layer,
-  Option,
-  type Scope,
-  Semaphore,
-} from "effect";
+  type Claim,
+  checkpointRef,
+  claimAndCheck,
+  detacher,
+  done,
+  machineRef,
+  nameOn,
+  native,
+  newInstance,
+} from "./actions.ts";
 import type { HostConfig } from "./config.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
-import { type MachineRef, observeConcurrency, Refusal, Runtime } from "./runtime.ts";
-import { type MachineRecord, type NewMachine, Store } from "./store.ts";
+import { observeConcurrency, type Refusal, Runtime } from "./runtime.ts";
+import { type CheckpointRecord, type MachineRecord, type NewMachine, Store } from "./store.ts";
 
 export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Machine>, HostError>;
@@ -49,20 +39,26 @@ export interface Interface {
   /** Stops a running machine; on any other, does nothing. */
   readonly stop: (id: string) => Effect.Effect<Machine, HostError>;
   readonly delete: (id: string) => Effect.Effect<void, HostError>;
+  /** Copies the machine `id` to a new machine named `name`, and prepares the copy. */
+  readonly fork: (id: string, name: string) => Effect.Effect<Machine, HostError>;
+  /** Makes a machine named `name` from the checkpoint `checkpoint`, and prepares it. */
+  readonly restore: (checkpoint: string, name: string) => Effect.Effect<Machine, HostError>;
 }
 
 export class Machines extends Context.Service<Machines, Interface>()("@clankerbox/host/Machines") {}
 
-/** The bytes of a row's `instance`: 32 hex characters. */
-const instanceBytes = 16;
-
-/** An action's hold on a row, and how to give it back without writing anything. */
-interface Claim {
-  /** The row as the action holds it. */
-  readonly record: MachineRecord;
-  /** Removes the row the action inserted, or puts back the action it replaced. */
-  readonly release: Effect.Effect<void, Internal>;
+/** What a new machine is made with: its base, label and sizes. */
+interface Spec extends Pick<MachineRecord, "base" | "cpu" | "ramMib" | "diskGib"> {
+  readonly profile?: string | undefined;
 }
+
+/** What a fork holds: the new machine and its source. */
+interface Forking {
+  readonly machine: MachineRecord;
+  readonly source: MachineRecord;
+}
+
+const holding = (action: ActionName) => ({ name: action, status: "running" }) as const;
 
 /**
  * Builds the actions. Before it returns, every action the last host process left running is
@@ -74,24 +70,19 @@ export const make = (
   Effect.gen(function* () {
     const store = yield* Store;
     const runtime = yield* Runtime;
-    const actions = yield* FiberSet.make<unknown>();
+    const detached = yield* detacher;
     const admission = yield* Semaphore.make(1);
 
     yield* store.failInterrupted;
     yield* runtime.startup;
 
     const idOf = (name: string) => `${config.id}_${name}`;
+    const nameOf = nameOn(config.id);
+    const ref = (record: MachineRecord) => machineRef(config.id, record);
 
-    const ref = (record: MachineRecord): MachineRef => ({
-      id: idOf(record.name),
-      name: record.name,
-      instance: record.instance,
-      native: record.native,
-      cpu: record.cpu,
-      ramMib: record.ramMib,
-      diskGib: record.diskGib,
-      port: record.port,
-    });
+    /** Runs native work that may need the runtime, such as preparation. */
+    const withRuntime = <A>(work: Effect.Effect<A, HostError | Refusal, Runtime>) =>
+      Effect.provideService(work, Runtime, runtime);
 
     /** The machine as the API reports it, its state read from the runtime. */
     const resource = (record: MachineRecord) =>
@@ -123,20 +114,6 @@ export const make = (
         return machine;
       });
 
-    /**
-     * The name an ID gives on this host: the whole ID is checked, and an ID for another host is
-     * the caller's mistake. A new machine's ID goes through here too, so the ID a row's machine
-     * reports always fits clankercreds' pattern.
-     */
-    const nameOf = (id: string) =>
-      Effect.flatMap(parseId(id), ({ host, name }) =>
-        host === config.id
-          ? Effect.succeed(name)
-          : Effect.fail(
-              new Invalid({ message: `${id} names host ${host}, and this is host ${config.id}` }),
-            ),
-      );
-
     const find = (name: string) =>
       Effect.flatMap(
         store.find(name),
@@ -148,56 +125,66 @@ export const make = (
 
     const read = (name: string) => Effect.flatMap(find(name), resource);
 
-    /** Inserts the new row, with the lowest port that no row holds and nothing listens on. */
-    const claimNew = (name: string, request: CreateRequest): Effect.Effect<Claim, HostError> =>
+    /** A new row, with the lowest port that no row holds and nothing listens on. */
+    const newRow = (name: string, action: ActionName, spec: Spec) =>
       Effect.gen(function* () {
         const address = runtime.publishAddress;
 
         const row: NewMachine = {
           name,
-          instance: randomBytes(instanceBytes).toString("hex"),
+          instance: newInstance(),
           native: undefined,
           createdAt: yield* DateTime.now,
-          base: request.base,
-          profile: request.profile,
-          cpu: request.cpu,
-          ramMib: request.ramMib,
-          diskGib: request.diskGib,
+          base: spec.base,
+          profile: spec.profile,
+          cpu: spec.cpu,
+          ramMib: spec.ramMib,
+          diskGib: spec.diskGib,
           port: address === undefined ? undefined : yield* pickPort(address, yield* store.ports),
           hostKey: undefined,
-          action: "create",
+          action,
         };
 
-        yield* store.insert(row);
-
-        return {
-          record: { ...row, action: { name: row.action, status: "running" } },
-          release: store.remove(name),
-        };
+        return row;
       });
 
-    const claimExisting = (name: string, action: ActionName): Effect.Effect<Claim, HostError> =>
+    const claimNew = (row: NewMachine): Effect.Effect<Claim<MachineRecord>, HostError> =>
+      Effect.as(store.insert(row), {
+        action: row.action,
+        record: { ...row, action: holding(row.action) },
+        release: store.remove(row.name),
+        end: (action, hostKey) => store.record(row.name, { action, hostKey }),
+      });
+
+    const claimExisting = (
+      name: string,
+      action: ActionName,
+    ): Effect.Effect<Claim<MachineRecord>, HostError> =>
       Effect.map(store.claim(name, action), (before) => ({
-        record: { ...before, action: { name: action, status: "running" } },
+        action,
+        record: { ...before, action: holding(action) },
         release: store.record(name, { action: before.action }),
+        end: (outcome, hostKey) => store.record(name, { action: outcome, hostKey }),
       }));
 
-    /**
-     * Steps 2 and 3: claims, then checks. A check that fails, or is interrupted, releases the
-     * claim, so nothing is written.
-     */
-    const claimAndCheck = <B>(
-      claim: Effect.Effect<Claim, HostError>,
-      check: (record: MachineRecord) => Effect.Effect<B, HostError>,
-    ): Effect.Effect<readonly [Claim, B], HostError> =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.flatMap(claim, (claimed) =>
-          restore(check(claimed.record)).pipe(
-            Effect.onError(() => Effect.ignore(claimed.release)),
-            Effect.map((checked) => [claimed, checked] as const),
-          ),
+    /** Inserts the fork's row and claims its source; both end with the fork's outcome. */
+    const claimFork = (row: NewMachine, source: string): Effect.Effect<Claim<Forking>, HostError> =>
+      Effect.map(store.insertFrom(row, source), (before) => ({
+        action: row.action,
+        record: {
+          machine: { ...row, action: holding(row.action) },
+          source: { ...before, action: holding(row.action) },
+        },
+        release: Effect.andThen(
+          store.remove(row.name),
+          store.record(source, { action: before.action }),
         ),
-      );
+        end: (outcome, hostKey) =>
+          Effect.andThen(
+            store.record(row.name, { action: outcome, hostKey }),
+            store.record(source, { action: outcome }),
+          ),
+      }));
 
     /**
      * Steps 2 and 3 for an action that boots a machine or allocates a port, one at a time. The
@@ -205,55 +192,13 @@ export const make = (
      * once would each count the other, and both could be refused although one fits. One at a
      * time, exactly one of two that fit only alone passes, and no two pick the same port.
      */
-    const claimAndAdmit = <B>(
-      claim: Effect.Effect<Claim, HostError>,
-      check: (record: MachineRecord) => Effect.Effect<B, HostError>,
-    ): Effect.Effect<readonly [Claim, B], HostError> =>
-      admission.withPermits(1)(claimAndCheck(claim, check));
-
-    /**
-     * Step 4 on. A runtime `Refusal` releases the claim like a failed check; any other failure
-     * leaves the row failed with the error the call replies with. A defect is recorded as
-     * `Internal`, so the row stays deletable.
-     */
-    const native = <A>(
-      claimed: Claim,
-      work: Effect.Effect<A, HostError | Refusal, Runtime>,
-    ): Effect.Effect<A, HostError> => {
-      const { name, action } = claimed.record;
-
-      return work.pipe(
-        Effect.provideService(Runtime, runtime),
-        Effect.catchDefect((defect) =>
-          Effect.fail(
-            new Internal({ message: `${action.name} ${idOf(name)} died: ${String(defect)}` }),
-          ),
-        ),
-        Effect.catch((error) =>
-          error instanceof Refusal
-            ? Effect.andThen(claimed.release, Effect.fail(error.error))
-            : Effect.andThen(
-                store.record(name, {
-                  action: {
-                    name: action.name,
-                    status: "failed",
-                    error: { tag: error._tag, message: error.message },
-                  },
-                }),
-                Effect.fail(error),
-              ),
-        ),
-      );
-    };
-
-    const done = (claimed: Claim, hostKey?: string) =>
-      store.record(claimed.record.name, {
-        action: { name: claimed.record.action.name, status: "done" },
-        hostKey,
-      });
+    const claimAndAdmit = <R, B>(
+      claim: Effect.Effect<Claim<R>, HostError>,
+      check: (record: R) => Effect.Effect<B, HostError>,
+    ) => admission.withPermits(1)(claimAndCheck(claim, check));
 
     /** Step 3 for an action that boots a machine: the runtime's own checks, over every row. */
-    const admit = (action: ActionName, record: MachineRecord) =>
+    const admit = (action: ActionName, record: MachineRecord, source?: MachineRecord) =>
       Effect.flatMap(store.list, (records) =>
         runtime.admit({
           action,
@@ -262,18 +207,8 @@ export const make = (
             machine: ref(held),
             holder: held.action.status === "running" ? held.action.name : undefined,
           })),
+          source: source === undefined ? undefined : ref(source),
         }),
-      );
-
-    /** Runs a mutation in the host's own fiber set; the caller only waits for it. */
-    const detached = <A>(action: Effect.Effect<A, HostError>): Effect.Effect<A, HostError> =>
-      Effect.flatMap(FiberSet.run(actions, Effect.result(action)), (fiber) =>
-        Effect.flatMap(Fiber.join(fiber), Effect.fromResult),
-      );
-
-    const logged = <A>(what: string, action: Effect.Effect<A, HostError>) =>
-      Effect.tapError(action, (error) =>
-        Effect.logWarning(`${what} failed: ${error._tag}: ${error.message}`),
       );
 
     const create = (request: CreateRequest) =>
@@ -287,23 +222,27 @@ export const make = (
           });
         }
 
-        const [claimed] = yield* claimAndAdmit(claimNew(name, request), (record) =>
-          admit("create", record),
+        const [claimed] = yield* claimAndAdmit(
+          Effect.flatMap(newRow(name, "create", request), claimNew),
+          (record) => admit("create", record),
         );
 
         const machine = ref(claimed.record);
 
         const hostKey = yield* native(
           claimed,
-          Effect.gen(function* () {
-            yield* runtime.create(machine, image);
+          `create ${machine.id}`,
+          withRuntime(
+            Effect.gen(function* () {
+              yield* runtime.create(machine, image);
 
-            if (request.setup !== undefined) {
-              yield* runSetup(machine, request.setup);
-            }
+              if (request.setup !== undefined) {
+                yield* runSetup(machine, request.setup);
+              }
 
-            return yield* prepare(machine);
-          }),
+              return yield* prepare(machine);
+            }),
+          ),
         );
 
         yield* done(claimed, hostKey);
@@ -335,7 +274,10 @@ export const make = (
 
         const hostKey = yield* native(
           claimed,
-          Effect.andThen(running ? Effect.void : runtime.start(machine), prepare(machine)),
+          `start ${id}`,
+          withRuntime(
+            Effect.andThen(running ? Effect.void : runtime.start(machine), prepare(machine)),
+          ),
         );
 
         yield* done(claimed, hostKey);
@@ -352,7 +294,7 @@ export const make = (
         );
 
         if (state === "running") {
-          yield* native(claimed, runtime.stop(ref(claimed.record)));
+          yield* native(claimed, `stop ${id}`, runtime.stop(ref(claimed.record)));
           yield* done(claimed);
         } else {
           yield* claimed.release;
@@ -366,8 +308,93 @@ export const make = (
         const name = yield* nameOf(id);
         const [claimed] = yield* claimAndCheck(claimExisting(name, "delete"), () => Effect.void);
 
-        yield* native(claimed, runtime.delete(ref(claimed.record)));
+        yield* native(claimed, `delete ${id}`, runtime.delete(ref(claimed.record)));
         yield* store.remove(name);
+      });
+
+    const fork = (sourceId: string, name: string) =>
+      Effect.gen(function* () {
+        const sourceName = yield* nameOf(sourceId);
+        const id = yield* formatId(config.id, name);
+        // A row's spec never changes, so the new row can copy it before the claim.
+        const spec = yield* find(sourceName);
+
+        const [claimed] = yield* claimAndAdmit(
+          Effect.flatMap(newRow(name, "fork", spec), (row) => claimFork(row, sourceName)),
+          ({ machine, source }) => admit("fork", machine, source),
+        );
+
+        const machine = ref(claimed.record.machine);
+
+        const hostKey = yield* native(
+          claimed,
+          `fork ${id}`,
+          withRuntime(
+            Effect.andThen(runtime.fork(ref(claimed.record.source), machine), prepare(machine)),
+          ),
+        );
+
+        yield* done(claimed, hostKey);
+
+        return yield* read(name);
+      });
+
+    /**
+     * A restore reads its checkpoint without claiming it: a ready checkpoint never changes, so
+     * restores of one checkpoint run in parallel. One deleted under the restore fails it like
+     * any runtime failure.
+     */
+    const ready = (id: string) =>
+      Effect.gen(function* () {
+        const found = yield* store.findCheckpoint(yield* nameOf(id));
+
+        if (Option.isNone(found)) {
+          return yield* new NotFound({ message: `no checkpoint ${id}` });
+        }
+
+        const checkpoint: CheckpointRecord = found.value;
+
+        if (checkpoint.action.status !== "done") {
+          return yield* new Precondition({
+            message: `checkpoint ${id} isn't ready: its ${checkpoint.action.name} is ${checkpoint.action.status}`,
+          });
+        }
+
+        if (checkpoint.kind === "ram" && checkpoint.pin !== runtime.pin) {
+          return yield* new Precondition({
+            message: `checkpoint ${id} holds RAM state saved under ${checkpoint.pin ?? "no pin"}, and this host runs ${runtime.pin ?? "no pin"}; it restores only under the same one`,
+          });
+        }
+
+        return checkpoint;
+      });
+
+    const restore = (checkpointId: string, name: string) =>
+      Effect.gen(function* () {
+        const id = yield* formatId(config.id, name);
+        const checkpoint = yield* ready(checkpointId);
+
+        const [claimed] = yield* claimAndAdmit(
+          Effect.flatMap(newRow(name, "restore", checkpoint), claimNew),
+          (record) => admit("restore", record),
+        );
+
+        const machine = ref(claimed.record);
+
+        const hostKey = yield* native(
+          claimed,
+          `restore ${id}`,
+          withRuntime(
+            Effect.andThen(
+              runtime.restore(checkpointRef(config.id, checkpoint), machine),
+              prepare(machine),
+            ),
+          ),
+        );
+
+        yield* done(claimed, hostKey);
+
+        return yield* read(name);
       });
 
     return {
@@ -375,10 +402,13 @@ export const make = (
         Effect.forEach(records, resource, { concurrency: observeConcurrency }),
       ),
       get: (id) => Effect.flatMap(nameOf(id), read),
-      create: (request) => detached(logged(`create ${request.id}`, create(request))),
-      start: (id) => detached(logged(`start ${id}`, start(id))),
-      stop: (id) => detached(logged(`stop ${id}`, stop(id))),
-      delete: (id) => detached(logged(`delete ${id}`, remove(id))),
+      create: (request) => detached(`create ${request.id}`, create(request)),
+      start: (id) => detached(`start ${id}`, start(id)),
+      stop: (id) => detached(`stop ${id}`, stop(id)),
+      delete: (id) => detached(`delete ${id}`, remove(id)),
+      fork: (id, name) => detached(`fork ${id} to ${name}`, fork(id, name)),
+      restore: (checkpoint, name) =>
+        detached(`restore ${checkpoint} to ${name}`, restore(checkpoint, name)),
     } satisfies Interface;
   });
 

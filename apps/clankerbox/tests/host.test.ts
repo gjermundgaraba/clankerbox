@@ -115,3 +115,43 @@ test("a create sent to a host under another host's ID is Invalid at the host, an
   expect(created.stderr).toContain("Invalid: mis_dev names host mis, and this is host linux");
   expect(await host.rows()).toEqual([]);
 });
+
+test("fork, checkpoint capture/list/get/delete and restore run on the host", async () => {
+  const { host, run } = await setUp();
+
+  await run(["create", "dev", ...sizes]);
+
+  const forked = await run(["fork", "linux_dev", "copy"]);
+  const captured = await run(["checkpoint", "capture", "linux_dev", "snap"]);
+  const listed = await run(["checkpoint", "list"]);
+  const got = await run(["checkpoint", "get", "linux_snap", "--json"]);
+  const removed = await run(["delete", "linux_dev"]);
+  const restored = await run(["restore", "linux_snap", "dev"]);
+  const machines = await run(["machines"]);
+  const checkpointRemoved = await run(["checkpoint", "delete", "linux_snap", "--json"]);
+  const again = await run(["checkpoint", "delete", "linux_snap"]);
+  const checkpointsAfter = await run(["checkpoint", "list"]);
+
+  expect(forked).toMatchObject({ code: 0, stdout: "linux_copy" });
+  expect(captured).toMatchObject({ code: 0, stdout: "linux_snap" });
+  expect(listed.stdout).toContain("linux_snap");
+  expect(listed.stdout).toContain("ram");
+  expect(
+    Schema.decodeUnknownSync(
+      Schema.fromJsonString(
+        Schema.Struct({ id: Schema.String, machine: Schema.String, kind: Schema.String }),
+      ),
+    )(got.stdout, { onExcessProperty: "ignore" }),
+  ).toEqual({ id: "linux_snap", machine: "linux_dev", kind: "ram" });
+  expect(removed).toMatchObject({ code: 0, stdout: "linux_dev" });
+  expect(restored).toMatchObject({ code: 0, stdout: "linux_dev" });
+  expect(machines.stdout).toContain("linux_copy");
+  expect(machines.stdout).toContain("linux_dev");
+  expect(checkpointRemoved).toMatchObject({
+    code: 0,
+    stdout: JSON.stringify({ deleted: "linux_snap" }),
+  });
+  expect(again.stderr).toContain("already gone");
+  expect(checkpointsAfter.stdout).not.toContain("linux_snap");
+  expect(await host.checkpointRows()).toEqual([]);
+});

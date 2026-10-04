@@ -127,7 +127,7 @@ export const runSetup = (
 const hostKeyMarker = "clankerbox-host-key: ";
 
 /**
- * Preparation, run after every create and start (and later fork and restore). Its arguments
+ * Preparation, run after every create, start, fork and restore. Its arguments
  * are the row's instance and the machine's ID; a fresh random seed arrives on stdin.
  *
  * 1. Identity, when `/var/lib/clankerbox/instance` isn't the row's instance: reseed the kernel
