@@ -1098,8 +1098,9 @@ includes a relayed HTTP round trip. Machines had 1 vCPU, 512–1024 MiB and
   its DNS relay, and the relay didn't resolve a tailnet name (nor does the
   host, whose resolver isn't Tailscale's). The check against another peer
   didn't run: the tailnet policy drops the Linux host's connections to this
-  Mac (8 ports tried, timeouts, the driver's own listener included), so the
-  control failed and the suite skipped it.
+  Mac (10 ports timed out, among them the driver's own listener and an sshd
+  listening on the Mac's tailnet address), so the control failed and the
+  suite skipped it.
 - **A smolvm stop of a `ram`-restored machine failed once in 24** ("orphan
   process still alive … still alive after stop attempts"); its scope ended
   0.1 ms after smolvm gave up, so the machine was stopped while `stop`
