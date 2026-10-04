@@ -54,6 +54,14 @@ class Stop(Exception):
     pass
 
 
+class Failed(Exception):
+    """A failed suite or step, raised inside the WorkRun so its manifest's outcome reads failed."""
+
+    def __init__(self, code):
+        super().__init__(f'exit code {code}')
+        self.code = code
+
+
 def raise_stop(signum, frame):
     raise Stop(f'signal {signum}')
 
@@ -268,7 +276,9 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
 
         if not options.loop:
             suite(1, options.suite_args)
-            sys.exit(code)
+            if code:
+                raise Failed(code)
+            return
 
         queue = list(options.steps)
         processed = 0
@@ -309,8 +319,12 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
             except Exception as error:  # noqa: BLE001 - a failed step is logged; teardown still runs
                 fail(f'step {n} ({step}): {error}')
         # Teardown still runs on the way out.
-        sys.exit(code)
+        if code:
+            raise Failed(code)
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Failed as failure:
+        sys.exit(failure.code)
