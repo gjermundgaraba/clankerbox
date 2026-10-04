@@ -24,7 +24,7 @@ test("--help shows the CLI's usage", async () => {
   const { exit, output } = await run(["--help"]);
 
   expect(Exit.isSuccess(exit)).toBe(true);
-  expect(output).toContain("clankerbox [flags]");
+  expect(output).toContain("clankerbox <subcommand> [flags]");
 });
 
 test("host --help shows the host role's usage", async () => {

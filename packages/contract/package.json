@@ -28,8 +28,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "vp pack",
-    "test": "vp test"
+    "build": "vp pack"
   },
   "devDependencies": {
     "@types/node": "catalog:",

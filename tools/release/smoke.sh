@@ -25,7 +25,7 @@ expect_in() { # NAME NEEDLE ARGS...
 
 expect "--version" "clankerbox v$version" "$("$bin" --version)"
 expect "host" "clankerbox host $version" "$("$bin" host)"
-expect_in "--help" "clankerbox [flags]" --help
+expect_in "--help" "clankerbox <subcommand> [flags]" --help
 expect_in "host --help" "clankerbox host [flags]" host --help
 expect "NODE_OPTIONS ignored" "clankerbox v$version" "$(NODE_OPTIONS=--require=/nonexistent-clankerbox-smoke.js "$bin" --version)"
 if "$bin" --no-such-flag >/dev/null 2>&1; then fail "--no-such-flag exited 0"; fi

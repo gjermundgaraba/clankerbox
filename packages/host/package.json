@@ -7,7 +7,6 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "vp pack",
     "test": "vp test"
   },
   "dependencies": {
