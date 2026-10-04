@@ -77,8 +77,11 @@ Checked 2026-10-01. Each row says what was actually exercised.
 - **`machine ls`** probes every running VM, up to about 3 s each
   (S@1.19.0:vm_common.rs:3130). Read one machine with `machine status --name X
   --json` instead.
-- **Locks:** `manager.rs`, `fork.rs` and `vm_common.rs` take `flock`s. Whether
-  concurrent CLI calls on different machines are safe is P12.
+- **Locks:** `manager.rs` and `fork.rs` take `flock`s; `vm_common.rs` has none
+  of its own and takes `fork.rs`'s fork-source lock in `stop_vm_named` and
+  `delete_vm` (S@1.22.2:src/cli/vm_common.rs:2367-2371, 2760-2761). Concurrent
+  CLI calls on different machines are safe, except a new prefix's first use
+  (P12, under "Phase 3").
 - **Supervision:**
   - The CLI starts the VMM as a detached child in the caller's cgroup
     (S@1.22.0:src/agent/manager.rs:2678).
@@ -876,6 +879,39 @@ the old pipeline's `macos-tahoe-vanilla` seed with tart-guest-agent 0.14.1):
 - **Guest clock** (not verified): the guest seems to boot at the image's build
   time, about 24 h behind, and is stepped forward around the time exec first
   answers.
+
+## Phase 3 (2026-10-04)
+
+**P12, concurrent smolvm CLI calls on one inventory** (L:p12, as root on the
+Linux host, 1.22.2, machines 1 vCPU / 1 GiB, 6 per batch):
+
+- **Steady state needs no serializing.** Thousands of concurrent create,
+  `start --branchable`, exec, stop, `delete -f`, `status --json`, `ls --json`,
+  `update`, captures into one store, `create --from` a checkpoint or a pack,
+  `checkpoint-prune` and `pack create --from-vm` calls on different machines
+  had no failure or inconsistency caused by concurrency. smolvm guards every
+  shared piece itself: the inventory database (WAL, a 15 s busy timeout, one
+  row per machine; S@1.22.2:src/db.rs), a per-VM `vm.lock`, the uid
+  allocation lock, the store's shared/exclusive lock (prune waits for
+  captures), and the image-seed cache lock.
+- **First use of a prefix races.** smolvm expands the `.zst` disk templates on
+  first use with no lock, through one fixed `<dest>.partial`
+  (S@1.22.2:crates/smolvm-pack/src/assets.rs:413-438, 450-465). Six concurrent
+  first starts destroyed both templates in 6 of 6 reps; 4 of 6 machines got a
+  blank disk and some guests mounted a damaged overlay. With the templates
+  written beforehand by `zstd -d --sparse` (byte-identical to smolvm's own
+  expansion), 2 of 2 reps were clean.
+- **Image seeds only at 20 GiB:** `seedable_image` returns none unless
+  `--storage` is the default 20 (S@1.22.2:src/image_seed.rs:184-195). At
+  `--storage 8`, first starts took 7.3 s against 1.6 s with a seed, and about 50
+  of them in 14 minutes hit Docker Hub's anonymous limit (`ratelimit-limit:
+  100;w=3600`, shared with production's address).
+- **`pack create --from-vm` fails for a `--storage 20` machine** (`krun_start_enter
+  returned: -22`), 36 of 36, and works at `--storage 8`. A failed export leaks
+  its helper's scope, `smolvm-vm-pack-fromvm-<pid>-<ns>.scope`, whose name
+  can't carry a prefix. Phase 4 meets this with `disk` checkpoints.
+- **Timings,** concurrent ×6 wall / sequential ×6: first start at 20 GiB
+  1.75 / 9.27 s, stop 0.41 / 1.40 s, capture into one store 1.76 / 4.32 s.
 
 ## Consumers and production
 

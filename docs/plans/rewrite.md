@@ -447,9 +447,10 @@ listed to keep them from being ported):
   - Runtime state checks run after the claim, so nothing changes between the
     check and the use.
   - Ports are recorded in the same transaction (see [Guest access](#guest-access)).
-- **No global native lock.** smolvm and Tart take their own locks. P12 checks
-  whether smolvm CLI calls on different machines need serializing; if they do, a
-  semaphore covers those calls only.
+- **No global native lock.** smolvm and Tart take their own locks. P12 found
+  that smolvm CLI calls on different machines need no serializing, except the
+  first use of a new prefix, which the install step settles (see
+  [Runtimes: smolvm](#runtimes-smolvm)); so there is no semaphore.
 - **The row comes before any native effect,** so that after a crash `delete` has
   something to own.
 - **Native IDs:** machine and checkpoint rows have one `native` column that the
@@ -712,8 +713,14 @@ Two rules for every VM job:
   With `HOME` at the prefix, the installer's `~/.local/bin` link and agent
   rootfs land inside it, and it doesn't refuse a prefix outside `HOME`. Host
   config points at that prefix.
+  - The install also expands both disk templates beside their `.zst` files,
+    `zstd -d --sparse <prefix>/X.zst -o <prefix>/X` for `storage-template.ext4`
+    and `overlay-template.ext4`. smolvm would expand them on first use with no
+    lock, and concurrent first starts destroyed both (P12, 6 of 6). Startup
+    refuses a prefix without them.
   - At startup the host compares `smolvm --version` with the version this
-    release was tested on, and refuses to start on a mismatch.
+    release was tested on, and refuses to start on a mismatch. It also refuses
+    to run as anyone but root.
   - Every smolvm call sets `SMOLVM_AGENT_ROOTFS=<prefix>/.local/share/smolvm/agent-rootfs`:
     with `SMOLVM_DATA_DIR` set, smolvm moves `HOME` to the data dir and
     doesn't find it otherwise. The wrapper finds its libraries from the prefix.
@@ -721,10 +728,16 @@ Two rules for every VM job:
     stale one there is used silently. Nothing of ours writes there.
   - Machines keep using their prefix (qcow2 backing files and the agent
     rootfs), so an old prefix stays until its last machine is deleted.
-- **Inventory:** one smolvm inventory per host, placed by `SMOLVM_DATA_DIR`.
-  Machine names are unique per host, which the scope names need anyway. Socket
-  paths are limited to 108 bytes, so init refuses a data root long enough to
-  exceed that.
+- **Inventory:** one smolvm inventory per host, placed by `SMOLVM_DATA_DIR` at
+  `<stateDir>/smolvm`, with `HOME` set to it too. Machine names are unique per
+  host, which the scope names need anyway. Socket paths are limited to 108
+  bytes, so startup refuses a state dir whose control-socket path,
+  `<stateDir>/smolvm/.cache/smolvm/vms/<16 hex>/control.sock`, would exceed
+  107 (so the state dir itself is at most 52 bytes).
+- **State:** read from `machine status --name X --json`. `running`, `pausing`,
+  `unreachable` and `frozen` have a live VMM and read as `running`;
+  `created`, `stopped`, `paused` and `failed` read as `stopped`; smolvm's
+  "machine '<name>' not found" reads as `missing`.
 - **Machines:** run from a digest-pinned OCI image, on smolvm's own 48 MiB agent
   rootfs (about 200 MiB of disk per machine).
   - Each VM runs as its own uid (2000000 and up), so guests can't write the
@@ -795,9 +808,13 @@ Two rules for every VM job:
   - A reachable guest that doesn't confirm its filesystem flush is left running,
     and `stop` fails. Return that error rather than force the stop: killing the
     VM then could lose writes.
-  - `delete` must still work on such a VM. When `machine stop` fails, delete
-    kills the VM's scope (`systemctl kill smolvm-vm-<name>.scope`), then runs
-    `machine delete -f`; `-f` only skips the prompt. Phase 3 verifies this.
+  - `delete` must still work on such a VM. It reads status first and touches
+    nothing for a name smolvm doesn't know. When `machine stop` fails, delete
+    kills the VM's scope (`systemctl kill --signal=SIGKILL
+    smolvm-vm-<name>.scope`, the signal smolvm's own `kill_scope` uses), then
+    runs `machine delete -f` (`-f` only skips the prompt), then `systemctl
+    reset-failed` on the scope, since systemd keeps a failed scope until then.
+    Phase 3 verifies this.
 - **Checkpoints:** the kind follows the machine's state at capture.
   - **`ram`, from a running machine:** a store checkpoint (below); smolvm
     captures only running machines. A restore continues the source's RAM state
@@ -838,6 +855,10 @@ Two rules for every VM job:
   `--storage <diskGib>`; the overlay keeps smolvm's default. Workload writes
   land on the storage disk. Below the 20 GiB template smolvm uses host
   `resize2fs`, which Ubuntu hosts have; no compact templates (P8).
+  - smolvm builds a host-side image seed only at the default 20 GiB
+    (S@1.22.2:src/image_seed.rs:184-195). At any other size every first start
+    pulls the image in the guest, against Docker Hub's anonymous limit of 100
+    pulls an hour per address (P12).
 
 ### Runtimes: Tart
 
