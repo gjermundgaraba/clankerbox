@@ -1056,6 +1056,68 @@ gzipped SEA crossed the DERP relay (0.96 MiB/s). Machines had 1 vCPU, 1 GiB and
   `smolvm-fork-ready` failures in 25 CLI calls and the host's journal. No
   `/dev/shm/smolvm-restore` and no `vms/_restore-checkpoints`.
 
+**Phase 4 live** (local run `.work/runs/live-smolvm-9dd402357c3b`, driver
+`tests/live/smolvm/driver.py`, remote `~/clankerbox-rewrite/runs/l9dd`; the
+host's code as of `9525ed5`). The linux-x64 SEA ran as root in a
+transient system unit on the Linux host with `ramBudgetMib` 8192; the suite
+ran from this Mac through the darwin CLI over Tailscale's DERP relay (no direct
+path; the 45.3 MiB gzipped SEA uploaded at 0.68–0.92 MiB/s), so every timing
+includes a relayed HTTP round trip. Machines had 1 vCPU, 512–1024 MiB and
+`diskGib` 20. Six suite runs on one inventory, reset in between:
+
+- **Result:** every test passed in the last two runs (25, with the peer check
+  skipped, below). The other
+  runs failed one test each: a probe of port 53 (smolvm's gateway answers it
+  at every address, so the test now probes 100.100.100.100:80), a smolvm stop
+  (below), and the crash test's probe racing a start (below).
+- **Timings,** 5 runs: `ram` capture of a running 1 GiB machine 1.18–1.25 s;
+  fork 2.65–3.31 s; two concurrent `ram` restores of one checkpoint together
+  1.64–2.19 s; one `ram` restore 1.32–1.56 s; `disk` capture 4.90–5.03 s;
+  `disk` restore 3.06–3.42 s.
+- **Disk per child:** a fork or `ram` restore, 241 MiB in its own smolvm
+  directory (246920–247116 KiB; its RAM file is unlinked and held by the
+  VMM, so `du` doesn't count it; P9: 466 MiB). A `disk` restore, 6–7 MiB of its
+  own, plus one shared pack extraction in `vms/_shared` that grew by about
+  423 MiB per run and that no delete freed (P9).
+- **Verified:** each copy's own port, host key (pinned by `clankerbox ssh`),
+  machine ID and instance, with the source's RAM marker for `ram` copies and
+  only the disk marker for a `disk` restore; `new-identity` ran once on each
+  fork and restore and not on a later stop and start; a fork's source
+  stopped, cold-started and deleted while the fork kept its RAM and answered
+  ssh, with the forks area empty; a restore under the deleted source's name
+  got a new instance and key and its old port (the port swap was skipped); a
+  `disk` capture of a 20 GiB machine restored from a `ram` checkpoint;
+  `Capacity` for a fork and a restore with no row and the source's action put
+  back; a `ram` restore under an edited pin refused with `Precondition` and no
+  row; a restart emptying a planted `forks/` entry; checkpoint deletes leaving
+  no `.checkpoint` directory and no pack.
+- **Tailnet:** a guest couldn't open 100.100.100.100:80, which the host
+  reaches; `ip route get` from the host to 100.100.100.100 and to this Mac was
+  the same before any machine and with four running. Port 53 opens at every
+  address, 10.0.0.1 and 100.64.0.1 included: smolvm's gateway answers it with
+  its DNS relay, and the relay didn't resolve a tailnet name (nor does the
+  host, whose resolver isn't Tailscale's). The check against another peer
+  didn't run: the tailnet policy drops the Linux host's connections to this
+  Mac (8 ports tried, timeouts, the driver's own listener included), so the
+  control failed and the suite skipped it.
+- **A smolvm stop of a `ram`-restored machine failed once in 24** ("orphan
+  process still alive … still alive after stop attempts"); its scope ended
+  0.1 ms after smolvm gave up, so the machine was stopped while `stop`
+  reported `Internal`.
+- **The intermittent start failure explained:** phase 3's "smolvm-fork-ready:
+  No such file" came back once as "`/bin/bash` not found in $PATH", again in
+  the first create after a restart, with an in-guest pull. Both times the
+  crash test's probe ran `smolvm machine exec` while the host's `machine
+  start` was still making the guest's container (the exec came before the
+  VM's scope started). The probe now
+  waits until the host runs setup, and it didn't recur in two runs. The host
+  never runs a guest command before its start returns.
+- **Counts:** 1 image-seed build (Docker Hub's IPv6 counter went 100 to 99),
+  plus 1 in-guest pull in that failed start; 0 `smolvm-fork-ready` failures in
+  the suite logs and the host's journal. smolvm's per-VM `agent-console.log`
+  records each guest command's arguments, so the preparation script's text
+  (not its seed, which goes on stdin) is in every machine's log until delete.
+
 ## Consumers and production
 
 - **Production hosts:** the Mac host runs Tart only and the Linux host smolvm
