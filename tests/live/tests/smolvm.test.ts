@@ -685,7 +685,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "after the host is killed during a create's setup, the row reads failed and delete removes the VM",
+    "after the host is killed during a create's setup, the row reads failed, stop stops the VM and delete removes it",
     async () => {
       let ended: Ran | undefined;
 
@@ -737,13 +737,25 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
 
       expect(seen.stdout).not.toContain("sleep 300");
       expect(seen.stdout).not.toContain("clankerbox-setup.");
+
+      const stopped = await cli(["stop"], id("crash"), "--json");
+
+      expect(stopped.code, stopped.stdout).toBe(0);
+      expect(decode(OneMachine, stopped)).toMatchObject({
+        state: "stopped",
+        action: { name: "stop", status: "done" },
+      });
+      expect(await natives("crash")).toMatchObject({
+        machines: [{ state: "stopped" }],
+        scopes: [],
+      });
       await removeMachine("crash");
     },
     minutes(10),
   );
 
   test(
-    "after a crash between inserting the row and calling the runtime, delete removes just the row",
+    "after a crash between inserting the row and calling the runtime, stop writes nothing and delete removes just the row",
     async () => {
       // Step 3 reads every other machine's state with `machine status` before the runtime's
       // create; the host dies inside that read, with the new row inserted and nothing native.
@@ -761,6 +773,18 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
         error: { tag: "Internal", message: "host restarted during create" },
       });
       expect(await natives("gap")).toEqual({ machines: [], scopes: [] });
+
+      const stopped = await cli(["stop"], id("gap"), "--json");
+
+      expect(stopped.code, stopped.stdout).toBe(0);
+      expect(decode(OneMachine, stopped)).toMatchObject({
+        state: "missing",
+        action: {
+          name: "create",
+          status: "failed",
+          error: { tag: "Internal", message: "host restarted during create" },
+        },
+      });
       await removeMachine("gap");
       expect(await machine("gap")).toBeUndefined();
     },

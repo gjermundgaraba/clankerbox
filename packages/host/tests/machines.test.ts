@@ -378,6 +378,56 @@ test("host startup fails every action the last host process left running", async
   expect(linux.fake.calls.filter((call) => call === "startup")).toHaveLength(2);
 });
 
+const restartedDuringCreate = {
+  name: "create",
+  status: "failed",
+  error: { tag: "Internal", message: "host restarted during create" },
+} as const;
+
+test("stop after a restart during create stops the VM the create left running", async () => {
+  const linux = await host();
+
+  // Held in setup's exec: the runtime's create has made and booted the machine.
+  const { entered } = linux.fake.holdNext("exec");
+
+  Effect.runFork(
+    linux.machines.create(request("dev", { setup: { script: "#!/bin/sh\n", timeoutSeconds: 30 } })),
+  );
+  await entered;
+  await linux.dispose();
+
+  const restarted = await host({ fake: linux.fake, dir: linux.dir });
+  const before = await restarted.run(restarted.machines.get("linux_dev"));
+  const stopped = await restarted.run(restarted.machines.stop("linux_dev"));
+
+  expect(before).toMatchObject({ state: "running", action: restartedDuringCreate });
+  expect(stopped).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
+  expect(linux.fake.calls).toContain("stop linux_dev");
+});
+
+test("stop after a crash before the runtime's create does nothing and writes nothing", async () => {
+  const linux = await host();
+
+  await linux.run(linux.machines.create(request("dev")));
+
+  const row = Option.getOrThrow(await linux.run(linux.store.find("dev")));
+
+  // As in the delete test above: the row a crash leaves before the first runtime call.
+  await linux.run(linux.machines.delete("linux_dev"));
+  await linux.run(linux.store.insert({ ...row, action: { name: "create", status: "running" } }));
+  await linux.dispose();
+  linux.fake.calls.length = 0;
+
+  const restarted = await host({ fake: linux.fake, dir: linux.dir });
+  const stopped = await restarted.run(restarted.machines.stop("linux_dev"));
+
+  await restarted.run(restarted.machines.delete("linux_dev"));
+
+  expect(stopped).toMatchObject({ state: "missing", action: restartedDuringCreate });
+  expect(linux.fake.calls).toEqual(["startup", "delete linux_dev"]);
+  expect(await rows(restarted)).toEqual([]);
+});
+
 const marker = "setup-text-marker";
 
 test("a failing setup fails the create with its last lines of output, never its text", async () => {
