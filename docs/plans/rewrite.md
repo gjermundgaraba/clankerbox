@@ -286,8 +286,9 @@ Units run `process.execPath host --config PATH`. VM jobs never reference this bi
   it classifies this way: on smolvm and Tart, a fork's source or a capture's
   machine in a state the runtime doesn't copy (see their runtimes), which the
   runtime's fork or capture reads after the claim, before anything native;
-  and boat's (see [Runtimes: boat](#runtimes-boat)). Any other runtime error
-  keeps the row.
+  on Tart, a new machine's port the forwarder can't listen on (see [Guest
+  access](#guest-access)); and boat's (see [Runtimes: boat](#runtimes-boat)).
+  Any other runtime error keeps the row.
 - **Long calls:** a mutation's reply, headers included, comes only when its
   action has finished. Node's server `requestTimeout` (300 s by default) covers
   only receiving the request, so it doesn't limit an action. The undici client
@@ -749,8 +750,8 @@ which only `delete` takes (see [State and claims](#state-and-claims)).
 - **Tart:**
   - Tart has no port publishing, and the guest's Softnet address is reachable
     only from the Mac.
-  - The host runs a forwarder, used only by Tart: for each running machine it
-    listens on `publishAddress:hostPort`. Each accepted connection runs
+  - The host runs a forwarder, used only by Tart: for each machine it listens
+    on `publishAddress:hostPort`. Each accepted connection runs
     `tart exec -i <vm> nc 127.0.0.1 22`.
   - This needs no guest IP, no Softnet exception and no Local Network
     permission. A host that dials guest IPs needs a fresh Local Network grant
@@ -760,12 +761,15 @@ which only `delete` takes (see [State and claims](#state-and-claims)).
   - The forwarder ends a connection by closing the exec's stdin. A killed
     `tart exec` leaves the guest's `nc` and `sshd-session` running until the
     session next writes.
-  - A machine's listener opens once its boot has answered `tart exec`, closes
-    when it stops or is deleted, and at host startup opens again for every
-    machine that runs. A boot that fails after its kickstart, by timing out or
-    because its listener can't open, forces the VM off, so the machine reads
-    stopped and `start` boots it again; a VM left running would stay
-    unreachable, since `start` boots nothing on a running machine.
+  - A machine's listener is tied to its row, not to its state (phase-5
+    review): it opens at create, fork or restore, before the clone, so a port
+    it can't listen on is refused (the refusal rule) and makes nothing native;
+    it opens again at host startup for every machine; and it closes at
+    delete, last, so a delete that fails leaves the machine reachable. A boot
+    that fails after its kickstart leaves the VM as it is, reachable, and a
+    `start` of a made machine that runs prepares it again. A stopped machine's
+    port accepts and closes the connection instead of refusing it. The port
+    stays bound for the row's life, which the allocation's bind probe sees.
 - **boat:** guest port 22 is reached at boat's SSH relay (see
   [Runtimes: boat](#runtimes-boat)), with no host port and no forwarder.
 - **Security:** a published port is reachable by whatever garaba-home's tailnet
@@ -1325,7 +1329,8 @@ tests use real VMs.
      Tart](#runtimes-tart)), and it freezes once they pass. Each change until
      then records its reason here:
      - `startup` receives the host's machines, so the Tart forwarder listens
-       again for those that run.
+       again for every one of them, running or not (since the phase-5
+       review, which tied a listener to the row).
      - Each machine in step 3's `admit` says whether an action is booting it,
        in place of the action that holds it: a fork holds its stopped source
        under the same action as the copy, and Tart's count took the source as

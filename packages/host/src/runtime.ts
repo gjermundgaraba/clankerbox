@@ -122,7 +122,7 @@ export interface Interface {
   /**
    * The runtime's own work at host startup, over every machine the host has, run after every
    * interrupted action has been marked failed and before the host serves: smolvm's cleanup, or
-   * the Tart forwarder's listeners for the machines that run.
+   * the Tart forwarder's listeners for every machine.
    */
   readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, HostError>;
   /**

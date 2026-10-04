@@ -2,7 +2,8 @@
  * The Tart runtime: macOS guests through the `tart` CLI of a versioned install, on a macOS host
  * that runs as the operator's user. Each VM runs as `tart run` under its own launchd job in the
  * user's GUI domain, so a host restart leaves VMs running, and the job references only tart. The
- * host's forwarder carries each running machine's SSH connections into the guest.
+ * host's forwarder carries each machine's SSH connections into the guest, on a listener that
+ * lives as long as the machine's row.
  *
  * Tart has one VM namespace per Tart home, shared with the operator's own VMs and with any other
  * host process on the Mac, so native names carry the host ID, the kind and the row's instance.
@@ -299,7 +300,11 @@ export const make = (
       );
     };
 
-    /** Listens for the machine's SSH connections; each one runs `nc` in the guest. */
+    /**
+     * Listens for the machine's SSH connections, from its create, or the host's startup, until
+     * its delete, whatever its state; each connection runs `nc` in the guest, and on a stopped
+     * machine closes at once.
+     */
     const listen = (machine: MachineRef) =>
       Effect.flatMap(portOf(machine), (port) =>
         forwarder.listen(port, (input) =>
@@ -398,10 +403,8 @@ export const make = (
      * Boots the machine's VM through its job: bootstrapped if launchd doesn't hold it (as after a
      * reboot), then kickstarted without `-k`, which never touches a running VM. `kickstart`
      * returns before Tart has started the VM, so `ready` waits for the guest agent. A boot that
-     * fails from there forces the VM off, so the machine reads stopped and `start` boots it again:
-     * a VM left running with no listener would stay unreachable, since `start` boots nothing on a
-     * running machine. An interrupted boot leaves the VM to the next host startup, as a host
-     * restart leaves every VM.
+     * fails from there leaves the VM as it is, reachable through its listener; a `start` of a
+     * made machine that runs prepares it again.
      */
     const boot = (machine: MachineRef) =>
       Effect.gen(function* () {
@@ -428,17 +431,7 @@ export const make = (
         yield* Effect.flatMap(launchctl(["kickstart", target], `kickstart ${vm}`), (ran) =>
           expect(ran, `launchctl kickstart ${vm}`),
         );
-        yield* Effect.andThen(ready(machine), listen(machine)).pipe(
-          Effect.tapError(() =>
-            forceStop(vm).pipe(
-              Effect.catch((error) =>
-                Effect.logWarning(
-                  `couldn't force ${machine.id} off after its failed boot: ${error.message}`,
-                ),
-              ),
-            ),
-          ),
-        );
+        yield* ready(machine);
       });
 
     /**
@@ -465,8 +458,6 @@ export const make = (
           );
           yield* forceStop(vm);
         }
-
-        yield* unlisten(machine);
       });
 
     /**
@@ -485,11 +476,15 @@ export const make = (
         }
       });
 
-    /** Clones `from` into the machine's VM with a new serial, and its job. */
+    /**
+     * Clones `from` into the machine's VM with a new serial, and its job. The machine's listener
+     * opens first, so a port it can't listen on is refused before anything native.
+     */
     const cloneInto = (from: string, machine: MachineRef, sizes: ReadonlyArray<string>) => {
       const vm = vmOf(machine);
 
       return Effect.gen(function* () {
+        yield* Effect.mapError(listen(machine), (error) => new Refusal({ error }));
         yield* writeJob(vm);
         yield* call(["clone", from, vm], `clone ${from} ${vm}`);
         yield* call(["set", vm, "--random-serial", ...sizes], `set ${vm}`);
@@ -532,16 +527,12 @@ export const make = (
             fs.makeDirectory(jobs, { recursive: true, mode: 0o700 }),
           );
 
-          const vms = yield* list;
-
           for (const machine of machines) {
-            if (vms.get(vmOf(machine)) === "running") {
-              yield* listen(machine).pipe(
-                Effect.catch((error) =>
-                  Effect.logWarning(`startup: no forwarder for ${machine.id}: ${error.message}`),
-                ),
-              );
-            }
+            yield* listen(machine).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning(`startup: no forwarder for ${machine.id}: ${error.message}`),
+              ),
+            );
           }
         }),
       observe: (machines) =>
@@ -598,7 +589,6 @@ export const make = (
           const vm = vmOf(machine);
           const { target, plist: file, log } = job(vm);
 
-          yield* unlisten(machine);
           yield* deleteVm(vm);
 
           // Exit 3 is a job launchd doesn't hold.
@@ -609,6 +599,9 @@ export const make = (
           for (const path of [file, log]) {
             yield* files(`couldn't remove ${path}`, fs.remove(path, { force: true }));
           }
+
+          // Last, so a delete that fails leaves the machine reachable.
+          yield* unlisten(machine);
         }),
       capture: (machine, checkpoint) =>
         Effect.andThen(

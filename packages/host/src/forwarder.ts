@@ -1,6 +1,6 @@
 /**
- * The forwarder, used only by Tart, which has no port publishing: for each running machine it
- * listens on the publish address and the machine's host port, and each connection it accepts
+ * The forwarder, used only by Tart, which has no port publishing: for each machine it listens on
+ * the publish address and the machine's host port, and each connection it accepts
  * runs one command that carries the bytes to the guest's port 22, `tart exec -i <vm> nc
  * 127.0.0.1 22`. That needs no guest IP, no Softnet exception and no Local Network permission.
  *

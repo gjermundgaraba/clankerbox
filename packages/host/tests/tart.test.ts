@@ -271,10 +271,13 @@ const runtimeOn = async (options?: {
   return { mac, runtime };
 };
 
-/** The calls after startup's, as `<program> <args…>`, without the `tart list` reads. */
+/**
+ * The calls after the version check, as `<program> <args…>`, without the `tart list` reads.
+ * Startup makes none.
+ */
 const calls = (mac: ScriptedMac) =>
   mac.spawner.calls
-    .slice(2)
+    .slice(1)
     .map((call) => [call.file === binary ? "tart" : "launchctl", ...call.args].join(" "))
     .filter((line) => !line.startsWith("tart list"));
 
@@ -489,7 +492,6 @@ test("Apple's refusal of a third VM, read from the job's log, is Capacity", asyn
   expect(error.message).toBe(
     "Apple's limit of 2 running macOS VMs per Mac refused mac_third: The number of VMs exceeds the system limit (other running VMs: a1, a2)",
   );
-  expect(await accepts(machine.port ?? 0)).toBe(false);
 });
 
 test("a job that exits for another reason fails the boot with its exit code and log", async () => {
@@ -512,7 +514,7 @@ test("a job that exits for another reason fails the boot with its exit code and 
   );
 });
 
-test("a boot whose guest agent never answers forces its VM off, and start boots it again", async () => {
+test("a boot whose guest agent never answers leaves its VM running, reachable through its listener", async () => {
   const { mac, runtime } = await runtimeOn();
   const machine = await machineOn("dev");
   const vm = vmOf(machine);
@@ -534,33 +536,50 @@ test("a boot whose guest agent never answers forces its VM off, and start boots 
   expect(error.message).toBe(
     "mac_dev's guest agent didn't answer tart exec within 3m of its start",
   );
-  expect(calls(mac).at(-1)).toBe(`tart stop --timeout 0 ${vm}`);
-  expect(mac.vms.get(vm)).toBe("stopped");
-  expect(await accepts(machine.port ?? 0)).toBe(false);
-
-  delete mac.hooks.probe;
-  await Effect.runPromise(runtime.start(machine));
-
+  expect(calls(mac).filter((line) => line.includes("stop"))).toEqual([]);
+  expect(mac.vms.get(vm)).toBe("running");
   expect(await accepts(machine.port ?? 0)).toBe(true);
 });
 
-test("a boot whose forwarder can't listen forces its VM off", async () => {
+test("a create, fork or restore whose forwarder can't listen is refused before anything native", async () => {
   const { mac, runtime } = await runtimeOn();
-  const machine = await machineOn("dev");
+  const [source, machine] = await Promise.all([machineOn("src"), machineOn("dev")]);
   const taken = createServer();
 
+  const checkpoint = {
+    id: "mac_snap",
+    name: "snap",
+    instance: "fedcba9876543210fedcba9876543210",
+    native: undefined,
+    kind: "disk" as const,
+    port: source.port,
+  };
+
+  mac.vms.set(vmOf(source), "stopped");
   await new Promise<void>((resolve) => {
     taken.listen({ host: "127.0.0.1", port: machine.port }, resolve);
   });
 
   try {
-    const error = await Effect.runPromise(Effect.flip(runtime.create(machine, "base")));
-
-    expect(error.message).toMatch(
-      new RegExp(`^the forwarder couldn't listen on 127\\.0\\.0\\.1:${machine.port}: `, "u"),
+    const errors = await Promise.all(
+      [
+        runtime.create(machine, "base"),
+        runtime.fork(source, machine),
+        runtime.restore(checkpoint, machine),
+      ].map((making) => Effect.runPromise(Effect.flip(making))),
     );
-    expect(calls(mac).at(-1)).toBe(`tart stop --timeout 0 ${vmOf(machine)}`);
-    expect(mac.vms.get(vmOf(machine))).toBe("stopped");
+
+    for (const error of errors) {
+      expect(refused(error)).toEqual([
+        "Internal",
+        expect.stringMatching(
+          new RegExp(`^the forwarder couldn't listen on 127\\.0\\.0\\.1:${machine.port}: `, "u"),
+        ),
+      ]);
+    }
+
+    expect(calls(mac)).toEqual([]);
+    expect(existsSync(join(jobsDir(mac.settings.stateDir), `${vmOf(machine)}.plist`))).toBe(false);
   } finally {
     await new Promise((resolve) => {
       taken.close(resolve);
@@ -675,6 +694,7 @@ test("a fork's source and a capture's machine must be stopped: anything else is 
   ]);
   expect(calls(mac)).toEqual([]);
   expect(existsSync(join(jobsDir(mac.settings.stateDir), `${vmOf(copy)}.plist`))).toBe(false);
+  expect(await accepts(copy.port ?? 0)).toBe(false);
 });
 
 test("a fork counts only the copy as booting, not its stopped source", async () => {
@@ -740,7 +760,7 @@ test("capture clones the machine to the checkpoint's name; fork and restore clon
   expect(mac.vms.has(snap)).toBe(false);
 });
 
-test("stop shuts the guest down from inside, waits for its VM to stop, and closes its forwarder", async () => {
+test("stop shuts the guest down from inside and waits for its VM to stop; its listener stays", async () => {
   const { mac, runtime } = await runtimeOn();
   const machine = await machineOn("dev");
   const vm = vmOf(machine);
@@ -753,7 +773,7 @@ test("stop shuts the guest down from inside, waits for its VM to stop, and close
 
   expect(calls(mac).slice(before)).toEqual([`tart exec ${vm} sudo -n /sbin/shutdown -h now`]);
   expect(mac.vms.get(vm)).toBe("stopped");
-  expect(await accepts(machine.port ?? 0)).toBe(false);
+  expect(await accepts(machine.port ?? 0)).toBe(true);
 });
 
 test("a guest that doesn't shut down within a minute is forced off", async () => {
@@ -820,7 +840,7 @@ test("delete after a crash before the clone finds nothing native, and succeeds",
   expect(calls(mac)).toEqual([`tart delete ${vm}`, `launchctl bootout gui/501/${vm}`]);
 });
 
-test("delete fails, keeping the job, when Tart can't delete the VM", async () => {
+test("delete fails, keeping the job and the listener, when Tart can't delete the VM", async () => {
   const { mac, runtime } = await runtimeOn();
   const machine = await machineOn("dev");
   const vm = vmOf(machine);
@@ -842,6 +862,7 @@ test("delete fails, keeping the job, when Tart can't delete the VM", async () =>
     `tart delete ${vm}`,
   ]);
   expect(mac.jobs.has(vm)).toBe(true);
+  expect(await accepts(machine.port ?? 0)).toBe(true);
 });
 
 test("exec runs the command as root through sudo -n, with its stdin", async () => {
@@ -869,7 +890,7 @@ test("exec runs the command as root through sudo -n, with its stdin", async () =
   });
 });
 
-test("startup makes the jobs dir and listens again for the machines that run", async () => {
+test("startup makes the jobs dir and listens again for every machine, running or not", async () => {
   const { mac, runtime } = await runtimeOn();
   const [up, down] = await Promise.all([machineOn("up"), machineOn("down")]);
 
@@ -878,7 +899,7 @@ test("startup makes the jobs dir and listens again for the machines that run", a
   await Effect.runPromise(runtime.startup([up, down]));
 
   expect(existsSync(jobsDir(mac.settings.stateDir))).toBe(true);
-  expect([await accepts(up.port ?? 0), await accepts(down.port ?? 0)]).toEqual([true, false]);
+  expect([await accepts(up.port ?? 0), await accepts(down.port ?? 0)]).toEqual([true, true]);
 });
 
 test("observe reads every machine's state with one tart list", async () => {
