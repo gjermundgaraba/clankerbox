@@ -456,10 +456,17 @@ listed to keep them from being ported):
   - Runtime state checks run after the claim, so nothing changes between the
     check and the use.
   - Ports are recorded in the same transaction (see [Guest access](#guest-access)).
+  - The actions that boot a machine or allocate a port (create and start;
+    fork and restore in phase 4) hold one permit, a `Semaphore`, across claim
+    and check (steps 2–3). The RAM budget counts the machines that booting
+    actions hold, so two checked at once would each count the other and both
+    could be refused; one at a time, exactly one of two that fit only alone
+    passes, and no two pick the same port.
 - **No global native lock.** smolvm and Tart take their own locks. P12 found
   that smolvm CLI calls on different machines need no serializing, except the
   first use of a new prefix, which the install step settles (see
-  [Runtimes: smolvm](#runtimes-smolvm)); so there is no semaphore.
+  [Runtimes: smolvm](#runtimes-smolvm)); so no semaphore serializes native
+  calls.
 - **The row comes before any native effect,** so that after a crash `delete` has
   something to own.
 - **Native IDs:** machine and checkpoint rows have one `native` column that the
@@ -672,8 +679,10 @@ A crashed preparation is simply run again on the next activation; no
     excludes the ports on its machine rows and confirms each one with a bind
     probe on the publish address. It takes the lowest such port, so
     allocation is deterministic.
-  - Ports are recorded with the action's claim under a unique index, so two
-    actions can't take the same port; a collision just picks again.
+  - Ports are picked and recorded with the action's claim, under the permit
+    that admits one booting action at a time (see [State and
+    claims](#state-and-claims)), so two actions can't take the same port. The
+    unique index on the port is a backstop.
   - A `ram` restore, and so a fork, keeps the checkpoint's port: smolvm refuses
     topology flags when creating from a live checkpoint. The host allocates a
     new one and applies it with `machine update --remove-port … -p …` before
@@ -771,8 +780,9 @@ Two rules for every VM job:
   and doesn't check.
   - The sum is the `ramMib` of every machine that is running or held by a
     running create, start, fork or restore, each counted once. The target is
-    already held when step 3 runs, so it is in the sum. Counting the held ones
-    keeps two concurrent creates from both passing.
+    already held when step 3 runs, so it is in the sum. Booting actions are
+    checked one at a time (see [State and claims](#state-and-claims)), so of
+    two concurrent creates that each fit only alone, exactly one passes.
   - The budget is `ramBudgetMib` in host config. It defaults to physical RAM
     minus 2 GiB, for the OS and the host processes. P9's memory figures per
     restored machine show whether VMs need more headroom. Set it above

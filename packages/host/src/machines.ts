@@ -23,7 +23,17 @@ import {
   parseId,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, DateTime, Effect, Fiber, FiberSet, Layer, Option, type Scope } from "effect";
+import {
+  Context,
+  DateTime,
+  Effect,
+  Fiber,
+  FiberSet,
+  Layer,
+  Option,
+  type Scope,
+  Semaphore,
+} from "effect";
 import type { HostConfig } from "./config.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
@@ -65,6 +75,7 @@ export const make = (
     const store = yield* Store;
     const runtime = yield* Runtime;
     const actions = yield* FiberSet.make<unknown>();
+    const admission = yield* Semaphore.make(1);
 
     yield* store.failInterrupted;
     yield* runtime.startup;
@@ -137,44 +148,32 @@ export const make = (
 
     const read = (name: string) => Effect.flatMap(find(name), resource);
 
-    /** Inserts the new row with a port no row holds and nothing listens on, picking again on a collision. */
+    /** Inserts the new row, with the lowest port that no row holds and nothing listens on. */
     const claimNew = (name: string, request: CreateRequest): Effect.Effect<Claim, HostError> =>
       Effect.gen(function* () {
-        const createdAt = yield* DateTime.now;
-        const instance = randomBytes(instanceBytes).toString("hex");
         const address = runtime.publishAddress;
 
-        for (;;) {
-          const port =
-            address === undefined ? undefined : yield* pickPort(address, yield* store.ports);
+        const row: NewMachine = {
+          name,
+          instance: randomBytes(instanceBytes).toString("hex"),
+          native: undefined,
+          createdAt: yield* DateTime.now,
+          base: request.base,
+          profile: request.profile,
+          cpu: request.cpu,
+          ramMib: request.ramMib,
+          diskGib: request.diskGib,
+          port: address === undefined ? undefined : yield* pickPort(address, yield* store.ports),
+          hostKey: undefined,
+          action: "create",
+        };
 
-          const row: NewMachine = {
-            name,
-            instance,
-            native: undefined,
-            createdAt,
-            base: request.base,
-            profile: request.profile,
-            cpu: request.cpu,
-            ramMib: request.ramMib,
-            diskGib: request.diskGib,
-            port,
-            hostKey: undefined,
-            action: "create",
-          };
+        yield* store.insert(row);
 
-          const inserted = yield* store.insert(row).pipe(
-            Effect.as(true),
-            Effect.catchTag("PortTaken", () => Effect.succeed(false)),
-          );
-
-          if (inserted) {
-            return {
-              record: { ...row, action: { name: row.action, status: "running" } },
-              release: store.remove(row.name),
-            };
-          }
-        }
+        return {
+          record: { ...row, action: { name: row.action, status: "running" } },
+          release: store.remove(name),
+        };
       });
 
     const claimExisting = (name: string, action: ActionName): Effect.Effect<Claim, HostError> =>
@@ -199,6 +198,18 @@ export const make = (
           ),
         ),
       );
+
+    /**
+     * Steps 2 and 3 for an action that boots a machine or allocates a port, one at a time. The
+     * RAM budget counts every machine a booting action holds, so two such actions checked at
+     * once would each count the other, and both could be refused although one fits. One at a
+     * time, exactly one of two that fit only alone passes, and no two pick the same port.
+     */
+    const claimAndAdmit = <B>(
+      claim: Effect.Effect<Claim, HostError>,
+      check: (record: MachineRecord) => Effect.Effect<B, HostError>,
+    ): Effect.Effect<readonly [Claim, B], HostError> =>
+      admission.withPermits(1)(claimAndCheck(claim, check));
 
     /**
      * Step 4 on. A runtime `Refusal` releases the claim like a failed check; any other failure
@@ -276,7 +287,7 @@ export const make = (
           });
         }
 
-        const [claimed] = yield* claimAndCheck(claimNew(name, request), (record) =>
+        const [claimed] = yield* claimAndAdmit(claimNew(name, request), (record) =>
           admit("create", record),
         );
 
@@ -304,7 +315,7 @@ export const make = (
       Effect.gen(function* () {
         const name = yield* nameOf(id);
 
-        const [claimed, running] = yield* claimAndCheck(claimExisting(name, "start"), (record) =>
+        const [claimed, running] = yield* claimAndAdmit(claimExisting(name, "start"), (record) =>
           Effect.flatMap(runtime.observe(ref(record)), ({ state }) => {
             if (state === "missing") {
               return Effect.fail(

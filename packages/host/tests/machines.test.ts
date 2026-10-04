@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
-import { Capacity, Conflict, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, Conflict, type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber, Option, Result } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import { Refusal } from "../src/runtime.ts";
@@ -505,33 +505,65 @@ test("the RAM budget counts running machines and refuses with Capacity, writing 
   expect((await rows(linux)).map(({ name }) => name).sort()).toEqual(["a", "b", "c"]);
 });
 
-test("two concurrent creates that would each fit alone don't both pass", async () => {
+/** Runs `actions` at once, each to its result. */
+const together = <A>(actions: ReadonlyArray<Effect.Effect<A, HostError>>) =>
+  actions.map((action) => Effect.runFork(Effect.result(action)));
+
+const results = <A>(fibers: ReadonlyArray<Fiber.Fiber<Result.Result<A, HostError>>>) =>
+  Promise.all(fibers.map((fiber) => Effect.runPromise(Fiber.join(fiber))));
+
+test("of two concurrent creates that each fit only alone, exactly one passes", async () => {
   const linux = await host({ runtime: { ramBudgetMib: 1536 } });
-  const holds = [linux.fake.holdNext("admit"), linux.fake.holdNext("admit")];
+  const { release, entered } = linux.fake.holdNext("admit");
 
-  const creates = [request("x"), request("y")].map((made) =>
-    Effect.runFork(Effect.result(linux.machines.create(made))),
-  );
+  const creates = together([
+    linux.machines.create(request("x")),
+    linux.machines.create(request("y")),
+  ]);
 
-  await Promise.all(holds.map(({ entered }) => entered));
+  await entered;
+  await pause();
 
-  for (const { release } of holds) {
-    release();
-  }
+  // The second create waits for the first's check, so only one admit has run.
+  const admitsWhileHeld = linux.fake.calls.filter((call) => call.startsWith("admit")).length;
 
-  const results = await Promise.all(creates.map((fiber) => Effect.runPromise(Fiber.join(fiber))));
+  release();
 
-  const passed = results.filter(Result.isSuccess);
-  const names = (await rows(linux)).map(({ name }) => name);
+  const ended = await results(creates);
+  const refused = ended.filter(Result.isFailure).map(({ failure }) => failure._tag);
 
-  // Both were claimed before either check, so each counts the other; one may pass once the
-  // other's refusal has removed its row.
-  expect(passed.length).toBeLessThan(2);
-  expect(names).toHaveLength(passed.length);
+  expect(admitsWhileHeld).toBe(1);
+  expect(ended.filter(Result.isSuccess)).toHaveLength(1);
+  expect(refused).toEqual(["Capacity"]);
+  expect(await rows(linux)).toHaveLength(1);
+});
 
-  for (const result of results.filter(Result.isFailure)) {
-    expect(result.failure._tag).toBe("Capacity");
-  }
+test("of two concurrent starts that each fit only alone, exactly one passes", async () => {
+  const linux = await host({ runtime: { ramBudgetMib: 1536 } });
+
+  await linux.run(linux.machines.create(request("x")));
+  await linux.run(linux.machines.stop("linux_x"));
+  await linux.run(linux.machines.create(request("y")));
+  await linux.run(linux.machines.stop("linux_y"));
+
+  const { release, entered } = linux.fake.holdNext("admit");
+  linux.fake.calls.length = 0;
+
+  const starts = together([linux.machines.start("linux_x"), linux.machines.start("linux_y")]);
+
+  await entered;
+  await pause();
+
+  const admitsWhileHeld = linux.fake.calls.filter((call) => call.startsWith("admit")).length;
+
+  release();
+
+  const ended = await results(starts);
+  const refused = ended.filter(Result.isFailure).map(({ failure }) => failure._tag);
+
+  expect(admitsWhileHeld).toBe(1);
+  expect(ended.filter(Result.isSuccess)).toHaveLength(1);
+  expect(refused).toEqual(["Capacity"]);
 });
 
 /** Listens on the first port from 10000 that is free on 127.0.0.1, and returns it. */

@@ -12,7 +12,8 @@ const booting: ReadonlySet<ActionName> = new Set(["create", "start", "fork", "re
 /**
  * Sums the `ramMib` of every machine that is running or held by an action that boots it, each
  * once, and refuses when the sum passes `budgetMib`. The target is already held, so it is in
- * the sum; counting the held ones keeps two concurrent creates from both passing.
+ * the sum. Counting the held ones keeps a booting action that is past its check from being
+ * missed; the host checks booting actions one at a time, so two never count each other.
  */
 export const checkRamBudget = (
   budgetMib: number,

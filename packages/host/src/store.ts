@@ -13,7 +13,7 @@ import {
   NotFound,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Data, DateTime, Effect, FileSystem, Option, Schema, type Scope } from "effect";
+import { Context, DateTime, Effect, FileSystem, Option, Schema, type Scope } from "effect";
 
 /** A directory is ours if it holds this database; there is no other marker. */
 export const databaseFile = "host.db";
@@ -115,9 +115,6 @@ export interface NewMachine extends Omit<MachineRecord, "action"> {
   readonly action: ActionName;
 }
 
-/** Another row already holds the port a new row asked for. */
-export class PortTaken extends Data.TaggedError("PortTaken")<{ readonly port: number }> {}
-
 /** What an action records on its row when it ends: its outcome, and the host key it read. */
 export interface Outcome {
   readonly action: ActionRecord;
@@ -130,10 +127,10 @@ export interface Interface {
   /** The ports every machine row holds. */
   readonly ports: Effect.Effect<ReadonlySet<number>, Internal>;
   /**
-   * Inserts a new row, held by its running action. A taken name is `Conflict{exists}`; a port
-   * another row holds is `PortTaken`, and the caller picks again.
+   * Inserts a new row, held by its running action. A taken name is `Conflict{exists}`. Actions
+   * pick ports one at a time, so the port's unique index is only a backstop.
    */
-  readonly insert: (record: NewMachine) => Effect.Effect<void, Conflict | PortTaken | Internal>;
+  readonly insert: (record: NewMachine) => Effect.Effect<void, Conflict | Internal>;
   /**
    * Claims an existing row for `action`, and returns the row as it was, so the claim can be
    * released by putting its action back. A row another action holds is `Conflict{busy}`.
@@ -156,8 +153,6 @@ const isSqliteError = (cause: unknown): cause is Error & { readonly errcode: num
   cause instanceof Error && "errcode" in cause && typeof cause.errcode === "number";
 
 const sqliteBusy = 5;
-
-const sqliteConstraintUnique = 2067;
 
 const describe = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
@@ -334,43 +329,33 @@ export const open = (
           ),
       ),
       insert: (record) =>
-        Effect.try({
-          try: () =>
-            transaction(db, () => {
-              if (findSync(record.name) !== undefined) {
-                return new Conflict({
-                  message: `machine ${id(record.name)} exists`,
-                  kind: "exists",
-                });
-              }
+        sql(`insert ${id(record.name)}`, () =>
+          transaction(db, () => {
+            if (findSync(record.name) !== undefined) {
+              return new Conflict({
+                message: `machine ${id(record.name)} exists`,
+                kind: "exists",
+              });
+            }
 
-              insertRow.run(
-                record.name,
-                record.instance,
-                record.native ?? null,
-                DateTime.formatIso(record.createdAt),
-                record.base,
-                record.profile ?? null,
-                record.cpu,
-                record.ramMib,
-                record.diskGib,
-                record.port ?? null,
-                record.hostKey ?? null,
-                record.action,
-              );
+            insertRow.run(
+              record.name,
+              record.instance,
+              record.native ?? null,
+              DateTime.formatIso(record.createdAt),
+              record.base,
+              record.profile ?? null,
+              record.cpu,
+              record.ramMib,
+              record.diskGib,
+              record.port ?? null,
+              record.hostKey ?? null,
+              record.action,
+            );
 
-              return undefined;
-            }),
-          catch: (cause) =>
-            isSqliteError(cause) &&
-            cause.errcode === sqliteConstraintUnique &&
-            cause.message.includes("machines.port") &&
-            record.port !== undefined
-              ? new PortTaken({ port: record.port })
-              : new Internal({
-                  message: `state database: insert ${id(record.name)}: ${describe(cause)}`,
-                }),
-        }).pipe(
+            return undefined;
+          }),
+        ).pipe(
           Effect.flatMap((conflict) =>
             conflict === undefined ? Effect.void : Effect.fail(conflict),
           ),

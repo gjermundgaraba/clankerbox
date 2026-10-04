@@ -6,14 +6,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Conflict } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Option } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import {
-  applicationId,
-  databaseFile,
-  type NewMachine,
-  migrations,
-  open,
-  PortTaken,
-} from "../src/store.ts";
+import { applicationId, databaseFile, type NewMachine, migrations, open } from "../src/store.ts";
 import { removeScratch, scratch } from "./scratch.ts";
 
 const owned: Array<string> = [];
@@ -171,22 +164,25 @@ test("an empty database file, as a crash during init leaves, is initialized", as
   await expect(withStore(stateDir, (store) => store.list)).resolves.toEqual([]);
 });
 
-test("a taken name is Conflict{exists}, and a taken port is PortTaken", async () => {
+test("a taken name is Conflict{exists}, and the unique index refuses a taken port", async () => {
   const stateDir = join(await scratch(owned), "state");
 
-  const [name, port] = await withStore(stateDir, (store) =>
+  const [name, port, names] = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
       yield* store.insert(record("dev", { port: 10_000 }));
 
       return [
         yield* Effect.flip(store.insert(record("dev", { port: 10_001 }))),
         yield* Effect.flip(store.insert(record("other", { port: 10_000 }))),
+        (yield* store.list).map((row) => row.name),
       ] as const;
     }),
   );
 
   expect(name).toEqual(new Conflict({ message: "machine linux_dev exists", kind: "exists" }));
-  expect(port).toEqual(new PortTaken({ port: 10_000 }));
+  expect(port._tag).toBe("Internal");
+  expect(port.message).toContain("insert linux_other");
+  expect(names).toEqual(["dev"]);
 });
 
 test("a claimed row is busy until its action ends; a missing row is NotFound", async () => {

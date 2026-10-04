@@ -34,9 +34,8 @@ const probe = (address: string, port: number): Effect.Effect<boolean, Internal> 
   });
 
 /**
- * The lowest port in the range that no machine row holds and that binds on `address`. The
- * caller records it under the rows' unique index, and picks again if another action took it
- * since.
+ * The lowest port in the range that no machine row holds and that binds on `address`. Actions
+ * that allocate a port pick and record it one at a time, so no other action takes it between.
  */
 export const pickPort = (
   address: string,
