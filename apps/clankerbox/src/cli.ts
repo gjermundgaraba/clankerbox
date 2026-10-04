@@ -36,7 +36,7 @@ export const clientFlags = {
   ),
   timeout: Flag.Int("timeout").pipe(
     Flag.withDescription(
-      "Stop waiting for a host's reply after SECONDS. The action keeps running on its host.",
+      "Stop waiting for each host's reply after SECONDS. It cancels nothing on the host.",
     ),
     Flag.filter(
       (seconds) => seconds > 0,

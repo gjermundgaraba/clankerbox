@@ -379,7 +379,7 @@ test("placement skips a host that didn't answer in time, and the create is still
   expect(linux.creates).toHaveLength(1);
 });
 
-test("a mutation that outlasts the timeout is Unavailable, still running, and names the ID to read", async () => {
+test("a mutation that outlasts the timeout is a lost reply: Unavailable, naming the ID to read", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"], create: () => Effect.never });
 
   const error = await withClient(
@@ -390,8 +390,8 @@ test("a mutation that outlasts the timeout is Unavailable, still running, and na
 
   expect(error._tag).toBe("Unavailable");
   expect(error.retryable).toBe(false);
-  expect(error.message).toContain("still running");
-  expect(error.message).toContain("read linux_dev");
+  expect(error.message).toContain("timed out after 50ms");
+  expect(error.message).toContain("may have run: read linux_dev to see");
   expect(linux.creates).toHaveLength(1);
 });
 

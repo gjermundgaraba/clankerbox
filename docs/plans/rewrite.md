@@ -249,8 +249,9 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
   (a `FiberSet` in the host layer), not into the request's scope. A dropped
   connection never interrupts native work, and the outcome is recorded on the
   row either way.
-- The CLI's `--timeout` only stops waiting. On timeout the CLI reports that the
-  action is still running and exits 1.
+- The CLI's `--timeout` only stops waiting. On timeout the CLI reports, as for
+  a lost reply, that the action may have run, and exits 1: the request may
+  never have reached the host.
   It bounds each request to a host from when it is sent, so a list names a
   host that outlasts it as unreachable, and placement skips one.
 - Every action runs in this order (see [State and claims](#state-and-claims)):

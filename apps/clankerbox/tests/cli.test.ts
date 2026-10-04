@@ -215,7 +215,7 @@ test("without --json an error goes to stderr with its tag", async () => {
   expect(stderr).toContain("Invalid");
 });
 
-test("--timeout stops waiting, says the action is still running, and exits 1", async () => {
+test("--timeout stops waiting, says the action may have run, and exits 1", async () => {
   const dir = await scratch(owned);
   const config = await writeConfig(dir, ["linux"]);
   const linux = host({ id: "linux", bases: ["ubuntu"], create: () => Effect.never });
@@ -231,8 +231,7 @@ test("--timeout stops waiting, says the action is still running, and exits 1", a
   );
 
   expect(text.code).toBe(1);
-  expect(text.stderr).toContain("still running");
-  expect(text.stderr).toContain("linux_dev");
+  expect(text.stderr).toContain("may have run: read linux_dev to see");
   expect(json.code).toBe(1);
   expect(decodeJsonError(json.stdout).error).toMatchObject({
     tag: "Unavailable",

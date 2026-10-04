@@ -44,8 +44,8 @@ export interface Gathered<A> {
 export interface Options {
   /**
    * How long to wait for each request's reply, unbounded by default. It only stops the
-   * wait: a mutation keeps running on its host. A fan-out bounds each host's request on its own,
-   * so a host that doesn't answer in time is named among the unreachable.
+   * wait, and a mutation that outlasts it fails like a lost reply. A fan-out bounds each host's
+   * request on its own, so a host that doesn't answer in time is named among the unreachable.
    */
   readonly timeout?: Duration.Duration | undefined;
 }
@@ -112,25 +112,18 @@ interface CallContext {
 const causeDetail = (error: HttpClientError.HttpClientError): string =>
   error.cause instanceof Error ? error.cause.message : error.message;
 
-const lost = (error: HttpClientError.HttpClientError, context: CallContext): Unavailable =>
+/**
+ * No reply came: the connection failed or dropped, or the timeout passed. A mutation's
+ * request may or may not have reached its host, so it may have run.
+ */
+const unanswered = (context: CallContext, detail: string): Unavailable =>
   context.access === "read"
     ? new Unavailable({
-        message: `host ${context.host.id} (${context.host.url}) didn't answer ${context.action}: ${causeDetail(error)}`,
+        message: `host ${context.host.id} (${context.host.url}) didn't answer ${context.action}: ${detail}`,
         access: "read",
       })
     : new Unavailable({
-        message: `no reply from host ${context.host.id} to ${context.action} (${causeDetail(error)}); the action may have run: read ${context.target ?? "the resource"} to see`,
-        access: "write",
-      });
-
-const timedOut = (context: CallContext, timeout: Duration.Duration): Unavailable =>
-  context.access === "read"
-    ? new Unavailable({
-        message: `host ${context.host.id} (${context.host.url}) didn't answer ${context.action} within ${Duration.format(timeout)}`,
-        access: "read",
-      })
-    : new Unavailable({
-        message: `stopped waiting for host ${context.host.id} after ${Duration.format(timeout)}; ${context.action} is still running: read ${context.target ?? "the resource"} to see how it ends`,
+        message: `no reply from host ${context.host.id} to ${context.action} (${detail}); the action may have run: read ${context.target ?? "the resource"} to see`,
         access: "write",
       });
 
@@ -145,7 +138,8 @@ const bounded = <A>(
     ? call
     : Effect.timeoutOrElse(call, {
         duration: timeout,
-        orElse: () => Effect.fail(timedOut(context, timeout)),
+        orElse: () =>
+          Effect.fail(unanswered(context, `timed out after ${Duration.format(timeout)}`)),
       });
 };
 
@@ -157,7 +151,7 @@ const settle = <A>(
     Effect.catchTag("HttpClientError", (error) =>
       Effect.fail(
         Match.value(error.reason).pipe(
-          Match.tag("TransportError", () => lost(error, context)),
+          Match.tag("TransportError", () => unanswered(context, causeDetail(error))),
           // The connection closed while the body was read. A body that arrived and doesn't
           // parse fails as a SyntaxError or a SchemaError, and a wrong status or content
           // type carries no cause.
@@ -166,7 +160,7 @@ const settle = <A>(
               _tag: "DecodeError",
               cause: (cause: unknown) => cause !== undefined && !(cause instanceof SyntaxError),
             },
-            () => lost(error, context),
+            () => unanswered(context, causeDetail(error)),
           ),
           Match.tag(
             "InvalidUrlError",
