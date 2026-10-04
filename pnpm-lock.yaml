@@ -170,6 +170,9 @@ catalogs:
     '@types/node':
       specifier: 26.6.4
       version: 26.6.4
+    effect:
+      specifier: 4.0.0
+      version: 4.0.0
     typescript:
       specifier: 7.0.2
       version: 7.0.2
@@ -190,6 +193,46 @@ importers:
       '@oxlint/plugins':
         specifier: 'catalog:'
         version: 1.85.0
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.4
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: '@voidzero-dev/vite-plus-core@1.0.0(@types/node@26.6.4)(typescript@7.0.2)'
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.0.0(@types/node@26.6.4)(@vitest/ui@5.0.1)(typescript@7.0.2)
+
+  packages/contract:
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.4
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: '@voidzero-dev/vite-plus-core@1.0.0(@types/node@26.6.4)(typescript@7.0.2)'
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.0.0(@types/node@26.6.4)(@vitest/ui@5.0.1)(typescript@7.0.2)
+
+  packages/host:
+    dependencies:
+      '@gjermundgaraba/clankerbox-sdk':
+        specifier: workspace:*
+        version: link:../contract
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0
+    devDependencies:
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.4
@@ -982,6 +1025,9 @@ packages:
   dom-accessibility-api@0.5.16:
     resolution: {integrity: sha512-X7BJ2yElsnOJ30pZF4uIIDfBEVgF4XEBxL9Bxhy6dnrm5hkzqmsWHGTiHqRiITNhMyFLyAiWndIJP7Z1NTteDg==}
 
+  effect@4.0.0:
+    resolution: {integrity: sha512-ooc1TG5t+FfzgYnFz2ff6BBKyZ7EwBRVXC7c4RhQUAD6/TZ2gTXXMeb4WX7a19ozQo4J73/QW+S00YAIresoMQ==}
+
   es-module-lexer@2.3.2:
     resolution: {integrity: sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw==}
 
@@ -1754,6 +1800,8 @@ snapshots:
   detect-libc@2.1.2: {}
 
   dom-accessibility-api@0.5.16: {}
+
+  effect@4.0.0: {}
 
   es-module-lexer@2.3.2: {}
 
