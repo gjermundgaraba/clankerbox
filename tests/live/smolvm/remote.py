@@ -599,17 +599,21 @@ def remove_natives(report):
     for unit in attempt(report, 'list the run\'s units', lambda: list_units(f'clankerbox-rewrite-{RID}*')) or []:
         attempt(report, f'reset {unit}',
                 lambda: sudo(['systemctl', 'reset-failed', unit], touched=f'teardown: resets {unit}'))
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline and (vm_uid_processes() or run_processes()):
-        time.sleep(1)
+    def wait_processes():
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and (vm_uid_processes() or run_processes()):
+            time.sleep(1)
+
+    attempt(report, 'wait for the run\'s processes to end', wait_processes)
     left = attempt(report, 'list the inventory again', lambda: [m.get('name') for m in machines()])
     report.update(machines_left=left,
                   scopes_left=attempt(report, 'list the run\'s scopes again',
                                       lambda: list_units(SCOPE_PATTERN) + new_helper_units()),
                   units_left=attempt(report, 'list the run\'s units again',
                                      lambda: list_units(f'clankerbox-rewrite-{RID}*')),
-                  vm_uid_processes=vm_uid_processes(), run_processes=run_processes(),
-                  tailnet_listeners=tailnet_listeners())
+                  vm_uid_processes=attempt(report, 'list VM-uid processes', vm_uid_processes),
+                  run_processes=attempt(report, 'list the run\'s processes', run_processes),
+                  tailnet_listeners=attempt(report, 'list the tailnet listeners', tailnet_listeners))
     return not (report['errors'] or left or report['scopes_left'] or report['units_left']
                 or report['vm_uid_processes'] or report['run_processes'])
 
@@ -617,9 +621,12 @@ def remove_natives(report):
 def cmd_teardown():
     initialised()
     report = {'at': now(), 'steps': [], 'errors': []}
-    clean = remove_natives(report)
-    attempt(report, 'keep the host\'s journal', journal)
-    (EVIDENCE / 'teardown.json').write_text(json.dumps(report, indent=2) + '\n')
+    clean = False
+    try:
+        clean = remove_natives(report)
+        attempt(report, 'keep the host\'s journal', journal)
+    finally:
+        (EVIDENCE / 'teardown.json').write_text(json.dumps(report, indent=2) + '\n')
     if not clean:
         raise RuntimeError(f'teardown incomplete: {report}')
     (EVIDENCE / 'teardown-verified.json').write_text(json.dumps(report, indent=2) + '\n')
