@@ -17,7 +17,7 @@ import type { HostConfig } from "./config.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
-import { observeConcurrency, type Refusal, Runtime } from "./runtime.ts";
+import { type MachineRef, observeConcurrency, type Refusal, Runtime } from "./runtime.ts";
 import { type MachineRecord, type NewMachine, type Rows, Store, type Token } from "./store.ts";
 
 export interface Interface {
@@ -41,6 +41,20 @@ export class Machines extends Context.Service<Machines, Interface>()("@clankerbo
 interface Spec extends Pick<MachineRecord, "base" | "cpu" | "ramMib" | "diskGib"> {
   readonly profile?: string | undefined;
 }
+
+/** The native work that makes a new machine, before its preparation. */
+type Work = Effect.Effect<void, HostError | Refusal, Runtime>;
+
+/**
+ * What a new machine is made from: a spec, or for a fork, the machine it copies, which the fork
+ * holds and whose spec it takes. `work` makes it.
+ */
+type Making =
+  | { readonly spec: Spec; readonly work: (machine: MachineRef) => Work }
+  | {
+      readonly source: string;
+      readonly work: (machine: MachineRef, source: MachineRef) => Work;
+    };
 
 /**
  * Builds the actions. Before it returns, every action the last host process left running is
@@ -166,6 +180,50 @@ export const make = (
         : Effect.void;
     };
 
+    /** The new machine's spec and work, with the source a fork holds, read once it is held. */
+    const resolve = (making: Making) =>
+      "source" in making
+        ? Effect.map(rows.machine(making.source), (source) => ({
+            spec: source,
+            source,
+            work: (machine: MachineRef) => making.work(machine, ref(source)),
+          }))
+        : Effect.succeed({ spec: making.spec, source: undefined, work: making.work });
+
+    /**
+     * Create, fork and restore: under the admission permit, a fork claims its source, then the
+     * new row is inserted into the same claim with the lowest free port, and admitted; then the
+     * work makes the machine, preparation runs, and the action ends done.
+     */
+    const makeMachine = (action: "create" | "fork" | "restore", name: string, making: Making) =>
+      Effect.gen(function* () {
+        const [token, { row, work }] = yield* admitted(
+          claimAndCheck(action, "source" in making ? holding(making.source) : {}, (join) =>
+            Effect.gen(function* () {
+              const { spec, source, work } = yield* resolve(making);
+              const row = yield* newRow(name, spec);
+
+              yield* join(inserting(row));
+              yield* admit(action, row, source);
+
+              return { row, work };
+            }),
+          ),
+        );
+
+        const machine = ref(row);
+
+        const hostKey = yield* native(
+          token,
+          `${action} ${machine.id}`,
+          withRuntime(Effect.andThen(work(machine), prepare(machine))),
+        );
+
+        yield* done(token, hostKey);
+
+        return yield* read(name);
+      });
+
     const create = (request: CreateRequest) =>
       Effect.gen(function* () {
         const name = yield* nameOf(request.id);
@@ -177,33 +235,14 @@ export const make = (
           });
         }
 
-        const [token, row] = yield* admitted(
-          Effect.flatMap(newRow(name, request), (row) =>
-            claimAndCheck("create", inserting(row), () => Effect.as(admit("create", row), row)),
-          ),
-        );
-
-        const machine = ref(row);
-
-        const hostKey = yield* native(
-          token,
-          `create ${machine.id}`,
-          withRuntime(
-            Effect.gen(function* () {
-              yield* runtime.create(machine, image);
-
-              if (request.setup !== undefined) {
-                yield* runSetup(machine, request.setup);
-              }
-
-              return yield* prepare(machine);
-            }),
-          ),
-        );
-
-        yield* done(token, hostKey);
-
-        return yield* read(name);
+        return yield* makeMachine("create", name, {
+          spec: request,
+          work: (machine: MachineRef) =>
+            Effect.andThen(
+              runtime.create(machine, image),
+              request.setup === undefined ? Effect.void : runSetup(machine, request.setup),
+            ),
+        });
       });
 
     const start = (id: string) =>
@@ -279,40 +318,16 @@ export const make = (
         yield* store.remove({ table: "machines", name });
       });
 
-    /**
-     * Claims the source, then, under the permit, inserts the new row with the source's spec into
-     * the same claim and admits it.
-     */
     const fork = (sourceId: string, name: string) =>
       Effect.gen(function* () {
-        const sourceName = yield* nameOf(sourceId);
-        const id = yield* formatId(config.id, name);
+        const source = yield* nameOf(sourceId);
 
-        const [token, { row, source }] = yield* admitted(
-          claimAndCheck("fork", holding(sourceName), (join) =>
-            Effect.gen(function* () {
-              const source = yield* rows.machine(sourceName);
-              const row = yield* newRow(name, source);
+        yield* formatId(config.id, name);
 
-              yield* join(inserting(row));
-              yield* admit("fork", row, source);
-
-              return { row, source };
-            }),
-          ),
-        );
-
-        const machine = ref(row);
-
-        const hostKey = yield* native(
-          token,
-          `fork ${id}`,
-          withRuntime(Effect.andThen(runtime.fork(ref(source), machine), prepare(machine))),
-        );
-
-        yield* done(token, hostKey);
-
-        return yield* read(name);
+        return yield* makeMachine("fork", name, {
+          source,
+          work: (machine, from) => runtime.fork(from, machine),
+        });
       });
 
     /**
@@ -341,31 +356,15 @@ export const make = (
 
     const restore = (checkpointId: string, name: string) =>
       Effect.gen(function* () {
-        const id = yield* formatId(config.id, name);
+        yield* formatId(config.id, name);
+
         const checkpoint = yield* ready(checkpointId);
 
-        const [token, row] = yield* admitted(
-          Effect.flatMap(newRow(name, checkpoint), (row) =>
-            claimAndCheck("restore", inserting(row), () => Effect.as(admit("restore", row), row)),
-          ),
-        );
-
-        const machine = ref(row);
-
-        const hostKey = yield* native(
-          token,
-          `restore ${id}`,
-          withRuntime(
-            Effect.andThen(
-              runtime.restore(checkpointRef(config.id, checkpoint), machine),
-              prepare(machine),
-            ),
-          ),
-        );
-
-        yield* done(token, hostKey);
-
-        return yield* read(name);
+        return yield* makeMachine("restore", name, {
+          spec: checkpoint,
+          work: (machine: MachineRef) =>
+            runtime.restore(checkpointRef(config.id, checkpoint), machine),
+        });
       });
 
     return {
