@@ -56,7 +56,7 @@ const config = (dir: string, port: number): HostConfig => ({
   runtime: "smolvm",
   listen: { address: "127.0.0.1", port },
   stateDir: join(dir, "state"),
-  bases: new Map([["ubuntu", "ubuntu@sha256:f144"]]),
+  bases: new Map([["ubuntu", "mirror.gcr.io/library/ubuntu@sha256:f144"]]),
   smolvm: { prefix: "/opt/smolvm/1.22.2", publishAddress: "127.0.0.1", ramBudgetMib: 4096 },
 });
 

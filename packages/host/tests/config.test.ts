@@ -9,7 +9,8 @@ import { removeScratch, scratch } from "./scratch.ts";
 
 const owned: Array<string> = [];
 
-const image = "ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
+const image =
+  "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
 
 afterEach(() => removeScratch(owned));
 

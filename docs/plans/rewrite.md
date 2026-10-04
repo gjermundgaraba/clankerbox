@@ -42,7 +42,7 @@ The Go implementation is deleted from this branch (`4898a3e`). Read it at `main`
 | Network and auth | Hosts and clients share the operator's Tailscale tailnet. Its policy lives in garaba-home's `access.ts`, outside this plan, and denies anything it doesn't name. The policy is the only gate: there are no API keys. garaba-home gives every caller its own tag (an app that needs the tailnet gets its own Tailscale container), so the policy can open each host port to exactly the callers that use it. A host listens only on its tailnet address, or on loopback for a local host. A guest must not reach its own host's API port from inside the box, where the policy doesn't apply; P1 checks that. No hop of ours uses TLS: the tailnet encrypts and authenticates. A boat host calls boat's API over HTTPS, and boat machines' SSH endpoints are public addresses (see [Runtimes: boat](#runtimes-boat)). |
 | State | SQLite through `node:sqlite`, on each host. The schema is versioned with `PRAGMA user_version` and an ordered list of migrations, starting at version 1. There is no client-side state beyond configuration and profile files. |
 | Placement | The client library places `create` on the host a full ID or the profile names, or else on the first reachable host in its host list that offers the request's base. There are no labels and no fall-through to another host. Every other call routes by ID. |
-| Linux guests | Ubuntu 26.04 LTS, the latest LTS, where we choose the image: smolvm bases are stock `ubuntu:26.04`. A runtime that ships its own image is used as it comes; boat's is Ubuntu 24.04. |
+| Linux guests | Ubuntu 26.04 LTS, the latest LTS, where we choose the image: smolvm bases are stock `ubuntu:26.04`, pulled by digest from mirror.gcr.io. A runtime that ships its own image is used as it comes; boat's is Ubuntu 24.04. |
 | Profiles | Client-side files, never stored on a host. A machine is created from a base image the host names (a stock image, or boat's own), and the profile's setup script runs once, at create. A profile can also name its host. |
 | Production | personal-cloud runs 0.11.0 with a Linux smolvm host (Hetzner) and a Mac Tart host. garaba-home replaces personal-cloud. At cut-over, every 0.11.0 machine and checkpoint is destroyed, the new release is deployed from garaba-home with a boat host added, and the profiles are rewritten as profile files. |
 | Hosts | A smolvm host always runs as root. smolvm runs only on Linux hosts and Tart only on macOS hosts. A boat host runs unprivileged on either. |
@@ -559,11 +559,16 @@ listed to keep them from being ported):
 - **Bases:** each host names its bases in config, mapping a name to an image,
   digest-pinned where the runtime allows. Hosts that offer the same image use
   the same name, and placement matches on it.
-  - smolvm: a stock OCI image, `ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7`
-    (`ubuntu:26.04` on 2026-10-04). It has no sshd; setup installs it. The
-    reference has no tag: smolvm can't parse tag plus digest and then pulls the
-    image inside every guest (about 7 s per create), while `ubuntu@sha256:…`
-    builds a host-side copy once and later creates take 1.36 s (P8).
+  - smolvm: a stock OCI image from Google's Docker Hub mirror, every base
+    digest-pinned as
+    `mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7`
+    (`ubuntu:26.04` on 2026-10-04, the same digest as Docker Hub's). It has no
+    sshd; setup installs it. On mirror.gcr.io neither the host's image-seed
+    build nor a guest's own pull touches Docker Hub and its anonymous limit of
+    100 pulls an hour per address (P12). The reference has no tag: smolvm
+    can't parse tag plus digest and then pulls the image inside every guest
+    (about 7 s per create), while `…/ubuntu@sha256:…` builds a host-side copy
+    once and later creates take 1.36 s (P8).
   - Tart: a stock Cirrus image, `ghcr.io/cirruslabs/macos-<version>-base` or
     `macos-<version>-xcode:N` (with Xcode), pinned by digest. Both ship sshd
     and tart-guest-agent.
@@ -939,8 +944,8 @@ Two rules for every VM job:
   `resize2fs`, which Ubuntu hosts have; no compact templates (P8).
   - smolvm builds a host-side image seed only at the default 20 GiB
     (S@1.22.2:src/image_seed.rs:184-195). At any other size every first start
-    pulls the image in the guest, against Docker Hub's anonymous limit of 100
-    pulls an hour per address (P12).
+    pulls the image in the guest, from mirror.gcr.io like the seed (see
+    Bases). smolvm's default seed behaviour is kept.
 
 ### Runtimes: Tart
 
@@ -1281,7 +1286,7 @@ tests use real VMs.
    - Check the smolvm host's RAM budget against everything else that runs
      there.
    - Configure each host's bases: a digest-pinned stock `ubuntu:26.04`
-     (`ubuntu@sha256:…`) on Linux;
+     (`mirror.gcr.io/library/ubuntu@sha256:…`) on Linux;
      digest-pinned Cirrus base and Xcode images on the Mac; boat's image on the
      boat host.
    - Rewrite the profiles as profile files next to their recipes: `linux-dev`

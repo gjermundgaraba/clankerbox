@@ -307,7 +307,9 @@ test("observe fails with smolvm's last output when status fails for another reas
 test("create makes the machine with its sizes and published port, then boots it branchable", async () => {
   const spawner = scripted(() => undefined);
   const runtime = await runtimeOf(await prepared(), spawner);
-  const image = "ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
+
+  const image =
+    "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
 
   await Effect.runPromise(runtime.create(machine, image));
 
@@ -341,7 +343,10 @@ test("a failed machine create fails with smolvm's last output and boots nothing"
   );
 
   const runtime = await runtimeOf(await prepared(), spawner);
-  const error = await Effect.runPromise(Effect.flip(runtime.create(machine, "ubuntu@sha256:00")));
+
+  const error = await Effect.runPromise(
+    Effect.flip(runtime.create(machine, "mirror.gcr.io/library/ubuntu@sha256:00")),
+  );
 
   expect(error._tag).toBe("Internal");
   expect(error.message).toBe("smolvm machine create dev-01234567 exited 1: Error: image not found");

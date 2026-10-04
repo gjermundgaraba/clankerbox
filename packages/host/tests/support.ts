@@ -15,7 +15,7 @@ import { type FakeOptions, type FakeRuntime, fakeRuntime } from "./fake-runtime.
 import { removeScratch } from "./scratch.ts";
 
 export const image =
-  "ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
+  "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
 
 export const hostConfig = (stateDir: string) => ({
   id: "linux",
