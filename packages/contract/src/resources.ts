@@ -1,0 +1,122 @@
+/** The resources a host reports: machines, checkpoints and the host itself. */
+import { Schema } from "effect";
+import { ErrorTag } from "./errors.ts";
+import { Id, Name } from "./ids.ts";
+
+export const Runtime = Schema.Literals(["smolvm", "tart", "boat"]);
+
+export type Runtime = typeof Runtime.Type;
+
+const Size = Schema.Int.check(Schema.isGreaterThan(0));
+
+/** The mutations that record themselves on a resource's `action`. */
+export const ActionName = Schema.Literals([
+  "create",
+  "start",
+  "stop",
+  "delete",
+  "fork",
+  "restore",
+  "capture",
+]);
+
+/**
+ * A resource's last action: `running` while it holds the row, `failed` with its error
+ * after a native failure, `done` after a success. The next action replaces it.
+ */
+export const ActionRecord = Schema.Struct({
+  name: ActionName,
+  status: Schema.Literals(["running", "failed", "done"]),
+  error: Schema.optionalKey(Schema.Struct({ tag: ErrorTag, message: Schema.String })),
+});
+
+export type ActionRecord = typeof ActionRecord.Type;
+
+/** Where a machine's guest port 22 is reached. */
+export const SshEndpoint = Schema.Struct({
+  host: Schema.String,
+  port: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
+});
+
+export type SshEndpoint = typeof SshEndpoint.Type;
+
+export const Machine = Schema.Struct({
+  id: Id,
+  runtime: Runtime,
+  createdAt: Schema.DateTimeUtcFromString,
+  base: Schema.String,
+  /** The label the client passed at create, normally its profile's name. */
+  profile: Schema.optionalKey(Schema.String),
+  cpu: Size,
+  ramMib: Size,
+  diskGib: Size,
+  /** Read from the runtime, never stored. */
+  state: Schema.Literals(["running", "stopped", "missing"]),
+  action: ActionRecord,
+  ssh: Schema.optionalKey(SshEndpoint),
+  /** The guest's SSH host public key, as `<type> <base64>`. */
+  hostKey: Schema.optionalKey(Schema.String),
+}).annotate({ identifier: "Machine" });
+
+export type Machine = typeof Machine.Type;
+
+export const Checkpoint = Schema.Struct({
+  id: Id,
+  createdAt: Schema.DateTimeUtcFromString,
+  /** The ID of the machine it was captured from. */
+  machine: Id,
+  kind: Schema.Literals(["ram", "disk"]),
+  base: Schema.String,
+  profile: Schema.optionalKey(Schema.String),
+  cpu: Size,
+  ramMib: Size,
+  diskGib: Size,
+  action: ActionRecord,
+}).annotate({ identifier: "Checkpoint" });
+
+export type Checkpoint = typeof Checkpoint.Type;
+
+export const Host = Schema.Struct({
+  id: Schema.String,
+  runtime: Runtime,
+  /** The clankerbox version the host runs. */
+  version: Schema.String,
+  /** The runtime's version; for boat, its API version. */
+  runtimeVersion: Schema.String,
+  bases: Schema.Array(Schema.String),
+}).annotate({ identifier: "Host" });
+
+export type Host = typeof Host.Type;
+
+const specFields = {
+  base: Schema.String,
+  cpu: Size,
+  ramMib: Size,
+  diskGib: Size,
+  /** The setup script's text. Nothing logs it: it can carry secrets. */
+  setup: Schema.optionalKey(Schema.String),
+  setupTimeoutSeconds: Schema.optionalKey(Size),
+  profile: Schema.optionalKey(Schema.String),
+};
+
+const setupWithItsTimeout = Schema.makeFilter(
+  (spec: { readonly setup?: string; readonly setupTimeoutSeconds?: number }) =>
+    (spec.setup === undefined) === (spec.setupTimeoutSeconds === undefined) ||
+    "setup and setupTimeoutSeconds go together",
+);
+
+/**
+ * What a new machine is made from: a base, its sizes, an optional setup script with its
+ * timeout, and an optional `profile` label. A profile file fills these in; the host never
+ * sees the profile itself.
+ */
+export const MachineSpec = Schema.Struct(specFields).check(setupWithItsTimeout);
+
+export type MachineSpec = typeof MachineSpec.Type;
+
+/** `machine.create`'s input: the spec and the new machine's name on the host it is sent to. */
+export const CreateRequest = Schema.Struct({ name: Name, ...specFields }).check(
+  setupWithItsTimeout,
+);
+
+export type CreateRequest = typeof CreateRequest.Type;
