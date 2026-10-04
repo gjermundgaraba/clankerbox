@@ -1151,6 +1151,35 @@ includes a relayed HTTP round trip. Machines had 1 vCPU, 512–1024 MiB and
   the host again reached no listener on this Mac. Counts: 1 image-seed build
   (Docker Hub's IPv6 counter 100 to 99), no other pull, 0
   `smolvm-fork-ready` failures.
+- **Rerun after the phase-4 review** (local runs `live-smolvm-935fc5838918`
+  and `live-smolvm-651ec6918b51`, remote `runs/l935` and `runs/l651`, each a
+  fresh inventory on the `mirror.gcr.io` base; same host and relay, SEA upload
+  0.79–1.12 MiB/s). The first run failed 2 of 24, both from one product bug:
+  a host stopped (SIGTERM) while a fork's VM booted left the copy `missing`,
+  but its VMM ran on in its scope, on the copy's port, for 80 s until
+  teardown. The boot had started the VMM before smolvm recorded its pid, so
+  smolvm read the VM as stopped and its `delete --force` didn't stop it; the
+  restore's cleanup now kills a still-loaded scope first. The second run, at
+  `9616566`, passed all 24 in 232 s:
+  - a host stopped with the host's `machine start` of a fork's and of a
+    restore's VM held (SIGSTOP; systemd's SIGTERM comes with SIGCONT) left
+    each copy `missing` and `failed`, with no native machine or scope;
+    `start` said to delete it, `delete` removed it, and the fork's source,
+    left `fork` `failed`, started. Both holds caught `start`; the shorter
+    window between create and port move was covered only by the unit tests;
+  - `clankerbox --log-level info host` exited 0 on each SIGTERM (systemd
+    logged "Deactivated successfully"), and startup recovery ran before the
+    host served (the crash test's row read "host restarted during create");
+  - a capture of a stopped machine was `Precondition` ("start it first")
+    with no checkpoint row, and the machine's action stayed its stop; each `ram`
+    checkpoint was in the store after its capture and gone after its delete;
+  - each run built one image seed from the mirror (one
+    `smolvm-vm-image-seed-*` scope, one seed), and the 10 GiB machines pulled
+    in the guest. Docker Hub's anonymous counter for the host read 100 of 100
+    on IPv4 and IPv6 before the first run and after each (HEAD requests,
+    which it doesn't count);
+  - timings: `ram` capture 1.20 s, fork 2.77 s, two concurrent restores
+    1.75 s, one restore 1.30 s; 0 `smolvm-fork-ready` failures.
 
 ## Consumers and production
 
