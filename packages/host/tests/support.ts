@@ -1,9 +1,13 @@
 /** A host core in process: the real store and actions over the fake runtime. */
+import { createServer } from "node:http";
 import { join } from "node:path";
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { CreateRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer, Logger, ManagedRuntime } from "effect";
+import { HttpRouter, HttpServer } from "effect/http";
 import * as Machines from "../src/machines.ts";
+import { routes } from "../src/server.ts";
 import * as Store from "../src/store.ts";
 import { type FakeOptions, type FakeRuntime, fakeRuntime } from "./fake-runtime.ts";
 import { removeScratch } from "./scratch.ts";
@@ -76,6 +80,38 @@ export const startHost = async (
     run,
     machines: await run(Effect.service(Machines.Machines)),
     store: await run(Effect.service(Store.Store)),
+    dispose: () => runtime.dispose(),
+  };
+};
+
+export interface ServedHost {
+  /** Where the host's API answers, on loopback. */
+  readonly url: string;
+  readonly fake: FakeRuntime;
+  /** The host's machine rows. */
+  readonly rows: () => Promise<ReadonlyArray<Store.MachineRecord>>;
+  readonly dispose: () => Promise<void>;
+}
+
+/** Serves host `linux` over a fake runtime in `dir`, on a loopback port. */
+export const serveHost = async (dir: string): Promise<ServedHost> => {
+  const fake = fakeRuntime({ dir });
+  const stateDir = join(dir, "state");
+
+  const runtime = ManagedRuntime.make(
+    HttpRouter.serve(routes(hostConfig(stateDir)), { disableLogger: true }).pipe(
+      Layer.provideMerge(NodeHttpServer.layer(createServer, { host: "127.0.0.1", port: 0 })),
+      Layer.provideMerge(coreLayer(stateDir, fake)),
+    ),
+  );
+
+  const server = await runtime.runPromise(Effect.service(HttpServer.HttpServer));
+
+  return {
+    url: HttpServer.formatAddress(server.address),
+    fake,
+    rows: () =>
+      runtime.runPromise(Effect.flatMap(Effect.service(Store.Store), (store) => store.list)),
     dispose: () => runtime.dispose(),
   };
 };

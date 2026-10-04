@@ -1,0 +1,111 @@
+/** The host API over a real loopback server, called through the SDK's client and raw HTTP. */
+import { Client, type MachineSpec, version } from "@gjermundgaraba/clankerbox-sdk";
+import { Effect } from "effect";
+import { afterEach, expect, test } from "vite-plus/test";
+import type { MachineRecord } from "../src/store.ts";
+import { removeScratch, scratch } from "./scratch.ts";
+import { type ServedHost, serveHost } from "./support.ts";
+
+const owned: Array<string> = [];
+
+const served: Array<ServedHost> = [];
+
+afterEach(async () => {
+  await Promise.all(served.splice(0).map(({ dispose }) => dispose()));
+  await removeScratch(owned);
+});
+
+const serve = async () => {
+  const host = await serveHost(await scratch(owned));
+
+  served.push(host);
+
+  return host;
+};
+
+const spec: MachineSpec = { base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
+
+const withClient = <A, E>(url: string, use: (client: Client.Interface) => Effect.Effect<A, E>) =>
+  Effect.flatMap(Client.Client, use).pipe(
+    Effect.provide(Client.layer([{ id: "linux", url }])),
+    Effect.runPromise,
+  );
+
+test("the SDK's client drives a machine's lifecycle on a served host", async () => {
+  const { url } = await serve();
+
+  const [hosts, made, stopped, started, listed] = await withClient(url, (client) =>
+    Effect.all([
+      client.hosts,
+      client.create("dev", spec, {}),
+      client.stop("linux_dev"),
+      client.start("linux_dev"),
+      client.machines,
+    ]),
+  );
+
+  const gone = await withClient(url, (client) =>
+    Effect.andThen(client.delete("linux_dev"), Effect.flip(client.machine("linux_dev"))),
+  );
+
+  expect(hosts.answers).toEqual([
+    { id: "linux", runtime: "smolvm", version, runtimeVersion: "fake", bases: ["ubuntu"] },
+  ]);
+  expect(made).toMatchObject({ id: "linux_dev", state: "running" });
+  expect(stopped.state).toBe("stopped");
+  expect(started.state).toBe("running");
+  expect(listed.answers.map(({ id }) => id)).toEqual(["linux_dev"]);
+  expect(gone._tag).toBe("NotFound");
+});
+
+test("fork and restore answer Precondition until phase 4", async () => {
+  const { url } = await serve();
+
+  const [fork, restore] = await withClient(url, (client) =>
+    Effect.all([
+      Effect.flip(client.fork("linux_dev", "copy")),
+      Effect.flip(client.restore("linux_snap", "again")),
+    ]),
+  );
+
+  expect(fork._tag).toBe("Precondition");
+  expect(restore._tag).toBe("Precondition");
+});
+
+/** Waits until the one machine's last action has ended, as recorded on its row. */
+const settled = async (rows: () => Promise<ReadonlyArray<MachineRecord>>) => {
+  for (let tries = 0; tries < 100; tries++) {
+    const [row] = await rows();
+
+    if (row !== undefined && row.action.status !== "running") {
+      return row.action;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  return undefined;
+};
+
+test("a create whose client disconnects still finishes and records its outcome", async () => {
+  const { url, fake, rows } = await serve();
+  const release = fake.holdNext("create");
+  const abort = new AbortController();
+
+  const sent = fetch(`${url}/api/machine/create`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: "dev", ...spec }),
+    signal: abort.signal,
+  }).catch((cause: Error) => cause.name);
+
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  abort.abort();
+
+  expect(await sent).toBe("AbortError");
+
+  release();
+
+  expect(await settled(rows)).toEqual({ name: "create", status: "done" });
+  expect(fake.calls).toContain("exec linux_dev");
+});

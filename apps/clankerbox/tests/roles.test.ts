@@ -25,13 +25,21 @@ test("host --help shows the host role's usage", async () => {
 
   expect(code).toBe(0);
   expect(stdout).toContain("clankerbox host [flags]");
+  expect(stdout).toContain("--config");
 });
 
-test("host runs the host role", async () => {
-  const { code, stdout } = await cli(["host"]);
+test("host without --config is a usage error", async () => {
+  const { code, stderr } = await cli(["host"]);
 
-  expect(code).toBe(0);
-  expect(stdout).toBe(`clankerbox host ${version}`);
+  expect(code).toBe(1);
+  expect(stderr).toContain("--config");
+});
+
+test("host with a config it can't read says so and exits 1", async () => {
+  const { code, stderr } = await cli(["host", "--config", "/nonexistent/clankerbox-host.json"]);
+
+  expect(code).toBe(1);
+  expect(stderr).toContain("Invalid: couldn't read host config /nonexistent/clankerbox-host.json");
 });
 
 test("an unknown flag exits 1", async () => {

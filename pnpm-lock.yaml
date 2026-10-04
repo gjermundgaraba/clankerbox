@@ -273,6 +273,9 @@ importers:
       '@gjermundgaraba/clankerbox-sdk':
         specifier: workspace:*
         version: link:../contract
+      '@gjermundgaraba/effect-actions':
+        specifier: 'catalog:'
+        version: 0.9.0(effect@4.0.0)
       effect:
         specifier: 'catalog:'
         version: 4.0.0

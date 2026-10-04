@@ -12,6 +12,7 @@
   "dependencies": {
     "@effect/platform-node": "catalog:",
     "@gjermundgaraba/clankerbox-sdk": "workspace:*",
+    "@gjermundgaraba/effect-actions": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
