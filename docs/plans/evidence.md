@@ -1209,9 +1209,9 @@ includes a relayed HTTP round trip. Machines had 1 vCPU, 512–1024 MiB and
   were `Precondition` ("start it first") with nothing native and an empty
   forks area; one list read three running machines and one stopped. Both holds
   caught the host's `machine start`, after 24 and 10 `pkill` attempts; the
-  copies read `failed`, `start` refused them, and their deletes killed the
-  VMM left in each loaded scope (systemd logged "Killed unit cgroup") before
-  the copy's port stopped answering. The unit's ExecStopPost read `exited 0`
+  copies read `failed`, `start` refused them, systemd logged "Killed unit
+  cgroup" for both copies' scopes during their deletes, and each copy's port
+  was unreachable after its delete. The unit's ExecStopPost read `exited 0`
   after each SIGTERM and `killed KILL` after the crash test's SIGKILL. No
   graceful stop left a scope loaded, so delete's kill of a scope with no
   processes didn't run. Timings: `ram` capture 1.21 s, fork 2.91 s, two
