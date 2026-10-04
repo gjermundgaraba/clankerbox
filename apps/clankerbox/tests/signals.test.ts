@@ -3,9 +3,12 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
-import { Exit, Schema } from "effect";
+import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { Effect, Exit, Layer, Schema } from "effect";
+import { TestConsole } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
-import { teardown } from "../src/roles.ts";
+import { dispatch, type Role, teardown } from "../src/roles.ts";
 import { cleanup, scratch } from "./support.ts";
 
 const owned: Array<string> = [];
@@ -34,10 +37,10 @@ afterEach(async () => {
   await cleanup(owned, []);
 });
 
-const codeOf = (exit: Exit.Exit<unknown, unknown>, args: ReadonlyArray<string>) => {
+const codeOf = (exit: Exit.Exit<unknown, unknown>, role: Role) => {
   let code = -1;
 
-  teardown(args)(exit, (exitCode) => {
+  teardown(role)(exit, (exitCode) => {
     code = exitCode;
   });
 
@@ -46,12 +49,29 @@ const codeOf = (exit: Exit.Exit<unknown, unknown>, args: ReadonlyArray<string>) 
 
 test("an interrupt exits 130 for the CLI and 0 for the host role; a failure exits 1 for both", () => {
   const failed = Exit.fail(new Error("broke"));
+  const cli: Role = { host: false };
+  const host: Role = { host: true };
 
-  expect(codeOf(Exit.interrupt(), ["machines"])).toBe(130);
-  expect(codeOf(Exit.interrupt(), ["host", "--config", "host.json"])).toBe(0);
-  expect(codeOf(failed, ["machines"])).toBe(1);
-  expect(codeOf(failed, ["host", "--config", "host.json"])).toBe(1);
-  expect(codeOf(Exit.void, ["host", "--config", "host.json"])).toBe(0);
+  expect(codeOf(Exit.interrupt(), cli)).toBe(130);
+  expect(codeOf(Exit.interrupt(), host)).toBe(0);
+  expect(codeOf(failed, cli)).toBe(1);
+  expect(codeOf(failed, host)).toBe(1);
+  expect(codeOf(Exit.void, host)).toBe(0);
+});
+
+test("the host role is marked by its handler, whatever global flags come before it", async () => {
+  const role: Role = { host: false };
+
+  await Effect.runPromise(
+    dispatch(role)(["--log-level", "error", "host", "--config", "/nonexistent/host.json"]).pipe(
+      Effect.exit,
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerNodeHttp, TestConsole.layer),
+      ),
+    ),
+  );
+
+  expect(role.host).toBe(true);
 });
 
 /** Runs `file` under this Node, with `args`, and resolves with its exit code. */

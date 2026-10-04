@@ -70,7 +70,7 @@ export const cli = (args: ReadonlyArray<string>, options?: CliOptions): Promise<
   );
 
   const program = Effect.gen(function* () {
-    const exit = yield* Effect.exit(dispatch(args));
+    const exit = yield* Effect.exit(dispatch({ host: false })(args));
     const stdout = yield* TestConsole.logLines;
     const stderr = yield* TestConsole.errorLines;
 
