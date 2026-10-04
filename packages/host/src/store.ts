@@ -13,7 +13,7 @@ import {
   NotFound,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, DateTime, Effect, FileSystem, Option, Schema, type Scope } from "effect";
+import { Context, DateTime, Effect, FileSystem, Option, Result, Schema, type Scope } from "effect";
 
 /** A directory is ours if it holds this database; there is no other marker. */
 export const databaseFile = "host.db";
@@ -164,22 +164,33 @@ const sql = <A>(what: string, run: () => A): Effect.Effect<A, Internal> =>
     catch: (cause) => new Internal({ message: `state database: ${what}: ${describe(cause)}` }),
   });
 
-/** Runs `body` in one transaction, rolled back if it throws. */
-const transaction = <A>(db: DatabaseSync, body: () => A): A => {
-  db.exec("BEGIN IMMEDIATE");
+/**
+ * Runs `body` in one transaction. Its success commits; its typed failure, or a throw, rolls
+ * back. The failure comes out as the effect's own, and SQLite's as `Internal`.
+ */
+const transaction = <A, E>(
+  db: DatabaseSync,
+  what: string,
+  body: () => Result.Result<A, E>,
+): Effect.Effect<A, E | Internal> =>
+  Effect.flatMap(
+    sql(what, () => {
+      db.exec("BEGIN IMMEDIATE");
 
-  try {
-    const result = body();
+      try {
+        const result = body();
 
-    db.exec("COMMIT");
+        db.exec(Result.isSuccess(result) ? "COMMIT" : "ROLLBACK");
 
-    return result;
-  } catch (cause) {
-    db.exec("ROLLBACK");
+        return result;
+      } catch (cause) {
+        db.exec("ROLLBACK");
 
-    throw cause;
-  }
-};
+        throw cause;
+      }
+    }),
+    Effect.fromResult,
+  );
 
 const pragma = (db: DatabaseSync, name: string): number => {
   const row = db.prepare(`PRAGMA ${name}`).get();
@@ -234,16 +245,16 @@ const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, Preconditi
       return;
     }
 
-    yield* sql("migrate", () =>
-      transaction(db, () => {
-        for (const migration of migrations.slice(version)) {
-          db.exec(migration);
-        }
+    yield* transaction(db, "migrate", () => {
+      for (const migration of migrations.slice(version)) {
+        db.exec(migration);
+      }
 
-        db.exec(`PRAGMA user_version = ${migrations.length}`);
-        db.exec(`PRAGMA application_id = ${applicationId}`);
-      }),
-    );
+      db.exec(`PRAGMA user_version = ${migrations.length}`);
+      db.exec(`PRAGMA application_id = ${applicationId}`);
+
+      return Result.void;
+    });
   });
 
 /**
@@ -329,63 +340,54 @@ export const open = (
           ),
       ),
       insert: (record) =>
-        sql(`insert ${id(record.name)}`, () =>
-          transaction(db, () => {
-            if (findSync(record.name) !== undefined) {
-              return new Conflict({
-                message: `machine ${id(record.name)} exists`,
-                kind: "exists",
-              });
-            }
-
-            insertRow.run(
-              record.name,
-              record.instance,
-              record.native ?? null,
-              DateTime.formatIso(record.createdAt),
-              record.base,
-              record.profile ?? null,
-              record.cpu,
-              record.ramMib,
-              record.diskGib,
-              record.port ?? null,
-              record.hostKey ?? null,
-              record.action,
+        transaction(db, `insert ${id(record.name)}`, () => {
+          if (findSync(record.name) !== undefined) {
+            return Result.fail(
+              new Conflict({ message: `machine ${id(record.name)} exists`, kind: "exists" }),
             );
+          }
 
-            return undefined;
-          }),
-        ).pipe(
-          Effect.flatMap((conflict) =>
-            conflict === undefined ? Effect.void : Effect.fail(conflict),
-          ),
-        ),
+          insertRow.run(
+            record.name,
+            record.instance,
+            record.native ?? null,
+            DateTime.formatIso(record.createdAt),
+            record.base,
+            record.profile ?? null,
+            record.cpu,
+            record.ramMib,
+            record.diskGib,
+            record.port ?? null,
+            record.hostKey ?? null,
+            record.action,
+          );
+
+          return Result.void;
+        }),
       claim: (name, action) =>
-        sql(`claim ${id(name)}`, () =>
-          transaction(db, () => {
+        transaction(
+          db,
+          `claim ${id(name)}`,
+          (): Result.Result<MachineRecord, NotFound | Conflict> => {
             const found = findSync(name);
 
             if (found === undefined) {
-              return new NotFound({ message: `no machine ${id(name)}` });
+              return Result.fail(new NotFound({ message: `no machine ${id(name)}` }));
             }
 
             if (found.action.status === "running") {
-              return new Conflict({
-                message: `machine ${id(name)} is busy: ${found.action.name} is running`,
-                kind: "busy",
-              });
+              return Result.fail(
+                new Conflict({
+                  message: `machine ${id(name)} is busy: ${found.action.name} is running`,
+                  kind: "busy",
+                }),
+              );
             }
 
             writeAction(name, { action: { name: action, status: "running" } });
 
-            return found;
-          }),
-        ).pipe(
-          Effect.flatMap((claimed) =>
-            claimed instanceof NotFound || claimed instanceof Conflict
-              ? Effect.fail(claimed)
-              : Effect.succeed(claimed),
-          ),
+            return Result.succeed(found);
+          },
         ),
       record: (name, outcome) =>
         sql(`record ${outcome.action.name} on ${id(name)}`, () => {
