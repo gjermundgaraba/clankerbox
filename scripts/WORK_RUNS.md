@@ -110,11 +110,10 @@ into each run (APFS clones on macOS), then delete only the run's clones during
 teardown. Validate host/controller startup before expensive image work. A failed
 qualification must not force another download of its unchanged input.
 
-Tart's per-VM control socket, `<host root>/tart/vms/clankerbox-<32 hex>/control.sock`,
-also has a macOS path-length limit: the canonical host root may be at most 37
-bytes. A run's `scratch/` is too deep for that, so give a Tart host a private
-root such as `tempfile.mkdtemp(prefix='clankerbox-', dir='/private/tmp')`, record
-its full path in the run's evidence, and register its removal with
-`run.on_cleanup` before registering the callback that stops its VMs (callbacks
-run in reverse order). The reusable seed stays in `.work/inputs/`. Validate the
-full native socket path before creating VMs.
+A Tart home can be a run's own `scratch/`: Tart 2.40.1 changes into the VM's
+directory and binds and dials its control socket by the relative name
+`control.sock`, so macOS's socket-path limit doesn't apply to the home
+(T:ControlSocket.swift:30-46; P11 ran homes of up to 106 bytes,
+evidence.md). Record the home's path in the run's evidence, and register its
+VMs' teardown with `run.on_cleanup` before creating them, so they are stopped
+and deleted before scratch is.
