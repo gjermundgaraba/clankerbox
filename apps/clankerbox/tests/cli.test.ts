@@ -153,6 +153,27 @@ test("with --json an error prints {error: {message, tag, retryable}} and exits 1
   expect(error.message).toContain("linux offers ubuntu");
 });
 
+test("with --json a usage error is the JSON error document too, without the help text", async () => {
+  const missing = await cli(["start", "--json"]);
+  const malformed = await cli(["create", "dev", "--json", ...sizes.slice(0, 2), "--cpu", "x"]);
+
+  for (const run of [missing, malformed]) {
+    expect(run.code).toBe(1);
+    expect(run.stderr).toBe("");
+    expect(decodeJsonError(run.stdout).error).toMatchObject({ tag: "Invalid", retryable: false });
+  }
+
+  expect(decodeJsonError(missing.stdout).error.message).toContain("machine");
+  expect(decodeJsonError(malformed.stdout).error.message).toContain("--cpu");
+});
+
+test("with --json, --help still prints the help", async () => {
+  const { code, stdout } = await cli(["machines", "--help", "--json"]);
+
+  expect(code).toBe(0);
+  expect(stdout).toContain("clankerbox machines");
+});
+
 test("a retryable error says so in --json", async () => {
   const dir = await scratch(owned);
   const config = await writeConfig(dir, ["linux"]);

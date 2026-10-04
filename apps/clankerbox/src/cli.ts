@@ -40,7 +40,7 @@ export const clientFlags = {
     ),
     Flag.filter(
       (seconds) => seconds > 0,
-      (seconds) => `--timeout must be a positive number of seconds, not ${seconds}`,
+      () => "a positive number of seconds",
     ),
     Flag.optional,
   ),
