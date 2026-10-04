@@ -148,7 +148,7 @@ Nearly all of each binary is Node itself (an Effect bundle run in one was
 machine would carry both. One binary also keeps the CLI and the host on a
 machine at one version.
 
-Units run `process.execPath host`. VM jobs never reference this binary (see
+Units run `process.execPath host --config PATH`. VM jobs never reference this binary (see
 [Supervision](#supervision)).
 
 ## API contract
@@ -211,7 +211,11 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
 - `start` on a running machine and `stop` on a stopped one succeed without doing
   anything, except that `start` on a running machine runs preparation again (the
   repair path, see [Setup and preparation](#setup-and-preparation)). `delete` of
-  a missing resource is `NotFound`, which clients treat as done.
+  a missing resource is `NotFound`, which clients treat as done. A `stop` that
+  does nothing writes nothing, so the row keeps its last `action`. A `start` of
+  a machine the runtime reports `missing` is `Precondition` in step 3: delete
+  it. A `create` for a base the host doesn't offer is `Precondition`, listing
+  the host's bases, and an ID that names another host is `Invalid`.
 
 **Placement**
 
@@ -263,7 +267,9 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
   4. Only then call the runtime.
 
   A failure in steps 1–3 releases the claims, removes the inserted row and
-  replies with the error. **Invariant: an error before the first runtime call
+  replies with the error. Releasing a claim on an existing row puts its last
+  `action` back. A check interrupted by the host's shutdown releases its claim
+  too. **Invariant: an error before the first runtime call
   writes nothing.** A failure from step 4 on leaves the row with
   `action.status = failed` and replies with the same tagged error; `delete`
   cleans up. Each runtime's phase (3–6) proves both for every mutation.
@@ -420,9 +426,16 @@ listed to keep them from being ported):
 ### State and claims
 
 - One owner lock for the process lifetime: a second host process on the same
-  state dir refuses to start.
+  state dir refuses to start. The lock is SQLite's own: the host opens its
+  database with `locking_mode = EXCLUSIVE` and holds the exclusive lock from
+  its first transaction until it exits. The OS drops it when the process ends,
+  so a crash leaves no stale lock to judge; the cost is that nothing else,
+  `sqlite3` included, can read the database while the host runs.
 - **One row per machine and per checkpoint,** with its spec, `instance`,
-  `native`, `createdAt` and `action`. There is no operation log.
+  `native`, `createdAt` and `action`. There is no operation log. A machine row
+  also holds its host `port` (see [Guest access](#guest-access)) and `hostKey`,
+  the key the last successful preparation printed. Checkpoint rows arrive with
+  phase 4, as the second migration; phase 3 has no action that writes one.
 - **Claims:** an action claims every row it changes in one SQLite transaction.
   It inserts the new row and, for fork and checkpoint capture, claims the source
   machine. A claimed row has `action.status = running`. If any of them is
@@ -527,6 +540,12 @@ guest (see [Other host rules](#other-host-rules)), as part of the action.
   running past the timeout, fails the create, and the error carries the
   script's last lines of output. The machine stays, with
   `action.status = failed`, until `delete`.
+- The script arrives on exec's stdin, so it never appears in a process list,
+  and runs as its own file under `/var/tmp`, honouring its `#!` line, with
+  stdin closed. The file is removed however setup ends.
+- A failing or overrunning setup, `new-identity`, `start` or preparation fails
+  the action with `Precondition`: the guest refused, not the host. The error
+  carries the last 20 lines of the output, at most 4000 characters.
 - Nothing runs setup again: `start` doesn't, and machines from fork or restore
   carry its results.
 - A typical setup installs sshd and the operator's public key, sets the guest's
@@ -537,7 +556,9 @@ guest (see [Other host rules](#other-host-rules)), as part of the action.
   the environment file itself.
 
 **Preparation** is one script, shipped inside the host binary, run after every
-create, start, fork and restore. In order:
+create, start, fork and restore, in one exec. Its arguments are the row's
+instance and the machine's ID, and a fresh 64-byte seed arrives on stdin. The
+60 s timeout below covers the whole exec. In order:
 
 1. **Identity.** Each machine row gets a random `instance` value when it is
    inserted. Compare `/var/lib/clankerbox/instance` with it. On a mismatch:
@@ -566,6 +587,15 @@ create, start, fork and restore. In order:
      new keys, so re-minting there is redundant but harmless.
    - Restart sshd if it is running. A sshd carried over in RAM can keep serving
      the old key until restarted (seen on OpenSSH 10.0).
+     - The listener is `/run/sshd.pid`, checked against `/proc/<pid>/comm`
+       for a stale pid file. It gets SIGHUP, which makes sshd re-execute
+       itself with the new keys and keep its listener, under whatever
+       launched it: a `start` script, or boat's systemd unit. macOS has no
+       `/run/sshd.pid`; launchd starts sshd per connection.
+     - The spikes restarted sshd by killing the listener and running `start`
+       (L:p1-tailnet), so SIGHUP is unverified live. The live tests check
+       that the key served after a re-mint under a running sshd equals
+       `Machine.hostKey`.
    - Write `/var/lib/clankerbox/machine-id` (the ID).
    - Run `/etc/clankerbox/new-identity`, if the profile installed one. It
      resets per-machine state that the copy carried over, such as tailnet
@@ -595,8 +625,8 @@ create, start, fork and restore. In order:
      path: it relaunches a dead sshd without a cold boot, which would lose the
      guest's RAM state. Re-running it takes about 50 ms.
    - The machine ID is written before `start` runs, because clankercreds reads it.
-3. **Host key.** Print the SSH host public key, if there is one. It becomes
-   `Machine.hostKey`.
+3. **Host key.** Print the SSH host public key, if there is one: ed25519,
+   else ecdsa, else rsa, after a marker line. It becomes `Machine.hostKey`.
 
 A crashed preparation is simply run again on the next activation; no
 `prepared` flag is needed.
@@ -617,7 +647,8 @@ A crashed preparation is simply run again on the next activation; no
   - The host picks one host port per machine from 10000–19999: below smolvm's
     fork range (20000–32000) and the Linux ephemeral range (32768 and up). It
     excludes the ports on its machine rows and confirms each one with a bind
-    probe.
+    probe on the publish address. It takes the lowest such port, so
+    allocation is deterministic.
   - Ports are recorded with the action's claim under a unique index, so two
     actions can't take the same port; a collision just picks again.
   - A `ram` restore, and so a fork, keeps the checkpoint's port: smolvm refuses
@@ -985,6 +1016,22 @@ Two rules for every VM job:
 - **State dir:** a directory is ours if it holds our SQLite database. Init
   creates the database in one transaction and refuses a non-empty directory
   without one. There is no separate marker file and no temp-directory rename.
+  - The database is `host.db`, marked with `PRAGMA application_id` `0x63627868`
+    ("cbxh"). An empty `host.db`, as a crash during init leaves, is
+    initialized; any other SQLite file under that name is refused.
+- **Host config:** one JSON file, read from `clankerbox host --config PATH`.
+  There is no default path: units pass it.
+  - It holds `id`, `runtime`, `listen: {address, port}`, `stateDir` (relative
+    to the config file), `bases` (name to image) and the runtime's own
+    settings, for smolvm `smolvm: {prefix, publishAddress, ramBudgetMib?}`.
+    Unknown keys are refused, as in every input.
+  - `listen.address` and `publishAddress` must be a tailnet address
+    (100.64.0.0/10 or fd7a:115c:a1e0::/48, Tailscale's ranges:
+    tailscale.com/kb/1015, kb/1033) or a loopback address. The tailnet is the
+    API's only gate, so a wildcard or public address is refused.
+  - `ramBudgetMib` defaults to `os.totalmem()` in MiB minus 2048.
+  - The runtime comes from a registry keyed by `runtime`; each runtime module
+    adds its entry.
 
 ## CLI
 
@@ -1057,7 +1104,10 @@ tests use real VMs.
    routing, fan-out with partial results, placement by base, recipe packing),
    and the CLI's commands and `ssh`. Long mutation calls: the client's timeouts
    off.
-3. **smolvm, end to end.**
+3. **smolvm, end to end.** Until phase 4, `fork` and `restore` answer
+   `Precondition`, and the checkpoint group isn't mounted: effect-actions
+   needs a handler for every action of a group it serves, and serves only the
+   groups it is given.
    - The state table, claims, the error-reply invariant and the refusal rule,
      the schema version, lifecycle, the smolvm runtime, supervision, setup and
      preparation (with the `new-identity` hook), port allocation and
