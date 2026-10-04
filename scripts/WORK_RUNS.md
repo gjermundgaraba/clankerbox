@@ -65,6 +65,16 @@ All callbacks are attempted. If one fails, scratch remains with state
 Use the same layout on remote hosts, and collect their evidence before deleting
 remote scratch. The local helper does not automatically manage remote resources.
 
+## The smolvm live suite
+
+`tests/live/smolvm/driver.py` is the provisioning driver for `tests/live` against
+a smolvm host on a Linux test machine: it runs the host there as root, from a run
+directory with this layout under the machine's owned root, and gives the suite
+its host-control program (`tests/live/tests/live.ts`). Its teardown removes the
+run's VMs and scopes natively, by the run's own smolvm data dir, so a test that
+leaves the host down leaves nothing behind. The driver's docstring shows its
+invocation.
+
 ## Abandoned runs
 
 ```sh

@@ -80,8 +80,10 @@ export const Natives = Schema.fromJsonString(
 
 /**
  * The live environment: `CLANKERBOX_BIN`, the binary under test; `CLANKERBOX_LIVE_CONFIG`, a
- * client config whose one host is the host under test; and `CLANKERBOX_LIVE_HOST_CONTROL`, a program run as `CONTROL OP ARGS…` on this machine
- * that acts on the host under test:
+ * client config whose one host is the host under test; and `CLANKERBOX_LIVE_HOST_CONTROL`, a
+ * program run as `CONTROL OP ARGS…` on this machine that acts on the host under test.
+ * `smolvm/driver.py` provides all three, and its teardown removes what the run left on the
+ * host. The program's ops:
  *
  * - `host-stop`, `host-start`: stop the host process (SIGTERM) or start it;
  * - `host-kill`: SIGKILL the host process, as a crash;

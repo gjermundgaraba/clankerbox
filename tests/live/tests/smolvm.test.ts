@@ -240,18 +240,10 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     await writeFileIn(join(recipe, "files"), "payload.bin", payload);
   });
 
-  afterAll(async () => {
-    const listed = await machines();
-
-    for (const left of listed.machines.filter(({ id: listedId }) =>
-      listedId.startsWith(`${env.host.id}_${namePrefix}`),
-    )) {
-      await cli(["delete"], left.id);
-    }
-
-    // It holds the run's private key and its setup scripts.
-    await rm(dir, { recursive: true, force: true });
-  }, minutes(5));
+  // The host-control program's teardown removes what the run left on the host natively, so a
+  // test that leaves the host down can't keep it there. This holds the run's private key and its
+  // setup scripts.
+  afterAll(() => rm(dir, { recursive: true, force: true }));
 
   test(
     "create packs the recipe, runs its setup once and then preparation, and reports the endpoint and key",
