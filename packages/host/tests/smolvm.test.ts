@@ -179,6 +179,7 @@ test("every smolvm call runs the prefix's wrapper in the spikes' environment, an
         SMOLVM_VM_USE_SCOPE: "1",
         SMOLVM_PUBLISH_ADDR: "100.95.240.37",
         SMOLVM_EGRESS_FLOOR: "strict",
+        NO_COLOR: "1",
       },
       stdin: undefined,
     },
