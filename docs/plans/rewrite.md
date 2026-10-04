@@ -264,8 +264,12 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
   behind `fetch` does: its header and body timeouts (300 s each at 26.10.0)
   would end a long `pack create` or a profile's setup. Phase 2 turns them off
   for mutation calls. effect-actions adds no timeout of its own (P5).
-  `NodeHttpClient.layerUndici` can't serve here: it forces a 1 h header
-  timeout.
+  - The client library uses `NodeHttpClient.layerNodeHttp`, which sets no
+    timeout. `fetch` has no public way to turn its timeouts off at 26.10.0,
+    and `NodeHttpClient.layerUndici` forces a 1 h header timeout.
+  - Every action group maps a Schema error in its input to `Invalid`. Without
+    that, effect-actions answers undeclared or malformed input with a bare
+    400.
 
 **Resources**
 
@@ -463,17 +467,26 @@ listed to keep them from being ported):
     self-extracting script: a base64 tar that unpacks into a temporary
     directory, then runs `setup.sh` from there. Stock Ubuntu, macOS and boat's
     image all have `base64` and `tar`.
+  - The packer sets `COPYFILE_DISABLE=1`, so macOS `tar` adds no `._*` files.
   - SDK clients pass a script's text or use the same packer.
   - A packed recipe can carry secrets, such as gg-linux-dev's clankercreds
     key. The host never stores a setup script.
+  - **Nothing logs a setup script or a packed recipe:** not the client
+    library, the host, nor any test or spike driver. A spike driver once logged
+    a packed recipe with its key into run evidence. Errors and logs carry the
+    script's output, never its text. The same holds for preparation, whose
+    script carries a random seed.
 - **A checkpoint holds everything the machine had,** including credentials its
   `start` synced. Capture a checkpoint meant for other machines from one that
   holds none, or clean up first.
 - **Bases:** each host names its bases in config, mapping a name to an image,
   digest-pinned where the runtime allows. Hosts that offer the same image use
   the same name, and placement matches on it.
-  - smolvm: a stock OCI image, `ubuntu:26.04@sha256:…`. It has no sshd; setup
-    installs it.
+  - smolvm: a stock OCI image, `ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7`
+    (`ubuntu:26.04` on 2026-10-04). It has no sshd; setup installs it. The
+    reference has no tag: smolvm can't parse tag plus digest and then pulls the
+    image inside every guest (about 7 s per create), while `ubuntu@sha256:…`
+    builds a host-side copy once and later creates take 1.36 s (P8).
   - Tart: a stock Cirrus image, `ghcr.io/cirruslabs/macos-<version>-base` or
     `macos-<version>-xcode:N` (with Xcode), pinned by digest. Both ship sshd
     and tart-guest-agent.
@@ -499,12 +512,27 @@ guest (see [Other host rules](#other-host-rules)), as part of the action.
   carry its results.
 - A typical setup installs sshd and the operator's public key, sets the guest's
   environment, and writes `/etc/clankerbox/start`.
+- `/etc/environment` reaches ssh sessions only, through `pam_env` (P3).
+  `start`, and whatever it launches, runs under exec and must read the file
+  itself.
 
 **Preparation** is one script, shipped inside the host binary, run after every
 create, start, fork and restore. In order:
 
 1. **Identity.** Each machine row gets a random `instance` value when it is
    inserted. Compare `/var/lib/clankerbox/instance` with it. On a mismatch:
+   - Reseed the guest's kernel RNG, before anything else. The host writes a
+     fresh random seed into `/dev/urandom`, then, on Linux guests, issues
+     `RNDRESEEDCRNG` (with `perl`, which stock Ubuntu ships as `perl-base`).
+     Tart and boat guests cold-boot, so the seed write is enough there.
+     - Why: a RAM restore, and so a fork, clones the guest's CRNG, and the
+       guest has no vmgenid or hwrng. smolvm's own re-mint only stirs the pool
+       (S@1.22.2:src/fork.rs:3245-3250). Across restores of one RAM state, it
+       gave 4 distinct host keys of 20, and a second `ssh-keygen -A` 5 of 7;
+       with the reseed, 8 of 8 (P1).
+     - It only fixes the kernel's RNG from then on. User-space generators
+       seeded before the fork stay duplicated; a profile resets those in its
+       `new-identity` hook.
    - Re-mint the SSH host keys, if the guest has any, on every runtime. A Tart
      clone, a machine restored from a `disk` checkpoint (a pack keeps the
      source's keys) and a machine created from a base (keys from the image or
@@ -677,7 +705,9 @@ Two rules for every VM job:
   directory.
 - **Every smolvm machine starts with `--branchable`.** Store capture requires it.
   It gives the guest file-backed RAM, so capture pauses the source for
-  40–170 ms instead of 0.5–3 s, and the source's resident RAM doesn't grow.
+  40–170 ms instead of 0.5–3 s (on this Mac, 1 vCPU / 1 GiB; 0.72–0.74 s on the
+  Linux host as root, 2 vCPU / 2 GiB after package installs), and the source's
+  resident RAM doesn't grow.
   Restored machines are branchable anyway. `machine status --json` reports
   `branchable: false` regardless, so don't read it.
 - **Fork is a checkpoint plus a restore:**
@@ -694,7 +724,9 @@ Two rules for every VM job:
   cache is off. P9 confirms deleting a whole store under running children.
 
   The child continues the source's RAM state, gets a fresh identity and its own
-  uid, and has no lineage. It takes 1.6–2.4 s. The cost is disk: a restored
+  uid, and has no lineage. It took 1.6–2.4 s on this Mac (1 vCPU / 1 GiB,
+  unprivileged) and 6.87 s on the Linux host as root (2 vCPU / 2 GiB, one
+  sample: a 3.34 s capture and a 2.81 s create). The cost is disk: a restored
   machine keeps its RAM file (about 280–620 MiB) for its life.
 - **Never call `machine branch`:**
   - Each branch adds a backing layer to the source, and smolvm refuses the 33rd.
@@ -1045,8 +1077,10 @@ tests use real VMs.
      `/home/clanker`. As root, smolvm adds others-execute to every directory
      above its data root.
    - **Change the egress guard before any guest runs:** `meta skuid 1000` becomes
-     `meta skuid 2000000-101999999`, smolvm's per-VM uid range. Until then, a
-     guest can reach services on the host's public address.
+     `meta skuid 2000000-101999999`, smolvm's per-VM uid range, for IPv4 and
+     IPv6 alike. Until then, a guest can reach services on the host's public
+     addresses: in P1 guests reached root-owned listeners on both, and the
+     host's sshd on :22.
    - Set `SMOLVM_RESTORE_TMPFS=0`. Only `machine pause`/`resume` stage memory in
      tmpfs, and clankerbox uses neither. Without `=0`, every root restore still
      creates `/dev/shm/smolvm-restore`. Restores cost the same either way.
@@ -1059,7 +1093,8 @@ tests use real VMs.
      deleted by hand.
    - Check the smolvm host's RAM budget against everything else that runs
      there.
-   - Configure each host's bases: a digest-pinned stock `ubuntu:26.04` on Linux;
+   - Configure each host's bases: a digest-pinned stock `ubuntu:26.04`
+     (`ubuntu@sha256:…`) on Linux;
      digest-pinned Cirrus base and Xcode images on the Mac; boat's image on the
      boat host.
    - Rewrite the profiles as profile files next to their recipes: `linux-dev`
@@ -1072,6 +1107,8 @@ tests use real VMs.
      environment (`gg-linux-dev`'s `env` moves there; P3 checks the paths), and
      writes an idempotent `/etc/clankerbox/start` that daemonizes what it
      launches. Recipes keep their `files/`; `machine.json` goes.
+     `gg-linux-dev` installs `libatomic1` first: Node needs it and stock 26.04
+     lacks it (P3).
    - Update the consumers' docs: `clankercreds/docs/recipe.md`, which still
      documents `machine.json`, and cliamp-verify's `clankerbox.md`, where
      `shell -T` becomes `ssh MACHINE -- cmd`, `create` takes the `cliamp-dev`
