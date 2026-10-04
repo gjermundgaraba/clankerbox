@@ -10,6 +10,7 @@
     "test": "vp test"
   },
   "dependencies": {
+    "@effect/platform-node": "catalog:",
     "@gjermundgaraba/clankerbox-sdk": "workspace:*",
     "effect": "catalog:"
   },
