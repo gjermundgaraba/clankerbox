@@ -5,7 +5,7 @@
  */
 import { type Checkpoint, formatId, type HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Layer, type Scope } from "effect";
-import { checkpointRef, claimsOn, detacher, machineRef, rowsOn } from "./actions.ts";
+import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./actions.ts";
 import type { HostConfig } from "./config.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { Runtime } from "./runtime.ts";
@@ -34,6 +34,7 @@ export const make = (
     const idOf = idOn(config.id);
     const nameOf = nameOn(config.id);
     const rows = rowsOn(store, config.id);
+    const made = madeOn(config.id);
     const { claimAndCheck, native, done } = claimsOn(store);
 
     const resource = (record: CheckpointRecord): Checkpoint => {
@@ -66,6 +67,8 @@ export const make = (
           store.claim("capture", { hold: { table: "machines", name: sourceName } }),
           (source, join) =>
             Effect.gen(function* () {
+              yield* made(source);
+
               const kind = runtime.checkpointKind;
 
               const row: NewCheckpoint = {

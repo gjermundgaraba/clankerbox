@@ -6,7 +6,7 @@ import { mkdirSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
@@ -27,6 +27,12 @@ import { removeScratch, scratch } from "./scratch.ts";
 import { type Call, type Reply, scripted as scriptedSpawner } from "./scripted.ts";
 
 const owned: Array<string> = [];
+
+/** A refusal's error, or the failure that wasn't one. */
+const refused = (error: Refusal | HostError) =>
+  error instanceof Refusal
+    ? [error.error._tag, error.error.message]
+    : ["not refused", error.message];
 
 afterEach(() => removeScratch(owned));
 
@@ -613,29 +619,17 @@ test("a capture or a fork of a machine that isn't running is refused before anyt
 
   const missing = await Effect.runPromise(Effect.flip(runtime.capture(machine, ramCheckpoint)));
 
-  expect(capture).toEqual(
-    new Refusal({
-      error: new Precondition({
-        message:
-          "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",
-      }),
-    }),
-  );
-  expect(fork).toEqual(
-    new Refusal({
-      error: new Precondition({
-        message:
-          "a fork copies a running machine, RAM included, and linux_dev is stopped: start it first",
-      }),
-    }),
-  );
-  expect(missing).toEqual(
-    new Refusal({
-      error: new Precondition({
-        message: "machine linux_dev is missing from the smolvm runtime; delete it",
-      }),
-    }),
-  );
+  expect([capture, fork, missing].map(refused)).toEqual([
+    [
+      "Precondition",
+      "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",
+    ],
+    [
+      "Precondition",
+      "a fork copies a running machine, RAM included, and linux_dev is stopped: start it first",
+    ],
+    ["Precondition", "machine linux_dev is missing from the smolvm runtime; delete it"],
+  ]);
   expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["status", "status", "status"]);
 });
 
@@ -696,96 +690,22 @@ test("a ram restore that got its source's old port keeps it", async () => {
   expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["create", "start"]);
 });
 
-test("a restore whose port move fails deletes the VM it made, and returns the move's error", async () => {
-  const spawner = scripted((call) => {
-    if (call.args[1] === "update") {
-      return { exitCode: 1, stderr: "Error: database is locked\n" };
-    }
+test("a restore whose port move or boot fails returns its error, and leaves its VM to delete", async () => {
+  for (const failing of ["update", "start"]) {
+    const spawner = scripted((call) =>
+      call.args[1] === failing ? { exitCode: 1, stderr: "Error: database is locked\n" } : undefined,
+    );
 
-    return call.args[1] === "status" ? status("created") : undefined;
-  });
+    const runtime = await runtimeOf(await prepared(), spawner);
+    const error = await Effect.runPromise(Effect.flip(runtime.restore(ramCheckpoint, copy)));
 
-  const runtime = await runtimeOf(await prepared(), spawner);
-  const error = await Effect.runPromise(Effect.flip(runtime.restore(ramCheckpoint, copy)));
-
-  expect(error.message).toBe(
-    "smolvm machine update copy-abcdefab exited 1: Error: database is locked",
-  );
-  expect(smolvmArgs(spawner.calls).map((args) => args.slice(0, 2).join(" "))).toEqual([
-    "machine create",
-    "machine update",
-    "machine status",
-    "systemctl show",
-    "machine delete",
-  ]);
-});
-
-test("a restore whose create fails deletes nothing: smolvm rolled it back", async () => {
-  const spawner = scripted((call) => {
-    if (call.args[1] === "create") {
-      return { exitCode: 1, stderr: "Error: no space\n" };
-    }
-
-    return call.args[1] === "status" ? unknownCopy : undefined;
-  });
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-  const error = await Effect.runPromise(Effect.flip(runtime.restore(ramCheckpoint, copy)));
-
-  expect(error.message).toBe("smolvm machine create copy-abcdefab exited 1: Error: no space");
-  expect(smolvmArgs(spawner.calls).map((args) => args.slice(0, 2).join(" "))).toEqual([
-    "machine create",
-    "machine status",
-  ]);
-});
-
-test("a restore whose boot fails deletes the VM it made", async () => {
-  const spawner = scripted((call) => {
-    if (call.args[1] === "start") {
-      return { exitCode: 1, stderr: "Error: crun create failed\n" };
-    }
-
-    return call.args[1] === "status" ? status("stopped") : undefined;
-  });
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  await Effect.runPromise(Effect.flip(runtime.restore(ramCheckpoint, copy)));
-
-  expect(smolvmArgs(spawner.calls).at(-1)).toEqual([
-    "machine",
-    "delete",
-    "--name",
-    "copy-abcdefab",
-    "--force",
-  ]);
-});
-
-test("a restore whose boot is cut short kills the VMM its scope still holds, then deletes the VM", async () => {
-  const spawner = scripted((call) => {
-    if (call.args[1] === "start") {
-      return { exitCode: 143 };
-    }
-
-    if (call.file === "systemctl" && call.args[0] === "show") {
-      return { stdout: "loaded\n" };
-    }
-
-    // smolvm recorded no pid for the cut-short boot, so it reads the VM as stopped.
-    return call.args[1] === "status" ? status("stopped") : undefined;
-  });
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  await Effect.runPromise(Effect.flip(runtime.restore(ramCheckpoint, copy)));
-
-  expect(smolvmArgs(spawner.calls).slice(3)).toEqual([
-    ["machine", "status", "--name", "copy-abcdefab", "--json"],
-    ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-copy-abcdefab.scope"],
-    ["systemctl", "kill", "--signal=SIGKILL", "smolvm-vm-copy-abcdefab.scope"],
-    ["machine", "delete", "--name", "copy-abcdefab", "--force"],
-    ["systemctl", "reset-failed", "smolvm-vm-copy-abcdefab.scope"],
-  ]);
+    expect(error.message).toBe(
+      `smolvm machine ${failing} copy-abcdefab exited 1: Error: database is locked`,
+    );
+    expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(
+      failing === "update" ? ["create", "update"] : ["create", "update", "start"],
+    );
+  }
 });
 
 /**

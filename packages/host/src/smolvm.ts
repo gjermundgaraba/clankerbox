@@ -342,9 +342,8 @@ export const make = (
      * Makes `machine` from a checkpoint, moves the source's port to its own, and boots it.
      * smolvm refuses topology flags at a create from a live checkpoint and keeps its port, so
      * the port is swapped before the first start. A VM made but not moved sits on the source's
-     * port, and `machine start` never moves it, so whatever fails here, or interrupts it,
-     * discards the VM: the row then reads missing, and delete is all it takes. A host crash in
-     * that window is accepted.
+     * port, and `machine start` never moves it; whatever fails here leaves the machine unmade,
+     * which the core never starts again, so it never publishes there, and delete removes it.
      * The restore cache is off: it survives every smolvm command, and a fork restores each
      * checkpoint once.
      */
@@ -380,15 +379,7 @@ export const make = (
         }
 
         yield* boot(native);
-      }).pipe(
-        Effect.onError(() =>
-          removeVm(machine).pipe(
-            Effect.catch((error) =>
-              Effect.logWarning(`restore ${machine.id}: couldn't delete its VM: ${error.message}`),
-            ),
-          ),
-        ),
-      );
+      });
 
     return {
       name: "smolvm",

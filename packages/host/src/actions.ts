@@ -11,7 +11,12 @@
  * Each mutation runs in a fiber of the host's own, so a dropped connection never interrupts it
  * and its outcome is recorded either way.
  */
-import { type HostError, Internal, type NotFound } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  type HostError,
+  Internal,
+  type NotFound,
+  Precondition,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber, FiberSet, Option, Ref } from "effect";
 import { idOn, type Kind, notFoundOn } from "./ids.ts";
 import { type CheckpointRef, type MachineRef, Refusal } from "./runtime.ts";
@@ -19,6 +24,7 @@ import type {
   CheckpointRecord,
   Claim,
   MachineRecord,
+  NewMachine,
   NewRow,
   Outcome,
   Interface as StoreInterface,
@@ -44,7 +50,7 @@ export const rowsOn = (store: StoreInterface, host: string) => {
   };
 };
 
-export const machineRef = (host: string, record: Omit<MachineRecord, "action">): MachineRef => ({
+export const machineRef = (host: string, record: NewMachine): MachineRef => ({
   id: idOn(host)(record.name),
   name: record.name,
   instance: record.instance,
@@ -54,6 +60,22 @@ export const machineRef = (host: string, record: Omit<MachineRecord, "action">):
   diskGib: record.diskGib,
   port: record.port,
 });
+
+/**
+ * Step 3's check that a machine was made: one whose create, fork or restore failed can only be
+ * read or deleted, so start, stop, fork and capture refuse it, a half-made VM never boots, and
+ * delete cleans it up.
+ */
+export const madeOn =
+  (host: string) =>
+  (record: MachineRecord): Effect.Effect<void, Precondition> =>
+    record.made
+      ? Effect.void
+      : Effect.fail(
+          new Precondition({
+            message: `machine ${idOn(host)(record.name)} was never made: its create, fork or restore failed; delete it`,
+          }),
+        );
 
 export const checkpointRef = (
   host: string,

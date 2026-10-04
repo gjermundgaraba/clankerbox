@@ -113,6 +113,7 @@ test("rows round-trip, and a reopened database keeps them", async () => {
 
   expect(Option.getOrUndefined(found)).toEqual({
     ...made,
+    made: false,
     action: { name: "create", status: "running" },
   });
 });
@@ -253,7 +254,7 @@ test("a claimed row is busy until its action ends, and a claim returns its recor
     new Conflict({ message: "machine linux_dev is busy: create is running", kind: "busy" }),
   );
   expect(missing).toEqual(new NotFound({ message: "no machine linux_gone" }));
-  const stopping = { ...record("dev"), action: { name: "stop", status: "running" } };
+  const stopping = { ...record("dev"), made: false, action: { name: "stop", status: "running" } };
 
   expect(claimed).toEqual([
     [{ table: "machines", name: "dev", before: { name: "create", status: "done" } }],
@@ -317,6 +318,31 @@ test("an end records the outcome on every claimed row, and the host key on the p
       { name: "start", status: "failed", error: { tag: "Internal", message: "no" } },
       undefined,
     ],
+  ]);
+});
+
+test("an end marks the machine it names made, and a failed end none", async () => {
+  const stateDir = join(await scratch(owned), "state");
+
+  const made = await withStore(stateDir, (store) =>
+    Effect.gen(function* () {
+      const failed = yield* store.claim("create", inserting(record("failed")));
+
+      yield* store.end(failed.token, {
+        action: { name: "create", status: "failed", error: { tag: "Internal", message: "no" } },
+      });
+
+      const created = yield* store.claim("create", inserting(record("dev", { port: 10_001 })));
+
+      yield* store.end(created.token, { action: { name: "create", status: "done" }, made: "dev" });
+
+      return (yield* store.list).map(({ name, made }) => [name, made]);
+    }),
+  );
+
+  expect(made).toEqual([
+    ["dev", true],
+    ["failed", false],
   ]);
 });
 
@@ -392,9 +418,9 @@ test("a database at schema version 1 gains the checkpoint table and keeps its ma
 
   db.exec(migrations[0] ?? "");
   db.exec(
-    `INSERT INTO machines (name, instance, created_at, base, cpu, ram_mib, disk_gib, action_name,
-      action_status) VALUES ('dev', 'abc', '2026-10-04T12:00:00.000Z', 'ubuntu', 1, 1024, 10,
-      'create', 'done')`,
+    `INSERT INTO machines (name, instance, created_at, base, cpu, ram_mib, disk_gib, made,
+      action_name, action_status) VALUES ('dev', 'abc', '2026-10-04T12:00:00.000Z', 'ubuntu', 1,
+      1024, 10, 1, 'create', 'done')`,
   );
   db.exec(`PRAGMA user_version = 1; PRAGMA application_id = ${applicationId}`);
   db.close();

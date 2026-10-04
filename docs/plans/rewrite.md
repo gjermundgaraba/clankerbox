@@ -220,7 +220,9 @@ Units run `process.execPath host --config PATH`. VM jobs never reference this bi
   a missing resource is `NotFound`, which clients treat as done. A `stop` that
   does nothing writes nothing, so the row keeps its last `action`. A `start` of
   a machine the runtime reports `missing` is `Precondition` in step 3: delete
-  it. A `create` for a base the host doesn't offer is `Precondition`, listing
+  it. `start`, `stop`, `fork` and `capture` of a machine that was never made,
+  as its create, fork or restore failed, are `Precondition` in step 3 too (see
+  [State and claims](#state-and-claims)). A `create` for a base the host doesn't offer is `Precondition`, listing
   the host's bases, and an ID that names another host is `Invalid`.
 
 **Placement**
@@ -506,29 +508,35 @@ listed to keep them from being ported):
   errors that a runtime documents as creating nothing, listed per runtime.
 - **No lineage:** a fork is an independent machine, so a source can be stopped
   or deleted while its forks run.
-- **Stop and delete after a failure:** they are never refused because of an
-  earlier failure, and they cope with leftover native state, including a live
-  orphan VM process. They are refused only while another action holds the row.
-  Each runtime's phase verifies this. Phase 3 verified it live on smolvm:
-  after a host crash during setup, `stop` stopped the VM the create left
-  running; after a crash before the runtime's create, `stop` wrote nothing;
-  and `delete` removed both, and a VM whose stop failed.
-- **A failed fork or `ram` restore leaves no VM:** smolvm makes the VM on the
-  source's port and moves it to the new machine's own before the first boot,
-  and `machine start` never re-applies ports, so a VM left between would
-  publish on another machine's port. `start` can't repair it: `machine status
-  --json` and `machine ls --json` report only a port count
-  (S@1.22.2:src/cli/vm_common.rs:3102), so it can't know which port to remove,
-  although `machine update` is idempotent (src/cli/machine.rs:5917-5929). So
-  whatever fails in the restore's create, port move or first boot deletes the
-  VM, reading status first like `delete`. A first boot cut short can leave
-  its VMM in the VM's scope before smolvm records its pid, and smolvm's delete
-  then leaves it running (evidence.md, Phase 4 live), so a scope still loaded
-  is killed before the delete. The row stays `failed`, the machine
-  reads `missing`, `start` says to delete it, and `delete` removes the row. A
-  host crash inside that window can still leave a VM on the source's port;
-  that is accepted. The fork's source ends `fork` `failed` like any fork's,
-  which blocks nothing.
+- **A machine is made only when its create, fork or restore succeeds:** the
+  machine row's `made` column is false at insert, and the end of a successful
+  create, fork or restore sets it (phase-5 review). Until then the machine
+  can only be read or deleted: `start`, `stop`, `fork` and `capture` refuse it
+  with `Precondition` in step 3 ("its create, fork or restore failed; delete
+  it"), so a half-made machine never boots. Without it, `start` repaired a
+  half-made machine and recorded `done`: a Tart clone whose `tart set` never
+  ran booted with the base's serial and sizes, and a create whose setup failed
+  read healthy after a start. The cost, accepted: a create that failed only in
+  preparation can't be repaired with `start`; delete it and create it again.
+- **Delete after a failure:** never refused because of an earlier failure, and
+  it copes with leftover native state, including a live orphan VM process.
+  `stop` of a made machine is never refused for an earlier failure either.
+  Both are refused only while another action holds the row. Each runtime's
+  phase verifies this. Phase 3 verified it live on smolvm, before `made`
+  existed: after a host crash during setup, `stop` stopped the VM the create
+  left running (now `stop` refuses that machine, which was never made); after
+  a crash before the runtime's create, `stop` wrote nothing; and `delete`
+  removed both, and a VM whose stop failed.
+- **A failed fork or `ram` restore leaves its VM to `delete`:** smolvm makes
+  the VM on the source's port and moves it to the new machine's own before
+  the first boot, and `machine start` never re-applies ports, so a VM left
+  between would publish on another machine's port if it ever booted. `start`
+  couldn't repair it: `machine status --json` and `machine ls --json` report
+  only a port count (S@1.22.2:src/cli/vm_common.rs:3102). A failed fork or
+  restore is never made, so nothing boots it again, and `delete` removes it
+  (see [Runtimes: smolvm](#runtimes-smolvm), Stop), including a VMM that a
+  first boot cut short left in its scope. The fork's source ends `fork`
+  `failed` like any fork's, which blocks nothing.
 - **Completion is recorded even when the caller has gone away.**
 - **Schema:** `PRAGMA user_version` and an ordered list of migrations, starting
   at version 1. A database newer than the binary is refused.
@@ -698,7 +706,9 @@ instance and the machine's ID, and a fresh 64-byte seed arrives on stdin. The
    else ecdsa, else rsa, after a marker line. It becomes `Machine.hostKey`.
 
 A crashed preparation is simply run again on the next activation; no
-`prepared` flag is needed.
+`prepared` flag is needed. That holds for `start` of a made machine; a
+create, fork or restore whose preparation fails leaves its machine unmade,
+which only `delete` takes (see [State and claims](#state-and-claims)).
 
 ### Guest access
 

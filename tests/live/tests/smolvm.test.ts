@@ -786,7 +786,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "a host stopped while a fork's or a restore's VM is made but not booted leaves the copy missing, which start refuses and delete removes; the fork's source still starts",
+    "a host stopped while a fork's or a restore's VM is made but not booted leaves the copy never made, which start refuses and delete removes with any VMM its scope holds; the fork's source still starts",
     async () => {
       for (const [action, name] of [
         ["fork", "fork-x"],
@@ -798,22 +798,22 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
             : cli(["restore"], id("main-ram"), named(name), "--json");
 
         // Holds the host's smolvm call that moves the new VM's port or boots it, then stops the
-        // host, which deletes the VM on its way out.
+        // host, which leaves the VM, and a VMM a cut-short boot started, to delete.
         const stopped = await control("stop-host-at", named(name), "120");
 
         expect(stopped.code, stopped.stderr).toBe(0);
         expect((await making).code).not.toBe(0);
         expect((await control("host-start")).code).toBe(0);
-        expect(await machine(name)).toMatchObject({
-          state: "missing",
-          action: { name: action, status: "failed" },
-        });
-        expect(await natives(name)).toEqual({ machines: [], scopes: [] });
+
+        const copy = await machine(name);
+
+        expect(copy).toMatchObject({ action: { name: action, status: "failed" } });
+        expect(["stopped", "running"]).toContain(copy?.state);
 
         const refused = failure(await cli(["start"], id(name), "--json"));
 
         expect(refused.tag).toBe("Precondition");
-        expect(refused.message).toContain("delete it");
+        expect(refused.message).toContain("was never made");
         await removeMachine(name);
       }
 
@@ -973,7 +973,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "after the host is killed during a create's setup, the row reads failed, stop stops the VM and delete removes it",
+    "after the host is killed during a create's setup, the row reads failed, stop refuses the machine, never made, and delete removes its VM",
     async () => {
       let ended: Ran | undefined;
 
@@ -1030,17 +1030,11 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       expect(seen.code, seen.stderr).toBe(0);
       expect(seen.stdout).not.toContain("sleep 300");
 
-      const stopped = await cli(["stop"], id("crash"), "--json");
+      const refused = failure(await cli(["stop"], id("crash"), "--json"));
 
-      expect(stopped.code, stopped.stdout).toBe(0);
-      expect(decode(OneMachine, stopped)).toMatchObject({
-        state: "stopped",
-        action: { name: "stop", status: "done" },
-      });
-      expect(await natives("crash")).toMatchObject({
-        machines: [{ state: "stopped" }],
-        scopes: [],
-      });
+      expect(refused.tag).toBe("Precondition");
+      expect(refused.message).toContain("was never made");
+      expect((await machine("crash"))?.action).toMatchObject({ name: "create", status: "failed" });
       await removeMachine("crash");
     },
     minutes(10),

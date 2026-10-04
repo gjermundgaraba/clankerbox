@@ -1,7 +1,7 @@
 /**
  * The host's state: one SQLite database in its state dir, through `node:sqlite`. It holds one
- * row per machine with its spec, `instance`, `native`, `createdAt`, host `port`, `hostKey` and
- * last `action`, and one row per checkpoint, and nothing else: machine state is always read from
+ * row per machine with its spec, `instance`, `native`, `createdAt`, host `port`, `hostKey`,
+ * whether it was made, and its last `action`, and one row per checkpoint, and nothing else: machine state is always read from
  * the runtime, and no setup script is kept.
  */
 import { DatabaseSync } from "node:sqlite";
@@ -40,6 +40,7 @@ export const migrations: ReadonlyArray<string> = [
     disk_gib INTEGER NOT NULL,
     port INTEGER UNIQUE,
     host_key TEXT,
+    made INTEGER NOT NULL,
     action_name TEXT NOT NULL,
     action_status TEXT NOT NULL,
     action_error_tag TEXT,
@@ -85,6 +86,11 @@ export interface MachineRecord extends Resource {
   readonly port: number | undefined;
   /** The guest's SSH host public key, as the last preparation printed it. */
   readonly hostKey: string | undefined;
+  /**
+   * Whether the create, fork or restore that inserted the row succeeded. Until then the machine
+   * can only be read or deleted.
+   */
+  readonly made: boolean;
 }
 
 /** A checkpoint row. Ready checkpoints never change, so restores read them without a claim. */
@@ -129,6 +135,7 @@ const Row = Schema.Struct({
   ...columns,
   port: Schema.NullOr(Schema.Int),
   host_key: Schema.NullOr(Schema.String),
+  made: Schema.Literals([0, 1]),
 });
 
 const CheckpointRow = Schema.Struct({
@@ -173,6 +180,7 @@ const fromRow = (row: typeof Row.Type): MachineRecord => ({
   ...resourceOf(row),
   port: row.port ?? undefined,
   hostKey: row.host_key ?? undefined,
+  made: row.made === 1,
 });
 
 const fromCheckpointRow = (row: typeof CheckpointRow.Type): CheckpointRecord => ({
@@ -197,8 +205,8 @@ const columnParameters = (record: Omit<Resource, "action">, action: ActionName) 
   action_name: action,
 });
 
-/** A new machine row. Its claim's action holds it from the start. */
-export type NewMachine = Omit<MachineRecord, "action">;
+/** A new machine row. Its claim's action holds it from the start, and it isn't made yet. */
+export type NewMachine = Omit<MachineRecord, "action" | "made">;
 
 /** A new checkpoint row. Its claim's action holds it from the start. */
 export type NewCheckpoint = Omit<CheckpointRecord, "action">;
@@ -270,6 +278,8 @@ export interface Outcome {
    * preparation that printed none leaves the row's key as it was.
    */
   readonly prepared?: { readonly name: string; readonly hostKey: string | undefined } | undefined;
+  /** The machine a create, fork or restore made, which the end marks made. */
+  readonly made?: string | undefined;
 }
 
 export interface Interface {
@@ -471,9 +481,9 @@ export const open = (
 
     const insertMachine = db.prepare(
       `INSERT INTO machines (name, instance, native, created_at, base, profile, cpu, ram_mib,
-        disk_gib, port, host_key, action_name, action_status)
+        disk_gib, port, host_key, made, action_name, action_status)
        VALUES ($name, $instance, $native, $created_at, $base, $profile, $cpu, $ram_mib,
-        $disk_gib, $port, $host_key, $action_name, 'running')`,
+        $disk_gib, $port, $host_key, 0, $action_name, 'running')`,
     );
 
     const insertCheckpoint = db.prepare(
@@ -484,6 +494,8 @@ export const open = (
     );
 
     const updateHostKey = db.prepare("UPDATE machines SET host_key = ? WHERE name = ?");
+
+    const markMade = db.prepare("UPDATE machines SET made = 1 WHERE name = ?");
 
     /** The statements that record a row's action and remove the row, per table. */
     const statementsOf = (table: Table) => ({
@@ -699,7 +711,7 @@ export const open = (
 
           return Result.void;
         }),
-      end: (token, { action, prepared }) =>
+      end: (token, { action, prepared, made }) =>
         transaction(db, `record ${action.name} on ${named(token)}`, () => {
           for (const row of [...token.inserted, ...token.held]) {
             record(row, action);
@@ -707,6 +719,10 @@ export const open = (
 
           if (prepared?.hostKey !== undefined) {
             updateHostKey.run(prepared.hostKey, prepared.name);
+          }
+
+          if (made !== undefined) {
+            markMade.run(made);
           }
 
           return Result.void;

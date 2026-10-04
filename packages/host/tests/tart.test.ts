@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { connect, createServer } from "node:net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
@@ -31,6 +31,12 @@ import { removeScratch, scratch } from "./scratch.ts";
 import { type Call, type Reply, scripted } from "./scripted.ts";
 
 const owned: Array<string> = [];
+
+/** A refusal's error, or the failure that wasn't one. */
+const refused = (error: Refusal | HostError) =>
+  error instanceof Refusal
+    ? [error.error._tag, error.error.message]
+    : ["not refused", error.message];
 
 const scopes: Array<Scope.Closeable> = [];
 
@@ -655,15 +661,17 @@ test("a fork's source and a capture's machine must be stopped: anything else is 
 
   const missing = await Effect.runPromise(Effect.flip(runtime.capture(source, checkpoint)));
 
-  const refused = (message: string) => new Refusal({ error: new Precondition({ message }) });
-
   expect(runtime.checkpointKind).toBe("disk");
-  expect([fork, capture, missing]).toEqual([
-    refused("a Tart fork copies a stopped machine's disk, and mac_src is running: stop it first"),
-    refused(
+  expect([fork, capture, missing].map(refused)).toEqual([
+    [
+      "Precondition",
+      "a Tart fork copies a stopped machine's disk, and mac_src is running: stop it first",
+    ],
+    [
+      "Precondition",
       "a Tart checkpoint copies a stopped machine's disk, and mac_src is running: stop it first",
-    ),
-    refused("machine mac_src is missing from the tart runtime; delete it"),
+    ],
+    ["Precondition", "machine mac_src is missing from the tart runtime; delete it"],
   ]);
   expect(calls(mac)).toEqual([]);
   expect(existsSync(join(jobsDir(mac.settings.stateDir), `${vmOf(copy)}.plist`))).toBe(false);

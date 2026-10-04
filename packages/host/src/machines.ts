@@ -13,7 +13,7 @@ import {
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Array as Arr, Context, DateTime, Effect, Layer, type Scope, Semaphore } from "effect";
-import { checkpointRef, claimsOn, detacher, machineRef, rowsOn } from "./actions.ts";
+import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./actions.ts";
 import type { HostConfig } from "./config.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
@@ -70,6 +70,7 @@ export const make = (
     const idOf = idOn(config.id);
     const nameOf = nameOn(config.id);
     const rows = rowsOn(store, config.id);
+    const made = madeOn(config.id);
     const { claimAndCheck, native, done } = claimsOn(store);
     const ref = (record: NewMachine) => machineRef(config.id, record);
 
@@ -208,6 +209,8 @@ export const make = (
             "source" in making
               ? claimAndCheck(store.claim(action, holding(making.source)), (source, join) =>
                   Effect.gen(function* () {
+                    yield* made(source);
+
                     const row = yield* newRow(name, source);
 
                     yield* join(inserting(row));
@@ -234,7 +237,7 @@ export const make = (
             withRuntime(Effect.andThen(work(machine), prepare(machine))),
           );
 
-          yield* done(token, { prepared: { name, hostKey } });
+          yield* done(token, { prepared: { name, hostKey }, made: name });
 
           return yield* read(name);
         }),
@@ -269,6 +272,8 @@ export const make = (
           const [token, { record, running }] = yield* admitted(
             claimAndCheck(store.claim("start", holding(name)), (record) =>
               Effect.gen(function* () {
+                yield* made(record);
+
                 const { state } = yield* observe(record);
 
                 if (state === "missing") {
@@ -308,7 +313,11 @@ export const make = (
 
         const [token, { record, state }] = yield* claimAndCheck(
           store.claim("stop", holding(name)),
-          (record) => Effect.map(observe(record), ({ state }) => ({ record, state })),
+          (record) =>
+            Effect.andThen(
+              made(record),
+              Effect.map(observe(record), ({ state }) => ({ record, state })),
+            ),
         );
 
         if (state === "running") {

@@ -79,6 +79,6 @@ test("a release that fails after a runtime's refusal is logged, and the refusal'
     ),
   );
 
-  expect(result).toEqual(new Capacity({ message: "no machine" }));
+  expect([result._tag, result.message]).toEqual(["Capacity", "no machine"]);
   expect(logged).toEqual([["couldn't release the rows of a create: disk full"]]);
 });

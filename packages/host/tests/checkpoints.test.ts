@@ -160,7 +160,10 @@ test("a fork of a source the runtime doesn't copy is refused and writes nothing"
 
   const error = await failure(linux, linux.machines.fork("linux_dev", "copy"));
 
-  expect(error).toEqual(new Precondition({ message: "linux_dev is stopped: start it first" }));
+  expect([error._tag, error.message]).toEqual([
+    "Precondition",
+    "linux_dev is stopped: start it first",
+  ]);
   expect(await actions(linux)).toEqual({ dev: { name: "stop", status: "done" } });
   expect(linux.fake.calls.filter((call) => call.startsWith("fork"))).toEqual(["fork linux_copy"]);
 });
@@ -187,7 +190,7 @@ test("a fork that fails natively leaves both rows failed, and the new one deleta
   expect(Object.keys(await actions(linux))).toEqual(["dev"]);
 });
 
-test("after a failed fork or restore, the source starts, and the new machine is only deleted", async () => {
+test("after a failed fork or restore, the source starts, and the new machine, never made, is only deleted", async () => {
   const linux = await withSource();
 
   await linux.run(linux.checkpoints.capture("linux_dev", "snap"));
@@ -196,17 +199,15 @@ test("after a failed fork or restore, the source starts, and the new machine is 
     ["forked", "fork", () => linux.machines.fork("linux_dev", "forked")],
     ["restored", "restore", () => linux.machines.restore("linux_snap", "restored")],
   ] as const) {
-    // As smolvm leaves it: a VM that failed before its first boot is deleted, so it is missing.
     linux.fake.failNext(operation, new Internal({ message: "port swap failed" }));
     await failure(linux, make());
 
     const error = await failure(linux, linux.machines.start(`linux_${name}`));
 
-    expect(error).toEqual(
-      new Precondition({
-        message: `machine linux_${name} is missing from the smolvm runtime; delete it`,
-      }),
-    );
+    expect([error._tag, error.message]).toEqual([
+      "Precondition",
+      `machine linux_${name} was never made: its create, fork or restore failed; delete it`,
+    ]);
     expect((await actions(linux))[name]).toMatchObject({ name: operation, status: "failed" });
 
     await linux.run(linux.machines.delete(`linux_${name}`));
