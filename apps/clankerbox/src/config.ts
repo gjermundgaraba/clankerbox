@@ -6,16 +6,12 @@
 import { Client, Invalid } from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 
+/** The client library refuses a host ID that appears twice. */
 const ClientConfig = Schema.Struct({
   hosts: Schema.NonEmptyArray(Client.HostEntry),
   /** Where `--profile NAME` looks for `NAME.json`, relative to the config file. */
   profiles: Schema.optionalKey(Schema.String),
-}).check(
-  Schema.makeFilter(
-    ({ hosts }) =>
-      new Set(hosts.map(({ id }) => id)).size === hosts.length || "host IDs must be unique",
-  ),
-);
+});
 
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(ClientConfig));
 

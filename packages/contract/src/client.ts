@@ -195,17 +195,28 @@ const withNote = (error: ClankerboxError, note: string): ClankerboxError => {
 
 const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
 
-/** Builds a client over `hosts`, in placement order. Making it sends nothing. */
+/**
+ * Builds a client over `hosts`, in placement order. Making it sends nothing. A host ID that
+ * appears twice is Invalid: IDs route by it.
+ */
 export const make = (
   hosts: ReadonlyArray<HostEntry>,
   options?: Options,
-): Effect.Effect<Interface, never, HttpClient.HttpClient> =>
+): Effect.Effect<Interface, Invalid, HttpClient.HttpClient> =>
   Effect.gen(function* () {
-    const routes = new Map<string, { readonly entry: HostEntry; readonly api: HostApi }>();
+    const twice = hosts.find(
+      ({ id }, index) => hosts.findIndex((other) => other.id === id) < index,
+    );
 
-    for (const entry of hosts) {
-      routes.set(entry.id, { entry, api: yield* makeHostApi(entry.url) });
+    if (twice !== undefined) {
+      return yield* new Invalid({ message: `host ${twice.id} appears twice in the host list` });
     }
+
+    const routed = yield* Effect.forEach(hosts, (entry) =>
+      Effect.map(makeHostApi(entry.url), (api) => ({ entry, api })),
+    );
+
+    const routes = new Map(routed.map((route) => [route.entry.id, route]));
 
     const timeout = options?.timeout;
 
@@ -247,33 +258,33 @@ export const make = (
       call: (api: HostApi) => Effect.Effect<ReadonlyArray<A>, CallError>,
     ): Effect.Effect<Gathered<A>> =>
       Effect.forEach(
-        hosts,
-        (entry) => {
-          const api = routes.get(entry.id)?.api;
-
-          return api === undefined
-            ? Effect.succeed(Result.succeed<ReadonlyArray<A>>([]))
-            : Effect.result(settle(call(api), { host: entry, timeout, access: "read", action }));
-        },
+        routed,
+        ({ entry, api }) =>
+          Effect.map(
+            Effect.result(settle(call(api), { host: entry, timeout, access: "read", action })),
+            (result) => ({ host: entry.id, result }),
+          ),
         { concurrency: "unbounded" },
       ).pipe(
         Effect.map((results) => {
           const answers: Array<A> = [];
           const unreachable: Array<Unreachable> = [];
 
-          results.forEach((result, index) => {
-            const host = hosts[index]?.id ?? "";
-
+          for (const { host, result } of results) {
             if (Result.isSuccess(result)) {
               answers.push(...result.success);
             } else {
               unreachable.push({ host, error: result.failure });
             }
-          });
+          }
 
           return { answers, unreachable };
         }),
       );
+
+    const allHosts = gather("get host", (api) =>
+      api.host.get({ payload: {} }).pipe(Effect.map((host) => [host])),
+    );
 
     const createOn = (host: string, name: string, spec: MachineSpec) =>
       Effect.gen(function* () {
@@ -292,9 +303,7 @@ export const make = (
     /** The first host in list order that offers `base`; a host that didn't answer is skipped. */
     const place = (base: string) =>
       Effect.gen(function* () {
-        const { answers, unreachable } = yield* gather("get host", (api) =>
-          api.host.get({ payload: {} }).pipe(Effect.map((host) => [host])),
-        );
+        const { answers, unreachable } = yield* allHosts;
 
         const skipped = unreachable.map(({ host }) => host);
         const chosen = answers.find((host) => host.bases.includes(base));
@@ -359,9 +368,7 @@ export const make = (
       Effect.flatMap(parseId(source), ({ host }) => formatId(host, name));
 
     return {
-      hosts: gather("get host", (api) =>
-        api.host.get({ payload: {} }).pipe(Effect.map((host) => [host])),
-      ),
+      hosts: allHosts,
       machines: gather("list machines", (api) => api.machine.list({ payload: {} })),
       checkpoints: gather("list checkpoints", (api) => api.checkpoint.list({ payload: {} })),
       machine: (id) => byId(id, "read", `get ${id}`, (api) => api.machine.get({ payload: { id } })),
@@ -412,5 +419,8 @@ export const make = (
  * The client over Node's `http` module, which sets no timeout of its own: a mutation can run
  * for hours.
  */
-export const layer = (hosts: ReadonlyArray<HostEntry>, options?: Options): Layer.Layer<Client> =>
+export const layer = (
+  hosts: ReadonlyArray<HostEntry>,
+  options?: Options,
+): Layer.Layer<Client, Invalid> =>
   Layer.effect(Client, make(hosts, options)).pipe(Layer.provide(NodeHttpClient.layerNodeHttp));

@@ -64,6 +64,18 @@ test("routing needs no network: an ID for a host outside the list is Invalid", a
   expect(linux.calls).toEqual([]);
 });
 
+test("a host list that names a host twice is Invalid", async () => {
+  const error = await Effect.flip(
+    Client.make([
+      { id: "linux", url: url("linux") },
+      { id: "linux", url: url("other") },
+    ]),
+  ).pipe(Effect.provide(transport(new Map())), Effect.runPromise);
+
+  expect(error._tag).toBe("Invalid");
+  expect(error.message).toContain("linux");
+});
+
 test("a malformed ID is Invalid and sends nothing", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 
