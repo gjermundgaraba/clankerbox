@@ -1295,6 +1295,20 @@ not through `clankerbox host`, with `network` empty instead of
   driver ran ssh synchronously in the process that hosts the forwarder.
 - Teardown: no VM, job (`launchctl print` 113) or process left; the seed's
   checksums unchanged.
+- **`tart get` and the base's disk size** (phase-5 review item I, run
+  `p5r-tart-get-d05a79556cbf`, a private APFS clone of the Cirrus seed in a
+  private `TART_HOME`, never booted): `tart get <clone> --format json`
+  reported `"Disk" : 50` (whole GB) with `OS`, `CPU`, `Memory` and `State`.
+  `tart get` of the base's digest-pinned OCI reference exited 2 ("the
+  specified VM … does not exist"): it opens local VMs only
+  (T:Commands/Get.swift:26, `VMStorageLocal().open`), and a host's bases
+  are OCI references that `tart clone` pulls on the first create. So the
+  base's size can't be read cheaply before the claim, and the check isn't
+  built: a `diskGib` below it fails the create at `tart set`, after the clone,
+  and the machine, never made, is only deleted. `tart list --format json`
+  reports no OS (T:Commands/List.swift:5-13). Teardown: the clone deleted,
+  the private home's `tart list` empty, no process naming it; the seed's
+  three checksums matched PROVENANCE afterwards.
 
 ## Consumers and production
 
