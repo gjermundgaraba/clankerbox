@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ConfigProvider, Effect, Layer, Runtime } from "effect";
+import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { TestConsole } from "effect/testing";
 import {
@@ -59,6 +60,8 @@ export interface CliOptions {
   readonly spawner?: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>;
   /** The environment the CLI reads its default config path from. */
   readonly env?: Readonly<Record<string, string>>;
+  /** Replaces the in-memory transport, as the tests against a real host do. */
+  readonly http?: Layer.Layer<HttpClient.HttpClient>;
 }
 
 export const cli = (args: ReadonlyArray<string>, options?: CliOptions): Promise<CliRun> => {
@@ -86,7 +89,7 @@ export const cli = (args: ReadonlyArray<string>, options?: CliOptions): Promise<
       Layer.mergeAll(
         NodeServices.layer,
         TestConsole.layer,
-        transport(network),
+        options?.http ?? transport(network),
         ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ...options?.env } })),
       ),
     ),
