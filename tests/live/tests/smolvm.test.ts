@@ -815,6 +815,10 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
         expect(refused.tag).toBe("Precondition");
         expect(refused.message).toContain("was never made");
         await removeMachine(name);
+
+        // No VMM a cut-short boot started is left publishing on the copy's port.
+        expect(copy?.ssh).toBeDefined();
+        expect(await probe(copy?.ssh?.host ?? "", String(copy?.ssh?.port))).toBe("unreachable");
       }
 
       expect((await machine("main"))?.action).toMatchObject({ name: "fork", status: "failed" });
@@ -901,11 +905,22 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "a capture of a stopped machine is Precondition, and writes nothing",
+    "one list reads every machine's own state, and a capture or a fork of a stopped machine is Precondition and writes nothing",
     async () => {
       const stopped = await cli(["stop"], id("restore-b"), "--json");
 
       expect(stopped.code, stopped.stdout).toBe(0);
+
+      const states = Object.fromEntries(
+        (await machines()).machines.map(({ id: listedId, state }) => [listedId, state]),
+      );
+
+      expect(states).toEqual({
+        [id("main")]: "running",
+        [id("fork-a")]: "running",
+        [id("restore-a")]: "running",
+        [id("restore-b")]: "stopped",
+      });
 
       const error = failure(
         await cli(["checkpoint", "capture"], id("restore-b"), named("stopped"), "--json"),
@@ -917,6 +932,15 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       const listed = decode(Checkpoints, await cli(["checkpoint", "list"], "--json"));
 
       expect(listed.checkpoints.map(({ id: listedId }) => listedId)).toEqual([id("main-ram")]);
+      expect(await stored("stopped")).toBe(false);
+
+      const fork = failure(await cli(["fork"], id("restore-b"), named("stopped-fork"), "--json"));
+
+      expect(fork.tag).toBe("Precondition");
+      expect(fork.message).toContain("start it first");
+      expect(await machine("stopped-fork")).toBeUndefined();
+      expect(await natives("stopped-fork")).toEqual({ machines: [], scopes: [] });
+      expect(await forks()).toEqual([]);
       expect((await machine("restore-b"))?.action).toEqual({ name: "stop", status: "done" });
     },
     minutes(3),
@@ -973,7 +997,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "after the host is killed during a create's setup, the row reads failed, stop refuses the machine, never made, and delete removes its VM",
+    "after the host is killed during a create's setup, the row reads failed; start, stop, fork and capture refuse the machine, never made, writing nothing, and delete removes its VM",
     async () => {
       let ended: Ran | undefined;
 
@@ -1030,11 +1054,28 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       expect(seen.code, seen.stderr).toBe(0);
       expect(seen.stdout).not.toContain("sleep 300");
 
-      const refused = failure(await cli(["stop"], id("crash"), "--json"));
+      for (const [command, ...args] of [
+        [["stop"]],
+        [["start"]],
+        [["fork"], named("crash-fork")],
+        [["checkpoint", "capture"], named("crash-ram")],
+      ] as const) {
+        const refused = failure(await cli(command, id("crash"), ...args, "--json"));
 
-      expect(refused.tag).toBe("Precondition");
-      expect(refused.message).toContain("was never made");
-      expect((await machine("crash"))?.action).toMatchObject({ name: "create", status: "failed" });
+        expect(refused.tag, command.join(" ")).toBe("Precondition");
+        expect(refused.message, command.join(" ")).toContain("was never made");
+      }
+
+      expect(await machine("crash")).toMatchObject({
+        state: "running",
+        action: { name: "create", status: "failed" },
+      });
+      expect(await machine("crash-fork")).toBeUndefined();
+      expect(await natives("crash-fork")).toEqual({ machines: [], scopes: [] });
+      expect(decode(Checkpoints, await cli(["checkpoint", "list"], "--json")).checkpoints).toEqual(
+        [],
+      );
+      expect(await stored("crash-ram")).toBe(false);
       await removeMachine("crash");
     },
     minutes(10),
