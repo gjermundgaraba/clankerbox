@@ -1,30 +1,24 @@
-/** Turns a profile file into what `create` needs. Hosts never see a profile. */
+/** Reads a profile file for `create`. Hosts never see a profile. */
 import { Effect, FileSystem, Path, Schema } from "effect";
-import type { ChildProcessSpawner } from "effect/process";
 import { Invalid } from "./errors.ts";
-import { Profile, type MachineSpec } from "./resources.ts";
-import { readSetup } from "./setup.ts";
+import { Profile } from "./resources.ts";
 
-/** What a profile file asks for: the machine's spec, and the host it names, if any. */
-export interface ProfileRequest {
-  readonly spec: MachineSpec;
-  readonly host?: string | undefined;
+/** A profile file as read: its fields, with `setup.path` resolved, and its name as `label`. */
+export interface LoadedProfile extends Profile {
+  readonly label: string;
 }
 
 /** Profile files are JSON, decoded with closed input like every call: unknown keys are refused. */
 const decodeProfile = Schema.decodeUnknownEffect(Schema.fromJsonString(Profile));
 
 /**
- * Reads the profile file at `file`. Its name, the file name without `.json`, becomes the
- * machine's `profile` label, and its `setup` is read relative to the file.
+ * Reads the profile file at `file`. Its name, the file name without `.json`, is the machine's
+ * `profile` label, and its `setup.path` is resolved against the file's directory. The setup
+ * itself is read by whoever sends it, with `readSetup`.
  */
 export const loadProfile = (
   file: string,
-): Effect.Effect<
-  ProfileRequest,
-  Invalid,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> =>
+): Effect.Effect<LoadedProfile, Invalid, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -43,21 +37,11 @@ export const loadProfile = (
 
     const label = path.basename(file, ".json");
 
-    const sizes = {
-      base: profile.base,
-      cpu: profile.cpu,
-      ramMib: profile.ramMib,
-      diskGib: profile.diskGib,
-    };
-
-    if (profile.setup === undefined || profile.setupTimeoutSeconds === undefined) {
-      return { spec: { ...sizes, profile: label }, host: profile.host };
-    }
-
-    const setup = yield* readSetup(path.resolve(path.dirname(file), profile.setup));
-
-    return {
-      spec: { ...sizes, setup, setupTimeoutSeconds: profile.setupTimeoutSeconds, profile: label },
-      host: profile.host,
-    };
+    return profile.setup === undefined
+      ? { ...profile, label }
+      : {
+          ...profile,
+          setup: { ...profile.setup, path: path.resolve(path.dirname(file), profile.setup.path) },
+          label,
+        };
   });

@@ -88,41 +88,36 @@ export const Host = Schema.Struct({
 
 export type Host = typeof Host.Type;
 
+/** A setup script and how long it may run. Nothing logs the script: it can carry secrets. */
+export const Setup = Schema.Struct({ script: Schema.String, timeoutSeconds: Size });
+
+export type Setup = typeof Setup.Type;
+
 const specFields = {
   base: Schema.String,
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
-  /** The setup script's text. Nothing logs it: it can carry secrets. */
-  setup: Schema.optionalKey(Schema.String),
-  setupTimeoutSeconds: Schema.optionalKey(Size),
+  setup: Schema.optionalKey(Setup),
   profile: Schema.optionalKey(Schema.String),
 };
-
-const setupWithItsTimeout = Schema.makeFilter(
-  (spec: { readonly setup?: string; readonly setupTimeoutSeconds?: number }) =>
-    (spec.setup === undefined) === (spec.setupTimeoutSeconds === undefined) ||
-    "setup and setupTimeoutSeconds go together",
-);
 
 /**
  * What a new machine is made from: a base, its sizes, an optional setup script with its
  * timeout, and an optional `profile` label. A profile file fills these in; the host never
  * sees the profile itself.
  */
-export const MachineSpec = Schema.Struct(specFields).check(setupWithItsTimeout);
+export const MachineSpec = Schema.Struct(specFields);
 
 export type MachineSpec = typeof MachineSpec.Type;
 
 /** `machine.create`'s input: the spec and the new machine's name on the host it is sent to. */
-export const CreateRequest = Schema.Struct({ name: Name, ...specFields }).check(
-  setupWithItsTimeout,
-);
+export const CreateRequest = Schema.Struct({ name: Name, ...specFields });
 
 export type CreateRequest = typeof CreateRequest.Type;
 
 /**
- * A profile file: a client-side file that fills in a create request. `setup` is a script
+ * A profile file: a client-side file that fills in a create request. `setup.path` is a script
  * file or a recipe directory, relative to the profile file, and comes with its timeout: the
  * profile's author sets it, and there is no default. `host` places the create on that host
  * instead of by base.
@@ -132,9 +127,8 @@ export const Profile = Schema.Struct({
   cpu: specFields.cpu,
   ramMib: specFields.ramMib,
   diskGib: specFields.diskGib,
-  setup: Schema.optionalKey(Schema.String),
-  setupTimeoutSeconds: specFields.setupTimeoutSeconds,
+  setup: Schema.optionalKey(Schema.Struct({ path: Schema.String, timeoutSeconds: Size })),
   host: Schema.optionalKey(HostId),
-}).check(setupWithItsTimeout);
+});
 
 export type Profile = typeof Profile.Type;

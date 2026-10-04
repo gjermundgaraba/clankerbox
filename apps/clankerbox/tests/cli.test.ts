@@ -315,8 +315,7 @@ test("create --profile NAME reads NAME.json from the profiles directory, with it
       cpu: 2,
       ramMib: 4096,
       diskGib: 20,
-      setup: "dev-recipe",
-      setupTimeoutSeconds: 900,
+      setup: { path: "dev-recipe", timeoutSeconds: 900 },
       host: "hetzner",
     }),
   );
@@ -338,8 +337,8 @@ test("create --profile NAME reads NAME.json from the profiles directory, with it
   expect(stdout).toBe("hetzner_box");
   expect(linux.creates).toHaveLength(0);
   expect(request?.profile).toBe("dev");
-  expect(request?.setupTimeoutSeconds).toBe(900);
-  expect(request?.setup?.startsWith("#!/bin/sh\n")).toBe(true);
+  expect(request?.setup?.timeoutSeconds).toBe(900);
+  expect(request?.setup?.script.startsWith("#!/bin/sh\n")).toBe(true);
 });
 
 test("create --profile takes a path to a profile file", async () => {
@@ -359,39 +358,90 @@ test("create --profile takes a path to a profile file", async () => {
   expect(linux.creates[0]?.profile).toBe("small");
 });
 
-test("create refuses --profile mixed with sizes, and --setup without --setup-timeout", async () => {
+test("create's flags override the profile's fields, and --setup with --setup-timeout replaces its setup", async () => {
+  const dir = await scratch(owned);
+  const file = join(dir, "dev.json");
+  const script = join(dir, "other.sh");
+
+  await writeFile(
+    file,
+    JSON.stringify({
+      base: "ubuntu",
+      cpu: 2,
+      ramMib: 4096,
+      diskGib: 20,
+      setup: { path: "missing.sh", timeoutSeconds: 900 },
+    }),
+  );
+  await writeFile(script, "#!/bin/sh\necho other\n");
+
+  const config = await writeConfig(dir, ["linux"]);
+  const linux = host({ id: "linux", bases: ["ubuntu", "ubuntu-dev"] });
+
+  const { code } = await cli(
+    [
+      "create",
+      "box",
+      "--profile",
+      file,
+      "--base",
+      "ubuntu-dev",
+      "--cpu",
+      "8",
+      "--setup",
+      script,
+      "--setup-timeout",
+      "60",
+      "--config",
+      config,
+    ],
+    { endpoints: [["linux", linux]] },
+  );
+
+  const [request] = linux.creates;
+
+  expect(code).toBe(0);
+  expect(request).toMatchObject({
+    name: "box",
+    base: "ubuntu-dev",
+    cpu: 8,
+    ramMib: 4096,
+    diskGib: 20,
+    profile: "dev",
+    setup: { timeoutSeconds: 60 },
+  });
+  expect(request?.setup?.script === "#!/bin/sh\necho other\n").toBe(true);
+});
+
+test("create refuses --setup or --setup-timeout alone, and a spec missing its base or sizes", async () => {
   const dir = await scratch(owned);
   const config = await writeConfig(dir, ["linux"]);
   const script = join(dir, "setup.sh");
+  const profile = join(dir, "small.json");
 
   await writeFile(script, "#!/bin/sh\ntrue\n");
+  await writeFile(profile, JSON.stringify({ base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 }));
 
   const linux = host({ id: "linux", bases: ["ubuntu"] });
-  const endpoints = [["linux", linux]] as const;
 
-  const mixed = await cli(
-    ["create", "box", "--profile", "dev", "--cpu", "2", "--json", "--config", config],
-    {
-      endpoints,
-    },
-  );
+  const run = (args: ReadonlyArray<string>) =>
+    cli(["create", "box", ...args, "--json", "--config", config], {
+      endpoints: [["linux", linux]],
+    });
 
-  const half = await cli(
-    ["create", "box", ...sizes, "--setup", script, "--json", "--config", config],
-    {
-      endpoints,
-    },
-  );
+  const runs = [
+    await run([...sizes, "--setup", script]),
+    await run(["--profile", profile, "--setup", script]),
+    await run(["--profile", profile, "--setup-timeout", "60"]),
+    await run(["--base", "ubuntu"]),
+  ];
 
-  const missing = await cli(["create", "box", "--base", "ubuntu", "--json", "--config", config], {
-    endpoints,
-  });
-
-  for (const run of [mixed, half, missing]) {
-    expect(run.code).toBe(1);
-    expect(decodeJsonError(run.stdout).error.tag).toBe("Invalid");
+  for (const { code, stdout } of runs) {
+    expect(code).toBe(1);
+    expect(decodeJsonError(stdout).error.tag).toBe("Invalid");
   }
 
+  expect(decodeJsonError(runs[3]?.stdout ?? "").error.message).toContain("cpu");
   expect(linux.calls).toEqual([]);
 });
 
@@ -410,8 +460,8 @@ test("create --setup sends a script file as its text", async () => {
   );
 
   expect(code).toBe(0);
-  expect(linux.creates[0]?.setup === "#!/bin/sh\necho set up\n").toBe(true);
-  expect(linux.creates[0]?.setupTimeoutSeconds).toBe(60);
+  expect(linux.creates[0]?.setup?.script === "#!/bin/sh\necho set up\n").toBe(true);
+  expect(linux.creates[0]?.setup?.timeoutSeconds).toBe(60);
 });
 
 test("deleting a machine that is already gone counts as done", async () => {

@@ -7,10 +7,10 @@ import {
   Client,
   Invalid,
   loadProfile,
-  type MachineSpec,
+  MachineSpec,
   readSetup,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Console, DateTime, Duration, Effect, FileSystem, Option, Path } from "effect";
+import { Console, DateTime, Duration, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
@@ -154,7 +154,9 @@ const createFlags = {
     ),
   ),
   profile: Flag.String("profile").pipe(
-    Flag.withDescription("A profile file's path, or a name in the config's profiles directory."),
+    Flag.withDescription(
+      "A profile file's path, or a name in the config's profiles directory. The other flags override its fields.",
+    ),
     Flag.optional,
   ),
   base: Flag.String("base").pipe(Flag.withDescription("The base to create from."), Flag.optional),
@@ -162,60 +164,24 @@ const createFlags = {
   ramMib: Flag.Int("ram-mib").pipe(Flag.withDescription("RAM in MiB."), Flag.optional),
   diskGib: Flag.Int("disk-gib").pipe(Flag.withDescription("Disk in GiB."), Flag.optional),
   setup: Flag.String("setup").pipe(
-    Flag.withDescription("A setup script, or a recipe directory holding setup.sh."),
+    Flag.withDescription(
+      "A setup script, or a recipe directory holding setup.sh. With --setup-timeout, it replaces the profile's setup.",
+    ),
     Flag.optional,
   ),
   setupTimeout: Flag.Int("setup-timeout").pipe(
-    Flag.withDescription("How long setup may run, in seconds. Required with --setup."),
+    Flag.withDescription("How long setup may run, in seconds. Goes with --setup."),
     Flag.optional,
   ),
 };
 
 type CreateFlags = Command.Command.Config.Infer<typeof createFlags>;
 
-/** The spec and host a create asks for, from a profile file or from the flags. */
-const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
+/** `--setup` and `--setup-timeout`, which go together, with the path resolved against the cwd. */
+const flagSetup = (flags: CreateFlags) =>
   Effect.gen(function* () {
-    const direct = [
-      Option.isSome(flags.base),
-      Option.isSome(flags.cpu),
-      Option.isSome(flags.ramMib),
-      Option.isSome(flags.diskGib),
-      Option.isSome(flags.setup),
-      Option.isSome(flags.setupTimeout),
-    ];
-
-    if (Option.isSome(flags.profile)) {
-      if (direct.includes(true)) {
-        return yield* new Invalid({
-          message:
-            "--profile doesn't mix with --base, --cpu, --ram-mib, --disk-gib, --setup or --setup-timeout",
-        });
-      }
-
-      return yield* loadProfile(yield* profileFile(config, flags.profile.value));
-    }
-
-    if (
-      Option.isNone(flags.base) ||
-      Option.isNone(flags.cpu) ||
-      Option.isNone(flags.ramMib) ||
-      Option.isNone(flags.diskGib)
-    ) {
-      return yield* new Invalid({
-        message: "create needs --profile, or --base, --cpu, --ram-mib and --disk-gib",
-      });
-    }
-
-    const sizes = {
-      base: flags.base.value,
-      cpu: flags.cpu.value,
-      ramMib: flags.ramMib.value,
-      diskGib: flags.diskGib.value,
-    };
-
     if (Option.isNone(flags.setup) && Option.isNone(flags.setupTimeout)) {
-      return { spec: sizes, host: undefined };
+      return undefined;
     }
 
     if (Option.isNone(flags.setup) || Option.isNone(flags.setupTimeout)) {
@@ -223,10 +189,54 @@ const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
     }
 
     const path = yield* Path.Path;
-    const setup = yield* readSetup(path.resolve(flags.setup.value));
-    const spec: MachineSpec = { ...sizes, setup, setupTimeoutSeconds: flags.setupTimeout.value };
 
-    return { spec, host: undefined };
+    return { path: path.resolve(flags.setup.value), timeoutSeconds: flags.setupTimeout.value };
+  });
+
+const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
+
+/**
+ * The spec and host a create asks for: the profile's fields, each overridden by its flag, and
+ * the profile's setup, replaced as a unit by `--setup` with `--setup-timeout`.
+ */
+const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
+  Effect.gen(function* () {
+    const replacement = yield* flagSetup(flags);
+
+    const profile = Option.isSome(flags.profile)
+      ? yield* loadProfile(yield* profileFile(config, flags.profile.value))
+      : undefined;
+
+    const source = replacement ?? profile?.setup;
+
+    const fields = {
+      base: Option.getOrElse(flags.base, () => profile?.base),
+      cpu: Option.getOrElse(flags.cpu, () => profile?.cpu),
+      ramMib: Option.getOrElse(flags.ramMib, () => profile?.ramMib),
+      diskGib: Option.getOrElse(flags.diskGib, () => profile?.diskGib),
+    };
+
+    const withSetup =
+      source === undefined
+        ? fields
+        : {
+            ...fields,
+            setup: { script: yield* readSetup(source.path), timeoutSeconds: source.timeoutSeconds },
+          };
+
+    const spec = yield* decodeSpec(
+      profile === undefined ? withSetup : { ...withSetup, profile: profile.label },
+      { onExcessProperty: "error", errors: "all" },
+    ).pipe(
+      Effect.mapError(
+        (error) =>
+          new Invalid({
+            message: `create's spec, from --profile and --base, --cpu, --ram-mib and --disk-gib, is invalid: ${error.message}`,
+          }),
+      ),
+    );
+
+    return { spec, host: profile?.host };
   });
 
 const create = Command.make("create", createFlags, (flags) =>
@@ -244,7 +254,7 @@ const create = Command.make("create", createFlags, (flags) =>
   ),
 ).pipe(
   Command.withDescription(
-    "Create a machine from a profile, or from a base with sizes and an optional setup. Prints the new ID.",
+    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. Prints the new ID.",
   ),
 );
 

@@ -73,12 +73,13 @@ test("malformed IDs, names and sizes are refused with Invalid", async () => {
 });
 
 test("setup goes with its timeout", async () => {
-  const marker = "setup-text-marker";
-
-  for (const body of [
-    { ...create, setup: `#!/bin/sh\necho ${marker}\n` },
+  const halves: ReadonlyArray<Schema.Json> = [
+    { ...create, setup: { script: "#!/bin/sh\ntrue\n" } },
+    { ...create, setup: { timeoutSeconds: 60 } },
     { ...create, setupTimeoutSeconds: 60 },
-  ]) {
+  ];
+
+  for (const body of halves) {
     const answer = await post("machine/create", body);
 
     expect(answer.status).toBe(400);
@@ -92,8 +93,7 @@ test("a refused create's message doesn't carry its setup script", async () => {
 
   const answer = await post("machine/create", {
     ...create,
-    setup: `#!/bin/sh\necho ${marker}\n`,
-    setupTimeoutSeconds: "soon",
+    setup: { script: `#!/bin/sh\necho ${marker}\n`, timeoutSeconds: "soon" },
     extra: true,
   });
 

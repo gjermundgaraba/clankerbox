@@ -219,7 +219,8 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
   of the machine or checkpoint they name: RAM state doesn't move, and nothing
   migrates.
 - A create request carries a base name, `cpu`, `ramMib`, `diskGib`, an
-  optional setup script, and an optional `profile` label. A profile file fills
+  optional `setup: {script, timeoutSeconds}`, and an optional `profile`
+  label. A profile file fills
   these in (see [Profiles and bases](#profiles-and-bases)).
 - A full ID, or else a profile's `host`, sends the create to that host.
   Otherwise the client library reads every host's bases, in parallel, and sends
@@ -350,7 +351,7 @@ features (guest sessions, `dev`); the cut-over gate in phase 8 is the only link.
 | Profiles | client-side files: base, sizes, a setup script or recipe directory with its timeout, and an optional host |
 | Setup and preparation | setup once at create; `/var/lib/clankerbox/machine-id` (clankercreds reads it), and `/etc/clankerbox/start` run after every activation |
 | Access | per machine, the SSH endpoint `{host, port}` and the guest's SSH host public key |
-| CLI | `hosts` (with their bases), `machines` (with each machine's age), `create NAME\|ID (--profile P \| --base NAME --cpu N --ram-mib N --disk-gib N [--setup FILE\|DIR --setup-timeout SECONDS])`, `start`, `stop`, `delete`, `fork`, `checkpoint capture/list/get/delete`, `restore`, `ssh MACHINE [ssh args…]`; `--json`, `--timeout` |
+| CLI | `hosts` (with their bases), `machines` (with each machine's age), `create NAME\|ID [--profile P] [--base NAME] [--cpu N] [--ram-mib N] [--disk-gib N] [--setup FILE\|DIR --setup-timeout SECONDS]`, `start`, `stop`, `delete`, `fork`, `checkpoint capture/list/get/delete`, `restore`, `ssh MACHINE [ssh args…]`; `--json`, `--timeout` |
 
 **Not carried over from the Go implementation** (read at `main`, so these are
 listed to keep them from being ported):
@@ -464,16 +465,17 @@ listed to keep them from being ported):
   `packages/contract`:
   - `base`: a base name;
   - `cpu`, `ramMib` and `diskGib`;
-  - `setup`: a script or a recipe directory, and `setupTimeoutSeconds`,
-    required with it. The profile author sets the timeout and records its
-    reason; there is no default;
+  - `setup`, optional: `{path, timeoutSeconds}`, where `path` is a script or
+    a recipe directory. The timeout is part of the setup, so it can't be left
+    out: the profile author sets it and records its reason; there is no
+    default;
   - `host`, optional: the host ID to create on, instead of placement by base.
 - **Profile files are JSON,** so the Schema decodes them with no parser dependency.
 - **Hosts never see a profile.** The client library turns it into a create
   request, and the machine keeps only the name the client passes as its
   `profile` label. Editing a profile affects only machines created afterwards.
-- **The host receives one script.** In the CLI, `setup` is a path relative to
-  the profile file.
+- **The host receives one script.** In the CLI, a profile's `setup.path` is
+  relative to the profile file, and `--setup` to the working directory.
   - A file is sent as its text.
   - A directory holds a `setup.sh` and the files it needs, as existing
     recipes do with `files/`. The client library packs it into one
@@ -991,9 +993,12 @@ Two rules for every VM job:
   ID; `create ID` goes to the host the ID names.
 - **`create`:** `--profile` takes a path to a profile file, or a name looked up
   in the profiles directory from client config, and passes the profile's name
-  as the machine's `profile` label. Without a profile, `--base` and the sizes
-  are given directly, and `--setup FILE|DIR` with `--setup-timeout` is
-  optional.
+  as the machine's `profile` label. The flags merge with the profile by
+  top-level field: `--base`, `--cpu`, `--ram-mib` and `--disk-gib` each
+  override the profile's, and `--setup FILE|DIR` with `--setup-timeout`
+  replaces the profile's setup as a unit. One of those two alone is
+  `Invalid`, with or without a profile. The merged spec is decoded once, which
+  reports a missing base or size.
 - **Shared options:** `--json` and `--timeout`. A mutation returns when its
   action has finished; `--timeout` only stops waiting.
 - **Client config:** one file holding the host list, in placement order, and
