@@ -173,7 +173,8 @@ def machines():
 
 
 def list_units(pattern):
-    _, so, _ = run(['systemctl', 'list-units', '--all', '--no-legend', '--plain', '--no-pager', pattern])
+    so = must(run(['systemctl', 'list-units', '--all', '--no-legend', '--plain', '--no-pager', pattern]),
+              f'systemctl list-units {pattern}')
     return [line.split()[0] for line in so.splitlines() if line.strip()]
 
 
@@ -193,7 +194,7 @@ def initialised():
 
 
 def vm_uid_processes():
-    _, so, _ = run(['ps', '-eo', 'pid=,uid=,args='])
+    so = must(run(['ps', '-eo', 'pid=,uid=,args=']), 'ps')
     found = []
     for line in so.splitlines():
         fields = line.split(None, 2)
@@ -204,7 +205,7 @@ def vm_uid_processes():
 
 def run_processes():
     """Processes whose command line names the run, other than this program and its ps."""
-    _, so, _ = run(['ps', '-eo', 'pid=,uid=,args='])
+    so = must(run(['ps', '-eo', 'pid=,uid=,args=']), 'ps')
     return [line.strip()[:300] for line in so.splitlines()
             if str(RUN) in line and 'remote.py' not in line and 'ps -eo' not in line]
 
@@ -215,7 +216,7 @@ def host_main_pid():
 
 
 def tailnet_listeners():
-    _, so, _ = run(['ss', '-ltnH'])
+    so = must(run(['ss', '-ltnH']), 'ss')
     return sorted({line.split()[3] for line in so.splitlines() if address() in line})
 
 
@@ -233,7 +234,7 @@ def mode_dirs():
 
 
 def prefix_tree():
-    _, so, _ = sudo(['find', str(prefix()), '-printf', '%y %m %u:%g %s %P\\n'])
+    so = must(sudo(['find', str(prefix()), '-printf', '%y %m %u:%g %s %P\\n']), 'find in the prefix')
     return sorted(so.splitlines())
 
 
@@ -472,8 +473,8 @@ def control(op, rest):
                 raise RuntimeError(f'the host ran no guest command in {name} within {limit}s')
             time.sleep(0.2)
     elif op == 'forks':
-        _, so, _ = sudo(['ls', '-A', str(STATE_DIR / 'forks')])
-        print(json.dumps(so.split()))
+        # The host's startup makes forks/ and the checkpoint store, so a missing one fails.
+        print(json.dumps(must(sudo(['ls', '-A', str(STATE_DIR / 'forks')]), 'ls forks').split()))
     elif op == 'plant-fork':
         leftover = STATE_DIR / 'forks' / rest[0]
         if not rest[0].startswith(NAME_PREFIX):
@@ -482,7 +483,7 @@ def control(op, rest):
              'mkdir')
         must(sudo(['touch', str(leftover / 'leftover')], touched=f'makes a file in {leftover}'), 'touch')
     elif op == 'store':
-        _, checkpoints, _ = sudo(['ls', '-A', str(STATE_DIR / 'checkpoints')])
+        checkpoints = must(sudo(['ls', '-A', str(STATE_DIR / 'checkpoints')]), 'ls checkpoints')
         print(json.dumps({'checkpoints': checkpoints.split()}))
     elif op == 'usage':
         print(json.dumps(usage(native_for(rest[0]))))

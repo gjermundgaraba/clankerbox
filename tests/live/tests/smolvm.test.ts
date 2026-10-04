@@ -295,6 +295,12 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
 
   const store = () => controlled(Store, "store");
 
+  /** Whether the host's store holds checkpoint `name`'s directory. */
+  const stored = async (name: string) =>
+    (await store()).checkpoints.some((entry) =>
+      new RegExp(`^${named(name)}-[0-9a-f]{8}\\.checkpoint$`, "u").test(entry),
+    );
+
   const usage = (name: string) => controlled(Usage, "usage", named(name));
 
   /** Whether the host itself reaches `address:port`. */
@@ -700,6 +706,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
         kind: "ram",
         action: { name: "capture", status: "done" },
       });
+      expect(await stored("main-ram")).toBe(true);
 
       started = performance.now();
 
@@ -803,6 +810,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       expect(
         (await cli(["checkpoint", "capture"], id("src"), named("src-ram"), "--json")).code,
       ).toBe(0);
+      expect(await stored("src-ram")).toBe(true);
 
       const forked = await cli(["fork"], id("src"), named("child"), "--json");
 
@@ -849,7 +857,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       await removeMachine("src");
       await removeMachine("child");
       expect((await cli(["checkpoint", "delete"], id("src-ram"), "--json")).code).toBe(0);
-      expect((await store()).checkpoints).not.toContainEqual(expect.stringContaining("src-ram"));
+      expect(await stored("src-ram")).toBe(false);
     },
     minutes(10),
   );
@@ -886,6 +894,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       const listed = decode(Checkpoints, await cli(["checkpoint", "list"], "--json"));
 
       expect(listed.checkpoints).toEqual([]);
+      expect(await stored("main-ram")).toBe(false);
       expect((await store()).checkpoints.filter((entry) => entry.endsWith(".checkpoint"))).toEqual(
         [],
       );
