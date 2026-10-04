@@ -234,6 +234,26 @@ test("with no host offering the base and a host not answering, create is Unavail
   expect(error.retryable).toBe(true);
 });
 
+test("a host that calls itself by another ID is unreachable, and placement never sends to it", async () => {
+  const other = host({ id: "other", bases: ["ubuntu"] });
+
+  const listed = await withClient([["mis", other]], (client) => client.hosts);
+
+  const error = await withClient([["mis", other]], (client) =>
+    Effect.flip(client.create("dev", spec)),
+  );
+
+  expect(listed.answers).toEqual([]);
+  expect(listed.unreachable.map(({ host: id, error: { _tag } }) => [id, _tag])).toEqual([
+    ["mis", "Invalid"],
+  ]);
+  expect(listed.unreachable[0]?.error.message).toContain("calls itself other");
+  expect(error._tag).toBe("Unavailable");
+  expect(error.message).toContain("mis");
+  expect(error.message).toContain("other");
+  expect(other.creates).toHaveLength(0);
+});
+
 test("Capacity from the chosen host is the reply; placement never moves on", async () => {
   const full = host({
     id: "linux",

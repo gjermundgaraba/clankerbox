@@ -77,7 +77,7 @@ export const Checkpoint = Schema.Struct({
 export type Checkpoint = typeof Checkpoint.Type;
 
 export const Host = Schema.Struct({
-  id: Schema.String,
+  id: HostId,
   runtime: Runtime,
   /** The clankerbox version the host runs. */
   version: Schema.String,

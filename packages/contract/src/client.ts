@@ -90,6 +90,12 @@ const makeHostApi = (url: string) => HttpApiClient.make(Http.api, { baseUrl: url
 
 type HostApi = Effect.Success<ReturnType<typeof makeHostApi>>;
 
+/** A host list entry and the client that calls it. */
+interface Route {
+  readonly entry: HostEntry;
+  readonly api: HostApi;
+}
+
 type CallError = HostError | HttpClientError.HttpClientError | Schema.SchemaError;
 
 /** Which call met an error, for its message and for whether it is retryable. */
@@ -223,7 +229,7 @@ export const make = (
       return yield* new Invalid({ message: `host ${twice.id} appears twice in the host list` });
     }
 
-    const routed = yield* Effect.forEach(hosts, (entry) =>
+    const routed: ReadonlyArray<Route> = yield* Effect.forEach(hosts, (entry) =>
       Effect.map(makeHostApi(entry.url), (api) => ({ entry, api })),
     );
 
@@ -266,14 +272,16 @@ export const make = (
     /** Asks every host at once; a host that fails is named rather than failing the whole. */
     const gather = <A>(
       action: string,
-      call: (api: HostApi) => Effect.Effect<ReadonlyArray<A>, CallError>,
+      call: (route: Route) => Effect.Effect<ReadonlyArray<A>, CallError>,
     ): Effect.Effect<Gathered<A>> =>
       Effect.forEach(
         routed,
-        ({ entry, api }) =>
+        (route) =>
           Effect.map(
-            Effect.result(settle(call(api), { host: entry, timeout, access: "read", action })),
-            (result) => ({ host: entry.id, result }),
+            Effect.result(
+              settle(call(route), { host: route.entry, timeout, access: "read", action }),
+            ),
+            (result) => ({ host: route.entry.id, result }),
           ),
         { concurrency: "unbounded" },
       ).pipe(
@@ -293,8 +301,22 @@ export const make = (
         }),
       );
 
-    const allHosts = gather("get host", (api) =>
-      api.host.get({ payload: {} }).pipe(Effect.map((host) => [host])),
+    /**
+     * Every host, paired with its entry. IDs route by the entry's ID, so a host that calls
+     * itself something else is listed as unreachable rather than placed on.
+     */
+    const listed = gather("get host", ({ entry, api }) =>
+      api.host.get({ payload: {} }).pipe(
+        Effect.flatMap((host) =>
+          host.id === entry.id
+            ? Effect.succeed([{ entry, host }])
+            : Effect.fail(
+                new Invalid({
+                  message: `host ${entry.id} (${entry.url}) calls itself ${host.id}; its entry in the host list must use that ID`,
+                }),
+              ),
+        ),
+      ),
     );
 
     const createOn = (host: string, name: string, spec: MachineSpec) =>
@@ -314,13 +336,13 @@ export const make = (
     /** The first host in list order that offers `base`; a host that didn't answer is skipped. */
     const place = (base: string) =>
       Effect.gen(function* () {
-        const { answers, unreachable } = yield* allHosts;
+        const { answers, unreachable } = yield* listed;
 
         const skipped = unreachable.map(({ host }) => host);
-        const chosen = answers.find((host) => host.bases.includes(base));
+        const chosen = answers.find(({ host }) => host.bases.includes(base));
 
         if (chosen !== undefined) {
-          return { host: chosen.id, skipped };
+          return { host: chosen.entry.id, skipped };
         }
 
         if (unreachable.length > 0) {
@@ -335,8 +357,8 @@ export const make = (
         return yield* new Precondition({
           message: `no host offers base ${base}: ${answers
             .map(
-              (host) =>
-                `${host.id} offers ${host.bases.length > 0 ? host.bases.join(", ") : "no bases"}`,
+              ({ entry, host }) =>
+                `${entry.id} offers ${host.bases.length > 0 ? host.bases.join(", ") : "no bases"}`,
             )
             .join("; ")}`,
         });
@@ -379,9 +401,12 @@ export const make = (
       Effect.flatMap(parseId(source), ({ host }) => formatId(host, name));
 
     return {
-      hosts: allHosts,
-      machines: gather("list machines", (api) => api.machine.list({ payload: {} })),
-      checkpoints: gather("list checkpoints", (api) => api.checkpoint.list({ payload: {} })),
+      hosts: Effect.map(listed, ({ answers, unreachable }) => ({
+        answers: answers.map(({ host }) => host),
+        unreachable,
+      })),
+      machines: gather("list machines", ({ api }) => api.machine.list({ payload: {} })),
+      checkpoints: gather("list checkpoints", ({ api }) => api.checkpoint.list({ payload: {} })),
       machine: (id) => byId(id, "read", `get ${id}`, (api) => api.machine.get({ payload: { id } })),
       checkpoint: (id) =>
         byId(id, "read", `get ${id}`, (api) => api.checkpoint.get({ payload: { id } })),
