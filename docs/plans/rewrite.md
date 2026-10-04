@@ -241,6 +241,8 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
   row either way.
 - The CLI's `--timeout` only stops waiting. On timeout the CLI reports that the
   action is still running and exits 1.
+  It bounds each request to a host from when it is sent, so a list names a
+  host that outlasts it as unreachable, and placement skips one.
 - Every action runs in this order (see [State and claims](#state-and-claims)):
   1. Validate the input.
   2. Claim the rows in one transaction, inserting the new row.
