@@ -116,6 +116,7 @@ export const Natives = Schema.fromJsonString(
  * - `store`: print `{checkpoints, packs}`, the names in the host's checkpoint store and packs;
  * - `usage NAME`: print `{native, own_kib, shared_kib}`, the disk of machine NAME's own smolvm
  *   directory and of smolvm's shared pack extractions;
+ * - `wait-host-exec NAME SECONDS`: wait until the host runs a guest command in machine NAME;
  * - `probe ADDRESS PORT`: from the host itself, print `reached` or `unreachable`;
  * - `route ADDRESS`: print the host's `ip route get ADDRESS`.
  *

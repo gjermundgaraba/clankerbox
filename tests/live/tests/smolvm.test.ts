@@ -1046,6 +1046,12 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
         return ran;
       });
 
+      // A guest command run while smolvm's start still makes the guest's container races it,
+      // and can fail the start: smolvm's exec makes the container itself. The host runs setup
+      // in a guest command of its own once the start is done, so the probe waits for that.
+      const running = await control("wait-host-exec", named("crash"), "180");
+
+      expect(running.code, running.stderr).toBe(0);
       await waitFor(
         "crash's setup to start",
         async () => {

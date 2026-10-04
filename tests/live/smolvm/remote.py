@@ -461,6 +461,13 @@ def control(op, rest):
                           'fsfreeze -f /storage && echo frozen', touched=f'freezes /storage in guest {native}',
                           timeout=10)
         note(f'freeze exec rc={rc} {so.strip()} {se.strip()[-300:]}')
+    elif op == 'wait-host-exec':
+        name, limit = rest
+        deadline = time.monotonic() + float(limit)
+        while not host_execs(name):
+            if time.monotonic() > deadline:
+                raise RuntimeError(f'the host ran no guest command in {name} within {limit}s')
+            time.sleep(0.2)
     elif op == 'forks':
         _, so, _ = sudo(['ls', '-A', str(STATE_DIR / 'forks')])
         print(json.dumps(so.split()))
@@ -494,6 +501,25 @@ def control(op, rest):
     else:
         raise RuntimeError(f'unknown control op {op}')
     return 0
+
+
+def host_execs(name):
+    """Whether a process under the host runs `smolvm machine exec` in the machine NAME-<8 hex>."""
+    host = host_main_pid()
+    pattern = re.compile(rf'machine\0exec\0--name\0{re.escape(name)}-[0-9a-f]{{8}}\0'.encode())
+    for pid in filter(str.isdigit, os.listdir('/proc')):
+        try:
+            if not pattern.search(Path(f'/proc/{pid}/cmdline').read_bytes()):
+                continue
+            ancestor = pid
+            while ancestor not in ('0', '1'):
+                if host is not None and ancestor == str(host):
+                    return True
+                status = Path(f'/proc/{ancestor}/status').read_text()
+                ancestor = re.search(r'^PPid:\s+(\d+)', status, re.M).group(1)
+        except (OSError, AttributeError):
+            continue
+    return False
 
 
 # The checkpoint's row in the host's database; sqlite3 holds no other lock on it.
