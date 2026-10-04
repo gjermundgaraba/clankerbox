@@ -159,12 +159,16 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
   - The client chooses the name. Names are unique per host and per resource
     type. Two hosts can each hold a machine with the same name; their IDs tell
     them apart.
-  - Host IDs must not contain `_`, and the ID splits at the first `_`. Short
-    host IDs (`linux`, `mac`) keep IDs short to type.
+  - A host ID matches `^[a-z][a-z0-9-]{0,31}$`. boat's named-snapshot names
+    must match `^[a-z0-9][a-z0-9-]{0,62}$`, and `cbx-<host>-<inst>` must fit
+    in 63 characters. Short host IDs (`linux`, `mac`) keep IDs short to type.
+  - Neither part contains `_`, so the ID splits at its one `_`, and a `create`
+    target that contains `_` is a full ID.
   - The whole ID must match `^[A-Za-z0-9_-]{1,62}$`.
-  - A name must start with a letter.
-  - A name has no `--` and doesn't end in `-`: smolvm 1.22.2 refuses
-    consecutive and trailing hyphens in `<name>-<inst>` (`validate_vm_name`).
+  - A name matches `^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$`: it starts with a
+    letter, keeps its case, and has no `--` and no trailing `-`, because
+    smolvm 1.22.2 refuses consecutive and trailing hyphens in `<name>-<inst>`
+    (`validate_vm_name`).
 - The separator is `_` and the 62-character limit apply because the ID is
   written to `/var/lib/clankerbox/machine-id`. clankercreds uses it as the
   machine's audit-log label, accepts only that pattern, and on a mismatch
@@ -176,14 +180,19 @@ Units run `process.execPath host`. VM jobs never reference this binary (see
   - Tart: `cbx-<host>-m-<name>-<inst>` for machines and
     `cbx-<host>-c-<name>-<inst>` for checkpoints (see
     [Runtimes: Tart](#runtimes-tart)).
-  - boat named snapshots: `cbx-<host>-<name>-<inst>`. boat assigns its own
-    sandbox IDs (see [Runtimes: boat](#runtimes-boat)).
+  - boat named snapshots: `cbx-<host>-<inst>`, which leaves the name, with its
+    case, out of boat's lowercase native name. boat assigns its own sandbox
+    IDs (see [Runtimes: boat](#runtimes-boat)).
 
   A native resource the host didn't make for that row, even one left by an
   earlier row with the same name, won't carry the row's native name. So
   `delete` only ever removes what its row could have made, including after a
-  crash between inserting the row and calling the runtime. Phase 2 checks that
-  the runtimes' name rules accept these names.
+  crash between inserting the row and calling the runtime. Phase 2 checked
+  that the runtimes' name rules accept these names: smolvm's
+  `validate_vm_name` (S@1.22.2:src/data/mod.rs:58-98), Tart's clone, which
+  only refuses `/` (T:Commands/Clone.swift:43-46), and the named-snapshot
+  name pattern in boat's OpenAPI document (see evidence.md "Native names" and
+  boat's Names bullet).
 - Bases have names, not IDs. Each host names its bases in config, and hosts that
   offer the same image use the same name.
 - Every command takes IDs, except `create`, which takes a name or a full ID.
@@ -934,7 +943,7 @@ Two rules for every VM job:
   0.2–21 s from a stopped one.
   - A restore creates a sandbox `from` the snapshot.
   - Named snapshots don't depend on their source and survive its deletion.
-  - Names are account-wide, so the host uses `cbx-<host>-<name>-<inst>`.
+  - Names are account-wide, so the host uses `cbx-<host>-<inst>`.
   - boat keeps at most 10 per account. An 11th is refused with 409
     `named_snapshot_limit`, which is `Capacity`.
 
