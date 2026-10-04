@@ -104,6 +104,7 @@ export const fakeRuntime = (options: FakeOptions) => {
   const machines = new Map<string, FakeMachine>();
   const calls: Array<string> = [];
   const activations: Array<Activation> = [];
+  const observed: Array<ReadonlyArray<string>> = [];
   const injections = new Map<Operation, Array<Injection>>();
   const refusals = new Map<Refusable, Array<Refusal>>();
   const publishAddress = "publishAddress" in options ? options.publishAddress : "127.0.0.1";
@@ -144,13 +145,17 @@ export const fakeRuntime = (options: FakeOptions) => {
       }),
     );
 
-  const observe = (machine: MachineRef): Effect.Effect<Observed> =>
+  const observe = (refs: ReadonlyArray<MachineRef>): Effect.Effect<ReadonlyArray<Observed>> =>
     Effect.sync(() => {
-      const state = machines.get(machine.name)?.state ?? "missing";
+      observed.push(refs.map(({ id }) => id));
 
-      return machine.port === undefined || publishAddress === undefined
-        ? { state }
-        : { state, ssh: { host: publishAddress, port: machine.port } };
+      return refs.map((machine) => {
+        const state = machines.get(machine.name)?.state ?? "missing";
+
+        return machine.port === undefined || publishAddress === undefined
+          ? { state }
+          : { state, ssh: { host: publishAddress, port: machine.port } };
+      });
     });
 
   /** Where a checkpoint's copy of its machine's root is kept. */
@@ -328,6 +333,8 @@ export const fakeRuntime = (options: FakeOptions) => {
     calls,
     /** What each `admit` was asked. */
     activations,
+    /** The machine IDs each `observe` read. */
+    observed,
     /** The guest root of the machine named `name`, while the fake holds it. */
     root: (name: string) => machines.get(name)?.root,
     /** The fake's machines by name, with their state. */

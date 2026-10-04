@@ -8,16 +8,17 @@ import {
   type CreateRequest,
   formatId,
   type HostError,
+  Internal,
   type Machine,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, DateTime, Effect, Layer, type Scope, Semaphore } from "effect";
+import { Array as Arr, Context, DateTime, Effect, Layer, type Scope, Semaphore } from "effect";
 import { checkpointRef, claimsOn, detacher, machineRef, rowsOn } from "./actions.ts";
 import type { HostConfig } from "./config.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
-import { type MachineRef, observeConcurrency, type Refusal, Runtime } from "./runtime.ts";
+import { type MachineRef, type Observed, type Refusal, Runtime } from "./runtime.ts";
 import { type MachineRecord, type NewMachine, type Holding, type NewRow, Store } from "./store.ts";
 
 export interface Interface {
@@ -83,37 +84,51 @@ export const make = (
     const withRuntime = <A>(work: Effect.Effect<A, HostError | Refusal, Runtime>) =>
       Effect.provideService(work, Runtime, runtime);
 
-    /** The machine as the API reports it, its state read from the runtime. */
-    const resource = (record: MachineRecord) =>
-      Effect.map(runtime.observe(ref(record)), (observed) => {
-        let machine: Machine = {
-          id: idOf(record.name),
-          runtime: runtime.name,
-          createdAt: record.createdAt,
-          base: record.base,
-          cpu: record.cpu,
-          ramMib: record.ramMib,
-          diskGib: record.diskGib,
-          state: observed.state,
-          action: record.action,
-        };
+    /** The machine as the API reports it, with the state the runtime read. */
+    const resource = (record: MachineRecord, observed: Observed) => {
+      let machine: Machine = {
+        id: idOf(record.name),
+        runtime: runtime.name,
+        createdAt: record.createdAt,
+        base: record.base,
+        cpu: record.cpu,
+        ramMib: record.ramMib,
+        diskGib: record.diskGib,
+        state: observed.state,
+        action: record.action,
+      };
 
-        if (record.profile !== undefined) {
-          machine = { ...machine, profile: record.profile };
-        }
+      if (record.profile !== undefined) {
+        machine = { ...machine, profile: record.profile };
+      }
 
-        if (observed.ssh !== undefined) {
-          machine = { ...machine, ssh: observed.ssh };
-        }
+      if (observed.ssh !== undefined) {
+        machine = { ...machine, ssh: observed.ssh };
+      }
 
-        if (record.hostKey !== undefined) {
-          machine = { ...machine, hostKey: record.hostKey };
-        }
+      if (record.hostKey !== undefined) {
+        machine = { ...machine, hostKey: record.hostKey };
+      }
 
-        return machine;
-      });
+      return machine;
+    };
 
-    const read = (name: string) => Effect.flatMap(rows.machine(name), resource);
+    /** One machine's state, read from the runtime. */
+    const observe = (record: MachineRecord) =>
+      Effect.flatMap(runtime.observe([ref(record)]), ([observed]) =>
+        observed === undefined
+          ? Effect.fail(
+              new Internal({
+                message: `the ${runtime.name} runtime read no state for ${idOf(record.name)}`,
+              }),
+            )
+          : Effect.succeed(observed),
+      );
+
+    const read = (name: string) =>
+      Effect.flatMap(rows.machine(name), (record) =>
+        Effect.map(observe(record), (observed) => resource(record, observed)),
+      );
 
     /** A new row, with the lowest port that no row holds and nothing listens on. */
     const newRow = (name: string, spec: Spec) =>
@@ -255,7 +270,7 @@ export const make = (
           const [token, { record, running }] = yield* admitted(
             claimAndCheck(store.claim("start", holding(name)), (record) =>
               Effect.gen(function* () {
-                const { state } = yield* runtime.observe(ref(record));
+                const { state } = yield* observe(record);
 
                 if (state === "missing") {
                   return yield* new Precondition({
@@ -294,7 +309,7 @@ export const make = (
 
         const [token, { record, state }] = yield* claimAndCheck(
           store.claim("stop", holding(name)),
-          (record) => Effect.map(runtime.observe(ref(record)), ({ state }) => ({ record, state })),
+          (record) => Effect.map(observe(record), ({ state }) => ({ record, state })),
         );
 
         if (state === "running") {
@@ -371,7 +386,9 @@ export const make = (
 
     return {
       list: Effect.flatMap(store.list, (records) =>
-        Effect.forEach(records, resource, { concurrency: observeConcurrency }),
+        Effect.map(runtime.observe(records.map(ref)), (observed) =>
+          Arr.zipWith(records, observed, resource),
+        ),
       ),
       get: (id) => Effect.flatMap(nameOf(id), read),
       create: (request) => detached(`create ${request.id}`, create(request)),

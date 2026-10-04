@@ -209,25 +209,43 @@ test("smolvm's states map onto running and stopped by whether the VMM is alive",
   });
 });
 
-test("observe reads one machine's status, and reports its published port unless it is missing", async () => {
-  let reply = status("running");
-  const spawner = scripted((call) => (call.args[0] === "machine" ? reply : undefined));
+test("observe reads each machine's status, and reports its published port unless it is missing", async () => {
+  const replies = new Map([
+    ["dev-01234567", status("running")],
+    ["two-01234567", status("created")],
+    [
+      "gone-01234567",
+      {
+        exitCode: 1,
+        stderr:
+          "Error: config operation failed: machine status: machine 'gone-01234567' not found\n",
+      },
+    ],
+  ]);
+
+  const spawner = scripted((call) =>
+    call.args[0] === "machine" ? replies.get(call.args[3] ?? "") : undefined,
+  );
+
   const runtime = await runtimeOf(await prepared(), spawner);
 
-  expect(await Effect.runPromise(runtime.observe(machine))).toEqual({
-    state: "running",
-    ssh: { host: "100.95.240.37", port: 10_000 },
-  });
-
-  reply = status("created");
-  expect((await Effect.runPromise(runtime.observe(machine))).state).toBe("stopped");
-
-  reply = unknown;
-  expect(await Effect.runPromise(runtime.observe(machine))).toEqual({ state: "missing" });
-
-  expect(smolvmArgs(spawner.calls)).toEqual(
-    Array.from({ length: 3 }, () => ["machine", "status", "--name", "dev-01234567", "--json"]),
+  const observed = await Effect.runPromise(
+    runtime.observe([
+      machine,
+      { ...machine, id: "linux_two", name: "two", port: 10_001 },
+      { ...machine, id: "linux_gone", name: "gone", port: 10_002 },
+    ]),
   );
+
+  expect(observed).toEqual([
+    { state: "running", ssh: { host: "100.95.240.37", port: 10_000 } },
+    { state: "stopped", ssh: { host: "100.95.240.37", port: 10_001 } },
+    { state: "missing" },
+  ]);
+  expect(smolvmArgs(spawner.calls).map((args) => args[3])).toEqual(
+    expect.arrayContaining(["dev-01234567", "two-01234567", "gone-01234567"]),
+  );
+  expect(spawner.calls).toHaveLength(4);
 });
 
 test("observe fails with smolvm's last output when status fails for another reason", async () => {
@@ -236,7 +254,7 @@ test("observe fails with smolvm's last output when status fails for another reas
   );
 
   const runtime = await runtimeOf(await prepared(), spawner);
-  const error = await Effect.runPromise(Effect.flip(runtime.observe(machine)));
+  const error = await Effect.runPromise(Effect.flip(runtime.observe([machine])));
 
   expect(error._tag).toBe("Internal");
   expect(error.message).toBe(

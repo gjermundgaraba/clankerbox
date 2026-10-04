@@ -52,13 +52,6 @@ export interface CheckpointRef {
   readonly port: number | undefined;
 }
 
-/**
- * How many machines' states the host reads at once, in a list or a RAM budget check. On smolvm
- * each read is a `machine status` process, so a host with many machines doesn't start them all
- * together.
- */
-export const observeConcurrency = 8;
-
 /** What the runtime reports about a machine. Nothing here is stored. */
 export interface Observed {
   readonly state: MachineState;
@@ -132,8 +125,15 @@ export interface Interface {
    * the Tart forwarder's listeners for the machines that run.
    */
   readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, HostError>;
-  /** Reads a machine's state. A machine the runtime doesn't know is `missing`, not an error. */
-  readonly observe: (machine: MachineRef) => Effect.Effect<Observed, HostError>;
+  /**
+   * Reads the machines' states, one per machine, in their order, in as few native calls as the
+   * runtime allows: one `tart list` on Tart, and one `GET /sandboxes` on boat; smolvm reads
+   * each machine on its own, at its own bound. A machine the runtime doesn't know is
+   * `missing`, not an error.
+   */
+  readonly observe: (
+    machines: ReadonlyArray<MachineRef>,
+  ) => Effect.Effect<ReadonlyArray<Observed>, HostError>;
   /**
    * Step 3 of an action that boots a machine: the runtime's own checks, such as the smolvm
    * host's RAM budget. A failure here writes nothing. Not called for `start` on a running

@@ -828,7 +828,9 @@ Two rules for every VM job:
   bytes, so startup refuses a state dir whose control-socket path,
   `<stateDir>/smolvm/.cache/smolvm/vms/<16 hex>/control.sock`, would exceed
   107 (so the state dir itself is at most 52 bytes).
-- **State:** read from `machine status --name X --json`. `running`, `pausing`,
+- **State:** read from `machine status --name X --json`, one per machine, at
+  most 8 at once when the core reads several (a list, or the RAM budget).
+  `running`, `pausing`,
   `unreachable` and `frozen` have a live VMM and read as `running`;
   `created`, `stopped`, `paused` and `failed` read as `stopped`; smolvm's
   "machine '<name>' not found" reads as `missing`.
@@ -1083,9 +1085,10 @@ Two rules for every VM job:
     unrenamed `Box <time>` sandbox created around the row's `createdAt`.
   - After a create, fork or restore, the host sets boat's display name to the
     machine ID, for the operator's boat dashboard.
-- **State:** read with one `GET /sandboxes` per listing, filtered to the
+- **State:** the runtime's `observe` takes the machines and returns each
+  one's state, which boat answers with one `GET /sandboxes`, filtered to the
   recorded IDs, because the account may also hold the operator's own
-  sandboxes.
+  sandboxes. Nothing caches it.
   - `ready`, `idle` and `running` read as `running`.
   - 404 and `cancelled` read as `missing`.
   - Anything else reads as `stopped`. A machine that boat stopped on its own
@@ -1306,6 +1309,11 @@ tests use real VMs.
        in place of the action that holds it: a fork holds its stopped source
        under the same action as the copy, and Tart's count took the source as
        booting, refusing another boot while a fork ran.
+     - `observe` takes the machines and returns each one's state (phase-5
+       review): a list of N Tart machines ran N `tart list` calls, and the
+       RAM budget N `machine status` calls under the admission permit. Tart
+       now answers with one `tart list` and boat with one `GET /sandboxes`;
+       smolvm reads each machine inside its runtime, at its own bound of 8.
 6. **boat.** The runtime, the machine-type choice, its refusals and its
    bounded retry. `stop` and `delete` after an interrupted operation. Built
    and tested on boat's trial, live tests included.

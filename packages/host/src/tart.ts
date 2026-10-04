@@ -539,11 +539,15 @@ export const make = (
             }
           }
         }),
-      observe: (machine): Effect.Effect<Observed, HostError> =>
-        Effect.map(state(vmOf(machine)), (observed) =>
-          observed !== "running" || machine.port === undefined
-            ? { state: observed }
-            : { state: observed, ssh: { host: settings.publishAddress, port: machine.port } },
+      observe: (machines) =>
+        Effect.map(list, (vms) =>
+          machines.map((machine): Observed => {
+            const observed = vms.get(vmOf(machine)) ?? "missing";
+
+            return observed !== "running" || machine.port === undefined
+              ? { state: observed }
+              : { state: observed, ssh: { host: settings.publishAddress, port: machine.port } };
+          }),
         ),
       /**
        * A fork's source must be stopped, and the Mac must have room: every running VM in the

@@ -61,6 +61,12 @@ export const pin = `smolvm ${testedVersion} ${process.platform}-${process.arch}`
 export const nativeName = (resource: Pick<MachineRef, "name" | "instance">): string =>
   `${resource.name}-${resource.instance.slice(0, 8)}`;
 
+/**
+ * How many `machine status` processes an `observe` runs at once, so a list or a RAM budget check
+ * on a host with many machines doesn't start them all together.
+ */
+const observeConcurrency = 8;
+
 /** The systemd scope `SMOLVM_VM_USE_SCOPE=1` puts a VM in (S@1.22.2:src/systemd_scope.rs:151-163). */
 const scopeName = (native: string): string => `smolvm-vm-${native}.scope`;
 
@@ -216,12 +222,15 @@ export const make = (
         },
       );
 
-    const observe = (machine: MachineRef): Effect.Effect<Observed, HostError> =>
+    const observeOne = (machine: MachineRef): Effect.Effect<Observed, HostError> =>
       Effect.map(state(nativeName(machine)), (observed) =>
         observed === "missing" || machine.port === undefined
           ? { state: observed }
           : { state: observed, ssh: { host: settings.publishAddress, port: machine.port } },
       );
+
+    const observe = (machines: ReadonlyArray<MachineRef>) =>
+      Effect.forEach(machines, observeOne, { concurrency: observeConcurrency });
 
     /** Every machine starts branchable: store capture needs it. */
     const boot = (native: string) =>

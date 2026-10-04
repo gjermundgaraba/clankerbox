@@ -149,6 +149,22 @@ test("a machine's state is read from the runtime every time", async () => {
   expect(listed.map(({ id, state }) => [id, state])).toEqual([["linux_dev", "missing"]]);
 });
 
+test("a list reads every machine's state in one observe", async () => {
+  const linux = await host();
+
+  await linux.run(linux.machines.create(request("a")));
+  await linux.run(linux.machines.create(request("b")));
+  linux.fake.observed.length = 0;
+
+  const listed = await linux.run(linux.machines.list);
+
+  expect(listed.map(({ id, state }) => [id, state])).toEqual([
+    ["linux_a", "running"],
+    ["linux_b", "running"],
+  ]);
+  expect(linux.fake.observed).toEqual([["linux_a", "linux_b"]]);
+});
+
 test("a duplicate name is Conflict{exists}, and the runtime is never called", async () => {
   const linux = await host();
 
@@ -511,6 +527,17 @@ test("the RAM budget counts running machines and refuses with Capacity, writing 
   expect(restart._tag).toBe("Capacity");
   expect(again.action).toEqual({ name: "start", status: "done" });
   expect((await rows(linux)).map(({ name }) => name).sort()).toEqual(["a", "b", "c"]);
+});
+
+test("the RAM budget reads the machines no action boots in one observe", async () => {
+  const linux = await host({ runtime: { ramBudgetMib: 4096 } });
+
+  await linux.run(linux.machines.create(request("a")));
+  await linux.run(linux.machines.create(request("b")));
+  linux.fake.observed.length = 0;
+  await linux.run(linux.machines.create(request("c")));
+
+  expect(linux.fake.observed[0]).toEqual(["linux_a", "linux_b"]);
 });
 
 /** Runs `actions` at once, each to its result. */

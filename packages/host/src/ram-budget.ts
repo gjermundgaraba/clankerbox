@@ -4,30 +4,27 @@
  */
 import { Capacity, type HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
-import { type Activation, type MachineRef, type Observed, observeConcurrency } from "./runtime.ts";
+import type { Activation, Interface } from "./runtime.ts";
 
 /**
  * Sums the `ramMib` of every machine that is running or that an action is booting, each once,
  * and refuses when the sum passes `budgetMib`. The target is booting, so it is in the sum.
  * Counting the booting ones keeps an action that is past its check from being missed; the host
- * checks booting actions one at a time, so two never count each other.
+ * checks booting actions one at a time, so two never count each other. The others' states come
+ * from one `observe`.
  */
 export const checkRamBudget = (
   budgetMib: number,
   activation: Activation,
-  observe: (machine: MachineRef) => Effect.Effect<Observed, HostError>,
+  observe: Interface["observe"],
 ): Effect.Effect<void, HostError> =>
   Effect.gen(function* () {
-    const counted = yield* Effect.forEach(
-      activation.machines,
-      ({ machine, booting }) =>
-        booting
-          ? Effect.succeed(machine.ramMib)
-          : Effect.map(observe(machine), ({ state }) => (state === "running" ? machine.ramMib : 0)),
-      { concurrency: observeConcurrency },
-    );
+    const booting = activation.machines.filter((held) => held.booting);
+    const others = activation.machines.filter((held) => !held.booting);
+    const observed = yield* observe(others.map(({ machine }) => machine));
+    const running = others.filter((_, index) => observed[index]?.state === "running");
 
-    const total = counted.reduce((sum, ramMib) => sum + ramMib, 0);
+    const total = [...booting, ...running].reduce((sum, { machine }) => sum + machine.ramMib, 0);
 
     if (total > budgetMib) {
       return yield* new Capacity({
