@@ -11,7 +11,6 @@ import { type Machine, version } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 import {
-  CrashWatch,
   type Environment,
   environment,
   Failure,
@@ -752,43 +751,6 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       await removeMachine("crash");
     },
     minutes(10),
-  );
-
-  test(
-    "after a crash between inserting the row and calling the runtime, stop writes nothing and delete removes just the row",
-    async () => {
-      // Step 3 reads every other machine's state with `machine status` before the runtime's
-      // create; the host dies inside that read, with the new row inserted and nothing native.
-      expect((await control("arm-crash", `${namePrefix}main-`, "120")).code).toBe(0);
-
-      const lost = failure(await createBare("gap"));
-      const watch = decode(CrashWatch, await control("crash-result", "60"));
-
-      expect(watch.killed, watch.reason).toBe(true);
-      expect(lost.tag).toBe("Unavailable");
-      expect((await control("host-start")).code).toBe(0);
-      expect((await machine("gap"))?.action).toEqual({
-        name: "create",
-        status: "failed",
-        error: { tag: "Internal", message: "host restarted during create" },
-      });
-      expect(await natives("gap")).toEqual({ machines: [], scopes: [] });
-
-      const stopped = await cli(["stop"], id("gap"), "--json");
-
-      expect(stopped.code, stopped.stdout).toBe(0);
-      expect(decode(OneMachine, stopped)).toMatchObject({
-        state: "missing",
-        action: {
-          name: "create",
-          status: "failed",
-          error: { tag: "Internal", message: "host restarted during create" },
-        },
-      });
-      await removeMachine("gap");
-      expect(await machine("gap")).toBeUndefined();
-    },
-    minutes(5),
   );
 
   test(

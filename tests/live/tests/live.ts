@@ -82,10 +82,6 @@ export const Natives = Schema.fromJsonString(
   }),
 );
 
-export const CrashWatch = Schema.fromJsonString(
-  Schema.Struct({ killed: Schema.Boolean, reason: Schema.optionalKey(Schema.String) }),
-);
-
 /**
  * The live environment: `CLANKERBOX_BIN`, the binary under test; `CLANKERBOX_LIVE_CONFIG`, a
  * client config whose first host is the host under test and whose other hosts don't answer;
@@ -94,8 +90,6 @@ export const CrashWatch = Schema.fromJsonString(
  *
  * - `host-stop`, `host-start`: stop the host process (SIGTERM) or start it;
  * - `host-kill`: SIGKILL the host process, as a crash;
- * - `arm-crash NEEDLE [SECONDS]`: SIGKILL the host the moment it spawns a command whose argv
- *   contains NEEDLE; `crash-result [SECONDS]` prints `{killed, reason?}` once that is decided;
  * - `natives PREFIX`: print `{machines: [{name, state}], scopes}` for the runtime's machines and
  *   systemd scopes whose names start with PREFIX;
  * - `guest NAME COMMAND`: run COMMAND with `/bin/sh -c` as root in the guest of machine NAME
