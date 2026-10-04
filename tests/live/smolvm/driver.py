@@ -83,15 +83,15 @@ def main():
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sig, raise_stop)
 
-    control_path = '/tmp/cbx-live-%C'
-    ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=8',
-           '-o', 'ControlMaster=auto', '-o', f'ControlPath={control_path}', '-o', 'ControlPersist=900',
-           options.ssh]
-    scp = ['scp', '-q', '-o', 'BatchMode=yes', '-o', 'ControlMaster=auto', '-o', f'ControlPath={control_path}',
-           '-o', 'ControlPersist=900']
-
     with WorkRun('live-smolvm') as run:
         rid = 'l' + run.path.name.rsplit('-', 1)[1][:3]
+        # The run's own ssh master, so another run's exit can't close it.
+        control_path = f'/tmp/cbx-live-{rid}-%C'
+        ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=8',
+               '-o', 'ControlMaster=auto', '-o', f'ControlPath={control_path}', '-o', 'ControlPersist=900',
+               options.ssh]
+        scp = ['scp', '-q', '-o', 'BatchMode=yes', '-o', 'ControlMaster=auto', '-o', f'ControlPath={control_path}',
+               '-o', 'ControlPersist=900']
         rdir = f'{options.root}/runs/{rid}'
         remote_py = f'{rdir}/remote.py'
         # Quoted for the remote shell.

@@ -40,7 +40,8 @@ OWNER = 'clankerbox-work-run-v1'
 # Pulled from the mirror by digest, so neither the image seed nor a guest pull reaches Docker Hub.
 IMAGE = 'mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7'
 TEMPLATES = ('storage-template.ext4', 'overlay-template.ext4')
-# Every live run's machines carry it; init refuses to start while any run's scope is there.
+# Every live run's host unit and machines carry it; init refuses to start while any run's unit or
+# scope is there.
 RUNS_PREFIX = 'clankerbox-rewrite-'
 # The scopes of smolvm's image-seed builder VMs, whose names smolvm fixes (S@1.22.2:src/image_seed.rs:381).
 HELPER_PATTERNS = ('smolvm-vm-image-seed-*',)
@@ -290,8 +291,9 @@ def cmd_init(tailnet, smolvm_prefix):
     save_state(address=tailnet, prefix=smolvm_prefix, helper_units_before=helper_units())
     if not (prefix() / 'READY').exists():
         sys.exit(f'{prefix()}/READY is missing')
-    if list_units(f'smolvm-vm-{RUNS_PREFIX}*') or vm_uid_processes():
-        sys.exit(f'smolvm-vm-{RUNS_PREFIX}* scopes or VM-uid processes exist before the run; another run is live')
+    if list_units(f'{RUNS_PREFIX}*') or list_units(f'smolvm-vm-{RUNS_PREFIX}*') or vm_uid_processes():
+        sys.exit(f'{RUNS_PREFIX}* units, smolvm-vm-{RUNS_PREFIX}* scopes or VM-uid processes exist before the '
+                 'run; another run is live')
     snap = snapshot('before')
     save_state(modes_before={d: v for d, v in snap['modes'].items()}, prefix_tree_before=snap['prefix_tree'],
                tailnet_listeners_before=snap['tailnet_listeners'],
