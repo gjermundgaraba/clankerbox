@@ -595,7 +595,7 @@ test("startup empties the forks area and makes the runtime's directories", async
   );
 
   await mkdir(join(paths.forks, "old-01234567", "old-01234567.checkpoint"), { recursive: true });
-  await Effect.runPromise(runtime.startup);
+  await Effect.runPromise(runtime.startup([machine]));
 
   expect(await readdir(paths.forks)).toEqual([]);
   expect((await readdir(settings.stateDir)).sort()).toEqual(["checkpoints", "forks"]);
@@ -804,7 +804,7 @@ test("a fork captures into a store of its own, restores from it, and removes the
   const runtime = await runtimeOf(settings, spawner);
   const store = join(settings.stateDir, "forks", "copy-abcdefab");
 
-  await Effect.runPromise(runtime.startup);
+  await Effect.runPromise(runtime.startup([machine]));
   await Effect.runPromise(runtime.fork(machine, copy));
 
   expect(smolvmArgs(spawner.calls)).toEqual([
@@ -840,7 +840,7 @@ test("a fork that fails still removes its store", async () => {
   const settings = await prepared();
   const runtime = await runtimeOf(settings, forking({ exitCode: 1, stderr: "Error: no space\n" }));
 
-  await Effect.runPromise(runtime.startup);
+  await Effect.runPromise(runtime.startup([machine]));
 
   const error = await Effect.runPromise(Effect.flip(runtime.fork(machine, copy)));
 
@@ -891,7 +891,7 @@ test("deleting a ram checkpoint from a store no capture has written prunes nothi
   const spawner = scripted(() => undefined);
   const runtime = await runtimeOf(settings, spawner);
 
-  await Effect.runPromise(runtime.startup);
+  await Effect.runPromise(runtime.startup([machine]));
   await Effect.runPromise(runtime.deleteCheckpoint(ramCheckpoint));
 
   expect(smolvmArgs(spawner.calls)).toEqual([]);

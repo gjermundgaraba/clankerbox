@@ -2,12 +2,15 @@
  * The RAM budget, a step-3 check that a runtime's `admit` calls: the smolvm host's machines
  * must fit its budget, so the host refuses with `Capacity` before it boots one too many.
  */
-import { type ActionName, Capacity, type HostError } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, type HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
-import { type Activation, type MachineRef, type Observed, observeConcurrency } from "./runtime.ts";
-
-/** The actions that boot a machine. A machine one of them holds is counted while it runs. */
-const booting: ReadonlySet<ActionName> = new Set(["create", "start", "fork", "restore"]);
+import {
+  type Activation,
+  bootingActions,
+  type MachineRef,
+  type Observed,
+  observeConcurrency,
+} from "./runtime.ts";
 
 /**
  * Sums the `ramMib` of every machine that is running or held by an action that boots it, each
@@ -24,7 +27,7 @@ export const checkRamBudget = (
     const counted = yield* Effect.forEach(
       activation.machines,
       ({ machine, holder }) =>
-        holder !== undefined && booting.has(holder)
+        holder !== undefined && bootingActions.has(holder)
           ? Effect.succeed(machine.ramMib)
           : Effect.map(observe(machine), ({ state }) => (state === "running" ? machine.ramMib : 0)),
       { concurrency: observeConcurrency },

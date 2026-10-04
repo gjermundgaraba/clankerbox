@@ -446,16 +446,17 @@ export const make = (
       publishAddress: settings.publishAddress,
       pin,
       // Nothing is in flight at startup, so no fork's store is still needed.
-      startup: Effect.gen(function* () {
-        yield* removeAll(paths.forks);
+      startup: () =>
+        Effect.gen(function* () {
+          yield* removeAll(paths.forks);
 
-        for (const dir of [paths.store, paths.forks]) {
-          yield* files(
-            `couldn't create ${dir}`,
-            fs.makeDirectory(dir, { recursive: true, mode: 0o700 }),
-          );
-        }
-      }),
+          for (const dir of [paths.store, paths.forks]) {
+            yield* files(
+              `couldn't create ${dir}`,
+              fs.makeDirectory(dir, { recursive: true, mode: 0o700 }),
+            );
+          }
+        }),
       observe,
       admit: ({ source, ...activation }) =>
         Effect.andThen(

@@ -190,7 +190,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         version: "fake",
         publishAddress,
         pin: options.pin ?? "fake 1",
-        startup: Effect.sync(() => calls.push("startup")),
+        startup: () => Effect.sync(() => calls.push("startup")),
         observe,
         admit: (activation: Activation) =>
           Effect.andThen(

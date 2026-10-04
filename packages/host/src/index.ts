@@ -29,7 +29,9 @@ export const hostLayer = <E, R>(
       ),
     ),
     Layer.provide(
-      Layer.merge(Machines.layer(config), Checkpoints.layer(config)).pipe(Layer.provide(startup)),
+      Layer.merge(Machines.layer(config), Checkpoints.layer(config)).pipe(
+        Layer.provide(startup(config)),
+      ),
     ),
     // The runtime is built only once the store holds the state dir's owner lock: a runtime may
     // write there (smolvm creates its inventory), and a second host must not touch it at all.

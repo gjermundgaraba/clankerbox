@@ -36,6 +36,14 @@ export interface MachineRef {
 
 export type MachineState = Machine["state"];
 
+/** The actions that boot a machine. Step 3 counts a machine one of them holds as running. */
+export const bootingActions: ReadonlySet<ActionName> = new Set([
+  "create",
+  "start",
+  "fork",
+  "restore",
+]);
+
 export type CheckpointKind = Checkpoint["kind"];
 
 /** A checkpoint as the runtime sees it. */
@@ -121,10 +129,11 @@ export interface Interface {
    */
   readonly pin: string | undefined;
   /**
-   * The runtime's own cleanup at host startup, run after every interrupted action has been
-   * marked failed and before the host serves.
+   * The runtime's own work at host startup, over every machine the host has, run after every
+   * interrupted action has been marked failed and before the host serves: smolvm's cleanup, or
+   * the Tart forwarder's listeners for the machines that run.
    */
-  readonly startup: Effect.Effect<void, HostError>;
+  readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, HostError>;
   /** Reads a machine's state. A machine the runtime doesn't know is `missing`, not an error. */
   readonly observe: (machine: MachineRef) => Effect.Effect<Observed, HostError>;
   /**
