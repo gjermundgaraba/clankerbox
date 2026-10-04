@@ -305,7 +305,7 @@ export const make = (
         const id = yield* formatId(host, name);
         const { entry, api } = yield* route(host);
 
-        return yield* settle(api.machine.create({ payload: { ...spec, name } }), {
+        return yield* settle(api.machine.create({ payload: { ...spec, id } }), {
           host: entry,
           timeout,
           access: "write",

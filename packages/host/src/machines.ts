@@ -112,7 +112,11 @@ export const make = (
         return machine;
       });
 
-    /** The name an ID gives on this host. An ID for another host is the caller's mistake. */
+    /**
+     * The name an ID gives on this host: the whole ID is checked, and an ID for another host is
+     * the caller's mistake. A new machine's ID goes through here too, so the ID a row's machine
+     * reports always fits clankercreds' pattern.
+     */
     const nameOf = (id: string) =>
       Effect.flatMap(parseId(id), ({ host, name }) =>
         host === config.id
@@ -134,7 +138,7 @@ export const make = (
     const read = (name: string) => Effect.flatMap(find(name), resource);
 
     /** Inserts the new row with a port no row holds and nothing listens on, picking again on a collision. */
-    const claimNew = (request: CreateRequest): Effect.Effect<Claim, HostError> =>
+    const claimNew = (name: string, request: CreateRequest): Effect.Effect<Claim, HostError> =>
       Effect.gen(function* () {
         const createdAt = yield* DateTime.now;
         const instance = randomBytes(instanceBytes).toString("hex");
@@ -145,7 +149,7 @@ export const make = (
             address === undefined ? undefined : yield* pickPort(address, yield* store.ports);
 
           const row: NewMachine = {
-            name: request.name,
+            name,
             instance,
             native: undefined,
             createdAt,
@@ -263,6 +267,7 @@ export const make = (
 
     const create = (request: CreateRequest) =>
       Effect.gen(function* () {
+        const name = yield* nameOf(request.id);
         const image = config.bases.get(request.base);
 
         if (image === undefined) {
@@ -271,7 +276,7 @@ export const make = (
           });
         }
 
-        const [claimed] = yield* claimAndCheck(claimNew(request), (record) =>
+        const [claimed] = yield* claimAndCheck(claimNew(name, request), (record) =>
           admit("create", record),
         );
 
@@ -292,7 +297,7 @@ export const make = (
 
         yield* done(claimed, hostKey);
 
-        return yield* read(request.name);
+        return yield* read(name);
       });
 
     const start = (id: string) =>
@@ -359,7 +364,7 @@ export const make = (
         Effect.forEach(records, resource, { concurrency: "unbounded" }),
       ),
       get: (id) => Effect.flatMap(nameOf(id), read),
-      create: (request) => detached(logged(`create ${idOf(request.name)}`, create(request))),
+      create: (request) => detached(logged(`create ${request.id}`, create(request))),
       start: (id) => detached(logged(`start ${id}`, start(id))),
       stop: (id) => detached(logged(`stop ${id}`, stop(id))),
       delete: (id) => detached(logged(`delete ${id}`, remove(id))),

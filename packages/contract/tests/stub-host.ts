@@ -79,7 +79,7 @@ export const stubHost = (options: StubHostOptions) => {
   const create = (request: CreateRequest) =>
     options.create === undefined
       ? add(
-          machine(`${options.id}_${request.name}`, {
+          machine(request.id, {
             runtime,
             base: request.base,
             cpu: request.cpu,

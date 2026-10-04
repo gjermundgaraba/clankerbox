@@ -21,8 +21,9 @@ export const hostConfig = (stateDir: string) => ({
   stateDir,
 });
 
+/** A create request for the machine named `name` on host `linux`. */
 export const request = (name: string, fields?: Partial<CreateRequest>): CreateRequest => ({
-  name,
+  id: `linux_${name}`,
   base: "ubuntu",
   cpu: 1,
   ramMib: 1024,

@@ -26,7 +26,7 @@ const post = async (path: string, body: Schema.Json) => {
   return { status: response.status, body: await response.text() };
 };
 
-const create = { name: "dev", base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
+const create = { id: "linux_dev", base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
 
 test("a valid call is answered", async () => {
   const { status } = await post("machine/create", create);
@@ -59,7 +59,8 @@ test("every group refuses undeclared fields with Invalid", async () => {
 test("malformed IDs, names and sizes are refused with Invalid", async () => {
   for (const [path, body] of [
     ["machine/get", { id: "nohost" }],
-    ["machine/create", { ...create, name: "2dev" }],
+    ["machine/create", { ...create, id: "linux_2dev" }],
+    ["machine/create", { ...create, id: `linux_${"a".repeat(57)}` }],
     ["machine/create", { ...create, cpu: 0 }],
     ["machine/create", { ...create, cpu: 1.5 }],
     ["machine/fork", { machine: "linux_dev", name: "a.b" }],

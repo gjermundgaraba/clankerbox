@@ -204,6 +204,11 @@ Units run `process.execPath host --config PATH`. VM jobs never reference this bi
 - `create`, `fork`, `restore` and checkpoint `capture` take the new resource's
   name. If that name already exists on the host, the call fails with
   `Conflict{kind: "exists"}`.
+  - `machine.create` carries the new machine's full ID. The host validates the
+    whole ID, so a raw HTTP caller can't make a machine whose ID breaks
+    clankercreds' pattern, and an ID that names another host is `Invalid`.
+    Fork, restore and capture carry a name; the host validates the new
+    resource's ID the same way, with `formatId(<host ID>, name)`.
 - **Lost replies:** the client library doesn't resolve them. A mutation whose
   reply is lost returns `Unavailable`, naming the ID and saying that the action
   may have run; the caller reads the resource to see. It is not retryable. A
@@ -222,9 +227,9 @@ Units run `process.execPath host --config PATH`. VM jobs never reference this bi
 - Only `create` is placed. Fork, restore, start, stop and delete go to the host
   of the machine or checkpoint they name: RAM state doesn't move, and nothing
   migrates.
-- A create request carries a base name, `cpu`, `ramMib`, `diskGib`, an
-  optional `setup: {script, timeoutSeconds}`, and an optional `profile`
-  label. A profile file fills
+- A create request carries the new machine's ID, a base name, `cpu`,
+  `ramMib`, `diskGib`, an optional `setup: {script, timeoutSeconds}`, and an
+  optional `profile` label. A profile file fills
   these in (see [Profiles and bases](#profiles-and-bases)).
 - A full ID, or else a profile's `host`, sends the create to that host.
   Otherwise the client library reads every host's bases, in parallel, and sends

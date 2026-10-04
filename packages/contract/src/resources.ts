@@ -1,7 +1,7 @@
 /** The resources a host reports: machines, checkpoints and the host itself. */
 import { Schema } from "effect";
 import { HostErrorTag } from "./errors.ts";
-import { HostId, Id, Name } from "./ids.ts";
+import { HostId, Id } from "./ids.ts";
 
 export const Runtime = Schema.Literals(["smolvm", "tart", "boat"]);
 
@@ -113,8 +113,11 @@ export const MachineSpec = Schema.Struct(specFields);
 
 export type MachineSpec = typeof MachineSpec.Type;
 
-/** `machine.create`'s input: the spec and the new machine's name on the host it is sent to. */
-export const CreateRequest = Schema.Struct({ name: Name, ...specFields });
+/**
+ * `machine.create`'s input: the spec and the new machine's full ID. The host checks that the ID
+ * names it, so a create never lands under another host's ID.
+ */
+export const CreateRequest = Schema.Struct({ id: Id, ...specFields });
 
 export type CreateRequest = typeof CreateRequest.Type;
 

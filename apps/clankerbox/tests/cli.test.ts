@@ -118,8 +118,8 @@ test("create NAME is placed on the first host that offers the base and prints th
   expect(code).toBe(0);
   expect(stdout).toBe("linux_dev");
   expect(
-    linux.creates.map(({ name, cpu, ramMib, diskGib }) => ({ name, cpu, ramMib, diskGib })),
-  ).toEqual([{ name: "dev", cpu: 2, ramMib: 4096, diskGib: 20 }]);
+    linux.creates.map(({ id, cpu, ramMib, diskGib }) => ({ id, cpu, ramMib, diskGib })),
+  ).toEqual([{ id: "linux_dev", cpu: 2, ramMib: 4096, diskGib: 20 }]);
 });
 
 test("with --json an error prints {error: {message, tag, retryable}} and exits 1", async () => {
@@ -397,7 +397,7 @@ test("create's flags override the profile's fields, and --setup with --setup-tim
 
   expect(code).toBe(0);
   expect(request).toMatchObject({
-    name: "box",
+    id: "linux_box",
     base: "ubuntu-dev",
     cpu: 8,
     ramMib: 4096,

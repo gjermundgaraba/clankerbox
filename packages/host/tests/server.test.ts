@@ -72,6 +72,31 @@ test("fork and restore answer Precondition until phase 4", async () => {
   expect(restore._tag).toBe("Precondition");
 });
 
+/** Posts a create for `id` straight to the host, as a caller without the SDK would. */
+const createRaw = async (url: string, id: string) => {
+  const response = await fetch(`${url}/api/machine/create`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id, ...spec }),
+  });
+
+  return { status: response.status, body: await response.text() };
+};
+
+test("a raw create whose ID is too long, or names another host, is Invalid and makes nothing", async () => {
+  const { url, fake, rows } = await serve();
+  const tooLong = await createRaw(url, `linux_${"a".repeat(57)}`);
+  const elsewhere = await createRaw(url, "mac_dev");
+
+  expect(tooLong.status).toBe(400);
+  expect(tooLong.body).toContain('"_tag":"Invalid"');
+  expect(elsewhere.status).toBe(400);
+  expect(elsewhere.body).toContain('"_tag":"Invalid"');
+  expect(elsewhere.body).toContain("this is host linux");
+  expect(await rows()).toEqual([]);
+  expect(fake.calls).toEqual(["startup"]);
+});
+
 /** Waits until the one machine's last action has ended, as recorded on its row. */
 const settled = async (rows: () => Promise<ReadonlyArray<MachineRecord>>) => {
   for (let tries = 0; tries < 100; tries++) {
@@ -95,7 +120,7 @@ test("a create whose client disconnects still finishes and records its outcome",
   const sent = fetch(`${url}/api/machine/create`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name: "dev", ...spec }),
+    body: JSON.stringify({ id: "linux_dev", ...spec }),
     signal: abort.signal,
   }).catch((cause: Error) => cause.name);
 

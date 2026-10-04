@@ -100,3 +100,18 @@ test("a duplicate name is Conflict, and the hosts listing names the host's bases
   expect(duplicate.stderr).toContain("Conflict: machine linux_dev exists");
   expect(hosts.stdout).toContain("ubuntu");
 });
+
+test("a create sent to a host under another host's ID is Invalid at the host, and makes nothing", async () => {
+  const { host, dir } = await setUp();
+  const config = join(dir, "misnamed.json");
+
+  await writeFile(config, JSON.stringify({ hosts: [{ id: "mis", url: host.url }] }));
+
+  const created = await cli(["create", "mis_dev", ...sizes, "--config", config], {
+    http: NodeHttpClient.layerNodeHttp,
+  });
+
+  expect(created.code).toBe(1);
+  expect(created.stderr).toContain("Invalid: mis_dev names host mis, and this is host linux");
+  expect(await host.rows()).toEqual([]);
+});
