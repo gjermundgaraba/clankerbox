@@ -786,6 +786,51 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
+    "a host stopped while a fork's or a restore's VM is made but not booted leaves the copy missing, which start refuses and delete removes; the fork's source still starts",
+    async () => {
+      for (const [action, name] of [
+        ["fork", "fork-x"],
+        ["restore", "restore-x"],
+      ] as const) {
+        const making =
+          action === "fork"
+            ? cli(["fork"], id("main"), named(name), "--json")
+            : cli(["restore"], id("main-ram"), named(name), "--json");
+
+        // Holds the host's smolvm call that moves the new VM's port or boots it, then stops the
+        // host, which deletes the VM on its way out.
+        const stopped = await control("stop-host-at", named(name), "120");
+
+        expect(stopped.code, stopped.stderr).toBe(0);
+        expect((await making).code).not.toBe(0);
+        expect((await control("host-start")).code).toBe(0);
+        expect(await machine(name)).toMatchObject({
+          state: "missing",
+          action: { name: action, status: "failed" },
+        });
+        expect(await natives(name)).toEqual({ machines: [], scopes: [] });
+
+        const refused = failure(await cli(["start"], id(name), "--json"));
+
+        expect(refused.tag).toBe("Precondition");
+        expect(refused.message).toContain("delete it");
+        await removeMachine(name);
+      }
+
+      expect((await machine("main"))?.action).toMatchObject({ name: "fork", status: "failed" });
+
+      const started = await cli(["start"], id("main"), "--json");
+
+      expect(started.code, started.stdout).toBe(0);
+      expect(decode(OneMachine, started)).toMatchObject({
+        state: "running",
+        action: { name: "start", status: "done" },
+      });
+    },
+    minutes(10),
+  );
+
+  test(
     "a guest can't reach the tailnet's 100.100.100.100, and running machines leave the host's route to the tailnet alone",
     async () => {
       // Its web port: smolvm's gateway answers port 53 at every address with its DNS relay.

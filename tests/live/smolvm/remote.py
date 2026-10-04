@@ -369,9 +369,10 @@ def host_start():
     port = load_state()['api_port']
     check_binary()
     sudo(['systemctl', 'reset-failed', UNIT], touched=f'clears {UNIT} if it is left failed')
+    # A global flag before `host`, which mustn't change the exit code host-stop checks.
     must(sudo(['systemd-run', f'--unit={UNIT}', '--collect', '--property=Type=exec',
                f'--property=WorkingDirectory={SCRATCH}', '--property=KillMode=control-group',
-               str(BINARY), 'host', '--config', str(CONFIG)],
+               str(BINARY), '--log-level', 'info', 'host', '--config', str(CONFIG)],
               touched=f'starts transient system unit {UNIT} (the clankerbox host as root)'), 'systemd-run')
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
@@ -421,10 +422,24 @@ def control(op, rest):
     if op == 'host-start':
         host_start()
     elif op == 'host-stop':
-        t0 = time.monotonic()
-        must(sudo(['systemctl', 'stop', UNIT], touched=f'stops {UNIT} (SIGTERM)'), 'systemctl stop')
-        wait_unit_gone()
-        note(f'host stopped in {time.monotonic() - t0:.2f}s')
+        host_stop()
+    elif op == 'stop-host-at':
+        name, limit = rest
+        deadline = time.monotonic() + float(limit)
+        while True:
+            caught = [(verb, pid) for verb in ('update', 'start') for pid in host_calls(name, verb)]
+            if caught:
+                break
+            if time.monotonic() > deadline:
+                raise RuntimeError(f'the host made no VM for {name} within {limit}s')
+            time.sleep(0.02)
+        verb, pid = caught[0]
+        # Held, so the stop lands while the VM is made but not booted; systemd's SIGTERM comes
+        # with a SIGCONT, so the held call then ends like the rest of the host's.
+        must(sudo(['kill', '-STOP', pid], touched=f'holds the host\'s smolvm machine {verb} of {name} (pid {pid})'),
+             'kill -STOP')
+        note(f'held the host\'s machine {verb} of {name}')
+        host_stop()
     elif op == 'host-kill':
         pid = host_main_pid()
         must(sudo(['systemctl', 'kill', '--signal=SIGKILL', '--kill-whom=main', UNIT],
@@ -466,7 +481,7 @@ def control(op, rest):
     elif op == 'wait-host-exec':
         name, limit = rest
         deadline = time.monotonic() + float(limit)
-        while not host_execs(name):
+        while not host_calls(name, 'exec'):
             if time.monotonic() > deadline:
                 raise RuntimeError(f'the host ran no guest command in {name} within {limit}s')
             time.sleep(0.2)
@@ -496,18 +511,40 @@ def control(op, rest):
     return 0
 
 
-def host_execs(name):
-    """Whether the host runs `smolvm machine exec` in the machine NAME-<8 hex>, as its child.
-    Only pgrep's PIDs are read: an exec's arguments can carry the preparation script."""
+def host_calls(name, verb):
+    """The PIDs of the host's own `smolvm machine VERB` calls for the machine NAME-<8 hex>. Only
+    pgrep's PIDs are read: an exec's arguments can carry the preparation script."""
     if not re.fullmatch(r'[a-z0-9-]+', name):
         raise RuntimeError(f'unexpected machine name {name}')
     host = host_main_pid()
     if host is None:
-        return False
-    rc, so, se = run(['pgrep', '-P', str(host), '-f', f'machine exec --name {name}-[0-9a-f]{{8}} '])
+        return []
+    rc, so, se = run(['pgrep', '-P', str(host), '-f', f'machine {verb} --name {name}-[0-9a-f]{{8}}( |$)'])
     if rc not in (0, 1):
         raise RuntimeError(f'pgrep failed rc={rc}: {se.strip()}')
-    return bool(so.split())
+    return so.split()
+
+
+def host_stop():
+    """Stops the host with SIGTERM, as its unit's stop does, and checks it exited 0."""
+    since = int(time.time())
+    t0 = time.monotonic()
+    must(sudo(['systemctl', 'stop', UNIT], touched=f'stops {UNIT} (SIGTERM)'), 'systemctl stop')
+    wait_unit_gone()
+    note(f'host stopped in {time.monotonic() - t0:.2f}s')
+    # The unit is collected once it stops, so its result is read from systemd's journal lines.
+    deadline = time.monotonic() + 10
+    while True:
+        _, so, _ = sudo(['journalctl', '-u', UNIT, '--since', f'@{since}', '--no-pager', '-o', 'cat'])
+        ended = [line for line in so.splitlines()
+                 if line.startswith(f'{UNIT}: ') and re.search(r'Deactivated|Failed|Main process', line)]
+        clean = any('Deactivated successfully' in line for line in ended)
+        failed = any('Failed' in line for line in ended)
+        if clean or failed or time.monotonic() > deadline:
+            break
+        time.sleep(0.5)
+    if failed or not clean:
+        raise RuntimeError(f'the host did not exit 0 on SIGTERM: {ended}')
 
 
 # ---------------------------------------------------------------- teardown and finish

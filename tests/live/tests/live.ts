@@ -93,7 +93,8 @@ export const Natives = Schema.fromJsonString(
  * machine footprint"). `smolvm/driver.py` provides all four, and its teardown removes what the
  * run left on the host. The program's ops:
  *
- * - `host-stop`, `host-start`: stop the host process (SIGTERM) or start it;
+ * - `host-stop`, `host-start`: stop the host process (SIGTERM), failing unless it exits 0, or
+ *   start it;
  * - `host-kill`: SIGKILL the host process, as a crash;
  * - `natives PREFIX`: print `{machines: [{name, state}], scopes}` for the runtime's machines and
  *   systemd scopes whose names start with PREFIX;
@@ -106,6 +107,8 @@ export const Natives = Schema.fromJsonString(
  *   named NAME there, as a crash during a fork would;
  * - `store`: print `{checkpoints}`, the names in the host's checkpoint store;
  * - `wait-host-exec NAME SECONDS`: wait until the host runs a guest command in machine NAME;
+ * - `stop-host-at NAME SECONDS`: wait until the host moves the port of, or boots, the VM it
+ *   made for machine NAME, hold that call, and stop the host (SIGTERM);
  * - `probe ADDRESS PORT`: from the host itself, print `reached` or `unreachable`;
  * - `route ADDRESS`: print the host's `ip route get ADDRESS`.
  */
