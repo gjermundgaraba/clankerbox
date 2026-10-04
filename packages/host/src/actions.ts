@@ -18,11 +18,12 @@ import {
   type HostError,
   Internal,
   Invalid,
+  NotFound,
   parseId,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Fiber, FiberSet } from "effect";
+import { Effect, Fiber, FiberSet, Option } from "effect";
 import { type CheckpointRef, type MachineRef, Refusal } from "./runtime.ts";
-import type { CheckpointRecord, MachineRecord } from "./store.ts";
+import type { CheckpointRecord, MachineRecord, Interface as StoreInterface } from "./store.ts";
 
 /** The bytes of a row's `instance`: 32 hex characters. */
 const instanceBytes = 16;
@@ -46,8 +47,33 @@ export const nameOn =
           ),
     );
 
+/** The ID of the resource named `name` on host `host`, a name that is already checked. */
+export const idOn =
+  (host: string) =>
+  (name: string): string =>
+    `${host}_${name}`;
+
+/** The rows of host `host`'s store by name; a missing one is NotFound. */
+export const rowsOn = (store: StoreInterface, host: string) => {
+  const idOf = idOn(host);
+
+  const present =
+    (kind: string, name: string) =>
+    <A>(found: Option.Option<A>): Effect.Effect<A, NotFound> =>
+      Option.match(found, {
+        onNone: () => Effect.fail(new NotFound({ message: `no ${kind} ${idOf(name)}` })),
+        onSome: Effect.succeed,
+      });
+
+  return {
+    machine: (name: string) => Effect.flatMap(store.find(name), present("machine", name)),
+    checkpoint: (name: string) =>
+      Effect.flatMap(store.findCheckpoint(name), present("checkpoint", name)),
+  };
+};
+
 export const machineRef = (host: string, record: MachineRecord): MachineRef => ({
-  id: `${host}_${record.name}`,
+  id: idOn(host)(record.name),
   name: record.name,
   instance: record.instance,
   native: record.native,
@@ -58,7 +84,7 @@ export const machineRef = (host: string, record: MachineRecord): MachineRef => (
 });
 
 export const checkpointRef = (host: string, record: CheckpointRecord): CheckpointRef => ({
-  id: `${host}_${record.name}`,
+  id: idOn(host)(record.name),
   name: record.name,
   instance: record.instance,
   native: record.native,

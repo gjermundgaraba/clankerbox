@@ -15,6 +15,7 @@ import {
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, FileSystem, Option, Result, Schema, type Scope } from "effect";
+import { idOn } from "./actions.ts";
 
 /** The database's file in the state dir. */
 export const databaseFile = "host.db";
@@ -407,7 +408,7 @@ export const open = (
     yield* lock(db, stateDir);
     yield* migrate(db, file);
 
-    const id = (name: string) => `${hostId}_${name}`;
+    const id = idOn(hostId);
 
     const selectAll = db.prepare("SELECT * FROM machines ORDER BY created_at, name");
     const selectOne = db.prepare("SELECT * FROM machines WHERE name = ?");

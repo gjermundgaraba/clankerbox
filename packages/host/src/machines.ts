@@ -10,26 +10,27 @@ import {
   formatId,
   type HostError,
   type Machine,
-  NotFound,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, DateTime, Effect, Layer, Option, type Scope, Semaphore } from "effect";
+import { Context, DateTime, Effect, Layer, type Scope, Semaphore } from "effect";
 import {
   type Claim,
   checkpointRef,
   claimAndCheck,
   detacher,
   done,
+  idOn,
   machineRef,
   nameOn,
   native,
   newInstance,
+  rowsOn,
 } from "./actions.ts";
 import type { HostConfig } from "./config.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
 import { observeConcurrency, type Refusal, Runtime } from "./runtime.ts";
-import { type CheckpointRecord, type MachineRecord, type NewMachine, Store } from "./store.ts";
+import { type MachineRecord, type NewMachine, Store } from "./store.ts";
 
 export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Machine>, HostError>;
@@ -82,8 +83,9 @@ export const make = (
     yield* store.failInterrupted;
     yield* runtime.startup;
 
-    const idOf = (name: string) => `${config.id}_${name}`;
+    const idOf = idOn(config.id);
     const nameOf = nameOn(config.id);
+    const rows = rowsOn(store, config.id);
     const ref = (record: MachineRecord) => machineRef(config.id, record);
 
     /** Runs native work that may need the runtime, such as preparation. */
@@ -120,16 +122,7 @@ export const make = (
         return machine;
       });
 
-    const find = (name: string) =>
-      Effect.flatMap(
-        store.find(name),
-        Option.match({
-          onNone: () => Effect.fail(new NotFound({ message: `no machine ${idOf(name)}` })),
-          onSome: Effect.succeed,
-        }),
-      );
-
-    const read = (name: string) => Effect.flatMap(find(name), resource);
+    const read = (name: string) => Effect.flatMap(rows.machine(name), resource);
 
     /** A new row, with the lowest port that no row holds and nothing listens on. */
     const newRow = (name: string, action: ActionName, spec: Spec) =>
@@ -338,7 +331,7 @@ export const make = (
         const sourceName = yield* nameOf(sourceId);
         const id = yield* formatId(config.id, name);
         // A row's spec never changes, so the new row can copy it before the claim.
-        const spec = yield* find(sourceName);
+        const spec = yield* rows.machine(sourceName);
 
         const [claimed] = yield* claimAndAdmit(
           Effect.flatMap(newRow(name, "fork", spec), (row) => claimFork(row, sourceName)),
@@ -367,13 +360,7 @@ export const make = (
      */
     const ready = (id: string) =>
       Effect.gen(function* () {
-        const found = yield* store.findCheckpoint(yield* nameOf(id));
-
-        if (Option.isNone(found)) {
-          return yield* new NotFound({ message: `no checkpoint ${id}` });
-        }
-
-        const checkpoint: CheckpointRecord = found.value;
+        const checkpoint = yield* rows.checkpoint(yield* nameOf(id));
 
         if (checkpoint.action.status !== "done") {
           return yield* new Precondition({

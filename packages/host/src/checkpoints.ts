@@ -8,20 +8,21 @@ import {
   Conflict,
   formatId,
   type HostError,
-  NotFound,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, DateTime, Effect, Layer, Option, type Scope } from "effect";
+import { Context, DateTime, Effect, Layer, type Scope } from "effect";
 import {
   type Claim,
   checkpointRef,
   claimAndCheck,
   detacher,
   done,
+  idOn,
   machineRef,
   nameOn,
   native,
   newInstance,
+  rowsOn,
 } from "./actions.ts";
 import type { HostConfig } from "./config.ts";
 import { Runtime } from "./runtime.ts";
@@ -53,8 +54,9 @@ export const make = (
     const runtime = yield* Runtime;
     const detached = yield* detacher;
 
-    const idOf = (name: string) => `${config.id}_${name}`;
+    const idOf = idOn(config.id);
     const nameOf = nameOn(config.id);
+    const rows = rowsOn(store, config.id);
 
     const resource = (record: CheckpointRecord): Checkpoint => {
       const checkpoint: Checkpoint = {
@@ -71,15 +73,6 @@ export const make = (
 
       return record.profile === undefined ? checkpoint : { ...checkpoint, profile: record.profile };
     };
-
-    const find = (name: string) =>
-      Effect.flatMap(
-        store.findCheckpoint(name),
-        Option.match({
-          onNone: () => Effect.fail(new NotFound({ message: `no checkpoint ${idOf(name)}` })),
-          onSome: Effect.succeed,
-        }),
-      );
 
     /** Inserts the checkpoint's row and claims its source; both end with the capture's outcome. */
     const claimCapture = (row: NewCheckpoint): Effect.Effect<Claim<Capturing>, HostError> =>
@@ -110,13 +103,7 @@ export const make = (
         const sourceName = yield* nameOf(machineId);
         const id = yield* formatId(config.id, name);
 
-        const source = yield* Effect.flatMap(
-          store.find(sourceName),
-          Option.match({
-            onNone: () => Effect.fail(new NotFound({ message: `no machine ${machineId}` })),
-            onSome: Effect.succeed,
-          }),
-        );
+        const source = yield* rows.machine(sourceName);
 
         // Another action's machine can read as missing before its VM exists.
         if (source.action.status === "running") {
@@ -166,7 +153,7 @@ export const make = (
         );
         yield* done(claimed);
 
-        return resource(yield* find(name));
+        return resource(yield* rows.checkpoint(name));
       });
 
     const remove = (id: string) =>
@@ -193,7 +180,8 @@ export const make = (
 
     return {
       list: Effect.map(store.checkpoints, (records) => records.map(resource)),
-      get: (id) => Effect.flatMap(nameOf(id), (name) => Effect.map(find(name), resource)),
+      get: (id) =>
+        Effect.flatMap(nameOf(id), (name) => Effect.map(rows.checkpoint(name), resource)),
       capture: (machine, name) => detached(`capture ${machine} to ${name}`, capture(machine, name)),
       delete: (id) => detached(`delete ${id}`, remove(id)),
     } satisfies Interface;
