@@ -455,6 +455,7 @@ listed to keep them from being ported):
     required with it. The profile author sets the timeout and records its
     reason; there is no default;
   - `host`, optional: the host ID to create on, instead of placement by base.
+- **Profile files are JSON,** so the Schema decodes them with no parser dependency.
 - **Hosts never see a profile.** The client library turns it into a create
   request, and the machine keeps only the name the client passes as its
   `profile` label. Editing a profile affects only machines created afterwards.
@@ -984,6 +985,9 @@ Two rules for every VM job:
   action has finished; `--timeout` only stops waiting.
 - **Client config:** one file holding the host list, in placement order, and
   an optional profiles directory.
+  - It is JSON, so a Schema decodes it with no parser dependency.
+  - It is read from `--config PATH`, or else from
+    `$XDG_CONFIG_HOME/clankerbox/config.json` (`~/.config` when that is unset).
 
 ## Release
 
