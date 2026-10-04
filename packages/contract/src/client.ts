@@ -106,6 +106,17 @@ interface CallContext {
 const causeDetail = (error: HttpClientError.HttpClientError): string =>
   error.cause instanceof Error ? error.cause.message : error.message;
 
+const lost = (error: HttpClientError.HttpClientError, context: CallContext): Unavailable =>
+  context.access === "read"
+    ? new Unavailable({
+        message: `host ${context.host.id} (${context.host.url}) didn't answer ${context.action}: ${causeDetail(error)}`,
+        access: "read",
+      })
+    : new Unavailable({
+        message: `no reply from host ${context.host.id} to ${context.action} (${causeDetail(error)}); the action may have run: read ${context.target ?? "the resource"} to see`,
+        access: "write",
+      });
+
 const timedOut = (context: CallContext, timeout: Duration.Duration): Unavailable =>
   context.access === "read"
     ? new Unavailable({
@@ -140,16 +151,16 @@ const settle = <A>(
     Effect.catchTag("HttpClientError", (error) =>
       Effect.fail(
         Match.value(error.reason).pipe(
-          Match.tag("TransportError", () =>
-            context.access === "read"
-              ? new Unavailable({
-                  message: `host ${context.host.id} (${context.host.url}) didn't answer ${context.action}: ${causeDetail(error)}`,
-                  access: "read",
-                })
-              : new Unavailable({
-                  message: `no reply from host ${context.host.id} to ${context.action} (${causeDetail(error)}); the action may have run: read ${context.target ?? "the resource"} to see`,
-                  access: "write",
-                }),
+          Match.tag("TransportError", () => lost(error, context)),
+          // The connection closed while the body was read. A body that arrived and doesn't
+          // parse fails as a SyntaxError or a SchemaError, and a wrong status or content
+          // type carries no cause.
+          Match.when(
+            {
+              _tag: "DecodeError",
+              cause: (cause: unknown) => cause !== undefined && !(cause instanceof SyntaxError),
+            },
+            () => lost(error, context),
           ),
           Match.tag(
             "InvalidUrlError",
