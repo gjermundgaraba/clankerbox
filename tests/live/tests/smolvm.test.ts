@@ -1047,6 +1047,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
 
       const seen = await control("guest", `${namePrefix}crash`, "ps -eo args");
 
+      expect(seen.code, seen.stderr).toBe(0);
       expect(seen.stdout).not.toContain("sleep 300");
 
       const stopped = await cli(["stop"], id("crash"), "--json");
