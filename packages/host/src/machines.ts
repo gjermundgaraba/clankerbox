@@ -179,36 +179,36 @@ export const make = (
         );
       });
 
-    /** The new machine's spec and work, with the source a fork holds, read once it is held. */
-    const resolve = (making: Making) =>
-      "source" in making
-        ? Effect.map(rows.machine(making.source), (source) => ({
-            spec: source,
-            source,
-            work: (machine: MachineRef) => making.work(machine, ref(source)),
-          }))
-        : Effect.succeed({ spec: making.spec, source: undefined, work: making.work });
-
     /**
-     * Create, fork and restore: under the admission permit, a fork claims its source, then the
-     * new row is inserted into the same claim with the lowest free port, and admitted; then the
-     * work makes the machine, preparation runs, and the action ends done.
+     * Create, fork and restore: under the admission permit, a create or restore claims its new
+     * row, with the lowest free port; a fork claims its source, then joins the new row, with the
+     * source's spec. The new row is admitted, the work makes the machine, preparation runs, and
+     * the action ends done.
      */
     const makeMachine = (action: "create" | "fork" | "restore", name: string, making: Making) =>
       Effect.scoped(
         Effect.gen(function* () {
           const [token, { row, work }] = yield* admitted(
-            claimAndCheck(action, "source" in making ? holding(making.source) : {}, (join) =>
-              Effect.gen(function* () {
-                const { spec, source, work } = yield* resolve(making);
-                const row = yield* newRow(name, spec);
+            "source" in making
+              ? claimAndCheck(action, holding(making.source), (join) =>
+                  Effect.gen(function* () {
+                    const source = yield* rows.machine(making.source);
+                    const row = yield* newRow(name, source);
 
-                yield* join(inserting(row));
-                yield* admit(action, row, source);
+                    yield* join(inserting(row));
+                    yield* admit(action, row, source);
 
-                return { row, work };
-              }),
-            ),
+                    return {
+                      row,
+                      work: (machine: MachineRef) => making.work(machine, ref(source)),
+                    };
+                  }),
+                )
+              : Effect.flatMap(newRow(name, making.spec), (row) =>
+                  claimAndCheck(action, inserting(row), () =>
+                    Effect.as(admit(action, row), { row, work: making.work }),
+                  ),
+                ),
           );
 
           const machine = ref(row);

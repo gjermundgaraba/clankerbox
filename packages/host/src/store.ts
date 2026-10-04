@@ -594,11 +594,11 @@ export const open = (
       return Result.succeed({ action, inserted, held });
     };
 
-    /** The rows a claim takes, for errors; a claim that takes none joins rows later. */
+    /** The rows a claim takes, for errors. */
     const claimed = (rows: Rows) =>
       [...(rows.hold ?? []), ...(rows.insert === undefined ? [] : [rows.insert.record])]
         .map((row) => id(row.name))
-        .join(", ") || "no rows yet";
+        .join(", ");
 
     /** The rows a token names, for errors. */
     const named = (token: Token) =>
