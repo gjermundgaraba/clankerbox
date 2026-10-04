@@ -1,6 +1,6 @@
 /** The resources a host reports: machines, checkpoints and the host itself. */
 import { Schema } from "effect";
-import { ErrorTag } from "./errors.ts";
+import { HostErrorTag } from "./errors.ts";
 import { HostId, Id, Name } from "./ids.ts";
 
 export const Runtime = Schema.Literals(["smolvm", "tart", "boat"]);
@@ -27,7 +27,7 @@ export const ActionName = Schema.Literals([
 export const ActionRecord = Schema.Struct({
   name: ActionName,
   status: Schema.Literals(["running", "failed", "done"]),
-  error: Schema.optionalKey(Schema.Struct({ tag: ErrorTag, message: Schema.String })),
+  error: Schema.optionalKey(Schema.Struct({ tag: HostErrorTag, message: Schema.String })),
 });
 
 export type ActionRecord = typeof ActionRecord.Type;

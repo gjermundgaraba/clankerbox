@@ -1,5 +1,7 @@
+import { Schema } from "effect";
 import { expect, test } from "vite-plus/test";
 import {
+  ActionRecord,
   Capacity,
   Conflict,
   Internal,
@@ -27,4 +29,17 @@ test("a busy conflict is retryable and a name that exists is not", () => {
 test("Unavailable is retryable for a read and not for a mutation", () => {
   expect(new Unavailable({ message: "m", access: "read" }).retryable).toBe(true);
   expect(new Unavailable({ message: "m", access: "write" }).retryable).toBe(false);
+});
+
+test("a recorded action's error is a host error, never Unavailable", () => {
+  const isRecord = Schema.is(ActionRecord);
+
+  const failed = (tag: string) => ({
+    name: "create",
+    status: "failed",
+    error: { tag, message: "" },
+  });
+
+  expect(isRecord(failed("Capacity"))).toBe(true);
+  expect(isRecord(failed("Unavailable"))).toBe(false);
 });

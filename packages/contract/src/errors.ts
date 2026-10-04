@@ -99,14 +99,17 @@ export type HostError = InstanceType<(typeof hostErrors)[number]>;
 /** What a call through the client library fails with. */
 export type ClankerboxError = HostError | Unavailable;
 
+/** The tag a host records on a failed action: always one of the errors it answers with. */
+export const HostErrorTag = Schema.Literals(
+  hostErrors.map((error) => error.fields._tag.schema.literal),
+);
+
+export type HostErrorTag = typeof HostErrorTag.Type;
+
+/** The tag of any error a call through the client library can fail with. */
 export const ErrorTag = Schema.Literals([
-  "Invalid",
-  "NotFound",
-  "Conflict",
-  "Precondition",
-  "Capacity",
-  "Unavailable",
-  "Internal",
+  ...HostErrorTag.literals,
+  Unavailable.fields._tag.schema.literal,
 ]);
 
 export type ErrorTag = typeof ErrorTag.Type;
