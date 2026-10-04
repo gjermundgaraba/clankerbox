@@ -32,7 +32,7 @@ Checked 2026-10-01. Each row says what was actually exercised.
 | smolvm | exactly 1.22.2, upstream and unmodified, installed by the operator | 1.22.0 on this Mac (unprivileged) and on the Linux host (unprivileged and as root); 1.22.2 on this Mac (unprivileged) and on the Linux host as root (phase 0: P1, P3, P8). |
 | Tart | ≥ 2.40.1 | Audited in source at 2.40.1; S3 ran on 2.38.0; P2 ran on 2.40.1 (release tarball, checksum verified). |
 | Softnet | 0.24.0 (needs macOS 26) | Audited. It runs its own DHCP server and advertises the gateway as DNS. |
-| tart-guest-agent | ≥ 0.15.0 | Audited. Its vsock sockets are close-on-exec. P2 ran on 0.14.1 (the old pipeline's seed); 0.15.0 not yet run. |
+| tart-guest-agent | ≥ 0.15.0 | Audited. Its vsock sockets are close-on-exec. P2 ran on 0.14.1 (the old pipeline's seed), P3 on 0.15.0 (stock Cirrus image). |
 | Ubuntu (smolvm base) | 26.04 LTS, `ubuntu:26.04` (resolute), digest-pinned in host config | On Docker Hub with amd64 and arm64 builds. The tag moved: index digest `sha256:3595d7fc…` on 2026-10-02, `sha256:f144425f…59f7` on 2026-10-04. Run on smolvm 1.22.2 as root in phase 0 (guest reports 26.04.1 LTS). |
 | boat.dev API | v1 (`https://boat.dev/api/v1`) | Three spikes on 2026-10-02 against an account on boat's trial, calling the API directly (L:boat). Docs and `openapi/boat-v1.yaml` read the same day. |
 | Node | 26.10.0 | SEA built and run on darwin-arm64 and linux-x64 (R:q-sea-min). |
@@ -710,9 +710,9 @@ Single samples unless a count is given.
 - **Timings:** create 0.025–0.03 s, stop 0.50 s, cold start 0.49 s. Each VM had
   its own uid and `smolvm-vm-<name>.scope`.
 
-**P1, published ports** (L:p1-ports). The tailnet half is blocked: the Linux
-host is not on the tailnet, and installing Tailscale there is outside the
-rules for these runs. The rest ran with `SMOLVM_PUBLISH_ADDR=127.0.0.2`:
+**P1, published ports** (L:p1-ports, then L:p1-tailnet once the Linux host had
+joined the tailnet as `hetzner-node`). The first runs used
+`SMOLVM_PUBLISH_ADDR=127.0.0.2`:
 
 - **Listeners:** `127.0.0.2:PORT` and `[::1]:PORT`. ssh, scp and rsync from this
   Mac through `ssh -J` worked into a source, a fork and two restores, each on
@@ -758,11 +758,15 @@ rules for these runs. The rest ran with `SMOLVM_PUBLISH_ADDR=127.0.0.2`:
   Stop, cold start and start took 1.26/0.67/0.16 s, and its tools worked after
   the cold start. The recipe installs no sshd, key or `start`.
 - **A realistic `start`:** the sshd guard 0.027 s and launching sshd 0.066 s in
-  the guest (5 samples each). A clankercreds sync could not be timed: the
-  service answered HTTP 530 (Cloudflare) from the guest and from this Mac on
-  2026-10-04; failing syncs took 0.64–1.47 s (12 samples).
-- **Recipe packing on macOS:** `tar` adds AppleDouble `._*` files; the packer
-  needs `COPYFILE_DISABLE=1` or to exclude them.
+  the guest (5 samples each). A full `start` that reads `/etc/environment`
+  itself, guards sshd and runs a successful clankercreds sync took 0.80–1.02 s
+  per exec (5 samples), and 1.48–1.52 s right after a cold start (2). The sync
+  alone took 0.82–0.84 s. (Earlier the same day the service answered HTTP 530
+  during its move to garaba-home; failing syncs took 0.64–1.47 s.)
+- **Recipe packing on macOS:** `tar` adds AppleDouble `._*` files and
+  `LIBARCHIVE.xattr.com.apple.provenance` pax headers, which GNU tar in the
+  guest reports. `COPYFILE_DISABLE=1` removes the first; the second also needs
+  `--no-xattrs` (or `--no-mac-metadata`).
 
 **P2, Tart forwarder** (L:p2-tart-forwarder, Tart 2.40.1, on an APFS clone of
 the old pipeline's `macos-tahoe-vanilla` seed with tart-guest-agent 0.14.1):
@@ -782,13 +786,83 @@ the old pipeline's `macos-tahoe-vanilla` seed with tart-guest-agent 0.14.1):
 - **Ending a connection:** when the ssh client dies, the forwarder closes the
   exec's stdin and everything exits in 0.05 s. When `tart exec` itself is
   killed (a host restart), the guest's `nc` and `sshd-session` stay until the
-  session next writes (T:ControlSocket.swift:98-113, not verified on 0.15.0).
+  session next writes (T:ControlSocket.swift:98-113). The same holds on
+  tart-guest-agent 0.15.0 (P3, one sample each for SIGTERM and SIGKILL).
 - **Memory:** a raw 1 GiB upload through `tart exec -i` peaked at 2.0–2.4 GiB
   RSS in the host's tart process (stdin is read into an unbounded stream,
   T:Commands/Exec.swift:100-160). Through the forwarder ssh's window kept it at
   18–22 MiB.
 - **Boot** (old seed, not the P3 answer for stock images): `tart exec` answered
   25.1 s after `tart run`; `sudo -n true` succeeded for `admin`.
+- **From another tailnet machine:** blocked. From the Linux host, a connection to
+  a forwarder on this Mac's tailnet address timed out (5 of 5) and the forwarder
+  saw nothing. This Mac's tailnet packet filter admits only its own addresses,
+  so garaba-home's policy has no rule that lets the Linux host reach it.
+
+**P1 over the tailnet** (L:p1-tailnet), with
+`SMOLVM_PUBLISH_ADDR=100.95.240.37`, the Linux host's tailnet address:
+
+- **Listeners:** `100.95.240.37:PORT` and `[::1]:PORT`. ssh, scp and rsync from
+  this Mac went straight to the published port, with no jump host and a pinned
+  key, into a source, a fork and a restore, each on its own port. sha256 matched
+  in 8 of 8 transfers; a wrong pin was refused.
+- **Throughput through Tailscale's DERP relay:** this Mac reaches the host only
+  through a relay (`hel` from this side; the host side reported `ams`), never
+  directly. 256 MiB, 2 samples: scp and rsync about 1.0 MiB/s up and 2.6 down.
+  The host's own sshd gave 1.1 / 1.9 over the tailnet and 22.4 / 25.3 MiB/s over
+  the public address (64 MiB, 1 sample).
+- **Fork:** 7.32 s in total with a 1.28 s source pause; the restore took
+  3.28–3.52 s to ready (1 sample each, 2 vCPU / 2 GiB).
+- **Guest probes:** root-owned listeners on the host's tailnet IPv4 and IPv6
+  addresses were refused in 15–17 ms, and so were the host's sshd on the tailnet
+  address, another machine's published port and the guest's own. The IPv4
+  refusal is the strict floor's CGNAT rule
+  (S@1.22.2:crates/smolvm-network/src/egress.rs:205-213); the IPv6 (ULA)
+  refusal was observed only. `1.1.1.1:443` was reached.
+- **Production's guard** (`meta skuid 1000 … fib daddr type local reject`, and
+  its IPv6 twin) also refuses the host's own uid-1000 processes connecting to
+  published ports on the tailnet address.
+
+**The RNG reseed, as preparation runs it** (L:p1-tailnet):
+
+- Stock `ubuntu@sha256:f144…` ships `perl-base` 5.40.1 (Essential).
+- On 6 restores of one RAM checkpoint: 64 fresh host bytes on stdin into
+  `/dev/urandom`, then `ioctl(0x5207)` (`RNDRESEEDCRNG`) through `perl`, both
+  exit 0 as root; then `ssh-keygen -A` and an sshd restart. 6 of 6 served keys
+  were distinct (8 of 8 with the fork and the restore). Interleaved controls
+  without the reseed: 3 of 4; smolvm's own re-mint: 4 of 10.
+- The reseed took 0.062–0.084 s per exec (8 samples); re-mint plus restart
+  after it 0.19–0.51 s (12).
+
+**P3 on a stock Cirrus image** (L:p3-tart, Tart 2.40.1,
+`ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3aa5c…7377`, the digest of
+`latest`, its only tag, on 2026-10-04; macOS 26.6.2, OpenSSH 10.3p1):
+
+- **The seed:** pulled by digest in 280 s; 30.8 GiB on disk.
+- **tart-guest-agent 0.15.0** runs as a root LaunchDaemon and as a per-user
+  LaunchAgent for the auto-login user `admin`; exec is served by the
+  LaunchAgent (uid 501).
+- **Exec after boot:** `tart exec` first answered 18.5–32.3 s after `tart run`
+  was spawned (5 boots). An exec before the VM runs fails at once (rc 2); one
+  sent while it boots blocks until the agent is up, then succeeds.
+- **sudo:** `sudo -n true` exits 0; `admin` has `NOPASSWD: ALL`.
+- **Exec form:** `tart exec -i <vm> sudo -n /bin/bash -c <script>` passed exit
+  codes through, returned stdout and stderr separately, ran as uid 0, and saw
+  end-of-input at once with stdin closed (0.07–0.27 s per call, 6 runs).
+- **Host keys:** every clone carries the image's keys, so the re-mint is
+  needed. `rm /etc/ssh/ssh_host_*; ssh-keygen -A` took 0.22–0.55 s in the
+  guest. sshd is started per connection by launchd, so the next connection
+  served the new key without a restart (3 of 3).
+- **RNG seed:** macOS refuses writes to `/dev/urandom` ("Operation not
+  permitted", 15 of 15) and accepts them on `/dev/random`, which reseeds at
+  once (xnu-12377.121.6:bsd/dev/random/randomdev.c:178-185,
+  osfmk/prng/prng_random.c:413-435). The write took about 0.04–0.08 s.
+- **Environment:** there is no `/etc/environment` and sshd's PAM stack has no
+  `pam_env`. ssh sessions run zsh and read `/etc/zshenv`; exec and
+  `sudo -n bash` read neither.
+- **Guest clock** (not verified): the guest seems to boot at the image's build
+  time, about 24 h behind, and is stepped forward around the time exec first
+  answers.
 
 ## Consumers and production
 
