@@ -3,8 +3,8 @@
  * claims, setup and preparation are the core's; each runtime is a module that implements this
  * service. The core allocates a machine's host port when it claims the row, for a runtime that
  * has a `publishAddress`; the RAM budget is a helper a runtime's `admit` calls when it needs one.
- * The interface is frozen as of phase 5, once Tart fit it with no runtime cases in the core; a
- * later change records its reason in the plan.
+ * The interface freezes once phase 5's live tests on the Mac pass; until then each change
+ * records its reason in the plan.
  */
 import type {
   ActionName,
@@ -37,14 +37,6 @@ export interface MachineRef {
 
 export type MachineState = Machine["state"];
 
-/** The actions that boot a machine. Step 3 counts a machine one of them holds as running. */
-export const bootingActions: ReadonlySet<ActionName> = new Set([
-  "create",
-  "start",
-  "fork",
-  "restore",
-]);
-
 export type CheckpointKind = Checkpoint["kind"];
 
 /** A checkpoint as the runtime sees it. */
@@ -74,10 +66,15 @@ export interface Observed {
   readonly ssh?: SshEndpoint | undefined;
 }
 
-/** One machine on the host, and the action that holds its row, if one does. */
+/** One machine on the host, and whether an action is booting it. */
 export interface Held {
   readonly machine: MachineRef;
-  readonly holder: ActionName | undefined;
+  /**
+   * Whether an admitted create, start, fork or restore that hasn't ended boots it, the target
+   * included: its VM may not run yet, so step 3 counts it as running. A fork's source is held
+   * by the fork but isn't booted by it.
+   */
+  readonly booting: boolean;
 }
 
 /** What step 3 checks before an action boots a machine. */
@@ -85,7 +82,7 @@ export interface Activation {
   readonly action: ActionName;
   /** The machine to boot, already claimed by the action. */
   readonly machine: MachineRef;
-  /** Every machine on the host, the target included, with what holds each. */
+  /** Every machine on the host, the target included, and whether an action is booting each. */
   readonly machines: ReadonlyArray<Held>;
   /** For a fork, the machine it copies, which the fork holds too. */
   readonly source?: MachineRef | undefined;

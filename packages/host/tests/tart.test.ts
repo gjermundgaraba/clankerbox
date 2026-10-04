@@ -576,7 +576,7 @@ test("a machine whose job file is gone can't start, and says to delete it", asyn
   );
 });
 
-test("the two-VM count takes every running VM, the operator's too, and machines booting actions hold", async () => {
+test("the two-VM count takes every running VM, the operator's too, and machines actions are booting", async () => {
   const { mac, runtime } = await runtimeOn();
   const [a, b, c] = await Promise.all([machineOn("a"), machineOn("b"), machineOn("c")]);
 
@@ -590,8 +590,8 @@ test("the two-VM count takes every running VM, the operator's too, and machines 
         action: "start",
         machine: b,
         machines: [
-          { machine: a, holder: undefined },
-          { machine: b, holder: "start" },
+          { machine: a, booting: false },
+          { machine: b, booting: true },
         ],
       }),
     ),
@@ -602,7 +602,7 @@ test("the two-VM count takes every running VM, the operator's too, and machines 
     `start mac_b would run 3 macOS VMs on this Mac, and Apple allows 2: ${[vmOf(a), vmOf(b), "operators-own"].sort().join(", ")}`,
   );
 
-  // A machine that a create holds counts before its VM exists; one a stop holds doesn't.
+  // A machine an action is booting counts before its VM exists.
   mac.vms.delete("operators-own");
 
   const crowded = await Effect.runPromise(
@@ -611,9 +611,9 @@ test("the two-VM count takes every running VM, the operator's too, and machines 
         action: "start",
         machine: b,
         machines: [
-          { machine: a, holder: undefined },
-          { machine: b, holder: "start" },
-          { machine: c, holder: "create" },
+          { machine: a, booting: false },
+          { machine: b, booting: true },
+          { machine: c, booting: true },
         ],
       }),
     ),
@@ -626,8 +626,8 @@ test("the two-VM count takes every running VM, the operator's too, and machines 
       action: "start",
       machine: b,
       machines: [
-        { machine: a, holder: "stop" },
-        { machine: b, holder: "start" },
+        { machine: a, booting: false },
+        { machine: b, booting: true },
       ],
     }),
   );
@@ -645,8 +645,8 @@ test("a fork's source and a capture's machine must be stopped, and a capture is 
         action: "fork",
         machine: copy,
         machines: [
-          { machine: source, holder: "fork" },
-          { machine: copy, holder: "fork" },
+          { machine: source, booting: false },
+          { machine: copy, booting: true },
         ],
         source,
       }),
@@ -667,13 +667,13 @@ test("a fork's source and a capture's machine must be stopped, and a capture is 
 
   expect(await Effect.runPromise(runtime.captureKind(source))).toBe("disk");
 
-  // The fork holds its stopped source as the core passes it, and only the copy boots.
+  // The fork holds its stopped source, and only the copy boots.
   const forking = {
     action: "fork" as const,
     machine: copy,
     machines: [
-      { machine: source, holder: "fork" as const },
-      { machine: copy, holder: "fork" as const },
+      { machine: source, booting: false },
+      { machine: copy, booting: true },
     ],
     source,
   };

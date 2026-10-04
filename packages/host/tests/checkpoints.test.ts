@@ -116,6 +116,32 @@ test("a fork claims its source: another action on it is busy, and a fork of a bu
   expect(Object.keys(await actions(linux)).sort()).toEqual(["copy", "dev"]);
 });
 
+test("an action admitted during a fork counts the copy as booting, not the source the fork holds", async () => {
+  const linux = await withSource();
+  const { release, entered } = linux.fake.holdNext("fork");
+  const fork = Effect.runFork(linux.machines.fork("linux_dev", "copy"));
+
+  const booting = () =>
+    Object.fromEntries(
+      (linux.fake.activations.at(-1)?.machines ?? []).map(({ machine, booting }) => [
+        machine.name,
+        booting,
+      ]),
+    );
+
+  await entered;
+  await linux.run(linux.machines.create(request("other")));
+
+  const duringFork = booting();
+
+  release();
+  await Effect.runPromise(Fiber.join(fork));
+  await linux.run(linux.machines.create(request("later")));
+
+  expect(duringFork).toEqual({ dev: false, copy: true, other: true });
+  expect(booting()).toEqual({ dev: false, copy: false, other: false, later: true });
+});
+
 test("a fork refused in its check writes nothing: no new row, and the source's action is back", async () => {
   const linux = await withSource();
 

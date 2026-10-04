@@ -477,10 +477,10 @@ listed to keep them from being ported):
   - Ports are recorded in the same transaction (see [Guest access](#guest-access)).
   - The actions that boot a machine or allocate a port (create and start;
     fork and restore in phase 4) hold one permit, a `Semaphore`, across claim
-    and check (steps 2–3). The RAM budget counts the machines that booting
-    actions hold, so two checked at once would each count the other and both
-    could be refused; one at a time, exactly one of two that fit only alone
-    passes, and no two pick the same port.
+    and check (steps 2–3). The RAM budget counts the machines that admitted
+    actions are booting, so two checked at once would each count the other
+    and both could be refused; one at a time, exactly one of two that fit only
+    alone passes, and no two pick the same port.
 - **No global native lock.** smolvm and Tart take their own locks. P12 found
   that smolvm CLI calls on different machines need no serializing, except the
   first use of a new prefix, which the install step settles (see
@@ -841,11 +841,17 @@ Two rules for every VM job:
   checks in step 3 that the host's machines fit its RAM budget, and refuses
   with `Capacity` when they don't. `start` on a running machine boots nothing
   and doesn't check.
-  - The sum is the `ramMib` of every machine that is running or held by a
-    running create, start, fork or restore, each counted once. The target is
-    already held when step 3 runs, so it is in the sum. Booting actions are
-    checked one at a time (see [State and claims](#state-and-claims)), so of
-    two concurrent creates that each fit only alone, exactly one passes.
+  - The sum is the `ramMib` of every machine that is running or that an
+    admitted create, start, fork or restore is booting until that action
+    ends, each counted once. The target is booting when step 3 runs, so it is
+    in the sum. Booting actions are checked one at a time (see [State and
+    claims](#state-and-claims)), so of two concurrent creates that each fit
+    only alone, exactly one passes.
+  - A fork holds its source but boots only the copy, and both rows carry the
+    fork's action, so the host keeps which machines are booting in memory,
+    one entry per admitted action, added under the admission permit and
+    removed once the action has ended. A host restart fails every running
+    action, so no entry needs to outlive the process.
   - The budget is `ramBudgetMib` in host config. It defaults to physical RAM
     minus 2 GiB, for the OS and the host processes. P9's memory figures per
     restored machine show whether VMs need more headroom. Set it above
@@ -1017,10 +1023,11 @@ Two rules for every VM job:
 - **Capacity:** Apple allows two running macOS VMs per Mac, the operator's own
   included. Every action that boots a VM (create, start, fork, restore) counts
   running VMs with `tart list` in step 3 and refuses with `Capacity` at two, so
-  the refusal writes nothing. The count also takes every machine a booting
-  action holds, the target included, as the RAM budget does: a VM reads
-  running only once its job has started it, so two creates checked one after
-  the other would otherwise both pass. Apple's own refusal is the backstop when two
+  the refusal writes nothing. The count also takes every machine an action is
+  booting, the target included, as the RAM budget does: a VM reads running
+  only once its job has started it, so two creates checked one after the
+  other would otherwise both pass. A fork's stopped source isn't booting, so a
+  fork in flight doesn't count it against another action's boot. Apple's own refusal is the backstop when two
   starts race: it maps to `Capacity` too, but the clone that a create, fork or
   restore has already made then stays, with `action.status = failed`, like any
   other failure from step 4.
@@ -1288,10 +1295,16 @@ tests use real VMs.
 5. **Tart.** The runtime, its names, the forwarder and the two-VM count.
    `stop` and `delete` after an interrupted operation. Spike P11. Live tests
    on the Mac. Freeze the `Runtime` interface only after this slice.
-   - The `Runtime` interface is frozen as of this phase
-     (`packages/host/src/runtime.ts`). Tart needed one change to it: `startup`
-     receives the host's machines, so the forwarder listens again for those
-     that run. A later change records its reason here.
+   - The `Runtime` interface (`packages/host/src/runtime.ts`) is not frozen
+     yet: the live tests on the Mac wait on Softnet (see [Runtimes:
+     Tart](#runtimes-tart)), and it freezes once they pass. Each change until
+     then records its reason here:
+     - `startup` receives the host's machines, so the Tart forwarder listens
+       again for those that run.
+     - Each machine in step 3's `admit` says whether an action is booting it,
+       in place of the action that holds it: a fork holds its stopped source
+       under the same action as the copy, and Tart's count took the source as
+       booting, refusing another boot while a fork ran.
 6. **boat.** The runtime, the machine-type choice, its refusals and its
    bounded retry. `stop` and `delete` after an interrupted operation. Built
    and tested on boat's trial, live tests included.

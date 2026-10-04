@@ -72,6 +72,13 @@ export const make = (
     const { claimAndCheck, native, done } = claimsOn(store);
     const ref = (record: NewMachine) => machineRef(config.id, record);
 
+    /**
+     * The machines that admitted actions are booting, one entry per action until it ends. The
+     * rows can't tell: a fork holds its source, which it doesn't boot, under the same action as
+     * the copy it does.
+     */
+    const booting = new Set<{ readonly name: string }>();
+
     /** Runs native work that may need the runtime, such as preparation. */
     const withRuntime = <A>(work: Effect.Effect<A, HostError | Refusal, Runtime>) =>
       Effect.provideService(work, Runtime, runtime);
@@ -142,19 +149,35 @@ export const make = (
      */
     const admitted = admission.withPermits(1);
 
-    /** Step 3 for an action that boots a machine: the runtime's own checks, over every row. */
+    /**
+     * Step 3 for an action that boots a machine: the runtime's own checks, over every row. Once
+     * admitted, the machine counts as booting until the action's scope closes, after its end:
+     * an entry removed before the end could let another action past its check while this one
+     * still boots.
+     */
     const admit = (action: ActionName, machine: NewMachine, source?: MachineRecord) =>
-      Effect.flatMap(store.list, (records) =>
-        runtime.admit({
+      Effect.gen(function* () {
+        const records = yield* store.list;
+        const boots = new Set([machine.name, ...Array.from(booting, ({ name }) => name)]);
+
+        yield* runtime.admit({
           action,
           machine: ref(machine),
-          machines: records.map((held) => ({
-            machine: ref(held),
-            holder: held.action.status === "running" ? held.action.name : undefined,
-          })),
+          machines: records.map((held) => ({ machine: ref(held), booting: boots.has(held.name) })),
           source: source === undefined ? undefined : ref(source),
-        }),
-      );
+        });
+
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const entry = { name: machine.name };
+
+            booting.add(entry);
+
+            return entry;
+          }),
+          (entry) => Effect.sync(() => booting.delete(entry)),
+        );
+      });
 
     /** The new machine's spec and work, with the source a fork holds, read once it is held. */
     const resolve = (making: Making) =>
@@ -172,33 +195,35 @@ export const make = (
      * work makes the machine, preparation runs, and the action ends done.
      */
     const makeMachine = (action: "create" | "fork" | "restore", name: string, making: Making) =>
-      Effect.gen(function* () {
-        const [token, { row, work }] = yield* admitted(
-          claimAndCheck(action, "source" in making ? holding(making.source) : {}, (join) =>
-            Effect.gen(function* () {
-              const { spec, source, work } = yield* resolve(making);
-              const row = yield* newRow(name, spec);
+      Effect.scoped(
+        Effect.gen(function* () {
+          const [token, { row, work }] = yield* admitted(
+            claimAndCheck(action, "source" in making ? holding(making.source) : {}, (join) =>
+              Effect.gen(function* () {
+                const { spec, source, work } = yield* resolve(making);
+                const row = yield* newRow(name, spec);
 
-              yield* join(inserting(row));
-              yield* admit(action, row, source);
+                yield* join(inserting(row));
+                yield* admit(action, row, source);
 
-              return { row, work };
-            }),
-          ),
-        );
+                return { row, work };
+              }),
+            ),
+          );
 
-        const machine = ref(row);
+          const machine = ref(row);
 
-        const hostKey = yield* native(
-          token,
-          `${action} ${machine.id}`,
-          withRuntime(Effect.andThen(work(machine), prepare(machine))),
-        );
+          const hostKey = yield* native(
+            token,
+            `${action} ${machine.id}`,
+            withRuntime(Effect.andThen(work(machine), prepare(machine))),
+          );
 
-        yield* done(token, hostKey);
+          yield* done(token, hostKey);
 
-        return yield* read(name);
-      });
+          return yield* read(name);
+        }),
+      );
 
     const create = (request: CreateRequest) =>
       Effect.gen(function* () {
@@ -222,44 +247,46 @@ export const make = (
       });
 
     const start = (id: string) =>
-      Effect.gen(function* () {
-        const name = yield* nameOf(id);
+      Effect.scoped(
+        Effect.gen(function* () {
+          const name = yield* nameOf(id);
 
-        const [token, { record, running }] = yield* admitted(
-          claimAndCheck("start", holding(name), () =>
-            Effect.gen(function* () {
-              const record = yield* rows.machine(name);
-              const { state } = yield* runtime.observe(ref(record));
+          const [token, { record, running }] = yield* admitted(
+            claimAndCheck("start", holding(name), () =>
+              Effect.gen(function* () {
+                const record = yield* rows.machine(name);
+                const { state } = yield* runtime.observe(ref(record));
 
-              if (state === "missing") {
-                return yield* new Precondition({
-                  message: `machine ${id} is missing from the ${runtime.name} runtime; delete it`,
-                });
-              }
+                if (state === "missing") {
+                  return yield* new Precondition({
+                    message: `machine ${id} is missing from the ${runtime.name} runtime; delete it`,
+                  });
+                }
 
-              if (state !== "running") {
-                yield* admit("start", record);
-              }
+                if (state !== "running") {
+                  yield* admit("start", record);
+                }
 
-              return { record, running: state === "running" };
-            }),
-          ),
-        );
+                return { record, running: state === "running" };
+              }),
+            ),
+          );
 
-        const machine = ref(record);
+          const machine = ref(record);
 
-        const hostKey = yield* native(
-          token,
-          `start ${id}`,
-          withRuntime(
-            Effect.andThen(running ? Effect.void : runtime.start(machine), prepare(machine)),
-          ),
-        );
+          const hostKey = yield* native(
+            token,
+            `start ${id}`,
+            withRuntime(
+              Effect.andThen(running ? Effect.void : runtime.start(machine), prepare(machine)),
+            ),
+          );
 
-        yield* done(token, hostKey);
+          yield* done(token, hostKey);
 
-        return yield* read(name);
-      });
+          return yield* read(name);
+        }),
+      );
 
     const stop = (id: string) =>
       Effect.gen(function* () {

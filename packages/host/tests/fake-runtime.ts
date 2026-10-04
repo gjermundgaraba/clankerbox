@@ -103,6 +103,7 @@ type Refusable = "create" | "start" | "capture" | "restore" | "fork";
 export const fakeRuntime = (options: FakeOptions) => {
   const machines = new Map<string, FakeMachine>();
   const calls: Array<string> = [];
+  const activations: Array<Activation> = [];
   const injections = new Map<Operation, Array<Injection>>();
   const refusals = new Map<Refusable, Array<Refusal>>();
   const publishAddress = "publishAddress" in options ? options.publishAddress : "127.0.0.1";
@@ -194,7 +195,10 @@ export const fakeRuntime = (options: FakeOptions) => {
         observe,
         admit: (activation: Activation) =>
           Effect.andThen(
-            enter("admit", activation.machine),
+            Effect.andThen(
+              Effect.sync(() => activations.push(activation)),
+              enter("admit", activation.machine),
+            ),
             options.ramBudgetMib === undefined
               ? Effect.void
               : checkRamBudget(options.ramBudgetMib, activation, observe),
@@ -322,6 +326,8 @@ export const fakeRuntime = (options: FakeOptions) => {
     layer,
     /** Every runtime call, as `<operation> <machine ID>`, and `startup`. */
     calls,
+    /** What each `admit` was asked. */
+    activations,
     /** The guest root of the machine named `name`, while the fake holds it. */
     root: (name: string) => machines.get(name)?.root,
     /** The fake's machines by name, with their state. */

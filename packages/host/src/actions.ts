@@ -87,11 +87,11 @@ export const claimsOn = (store: StoreInterface) => {
    * through `join`, each joining the claim before, so one token covers them all. A check that
    * fails, or is interrupted, releases every row claimed so far, so nothing is written.
    */
-  const claimAndCheck = <B>(
+  const claimAndCheck = <B, R>(
     action: ActionName,
     rows: Rows,
-    check: (join: (more: Rows) => Effect.Effect<void, HostError>) => Effect.Effect<B, HostError>,
-  ): Effect.Effect<readonly [Token, B], HostError> =>
+    check: (join: (more: Rows) => Effect.Effect<void, HostError>) => Effect.Effect<B, HostError, R>,
+  ): Effect.Effect<readonly [Token, B], HostError, R> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const claimed = yield* Ref.make(yield* store.claim(action, rows));

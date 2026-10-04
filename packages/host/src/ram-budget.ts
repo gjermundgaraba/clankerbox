@@ -4,19 +4,13 @@
  */
 import { Capacity, type HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
-import {
-  type Activation,
-  bootingActions,
-  type MachineRef,
-  type Observed,
-  observeConcurrency,
-} from "./runtime.ts";
+import { type Activation, type MachineRef, type Observed, observeConcurrency } from "./runtime.ts";
 
 /**
- * Sums the `ramMib` of every machine that is running or held by an action that boots it, each
- * once, and refuses when the sum passes `budgetMib`. The target is already held, so it is in
- * the sum. Counting the held ones keeps a booting action that is past its check from being
- * missed; the host checks booting actions one at a time, so two never count each other.
+ * Sums the `ramMib` of every machine that is running or that an action is booting, each once,
+ * and refuses when the sum passes `budgetMib`. The target is booting, so it is in the sum.
+ * Counting the booting ones keeps an action that is past its check from being missed; the host
+ * checks booting actions one at a time, so two never count each other.
  */
 export const checkRamBudget = (
   budgetMib: number,
@@ -26,8 +20,8 @@ export const checkRamBudget = (
   Effect.gen(function* () {
     const counted = yield* Effect.forEach(
       activation.machines,
-      ({ machine, holder }) =>
-        holder !== undefined && bootingActions.has(holder)
+      ({ machine, booting }) =>
+        booting
           ? Effect.succeed(machine.ramMib)
           : Effect.map(observe(machine), ({ state }) => (state === "running" ? machine.ramMib : 0)),
       { concurrency: observeConcurrency },

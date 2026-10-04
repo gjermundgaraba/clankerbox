@@ -483,8 +483,8 @@ test("admit refuses with Capacity when running machines would pass the RAM budge
         action: "start",
         machine,
         machines: [
-          { machine, holder: "start" },
-          { machine: other, holder: undefined },
+          { machine, booting: true },
+          { machine: other, booting: false },
         ],
       }),
     ),
@@ -799,8 +799,8 @@ test("a fork of a machine that isn't running is refused before anything runs", a
         machine: copy,
         source: machine,
         machines: [
-          { machine, holder: "fork" },
-          { machine: copy, holder: "fork" },
+          { machine, booting: false },
+          { machine: copy, booting: true },
         ],
       }),
     ),

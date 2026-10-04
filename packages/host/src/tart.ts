@@ -31,7 +31,6 @@ import type { Tart, TartHost } from "./config.ts";
 import * as Forwarder from "./forwarder.ts";
 import { lastLines } from "./guest.ts";
 import {
-  bootingActions,
   type CheckpointRef,
   type Interface,
   type MachineRef,
@@ -601,8 +600,8 @@ export const make = (
         ),
       /**
        * A fork's source must be stopped, and the Mac must have room: every running VM in the
-       * Tart home counts, the operator's included, and so does every machine a booting action
-       * holds, the target too, since its VM runs only once its job has started.
+       * Tart home counts, the operator's included, and so does every machine an action is
+       * booting, the target too, since its VM runs only once its job has started.
        */
       admit: ({ action, machine, machines, source }) =>
         Effect.gen(function* () {
@@ -620,9 +619,8 @@ export const make = (
             }
           }
 
-          // A fork holds its source too, which stays stopped.
-          for (const { machine: held, holder } of machines) {
-            if (holder !== undefined && bootingActions.has(holder) && held.id !== source?.id) {
+          for (const { machine: held, booting } of machines) {
+            if (booting) {
               counted.add(vmOf(held));
             }
           }
