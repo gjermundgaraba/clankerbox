@@ -723,6 +723,11 @@ A crashed preparation is simply run again on the next activation; no
     new one and applies it with `machine update --remove-port … -p …` before
     start. To read ports back, use `machine ls -v` or the VM's
     `agent.config.json`; `machine status --json` reports only a count.
+  - Every published port comes from this allocation, a fork's and a
+    restore's included: the checkpoint's port is its source's, and the new
+    machine moves to its own before its first boot. smolvm's own fork range
+    (20000–32000) is never used, since `machine branch` is never called.
+    garaba-home opens only TCP 10000–19999 for `clankerbox ssh`.
 - **Tart:**
   - Tart has no port publishing, and the guest's Softnet address is reachable
     only from the Mac.
@@ -743,8 +748,9 @@ A crashed preparation is simply run again on the next activation; no
   policy lets reach the host, which denies by default: the operator's admin
   device, plus any rule that names the host. sshd's keys and the pinned host
   key are the protection. smolvm's strict floor and Softnet keep guests away
-  from private ranges. The guest can still reach the host's public address, so
-  production adds a firewall rule (see [Phases](#phases)). A boat machine's SSH
+  from private ranges. The strict floor doesn't block the host's public
+  addresses, so no host service may listen on one; phase 9 checks that at
+  deploy (see [Phases](#phases)). A boat machine's SSH
   relay is a public address, protected by sshd the same way, and boat guests
   have full outbound internet.
 
@@ -1241,7 +1247,9 @@ tests use real VMs.
      `tag:agent-host` on 8444, for the controller's mTLS identity) with the host
      API ports (two on the Linux host, one on the Mac), opened to the clients
      that call hosts. A client other than the admin device that runs
-     `clankerbox ssh` also needs the published range, 10000–19999. Drop the
+     `clankerbox ssh` also needs the published range, 10000–19999, the only
+     range garaba-home opens for it. Tailscale SSH on both hosts' :22 stays
+     admin-only. Drop the
      clankerbox controller from the compute node's apps. Its PLAN.md has the
      controller minting tailnet keys for elevated agent profiles. With no
      controller, guests join the tailnet only when a profile does it: an
@@ -1250,15 +1258,25 @@ tests use real VMs.
      tailnet, never its setup, and its `new-identity` hook removes the tailnet
      node state, so every fork and restore joins as a new node.
    - Install smolvm 1.22.2 from upstream under `/opt/smolvm/1.22.2` on the Linux
-     host, and Tart ≥ 2.40.1 on the Mac.
+     host, and Tart ≥ 2.40.1 on the Mac. Production's Tart host is
+     macbook-workstation (100.73.230.122, `tag:agent-host`), not the MacBook
+     Pro (100.122.69.11) where phase 5 develops and tests. Its pf passes the
+     Tart host's API port and 10000–19999 on its tailnet address. Pull the
+     Cirrus images on the workstation: the 31 GiB seed P3 pulled is on the
+     MacBook Pro.
    - Run the smolvm host as root: system units, and host state out of
      `/home/clanker`. As root, smolvm adds others-execute to every directory
      above its data root.
-   - **Change the egress guard before any guest runs:** `meta skuid 1000` becomes
-     `meta skuid 2000000-101999999`, smolvm's per-VM uid range, for IPv4 and
-     IPv6 alike. Until then, a guest can reach services on the host's public
-     addresses: in P1 guests reached root-owned listeners on both, and the
-     host's sshd on :22.
+   - **Check that no host service listens on a public address** before any
+     guest runs. smolvm's strict floor refuses loopback, private ranges and
+     the tailnet, so the host's public addresses are a guest's only way to a
+     host service (in P1 guests reached root-owned listeners there, evidence.md).
+     Nothing listens there now: OpenSSH listens on localhost only, and `ss`
+     showed TCP listeners only on loopback and the tailnet address. The Linux
+     host's firewall (input: `lo`, established, all of `tailscale0`, UDP 41641
+     and ICMP; output open) needs nothing more for smolvm, and no egress guard
+     is added. Leave `/etc/chrony/conf.d/garaba-home.conf` alone; it is
+     garaba-home's.
    - `SMOLVM_RESTORE_TMPFS=0` needs no deploy step: the host sets it on every
      smolvm call (see Guest access).
    - Add a boat host: a second host process on the Linux host, unprivileged,
@@ -1285,6 +1303,9 @@ tests use real VMs.
      launches. Recipes keep their `files/`; `machine.json` goes.
      `gg-linux-dev` installs `libatomic1` first: Node needs it and stock 26.04
      lacks it (P3).
+   - Hand garaba-home the three host API ports, each caller's tag and which
+     callers run `clankerbox ssh`, the elevated profiles' tags, and the live
+     suite's result.
    - Update the consumers' docs: `clankercreds/docs/recipe.md`, which still
      documents `machine.json`, and cliamp-verify's `clankerbox.md`, where
      `shell -T` becomes `ssh MACHINE -- cmd`, `create` takes the `cliamp-dev`

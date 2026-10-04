@@ -629,6 +629,11 @@ the source started `--branchable`):
 
 ## Phase 0 spikes (2026-10-04)
 
+The Linux host's clock ran 103 s slow until 2026-10-04, when garaba-home's
+chrony configuration took over, so wall-clock times recorded there before then
+(journal lines, file times) are 103 s behind this Mac's; durations are not
+affected.
+
 Run with `scripts/work_runs.py`. smolvm ran as root on the Linux host, from a
 1.22.2 prefix install (L:smolvm-install, L:p8-disk, L:p1-ports, L:p3-smolvm).
 Tart ran on this Mac (L:p2-tart-forwarder), and the SEA on both (L:p5-pins).
@@ -757,7 +762,11 @@ joined the tailnet as `hetzner-node`). The first runs used
   ports were refused. Root-owned listeners on the host's public IPv4 and IPv6
   addresses were reachable, and so was the host's sshd on :22. Listeners owned by
   uid 1000 timed out, consistent with production's `meta skuid 1000` rule
-  (ruleset read, not changed).
+  (ruleset read, not changed). This motivated an egress guard for phase 9,
+  which the owner dropped on 2026-10-04: nothing on the host listens on a
+  public address any more (OpenSSH on localhost only; `ss` showed TCP
+  listeners only on loopback and the tailnet address), so phase 9 checks that
+  instead.
 
 **P3, setup and preparation on smolvm** (L:p3-smolvm):
 
@@ -843,7 +852,8 @@ the old pipeline's `macos-tahoe-vanilla` seed with tart-guest-agent 0.14.1):
   refusal is its fc00::/7 rule (egress.rs:228-229). `1.1.1.1:443` was reached.
 - **Production's guard** (`meta skuid 1000 … fib daddr type local reject`, and
   its IPv6 twin) also refuses the host's own uid-1000 processes connecting to
-  published ports on the tailnet address.
+  published ports on the tailnet address. (It belonged to personal-cloud; the
+  rewrite adds no egress guard, see P1 above.)
 
 **The RNG reseed, as preparation runs it** (L:p1-tailnet):
 
