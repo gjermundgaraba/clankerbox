@@ -146,8 +146,38 @@ const machines = listCommand({
   rows: machineRows,
 });
 
-const createFlags = {
-  ...clientFlags,
+/**
+ * The body of a command that makes one client call and prints the resource it replies with:
+ * its JSON document with `--json`, or else `text`.
+ */
+const printResource = <A, Encoded extends object, R>(
+  flags: ClientFlags,
+  resource: {
+    readonly call: (
+      client: Client.Interface,
+      config: LoadedConfig,
+    ) => Effect.Effect<A, ClankerboxError, R>;
+    readonly encode: (resource: A) => Encoded;
+    readonly text: (resource: A, now: DateTime.Utc) => string;
+  },
+) =>
+  withClient(flags, (client, config) =>
+    Effect.gen(function* () {
+      const replied = yield* resource.call(client, config);
+      const now = yield* DateTime.now;
+
+      yield* print(
+        flags.json,
+        () => resource.encode(replied),
+        () => resource.text(replied, now),
+      );
+    }),
+  );
+
+/** What a command that makes a resource prints without `--json`: the new ID. */
+const newId = ({ id }: { readonly id: string }) => id;
+
+const createArguments = {
   target: Argument.String("target").pipe(
     Argument.withDescription(
       "A name, placed on the profile's host or the first host that offers the base, or a full ID <host>_<name>.",
@@ -175,7 +205,7 @@ const createFlags = {
   ),
 };
 
-type CreateFlags = Command.Command.Config.Infer<typeof createFlags>;
+type CreateFlags = Command.Command.Config.Infer<typeof clientFlags & typeof createArguments>;
 
 /** `--setup` and `--setup-timeout`, which go together, with the path resolved against the cwd. */
 const flagSetup = (flags: CreateFlags) =>
@@ -239,69 +269,57 @@ const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
     return { spec, host: profile?.host };
   });
 
-const create = Command.make("create", createFlags, (flags) =>
-  withClient(flags, (client, config) =>
-    Effect.gen(function* () {
-      const { spec, host } = yield* createRequest(flags, config);
-      const machine = yield* client.create(flags.target, spec, { host });
-
-      yield* print(
-        flags.json,
-        () => encodeMachine(machine),
-        () => machine.id,
-      );
-    }),
-  ),
+const create = Command.make("create", { ...clientFlags, ...createArguments }, (flags) =>
+  printResource(flags, {
+    call: (client, config) =>
+      Effect.flatMap(createRequest(flags, config), ({ spec, host }) =>
+        client.create(flags.target, spec, { host }),
+      ),
+    encode: encodeMachine,
+    text: newId,
+  }),
 ).pipe(
   Command.withDescription(
     "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. Prints the new ID.",
   ),
 );
 
-/** A mutation on one machine that replies with the machine. */
-const machineAction = (
-  name: "start" | "stop",
-  description: string,
-  call: (client: Client.Interface, id: string) => ReturnType<Client.Interface["start"]>,
-) =>
-  Command.make(name, { ...clientFlags, machine: machineArgument }, (flags) =>
-    withClient(flags, (client) =>
-      Effect.flatMap(call(client, flags.machine), (machine) =>
-        print(
-          flags.json,
-          () => encodeMachine(machine),
-          () => `${machine.id} ${machine.state}`,
-        ),
-      ),
-    ),
-  ).pipe(Command.withDescription(description));
+/** What start and stop print without `--json`: the machine's ID and state. */
+const machineState = (machine: { readonly id: string; readonly state: string }) =>
+  `${machine.id} ${machine.state}`;
 
-const start = machineAction(
-  "start",
-  "Start a machine. On a running machine, run preparation again.",
-  (client, id) => client.start(id),
-);
+const start = Command.make("start", { ...clientFlags, machine: machineArgument }, (flags) =>
+  printResource(flags, {
+    call: (client) => client.start(flags.machine),
+    encode: encodeMachine,
+    text: machineState,
+  }),
+).pipe(Command.withDescription("Start a machine. On a running machine, run preparation again."));
 
-const stop = machineAction(
-  "stop",
-  "Stop a machine. Stopping a stopped machine does nothing.",
-  (client, id) => client.stop(id),
-);
+const stop = Command.make("stop", { ...clientFlags, machine: machineArgument }, (flags) =>
+  printResource(flags, {
+    call: (client) => client.stop(flags.machine),
+    encode: encodeMachine,
+    text: machineState,
+  }),
+).pipe(Command.withDescription("Stop a machine. Stopping a stopped machine does nothing."));
 
-/** Deleting what is already gone is done: the host answers NotFound, and the CLI exits 0. */
+/**
+ * Deleting what is already gone is done: the host answers NotFound, the CLI says so on stderr,
+ * and exits 0. Either way `--json` prints `{deleted: id}`.
+ */
 const deleted = (json: boolean, id: string, removal: Effect.Effect<void, ClankerboxError>) =>
   removal.pipe(
-    Effect.andThen(
-      print(
-        json,
-        () => ({ deleted: id }),
-        () => id,
-      ),
-    ),
-    Effect.catchTag("NotFound", () =>
-      json
-        ? Console.log(JSON.stringify({ deleted: id }))
-        : Console.error(`clankerbox: ${id} was already gone`),
+    Effect.as(false),
+    Effect.catchTag("NotFound", () => Effect.succeed(true)),
+    Effect.flatMap((gone) =>
+      gone && !json
+        ? Console.error(`clankerbox: ${id} was already gone`)
+        : print(
+            json,
+            () => ({ deleted: id }),
+            () => id,
+          ),
     ),
   );
 
@@ -318,34 +336,22 @@ const fork = Command.make(
   "fork",
   { ...clientFlags, machine: machineArgument, name: nameArgument },
   (flags) =>
-    withClient(flags, (client) =>
-      Effect.flatMap(client.fork(flags.machine, flags.name), (machine) =>
-        print(
-          flags.json,
-          () => encodeMachine(machine),
-          () => machine.id,
-        ),
-      ),
-    ),
+    printResource(flags, {
+      call: (client) => client.fork(flags.machine, flags.name),
+      encode: encodeMachine,
+      text: newId,
+    }),
 ).pipe(Command.withDescription("Copy a machine to a new name on its host. Prints the new ID."));
 
 const restore = Command.make(
   "restore",
-  {
-    ...clientFlags,
-    checkpoint: checkpointArgument,
-    name: nameArgument,
-  },
+  { ...clientFlags, checkpoint: checkpointArgument, name: nameArgument },
   (flags) =>
-    withClient(flags, (client) =>
-      Effect.flatMap(client.restore(flags.checkpoint, flags.name), (machine) =>
-        print(
-          flags.json,
-          () => encodeMachine(machine),
-          () => machine.id,
-        ),
-      ),
-    ),
+    printResource(flags, {
+      call: (client) => client.restore(flags.checkpoint, flags.name),
+      encode: encodeMachine,
+      text: newId,
+    }),
 ).pipe(
   Command.withDescription(
     "Create a machine from a checkpoint, on the checkpoint's host. Prints the new ID.",
@@ -356,15 +362,11 @@ const capture = Command.make(
   "capture",
   { ...clientFlags, machine: machineArgument, name: nameArgument },
   (flags) =>
-    withClient(flags, (client) =>
-      Effect.flatMap(client.capture(flags.machine, flags.name), (checkpoint) =>
-        print(
-          flags.json,
-          () => encodeCheckpoint(checkpoint),
-          () => checkpoint.id,
-        ),
-      ),
-    ),
+    printResource(flags, {
+      call: (client) => client.capture(flags.machine, flags.name),
+      encode: encodeCheckpoint,
+      text: newId,
+    }),
 ).pipe(
   Command.withDescription(
     "Capture a checkpoint: ram from a running machine, disk from a stopped one. Prints its ID.",
@@ -384,18 +386,11 @@ const getCheckpoint = Command.make(
   "get",
   { ...clientFlags, checkpoint: checkpointArgument },
   (flags) =>
-    withClient(flags, (client) =>
-      Effect.gen(function* () {
-        const checkpoint = yield* client.checkpoint(flags.checkpoint);
-        const now = yield* DateTime.now;
-
-        yield* print(
-          flags.json,
-          () => encodeCheckpoint(checkpoint),
-          () => table(checkpointRows([checkpoint], now)),
-        );
-      }),
-    ),
+    printResource(flags, {
+      call: (client) => client.checkpoint(flags.checkpoint),
+      encode: encodeCheckpoint,
+      text: (checkpoint, now) => table(checkpointRows([checkpoint], now)),
+    }),
 ).pipe(Command.withDescription("Read one checkpoint."));
 
 const deleteCheckpoint = Command.make(

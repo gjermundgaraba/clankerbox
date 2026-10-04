@@ -463,12 +463,13 @@ test("deleting a machine that is already gone counts as done", async () => {
   const dir = await scratch(owned);
   const config = await writeConfig(dir, ["linux"]);
 
-  const { code, stderr } = await cli(["delete", "linux_gone", "--config", config], {
-    endpoints: [["linux", host({ id: "linux", bases: ["ubuntu"] })]],
-  });
+  const endpoints = [["linux", host({ id: "linux", bases: ["ubuntu"] })]] as const;
+  const text = await cli(["delete", "linux_gone", "--config", config], { endpoints });
+  const json = await cli(["delete", "linux_gone", "--json", "--config", config], { endpoints });
 
-  expect(code).toBe(0);
-  expect(stderr).toContain("already gone");
+  expect(text).toMatchObject({ code: 0, stdout: "" });
+  expect(text.stderr).toContain("already gone");
+  expect(json).toMatchObject({ code: 0, stdout: JSON.stringify({ deleted: "linux_gone" }) });
 });
 
 test("start, stop, fork and checkpoint capture route by ID", async () => {
