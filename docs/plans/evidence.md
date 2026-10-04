@@ -1105,7 +1105,9 @@ includes a relayed HTTP round trip. Machines had 1 vCPU, 512–1024 MiB and
   didn't run: the tailnet policy drops the Linux host's connections to this
   Mac (10 ports timed out, among them the driver's own listener and an sshd
   listening on the Mac's tailnet address), so the control failed and the
-  suite skipped it.
+  suite skipped it. The phase-4 review dropped the check: the strict floor
+  refuses all of 100.64.0.0/10 by source (S@1.22.2:crates/smolvm-network/src/egress.rs:205-213),
+  and every tailnet IPv4 address is in it.
 - **A smolvm stop of a `ram`-restored machine failed once in 24** ("orphan
   process still alive … still alive after stop attempts"); its scope ended
   0.1 ms after smolvm gave up, so the machine was stopped while `stop`
@@ -1123,6 +1125,7 @@ includes a relayed HTTP round trip. Machines had 1 vCPU, 512–1024 MiB and
   the suite logs and the host's journal. smolvm's per-VM `agent-console.log`
   records each guest command's arguments, so the preparation script's text
   (not its seed, which goes on stdin) is in every machine's log until delete.
+  Accepted in the phase-4 review: the preparation text carries no secret.
 - **Rerun after the review fixes** (run `live-smolvm-dc551f1bc155`, remote
   `runs/ldc5`, code as of `3d34da5`; same host, relay and sizes): 23 of 24
   tests passed in 189 s. A `disk` restore of a 1 vCPU / 1 GiB checkpoint,

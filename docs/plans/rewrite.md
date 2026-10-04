@@ -1397,11 +1397,14 @@ Everything the rewrite creates on a test machine is removed when the work ends.
   - a `new-identity` hook running on create, fork and restore and not on
     `start`, and a failing hook failing the action;
   - a guest refused when it calls its own host's API port;
-  - a guest refused when it calls another tailnet peer on a port its host
-    reaches, with the host's own connection as the control. Not yet run: the
-    tailnet policy drops the Linux host's connections to the Mac that ran
-    the phase-4 suite (evidence.md, Phase 4 live), and the check fails until
-    the host reaches some peer;
+  - a guest refused when it calls 100.100.100.100, which its host reaches,
+    and the host's routes to the tailnet unchanged by running machines. The
+    case of another tailnet peer follows from the strict floor's CGNAT rule
+    (S@1.22.2:crates/smolvm-network/src/egress.rs:205-213): every tailnet
+    IPv4 address is in 100.64.0.0/10, and live, a guest was refused the
+    host's own tailnet address and 100.100.100.100, and ULA IPv6 too
+    (evidence.md, P1 over the tailnet and Phase 4 live), so the suite has no
+    peer check;
   - smolvm's RAM budget refusing with `Capacity`, and of two concurrent
     creates that each fit only alone, exactly one passing;
   - RAM fork, `ram` checkpoint capture, restore and delete on smolvm, a
@@ -1435,7 +1438,8 @@ Everything the rewrite creates on a test machine is removed when the work ends.
     claimed machine refused with `Conflict{busy}`;
   - Tart's two-VM limit refused with `Capacity` before any clone, with nothing
     written;
-  - list fan-out with one host down;
-  - `--json` error tags.
+  - list fan-out with one host down and `--json` error tags, which the unit
+    suite covers against the real host process over the fake runtime
+    (`apps/clankerbox/tests/host.test.ts`) rather than live.
 - Every live run goes through `scripts/work_runs.py`, following AGENTS.md.
   It runs `clankerbox host` from its own config, like any consumer.
