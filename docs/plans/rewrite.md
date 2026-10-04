@@ -94,8 +94,9 @@ and answer them again at every bump of that dependency:
     by its base, by a `boat_` ID, or by a profile that names the boat host.
 
   Each is one module behind a shared `Runtime` interface. The state, setup
-  and preparation are shared. Port allocation, the forwarder and supervision
-  are helpers that a runtime calls when it needs them. The host records the
+  and preparation are shared. Port allocation and the forwarder are helpers
+  that a runtime calls when it needs them, and each runtime supervises its own
+  VMs (see [Supervision](#supervision)). The host records the
   endpoints its runtime reports. Fork, checkpoint and access stay
   runtime-specific.
 - **One runtime per host process.** Two runtimes on one machine are two host
@@ -127,7 +128,7 @@ apps/
   clankerbox/           # the only binary: `clankerbox <cli…> | host`; the CLI commands and `ssh` live here
 packages/
   contract/             # Schemas, action groups (machine, checkpoint, host), errors, the profile file schema, client library (host list, routing, fan-out, placement, recipe packing)
-  host/                 # state, claims, lifecycle, runtimes (smolvm, tart, boat), supervisor, setup, preparation, checkpoints, ports, forwarder (Tart), state dir and sqlite
+  host/                 # state, claims, lifecycle, runtimes (smolvm, tart, boat) with their supervision, setup, preparation, checkpoints, ports, forwarder (Tart), state dir and sqlite
 tools/
   release/              # SEA build and signing, bundle, notices
   oxlint/               # anti-slop plugin, installed from upstream by the install-anti-slop skill
@@ -786,15 +787,16 @@ which only `delete` takes (see [State and claims](#state-and-claims)).
 
 The smolvm CLI starts the VMM in the caller's cgroup, so without its own job a
 host restart would kill every VM. boat runs its own machines and needs no
-supervision. `Supervisor.launch(label, argv, env)` covers the other two
-runtimes:
+supervision. smolvm and Tart each supervise their VMs in their own runtime
+module, with no shared supervisor:
 
-- **smolvm (Linux, root):** set `SMOLVM_VM_USE_SCOPE=1` on every `start`,
-  including a restored machine's first start. Each VM gets its own
-  `system.slice/smolvm-vm-<name>.scope` and survives its launcher. No
+- **smolvm (Linux, root), with systemd scopes:** set `SMOLVM_VM_USE_SCOPE=1`
+  on every `start`, including a restored machine's first start. Each VM gets
+  its own `system.slice/smolvm-vm-<name>.scope` and survives its launcher. No
   `systemd-run` and no unit files. Verified for plain starts and restores.
-- **Tart:** the plist is written once at create. Start runs `launchctl print`,
-  then bootstrap if the job is absent, then `kickstart` without `-k`.
+- **Tart, with one launchd job per VM (`tart.ts`):** the plist is written once
+  at create. Start runs `launchctl print`, then bootstrap if the job is
+  absent, then `kickstart` without `-k`.
   - One LaunchAgent per VM in the user's `gui/<uid>` domain, labelled with the
     VM's name, running `tart run --no-graphics --net-softnet-block=@host <vm>`
     with `RunAtLoad` and `KeepAlive` false. The plist and the job's log are in
@@ -802,9 +804,10 @@ runtimes:
     them at login, and a test host's jobs stay apart from production's. After
     a reboot, `start` bootstraps the job again.
   - The job's environment is the one every tart call of the host gets: a fixed
-    `PATH` (with `/opt/homebrew/bin`, where Tart looks for `softnet`), `HOME`,
-    and the host's own `TART_HOME` if it has one, so the job finds the VM the
-    host made. Production sets none and uses `~/.tart`.
+    `PATH` (with `/usr/local/bin`, where the operator installs `softnet`, and
+    `/opt/homebrew/bin`; Tart looks for `softnet` on it), `HOME`, and the
+    host's own `TART_HOME` if it has one, so the job finds the VM the host
+    made. Production sets none and uses `~/.tart`.
   - `kickstart` returns before Tart has started the VM (P11), so a boot waits
     for `tart exec` to answer, and a job that exits instead fails it with its
     log, which each boot empties first.
