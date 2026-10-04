@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Precondition } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Layer, Sink, Stream } from "effect";
+import { Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
 import type { CheckpointRef, MachineRef } from "../src/runtime.ts";
@@ -24,81 +24,21 @@ import {
   testedVersion,
 } from "../src/smolvm.ts";
 import { removeScratch, scratch } from "./scratch.ts";
+import { type Call, type Reply, scripted as scriptedSpawner } from "./scripted.ts";
 
 const owned: Array<string> = [];
 
 afterEach(() => removeScratch(owned));
 
-/** One process the runtime started. */
-interface Call {
-  readonly file: string;
-  readonly args: ReadonlyArray<string>;
-  readonly env: unknown;
-  readonly stdin: string | undefined;
-}
-
-/** What a scripted process prints and how it exits. */
-interface Reply {
-  readonly exitCode?: number;
-  readonly stdout?: string;
-  readonly stderr?: string;
-}
-
 const encoder = new TextEncoder();
 
-/**
- * A spawner that runs nothing: each process answers with `reply(call)`. `--version` answers
- * the tested version unless `reply` says otherwise.
- */
-const scripted = (reply: (call: Call) => Reply | undefined) => {
-  const calls: Array<Call> = [];
-
-  const spawner = ChildProcessSpawner.make((command) =>
-    Effect.gen(function* () {
-      if (!ChildProcess.isStandardCommand(command)) {
-        return yield* Effect.die("the runtime runs no pipelines");
-      }
-
-      const input = command.options.stdin;
-
-      const stdin = Stream.isStream(input)
-        ? yield* Stream.mkString(Stream.decodeText(input))
-        : undefined;
-
-      const call: Call = {
-        file: command.command,
-        args: command.args,
-        env: command.options.env,
-        stdin,
-      };
-
-      calls.push(call);
-
-      const answer =
-        reply(call) ??
-        (call.args[0] === "--version" ? { stdout: `smolvm ${testedVersion}\n` } : {});
-
-      const stdout = answer.stdout ?? "";
-      const stderr = answer.stderr ?? "";
-
-      return ChildProcessSpawner.makeHandle({
-        pid: ChildProcessSpawner.ProcessId(1),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(answer.exitCode ?? 0)),
-        isRunning: Effect.succeed(false),
-        kill: () => Effect.void,
-        stdin: Sink.drain,
-        stdout: Stream.make(encoder.encode(stdout)),
-        stderr: Stream.make(encoder.encode(stderr)),
-        all: Stream.make(encoder.encode(stdout + stderr)),
-        getInputFd: () => Sink.drain,
-        getOutputFd: () => Stream.empty,
-        unref: Effect.succeed(Effect.void),
-      });
-    }),
+/** A scripted spawner whose `--version` answers the tested version unless `reply` says otherwise. */
+const scripted = (reply: (call: Call) => Reply | undefined) =>
+  scriptedSpawner(
+    (call) =>
+      reply(call) ??
+      (call.args[0] === "--version" ? { stdout: `smolvm ${testedVersion}\n` } : undefined),
   );
-
-  return { calls, layer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner) };
-};
 
 /**
  * A prefix with its templates expanded, and a state dir short enough for smolvm's sockets: under
