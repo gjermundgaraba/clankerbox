@@ -1,9 +1,10 @@
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Logger } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import { claimsOn } from "../src/actions.ts";
+import { Refusal } from "../src/runtime.ts";
 import { type Interface, type NewMachine, open } from "../src/store.ts";
 import { removeScratch, scratch } from "./scratch.ts";
 
@@ -59,5 +60,25 @@ test("a release that fails after a failed check is logged, and the check's error
   );
 
   expect(result).toEqual(new Precondition({ message: "no room" }));
+  expect(logged).toEqual([["couldn't release the rows of a create: disk full"]]);
+});
+
+test("a release that fails after a runtime's refusal is logged, and the refusal's error is the reply", async () => {
+  const { result, logged } = await withFailingRelease(({ claimAndCheck, native }, store) =>
+    Effect.flatMap(
+      claimAndCheck(
+        store.claim("create", { insert: { table: "machines", record: row } }),
+        () => Effect.void,
+      ),
+      ([token]) =>
+        native(
+          token,
+          "create linux_dev",
+          Effect.fail(new Refusal({ error: new Capacity({ message: "no machine" }) })),
+        ),
+    ),
+  );
+
+  expect(result).toEqual(new Capacity({ message: "no machine" }));
   expect(logged).toEqual([["couldn't release the rows of a create: disk full"]]);
 });

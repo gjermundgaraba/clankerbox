@@ -130,7 +130,7 @@ export const claimsOn = (store: StoreInterface) => {
       ),
       Effect.catch((error) =>
         error instanceof Refusal
-          ? Effect.andThen(store.release(token), Effect.fail(error.error))
+          ? Effect.andThen(release(token), Effect.fail(error.error))
           : Effect.andThen(
               store.end(token, {
                 action: {
