@@ -1,13 +1,14 @@
 /**
  * The host's state: one SQLite database in its state dir, through `node:sqlite`. It holds one
  * row per machine with its spec, `instance`, `native`, `createdAt`, host `port`, `hostKey` and
- * last `action`, and nothing else: machine state is always read from the runtime, and no setup
- * script is kept.
+ * last `action`, and one row per checkpoint, and nothing else: machine state is always read from
+ * the runtime, and no setup script is kept.
  */
 import { DatabaseSync } from "node:sqlite";
 import {
   type ActionName,
   ActionRecord,
+  Checkpoint,
   Conflict,
   Internal,
   NotFound,
@@ -38,6 +39,25 @@ export const migrations: ReadonlyArray<string> = [
     disk_gib INTEGER NOT NULL,
     port INTEGER UNIQUE,
     host_key TEXT,
+    action_name TEXT NOT NULL,
+    action_status TEXT NOT NULL,
+    action_error_tag TEXT,
+    action_error_message TEXT
+  ) STRICT`,
+  `CREATE TABLE checkpoints (
+    name TEXT PRIMARY KEY,
+    instance TEXT NOT NULL,
+    native TEXT,
+    created_at TEXT NOT NULL,
+    machine TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    pin TEXT,
+    port INTEGER,
+    base TEXT NOT NULL,
+    profile TEXT,
+    cpu INTEGER NOT NULL,
+    ram_mib INTEGER NOT NULL,
+    disk_gib INTEGER NOT NULL,
     action_name TEXT NOT NULL,
     action_status TEXT NOT NULL,
     action_error_tag TEXT,
@@ -84,6 +104,25 @@ const decodeRow = Schema.decodeUnknownSync(Row);
 
 const decodeAction = Schema.decodeUnknownSync(ActionRecord);
 
+/** The columns every row keeps its last action in. */
+interface ActionColumns {
+  readonly action_name: ActionName;
+  readonly action_status: ActionRecord["status"];
+  readonly action_error_tag: string | null;
+  readonly action_error_message: string | null;
+}
+
+const actionOf = (row: ActionColumns): ActionRecord =>
+  decodeAction(
+    row.action_error_tag === null || row.action_error_message === null
+      ? { name: row.action_name, status: row.action_status }
+      : {
+          name: row.action_name,
+          status: row.action_status,
+          error: { tag: row.action_error_tag, message: row.action_error_message },
+        },
+  );
+
 const fromRow = (row: typeof Row.Type): MachineRecord => ({
   name: row.name,
   instance: row.instance,
@@ -96,21 +135,79 @@ const fromRow = (row: typeof Row.Type): MachineRecord => ({
   diskGib: row.disk_gib,
   port: row.port ?? undefined,
   hostKey: row.host_key ?? undefined,
-  action: decodeAction(
-    row.action_error_tag === null || row.action_error_message === null
-      ? { name: row.action_name, status: row.action_status }
-      : {
-          name: row.action_name,
-          status: row.action_status,
-          error: { tag: row.action_error_tag, message: row.action_error_message },
-        },
-  ),
+  action: actionOf(row),
+});
+
+/** A checkpoint row. Ready checkpoints never change, so restores read them without a claim. */
+export interface CheckpointRecord {
+  readonly name: string;
+  readonly instance: string;
+  readonly native: string | undefined;
+  readonly createdAt: DateTime.Utc;
+  /** The name of the machine it was captured from. */
+  readonly machine: string;
+  readonly kind: Checkpoint["kind"];
+  /** What a `ram` checkpoint must be restored under: the runtime's pin at capture. */
+  readonly pin: string | undefined;
+  /**
+   * The source's host port at capture. A `ram` restore comes up on it, as the checkpoint holds
+   * the source's published port, until the runtime moves it to the new machine's own.
+   */
+  readonly port: number | undefined;
+  readonly base: string;
+  readonly profile: string | undefined;
+  readonly cpu: number;
+  readonly ramMib: number;
+  readonly diskGib: number;
+  readonly action: ActionRecord;
+}
+
+const CheckpointRow = Schema.Struct({
+  name: Schema.String,
+  instance: Schema.String,
+  native: Schema.NullOr(Schema.String),
+  created_at: Schema.DateTimeUtcFromString,
+  machine: Schema.String,
+  kind: Checkpoint.fields.kind,
+  pin: Schema.NullOr(Schema.String),
+  port: Schema.NullOr(Schema.Int),
+  base: Schema.String,
+  profile: Schema.NullOr(Schema.String),
+  cpu: Schema.Int,
+  ram_mib: Schema.Int,
+  disk_gib: Schema.Int,
+  action_name: ActionRecord.fields.name,
+  action_status: ActionRecord.fields.status,
+  action_error_tag: Schema.NullOr(Schema.String),
+  action_error_message: Schema.NullOr(Schema.String),
+});
+
+const decodeCheckpointRow = Schema.decodeUnknownSync(CheckpointRow);
+
+const fromCheckpointRow = (row: typeof CheckpointRow.Type): CheckpointRecord => ({
+  name: row.name,
+  instance: row.instance,
+  native: row.native ?? undefined,
+  createdAt: row.created_at,
+  machine: row.machine,
+  kind: row.kind,
+  pin: row.pin ?? undefined,
+  port: row.port ?? undefined,
+  base: row.base,
+  profile: row.profile ?? undefined,
+  cpu: row.cpu,
+  ramMib: row.ram_mib,
+  diskGib: row.disk_gib,
+  action: actionOf(row),
 });
 
 /** A new row: its fields, and the action that holds it from the start. */
 export interface NewMachine extends Omit<MachineRecord, "action"> {
   readonly action: ActionName;
 }
+
+/** A new checkpoint row, held by its capture from the start. */
+export type NewCheckpoint = Omit<CheckpointRecord, "action">;
 
 /** What an action records on its row when it ends: its outcome, and the host key it read. */
 export interface Outcome {
@@ -129,6 +226,14 @@ export interface Interface {
    */
   readonly insert: (record: NewMachine) => Effect.Effect<void, Conflict | Internal>;
   /**
+   * Inserts a new row made from the machine named `source`, such as a fork, and claims `source`
+   * for the same action, in one transaction. It returns the source as it was.
+   */
+  readonly insertFrom: (
+    record: NewMachine,
+    source: string,
+  ) => Effect.Effect<MachineRecord, NotFound | Conflict | Internal>;
+  /**
    * Claims an existing row for `action`, and returns the row as it was, so the claim can be
    * released by putting its action back. A row another action holds is `Conflict{busy}`.
    */
@@ -139,6 +244,24 @@ export interface Interface {
   /** Records an action's outcome on its row, or puts back the action a released claim replaced. */
   readonly record: (name: string, outcome: Outcome) => Effect.Effect<void, Internal>;
   readonly remove: (name: string) => Effect.Effect<void, Internal>;
+  readonly checkpoints: Effect.Effect<ReadonlyArray<CheckpointRecord>, Internal>;
+  readonly findCheckpoint: (
+    name: string,
+  ) => Effect.Effect<Option.Option<CheckpointRecord>, Internal>;
+  /**
+   * Inserts a new checkpoint row, held by its capture, and claims its source machine for the
+   * capture, in one transaction. It returns the source as it was.
+   */
+  readonly insertCheckpoint: (
+    record: NewCheckpoint,
+  ) => Effect.Effect<MachineRecord, NotFound | Conflict | Internal>;
+  /** Claims a checkpoint row, as `claim` does a machine's. */
+  readonly claimCheckpoint: (
+    name: string,
+    action: ActionName,
+  ) => Effect.Effect<CheckpointRecord, NotFound | Conflict | Internal>;
+  readonly recordCheckpoint: (name: string, action: ActionRecord) => Effect.Effect<void, Internal>;
+  readonly removeCheckpoint: (name: string) => Effect.Effect<void, Internal>;
   /** At startup: every action still running was cut off by the last host process's end. */
   readonly failInterrupted: Effect.Effect<void, Internal>;
 }
@@ -303,10 +426,32 @@ export const open = (
 
     const deleteRow = db.prepare("DELETE FROM machines WHERE name = ?");
 
+    const selectCheckpoints = db.prepare("SELECT * FROM checkpoints ORDER BY created_at, name");
+    const selectCheckpoint = db.prepare("SELECT * FROM checkpoints WHERE name = ?");
+
+    const insertCheckpointRow = db.prepare(
+      `INSERT INTO checkpoints (name, instance, native, created_at, machine, kind, pin, port, base,
+        profile, cpu, ram_mib, disk_gib, action_name, action_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'capture', 'running')`,
+    );
+
+    const updateCheckpointAction = db.prepare(
+      `UPDATE checkpoints SET action_name = ?, action_status = ?, action_error_tag = ?,
+        action_error_message = ? WHERE name = ?`,
+    );
+
+    const deleteCheckpointRow = db.prepare("DELETE FROM checkpoints WHERE name = ?");
+
     const findSync = (name: string) => {
       const row = selectOne.get(name);
 
       return row === undefined ? undefined : fromRow(decodeRow(row));
+    };
+
+    const findCheckpointSync = (name: string) => {
+      const row = selectCheckpoint.get(name);
+
+      return row === undefined ? undefined : fromCheckpointRow(decodeCheckpointRow(row));
     };
 
     const writeAction = (name: string, { action, hostKey }: Outcome) =>
@@ -318,6 +463,98 @@ export const open = (
         hostKey ?? null,
         name,
       );
+
+    const writeCheckpointAction = (name: string, action: ActionRecord) =>
+      updateCheckpointAction.run(
+        action.name,
+        action.status,
+        action.error?.tag ?? null,
+        action.error?.message ?? null,
+        name,
+      );
+
+    /** A row another action holds is busy. */
+    const busy = (kind: string, name: string, action: ActionRecord) =>
+      action.status === "running"
+        ? new Conflict({
+            message: `${kind} ${id(name)} is busy: ${action.name} is running`,
+            kind: "busy",
+          })
+        : undefined;
+
+    /** The claim of a machine row, inside a transaction. */
+    const claimSync = (
+      name: string,
+      action: ActionName,
+    ): Result.Result<MachineRecord, NotFound | Conflict> => {
+      const found = findSync(name);
+
+      if (found === undefined) {
+        return Result.fail(new NotFound({ message: `no machine ${id(name)}` }));
+      }
+
+      const held = busy("machine", name, found.action);
+
+      if (held !== undefined) {
+        return Result.fail(held);
+      }
+
+      writeAction(name, { action: { name: action, status: "running" } });
+
+      return Result.succeed(found);
+    };
+
+    /** The insert of a machine row, inside a transaction. */
+    const insertSync = (record: NewMachine): Result.Result<void, Conflict> => {
+      if (findSync(record.name) !== undefined) {
+        return Result.fail(
+          new Conflict({ message: `machine ${id(record.name)} exists`, kind: "exists" }),
+        );
+      }
+
+      insertRow.run(
+        record.name,
+        record.instance,
+        record.native ?? null,
+        DateTime.formatIso(record.createdAt),
+        record.base,
+        record.profile ?? null,
+        record.cpu,
+        record.ramMib,
+        record.diskGib,
+        record.port ?? null,
+        record.hostKey ?? null,
+        record.action,
+      );
+
+      return Result.void;
+    };
+
+    const insertCheckpointSync = (record: NewCheckpoint): Result.Result<void, Conflict> => {
+      if (findCheckpointSync(record.name) !== undefined) {
+        return Result.fail(
+          new Conflict({ message: `checkpoint ${id(record.name)} exists`, kind: "exists" }),
+        );
+      }
+
+      insertCheckpointRow.run(
+        record.name,
+        record.instance,
+        record.native ?? null,
+        DateTime.formatIso(record.createdAt),
+        record.machine,
+        record.kind,
+        record.pin ?? null,
+        record.port ?? null,
+        record.base,
+        record.profile ?? null,
+        record.cpu,
+        record.ramMib,
+        record.diskGib,
+      );
+
+      return Result.void;
+    };
 
     const store: Interface = {
       list: sql("list machines", () => selectAll.all().map((row) => fromRow(decodeRow(row)))),
@@ -331,56 +568,14 @@ export const open = (
             ).map(({ port }) => port),
           ),
       ),
-      insert: (record) =>
-        transaction(db, `insert ${id(record.name)}`, () => {
-          if (findSync(record.name) !== undefined) {
-            return Result.fail(
-              new Conflict({ message: `machine ${id(record.name)} exists`, kind: "exists" }),
-            );
-          }
-
-          insertRow.run(
-            record.name,
-            record.instance,
-            record.native ?? null,
-            DateTime.formatIso(record.createdAt),
-            record.base,
-            record.profile ?? null,
-            record.cpu,
-            record.ramMib,
-            record.diskGib,
-            record.port ?? null,
-            record.hostKey ?? null,
-            record.action,
-          );
-
-          return Result.void;
-        }),
-      claim: (name, action) =>
-        transaction(
-          db,
-          `claim ${id(name)}`,
-          (): Result.Result<MachineRecord, NotFound | Conflict> => {
-            const found = findSync(name);
-
-            if (found === undefined) {
-              return Result.fail(new NotFound({ message: `no machine ${id(name)}` }));
-            }
-
-            if (found.action.status === "running") {
-              return Result.fail(
-                new Conflict({
-                  message: `machine ${id(name)} is busy: ${found.action.name} is running`,
-                  kind: "busy",
-                }),
-              );
-            }
-
-            writeAction(name, { action: { name: action, status: "running" } });
-
-            return Result.succeed(found);
-          },
+      insert: (record) => transaction(db, `insert ${id(record.name)}`, () => insertSync(record)),
+      insertFrom: (record, source) =>
+        transaction(db, `insert ${id(record.name)} from ${id(source)}`, () =>
+          Result.flatMap(claimSync(source, record.action), (before) =>
+            Result.map(insertSync(record), () => before),
+          ),
         ),
+      claim: (name, action) => transaction(db, `claim ${id(name)}`, () => claimSync(name, action)),
       record: (name, outcome) =>
         sql(`record ${outcome.action.name} on ${id(name)}`, () => {
           writeAction(name, outcome);
@@ -389,12 +584,55 @@ export const open = (
         sql(`remove ${id(name)}`, () => {
           deleteRow.run(name);
         }),
+      checkpoints: sql("list checkpoints", () =>
+        selectCheckpoints.all().map((row) => fromCheckpointRow(decodeCheckpointRow(row))),
+      ),
+      findCheckpoint: (name) =>
+        sql(`read checkpoint ${id(name)}`, () => Option.fromNullishOr(findCheckpointSync(name))),
+      insertCheckpoint: (record) =>
+        transaction(db, `insert checkpoint ${id(record.name)}`, () =>
+          Result.flatMap(claimSync(record.machine, "capture"), (before) =>
+            Result.map(insertCheckpointSync(record), () => before),
+          ),
+        ),
+      claimCheckpoint: (name, action) =>
+        transaction(
+          db,
+          `claim checkpoint ${id(name)}`,
+          (): Result.Result<CheckpointRecord, NotFound | Conflict> => {
+            const found = findCheckpointSync(name);
+
+            if (found === undefined) {
+              return Result.fail(new NotFound({ message: `no checkpoint ${id(name)}` }));
+            }
+
+            const held = busy("checkpoint", name, found.action);
+
+            if (held !== undefined) {
+              return Result.fail(held);
+            }
+
+            writeCheckpointAction(name, { name: action, status: "running" });
+
+            return Result.succeed(found);
+          },
+        ),
+      recordCheckpoint: (name, action) =>
+        sql(`record ${action.name} on checkpoint ${id(name)}`, () => {
+          writeCheckpointAction(name, action);
+        }),
+      removeCheckpoint: (name) =>
+        sql(`remove checkpoint ${id(name)}`, () => {
+          deleteCheckpointRow.run(name);
+        }),
       failInterrupted: sql("fail interrupted actions", () => {
-        db.exec(
-          `UPDATE machines SET action_status = 'failed', action_error_tag = 'Internal',
-            action_error_message = 'host restarted during ' || action_name
-           WHERE action_status = 'running'`,
-        );
+        for (const table of ["machines", "checkpoints"]) {
+          db.exec(
+            `UPDATE ${table} SET action_status = 'failed', action_error_tag = 'Internal',
+              action_error_message = 'host restarted during ' || action_name
+             WHERE action_status = 'running'`,
+          );
+        }
       }),
     };
 
