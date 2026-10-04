@@ -48,6 +48,18 @@ test("a host config resolves its state dir against its own directory and default
   });
 });
 
+test("the publish address defaults to the listen address, and a set one is kept", async () => {
+  const defaulted = await load({ ...config, smolvm: { prefix: config.smolvm.prefix } });
+
+  const set = await load({
+    ...config,
+    smolvm: { ...config.smolvm, publishAddress: "100.100.1.2" },
+  });
+
+  expect((await Effect.runPromise(defaulted.loaded)).smolvm.publishAddress).toBe("100.95.240.37");
+  expect((await Effect.runPromise(set.loaded)).smolvm.publishAddress).toBe("100.100.1.2");
+});
+
 test("a set RAM budget is kept, even above physical RAM", async () => {
   const { loaded } = await load({
     ...config,

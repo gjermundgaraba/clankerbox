@@ -1076,12 +1076,13 @@ Two rules for every VM job:
   There is no default path: units pass it.
   - It holds `id`, `runtime`, `listen: {address, port}`, `stateDir` (relative
     to the config file), `bases` (name to image) and the runtime's own
-    settings, for smolvm `smolvm: {prefix, publishAddress, ramBudgetMib?}`.
+    settings, for smolvm `smolvm: {prefix, publishAddress?, ramBudgetMib?}`.
     Unknown keys are refused, as in every input.
   - `listen.address` and `publishAddress` must be a tailnet address
     (100.64.0.0/10 or fd7a:115c:a1e0::/48, Tailscale's ranges:
     tailscale.com/kb/1015, kb/1033) or a loopback address. The tailnet is the
     API's only gate, so a wildcard or public address is refused.
+  - `publishAddress` defaults to `listen.address`.
   - `ramBudgetMib` defaults to `os.totalmem()` in MiB minus 2048.
   - The runtime comes from a registry keyed by `runtime`; each runtime module
     adds its entry.

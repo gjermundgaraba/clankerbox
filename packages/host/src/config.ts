@@ -46,8 +46,8 @@ const Size = Schema.Int.check(Schema.isGreaterThan(0));
 const SmolvmSettings = Schema.Struct({
   /** The versioned install prefix, such as `/opt/smolvm/1.22.2`. */
   prefix: Schema.String,
-  /** Where machines' guest port 22 is published (`SMOLVM_PUBLISH_ADDR`). */
-  publishAddress: Address,
+  /** Where machines' guest port 22 is published (`SMOLVM_PUBLISH_ADDR`). Default: `listen.address`. */
+  publishAddress: Schema.optionalKey(Address),
   /** The RAM the host's machines may use together. Default: physical RAM minus 2 GiB. */
   ramBudgetMib: Schema.optionalKey(Size),
 });
@@ -106,7 +106,11 @@ const resolveConfig = (
       listen: decoded.listen,
       stateDir: path.resolve(directory, decoded.stateDir),
       bases: new Map(Object.entries(decoded.bases)),
-      smolvm: { ...decoded.smolvm, ramBudgetMib },
+      smolvm: {
+        ...decoded.smolvm,
+        publishAddress: decoded.smolvm.publishAddress ?? decoded.listen.address,
+        ramBudgetMib,
+      },
     };
   });
 
