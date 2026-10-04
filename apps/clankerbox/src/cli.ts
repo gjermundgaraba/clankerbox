@@ -369,7 +369,7 @@ const capture = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "Capture a checkpoint: ram from a running machine, disk from a stopped one. Prints its ID.",
+    "Capture a checkpoint. Its kind follows the runtime: ram from a running smolvm machine, otherwise disk. Prints its ID.",
   ),
 );
 
