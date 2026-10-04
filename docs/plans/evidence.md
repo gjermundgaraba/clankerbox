@@ -229,6 +229,14 @@ Checked 2026-10-01. Each row says what was actually exercised.
   - It doesn't remove per-VM supervision, it leaves exited VMMs as zombies of the
     host, and it has no stability statement.
 
+**Native names** (checked in phase 2):
+
+- **smolvm:** a VM name is at most 128 characters, starts with a letter or
+  digit, uses only `[A-Za-z0-9_-]`, and has no `--` and no trailing `-`
+  (S@1.22.2:src/data/mod.rs:58-98). The scope name `smolvm-vm-<name>.scope`
+  adds nothing stricter (src/systemd_scope.rs:151-163). The rule for
+  checkpoint and store names was not found.
+
 ## Upstream defects the design avoids
 
 All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
@@ -277,6 +285,8 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
     passed (Clone.swift:58,106).
   - It doesn't require a stopped source (Clone.swift:122-128).
   - It regenerates a colliding MAC (Clone.swift:101-103).
+- **Names:** a local VM name only has to be free of `/`
+  (T:Commands/Clone.swift:43-46).
 - **Delete:** on a missing VM it exits 2. From 2.40.0 a running VM exits 1
   instead.
 - **Two-VM limit:** enforced by Apple, system-wide, including VMs outside
@@ -436,6 +446,9 @@ All three are unfixed at 1.22.2: `state_probe.rs`, `fork.rs` and the agent's
   - A named snapshot is independent of its source: a deploy after the source
     was deleted had every file.
   - Names are account-wide, and an account keeps at most 10 (D:).
+- **Names (D:):** a named snapshot's name must match
+  `^[a-z0-9][a-z0-9-]{0,62}$` (`boat-v1.yaml` lines 2371 and 2449, sha256
+  `79aa87e2…f210`, fetched 2026-10-04). A display name is 1–120 characters.
 - **Delete (D:, observed):**
   - `DELETE` needs `X-Ascii-Confirm-Delete: <id>`. It returns 202 with an
     operation, and the sandbox answers 404 within 0.2 s.
