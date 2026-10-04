@@ -421,10 +421,40 @@ export const make = (
       );
     };
 
+    /** Waits until the VM no longer runs; false when `wait` passes first. */
+    const halted = (vm: string, wait: Duration.Duration) =>
+      state(vm).pipe(
+        Effect.repeat({
+          until: (observed) => observed !== "running",
+          schedule: Schedule.spaced(stopPause),
+        }),
+        Effect.timeoutOption(wait),
+        Effect.map(Option.isSome),
+      );
+
+    /**
+     * Tart's forced stop: SIGINT, then SIGKILL of `tart run` at once. Exit 2 is a VM that
+     * doesn't run.
+     */
+    const forceStop = (vm: string) =>
+      Effect.gen(function* () {
+        yield* call(["stop", "--timeout", "0", vm], `stop ${vm}`, [0, 2]);
+
+        if (!(yield* halted(vm, forcedStopWait))) {
+          return yield* new Internal({
+            message: `${vm} still runs ${Duration.format(forcedStopWait)} after tart stop --timeout 0`,
+          });
+        }
+      });
+
     /**
      * Boots the machine's VM through its job: bootstrapped if launchd doesn't hold it (as after a
      * reboot), then kickstarted without `-k`, which never touches a running VM. `kickstart`
-     * returns before Tart has started the VM, so `ready` waits for the guest agent.
+     * returns before Tart has started the VM, so `ready` waits for the guest agent. A boot that
+     * fails from there forces the VM off, so the machine reads stopped and `start` boots it again:
+     * a VM left running with no listener would stay unreachable, since `start` boots nothing on a
+     * running machine. An interrupted boot leaves the VM to the next host startup, as a host
+     * restart leaves every VM.
      */
     const boot = (machine: MachineRef) =>
       Effect.gen(function* () {
@@ -451,34 +481,17 @@ export const make = (
         yield* Effect.flatMap(launchctl(["kickstart", target], `kickstart ${vm}`), (ran) =>
           expect(ran, `launchctl kickstart ${vm}`),
         );
-        yield* ready(machine);
-        yield* listen(machine);
-      });
-
-    /** Waits until the VM no longer runs; false when `wait` passes first. */
-    const halted = (vm: string, wait: Duration.Duration) =>
-      state(vm).pipe(
-        Effect.repeat({
-          until: (observed) => observed !== "running",
-          schedule: Schedule.spaced(stopPause),
-        }),
-        Effect.timeoutOption(wait),
-        Effect.map(Option.isSome),
-      );
-
-    /**
-     * Tart's forced stop: SIGINT, then SIGKILL of `tart run` at once. Exit 2 is a VM that
-     * doesn't run.
-     */
-    const forceStop = (vm: string) =>
-      Effect.gen(function* () {
-        yield* call(["stop", "--timeout", "0", vm], `stop ${vm}`, [0, 2]);
-
-        if (!(yield* halted(vm, forcedStopWait))) {
-          return yield* new Internal({
-            message: `${vm} still runs ${Duration.format(forcedStopWait)} after tart stop --timeout 0`,
-          });
-        }
+        yield* Effect.andThen(ready(machine), listen(machine)).pipe(
+          Effect.tapError(() =>
+            forceStop(vm).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning(
+                  `couldn't force ${machine.id} off after its failed boot: ${error.message}`,
+                ),
+              ),
+            ),
+          ),
+        );
       });
 
     /**

@@ -506,6 +506,62 @@ test("a job that exits for another reason fails the boot with its exit code and 
   );
 });
 
+test("a boot whose guest agent never answers forces its VM off, and start boots it again", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const machine = await machineOn("dev");
+  const vm = vmOf(machine);
+
+  mac.hooks.probe = () => ({ exitCode: 1, stderr: "is the Tart Guest Agent running?\n" });
+
+  const creating = Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(Effect.flip(runtime.create(machine, "base")));
+
+    for (let step = 0; step < 200; step++) {
+      yield* TestClock.adjust(Duration.seconds(1));
+    }
+
+    return yield* Fiber.join(fiber);
+  });
+
+  const error = await Effect.runPromise(creating.pipe(Effect.provide(TestClock.layer())));
+
+  expect(error.message).toBe(
+    "mac_dev's guest agent didn't answer tart exec within 3m of its start",
+  );
+  expect(calls(mac).at(-1)).toBe(`tart stop --timeout 0 ${vm}`);
+  expect(mac.vms.get(vm)).toBe("stopped");
+  expect(await accepts(machine.port ?? 0)).toBe(false);
+
+  delete mac.hooks.probe;
+  await Effect.runPromise(runtime.start(machine));
+
+  expect(await accepts(machine.port ?? 0)).toBe(true);
+});
+
+test("a boot whose forwarder can't listen forces its VM off", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const machine = await machineOn("dev");
+  const taken = createServer();
+
+  await new Promise<void>((resolve) => {
+    taken.listen({ host: "127.0.0.1", port: machine.port }, resolve);
+  });
+
+  try {
+    const error = await Effect.runPromise(Effect.flip(runtime.create(machine, "base")));
+
+    expect(error.message).toMatch(
+      new RegExp(`^the forwarder couldn't listen on 127\\.0\\.0\\.1:${machine.port}: `, "u"),
+    );
+    expect(calls(mac).at(-1)).toBe(`tart stop --timeout 0 ${vmOf(machine)}`);
+    expect(mac.vms.get(vmOf(machine))).toBe("stopped");
+  } finally {
+    await new Promise((resolve) => {
+      taken.close(resolve);
+    });
+  }
+});
+
 test("a machine whose job file is gone can't start, and says to delete it", async () => {
   const { mac, runtime } = await runtimeOn();
   const machine = await machineOn("dev");

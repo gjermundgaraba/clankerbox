@@ -749,7 +749,10 @@ A crashed preparation is simply run again on the next activation; no
     session next writes.
   - A machine's listener opens once its boot has answered `tart exec`, closes
     when it stops or is deleted, and at host startup opens again for every
-    machine that runs.
+    machine that runs. A boot that fails after its kickstart, by timing out or
+    because its listener can't open, forces the VM off, so the machine reads
+    stopped and `start` boots it again; a VM left running would stay
+    unreachable, since `start` boots nothing on a running machine.
 - **boat:** guest port 22 is reached at boat's SSH relay (see
   [Runtimes: boat](#runtimes-boat)), with no host port and no forwarder.
 - **Security:** a published port is reachable by whatever garaba-home's tailnet
