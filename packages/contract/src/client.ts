@@ -260,7 +260,7 @@ export const make = (
 
         if (unreachable.length > 0) {
           return yield* new Unavailable({
-            message: `no reachable host offers base ${base}; hosts that didn't answer: ${unreachable
+            message: `no reachable host offers base ${base}; hosts whose bases couldn't be read: ${unreachable
               .map(({ host, error }) => `${host} (${error.message})`)
               .join(", ")}`,
             access: "read",
@@ -307,7 +307,10 @@ export const make = (
         return yield* createOn(host, name, spec).pipe(
           Effect.mapError((error) =>
             skipped.length > 0
-              ? withNote(error, `placement skipped hosts that didn't answer: ${skipped.join(", ")}`)
+              ? withNote(
+                  error,
+                  `placement skipped hosts whose bases couldn't be read: ${skipped.join(", ")}`,
+                )
               : error,
           ),
         );
