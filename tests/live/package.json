@@ -1,0 +1,14 @@
+{
+  "name": "@clankerbox/live-tests",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@gjermundgaraba/clankerbox-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
