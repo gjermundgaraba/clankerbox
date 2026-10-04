@@ -167,6 +167,9 @@ catalogs:
     '@effect/platform-node':
       specifier: 4.0.0
       version: 4.0.0
+    '@gjermundgaraba/effect-actions':
+      specifier: 0.9.0
+      version: 0.9.0
     '@oxlint/plugins':
       specifier: 1.85.0
       version: 1.85.0
@@ -238,6 +241,10 @@ importers:
         version: 1.0.0(@types/node@26.6.4)(@vitest/ui@5.0.1)(typescript@7.0.2)
 
   packages/contract:
+    dependencies:
+      '@gjermundgaraba/effect-actions':
+        specifier: 'catalog:'
+        version: 0.9.0(effect@4.0.0)
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
@@ -325,6 +332,16 @@ packages:
     peerDependencies:
       effect: ^4.0.0
       redis: '>=5.0.0 <7.0.0'
+
+  '@gjermundgaraba/effect-actions@0.9.0':
+    resolution: {integrity: sha512-DAODfwDOk79p2SddM4uNSD1rRlfNNJ0qKxel2ebmlMxzihSNnxhI5AgKDvRdRyYwd997TJXFkgQYKhDqnRqLDg==}
+    engines: {node: ^22.12.0 || ^24.0.0 || >=26.0.0}
+    peerDependencies:
+      '@modelcontextprotocol/client': ^2.0.0
+      effect: ^4.0.0
+    peerDependenciesMeta:
+      '@modelcontextprotocol/client':
+        optional: true
 
   '@jridgewell/resolve-uri@3.1.2':
     resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
@@ -1481,6 +1498,10 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
+
+  '@gjermundgaraba/effect-actions@0.9.0(effect@4.0.0)':
+    dependencies:
+      effect: 4.0.0
 
   '@jridgewell/resolve-uri@3.1.2': {}
 
