@@ -35,6 +35,13 @@ export interface MachineRef {
 
 export type MachineState = Machine["state"];
 
+/**
+ * How many machines' states the host reads at once, in a list or a RAM budget check. On smolvm
+ * each read is a `machine status` process, so a host with many machines doesn't start them all
+ * together.
+ */
+export const observeConcurrency = 8;
+
 /** What the runtime reports about a machine. Nothing here is stored. */
 export interface Observed {
   readonly state: MachineState;

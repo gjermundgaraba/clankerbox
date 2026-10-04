@@ -4,7 +4,7 @@
  */
 import { type ActionName, Capacity, type HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
-import type { Activation, MachineRef, Observed } from "./runtime.ts";
+import { type Activation, type MachineRef, type Observed, observeConcurrency } from "./runtime.ts";
 
 /** The actions that boot a machine. A machine one of them holds is counted while it runs. */
 const booting: ReadonlySet<ActionName> = new Set(["create", "start", "fork", "restore"]);
@@ -27,7 +27,7 @@ export const checkRamBudget = (
         holder !== undefined && booting.has(holder)
           ? Effect.succeed(machine.ramMib)
           : Effect.map(observe(machine), ({ state }) => (state === "running" ? machine.ramMib : 0)),
-      { concurrency: "unbounded" },
+      { concurrency: observeConcurrency },
     );
 
     const total = counted.reduce((sum, ramMib) => sum + ramMib, 0);

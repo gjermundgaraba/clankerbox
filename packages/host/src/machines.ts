@@ -37,7 +37,7 @@ import {
 import type { HostConfig } from "./config.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
-import { type MachineRef, Refusal, Runtime } from "./runtime.ts";
+import { type MachineRef, observeConcurrency, Refusal, Runtime } from "./runtime.ts";
 import { type MachineRecord, type NewMachine, Store } from "./store.ts";
 
 export interface Interface {
@@ -372,7 +372,7 @@ export const make = (
 
     return {
       list: Effect.flatMap(store.list, (records) =>
-        Effect.forEach(records, resource, { concurrency: "unbounded" }),
+        Effect.forEach(records, resource, { concurrency: observeConcurrency }),
       ),
       get: (id) => Effect.flatMap(nameOf(id), read),
       create: (request) => detached(logged(`create ${request.id}`, create(request))),
