@@ -1515,6 +1515,40 @@ snapshots and 2 active sandboxes allowed before each run. Machines were
   account held 0 sandboxes, 0 named snapshots and 0 active. Each run keeps
   68 KiB of evidence.
 
+**Snapshot attempt timing (spike, 2026-10-05)** (run
+`.work/runs/boat-snapshot-spike-9e24d0c6337b`, driver
+`evidence/snapshot_spike.py`). One `small` sandbox on the trial (`noEnv`,
+`ttlSeconds: 7200`, an Idempotency-Key, display name `cbx-spike-…`), polled
+with `GET /sandboxes/{id}` every 1.01 s on average (at most 1.57 s) for
+4.7 minutes, while the command API wrote 32–256 MiB to one file in
+`/home/user` and ran `sync` every 25 s.
+
+- **Answer:** boat sets `lastSnapshotAttemptAt` when a background attempt
+  starts. Every poll that first showed a new attempt (5 of 5) already read
+  `lastSnapshotStatus` `in_progress`, with `snapshotCompletedAt` still the
+  previous attempt's time. When the attempt ended, `lastSnapshotStatus`
+  became `completed` and `snapshotCompletedAt` (and `snapshotVerifiedAt`,
+  the same value) moved, while `lastSnapshotAttemptAt` stayed. So no poll
+  showed an attempt in progress that the host's fork wait (an attempt later
+  than the noted time, with status `completed`) would accept.
+- **Sequence:** before the first attempt all three fields were `null`
+  (`snapshotAvailable: false`); the first `in_progress` came 38.1 s after
+  boat's `createdAt`. Each new attempt was first seen 0.13–0.94 s after its
+  `lastSnapshotAttemptAt` value, already `in_progress`. The attempts ran
+  24.4 s (the first, which also set `snapshotAvailable: true`), then 6.7,
+  4.4, 3.8 and 5.1 s, start to `snapshotCompletedAt`.
+- **Interval:** attempts started 60.0 s apart (59.99–60.03 s, at :19.4 past
+  each minute), regardless of the writes. The sandbox read `idle` throughout.
+- **Clocks:** every change showed in the first poll answered after boat's
+  time for it (by the Mac's clock, polls taking 0.08–0.09 s), so the two
+  clocks agreed to well within the 1 s poll interval.
+- **Cost and cleanup:** 1 start (the create); the account's hour count read
+  14 before and 15 after, with 0 active before and after. Teardown deleted
+  the sandbox by its ID (404 0.18 s later), and the account's listing held
+  no `cbx-spike-` sandbox. The request log keeps method, path, status and
+  boat's code; the API key is in no evidence file. The run keeps 64 KiB of
+  evidence and no scratch.
+
 ## Consumers and production
 
 - **Production hosts:** the Mac host runs Tart only and the Linux host smolvm
