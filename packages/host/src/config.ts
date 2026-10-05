@@ -40,9 +40,11 @@ const Address = Schema.String.check(
 );
 
 /**
- * The API's port, outside the machines' range: a tailnet policy can then open that range to the
- * clients that run `clankerbox ssh` without opening the API, and the API never takes a port a
- * machine would be given.
+ * The API's port, outside the machines' range, on every runtime. The tailnet is the API's only
+ * gate, so a policy that opens that range to the clients that run `clankerbox ssh` would open an
+ * API port inside it to them too. That holds for a boat host, which publishes no machine ports:
+ * in production it shares the Linux host's tailnet address with the smolvm host, whose range such
+ * a policy opens. The API never takes a port a machine would be given, either.
  */
 const Port = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: 65_535 }),
