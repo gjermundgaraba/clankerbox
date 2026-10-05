@@ -342,7 +342,9 @@ every bump of it:
   profile files.
 - **A host** (`packages/host/src`) owns everything durable for its machines:
   machine and checkpoint rows, and their ports. Machine state (`running`,
-  `stopped`, `missing`) is always read from the runtime, never stored. A
+  `stopped`, `missing`) is always read from the runtime, never stored; a
+  machine whose state couldn't be read is `unknown`, so a failed read never
+  fails a list or the action it follows. A
   machine and its checkpoints stay on the host that made them.
 - **One runtime per host process**, behind the `Runtime` interface
   (`runtime.ts`), picked by the config's `runtime` from the registry in
@@ -654,8 +656,9 @@ These are known, not guarded, and accepted:
 - **State** comes from `machine status --name X --json`, at most 8 at once.
   smolvm's exit codes are trusted: no polling around calls.
 - **RAM budget** (`ram-budget.ts`): every boot checks that running and booting
-  machines' `ramMib` fit `ramBudgetMib`, else `Capacity`. Set it above
-  physical RAM to overcommit on purpose.
+  machines' `ramMib` fit `ramBudgetMib`, else `Capacity`; a machine whose
+  state couldn't be read counts as running. Set it above physical RAM to
+  overcommit on purpose.
 - **Fork** is a checkpoint of the running source into a store of its own,
   `create --from` it, a port swap (`machine update --remove-port … -p …`),
   start, then the store is removed whole, whatever happened. The child
@@ -732,7 +735,7 @@ These are known, not guarded, and accepted:
   `out_of_capacity`/`no_ready_machine` are `Capacity`, as is 409
   `named_snapshot_limit`, boat's cap on an account's named snapshots.
 - **State** is a `GET` of each recorded sandbox, never a list; a failed read
-  fails rather than reading `missing`. The SSH endpoint changes at every start
+  reads `unknown`, never `missing`. The SSH endpoint changes at every start
   and is only reported for a running machine.
 - **Ready:** after a fork, start or restore the host waits for boat's
   lazy-restore marker before preparation writes `/var/lib/clankerbox/`.

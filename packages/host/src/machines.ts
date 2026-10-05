@@ -114,9 +114,23 @@ export const make = (
       return machine;
     };
 
+    /**
+     * The machines' states, read from the runtime. A read that fails as a whole, as Tart's one
+     * `tart list` can, reads every machine `unknown`: a state read never fails an action.
+     */
+    const observeAll = (records: ReadonlyArray<MachineRecord>) =>
+      runtime.observe(records.map(ref)).pipe(
+        Effect.catch((error) =>
+          Effect.as(
+            Effect.logWarning(`couldn't read the machines' states: ${error.message}`),
+            records.map((): Observed => ({ state: "unknown" })),
+          ),
+        ),
+      );
+
     /** One machine's state, read from the runtime. */
     const observe = (record: MachineRecord) =>
-      Effect.map(runtime.observe([ref(record)]), ([observed]) => observed);
+      Effect.map(observeAll([record]), ([observed]) => observed);
 
     const read = (name: string) =>
       Effect.flatMap(rows.machine(name), (record) =>
@@ -388,9 +402,7 @@ export const make = (
 
     return {
       list: Effect.flatMap(store.list, (records) =>
-        Effect.map(runtime.observe(records.map(ref)), (observed) =>
-          Arr.zipWith(records, observed, resource),
-        ),
+        Effect.map(observeAll(records), (observed) => Arr.zipWith(records, observed, resource)),
       ),
       get: (id) => Effect.flatMap(nameOf(id), read),
       create: (request) => detached(`create ${request.id}`, create(request)),

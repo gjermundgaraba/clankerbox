@@ -1014,7 +1014,7 @@ test("a machine no boat type covers is refused with Precondition, in admit and b
   );
 });
 
-test("observe reads each recorded sandbox with its own GET, and none when no sandbox is recorded", async () => {
+test("observe reads each recorded sandbox with its own GET, none when no sandbox is recorded, and a failed read unknown", async () => {
   const boat = fakeBoat({ instant: true });
   const rig = await rigOn(boat);
 
@@ -1054,6 +1054,8 @@ test("observe reads each recorded sandbox with its own GET, and none when no san
     ip: null,
     sshEndpoint: null,
   });
+  boat.hooks.answer = (sent) =>
+    sent.path.endsWith("/bx_broken") ? refusal(500, "internal_error") : undefined;
 
   const observed = await succeeds(
     rig.runtime.observe([
@@ -1064,6 +1066,7 @@ test("observe reads each recorded sandbox with its own GET, and none when no san
       machineOn("cancelled", { native: "bx_cancelled" }),
       machineOn("deleted", { native: "bx_deleted" }),
       machineOn("unrecorded"),
+      machineOn("broken", { native: "bx_broken" }),
     ]),
   );
 
@@ -1076,10 +1079,13 @@ test("observe reads each recorded sandbox with its own GET, and none when no san
     { state: "missing" },
     { state: "missing" },
     { state: "missing" },
+    // A read that fails is no answer: the sandbox may still be there.
+    { state: "unknown" },
   ]);
   // Never the operator's own sandbox: only the recorded ones are read.
   expect(boat.sent.map((sent) => `${sent.method} ${sent.path}`).toSorted()).toEqual([
     "GET /sandboxes/bx_booting",
+    "GET /sandboxes/bx_broken",
     "GET /sandboxes/bx_cancelled",
     "GET /sandboxes/bx_deleted",
     "GET /sandboxes/bx_down",

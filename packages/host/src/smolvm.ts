@@ -223,11 +223,19 @@ export const make = (
         },
       );
 
-    const observeOne = (machine: MachineRef): Effect.Effect<Observed, HostError> =>
-      Effect.map(state(nativeName(machine)), (observed) =>
-        observed === "missing" || machine.port === undefined
-          ? { state: observed }
-          : { state: observed, ssh: { host: settings.publishAddress, port: machine.port } },
+    /** A machine's state, `unknown` when smolvm can't read it. */
+    const observeOne = (machine: MachineRef): Effect.Effect<Observed> =>
+      state(nativeName(machine)).pipe(
+        Effect.map((observed): Observed =>
+          observed === "missing" || machine.port === undefined
+            ? { state: observed }
+            : { state: observed, ssh: { host: settings.publishAddress, port: machine.port } },
+        ),
+        Effect.catch((error) =>
+          Effect.as(Effect.logWarning(`couldn't read ${machine.id}'s state: ${error.message}`), {
+            state: "unknown",
+          } satisfies Observed),
+        ),
       );
 
     const observe = (machines: ReadonlyArray<MachineRef>) =>

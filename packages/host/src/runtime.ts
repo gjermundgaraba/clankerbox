@@ -140,9 +140,11 @@ export interface Interface {
   /**
    * Reads the machines' states in as few native calls as the runtime allows: one `tart list` on
    * Tart; smolvm reads each machine on its own, at its own bound, and boat each recorded sandbox,
-   * all at once. A machine the runtime doesn't know is `missing`, not an error. Its contract is one
-   * state per machine, in their order: a runtime builds its answer by mapping over `machines`,
-   * and callers rely on that without checking.
+   * all at once. A machine the runtime doesn't know is `missing`, not an error, and one whose
+   * read fails is `unknown`. Only a read of every machine at once may fail, and the core reads
+   * every machine `unknown` then. Its contract is one state per machine, in their order: a
+   * runtime builds its answer by mapping over `machines`, and callers rely on that without
+   * checking.
    */
   readonly observe: (
     machines: ReadonlyArray<MachineRef>,

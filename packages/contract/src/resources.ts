@@ -52,8 +52,11 @@ export const Machine = Schema.Struct({
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
-  /** Read from the runtime, never stored. */
-  state: Schema.Literals(["running", "stopped", "missing"]),
+  /**
+   * Read from the runtime, never stored: `missing` when the runtime doesn't have the machine,
+   * `unknown` when it couldn't be read.
+   */
+  state: Schema.Literals(["running", "stopped", "missing", "unknown"]),
   action: ActionRecord,
   ssh: Schema.optionalKey(SshEndpoint),
   /** The guest's SSH host public key, as `<type> <base64>`. */

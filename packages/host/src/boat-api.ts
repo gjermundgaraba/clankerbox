@@ -406,23 +406,6 @@ export const make = (settings: Settings) =>
       );
 
     return {
-      /**
-       * The sandboxes among `ids` that boat has, each read with its own `GET`, all at once. A
-       * host holds few machines, and boat limits starts, not reads; a list would also hold the
-       * operator's own sandboxes, a page at a time.
-       */
-      sandboxes: (ids: ReadonlyArray<string>) =>
-        Effect.map(
-          Effect.forEach(
-            ids,
-            (id) =>
-              Effect.map(sandbox(id), (found) =>
-                Option.map(found, (existing) => [id, existing] as const),
-              ),
-            { concurrency: "unbounded" },
-          ),
-          (found) => new Map(Arr.getSomes(found)),
-        ),
       sandbox,
       /** Creates a sandbox of `type`, or from the named snapshot `from`; its ID. */
       create: (key: string, type: TypeName, from?: string) =>

@@ -197,6 +197,56 @@ test("a list reads every machine's state in one observe", async () => {
   expect(linux.fake.observed).toEqual([["linux_a", "linux_b"]]);
 });
 
+test("a read of every machine that fails reads them all unknown, and never fails the action it follows", async () => {
+  const linux = await host();
+
+  await linux.run(linux.machines.create(request("a")));
+  linux.fake.failNextObserve(new Internal({ message: "tart list exited 1" }));
+
+  // The create's own read, after it is done, is the one that fails.
+  const made = await linux.run(linux.machines.create(request("b")));
+
+  linux.fake.failNextObserve(new Internal({ message: "tart list exited 1" }));
+
+  const listed = await linux.run(linux.machines.list);
+
+  expect(made).toMatchObject({ state: "unknown", action: { name: "create", status: "done" } });
+  expect(made.ssh).toBeUndefined();
+  expect(listed.map(({ id, state }) => [id, state])).toEqual([
+    ["linux_a", "unknown"],
+    ["linux_b", "unknown"],
+  ]);
+  expect(await linux.run(linux.machines.get("linux_b"))).toMatchObject({ state: "running" });
+});
+
+test("one machine the runtime can't read is unknown, and the list still reads the rest", async () => {
+  const linux = await host();
+
+  await linux.run(linux.machines.create(request("a")));
+  await linux.run(linux.machines.create(request("b")));
+  linux.fake.machines.set("a", { state: "unknown", root: linux.fake.root("a") ?? "" });
+
+  const listed = await linux.run(linux.machines.list);
+
+  expect(listed.map(({ id, state }) => [id, state])).toEqual([
+    ["linux_a", "unknown"],
+    ["linux_b", "running"],
+  ]);
+});
+
+test("stop on a machine the runtime can't read does nothing and writes nothing", async () => {
+  const linux = await host();
+
+  await linux.run(linux.machines.create(request("dev")));
+  linux.fake.machines.set("dev", { state: "unknown", root: linux.fake.root("dev") ?? "" });
+  linux.fake.calls.length = 0;
+
+  const stopped = await linux.run(linux.machines.stop("linux_dev"));
+
+  expect(stopped).toMatchObject({ state: "unknown", action: { name: "create", status: "done" } });
+  expect(linux.fake.calls).toEqual([]);
+});
+
 test("a duplicate name is Conflict{exists}, and the runtime is never called", async () => {
   const linux = await host();
 
@@ -646,6 +696,18 @@ test("the RAM budget counts running machines and refuses with Capacity, writing 
   expect(restart._tag).toBe("Capacity");
   expect(again.action).toEqual({ name: "start", status: "done" });
   expect((await rows(linux)).map(({ name }) => name).sort()).toEqual(["a", "b", "c"]);
+});
+
+test("the RAM budget counts a machine the runtime can't read as running", async () => {
+  const linux = await host({ runtime: { ramBudgetMib: 2048 } });
+
+  await linux.run(linux.machines.create(request("a")));
+  linux.fake.machines.set("a", { state: "unknown", root: linux.fake.root("a") ?? "" });
+
+  const full = await failure(linux, linux.machines.create(request("c", { ramMib: 2048 })));
+
+  expect(full._tag).toBe("Capacity");
+  expect(full.message).toContain("3072 MiB");
 });
 
 test("the RAM budget reads the machines no action boots in one observe", async () => {

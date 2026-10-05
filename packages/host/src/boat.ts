@@ -114,6 +114,14 @@ export const endpointOf = (sandbox: Sandbox): SshEndpoint | undefined => {
     : { host: sandbox.ip, port: 22 };
 };
 
+/** A sandbox boat has, as the core sees it: its endpoint only once it is up. */
+const observed = (sandbox: Sandbox): Observed => {
+  const state = stateOf(sandbox.state);
+  const ssh = upStates.has(sandbox.state) ? endpointOf(sandbox) : undefined;
+
+  return ssh === undefined ? { state } : { state, ssh };
+};
+
 /** What boat says went wrong with a sandbox, as an error's tail. */
 const why = (sandbox: Pick<Sandbox, "error">): string =>
   sandbox.error === undefined || sandbox.error === null ? "" : `: ${sandbox.error}`;
@@ -647,27 +655,35 @@ export const make = (
       checkpointKind: "disk",
       startup: () => Effect.void,
       /**
-       * A `GET` of each recorded sandbox, all at once, and none when no machine has one. A
-       * machine whose sandbox boat answers 404 for, or has none recorded, is missing.
+       * A `GET` of each recorded sandbox, all at once: a host holds few machines, and boat limits
+       * starts, not reads; a list would also hold the operator's own sandboxes, a page at a time.
+       * A machine whose sandbox boat answers 404 for, or has none recorded, is missing, and one
+       * whose read fails is unknown.
        */
       observe: (machines) =>
-        Effect.gen(function* () {
-          const recorded = machines.flatMap((machine) => machine.native ?? []);
-          const found = recorded.length === 0 ? new Map() : yield* api.sandboxes(recorded);
-
-          return machines.map((machine): Observed => {
-            const sandbox = machine.native === undefined ? undefined : found.get(machine.native);
-
-            if (sandbox === undefined) {
-              return { state: "missing" };
-            }
-
-            const state = stateOf(sandbox.state);
-            const ssh = upStates.has(sandbox.state) ? endpointOf(sandbox) : undefined;
-
-            return ssh === undefined ? { state } : { state, ssh };
-          });
-        }),
+        Effect.forEach(
+          machines,
+          (machine): Effect.Effect<Observed> =>
+            Option.match(sandboxOf(machine), {
+              onNone: () => Effect.succeed({ state: "missing" }),
+              onSome: (id) =>
+                api.sandbox(id).pipe(
+                  Effect.map((found) =>
+                    Option.match(found, {
+                      onNone: (): Observed => ({ state: "missing" }),
+                      onSome: observed,
+                    }),
+                  ),
+                  Effect.catch((error) =>
+                    Effect.as(
+                      Effect.logWarning(`couldn't read ${machine.id}'s state: ${error.message}`),
+                      { state: "unknown" } satisfies Observed,
+                    ),
+                  ),
+                ),
+            }),
+          { concurrency: "unbounded" },
+        ),
       /**
        * One of boat's types must cover the machine; whether the account's plan includes it is
        * boat's to say. boat's own count of active sandboxes includes the operator's, so its 429

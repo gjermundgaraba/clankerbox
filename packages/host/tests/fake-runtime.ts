@@ -107,6 +107,7 @@ export const fakeRuntime = (options: FakeOptions) => {
   const observed: Array<ReadonlyArray<string>> = [];
   const injections = new Map<Operation, Array<Injection>>();
   const refusals = new Map<Refusable, Array<Refusal>>();
+  const observeFailures: Array<HostError> = [];
   const publishAddress = "publishAddress" in options ? options.publishAddress : "127.0.0.1";
   let stubs: string | undefined;
 
@@ -145,7 +146,8 @@ export const fakeRuntime = (options: FakeOptions) => {
       }),
     );
 
-  const observe = (refs: ReadonlyArray<MachineRef>): Effect.Effect<ReadonlyArray<Observed>> =>
+  /** The machines' states, as smolvm reads them: one at a time, so none fails the others. */
+  const states = (refs: ReadonlyArray<MachineRef>): Effect.Effect<ReadonlyArray<Observed>> =>
     Effect.sync(() => {
       observed.push(refs.map(({ id }) => id));
 
@@ -156,6 +158,14 @@ export const fakeRuntime = (options: FakeOptions) => {
           ? { state }
           : { state, ssh: { host: publishAddress, port: machine.port } };
       });
+    });
+
+  /** `states`, or the read of every machine failing as a whole, as Tart's `tart list` can. */
+  const observe = (refs: ReadonlyArray<MachineRef>) =>
+    Effect.suspend(() => {
+      const error = observeFailures.shift();
+
+      return error === undefined ? states(refs) : Effect.fail(error);
     });
 
   /** Where a checkpoint's copy of its machine's root is kept. */
@@ -239,7 +249,7 @@ export const fakeRuntime = (options: FakeOptions) => {
             ),
             options.ramBudgetMib === undefined
               ? Effect.void
-              : checkRamBudget(options.ramBudgetMib, activation, observe),
+              : checkRamBudget(options.ramBudgetMib, activation, states),
           ),
         create: (machine) =>
           Effect.andThen(
@@ -361,6 +371,10 @@ export const fakeRuntime = (options: FakeOptions) => {
     stubs: () => stubs,
     failNext: (operation: Operation, error: HostError) => {
       inject(operation, { kind: "fail", error });
+    },
+    /** Fails the next `observe` as a whole, without reading any machine. */
+    failNextObserve: (error: HostError) => {
+      observeFailures.push(error);
     },
     refuseNext: (operation: Refusable, refusal: Refusal) => {
       refusals.set(operation, [...(refusals.get(operation) ?? []), refusal]);

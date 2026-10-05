@@ -7,7 +7,7 @@ import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Layer, Logger, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
 import { type CheckpointRef, type MachineRef, Refusal } from "../src/runtime.ts";
@@ -254,18 +254,33 @@ test("observe reads each machine's status, and reports its published port unless
   expect(spawner.calls).toHaveLength(4);
 });
 
-test("observe fails with smolvm's last output when status fails for another reason", async () => {
+test("observe reads a machine whose status fails for another reason unknown, and logs smolvm's last output", async () => {
   const spawner = scripted((call) =>
-    call.args[0] === "machine" ? { exitCode: 1, stderr: "Error: database is locked\n" } : undefined,
+    call.args[0] === "machine"
+      ? call.args[3] === "dev-01234567"
+        ? { exitCode: 1, stderr: "Error: database is locked\n" }
+        : status("stopped")
+      : undefined,
   );
 
   const runtime = await runtimeOf(await prepared(), spawner);
-  const error = await Effect.runPromise(Effect.flip(runtime.observe([machine])));
+  const logged: Array<unknown> = [];
 
-  expect(error._tag).toBe("Internal");
-  expect(error.message).toBe(
-    "smolvm machine status dev-01234567 exited 1: Error: database is locked",
+  const observed = await Effect.runPromise(
+    runtime
+      .observe([machine, { ...machine, id: "linux_two", name: "two", port: 10_001 }])
+      .pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))]))),
   );
+
+  expect(observed).toEqual([
+    { state: "unknown" },
+    { state: "stopped", ssh: { host: "100.95.240.37", port: 10_001 } },
+  ]);
+  expect(logged).toEqual([
+    [
+      "couldn't read linux_dev's state: smolvm machine status dev-01234567 exited 1: Error: database is locked",
+    ],
+  ]);
 });
 
 test("create makes the machine with its sizes and published port, then boots it branchable", async () => {
