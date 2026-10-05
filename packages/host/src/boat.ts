@@ -6,8 +6,8 @@
  *
  * boat assigns sandbox IDs, so the runtime records each one on its row (`native`) as soon as
  * boat answers, through the core's `recordNative`, and reads it from the machine the core
- * passes; a row without one has nothing on boat the host can find. A named snapshot's name derives from the host ID and the row's instance, so a checkpoint
- * row needs none.
+ * passes; a row without one has nothing on boat the host can find. A named snapshot's name
+ * derives from the host ID and the row's instance, so a checkpoint row needs none.
  *
  * The refusal rule covers boat's answers that leave nothing on boat (evidence.md, boat claims):
  * its `Capacity` refusals of a create, fork, resume, restore or capture (the account's limits,

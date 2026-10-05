@@ -352,8 +352,8 @@ export const make = (settings: Settings) =>
     /**
      * A call that carries an `Idempotency-Key`: while its outcome is unclear it is repeated with
      * the same key and body, with backoff, for `retryWindow` from its first unclear answer, far
-     * inside boat's 24-hour key window. Then it fails. A `Capacity` refusal of a repeat is `Internal`: the unclear attempt
-     * may have made a sandbox, which the refusal may be counting.
+     * inside boat's 24-hour key window. Then it fails. A `Capacity` refusal of a repeat is
+     * `Internal`: the unclear attempt may have made a sandbox, which the refusal may be counting.
      */
     const idempotent = <A>(
       call: Call,
