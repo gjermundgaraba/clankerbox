@@ -155,6 +155,15 @@ test("setup.sh runs through its #! line, with or without its execute bit", async
   expect(await readFile(join(out, "interpreter"), "utf8")).toBe("awk ran\n");
 });
 
+test("a setup.sh without a #! line runs under /bin/sh", async () => {
+  const dir = await recipe('echo sh ran >"$OUT/interpreter"\n');
+
+  const { out, exitCode } = await runPacked(await pack(dir));
+
+  expect(exitCode).toBe(0);
+  expect(await readFile(join(out, "interpreter"), "utf8")).toBe("sh ran\n");
+});
+
 test("a directory without setup.sh is refused with Invalid", async () => {
   const dir = await scratch();
 
