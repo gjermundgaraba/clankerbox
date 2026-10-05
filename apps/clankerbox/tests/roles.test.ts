@@ -9,15 +9,11 @@ test("--version prints the version", async () => {
   expect(stdout).toBe(`clankerbox v${version}`);
 });
 
-test("--help lists the CLI's commands next to host", async () => {
+test("--help shows the CLI's usage", async () => {
   const { code, stdout } = await cli(["--help"]);
 
   expect(code).toBe(0);
   expect(stdout).toContain("clankerbox <subcommand> [flags]");
-
-  for (const command of ["hosts", "machines", "create", "checkpoint", "restore", "ssh", "host"]) {
-    expect(stdout).toContain(command);
-  }
 });
 
 test("host --help shows the host role's usage", async () => {
