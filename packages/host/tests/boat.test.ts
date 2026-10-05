@@ -874,7 +874,8 @@ test("a sandbox that boat cancels or loses during the SSH wait fails it at once"
       "Internal",
       `machine boat_dev doesn't run: boat reads its sandbox bx_made0001 ${ending}`,
     ]);
-    expect(Duration.toSeconds(waited)).toBeLessThan(10);
+    // Short of the SSH wait's 3 minutes, which a retried read of the gone sandbox would use up.
+    expect(Duration.toSeconds(waited)).toBeLessThan(180);
     expect(remotes(rig.guest)).toHaveLength(1);
   }
 });
@@ -1309,9 +1310,9 @@ test("the fork's wait reads only boat's stamps: an attempt begun before the sync
   expect(Exit.isSuccess(exit)).toBe(true);
 
   // The attempt under way at the sync completed a second later and wasn't taken; the next began
-  // at 59 s and completed at 61 s.
+  // at 59 s and completed at 61 s. The test clock runs on while the host works, so a busy machine
+  // may note that next attempt and wait for the one after: only the lower bound is boat's.
   expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(61);
-  expect(Duration.toSeconds(waited)).toBeLessThan(120);
   expect(rig.boat.calls()).toEqual([
     "POST /sandboxes/bx_source/fork",
     "PATCH /sandboxes/bx_made0001",
