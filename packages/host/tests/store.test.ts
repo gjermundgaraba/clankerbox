@@ -348,6 +348,36 @@ test("markMade marks the machines its claim inserted made, not those it holds; a
   ]);
 });
 
+test("recordNative keeps the runtime's ID on its row's instance, and refuses a row that's gone or another instance's", async () => {
+  const stateDir = join(await scratch(owned), "state");
+
+  const [native, gone, other] = await withStore(stateDir, (store) =>
+    Effect.gen(function* () {
+      const { instance } = record("dev");
+
+      yield* store.insert("create", inserting(record("dev")));
+      yield* store.recordNative("dev", instance, "bx_first");
+
+      const found = yield* store.find("dev");
+
+      return [
+        Option.map(found, (row) => row.native),
+        yield* Effect.flip(store.recordNative("gone", instance, "bx_second")),
+        yield* Effect.flip(
+          store.recordNative("dev", "ffffffffffffffffffffffffffffffff", "bx_third"),
+        ),
+      ] as const;
+    }),
+  );
+
+  expect(native).toEqual(Option.some("bx_first"));
+  expect([gone._tag, gone.message]).toEqual([
+    "Internal",
+    "state database: machine linux_gone of instance 0123456789abcdef0123456789abcdef is gone, so its native ID bx_second wasn't recorded",
+  ]);
+  expect(other._tag).toBe("Internal");
+});
+
 test("a claim joining another covers both rows, and a joining claim that fails writes nothing", async () => {
   const stateDir = join(await scratch(owned), "state");
 

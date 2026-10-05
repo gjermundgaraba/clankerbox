@@ -304,6 +304,16 @@ export interface Interface {
   readonly markMade: (token: Token) => Effect.Effect<void, Internal>;
   /** Ends a claim in one transaction, recording `outcome` on its rows. */
   readonly end: (token: Token, outcome: Outcome) => Effect.Effect<void, Internal>;
+  /**
+   * Records the runtime's native ID on the machine row `name` of instance `instance`, as soon as
+   * the runtime knows it: boat's sandbox ID, which boat assigns, so that a `delete` after a crash
+   * has it. A row that is gone, or now holds another instance, is `Internal`.
+   */
+  readonly recordNative: (
+    name: string,
+    instance: string,
+    native: string,
+  ) => Effect.Effect<void, Internal>;
   /** Removes a row, as a successful delete does. */
   readonly remove: (row: RowRef) => Effect.Effect<void, Internal>;
   /** At startup: every action still running was cut off by the last host process's end. */
@@ -485,6 +495,10 @@ export const open = (
     const updateHostKey = db.prepare("UPDATE machines SET host_key = ? WHERE name = ?");
 
     const updateMade = db.prepare("UPDATE machines SET made = 1 WHERE name = ?");
+
+    const updateNative = db.prepare(
+      "UPDATE machines SET native = $native WHERE name = $name AND instance = $instance",
+    );
 
     /** The statements that record a row's action and remove the row, per table. */
     const statementsOf = (table: Table) => ({
@@ -680,6 +694,20 @@ export const open = (
 
           return Result.void;
         }),
+      recordNative: (name, instance, native) =>
+        Effect.flatMap(
+          sql(`record ${id(name)}'s native ID`, () =>
+            Number(updateNative.run({ name, instance, native }).changes),
+          ),
+          (changes) =>
+            changes === 1
+              ? Effect.void
+              : Effect.fail(
+                  new Internal({
+                    message: `state database: machine ${id(name)} of instance ${instance} is gone, so its native ID ${native} wasn't recorded`,
+                  }),
+                ),
+        ),
       remove: (row) =>
         sql(`remove ${kinds[row.table]} ${id(row.name)}`, () => {
           statements[row.table].remove.run(row.name);
