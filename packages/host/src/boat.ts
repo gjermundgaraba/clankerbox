@@ -225,16 +225,18 @@ const hostKeysTimeoutSeconds = 30;
  */
 class HostKeysUnread extends Data.TaggedError("HostKeysUnread")<{ readonly message: string }> {}
 
-/** Waits until `read` answers `Some`, polling every `pause`; `None` once `wait` has passed. */
-const poll = <A, E, R>(
+/** Waits until `read` answers `Some`, polling every `pause`; `late` once `wait` has passed. */
+const poll = <A, E, R, E2, R2>(
   read: Effect.Effect<Option.Option<A>, E, R>,
   pause: Duration.Duration,
   wait: Duration.Duration,
+  late: () => Effect.Effect<never, E2, R2>,
 ) =>
   read.pipe(
     Effect.repeat({ until: Option.isSome, schedule: Schedule.spaced(pause) }),
-    Effect.timeoutOption(wait),
-    Effect.map(Option.flatten),
+    // The repeat ends only on `Some`.
+    Effect.map(Option.getOrThrow),
+    Effect.timeoutOrElse({ duration: wait, orElse: late }),
   );
 
 /** The contract's errors, to rebuild one with its message scrubbed. */
@@ -387,14 +389,14 @@ export const make = (
         },
       );
 
-      return Effect.flatMap(poll(read, upPause, upWait), (found) =>
-        Option.isSome(found)
-          ? Effect.void
-          : Effect.fail(
-              new Internal({
-                message: `boat's sandbox ${id} of ${machine.id} didn't run within ${Duration.format(upWait)}`,
-              }),
-            ),
+      return Effect.asVoid(
+        poll(read, upPause, upWait, () =>
+          Effect.fail(
+            new Internal({
+              message: `boat's sandbox ${id} of ${machine.id} didn't run within ${Duration.format(upWait)}`,
+            }),
+          ),
+        ),
       );
     };
 
@@ -536,7 +538,7 @@ export const make = (
       Effect.gen(function* () {
         const last = yield* Ref.make("");
 
-        const answered = yield* Effect.scoped(
+        yield* Effect.scoped(
           Effect.flatMap(session(machine, id, { argv: ["true"] }), finished),
         ).pipe(
           Effect.catchTag("HostKeysUnread", (error) =>
@@ -547,14 +549,18 @@ export const make = (
             until: ({ exitCode }) => exitCode === 0,
             schedule: Schedule.spaced(sshPause),
           }),
-          Effect.timeoutOption(sshWait),
+          Effect.timeoutOrElse({
+            duration: sshWait,
+            orElse: () =>
+              Effect.flatMap(Ref.get(last), (output) =>
+                Effect.fail(
+                  new Internal({
+                    message: `${machine.id} didn't answer SSH within ${Duration.format(sshWait)}: ${output}`,
+                  }),
+                ),
+              ),
+          }),
         );
-
-        if (Option.isNone(answered)) {
-          return yield* new Internal({
-            message: `${machine.id} didn't answer SSH within ${Duration.format(sshWait)}: ${yield* Ref.get(last)}`,
-          });
-        }
       });
 
     /**
@@ -568,17 +574,21 @@ export const make = (
           "/bin/sh",
           "-c",
           `until [ -e ${restoredMarker} ]; do sleep 0.25; done`,
-        ]).pipe(Effect.timeoutOption(markerWait));
+        ]).pipe(
+          Effect.timeoutOrElse({
+            duration: markerWait,
+            orElse: () =>
+              Effect.fail(
+                new Internal({
+                  message: `${machine.id}'s /var/lib wasn't restored within ${Duration.format(markerWait)}: no ${restoredMarker}`,
+                }),
+              ),
+          }),
+        );
 
-        if (Option.isNone(waited)) {
+        if (waited.exitCode !== 0) {
           return yield* new Internal({
-            message: `${machine.id}'s /var/lib wasn't restored within ${Duration.format(markerWait)}: no ${restoredMarker}`,
-          });
-        }
-
-        if (waited.value.exitCode !== 0) {
-          return yield* new Internal({
-            message: `waiting for ${machine.id}'s ${restoredMarker} exited ${waited.value.exitCode}: ${waited.value.output}`,
+            message: `waiting for ${machine.id}'s ${restoredMarker} exited ${waited.exitCode}: ${waited.output}`,
           });
         }
       });
@@ -617,11 +627,21 @@ export const make = (
      */
     const sync = (machine: MachineRef, id: string, before: "fork" | "capture") =>
       Effect.gen(function* () {
-        const synced = yield* runToEnd(machine, id, ["sync"]).pipe(Effect.timeoutOption(syncWait));
+        const synced = yield* runToEnd(machine, id, ["sync"]).pipe(
+          Effect.timeoutOrElse({
+            duration: syncWait,
+            orElse: () =>
+              Effect.fail(
+                new Internal({
+                  message: `sync in ${machine.id} before its ${before} ran past ${Duration.format(syncWait)}`,
+                }),
+              ),
+          }),
+        );
 
-        if (Option.isNone(synced) || synced.value.exitCode !== 0) {
+        if (synced.exitCode !== 0) {
           return yield* new Internal({
-            message: `sync in ${machine.id} before its ${before} ${Option.isNone(synced) ? `ran past ${Duration.format(syncWait)}` : `exited ${synced.value.exitCode}: ${synced.value.output}`}`,
+            message: `sync in ${machine.id} before its ${before} exited ${synced.exitCode}: ${synced.output}`,
           });
         }
       });
@@ -658,11 +678,13 @@ export const make = (
           ),
         );
 
-        if (Option.isNone(yield* poll(read, snapshotPause, snapshotWait))) {
-          return yield* new Internal({
-            message: `boat completed no snapshot of ${source.id} within ${Duration.format(snapshotWait)} of its sync, so the fork wouldn't hold its latest writes`,
-          });
-        }
+        yield* poll(read, snapshotPause, snapshotWait, () =>
+          Effect.fail(
+            new Internal({
+              message: `boat completed no snapshot of ${source.id} within ${Duration.format(snapshotWait)} of its sync, so the fork wouldn't hold its latest writes`,
+            }),
+          ),
+        );
       });
 
     /** Waits until boat reads the stopped sandbox `archived`. */
@@ -677,15 +699,15 @@ export const make = (
           ),
         );
 
-        if (Option.isSome(yield* poll(read, stopPause, stopWait))) {
-          return;
-        }
-
-        const seen = yield* Ref.get(last);
-
-        return yield* new Internal({
-          message: `boat didn't archive ${machine.id}'s sandbox ${id} within ${Duration.format(stopWait)} of its stop: ${Option.match(seen, { onNone: () => "it is gone", onSome: (sandbox) => `it reads ${sandbox.state}${why(sandbox)}` })}`,
-        });
+        yield* poll(read, stopPause, stopWait, () =>
+          Effect.flatMap(Ref.get(last), (seen) =>
+            Effect.fail(
+              new Internal({
+                message: `boat didn't archive ${machine.id}'s sandbox ${id} within ${Duration.format(stopWait)} of its stop: ${Option.match(seen, { onNone: () => "it is gone", onSome: (sandbox) => `it reads ${sandbox.state}${why(sandbox)}` })}`,
+              }),
+            ),
+          ),
+        );
       });
 
     return {
@@ -791,19 +813,19 @@ export const make = (
 
           yield* api.delete(id.value);
 
-          const gone = yield* poll(
+          yield* poll(
             Effect.map(api.sandbox(id.value), (found) =>
               Option.isNone(found) ? Option.some(true) : Option.none(),
             ),
             deletePause,
             deleteWait,
+            () =>
+              Effect.fail(
+                new Internal({
+                  message: `boat still has ${machine.id}'s sandbox ${id.value} ${Duration.format(deleteWait)} after its delete`,
+                }),
+              ),
           );
-
-          if (Option.isNone(gone)) {
-            return yield* new Internal({
-              message: `boat still has ${machine.id}'s sandbox ${id.value} ${Duration.format(deleteWait)} after its delete`,
-            });
-          }
         }).pipe(scrubbing),
       /**
        * A named snapshot of a running or a stopped sandbox, always of its disk. A running one
@@ -826,17 +848,17 @@ export const make = (
             ),
             capturePause,
             captureWait,
+            () =>
+              Effect.fail(
+                new Internal({
+                  message: `boat didn't save snapshot ${name} of ${machine.id} within ${Duration.format(captureWait)}`,
+                }),
+              ),
           );
 
-          if (Option.isNone(settled)) {
+          if (settled.status !== "ready") {
             return yield* new Internal({
-              message: `boat didn't save snapshot ${name} of ${machine.id} within ${Duration.format(captureWait)}`,
-            });
-          }
-
-          if (settled.value.status !== "ready") {
-            return yield* new Internal({
-              message: `boat's snapshot ${name} of ${machine.id} is ${settled.value.status}${settled.value.error === undefined ? "" : `: ${settled.value.error}`}`,
+              message: `boat's snapshot ${name} of ${machine.id} is ${settled.status}${settled.error === undefined ? "" : `: ${settled.error}`}`,
             });
           }
         }).pipe(scrubbingRefusal),
