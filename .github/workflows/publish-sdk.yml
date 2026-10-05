@@ -1,0 +1,54 @@
+name: Publish SDK
+# Release tags only: the SDK is versioned with the binaries, so v1.2.3 publishes 1.2.3.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+permissions:
+  contents: read
+concurrency:
+  group: publish-sdk-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: 26.10.0
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Check that the tag names the SDK's version
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const { name, version } = JSON.parse(readFileSync('packages/contract/package.json', 'utf8'));
+          assert.equal(name, '@gjermundgaraba/clankerbox-sdk');
+          assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+          assert.equal(process.env.GITHUB_REF, `refs/tags/v${version}`);
+          NODE
+      - run: npm install -g "$(node -p "require('./package.json').packageManager")"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm ready
+      - name: Pack and check the package
+        run: |
+          mkdir -p "$RUNNER_TEMP/sdk"
+          pnpm --filter @gjermundgaraba/clankerbox-sdk pack --pack-destination "$RUNNER_TEMP/sdk"
+          tar -tzf "$RUNNER_TEMP/sdk/"*.tgz | grep -qx package/LICENSE
+          tar -xzOf "$RUNNER_TEMP/sdk/"*.tgz package/package.json | node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import { readFileSync } from "node:fs";
+            const text = readFileSync(0, "utf8");
+            assert.doesNotMatch(text, /"(catalog|workspace):/);
+            assert.equal(JSON.parse(text).exports["."].import, "./dist/index.mjs");
+          '
+          git diff --exit-code
+      - name: Publish with npm trusted publishing
+        run: npm publish "$RUNNER_TEMP/sdk/"*.tgz --access public --provenance --ignore-scripts
