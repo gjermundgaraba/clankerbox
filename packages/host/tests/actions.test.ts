@@ -33,8 +33,11 @@ const inserting = (store: Interface) =>
     held: row,
   }));
 
-/** Runs `use` with the claims over a store whose release fails, and what it logged. */
-const withFailingRelease = async <A>(
+const diskFull = () => Effect.fail(new Internal({ message: "disk full" }));
+
+/** Runs `use` with the claims over a store whose `failing` write fails, and what it logged. */
+const withFailing = async <A>(
+  failing: "release" | "end",
   use: (claims: ReturnType<typeof claimsOn>, store: Interface) => Effect.Effect<A, HostError>,
 ) => {
   const stateDir = join(await scratch(owned), "state");
@@ -43,10 +46,7 @@ const withFailingRelease = async <A>(
   const result = await Effect.gen(function* () {
     const store = yield* open(stateDir, "linux");
 
-    const claims = claimsOn({
-      ...store,
-      release: () => Effect.fail(new Internal({ message: "disk full" })),
-    });
+    const claims = claimsOn({ ...store, [failing]: diskFull });
 
     return yield* Effect.flip(use(claims, store));
   }).pipe(
@@ -60,7 +60,7 @@ const withFailingRelease = async <A>(
 };
 
 test("a release that fails after a failed check is logged, and the check's error is the reply", async () => {
-  const { result, logged } = await withFailingRelease(({ claimAndCheck }, store) =>
+  const { result, logged } = await withFailing("release", ({ claimAndCheck }, store) =>
     claimAndCheck(inserting(store), () => Effect.fail(new Precondition({ message: "no room" }))),
   );
 
@@ -69,7 +69,7 @@ test("a release that fails after a failed check is logged, and the check's error
 });
 
 test("a release that fails after a runtime's refusal is logged, and the refusal's error is the reply", async () => {
-  const { result, logged } = await withFailingRelease(({ claimAndCheck, native }, store) =>
+  const { result, logged } = await withFailing("release", ({ claimAndCheck, native }, store) =>
     Effect.flatMap(
       claimAndCheck(inserting(store), () => Effect.void),
       ([token]) =>
@@ -83,4 +83,17 @@ test("a release that fails after a runtime's refusal is logged, and the refusal'
 
   expect([result._tag, result.message]).toEqual(["Capacity", "no machine"]);
   expect(logged).toEqual([["couldn't release the rows of a create: disk full"]]);
+});
+
+test("an end that fails after a runtime's failure is logged, and the runtime's error is the reply", async () => {
+  const { result, logged } = await withFailing("end", ({ claimAndCheck, native }, store) =>
+    Effect.flatMap(
+      claimAndCheck(inserting(store), () => Effect.void),
+      ([token]) =>
+        native(token, "create linux_dev", Effect.fail(new Capacity({ message: "no machine" }))),
+    ),
+  );
+
+  expect([result._tag, result.message]).toEqual(["Capacity", "no machine"]);
+  expect(logged).toEqual([["couldn't record the failure of a create: disk full"]]);
 });

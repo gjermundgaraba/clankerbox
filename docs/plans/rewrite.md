@@ -468,7 +468,8 @@ listed to keep them from being ported):
   the inserted rows, put back each held row's last `action`) and
   `end(token, outcome)` each write every row of the token in one transaction.
   A release that fails is logged; its rows stay held until the next startup
-  marks them failed.
+  marks them failed. So is an end that records a failure: the action's own
+  error stays the reply.
   - Fork and capture claim their source first, then insert the new row into
     the same claim: a fork with the source's spec, a capture with the
     runtime's checkpoint kind, which is constant per runtime, like its pin. A

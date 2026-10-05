@@ -102,6 +102,25 @@ export const claimsOn = (store: StoreInterface) => {
       );
 
   /**
+   * Ends the action failed with `error`. An end that fails is logged, so the action's error
+   * stays the reply, and leaves its rows running until the next host start marks them failed.
+   */
+  const endFailed = (token: Token, error: HostError) =>
+    store
+      .end(token, {
+        action: {
+          name: token.action,
+          status: "failed",
+          error: { tag: error._tag, message: error.message },
+        },
+      })
+      .pipe(
+        Effect.catch((failure) =>
+          Effect.logWarning(`couldn't record the failure of a ${token.action}: ${failure.message}`),
+        ),
+      );
+
+  /**
    * Steps 2 and 3: runs `claim`, then `check` with the record of the row it claimed. The
    * check can insert a row through `join`, which joins the claim, so one token covers them all.
    * A check that fails, or is interrupted, releases every row claimed so far, so nothing is
@@ -153,16 +172,7 @@ export const claimsOn = (store: StoreInterface) => {
       Effect.catch((error) =>
         error instanceof Refusal
           ? Effect.andThen(release(token), Effect.fail(error.error))
-          : Effect.andThen(
-              store.end(token, {
-                action: {
-                  name: token.action,
-                  status: "failed",
-                  error: { tag: error._tag, message: error.message },
-                },
-              }),
-              Effect.fail(error),
-            ),
+          : Effect.andThen(endFailed(token, error), Effect.fail(error)),
       ),
     );
 
