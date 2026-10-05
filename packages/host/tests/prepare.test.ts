@@ -189,16 +189,33 @@ test("a failing start fails preparation with its output", async () => {
   expect(output).toContain("sshd wouldn't start");
 });
 
-/** A process standing in for sshd's listener, which records the SIGHUP that makes it re-exec. */
+/** Waits until `file` holds `text`; the test's timeout bounds the wait. */
+const waitFor = async (file: string, text: string) => {
+  while (!(await readFile(file, "utf8").catch(() => "")).includes(text)) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+};
+
+/**
+ * A process standing in for sshd's listener, which records the SIGHUP that makes it re-exec.
+ * It writes `ready` once its traps are in, and `usr1` on SIGUSR1, which `settled` sends: the
+ * shell runs pending traps in signal order, so a SIGHUP sent before it is recorded first.
+ */
 const listener = async (root: string, comm: string) => {
-  const marker = join(root, "hup");
+  const marker = join(root, "listener");
 
   const child = spawn(
     "/bin/sh",
-    ["-c", `trap 'echo hup >>"${marker}"' HUP; while :; do sleep 0.05; done`],
-    {
-      stdio: "ignore",
-    },
+    [
+      "-c",
+      [
+        `trap 'echo hup >>"${marker}"' HUP`,
+        `trap 'echo usr1 >>"${marker}"' USR1`,
+        `echo ready >>"${marker}"`,
+        "while :; do sleep 0.05; done",
+      ].join("\n"),
+    ],
+    { stdio: "ignore" },
   );
 
   children.push(() => child.kill("SIGKILL"));
@@ -209,19 +226,18 @@ const listener = async (root: string, comm: string) => {
   await mkdir(join(root, "proc", `${pid}`), { recursive: true });
   await writeFile(join(root, "run", "sshd.pid"), `${pid}\n`);
   await writeFile(join(root, "proc", `${pid}`, "comm"), `${comm}\n`);
-  // Let the shell install its trap before the script signals it.
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  await waitFor(marker, "ready");
 
-  return marker;
-};
+  return {
+    hup: () => waitFor(marker, "hup"),
+    /** What the listener recorded by the time it handled a SIGUSR1 sent now. */
+    settled: async () => {
+      child.kill("SIGUSR1");
+      await waitFor(marker, "usr1");
 
-const signalled = async (marker: string) => {
-  await new Promise((resolve) => setTimeout(resolve, 200));
-
-  return readFile(marker, "utf8").then(
-    (text) => text.includes("hup"),
-    () => false,
-  );
+      return readFile(marker, "utf8");
+    },
+  };
 };
 
 test("a running sshd gets SIGHUP after the re-mint, so it serves the new key", async () => {
@@ -229,20 +245,20 @@ test("a running sshd gets SIGHUP after the re-mint, so it serves the new key", a
 
   await withHostKeys(where.root);
 
-  const marker = await listener(where.root, "sshd");
+  const sshd = await listener(where.root, "sshd");
   const { code, output } = prepare(where, "aaaa1111");
 
   expect(code, output).toBe(0);
-  expect(await signalled(marker)).toBe(true);
+  await sshd.hup();
 });
 
 test("a stale sshd.pid naming another process is left alone", async () => {
   const where = await guest();
-  const marker = await listener(where.root, "sleep");
+  const other = await listener(where.root, "sleep");
   const { code, output } = prepare(where, "aaaa1111");
 
   expect(code, output).toBe(0);
-  expect(await signalled(marker)).toBe(false);
+  expect(await other.settled()).not.toContain("hup");
 });
 
 test("hostKeyIn takes the last marker line and refuses anything that isn't a key", () => {
