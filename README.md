@@ -157,8 +157,9 @@ ending in `.json` is a path. A profile file:
 `setup.path`, relative to the profile, is a script or a recipe directory (a
 `setup.sh` and the files it needs). Either runs through its `#!` line, and
 `/bin/sh` runs one without; `setup.sh` needn't be executable, and the other
-files keep their modes. Its timeout is required. An optional `host` sends
-every create from the profile to that host instead of placing it. The file's name, without `.json`, becomes the machine's `profile` label.
+files keep their modes. Its timeout is required. An optional `host` sends every
+create from the profile to that host instead of placing it. The file's name,
+without `.json`, becomes the machine's `profile` label.
 
 ```sh
 clankerbox hosts                           # every host, its runtime, versions and bases

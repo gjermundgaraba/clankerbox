@@ -52,19 +52,19 @@ It covers create, stop, cold start, start and delete; a start of a running
 machine, which keeps its VM's boot, and of one smolvm reads unreachable (its
 VMM stopped with SIGSTOP, so its agent doesn't answer), which refuses a fork
 until start boots it again; a setup packed from a recipe with `files/` and run
-once, then preparation's `start` and `new-identity`; a failing setup, an overrunning setup, a failing `start` and a
-failing `new-identity` hook; `clankerbox ssh`, scp and rsync pinned to the host
-key, and a re-mint under a running sshd; a guest refused its own host's API
-port and 100.100.100.100, with the host's route to the tailnet unchanged;
-`Conflict{exists}`, `Conflict{busy}`, a client that goes away mid-create and a
-call past 300 s; the RAM budget's `Capacity`, with two concurrent creates of
-which one fits; `ram` checkpoints, forks and restores, each with its own port,
-host key and identity, a restore under a reused name, and a fork's source
-stopped, cold-started and deleted while the fork runs; `Precondition` for a
-capture or fork of a stopped machine; a host restart, a host killed during a
-setup, a host stopped while a fork's or a restore's VM is made but not booted,
-and a stop the guest won't confirm; and a native machine that already carries a
-machine's name.
+once, then preparation's `start` and `new-identity`; a failing setup, an
+overrunning setup, a failing `start` and a failing `new-identity` hook;
+`clankerbox ssh`, scp and rsync pinned to the host key, and a re-mint under a
+running sshd; a guest refused its own host's API port and 100.100.100.100, with
+the host's route to the tailnet unchanged; `Conflict{exists}`,
+`Conflict{busy}`, a client that goes away mid-create and a call past 300 s; the
+RAM budget's `Capacity`, with two concurrent creates of which one fits; `ram`
+checkpoints, forks and restores, each with its own port, host key and identity,
+a restore under a reused name, and a fork's source stopped, cold-started and
+deleted while the fork runs; `Precondition` for a capture or fork of a stopped
+machine; a host restart, a host killed during a setup, a host stopped while a
+fork's or a restore's VM is made but not booted, and a stop the guest won't
+confirm; and a native machine that already carries a machine's name.
 
 - `--ssh USER@HOST`: the Linux/amd64 test host with KVM, reachable by ssh with
   a key (`BatchMode`), where `USER` has passwordless `sudo` (the host runs as
@@ -94,14 +94,14 @@ home in the run's scratch, and the suite with the same binary as the CLI.
 
 It covers create, stop, cold start, start and delete on macOS guests, with
 setup and preparation; scp and rsync through the forwarder, pinned to the host
-key, and a re-mint on start of a running VM, which keeps its boot; Softnet's block of the host's API port and every
-host address; placement over two hosts, in both list orders: the first host
-offering the base, a full ID, a profile's `host`, and `Precondition` when no
-host offers it; `disk` checkpoints, forks and restores of a stopped machine,
-and `Precondition` for a capture or fork of a running one; Apple's two-VM
-limit, refused with `Capacity` before any clone; a disk below the base's; a
-host restart that brings the forwarded endpoints back; and a host killed during
-a setup.
+key, and a re-mint on start of a running VM, which keeps its boot; Softnet's
+block of the host's API port and every host address; placement over two hosts,
+in both list orders: the first host offering the base, a full ID, a profile's
+`host`, and `Precondition` when no host offers it; `disk` checkpoints, forks
+and restores of a stopped machine, and `Precondition` for a capture or fork of
+a running one; Apple's two-VM limit, refused with `Capacity` before any clone;
+a disk below the base's; a host restart that brings the forwarded endpoints
+back; and a host killed during a setup.
 
 - `--tart`: the `tart` binary of Tart 2.40.1, absolute, such as
   `.work/inputs/tart-2.40.1/tart.app/Contents/MacOS/tart` in the checkout the
@@ -124,19 +124,18 @@ second host, `<host ID>-b`, serves only the placement test.
 Runs the darwin-arm64 binary as a boat host on this Mac, unprivileged (the
 driver refuses root), and the suite with the same binary as the CLI.
 
-It covers create, stop (boat's archive), start (a resume on a new machine,
-with a new endpoint and host key) and delete once boat answers 404; setup and
+It covers create, stop (boat's archive), start (a resume on a new machine, with
+a new endpoint and host key) and delete once boat answers 404; setup and
 preparation, with `/var/lib/clankerbox/` kept across a resume; scp and rsync
 through boat's endpoint; a start of the running machine its create made, right
 after the create, which waits for no restore marker and keeps its boot, and a
-re-mint without a resume; the create's mark (`/run/clankerbox-created`) on
-that machine alone, and boat's restore marker on every resumed, forked and
-restored one; a size no boat
-type covers, a large create on the trial (boat's 403) and a third active
-sandbox (boat's 429), each refused leaving no row; checkpoints and forks of a
-running and a stopped machine, a fork holding a file written just before it,
-and a checkpoint restored after its source is deleted; a host restart; and a
-host killed during a setup.
+re-mint without a resume; the create's mark (`/run/clankerbox-created`) on that
+machine alone, and boat's restore marker on every resumed, forked and restored
+one; a size no boat type covers, a large create on the trial (boat's 403) and a
+third active sandbox (boat's 429), each refused leaving no row; checkpoints and
+forks of a running and a stopped machine, a fork holding a file written just
+before it, and a checkpoint restored after its source is deleted; a host
+restart; and a host killed during a setup.
 
 - `--key-file`: a file holding the boat API key alone, outside the repository
   and mode 0600. The boat CLI's config holds the key as its JSON `token`; this
