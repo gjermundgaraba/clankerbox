@@ -177,7 +177,8 @@ clankerbox checkpoint delete linux_base
   Its `--timeout SECONDS` only stops waiting: the action runs on, and the CLI
   says it may have run. A read gives up on a host after 10 s.
 - `--json` prints the resource, or `{"error": {"message", "tag", "retryable"}}`.
-  Lists print what reachable hosts answered and name the unreachable ones.
+  Lists print what reachable hosts answered and name the unreachable ones; a
+  list exits 1 when no host answered.
 - The CLI exits 0 or 1, 130 on Ctrl-C, and `ssh` with ssh's code. Deleting
   something already gone exits 0.
 

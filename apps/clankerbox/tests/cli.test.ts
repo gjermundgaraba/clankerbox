@@ -103,6 +103,34 @@ test("machines --json carries the machines and the unreachable hosts", async () 
   ]);
 });
 
+test("a list exits 1 when every host failed, still naming each one", async () => {
+  const dir = await scratch(owned);
+  const config = await writeConfig(dir, ["linux", "mac"]);
+
+  for (const command of [["machines"], ["hosts"], ["checkpoint", "list"]]) {
+    const { code, stdout, stderr } = await cli([...command, "--config", config], {
+      endpoints: [
+        ["linux", "down"],
+        ["mac", "down"],
+      ],
+    });
+
+    const json = await cli([...command, "--json", "--config", config], {
+      endpoints: [
+        ["linux", "down"],
+        ["mac", "down"],
+      ],
+    });
+
+    expect(code, command.join(" ")).toBe(1);
+    expect(stdout.split("\n")).toHaveLength(1);
+    expect(stderr).toContain("linux");
+    expect(stderr).toContain("mac");
+    expect(json.code, command.join(" ")).toBe(1);
+    expect(json.stdout).toContain('"unreachable":[{"host":"linux"');
+  }
+});
+
 test("create NAME is placed on the first host that offers the base and prints the new ID", async () => {
   const dir = await scratch(owned);
   const config = await writeConfig(dir, ["mac", "linux"]);

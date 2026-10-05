@@ -20,7 +20,7 @@ import {
   encodeCheckpoint,
   encodeHost,
   encodeMachine,
-  type Exited,
+  Exited,
   fail,
   hostRows,
   machineRows,
@@ -103,7 +103,8 @@ const nameArgument = Argument.String("name").pipe(
 
 /**
  * A list over every host: a table, or with `--json` the answers under `key`. The hosts that
- * didn't answer go to stderr, or to `unreachable` with `--json`.
+ * didn't answer go to stderr, or to `unreachable` with `--json`. When no host answered, the
+ * command exits 1, as a failed call does; a partial answer exits 0.
  */
 const listCommand = <A, Encoded>(options: {
   readonly name: string;
@@ -114,25 +115,33 @@ const listCommand = <A, Encoded>(options: {
   readonly rows: (answers: ReadonlyArray<A>, now: DateTime.Utc) => Array<Array<string>>;
 }) =>
   Command.make(options.name, clientFlags, (flags) =>
-    withClient(flags, (client) =>
-      Effect.gen(function* () {
-        const { answers, unreachable } = yield* options.read(client);
-        const now = yield* DateTime.now;
+    Effect.gen(function* () {
+      const failed = yield* withClient(flags, (client, config) =>
+        Effect.gen(function* () {
+          const { answers, unreachable } = yield* options.read(client);
+          const now = yield* DateTime.now;
 
-        yield* print(
-          flags.json,
-          () => ({
-            [options.key]: answers.map((answer) => options.encode(answer)),
-            unreachable: unreachableDocument(unreachable),
-          }),
-          () => table(options.rows(answers, now)),
-        );
+          yield* print(
+            flags.json,
+            () => ({
+              [options.key]: answers.map((answer) => options.encode(answer)),
+              unreachable: unreachableDocument(unreachable),
+            }),
+            () => table(options.rows(answers, now)),
+          );
 
-        if (!flags.json) {
-          yield* warnUnreachable(unreachable);
-        }
-      }),
-    ),
+          if (!flags.json) {
+            yield* warnUnreachable(unreachable);
+          }
+
+          return unreachable.length === config.hosts.length;
+        }),
+      );
+
+      if (failed) {
+        return yield* new Exited({ code: 1 });
+      }
+    }),
   ).pipe(Command.withDescription(options.description));
 
 const hosts = listCommand({
