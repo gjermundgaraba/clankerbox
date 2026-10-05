@@ -1,12 +1,15 @@
 import { readFile, rm, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Capacity, Conflict, type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Fiber, Option, Result } from "effect";
+import { Effect, Fiber, Logger, Option, Result } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
+import * as Machines from "../src/machines.ts";
 import { Refusal } from "../src/runtime.ts";
+import * as Store from "../src/store.ts";
 import { scratch } from "./scratch.ts";
-import { cleanup, request, startHost, type TestHost } from "./support.ts";
+import { cleanup, hostConfig, request, startHost, type TestHost } from "./support.ts";
 
 const owned: Array<string> = [];
 
@@ -133,6 +136,35 @@ test("stop on a stopped machine does nothing and writes nothing", async () => {
 
   expect(again).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
   expect(linux.fake.calls).toEqual([]);
+});
+
+test("a stop that does nothing replies with the machine when giving back its claim fails, and logs it", async () => {
+  const linux = await host();
+  const logged: Array<unknown> = [];
+
+  await linux.run(linux.machines.create(request("dev")));
+  await linux.run(linux.machines.stop("linux_dev"));
+
+  const again = await linux.run(
+    Effect.gen(function* () {
+      const machines = yield* Machines.make(hostConfig(linux.stateDir)).pipe(
+        Effect.provideService(Store.Store, {
+          ...linux.store,
+          release: () => Effect.fail(new Internal({ message: "disk full" })),
+        }),
+        Effect.provide(linux.fake.layer),
+      );
+
+      return yield* machines.stop("linux_dev");
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))])),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
+  expect(again).toMatchObject({ state: "stopped", action: { name: "stop", status: "running" } });
+  expect(logged).toEqual([["couldn't release the rows of a stop: disk full"]]);
 });
 
 test("a machine's state is read from the runtime every time", async () => {

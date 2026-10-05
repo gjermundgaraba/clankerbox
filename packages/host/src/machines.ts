@@ -71,7 +71,7 @@ export const make = (
     const nameOf = nameOn(config.id);
     const rows = rowsOn(store, config.id);
     const made = madeOn(config.id);
-    const { claimAndCheck, native, done } = claimsOn(store);
+    const { claimAndCheck, native, done, release } = claimsOn(store);
     const ref = (record: NewMachine) => machineRef(config.id, record);
 
     /**
@@ -324,7 +324,7 @@ export const make = (
           yield* native(token, `stop ${id}`, runtime.stop(ref(record)));
           yield* done(token);
         } else {
-          yield* store.release(token);
+          yield* release(token);
         }
 
         return yield* read(name);
