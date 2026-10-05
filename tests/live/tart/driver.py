@@ -63,8 +63,7 @@ DOMAIN = f'gui/{os.getuid()}'
 
 
 def seed_vm(seed):
-    """The seed's one VM, under home/vms. A seed prepared now names it
-    `clankerbox-live-seed-<base>`; the driver takes it whatever its name."""
+    """The seed's one VM, under home/vms, whatever its name."""
     vms = [entry for entry in (seed / 'home' / 'vms').iterdir() if entry.is_dir()]
     if len(vms) != 1:
         sys.exit(f'the seed at {seed} holds {len(vms)} VMs under home/vms, not one')
