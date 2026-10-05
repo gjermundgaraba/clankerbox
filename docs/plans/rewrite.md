@@ -1605,6 +1605,9 @@ tests use real VMs.
 
      gg-linux-dev can't run before phase 9 rewrites it: unmodified it fails
      on 26.04 and installs no sshd, key or `start` (evidence.md, P3).
+   - `README.md` is written: what clankerbox is, install, quick start, the SDK,
+     the design with its rules, the accepted cases and the runtime notes, citing
+     code paths, so it outlives these plans.
    - The bump skills are written: `.agents/skills/bump-smolvm`, `bump-tart`,
      `bump-boat-api` and `bump-node`, each linked from `.claude/skills/`. Each
      carries its dependency's claims from this file's evidence, with their
