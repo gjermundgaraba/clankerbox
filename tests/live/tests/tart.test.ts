@@ -1,10 +1,10 @@
 /**
  * Live acceptance on a Tart host, through the CLI: lifecycle, setup and preparation on macOS
  * guests, the forwarder, Softnet, placement over two hosts, disk checkpoints and forks, Apple's
- * two-VM limit, a host restart and a crash. Apple runs at most two macOS VMs per Mac, so at most two of the run's VMs
- * run at once. The tests run in order and share `main`, whose setup sets public resolvers,
- * installs the run's key for `admin`, and writes a `start` and a `new-identity` hook; the test
- * that made any other machine deletes it. Timings print as `[timing]` lines.
+ * two-VM limit, a host restart and a crash. Apple runs at most two macOS VMs per Mac, so at most
+ * two of the run's VMs run at once. The tests run in order and share `main`, whose setup sets
+ * public resolvers, installs the run's key for `admin`, and writes a `start` and a `new-identity`
+ * hook; the test that made any other machine deletes it. Timings print as `[timing]` lines.
  */
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";

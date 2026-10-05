@@ -1,7 +1,8 @@
 /**
  * boat's HTTP API v1, as the boat runtime calls it: Schemas for exactly the endpoints it uses,
- * boat's refusals mapped to the contract's errors, and the bounded retry of the calls that are
- * safe to repeat: every `GET`, and every call that carries an `Idempotency-Key`. Shapes follow `docs.boat.dev/openapi/boat-v1.yaml` (sha256
+ * boat's refusals mapped to the contract's errors, and the bounded retry of the calls that are safe
+ * to repeat: every `GET`, and every call that carries an `Idempotency-Key`. Shapes follow
+ * `docs.boat.dev/openapi/boat-v1.yaml` (sha256
  * `79aa87e21849194635cf057293d6934638bab1aeee1c1d4857aa1920e34cf210`, fetched 2026-10-05) and what
  * the trial account showed; the bump-boat-api skill lists the claims they rest on.
  *
@@ -47,9 +48,10 @@ export const ttlSeconds = 7200;
 const activation = { noEnv: true, ttlSeconds } as const;
 
 /**
- * How long a call safe to repeat is repeated while its outcome is unclear, counted from the
- * first unclear answer; a caller with a deadline of its own cuts it short. That answer can take `attemptTimeout`, and so can the last
- * repeat, begun after a pause decided inside the window: a call can take up to 9.5 minutes.
+ * How long a call safe to repeat is repeated while its outcome is unclear, counted from the first
+ * unclear answer; a caller with a deadline of its own cuts it short. That answer can take
+ * `attemptTimeout`, and so can the last repeat, begun after a pause decided inside the window: a
+ * call can take up to 9.5 minutes.
  */
 export const retryWindow = Duration.minutes(5);
 
