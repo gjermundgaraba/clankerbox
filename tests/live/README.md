@@ -48,9 +48,11 @@ the suite with the darwin-arm64 binary as the CLI. The test host gets the
 linux-x64 bundle and its `.sha256`, checks one against the other and extracts
 the binary (`smolvm/remote.py`).
 
-It covers create, stop, cold start, start and delete; a setup packed from a
-recipe with `files/` and run once, then preparation's `start` and
-`new-identity`; a failing setup, an overrunning setup, a failing `start` and a
+It covers create, stop, cold start, start and delete; a start of a running
+machine, which keeps its VM's boot, and of one smolvm reads unreachable (its
+VMM stopped with SIGSTOP, so its agent doesn't answer), which refuses a fork
+until start boots it again; a setup packed from a recipe with `files/` and run
+once, then preparation's `start` and `new-identity`; a failing setup, an overrunning setup, a failing `start` and a
 failing `new-identity` hook; `clankerbox ssh`, scp and rsync pinned to the host
 key, and a re-mint under a running sshd; a guest refused its own host's API
 port and 100.100.100.100, with the host's route to the tailnet unchanged;
@@ -72,15 +74,18 @@ machine's name.
   publishes on.
 - `--root`: the working root on the test host that the run owns, as an
   absolute path; on the current test host, `~/clankerbox-rewrite/` expanded.
-  The run's directory is `runs/l<3 hex>/` there, and `CLEANUP.md` there is its
-  ledger of every change outside that root.
+  The run's directory is `runs/l<3 hex>/` there, reserved under a free name
+  before the build and removed again if the run stops before it writes there,
+  and `CLEANUP.md` there is its ledger of every change outside that root.
 - `--smolvm-prefix`: smolvm 1.22.2 installed from upstream, with `READY` and
   its `.zst` disk templates; the run expands the templates and removes them
   again. The base is `ubuntu:26.04` from `mirror.gcr.io`, pulled by digest
   (`smolvm/remote.py`).
 
 The run's host ID, systemd units and machine names start `clankerbox-live-l`,
-followed by the run's ID.
+followed by the run's ID. A VMM the unreachable test leaves stopped, should it
+fail before its start, goes with teardown's `smolvm machine stop`, which ends
+an unreachable machine's VMM with SIGKILL, or the scope's SIGKILL after it.
 
 ## Tart: `pnpm live:tart`
 
@@ -89,7 +94,7 @@ home in the run's scratch, and the suite with the same binary as the CLI.
 
 It covers create, stop, cold start, start and delete on macOS guests, with
 setup and preparation; scp and rsync through the forwarder, pinned to the host
-key, and a re-mint on start; Softnet's block of the host's API port and every
+key, and a re-mint on start of a running VM, which keeps its boot; Softnet's block of the host's API port and every
 host address; placement over two hosts, in both list orders: the first host
 offering the base, a full ID, a profile's `host`, and `Precondition` when no
 host offers it; `disk` checkpoints, forks and restores of a stopped machine,
@@ -122,8 +127,11 @@ driver refuses root), and the suite with the same binary as the CLI.
 It covers create, stop (boat's archive), start (a resume on a new machine,
 with a new endpoint and host key) and delete once boat answers 404; setup and
 preparation, with `/var/lib/clankerbox/` kept across a resume; scp and rsync
-through boat's endpoint; a start of the running machine its create made, which
-waits for no restore marker, and a re-mint without a resume; a size no boat
+through boat's endpoint; a start of the running machine its create made, right
+after the create, which waits for no restore marker and keeps its boot, and a
+re-mint without a resume; the create's mark (`/run/clankerbox-created`) on
+that machine alone, and boat's restore marker on every resumed, forked and
+restored one; a size no boat
 type covers, a large create on the trial (boat's 403) and a third active
 sandbox (boat's 429), each refused leaving no row; checkpoints and forks of a
 running and a stopped machine, a fork holding a file written just before it,
@@ -183,6 +191,14 @@ sandboxes' display names start `<host ID>_` and its named snapshots
 - **100.100.100.100 and the tailnet route, on Tart:** they check smolvm's
   egress floor and its host routes; on Tart, the suite checks Softnet's block
   of every host address instead.
+- **boat's repeats of a call whose outcome is unclear:** they need a dropped
+  connection, a timeout or a 5xx from boat, which a live run can't cause; the
+  unit suite covers them, and the refusals it no longer trusts after one,
+  against a fake boat (`packages/host/tests/boat-api.test.ts`). Live, a 429 to
+  a create on the first attempt is still `Capacity`.
+- **A machine whose state can't be read (`unknown`):** it needs the runtime's
+  read to fail; the unit suite covers it on smolvm and boat and in the core
+  (`packages/host/tests/machines.test.ts`).
 - **List fan-out with a host down, and `--json` error tags:** the unit suite
   covers them against the real host process over the fake runtime
   (`apps/clankerbox/tests/host.test.ts`).

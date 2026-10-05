@@ -31,9 +31,10 @@ where `--out` says, and `sea:smoke` extracts into `TMPDIR`; `sea:build`'s Node
 archives stay in `tools/release/cache/`, a reusable input outside the run.
 
 Success, command failure and ordinary interruption stop the command's process
-group and remove scratch. `--keep` retains scratch for an explicit debugging need;
-record that reason in evidence. Logs are only retained if the driver writes them
-there, as above.
+group and remove scratch. A group whose members have all exited counts as gone
+once its leader is reaped (macOS refuses a signal to it before then). `--keep`
+retains scratch for an explicit debugging need; record that reason in evidence.
+Logs are only retained if the driver writes them there, as above.
 
 **Do not use the command wrapper alone for drivers that create VMs, launchd jobs,
 remote services or detached processes.** Those require resource-specific teardown.
@@ -110,10 +111,14 @@ count before and after. Its docstring shows its invocation.
 
 The drivers share `tests/live/driver_common.py`, which holds their evidence
 (`driver.log`, `resources.json` and each command's log) and runs the suite with
-its temporary directory in the run's scratch. They refuse a tree with
-uncommitted changes (`git status --porcelain`, which leaves out ignored files),
-so the commit each records in its evidence (`resources.json` `commit`) names the
-code the run built and tested.
+its temporary directory in the run's scratch. It runs each command in a process
+group of its own, which it stops through `stop_group` once the command ends, so
+no descendant outlives it, and runs a teardown's steps one after another: a
+failed step is logged and the next still runs, and the teardown fails with them
+all at the end. They refuse a tree with uncommitted changes
+(`git status --porcelain`, which leaves out ignored files), so the commit each
+records in its evidence (`resources.json` `commit`) names the code the run built
+and tested.
 
 ## Abandoned runs
 
