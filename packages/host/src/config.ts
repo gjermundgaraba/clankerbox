@@ -64,6 +64,15 @@ const TartSettings = Schema.Struct({
   publishAddress: Schema.optionalKey(Address),
 });
 
+/**
+ * The boat runtime's settings. The API key is a secret: it stays `Redacted` from the moment it is
+ * decoded, so nothing that prints the config prints it.
+ */
+const BoatSettings = Schema.Struct({
+  /** A boat API key, `boat_…`, sent only as the bearer token of boat's API. */
+  apiKey: Schema.RedactedFromValue(Schema.String.check(Schema.isNonEmpty())),
+});
+
 /** What every host config holds, whatever its runtime. */
 const common = {
   id: HostId,
@@ -77,6 +86,7 @@ const common = {
 const HostConfigFile = Schema.Union([
   Schema.Struct({ ...common, runtime: Schema.Literal("smolvm"), smolvm: SmolvmSettings }),
   Schema.Struct({ ...common, runtime: Schema.Literal("tart"), tart: TartSettings }),
+  Schema.Struct({ ...common, runtime: Schema.Literal("boat"), boat: BoatSettings }),
 ]);
 
 type HostConfigFile = typeof HostConfigFile.Type;
@@ -86,6 +96,9 @@ export type Smolvm = Required<typeof SmolvmSettings.Type>;
 
 /** The Tart settings with their defaults applied. */
 export type Tart = Required<typeof TartSettings.Type>;
+
+/** The boat settings. */
+export type Boat = typeof BoatSettings.Type;
 
 /** What every host config holds, as the host uses it: paths resolved. */
 interface Common {
@@ -107,8 +120,14 @@ export interface TartHost extends Common {
   readonly tart: Tart;
 }
 
+/** A boat host's config. */
+export interface BoatHost extends Common {
+  readonly runtime: "boat";
+  readonly boat: Boat;
+}
+
 /** The host config as the host uses it: paths resolved and defaults applied. */
-export type HostConfig = SmolvmHost | TartHost;
+export type HostConfig = SmolvmHost | TartHost | BoatHost;
 
 const mib = 1024 * 1024;
 
@@ -131,6 +150,10 @@ const resolveConfig = (
       stateDir: path.resolve(directory, decoded.stateDir),
       bases: new Map(Object.entries(decoded.bases)),
     };
+
+    if (decoded.runtime === "boat") {
+      return { ...common, runtime: decoded.runtime, boat: decoded.boat };
+    }
 
     if (decoded.runtime === "tart") {
       return {

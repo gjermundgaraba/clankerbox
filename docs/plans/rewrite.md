@@ -1276,7 +1276,11 @@ Two rules for every VM job:
     settings, for smolvm `smolvm: {prefix, publishAddress?, ramBudgetMib?}`.
     Unknown keys are refused, as in every input. For Tart:
     `tart: {binary, publishAddress?}`, where `binary` is the `tart` executable
-    of a versioned install, which VM jobs run.
+    of a versioned install, which VM jobs run. For boat: `boat: {apiKey}`, the
+    account's API key. It stays redacted from decoding on, so nothing that
+    prints the config or an error prints it. The base URL,
+    `https://boat.dev/api/v1`, is the API version the host is built for, not a
+    setting.
   - `listen.address` and `publishAddress` must be a tailnet address
     (100.64.0.0/10 or fd7a:115c:a1e0::/48, Tailscale's ranges:
     tailscale.com/kb/1015, kb/1033) or a loopback address. The tailnet is the

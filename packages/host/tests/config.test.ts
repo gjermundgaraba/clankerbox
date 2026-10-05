@@ -2,7 +2,8 @@ import { writeFile } from "node:fs/promises";
 import { totalmem } from "node:os";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, type Schema } from "effect";
+import { inspect } from "node:util";
+import { Effect, Redacted, type Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import { loadConfig } from "../src/config.ts";
 import { removeScratch, scratch } from "./scratch.ts";
@@ -117,6 +118,53 @@ test("a Tart host config takes only Tart's settings, on a tailnet or loopback ad
     const { loaded } = await load(contents);
 
     expect((await Effect.runPromise(Effect.flip(loaded)))._tag).toBe("Invalid");
+  }
+});
+
+const apiKey = "boat_test-key-that-never-prints";
+
+const boat = {
+  id: "boat",
+  runtime: "boat",
+  listen: { address: "100.95.240.37", port: 8486 },
+  stateDir: "state",
+  bases: { "boat-ubuntu": "boat" },
+  boat: { apiKey },
+};
+
+test("a boat host config holds its API key, which nothing that prints the config shows", async () => {
+  const { file, loaded } = await load(boat);
+  const host = await Effect.runPromise(loaded);
+
+  expect(host).toMatchObject({
+    id: "boat",
+    runtime: "boat",
+    stateDir: join(file, "..", "state"),
+    bases: new Map([["boat-ubuntu", "boat"]]),
+  });
+  expect(host.runtime === "boat" ? Redacted.value(host.boat.apiKey) : undefined).toBe(apiKey);
+
+  for (const printed of [JSON.stringify(host), inspect(host, { depth: 10 })]) {
+    expect(printed).not.toContain(apiKey);
+  }
+});
+
+test("a boat host config takes only boat's settings, and a refused one doesn't print its key", async () => {
+  const refused: Array<Schema.Json> = [
+    { ...boat, boat: {} },
+    { ...boat, boat: { apiKey: "" } },
+    { ...boat, boat: { apiKey, baseUrl: "http://boat.test" } },
+    { ...boat, boat: { apiKey, publishAddress: "127.0.0.1" } },
+    { ...boat, tart: tart.tart },
+    { ...boat, listen: { address: "0.0.0.0", port: 8486 } },
+  ];
+
+  for (const contents of refused) {
+    const { loaded } = await load(contents);
+    const error = await Effect.runPromise(Effect.flip(loaded));
+
+    expect(error._tag).toBe("Invalid");
+    expect(error.message).not.toContain(apiKey);
   }
 });
 
