@@ -1,15 +1,100 @@
-name: Publish SDK
-# Release tags only: the SDK is versioned with the binaries, so v1.2.3 publishes 1.2.3.
+name: Release
+# Release tags only, vX.Y.Z, naming the SDK's version, which the binaries share: builds and
+# bundles both targets, uploads every bundle and its .sha256 to the tag's GitHub release, then
+# publishes the SDK to npm. The npm trusted publisher is bound to this file's name.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
-permissions:
-  contents: read
+permissions: {}
 concurrency:
   group: publish-sdk-${{ github.ref }}
   cancel-in-progress: false
 jobs:
+  tag:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Check that the tag names the SDK's version
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const { name, version } = JSON.parse(readFileSync('packages/contract/package.json', 'utf8'));
+          assert.equal(name, '@gjermundgaraba/clankerbox-sdk');
+          assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+          assert.equal(process.env.GITHUB_REF, `refs/tags/v${version}`);
+          NODE
+  bundle:
+    needs: tag
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15 # arm64
+            target: darwin-arm64
+          - runner: ubuntu-24.04
+            target: linux-x64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - run: npm install -g "$(node -p "require('./package.json').packageManager")"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # No cache: a release downloads and verifies its Node archives afresh.
+      - run: pnpm sea:build "$TARGET"
+      - run: pnpm sea:smoke "tools/release/dist/clankerbox-${GITHUB_REF_NAME#v}-$TARGET.tar.gz"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bundle-${{ matrix.target }}
+          path: |
+            tools/release/dist/*.tar.gz
+            tools/release/dist/*.tar.gz.sha256
+          if-no-files-found: error
+  release:
+    needs: bundle
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: bundle-*
+          path: bundles
+          merge-multiple: true
+      - name: Upload the bundles to the tag's GitHub release
+        working-directory: bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          for target in darwin-arm64 linux-x64; do
+            test -s "clankerbox-${TAG#v}-$target.tar.gz"
+            test -s "clankerbox-${TAG#v}-$target.tar.gz.sha256"
+          done
+          sha256sum -c ./*.sha256
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
+              --notes "One bundle per target, each beside its .sha256. The SDK is @gjermundgaraba/clankerbox-sdk@${TAG#v} on npm."
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber ./*.tar.gz ./*.sha256
   publish:
+    needs: release
     runs-on: ubuntu-24.04
     environment: npm
     permissions:
@@ -24,19 +109,9 @@ jobs:
           node-version-file: .node-version
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
-      - name: Check that the tag names the SDK's version
-        run: |
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          const { name, version } = JSON.parse(readFileSync('packages/contract/package.json', 'utf8'));
-          assert.equal(name, '@gjermundgaraba/clankerbox-sdk');
-          assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
-          assert.equal(process.env.GITHUB_REF, `refs/tags/v${version}`);
-          NODE
       - run: npm install -g "$(node -p "require('./package.json').packageManager")"
       - run: pnpm install --frozen-lockfile
-      - run: pnpm ready
+      - run: pnpm --filter @gjermundgaraba/clankerbox-sdk build
       - name: Pack and check the package
         run: |
           mkdir -p "$RUNNER_TEMP/sdk"

@@ -24,6 +24,8 @@ client library the CLI uses.
 
 ## Install
 
+Releases are on the repository's GitHub releases page,
+<https://github.com/gjermundgaraba/clankerbox/releases>, tagged `v<version>`.
 Each release has one bundle per target, `clankerbox-<version>-<target>.tar.gz`,
 beside its `.sha256`. The targets are `darwin-arm64` and `linux-x64`. A bundle
 holds, with no top directory:
@@ -34,7 +36,14 @@ holds, with no top directory:
 - `notices/node/LICENSE` and `notices/npm/`, the licenses of Node and of every
   production npm dependency.
 
+Download a bundle and its `.sha256` into one directory, and check the bundle
+against it before extracting it: the `.sha256` holds `<sha256>  <bundle name>`,
+which `shasum -a 256 -c` (macOS) and `sha256sum -c` (Linux) check.
+
 ```sh
+base=https://github.com/gjermundgaraba/clankerbox/releases/download/v1.0.0
+curl -fLO "$base/clankerbox-1.0.0-linux-x64.tar.gz"
+curl -fLO "$base/clankerbox-1.0.0-linux-x64.tar.gz.sha256"
 shasum -a 256 -c clankerbox-1.0.0-linux-x64.tar.gz.sha256   # or sha256sum -c
 mkdir clankerbox && tar -xzf clankerbox-1.0.0-linux-x64.tar.gz -C clankerbox
 clankerbox/clankerbox --version
@@ -693,15 +702,42 @@ pnpm sea:build [darwin-arm64|linux-x64]   # build and bundle; darwin needs macOS
 pnpm sea:smoke tools/release/dist/clankerbox-<version>-<target>.tar.gz
 ```
 
-CI runs `ready` and builds, bundles and smokes both targets. A release tag
-`v<version>` publishes the SDK to npm, with provenance, when it names the
-package's version.
+CI (`.github/workflows/quality.yml`) runs `ready` and builds, bundles and
+smokes both targets, on pull requests and on pushes to `main` and release tags.
+A release tag `v<version>` that names the SDK's version runs the release
+(`.github/workflows/publish-sdk.yml`): it builds, bundles and smokes both
+targets again, uploads the bundles and their `.sha256` files to the tag's
+GitHub release, then publishes the SDK to npm with provenance (see
+[Releasing](#releasing)).
 
 The live suites drive real hosts through the binary, one per runtime
 (`pnpm live:smolvm`, `live:tart`, `live:boat`). See
 [tests/live/README.md](tests/live/README.md) for what each needs and what it
 covers. Every disposable build or live run goes through
 `scripts/work_runs.py`, following [AGENTS.md](AGENTS.md).
+
+## Releasing
+
+The binaries and the SDK share one version, the SDK's, in
+`packages/contract/package.json`.
+
+1. Set that `version` to `X.Y.Z` and merge to `main`; wait for its CI to pass,
+   since nothing gates the release on it.
+2. Tag the merge commit `vX.Y.Z` and push the tag:
+   `git tag vX.Y.Z <commit> && git push origin vX.Y.Z`.
+
+The tag runs `.github/workflows/publish-sdk.yml`, which refuses a tag that
+doesn't name the version, uploads both bundles and their `.sha256` files to the
+`vX.Y.Z` GitHub release, then publishes `@gjermundgaraba/clankerbox-sdk@X.Y.Z`
+from the `npm` environment. A failed run can be re-run: the upload replaces the
+release's files.
+
+Before the first release, the repository's owner checks two settings:
+
+- npm's trusted publisher for `@gjermundgaraba/clankerbox-sdk` names this
+  repository, the workflow `publish-sdk.yml` and the environment `npm`;
+- the `npm` environment's protection rules: required reviewers, if any, and
+  deployments limited to `v*` tags, so only a release tag can publish.
 
 ## License
 
