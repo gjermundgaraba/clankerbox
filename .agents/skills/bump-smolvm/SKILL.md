@@ -245,7 +245,7 @@ citation moved to the new tag.
   (S@1.22.0:src/agent/fork.rs:3022-3197, src/portable_checkpoint.rs:4280-4285),
   retrying three times, then deleting the clone (fork.rs:3770-3783).
   `create --from … --keep-identity` skips it. The re-mint only stirs the RNG
-  pool (S@1.22.2:src/fork.rs:3176, 3245-3250), and the guest has no vmgenid or
+  pool (S@1.22.2:src/agent/fork.rs:3176, 3245-3250), and the guest has no vmgenid or
   hwrng, so restores of one RAM state got duplicate host keys (4 distinct of
   20). A running sshd is not touched, and the kernel `boot_id` is not re-minted.
   Ours: preparation reseeds the RNG (`/dev/random` plus `RNDRESEEDCRNG`),
