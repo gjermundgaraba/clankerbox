@@ -502,9 +502,12 @@ listed to keep them from being ported):
 - **The row comes before any native effect,** so that after a crash `delete` has
   something to own.
 - **Native IDs:** machine and checkpoint rows have one `native` column that the
-  runtime owns. boat keeps its sandbox ID or snapshot name there. smolvm and
-  Tart derive native names from the name and the instance (see IDs and names
-  under [API contract](#api-contract)) and leave it empty.
+  runtime owns. boat keeps its sandbox ID on the machine row, and records it
+  itself, with the store's `recordNative`, as soon as boat answers: the
+  `Runtime` interface returns nothing from a create, fork or restore. boat's
+  snapshot names, like smolvm's and Tart's native names, derive from the host
+  ID and the instance (see IDs and names under [API contract](#api-contract)),
+  so checkpoint rows leave it empty, and so do smolvm's and Tart's machines.
 - **On host startup:** every `running` action becomes `failed` with "host
   restarted during <name>". The machine shows whatever the runtime reports,
   possibly `missing`. The smolvm forks area is wiped (see
@@ -1169,8 +1172,13 @@ Two rules for every VM job:
     the row. A sandbox may exist. boat's create takes no name or tag and a
     sandbox echoes nothing the client chose, so look on the dashboard for an
     unrenamed `Box <time>` sandbox created around the row's `createdAt`.
-  - After a create, fork or restore, the host sets boat's display name to the
-    machine ID, for the operator's boat dashboard.
+  - The runtime records the sandbox ID on the row as soon as the call answers,
+    before it waits for the sandbox to run, so a `delete` after any later
+    failure finds it.
+  - After a create, fork or restore, once the sandbox runs, the host sets
+    boat's display name to the machine ID, for the operator's boat dashboard.
+    A rename boat refuses fails the action like any runtime failure, and
+    leaves the machine unmade, to delete.
 - **State:** the runtime's `observe` takes the machines and returns each
   one's state, in their order, which boat answers with one `GET /sandboxes`,
   filtered to the recorded IDs, because the account may also hold the
@@ -1180,7 +1188,8 @@ Two rules for every VM job:
     host can't tell that machine is gone, and `observe` fails with
     `Internal` rather than read it `missing`.
   - `ready`, `idle` and `running` read as `running`.
-  - 404 and `cancelled` read as `missing`.
+  - 404 and `cancelled` read as `missing`, and so does a row without a
+    sandbox ID. When no row has one, `observe` makes no call.
   - Anything else reads as `stopped`. A machine that boat stopped on its own
     reads `stopped`, and `start` resumes it.
 - **Sizes:** boat has four fixed machine types, from `small` (2 vCPU, 4 GiB,
@@ -1191,24 +1200,37 @@ Two rules for every VM job:
   - The host picks the smallest of those that covers `cpu`, `ramMib` and
     `diskGib`, and the machine reports that type's sizes.
   - A request that neither covers is refused with `Precondition` in step 3.
+    Step 3 checks nothing else: boat's count of active sandboxes includes the
+    operator's own, so boat's 429 `limit_reached`, under the refusal rule, is
+    the count.
 - **Refusals:** none of these leaves anything on boat, so all of them fall
   under the refusal rule and remove the row:
   - 429 (`limit_reached`, `rate_limited`, `daily_limit_reached`);
   - 403 for a type the account's plan doesn't include
     (`trial_machine_class_not_allowed`, `machine_class_plan_required`);
   - 409 `named_snapshot_limit`, for an 11th checkpoint;
-  - a create or fork that ends in state `cancelled` when boat finds no
-    machine.
+  - a create, fork or restore that ends in state `cancelled` when boat finds
+    no machine, or that boat already answers 404 for, as it does once it has
+    reported the cancelled sandbox;
+  - the same 429s on a resume, which leave the machine stopped: the `start`
+    is released, and the row keeps its last action.
 
-  They map to `Capacity`. Every call waits for a machine; none sends
+  They map to `Capacity`. A fork's or capture's source without a sandbox, or
+  one boat reads cancelled or gone, is refused with `Precondition` before
+  anything native, as on smolvm and Tart. Every call waits for a machine; none sends
   `failFast`, whose 503 `no_ready_machine` only helped placement move on.
 - **Ready:** boat reports `ready` before its lazy restore has finished.
   - `/var/lib` and `/var/opt` are restored in full before boat's marker
     `/var/lib/ascii-lazy/sys-done` appears: a few seconds after ready with
     little data there, 10–14 s with 1 GiB. Enabled units start after that.
   - Preparation writes `/var/lib/clankerbox/`, so after a fork, start or
-    restore the runtime also waits, over exec, for that marker. A fresh create
-    is not a restore, has no marker, and doesn't wait.
+    restore the runtime also waits, over exec, for that marker, in one SSH
+    session that polls it every 0.25 s, for at most 10 minutes. A fresh
+    create is not a restore, has no marker, and doesn't wait.
+  - Before that, every create, fork, start and restore waits for boat to read
+    the sandbox running (polled each second, at most 10 minutes), then for
+    SSH to answer `true` (every 2 s, at most 3 minutes): a fresh activation
+    may refuse the first connection.
   - The marker is undocumented. boat's documented signal, the
     `sandbox.hydrated` webhook, can't reach a host on the tailnet. Ask boat
     for a documented one, and re-check the marker at every change of boat's
@@ -1222,10 +1244,17 @@ Two rules for every VM job:
     and authorizes it with `POST /sshkey` after create. Forks, resumes and restores carry it in
     `/home/user/.ssh/authorized_keys`.
   - ssh joins argv into one string, so the runtime quotes it.
-  - Before its first SSH to a new activation, the host reads the guest's host
-    keys through boat's command API, over HTTPS, and pins them. After
-    preparation, the pin is `Machine.hostKey`. `POST /sshkey`'s reply also
-    carries a `hostKey`, which the host doesn't use.
+  - Before every SSH connection, the host reads the guest's host keys through
+    boat's command API, over HTTPS, and pins them in a known-hosts file of
+    that connection's own, under the sandbox ID as `HostKeyAlias`. A pin is
+    never reused: every activation has new keys, and preparation re-mints
+    them within one, and the runtime never sees `Machine.hostKey`, which only
+    the end of the action records. That costs each exec a `GET` of the
+    sandbox, which also gives the endpoint, and a command call. After
+    preparation, `clankerbox ssh` pins `Machine.hostKey`. `POST /sshkey`'s
+    reply also carries a `hostKey`, which the host doesn't use.
+  - ssh runs with `-F /dev/null`, the host's key only, strict host-key
+    checking against that file, and batch mode.
   - boat's command API is not the exec: it takes no stdin and caps a call at
     600 s. An SSH session has neither limit.
   - Each exec opens its own SSH connection, about 0.3 s. There is no shared
@@ -1233,17 +1262,24 @@ Two rules for every VM job:
 - **Endpoints:** guest port 22 is reached at boat's `sshEndpoint`, a public IPv4
   relay, or at `ip:22` when the machine has an IPv4 address of its own.
   - Host and port change on every start, so the host reads them with the
-    state and never stores them.
+    state and never stores them, and reports them only for a running machine.
 - **Fork:** a fork of a running machine would come from boat's last background
   snapshot, which can be a minute old.
   - So the host first syncs the guest's filesystems and notes the time. It
     waits until a snapshot attempt that began after that time has completed
-    (41 s with little new data, 102 s after writing 3 GiB), then forks.
+    (41 s with little new data, 102 s after writing 3 GiB), then forks: until
+    `lastSnapshotAttemptAt` is later than the noted time and
+    `lastSnapshotStatus` is `completed`, polled every 5 s for at most 10
+    minutes. It doesn't compare `snapshotCompletedAt`, which one spike read
+    8 ms before its attempt's start. The noted time is the host's clock, so
+    the host's clock must not run behind boat's.
   - The source keeps running, and a stopped source forks at once.
   - Forks carry the disk only, never RAM.
 - **Checkpoints** are boat named snapshots, always `disk`, from a running or a
   stopped machine. Capture takes about two minutes from a running machine and
   0.2–21 s from a stopped one.
+  - The host polls the snapshot every 3 s, for at most 15 minutes, until it
+    is no longer `saving`; `failed` fails the capture.
   - A restore creates a sandbox `from` the snapshot.
   - Named snapshots don't depend on their source and survive its deletion.
   - Names are account-wide, so the host uses `cbx-<host>-<inst>`.
@@ -1252,12 +1288,13 @@ Two rules for every VM job:
 
   The alternative, checkpoints as stopped sandboxes, avoids the cap but costs
   a start per capture. It is not used.
-- **Stop:** `POST /stop`, then wait for `archived`. boat takes a final
-  snapshot, and if that fails it refuses the stop and the machine keeps
-  running. Return that error. Never pass `force`: it drops everything written
-  since the last snapshot.
+- **Stop:** `POST /stop`, then wait for `archived`, polled each second for at
+  most 5 minutes. boat takes a final snapshot, and if that fails it refuses
+  the stop and the machine keeps running. Return that error. Never pass
+  `force`: it drops everything written since the last snapshot.
 - **Delete:** `DELETE` with `X-Ascii-Confirm-Delete`. The machine is gone once
-  boat answers 404, within a second.
+  boat answers 404, within a second; the host polls for it for at most a
+  minute.
   - boat's deletion operation then purges data in the background, sometimes
     for hours, and the host never waits for it.
   - Repeating a `DELETE` returns the same operation.
@@ -1431,6 +1468,11 @@ tests use real VMs.
 6. **boat.** The runtime, the machine-type choice, its refusals and its
    bounded retry. `stop` and `delete` after an interrupted operation. Built
    and tested on boat's trial, live tests included.
+   - Built (`boat-api.ts`, `boat-key.ts`, `boat.ts`) and unit-tested against a
+     fake boat and a scripted `ssh`: every operation and refusal, the
+     `noEnv`/`ttlSeconds` bodies, the bounded retry (never provoked live),
+     and `stop` and `delete` after a crash before and after the sandbox ID
+     was recorded. The live tests on the trial are still to run.
 7. **Release and live tests.** `tools/release` (SEA, bundle, notices) and the
    full `tests/live`. Then the README design section and the bump skills
    (seeded from evidence.md).

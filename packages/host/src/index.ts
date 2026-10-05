@@ -17,7 +17,7 @@ import * as Store from "./store.ts";
 export const hostLayer = <E, R>(
   config: HostConfig,
   runtime: Layer.Layer<Runtime, E, R>,
-): Layer.Layer<never, HostError | E, R | FileSystem.FileSystem> =>
+): Layer.Layer<never, HostError | E, Exclude<R, Store.Store> | FileSystem.FileSystem> =>
   serve(config).pipe(
     Layer.catchTag("ServeError", (error) =>
       Layer.effectDiscard(
@@ -35,6 +35,7 @@ export const hostLayer = <E, R>(
     ),
     // The runtime is built only once the store holds the state dir's owner lock: a runtime may
     // write there (smolvm creates its inventory), and a second host must not touch it at all.
+    // A runtime that owns a native ID, as boat does its sandbox's, records it in the store.
     Layer.provide(
       runtime.pipe(
         Layer.provideMerge(Layer.effect(Store.Store, Store.open(config.stateDir, config.id))),
