@@ -1,84 +1,59 @@
 /** The whole host layer, as `clankerbox host` runs it, over the fake runtime. */
-import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Client } from "@gjermundgaraba/clankerbox-sdk";
 import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
-import { DateTime, Effect, Layer, Schema } from "effect";
+import { DateTime, Effect, Layer, Logger } from "effect";
+import { HttpServer } from "effect/http";
 import { afterEach, expect, test } from "vite-plus/test";
-import type { HostConfig } from "../src/config.ts";
-import { hostLayer } from "../src/index.ts";
+import { type HostLayerConfig, hostLayer } from "../src/index.ts";
 import { open } from "../src/store.ts";
-import { fakeRuntime } from "./fake-runtime.ts";
+import { type FakeRuntime, fakeRuntime } from "./fake-runtime.ts";
 import { removeScratch, scratch } from "./scratch.ts";
+import { hostConfig, loopbackServer } from "./support.ts";
 
 const owned: Array<string> = [];
 
-const servers: Array<Server> = [];
+afterEach(() => removeScratch(owned));
 
-afterEach(async () => {
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise((resolve) => {
-          server.close(resolve);
-        }),
-    ),
-  );
-  await removeScratch(owned);
+const config = (dir: string, fields?: Partial<HostLayerConfig>): HostLayerConfig => ({
+  ...hostConfig(join(dir, "state")),
+  ...fields,
 });
 
-/** A port that was free on loopback a moment ago; with `hold`, still held by a listener. */
-const loopbackPort = async (hold = false) => {
-  const server = createServer();
+/** The host on `host`, over `fake`, served on `host.listen.port` of loopback. */
+const hostOn = (host: HostLayerConfig, fake: FakeRuntime) =>
+  hostLayer(host, () => fake.layer, loopbackServer(host.listen.port));
 
-  await new Promise<void>((resolve) => {
-    server.listen({ host: "127.0.0.1", port: 0 }, resolve);
-  });
-
-  const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
-    server.address(),
-    { onExcessProperty: "ignore" },
-  );
-
-  if (hold) {
-    servers.push(server);
-  } else {
-    await new Promise((resolve) => {
-      server.close(resolve);
-    });
-  }
-
-  return port;
-};
-
-const config = (dir: string, port: number): HostConfig => ({
-  id: "linux",
-  runtime: "smolvm",
-  listen: { address: "127.0.0.1", port },
-  stateDir: join(dir, "state"),
-  bases: new Map([["ubuntu", "mirror.gcr.io/library/ubuntu@sha256:f144"]]),
-  smolvm: { prefix: "/opt/smolvm/1.22.2", publishAddress: "127.0.0.1", ramBudgetMib: 4096 },
-});
-
-/** Runs `use` while the host runs on `host`, then stops the host. */
-const whileServing = <A, E>(host: HostConfig, dir: string, use: Effect.Effect<A, E>) =>
-  Layer.build(hostLayer(host, () => fakeRuntime({ dir }).layer)).pipe(
-    Effect.andThen(use),
-    Effect.scoped,
+/** Runs `use` with the URL the host on `host` answers on, then stops the host. */
+const whileServing = <A, E>(
+  host: HostLayerConfig,
+  dir: string,
+  use: (url: string) => Effect.Effect<A, E>,
+) =>
+  Effect.flatMap(Effect.service(HttpServer.HttpServer), (server) =>
+    use(HttpServer.formatAddress(server.address)),
+  ).pipe(
+    Effect.provide(hostOn(host, fakeRuntime({ dir }))),
+    Effect.provide(Logger.layer([])),
     Effect.provide(NodeServices.layer),
     Effect.runPromise,
   );
 
-const withClient = <A, E>(port: number, use: (client: Client.Interface) => Effect.Effect<A, E>) =>
-  Effect.flatMap(Client.Client, use).pipe(
-    Effect.provide(NodeClient.layer([{ id: "linux", url: `http://127.0.0.1:${port}` }])),
+/** The failure of the host on `host`, over `fake`, to start. */
+const refused = (host: HostLayerConfig, fake: FakeRuntime) =>
+  Effect.flip(Layer.build(hostOn(host, fake))).pipe(
+    Effect.scoped,
+    Effect.provide(Logger.layer([])),
+    Effect.provide(NodeServices.layer),
   );
+
+const withClient = <A, E>(url: string, use: (client: Client.Interface) => Effect.Effect<A, E>) =>
+  Effect.flatMap(Client.Client, use).pipe(Effect.provide(NodeClient.layer([{ id: "linux", url }])));
 
 test("the host fails the actions its last process left running before it serves", async () => {
   const dir = await scratch(owned);
-  const port = await loopbackPort();
-  const host = config(dir, port);
+  const host = config(dir);
 
   await Effect.flatMap(open(host), (store) =>
     store.insert("create", {
@@ -99,10 +74,8 @@ test("the host fails the actions its last process left running before it serves"
     }),
   ).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
 
-  const machine = await whileServing(
-    host,
-    dir,
-    withClient(port, (client) => client.machine("linux_dev")),
+  const machine = await whileServing(host, dir, (url) =>
+    withClient(url, (client) => client.machine("linux_dev")),
   );
 
   expect(machine.action).toEqual({
@@ -114,32 +87,46 @@ test("the host fails the actions its last process left running before it serves"
 
 test("a second host on the same state dir refuses to start, before it builds its runtime", async () => {
   const dir = await scratch(owned);
-  const first = config(dir, await loopbackPort());
-  const second = config(dir, await loopbackPort());
   const secondFake = fakeRuntime({ dir: await scratch(owned) });
 
-  const error = await whileServing(
-    first,
-    dir,
-    Effect.flip(Layer.build(hostLayer(second, () => secondFake.layer))).pipe(
-      Effect.scoped,
-      Effect.provide(NodeServices.layer),
-    ),
-  );
+  const error = await whileServing(config(dir), dir, () => refused(config(dir), secondFake));
 
   expect(error._tag).toBe("Precondition");
   expect(error.message).toContain("another host process holds state dir");
   expect(secondFake.stubs()).toBeUndefined();
 });
 
+test("a host renamed, or moved to another runtime, refuses its state dir before it builds its runtime", async () => {
+  const dir = await scratch(owned);
+
+  const fake = fakeRuntime({ dir: await scratch(owned) });
+
+  await whileServing(config(dir), dir, () => Effect.void);
+
+  const renamed = await Effect.runPromise(refused(config(dir, { id: "mac" }), fake));
+  const moved = await Effect.runPromise(refused(config(dir, { runtime: "tart" }), fake));
+
+  expect(renamed._tag).toBe("Precondition");
+  expect(renamed.message).toContain("holds host linux on smolvm, and this config names host mac");
+  expect(moved.message).toContain("this config names host linux on tart");
+  expect(fake.stubs()).toBeUndefined();
+});
+
 test("a host whose address is taken says where it couldn't listen", async () => {
   const dir = await scratch(owned);
-  const port = await loopbackPort(true);
 
-  const error = await Layer.build(
-    hostLayer(config(dir, port), () => fakeRuntime({ dir }).layer),
-  ).pipe(Effect.flip, Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
+  const other = await scratch(owned);
 
-  expect(error._tag).toBe("Internal");
-  expect(error.message).toContain(`couldn't listen on 127.0.0.1:${port}`);
+  const [port, failure] = await whileServing(config(dir), dir, (url) => {
+    const port = Number(new URL(url).port);
+    const taken = config(other, { listen: { address: "127.0.0.1", port } });
+
+    return Effect.map(
+      refused(taken, fakeRuntime({ dir: other })),
+      (error) => [port, error] as const,
+    );
+  });
+
+  expect(failure._tag).toBe("Internal");
+  expect(failure.message).toContain(`couldn't listen on 127.0.0.1:${port}`);
 });

@@ -1,6 +1,4 @@
-/** The host API: the contract's action groups over the host's actions, served on the configured address. */
-import { createServer } from "node:http";
-import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+/** The host API: the contract's action groups over the host's actions. */
 import {
   CheckpointGroup,
   HostGroup,
@@ -8,8 +6,7 @@ import {
   MachineGroup,
   version,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Layer } from "effect";
-import { HttpRouter } from "effect/http";
+import { Effect } from "effect";
 import { Checkpoints } from "./checkpoints.ts";
 import type { HostConfig } from "./config.ts";
 import { Machines } from "./machines.ts";
@@ -66,14 +63,3 @@ const hostApp = (config: Pick<HostConfig, "id" | "bases">) =>
 /** The API's routes, for any HTTP server. */
 export const routes = (config: Pick<HostConfig, "id" | "bases">) =>
   Http.layer([machineApp, checkpointApp, hostApp(config)]);
-
-/** Serves the API on `config.listen`, the host's tailnet or loopback address. */
-export const serve = (config: Pick<HostConfig, "id" | "bases" | "listen">) =>
-  HttpRouter.serve(routes(config)).pipe(
-    Layer.provide(
-      NodeHttpServer.layer(createServer, {
-        host: config.listen.address,
-        port: config.listen.port,
-      }),
-    ),
-  );

@@ -5,12 +5,12 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { ErrorTag } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { type ServedHost, serveHost } from "../../../packages/host/tests/support.ts";
+import { startHost, type TestHost } from "../../../packages/host/tests/support.ts";
 import { cleanup, cli, scratch } from "./support.ts";
 
 const owned: Array<string> = [];
 
-const served: Array<ServedHost> = [];
+const served: Array<TestHost> = [];
 
 afterEach(async () => {
   await Promise.all(served.splice(0).map(({ dispose }) => dispose()));
@@ -19,7 +19,7 @@ afterEach(async () => {
 
 /** A loopback URL that refuses connections: a host's, once it has ended. */
 const refusedUrl = async () => {
-  const gone = await serveHost(await scratch(owned));
+  const gone = await startHost(await scratch(owned));
 
   await gone.dispose();
 
@@ -32,7 +32,7 @@ const refusedUrl = async () => {
  */
 const setUp = async (down: ReadonlyArray<string> = []) => {
   const dir = await scratch(owned);
-  const host = await serveHost(dir);
+  const host = await startHost(dir);
   const config = join(dir, "config.json");
   const others = await Promise.all(down.map(async (id) => ({ id, url: await refusedUrl() })));
 
@@ -73,7 +73,7 @@ test("create, stop, start and delete run on the host, and the CLI prints each ou
   expect(listed.stdout).toContain("linux_dev");
   expect(removed).toMatchObject({ code: 0, stdout: "linux_dev" });
   expect(again.stderr).toContain("already gone");
-  expect(await host.rows()).toEqual([]);
+  expect(await host.run(host.store.list)).toEqual([]);
 });
 
 test("a setup that fails replies with its output, and the machine stays failed until delete", async () => {
@@ -130,7 +130,7 @@ test("a create sent to a host under another host's ID is Invalid at the host, an
 
   expect(created.code).toBe(1);
   expect(created.stderr).toContain("Invalid: mis_dev names host mis, and this is host linux");
-  expect(await host.rows()).toEqual([]);
+  expect(await host.run(host.store.list)).toEqual([]);
 });
 
 test("fork, checkpoint capture/list/get/delete and restore run on the host", async () => {
@@ -170,7 +170,7 @@ test("fork, checkpoint capture/list/get/delete and restore run on the host", asy
   });
   expect(again.stderr).toContain("already gone");
   expect(checkpointsAfter.stdout).not.toContain("linux_snap");
-  expect(await host.checkpointRows()).toEqual([]);
+  expect(await host.run(host.store.checkpoints)).toEqual([]);
 });
 
 test("machines shows each machine's age and names the host that is down; hosts --json names the runtime", async () => {

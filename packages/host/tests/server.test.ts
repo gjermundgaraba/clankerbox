@@ -3,13 +3,12 @@ import { Client, type MachineSpec, version } from "@gjermundgaraba/clankerbox-sd
 import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import type { MachineRecord } from "../src/store.ts";
 import { removeScratch, scratch } from "./scratch.ts";
-import { type ServedHost, serveHost } from "./support.ts";
+import { startHost, type TestHost } from "./support.ts";
 
 const owned: Array<string> = [];
 
-const served: Array<ServedHost> = [];
+const served: Array<TestHost> = [];
 
 afterEach(async () => {
   await Promise.all(served.splice(0).map(({ dispose }) => dispose()));
@@ -17,7 +16,7 @@ afterEach(async () => {
 });
 
 const serve = async () => {
-  const host = await serveHost(await scratch(owned));
+  const host = await startHost(await scratch(owned));
 
   served.push(host);
 
@@ -60,7 +59,7 @@ test("the SDK's client drives a machine's lifecycle on a served host", async () 
 });
 
 test("the SDK's client forks, captures, restores and deletes checkpoints on a served host", async () => {
-  const { url, checkpointRows } = await serve();
+  const { url, run, store } = await serve();
 
   const [copy, captured, listed, got, restored] = await withClient(url, (client) =>
     Effect.gen(function* () {
@@ -93,7 +92,7 @@ test("the SDK's client forks, captures, restores and deletes checkpoints on a se
     action: { name: "restore" },
   });
   expect(gone._tag).toBe("NotFound");
-  expect(await checkpointRows()).toEqual([]);
+  expect(await run(store.checkpoints)).toEqual([]);
 });
 
 /** Posts a create for `id` straight to the host, as a caller without the SDK would. */
@@ -108,7 +107,7 @@ const createRaw = async (url: string, id: string) => {
 };
 
 test("a raw create whose ID is too long, or names another host, is Invalid and makes nothing", async () => {
-  const { url, fake, rows } = await serve();
+  const { url, fake, run, store } = await serve();
   const tooLong = await createRaw(url, `linux_${"a".repeat(57)}`);
   const elsewhere = await createRaw(url, "mac_dev");
 
@@ -117,14 +116,14 @@ test("a raw create whose ID is too long, or names another host, is Invalid and m
   expect(elsewhere.status).toBe(400);
   expect(elsewhere.body).toContain('"_tag":"Invalid"');
   expect(elsewhere.body).toContain("this is host linux");
-  expect(await rows()).toEqual([]);
+  expect(await run(store.list)).toEqual([]);
   expect(fake.calls).toEqual(["startup"]);
 });
 
 /** Waits until the one machine's last action has ended, as recorded on its row. */
-const settled = async (rows: () => Promise<ReadonlyArray<MachineRecord>>) => {
+const settled = async ({ run, store }: TestHost) => {
   for (let tries = 0; tries < 100; tries++) {
-    const [row] = await rows();
+    const [row] = await run(store.list);
 
     if (row !== undefined && row.action.status !== "running") {
       return row.action;
@@ -137,7 +136,8 @@ const settled = async (rows: () => Promise<ReadonlyArray<MachineRecord>>) => {
 };
 
 test("a create whose client disconnects still finishes and records its outcome", async () => {
-  const { url, fake, rows } = await serve();
+  const host = await serve();
+  const { url, fake } = host;
   const { release, entered } = fake.holdNext("create");
   const abort = new AbortController();
 
@@ -155,6 +155,6 @@ test("a create whose client disconnects still finishes and records its outcome",
 
   release();
 
-  expect(await settled(rows)).toEqual({ name: "create", status: "done" });
+  expect(await settled(host)).toEqual({ name: "create", status: "done" });
   expect(fake.calls).toContain("exec linux_dev");
 });

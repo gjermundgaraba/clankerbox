@@ -100,9 +100,9 @@ minutes)
 - The `node:http` server's defaults: `requestTimeout` 300 000 ms, covering only
   receiving the request, `headersTimeout` 60 000, `keepAliveTimeout` 5 000 and
   `timeout` 0 (`storeHTTPOptions` and `Server`, N@v26.10.0:lib/_http_server.js);
-  330 s handlers replied under them. Ours: `packages/host/src/server.ts` creates
-  the server with Node's defaults. A default that starts bounding a response
-  would cut long mutations off.
+  330 s handlers replied under them. Ours: `runHost` in
+  `packages/host/src/index.ts` creates the server with Node's defaults. A
+  default that starts bounding a response would cut long mutations off.
 
 **Sizes and startup** (sanity checks, not contracts)
 
