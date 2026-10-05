@@ -2,8 +2,7 @@
 
 The live suites drive real hosts through the `clankerbox` binary, one suite per
 runtime: `tests/smolvm.test.ts`, `tests/tart.test.ts` and `tests/boat.test.ts`,
-with the harness in `tests/live.ts`; `tests/binary.test.ts` checks the binary's
-version on every runtime. Under `vp run -r test` they are skipped:
+with the harness in `tests/live.ts`. Under `vp run -r test` they are skipped:
 they run only with `CLANKERBOX_LIVE=1` and the environment their driver sets.
 `tests/live.ts` documents that environment and the host-control program's ops.
 
