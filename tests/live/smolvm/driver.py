@@ -14,7 +14,10 @@ commit it records (resources.json `commit`) names the code it ran.
 
 The run owns a local WorkRun (scripts/WORK_RUNS.md) and one remote run directory,
 OWNED_ROOT/runs/l<3 hex>, short because smolvm's socket paths limit the host's state dir (the
-host refuses one too long). Teardown, registered before what it owns, runs in reverse order:
+host refuses one too long). It reserves that directory before it builds anything, under a name no
+earlier run's directory holds, and removes it again if the run stops before remote.py's init
+wrote into it. Its ssh master's socket, in /tmp, carries the local run's full ID. Teardown,
+registered before what it owns, runs in reverse order:
 remote `teardown` stops the host and removes the run's VMs and scopes natively, by the run's own
 data dir, so it works after a test left the host down; then the remote evidence is copied here,
 and remote `finish` removes scratch and reverts what the run changed outside the owned root.
@@ -26,6 +29,7 @@ which it removes.
 import argparse
 import json
 from pathlib import Path
+import secrets
 import shlex
 import subprocess
 import sys
@@ -51,19 +55,15 @@ def main():
     stop_on_signals()
 
     with WorkRun('live-smolvm') as run:
-        rid = 'l' + run.path.name.rsplit('-', 1)[1][:3]
-        # The run's own ssh master, so another run's exit can't close it.
-        control_path = f'/tmp/cbx-live-{rid}-%C'
+        # The run's own ssh master, by its full ID, so another run's exit can't close it.
+        control_path = f'/tmp/cbx-{run.path.name}-%C'
         ssh = ['ssh', '-o', 'BatchMode=yes', '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=8',
                '-o', 'ControlMaster=auto', '-o', f'ControlPath={control_path}', '-o', 'ControlPersist=900',
                options.ssh]
         scp = ['scp', '-q', '-o', 'BatchMode=yes', '-o', 'ControlMaster=auto', '-o', f'ControlPath={control_path}',
                '-o', 'ControlPersist=900']
-        rdir = f'{options.root}/runs/{rid}'
-        remote_py = f'{rdir}/remote.py'
-        # Quoted for the remote shell.
-        q_rdir, q_root, q_remote_py = shlex.quote(rdir), shlex.quote(options.root), shlex.quote(remote_py)
-        # The remote dir holds evidence from its creation; only an initialised run owns more.
+        q_root = shlex.quote(options.root)
+        # The remote dir holds evidence from init on; only an initialised run owns more.
         state = {'remote_dir': False, 'initialised': False, 'remote_clean': False}
         darwin_bin = run.scratch / 'clankerbox'
         client_config = run.scratch / 'client.json'
@@ -94,6 +94,12 @@ def main():
                 if not state['remote_dir']:
                     return
                 if not state['initialised']:
+                    # Only init writes beside remote.py: the directory holds nothing else until then.
+                    unused = subprocess.run(ssh + [f'test -z "$(ls -A {q_rdir} | grep -vx remote.py)" && '
+                                                   f'rm -f {q_remote_py} && rmdir {q_rdir}'], timeout=60).returncode
+                    if unused == 0:
+                        log(f'removed {rdir}, which init never wrote into')
+                        return
                     collect()
                     log(f'init did not complete, so nothing remote was torn down; {rdir} keeps its evidence')
                     return
@@ -138,12 +144,21 @@ def main():
             log(f'uploaded {bundle.name} ({bundle.stat().st_size / 2**20:.1f} MiB) in {took:.1f}s '
                 f'({bundle.stat().st_size / 2**20 / took:.2f} MiB/s)')
 
+        # Reserved before the build, under a name no run there holds: remote.py takes l<3 hex>,
+        # short because smolvm's socket paths limit the host's state dir, and every run keeps its
+        # directory for its evidence.
+        names = ' '.join(f'l{secrets.token_hex(2)[:3]}' for _ in range(16))
+        sh(ssh + [f'mkdir -p {q_root}/runs && cd {q_root}/runs && for name in {names}; do '
+                  'mkdir -m 700 "$name" && echo "reserved $name" && exit 0; done; exit 1'], 'reserve', timeout=60)
+        rdir = f'{options.root}/runs/{(run.evidence / "reserve.log").read_text().split()[-1]}'
+        remote_py = f'{rdir}/remote.py'
+        # Quoted for the remote shell.
+        q_rdir, q_remote_py = shlex.quote(rdir), shlex.quote(remote_py)
+        state['remote_dir'] = True
         record(commit=commit, remote_host=options.ssh, remote_run=rdir, smolvm_prefix=options.smolvm_prefix,
                address=options.address)
         log(f'local run {run.path.name}; remote run {rdir}')
         linux = evidence.build_binary(darwin_bin, also=('linux-x64',))['linux-x64']
-        sh(ssh + [f'mkdir -p {q_root}/runs && mkdir -m 700 {q_rdir}'], 'mkdir', timeout=60)
-        state['remote_dir'] = True
         subprocess.run(scp + [str(HERE / 'remote.py'), f'{options.ssh}:{remote_py}'], check=True, timeout=120)
         remote(f'init {shlex.quote(options.address)} {shlex.quote(options.smolvm_prefix)}', 'init', timeout=600)
         state['initialised'] = True
