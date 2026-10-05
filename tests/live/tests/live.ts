@@ -94,6 +94,16 @@ export const TartNatives = Schema.fromJsonString(
   }),
 );
 
+export const BoatNatives = Schema.fromJsonString(
+  Schema.Struct({
+    sandboxes: Schema.Array(Schema.Struct({ id: Schema.String, state: Schema.String })),
+  }),
+);
+
+export const BoatAccount = Schema.fromJsonString(
+  Schema.Struct({ sandboxes: Schema.Number, snapshots: Schema.Number }),
+);
+
 /**
  * The live environment: `CLANKERBOX_BIN`, the binary under test; `CLANKERBOX_LIVE_CONFIG`, a
  * client config whose one host is the host under test; `CLANKERBOX_LIVE_HOST_CONTROL`, a
@@ -101,14 +111,15 @@ export const TartNatives = Schema.fromJsonString(
  * `CLANKERBOX_LIVE_PREFIX`, which every machine name of the run starts with. It carries the
  * run's ID, so the run's teardown finds, and only finds, what the run made (rewrite.md, "Test
  * machine footprint"). `CLANKERBOX_LIVE_RUNTIME` names the host's runtime, and only that
- * runtime's tests run. `smolvm/driver.py` and `tart/driver.py` provide all five, and their
- * teardown removes what the run left on the host. The program's ops, on both runtimes:
+ * runtime's tests run. `smolvm/driver.py`, `tart/driver.py` and `boat/driver.py` provide all
+ * five, and their teardown removes what the run left on the host. The program's ops, on every
+ * runtime:
  *
  * - `host-stop`, `host-start`: stop the host process (SIGTERM), failing unless its exit status,
  *   as its unit or keeper records it, is 0, or start it;
  * - `host-kill`: SIGKILL the host process, as a crash, failing unless that is how it ended;
  * - `guest NAME COMMAND`: run COMMAND with `/bin/sh -c` as root in the guest of machine NAME,
- *   through the runtime, printing its output;
+ *   through the runtime (on boat, its command API), printing its output;
  * - `probe ADDRESS PORT`: from the host itself, print `reached` or `unreachable`.
  *
  * On smolvm:
@@ -132,6 +143,14 @@ export const TartNatives = Schema.fromJsonString(
  *   job files (plist and log) of machine or checkpoint NAME;
  * - `addresses`: print the host's own IPv4 addresses, loopback aside;
  * - `listener`: print a TCP port that some process of the host listens on at every address.
+ *
+ * On boat, whose account may also hold the operator's own sandboxes and snapshots:
+ *
+ * - `natives NAME`: print `{sandboxes: [{id, state}]}`, the sandboxes whose display name is
+ *   machine NAME's ID;
+ * - `snapshots`: print the names of the run's named snapshots, which start `cbx-<host ID>-`;
+ * - `account`: print `{sandboxes, snapshots}`, how many sandboxes and named snapshots the whole
+ *   account holds, the operator's included.
  */
 export const environment = async () => {
   const binary = required("CLANKERBOX_BIN");
@@ -188,7 +207,7 @@ export const decode = <A>(schema: Schema.Codec<A, string>, ran: Ran): A => {
 };
 
 /** Whether this run is live on `runtime`, which `describe.skipIf` reads. */
-export const liveOn = (runtime: "smolvm" | "tart") =>
+export const liveOn = (runtime: "smolvm" | "tart" | "boat") =>
   process.env["CLANKERBOX_LIVE"] === "1" && process.env["CLANKERBOX_LIVE_RUNTIME"] === runtime;
 
 /** Waits until `check` holds, checking every `everyMs`, and fails after `seconds`. */
