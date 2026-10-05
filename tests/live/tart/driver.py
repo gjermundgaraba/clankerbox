@@ -2,13 +2,15 @@
 """Runs the Tart live suite (tests/live) on this Mac: builds the darwin-arm64 SEA, runs it as a
 Tart host from a private Tart home, and runs the suite with the same binary as the CLI.
 
-  python3 tests/live/tart/driver.py --seed SEED --address TAILNET_ADDRESS [--suite-args 'VP TEST ARGS']
+  python3 tests/live/tart/driver.py --tart TART --seed SEED --address TAILNET_ADDRESS \\
+    [--suite-args 'VP TEST ARGS']
 
-  python3 tests/live/tart/driver.py \\
-    --seed /Users/gg/ws/pers/clankerbox/.work/inputs/tart-cirrus-tahoe-base --address 100.122.69.11
+  python3 tests/live/tart/driver.py --tart "$PWD/.work/inputs/tart-2.40.1/tart.app/Contents/MacOS/tart" \\
+    --seed /path/to/main-checkout/.work/inputs/tart-cirrus-tahoe-base --address TAILNET_ADDRESS
 
-SEED is the absolute path of the stock Cirrus seed (PROVENANCE, READY and its VM under home/vms),
-in the main checkout's .work/inputs, and TAILNET_ADDRESS this Mac's tailnet address.
+TART is the absolute path of the tart binary the host runs (inside its tart.app), SEED that of
+the stock Cirrus seed (PROVENANCE, READY and its VM under home/vms), in the main checkout's
+.work/inputs, and TAILNET_ADDRESS this Mac's tailnet address.
 
 The run owns one WorkRun (scripts/WORK_RUNS.md). Its scratch holds the private TART_HOME, whose
 base VM is an APFS clone (cp -c) of the seed's three files, never booted; the seed itself is only
@@ -54,7 +56,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from driver_common import (DIST, REPO, Evidence, Failed, WorkRun, alive, clean_commit, free_port,  # noqa: E402
                            host_end, host_start, install_binary, keep, read_int, sha256, stop_on_signals)
 
-TART = REPO / '.work/inputs/tart-2.40.1/tart.app/Contents/MacOS/tart'
 SEED_VM = 'home/vms/clankerbox-rewrite-seed-macos-tahoe-base'
 SEED_FILES = ('config.json', 'disk.img', 'nvram.bin')
 SOFTNET = Path('/usr/local/bin/softnet')
@@ -274,14 +275,18 @@ def firewall_state():
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--tart', required=True, help='the tart binary, inside its tart.app')
     parser.add_argument('--seed', required=True, help='the Cirrus seed, with its PROVENANCE and READY')
     parser.add_argument('--address', required=True, help="this Mac's tailnet address")
     parser.add_argument('--suite-args', default='', help='arguments for the suite run, such as -t PATTERN')
     options = parser.parse_args()
-    if not options.seed.startswith('/'):
-        parser.error('--seed must be absolute')
+    if not (options.tart.startswith('/') and options.seed.startswith('/')):
+        parser.error('--tart and --seed must be absolute')
+    tart_bin = Path(options.tart)
     seed = Path(options.seed)
 
+    if not os.access(tart_bin, os.X_OK):
+        sys.exit(f'{tart_bin} is not an executable')
     if not softnet_ready():
         sys.exit(f'{SOFTNET} is not installed SUID root (4755, root:wheel)')
     if not (seed / 'READY').exists():
@@ -328,7 +333,7 @@ def main():
         api_port = free_port(address)
         state = {
             'scratch': str(run.scratch), 'evidence': str(run.evidence), 'state_file': str(state_file),
-            'tart': str(TART), 'tart_home': str(home), 'binary': str(binary), 'config': str(config),
+            'tart': str(tart_bin), 'tart_home': str(home), 'binary': str(binary), 'config': str(config),
             'host_id': host_id, 'state_dir': str(run.scratch / 'state'), 'address': address, 'api_port': api_port,
         }
         state_file.write_text(json.dumps(state, indent=2) + '\n')
@@ -336,7 +341,7 @@ def main():
                vm_and_label_prefix=f'cbx-{host_id}-', domain=DOMAIN, state_dir=state['state_dir'],
                config=str(config), address=address,
                address_reason=why, api_port=api_port, host_pid_file=str(run.scratch / 'host.pid'),
-               softnet=str(SOFTNET), tart=str(TART),
+               softnet=str(SOFTNET), tart=str(tart_bin),
                softnet_ls=subprocess.run(['ls', '-l', str(SOFTNET)], capture_output=True, text=True).stdout.strip(),
                softnet_version=subprocess.run([str(SOFTNET), '--version'], capture_output=True,
                                               text=True).stdout.strip())
@@ -364,7 +369,7 @@ def main():
             'listen': {'address': address, 'port': api_port},
             'stateDir': 'state',
             'bases': {'macos': base},
-            'tart': {'binary': str(TART)},
+            'tart': {'binary': str(tart_bin)},
         }, indent=2) + '\n')
         client_config.write_text(json.dumps({'hosts': [{'id': host_id, 'url': f'http://{address}:{api_port}'}]},
                                             indent=2) + '\n')
@@ -388,7 +393,7 @@ def main():
             'listen': {'address': address, 'port': second['api_port']},
             'stateDir': 'state',
             'bases': {'macos': base, 'macos-b': base},
-            'tart': {'binary': str(TART)},
+            'tart': {'binary': str(tart_bin)},
         }, indent=2) + '\n')
         placement_config = run.scratch / 'placement.json'
         placement_config.write_text(json.dumps({'hosts': [

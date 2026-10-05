@@ -13,8 +13,8 @@ root:
 
 ```sh
 pnpm live:smolvm --ssh USER@HOST --address TAILNET_ADDRESS --root OWNED_ROOT --smolvm-prefix PREFIX
-pnpm live:tart --seed SEED --address TAILNET_ADDRESS
-pnpm live:boat [--address TAILNET_ADDRESS]
+pnpm live:tart --tart TART --seed SEED --address TAILNET_ADDRESS
+pnpm live:boat [--key-file KEY_FILE] [--address TAILNET_ADDRESS]
 ```
 
 Each is `python3 tests/live/<runtime>/driver.py`, whose `--help` prints its full
@@ -69,9 +69,11 @@ home in the run's scratch, and the suite with the same binary as the CLI.
   with the files' checksums, and `READY`). The run clones it with APFS clones
   and checks its checksums before and after; it never boots or changes it.
 - `--address`: this Mac's tailnet address; loopback when it isn't assigned.
-- Tart 2.40.1 at `.work/inputs/tart-2.40.1/tart.app` in the checkout the
-  driver runs from, and Softnet 0.24.0 installed SUID root at
-  `/usr/local/bin/softnet` (mode 4755, root:wheel).
+- `--tart`: the `tart` binary of Tart 2.40.1, absolute, such as
+  `.work/inputs/tart-2.40.1/tart.app/Contents/MacOS/tart` in the checkout the
+  driver runs from.
+- Softnet 0.24.0 installed SUID root at `/usr/local/bin/softnet` (mode 4755,
+  root:wheel).
 - No macOS VM running on this Mac: Apple allows two, and the suite uses both.
 - The second host, `<host ID>-b`, serves only the placement test; see the
   driver's docstring.
@@ -81,10 +83,11 @@ home in the run's scratch, and the suite with the same binary as the CLI.
 Runs the darwin-arm64 binary as a boat host on this Mac, unprivileged (the
 driver refuses root), and the suite with the same binary as the CLI.
 
-- The boat CLI's API key: the `token` in
-  `~/Library/Application Support/ascii/boat/config.json`. The driver writes it
-  only into the host's config in scratch (mode 0600) and fails the run if it
-  ever reaches evidence.
+- `--key-file`, optional: a file holding the boat API key, alone or as the
+  `token` of a JSON object; by default the boat CLI's config,
+  `~/Library/Application Support/ascii/boat/config.json`. The driver writes the
+  key only into the host's config in scratch (mode 0600) and fails the run if
+  it ever reaches evidence.
 - Room on the account, which a read-only pre-flight checks before anything is
   made: two free active sandboxes, 7 starts left this hour and this day (one
   run makes 7, of the trial's 5 a minute, 25 an hour and 75 a day, which the

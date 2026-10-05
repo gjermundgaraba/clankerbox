@@ -19,8 +19,8 @@ without the live run below is an **unqualified candidate**.
   floor: `supported` accepts any `major.minor.patch` at or above it, and startup
   refuses the rest. Its comment lists why the floor is where it is. The tested
   release also appears in README (install table, the `tart.binary` example),
-  `tests/live/README.md`, `tests/live/tart/driver.py` (`TART`, a release staged
-  at `.work/inputs/tart-<version>/tart.app`), `scripts/WORK_RUNS.md` and the tests
+  `tests/live/README.md` (the live driver's `--tart`, a release staged at
+  `.work/inputs/tart-<version>/tart.app`), `scripts/WORK_RUNS.md` and the tests
   (`packages/host/tests/tart.test.ts`, whose fake `tart` answers as the tested
   release; `config.test.ts`): `git grep -n '2\.40'`.
 - **Companions** pinned beside it, re-checked only when they change: Softnet
@@ -186,14 +186,14 @@ Each: what Tart does, where, and what of ours depends on it.
   `config.test.ts`), then `vp run --no-cache ready`. Change the fake's answers
   only to match Tart's real output at the target.
 - Live: stage the target's release tarball, checksum verified, with its
-  provenance, at `.work/inputs/tart-<version>/tart.app` and point the driver's
-  `TART` at it, then `pnpm live:tart --seed SEED --address TAILNET_ADDRESS`
-  (`tests/live/README.md` lists what it needs: the stock Cirrus seed, Softnet
-  SUID root, no other macOS VM running). It covers create, stop, cold start,
-  forks and `disk` checkpoints, the two-VM limit, Softnet's block of the host,
-  a host restart and a crash, and placement over two hosts. It runs as a work
-  run (`scripts/WORK_RUNS.md`); report what it leaves running and what it
-  retains.
+  provenance, at `.work/inputs/tart-<version>/tart.app`, then run
+  `pnpm live:tart --tart TART --seed SEED --address TAILNET_ADDRESS` with its
+  `Contents/MacOS/tart` as `TART` (`tests/live/README.md` lists what it needs:
+  the stock Cirrus seed, Softnet SUID root, no other macOS VM running). It
+  covers create, stop, cold start, forks and `disk` checkpoints, the two-VM
+  limit, Softnet's block of the host, a host restart and a crash, and
+  placement over two hosts. It runs as a work run (`scripts/WORK_RUNS.md`);
+  report what it leaves running and what it retains.
 
 ## After
 
@@ -201,7 +201,7 @@ Each: what Tart does, where, and what of ours depends on it.
   target added or fixed: add that reason to its comment, and the boundary
   versions to `tart.test.ts`'s `supported` cases. Otherwise the floor stays,
   and only the tested release moves (README, `tests/live/README.md`, the
-  driver's `TART`, the fake's version).
+  fake's version).
 - Move each `T@<old>` citation, in this skill and in `tart.ts`'s comments, to
   the new tag (`tart.ts`'s also to their current lines), check that each
   identifier still finds the code, and add claims the new release introduced.

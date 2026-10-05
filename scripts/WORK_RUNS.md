@@ -78,35 +78,35 @@ run's VMs and scopes natively, by the run's own smolvm data dir, so a test that
 leaves the host down leaves nothing behind. The driver's docstring shows its
 invocation.
 
-`tests/live/tart/driver.py` is its counterpart on this Mac: it runs a Tart host
-from a private Tart home in the run's scratch, whose base is an APFS clone of the
-Cirrus seed named by `--seed` (the main checkout's
-`.work/inputs/tart-cirrus-tahoe-base`), on the tailnet address named by
-`--address`, and gives the suite the same host-control program. It also runs a
-second Tart host, `<host ID>-b`, on the same home and address, which only the
-suite's placement test uses. Its teardown stops both hosts, then deletes the
+`tests/live/tart/driver.py` is its counterpart on this Mac: it runs a Tart host,
+with the `tart` binary named by `--tart`, from a private Tart home in the run's
+scratch, whose base is an APFS clone of the Cirrus seed named by `--seed` (the
+main checkout's `.work/inputs/tart-cirrus-tahoe-base`), on the tailnet address
+named by `--address`, and gives the suite the same host-control program. It also
+runs a second Tart host, `<host ID>-b`, on the same home and address, which only
+the suite's placement test uses. Its teardown stops both hosts, then deletes the
 home's VMs and boots out the launchd jobs carrying the run's host ID, which the
-second host's ID starts with, natively, before scratch is deleted. Its
-docstring shows its invocation.
+second host's ID starts with, natively, before scratch is deleted. Its docstring
+shows its invocation.
 
 `tests/live/boat/driver.py` runs a boat host on this Mac, unprivileged, against
 the operator's boat account on its trial, on loopback or the tailnet address
 named by `--address`. The host's config, in scratch with mode 0600, holds the
-boat CLI's API key, which nothing else writes down: the driver logs its own
-calls as method, path, status and boat's code, and its last teardown step
-redacts the key from every evidence file and fails the run if it was there. A
-read-only pre-flight records the account's counts (never the operator's names
-or IDs) and stops the run before it makes anything unless two active sandboxes
-are free and its starts and named snapshots have room for the run. When the
-account's active limit isn't the trial's two, the suite skips its test of
-boat's 429 for a third sandbox, and when its tier isn't the trial, its large
-create. The run's host ID carries its run ID, so its sandboxes' display names
-start `<host ID>_` and its named snapshots `cbx-<host ID>-`. Its teardown stops
-the host, deletes by ID every sandbox the host's database records or the
-suite's host-control program saw, sweeps those two prefixes, and checks that
-nothing of the run's remains; it touches nothing else on the account. The
-evidence keeps the suite's starts and the account's start count before and
-after. Its docstring shows its invocation.
+API key from `--key-file` (by default the boat CLI's config), which nothing else
+writes down: the driver logs its own calls as method, path, status and boat's
+code, and its last teardown step redacts the key from every evidence file and
+fails the run if it was there. A read-only pre-flight records the account's
+counts (never the operator's names or IDs) and stops the run before it makes
+anything unless two active sandboxes are free and its starts and named snapshots
+have room for the run. When the account's active limit isn't the trial's two,
+the suite skips its test of boat's 429 for a third sandbox, and when its tier
+isn't the trial, its large create. The run's host ID carries its run ID, so its
+sandboxes' display names start `<host ID>_` and its named snapshots
+`cbx-<host ID>-`. Its teardown stops the host, deletes by ID every sandbox the
+host's database records or the suite's host-control program saw, sweeps those
+two prefixes, and checks that nothing of the run's remains; it touches nothing
+else on the account. The evidence keeps the suite's starts and the account's start
+count before and after. Its docstring shows its invocation.
 
 The drivers share `tests/live/driver_common.py`, which holds their evidence
 (`driver.log`, `resources.json` and each command's log) and runs the suite with
