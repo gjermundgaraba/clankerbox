@@ -4,7 +4,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vite-plus/test";
 import { hostKeyIn, preparationScript } from "../src/guest.ts";
@@ -37,13 +37,10 @@ const prepare = (
   where: { readonly root: string; readonly bin: string },
   instance: string,
   seed: Uint8Array = randomBytes(64),
+  path = `${where.bin}:${process.env["PATH"]}`,
 ) => {
   const ran = spawnSync("/bin/sh", ["-c", preparationScript, "prepare", instance, "linux_dev"], {
-    env: {
-      ...process.env,
-      CLANKERBOX_ROOT: where.root,
-      PATH: `${where.bin}:${process.env["PATH"]}`,
-    },
+    env: { ...process.env, CLANKERBOX_ROOT: where.root, PATH: path },
     input: seed,
     encoding: "utf8",
   });
@@ -93,6 +90,20 @@ test("a new instance reseeds, writes the machine ID and the instance, and runs s
   expect(await read(where.root, "var/lib/clankerbox/instance")).toBe("aaaa1111\n");
   expect(await read(where.root, "started")).toBe("linux_dev\n");
   expect(hostKeyIn(output)).toBeUndefined();
+});
+
+test("on Linux without perl, preparation says it needs perl", async () => {
+  const where = await guest();
+
+  // Only the stubs and `cat` are on PATH, and the script adds only the guest root's own dirs.
+  await rm(join(where.bin, "perl"));
+  await symlink("/bin/cat", join(where.bin, "cat"));
+
+  const { code, output } = prepare(where, "aaaa1111", randomBytes(64), where.bin);
+
+  expect(code).toBe(1);
+  expect(output).toContain("preparation needs perl");
+  await expect(stat(join(where.root, "var/lib/clankerbox/instance"))).rejects.toThrow();
 });
 
 test("on macOS the seed write is the whole reseed", async () => {

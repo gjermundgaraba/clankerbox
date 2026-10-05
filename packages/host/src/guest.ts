@@ -126,10 +126,10 @@ const hostKeyMarker = "clankerbox-host-key: ";
  * are the row's instance and the machine's ID; a fresh random seed arrives on stdin.
  *
  * 1. Identity, when `/var/lib/clankerbox/instance` isn't the row's instance: reseed the kernel
- *    RNG first (the seed into `/dev/random`, then `RNDRESEEDCRNG` on Linux, as a RAM restore
- *    clones the guest's CRNG); re-mint the SSH host keys if there are any; make a running
- *    sshd load them; write the machine ID; run the `new-identity` hook; and write the
- *    instance last, so a crash before it repeats these steps.
+ *    RNG first (the seed into `/dev/random`, then `RNDRESEEDCRNG` on Linux through `perl`,
+ *    as a RAM restore clones the guest's CRNG); re-mint the SSH host keys if there are any;
+ *    make a running sshd load them; write the machine ID; run the `new-identity` hook; and
+ *    write the instance last, so a crash before it repeats these steps.
  * 2. `/etc/clankerbox/start`, if it exists, on every activation.
  * 3. The SSH host public key, if there is one, after a marker.
  *
@@ -137,18 +137,22 @@ const hostKeyMarker = "clankerbox-host-key: ";
  * whatever launched it: a `start` script, or boat's systemd unit. `/proc/<pid>/comm` guards
  * against a stale pid file; macOS has no `/run/sshd.pid`, as launchd starts sshd per
  * connection. `CLANKERBOX_ROOT` is unset in a guest; tests run the script against a
- * temporary directory as the root.
+ * temporary directory as the root, so the directories it adds to `PATH` are under it too.
  */
 export const preparationScript = [
   "set -eu",
   "instance=$1",
   "id=$2",
   "root=${CLANKERBOX_ROOT-}",
-  "PATH=$PATH:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+  "PATH=$PATH:$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
   "state=$root/var/lib/clankerbox",
   `if [ "$(cat "$state/instance" 2>/dev/null || true)" != "$instance" ]; then`,
   `  cat >"$root/dev/random"`,
   `  if [ "$(uname -s)" = Linux ]; then`,
+  "    if ! command -v perl >/dev/null 2>&1; then",
+  `      echo "preparation needs perl, for RNDRESEEDCRNG" >&2`,
+  "      exit 1",
+  "    fi",
   `    perl -e 'open(my $f, "<", $ARGV[0]) or die "$ARGV[0]: $!\\n"; ioctl($f, 0x5207, 0) or die "RNDRESEEDCRNG: $!\\n"' "$root/dev/urandom"`,
   "  fi",
   `  if ls "$root"/etc/ssh/ssh_host_*_key >/dev/null 2>&1; then`,

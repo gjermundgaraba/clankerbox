@@ -539,6 +539,9 @@ Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
   A failed preparation is simply run again by the next `start`.
 
 - **The guest's contract**, for profile authors:
+  - A Linux guest has `perl`, which preparation needs for `RNDRESEEDCRNG`;
+    without it, preparation fails saying so. Minimal images, such as Alpine,
+    lack it until setup installs it.
   - Setup installs sshd and keys, sets the guest's environment and writes
     `/etc/clankerbox/start`.
   - `start` is idempotent, daemonizes whatever it launches (`setsid -f`, or
