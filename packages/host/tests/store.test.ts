@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Conflict, NotFound } from "@gjermundgaraba/clankerbox-sdk";
-import { DateTime, Effect, Option } from "effect";
+import { DateTime, Effect, Option, Result } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import {
   applicationId,
@@ -16,6 +16,7 @@ import {
   type NewRow,
   open,
   type RowRef,
+  transaction,
 } from "../src/store.ts";
 import { removeScratch, scratch } from "./scratch.ts";
 
@@ -176,6 +177,23 @@ test("a database newer than the binary is refused", async () => {
 
   expect(error._tag).toBe("Precondition");
   expect(error.message).toContain("newer than this binary");
+});
+
+test("a full database fails a transaction with SQLite's own error, which rolled it back", async () => {
+  const db = new DatabaseSync(":memory:");
+
+  db.exec("CREATE TABLE blobs (data BLOB) STRICT");
+  db.exec("PRAGMA max_page_count = 4");
+
+  const error = await transaction(db, "write a blob", () => {
+    db.prepare("INSERT INTO blobs VALUES (?)").run(new Uint8Array(1 << 20));
+
+    return Result.void;
+  }).pipe(Effect.flip, Effect.runPromise);
+
+  expect(error.message).toBe("state database: write a blob: database or disk is full");
+  expect(db.isTransaction).toBe(false);
+  db.close();
 });
 
 test("a directory that holds other files, as a mount point holds lost+found, is used", async () => {

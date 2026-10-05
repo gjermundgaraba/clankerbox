@@ -343,9 +343,11 @@ const sql = <A>(what: string, run: () => A): Effect.Effect<A, Internal> =>
 
 /**
  * Runs `body` in one transaction. Its success commits; its typed failure, or a throw, rolls
- * back. The failure comes out as the effect's own, and SQLite's as `Internal`.
+ * back. The failure comes out as the effect's own, and SQLite's as `Internal`. Some of SQLite's
+ * errors, such as a full disk, roll the transaction back themselves, so a throw rolls back only
+ * a transaction still open, and the error is SQLite's.
  */
-const transaction = <A, E>(
+export const transaction = <A, E>(
   db: DatabaseSync,
   what: string,
   body: () => Result.Result<A, E>,
@@ -361,7 +363,9 @@ const transaction = <A, E>(
 
         return result;
       } catch (cause) {
-        db.exec("ROLLBACK");
+        if (db.isTransaction) {
+          db.exec("ROLLBACK");
+        }
 
         throw cause;
       }
