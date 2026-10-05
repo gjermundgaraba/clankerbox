@@ -2,19 +2,19 @@
 # Smoke-test a clankerbox bundle: it is checked against BUNDLE.sha256 and extracted into a
 # temporary directory, its license and notices must be there, and every role of its binary
 # starts and --help works.
-# Usage: smoke.sh BUNDLE [VERSION], BUNDLE a clankerbox-<version>-<target>.tar.gz from build.sh,
-# beside its .sha256. VERSION defaults to the one in its name. It needs no repository, so a
-# bundle can be smoked on another machine with this script alone.
+# Usage: smoke.sh BUNDLE, a clankerbox-<version>-<target>.tar.gz from build.sh beside its
+# .sha256; --version must print the version in its name. It needs no repository, so a bundle
+# can be smoked on another machine with this script alone.
 set -eu
 fail() { echo "FAIL: $*" >&2; exit 1; }
 case "${1:-}" in
   *.tar.gz) ;;
-  *) fail "usage: smoke.sh clankerbox-<version>-<target>.tar.gz [VERSION]" ;;
+  *) fail "usage: smoke.sh clankerbox-<version>-<target>.tar.gz" ;;
 esac
 if command -v sha256sum >/dev/null; then check() { sha256sum -c "$1"; }; else check() { shasum -a 256 -c "$1"; }; fi
 name=$(basename "$1")
 (cd "$(dirname "$1")" && check "$name.sha256") || fail "$name: checksum"
-version=${name#clankerbox-} && version=${version%.tar.gz} && version=${2:-${version%-*-*}}
+version=${name#clankerbox-} && version=${version%.tar.gz} && version=${version%-*-*}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/clankerbox-smoke.XXXXXX") && trap 'rm -rf "$tmp"' EXIT
 tar -xzf "$1" -C "$tmp"
 for file in LICENSE notices/node/LICENSE notices/npm/licenses.json; do

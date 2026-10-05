@@ -1,8 +1,9 @@
 #!/bin/sh
-# Build and bundle clankerbox for each target: tools/release/dist/clankerbox-<version>-<target>.tar.gz,
+# Build and bundle clankerbox for each target: OUT/clankerbox-<version>-<target>.tar.gz,
 # beside <bundle>.sha256, which `sha256sum -c` and `shasum -a 256 -c` check.
-# Usage: build.sh [TARGET...], TARGET darwin-arm64 or linux-x64. By default it builds what
-# this machine can: both targets on macOS, linux-x64 on Linux (darwin needs codesign).
+# Usage: build.sh [--out OUT] [TARGET...], TARGET darwin-arm64 or linux-x64; OUT defaults to
+# tools/release/dist. By default it builds what this machine can: both targets on macOS,
+# linux-x64 on Linux (darwin needs codesign).
 # Bundle the code first (vp run -r build). The Node is the one .node-version pins, its
 # archives' checksums in release-inputs.json. The first run downloads them into
 # tools/release/cache/, so `vp run ready` doesn't include it and stays offline. The version
@@ -18,6 +19,10 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 out="$here/dist"
+if [ "${1:-}" = --out ]; then
+  [ $# -ge 2 ] || { echo "--out needs a directory" >&2; exit 1; }
+  out=$2 && shift 2
+fi
 code="$root/apps/clankerbox/dist/clankerbox.mjs"
 inputs="$here/release-inputs.json"
 node_version=$(tr -d '[:space:]' <"$root/.node-version")
@@ -66,7 +71,8 @@ for target in "$@"; do
   esac
 done
 builder=$(node_for "$builder_platform")/node
-mkdir -p "$out"
+# Absolute, since the bundles are packed from inside each stage.
+mkdir -p "$out" && out=$(cd "$out" && pwd)
 
 notices="$out/notices.part"
 rm -rf "$notices" && mkdir -p "$notices/npm"
