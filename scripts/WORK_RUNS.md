@@ -65,7 +65,7 @@ All callbacks are attempted. If one fails, scratch remains with state
 Use the same layout on remote hosts, and collect their evidence before deleting
 remote scratch. The local helper does not automatically manage remote resources.
 
-## The smolvm live suite
+## The live suites
 
 `tests/live/smolvm/driver.py` is the provisioning driver for `tests/live` against
 a smolvm host on a Linux test machine: it runs the host there as root, from a run
@@ -77,9 +77,12 @@ invocation.
 
 `tests/live/tart/driver.py` is its counterpart on this Mac: it runs a Tart host
 from a private Tart home in the run's scratch, whose base is an APFS clone of the
-Cirrus seed, and gives the suite the same host-control program. Its teardown stops
-the host, then deletes the home's VMs and boots out the launchd jobs carrying the
-run's host ID, natively, before scratch is deleted.
+Cirrus seed named by `--seed` (the main checkout's
+`.work/inputs/tart-cirrus-tahoe-base`), on the tailnet address named by
+`--address`, and gives the suite the same host-control program. Its teardown
+stops the host, then deletes the home's VMs and boots out the launchd jobs
+carrying the run's host ID, natively, before scratch is deleted. Its docstring
+shows its invocation.
 
 Both drivers share `tests/live/driver_common.py`, which holds their evidence
 (`driver.log`, `resources.json` and each command's log) and runs the suite with

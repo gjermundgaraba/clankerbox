@@ -2,14 +2,20 @@
 """Runs the Tart live suite (tests/live) on this Mac: builds the darwin-arm64 SEA, runs it as a
 Tart host from a private Tart home, and runs the suite with the same binary as the CLI.
 
-  python3 tests/live/tart/driver.py [--address TAILNET_ADDRESS] [--suite-args 'VP TEST ARGS']
+  python3 tests/live/tart/driver.py --seed SEED --address TAILNET_ADDRESS [--suite-args 'VP TEST ARGS']
+
+  python3 tests/live/tart/driver.py \
+    --seed /Users/gg/ws/pers/clankerbox/.work/inputs/tart-cirrus-tahoe-base --address 100.122.69.11
+
+SEED is the absolute path of the stock Cirrus seed (PROVENANCE, READY and its VM under home/vms),
+in the main checkout's .work/inputs, and TAILNET_ADDRESS this Mac's tailnet address.
 
 The run owns one WorkRun (scripts/WORK_RUNS.md). Its scratch holds the private TART_HOME, whose
-base VM is an APFS clone (cp -c) of the stock Cirrus seed's three files, never booted; the seed
-itself is only read, and its checksums are compared with its PROVENANCE before and after. The
-host's ID carries the run's ID, so every VM and launchd label the host makes starts with
-`cbx-<host ID>-`. The host listens on the tailnet address, or on loopback when that address isn't
-assigned here (recorded in evidence).
+base VM is an APFS clone (cp -c) of the seed's three files, never booted; the seed itself is only
+read, and its checksums are compared with its PROVENANCE before and after. The host's ID carries
+the run's ID, so every VM and launchd label the host makes starts with `cbx-<host ID>-`. The host
+listens on the tailnet address, or on loopback when that address isn't assigned here (recorded in
+evidence).
 
 The host runs under a keeper process (`driver.py keep`), which records the host's pid and exit
 status, so the suite's host-control program (`driver.py control`, tests/live/tests/live.ts) can
@@ -41,11 +47,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from driver_common import REPO, Evidence, Failed, WorkRun, clean_commit, stop_on_signals  # noqa: E402
 
 TART = REPO / '.work/inputs/tart-2.40.1/tart.app/Contents/MacOS/tart'
-SEED_ROOT = Path('/Users/gg/ws/pers/clankerbox/.work/inputs/tart-cirrus-tahoe-base')
-SEED = SEED_ROOT / 'home/vms/clankerbox-rewrite-seed-macos-tahoe-base'
+SEED_VM = 'home/vms/clankerbox-rewrite-seed-macos-tahoe-base'
 SEED_FILES = ('config.json', 'disk.img', 'nvram.bin')
 SOFTNET = Path('/usr/local/bin/softnet')
-TAILNET_ADDRESS = '100.122.69.11'
 DIST = REPO / 'tools' / 'release' / 'dist'
 VZ = 'com.apple.Virtualization.VirtualMachine'
 DOMAIN = f'gui/{os.getuid()}'
@@ -59,9 +63,9 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def provenance_sums():
+def provenance_sums(seed):
     """The seed files' checksums as its PROVENANCE records them."""
-    text = (SEED_ROOT / 'PROVENANCE').read_text()
+    text = (seed / 'PROVENANCE').read_text()
     sums = dict(re.findall(r'^\s+(config\.json|disk\.img|nvram\.bin)\s+([0-9a-f]{64})\s*$', text, re.M))
     if sorted(sums) != sorted(SEED_FILES):
         raise RuntimeError(f'PROVENANCE lists checksums for {sorted(sums)}, not {sorted(SEED_FILES)}')
@@ -333,14 +337,18 @@ def free_port(address):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--address', default=TAILNET_ADDRESS, help="this Mac's tailnet address")
+    parser.add_argument('--seed', required=True, help='the Cirrus seed, with its PROVENANCE and READY')
+    parser.add_argument('--address', required=True, help="this Mac's tailnet address")
     parser.add_argument('--suite-args', default='', help='arguments for the suite run, such as -t PATTERN')
     options = parser.parse_args()
+    if not options.seed.startswith('/'):
+        parser.error('--seed must be absolute')
+    seed = Path(options.seed)
 
     if not softnet_ready():
         sys.exit(f'{SOFTNET} is not installed SUID root (4755, root:wheel)')
-    if not (SEED_ROOT / 'READY').exists():
-        sys.exit(f'the seed at {SEED_ROOT} is not READY')
+    if not (seed / 'READY').exists():
+        sys.exit(f'the seed at {seed} is not READY')
     if vz_processes():
         sys.exit(f'macOS VMs already run on this Mac, and Apple allows two: {vz_processes()}')
     commit = clean_commit()
@@ -360,11 +368,11 @@ def main():
         evidence = Evidence(run)
         log, record, sh = evidence.log, evidence.record, evidence.sh
 
-        sums = provenance_sums()
+        sums = provenance_sums(seed)
 
         def seed_check(when):
             started = time.monotonic()
-            found = {name: sha256(SEED / name) for name in SEED_FILES}
+            found = {name: sha256(seed / SEED_VM / name) for name in SEED_FILES}
             matches = found == sums
             log(f'seed checksums {when}: {"match" if matches else "DIFFER from"} PROVENANCE '
                 f'({time.monotonic() - started:.1f}s)')
@@ -375,9 +383,9 @@ def main():
         # Runs last, after the VMs are gone.
         run.on_cleanup(lambda: seed_check('after'))
 
-        if options.address == TAILNET_ADDRESS and TAILNET_ADDRESS not in subprocess.run(
-                ['ifconfig'], capture_output=True, text=True).stdout:
-            address, why = '127.0.0.1', f'{TAILNET_ADDRESS} is not assigned on this Mac'
+        if not re.search(rf'^\tinet {re.escape(options.address)} ',
+                         subprocess.run(['ifconfig'], capture_output=True, text=True).stdout, re.M):
+            address, why = '127.0.0.1', f'{options.address} is not assigned on this Mac'
         else:
             address, why = options.address, 'the tailnet address, as production listens'
         api_port = free_port(address)
@@ -387,8 +395,9 @@ def main():
             'host_id': host_id, 'state_dir': str(run.scratch / 'state'), 'address': address, 'api_port': api_port,
         }
         state_file.write_text(json.dumps(state, indent=2) + '\n')
-        record(tart_home=str(home), base_vm=base, host_id=host_id, vm_and_label_prefix=f'cbx-{host_id}-',
-               domain=DOMAIN, state_dir=state['state_dir'], config=str(config), address=address,
+        record(seed=str(seed), tart_home=str(home), base_vm=base, host_id=host_id,
+               vm_and_label_prefix=f'cbx-{host_id}-', domain=DOMAIN, state_dir=state['state_dir'],
+               config=str(config), address=address,
                address_reason=why, api_port=api_port, host_pid_file=str(run.scratch / 'host.pid'),
                softnet=str(SOFTNET), tart=str(TART),
                softnet_ls=subprocess.run(['ls', '-l', str(SOFTNET)], capture_output=True, text=True).stdout.strip(),
@@ -409,7 +418,7 @@ def main():
 
         (home / 'vms' / base).mkdir(parents=True)
         for name in SEED_FILES:
-            subprocess.run(['cp', '-c', str(SEED / name), str(home / 'vms' / base / name)], check=True)
+            subprocess.run(['cp', '-c', str(seed / SEED_VM / name), str(home / 'vms' / base / name)], check=True)
         log(f'base {base}: an APFS clone of the seed')
 
         config.write_text(json.dumps({
