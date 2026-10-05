@@ -22,15 +22,15 @@ packages, not this one.
 ## Source and scope
 
 - **Pinned in this repo:** `.node-version`, the one Node pin, which the
-  workflows' `setup-node` (`node-version-file`) and the release build read;
-  `tools/release/release-inputs.json`, each target's archive sha256 under
+  workflows' `setup-node` (`node-version-file`), the release build and
+  `apps/clankerbox/vite.config.ts` (its bundle's `target`, `node<major>`) read;
+  and `tools/release/release-inputs.json`, each target's archive sha256 under
   `nodeArchiveSha256.<version>` (`node-v<version>-darwin-arm64.tar.xz` and
-  `node-v<version>-linux-x64.tar.xz`); README ("Node 26.10.0 inside").
-  `git grep -n '26\.10'` finds them. `@types/node` in
-  `pnpm-workspace.yaml`'s catalog has its own version (26.6.4). The major alone
-  is in `engines` in the root `package.json` (`"node": ">=26"`, a floor) and
-  README's "Node 26 and pnpm 12": a patch or minor bump leaves both, and that
-  grep doesn't find them.
+  `node-v<version>-linux-x64.tar.xz`). Nothing else names the version.
+  `@types/node` in `pnpm-workspace.yaml`'s catalog has its own version
+  (26.6.4). The major alone is in `engines` in the root `package.json`
+  (`"node": ">=26"`, a floor) and README's "Node 26 and pnpm 12": a patch or
+  minor bump leaves both.
 - **Target:** the latest release of the current major on
   `https://nodejs.org/dist/` (its `index.json`), unless the user names one. A
   new major is a larger change: also `engines`, the `@types/node` major and
@@ -126,10 +126,10 @@ minutes)
 ## After
 
 - Update `.node-version` and `release-inputs.json` (the new version's two
-  checksums; drop the old version's) together, `@types/node` (the newest of the
-  major, which waits a day under the workspace's `minimumReleaseAge`) and
-  README's "Node 26.10.0 inside". For a new major, also raise `engines`'
-  floor to it (`>=27`) and README's "Node 26".
+  checksums; drop the old version's) together, and `@types/node` (the newest
+  of the major, which waits a day under the workspace's `minimumReleaseAge`).
+  For a new major, also raise `engines`' floor to it (`>=27`) and README's
+  "Node 26".
 - Move each `N@v<old>` citation, here and in comments, to the new tag, and add
   claims the release introduced.
 - Hosts pick the new Node up only with a new clankerbox release; running VMs

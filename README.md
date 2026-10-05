@@ -31,8 +31,8 @@ its `.sha256`. The targets are `darwin-arm64` and `linux-x64`. The names carry
 no version: the tag does, and so does `clankerbox --version`. A bundle holds,
 with no top directory:
 
-- `clankerbox`, a Node single-executable binary (Node 26.10.0 inside; nothing
-  else to install);
+- `clankerbox`, a Node single-executable binary (the Node `.node-version`
+  pins inside; nothing else to install);
 - `LICENSE`, clankerbox's own;
 - `notices/node/LICENSE` and `notices/npm/`, the licenses of Node and of every
   production npm dependency.
