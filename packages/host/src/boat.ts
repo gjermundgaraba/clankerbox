@@ -68,7 +68,7 @@ export interface Settings {
 }
 
 /** The API version the host is built for, which the host reports as its runtime's version. */
-export const apiVersion = "v1";
+const apiVersion = "v1";
 
 /** The states of a sandbox that runs; boat reports `ready` before its lazy restore is done. */
 const upStates: ReadonlySet<string> = new Set(["ready", "idle", "running"]);

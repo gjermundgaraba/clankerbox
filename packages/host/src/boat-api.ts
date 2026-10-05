@@ -79,7 +79,7 @@ export interface MachineType {
  */
 const largest: MachineType = { name: "default", cpu: 4, ramMib: 8192, diskGib: 50 };
 
-export const machineTypes: ReadonlyArray<MachineType> = [
+const machineTypes: ReadonlyArray<MachineType> = [
   { name: "small", cpu: 2, ramMib: 4096, diskGib: 12 },
   largest,
 ];
@@ -130,14 +130,12 @@ export const Sandbox = Schema.Struct({
   id: Schema.String,
   state: Schema.String,
   error: Nullable(Schema.String),
-  type: Schema.optionalKey(Schema.String),
   /** IPv6 or IPv4. */
   ip: Nullable(Schema.String),
   /** A public IPv4 `host:port` relay to port 22, set only when the machine has no IPv4 of its own. */
   sshEndpoint: Nullable(Schema.String),
   lastSnapshotAttemptAt: Nullable(Schema.String),
   lastSnapshotStatus: Nullable(Schema.String),
-  snapshotCompletedAt: Nullable(Schema.String),
 });
 
 export type Sandbox = typeof Sandbox.Type;
@@ -157,8 +155,6 @@ const Authorized = Schema.Struct({
   sshEndpoint: Nullable(Schema.String),
 });
 
-export type Authorized = typeof Authorized.Type;
-
 const Finished = Schema.Struct({
   exitCode: Schema.NullOr(Schema.Number),
   stdout: Schema.String,
@@ -166,20 +162,14 @@ const Finished = Schema.Struct({
   timedOut: Schema.Boolean,
 });
 
-export type Finished = typeof Finished.Type;
-
-export const NamedSnapshot = Schema.Struct({
+const NamedSnapshot = Schema.Struct({
   name: Schema.String,
   /** `saving`, `ready` or `failed`. */
   status: Schema.String,
   error: Schema.optionalKey(Schema.String),
 });
 
-export type NamedSnapshot = typeof NamedSnapshot.Type;
-
 const NamedSnapshotInfo = Schema.Struct({ snapshot: NamedSnapshot });
-
-const NamedSnapshotList = Schema.Struct({ snapshots: Schema.Array(NamedSnapshot) });
 
 /** A body the host ignores beyond its status. */
 const Accepted = Schema.Struct({});
@@ -512,10 +502,6 @@ export const make = (settings: Settings) =>
           Effect.map((info) => Option.some(info.snapshot)),
           Effect.catchTag("NotFound", () => Effect.succeedNone),
         ),
-      snapshots: Effect.map(
-        once({ method: "GET", path: "/named-snapshots" }, NamedSnapshotList),
-        (list) => list.snapshots,
-      ),
       /** Deletes a named snapshot; one boat no longer has is already gone. */
       deleteSnapshot: (name: string) =>
         once({ method: "DELETE", path: `/named-snapshots/${name}` }, Accepted).pipe(
