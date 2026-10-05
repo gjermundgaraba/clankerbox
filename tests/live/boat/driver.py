@@ -200,6 +200,14 @@ def alive(pid):
     return True
 
 
+def scratch_processes(scratch):
+    """(PID, program) of every other process whose command line names the run's scratch."""
+    procs = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True).stdout
+    return [(pid_text, Path(command.split(' ', 1)[0]).name)
+            for pid_text, command in (line.strip().split(' ', 1) for line in procs.splitlines() if scratch in line)
+            if int(pid_text) != os.getpid()]
+
+
 def read_int(path):
     try:
         return int(path.read_text().strip())
@@ -417,8 +425,21 @@ def teardown(state, boat, before, log, record):
     # never recorded, or the operator's own: counted for the operator, never touched.
     unnamed = sum(1 for sandbox in listed if sandbox['id'] not in before['ids'] and sandbox['id'] not in ids
                   and sandbox.get('createdAt', '') >= before['at'])
-    procs = subprocess.run(['ps', '-axo', 'pid,command'], capture_output=True, text=True).stdout
-    mine = [line.strip() for line in procs.splitlines() if state['scratch'] in line]
+    # A host killed mid-exec leaves its ssh child behind, holding the run's key: stop it. Only
+    # the PID and program go to the log, since a child's argv carries the exec's wrapper.
+    stopped = []
+    for pid_text, program in scratch_processes(state['scratch']):
+        try:
+            os.kill(int(pid_text), signal.SIGTERM)
+            stopped.append(f'{pid_text} {program}')
+        except ProcessLookupError:
+            pass
+    if stopped:
+        log(f'teardown: stopped processes the host left: {stopped}')
+    deadline = time.monotonic() + 5
+    while scratch_processes(state['scratch']) and time.monotonic() < deadline:
+        time.sleep(0.2)
+    mine = [f'{pid_text} {program}' for pid_text, program in scratch_processes(state['scratch'])]
     if mine:
         errors.append(f'processes left: {mine}')
 
