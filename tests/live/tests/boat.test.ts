@@ -1,7 +1,8 @@
 /**
  * Live acceptance on a boat host, through the CLI, on boat's trial: lifecycle, setup and
- * preparation, ssh and scp through boat's endpoint, stop and resume, disk forks of a running and
- * a stopped machine, named-snapshot checkpoints, boat's refusals, a host restart and a crash.
+ * preparation, ssh, scp and rsync through boat's endpoint, stop and resume, disk forks of a
+ * running and a stopped machine, named-snapshot checkpoints, boat's refusals, a host restart and
+ * a crash.
  *
  * The trial runs 2 sandboxes at once and allows 5 starts a minute, 25 an hour and 75 a day; a
  * create, fork, resume and restore each count, and so does a 429 refusal, but not a 403 for a
@@ -52,9 +53,13 @@ import {
  * The setup of `main`. boat's sshd accepts root with a key, so the run's key goes to root, and
  * `user`'s `authorized_keys`, which boat's own access needs, is left alone. Setup runs before
  * preparation, so it records the host key the sandbox came with, which preparation replaces.
+ * rsync goes in if the image lacks it; an install that fails fails only the transfer test.
  */
 const mainScript = (publicKey: string) => `#!/bin/sh
 set -eu
+command -v rsync >/dev/null || {
+  apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends rsync >/dev/null
+} || echo "rsync didn't install"
 install -d -m 700 /root/.ssh
 printf '%s\\n' '${publicKey}' >>/root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
@@ -299,7 +304,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   );
 
   test(
-    "scp moves a binary file both ways through boat's endpoint, pinned to the machine's host key",
+    "scp and rsync move a binary file both ways through boat's endpoint, pinned to the machine's host key",
     async () => {
       const target = await machine("main");
       const endpoint = target?.ssh;
@@ -323,17 +328,24 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       const up = await run("scp", [...options, "-P", port, local, `${remote}:up.bin`]);
       const down = join(suite.dir, "scp-down.bin");
       const back = await run("scp", [...options, "-P", port, `${remote}:up.bin`, down]);
+      const rsh = ["ssh", ...options, "-p", port].join(" ");
+      const synced = join(suite.dir, "rsync-down.bin");
+      const rsyncUp = await run("rsync", ["-a", "-e", rsh, local, `${remote}:rsync-up.bin`]);
+      const rsyncDown = await run("rsync", ["-a", "-e", rsh, `${remote}:rsync-up.bin`, synced]);
 
-      timing("scp of 256 KiB, each way", started);
+      timing("scp and rsync of 256 KiB, each way", started);
 
-      for (const ran of [up, back]) {
+      for (const ran of [up, back, rsyncUp, rsyncDown]) {
         expect(ran.code, ran.stderr).toBe(0);
       }
 
       const expected = sha256(await readFile(local));
 
       expect(sha256(await readFile(down))).toBe(expected);
-      expect(await inGuest("main", "sha256sum up.bin | cut -d ' ' -f 1")).toBe(expected);
+      expect(sha256(await readFile(synced))).toBe(expected);
+      expect(await inGuest("main", "sha256sum up.bin rsync-up.bin | cut -d ' ' -f 1")).toBe(
+        `${expected}\n${expected}`,
+      );
     },
     minutes(5),
   );
