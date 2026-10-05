@@ -538,13 +538,7 @@ export const make = (
         }),
       observe: (machines) =>
         Effect.map(list, (vms) =>
-          machines.map((machine): Observed => {
-            const observed = vms.get(vmOf(machine)) ?? "missing";
-
-            return observed === "missing" || machine.port === undefined
-              ? { state: observed }
-              : { state: observed, ssh: { host: settings.publishAddress, port: machine.port } };
-          }),
+          machines.map((machine): Observed => ({ state: vms.get(vmOf(machine)) ?? "missing" })),
         ),
       /**
        * The Mac must have room: every running VM in the Tart home counts, the operator's

@@ -215,7 +215,7 @@ test("smolvm's states map onto running and stopped by whether the VMM is alive",
   });
 });
 
-test("observe reads each machine's status, and reports its published port unless it is missing", async () => {
+test("observe reads each machine's status", async () => {
   const replies = new Map([
     ["dev-01234567", status("running")],
     ["two-01234567", status("created")],
@@ -243,11 +243,7 @@ test("observe reads each machine's status, and reports its published port unless
     ]),
   );
 
-  expect(observed).toEqual([
-    { state: "running", ssh: { host: "100.95.240.37", port: 10_000 } },
-    { state: "stopped", ssh: { host: "100.95.240.37", port: 10_001 } },
-    { state: "missing" },
-  ]);
+  expect(observed).toEqual([{ state: "running" }, { state: "stopped" }, { state: "missing" }]);
   expect(smolvmArgs(spawner.calls).map((args) => args[3])).toEqual(
     expect.arrayContaining(["dev-01234567", "two-01234567", "gone-01234567"]),
   );
@@ -272,10 +268,7 @@ test("observe reads a machine whose status fails for another reason unknown, and
       .pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))]))),
   );
 
-  expect(observed).toEqual([
-    { state: "unknown" },
-    { state: "stopped", ssh: { host: "100.95.240.37", port: 10_001 } },
-  ]);
+  expect(observed).toEqual([{ state: "unknown" }, { state: "stopped" }]);
   expect(logged).toEqual([
     [
       "couldn't read linux_dev's state: smolvm machine status dev-01234567 exited 1: Error: database is locked",

@@ -151,13 +151,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     Effect.sync(() => {
       observed.push(refs.map(({ id }) => id));
 
-      return refs.map((machine) => {
-        const state = machines.get(machine.name)?.state ?? "missing";
-
-        return machine.port === undefined || publishAddress === undefined
-          ? { state }
-          : { state, ssh: { host: publishAddress, port: machine.port } };
-      });
+      return refs.map((machine) => ({ state: machines.get(machine.name)?.state ?? "missing" }));
     });
 
   /** `states`, or the read of every machine failing as a whole, as Tart's `tart list` can. */

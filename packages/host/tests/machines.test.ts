@@ -247,6 +247,24 @@ test("stop on a machine the runtime can't read does nothing and writes nothing",
   expect(linux.fake.calls).toEqual([]);
 });
 
+test("a machine has an SSH endpoint, on its port of the publish address, only while it runs", async () => {
+  const linux = await host();
+
+  const made = await linux.run(linux.machines.create(request("dev")));
+  const stopped = await linux.run(linux.machines.stop("linux_dev"));
+
+  linux.fake.machines.clear();
+
+  const missing = await linux.run(linux.machines.get("linux_dev"));
+  const [row] = await rows(linux);
+
+  expect(made.ssh).toEqual({ host: "127.0.0.1", port: row?.port });
+  expect([stopped, missing].map(({ state, ssh }) => [state, ssh])).toEqual([
+    ["stopped", undefined],
+    ["missing", undefined],
+  ]);
+});
+
 test("a duplicate name is Conflict{exists}, and the runtime is never called", async () => {
   const linux = await host();
 

@@ -67,7 +67,10 @@ export interface CheckpointRef {
 /** What the runtime reports about a machine. Nothing here is stored. */
 export interface Observed {
   readonly state: MachineState;
-  /** Where guest port 22 is reached. */
+  /**
+   * Where guest port 22 is reached, from a runtime without a `publishAddress`; with one, the
+   * core reports the machine's port on it. The core reports either only for a running machine.
+   */
   readonly ssh?: SshEndpoint | undefined;
 }
 

@@ -85,8 +85,25 @@ export const make = (
     const withRuntime = <A>(work: Effect.Effect<A, HostError | Refusal, Runtime>) =>
       Effect.provideService(work, Runtime, runtime);
 
+    /**
+     * Where a running machine's guest port 22 is reached: on its host port of the publish
+     * address, for a runtime that has one, or where the runtime reports. A machine that doesn't
+     * run has none.
+     */
+    const sshOf = (record: MachineRecord, observed: Observed) => {
+      if (observed.state !== "running") {
+        return undefined;
+      }
+
+      return runtime.publishAddress === undefined || record.port === undefined
+        ? observed.ssh
+        : { host: runtime.publishAddress, port: record.port };
+    };
+
     /** The machine as the API reports it, with the state the runtime read. */
     const resource = (record: MachineRecord, observed: Observed) => {
+      const ssh = sshOf(record, observed);
+
       let machine: Machine = {
         id: idOf(record.name),
         runtime: runtime.name,
@@ -103,8 +120,8 @@ export const make = (
         machine = { ...machine, profile: record.profile };
       }
 
-      if (observed.ssh !== undefined) {
-        machine = { ...machine, ssh: observed.ssh };
+      if (ssh !== undefined) {
+        machine = { ...machine, ssh };
       }
 
       if (record.hostKey !== undefined) {

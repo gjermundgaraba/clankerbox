@@ -403,9 +403,7 @@ test("create writes the VM's job, clones the base with a new serial and the size
     }),
   );
   expect(await accepts(machine.port ?? 0)).toBe(true);
-  expect(await Effect.runPromise(runtime.observe([machine]))).toEqual([
-    { state: "running", ssh: { host: "127.0.0.1", port: machine.port } },
-  ]);
+  expect(await Effect.runPromise(runtime.observe([machine]))).toEqual([{ state: "running" }]);
 });
 
 test("a job plist names only tart, never restarts, and escapes what it holds", () => {
@@ -1096,11 +1094,7 @@ test("observe reads every machine's state with one tart list", async () => {
   const before = mac.spawner.calls.length;
   const observed = await Effect.runPromise(runtime.observe([up, down, gone]));
 
-  expect(observed).toEqual([
-    { state: "running", ssh: { host: "127.0.0.1", port: up.port } },
-    { state: "stopped", ssh: { host: "127.0.0.1", port: down.port } },
-    { state: "missing" },
-  ]);
+  expect(observed).toEqual([{ state: "running" }, { state: "stopped" }, { state: "missing" }]);
   expect(mac.spawner.calls.slice(before).map(({ args }) => args)).toEqual([
     ["list", "--source", "local", "--format", "json"],
   ]);
