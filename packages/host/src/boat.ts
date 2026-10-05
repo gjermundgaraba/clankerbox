@@ -24,7 +24,6 @@ import {
   type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
-  DateTime,
   Duration,
   Effect,
   FileSystem,
@@ -181,7 +180,8 @@ const deletePause = Duration.millis(500);
 
 /**
  * How long a running fork source may take to complete a snapshot attempt begun after its sync:
- * 41 s with little new data, 102 s after writing 3 GiB. boat attempts one about once a minute.
+ * 41 s with little new data, 102 s after writing 3 GiB. boat starts one every 60 s, and one
+ * attempt took 3.8–24.4 s in the timing spike (evidence.md, Phase 6).
  */
 const snapshotWait = Duration.minutes(10);
 
@@ -557,26 +557,34 @@ export const make = (
 
     /**
      * Waits until a snapshot attempt that began after the source's sync has completed, so the
-     * fork holds everything written before it. The times are boat's, and "after" is read
+     * fork holds everything written before it. boat stamps `lastSnapshotAttemptAt` when an
+     * attempt starts (evidence.md, Phase 6, snapshot attempt timing), so the value read after
+     * the sync names the last attempt begun before it; once it changes, a later attempt has
+     * begun, and `completed` says that one is done. Only boat's own values are compared, never
      * against the host's clock.
      */
     const freshSnapshot = (source: MachineRef, id: string) =>
       Effect.gen(function* () {
         yield* sync(source, id, "fork");
 
-        const noted = yield* DateTime.now;
+        const synced = yield* api.sandbox(id);
+
+        if (Option.isNone(synced)) {
+          return yield* new Internal({
+            message: `boat no longer has ${source.id}'s sandbox ${id} after its sync`,
+          });
+        }
+
+        const noted = synced.value.lastSnapshotAttemptAt;
 
         const read = Effect.map(api.sandbox(id), (found) =>
-          Option.filter(found, (sandbox) =>
-            Option.match(
-              Option.flatMap(Option.fromNullishOr(sandbox.lastSnapshotAttemptAt), DateTime.make),
-              {
-                onNone: () => false,
-                onSome: (attempt) =>
-                  DateTime.isGreaterThan(attempt, noted) &&
-                  sandbox.lastSnapshotStatus === "completed",
-              },
-            ),
+          Option.filter(
+            found,
+            ({ lastSnapshotAttemptAt: attempt, lastSnapshotStatus: status }) =>
+              attempt !== undefined &&
+              attempt !== null &&
+              attempt !== noted &&
+              status === "completed",
           ),
         );
 

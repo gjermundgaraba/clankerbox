@@ -1297,14 +1297,24 @@ Two rules for every VM job:
     state and never stores them, and reports them only for a running machine.
 - **Fork:** a fork of a running machine would come from boat's last background
   snapshot, which can be a minute old.
-  - So the host first syncs the guest's filesystems and notes the time. It
-    waits until a snapshot attempt that began after that time has completed
-    (41 s with little new data, 102 s after writing 3 GiB), then forks: until
-    `lastSnapshotAttemptAt` is later than the noted time and
+  - So the host first syncs the guest's filesystems, then reads the sandbox
+    and notes its `lastSnapshotAttemptAt` (or none). It waits until a
+    snapshot attempt that began after the sync has completed (41 s with
+    little new data, 102 s after writing 3 GiB), then forks: until
+    `lastSnapshotAttemptAt` differs from the noted value and
     `lastSnapshotStatus` is `completed`, polled every 5 s for at most 10
-    minutes. It doesn't compare `snapshotCompletedAt`, which one spike read
-    8 ms before its attempt's start. The noted time is the host's clock, so
-    the host's clock must not run behind boat's.
+    minutes.
+  - boat stamps `lastSnapshotAttemptAt` when an attempt starts: in the
+    timing spike (evidence.md, Phase 6, "Snapshot attempt timing"), the
+    first read of each new value already showed `in_progress`, and the value
+    didn't move when the attempt completed. So one change of it means an
+    attempt begun after the noted read, and `completed` means that attempt
+    is done. An attempt already under way at the sync keeps the noted value
+    and isn't taken. Attempts started every 60 s and took 3.8–24.4 s.
+  - The wait compares only boat's own values, never the host's clock, so a
+    host clock that runs behind or ahead of boat's changes nothing. It
+    doesn't compare `snapshotCompletedAt`, which one spike read 8 ms before
+    its attempt's start.
   - The source keeps running, and a stopped source forks at once.
   - Forks carry the disk only, never RAM.
 - **Checkpoints** are boat named snapshots, always `disk`, from a running or a

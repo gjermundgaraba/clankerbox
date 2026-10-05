@@ -133,6 +133,8 @@ interface FakeSandbox {
   next?: string | undefined;
   /** Whether boat attempts a snapshot every minute, by the clock, as for a running fork source. */
   snapshots?: boolean;
+  /** How far boat's clock, which stamps its snapshot attempts, runs behind the host's, in ms. */
+  behind?: number;
 }
 
 const decoder = new TextDecoder();
@@ -176,12 +178,14 @@ const fakeBoat = (options?: { readonly instant?: boolean }) => {
       desktopUrl: `https://desktop.example/stream.html?token=secret-${sandbox.id}`,
     };
 
-    // boat attempts a snapshot at every whole minute, and completes it two seconds later.
+    // boat attempts a snapshot at every whole minute of its clock, stamped as it starts, and
+    // completes it two seconds later.
     if (sandbox.snapshots === true) {
-      shown.lastSnapshotAttemptAt = DateTime.formatIso(
-        DateTime.makeUnsafe(Math.floor(now / minute) * minute),
-      );
-      shown.lastSnapshotStatus = now % minute >= 2000 ? "completed" : "in_progress";
+      const boatNow = now - (sandbox.behind ?? 0);
+      const phase = ((boatNow % minute) + minute) % minute;
+
+      shown.lastSnapshotAttemptAt = DateTime.formatIso(DateTime.makeUnsafe(boatNow - phase));
+      shown.lastSnapshotStatus = phase >= 2000 ? "completed" : "in_progress";
     }
 
     if (sandbox.next !== undefined) {
@@ -1247,6 +1251,38 @@ test("a running source syncs, then forks once a snapshot attempt begun after the
     "PATCH /sandboxes/bx_made0001",
   ]);
   expect(rig.boat.sandboxes.get("bx_source")?.state).toBe("idle");
+});
+
+test("the fork's wait reads only boat's stamps: an attempt begun before the sync isn't taken, whatever boat's clock says", async () => {
+  const rig = await rigOn(fakeBoat({ instant: true }));
+  const copy = machineOn("copy");
+
+  await rig.insert(copy);
+
+  // boat's clock runs an hour behind the host's, and an attempt began a second before the sync.
+  rig.boat.sandboxes.set("bx_source", {
+    id: "bx_source",
+    state: "idle",
+    ip: null,
+    sshEndpoint: "203.0.113.10:19044",
+    snapshots: true,
+    behind: 3_600_000 - 1000,
+  });
+
+  const { exit, waited } = await timed(
+    rig.runtime.fork(machineOn("dev", { native: "bx_source" }), copy),
+  );
+
+  expect(Exit.isSuccess(exit)).toBe(true);
+
+  // The attempt under way at the sync completed a second later and wasn't taken; the next began
+  // at 59 s and completed at 61 s.
+  expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(61);
+  expect(Duration.toSeconds(waited)).toBeLessThan(120);
+  expect(rig.boat.calls()).toEqual([
+    "POST /sandboxes/bx_source/fork",
+    "PATCH /sandboxes/bx_made0001",
+  ]);
 });
 
 test("a fork whose source boat completes no fresh snapshot fails before the fork call", async () => {
