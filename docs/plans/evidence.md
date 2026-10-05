@@ -1611,9 +1611,9 @@ log back. The run keeps 40 KiB of evidence and no scratch.
 **Phase 7 live: smolvm** (local run `.work/runs/live-smolvm-e808dddbb9a7`,
 remote `runs/le80`, commit `993f2de`, through `pnpm live:smolvm`; same host,
 prefix and mirror base as the phase-4 live runs). An earlier start at the same
-commit (`live-smolvm-23153b432d1a`, remote `runs/l231`) was cut off mid-suite
-by its caller, not by a test, after 10 passing tests; its teardown and a
-manual `finish` left every CLEANUP.md entry REVERTED.
+commit (`live-smolvm-23153b432d1a`, remote `runs/l231`) was interrupted
+mid-suite after 10 passing tests, with no test failed and no summary, and its
+teardown ran; with a manual `finish` it left every CLEANUP.md entry REVERTED.
 
 - **Result:** all 27 tests (26 smolvm and the binary's) passed in 572 s, with
   the real-recipe test skipped (no `--recipe`) and Tart's and boat's suites
