@@ -1003,7 +1003,7 @@ test("observe reads every machine's state with one tart list", async () => {
 
   expect(observed).toEqual([
     { state: "running", ssh: { host: "127.0.0.1", port: up.port } },
-    { state: "stopped" },
+    { state: "stopped", ssh: { host: "127.0.0.1", port: down.port } },
     { state: "missing" },
   ]);
   expect(mac.spawner.calls.slice(before).map(({ args }) => args)).toEqual([

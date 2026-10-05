@@ -101,8 +101,6 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
   let dir: string;
   let key: string;
   let setup: string;
-  /** `main`'s endpoint, which a list reports only while it runs. */
-  let mainEndpoint: SshEndpoint;
 
   const cli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
     run(env.binary, [...command, "--config", env.config, ...args]);
@@ -230,12 +228,9 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
     return ran.stdout;
   };
 
-  /**
-   * Deletes the machine, then checks that its VM, job, job files and listener are gone. A
-   * stopped machine's endpoint isn't reported, so the caller can name it.
-   */
-  const removeMachine = async (name: string, known?: SshEndpoint) => {
-    const endpoint = known ?? (await machine(name))?.ssh;
+  /** Deletes the machine, then checks that its VM, job, job files and listener are gone. */
+  const removeMachine = async (name: string) => {
+    const endpoint = (await machine(name))?.ssh;
     const ran = await cli(["delete"], id(name), "--json");
 
     expect(ran.code, ran.stdout).toBe(0);
@@ -336,12 +331,6 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
       expect(made.ssh?.port).toBeGreaterThanOrEqual(10_000);
       expect(made.ssh?.port).toBeLessThanOrEqual(19_999);
       expect(made.hostKey).toMatch(/^ssh-ed25519 /u);
-
-      if (made.ssh === undefined) {
-        throw new Error("main has no endpoint");
-      }
-
-      mainEndpoint = made.ssh;
 
       // clankerbox ssh pins Machine.hostKey, so logging in proves sshd serves the re-minted key.
       expect(await facts("main")).toEqual({
@@ -488,6 +477,7 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
       expect(decode(OneMachine, stopped)).toMatchObject({
         state: "stopped",
         action: { name: "stop", status: "done" },
+        ssh: before.ssh,
       });
       expect(await answer(before.ssh)).toBe("closed");
 
@@ -606,9 +596,8 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
       expect(restored.code, restored.stdout).toBe(0);
 
       const all = await Promise.all(["main", "fork-a", "restore-a"].map(machine));
-      const ports = [mainEndpoint.port, all[1]?.ssh?.port, all[2]?.ssh?.port];
+      const ports = all.map((listed) => listed?.ssh?.port);
 
-      // main is stopped, so a list reports no endpoint for it; its port is the one create gave.
       expect(new Set(ports.filter((port) => port !== undefined)).size).toBe(3);
       expect(new Set(all.map((listed) => listed?.hostKey)).size).toBe(3);
       expect(all[0]?.state).toBe("stopped");
@@ -672,10 +661,10 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
     async () => {
       const before = await machines();
       const boots = await Promise.all(["fork-a", "restore-a"].map(bootTime));
-      const fork = await machine("fork-a");
+      const [fork, main] = await Promise.all(["fork-a", "main"].map(machine));
 
-      if (fork?.ssh === undefined) {
-        throw new Error("fork-a has no endpoint");
+      if (fork?.ssh === undefined || main?.ssh === undefined) {
+        throw new Error("fork-a or main has no endpoint");
       }
 
       expect((await control("host-stop")).code).toBe(0);
@@ -688,7 +677,7 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
       expect(await machines()).toEqual(before);
       expect(await Promise.all(["fork-a", "restore-a"].map(bootTime))).toEqual(boots);
       expect(await answer(fork.ssh)).toBe("banner");
-      expect(await answer(mainEndpoint)).toBe("closed");
+      expect(await answer(main.ssh)).toBe("closed");
     },
     minutes(5),
   );
@@ -795,7 +784,7 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
 
       const started = performance.now();
 
-      await removeMachine("crash", crashed?.ssh);
+      await removeMachine("crash");
       timing("delete (never made, stopped)", started);
     },
     minutes(10),
@@ -829,7 +818,7 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
     "delete removes the last machines, a fork and its stopped source",
     async () => {
       await removeMachine("fork-a");
-      await removeMachine("main", mainEndpoint);
+      await removeMachine("main");
       expect((await machines()).machines).toEqual([]);
     },
     minutes(3),

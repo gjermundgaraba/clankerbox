@@ -792,8 +792,10 @@ repaired with `start` (see [State and claims](#state-and-claims)).
     operator frees the port, and `start` works again. A boot
     that fails after its kickstart leaves the VM as it is, reachable, and a
     `start` of a made machine that runs prepares it again. A stopped machine's
-    port accepts and closes the connection instead of refusing it. The port
-    stays bound for the row's life, which the allocation's bind probe sees.
+    port accepts and closes the connection instead of refusing it, and its
+    endpoint is reported whatever its state, as smolvm's is; only a missing
+    machine has none. The port stays bound for the row's life, which the
+    allocation's bind probe sees.
 - **boat:** guest port 22 is reached at boat's SSH relay (see
   [Runtimes: boat](#runtimes-boat)), with no host port and no forwarder.
 - **Security:** a published port is reachable by whatever garaba-home's tailnet

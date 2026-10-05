@@ -526,7 +526,7 @@ export const make = (
           machines.map((machine): Observed => {
             const observed = vms.get(vmOf(machine)) ?? "missing";
 
-            return observed !== "running" || machine.port === undefined
+            return observed === "missing" || machine.port === undefined
               ? { state: observed }
               : { state: observed, ssh: { host: settings.publishAddress, port: machine.port } };
           }),
