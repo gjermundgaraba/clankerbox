@@ -13,18 +13,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Capacity, type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  Data,
-  Duration,
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Predicate,
-  Schedule,
-  Schema,
-  type Scope,
-} from "effect";
+import { Duration, Effect, FileSystem, Layer, Option, Schedule, Schema, type Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { cliIn, expect, files, portOf } from "./cli.ts";
 import type { Tart, TartHost } from "./config.ts";
@@ -216,9 +205,6 @@ export const supported = (reported: string): boolean => {
 const printed = (output: string, key: string): string | undefined =>
   new RegExp(`^\\t${key} = (.+)$`, "mu").exec(output)?.[1];
 
-/** A boot whose guest agent doesn't answer yet. */
-class Booting extends Data.TaggedError("Booting")<{}> {}
-
 export const make = (
   settings: Settings,
 ): Effect.Effect<
@@ -318,16 +304,17 @@ export const make = (
     /**
      * Waits until the VM's guest agent answers `tart exec`. Before `tart run` holds the VM, an
      * exec fails at once; while the guest boots, it blocks, and fails after about 30 s if the
-     * agent isn't up yet (P11), so it is tried again. A job that exits instead failed the boot:
-     * its log says why, and Apple's refusal of a third VM is `Capacity`.
+     * agent isn't up yet (P11), so it is tried again until `bootWait` passes. A job that exits
+     * instead failed the boot: its log says why, and Apple's refusal of a third VM is `Capacity`.
      */
     const ready = (machine: MachineRef) => {
       const vm = vmOf(machine);
       const { target, log } = job(vm);
 
+      /** Whether the agent answered; false while the guest boots. */
       const probe = Effect.gen(function* () {
         if ((yield* tart(["exec", vm, "true"], `exec ${vm}`)).exitCode === 0) {
-          return;
+          return true;
         }
 
         const printedJob = yield* Effect.flatMap(
@@ -336,7 +323,7 @@ export const make = (
         );
 
         if (printed(printedJob.stdout, "state") !== "not running") {
-          return yield* new Booting();
+          return false;
         }
 
         const output = yield* fs.readFileString(log).pipe(Effect.orElseSucceed(() => ""));
@@ -353,8 +340,8 @@ export const make = (
       });
 
       return probe.pipe(
-        Effect.retry({
-          while: Predicate.isTagged("Booting"),
+        Effect.repeat({
+          until: (answered) => answered,
           schedule: Schedule.spaced(probePause),
         }),
         Effect.timeoutOption(bootWait),
@@ -366,9 +353,6 @@ export const make = (
                   message: `${machine.id}'s guest agent didn't answer tart exec within ${Duration.format(bootWait)} of its start`,
                 }),
               ),
-        ),
-        Effect.catchTag("Booting", () =>
-          Effect.fail(new Internal({ message: `${machine.id} is still booting` })),
         ),
       );
     };
