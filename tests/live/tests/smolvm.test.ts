@@ -1,9 +1,9 @@
 /**
  * Live acceptance on a smolvm host, through the CLI: lifecycle, setup and preparation, guest
- * access, claims, the RAM budget, fork and checkpoints, crashes and restarts. The tests run in
- * order and share one machine, `main`, whose setup installs sshd and the run's own key, and
- * some of its copies; the test that made any other machine deletes it. Timings print as
- * `[timing]` lines.
+ * access, claims, a client that goes away, a call past 300 s, the RAM budget, fork and
+ * checkpoints, crashes and restarts. The tests run in order and share one machine, `main`, whose
+ * setup installs sshd and the run's own key, and some of its copies; the test that made any other
+ * machine deletes it. Timings print as `[timing]` lines.
  */
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
@@ -111,6 +111,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
   const {
     cli,
+    launchCli,
     named,
     id,
     control,
@@ -118,6 +119,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
     machines,
     machine,
     createBare,
+    createArgs,
     createWith,
     ssh,
     inGuest,
@@ -440,9 +442,16 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
   refusedBeforeTheRuntime(suite, smolvm, "main");
 
   test(
-    "a taken name is Conflict{exists}, and an action on a claimed machine is Conflict{busy}",
+    "a taken name is Conflict{exists}, an action on a claimed machine is Conflict{busy}, and a create whose client goes away still finishes and records its outcome",
     async () => {
-      const creating = createWith("busy", "#!/bin/sh\necho waiting\nsleep 20\n", 120);
+      const creating = launchCli(
+        ["create"],
+        ...(await createArgs(
+          "busy",
+          "#!/bin/sh\necho waiting\nsleep 30\ntouch /root/setup-done\n",
+          120,
+        )),
+      );
 
       await waitFor(
         "busy's create to hold its row",
@@ -456,8 +465,68 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(busy).toMatchObject({ tag: "Conflict", retryable: true });
       expect(exists).toMatchObject({ tag: "Conflict", retryable: false });
       expect(exists.message).toContain("exists");
-      expect((await creating).code).toBe(0);
+
+      // The client goes away while the create runs: its connection closes with no reply read.
+      expect((await machine("busy"))?.action.status).toBe("running");
+      creating.kill();
+      expect((await creating.ran).signal).toBe("SIGKILL");
+      await waitFor(
+        "busy's create to end without its client",
+        async () => (await machine("busy"))?.action.status !== "running",
+        120,
+        1000,
+      );
+      expect(await machine("busy")).toMatchObject({
+        state: "running",
+        action: { name: "create", status: "done" },
+      });
+
+      const setupDone = await control("guest", named("busy"), "test -e /root/setup-done");
+
+      expect(setupDone.code, setupDone.stderr).toBe(0);
       await removeMachine("busy");
+    },
+    minutes(5),
+  );
+
+  test(
+    "a create whose setup runs past 300 s replies normally",
+    async () => {
+      const started = performance.now();
+
+      const ran = await createWith(
+        "long",
+        "#!/bin/sh\necho long-started\nsleep 310\necho long-done\n",
+        600,
+      );
+
+      timing("create with a 310 s setup", started);
+      expect(ran.code, ran.stdout).toBe(0);
+      expect(performance.now() - started).toBeGreaterThan(310_000);
+      expect(decode(OneMachine, ran)).toMatchObject({
+        id: id("long"),
+        state: "running",
+        action: { name: "create", status: "done" },
+      });
+      await removeMachine("long");
+    },
+    minutes(12),
+  );
+
+  test(
+    "a failing setup fails the create with its exit code and output, leaving the machine failed until delete",
+    async () => {
+      const error = failure(
+        await createWith("failing", "#!/bin/sh\necho setup-refused\nexit 7\n", 60),
+      );
+
+      expect(error.tag).toBe("Precondition");
+      expect(error.message).toContain("setup exited 7");
+      expect(error.message).toContain("setup-refused");
+      expect(await machine("failing")).toMatchObject({
+        action: { name: "create", status: "failed" },
+      });
+      await removeMachine("failing");
     },
     minutes(5),
   );

@@ -13,29 +13,47 @@ import { Schema } from "effect";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 export interface Ran {
+  /** The exit code, or -1 when a signal ended the program. */
   readonly code: number;
+  /** The signal that ended the program, if one did. */
+  readonly signal: NodeJS.Signals | null;
   readonly stdout: string;
   readonly stderr: string;
 }
 
-/** Runs `file` to its end, with stdin closed, and never throws on a non-zero exit. */
-export const run = (file: string, args: ReadonlyArray<string>): Promise<Ran> =>
-  new Promise((resolve, reject) => {
-    const child = spawn(file, args, { stdio: ["ignore", "pipe", "pipe"] });
-    const stdout: Array<Buffer> = [];
-    const stderr: Array<Buffer> = [];
+/** A program started with `launch`: its outcome, and a way to SIGKILL it before then. */
+export interface Launched {
+  readonly ran: Promise<Ran>;
+  readonly kill: () => void;
+}
 
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+/** Starts `file` with stdin closed. Its outcome never throws on a non-zero exit or a signal. */
+export const launch = (file: string, args: ReadonlyArray<string>): Launched => {
+  const child = spawn(file, args, { stdio: ["ignore", "pipe", "pipe"] });
+  const stdout: Array<Buffer> = [];
+  const stderr: Array<Buffer> = [];
+
+  child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+
+  const ran = new Promise<Ran>((resolve, reject) => {
     child.once("error", reject);
-    child.once("close", (code) => {
+    child.once("close", (code, signal) => {
       resolve({
         code: code ?? -1,
+        signal,
         stdout: Buffer.concat(stdout).toString("utf8").trim(),
         stderr: Buffer.concat(stderr).toString("utf8").trim(),
       });
     });
   });
+
+  return { ran, kill: () => child.kill("SIGKILL") };
+};
+
+/** Runs `file` to its end, with stdin closed, and never throws on a non-zero exit. */
+export const run = (file: string, args: ReadonlyArray<string>): Promise<Ran> =>
+  launch(file, args).ran;
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -277,6 +295,10 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
   const cli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
     run(env.binary, [...command, "--config", env.config, ...args]);
 
+  /** Starts the CLI, to SIGKILL it partway through its call. */
+  const launchCli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
+    launch(env.binary, [...command, "--config", env.config, ...args]);
+
   /** A new resource's name, which carries the run's prefix like every other. */
   const named = (name: string) => `${env.prefix}${name}`;
 
@@ -301,21 +323,20 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
   const createBare = (name: string, ...sizeArgs: ReadonlyArray<number>) =>
     cli(["create"], id(name), ...runtime.sizes(...sizeArgs), "--json");
 
-  /** Creates `name` with `script` as its setup file. */
-  const createWith = async (name: string, script: string, timeoutSeconds: number) => {
-    const file = await writeFileIn(dir, `${name}-setup.sh`, script, 0o755);
+  /** The arguments of a create of `name` with `script` as its setup file. */
+  const createArgs = async (name: string, script: string, timeoutSeconds: number) => [
+    id(name),
+    ...runtime.sizes(),
+    "--setup",
+    await writeFileIn(dir, `${name}-setup.sh`, script, 0o755),
+    "--setup-timeout",
+    String(timeoutSeconds),
+    "--json",
+  ];
 
-    return cli(
-      ["create"],
-      id(name),
-      ...runtime.sizes(),
-      "--setup",
-      file,
-      "--setup-timeout",
-      String(timeoutSeconds),
-      "--json",
-    );
-  };
+  /** Creates `name` with `script` as its setup file. */
+  const createWith = async (name: string, script: string, timeoutSeconds: number) =>
+    cli(["create"], ...(await createArgs(name, script, timeoutSeconds)));
 
   const ssh = (name: string, command: string) =>
     cli(
@@ -408,6 +429,7 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
       return mainSetup;
     },
     cli,
+    launchCli,
     named,
     id,
     control,
@@ -415,6 +437,7 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     machines,
     machine,
     createBare,
+    createArgs,
     createWith,
     ssh,
     inGuest,
