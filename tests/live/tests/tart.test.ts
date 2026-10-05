@@ -715,7 +715,7 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
   );
 
   test(
-    "after the host is killed during a create's setup, the row reads failed; start, stop, fork and capture refuse the machine, never made, writing nothing, and delete removes its VM, job and listener",
+    "after the host is killed during a create's setup, the row reads failed; stop stops the machine, never made, start, fork and capture refuse it, writing nothing, and delete removes its VM, job and listener",
     async () => {
       let ended: Ran | undefined;
 
@@ -755,7 +755,10 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
       expect(lost.tag).toBe("Unavailable");
       expect(lost.message).toContain("may have run");
       expect((await control("host-start")).code).toBe(0);
-      expect(await machine("crash")).toMatchObject({
+
+      const crashed = await machine("crash");
+
+      expect(crashed).toMatchObject({
         state: "running",
         action: {
           name: "create",
@@ -764,8 +767,15 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
         },
       });
 
+      const stopped = await cli(["stop"], id("crash"), "--json");
+
+      expect(stopped.code, stopped.stdout).toBe(0);
+      expect(decode(OneMachine, stopped)).toMatchObject({
+        state: "stopped",
+        action: { name: "stop", status: "done" },
+      });
+
       for (const [command, ...args] of [
-        [["stop"]],
         [["start"]],
         [["fork"], named("crash-fork")],
         [["checkpoint", "capture"], named("crash-snap")],
@@ -785,8 +795,8 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
 
       const started = performance.now();
 
-      await removeMachine("crash");
-      timing("delete (never made, running)", started);
+      await removeMachine("crash", crashed?.ssh);
+      timing("delete (never made, stopped)", started);
     },
     minutes(10),
   );

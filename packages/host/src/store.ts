@@ -88,7 +88,7 @@ export interface MachineRecord extends Resource {
   readonly hostKey: string | undefined;
   /**
    * Whether the create, fork or restore that inserted the row succeeded. Until then the machine
-   * can only be read or deleted.
+   * can only be read, stopped or deleted.
    */
   readonly made: boolean;
 }

@@ -426,7 +426,7 @@ const restartedDuringCreate = {
   error: { tag: "Internal", message: "host restarted during create" },
 } as const;
 
-test("a machine whose create failed is only read or deleted: start, stop, fork and capture refuse it", async () => {
+test("a machine whose create failed is only read, stopped or deleted: start, fork and capture refuse it", async () => {
   const linux = await host();
 
   const neverMade = [
@@ -446,29 +446,34 @@ test("a machine whose create failed is only read or deleted: start, stop, fork a
 
   const refused = await Promise.all([
     failure(linux, linux.machines.start("linux_dev")),
-    failure(linux, linux.machines.stop("linux_dev")),
     failure(linux, linux.machines.fork("linux_dev", "copy")),
     failure(linux, linux.checkpoints.capture("linux_dev", "snap")),
   ]);
 
   const got = await linux.run(linux.machines.get("linux_dev"));
+  const stopped = await linux.run(linux.machines.stop("linux_dev"));
+
+  // Still never made once stopped: the check runs before the runtime's own state checks.
+  const refusedStopped = await Promise.all([
+    failure(linux, linux.machines.start("linux_dev")),
+    failure(linux, linux.machines.fork("linux_dev", "copy")),
+    failure(linux, linux.checkpoints.capture("linux_dev", "snap")),
+  ]);
 
   await linux.run(linux.machines.delete("linux_dev"));
 
   expect(error._tag).toBe("Precondition");
-  expect(refused.map(({ _tag, message }) => [_tag, message])).toEqual([
-    neverMade,
-    neverMade,
-    neverMade,
-    neverMade,
-  ]);
+  expect([...refused, ...refusedStopped].map(({ _tag, message }) => [_tag, message])).toEqual(
+    Array.from({ length: 6 }, () => neverMade),
+  );
   expect(got).toMatchObject({ state: "running", action: { name: "create", status: "failed" } });
-  expect(linux.fake.calls).toEqual(["delete linux_dev"]);
+  expect(stopped).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
+  expect(linux.fake.calls).toEqual(["stop linux_dev", "delete linux_dev"]);
   expect(await rows(linux)).toEqual([]);
   expect(await linux.run(linux.store.checkpoints)).toEqual([]);
 });
 
-test("after a restart during create, the machine is never made: stop refuses it and delete removes its VM", async () => {
+test("after a restart during create's setup, the machine is never made: stop stops its VM, start refuses it and delete removes it", async () => {
   const linux = await host();
 
   // Held in setup's exec: the runtime's create has made and booted the machine.
@@ -482,17 +487,21 @@ test("after a restart during create, the machine is never made: stop refuses it 
 
   const restarted = await host({ fake: linux.fake, dir: linux.dir });
   const before = await restarted.run(restarted.machines.get("linux_dev"));
-  const stop = await failure(restarted, restarted.machines.stop("linux_dev"));
 
   linux.fake.calls.length = 0;
+
+  const stopped = await restarted.run(restarted.machines.stop("linux_dev"));
+  const start = await failure(restarted, restarted.machines.start("linux_dev"));
+
   await restarted.run(restarted.machines.delete("linux_dev"));
 
   expect(before).toMatchObject({ state: "running", action: restartedDuringCreate });
-  expect([stop._tag, stop.message]).toEqual([
+  expect(stopped).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
+  expect([start._tag, start.message]).toEqual([
     "Precondition",
     "machine linux_dev was never made: its create, fork or restore failed; delete it",
   ]);
-  expect(linux.fake.calls).toEqual(["delete linux_dev"]);
+  expect(linux.fake.calls).toEqual(["stop linux_dev", "delete linux_dev"]);
   expect(await rows(restarted)).toEqual([]);
 });
 

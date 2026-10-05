@@ -221,8 +221,8 @@ Units run `process.execPath host --config PATH`. VM jobs never reference this bi
   a missing resource is `NotFound`, which clients treat as done. A `stop` that
   does nothing writes nothing, so the row keeps its last `action`. A `start` of
   a machine the runtime reports `missing` is `Precondition` in step 3: delete
-  it. `start`, `stop`, `fork` and `capture` of a machine that was never made,
-  as its create, fork or restore failed, are `Precondition` in step 3 too (see
+  it. `start`, `fork` and `capture` of a machine that was never made, as its
+  create, fork or restore failed, are `Precondition` in step 3 too (see
   [State and claims](#state-and-claims)). A `create` for a base the host doesn't offer is `Precondition`, listing
   the host's bases, and an ID that names another host is `Invalid`.
 
@@ -518,22 +518,25 @@ listed to keep them from being ported):
 - **A machine is made only when its create, fork or restore succeeds:** the
   machine row's `made` column is false at insert, and the `done` end of the
   create, fork or restore that inserted the row sets it (phase-5 review). Until then the machine
-  can only be read or deleted: `start`, `stop`, `fork` and `capture` refuse it
+  can only be read, stopped or deleted: `start`, `fork` and `capture` refuse it
   with `Precondition` in step 3 ("its create, fork or restore failed; delete
   it"), so a half-made machine never boots. Without it, `start` repaired a
   half-made machine and recorded `done`: a Tart clone whose `tart set` never
   ran booted with the base's serial and sizes, and a create whose setup failed
-  read healthy after a start. The cost, accepted: a create that failed only in
+  read healthy after a start. `stop` boots nothing, so it takes an unmade
+  machine too: a host crash during setup leaves the VM running, which would
+  otherwise hold its Tart slot or its RAM until `delete`. The cost, accepted: a create that failed only in
   preparation can't be repaired with `start`; delete it and create it again.
 - **Delete after a failure:** never refused because of an earlier failure, and
   it copes with leftover native state, including a live orphan VM process.
-  `stop` of a made machine is never refused for an earlier failure either.
-  Both are refused only while another action holds the row. Each runtime's
-  phase verifies this. Phase 3 verified it live on smolvm, before `made`
-  existed: after a host crash during setup, `stop` stopped the VM the create
-  left running (now `stop` refuses that machine, which was never made); after
-  a crash before the runtime's create, `stop` wrote nothing; and `delete`
-  removed both, and a VM whose stop failed.
+  `stop` is never refused for an earlier failure either, made or not. Both
+  are refused only while another action holds the row. Each runtime's phase
+  verifies this. Phase 3 verified it live on smolvm, before `made` existed:
+  after a host crash during setup, `stop` stopped the VM the create left
+  running; after a crash before the runtime's create, `stop` wrote nothing;
+  and `delete` removed both, and a VM whose stop failed. Phase 5's live runs
+  saw `stop` refuse that machine, as never made, before `stop` took unmade
+  machines (phase-5 review).
 - **A failed fork or `ram` restore leaves its VM to `delete`:** smolvm makes
   the VM on the source's port and moves it to the new machine's own before
   the first boot, and `machine start` never re-applies ports, so a VM left

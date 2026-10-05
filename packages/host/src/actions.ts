@@ -63,7 +63,7 @@ export const machineRef = (host: string, record: NewMachine): MachineRef => ({
 
 /**
  * Step 3's check that a machine was made: one whose create, fork or restore failed can only be
- * read or deleted, so start, stop, fork and capture refuse it, a half-made VM never boots, and
+ * read, stopped or deleted, so start, fork and capture refuse it, a half-made VM never boots, and
  * delete cleans it up.
  */
 export const madeOn =

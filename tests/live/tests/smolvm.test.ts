@@ -984,7 +984,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "after the host is killed during a create's setup, the row reads failed; start, stop, fork and capture refuse the machine, never made, writing nothing, and delete removes its VM",
+    "after the host is killed during a create's setup, the row reads failed; stop stops the machine, never made, start, fork and capture refuse it, writing nothing, and delete removes its VM",
     async () => {
       let ended: Ran | undefined;
 
@@ -1041,8 +1041,15 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       expect(seen.code, seen.stderr).toBe(0);
       expect(seen.stdout).not.toContain("sleep 300");
 
+      const stopped = await cli(["stop"], id("crash"), "--json");
+
+      expect(stopped.code, stopped.stdout).toBe(0);
+      expect(decode(OneMachine, stopped)).toMatchObject({
+        state: "stopped",
+        action: { name: "stop", status: "done" },
+      });
+
       for (const [command, ...args] of [
-        [["stop"]],
         [["start"]],
         [["fork"], named("crash-fork")],
         [["checkpoint", "capture"], named("crash-ram")],
@@ -1054,8 +1061,8 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       }
 
       expect(await machine("crash")).toMatchObject({
-        state: "running",
-        action: { name: "create", status: "failed" },
+        state: "stopped",
+        action: { name: "stop", status: "done" },
       });
       expect(await machine("crash-fork")).toBeUndefined();
       expect(await natives("crash-fork")).toEqual({ machines: [], scopes: [] });

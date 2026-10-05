@@ -26,7 +26,10 @@ export interface Interface {
   readonly create: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
   /** Boots a stopped machine and prepares it; on a running machine, prepares it again. */
   readonly start: (id: string) => Effect.Effect<Machine, HostError>;
-  /** Stops a running machine; on any other, does nothing. */
+  /**
+   * Stops a running machine, made or not: a stop boots nothing, so it may stop the VM a failed
+   * create, fork or restore left running. On any other machine, it does nothing.
+   */
   readonly stop: (id: string) => Effect.Effect<Machine, HostError>;
   readonly delete: (id: string) => Effect.Effect<void, HostError>;
   /** Copies the machine `id` to a new machine named `name`, and prepares the copy. */
@@ -290,10 +293,7 @@ export const make = (
         const name = yield* nameOf(id);
 
         const [token, { record, state }] = yield* claimAndCheck(holding("stop", name), (record) =>
-          Effect.andThen(
-            made(record),
-            Effect.map(observe(record), ({ state }) => ({ record, state })),
-          ),
+          Effect.map(observe(record), ({ state }) => ({ record, state })),
         );
 
         if (state === "running") {
