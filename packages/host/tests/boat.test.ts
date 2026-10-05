@@ -846,6 +846,39 @@ test("a create waits while SSH or boat's command API doesn't answer yet, and fai
   expect(await nativeOf(rig, "other")).toBe("bx_made0002");
 });
 
+test("a sandbox that boat cancels or loses during the SSH wait fails it at once", async () => {
+  for (const ending of ["cancelled", "gone"]) {
+    const rig = await rigOn(fakeBoat({ instant: true }));
+    const machine = machineOn("dev");
+
+    await rig.insert(machine);
+
+    // The first probe finds SSH not up yet; then boat gives the sandbox up.
+    rig.guest.hooks.answer = () => {
+      const sandbox = rig.boat.sandboxes.get("bx_made0001");
+
+      if (sandbox !== undefined && ending === "cancelled") {
+        sandbox.state = ending;
+      } else {
+        rig.boat.sandboxes.delete("bx_made0001");
+      }
+
+      return { exitCode: 255, stderr: "Connection refused\n" };
+    };
+
+    const { exit, waited } = await timed(rig.runtime.create(machine, "boat"));
+    const error = Exit.isFailure(exit) ? Option.getOrThrow(Exit.findErrorOption(exit)) : undefined;
+
+    expect(error === undefined ? undefined : refused(error)).toEqual([
+      "not refused",
+      "Internal",
+      `machine boat_dev doesn't run: boat reads its sandbox bx_made0001 ${ending}`,
+    ]);
+    expect(Duration.toSeconds(waited)).toBeLessThan(10);
+    expect(remotes(rig.guest)).toHaveLength(1);
+  }
+});
+
 test("boat's refusals of a create leave nothing: a Refusal, and no sandbox recorded", async () => {
   const rig = await rigOn();
 

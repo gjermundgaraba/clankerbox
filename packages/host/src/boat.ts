@@ -24,6 +24,7 @@ import {
   type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
+  Data,
   Duration,
   Effect,
   FileSystem,
@@ -50,6 +51,7 @@ import type { BoatHost } from "./config.ts";
 import { lastLines } from "./guest.ts";
 import {
   type Command,
+  type Execution,
   type Interface,
   type MachineRef,
   type MachineState,
@@ -197,6 +199,12 @@ const syncWait = Duration.minutes(5);
 
 /** How long reading the host keys over boat's command API may take, in the guest. */
 const hostKeysTimeoutSeconds = 30;
+
+/**
+ * A failed read of the guest's host keys through boat's command API, which a fresh activation
+ * may answer with for a moment: the SSH wait tries again, and anything else reports `Internal`.
+ */
+class HostKeysUnread extends Data.TaggedError("HostKeysUnread")<{ readonly message: string }> {}
 
 /** Waits until `read` answers `Some`, polling every `pause`; `None` once `wait` has passed. */
 const poll = <A, E, R>(
@@ -349,11 +357,15 @@ export const make = (
      */
     const pin = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
-        const ran = yield* api.command(id, hostKeysCommand, hostKeysTimeoutSeconds);
+        const ran = yield* Effect.mapError(
+          api.command(id, hostKeysCommand, hostKeysTimeoutSeconds),
+          (error) => new HostKeysUnread({ message: error.message }),
+        );
+
         const lines = knownHosts(id, ran.stdout);
 
         if (ran.exitCode !== 0 || lines.length === 0) {
-          return yield* new Internal({
+          return yield* new HostKeysUnread({
             message: `couldn't read ${machine.id}'s SSH host keys through boat's command API (exit ${ran.exitCode ?? "none"}${ran.timedOut ? ", timed out" : ""}): ${lastLines(ran.stderr)}`,
           });
         }
@@ -379,9 +391,10 @@ export const make = (
     /**
      * Runs a command as root over SSH: as `user`, through `sudo -n`, with the host's own key and
      * the guest's host keys pinned, at the endpoint boat reports now. Each exec opens its own
-     * connection. Errors name the machine, never the command.
+     * connection. Errors name the machine, never the command. A sandbox that doesn't run, or
+     * has no address, fails before the host keys are read.
      */
-    const execIn = (machine: MachineRef, id: string, { argv, stdin }: Command) =>
+    const session = (machine: MachineRef, id: string, { argv, stdin }: Command) =>
       Effect.gen(function* () {
         const found = yield* api.sandbox(id);
 
@@ -444,34 +457,43 @@ export const make = (
         );
       });
 
+    const execIn = (machine: MachineRef, id: string, command: Command) =>
+      Effect.catchTag(session(machine, id, command), "HostKeysUnread", (error) =>
+        Effect.fail(new Internal({ message: error.message })),
+      );
+
     const exec: Interface["exec"] = (machine, command) =>
       Effect.flatMap(recordedSandbox(machine), (id) => execIn(machine, id, command));
 
-    /** Runs a command to its end; its exit code, and the last lines of its output. */
-    const runToEnd = (machine: MachineRef, id: string, argv: ReadonlyArray<string>) =>
-      Effect.scoped(
-        Effect.flatMap(execIn(machine, id, { argv }), (execution) =>
-          Effect.all(
-            {
-              exitCode: execution.exitCode,
-              output: Stream.mkString(Stream.decodeText(execution.output)),
-            },
-            { concurrency: "unbounded" },
-          ),
-        ),
+    /** A command run to its end: its exit code, and the last lines of its output. */
+    const finished = (execution: Execution) =>
+      Effect.all(
+        {
+          exitCode: execution.exitCode,
+          output: Stream.mkString(Stream.decodeText(execution.output)),
+        },
+        { concurrency: "unbounded" },
       ).pipe(Effect.map(({ exitCode, output }) => ({ exitCode, output: lastLines(output) })));
+
+    const runToEnd = (machine: MachineRef, id: string, argv: ReadonlyArray<string>) =>
+      Effect.scoped(Effect.flatMap(execIn(machine, id, { argv }), finished));
 
     /**
      * Waits until SSH answers, which it may not for a moment after boat reads the sandbox ready.
-     * Reading the host keys through boat's command API may fail that early too, so a failed
-     * probe is tried again; the last one's output or error is the timeout's.
+     * Only an SSH that fails and a failed read of the host keys through boat's command API,
+     * which may fail that early too, are tried again; the last one's output or error is the
+     * timeout's. A sandbox that no longer runs, or anything else, fails at once.
      */
     const reachable = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
         const last = yield* Ref.make("");
 
-        const answered = yield* runToEnd(machine, id, ["true"]).pipe(
-          Effect.catch((error) => Effect.succeed({ exitCode: -1, output: error.message })),
+        const answered = yield* Effect.scoped(
+          Effect.flatMap(session(machine, id, { argv: ["true"] }), finished),
+        ).pipe(
+          Effect.catchTag("HostKeysUnread", (error) =>
+            Effect.succeed({ exitCode: -1, output: error.message }),
+          ),
           Effect.tap(({ output }) => Ref.set(last, output)),
           Effect.repeat({
             until: ({ exitCode }) => exitCode === 0,
