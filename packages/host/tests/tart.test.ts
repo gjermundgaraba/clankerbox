@@ -10,7 +10,7 @@ import { basename, join } from "node:path";
 import { connect, createServer } from "node:net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect";
+import { Duration, Effect, Exit, Fiber, Layer, Logger, Schema, Scope, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
 import { type Interface, type MachineRef, Refusal } from "../src/runtime.ts";
@@ -913,27 +913,72 @@ test("startup makes the jobs dir and listens again for every machine, running or
   expect([await accepts(up.port ?? 0), await accepts(down.port ?? 0)]).toEqual([true, true]);
 });
 
-test("startup fails, naming the machine and its port, when the forwarder can't listen for it", async () => {
-  const { runtime } = await runtimeOn();
+test("a port startup can't listen on is logged and the rest served, and start listens again before it boots", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const [blocked, other] = await Promise.all([machineOn("dev"), machineOn("other")]);
+  const vm = vmOf(blocked);
+  const taken = createServer();
+  const logged: Array<unknown> = [];
+  const listenError = `the forwarder couldn't listen on 127\\.0\\.0\\.1:${blocked.port}: `;
+
+  mac.vms.set(vm, "stopped");
+  await new Promise<void>((resolve) => {
+    taken.listen({ host: "127.0.0.1", port: blocked.port }, resolve);
+  });
+
+  try {
+    await Effect.runPromise(
+      runtime
+        .startup([blocked, other])
+        .pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))]))),
+    );
+
+    expect(logged).toEqual([
+      [
+        expect.stringMatching(
+          new RegExp(`^startup: no forwarder for mac_dev: ${listenError}`, "u"),
+        ),
+      ],
+    ]);
+    expect(await accepts(other.port ?? 0)).toBe(true);
+
+    const before = calls(mac).length;
+    const error = await Effect.runPromise(Effect.flip(runtime.start(blocked)));
+
+    expect([error._tag, error.message]).toEqual([
+      "Internal",
+      expect.stringMatching(new RegExp(`^${listenError}`, "u")),
+    ]);
+    expect(calls(mac).slice(before)).toEqual([]);
+    expect(mac.vms.get(vm)).toBe("stopped");
+  } finally {
+    await new Promise((resolve) => {
+      taken.close(resolve);
+    });
+  }
+
+  await Effect.runPromise(runtime.start(blocked));
+  expect(mac.vms.get(vm)).toBe("running");
+  expect(await accepts(blocked.port ?? 0)).toBe(true);
+});
+
+test("delete works for a machine whose port startup couldn't listen on", async () => {
+  const { mac, runtime } = await runtimeOn();
   const machine = await machineOn("dev");
+  const vm = vmOf(machine);
   const taken = createServer();
 
+  mac.vms.set(vm, "stopped");
   await new Promise<void>((resolve) => {
     taken.listen({ host: "127.0.0.1", port: machine.port }, resolve);
   });
 
   try {
-    const error = await Effect.runPromise(Effect.flip(runtime.startup([machine])));
+    await Effect.runPromise(runtime.startup([machine]).pipe(Effect.provide(Logger.layer([]))));
+    await Effect.runPromise(runtime.delete(machine));
 
-    expect([error._tag, error.message]).toEqual([
-      "Internal",
-      expect.stringMatching(
-        new RegExp(
-          `^startup: no forwarder for mac_dev: the forwarder couldn't listen on 127\\.0\\.0\\.1:${machine.port}: `,
-          "u",
-        ),
-      ),
-    ]);
+    expect(calls(mac)).toEqual([`tart delete ${vm}`, `launchctl bootout gui/501/${vm}`]);
+    expect(mac.vms.has(vm)).toBe(false);
   } finally {
     await new Promise((resolve) => {
       taken.close(resolve);

@@ -292,7 +292,7 @@ export const make = (
     /**
      * Listens for the machine's SSH connections, from its create, or the host's startup, until
      * its delete, whatever its state; each connection runs `nc` in the guest, and on a stopped
-     * machine closes at once.
+     * machine closes at once. A start listens again if startup couldn't.
      */
     const listen = (machine: MachineRef) =>
       Effect.flatMap(portOf(machine), (port) =>
@@ -511,16 +511,13 @@ export const make = (
             fs.makeDirectory(jobs, { recursive: true, mode: 0o700 }),
           );
 
-          // Host ports sit below macOS's ephemeral range, so whatever holds one is the
-          // operator's to see and free; a host that served without it would leave the machine
-          // silently unreachable.
+          // A port something else holds leaves only its machine unreachable: the host serves
+          // the rest, its delete still works, and its start listens again before it boots.
           for (const machine of machines) {
-            yield* Effect.mapError(
-              listen(machine),
-              (error) =>
-                new Internal({
-                  message: `startup: no forwarder for ${machine.id}: ${error.message}`,
-                }),
+            yield* listen(machine).pipe(
+              Effect.catch((error) =>
+                Effect.logWarning(`startup: no forwarder for ${machine.id}: ${error.message}`),
+              ),
             );
           }
         }),
@@ -572,7 +569,7 @@ export const make = (
           "--disk-size",
           String(diskGb(machine.diskGib)),
         ]),
-      start: boot,
+      start: (machine) => Effect.andThen(listen(machine), boot(machine)),
       stop,
       delete: (machine) =>
         Effect.gen(function* () {

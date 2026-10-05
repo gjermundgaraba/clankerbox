@@ -784,10 +784,12 @@ repaired with `start` (see [State and claims](#state-and-claims)).
     it can't listen on is refused (the refusal rule) and makes nothing native;
     it opens again at host startup for every machine; and it closes at
     delete, last, so a delete that fails leaves the machine reachable. A port
-    it can't listen on at startup fails the host's startup with `Internal`,
-    naming the machine and the port (phase-5 review): ports 10000–19999 sit
-    below macOS's ephemeral range, so a holder is something the operator must
-    see and free, and a loud stop beats a silently unreachable machine. A boot
+    it can't listen on at startup is logged as a warning naming the machine
+    and the port, and the host serves the rest: failing the whole startup
+    would leave that machine undeletable through the host, and `delete` must
+    always work. `start` listens again before it boots, and fails with
+    `Internal` naming the port while something else still holds it; the
+    operator frees the port, and `start` works again. A boot
     that fails after its kickstart leaves the VM as it is, reachable, and a
     `start` of a made machine that runs prepares it again. A stopped machine's
     port accepts and closes the connection instead of refusing it. The port
