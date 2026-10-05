@@ -1608,6 +1608,94 @@ log back. The run keeps 40 KiB of evidence and no scratch.
   --no-xattrs` to leave out AppleDouble and xattr entries; the bundles list
   none.
 
+**Phase 7 live: smolvm** (local run `.work/runs/live-smolvm-e808dddbb9a7`,
+remote `runs/le80`, commit `993f2de`, through `pnpm live:smolvm`; same host,
+prefix and mirror base as the phase-4 live runs). An earlier start at the same
+commit (`live-smolvm-23153b432d1a`, remote `runs/l231`) was cut off mid-suite
+by its caller, not by a test, after 10 passing tests; its teardown and a
+manual `finish` left every CLEANUP.md entry REVERTED.
+
+- **Result:** all 27 tests (26 smolvm and the binary's) passed in 572 s, with
+  the real-recipe test skipped (no `--recipe`) and Tart's and boat's suites
+  skipped. New since phase 6: the refusal before the runtime (a taken name
+  is `Conflict{exists}`, a base no host offers `Precondition` naming the
+  host's bases); a CLI SIGKILLed during the `busy` create, whose row still
+  read `create/done` with its setup finished; a create whose setup slept
+  310 s, which replied normally after 318.45 s; and a setup exiting 7, which
+  failed the create with its exit code and output and left the row failed
+  until delete.
+- **Timings** (this run / `l3f8`): create with setup 21.96 / 20.57 s; stop
+  0.85 / 0.67 s; cold start 0.93 / 0.96 s; start of a running machine 0.31 /
+  0.29 s; `ram` capture 1.26 / 1.19 s; fork 2.78 / 2.83 s; two concurrent
+  restores 1.95 / 1.73 s; one restore 1.45 / 1.29 s; delete after a failed
+  stop 2.87 / 2.71 s; delete of a running machine 0.87 / 0.86 s. The SEA
+  (45.3 MiB gzipped) uploaded at 0.85 MiB/s.
+- Teardown left no unit, scope, VM, uid ≥ 2000000 process or tailnet
+  listener of the run; directory modes and the prefix matched the "before"
+  snapshot, and the run's five CLEANUP.md entries read REVERTED. Its 208
+  root commands are in the remote evidence's `root-runs.log` (132
+  read-only). The run keeps 564 KiB of evidence here and 504 KiB in
+  `runs/le80`.
+
+**Phase 7 live: Tart** (run `.work/runs/live-tart-d4ffab0715a1`, commit
+`414b0c4`, through `pnpm live:tart`; same seed, Softnet, sizes and tailnet
+address as before; the SEA's sha256 `43e7ea0c…` is the same as at `993f2de`,
+the fix being the driver's).
+
+- **First run** (`live-tart-30801a7dc4f9` at `993f2de`): 15 of 16 passed. The
+  Softnet test failed at its control: the host itself couldn't reach
+  `192.168.215.0:4320`, the address of an OrbStack bridge (`bridge101`,
+  `/24`), which takes no connection from the Mac either (`EADDRNOTAVAIL`, as
+  for any subnet's network or broadcast address). The driver's `addresses`
+  now leaves those out, keeping a `/31`'s or `/32`'s such as the tailnet's
+  (`414b0c4`).
+- **Result:** all 16 tests (15 Tart and the binary's) passed in 315 s, with
+  smolvm's and boat's skipped. New since phase 6: the refusal before the
+  runtime, and placement over the run's two hosts: a create by name landed
+  on the first host in list order offering its base, in both orders and
+  where only the later host offered it; a full ID and a profile's `host`
+  sent it to the host they name; a base no host offers was `Precondition`
+  naming both hosts' bases; each create failed at `tart set` on the chosen
+  host, and delete there left no VM, job or file (2.3 s for the test). The
+  guest's gateway was 192.168.154.9 this time.
+- **Timings** (this run / the first run / `live-tart-950431edf3d4`): create
+  with setup 44.8 / 48.7 / 43.1 s; stop 9.7 / 7.6 / 7.6 s; cold start 47.8 /
+  39.7 / 37.5 s; start of a running machine 0.60 / 1.54 / 0.67 s; disk
+  capture 0.20 / 1.01 / 0.18 s; a fork and a restore booting together 60.2
+  and 63.2 / 79.0 and 80.4 / 37.6 and 41.9 s; `clankerbox ssh … true`
+  0.49–0.65 s; scp and rsync each way 1.33 / 1.71 / 1.34 s; host start 0.96
+  / 0.33 / 0.32 s; delete of a running machine 7.05 / 4.05 / 1.31 s;
+  checkpoint delete 0.13 / 0.96 / 0.13 s; a create refused at `tart set`
+  0.21 / 0.25 / 0.23 s.
+- Both runs' teardown left no VM, launchd job, Softnet or Virtualization
+  process, with both hosts stopped; the seed's checksums matched PROVENANCE
+  before and after each. Each keeps 64 KiB of evidence.
+
+**Phase 7 live: boat** (run `.work/runs/live-boat-d6c2f95d4759` at `414b0c4`,
+through `pnpm live:boat` on the tailnet address; trial tier, pre-flight 0
+sandboxes, 0 named snapshots, 0 of 2 active).
+
+- **Result:** all 16 tests (15 boat tests and the binary's) passed in 265 s,
+  with the 429 test and the large create run. New since phase 6: the refusal
+  before the runtime, which made no call to boat, and rsync of the 256 KiB
+  file both ways through boat's endpoint beside scp (2.37 s for both, each
+  way).
+- **Starts:** 7, the suite's `[start]` lines (3 creates, one the expected 429
+  and one the crash test's; 1 resume; 2 forks; 1 restore). The account read
+  0 of 25 for the hour and 22 of 75 for the day before, and 7 and 29 after.
+- **Timings** (this run / the phase-6 rerun): create with setup 2.95 /
+  4.34 s; ssh `true` 0.61–0.78 s; stop 16.79 / 25.27 s; start (resume) 5.84
+  / 3.76 s; start of a running machine 2.54 / 1.11 s; capture of a running
+  sandbox 10.10 / 37.94 s; fork of a running source 26.85 / 61.82 s;
+  capture of a stopped sandbox 123.57 / 120.43 s; fork of a stopped source
+  8.13 / 4.49 s; restore 7.60 / 4.31 s; delete of a running machine 0.52 /
+  0.45 s; checkpoint delete 0.25–0.52 s; host start 0.36 s.
+- **Cleanup:** teardown deleted the 2 sandboxes its ledger recorded (each 404
+  afterwards) and stopped the `ssh` child the crash test's SIGKILL left;
+  afterwards the account held 0 sandboxes, 0 named snapshots and 0 active.
+  The API key is in no evidence file (compared by bytes). The run keeps
+  68 KiB of evidence and no scratch.
+
 ## Consumers and production
 
 - **Production hosts:** the Mac host runs Tart only and the Linux host smolvm
