@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Runs the smolvm live suite (tests/live) from this Mac against a clankerbox host on a Linux test
-host, over the tailnet: builds both SEAs, runs the linux one as root on the test host through
-remote.py, and runs the suite with the darwin one as the CLI.
+host, over the tailnet: builds both release bundles in its scratch, uploads the linux-x64 one,
+which remote.py checks against its .sha256 and extracts, runs its binary as root on the test host,
+and runs the suite with the darwin-arm64 one, smoked here, as the CLI.
 
   python3 tests/live/smolvm/driver.py --ssh USER@HOST --address TAILNET_ADDRESS \\
     --root OWNED_ROOT --smolvm-prefix PREFIX [--suite-args 'VP TEST ARGS']
@@ -23,20 +24,16 @@ The suite's own key and scripts stay in its temporary directory, under the local
 which it removes.
 """
 import argparse
-import gzip
-import hashlib
 import json
 from pathlib import Path
 import shlex
-import shutil
 import subprocess
 import sys
 import time
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from driver_common import (DIST, REPO, Evidence, Failed, WorkRun, bundled_binary, clean_commit,  # noqa: E402
-                           install_binary, stop_on_signals)
+from driver_common import Evidence, Failed, WorkRun, clean_commit, stop_on_signals  # noqa: E402
 
 
 def main():
@@ -131,41 +128,27 @@ def main():
 
         run.on_cleanup(remote_teardown)
 
-        def build():
-            sh(['vp', 'run', '-r', 'build'], 'build', cwd=REPO)
-            sh(['sh', 'tools/release/build.sh', 'darwin-arm64', 'linux-x64'], 'build-sea', cwd=REPO)
-            install_binary('darwin-arm64', darwin_bin)
-            linux = run.scratch / 'clankerbox-linux-x64.gz'
-            raw = bundled_binary('linux-x64')
-            sha = hashlib.sha256(raw).hexdigest()
-            with gzip.open(linux, 'wb', compresslevel=6) as f:
-                f.write(raw)
-            shutil.rmtree(DIST)
-            log(f'SEAs from {commit}; linux {len(raw) / 2**20:.1f} MiB, gzipped '
-                f'{linux.stat().st_size / 2**20:.1f} MiB, sha256 {sha}')
-            return linux, sha
-
-        def upload(linux, sha):
+        def upload(bundle):
+            """Uploads the bundle and its .sha256 into the remote run's scratch, where setup checks
+            and extracts it."""
             t0 = time.monotonic()
-            subprocess.run(scp + [str(linux), f'{options.ssh}:{rdir}/scratch/clankerbox.gz'], check=True,
+            subprocess.run(scp + [str(bundle), f'{bundle}.sha256', f'{options.ssh}:{rdir}/scratch/'], check=True,
                            timeout=1800)
             took = time.monotonic() - t0
-            log(f'uploaded {linux.stat().st_size / 2**20:.1f} MiB in {took:.1f}s '
-                f'({linux.stat().st_size / 2**20 / took:.2f} MiB/s)')
-            subprocess.run(ssh + [f'gunzip -f {q_rdir}/scratch/clankerbox.gz'], check=True, timeout=300)
-            remote(f'set-binary-sha {sha}', 'set-sha', timeout=60)
+            log(f'uploaded {bundle.name} ({bundle.stat().st_size / 2**20:.1f} MiB) in {took:.1f}s '
+                f'({bundle.stat().st_size / 2**20 / took:.2f} MiB/s)')
 
         record(commit=commit, remote_host=options.ssh, remote_run=rdir, smolvm_prefix=options.smolvm_prefix,
                address=options.address)
         log(f'local run {run.path.name}; remote run {rdir}')
-        linux, sha = build()
+        linux = evidence.build_binary(darwin_bin, also=('linux-x64',))['linux-x64']
         sh(ssh + [f'mkdir -p {q_root}/runs && mkdir -m 700 {q_rdir}'], 'mkdir', timeout=60)
         state['remote_dir'] = True
         subprocess.run(scp + [str(HERE / 'remote.py'), f'{options.ssh}:{remote_py}'], check=True, timeout=120)
         remote(f'init {shlex.quote(options.address)} {shlex.quote(options.smolvm_prefix)}', 'init', timeout=600)
         state['initialised'] = True
-        upload(linux, sha)
-        remote('setup', 'setup', timeout=900)
+        upload(linux)
+        remote(f'setup {shlex.quote(linux.name)}', 'setup', timeout=900)
         subprocess.run(scp + [f'{options.ssh}:{rdir}/state.json', str(run.scratch / 'remote-state.json')], check=True)
         remote_state = json.loads((run.scratch / 'remote-state.json').read_text())
         record(**{key: remote_state[key] for key in ('host_id', 'unit', 'machine_prefix', 'scope_pattern',

@@ -6,8 +6,9 @@ run directory, <owned root>/runs/l<3 hex>/, which has the work-run layout (manif
 scratch/, evidence/), and runs it once per command:
 
   init ADDRESS PREFIX  manifest, "before" snapshot, CLEANUP.md entries
-  setup                check the binary, expand the prefix's disk templates, write the host
-                       config, start the host unit
+  setup BUNDLE         check the uploaded linux-x64 bundle against its .sha256 and extract its
+                       binary, expand the prefix's disk templates, write the host config, start
+                       the host unit
   control OP [ARGS]    what the live suite asks of the host (tests/live/tests/live.ts)
   teardown             stop the unit, then delete every VM of the run's inventory and stop every
                        scope of the run natively, by the run's own data dir, so it works with the
@@ -33,6 +34,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import tarfile
 import time
 
 OWNER = 'clankerbox-work-run-v1'
@@ -73,6 +75,8 @@ STATE = RUN / 'state.json'
 STATE_DIR = SCRATCH / 's'
 DATA = STATE_DIR / 'smolvm'
 BINARY = SCRATCH / 'clankerbox'
+# What driver.py uploads into scratch, beside its .sha256: build.sh's linux-x64 bundle.
+BUNDLE_NAME = re.compile(r'clankerbox-[0-9][0-9A-Za-z.+-]*-linux-x64\.tar\.gz')
 CONFIG = SCRATCH / 'host.json'
 ROOTLOG = EVIDENCE / 'root-runs.log'
 # The host unit's ExecStopPost writes how its process ended: systemd's $EXIT_CODE and $EXIT_STATUS.
@@ -344,6 +348,27 @@ def answers(port):
         return False
 
 
+def install_bundle(name):
+    """Checks the bundle `name` in scratch against its .sha256, which must name it, extracts its
+    binary to BINARY and records the binary's checksum, which every host start checks."""
+    if not BUNDLE_NAME.fullmatch(name):
+        raise RuntimeError(f'not a linux-x64 bundle: {name}')
+    bundle = SCRATCH / name
+    fields = (SCRATCH / f'{name}.sha256').read_text().split()
+    if len(fields) != 2 or fields[1] != name:
+        raise RuntimeError(f'{name}.sha256 does not name {name}')
+    sha = must(run(['sha256sum', bundle]), 'sha256sum bundle').split()[0]
+    if sha != fields[0]:
+        raise RuntimeError(f'{name}: sha256 {sha} != {fields[0]} in its .sha256')
+    with tarfile.open(bundle) as tar:
+        member = tar.getmember('clankerbox')
+        if not member.isfile():
+            raise RuntimeError(f'{name}: clankerbox is not a file')
+        BINARY.write_bytes(tar.extractfile(member).read())
+    save_state(binary_sha256=must(run(['sha256sum', BINARY]), 'sha256sum binary').split()[0])
+    note(f'{name} matches its .sha256; extracted its binary')
+
+
 def check_binary():
     sha = load_state().get('binary_sha256')
     _, so, _ = run(['sha256sum', BINARY])
@@ -352,9 +377,10 @@ def check_binary():
     os.chmod(BINARY, 0o755)
 
 
-def cmd_setup():
+def cmd_setup(bundle):
     # Outside 10000-19999 (machine ports), smolvm's 20000-32000 and the ephemeral range.
     port = next(p for p in range(9460, 9500) if port_free(p))
+    install_bundle(bundle)
     check_binary()
     must(run([BINARY, '--version']), 'binary --version')
     # The host refuses a prefix without expanded templates (the bump-smolvm skill). As the
@@ -787,10 +813,8 @@ def stop_unless_reverted(manifest, result):
 def main():
     if args.cmd == 'init':
         return cmd_init(*args.args)
-    if args.cmd == 'set-binary-sha':
-        return save_state(binary_sha256=args.args[0])
     if args.cmd == 'setup':
-        return cmd_setup()
+        return cmd_setup(*args.args)
     if args.cmd == 'control':
         sys.exit(control(args.args[0], args.args[1:]))
     if args.cmd == 'teardown':

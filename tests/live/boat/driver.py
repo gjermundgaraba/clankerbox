@@ -50,7 +50,6 @@ import os
 from pathlib import Path
 import re
 import shlex
-import shutil
 import signal
 import socket
 import sqlite3
@@ -61,8 +60,8 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from driver_common import (DIST, REPO, Evidence, Failed, WorkRun, alive, clean_commit, free_port,  # noqa: E402
-                           host_end, host_start, install_binary, keep, read_int, sha256, stop_on_signals)
+from driver_common import (Evidence, Failed, WorkRun, alive, clean_commit, free_port, host_end, host_start,  # noqa: E402
+                           keep, read_int, stop_on_signals)
 
 KEY_SOURCE = Path.home() / 'Library' / 'Application Support' / 'ascii' / 'boat' / 'config.json'
 API = 'https://boat.dev/api/v1'
@@ -473,7 +472,7 @@ def main():
         state_file = run.scratch / 'state.json'
 
         evidence = Evidence(run)
-        log, record, sh = evidence.log, evidence.record, evidence.sh
+        log, record = evidence.log, evidence.record
 
         # Runs last, after teardown, which needs the key.
         run.on_cleanup(lambda: redact_evidence(run.evidence, config, token, log))
@@ -503,12 +502,7 @@ def main():
         before = preflight(boat, record, log)
         run.on_cleanup(lambda: teardown(state, boat, before, log, record))
 
-        sh(['vp', 'run', '-r', 'build'], 'build', cwd=REPO)
-        sh(['sh', 'tools/release/build.sh', 'darwin-arm64'], 'build-sea', cwd=REPO)
-        install_binary('darwin-arm64', binary)
-        shutil.rmtree(DIST)
-        record(sea={'bytes': binary.stat().st_size, 'sha256': sha256(binary)})
-        log(f'SEA from {commit}: {binary.stat().st_size / 2**20:.1f} MiB, sha256 {sha256(binary)}')
+        evidence.build_binary(binary)
 
         # The host reads its key from here: created 0600, never written wider.
         fd = os.open(config, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

@@ -53,8 +53,8 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from driver_common import (DIST, REPO, Evidence, Failed, WorkRun, alive, clean_commit, free_port,  # noqa: E402
-                           host_end, host_start, install_binary, keep, read_int, sha256, stop_on_signals)
+from driver_common import (Evidence, Failed, WorkRun, alive, clean_commit, free_port, host_end, host_start,  # noqa: E402
+                           keep, read_int, sha256, stop_on_signals)
 
 SEED_FILES = ('config.json', 'disk.img', 'nvram.bin')
 SOFTNET = Path('/usr/local/bin/softnet')
@@ -316,7 +316,7 @@ def main():
         state_file = run.scratch / 'state.json'
 
         evidence = Evidence(run)
-        log, record, sh = evidence.log, evidence.record, evidence.sh
+        log, record = evidence.log, evidence.record
 
         sums = provenance_sums(seed)
 
@@ -359,12 +359,7 @@ def main():
 
         record(commit=commit, firewall=firewall_state())
         seed_check('before')
-        sh(['vp', 'run', '-r', 'build'], 'build', cwd=REPO)
-        sh(['sh', 'tools/release/build.sh', 'darwin-arm64'], 'build-sea', cwd=REPO)
-        install_binary('darwin-arm64', binary)
-        shutil.rmtree(DIST)
-        record(sea={'bytes': binary.stat().st_size, 'sha256': sha256(binary)})
-        log(f'SEA from {commit}: {binary.stat().st_size / 2**20:.1f} MiB, sha256 {sha256(binary)}')
+        evidence.build_binary(binary)
 
         (home / 'vms' / base).mkdir(parents=True)
         for name in SEED_FILES:

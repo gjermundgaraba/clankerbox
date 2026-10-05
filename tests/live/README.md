@@ -32,8 +32,9 @@ share machines, so a subset can fail where the whole suite passes.
 - The release tooling's Node archives, for the Node `.node-version` pins, with
   their checksums in `tools/release/release-inputs.json`;
   `tools/release/build.sh` downloads them into `tools/release/cache/` on first
-  use. The driver builds the bundles there and removes `tools/release/dist/`
-  once it has taken the binary out of its bundle.
+  use. The driver builds the bundles into its run's scratch, smokes the
+  darwin-arm64 one with `tools/release/smoke.sh` and runs the binary it holds;
+  it leaves `tools/release/dist/` alone.
 - Each run is a work run (`scripts/WORK_RUNS.md`): it owns
   `.work/runs/live-<runtime>-<id>/`, whose `evidence/` it keeps (driver log,
   `resources.json`, the suite's verbose log with its `[timing]` lines, the
@@ -44,7 +45,9 @@ share machines, so a subset can fail where the whole suite passes.
 ## smolvm: `pnpm live:smolvm`
 
 Runs the linux-x64 binary as root on a Linux test host, over the tailnet, and
-the suite with the darwin-arm64 binary as the CLI.
+the suite with the darwin-arm64 binary as the CLI. The test host gets the
+linux-x64 bundle and its `.sha256`, checks one against the other and extracts
+the binary (`smolvm/remote.py`).
 
 It covers create, stop, cold start, start and delete; a setup packed from a
 recipe with `files/` and run once, then preparation's `start` and
@@ -175,5 +178,7 @@ sandboxes' display names start `<host ID>_` and its named snapshots
 - **List fan-out with a host down, and `--json` error tags:** the unit suite
   covers them against the real host process over the fake runtime
   (`apps/clankerbox/tests/host.test.ts`).
-- **The release bundles' smoke tests:** not the live suites;
-  `tools/release/smoke.sh` (`pnpm sea:smoke`) runs them, in CI on both targets.
+- **The linux-x64 bundle's smoke test:** a driver runs `tools/release/smoke.sh`
+  on the darwin-arm64 bundle it built, and the smolvm run checks the linux-x64
+  one against its `.sha256` and runs its binary as the host; CI smokes both
+  targets (`pnpm sea:smoke`).

@@ -1,7 +1,8 @@
 """What the live drivers (smolvm/driver.py, tart/driver.py, boat/driver.py) share: the commit a
-run names, its signals, its evidence and the suite's run, the binary from a release bundle, and for
-a host on this Mac, its keeper, its start and end, its API port and a file's checksum. A driver
-puts tests/live on its import path and imports this module by name.
+run names, its signals, its evidence and the suite's run, the release bundles it builds in its
+scratch and the binary it takes from one, and for a host on this Mac, its keeper, its start and end,
+its API port and a file's checksum. A driver puts tests/live on its import path and imports this
+module by name.
 """
 import hashlib
 import json
@@ -16,7 +17,7 @@ import tarfile
 import time
 
 REPO = Path(__file__).resolve().parents[2]
-DIST = REPO / 'tools' / 'release' / 'dist'
+RELEASE = REPO / 'tools' / 'release'
 sys.path.insert(0, str(REPO))
 from scripts.work_runs import WorkRun  # noqa: E402, F401
 
@@ -59,19 +60,6 @@ def sha256(path):
         for chunk in iter(lambda: f.read(1 << 22), b''):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def bundled_binary(target):
-    """The clankerbox binary in the bundle tools/release/build.sh built for `target`, as bytes."""
-    version = json.loads((REPO / 'packages' / 'contract' / 'package.json').read_text())['version']
-    with tarfile.open(DIST / f'clankerbox-{version}-{target}.tar.gz') as bundle:
-        return bundle.extractfile('clankerbox').read()
-
-
-def install_binary(target, path):
-    """Writes the bundled binary for `target` to `path`, executable."""
-    path.write_bytes(bundled_binary(target))
-    path.chmod(0o755)
 
 
 def alive(pid):
@@ -200,6 +188,35 @@ class Evidence:
         if check and rc != 0:
             raise RuntimeError(f'{label} failed rc={rc}; see evidence/{label}.log')
         return rc
+
+    def build_binary(self, binary, also=()):
+        """Builds the code, then tools/release/build.sh's darwin-arm64 bundle and one for each
+        target in `also`, into the run's scratch/bundles; smokes the darwin-arm64 bundle with
+        tools/release/smoke.sh, writes its binary to `binary`, executable, and records every
+        bundle. Returns each target's bundle, beside its .sha256."""
+        out = self.run.scratch / 'bundles'
+        targets = ('darwin-arm64', *also)
+        self.sh(['vp', 'run', '-r', 'build'], 'build', cwd=REPO)
+        self.sh(['sh', str(RELEASE / 'build.sh'), '--out', str(out), *targets], 'bundle', cwd=REPO)
+        bundles = {}
+        for target in targets:
+            found = sorted(out.glob(f'clankerbox-*-{target}.tar.gz'))
+            if len(found) != 1:
+                raise RuntimeError(f'build.sh left {len(found)} {target} bundles in {out}, not one')
+            bundles[target] = found[0]
+        # Smoke's own temporary directory stays in scratch.
+        self.sh(['sh', str(RELEASE / 'smoke.sh'), str(bundles['darwin-arm64'])], 'smoke',
+                env=dict(os.environ, TMPDIR=str(self.run.scratch)))
+        with tarfile.open(bundles['darwin-arm64']) as bundle:
+            binary.write_bytes(bundle.extractfile('clankerbox').read())
+        binary.chmod(0o755)
+        self.record(bundles={target: {'name': path.name, 'bytes': path.stat().st_size, 'sha256': sha256(path)}
+                             for target, path in bundles.items()},
+                    binary={'bytes': binary.stat().st_size, 'sha256': sha256(binary)})
+        for target, path in bundles.items():
+            self.log(f'{path.name}: {path.stat().st_size / 2**20:.1f} MiB, sha256 {sha256(path)}')
+        self.log(f'binary: {binary.stat().st_size / 2**20:.1f} MiB, sha256 {sha256(binary)}')
+        return bundles
 
     def suite(self, runtime, binary, client_config, control, prefix, suite_args, extra_env=None):
         """Runs the live suite on `runtime` (tests/live/tests/live.ts names the environment, and
