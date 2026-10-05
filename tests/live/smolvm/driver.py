@@ -8,7 +8,8 @@ remote.py, and runs the suite with the darwin one as the CLI.
 
 OWNED_ROOT is the test host's directory for this work (runs/ and CLEANUP.md live there), and
 PREFIX the smolvm 1.22.2 install the host uses; both absolute. The driver runs the suite once,
-tears down, and exits with the suite's code.
+tears down, and exits with the suite's code. It refuses a tree with uncommitted changes, so the
+commit it records (resources.json `commit`) names the code it ran.
 
 The run owns a local WorkRun (scripts/WORK_RUNS.md) and one remote run directory,
 OWNED_ROOT/runs/l<3 hex>, short because smolvm's socket paths limit the host's state dir (the
@@ -57,6 +58,16 @@ def raise_stop(signum, frame):
     raise Stop(f'signal {signum}')
 
 
+def clean_commit():
+    """HEAD, which names the code the run builds, provided the tree holds no change on it."""
+    status = subprocess.run(['git', 'status', '--porcelain'], cwd=REPO, capture_output=True, text=True,
+                            check=True).stdout
+    if status:
+        sys.exit(f'the tree has uncommitted changes, which no commit would name; commit them first:\n{status}')
+    return subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=REPO, capture_output=True, text=True,
+                          check=True).stdout.strip()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ssh', required=True, help='USER@HOST of the Linux test host')
@@ -67,6 +78,7 @@ def main():
     options = parser.parse_args()
     if not (options.root.startswith('/') and options.smolvm_prefix.startswith('/')):
         parser.error('--root and --smolvm-prefix must be absolute')
+    commit = clean_commit()
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sig, raise_stop)
 
@@ -187,8 +199,7 @@ def main():
             with gzip.open(linux, 'wb', compresslevel=6) as f:
                 f.write(raw)
             shutil.rmtree(DIST)
-            commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=REPO, capture_output=True, text=True).stdout
-            log(f'SEAs from {commit.strip()}; linux {len(raw) / 2**20:.1f} MiB, gzipped '
+            log(f'SEAs from {commit}; linux {len(raw) / 2**20:.1f} MiB, gzipped '
                 f'{linux.stat().st_size / 2**20:.1f} MiB, sha256 {sha}')
             return linux, sha
 
@@ -202,7 +213,8 @@ def main():
             subprocess.run(ssh + [f'gunzip -f {q_rdir}/scratch/clankerbox.gz'], check=True, timeout=300)
             remote(f'set-binary-sha {sha}', 'set-sha', timeout=60)
 
-        record(remote_host=options.ssh, remote_run=rdir, smolvm_prefix=options.smolvm_prefix, address=options.address)
+        record(commit=commit, remote_host=options.ssh, remote_run=rdir, smolvm_prefix=options.smolvm_prefix,
+               address=options.address)
         log(f'local run {run.path.name}; remote run {rdir}')
         linux, sha = build()
         sh(ssh + [f'mkdir -p {q_root}/runs && mkdir -m 700 {q_rdir}'], 'mkdir', timeout=60)

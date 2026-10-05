@@ -18,9 +18,9 @@ down: it stops the host, then stops and deletes every VM in the private home and
 launchd job carrying the run's prefix, natively, and checks that none remains. The suite's key and
 scripts stay in its own temporary directory, which it removes; nothing here prints a setup script.
 
-The evidence names the code it ran (resources.json `code`): the base commit, the sha256 of `git
-diff HEAD` and of each untracked file, read before the build and checked again after it and after
-the suite. It also keeps a read-only snapshot of the application firewall's settings.
+It refuses a tree with uncommitted changes, so the commit it records (resources.json `commit`)
+names the code it ran. The evidence also keeps a read-only snapshot of the application firewall's
+settings.
 """
 import argparse
 import hashlib
@@ -323,20 +323,14 @@ def teardown(state, log):
         raise RuntimeError('; '.join(errors))
 
 
-def code_identity():
-    """The exact code a run uses: the base commit, the hash of every tracked change on it (staged
-    and unstaged, as `git diff HEAD` prints them), and the hash of each untracked file."""
-    def git(*args):
-        return subprocess.run(['git', *args], cwd=REPO, capture_output=True, check=True).stdout
-
-    untracked = git('ls-files', '--others', '--exclude-standard', '-z').decode().split('\0')
-    return {
-        'base_commit': git('rev-parse', 'HEAD').decode().strip(),
-        'diff_command': 'git diff HEAD',
-        'diff_sha256': hashlib.sha256(git('diff', 'HEAD')).hexdigest(),
-        'diff_files': git('diff', 'HEAD', '--name-only').decode().split(),
-        'untracked_sha256': {path: sha256(REPO / path) for path in sorted(untracked) if path},
-    }
+def clean_commit():
+    """HEAD, which names the code the run builds, provided the tree holds no change on it."""
+    status = subprocess.run(['git', 'status', '--porcelain'], cwd=REPO, capture_output=True, text=True,
+                            check=True).stdout
+    if status:
+        sys.exit(f'the tree has uncommitted changes, which no commit would name; commit them first:\n{status}')
+    return subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=REPO, capture_output=True, text=True,
+                          check=True).stdout.strip()
 
 
 FIREWALL = '/usr/libexec/ApplicationFirewall/socketfilterfw'
@@ -375,6 +369,7 @@ def main():
         sys.exit(f'the seed at {SEED_ROOT} is not READY')
     if vz_processes():
         sys.exit(f'macOS VMs already run on this Mac, and Apple allows two: {vz_processes()}')
+    commit = clean_commit()
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sig, raise_stop)
 
@@ -459,21 +454,14 @@ def main():
 
         run.on_cleanup(lambda: teardown(state, log))
 
-        # Read before the build, so the evidence names the code the SEA is built from.
-        code = code_identity()
-        record(code=code, firewall=firewall_state())
-        log(f'code: base {code["base_commit"]}, git diff HEAD sha256 {code["diff_sha256"]}, untracked '
-            f'{code["untracked_sha256"]}')
+        record(commit=commit, firewall=firewall_state())
         seed_check('before')
         sh(['vp', 'run', '-r', 'build'], 'build', cwd=REPO)
         sh(['sh', 'tools/release/build-sea.sh', 'darwin-arm64'], 'build-sea', cwd=REPO)
         shutil.copy2(DIST / 'darwin-arm64' / 'clankerbox', binary)
         shutil.rmtree(DIST)
         record(sea={'bytes': binary.stat().st_size, 'sha256': sha256(binary)})
-        log(f'SEA from {code["base_commit"]} plus the tree above: {binary.stat().st_size / 2**20:.1f} MiB, '
-            f'sha256 {sha256(binary)}')
-        if code_identity() != code:
-            raise RuntimeError('the tree changed while the SEA was built; its evidence would name the wrong code')
+        log(f'SEA from {commit}: {binary.stat().st_size / 2**20:.1f} MiB, sha256 {sha256(binary)}')
 
         (home / 'vms' / base).mkdir(parents=True)
         for name in SEED_FILES:
@@ -504,10 +492,7 @@ def main():
         # Verbose, so the evidence names every test's result and keeps its [timing] lines.
         rc = sh(['vp', 'test', '--reporter=verbose', *shlex.split(options.suite_args)], 'suite', env=suite_env,
                 cwd=REPO / 'tests' / 'live', timeout=5400, check=False)
-        same = code_identity() == code
-        record(suite={'rc': rc, 'tree_unchanged': same})
-        if not same:
-            raise RuntimeError('the tree changed during the suite; its evidence would name the wrong code')
+        record(suite={'rc': rc})
         if rc != 0:
             log(f'suite: rc={rc}; see evidence/suite.log')
             raise Failed(rc)

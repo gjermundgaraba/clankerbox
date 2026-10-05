@@ -81,6 +81,10 @@ Cirrus seed, and gives the suite the same host-control program. Its teardown sto
 the host, then deletes the home's VMs and boots out the launchd jobs carrying the
 run's host ID, natively, before scratch is deleted.
 
+Both drivers refuse a tree with uncommitted changes (`git status --porcelain`,
+which leaves out ignored files), so the commit each records in its evidence
+(`resources.json` `commit`) names the code the run built and tested.
+
 ## Abandoned runs
 
 ```sh
