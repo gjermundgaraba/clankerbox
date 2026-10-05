@@ -5,7 +5,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { type HostError, Precondition, type Setup } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Option, Stream } from "effect";
+import { Duration, Effect, Stream } from "effect";
 import { type Command, type MachineRef, Runtime } from "./runtime.ts";
 
 /** How much of a script's output an error carries: its last lines, and at most this many characters. */
@@ -38,25 +38,21 @@ const outputTail = () => {
   };
 };
 
-/** How a script run in the guest ended. */
-interface Ran {
-  /** The exit code, or none when the script ran past its timeout. */
-  readonly exitCode: Option.Option<number>;
-  /** The last lines of its output. */
-  readonly output: string;
-}
-
-/** Runs `command` in the guest until it exits or `timeout` passes, keeping its output's tail. */
+/**
+ * Runs `command` in the guest, keeping its output's tail, and returns that tail. A run past
+ * `timeout`, or a non-zero exit, fails the action with the tail; `what` names the script.
+ */
 const runInGuest = (
+  what: string,
   machine: MachineRef,
   command: Command,
   timeout: Duration.Duration,
-): Effect.Effect<Ran, HostError, Runtime> =>
+): Effect.Effect<string, HostError, Runtime> =>
   Effect.gen(function* () {
     const runtime = yield* Runtime;
     const tail = outputTail();
 
-    const exitCode = yield* Effect.scoped(
+    const [, code] = yield* Effect.scoped(
       Effect.flatMap(runtime.exec(machine, command), (execution) =>
         Effect.all(
           [
@@ -67,30 +63,26 @@ const runInGuest = (
         ),
       ),
     ).pipe(
-      Effect.map(([, code]) => code),
-      Effect.timeoutOption(timeout),
-    );
-
-    return { exitCode, output: tail.text() };
-  });
-
-/** Fails the action when the script exited non-zero or ran past its timeout. */
-const succeeded = (what: string, timeout: Duration.Duration, ran: Ran) =>
-  Option.match(ran.exitCode, {
-    onNone: () =>
-      Effect.fail(
-        new Precondition({
-          message: `${what} ran past its ${Duration.format(timeout)} timeout; its last output:\n${ran.output}`,
-        }),
-      ),
-    onSome: (code) =>
-      code === 0
-        ? Effect.void
-        : Effect.fail(
+      Effect.timeoutOrElse({
+        duration: timeout,
+        orElse: () =>
+          Effect.fail(
             new Precondition({
-              message: `${what} exited ${code}; its last output:\n${ran.output}`,
+              message: `${what} ran past its ${Duration.format(timeout)} timeout; its last output:\n${tail.text()}`,
             }),
           ),
+      }),
+    );
+
+    const output = tail.text();
+
+    if (code !== 0) {
+      return yield* new Precondition({
+        message: `${what} exited ${code}; its last output:\n${output}`,
+      });
+    }
+
+    return output;
   });
 
 /**
@@ -116,11 +108,14 @@ export const runSetup = (
 ): Effect.Effect<void, HostError, Runtime> => {
   const timeout = Duration.seconds(setup.timeoutSeconds);
 
-  return runInGuest(
-    machine,
-    { argv: ["/bin/sh", "-c", setupRunner], stdin: new TextEncoder().encode(setup.script) },
-    timeout,
-  ).pipe(Effect.flatMap((ran) => succeeded("setup", timeout, ran)));
+  return Effect.asVoid(
+    runInGuest(
+      "setup",
+      machine,
+      { argv: ["/bin/sh", "-c", setupRunner], stdin: new TextEncoder().encode(setup.script) },
+      timeout,
+    ),
+  );
 };
 
 /** Precedes the host key on preparation's output. */
@@ -213,6 +208,7 @@ export const prepare = (
   machine: MachineRef,
 ): Effect.Effect<string | undefined, HostError, Runtime> =>
   runInGuest(
+    "preparation",
     machine,
     {
       argv: [
@@ -226,7 +222,4 @@ export const prepare = (
       stdin: randomBytes(seedBytes),
     },
     preparationTimeout,
-  ).pipe(
-    Effect.tap((ran) => succeeded("preparation", preparationTimeout, ran)),
-    Effect.map((ran) => hostKeyIn(ran.output)),
-  );
+  ).pipe(Effect.map(hostKeyIn));
