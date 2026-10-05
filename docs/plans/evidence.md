@@ -1420,6 +1420,44 @@ from the rows; the suite runs through the harness it shares with Tart's.
   "before" snapshot, every CLEANUP.md entry read REVERTED, and 0
   `smolvm-fork-ready` failures were in the suite log or the host's journal.
 
+**Tart rerun after the phase-5 review's fixes** (2026-10-05; run
+`.work/runs/live-tart-950431edf3d4`, commit `474e86d`, which `resources.json`
+names; one SEA, sha256 `0562c90b…`, 140.2 MiB; same Mac, seed, Softnet, sizes
+and tailnet address as the phase-5 live runs). The code now lets stop take a
+machine that was never made, reports a stopped machine's endpoint, makes a
+`diskGib` below the base's disk `Precondition`, runs every VM on Softnet
+without a network setting, waits for a boot by repeating its probe, and
+writes a machine's job at every boot.
+
+- **Result:** all 13 Tart tests and the binary's passed in 249 s, with
+  smolvm's 23 skipped, in the first run. After the host was killed during a
+  create's setup, `stop` stopped the never-made machine, and start, fork and
+  capture still refused it; a stopped `main`'s endpoint came from the list; a
+  `diskGib` of 20 was `Precondition` at `tart set`. The guest again couldn't
+  reach the host's API port or the listener on `*:4320` at any of the host's
+  addresses, its gateway (192.168.129.145 this time) included, and reached
+  the internet by name. Serving when a machine's port is taken and reloading
+  a job that names another `tart` weren't tried live.
+- **Timings** (this run / phase-5 runs 1 / 2): create with setup 43.1 /
+  108.8 / 49.3 s; stop 7.6 / 9.8 / 9.3 s; cold start 37.5 / 38.3 / 36.0 s;
+  start of a running machine 0.67 / 0.58 / 0.82 s; disk capture 0.18 /
+  0.18 / 0.19 s; a fork and a restore booting together 37.6 and 41.9 / 41.4
+  and 39.5 / 42.7 and 43.5 s; `clankerbox ssh … true` 0.32–0.48 s (3
+  samples, against 0.50–0.67); scp and rsync each way 1.34 / 1.30 / 1.30 s;
+  host start 0.32 / 0.35 / 0.34 s; delete of a running machine 1.31 / 1.45 /
+  1.58 s; checkpoint delete 0.13 s in all; delete of the never-made machine
+  1.40 s, now stopped first (1.32 / 1.97 s running); a create refused at
+  `tart set` 0.23 / 0.22 / 0.24 s.
+- **The application firewall** (settings as before) didn't prompt: it
+  matched the new SEA to phase 5's "Allow incoming connections" entry by
+  its signing identifier (`clankerbox-5555…`) and allowed its flows, so no
+  connection was held. As in phase 5 it logged one flow to the listener for
+  each of the host's 4 probes and none for the guest's. The run changed
+  nothing in the firewall.
+- Teardown left no VM, launchd job, Softnet or Virtualization process, or
+  process naming the run; the seed's three checksums matched PROVENANCE
+  before and after. Only the 52 KiB of evidence remains.
+
 ## Consumers and production
 
 - **Production hosts:** the Mac host runs Tart only and the Linux host smolvm
