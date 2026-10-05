@@ -185,25 +185,10 @@ const decodeList = Schema.decodeUnknownEffect(
 export const stateOf = (state: typeof VmState.Type): MachineState =>
   state === "running" ? "running" : "stopped";
 
-/** Whether `reported` is at least `minimumVersion`, comparing `major.minor.patch`. */
-export const supported = (reported: string): boolean => {
-  const parts = (version: string) => version.split(".").map(Number);
-  const [have, want] = [parts(reported), parts(minimumVersion)];
-
-  for (const [index, wanted] of want.entries()) {
-    const part = have[index] ?? Number.NaN;
-
-    if (Number.isNaN(part)) {
-      return false;
-    }
-
-    if (part !== wanted) {
-      return part > wanted;
-    }
-  }
-
-  return true;
-};
+/** Whether `reported` is a `major.minor.patch` release at least `minimumVersion`. */
+export const supported = (reported: string): boolean =>
+  /^\d+\.\d+\.\d+$/u.test(reported) &&
+  reported.localeCompare(minimumVersion, "en", { numeric: true }) >= 0;
 
 /** A top-level `key = value` line of `launchctl print`; nested lines are indented further. */
 const printed = (output: string, key: string): string | undefined =>
