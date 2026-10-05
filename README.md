@@ -436,9 +436,10 @@ is afterwards or a tagged error. Each runs in this order (`actions.ts`):
   `delete`, so no failure needs a proof that it left nothing behind. `delete`
   and `stop` are never refused for an earlier failure, only while another
   action holds the row, and `delete` copes with any leftover native state.
-- **Actions outlive their request.** Each runs in a fiber of a `FiberSet` that
-  lives as long as the host, so a dropped connection never interrupts native
-  work, and the outcome is recorded either way.
+- **Actions outlive their request.** Each runs in a fiber forked into the
+  host's own scope, which only the host's end interrupts, so a dropped
+  connection never interrupts native work, and the outcome is recorded either
+  way.
 - **`made`:** a machine row is made once its create (with setup), fork or
   restore has done its native work, before preparation. Until then `start`,
   `fork` and `capture` refuse it with `Precondition`, so a half-made machine

@@ -17,7 +17,7 @@ import {
   type NotFound,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Cause, Effect, Fiber, FiberSet, Option, Ref } from "effect";
+import { Cause, Effect, Fiber, Option, Ref } from "effect";
 import { idOn, type Kind, notFoundOn } from "./ids.ts";
 import { type CheckpointRef, type MachineRef, Refusal } from "./runtime.ts";
 import type {
@@ -187,20 +187,21 @@ export const claimsOn = (store: StoreInterface) => {
   return { claimAndCheck, native, done, release };
 };
 
-/** Runs mutations in the host's own fiber set; the caller only waits for each. */
+/**
+ * Runs mutations in fibers of the host's own scope, which only the host's end interrupts; the
+ * caller only waits for each.
+ */
 export const detacher = Effect.map(
-  FiberSet.make<unknown>(),
-  (actions) =>
+  Effect.scope,
+  (scope) =>
     <A>(what: string, action: Effect.Effect<A, HostError>): Effect.Effect<A, HostError> =>
       Effect.flatMap(
-        FiberSet.run(
-          actions,
-          Effect.result(
-            Effect.tapError(action, (error) =>
-              Effect.logWarning(`${what} failed: ${error._tag}: ${error.message}`),
-            ),
+        Effect.forkIn(
+          Effect.tapError(action, (error) =>
+            Effect.logWarning(`${what} failed: ${error._tag}: ${error.message}`),
           ),
+          scope,
         ),
-        (fiber) => Effect.flatMap(Fiber.join(fiber), Effect.fromResult),
+        Fiber.join,
       ),
 );
