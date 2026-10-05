@@ -8,6 +8,7 @@
     "test": "vp run -r test",
     "ready": "vp run check && vp run -r test && vp run -r build",
     "sea:build": "sh tools/release/build-sea.sh",
+    "sea:bundle": "sh tools/release/bundle.sh",
     "sea:smoke": "sh tools/release/smoke.sh"
   },
   "devDependencies": {
