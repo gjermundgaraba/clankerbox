@@ -3,8 +3,8 @@
  * must fit its budget, so the host refuses with `Capacity` before it boots one too many.
  */
 import { Capacity, type HostError } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect } from "effect";
-import type { Activation, Interface } from "./runtime.ts";
+import { Array as Arr, Effect } from "effect";
+import { type Activation, type Interface, observeAll } from "./runtime.ts";
 
 /**
  * Sums the `ramMib` of every machine that is running or that an action is booting, each once,
@@ -21,8 +21,15 @@ export const checkRamBudget = (
   Effect.gen(function* () {
     const booting = activation.machines.filter((held) => held.booting);
     const others = activation.machines.filter((held) => !held.booting);
-    const observed = yield* observe(others.map(({ machine }) => machine));
-    const running = others.filter((_, index) => observed[index]?.state === "running");
+
+    const observed = yield* observeAll(
+      observe,
+      others.map(({ machine }) => machine),
+    );
+
+    const running = Arr.zip(others, observed)
+      .filter(([, { state }]) => state === "running")
+      .map(([held]) => held);
 
     const total = [...booting, ...running].reduce((sum, { machine }) => sum + machine.ramMib, 0);
 

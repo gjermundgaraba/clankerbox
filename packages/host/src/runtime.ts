@@ -6,15 +6,16 @@
  * The interface freezes once phase 5's live tests on the Mac pass; until then each change
  * records its reason in the plan.
  */
-import type {
-  ActionName,
-  Checkpoint,
-  HostError,
-  Machine,
-  Runtime as RuntimeName,
-  SshEndpoint,
+import {
+  type ActionName,
+  type Checkpoint,
+  type HostError,
+  Internal,
+  type Machine,
+  type Runtime as RuntimeName,
+  type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Data, type Effect, type Scope, type Stream } from "effect";
+import { Context, Data, Effect, type Scope, type Stream } from "effect";
 
 /** A machine as the runtime sees it: what its native names and native calls need. */
 export interface MachineRef {
@@ -187,3 +188,34 @@ export interface Interface {
 }
 
 export class Runtime extends Context.Service<Runtime, Interface>()("@clankerbox/host/Runtime") {}
+
+/**
+ * Reads the machines' states through a runtime's `observe`, held to its contract of one state per
+ * machine, in their order. Any other answer is the runtime's bug, so it fails here rather than
+ * reading a machine as `missing` or dropping it.
+ */
+export const observeAll = (
+  observe: Interface["observe"],
+  machines: ReadonlyArray<MachineRef>,
+): Effect.Effect<ReadonlyArray<Observed>, HostError> =>
+  Effect.flatMap(observe(machines), (states) =>
+    states.length === machines.length
+      ? Effect.succeed(states)
+      : Effect.fail(
+          new Internal({
+            message: `observe read ${states.length} states for ${machines.length} machines: ${machines.map(({ id }) => id).join(", ")}`,
+          }),
+        ),
+  );
+
+/** One machine's state, through `observeAll`. */
+export const observeOne = (
+  observe: Interface["observe"],
+  machine: MachineRef,
+): Effect.Effect<Observed, HostError> =>
+  Effect.flatMap(observeAll(observe, [machine]), ([state]) =>
+    // `observeAll` checked there is one; this only narrows the type.
+    state === undefined
+      ? Effect.fail(new Internal({ message: `observe read no state for ${machine.id}` }))
+      : Effect.succeed(state),
+  );
