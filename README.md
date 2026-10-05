@@ -283,9 +283,11 @@ every bump of it:
   smolvm refuses in native names). Neither has `_`, so an ID splits at its one
   `_`, and a `create` target with `_` is a full ID.
 - The whole ID matches `^[A-Za-z0-9_-]{1,62}$` because it is written to
-  `/var/lib/clankerbox/machine-id`, and clankercreds, which reads it as the
-  machine's audit-log label, accepts only that pattern. The host validates
-  every new ID, including one a raw HTTP caller sends.
+  `/var/lib/clankerbox/machine-id`, and clankercreds accepts only that
+  pattern. clankercreds is a separate tool that profiles install in guests to
+  sync credentials into them; it reads the ID as the machine's audit-log
+  label. The host validates every new ID, including one a raw HTTP caller
+  sends.
 - Names are unique per host and resource type. Reusing a name is a
   `Conflict{kind: "exists"}`; there are no idempotency keys.
 - **Native names carry the row's instance**, a random hex value each row gets
@@ -476,14 +478,14 @@ a parent-death watchdog.
 
 ### Deliberately absent
 
-Each was in the Go implementation (on `main`) or proposed, and has no real
-consumer: a controller and its queues and reservations; idempotency keys,
-operations and `--async`; host-side profile builds and stored profiles;
-machine and host labels; a guest daemon, sessions and `shell`; TLS, PKI and
-bearer tokens; the `dev` command; shipping smolvm or a Linux image pipeline;
-rewind to an earlier generation; a setup cache (capture a checkpoint of a
-set-up machine instead); name lookup. A feature used only by tests or docs
-doesn't count as a consumer.
+Each was in the Go implementation (its last release, tag `v0.11.0`) or
+proposed, and has no real consumer: a controller and its queues and
+reservations; idempotency keys, operations and `--async`; host-side profile
+builds and stored profiles; machine and host labels; a guest daemon, sessions
+and `shell`; TLS, PKI and bearer tokens; the `dev` command; shipping smolvm or
+a Linux image pipeline; rewind to an earlier generation; a setup cache
+(capture a checkpoint of a set-up machine instead); name lookup. A feature
+used only by tests or docs doesn't count as a consumer.
 
 ## Accepted cases
 
@@ -565,8 +567,9 @@ These are known, not guarded, and accepted:
   `--net --net-backend virtio-net -p <port>:22` and `--branchable`, each as its
   own uid. Reference the base by digest only, from `mirror.gcr.io` (avoids
   Docker Hub's anonymous pull limit; smolvm's own mirror setting breaks
-  `machine start`): a tag plus a digest makes smolvm pull inside every guest. The stock image has no sshd;
-  setup installs it. Install packages with `--no-install-recommends`.
+  `machine start`): a tag plus a digest makes smolvm pull inside every guest.
+  The stock image has no sshd; setup installs it. Install packages with
+  `--no-install-recommends`.
 - **Disks:** `diskGib` is `--storage`, where workload writes land. smolvm
   builds its host-side image seed only at the default 20 GiB; other sizes pull
   the image in the guest on first start.
