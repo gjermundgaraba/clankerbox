@@ -128,6 +128,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
     createBare,
     createWith,
     inGuest,
+    facts,
     pinned,
     failure,
     natives,
@@ -143,31 +144,6 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
     if (endpoint !== undefined) {
       expect(await answer(endpoint)).toBe("refused");
     }
-  };
-
-  /** What a machine shows of its identity, and of what a copy carried over. */
-  const facts = async (name: string) => {
-    const [machineId, instance, disk, identities, starts, setups] = (
-      await inGuest(
-        name,
-        [
-          "cat /var/lib/clankerbox/machine-id /var/lib/clankerbox/instance",
-          "cat ~/live-disk 2>/dev/null || echo none",
-          "wc -l </var/lib/clankerbox-live/identities",
-          "wc -l </var/lib/clankerbox-live/starts",
-          "wc -l </var/lib/clankerbox-live/setups",
-        ].join("; "),
-      )
-    ).split("\n");
-
-    return {
-      machineId,
-      instance,
-      disk,
-      identities: Number(identities),
-      starts: Number(starts),
-      setups: Number(setups),
-    };
   };
 
   /** When the guest booted; a VM that kept running keeps it. */

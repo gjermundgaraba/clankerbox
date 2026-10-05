@@ -138,6 +138,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
     createBare,
     createWith,
     inGuest,
+    facts,
     pinned,
     failure,
     natives,
@@ -184,31 +185,6 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
 
   /** The names of the run's named snapshots. */
   const snapshots = () => controlled(Names, "snapshots");
-
-  /** What a machine shows of its identity, and of what a copy carried over. */
-  const facts = async (name: string) => {
-    const [machineId, instance, disk, identities, starts, setups] = (
-      await inGuest(
-        name,
-        [
-          "cat /var/lib/clankerbox/machine-id /var/lib/clankerbox/instance",
-          "cat ~/live-disk 2>/dev/null || echo none",
-          "wc -l </var/lib/clankerbox-live/identities",
-          "wc -l </var/lib/clankerbox-live/starts",
-          "wc -l </var/lib/clankerbox-live/setups",
-        ].join("; "),
-      )
-    ).split("\n");
-
-    return {
-      machineId,
-      instance,
-      disk,
-      identities: Number(identities),
-      starts: Number(starts),
-      setups: Number(setups),
-    };
-  };
 
   /** The guest kernel's boot ID; a sandbox that kept running keeps it. */
   const bootId = (name: string) => inGuest(name, "cat /proc/sys/kernel/random/boot_id");

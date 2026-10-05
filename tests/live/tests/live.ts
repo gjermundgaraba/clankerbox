@@ -394,6 +394,35 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     return ran.stdout;
   };
 
+  /**
+   * What a machine shows of its identity, and of what a copy carried over: its machine ID and
+   * instance, `~/live-disk`, and the lines `main`'s setup and hooks wrote to
+   * `/var/lib/clankerbox-live/identities`, `starts` and `setups`.
+   */
+  const facts = async (name: string) => {
+    const [machineId, instance, disk, identities, starts, setups] = (
+      await inGuest(
+        name,
+        [
+          "cat /var/lib/clankerbox/machine-id /var/lib/clankerbox/instance",
+          "cat ~/live-disk 2>/dev/null || echo none",
+          "wc -l </var/lib/clankerbox-live/identities",
+          "wc -l </var/lib/clankerbox-live/starts",
+          "wc -l </var/lib/clankerbox-live/setups",
+        ].join("; "),
+      )
+    ).split("\n");
+
+    return {
+      machineId,
+      instance,
+      disk,
+      identities: Number(identities),
+      starts: Number(starts),
+      setups: Number(setups),
+    };
+  };
+
   /** ssh options pinning `hostKey` under the machine's ID, as `clankerbox ssh` does. */
   const pinned = async (target: Machine, hostKey = target.hostKey ?? "") => {
     const knownHosts = await writeFileIn(
@@ -471,6 +500,7 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     createWith,
     ssh,
     inGuest,
+    facts,
     pinned,
     failure,
     natives,
