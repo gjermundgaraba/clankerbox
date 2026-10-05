@@ -182,6 +182,84 @@ clankerbox checkpoint delete linux_base
 
 `clankerbox COMMAND --help` documents each command.
 
+## Deploy
+
+A deployment is one host process per runtime, each with its own config,
+state dir and API port, and a client config on each machine that calls them.
+Install the binary at a versioned path, such as
+`/opt/clankerbox/<version>/clankerbox`: VM jobs never reference it, so a
+release replaces it while machines run.
+
+**smolvm host** (Linux/amd64 with KVM), as root:
+
+1. Install smolvm 1.22.2 under `/opt/smolvm/1.22.2` and expand its two disk
+   templates (the commands are in [smolvm](#smolvm)).
+2. Put the state dir outside every home directory, such as
+   `/srv/clankerbox/smolvm`: as root, smolvm adds others-execute to every
+   directory above its data root. The path is at most 52 bytes.
+3. Run the host as a system unit:
+
+   ```ini
+   [Unit]
+   Description=clankerbox host (smolvm)
+   Wants=network-online.target
+   After=network-online.target tailscaled.service
+
+   [Service]
+   Type=exec
+   ExecStart=/opt/clankerbox/<version>/clankerbox host --config /etc/clankerbox/linux.json
+   KillMode=control-group
+   Restart=on-failure
+   RestartSec=5
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   Each VM runs in its own scope, outside the unit's cgroup, so stopping or
+   restarting the unit leaves machines running.
+
+**Tart host** (Apple Silicon, macOS 26), as the operator's user:
+
+1. Install Tart 2.40.1 or later at a versioned path, and Softnet 0.24.0 SUID
+   root in `/usr/local/bin`:
+   `sudo install -o root -g wheel -m 4755 softnet /usr/local/bin/softnet`.
+2. Run the host as a LaunchAgent of that user, in its GUI session, since its
+   VMs are LaunchAgents in `gui/<uid>`.
+3. Pull each base as that user, into the Tart home the host uses
+   (`tart pull <image>`), before its first create; a macOS image is tens of
+   GiB.
+
+**boat host:** unprivileged, on any always-on machine on the tailnet, beside
+another host or alone, with its own host ID, state dir and boat API key. Keep
+its config readable by its user only, since it holds the key. Nothing backs up
+its database; a lost one leaves its sandboxes to be found by display name.
+
+**Host config:** one per host, as in [Run a host](#run-a-host), listening on
+the machine's tailnet address. Each API port lies outside 10000–19999, the
+machines' range; the host refuses one inside it. Pin every stock base by
+digest.
+
+**Network and firewalls:**
+
+- The tailnet policy opens each host's API port to the clients that call that
+  host, and 10000–19999 on smolvm and Tart hosts to the clients that run
+  `clankerbox ssh`.
+- A packet filter on a host passes the API port and 10000–19999 on its
+  tailnet address.
+- On a smolvm host, check that no service listens on a public address or a
+  wildcard before any guest runs (`ss -Hltnu`). smolvm's egress floor refuses
+  loopback, private ranges and the tailnet, but not the host's public
+  addresses, so those are a guest's only way to a host service.
+- The macOS application firewall, if on, needs an "Allow incoming connections"
+  entry for the binary, and each release's new binary prompts once. Where the
+  firewall isn't managed by MDM, as root:
+
+  ```sh
+  /usr/libexec/ApplicationFirewall/socketfilterfw --add <binary>
+  /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp <binary>
+  ```
+
 ## SDK
 
 `@gjermundgaraba/clankerbox-sdk` (`packages/contract`) holds the Schemas, the
@@ -624,7 +702,8 @@ These are known, not guarded, and accepted:
   `tart exec -i <vm> nc 127.0.0.1 22`: no guest IP, no Softnet exception and no
   Local Network permission. A new connection costs about 0.3 s.
 - If the Mac's application firewall is on, the binary needs an "Allow incoming
-  connections" entry, and each release's new binary asks again.
+  connections" entry, and each release's new binary prompts once (see
+  [Deploy](#deploy)).
 
 ### boat
 
