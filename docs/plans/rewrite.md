@@ -878,11 +878,13 @@ Two rules for every VM job:
     in the sum. Booting actions are checked one at a time (see [State and
     claims](#state-and-claims)), so of two concurrent creates that each fit
     only alone, exactly one passes.
-  - A fork holds its source but boots only the copy, and both rows carry the
-    fork's action, so the host keeps which machines are booting in memory,
-    one entry per admitted action, added under the admission permit and
-    removed once the action has ended. A host restart fails every running
-    action, so no entry needs to outlive the process.
+  - The rows tell which machines are booting: a row whose running action is
+    `create`, `restore` or `start`, or `fork` on a row not yet made. A fork
+    holds its source, which is made, but boots only the copy. Booting actions
+    claim under the admission permit, so every such row is past its check. A
+    start on a running machine reads booting too, which counts nothing twice,
+    and a row whose release or end failed reads booting until the next host
+    start fails its action.
   - The budget is `ramBudgetMib` in host config. It defaults to physical RAM
     minus 2 GiB, for the OS and the host processes. P9's memory figures per
     restored machine show whether VMs need more headroom. Set it above
