@@ -72,7 +72,8 @@ Each: what Tart does, where, and what of ours depends on it.
   `runGarbageCollection` in Root.swift). It doesn't require a stopped source,
   only a stacked one must be stopped ("must be stopped before cloning"). Ours:
   no checks around clone; fork and capture of a running machine are refused by
-  our own rule, after the claim.
+  our own rule, after the claim, since a clone of a stopped disk is consistent
+  and one of a running VM's disk is crash-consistent at best.
 - Clone regenerates a colliding MAC, checking one Tart home only
   (`hasVMsWithMACAddress`, T@2.40.1:Commands/Clone.swift;
   `hasRunningMACCollision`, Commands/Run.swift). Ours: no `--random-mac`;

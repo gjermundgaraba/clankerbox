@@ -744,8 +744,9 @@ These are known, not guarded, and accepted:
   exec runs through `sudo -n`, so a base without it fails the create.
 - **Clones** get `tart set --random-serial` and the sizes; Tart rounds
   `diskGib` up to whole GB and only grows a disk. Never `--overwrite`.
-- **Fork and capture need a stopped machine** (our rule); checkpoints are
-  `disk` clones.
+- **Fork and capture need a stopped machine** (our rule, not Tart's): a clone
+  of a stopped disk is consistent, while one of a running VM's disk is
+  crash-consistent at best. Checkpoints are `disk` clones.
 - **State** is one `tart list` for every machine; one that doesn't answer
   within 8 s reads them all `unknown`.
 - **Capacity:** Apple runs two macOS VMs per Mac, the operator's included. Each
@@ -887,4 +888,4 @@ Before the first release, the repository's owner checks two settings:
 ## License
 
 MIT, see [LICENSE](LICENSE). Release bundles also carry Node's license and
-every bundled npm dependency's under `notices/`.
+those of every production npm dependency under `notices/`.

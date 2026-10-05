@@ -16,19 +16,19 @@ curated inputs to their intended destination before leaving the run.
 ## Foreground build commands
 
 ```sh
-python3 scripts/work_runs.py run --label build-check -- sh -c '
-  python3 some-build-driver.py --output "$WORK_RUN_SCRATCH/output" \
-    >"$WORK_RUN_EVIDENCE/build.log" 2>&1
+python3 scripts/work_runs.py run --label sea-check -- sh -c '
+  { pnpm build &&
+    pnpm sea:build --out "$WORK_RUN_SCRATCH/bundles" &&
+    pnpm sea:smoke "$WORK_RUN_SCRATCH/bundles/clankerbox-darwin-arm64.tar.gz"
+  } >"$WORK_RUN_EVIDENCE/sea.log" 2>&1
 '
-make work-list
-make work-clean
+python3 scripts/work_runs.py list
 ```
 
-Replace `some-build-driver.py` with the actual build command. The wrapper supplies
-`TMPDIR`, `WORK_RUN_SCRATCH` and `WORK_RUN_EVIDENCE`; it does not redirect arbitrary
-output paths or compiler caches automatically. For example, set `CARGO_TARGET_DIR`
-to a scratch subdirectory for disposable Rust compilation. The Mac host signing
-script respects `TMPDIR`.
+The wrapper supplies `TMPDIR`, `WORK_RUN_SCRATCH` and `WORK_RUN_EVIDENCE`; it does
+not redirect arbitrary output paths or caches automatically. `sea:build` writes
+where `--out` says, and `sea:smoke` extracts into `TMPDIR`; `sea:build`'s Node
+archives stay in `tools/release/cache/`, a reusable input outside the run.
 
 Success, command failure and ordinary interruption stop the command's process
 group and remove scratch. `--keep` retains scratch for an explicit debugging need;
