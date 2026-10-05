@@ -547,12 +547,22 @@ test("a boot whose guest agent never answers leaves its VM running, reachable th
   const machine = await machineOn("dev");
   const vm = vmOf(machine);
 
-  mac.hooks.probe = () => ({ exitCode: 1, stderr: "is the Tart Guest Agent running?\n" });
+  // The create's clone, job file and listener take real time; the clock moves only once the
+  // boot waits for the agent, and then until the create ends, however loaded the machine is.
+  const probed = Promise.withResolvers<void>();
+
+  mac.hooks.probe = () => {
+    probed.resolve();
+
+    return { exitCode: 1, stderr: "is the Tart Guest Agent running?\n" };
+  };
 
   const creating = Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(Effect.flip(runtime.create(machine, "base")));
 
-    for (let step = 0; step < 200; step++) {
+    yield* Effect.promise(() => probed.promise);
+
+    while (fiber.pollUnsafe() === undefined) {
       yield* TestClock.adjust(Duration.seconds(1));
     }
 
@@ -883,7 +893,7 @@ test("a guest that doesn't shut down within a minute is forced off", async () =>
   const stopping = Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(runtime.stop(machine));
 
-    for (let step = 0; step < 130; step++) {
+    while (fiber.pollUnsafe() === undefined) {
       yield* TestClock.adjust(Duration.millis(500));
     }
 
