@@ -23,25 +23,27 @@ const wrap = (base64: string): string => {
 };
 
 /**
- * Unpacks into a fresh temporary directory, runs `/bin/sh ./setup.sh` from there, and
- * removes the directory however setup ends. Setup runs as a child rather than through
- * `exec`, so the cleanup trap still runs after it. `--no-same-owner` keeps the packer's
- * uid off the files when root unpacks them in the guest.
+ * Pipes the archive into `tar -x` in a fresh directory, so no file of the recipe's can
+ * collide with the archive, then runs `./setup.sh` from there: its `#!` line picks the
+ * interpreter, as for a single-file setup, and the unpacker marks it executable whatever mode
+ * it was packed with. The directory is under `/var/tmp`, as a single-file setup is, which
+ * nothing mounts `noexec`, and is removed however setup ends. Setup runs as a child
+ * rather than through `exec`, so the cleanup trap still runs after it. `--no-same-owner`
+ * keeps the packer's uid off the files when root unpacks them in the guest.
  */
 const selfExtracting = (archive: string): string =>
   [
     "#!/bin/sh",
     "set -eu",
-    "recipe=$(mktemp -d)",
+    "recipe=$(mktemp -d /var/tmp/clankerbox-recipe.XXXXXX)",
     `trap 'rm -rf "$recipe"' EXIT`,
     "trap 'exit 1' HUP INT TERM",
-    `base64 -d >"$recipe/recipe.tar" <<'${terminator}'`,
+    `base64 -d <<'${terminator}' | tar -x -f - --no-same-owner -C "$recipe"`,
     wrap(archive),
     terminator,
-    'tar -x -f "$recipe/recipe.tar" --no-same-owner -C "$recipe"',
-    'rm "$recipe/recipe.tar"',
     'cd "$recipe"',
-    "/bin/sh ./setup.sh",
+    "chmod +x setup.sh",
+    "./setup.sh",
     "",
   ].join("\n");
 

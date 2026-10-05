@@ -70,7 +70,7 @@ const runPacked = async (script: string) => {
 
   const result = await run("sh", [join(work, "setup")], {
     cwd: work,
-    env: { ...process.env, OUT: out, TMPDIR: work },
+    env: { ...process.env, OUT: out },
   }).then(
     () => 0,
     (error: { readonly code?: number }) => error.code ?? -1,
@@ -96,7 +96,7 @@ test("a recipe directory packs into one script that recreates its files and runs
 /** The tar archive inside a packed script, decoded from its here-document. */
 const archiveOf = (script: string): Buffer => {
   const lines = script.split("\n");
-  const start = lines.findIndex((line) => line.endsWith("<<'CLANKERBOX_RECIPE'"));
+  const start = lines.findIndex((line) => line.includes("<<'CLANKERBOX_RECIPE'"));
   const end = lines.indexOf("CLANKERBOX_RECIPE", start + 1);
 
   return Buffer.from(lines.slice(start + 1, end).join(""), "base64");
@@ -129,6 +129,30 @@ test("a failing setup.sh fails the script with its exit code, and the unpacked f
   const ranIn = (await readFile(join(out, "ran-in"), "utf8")).trim();
 
   expect(existsSync(ranIn)).toBe(false);
+});
+
+test("a recipe may hold its own top-level recipe.tar", async () => {
+  const dir = await recipe('#!/bin/sh\ncp recipe.tar "$OUT/recipe.tar"\n');
+
+  await writeFile(join(dir, "recipe.tar"), "the recipe's own\n");
+
+  const { out, exitCode } = await runPacked(await pack(dir));
+
+  expect(exitCode).toBe(0);
+  expect(await readFile(join(out, "recipe.tar"), "utf8")).toBe("the recipe's own\n");
+});
+
+test("setup.sh runs through its #! line, with or without its execute bit", async () => {
+  const dir = await recipe(
+    '#!/usr/bin/awk -f\nBEGIN { print "awk ran" > (ENVIRON["OUT"] "/interpreter") }\n',
+  );
+
+  await chmod(join(dir, "setup.sh"), 0o644);
+
+  const { out, exitCode } = await runPacked(await pack(dir));
+
+  expect(exitCode).toBe(0);
+  expect(await readFile(join(out, "interpreter"), "utf8")).toBe("awk ran\n");
 });
 
 test("a directory without setup.sh is refused with Invalid", async () => {

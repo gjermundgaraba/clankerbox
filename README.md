@@ -147,9 +147,10 @@ ending in `.json` is a path. A profile file:
 ```
 
 `setup.path`, relative to the profile, is a script or a recipe directory (a
-`setup.sh` and the files it needs). Its timeout is required. An optional
-`host` sends every create from the profile to that host instead of placing
-it. The file's name, without `.json`, becomes the machine's `profile` label.
+`setup.sh` and the files it needs). Either runs through its `#!` line, and
+`/bin/sh` runs one without; `setup.sh` needn't be executable, and the other
+files keep their modes. Its timeout is required. An optional `host` sends
+every create from the profile to that host instead of placing it. The file's name, without `.json`, becomes the machine's `profile` label.
 
 ```sh
 clankerbox hosts                           # every host, its runtime, versions and bases
@@ -512,8 +513,10 @@ Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
   4000 characters). Nothing runs setup again; forks and restores carry its
   results.
 - **Recipes** are packed by the client (`packages/contract/src/setup.ts`) into
-  one script: a base64 tar that unpacks into a temporary directory and runs
-  `setup.sh` there. The packer leaves out macOS `._*` files and xattrs.
+  one script: a base64 tar piped into `tar -x` in a fresh directory under
+  `/var/tmp`, which marks `setup.sh` executable and runs `./setup.sh` there,
+  so its `#!` line counts as a single file's does. The packer leaves out
+  macOS `._*` files and xattrs.
 - **Nothing logs a setup script, a packed recipe or the preparation seed:** not
   the client, the host, nor any test. Recipes can carry secrets. Errors carry a
   script's output, never its text.
