@@ -84,7 +84,24 @@ stops the host, then deletes the home's VMs and boots out the launchd jobs
 carrying the run's host ID, natively, before scratch is deleted. Its docstring
 shows its invocation.
 
-Both drivers share `tests/live/driver_common.py`, which holds their evidence
+`tests/live/boat/driver.py` runs a boat host on this Mac, unprivileged, against
+the operator's boat account on its trial, on loopback or the tailnet address
+named by `--address`. The host's config, in scratch with mode 0600, holds the
+boat CLI's API key, which nothing else writes down: the driver logs its own
+calls as method, path, status and boat's code, and its last teardown step
+redacts the key from every evidence file and fails the run if it was there. A
+read-only pre-flight records the account's counts (never the operator's names
+or IDs) and stops the run before it makes anything unless the trial's two
+active sandboxes are free and its starts and named snapshots have room for the
+run. The run's host ID carries its run ID, so its sandboxes' display names start
+`<host ID>_` and its named snapshots `cbx-<host ID>-`. Its teardown stops the
+host, deletes by ID every sandbox the host's database records or the suite's
+host-control program saw, sweeps those two prefixes, and checks that nothing of
+the run's remains; it touches nothing else on the account. The evidence keeps
+the suite's starts and the account's start count before and after. Its
+docstring shows its invocation.
+
+The drivers share `tests/live/driver_common.py`, which holds their evidence
 (`driver.log`, `resources.json` and each command's log) and runs the suite with
 its temporary directory in the run's scratch. They refuse a tree with
 uncommitted changes (`git status --porcelain`, which leaves out ignored files),

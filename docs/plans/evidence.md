@@ -345,6 +345,10 @@ create, fork, resume and restore, a `large` create, and whether
     payment.
   - Create, fork and resume each count as a start. Two 429 refusals counted
     too (4 → 6 per hour); 403 type refusals and idempotent repeats didn't.
+  - `GET /limits` reports the account's limits, its `activeSandboxes` and its
+    starts used and remaining per minute, hour and day. Its `activeStates`
+    are `provisioned`, `cloning`, `ready`, `idle` and `running`, so a stopped
+    (`archived`) sandbox doesn't count as active.
   - The trial refuses `ttlSeconds: null` and anything over 7200 with 400
     `trial_auto_stop_required`. Create and resume default to a 1 h TTL, and a
     fork always does unless the call passes `ttlSeconds` (D:).

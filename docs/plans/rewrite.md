@@ -1475,6 +1475,14 @@ tests use real VMs.
      `noEnv`/`ttlSeconds` bodies, the bounded retry (never provoked live),
      and `stop` and `delete` after a crash before and after the sandbox ID
      was recorded. The live tests on the trial are still to run.
+   - The live suite (`tests/live/tests/boat.test.ts`) and its driver
+     (`tests/live/boat/driver.py`) are built, not yet run. One run makes 7
+     starts, the 429 refusal of a third sandbox included, with at most two
+     sandboxes active, and 2 named snapshots; the driver's read-only
+     pre-flight stops it before anything is made when the account has no
+     room. `GET /limits` lists `provisioned`, `cloning`, `ready`, `idle` and
+     `running` as the active states, so a stopped (`archived`) sandbox
+     doesn't count toward the two.
 7. **Release and live tests.** `tools/release` (SEA, bundle, notices) and the
    full `tests/live`. Then the README design section and the bump skills
    (seeded from evidence.md).

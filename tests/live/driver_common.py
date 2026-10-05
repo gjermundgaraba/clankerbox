@@ -1,6 +1,6 @@
-"""What the live drivers (smolvm/driver.py, tart/driver.py) share: the commit a run names, its
-signals, its evidence and the suite's run. A driver puts tests/live on its import path and
-imports this module by name.
+"""What the live drivers (smolvm/driver.py, tart/driver.py, boat/driver.py) share: the commit a
+run names, its signals, its evidence and the suite's run. A driver puts tests/live on its import
+path and imports this module by name.
 """
 import json
 import os
