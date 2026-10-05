@@ -782,11 +782,11 @@ pnpm sea:smoke tools/release/dist/clankerbox-<version>-<target>.tar.gz
 ```
 
 CI (`.github/workflows/quality.yml`) runs `ready` and builds, bundles and
-smokes both targets, on pull requests and on pushes to `main` and release tags.
-A release tag `v<version>` that names the SDK's version runs the release
-(`.github/workflows/publish-sdk.yml`): it builds, bundles and smokes both
-targets again, uploads the bundles and their `.sha256` files to the tag's
-GitHub release, then publishes the SDK to npm with provenance (see
+smokes both targets, on pull requests and on pushes to `main`, and keeps each
+bundle and its `.sha256` as an artifact. A release tag `v<version>` that names
+the SDK's version runs the release (`.github/workflows/publish-sdk.yml`): it
+runs that CI first, uploads the bundles it smoked and their `.sha256` files to
+the tag's GitHub release, then publishes the SDK to npm with provenance (see
 [Releasing](#releasing)).
 
 The live suites drive real hosts through the binary, one per runtime
@@ -800,16 +800,16 @@ covers. Every disposable build or live run goes through
 The binaries and the SDK share one version, the SDK's, in
 `packages/contract/package.json`.
 
-1. Set that `version` to `X.Y.Z` and merge to `main`; wait for its CI to pass,
-   since nothing gates the release on it.
+1. Set that `version` to `X.Y.Z` and merge to `main`.
 2. Tag the merge commit `vX.Y.Z` and push the tag:
    `git tag vX.Y.Z <commit> && git push origin vX.Y.Z`.
 
 The tag runs `.github/workflows/publish-sdk.yml`, which refuses a tag that
-doesn't name the version, uploads both bundles and their `.sha256` files to the
-`vX.Y.Z` GitHub release, then publishes `@gjermundgaraba/clankerbox-sdk@X.Y.Z`
-from the `npm` environment. A failed run can be re-run: the upload replaces the
-release's files.
+doesn't name the version, runs CI on the tagged commit, uploads the two bundles
+CI smoked and their `.sha256` files to the `vX.Y.Z` GitHub release, then
+publishes `@gjermundgaraba/clankerbox-sdk@X.Y.Z` from the `npm` environment.
+A failing CI stops it before anything is uploaded. A failed run can be re-run:
+the upload replaces the release's files.
 
 Before the first release, the repository's owner checks two settings:
 

@@ -26,8 +26,7 @@ packages, not this one.
   `tools/release/release-inputs.json`, each target's archive sha256 under
   `nodeArchiveSha256.<version>` (`node-v<version>-darwin-arm64.tar.xz` and
   `node-v<version>-linux-x64.tar.xz`); README ("Node 26.10.0 inside").
-  `git grep -n '26\.10'` finds them. CI's SEA cache key hashes `.node-version`
-  and `release-inputs.json`, so it follows. `@types/node` in
+  `git grep -n '26\.10'` finds them. `@types/node` in
   `pnpm-workspace.yaml`'s catalog has its own version (26.6.4). The major alone
   is in `engines` in the root `package.json` (`"node": ">=26"`, a floor) and
   README's "Node 26 and pnpm 12": a patch or minor bump leaves both, and that

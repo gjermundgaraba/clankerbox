@@ -1,7 +1,8 @@
 name: Release
-# Release tags only, vX.Y.Z, naming the SDK's version, which the binaries share: builds and
-# bundles both targets, uploads every bundle and its .sha256 to the tag's GitHub release, then
-# publishes the SDK to npm. The npm trusted publisher is bound to this file's name.
+# Release tags only, vX.Y.Z, naming the SDK's version, which the binaries share: runs Quality,
+# whose sea job builds, bundles and smokes both targets, uploads every bundle and its .sha256
+# to the tag's GitHub release, then publishes the SDK to npm. The npm trusted publisher is
+# bound to this file's name.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -18,57 +19,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .node-version
-          package-manager-cache: false
       - name: Check that the tag names the SDK's version
-        run: |
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          const { name, version } = JSON.parse(readFileSync('packages/contract/package.json', 'utf8'));
-          assert.equal(name, '@gjermundgaraba/clankerbox-sdk');
-          assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
-          assert.equal(process.env.GITHUB_REF, `refs/tags/v${version}`);
-          NODE
-  bundle:
+        run: test "$GITHUB_REF_NAME" = "v$(jq -r .version packages/contract/package.json)"
+  quality:
     needs: tag
-    strategy:
-      matrix:
-        include:
-          - runner: macos-15 # arm64
-            target: darwin-arm64
-          - runner: ubuntu-24.04
-            target: linux-x64
-    runs-on: ${{ matrix.runner }}
+    uses: ./.github/workflows/quality.yml
     permissions:
       contents: read
-    env:
-      TARGET: ${{ matrix.target }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .node-version
-          package-manager-cache: false
-      - run: npm install -g "$(node -p "require('./package.json').packageManager")"
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      # No cache: a release downloads and verifies its Node archives afresh.
-      - run: pnpm sea:build "$TARGET"
-      - run: pnpm sea:smoke "tools/release/dist/clankerbox-${GITHUB_REF_NAME#v}-$TARGET.tar.gz"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: bundle-${{ matrix.target }}
-          path: |
-            tools/release/dist/*.tar.gz
-            tools/release/dist/*.tar.gz.sha256
-          if-no-files-found: error
   release:
-    needs: bundle
+    needs: quality
     runs-on: ubuntu-24.04
     permissions:
       contents: write
