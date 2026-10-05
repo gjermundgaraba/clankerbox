@@ -19,53 +19,25 @@ data dir, so it works after a test left the host down; then the remote evidence 
 and remote `finish` removes scratch and reverts what the run changed outside the owned root.
 The host's ID, unit, machine prefix, scope pattern and state dir come from the remote run's
 state.json, which remote.py writes.
-The suite's own key and scripts stay in its local temporary directory, which it removes.
+The suite's own key and scripts stay in its temporary directory, under the local run's scratch,
+which it removes.
 """
 import argparse
 import gzip
 import hashlib
 import json
-import os
 from pathlib import Path
 import shlex
 import shutil
-import signal
 import subprocess
 import sys
 import time
 
-REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
-from scripts.work_runs import WorkRun  # noqa: E402
-
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+from driver_common import REPO, Evidence, Failed, WorkRun, clean_commit, stop_on_signals  # noqa: E402
+
 DIST = REPO / 'tools' / 'release' / 'dist'
-
-
-class Stop(Exception):
-    pass
-
-
-class Failed(Exception):
-    """A failed suite, raised inside the WorkRun so its manifest's outcome reads failed."""
-
-    def __init__(self, code):
-        super().__init__(f'exit code {code}')
-        self.code = code
-
-
-def raise_stop(signum, frame):
-    raise Stop(f'signal {signum}')
-
-
-def clean_commit():
-    """HEAD, which names the code the run builds, provided the tree holds no change on it."""
-    status = subprocess.run(['git', 'status', '--porcelain'], cwd=REPO, capture_output=True, text=True,
-                            check=True).stdout
-    if status:
-        sys.exit(f'the tree has uncommitted changes, which no commit would name; commit them first:\n{status}')
-    return subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=REPO, capture_output=True, text=True,
-                          check=True).stdout.strip()
 
 
 def main():
@@ -79,8 +51,7 @@ def main():
     if not (options.root.startswith('/') and options.smolvm_prefix.startswith('/')):
         parser.error('--root and --smolvm-prefix must be absolute')
     commit = clean_commit()
-    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-        signal.signal(sig, raise_stop)
+    stop_on_signals()
 
     with WorkRun('live-smolvm') as run:
         rid = 'l' + run.path.name.rsplit('-', 1)[1][:3]
@@ -101,37 +72,8 @@ def main():
         client_config = run.scratch / 'client.json'
         control_bin = run.scratch / 'host-control'
 
-        def log(msg):
-            line = f'{time.strftime("%Y-%m-%dT%H:%M:%S")} {msg}'
-            print(line, flush=True)
-            with open(run.evidence / 'driver.log', 'a') as f:
-                f.write(line + '\n')
-
-        def record(**fields):
-            path = run.evidence / 'resources.json'
-            data = json.loads(path.read_text()) if path.exists() else {}
-            data.update(fields)
-            path.write_text(json.dumps(data, indent=2) + '\n')
-
-        def sh(cmd, label, timeout=3600, check=True, env=None, cwd=None):
-            log(f'$ {shlex.join(cmd)}')
-            with open(run.evidence / f'{label}.log', 'a') as out:
-                proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                        env=env, cwd=cwd, start_new_session=True)
-                try:
-                    rc = proc.wait(timeout)
-                except BaseException:
-                    os.killpg(proc.pid, signal.SIGTERM)
-                    try:
-                        proc.wait(15)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                        proc.wait()
-                    raise
-            log(f'{label}: rc={rc}')
-            if check and rc != 0:
-                raise RuntimeError(f'{label} failed rc={rc}; see evidence/{label}.log')
-            return rc
+        evidence = Evidence(run)
+        log, record, sh = evidence.log, evidence.record, evidence.sh
 
         def remote(cmd, label, timeout=1800):
             return sh(ssh + [f'python3 {q_remote_py} --run {q_rdir} {cmd}'], label, timeout=timeout)
@@ -243,18 +185,8 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
 ''')
         control_bin.chmod(0o755)
 
-        suite_env = dict(os.environ, CLANKERBOX_LIVE='1', CLANKERBOX_LIVE_RUNTIME='smolvm',
-                         CLANKERBOX_BIN=str(darwin_bin), CLANKERBOX_LIVE_CONFIG=str(client_config),
-                         CLANKERBOX_LIVE_HOST_CONTROL=str(control_bin),
-                         CLANKERBOX_LIVE_PREFIX=remote_state['machine_prefix'])
-        # Verbose, so the evidence names every test's result and keeps its [timing] lines.
-        rc = sh(['vp', 'test', '--reporter=verbose', *shlex.split(options.suite_args)], 'suite', env=suite_env,
-                cwd=REPO / 'tests' / 'live', timeout=5400, check=False)
-        record(suite={'rc': rc})
-        if rc != 0:
-            log(f'suite: rc={rc}; see evidence/suite.log')
-            # Teardown still runs on the way out.
-            raise Failed(rc)
+        evidence.suite('smolvm', darwin_bin, client_config, control_bin, remote_state['machine_prefix'],
+                       options.suite_args)
 
 
 if __name__ == '__main__':

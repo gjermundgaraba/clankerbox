@@ -16,7 +16,8 @@ status, so the suite's host-control program (`driver.py control`, tests/live/tes
 stop, kill and start it. Teardown, registered before anything it owns exists, works with the host
 down: it stops the host, then stops and deletes every VM in the private home and boots out every
 launchd job carrying the run's prefix, natively, and checks that none remains. The suite's key and
-scripts stay in its own temporary directory, which it removes; nothing here prints a setup script.
+scripts stay in its temporary directory, under the run's scratch, which it removes; nothing here
+prints a setup script.
 
 It refuses a tree with uncommitted changes, so the commit it records (resources.json `commit`)
 names the code it ran. The evidence also keeps a read-only snapshot of the application firewall's
@@ -36,9 +37,8 @@ import subprocess
 import sys
 import time
 
-REPO = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO))
-from scripts.work_runs import WorkRun  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from driver_common import REPO, Evidence, Failed, WorkRun, clean_commit, stop_on_signals  # noqa: E402
 
 TART = REPO / '.work/inputs/tart-2.40.1/tart.app/Contents/MacOS/tart'
 SEED_ROOT = Path('/Users/gg/ws/pers/clankerbox/.work/inputs/tart-cirrus-tahoe-base')
@@ -49,22 +49,6 @@ TAILNET_ADDRESS = '100.122.69.11'
 DIST = REPO / 'tools' / 'release' / 'dist'
 VZ = 'com.apple.Virtualization.VirtualMachine'
 DOMAIN = f'gui/{os.getuid()}'
-
-
-class Stop(Exception):
-    pass
-
-
-class Failed(Exception):
-    """A failed suite, raised inside the WorkRun so its manifest's outcome reads failed."""
-
-    def __init__(self, code):
-        super().__init__(f'exit code {code}')
-        self.code = code
-
-
-def raise_stop(signum, frame):
-    raise Stop(f'signal {signum}')
 
 
 def sha256(path):
@@ -323,16 +307,6 @@ def teardown(state, log):
         raise RuntimeError('; '.join(errors))
 
 
-def clean_commit():
-    """HEAD, which names the code the run builds, provided the tree holds no change on it."""
-    status = subprocess.run(['git', 'status', '--porcelain'], cwd=REPO, capture_output=True, text=True,
-                            check=True).stdout
-    if status:
-        sys.exit(f'the tree has uncommitted changes, which no commit would name; commit them first:\n{status}')
-    return subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=REPO, capture_output=True, text=True,
-                          check=True).stdout.strip()
-
-
 FIREWALL = '/usr/libexec/ApplicationFirewall/socketfilterfw'
 
 
@@ -370,8 +344,7 @@ def main():
     if vz_processes():
         sys.exit(f'macOS VMs already run on this Mac, and Apple allows two: {vz_processes()}')
     commit = clean_commit()
-    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-        signal.signal(sig, raise_stop)
+    stop_on_signals()
 
     with WorkRun('live-tart') as run:
         rid = run.path.name.rsplit('-', 1)[1][:5]
@@ -384,37 +357,8 @@ def main():
         binary = run.scratch / 'clankerbox'
         state_file = run.scratch / 'state.json'
 
-        def log(msg):
-            line = f'{time.strftime("%Y-%m-%dT%H:%M:%S")} {msg}'
-            print(line, flush=True)
-            with open(run.evidence / 'driver.log', 'a') as f:
-                f.write(line + '\n')
-
-        def record(**fields):
-            path = run.evidence / 'resources.json'
-            data = json.loads(path.read_text()) if path.exists() else {}
-            data.update(fields)
-            path.write_text(json.dumps(data, indent=2) + '\n')
-
-        def sh(cmd, label, timeout=3600, check=True, env=None, cwd=None):
-            log(f'$ {shlex.join(cmd)}')
-            with open(run.evidence / f'{label}.log', 'a') as out:
-                proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                        env=env, cwd=cwd, start_new_session=True)
-                try:
-                    rc = proc.wait(timeout)
-                except BaseException:
-                    os.killpg(proc.pid, signal.SIGTERM)
-                    try:
-                        proc.wait(15)
-                    except subprocess.TimeoutExpired:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                        proc.wait()
-                    raise
-            log(f'{label}: rc={rc}')
-            if check and rc != 0:
-                raise RuntimeError(f'{label} failed rc={rc}; see evidence/{label}.log')
-            return rc
+        evidence = Evidence(run)
+        log, record, sh = evidence.log, evidence.record, evidence.sh
 
         sums = provenance_sums()
 
@@ -483,19 +427,7 @@ def main():
         control_bin.chmod(0o755)
 
         log(f'host pid {host_start(state)}')
-        # The suite's key and scripts then live in scratch, even if the suite dies before its afterAll.
-        suite_tmp = run.scratch / 'tmp'
-        suite_tmp.mkdir()
-        suite_env = dict(os.environ, TMPDIR=str(suite_tmp), CLANKERBOX_LIVE='1', CLANKERBOX_LIVE_RUNTIME='tart', CLANKERBOX_BIN=str(binary),
-                         CLANKERBOX_LIVE_CONFIG=str(client_config), CLANKERBOX_LIVE_HOST_CONTROL=str(control_bin),
-                         CLANKERBOX_LIVE_PREFIX=f'r{rid[:3]}-')
-        # Verbose, so the evidence names every test's result and keeps its [timing] lines.
-        rc = sh(['vp', 'test', '--reporter=verbose', *shlex.split(options.suite_args)], 'suite', env=suite_env,
-                cwd=REPO / 'tests' / 'live', timeout=5400, check=False)
-        record(suite={'rc': rc})
-        if rc != 0:
-            log(f'suite: rc={rc}; see evidence/suite.log')
-            raise Failed(rc)
+        evidence.suite('tart', binary, client_config, control_bin, f'r{rid[:3]}-', options.suite_args)
 
 
 if __name__ == '__main__':
