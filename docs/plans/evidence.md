@@ -1485,7 +1485,7 @@ snapshots and 2 active sandboxes allowed before each run. Machines were
   second run's minute window read 5 of 5 used at its end: the suite paced
   starts from when each call began, while a running source's fork starts
   boat's sandbox about 45 s into its call. The pacing is fixed (`7e34f32`) to
-  time a start when its call returns; that change hasn't run live yet.
+  time a start when its call returns; the rerun below ran it.
 - **Verified:** setup ran once, then preparation, with a fresh host key;
   ssh and scp through boat's endpoint, pinned; a size no trial type covers
   was `Precondition`, costing no start; stop read `archived`, and start
@@ -1548,6 +1548,42 @@ with `GET /sandboxes/{id}` every 1.01 s on average (at most 1.57 s) for
   no `cbx-spike-` sandbox. The request log keeps method, path, status and
   boat's code; the API key is in no evidence file. The run keeps 64 KiB of
   evidence and no scratch.
+
+**Phase 6 live rerun (2026-10-05)** (run `.work/runs/live-boat-705c5ae58737`
+at `de45379`, the same driver and suite, on the tailnet address). The
+pre-flight read 0 sandboxes, 0 named snapshots, 0 of 2 active and the trial
+tier, so the suite ran its 429 test and its large create.
+
+- **Result:** all 15 tests (14 boat tests plus the binary's) passed in
+  314.54 s (386 s and 202 s before). Teardown ended with no error: it stopped
+  the `ssh` child the crash test's SIGKILL left and deleted the 2 sandboxes
+  its ledger recorded (each 404 afterwards).
+- **Large create:** 8 vCPU (boat's `large`) was refused with 403
+  `trial_machine_class_not_allowed` as `Precondition`, leaving no row and the
+  account's sandbox and snapshot counts unchanged. It cost no start: the
+  account's hour count moved by 7, the suite's `[start]` count.
+- **Capture sync:** a marker written just before a running capture, with no
+  sync of its own, was on the disk the restore from that checkpoint read.
+- **Starts:** 7 (3 creates, one of them the expected 429 and one the crash
+  test's, which the CLI saw as `Unavailable` once the host was killed; 1
+  resume, 2 forks, 1 restore). The account read 0 before and 7 of 25 after
+  for the hour, whose window held neither earlier run nor the spike, and
+  22 of 75 for the day: 7 + 7 for the two earlier runs, 1 for the spike and
+  7 for this one. The minute window read 3 of 5 at the end (5 of 5 in the
+  second run), with the pacing of `7e34f32`.
+- **Timings** (run 1 / run 2 / rerun): create with setup 3.58 / 3.46 /
+  4.34 s; ssh `true` 0.45–0.48 s before and 0.49–0.50 s; scp of 256 KiB
+  each way 1.03 / 0.96 / 1.18 s; stop 16.69 / 28.49 / 25.27 s; start
+  (resume) 4.49 / 6.51 / 3.76 s; start of a running machine 1.58 / 0.98 /
+  1.11 s; capture of a running sandbox 124.10 / 49.61 / 37.94 s; capture of
+  a stopped sandbox 120.87 / 0.39 / 120.43 s; fork of a running source
+  41.87 / 46.58 / 61.82 s (now its sync, a snapshot begun after it, then the
+  fork); fork of a stopped source 5.78 / 9.35 / 4.49 s; restore 6.15 / 4.01
+  / 4.31 s; delete of a running machine 0.45 / 0.46 / 0.45 s; checkpoint
+  delete 0.19 s; host start 0.35 s; delete of the never-made machine 0.42 s.
+- **Cleanup:** afterwards the account held 0 sandboxes, 0 named snapshots
+  and 0 active, and no process named the run. The API key is in no evidence
+  file (compared by bytes). The run keeps 68 KiB of evidence and no scratch.
 
 ## Consumers and production
 
