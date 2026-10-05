@@ -746,9 +746,11 @@ These are known, not guarded, and accepted:
   never `missing`. The SSH endpoint changes at every start and is only
   reported for a running machine.
 - **Ready:** after a fork, a restore or any start the host waits for boat's
-  lazy-restore marker before preparation writes `/var/lib/clankerbox/`. A
-  start resumes only a sandbox boat doesn't read active; one it still makes,
-  resumes or runs is waited for instead.
+  lazy-restore marker before preparation writes `/var/lib/clankerbox/`, except
+  on the machine a create made: its SSH wait leaves `/run/clankerbox-created`,
+  which no snapshot or new machine carries, and boat restores nothing there,
+  so no marker comes. A start resumes only a sandbox boat doesn't read active;
+  one it still makes, resumes or runs is waited for instead.
 - **Exec** is SSH as `user` with `sudo -n`, one connection per exec, with the
   host's own key (`<stateDir>/boat-ssh/id_ed25519`, authorized after create)
   and the guest's host keys read through boat's command API and pinned per

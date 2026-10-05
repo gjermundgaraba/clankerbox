@@ -122,12 +122,13 @@ driver refuses root), and the suite with the same binary as the CLI.
 It covers create, stop (boat's archive), start (a resume on a new machine,
 with a new endpoint and host key) and delete once boat answers 404; setup and
 preparation, with `/var/lib/clankerbox/` kept across a resume; scp and rsync
-through boat's endpoint, and a re-mint without a resume; a size no boat type
-covers, a large create on the trial (boat's 403) and a third active sandbox
-(boat's 429), each refused leaving no row; checkpoints and forks of a running
-and a stopped machine, a fork holding a file written just before it, and a
-checkpoint restored after its source is deleted; a host restart; and a host
-killed during a setup.
+through boat's endpoint; a start of the running machine its create made, which
+waits for no restore marker, and a re-mint without a resume; a size no boat
+type covers, a large create on the trial (boat's 403) and a third active
+sandbox (boat's 429), each refused leaving no row; checkpoints and forks of a
+running and a stopped machine, a fork holding a file written just before it,
+and a checkpoint restored after its source is deleted; a host restart; and a
+host killed during a setup.
 
 - `--key-file`: a file holding the boat API key alone, outside the repository
   and mode 0600. The boat CLI's config holds the key as its JSON `token`; this

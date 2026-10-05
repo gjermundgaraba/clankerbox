@@ -351,6 +351,41 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   );
 
   test(
+    "start of the running machine its create made leaves it running and doesn't wait for boat's restore marker, which a create never gets",
+    async () => {
+      const before = await machine("main");
+      const boot = await bootId("main");
+      const source = await facts("main");
+
+      // The create's SSH wait marked the guest's machine as the create's own. Whether boat wrote
+      // its restore marker anyway is the bump-boat-api skill's to note.
+      expect(await inGuest("main", "test -e /run/clankerbox-created && echo marked")).toBe(
+        "marked",
+      );
+      console.log(
+        `[marker] after create: ${await inGuest("main", "ls -d /var/lib/ascii-lazy /var/lib/ascii-lazy/sys-done 2>&1 || true")}`,
+      );
+
+      const started = performance.now();
+      const ran = await cli(["start"], id("main"), "--json");
+      const took = performance.now() - started;
+
+      timing("start (running machine its create made)", started);
+      expect(ran.code, ran.stdout).toBe(0);
+
+      const after = decode(OneMachine, ran);
+
+      expect(after).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
+      expect(after.ssh).toEqual(before?.ssh);
+      // Far inside the marker wait's 10 minutes: SSH and preparation take seconds.
+      expect(took).toBeLessThan(minutes(2));
+      expect(await bootId("main")).toBe(boot);
+      expect(await facts("main")).toEqual({ ...source, starts: source.starts + 1 });
+    },
+    minutes(5),
+  );
+
+  test(
     "a size no boat type covers is refused with Precondition before any call to boat, leaving no row and nothing on boat",
     async () => {
       const before = await account();
@@ -440,6 +475,11 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         starts: source.starts + 1,
       });
       expect(await inGuest("main", "cat /var/lib/clankerbox-live/kept")).toBe(kept);
+      // The resume's fresh machine doesn't carry the create's mark, so the start waited for
+      // boat's marker.
+      expect(
+        await inGuest("main", "test -e /run/clankerbox-created && echo marked || echo unmarked"),
+      ).toBe("unmarked");
       await refusesPin("main", before);
     },
     minutes(25),
@@ -471,7 +511,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       expect(after.hostKey).not.toBe(before.hostKey);
       expect(after.ssh).toEqual(before.ssh);
       expect(await bootId("main")).toBe(boot);
-      expect(await facts("main")).toMatchObject({ identities: 2, starts: 3, setups: 1 });
+      expect(await facts("main")).toMatchObject({ identities: 2, starts: 4, setups: 1 });
       await refusesPin("main", before);
     },
     minutes(5),

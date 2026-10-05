@@ -161,6 +161,20 @@ export const knownHosts = (alias: string, printed: string): ReadonlyArray<string
  */
 export const restoredMarker = "/var/lib/ascii-lazy/sys-done";
 
+/**
+ * The host's own mark that the guest runs on the machine its create made, which boat restored
+ * nothing into, so no restore marker comes. A create's SSH wait leaves it. `/run` is a tmpfs
+ * that no snapshot carries, and boat runs every fork, resume and restore on a fresh machine, so
+ * the mark never outlives the create's machine.
+ */
+export const createdMark = "/run/clankerbox-created";
+
+/**
+ * What waits in the guest for boat's restore: nothing on the create's own machine, and the
+ * marker on any other.
+ */
+export const restoredWait = `[ -e ${createdMark} ] || until [ -e ${restoredMarker} ]; do sleep 0.25; done`;
+
 /** Where `ssh` is, on macOS and on Ubuntu. */
 const searchPath = "/usr/bin:/bin";
 
@@ -532,15 +546,14 @@ export const make = (
      * Waits until SSH answers, which it may not for a moment after boat reads the sandbox ready.
      * Only an SSH that fails and a failed read of the host keys through boat's command API,
      * which may fail that early too, are tried again; the last one's output or error is the
-     * timeout's. A sandbox that no longer runs, or anything else, fails at once.
+     * timeout's. A sandbox that no longer runs, or anything else, fails at once. `argv` is what
+     * the probe runs.
      */
-    const reachable = (machine: MachineRef, id: string) =>
+    const reachable = (machine: MachineRef, id: string, argv: ReadonlyArray<string> = ["true"]) =>
       Effect.gen(function* () {
         const last = yield* Ref.make("");
 
-        yield* Effect.scoped(
-          Effect.flatMap(session(machine, id, { argv: ["true"] }), finished),
-        ).pipe(
+        yield* Effect.scoped(Effect.flatMap(session(machine, id, { argv }), finished)).pipe(
           Effect.catchTag("HostKeysUnread", (error) =>
             Effect.succeed({ exitCode: -1, output: error.message }),
           ),
@@ -565,16 +578,12 @@ export const make = (
 
     /**
      * Waits, in one SSH session, for boat's marker that `/var/lib` and `/var/opt` are restored,
-     * where preparation keeps its state and enabled units start from. A create restores nothing,
-     * so it doesn't wait.
+     * where preparation keeps its state and enabled units start from, unless the guest runs on
+     * its create's own machine (`createdMark`): a create restores nothing, so no marker comes.
      */
     const restored = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
-        const waited = yield* runToEnd(machine, id, [
-          "/bin/sh",
-          "-c",
-          `until [ -e ${restoredMarker} ]; do sleep 0.25; done`,
-        ]).pipe(
+        const waited = yield* runToEnd(machine, id, ["/bin/sh", "-c", restoredWait]).pipe(
           Effect.timeoutOrElse({
             duration: markerWait,
             orElse: () =>
@@ -770,13 +779,14 @@ export const make = (
 
           yield* made(machine, id);
           yield* api.authorize(id, key.publicKey);
-          yield* reachable(machine, id);
+          yield* reachable(machine, id, ["touch", createdMark]);
         }).pipe(scrubbingRefusal),
       /**
        * Resumes the sandbox unless boat reads it active: one boat still makes or resumes, or that
        * runs, isn't resumed again. Either way the start waits for it to run, for SSH and for the
        * marker, so preparation never meets a half-restored `/var/lib`, as boat reads a sandbox
-       * ready before its marker exists.
+       * ready before its marker exists; on the create's own machine, which boat restored nothing
+       * into, it doesn't wait for the marker.
        */
       start: (machine) =>
         Effect.gen(function* () {

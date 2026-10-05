@@ -3,10 +3,11 @@
  * memory and answers as boat's API v1 does (the bump-boat-api skill), and a scripted `ssh` that
  * stands for the guest. Nothing here reaches boat, and nothing runs ssh.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { inspect } from "node:util";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
@@ -34,12 +35,14 @@ import {
 import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
 import {
+  createdMark,
   endpointOf,
   knownHosts,
   make,
   quote,
   remoteCommand,
   restoredMarker,
+  restoredWait,
   type Settings,
   stateOf,
 } from "../src/boat.ts";
@@ -615,6 +618,37 @@ test("argv survives ssh's joining: a POSIX shell reads every quoted argument bac
   expect(remoteCommand(["true"])).toBe("'sudo' '-n' '--' 'true'");
 });
 
+test("the guest's restore wait: none on its create's own machine, else until boat's marker appears", async () => {
+  const dir = await scratch(owned);
+  const mark = join(dir, "created");
+  const marker = join(dir, "sys-done");
+  const local = restoredWait.replaceAll(createdMark, mark).replaceAll(restoredMarker, marker);
+
+  expect(createdMark).toMatch(/^\/run\//u);
+
+  const waiting = () => {
+    const child = spawn("/bin/sh", ["-c", local], { stdio: "ignore" });
+
+    const exited = new Promise<number | null>((resolve) => {
+      child.once("exit", resolve);
+    });
+
+    return { child, exited };
+  };
+
+  // Off the create's machine, nothing ends the wait but the marker.
+  const restoring = waiting();
+
+  expect(await Promise.race([restoring.exited, sleep(600, "waiting")])).toBe("waiting");
+  await writeFile(marker, "");
+  expect(await restoring.exited).toBe(0);
+
+  // On the create's own machine it doesn't wait, though no marker ever comes.
+  await rm(marker);
+  await writeFile(mark, "");
+  expect(await Promise.race([waiting().exited, sleep(5000, "waiting")])).toBe(0);
+});
+
 test("known hosts pin every host key boat's command API printed, under the sandbox's alias", () => {
   expect(knownHosts("bx_1", `${guestKey} root@guest\n\nnot a key line\n`)).toEqual([
     `bx_1 ${guestKey}`,
@@ -644,8 +678,9 @@ test("create sends noEnv and the trial's TTL under the row's key, records the sa
   });
   expect(rig.boat.sandboxes.get("bx_made0001")?.state).toBe("ready");
 
-  // A fresh create isn't a restore: it waits for SSH, not for boat's marker.
-  expect(remotes(rig.guest)).toEqual([remoteCommand(["true"])]);
+  // A fresh create isn't a restore: it waits for SSH, which marks the guest's machine as the
+  // create's own, and not for boat's marker.
+  expect(remotes(rig.guest)).toEqual([remoteCommand(["touch", createdMark])]);
 });
 
 test("a rename boat refuses is only a warning: the create goes on and the sandbox stays recorded", async () => {
@@ -674,7 +709,7 @@ test("a rename boat refuses is only a warning: the create goes on and the sandbo
     ],
   ]);
   expect(await nativeOf(rig, "dev")).toBe("bx_made0001");
-  expect(remotes(rig.guest)).toEqual([remoteCommand(["true"])]);
+  expect(remotes(rig.guest)).toEqual([remoteCommand(["touch", createdMark])]);
 });
 
 test("every create, fork, start and restore sends noEnv: true and ttlSeconds: 7200", async () => {
@@ -1150,14 +1185,14 @@ test("start resumes, waits for SSH, then for boat's marker that /var/lib is rest
   expect(rig.boat.sent.some((sent) => sent.headers["idempotency-key"] !== undefined)).toBe(false);
   expect(remotes(rig.guest)).toEqual([
     remoteCommand(["true"]),
-    remoteCommand(["/bin/sh", "-c", `until [ -e ${restoredMarker} ]; do sleep 0.25; done`]),
+    remoteCommand(["/bin/sh", "-c", restoredWait]),
   ]);
 
   // The relay moved on resume; the exec reads it with the state.
   expect(rig.guest.calls.map((call) => call.args.at(-2))).toEqual(["203.0.113.11", "203.0.113.11"]);
 });
 
-test("start of a sandbox boat reads ready skips the resume, and still waits for SSH and boat's marker", async () => {
+test("start of a sandbox boat reads ready, never stopped since its create, skips the resume and waits for SSH, then for the marker only off the create's machine", async () => {
   const rig = await rigOn();
   const machine = machineOn("dev");
 
@@ -1171,7 +1206,7 @@ test("start of a sandbox boat reads ready skips the resume, and still waits for 
   expect(rig.boat.calls()).toEqual([]);
   expect(remotes(rig.guest)).toEqual([
     remoteCommand(["true"]),
-    remoteCommand(["/bin/sh", "-c", `until [ -e ${restoredMarker} ]; do sleep 0.25; done`]),
+    remoteCommand(["/bin/sh", "-c", restoredWait]),
   ]);
 });
 
@@ -1192,7 +1227,7 @@ test("start of a sandbox boat still resumes waits for it to run, and doesn't res
   expect(rig.boat.sent.filter((sent) => sent.method === "GET").length).toBeGreaterThan(1);
   expect(remotes(rig.guest)).toEqual([
     remoteCommand(["true"]),
-    remoteCommand(["/bin/sh", "-c", `until [ -e ${restoredMarker} ]; do sleep 0.25; done`]),
+    remoteCommand(["/bin/sh", "-c", restoredWait]),
   ]);
 });
 
@@ -1375,7 +1410,7 @@ test("a stopped source forks at once; the copy waits for SSH and boat's marker, 
   expect(rig.boat.sandboxes.get("bx_made0002")?.name).toBe("boat_copy");
   expect(remotes(rig.guest)).toEqual([
     remoteCommand(["true"]),
-    remoteCommand(["/bin/sh", "-c", `until [ -e ${restoredMarker} ]; do sleep 0.25; done`]),
+    remoteCommand(["/bin/sh", "-c", restoredWait]),
   ]);
 });
 

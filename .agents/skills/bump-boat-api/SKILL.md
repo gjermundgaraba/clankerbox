@@ -177,12 +177,23 @@ Each: what boat does, and what of ours depends on it.
   are mounted and fetched on first read; `/var/lib` and `/var/opt` are restored
   in full before `/var/lib/ascii-lazy/sys-done` appears, a few seconds after
   ready, 9–14 s with 1 GiB. That marker is undocumented; the documented signal
-  is the `sandbox.hydrated` webhook, which can't reach a tailnet host. Ours:
-  `restoredMarker` and `markerWait` before preparation after a fork, restore
-  or any start, a running machine's included. Ask whether boat now documents a
-  signal a host can poll. Unverified: whether a fresh create's sandbox writes
-  the marker too; if not, a start of a running machine never stopped since its
-  create waits `markerWait` and fails. Check it live.
+  is the `sandbox.hydrated` webhook, which can't reach a tailnet host; a
+  sandbox has no field for it (the spec of 2026-10-05). Ours: `restoredWait`
+  (`restoredMarker`, `markerWait`) before preparation after a fork, restore or
+  any start, a running machine's included, except on the machine a create
+  made: create's SSH wait touches `createdMark` (`/run/clankerbox-created`),
+  and the wait skips the marker while it exists. That rests on D: a resume
+  "restores onto a fresh machine", and a fork or restore provisions a new
+  sandbox, so `/run`, a tmpfs outside the carried paths, never holds the mark
+  after a lazy restore. Check live (the suite's start of `main` after its
+  create, its `[marker]` line and its resume): whether a fresh create's
+  sandbox has `/var/lib/ascii-lazy` or its `sys-done` at all; that the mark is
+  there after create and gone after a resume, a fork and a restore, whose
+  marker still appears; and that a start of a running machine never stopped
+  since its create returns in seconds. Gaps: a create that fails before SSH answers, or
+  a guest reboot, leaves the create's machine without the mark, and a start of
+  it waits `markerWait` and fails. Ask whether boat now documents a signal a
+  host can poll.
 
 **Delete** (D, O)
 
