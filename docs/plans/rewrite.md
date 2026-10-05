@@ -1283,8 +1283,8 @@ Two rules for every VM job:
   - Forks carry the disk only, never RAM.
 - **Checkpoints** are boat named snapshots, always `disk`, from a running or a
   stopped machine. Capture takes about two minutes from a running machine.
-  From a stopped one it took 0.2–21 s in the spikes but 121 s in phase 6's
-  live run, so a capture can take minutes either way.
+  From a stopped one it took 0.2–21 s in the spikes, and 121 s and 0.4 s in
+  phase 6's two live runs, so a capture can take minutes either way.
   - The host polls the snapshot every 3 s, for at most 15 minutes, until it
     is no longer `saving`; `failed` fails the capture.
   - A restore creates a sandbox `from` the snapshot.
@@ -1479,9 +1479,10 @@ tests use real VMs.
      fake boat and a scripted `ssh`: every operation and refusal, the
      `noEnv`/`ttlSeconds` bodies, the bounded retry (never provoked live),
      and `stop` and `delete` after a crash before and after the sandbox ID
-     was recorded. The live tests on the trial are still to run.
+     was recorded.
    - The live suite (`tests/live/tests/boat.test.ts`) and its driver
-     (`tests/live/boat/driver.py`) are built, not yet run. One run makes 7
+     (`tests/live/boat/driver.py`) passed on the trial (2026-10-05,
+     evidence.md, Phase 6 live). One run makes 7
      starts, the 429 refusal of a third sandbox included, with at most two
      sandboxes active, and 2 named snapshots; the driver's read-only
      pre-flight stops it before anything is made when the account has no

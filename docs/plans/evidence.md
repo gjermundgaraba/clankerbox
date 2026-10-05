@@ -1462,6 +1462,59 @@ writes a machine's job at every boot.
   process naming the run; the seed's three checksums matched PROVENANCE
   before and after. Only the 52 KiB of evidence remains.
 
+## Phase 6 (2026-10-05)
+
+**Phase 6 live** (runs `.work/runs/live-boat-c52ca05d4028` at `6bc5b24` and
+`live-boat-8bc955cb9d60` at `c35252f`, driver `tests/live/boat/driver.py`,
+suite `tests/live/tests/boat.test.ts`). The darwin-arm64 SEA ran as
+`clankerbox host` for boat on this Mac, without root, on the tailnet address
+(100.122.69.11), with a per-run host ID; the same binary's CLI drove it. The
+account was on boat's trial; its pre-flight read 0 sandboxes, 0 named
+snapshots and 2 active sandboxes allowed before each run. Machines were
+`small` (2 vCPU, 4096 MiB, 12 GiB).
+
+- **Result:** all 14 tests (13 boat tests plus the binary's) passed in both
+  runs, in 386 s and 202 s. The first run's teardown failed: the crash test's
+  SIGKILL of the host left its `ssh` child (the setup's stdin wrapper)
+  running, which the driver only reported (fixed in `3830d2f`: teardown
+  stops processes naming the run's scratch, logging PID and program only).
+  The second run's teardown stopped that child and ended with no error.
+- **Starts:** 7 per run (3 creates, one of them the expected 429, 1 resume,
+  2 forks, 1 restore), matching the account's own count: 14 of 25 that hour
+  and that day after both. At most 2 sandboxes were active at once. The
+  second run's minute window read 5 of 5 used at its end: the suite paced
+  starts from when each call began, while a running source's fork starts
+  boat's sandbox about 45 s into its call. The pacing is fixed (`7e34f32`) to
+  time a start when its call returns; that change hasn't run live yet.
+- **Verified:** setup ran once, then preparation, with a fresh host key;
+  ssh and scp through boat's endpoint, pinned; a size no trial type covers
+  was `Precondition`, costing no start; stop read `archived`, and start
+  resumed it with a new endpoint and key, keeping files in `/root` and
+  `/var/lib`; a re-mint on start of a running machine; capture from a
+  running and a stopped machine; a fork of a running source after its
+  snapshot wait, holding a file written just before; a fork of a stopped
+  source; a restore after its source was deleted, with the disk as
+  captured; a third create with two running refused with 429
+  `limit_reached` as `Capacity`, leaving no row and nothing on boat; a host
+  restart kept the sandboxes and machines; a host killed during a create's
+  setup left an unmade row that stop took and start, fork and capture
+  refused, and delete removed.
+- **Timings** (run 1 / run 2, through the CLI): create with setup 3.58 /
+  3.46 s; ssh `true` 0.45–0.48 s; scp of 256 KiB each way 1.03 / 0.96 s;
+  stop (boat's final snapshot, then `archived`) 16.69 / 28.49 s; start
+  (resume, marker, preparation) 4.49 / 6.51 s; start of a running machine
+  1.58 / 0.98 s; capture of a running sandbox 124.10 / 49.61 s; capture of a
+  stopped sandbox 120.87 / 0.39 s; fork of a running source 41.87 / 46.58 s;
+  fork of a stopped source 5.78 / 9.35 s; restore 6.15 / 4.01 s; delete of a
+  running machine 0.45 / 0.46 s; checkpoint delete 0.18–0.19 s; host start
+  0.35 s.
+- **Key hygiene:** the API key appears in no evidence file of either run
+  (compared by bytes) and in no process's argv; the driver's request log
+  keeps method, path, status and boat's code only.
+- Both runs' teardown deleted their sandboxes by recorded ID; afterwards the
+  account held 0 sandboxes, 0 named snapshots and 0 active. Each run keeps
+  68 KiB of evidence.
+
 ## Consumers and production
 
 - **Production hosts:** the Mac host runs Tart only and the Linux host smolvm
