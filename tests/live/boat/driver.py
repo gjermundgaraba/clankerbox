@@ -66,8 +66,8 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from driver_common import (Evidence, Failed, WorkRun, alive, clean_commit, free_port, host_end, host_start,  # noqa: E402
-                           keep, read_int, stop_on_signals)
+from driver_common import (Evidence, Failed, Steps, WorkRun, clean_commit, free_port, host_end, host_start,  # noqa: E402
+                           keep, stop_host, stop_on_signals)
 
 API = 'https://boat.dev/api/v1'
 # What one run uses (tests/live/tests/boat.test.ts): its starts, the 429 refusal included, the
@@ -267,95 +267,40 @@ def control(state_file, op, args):
 
 # Teardown, by the run's recorded IDs and its own names.
 
-def recorded_sandboxes(state, log, errors):
-    """The sandbox IDs the host's database records, and those the control program saw. The host
-    holds its database exclusively, so this reads it once the host is down, read-write: a host
-    killed mid-write leaves a hot journal, which only a writer can roll back."""
-    ids = set()
+def database_sandboxes(state, log):
+    """The sandbox IDs the host's database records. The host holds its database exclusively, so
+    this reads it once the host is down, read-write: a host killed mid-write leaves a hot
+    journal, which only a writer can roll back."""
     database = Path(state['state_dir']) / 'host.db'
-    if database.exists():
-        try:
-            with closing(sqlite3.connect(str(database))) as db:
-                ids |= {row[0] for row in db.execute('SELECT native FROM machines WHERE native IS NOT NULL')}
-            log(f'teardown: the host database records {len(ids)} sandboxes')
-        except sqlite3.Error as error:
-            errors.append(f"couldn't read the host database: {error}")
-    ledger = Path(state['evidence']) / 'sandbox-ids.txt'
-    if ledger.exists():
-        ids |= {line.strip() for line in ledger.read_text().splitlines() if line.strip()}
+    if not database.exists():
+        return set()
+    with closing(sqlite3.connect(str(database))) as db:
+        ids = {row[0] for row in db.execute('SELECT native FROM machines WHERE native IS NOT NULL')}
+    log(f'teardown: the host database records {len(ids)} sandboxes')
     return ids
 
 
-def teardown(state, boat, before, log, record):
-    errors = []
-    scratch = Path(state['scratch'])
-    pid = read_int(scratch / 'host.pid')
-    if pid is not None and alive(pid) and not (scratch / 'host.exit').exists():
-        os.kill(pid, signal.SIGTERM)
-        deadline = time.monotonic() + 30
-        while alive(pid) and time.monotonic() < deadline:
-            time.sleep(0.2)
-        if alive(pid):
-            os.kill(pid, signal.SIGKILL)
-        log(f'teardown: stopped the host (pid {pid})')
-    deadline = time.monotonic() + 10
-    while read_int(scratch / 'host.pid') is not None and not (scratch / 'host.exit').exists() \
-            and time.monotonic() < deadline:
-        time.sleep(0.2)
+def ledger_sandboxes(state):
+    """The sandbox IDs the control program saw."""
+    ledger = Path(state['evidence']) / 'sandbox-ids.txt'
+    return {line.strip() for line in ledger.read_text().splitlines() if line.strip()} if ledger.exists() else set()
 
-    named_prefix = f'{state["host_id"]}_'
-    snapshot_prefix = f'cbx-{state["host_id"]}-'
 
-    def listing(what, read):
-        """`read()`, or None with the error noted, so one failed listing stops no deletion."""
-        try:
-            return read()
-        except RuntimeError as error:
-            errors.append(f"couldn't list {what}: {error}")
-            return None
+def delete_sandbox(boat, sandbox_id, log):
+    boat.delete(sandbox_id)
+    if not boat.gone(sandbox_id):
+        raise RuntimeError(f'boat still has sandbox {sandbox_id} a minute after its delete')
+    log(f'teardown: deleted sandbox {sandbox_id}')
 
-    def delete_sandboxes(ids):
-        for sandbox_id in sorted(ids):
-            try:
-                boat.delete(sandbox_id)
-                if not boat.gone(sandbox_id):
-                    errors.append(f'boat still has sandbox {sandbox_id} a minute after its delete')
-                log(f'teardown: deleted sandbox {sandbox_id}')
-            except RuntimeError as error:
-                errors.append(str(error))
 
-    # By ID first, so a failed listing can't keep a recorded sandbox; then by run name.
-    ids = recorded_sandboxes(state, log, errors)
-    delete_sandboxes(ids)
-    listed = listing('sandboxes', boat.sandboxes) or []
-    swept = {sandbox['id'] for sandbox in listed
-             if sandbox['id'] not in ids and (sandbox.get('name') or '').startswith(named_prefix)}
-    delete_sandboxes(swept)
-    ids |= swept
-    names = sorted(snapshot['name'] for snapshot in listing('named snapshots', boat.snapshots) or []
-                   if snapshot['name'].startswith(snapshot_prefix))
-    for name in names:
-        try:
-            boat.delete_snapshot(name)
-            log(f'teardown: deleted named snapshot {name}')
-        except RuntimeError as error:
-            errors.append(str(error))
+def delete_snapshot(boat, name, log):
+    boat.delete_snapshot(name)
+    log(f'teardown: deleted named snapshot {name}')
 
-    listed = listing('sandboxes', boat.sandboxes) or []
-    left = [sandbox['id'] for sandbox in listed
-            if sandbox['id'] in ids or (sandbox.get('name') or '').startswith(named_prefix)]
-    if left:
-        errors.append(f'sandboxes left: {left}')
-    left_snapshots = [snapshot['name'] for snapshot in listing('named snapshots', boat.snapshots) or []
-                      if snapshot['name'].startswith(snapshot_prefix)]
-    if left_snapshots:
-        errors.append(f'named snapshots left: {left_snapshots}')
-    # A sandbox made during the run that carries no run name may be one whose create the host
-    # never recorded, or the operator's own: counted for the operator, never touched.
-    unnamed = sum(1 for sandbox in listed if sandbox['id'] not in before['ids'] and sandbox['id'] not in ids
-                  and sandbox.get('createdAt', '') >= before['at'])
-    # A host killed mid-exec leaves its ssh child behind, holding the run's key: stop it. Only
-    # the PID and program go to the log, since a child's argv carries the exec's wrapper.
+
+def stop_left_processes(state, log):
+    """A host killed mid-exec leaves its ssh child behind, holding the run's key: stops it. Only
+    the PID and program go to the log, since a child's argv carries the exec's wrapper."""
     stopped = []
     for pid_text, program in scratch_processes(state['scratch']):
         try:
@@ -370,9 +315,45 @@ def teardown(state, boat, before, log, record):
         time.sleep(0.2)
     mine = [f'{pid_text} {program}' for pid_text, program in scratch_processes(state['scratch'])]
     if mine:
-        errors.append(f'processes left: {mine}')
+        raise RuntimeError(f'processes left: {mine}')
 
-    limits = listing('limits', boat.limits)
+
+def teardown(state, boat, before, log, record):
+    step = Steps(log)
+    pid = step('stop the host', stop_host, Path(state['scratch']), log)
+    named_prefix = f'{state["host_id"]}_'
+    snapshot_prefix = f'cbx-{state["host_id"]}-'
+
+    # By ID first, so a failed listing can't keep a recorded sandbox; then by run name.
+    ids = (step('read the host database', database_sandboxes, state, log) or set()) | ledger_sandboxes(state)
+    for sandbox_id in sorted(ids):
+        step(f'delete sandbox {sandbox_id}', delete_sandbox, boat, sandbox_id, log)
+    swept = {sandbox['id'] for sandbox in step('list sandboxes', boat.sandboxes) or []
+             if sandbox['id'] not in ids and (sandbox.get('name') or '').startswith(named_prefix)}
+    for sandbox_id in sorted(swept):
+        step(f'delete sandbox {sandbox_id}', delete_sandbox, boat, sandbox_id, log)
+    ids |= swept
+    names = sorted(snapshot['name'] for snapshot in step('list named snapshots', boat.snapshots) or []
+                   if snapshot['name'].startswith(snapshot_prefix))
+    for name in names:
+        step(f'delete named snapshot {name}', delete_snapshot, boat, name, log)
+
+    listed = step('list sandboxes again', boat.sandboxes) or []
+    left = [sandbox['id'] for sandbox in listed
+            if sandbox['id'] in ids or (sandbox.get('name') or '').startswith(named_prefix)]
+    if left:
+        step.fail(f'sandboxes left: {left}')
+    left_snapshots = [snapshot['name'] for snapshot in step('list named snapshots again', boat.snapshots) or []
+                      if snapshot['name'].startswith(snapshot_prefix)]
+    if left_snapshots:
+        step.fail(f'named snapshots left: {left_snapshots}')
+    # A sandbox made during the run that carries no run name may be one whose create the host
+    # never recorded, or the operator's own: counted for the operator, never touched.
+    unnamed = sum(1 for sandbox in listed if sandbox['id'] not in before['ids'] and sandbox['id'] not in ids
+                  and sandbox.get('createdAt', '') >= before['at'])
+    step("stop the processes the host left", stop_left_processes, state, log)
+
+    limits = step('read limits', boat.limits)
     after = None if limits is None else starts_of(limits)
     suite_log = Path(state['evidence']) / 'suite.log'
     lines = re.findall(r'^\[start\] (\S+) (\S+) (\S+)\s*$', suite_log.read_text(), re.M) if suite_log.exists() else []
@@ -383,12 +364,11 @@ def teardown(state, boat, before, log, record):
         'account_hour_delta': None if after is None else after['hour']['used'] - before['starts']['hour']['used'],
         'active_after': None if limits is None else limits.get('activeSandboxes'),
     })
-    result = {'errors': errors, 'deleted_sandboxes': sorted(ids), 'deleted_snapshots': names,
+    result = {'errors': step.errors, 'deleted_sandboxes': sorted(ids), 'deleted_snapshots': names,
               'unnamed_sandboxes_made_during_the_run': unnamed, 'host_pid': pid}
     (Path(state['evidence']) / 'teardown.json').write_text(json.dumps(result, indent=2) + '\n')
     log(f'teardown: {result}')
-    if errors:
-        raise RuntimeError('; '.join(errors))
+    step.done()
 
 
 def redact_evidence(evidence, config, token, log):

@@ -53,8 +53,8 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from driver_common import (Evidence, Failed, WorkRun, alive, clean_commit, free_port, host_end, host_start,  # noqa: E402
-                           keep, read_int, sha256, stop_on_signals)
+from driver_common import (Evidence, Failed, Steps, WorkRun, clean_commit, free_port, host_end, host_start,  # noqa: E402
+                           keep, sha256, stop_host, stop_on_signals)
 
 SEED_FILES = ('config.json', 'disk.img', 'nvram.bin')
 SOFTNET = Path('/usr/local/bin/softnet')
@@ -79,9 +79,14 @@ def provenance_sums(seed):
     return sums
 
 
-def vz_processes():
+def processes(text):
+    """The processes whose command line holds `text`."""
     out = subprocess.run(['ps', '-axo', 'pid,command'], capture_output=True, text=True).stdout
-    return [line.strip() for line in out.splitlines() if VZ in line]
+    return [line.strip() for line in out.splitlines() if text in line]
+
+
+def vz_processes():
+    return processes(VZ)
 
 
 def softnet_ready():
@@ -197,74 +202,72 @@ def control(state_file, op, args):
 
 # Teardown, natively, by the run's own names.
 
-def stop_host(scratch, log):
-    """Stops the host whose keeper records its pid in `scratch`, if it runs, and returns its pid."""
-    pid = read_int(scratch / 'host.pid')
-    if pid is not None and alive(pid) and not (scratch / 'host.exit').exists():
-        os.kill(pid, signal.SIGTERM)
-        deadline = time.monotonic() + 30
-        while alive(pid) and time.monotonic() < deadline:
-            time.sleep(0.2)
-        if alive(pid):
-            os.kill(pid, signal.SIGKILL)
-        log(f'teardown: stopped the host (pid {pid})')
-    return pid
-
-
-def teardown(state, log):
-    errors = []
+def keep_job_logs(state):
+    """The jobs' logs hold tart run's and Softnet's output, the only record of a failed boot."""
     scratch = Path(state['scratch'])
-    pid = stop_host(scratch, log)
-    second_pid = stop_host(scratch / 'second', log)
-    # The jobs' logs hold tart run's and Softnet's output, the only record of a failed boot.
     for jobs, kept in ((Path(state['state_dir']) / 'launchd', Path(state['evidence']) / 'launchd'),
                        (scratch / 'second' / 'state' / 'launchd', Path(state['evidence']) / 'second' / 'launchd')):
         if jobs.exists():
             kept.mkdir(parents=True, exist_ok=True)
             for job_log in jobs.glob('*.log'):
                 shutil.copy2(job_log, kept / job_log.name)
-    home = Path(state['tart_home'])
-    if (home / 'vms').exists():
-        for vm in tart_list(state):
-            name = vm['Name']
-            if vm['State'] == 'running':
-                ran = tart(state, 'stop', '--timeout', '0', name)
-                log(f'teardown: tart stop {name} rc={ran.returncode}')
-                deadline = time.monotonic() + 30
-                while time.monotonic() < deadline and any(
-                        other['Name'] == name and other['State'] == 'running' for other in tart_list(state)):
-                    time.sleep(0.5)
-            ran = tart(state, 'delete', name)
-            log(f'teardown: tart delete {name} rc={ran.returncode} {ran.stderr.strip()}')
-        left = [vm['Name'] for vm in tart_list(state)]
-        if left:
-            errors.append(f'VMs left in {home}: {left}')
-    prefix = f'cbx-{state["host_id"]}-'
-    for label in labels(prefix):
-        subprocess.run(['launchctl', 'bootout', f'{DOMAIN}/{label}'], capture_output=True)
-        rc = subprocess.run(['launchctl', 'print', f'{DOMAIN}/{label}'], capture_output=True).returncode
-        log(f'teardown: bootout {label}, then launchctl print rc={rc}')
-        if rc != 113:
-            errors.append(f'launchd still holds {label}')
-    if labels(prefix):
-        errors.append(f'launchctl list still shows {labels(prefix)}')
-    # The host's keeper records its exit just after the host ends.
+
+
+def remove_vm(state, vm, log):
+    name = vm['Name']
+    if vm['State'] == 'running':
+        ran = tart(state, 'stop', '--timeout', '0', name)
+        log(f'teardown: tart stop {name} rc={ran.returncode}')
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and any(
+                other['Name'] == name and other['State'] == 'running' for other in tart_list(state)):
+            time.sleep(0.5)
+    ran = tart(state, 'delete', name)
+    log(f'teardown: tart delete {name} rc={ran.returncode} {ran.stderr.strip()}')
+
+
+def bootout(label, log):
+    subprocess.run(['launchctl', 'bootout', f'{DOMAIN}/{label}'], capture_output=True)
+    rc = subprocess.run(['launchctl', 'print', f'{DOMAIN}/{label}'], capture_output=True).returncode
+    log(f'teardown: bootout {label}, then launchctl print rc={rc}')
+    if rc != 113:
+        raise RuntimeError(f'launchd still holds {label}')
+
+
+def processes_end(state, prefix):
+    """Waits 10 s for the run's processes to end: the host's keeper records its exit just after
+    the host ends."""
     deadline = time.monotonic() + 10
-    while True:
-        procs = subprocess.run(['ps', '-axo', 'pid,command'], capture_output=True, text=True).stdout
-        mine = [line.strip() for line in procs.splitlines() if state['scratch'] in line or prefix in line]
-        if not mine or time.monotonic() > deadline:
-            break
+    while (mine := processes(state['scratch']) + processes(prefix)) and time.monotonic() < deadline:
         time.sleep(0.5)
     if mine:
-        errors.append(f'processes left: {mine}')
-    softnets = [line.strip() for line in procs.splitlines() if str(SOFTNET) in line]
-    record = {'errors': errors, 'vz_processes': vz_processes(), 'softnet_processes': softnets,
+        raise RuntimeError(f'processes left: {mine}')
+
+
+def teardown(state, log):
+    step = Steps(log)
+    scratch = Path(state['scratch'])
+    pid = step('stop the host', stop_host, scratch, log)
+    second_pid = step('stop the second host', stop_host, scratch / 'second', log)
+    step("keep the launchd jobs' logs", keep_job_logs, state)
+    home = Path(state['tart_home'])
+    if (home / 'vms').exists():
+        for vm in step('list the VMs', tart_list, state) or []:
+            step(f'remove VM {vm["Name"]}', remove_vm, state, vm, log)
+        left = step('list the VMs again', tart_list, state)
+        if left:
+            step.fail(f'VMs left in {home}: {[vm["Name"] for vm in left]}')
+    prefix = f'cbx-{state["host_id"]}-'
+    for label in step('list the launchd jobs', labels, prefix) or []:
+        step(f'boot out {label}', bootout, label, log)
+    if labels(prefix):
+        step.fail(f'launchctl list still shows {labels(prefix)}')
+    step("wait for the run's processes to end", processes_end, state, prefix)
+    record = {'errors': step.errors, 'vz_processes': vz_processes(), 'softnet_processes': processes(str(SOFTNET)),
               'launchd_labels': labels(prefix), 'host_pid': pid, 'second_host_pid': second_pid}
     (Path(state['evidence']) / 'teardown.json').write_text(json.dumps(record, indent=2) + '\n')
     log(f'teardown: {record}')
-    if errors:
-        raise RuntimeError('; '.join(errors))
+    step.done()
 
 
 FIREWALL = '/usr/libexec/ApplicationFirewall/socketfilterfw'

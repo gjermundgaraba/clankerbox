@@ -1,8 +1,8 @@
 """What the live drivers (smolvm/driver.py, tart/driver.py, boat/driver.py) share: the commit a
 run names, its signals, its evidence and the suite's run, the release bundles it builds in its
-scratch and the binary it takes from one, and for a host on this Mac, its keeper, its start and end,
-its API port and a file's checksum. A driver puts tests/live on its import path and imports this
-module by name.
+scratch and the binary it takes from one, a teardown's steps, and for a host on this Mac, its
+keeper, its start and end, its stop at teardown, its API port and a file's checksum. A driver puts
+tests/live on its import path and imports this module by name.
 """
 import hashlib
 import json
@@ -149,6 +149,55 @@ def host_end(state, sig, expected, wait=60):
             return
         time.sleep(0.1)
     raise RuntimeError(f'the host did not end within {wait} s of signal {sig}')
+
+
+def stop_host(scratch, log):
+    """Stops the host whose keeper records its pid in `scratch`, if it runs: SIGTERM, then
+    SIGKILL after 30 s. Waits up to 10 s for its keeper to record its exit, which reads 130 once
+    the host handled the SIGTERM, and logs it. Returns the host's pid."""
+    pid = read_int(scratch / 'host.pid')
+    if pid is None or (scratch / 'host.exit').exists():
+        return pid
+    if alive(pid):
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + 30
+        while alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        if alive(pid):
+            os.kill(pid, signal.SIGKILL)
+    deadline = time.monotonic() + 10
+    while (code := read_int(scratch / 'host.exit')) is None and time.monotonic() < deadline:
+        time.sleep(0.2)
+    if alive(pid):
+        raise RuntimeError(f'the host (pid {pid}) still runs after SIGKILL')
+    ended = 'left no exit status' if code is None else f'exited {code}{"" if code == 130 else ", not 130"}'
+    log(f'teardown: stopped the host (pid {pid}); it {ended}')
+    return pid
+
+
+class Steps:
+    """A teardown's steps: every step runs even after one failed, each failure is logged and
+    noted, and `done` raises with them all."""
+
+    def __init__(self, log):
+        self.log = log
+        self.errors = []
+
+    def __call__(self, what, action, *args):
+        """`action(*args)`, or None once its failure is noted."""
+        try:
+            return action(*args)
+        except Exception as error:
+            self.fail(f'{what}: {error}')
+            return None
+
+    def fail(self, message):
+        self.errors.append(message)
+        self.log(f'teardown: {message}')
+
+    def done(self):
+        if self.errors:
+            raise RuntimeError('; '.join(self.errors))
 
 
 class Evidence:
