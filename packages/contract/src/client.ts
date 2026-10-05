@@ -7,7 +7,7 @@
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
-import { Context, Duration, Effect, Fiber, Layer, Match, Result, Schema } from "effect";
+import { Context, Duration, Effect, Fiber, Layer, Match, Predicate, Result, Schema } from "effect";
 import type { HttpClient, HttpClientError } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 import { CheckpointGroup, HostGroup, Http, MachineGroup } from "./api.ts";
@@ -353,7 +353,8 @@ export const make = (
     /**
      * Asks every host at once and goes through the answers in list order: the first host
      * that answers and offers `base` wins, and the requests still out are interrupted, so a
-     * silent host after it delays nothing.
+     * silent host after it delays nothing. With no winner the create is `Unavailable` only if
+     * a host gave no reply; otherwise asking again changes nothing, and it is `Precondition`.
      */
     const place = (base: string) =>
       Effect.gen(function* () {
@@ -364,38 +365,30 @@ export const make = (
           })),
         );
 
-        const answers: Array<{ readonly host: string; readonly bases: ReadonlyArray<string> }> = [];
-        const unreachable: Array<Unreachable> = [];
+        /** What each host answered, in list order. */
+        const misses: Array<string> = [];
+        let unanswered = false;
 
         for (const { host, fiber } of asked) {
           const result = yield* Fiber.join(fiber);
 
           if (Result.isFailure(result)) {
-            unreachable.push({ host, error: result.failure });
+            unanswered ||= Predicate.isTagged(result.failure, "Unavailable");
+            misses.push(`${host} failed: ${result.failure._tag}: ${result.failure.message}`);
           } else if (result.success.bases.includes(base)) {
             return host;
           } else {
-            answers.push({ host, bases: result.success.bases });
+            const { bases } = result.success;
+
+            misses.push(`${host} offers ${bases.length > 0 ? bases.join(", ") : "no bases"}`);
           }
         }
 
-        if (unreachable.length > 0) {
-          return yield* new Unavailable({
-            message: `no reachable host offers base ${base}; hosts whose bases couldn't be read: ${unreachable
-              .map(({ host, error }) => `${host} (${error.message})`)
-              .join(", ")}`,
-            access: "read",
-          });
-        }
+        const message = `no host offers base ${base}: ${misses.join("; ")}`;
 
-        return yield* new Precondition({
-          message: `no host offers base ${base}: ${answers
-            .map(
-              ({ host, bases }) =>
-                `${host} offers ${bases.length > 0 ? bases.join(", ") : "no bases"}`,
-            )
-            .join("; ")}`,
-        });
+        return yield* unanswered
+          ? new Unavailable({ message, access: "read" })
+          : new Precondition({ message });
       }).pipe(Effect.scoped);
 
     const create = (target: string, spec: MachineSpec, options?: CreateOptions) =>

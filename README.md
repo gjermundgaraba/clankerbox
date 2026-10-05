@@ -389,12 +389,16 @@ every bump of it:
 
 Only `create` is placed (`client.ts`, `place`). A full ID, or else the
 profile's `host`, sends it to that host. Otherwise the client reads every
-host's bases in parallel and picks the first host in list order that offers
-the base, skipping hosts that don't answer. Whatever that host replies,
-`Capacity` included, is the reply; placement never moves on. With no host
-offering the base the reply is `Unavailable` if some host didn't answer, and
-otherwise `Precondition` listing each host's bases. Fork, restore, start, stop
-and delete go to the host of the resource they name: nothing migrates.
+host's bases in parallel and goes through the answers in list order: the
+first host that answers and offers the base wins, and the reads still out are
+interrupted, so a silent host after it delays nothing. A host that fails its
+read is skipped. Whatever the chosen host replies, `Capacity` included, is the
+reply; placement never moves on. With no host offering the base the reply
+names each host's bases or error, and is `Unavailable` if some host gave no
+reply, and otherwise `Precondition`: a host that calls itself by another ID,
+or whose reply doesn't decode, won't answer differently when asked again.
+Fork, restore, start, stop and delete go to the host of the resource they
+name: nothing migrates.
 
 ### Actions
 

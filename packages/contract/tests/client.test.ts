@@ -289,8 +289,28 @@ test("with no host offering the base and a host not answering, create is Unavail
   );
 
   expect(error._tag).toBe("Unavailable");
-  expect(error.message).toContain("mac");
+  expect(error.message).toContain("linux offers ubuntu");
+  expect(error.message).toContain("mac failed: Unavailable");
   expect(error.retryable).toBe(true);
+});
+
+test("with no host offering the base, a host that replied wrongly makes create Precondition, naming its error", async () => {
+  const linux = host({ id: "linux", bases: ["ubuntu"] });
+  const other = host({ id: "other", bases: ["ubuntu"] });
+
+  const error = await withClient(
+    [
+      ["linux", linux],
+      ["mis", other],
+    ],
+    (client) => Effect.flip(client.create("dev", { ...spec, base: "tahoe" })),
+  );
+
+  expect(error._tag).toBe("Precondition");
+  expect(error.retryable).toBe(false);
+  expect(error.message).toContain("linux offers ubuntu");
+  expect(error.message).toContain("mis failed: Invalid");
+  expect(error.message).toContain("calls itself other");
 });
 
 test("a host that calls itself by another ID is unreachable, and placement never sends to it", async () => {
@@ -307,7 +327,7 @@ test("a host that calls itself by another ID is unreachable, and placement never
     ["mis", "Invalid"],
   ]);
   expect(listed.unreachable[0]?.error.message).toContain("calls itself other");
-  expect(error._tag).toBe("Unavailable");
+  expect(error._tag).toBe("Precondition");
   expect(error.message).toContain("mis");
   expect(error.message).toContain("other");
   expect(other.creates).toHaveLength(0);
