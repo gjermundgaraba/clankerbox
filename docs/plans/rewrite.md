@@ -1702,7 +1702,10 @@ tests use real VMs.
    - Fix the three host API ports, each outside 10000–19999 (see Port
      allocation), and hand them to garaba-home with each caller's tag, which
      callers run `clankerbox ssh`, the elevated profiles' tags, and the live
-     suite's result.
+     suite's result. Also hand over that garaba-home's download URL changes:
+     0.11.0's Linux asset was `linux-amd64`, and from 0.12.0 it is
+     `linux-x64` (`clankerbox-<version>-linux-x64.tar.gz`, beside its
+     `.sha256`; see [Release](#release)).
    - Update the consumers' docs: `clankercreds/docs/recipe.md`, which still
      documents `machine.json`, and cliamp-verify's `clankerbox.md`, where
      `shell -T` becomes `ssh MACHINE -- cmd`, `create` takes the `cliamp-dev`
