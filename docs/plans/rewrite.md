@@ -143,7 +143,7 @@ typescript 7.0.2, vite-plus 1.0.0, @types/node 26. No native addons.
 gzipped):
 
 - darwin-arm64: CLI and host.
-- linux-amd64: CLI and host.
+- linux-x64 (Linux/amd64, under Node's name): CLI and host.
 
 Nearly all of each binary is Node itself (an Effect bundle run in one was
 666 KB), so separate CLI and host binaries would each be as large, and a host
@@ -1431,17 +1431,27 @@ Two rules for every VM job:
 
 ## Release
 
-**Node SEA pipeline:** about 40 lines of shell, validated on 26.10.0:
+**Node SEA pipeline:** three shell scripts in `tools/release`, validated on
+26.10.0 (`build-sea.sh`, `bundle.sh`, `smoke.sh`; `pnpm sea:build`,
+`sea:bundle`, `sea:smoke`):
 
 1. Pin the Node archives by SHASUMS256.
-2. Download and verify `bin/node` per target.
+2. Download and verify each target's archive, and keep its `bin/node` and
+   `LICENSE`.
 3. Bundle to one file.
 4. Write the per-target config with `"execArgvExtension": "none"`, so the binary
    ignores `NODE_OPTIONS`.
 5. Run `node --build-sea` per target, using the same Node version as the
    builder, with no code cache and no snapshot.
 6. Ad-hoc sign darwin with the hardened runtime and `allow-jit`.
-7. Smoke-test every role on each target.
+7. Bundle each target as `clankerbox-<version>-<target>.tar.gz`, beside its
+   `.sha256` (`<sha>  <name>`, which `sha256sum -c` and `shasum -a 256 -c`
+   check). The version is the SDK's. The targets keep Node's names,
+   `darwin-arm64` and `linux-x64` (0.11.0's Linux asset was `linux-amd64`).
+   The archive has no top directory, entries owned by root:0, and no
+   AppleDouble or xattr entries.
+8. Smoke-test every role on each target, from the bundle: its checksum, its
+   license and notices, then the extracted binary.
 
 Notarization isn't needed for curl/tar/scp installs.
 
@@ -1450,14 +1460,27 @@ Notarization isn't needed for curl/tar/scp installs.
 runtime manifest, and no notices or corresponding source for smolvm and its
 native libraries.
 
-**Notices:** Node's LICENSE and the pnpm dependency notices.
+**Notices:** Node's LICENSE and the pnpm dependency notices. A bundle holds
+`clankerbox`, the project's MIT `LICENSE` (restored from `main`; the SDK
+package carries it too), `notices/node/LICENSE` from the verified archive, and
+`notices/npm/`: `licenses.json` lists every production dependency of
+`apps/clankerbox` and its workspace packages, from `pnpm licenses list --prod`
+(name, version, license, homepage, no local paths), and
+`<name>@<version>/` holds each one's own license and notice files. The list
+is the lockfile's, a superset of what the bundle inlines: it includes
+`undici`, `redis` (platform-node's peer), and `@types/*`. The `redis`
+packages ship no license file and are listed with none.
 
 **Pins:** one `release-inputs.json` keyed by platform, with the Node SEA base
 binaries. The smolvm version the release was tested on is a constant in the
 host.
 
-**CI:** one vite-plus job, plus a SEA build smoke test on both targets.
-`publish-sdk` publishes `packages/contract` on release tags.
+**CI:** one vite-plus job, plus a SEA build, bundle and smoke test on both
+targets (`ubuntu-24.04` and `macos-latest`, arm64). `publish-sdk` publishes
+`packages/contract` only on a push of a release tag, `v<major>.<minor>.<patch>`,
+after checking that the tag names the package's version, through npm trusted
+publishing with provenance (the `npm` environment, as on `main`). It has no
+manual trigger, so nothing publishes from a branch.
 
 ## Phases
 
@@ -1556,6 +1579,9 @@ tests use real VMs.
 7. **Release and live tests.** `tools/release` (SEA, bundle, notices) and the
    full `tests/live`. Then the README design section and the bump skills
    (seeded from evidence.md).
+   - `tools/release` is built (see [Release](#release)): both targets' bundles
+     built here and passed the smoke test, darwin-arm64 on this Mac and
+     linux-x64 on the Linux test host (2026-10-05, evidence.md, Phase 7).
 8. **Cut over.**
    - Cut-over waits until every API consumer runs on the new SDK, or the
      operator accepts that consumer's downtime.

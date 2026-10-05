@@ -1585,6 +1585,29 @@ tier, so the suite ran its 429 test and its large create.
   and 0 active, and no process named the run. The API key is in no evidence
   file (compared by bytes). The run keeps 68 KiB of evidence and no scratch.
 
+## Phase 7 (2026-10-05)
+
+**Release bundles** (run `.work/runs/release-bundle-smoke-5231e11b9391` at
+`369580c`, a one-off driver). Both targets built and bundled on this Mac:
+`clankerbox-1.0.0-darwin-arm64.tar.gz` 44.3 MB and
+`clankerbox-1.0.0-linux-x64.tar.gz` 47.5 MB. `smoke.sh` passed on each
+bundle (checksum, license and notices, every role and `--help`):
+darwin-arm64 here, linux-x64 on the Linux test host (Linux 7.0.0, x86_64) in
+`~/clankerbox-rewrite/runs/rel-04f6`, which the run deleted after copying its
+log back. The run keeps 40 KiB of evidence and no scratch.
+
+- **Node's LICENSE** is `node-v26.10.0-<target>/LICENSE` in the pinned
+  archive, 156,386 bytes on both targets.
+- **npm notices:** `pnpm --filter '@clankerbox/clankerbox...' licenses list
+  --prod --json` lists 15 packages, all MIT. The bundle inlines `effect`,
+  `@effect/platform-node`, `@effect/platform-node-shared`, effect-actions and
+  `ws` (by rolldown's region comments, not a contract). `undici` is
+  tree-shaken out, `redis` is platform-node's peer and unused, and
+  `@types/*` are types; the five `redis` packages ship no license file.
+- **macOS tar:** bsdtar needs `COPYFILE_DISABLE=1` and `--no-mac-metadata
+  --no-xattrs` to leave out AppleDouble and xattr entries; the bundles list
+  none.
+
 ## Consumers and production
 
 - **Production hosts:** the Mac host runs Tart only and the Linux host smolvm
