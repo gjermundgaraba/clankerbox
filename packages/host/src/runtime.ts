@@ -63,9 +63,9 @@ export interface Observed {
 export interface Held {
   readonly machine: MachineRef;
   /**
-   * Whether an admitted create, start, fork or restore that hasn't ended boots it, the target
-   * included: its VM may not run yet, so step 3 counts it as running. A fork's source is held
-   * by the fork but isn't booted by it.
+   * Whether a running create, start or restore holds it, or a running fork that hasn't made it
+   * yet, the target included: its VM may not run yet, so step 3 counts it as running. A fork's
+   * source is held by the fork but isn't booted by it, and its copy runs once made.
    */
   readonly booting: boolean;
 }
