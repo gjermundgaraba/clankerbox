@@ -7,7 +7,7 @@
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
-import { Context, Duration, Effect, Layer, Match, Result, Schema } from "effect";
+import { Context, Duration, Effect, Fiber, Layer, Match, Result, Schema } from "effect";
 import type { HttpClient, HttpClientError } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 import { CheckpointGroup, HostGroup, Http, MachineGroup } from "./api.ts";
@@ -257,6 +257,25 @@ export const make = (
     };
 
     /**
+     * Sends one call to one host, bounded by its action's access. `target` is the ID to read
+     * when a mutation's reply is lost.
+     */
+    const ask = <A>(
+      { entry, api }: Route,
+      contract: { readonly access: Action.Access },
+      action: string,
+      call: (api: HostApi) => Effect.Effect<A, CallError>,
+      target?: string,
+    ) =>
+      settle(call(api), {
+        host: entry,
+        timeout: bounds[contract.access],
+        access: contract.access,
+        action,
+        target,
+      });
+
+    /**
      * Routes a call by the ID's host part: no network is needed to find the host. `made` is
      * the ID of the resource the call makes, if any, which is what to read after a lost reply.
      */
@@ -269,37 +288,18 @@ export const make = (
     ) =>
       Effect.gen(function* () {
         const { host } = yield* parseId(id);
-        const { entry, api } = yield* route(host);
 
-        return yield* settle(call(api), {
-          host: entry,
-          timeout: bounds[contract.access],
-          access: contract.access,
-          action,
-          target: made ?? id,
-        });
+        return yield* ask(yield* route(host), contract, action, call, made ?? id);
       });
 
     /** Asks every host at once; a host that fails is named rather than failing the whole. */
     const gather = <A>(
-      contract: { readonly access: Action.Access },
-      action: string,
-      call: (route: Route) => Effect.Effect<ReadonlyArray<A>, CallError>,
+      call: (route: Route) => Effect.Effect<ReadonlyArray<A>, ClankerboxError>,
     ): Effect.Effect<Gathered<A>> =>
       Effect.forEach(
         routed,
         (route) =>
-          Effect.map(
-            Effect.result(
-              settle(call(route), {
-                host: route.entry,
-                timeout: bounds[contract.access],
-                access: contract.access,
-                action,
-              }),
-            ),
-            (result) => ({ host: route.entry.id, result }),
-          ),
+          Effect.map(Effect.result(call(route)), (result) => ({ host: route.entry.id, result })),
         { concurrency: "unbounded" },
       ).pipe(
         Effect.map((results) => {
@@ -319,46 +319,64 @@ export const make = (
       );
 
     /**
-     * Every host, paired with its entry. IDs route by the entry's ID, so a host that calls
-     * itself something else is listed as unreachable rather than placed on.
+     * Reads a host. IDs route by its entry's ID, so a host that calls itself something else
+     * fails rather than being placed on.
      */
-    const listed = gather(actions["host.get"], "get host", ({ entry, api }) =>
-      api.host.get({ payload: {} }).pipe(
-        Effect.flatMap((host) =>
-          host.id === entry.id
-            ? Effect.succeed([{ entry, host }])
-            : Effect.fail(
-                new Invalid({
-                  message: `host ${entry.id} (${entry.url}) calls itself ${host.id}; its entry in the host list must use that ID`,
-                }),
-              ),
+    const readHost = (route: Route) =>
+      ask(route, actions["host.get"], "get host", (api) =>
+        api.host.get({ payload: {} }).pipe(
+          Effect.flatMap((host) =>
+            host.id === route.entry.id
+              ? Effect.succeed(host)
+              : Effect.fail(
+                  new Invalid({
+                    message: `host ${route.entry.id} (${route.entry.url}) calls itself ${host.id}; its entry in the host list must use that ID`,
+                  }),
+                ),
+          ),
         ),
-      ),
-    );
+      );
 
     const createOn = (host: string, name: string, spec: MachineSpec) =>
       Effect.gen(function* () {
         const id = yield* formatId(host, name);
-        const { entry, api } = yield* route(host);
 
-        return yield* settle(api.machine.create({ payload: { ...spec, id } }), {
-          host: entry,
-          timeout: bounds[actions["machine.create"].access],
-          access: actions["machine.create"].access,
-          action: `create ${id}`,
-          target: id,
-        });
+        return yield* ask(
+          yield* route(host),
+          actions["machine.create"],
+          `create ${id}`,
+          (api) => api.machine.create({ payload: { ...spec, id } }),
+          id,
+        );
       });
 
-    /** The first host in list order that offers `base`; a host that didn't answer is skipped. */
+    /**
+     * Asks every host at once and goes through the answers in list order: the first host
+     * that answers and offers `base` wins, and the requests still out are interrupted, so a
+     * silent host after it delays nothing.
+     */
     const place = (base: string) =>
       Effect.gen(function* () {
-        const { answers, unreachable } = yield* listed;
+        const asked = yield* Effect.forEach(routed, (route) =>
+          Effect.map(Effect.forkScoped(Effect.result(readHost(route))), (fiber) => ({
+            host: route.entry.id,
+            fiber,
+          })),
+        );
 
-        const chosen = answers.find(({ host }) => host.bases.includes(base));
+        const answers: Array<{ readonly host: string; readonly bases: ReadonlyArray<string> }> = [];
+        const unreachable: Array<Unreachable> = [];
 
-        if (chosen !== undefined) {
-          return chosen.entry.id;
+        for (const { host, fiber } of asked) {
+          const result = yield* Fiber.join(fiber);
+
+          if (Result.isFailure(result)) {
+            unreachable.push({ host, error: result.failure });
+          } else if (result.success.bases.includes(base)) {
+            return host;
+          } else {
+            answers.push({ host, bases: result.success.bases });
+          }
         }
 
         if (unreachable.length > 0) {
@@ -373,12 +391,12 @@ export const make = (
         return yield* new Precondition({
           message: `no host offers base ${base}: ${answers
             .map(
-              ({ entry, host }) =>
-                `${entry.id} offers ${host.bases.length > 0 ? host.bases.join(", ") : "no bases"}`,
+              ({ host, bases }) =>
+                `${host} offers ${bases.length > 0 ? bases.join(", ") : "no bases"}`,
             )
             .join("; ")}`,
         });
-      });
+      }).pipe(Effect.scoped);
 
     const create = (target: string, spec: MachineSpec, options?: CreateOptions) =>
       Effect.gen(function* () {
@@ -402,15 +420,16 @@ export const make = (
       Effect.flatMap(parseId(source), ({ host }) => formatId(host, name));
 
     return {
-      hosts: Effect.map(listed, ({ answers, unreachable }) => ({
-        answers: answers.map(({ host }) => host),
-        unreachable,
-      })),
-      machines: gather(actions["machine.list"], "list machines", ({ api }) =>
-        api.machine.list({ payload: {} }),
+      hosts: gather((route) => Effect.map(readHost(route), (host) => [host])),
+      machines: gather((route) =>
+        ask(route, actions["machine.list"], "list machines", (api) =>
+          api.machine.list({ payload: {} }),
+        ),
       ),
-      checkpoints: gather(actions["checkpoint.list"], "list checkpoints", ({ api }) =>
-        api.checkpoint.list({ payload: {} }),
+      checkpoints: gather((route) =>
+        ask(route, actions["checkpoint.list"], "list checkpoints", (api) =>
+          api.checkpoint.list({ payload: {} }),
+        ),
       ),
       machine: (id) =>
         byId(id, actions["machine.get"], `get ${id}`, (api) =>

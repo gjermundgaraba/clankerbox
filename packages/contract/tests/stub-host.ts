@@ -204,10 +204,15 @@ export const stubHost = (options: StubHostOptions) => {
 export type StubHost = ReturnType<typeof stubHost>;
 
 /**
- * How a host behaves on the network: served, down, never answering, or losing every reply
- * after running it.
+ * How a host behaves on the network: served, down, never answering, answering 100 ms late,
+ * or losing every reply after running it.
  */
-export type Endpoint = StubHost | "down" | "silent" | { readonly lost: StubHost };
+export type Endpoint =
+  | StubHost
+  | "down"
+  | "silent"
+  | { readonly slow: StubHost }
+  | { readonly lost: StubHost };
 
 const requestUrl = (input: string | URL | Request): URL =>
   new URL(input instanceof Request ? input.url : input);
@@ -236,6 +241,12 @@ export const transport = (
 
     if (endpoint === "silent") {
       return unanswered(init?.signal);
+    }
+
+    if ("slow" in endpoint) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+
+      return endpoint.slow.handler(new Request(input, init));
     }
 
     if ("lost" in endpoint) {
