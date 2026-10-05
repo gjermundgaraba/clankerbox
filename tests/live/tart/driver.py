@@ -30,7 +30,6 @@ names the code it ran. The evidence also keeps a read-only snapshot of the appli
 settings.
 """
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -44,7 +43,8 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from driver_common import REPO, Evidence, Failed, WorkRun, clean_commit, stop_on_signals  # noqa: E402
+from driver_common import (REPO, Evidence, Failed, WorkRun, alive, clean_commit, free_port, host_end,  # noqa: E402
+                           host_start, keep, read_int, sha256, stop_on_signals)
 
 TART = REPO / '.work/inputs/tart-2.40.1/tart.app/Contents/MacOS/tart'
 SEED_VM = 'home/vms/clankerbox-rewrite-seed-macos-tahoe-base'
@@ -53,14 +53,6 @@ SOFTNET = Path('/usr/local/bin/softnet')
 DIST = REPO / 'tools' / 'release' / 'dist'
 VZ = 'com.apple.Virtualization.VirtualMachine'
 DOMAIN = f'gui/{os.getuid()}'
-
-
-def sha256(path):
-    digest = hashlib.sha256()
-    with open(path, 'rb') as f:
-        for chunk in iter(lambda: f.read(1 << 22), b''):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def provenance_sums(seed):
@@ -103,84 +95,9 @@ def labels(prefix):
     return sorted(line.split('\t')[-1] for line in listed.splitlines() if line.split('\t')[-1].startswith(prefix))
 
 
-def alive(pid):
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
-
-
-def read_int(path):
-    try:
-        return int(path.read_text().strip())
-    except (FileNotFoundError, ValueError):
-        return None
-
-
 def native_pattern(state, name):
     """A machine's or checkpoint's VM name, launchd label and job files, by its name on the host."""
     return re.compile(rf'^cbx-{re.escape(state["host_id"])}-[mc]-{re.escape(name)}-[0-9a-f]{{8}}(\.plist|\.log)?$')
-
-
-# The host and its keeper.
-
-def keep(state_file):
-    """Runs the host to its end, recording its pid and exit status (negative: the signal)."""
-    state = json.loads(Path(state_file).read_text())
-    scratch = Path(state['scratch'])
-    with open(Path(state['evidence']) / 'host.log', 'a') as log:
-        log.write(f'--- host start {time.strftime("%Y-%m-%dT%H:%M:%S")}\n')
-        log.flush()
-        host = subprocess.Popen([state['binary'], 'host', '--config', state['config']], stdout=log,
-                                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                env=dict(os.environ, TART_HOME=state['tart_home']))
-        (scratch / 'host.pid.new').write_text(f'{host.pid}\n')
-        (scratch / 'host.pid.new').replace(scratch / 'host.pid')
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        code = host.wait()
-        (scratch / 'host.exit.new').write_text(f'{code}\n')
-        (scratch / 'host.exit.new').replace(scratch / 'host.exit')
-
-
-def host_start(state):
-    scratch = Path(state['scratch'])
-    pid = read_int(scratch / 'host.pid')
-    if pid is not None and alive(pid) and not (scratch / 'host.exit').exists():
-        raise RuntimeError(f'the host already runs as pid {pid}')
-    for name in ('host.pid', 'host.exit'):
-        (scratch / name).unlink(missing_ok=True)
-    subprocess.Popen([sys.executable, __file__, 'keep', state['state_file']], start_new_session=True,
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    deadline = time.monotonic() + 60
-    while time.monotonic() < deadline:
-        if (scratch / 'host.exit').exists():
-            log = (Path(state['evidence']) / 'host.log').read_text()[-2000:]
-            raise RuntimeError(f'the host exited {(scratch / "host.exit").read_text().strip()} at startup:\n{log}')
-        try:
-            with socket.create_connection((state['address'], state['api_port']), timeout=2):
-                return read_int(scratch / 'host.pid')
-        except OSError:
-            time.sleep(0.25)
-    raise RuntimeError('the host did not listen within 60 s')
-
-
-def host_end(state, sig, expected, wait=60):
-    """Signals the host and waits for its keeper to record how it ended."""
-    scratch = Path(state['scratch'])
-    pid = read_int(scratch / 'host.pid')
-    if pid is None or (scratch / 'host.exit').exists():
-        raise RuntimeError('the host does not run')
-    os.kill(pid, sig)
-    deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
-        code = read_int(scratch / 'host.exit')
-        if code is not None:
-            if code != expected:
-                raise RuntimeError(f'the host ended with {code}, not {expected}')
-            return
-        time.sleep(0.1)
-    raise RuntimeError(f'the host did not end within {wait} s of signal {sig}')
 
 
 # The suite's host-control program (tests/live/tests/live.ts).
@@ -190,7 +107,7 @@ def control(state_file, op, args):
     with open(Path(state['evidence']) / 'control.log', 'a') as log:
         log.write(f'{time.strftime("%H:%M:%S")} {shlex.join([op, *args])}\n')
     if op == 'host-start':
-        host_start(state)
+        host_start(state, __file__)
     elif op == 'host-stop':
         host_end(state, signal.SIGTERM, 0)
     elif op == 'host-kill':
@@ -323,18 +240,6 @@ def firewall_state():
                                           '--getallowsigned')}
 
 
-def free_port(address):
-    """A port outside the machines' range (10000-19999) that binds on `address`."""
-    for port in range(47000, 48000):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-            try:
-                probe.bind((address, port))
-            except OSError:
-                continue
-            return port
-    raise RuntimeError(f'no free port in 47000-47999 on {address}')
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', required=True, help='the Cirrus seed, with its PROVENANCE and READY')
@@ -435,13 +340,14 @@ def main():
                                f'{shlex.quote(str(state_file))} "$@"\n')
         control_bin.chmod(0o755)
 
-        log(f'host pid {host_start(state)}')
+        log(f'host pid {host_start(state, __file__)}')
         evidence.suite('tart', binary, client_config, control_bin, f'r{rid[:3]}-', options.suite_args)
 
 
 if __name__ == '__main__':
     if sys.argv[1:2] == ['keep']:
-        keep(sys.argv[2])
+        kept = json.loads(Path(sys.argv[2]).read_text())
+        keep(kept, dict(os.environ, TART_HOME=kept['tart_home']))
     elif sys.argv[1:2] == ['control']:
         try:
             sys.exit(control(sys.argv[2], sys.argv[3], sys.argv[4:]))
