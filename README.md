@@ -41,11 +41,11 @@ against it before extracting it: the `.sha256` holds `<sha256>  <bundle name>`,
 which `shasum -a 256 -c` (macOS) and `sha256sum -c` (Linux) check.
 
 ```sh
-base=https://github.com/gjermundgaraba/clankerbox/releases/download/v1.0.0
-curl -fLO "$base/clankerbox-1.0.0-linux-x64.tar.gz"
-curl -fLO "$base/clankerbox-1.0.0-linux-x64.tar.gz.sha256"
-shasum -a 256 -c clankerbox-1.0.0-linux-x64.tar.gz.sha256   # or sha256sum -c
-mkdir clankerbox && tar -xzf clankerbox-1.0.0-linux-x64.tar.gz -C clankerbox
+base=https://github.com/gjermundgaraba/clankerbox/releases/download/v0.12.0
+curl -fLO "$base/clankerbox-0.12.0-linux-x64.tar.gz"
+curl -fLO "$base/clankerbox-0.12.0-linux-x64.tar.gz.sha256"
+shasum -a 256 -c clankerbox-0.12.0-linux-x64.tar.gz.sha256   # or sha256sum -c
+mkdir clankerbox && tar -xzf clankerbox-0.12.0-linux-x64.tar.gz -C clankerbox
 clankerbox/clankerbox --version
 ```
 

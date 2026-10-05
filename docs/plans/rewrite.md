@@ -38,7 +38,7 @@ The Go implementation is deleted from this branch (`4898a3e`). Read it at `main`
 | Runtime | Node 26.10.0 (the latest patch at each release), shipped as Node SEA single-executable binaries. |
 | Effect | `effect` and `@effect/platform-node` **4.0.0**, the first stable release, published 2026-10-01. Before using `effect/http` and `effect/cli` (top-level modules in rc.118), check where they live at 4.0.0. |
 | Contract | [effect-actions](https://github.com/gjermundgaraba/effect-actions) **0.9.0** for every call. All calls are unary HTTP, and a mutation replies when its action has finished. Input is closed: undeclared fields are refused. |
-| SDK | `packages/contract` (Schemas, action groups, errors, the profile file schema and the client library) is published as the next major of `@gjermundgaraba/clankerbox-sdk`, versioned with the binaries. `effect` is a peer dependency, `^4.0.0`, so a consumer has a single copy and Schema identity holds. There is no separate `sdk-v*` tag and no pairing table. |
+| SDK | `packages/contract` (Schemas, action groups, errors, the profile file schema and the client library) is published as `@gjermundgaraba/clankerbox-sdk` 0.12.0, the version the binaries share (0.11.0 was the Go implementation's last release). `effect` is a peer dependency, `^4.0.0`, so a consumer has a single copy and Schema identity holds. There is no separate `sdk-v*` tag and no pairing table. |
 | Network and auth | Hosts and clients share the operator's Tailscale tailnet. Its policy lives in garaba-home's `access.ts`, outside this plan, and denies anything it doesn't name. The policy is the only gate: there are no API keys. garaba-home gives every caller its own tag (an app that needs the tailnet gets its own Tailscale container), so the policy can open each host port to exactly the callers that use it. A host listens only on its tailnet address, or on loopback for a local host. A guest must not reach its own host's API port from inside the box, where the policy doesn't apply; P1 checks that. No hop of ours uses TLS: the tailnet encrypts and authenticates. A boat host calls boat's API over HTTPS, and boat machines' SSH endpoints are public addresses (see [Runtimes: boat](#runtimes-boat)). |
 | State | SQLite through `node:sqlite`, on each host. The schema is versioned with `PRAGMA user_version` and an ordered list of migrations, starting at version 1. There is no client-side state beyond configuration and profile files. |
 | Placement | The client library places `create` on the host a full ID or the profile names, or else on the first reachable host in its host list that offers the request's base. There are no labels and no fall-through to another host. Every other call routes by ID. |
@@ -1623,8 +1623,7 @@ tests use real VMs.
      operator accepts that consumer's downtime.
    - Run the full live acceptance suite on Apple Silicon (Tart), on
      Linux/amd64 with KVM (smolvm as root), and against boat on the trial.
-   - Release.
-   - Publish the SDK major.
+   - Release 0.12.0, the binaries and the SDK.
    - Delete these plans in the last commit before the merge.
 9. **Redeploy production,** from garaba-home, which replaces personal-cloud:
    - Destroy the 0.11.0 machines and checkpoints on both hosts, and the

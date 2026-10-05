@@ -15,6 +15,7 @@ import {
   MachineGroup,
   NotFound,
   type Runtime,
+  version,
 } from "../src/index.ts";
 
 export interface StubHostOptions {
@@ -175,7 +176,7 @@ export const stubHost = (options: StubHostOptions) => {
       Effect.as(record("host.get"), {
         id: options.id,
         runtime,
-        version: "1.0.0",
+        version,
         runtimeVersion: "1.22.2",
         bases: options.bases,
       }),
