@@ -67,6 +67,9 @@ remote scratch. The local helper does not automatically manage remote resources.
 
 ## The live suites
 
+`tests/live/README.md` says how to run each runtime's suite, what each needs and
+what each covers.
+
 `tests/live/smolvm/driver.py` is the provisioning driver for `tests/live` against
 a smolvm host on a Linux test machine: it runs the host there as root, from a run
 directory with this layout under the machine's owned root, and gives the suite

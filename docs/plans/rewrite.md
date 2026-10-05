@@ -1582,6 +1582,29 @@ tests use real VMs.
    - `tools/release` is built (see [Release](#release)): both targets' bundles
      built here and passed the smoke test, darwin-arm64 on this Mac and
      linux-x64 on the Linux test host (2026-10-05, evidence.md, Phase 7).
+   - `tests/live` is complete against [Validation](#validation):
+     `tests/live/README.md` maps each item to the test that covers it, live or
+     unit, gives every uncovered item its reason, and says how to run each
+     runtime's one entry point (`pnpm live:smolvm`, `live:tart`, `live:boat`,
+     each its driver) and what it needs. These were added since the suites last
+     passed, and none has run live yet:
+     - every runtime: a taken name is `Conflict{exists}` and a base no host
+       offers is `Precondition` naming the host's bases, both before any
+       runtime call (no boat start);
+     - smolvm: a create whose CLI is SIGKILLed mid-call still finishes and
+       records its outcome, a create whose setup runs 310 s replies normally,
+       a failing setup fails the create with its output, and, opt-in with the
+       driver's `--recipe`, a real recipe through a create, a stop and a cold
+       start;
+     - Tart: placement over two hosts, by list order, a full ID, a profile's
+       `host` and a base no host offers. The driver runs a second Tart host,
+       `<host ID>-b`, on the run's home; its creates fail at `tart set`, so
+       none boots;
+     - boat: rsync beside scp, its setup installing rsync if the image lacks
+       it (no start). One run still makes 7 starts.
+
+     gg-linux-dev can't run before phase 9 rewrites it: unmodified it fails
+     on 26.04 and installs no sshd, key or `start` (evidence.md, P3).
 8. **Cut over.**
    - Cut-over waits until every API consumer runs on the new SDK, or the
      operator accepts that consumer's downtime.
@@ -1829,3 +1852,5 @@ Everything the rewrite creates on a test machine is removed when the work ends.
     (`apps/clankerbox/tests/host.test.ts`) rather than live.
 - Every live run goes through `scripts/work_runs.py`, following AGENTS.md.
   It runs `clankerbox host` from its own config, like any consumer.
+- `tests/live/README.md` maps each item above to the test that covers it, and
+  gives each item no live test covers its reason. It outlives these plans.
