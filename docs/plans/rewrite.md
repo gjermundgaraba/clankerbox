@@ -1160,9 +1160,11 @@ Two rules for every VM job:
   - An unclear outcome of the call (a dropped connection, no answer within
     2 minutes, a 5xx that isn't a refusal below, or a 2xx whose body breaks
     off) is retried inside the action, with backoff and the same key and
-    body, for up to 5 minutes: long enough to ride out a brief outage, and
-    far inside the key window. Then the action fails. The pauses double from
-    1 s up to 30 s. A repeat that boat answers with 409
+    body, for 5 minutes from the first unclear answer: long enough to ride
+    out a brief outage, and far inside the key window. Then the action
+    fails. The pauses double from 1 s up to 30 s. The first attempt and the
+    last repeat, begun inside the window, can each take 2 minutes, so a
+    call can take up to 9.5 minutes. A repeat that boat answers with 409
     `idempotency_in_progress`, while the first call is still making the
     sandbox, is unclear too.
   - The status decides before the body: any other 4xx is a definite answer,

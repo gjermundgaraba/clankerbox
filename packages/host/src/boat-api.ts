@@ -45,7 +45,11 @@ export const ttlSeconds = 7200;
  */
 const activation = { noEnv: true, ttlSeconds } as const;
 
-/** How long a call with an `Idempotency-Key` is repeated while its outcome is unclear. */
+/**
+ * How long a call with an `Idempotency-Key` is repeated while its outcome is unclear, counted
+ * from the first unclear answer. That answer can take `attemptTimeout`, and so can the last
+ * repeat, begun after a pause decided inside the window: a call can take up to 9.5 minutes.
+ */
 export const retryWindow = Duration.minutes(5);
 
 /** The first pause between repeats, doubling up to `longestPause`. */
@@ -147,11 +151,6 @@ const SandboxInfo = Schema.Struct({ sandbox: Sandbox });
 /** A fork's answer: `id` is the new sandbox. */
 const Forked = Schema.Struct({ id: Schema.String });
 
-const Authorized = Schema.Struct({
-  machineIp: Nullable(Schema.String),
-  sshEndpoint: Nullable(Schema.String),
-});
-
 const Finished = Schema.Struct({
   exitCode: Schema.NullOr(Schema.Number),
   stdout: Schema.String,
@@ -168,7 +167,7 @@ const NamedSnapshot = Schema.Struct({
 
 const NamedSnapshotInfo = Schema.Struct({ snapshot: NamedSnapshot });
 
-/** A body the host ignores beyond its status. */
+/** A body the host ignores beyond its status: it reads none of its fields. */
 const Accepted = Schema.Struct({});
 
 /** boat's error envelope. */
@@ -351,8 +350,8 @@ export const make = (settings: Settings) =>
 
     /**
      * A call that carries an `Idempotency-Key`: while its outcome is unclear it is repeated with
-     * the same key and body, with backoff, for up to `retryWindow`, far inside boat's 24-hour key
-     * window. Then it fails. A `Capacity` refusal of a repeat is `Internal`: the unclear attempt
+     * the same key and body, with backoff, for `retryWindow` from its first unclear answer, far
+     * inside boat's 24-hour key window. Then it fails. A `Capacity` refusal of a repeat is `Internal`: the unclear attempt
      * may have made a sandbox, which the refusal may be counting.
      */
     const idempotent = <A>(
@@ -474,13 +473,18 @@ export const make = (settings: Settings) =>
       /** Sets the display name the operator sees on boat's dashboard. */
       rename: (id: string, name: string) =>
         Effect.asVoid(
-          once({ method: "PATCH", path: `/sandboxes/${id}`, body: { name } }, SandboxInfo),
+          once({ method: "PATCH", path: `/sandboxes/${id}`, body: { name } }, Accepted),
         ),
-      /** Authorizes an OpenSSH public key for `user`. */
+      /**
+       * Authorizes an OpenSSH public key for `user`. The answer's address and host key go unread:
+       * the state gives the endpoint, and the command API the host keys.
+       */
       authorize: (id: string, publicKey: string) =>
-        once(
-          { method: "POST", path: `/sandboxes/${id}/sshkey`, body: { key: publicKey } },
-          Authorized,
+        Effect.asVoid(
+          once(
+            { method: "POST", path: `/sandboxes/${id}/sshkey`, body: { key: publicKey } },
+            Accepted,
+          ),
         ),
       /**
        * Runs a bash command as `user` through boat's command API, which takes no stdin and caps

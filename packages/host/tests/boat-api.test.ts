@@ -46,13 +46,14 @@ interface Answered {
 
 /**
  * How the fake answers a request: a status and JSON body, a status and some other text (a
- * proxy's page), a status and a body cut off after `cut`, or a dropped connection.
+ * proxy's page), a status and a body cut off after `cut`, a dropped connection, or no answer.
  */
 type Reply =
   | Answered
   | { readonly status: number; readonly text: string }
   | { readonly status: number; readonly cut: string }
-  | "drop";
+  | "drop"
+  | "hang";
 
 /** A response body that breaks off after `text`, as a dropped connection leaves it. */
 const cutOff = (text: string) =>
@@ -63,7 +64,7 @@ const cutOff = (text: string) =>
     },
   });
 
-const bodyOf = (reply: Exclude<Reply, "drop">) =>
+const bodyOf = (reply: Exclude<Reply, "drop" | "hang">) =>
   "body" in reply ? JSON.stringify(reply.body) : "text" in reply ? reply.text : cutOff(reply.cut);
 
 const decoder = new TextDecoder();
@@ -127,6 +128,10 @@ const fakeBoat = (reply: (sent: Sent, index: number) => Reply, delay = Duration.
       sent.push(recorded);
 
       const answer = reply(recorded, sent.length - 1);
+
+      if (answer === "hang") {
+        return Effect.never;
+      }
 
       const answered =
         answer === "drop"
@@ -334,6 +339,22 @@ test("the repeats stop at their bound, and the create fails without a second key
   }
 });
 
+test("the bound counts from the first unclear answer, so a call can outlast it by an attempt each side", async () => {
+  const boat = fakeBoat(() => "hang");
+
+  const { exit, waited } = await runTimed(boat, (api) => Effect.flip(api.create("key-1", "small")));
+  const error = Exit.isSuccess(exit) ? exit.value : undefined;
+
+  expect([error?._tag, error?.message]).toEqual([
+    "Internal",
+    "boat POST /sandboxes had no answer within 2m, and repeats for 5m got no clearer answer",
+  ]);
+  // 2 minutes until the first answers nothing; repeats after 1, 2 and 4 s, the last begun 4m 7s
+  // into the window; 2 minutes more.
+  expect(boat.sent).toHaveLength(4);
+  expect(Duration.format(waited)).toBe("8m 7s");
+});
+
 test("a Capacity refusal after an unclear attempt isn't one: that attempt may have made a sandbox", async () => {
   for (const unclear of ["drop", refusal(500, "internal_error")] as const) {
     const boat = fakeBoat((_sent, index) =>
@@ -499,6 +520,23 @@ test("a sandbox or snapshot boat answers 404 for is none, and deleting one is do
     ["GET", "/named-snapshots/cbx-boat-01234567", undefined],
     ["DELETE", "/sandboxes/bx_gone0001", "bx_gone0001"],
     ["DELETE", "/named-snapshots/cbx-boat-01234567", undefined],
+  ]);
+});
+
+test("rename and authorize read only the status: an answer without the fields they used to decode is done", async () => {
+  const boat = fakeBoat(() => ({ status: 200, body: { ok: true } }));
+
+  const answers = await run(boat, (api) =>
+    Effect.all([
+      api.rename("bx_made0001", "boat_dev"),
+      api.authorize("bx_made0001", "ssh-ed25519 AAAAC3Nza host"),
+    ]),
+  );
+
+  expect(answers).toEqual([undefined, undefined]);
+  expect(boat.sent.map((sent) => [sent.method, sent.path, json(sent)])).toEqual([
+    ["PATCH", "/sandboxes/bx_made0001", { name: "boat_dev" }],
+    ["POST", "/sandboxes/bx_made0001/sshkey", { key: "ssh-ed25519 AAAAC3Nza host" }],
   ]);
 });
 
