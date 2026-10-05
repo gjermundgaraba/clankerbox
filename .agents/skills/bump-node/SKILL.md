@@ -25,11 +25,13 @@ packages, not this one.
   workflows' `setup-node` (`node-version-file`) and the release build read;
   `tools/release/release-inputs.json`, each target's archive sha256 under
   `nodeArchiveSha256.<version>` (`node-v<version>-darwin-arm64.tar.xz` and
-  `node-v<version>-linux-x64.tar.xz`); `@types/node` in
-  `pnpm-workspace.yaml`'s catalog; `engines` in the root `package.json`; README
-  ("Node 26.10.0 inside", "Node 26 and pnpm 12"). `git grep -n '26\.10'` finds
-  them. CI's SEA cache key hashes `.node-version` and `release-inputs.json`, so
-  it follows.
+  `node-v<version>-linux-x64.tar.xz`); README ("Node 26.10.0 inside").
+  `git grep -n '26\.10'` finds them. CI's SEA cache key hashes `.node-version`
+  and `release-inputs.json`, so it follows. `@types/node` in
+  `pnpm-workspace.yaml`'s catalog has its own version (26.6.4). The major alone
+  is in `engines` in the root `package.json` (`"node": ">=26"`, a floor) and
+  README's "Node 26 and pnpm 12": a patch or minor bump leaves both, and that
+  grep doesn't find them.
 - **Target:** the latest release of the current major on
   `https://nodejs.org/dist/` (its `index.json`), unless the user names one. A
   new major is a larger change: also `engines`, the `@types/node` major and
@@ -37,8 +39,8 @@ packages, not this one.
 - **Checksums:** take each archive's sha256 from that release's
   `SHASUMS256.txt`, verify the file's signature (`SHASUMS256.txt.asc`) against
   Node's release keys, and confirm by hashing the downloaded archives.
-- **Notation:** `N@v<version>:path:lines` is Node's source at that tag
-  (`github.com/nodejs/node`); lines move, the identifier beside them finds them.
+- **Notation:** `N@v<version>:path` is Node's source at that tag
+  (`github.com/nodejs/node`); the identifier beside it finds the code.
   The SEA claims are in `doc/api/single-executable-applications.md`.
 
 ## Claims to re-check
@@ -89,19 +91,19 @@ Each: what Node does, where, and what of ours depends on it.
 **HTTP timeouts** (a mutation replies when its action ends, which can take
 minutes)
 
-- `fetch` runs on Node's bundled undici (8.10.2 at 26.10.0, `process.versions.undici`),
-  whose `headersTimeout` and `bodyTimeout` are both 300 000 ms
-  (N@v26.10.0:deps/undici/src/lib/dispatcher/client.js:316-317); a 330 s call
-  failed at 300.9 s with `UND_ERR_HEADERS_TIMEOUT`, and Node has no public API to
-  change them. Ours: the SDK's `Client.layer` uses `node:http`, which sets no
-  client timeout; README's SDK section says a `fetch` client gives up after
-  300 s.
+- `fetch` runs on Node's bundled undici (8.10.2 at 26.10.0,
+  `process.versions.undici`), whose `headersTimeout` and `bodyTimeout` are both
+  300 000 ms (`kBodyTimeout`, `kHeadersTimeout`,
+  N@v26.10.0:deps/undici/src/lib/dispatcher/client.js); a 330 s call failed at
+  300.9 s with `UND_ERR_HEADERS_TIMEOUT`, and Node has no public API to change
+  them. Ours: the SDK's `Client.layer` uses `node:http`, which sets no client
+  timeout; README's SDK section says a `fetch` client gives up after 300 s.
 - The `node:http` server's defaults: `requestTimeout` 300 000 ms, covering only
   receiving the request, `headersTimeout` 60 000, `keepAliveTimeout` 5 000 and
-  `timeout` 0 (N@v26.10.0:lib/_http_server.js:537-562, 665); 330 s handlers
-  replied under them. Ours: `packages/host/src/server.ts` creates the server
-  with Node's defaults. A default that starts bounding a response would cut
-  long mutations off.
+  `timeout` 0 (`storeHTTPOptions` and `Server`, N@v26.10.0:lib/_http_server.js);
+  330 s handlers replied under them. Ours: `packages/host/src/server.ts` creates
+  the server with Node's defaults. A default that starts bounding a response
+  would cut long mutations off.
 
 **Sizes and startup** (sanity checks, not contracts)
 
@@ -125,8 +127,9 @@ minutes)
 
 - Update `.node-version` and `release-inputs.json` (the new version's two
   checksums; drop the old version's) together, `@types/node` (the newest of the
-  major, which waits a day under the workspace's `minimumReleaseAge`), README,
-  and for a new major `engines`.
+  major, which waits a day under the workspace's `minimumReleaseAge`) and
+  README's "Node 26.10.0 inside". For a new major, also raise `engines`'
+  floor to it (`>=27`) and README's "Node 26".
 - Move each `N@v<old>` citation, here and in comments, to the new tag, and add
   claims the release introduced.
 - Hosts pick the new Node up only with a new clankerbox release; running VMs

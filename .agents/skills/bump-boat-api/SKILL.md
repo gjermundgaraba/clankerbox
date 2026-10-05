@@ -31,9 +31,11 @@ back.
   spec, and so do the fakes in `packages/host/tests/boat-api.test.ts` and
   `boat.test.ts`. `packages/contract/tests/ids.test.ts` holds the named-snapshot
   name rule.
-- **Sources:** the spec at `https://docs.boat.dev/openapi/boat-v1.yaml`
-  (`79aa87e2…f210` when last read, 2026-10-04; only that prefix was recorded),
-  and the docs at `docs.boat.dev`. Keep the copy you audit under
+- **Sources:** the spec at `https://docs.boat.dev/openapi/boat-v1.yaml`, and
+  the docs at `docs.boat.dev`. The audited spec has sha256
+  `79aa87e21849194635cf057293d6934638bab1aeee1c1d4857aa1920e34cf210`, fetched
+  2026-10-05; the audit, on 2026-10-04, recorded only its prefix and suffix,
+  `79aa87e2…f210`, which match. Keep the copy you audit under
   `.work/inputs/boat-v1-<date>.yaml` with its full sha256 and fetch date, so the
   next bump can diff against it. Also note boat's changelog and the image's
   OS release.
