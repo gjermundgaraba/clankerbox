@@ -16,13 +16,7 @@ const agentTooling = [
 
 export default defineConfig({
   fmt: {
-    ignorePatterns: [
-      ...agentTooling,
-      ".work/**",
-      // The plans keep their own line breaks and are deleted before the merge.
-      "docs/plans/**",
-      "tools/oxlint/anti-slop/**",
-    ],
+    ignorePatterns: [...agentTooling, ".work/**", "tools/oxlint/anti-slop/**"],
   },
   lint: {
     options: { typeAware: true, typeCheck: true },
