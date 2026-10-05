@@ -7,41 +7,36 @@
  * that made any other machine deletes it. Timings print as `[timing]` lines.
  */
 import { randomBytes } from "node:crypto";
-import { readFile, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { join } from "node:path";
-import type { Machine, SshEndpoint } from "@gjermundgaraba/clankerbox-sdk";
-import { Schema } from "effect";
-import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
+import type { SshEndpoint } from "@gjermundgaraba/clankerbox-sdk";
+import { describe, expect, test } from "vite-plus/test";
 import {
   Checkpoints,
   decode,
-  type Environment,
-  environment,
-  Failure,
-  Machines,
+  harness,
+  liveOn,
   minutes,
   Names,
   OneCheckpoint,
   OneMachine,
   type Ran,
+  type Runtime,
   run,
-  scratch,
   sha256,
   TartNatives,
   timing,
+  waitFor,
   writeFileIn,
 } from "./live.ts";
-
-const live =
-  process.env["CLANKERBOX_LIVE"] === "1" && process.env["CLANKERBOX_LIVE_RUNTIME"] === "tart";
 
 /**
  * The setup of `main`. Softnet's block of the host also blocks the gateway's DNS, so public
  * resolvers come first (rewrite.md, Runtimes: Tart). `admin` is the Cirrus image's user. Setup
  * runs before preparation, so it records the image's host key, which preparation replaces.
  */
-const mainSetup = (publicKey: string) => `#!/bin/sh
+const mainScript = (publicKey: string) => `#!/bin/sh
 set -eu
 networksetup -listallnetworkservices | tail -n +2 | sed 's/^\\*//' | while IFS= read -r service; do
   networksetup -setdnsservers "$service" 1.1.1.1 9.9.9.9
@@ -94,31 +89,12 @@ const answer = (endpoint: SshEndpoint) =>
     });
   });
 
-const nothing = { machines: [], jobs: [], files: [] };
-
-describe.skipIf(!live)("a Tart host, through the CLI", () => {
-  let env: Environment;
-  let dir: string;
-  let key: string;
-  let setup: string;
-
-  const cli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
-    run(env.binary, [...command, "--config", env.config, ...args]);
-
-  /** A new resource's name, which carries the run's prefix like every other. */
-  const named = (name: string) => `${env.prefix}${name}`;
-
-  const id = (name: string) => `${env.host.id}_${named(name)}`;
-
-  const control = (...args: ReadonlyArray<string>) => run(env.control, args);
-
-  const machines = async () => decode(Machines, await cli(["machines"], "--json"));
-
-  const machine = async (name: string): Promise<Machine | undefined> =>
-    (await machines()).machines.find((listed) => listed.id === id(name));
-
+/** What the harness drives a Tart host with. */
+const tart: Runtime<typeof TartNatives.Type> = {
+  /** The Cirrus image's user. */
+  user: "admin",
   /** The base's disk is 50 GB, and Tart only grows a disk (rewrite.md, Runtimes: Tart). */
-  const sizes = (diskGib = 50) => [
+  sizes: (diskGib = 50) => [
     "--base",
     "macos",
     "--cpu",
@@ -127,129 +103,41 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
     "4096",
     "--disk-gib",
     String(diskGib),
-  ];
+  ],
+  /** The VMs, launchd jobs and job files of the machine or checkpoint named `name` on the host. */
+  natives: (controlled, name) => controlled(TartNatives, "natives", name),
+  nothing: { machines: [], jobs: [], files: [] },
+  mainSetup: (dir, publicKey) => writeFileIn(dir, "main-setup.sh", mainScript(publicKey), 0o755),
+};
 
-  const createBare = (name: string, diskGib?: number) =>
-    cli(["create"], id(name), ...sizes(diskGib), "--json");
+describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
+  const suite = harness(tart);
 
-  const createWith = async (name: string, script: string, timeoutSeconds: number) => {
-    const file = await writeFileIn(dir, `${name}-setup.sh`, script, 0o755);
+  const {
+    cli,
+    named,
+    id,
+    control,
+    controlled,
+    machines,
+    machine,
+    createBare,
+    createWith,
+    inGuest,
+    pinned,
+    failure,
+    natives,
+    probe,
+  } = suite;
 
-    return cli(
-      ["create"],
-      id(name),
-      ...sizes(),
-      "--setup",
-      file,
-      "--setup-timeout",
-      String(timeoutSeconds),
-      "--json",
-    );
-  };
-
-  const ssh = (name: string, command: string) =>
-    cli(
-      ["ssh"],
-      id(name),
-      "--",
-      "-i",
-      key,
-      "-o",
-      "IdentitiesOnly=yes",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "ConnectTimeout=30",
-      "-l",
-      "admin",
-      command,
-    );
-
-  /** Runs `command` over ssh and returns its output, failing the test on a non-zero exit. */
-  const inGuest = async (name: string, command: string) => {
-    const ran = await ssh(name, command);
-
-    expect(ran.code, `${command}: ${ran.stderr}`).toBe(0);
-
-    return ran.stdout;
-  };
-
-  /** ssh options pinning `hostKey` under the machine's ID, as `clankerbox ssh` does. */
-  const pinned = async (target: Machine, hostKey = target.hostKey ?? "") => {
-    const knownHosts = await writeFileIn(
-      dir,
-      `known-hosts-${randomBytes(4).toString("hex")}`,
-      `${target.id} ${hostKey}\n`,
-    );
-
-    return [
-      "-o",
-      `HostKeyAlias=${target.id}`,
-      "-o",
-      `UserKnownHostsFile=${knownHosts}`,
-      "-o",
-      "GlobalKnownHostsFile=/dev/null",
-      "-o",
-      "StrictHostKeyChecking=yes",
-      "-o",
-      "IdentitiesOnly=yes",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "ConnectTimeout=30",
-      "-i",
-      key,
-    ];
-  };
-
-  const failure = (ran: Ran) => {
-    expect(ran.code, ran.stdout).toBe(1);
-
-    return decode(Failure, ran).error;
-  };
-
-  const controlled = async <A>(schema: Schema.Codec<A, string>, ...args: ReadonlyArray<string>) => {
-    const ran = await control(...args);
-
-    expect(ran.code, ran.stderr).toBe(0);
-
-    return decode(schema, ran);
-  };
-
-  /** The VMs, launchd jobs and job files of machine or checkpoint `name`. */
-  const natives = (name: string) => controlled(TartNatives, "natives", named(name));
-
-  /** Whether the host itself reaches `address:port`. */
-  const probe = async (address: string, port: string) => {
-    const ran = await control("probe", address, port);
-
-    expect(ran.code, ran.stderr).toBe(0);
-
-    return ran.stdout;
-  };
-
-  /** Deletes the machine, then checks that its VM, job, job files and listener are gone. */
+  /** Deletes the machine as the harness does, then checks that its listener is gone too. */
   const removeMachine = async (name: string) => {
     const endpoint = (await machine(name))?.ssh;
-    const ran = await cli(["delete"], id(name), "--json");
 
-    expect(ran.code, ran.stdout).toBe(0);
-    expect(await natives(name)).toEqual(nothing);
+    await suite.removeMachine(name);
 
     if (endpoint !== undefined) {
       expect(await answer(endpoint)).toBe("refused");
-    }
-  };
-
-  const waitFor = async (what: string, check: () => Promise<boolean>, seconds: number) => {
-    const deadline = performance.now() + seconds * 1000;
-
-    while (!(await check())) {
-      if (performance.now() > deadline) {
-        throw new Error(`timed out waiting for ${what}`);
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   };
 
@@ -281,26 +169,6 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
   /** When the guest booted; a VM that kept running keeps it. */
   const bootTime = (name: string) => inGuest(name, "sysctl -n kern.boottime");
 
-  beforeAll(async () => {
-    env = await environment();
-    dir = await scratch();
-    key = join(dir, "key");
-
-    const keygen = await run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key]);
-
-    expect(keygen.code, keygen.stderr).toBe(0);
-    setup = await writeFileIn(
-      dir,
-      "main-setup.sh",
-      mainSetup((await readFile(`${key}.pub`, "utf8")).trim()),
-      0o755,
-    );
-  });
-
-  // The driver's teardown removes what the run left on the host natively, so a test that leaves
-  // the host down can't keep it there. This holds the run's private key and its setup scripts.
-  afterAll(() => rm(dir, { recursive: true, force: true }));
-
   test(
     "create runs setup once and then preparation, and reports the forwarder's endpoint and a fresh host key",
     async () => {
@@ -309,9 +177,9 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
       const ran = await cli(
         ["create"],
         id("main"),
-        ...sizes(),
+        ...tart.sizes(),
         "--setup",
-        setup,
+        suite.mainSetup,
         "--setup-timeout",
         "600",
         "--json",
@@ -326,7 +194,7 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
         id: id("main"),
         state: "running",
         action: { name: "create", status: "done" },
-        ssh: { host: new URL(env.host.url).hostname },
+        ssh: { host: new URL(suite.env.host.url).hostname },
       });
       expect(made.ssh?.port).toBeGreaterThanOrEqual(10_000);
       expect(made.ssh?.port).toBeLessThanOrEqual(19_999);
@@ -368,15 +236,15 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
       }
 
       const options = await pinned(target);
-      const local = await writeFileIn(dir, "upload.bin", randomBytes(256 * 1024));
+      const local = await writeFileIn(suite.dir, "upload.bin", randomBytes(256 * 1024));
       const remote = `admin@${endpoint.host}`;
       const port = String(endpoint.port);
       const started = performance.now();
       const up = await run("scp", [...options, "-P", port, local, `${remote}:up.bin`]);
-      const down = join(dir, "scp-down.bin");
+      const down = join(suite.dir, "scp-down.bin");
       const back = await run("scp", [...options, "-P", port, `${remote}:up.bin`, down]);
       const rsh = ["ssh", ...options, "-p", port].join(" ");
-      const synced = join(dir, "rsync-down.bin");
+      const synced = join(suite.dir, "rsync-down.bin");
       const rsyncUp = await run("rsync", ["-a", "-e", rsh, local, `${remote}:rsync-up.bin`]);
       const rsyncDown = await run("rsync", ["-a", "-e", rsh, `${remote}:rsync-up.bin`, synced]);
 
@@ -400,7 +268,7 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
   test(
     "under Softnet a guest can't reach its host's API port or any of the host's addresses, and reaches the internet by name",
     async () => {
-      const api = new URL(env.host.url);
+      const api = new URL(suite.env.host.url);
       const listener = (await control("listener")).stdout;
       const gateway = await inGuest("main", "route -n get default | awk '/gateway:/ {print $2}'");
       const addresses = new Set([...(await controlled(Names, "addresses")), gateway]);
@@ -450,8 +318,8 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
         [],
       );
       expect(await machine("hot-fork")).toBeUndefined();
-      expect(await natives("hot")).toEqual(nothing);
-      expect(await natives("hot-fork")).toEqual(nothing);
+      expect(await natives("hot")).toEqual(tart.nothing);
+      expect(await natives("hot-fork")).toEqual(tart.nothing);
       expect(await machine("main")).toMatchObject({
         state: "running",
         action: { name: "create", status: "done" },
@@ -643,7 +511,7 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
       expect(third.tag).toBe("Capacity");
       expect(third.message).toContain("Apple allows 2");
       expect(await machine("third")).toBeUndefined();
-      expect(await natives("third")).toEqual(nothing);
+      expect(await natives("third")).toEqual(tart.nothing);
 
       const start = failure(await cli(["start"], id("main"), "--json"));
 
@@ -695,7 +563,7 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
 
       timing("checkpoint delete", started);
       expect(deleted.code, deleted.stdout).toBe(0);
-      expect(await natives("snap")).toEqual(nothing);
+      expect(await natives("snap")).toEqual(tart.nothing);
       expect(decode(Checkpoints, await cli(["checkpoint", "list"], "--json")).checkpoints).toEqual(
         [],
       );
@@ -736,6 +604,7 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
           );
         },
         300,
+        2000,
       );
       expect((await control("host-kill")).code).toBe(0);
 
@@ -776,8 +645,8 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
       }
 
       expect(await machine("crash-fork")).toBeUndefined();
-      expect(await natives("crash-fork")).toEqual(nothing);
-      expect(await natives("crash-snap")).toEqual(nothing);
+      expect(await natives("crash-fork")).toEqual(tart.nothing);
+      expect(await natives("crash-snap")).toEqual(tart.nothing);
       expect(decode(Checkpoints, await cli(["checkpoint", "list"], "--json")).checkpoints).toEqual(
         [],
       );

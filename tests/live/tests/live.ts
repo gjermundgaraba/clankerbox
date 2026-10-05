@@ -4,12 +4,13 @@
  * Nothing here prints a setup script: tests write them to files the CLI reads.
  */
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Checkpoint, ErrorTag, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
+import { afterAll, beforeAll, expect } from "vite-plus/test";
 
 export interface Ran {
   readonly code: number;
@@ -184,4 +185,224 @@ export const decode = <A>(schema: Schema.Codec<A, string>, ran: Ran): A => {
       cause: error,
     });
   }
+};
+
+/** Whether this run is live on `runtime`, which `describe.skipIf` reads. */
+export const liveOn = (runtime: "smolvm" | "tart") =>
+  process.env["CLANKERBOX_LIVE"] === "1" && process.env["CLANKERBOX_LIVE_RUNTIME"] === runtime;
+
+/** Waits until `check` holds, checking every `everyMs`, and fails after `seconds`. */
+export const waitFor = async (
+  what: string,
+  check: () => Promise<boolean>,
+  seconds: number,
+  everyMs = 500,
+) => {
+  const deadline = performance.now() + seconds * 1000;
+
+  while (!(await check())) {
+    if (performance.now() > deadline) {
+      throw new Error(`timed out waiting for ${what}`);
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, everyMs));
+  }
+};
+
+/** Runs the host-control program and decodes what it prints, failing the test on a non-zero exit. */
+export type Controlled = <A>(
+  schema: Schema.Codec<A, string>,
+  ...args: ReadonlyArray<string>
+) => Promise<A>;
+
+/** What one runtime's suite tells the harness. */
+export interface Runtime<Native> {
+  /** The user the run's key logs in as over ssh. */
+  readonly user: string;
+  /** A create's `--base` and sizes; with no arguments, those of a create with setup. */
+  readonly sizes: (...args: ReadonlyArray<number>) => ReadonlyArray<string>;
+  /** The native resources of the machine or checkpoint whose name on the host is `name`. */
+  readonly natives: (controlled: Controlled, name: string) => Promise<Native>;
+  /** What `natives` reads once a delete removed everything. */
+  readonly nothing: Native;
+  /** Writes the setup of `main`, for the run's public key, into `dir`, and returns its path. */
+  readonly mainSetup: (dir: string, publicKey: string) => Promise<string>;
+}
+
+/**
+ * Drives one runtime's host through the CLI. Before the suite's tests it reads the environment,
+ * makes the run's scratch directory and key, and writes the setup of `main` there; after them it
+ * removes that directory. `env`, `dir` and `mainSetup` are read once that has run.
+ */
+export const harness = <Native>(runtime: Runtime<Native>) => {
+  let env: Environment;
+  let dir: string;
+  let key: string;
+  let mainSetup: string;
+
+  beforeAll(async () => {
+    env = await environment();
+    dir = await scratch();
+    key = join(dir, "key");
+
+    const keygen = await run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key]);
+
+    expect(keygen.code, keygen.stderr).toBe(0);
+    mainSetup = await runtime.mainSetup(dir, (await readFile(`${key}.pub`, "utf8")).trim());
+  });
+
+  // The driver's teardown removes what the run left on the host natively, so a test that leaves
+  // the host down can't keep it there. This holds the run's private key and its setup scripts.
+  afterAll(() => rm(dir, { recursive: true, force: true }));
+
+  const cli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
+    run(env.binary, [...command, "--config", env.config, ...args]);
+
+  /** A new resource's name, which carries the run's prefix like every other. */
+  const named = (name: string) => `${env.prefix}${name}`;
+
+  const id = (name: string) => `${env.host.id}_${named(name)}`;
+
+  const control = (...args: ReadonlyArray<string>) => run(env.control, args);
+
+  const controlled: Controlled = async (schema, ...args) => {
+    const ran = await control(...args);
+
+    expect(ran.code, ran.stderr).toBe(0);
+
+    return decode(schema, ran);
+  };
+
+  const machines = async () => decode(Machines, await cli(["machines"], "--json"));
+
+  const machine = async (name: string): Promise<Machine | undefined> =>
+    (await machines()).machines.find((listed) => listed.id === id(name));
+
+  /** Creates `name` with no setup, at `sizes(...sizeArgs)`. */
+  const createBare = (name: string, ...sizeArgs: ReadonlyArray<number>) =>
+    cli(["create"], id(name), ...runtime.sizes(...sizeArgs), "--json");
+
+  /** Creates `name` with `script` as its setup file. */
+  const createWith = async (name: string, script: string, timeoutSeconds: number) => {
+    const file = await writeFileIn(dir, `${name}-setup.sh`, script, 0o755);
+
+    return cli(
+      ["create"],
+      id(name),
+      ...runtime.sizes(),
+      "--setup",
+      file,
+      "--setup-timeout",
+      String(timeoutSeconds),
+      "--json",
+    );
+  };
+
+  const ssh = (name: string, command: string) =>
+    cli(
+      ["ssh"],
+      id(name),
+      "--",
+      "-i",
+      key,
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=30",
+      "-l",
+      runtime.user,
+      command,
+    );
+
+  /** Runs `command` over ssh and returns its output, failing the test on a non-zero exit. */
+  const inGuest = async (name: string, command: string) => {
+    const ran = await ssh(name, command);
+
+    expect(ran.code, `${command}: ${ran.stderr}`).toBe(0);
+
+    return ran.stdout;
+  };
+
+  /** ssh options pinning `hostKey` under the machine's ID, as `clankerbox ssh` does. */
+  const pinned = async (target: Machine, hostKey = target.hostKey ?? "") => {
+    const knownHosts = await writeFileIn(
+      dir,
+      `known-hosts-${randomBytes(4).toString("hex")}`,
+      `${target.id} ${hostKey}\n`,
+    );
+
+    return [
+      "-o",
+      `HostKeyAlias=${target.id}`,
+      "-o",
+      `UserKnownHostsFile=${knownHosts}`,
+      "-o",
+      "GlobalKnownHostsFile=/dev/null",
+      "-o",
+      "StrictHostKeyChecking=yes",
+      "-o",
+      "IdentitiesOnly=yes",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=30",
+      "-i",
+      key,
+    ];
+  };
+
+  const failure = (ran: Ran) => {
+    expect(ran.code, ran.stdout).toBe(1);
+
+    return decode(Failure, ran).error;
+  };
+
+  const natives = (name: string) => runtime.natives(controlled, named(name));
+
+  /** Whether the host itself reaches `address:port`. */
+  const probe = async (address: string, port: string) => {
+    const ran = await control("probe", address, port);
+
+    expect(ran.code, ran.stderr).toBe(0);
+
+    return ran.stdout;
+  };
+
+  /** Deletes the machine, then checks that its native resources are gone. */
+  const removeMachine = async (name: string) => {
+    const ran = await cli(["delete"], id(name), "--json");
+
+    expect(ran.code, ran.stdout).toBe(0);
+    expect(await natives(name)).toEqual(runtime.nothing);
+  };
+
+  return {
+    get env() {
+      return env;
+    },
+    get dir() {
+      return dir;
+    },
+    get mainSetup() {
+      return mainSetup;
+    },
+    cli,
+    named,
+    id,
+    control,
+    controlled,
+    machines,
+    machine,
+    createBare,
+    createWith,
+    ssh,
+    inGuest,
+    pinned,
+    failure,
+    natives,
+    probe,
+    removeMachine,
+  };
 };

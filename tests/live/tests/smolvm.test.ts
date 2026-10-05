@@ -6,37 +6,31 @@
  * `[timing]` lines.
  */
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
-import { Schema } from "effect";
-import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
+import { beforeAll, describe, expect, test } from "vite-plus/test";
 import {
   Checkpoints,
   decode,
-  type Environment,
-  environment,
-  Failure,
-  Machines,
+  harness,
+  liveOn,
   minutes,
   Names,
   Natives,
   OneCheckpoint,
   OneMachine,
   type Ran,
+  type Runtime,
   run,
   Store,
-  scratch,
   sha256,
   timing,
+  waitFor,
   writeFileIn,
 } from "./live.ts";
 
-const live =
-  process.env["CLANKERBOX_LIVE"] === "1" && process.env["CLANKERBOX_LIVE_RUNTIME"] === "smolvm";
-
 /** The setup of `main`: sshd, rsync and the run's key, a `start` and a `new-identity` hook. */
-const mainSetup = (publicKey: string) => `#!/bin/sh
+const mainScript = (publicKey: string) => `#!/bin/sh
 set -eu
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
@@ -76,31 +70,17 @@ cp /run/sshd.pid /var/lib/clankerbox-live/setup-sshd-pid
 const guestProbe = (address: string, port: string) =>
   `timeout 5 bash -c 'echo >/dev/tcp/${address}/${port}' 2>/dev/null && echo reached || echo refused`;
 
-describe.skipIf(!live)("a smolvm host, through the CLI", () => {
-  let env: Environment;
-  let dir: string;
-  let key: string;
-  let recipe: string;
-  let payload: Uint8Array;
-  let routeBefore: string;
+/** The payload `main`'s recipe carries in `files/`. */
+const payload = randomBytes(64 * 1024);
 
-  const cli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
-    run(env.binary, [...command, "--config", env.config, ...args]);
-
-  const id = (name: string) => `${env.host.id}_${env.prefix}${name}`;
-
-  const control = (...args: ReadonlyArray<string>) => run(env.control, args);
-
-  const machines = async () => decode(Machines, await cli(["machines"], "--json"));
-
-  const machine = async (name: string): Promise<Machine | undefined> =>
-    (await machines()).machines.find((listed) => listed.id === id(name));
-
+/** What the harness drives a smolvm host with. */
+const smolvm: Runtime<typeof Natives.Type> = {
+  user: "root",
   /**
    * `main` is 20 GiB, which smolvm boots from its image seed; the other creates' 10 GiB pull the
    * base in the guest (rewrite.md, Disk sizing). Both fetch from the base's registry.
    */
-  const sizes = (ramMib: number, diskGib = 10) => [
+  sizes: (ramMib = 512, diskGib = 10) => [
     "--base",
     "ubuntu",
     "--cpu",
@@ -109,121 +89,48 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     String(ramMib),
     "--disk-gib",
     String(diskGib),
-  ];
+  ],
+  /** The runtime's machines and systemd scopes whose names start with `name`'s. */
+  natives: (controlled, name) => controlled(Natives, "natives", `${name}-`),
+  nothing: { machines: [], scopes: [] },
+  /** A recipe directory, whose `files/` carry the payload. */
+  mainSetup: async (dir, publicKey) => {
+    const recipe = join(dir, "recipe");
 
-  /** Creates `name` with no setup. */
-  const createBare = (name: string, ramMib = 512) =>
-    cli(["create"], id(name), ...sizes(ramMib), "--json");
+    await mkdir(join(recipe, "files"), { recursive: true });
+    await writeFileIn(recipe, "setup.sh", mainScript(publicKey), 0o755);
+    await writeFileIn(join(recipe, "files"), "payload.bin", payload);
 
-  /** Creates `name` with `script` as its setup file. */
-  const createWith = async (name: string, script: string, timeoutSeconds: number) => {
-    const file = await writeFileIn(dir, `${name}-setup.sh`, script, 0o755);
+    return recipe;
+  },
+};
 
-    return cli(
-      ["create"],
-      id(name),
-      ...sizes(512),
-      "--setup",
-      file,
-      "--setup-timeout",
-      String(timeoutSeconds),
-      "--json",
-    );
-  };
+describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
+  const suite = harness(smolvm);
 
-  const ssh = (name: string, command: string) =>
-    cli(
-      ["ssh"],
-      id(name),
-      "--",
-      "-i",
-      key,
-      "-o",
-      "IdentitiesOnly=yes",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "ConnectTimeout=30",
-      "-l",
-      "root",
-      command,
-    );
+  const {
+    cli,
+    named,
+    id,
+    control,
+    controlled,
+    machines,
+    machine,
+    createBare,
+    createWith,
+    ssh,
+    inGuest,
+    pinned,
+    failure,
+    natives,
+    probe,
+    removeMachine,
+  } = suite;
 
-  /** Runs `command` over ssh and returns its output, failing the test on a non-zero exit. */
-  const inGuest = async (name: string, command: string) => {
-    const ran = await ssh(name, command);
-
-    expect(ran.code, `${command}: ${ran.stderr}`).toBe(0);
-
-    return ran.stdout;
-  };
-
-  /** ssh options pinning `hostKey` under the machine's ID, as `clankerbox ssh` does. */
-  const pinned = async (target: Machine, hostKey = target.hostKey ?? "") => {
-    const knownHosts = await writeFileIn(
-      dir,
-      `known-hosts-${randomBytes(4).toString("hex")}`,
-      `${target.id} ${hostKey}\n`,
-    );
-
-    return [
-      "-o",
-      `HostKeyAlias=${target.id}`,
-      "-o",
-      `UserKnownHostsFile=${knownHosts}`,
-      "-o",
-      "GlobalKnownHostsFile=/dev/null",
-      "-o",
-      "StrictHostKeyChecking=yes",
-      "-o",
-      "IdentitiesOnly=yes",
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "ConnectTimeout=30",
-      "-i",
-      key,
-    ];
-  };
-
-  const failure = (ran: Ran) => {
-    expect(ran.code, ran.stdout).toBe(1);
-
-    return decode(Failure, ran).error;
-  };
-
-  const natives = async (name: string) => {
-    const ran = await control("natives", `${env.prefix}${name}-`);
-
-    expect(ran.code, ran.stderr).toBe(0);
-
-    return decode(Natives, ran);
-  };
-
-  const removeMachine = async (name: string) => {
-    const ran = await cli(["delete"], id(name), "--json");
-
-    expect(ran.code, ran.stdout).toBe(0);
-    expect(await natives(name)).toEqual({ machines: [], scopes: [] });
-  };
-
-  const waitFor = async (what: string, check: () => Promise<boolean>, seconds: number) => {
-    const deadline = performance.now() + seconds * 1000;
-
-    while (!(await check())) {
-      if (performance.now() > deadline) {
-        throw new Error(`timed out waiting for ${what}`);
-      }
-
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-  };
+  let routeBefore: string;
 
   const count = async (name: string, file: string) =>
     (await inGuest(name, `cat /var/lib/clankerbox-live/${file}`)).split("\n").length;
-
-  /** A new resource's name, which carries the run's prefix like every other. */
-  const named = (name: string) => `${env.prefix}${name}`;
 
   /** What a machine shows of its identity, and of what a copy carried over. */
   const facts = async (name: string) => {
@@ -269,14 +176,6 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     return budget - running;
   };
 
-  const controlled = async <A>(schema: Schema.Codec<A, string>, ...args: ReadonlyArray<string>) => {
-    const ran = await control(...args);
-
-    expect(ran.code, ran.stderr).toBe(0);
-
-    return decode(schema, ran);
-  };
-
   const forks = () => controlled(Names, "forks");
 
   const store = () => controlled(Store, "store");
@@ -287,15 +186,6 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       new RegExp(`^${named(name)}-[0-9a-f]{8}\\.checkpoint$`, "u").test(entry),
     );
 
-  /** Whether the host itself reaches `address:port`. */
-  const probe = async (address: string, port: string) => {
-    const ran = await control("probe", address, port);
-
-    expect(ran.code, ran.stderr).toBe(0);
-
-    return ran.stdout;
-  };
-
   /** The host's route to the tailnet's own address, which its route to every peer shares. */
   const route = async () => {
     const ran = await control("route", "100.100.100.100");
@@ -305,29 +195,10 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
     return ran.stdout;
   };
 
+  // Vitest runs a suite's beforeAll hooks in order, so the harness's has read the environment.
   beforeAll(async () => {
-    env = await environment();
-    dir = await scratch();
-    key = join(dir, "key");
-
-    const keygen = await run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", key]);
-
-    expect(keygen.code, keygen.stderr).toBe(0);
-
-    const publicKey = (await readFile(`${key}.pub`, "utf8")).trim();
-
-    recipe = join(dir, "recipe");
-    payload = randomBytes(64 * 1024);
-    await mkdir(join(recipe, "files"), { recursive: true });
-    await writeFileIn(recipe, "setup.sh", mainSetup(publicKey), 0o755);
-    await writeFileIn(join(recipe, "files"), "payload.bin", payload);
     routeBefore = await route();
   });
-
-  // The host-control program's teardown removes what the run left on the host natively, so a
-  // test that leaves the host down can't keep it there. This holds the run's private key and its
-  // setup scripts.
-  afterAll(() => rm(dir, { recursive: true, force: true }));
 
   test(
     "create packs the recipe, runs its setup once and then preparation, and reports the endpoint and key",
@@ -337,9 +208,9 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       const ran = await cli(
         ["create"],
         id("main"),
-        ...sizes(1024, 20),
+        ...smolvm.sizes(1024, 20),
         "--setup",
-        recipe,
+        suite.mainSetup,
         "--setup-timeout",
         "600",
         "--json",
@@ -354,7 +225,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
         id: id("main"),
         state: "running",
         action: { name: "create", status: "done" },
-        ssh: { host: new URL(env.host.url).hostname },
+        ssh: { host: new URL(suite.env.host.url).hostname },
       });
       expect(made.ssh?.port).toBeGreaterThanOrEqual(10_000);
       expect(made.ssh?.port).toBeLessThanOrEqual(19_999);
@@ -401,7 +272,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       }
 
       const options = await pinned(target);
-      const local = await writeFileIn(dir, "upload.bin", randomBytes(256 * 1024));
+      const local = await writeFileIn(suite.dir, "upload.bin", randomBytes(256 * 1024));
       const remote = `root@${endpoint.host}`;
 
       const up = await run("scp", [
@@ -412,7 +283,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
         `${remote}:/root/up.bin`,
       ]);
 
-      const down = join(dir, "scp-down.bin");
+      const down = join(suite.dir, "scp-down.bin");
 
       const back = await run("scp", [
         ...options,
@@ -423,7 +294,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       ]);
 
       const rsh = ["ssh", ...options, "-p", String(endpoint.port)].join(" ");
-      const synced = join(dir, "rsync-down.bin");
+      const synced = join(suite.dir, "rsync-down.bin");
       const rsyncUp = await run("rsync", ["-a", "-e", rsh, local, `${remote}:/root/rsync-up.bin`]);
 
       const rsyncDown = await run("rsync", [
@@ -558,7 +429,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   );
 
   test("a guest can't reach its own host's API port on the tailnet address", async () => {
-    const api = new URL(env.host.url);
+    const api = new URL(suite.env.host.url);
 
     expect(await inGuest("main", guestProbe(api.hostname, api.port))).toBe("refused");
     // The same probe reaches the internet, so the refusal is the host's address.
@@ -599,7 +470,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       expect(error.message).toContain("setup ran past its 5s timeout");
       expect(error.message).toContain("overrun-started");
 
-      const seen = await control("guest", `${env.prefix}overrun`, "ps -eo args");
+      const seen = await control("guest", named("overrun"), "ps -eo args");
 
       expect(seen.code, seen.stderr).toBe(0);
       expect(seen.stdout).not.toContain("sleep 600");
@@ -926,7 +797,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       expect(fork.tag).toBe("Precondition");
       expect(fork.message).toContain("start it first");
       expect(await machine("stopped-fork")).toBeUndefined();
-      expect(await natives("stopped-fork")).toEqual({ machines: [], scopes: [] });
+      expect(await natives("stopped-fork")).toEqual(smolvm.nothing);
       expect(await forks()).toEqual([]);
       expect((await machine("restore-b"))?.action).toEqual({ name: "stop", status: "done" });
     },
@@ -1011,9 +882,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
             throw new Error(`crash's create ended before the kill: ${ended.stdout}`);
           }
 
-          return (
-            (await control("guest", `${env.prefix}crash`, "test -e /root/setup-started")).code === 0
-          );
+          return (await control("guest", named("crash"), "test -e /root/setup-started")).code === 0;
         },
         180,
       );
@@ -1036,7 +905,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
         },
       });
 
-      const seen = await control("guest", `${env.prefix}crash`, "ps -eo args");
+      const seen = await control("guest", named("crash"), "ps -eo args");
 
       expect(seen.code, seen.stderr).toBe(0);
       expect(seen.stdout).not.toContain("sleep 300");
@@ -1065,7 +934,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
         action: { name: "stop", status: "done" },
       });
       expect(await machine("crash-fork")).toBeUndefined();
-      expect(await natives("crash-fork")).toEqual({ machines: [], scopes: [] });
+      expect(await natives("crash-fork")).toEqual(smolvm.nothing);
       expect(decode(Checkpoints, await cli(["checkpoint", "list"], "--json")).checkpoints).toEqual(
         [],
       );
@@ -1078,7 +947,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   test(
     "a native machine that already carries a machine's name is left alone by that machine's create and delete",
     async () => {
-      const decoy = await control("decoy", `${env.prefix}decoy`);
+      const decoy = await control("decoy", named("decoy"));
 
       expect(decoy.code, decoy.stderr).toBe(0);
 
@@ -1092,7 +961,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       expect(removed.code, removed.stdout).toBe(0);
       expect((await natives("decoy")).machines).toEqual([{ name: decoy.stdout, state: "running" }]);
       expect((await control("remove-native", decoy.stdout)).code).toBe(0);
-      expect(await natives("decoy")).toEqual({ machines: [], scopes: [] });
+      expect(await natives("decoy")).toEqual(smolvm.nothing);
     },
     minutes(5),
   );
@@ -1103,7 +972,7 @@ describe.skipIf(!live)("a smolvm host, through the CLI", () => {
       const created = await createBare("stuck");
 
       expect(created.code, created.stdout).toBe(0);
-      expect((await control("freeze", `${env.prefix}stuck`)).code).toBe(0);
+      expect((await control("freeze", named("stuck"))).code).toBe(0);
 
       const error = failure(await cli(["stop"], id("stuck"), "--json"));
       const row = await machine("stuck");
