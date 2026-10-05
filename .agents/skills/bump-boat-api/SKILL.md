@@ -191,10 +191,9 @@ Each: what boat does, and what of ours depends on it.
   sandbox has `/var/lib/ascii-lazy` or its `sys-done` at all; that the mark is
   there after create and gone after a resume, a fork and a restore, whose
   marker still appears; and that a start of a running machine never stopped
-  since its create returns in seconds. Gaps: a create that fails before SSH answers, or
-  a guest reboot, leaves the create's machine without the mark, and a start of
-  it waits `markerWait` and fails. Ask whether boat now documents a signal a
-  host can poll.
+  since its create returns in seconds. Gap: a guest reboot clears the mark, and
+  a start of the create's machine then waits `markerWait` and fails. Ask
+  whether boat now documents a signal a host can poll.
 
 **Delete** (D, O)
 

@@ -367,8 +367,8 @@ export const make = (
 
     /**
      * Waits until boat reads the sandbox running. A create, fork or restore that ends cancelled,
-     * or gone, found no machine and left nothing: a refusal. After a resume, either is a
-     * failure. An `error` state is boat's failure.
+     * or gone, found no machine and left nothing: a refusal. At a start, either is a failure.
+     * An `error` state is boat's failure.
      */
     const running = (machine: MachineRef, id: string, fresh: boolean) => {
       const read = Effect.flatMap(

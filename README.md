@@ -789,7 +789,8 @@ These are known, not guarded, and accepted:
   answers a repeat isn't trusted as a refusal: the row stays `failed`. Resume
   takes no key, and it and the other calls are never repeated.
 - **Refusals** that leave nothing on boat remove the row: to a create, fork,
-  resume, restore or a named snapshot's save, 429s and 503
+  resume, restore or a named snapshot's save, 429
+  `limit_reached`/`rate_limited`/`daily_limit_reached` and 503
   `out_of_capacity`/`no_ready_machine` are `Capacity`, as is 409
   `named_snapshot_limit`, boat's cap on an account's named snapshots.
 - **State** is a `GET` of each recorded sandbox, never a list; a read that
