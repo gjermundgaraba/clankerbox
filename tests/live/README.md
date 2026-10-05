@@ -50,9 +50,9 @@ the suite with the darwin-arm64 binary as the CLI.
   first.
 - `--address`: that host's tailnet address, which the host listens and
   publishes on.
-- `--root`: the owned root on the test host (the plan's
-  `~/clankerbox-rewrite/`, as an absolute path). The run's directory is
-  `runs/l<3 hex>/` there, and `CLEANUP.md` there is its ledger.
+- `--root`: the run's owned root on the test host, as an absolute path (such as
+  `~/clankerbox-rewrite/` expanded). The run's directory is `runs/l<3 hex>/`
+  there, and `CLEANUP.md` there is its ledger.
 - `--smolvm-prefix`: smolvm 1.22.2 installed from upstream, with `READY` and
   its `.zst` disk templates; the run expands the templates and removes them
   again. The base is `ubuntu:26.04` from `mirror.gcr.io`, pulled by digest
@@ -98,12 +98,12 @@ driver refuses root), and the suite with the same binary as the CLI.
   trial's 2, and its large create only on the trial tier.
 - `--address`, optional: this Mac's tailnet address; loopback otherwise.
 
-## Coverage of the plan's Validation list
+## Coverage
 
-The plan (`docs/plans/rewrite.md`, "Validation") lists what live acceptance
-must cover. Each item, and where it is checked: a suite's test, named by the
-start of its title, or a unit test where the item is checked against the real
-host process or the client library instead. "smolvm", "Tart" and "boat" are
+What live acceptance must cover, as the rewrite's plan set it out, item by
+item, and where each is checked: a suite's test, named by the start of its
+title, or a unit test where the item is checked against the real host process
+or the client library instead. "smolvm", "Tart" and "boat" are
 the live suites.
 
 | Item                                                                                                                         | Covered by                                                                                                                                                                                                                                                                                   |
@@ -156,9 +156,9 @@ the live suites.
 
 - **The real recipe (gg-linux-dev)** is opt-in and has not run. Unmodified,
   gg-linux-dev fails on stock 26.04 (Node needs `libatomic1`) and installs no
-  sshd, key or `start` (evidence.md, P3); the plan rewrites it as a profile in
-  phase 9, after phase 8's acceptance run. Its directory also holds the
-  clankercreds key, so it stays on the operator's machine, outside the repo.
+  sshd, key or `start`; it is to be rewritten as a profile after the cut-over's
+  acceptance run. Its directory also holds the clankercreds key, so it stays on
+  the operator's machine, outside the repo.
   Once it is rewritten, a smolvm run with `--recipe` covers the item.
 - **A guest refused its own host's API port, on boat:** a boat host runs on
   the operator's side and listens on its tailnet address or loopback, which a
