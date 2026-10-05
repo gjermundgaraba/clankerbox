@@ -1,6 +1,6 @@
 import { runHost } from "@clankerbox/host";
 import { version } from "@gjermundgaraba/clankerbox-sdk";
-import { Cause, Effect, Exit, Runtime, Stdio } from "effect";
+import { Cause, Effect, Exit, Runtime } from "effect";
 import { Command, Flag } from "effect/cli";
 import { clientCommands } from "./cli.ts";
 import { fail } from "./output.ts";
@@ -45,8 +45,8 @@ const clankerbox = (role: Role) =>
 /** Runs the command `args` names, marking `role` if it is the host. */
 export const dispatch = (role: Role) => Command.runWith(clankerbox(role), { version });
 
-export const main = (role: Role) =>
-  Stdio.Stdio.use(({ args }) => Effect.flatMap(args, dispatch(role)));
+/** Runs the command the process's arguments name, marking `role` if it is the host. */
+export const main = (role: Role) => Command.run(clankerbox(role), { version });
 
 /**
  * How the process exits. The CLI exits 130 on an interrupt such as Ctrl-C, the shell's
