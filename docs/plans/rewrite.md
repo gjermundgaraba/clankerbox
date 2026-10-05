@@ -1182,7 +1182,9 @@ Two rules for every VM job:
     sandbox, is unclear too.
   - The status decides before the body: any other 4xx is a definite answer,
     whether or not its body is boat's. A proxy's HTML 403 or 429 fails the
-    action `Internal` at once, and a 404 without a body reads as gone.
+    action `Internal` at once, and a 404 without a body reads as gone. A 2xx
+    whose body arrived whole but isn't boat's answer (not JSON, or missing a
+    field the host reads) fails `Internal` at once too.
   - A refusal below that answers a repeat is not a refusal: the unclear
     attempt may have made a sandbox, which the limit may be counting, so the
     action fails `Internal` and the row stays.

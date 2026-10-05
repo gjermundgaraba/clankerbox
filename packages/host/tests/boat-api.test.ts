@@ -395,6 +395,23 @@ test("calls without a key aren't repeated: an unclear outcome fails them", async
   ]);
 });
 
+test("a 2xx whose body arrived whole but isn't boat's answer is Internal at once, even for a keyed call", async () => {
+  for (const reply of [
+    { status: 202, text: "<html><body>Accepted</body></html>" },
+    { status: 202, body: { ok: true, sandbox: { state: "provisioned" } } },
+  ]) {
+    const boat = fakeBoat(() => reply);
+    const { exit } = await runTimed(boat, (api) => Effect.flip(api.create("key-1", "small")));
+    const error = Exit.isSuccess(exit) ? exit.value : undefined;
+
+    expect(boat.sent).toHaveLength(1);
+    expect(error?._tag).toBe("Internal");
+    expect(error?.message).toMatch(
+      /^boat POST \/sandboxes answered 202 with a body the host can't read: /u,
+    );
+  }
+});
+
 test("a 4xx is a definite answer whatever its body, and is never repeated", async () => {
   const bare = "without boat's error";
 

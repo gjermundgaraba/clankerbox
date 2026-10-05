@@ -297,9 +297,10 @@ export const make = (settings: Settings) =>
           return yield* refusal(call, response);
         }
 
-        // A body cut off midway leaves the outcome unknown, as a dropped connection does.
-        const json = yield* Effect.mapError(
-          response.json,
+        // A body cut off midway leaves the outcome unknown, as a dropped connection does; one that
+        // arrived whole but isn't the answer is boat's, or a proxy's, definite word.
+        const text = yield* Effect.mapError(
+          response.text,
           (error) =>
             new Unclear({
               message: `${named(call)} answered ${status}, and its body didn't arrive whole: ${error.reason._tag}`,
@@ -307,7 +308,7 @@ export const make = (settings: Settings) =>
         );
 
         return yield* Effect.mapError(
-          Schema.decodeUnknownEffect(schema)(json),
+          Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text),
           (error) =>
             new Internal({
               message: `${named(call)} answered ${status} with a body the host can't read: ${scrub(error.message)}`,
