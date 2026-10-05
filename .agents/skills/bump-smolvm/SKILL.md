@@ -140,7 +140,11 @@ citation moved to the new tag.
   first, leaves `running` as it is, boots `unreachable` again and refuses
   `unstartable` before anything native.
   `copyable` takes only `running`, so an unreachable source is refused, and
-  the RAM budget counts `unreachable` as running.
+  the RAM budget counts `unreachable` as running. The ping's socket waits 3 s
+  to read and 3 s to write (`connect_for_state_probe`,
+  S@1.22.2:src/agent/client.rs), so `machine status` reads an unreachable
+  machine within the host's 8 s `stateReadWait`, which the live stall test
+  relies on.
 - `stop` returns after the process is dead. It needs the guest's shutdown ack;
   it hard-kills an unreachable VM or an orphaned VMM
   (`cli_recover_if_unreachable`, `kill_orphaned_boot_process`,
