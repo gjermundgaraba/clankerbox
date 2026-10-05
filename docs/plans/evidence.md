@@ -1395,6 +1395,31 @@ run's did at once.
   ad-hoc signature's identifier, `clankerbox-5555…`), so it wasn't prompted.
   The runs ran no command that changes the firewall.
 
+**smolvm rerun after Tart's acceptance** (2026-10-05; local run
+`.work/runs/live-smolvm-3f8ebea7ec37`, remote `runs/l3f8`, commit `39d663b`,
+which `resources.json` names now that the driver refuses a dirty tree; same
+host and sizes as the phase-4 live runs, fresh inventory on the mirror base). The code now lets stop take a machine that was never made, marks a
+machine made before its preparation, and reads which machines are booting
+from the rows; the suite runs through the harness it shares with Tart's.
+
+- **Result:** all 24 smolvm tests passed in 230 s (Tart's 13 skipped), in the
+  first run. A create killed during its setup read `failed`, `stop` took it
+  while it stayed never made, and start, fork and capture refused it; both
+  holds of the host's `machine start` (13 and 6 `pkill` attempts) left the
+  copy never made, which start refused and delete removed. A machine whose
+  only failure was preparation, which start can now repair, wasn't tried live.
+- **Timings** (this run / `ld95`, the phase-5 rerun): create with setup
+  20.57 / 18.40 s; stop 0.67 / 0.69 s; cold start 0.96 / 0.89 s; start of a
+  running machine 0.29 / 0.29 s; `ram` capture 1.19 / 1.21 s; fork 2.83 /
+  2.91 s; two concurrent restores 1.73 / 1.81 s; one restore 1.29 / 1.45 s;
+  delete after a failed stop 2.71 / 2.69 s; delete of a running machine
+  0.86 / 0.85 s. The SEA (45.3 MiB gzipped) uploaded at 0.63 MiB/s, against
+  0.95.
+- Teardown left no unit, scope, VM, uid ≥ 2000000 process or tailnet
+  listener of the run; the directory modes and the prefix matched the
+  "before" snapshot, every CLEANUP.md entry read REVERTED, and 0
+  `smolvm-fork-ready` failures were in the suite log or the host's journal.
+
 ## Consumers and production
 
 - **Production hosts:** the Mac host runs Tart only and the Linux host smolvm
