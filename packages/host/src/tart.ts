@@ -44,15 +44,13 @@ export interface Settings extends Tart {
   readonly uid: number | undefined;
   /** The host's own `TART_HOME`, if it has one. Without one Tart uses `~/.tart`. */
   readonly tartHome: string | undefined;
-  /**
-   * What `tart run` adds for networking. The host blocks the Mac itself with Softnet; `tart
-   * run` without it falls back to Tart's shared NAT.
-   */
-  readonly network: ReadonlyArray<string>;
 }
 
-/** Softnet, blocking the Mac itself: guests can't reach the host's services (rewrite.md). */
-export const softnet = ["--net-softnet-block=@host"] as const;
+/**
+ * Softnet, blocking the Mac itself: guests can't reach the host's services (rewrite.md). `tart
+ * run` without it falls back to Tart's shared NAT.
+ */
+const softnet = "--net-softnet-block=@host";
 
 /**
  * Two running macOS VMs per Mac is Apple's limit, the operator's own VMs included. Tart reports
@@ -286,7 +284,7 @@ export const make = (
           file,
           plist({
             label: vm,
-            program: [settings.binary, "run", "--no-graphics", ...settings.network, vm],
+            program: [settings.binary, "run", "--no-graphics", softnet, vm],
             environment: env,
             log,
           }),
@@ -649,6 +647,5 @@ export const layer = (
       stateDir: config.stateDir,
       uid: process.getuid?.(),
       tartHome: process.env["TART_HOME"],
-      network: softnet,
     }),
   );

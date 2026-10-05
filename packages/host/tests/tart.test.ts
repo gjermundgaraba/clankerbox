@@ -23,7 +23,6 @@ import {
   make,
   plist,
   type Settings,
-  softnet,
   stateOf,
   supported,
 } from "../src/tart.ts";
@@ -255,7 +254,6 @@ const scriptedMac = (stateDir: string) => {
     stateDir,
     uid: 501,
     tartHome: "/Users/operator/.tart-test",
-    network: softnet,
   };
 
   return { vms, jobs, exited, hooks, spawner, settings };
