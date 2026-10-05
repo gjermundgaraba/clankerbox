@@ -719,8 +719,9 @@ These are known, not guarded, and accepted:
 - **API:** boat's HTTP API v1 directly (`boat-api.ts`), no boat SDK or CLI. The
   API key is held `Redacted` from decoding on and travels only as the bearer
   token; errors carry method, path, status and boat's code and message, never
-  a request or body. Every error and warning is scrubbed of the key where it
-  leaves the boat runtime, whatever boat, the transport or the guest echoed.
+  a request or body. Every error an action fails with, and every warning, is
+  scrubbed of the key where it leaves the boat runtime, whatever boat, the
+  transport or ssh echoed.
 - **Designed for boat's trial,** whose limits the bump-boat-api skill lists.
   Every create, fork, resume and restore sends `noEnv: true` (no account
   secrets in the guest) and `ttlSeconds: 7200`, so boat stops a machine two
