@@ -491,17 +491,28 @@ const rigOn = async (boat = fakeBoat()): Promise<Rig> => {
 };
 
 /**
- * Runs `effect` under the test clock, moving it a second at a time, with a moment of real time
- * between, until it ends; how long it waited on the clock.
+ * Runs `effect` under the test clock, moving it a second at a time until it ends; how long it
+ * waited on the clock. Until `waiting` resolves, each step leaves a moment of real time for the
+ * host's files and processes. From then on everything the test checks is settled, bar the clock,
+ * and the steps follow one another, so a wait of minutes doesn't take minutes' worth of real
+ * moments on a loaded machine.
  */
-const timed = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+const timed = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>, waiting?: Promise<void>) =>
   Effect.runPromise(
     Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(Effect.exit(Effect.scoped(effect)));
+      let clockOnly = false;
       let waited = Duration.zero;
 
+      void waiting?.then(() => {
+        clockOnly = true;
+      });
+
       while (fiber.pollUnsafe() === undefined) {
-        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
+        if (!clockOnly) {
+          yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
+        }
+
         yield* TestClock.adjust(Duration.seconds(1));
         waited = Duration.sum(waited, Duration.seconds(1));
       }
@@ -520,8 +531,8 @@ const succeeds = async <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) => {
   return exit.value;
 };
 
-const fails = async <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) => {
-  const { exit } = await timed(effect);
+const fails = async <A, E>(effect: Effect.Effect<A, E, Scope.Scope>, waiting?: Promise<void>) => {
+  const { exit } = await timed(effect, waiting);
 
   if (Exit.isSuccess(exit)) {
     throw new Error("succeeded");
@@ -830,9 +841,22 @@ test("a create waits while SSH or boat's command API doesn't answer yet, and fai
   const other = machineOn("other");
 
   await rig.insert(other);
-  rig.guest.hooks.answer = () => ({ exitCode: 255, stderr: "Connection refused\n" });
 
-  const { exit, waited } = await timed(rig.runtime.create(other, "boat"));
+  // Each probe pins host keys in a file of its own; by the second, the first's output is noted.
+  const probedTwice = Promise.withResolvers<void>();
+  let probes = 0;
+
+  rig.guest.hooks.answer = () => {
+    probes += 1;
+
+    if (probes === 2) {
+      probedTwice.resolve();
+    }
+
+    return { exitCode: 255, stderr: "Connection refused\n" };
+  };
+
+  const { exit, waited } = await timed(rig.runtime.create(other, "boat"), probedTwice.promise);
   const error = Exit.isFailure(exit) ? Option.getOrThrow(Exit.findErrorOption(exit)) : undefined;
 
   expect(error === undefined ? undefined : refused(error)).toEqual([
@@ -1152,10 +1176,32 @@ test("a stop that boat never archives fails after five minutes with what boat re
     ip: null,
     sshEndpoint: "203.0.113.10:19044",
   });
-  rig.boat.hooks.answer = (sent) =>
-    sent.path.endsWith("/stop") ? { status: 202, body: { ok: true } } : undefined;
 
-  const { exit, waited } = await timed(rig.runtime.stop(machineOn("dev", { native: "bx_stuck" })));
+  // After the stop, the wait only reads boat; by the second read the first one is noted.
+  const readTwice = Promise.withResolvers<void>();
+  let reads = 0;
+
+  rig.boat.hooks.answer = (sent) => {
+    if (sent.path.endsWith("/stop")) {
+      return { status: 202, body: { ok: true } };
+    }
+
+    if (rig.boat.calls().length > 0 && sent.method === "GET") {
+      reads += 1;
+    }
+
+    if (reads === 2) {
+      readTwice.resolve();
+    }
+
+    return undefined;
+  };
+
+  const { exit, waited } = await timed(
+    rig.runtime.stop(machineOn("dev", { native: "bx_stuck" })),
+    readTwice.promise,
+  );
+
   const error = Exit.isFailure(exit) ? Option.getOrThrow(Exit.findErrorOption(exit)) : undefined;
 
   expect(error?.message).toBe(
@@ -1331,8 +1377,20 @@ test("a fork whose source boat completes no fresh snapshot fails before the fork
     sshEndpoint: "203.0.113.10:19044",
   });
 
+  // Once the sync has run, the wait only reads boat.
+  const synced = Promise.withResolvers<void>();
+
+  rig.boat.hooks.answer = () => {
+    if (rig.guest.calls.length > 0) {
+      synced.resolve();
+    }
+
+    return undefined;
+  };
+
   const error = await fails(
     rig.runtime.fork(machineOn("dev", { native: "bx_source" }), machineOn("copy")),
+    synced.promise,
   );
 
   expect(refused(error)).toEqual([
