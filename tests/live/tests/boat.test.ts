@@ -77,6 +77,15 @@ cut -d ' ' -f 1,2 /etc/ssh/ssh_host_ed25519_key.pub >/var/lib/clankerbox-live/se
 echo setup >>/var/lib/clankerbox-live/setups
 `;
 
+/**
+ * The host's mark that the guest runs on the machine its create made, which no snapshot carries,
+ * and boat's marker that a fork, resume or restore has restored `/var/lib` in full
+ * (packages/host/src/boat.ts).
+ */
+const createdMark = "/run/clankerbox-created";
+
+const restoredMarker = "/var/lib/ascii-lazy/sys-done";
+
 /** The states of a sandbox that runs. */
 const upStates = ["ready", "idle", "running"];
 
@@ -186,6 +195,13 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   /** The names of the run's named snapshots. */
   const snapshots = () => controlled(Names, "snapshots");
 
+  /** Which of the create's mark and boat's restore marker the guest holds, one per line. */
+  const marks = (name: string) =>
+    inGuest(
+      name,
+      `for mark in ${createdMark} ${restoredMarker}; do test -e $mark && echo $mark; done; true`,
+    );
+
   /** The guest kernel's boot ID; a sandbox that kept running keeps it. */
   const bootId = (name: string) => inGuest(name, "cat /proc/sys/kernel/random/boot_id");
 
@@ -280,6 +296,39 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   );
 
   test(
+    "start of the running machine its create made, right after the create, leaves it running and doesn't wait for boat's restore marker, which a create never gets",
+    async () => {
+      const before = await machine("main");
+      const boot = await bootId("main");
+      const source = await facts("main");
+
+      const created = await marks("main");
+
+      // The create's SSH wait marked the guest's machine as the create's own. Whether boat wrote
+      // its restore marker anyway is the bump-boat-api skill's to note.
+      expect(created).toContain(createdMark);
+      console.log(`[marker] after create: ${created.replaceAll("\n", " ") || "none"}`);
+
+      const started = performance.now();
+      const ran = await cli(["start"], id("main"), "--json");
+      const took = performance.now() - started;
+
+      timing("start (running machine its create made)", started);
+      expect(ran.code, ran.stdout).toBe(0);
+
+      const after = decode(OneMachine, ran);
+
+      expect(after).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
+      expect(after.ssh).toEqual(before?.ssh);
+      // Far inside the marker wait's 10 minutes: SSH and preparation take seconds.
+      expect(took).toBeLessThan(minutes(1));
+      expect(await bootId("main")).toBe(boot);
+      expect(await facts("main")).toEqual({ ...source, starts: source.starts + 1 });
+    },
+    minutes(5),
+  );
+
+  test(
     "scp and rsync move a binary file both ways through boat's endpoint, pinned to the machine's host key",
     async () => {
       const target = await machine("main");
@@ -322,41 +371,6 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       expect(await inGuest("main", "sha256sum up.bin rsync-up.bin | cut -d ' ' -f 1")).toBe(
         `${expected}\n${expected}`,
       );
-    },
-    minutes(5),
-  );
-
-  test(
-    "start of the running machine its create made leaves it running and doesn't wait for boat's restore marker, which a create never gets",
-    async () => {
-      const before = await machine("main");
-      const boot = await bootId("main");
-      const source = await facts("main");
-
-      // The create's SSH wait marked the guest's machine as the create's own. Whether boat wrote
-      // its restore marker anyway is the bump-boat-api skill's to note.
-      expect(await inGuest("main", "test -e /run/clankerbox-created && echo marked")).toBe(
-        "marked",
-      );
-      console.log(
-        `[marker] after create: ${await inGuest("main", "ls -d /var/lib/ascii-lazy /var/lib/ascii-lazy/sys-done 2>&1 || true")}`,
-      );
-
-      const started = performance.now();
-      const ran = await cli(["start"], id("main"), "--json");
-      const took = performance.now() - started;
-
-      timing("start (running machine its create made)", started);
-      expect(ran.code, ran.stdout).toBe(0);
-
-      const after = decode(OneMachine, ran);
-
-      expect(after).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
-      expect(after.ssh).toEqual(before?.ssh);
-      // Far inside the marker wait's 10 minutes: SSH and preparation take seconds.
-      expect(took).toBeLessThan(minutes(2));
-      expect(await bootId("main")).toBe(boot);
-      expect(await facts("main")).toEqual({ ...source, starts: source.starts + 1 });
     },
     minutes(5),
   );
@@ -453,9 +467,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       expect(await inGuest("main", "cat /var/lib/clankerbox-live/kept")).toBe(kept);
       // The resume's fresh machine doesn't carry the create's mark, so the start waited for
       // boat's marker.
-      expect(
-        await inGuest("main", "test -e /run/clankerbox-created && echo marked || echo unmarked"),
-      ).toBe("unmarked");
+      expect(await marks("main")).toBe(restoredMarker);
       await refusesPin("main", before);
     },
     minutes(25),
@@ -548,6 +560,8 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         starts: atCapture.starts + 1,
         setups: 1,
       });
+      // A fork runs on a fresh machine, without the create's mark, so it waited for boat's marker.
+      expect(await marks("fork-a")).toBe(restoredMarker);
     },
     minutes(50),
   );
@@ -643,6 +657,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         starts: source.starts + 1,
         setups: 1,
       });
+      expect(await marks("fork-b")).toBe(restoredMarker);
     },
     minutes(40),
   );
@@ -683,6 +698,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         setups: 1,
       });
       expect(await inGuest("restore-a", "cat ~/live-capture")).toBe(captured);
+      expect(await marks("restore-a")).toBe(restoredMarker);
     },
     minutes(30),
   );
