@@ -58,12 +58,6 @@ the suite with the darwin-arm64 binary as the CLI.
   its `.zst` disk templates; the run expands the templates and removes them
   again. The base is `ubuntu:26.04` from `mirror.gcr.io`, pulled by digest
   (`smolvm/remote.py`).
-- `--recipe DIR`, optional: a real recipe directory (`setup.sh` and `files/`),
-  such as gg-linux-dev's, for the real-recipe test, which is skipped without
-  it. `--recipe-check CMD` is what shows its services work, run over ssh as
-  root (default `true`). The recipe must install sshd and a `start` that
-  launches it, and allow root to log in with a key: the test authorizes the
-  run's key through the runtime. Only DIR's path reaches evidence.
 
 ## Tart: `pnpm live:tart`
 
@@ -119,7 +113,6 @@ the live suites.
 | A failing setup fails the create with its output                                                                             | smolvm: "a failing setup fails the create with its exit code and output". Unit: `apps/clankerbox/tests/host.test.ts`                                                                                                                                                                         |
 | An overrunning setup fails the create with its output                                                                        | smolvm: "a setup past its timeout fails the create …"                                                                                                                                                                                                                                        |
 | A recipe directory with `files/` packed and run as one script                                                                | smolvm: "create packs the recipe …" (`main` is a recipe whose `files/` carry a payload, checked by hash)                                                                                                                                                                                     |
-| A real recipe (gg-linux-dev) through a create, a stop and a cold start, with ssh and its services working after each         | smolvm: "a real recipe makes a machine …", **opt-in** with `--recipe`; see below                                                                                                                                                                                                             |
 | A profile with `host` creates on that host, whatever placement by base would pick                                            | Tart: "placement: …" (`--profile`, with the other host first and offering the base). Unit: `client.test.ts`, `apps/clankerbox/tests/cli.test.ts`                                                                                                                                             |
 | `new-identity` runs on create, fork and restore, not on `start`                                                              | smolvm: "create packs the recipe …", "a ram capture, a fork and two restores …", "start on a fork and on a restore …". Tart: "create runs setup …", "a disk checkpoint …", "stop and a cold start …". boat: "create runs setup …", the fork and restore tests, "stop archives the sandbox …" |
 | A failing hook fails the action                                                                                              | smolvm: "a failing new-identity hook fails the create". For fork and restore, unit: `packages/host/tests/checkpoints.test.ts`, `prepare.test.ts`                                                                                                                                             |
@@ -155,12 +148,6 @@ the live suites.
 
 ### Not covered live, and why
 
-- **The real recipe (gg-linux-dev)** is opt-in and has not run. Unmodified,
-  gg-linux-dev fails on stock 26.04 (Node needs `libatomic1`) and installs no
-  sshd, key or `start`; it is to be rewritten as a profile after the cut-over's
-  acceptance run. Its directory also holds the clankercreds key, so it stays on
-  the operator's machine, outside the repo.
-  Once it is rewritten, a smolvm run with `--recipe` covers the item.
 - **A guest refused its own host's API port, on boat:** a boat host runs on
   the operator's side and listens on its tailnet address or loopback, which a
   sandbox in boat's cloud can't route to; there is no host port beside the

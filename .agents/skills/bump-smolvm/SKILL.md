@@ -328,10 +328,10 @@ citation moved to the new tag.
 - Live: `pnpm live:smolvm --ssh USER@HOST --address TAILNET_ADDRESS --root OWNED_ROOT --smolvm-prefix PREFIX`,
   with the target installed into its own prefix on the Linux test host, as root,
   with its `READY` marker and `.zst` templates (`tests/live/README.md` lists what
-  else it needs). Add `--recipe DIR` for the real-recipe test. The suite covers
-  forks, `ram` checkpoints, the RAM budget, crashes mid-boot, a call past
-  300 s and the guest's isolation. It runs as a work run (`scripts/WORK_RUNS.md`);
-  report what it leaves running and what it retains.
+  else it needs). The suite covers forks, `ram` checkpoints, the RAM budget,
+  crashes mid-boot, a call past 300 s and the guest's isolation. It runs as a
+  work run (`scripts/WORK_RUNS.md`); report what it leaves running and what it
+  retains.
 
 ## After
 

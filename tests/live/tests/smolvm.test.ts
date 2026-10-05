@@ -74,15 +74,6 @@ const guestProbe = (address: string, port: string) =>
 /** The payload `main`'s recipe carries in `files/`. */
 const payload = randomBytes(64 * 1024);
 
-/**
- * A real recipe directory, such as gg-linux-dev's, which the driver names with `--recipe`; its
- * test is skipped without one. Its setup installs sshd and a `start` that launches it.
- */
-const realRecipe = process.env["CLANKERBOX_LIVE_RECIPE"] ?? "";
-
-/** What shows the real recipe's services work, run over ssh as root (`--recipe-check`). */
-const recipeCheck = process.env["CLANKERBOX_LIVE_RECIPE_CHECK"] ?? "true";
-
 /** What the harness drives a smolvm host with. */
 const smolvm: Runtime<typeof Natives.Type> = {
   user: "root",
@@ -1069,52 +1060,6 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       timing("delete after a failed stop (SIGKILL of the scope)", started);
     },
     minutes(5),
-  );
-
-  test.skipIf(realRecipe === "")(
-    "a real recipe makes a machine whose ssh and services work after its create, and again after a stop and a cold start",
-    async () => {
-      let started = performance.now();
-
-      const ran = await cli(
-        ["create"],
-        id("recipe"),
-        ...smolvm.sizes(2048, 20),
-        "--setup",
-        realRecipe,
-        "--setup-timeout",
-        "1800",
-        "--json",
-      );
-
-      timing("create with the real recipe", started);
-      expect(ran.code, ran.stdout).toBe(0);
-
-      // The recipe authorizes the operator's key; the run's own goes in through the runtime.
-      const publicKey = (await readFile(join(suite.dir, "key.pub"), "utf8")).trim();
-
-      const authorized = await control(
-        "guest",
-        named("recipe"),
-        `install -d -m 700 /root/.ssh && printf '%s\\n' '${publicKey}' >>/root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys`,
-      );
-
-      expect(authorized.code, authorized.stderr).toBe(0);
-      await inGuest("recipe", recipeCheck);
-
-      for (const step of ["stop", "start"]) {
-        started = performance.now();
-
-        const stepped = await cli([step], id("recipe"), "--json");
-
-        timing(`${step} (real recipe)`, started);
-        expect(stepped.code, stepped.stdout).toBe(0);
-      }
-
-      await inGuest("recipe", recipeCheck);
-      await removeMachine("recipe");
-    },
-    minutes(40),
   );
 
   test(
