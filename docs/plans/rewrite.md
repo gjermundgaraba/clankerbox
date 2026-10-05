@@ -1343,10 +1343,10 @@ tests use real VMs.
 5. **Tart.** The runtime, its names, the forwarder and the two-VM count.
    `stop` and `delete` after an interrupted operation. Spike P11. Live tests
    on the Mac. Freeze the `Runtime` interface only after this slice.
-   - The `Runtime` interface (`packages/host/src/runtime.ts`) is not frozen
-     yet: the live tests on the Mac wait on Softnet (see [Runtimes:
-     Tart](#runtimes-tart)), and it freezes once they pass. Each change until
-     then records its reason here:
+   - The `Runtime` interface (`packages/host/src/runtime.ts`) is frozen: Tart's
+     live tests passed on the Mac through the CLI, under Softnet (2026-10-05,
+     evidence.md, Phase 5 live). The changes made before it froze, with their
+     reasons:
      - `startup` receives the host's machines, so the Tart forwarder listens
        again for every one of them, running or not (since the phase-5
        review, which tied a listener to the row).
