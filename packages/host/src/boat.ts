@@ -188,6 +188,12 @@ const stopWait = Duration.minutes(5);
 
 const stopPause = Duration.seconds(1);
 
+/**
+ * How long one machine's state read may take, its repeats included: as long as one attempt, so
+ * a list doesn't hang on boat while a few quick repeats still ride out a blip.
+ */
+const readWait = Duration.minutes(2);
+
 /** How long a deleted sandbox may take to answer 404; it took under a second. */
 const deleteWait = Duration.minutes(1);
 
@@ -693,7 +699,7 @@ export const make = (
        * A `GET` of each recorded sandbox, all at once: a host holds few machines, and boat limits
        * starts, not reads; a list would also hold the operator's own sandboxes, a page at a time.
        * A machine whose sandbox boat answers 404 for, or has none recorded, is missing, and one
-       * whose read fails is unknown.
+       * whose read fails, its repeats included, or takes over `readWait`, is unknown.
        */
       observe: (machines) =>
         Effect.forEach(
@@ -703,6 +709,15 @@ export const make = (
               onNone: () => Effect.succeed({ state: "missing" }),
               onSome: (id) =>
                 api.sandbox(id).pipe(
+                  Effect.timeoutOrElse({
+                    duration: readWait,
+                    orElse: () =>
+                      Effect.fail(
+                        new Internal({
+                          message: `boat answered no read of sandbox ${id} within ${Duration.format(readWait)}`,
+                        }),
+                      ),
+                  }),
                   Effect.map((found) =>
                     Option.match(found, {
                       onNone: (): Observed => ({ state: "missing" }),

@@ -109,16 +109,21 @@ Each: what boat does, and what of ours depends on it.
   `failFast`, within about 1.5 s); 409 `named_snapshot_limit` for an 11th named
   snapshot. None creates anything. A create or fork that finds no machine ends
   `cancelled`, reported once, then 404. Ours: `capacityRefusals` as `Capacity`
-  under the refusal rule; no call sends `failFast`.
+  under the refusal rule, only for the calls that take room (`takesRoom`:
+  create, fork, resume, restore and a named snapshot's save); a 429 to any
+  other call is a passing limit, repeated for a `GET` and failing `Internal`
+  otherwise; no call sends `failFast`.
 - `Idempotency-Key` on create (also with `from`) and fork: the same key and body
   return the same sandbox, also once ready; another body is 409
   `idempotency_key_reused`; a retry during creation is 409
   `idempotency_in_progress`. Keys last 24 h, and a create that failed before
   its sandbox existed releases its key within about 2 minutes. Ours:
   `idempotencyKey` (`clankerbox-<host>-<instance>`), the unclear-outcome retry
-  (`retryWindow` 5 minutes, `firstPause` to `longestPause`, `attemptTimeout`),
-  `inProgress` repeated as unclear, a refusal answering a repeat failing
-  `Internal`.
+  of every call safe to repeat, every `GET` and every keyed call (`retryWindow`
+  5 minutes, `firstPause` to `longestPause`, `attemptTimeout`), cut short by a
+  caller's own wait, and a state read by `readWait`; `inProgress` repeated as
+  unclear; any refusal answering a repeat, a 429 or 503 `Capacity` or a 403
+  plan `Precondition`, failing `Internal`.
 
 **Access and exec** (D, O)
 

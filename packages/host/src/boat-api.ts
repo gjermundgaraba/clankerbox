@@ -1,7 +1,7 @@
 /**
  * boat's HTTP API v1, as the boat runtime calls it: Schemas for exactly the endpoints it uses,
- * boat's refusals mapped to the contract's errors, and the bounded retry of the calls that carry
- * an `Idempotency-Key`. Shapes follow `docs.boat.dev/openapi/boat-v1.yaml` (sha256
+ * boat's refusals mapped to the contract's errors, and the bounded retry of the calls that are
+ * safe to repeat: every `GET`, and every call that carries an `Idempotency-Key`. Shapes follow `docs.boat.dev/openapi/boat-v1.yaml` (sha256
  * `79aa87e21849194635cf057293d6934638bab1aeee1c1d4857aa1920e34cf210`, fetched 2026-10-05) and what
  * the trial account showed; the bump-boat-api skill lists the claims they rest on.
  *
@@ -47,8 +47,8 @@ export const ttlSeconds = 7200;
 const activation = { noEnv: true, ttlSeconds } as const;
 
 /**
- * How long a call with an `Idempotency-Key` is repeated while its outcome is unclear, counted
- * from the first unclear answer. That answer can take `attemptTimeout`, and so can the last
+ * How long a call safe to repeat is repeated while its outcome is unclear, counted from the
+ * first unclear answer; a caller with a deadline of its own cuts it short. That answer can take `attemptTimeout`, and so can the last
  * repeat, begun after a pause decided inside the window: a call can take up to 9.5 minutes.
  */
 export const retryWindow = Duration.minutes(5);
@@ -182,8 +182,9 @@ const decodeRefused = Schema.decodeUnknownEffect(Refused);
 
 /**
  * boat's answers that leave nothing on boat and mean "no room now", by status and code: the
- * account's active or start limits, no machine to run it on, and an 11th named snapshot. A
- * create or fork that ends `cancelled` is the runtime's to read.
+ * account's active or start limits, no machine to run it on, and an 11th named snapshot. They
+ * count only for a call that takes room (`Call.takesRoom`). A create or fork that ends
+ * `cancelled` is the runtime's to read.
  */
 const capacityRefusals: ReadonlyArray<readonly [number, string]> = [
   [429, "limit_reached"],
@@ -207,8 +208,9 @@ const planRefusals: ReadonlyArray<string> = [
 const inProgress = "idempotency_in_progress";
 
 /**
- * An attempt whose outcome isn't known: a dropped connection, a timeout, a 5xx boat doesn't
- * call a refusal, a repeat still in progress or a 2xx whose body didn't arrive whole.
+ * An attempt whose outcome isn't known, or that may go through later: a dropped connection, a
+ * timeout, a 5xx boat doesn't call a refusal, a repeat still in progress, a 2xx whose body
+ * didn't arrive whole, or a 429 to a call that takes no room.
  */
 class Unclear extends Data.TaggedError("Unclear")<{ readonly message: string }> {}
 
@@ -226,6 +228,13 @@ interface Call {
   readonly body?: Schema.Json | undefined;
   readonly headers?: Readonly<Record<string, string>> | undefined;
   readonly timeout?: Duration.Duration | undefined;
+  /** An `Idempotency-Key`, which makes the call safe to repeat. */
+  readonly key?: string | undefined;
+  /**
+   * Whether the call starts a machine or saves a named snapshot: create, fork, resume, restore
+   * and a snapshot's save. Only then is a 429 or 503 refusal in `capacityRefusals` `Capacity`.
+   */
+  readonly takesRoom?: true | undefined;
 }
 
 export const make = (settings: Settings) =>
@@ -236,7 +245,8 @@ export const make = (settings: Settings) =>
     const request = (call: Call) =>
       HttpClientRequest.make(call.method)(`${settings.url}${call.path}`, {
         acceptJson: true,
-        headers: call.headers,
+        headers:
+          call.key === undefined ? call.headers : { ...call.headers, "Idempotency-Key": call.key },
       }).pipe(HttpClientRequest.bearerToken(settings.apiKey), (built) =>
         call.body === undefined ? built : HttpClientRequest.bodyJsonUnsafe(built, call.body),
       );
@@ -244,7 +254,8 @@ export const make = (settings: Settings) =>
     /**
      * boat's answer to a call that isn't a 2xx, decided by its status; boat's code, when the body
      * holds one, refines it. A 4xx is definite whatever its body: a proxy's HTML 403 is
-     * `Internal`, and a 404 without a body is `NotFound`.
+     * `Internal`, and a 404 without a body is `NotFound`. A 429 to a call that takes no room is
+     * boat's rate limit on reads and the like, which passes.
      */
     const refusal = (
       call: Call,
@@ -263,7 +274,10 @@ export const make = (settings: Settings) =>
         const code = Option.map(decoded, (refused) => refused.code);
         const coded = (known: string) => Option.contains(code, known);
 
-        if (capacityRefusals.some(([refused, known]) => refused === status && coded(known))) {
+        if (
+          call.takesRoom === true &&
+          capacityRefusals.some(([refused, known]) => refused === status && coded(known))
+        ) {
           return yield* new Capacity({ message: said });
         }
 
@@ -271,7 +285,11 @@ export const make = (settings: Settings) =>
           return yield* new Precondition({ message: said });
         }
 
-        if (status >= 500 || (status === 409 && coded(inProgress))) {
+        if (
+          status >= 500 ||
+          (status === 429 && call.takesRoom !== true) ||
+          (status === 409 && coded(inProgress))
+        ) {
           return yield* new Unclear({ message: said });
         }
 
@@ -339,63 +357,63 @@ export const make = (settings: Settings) =>
         }),
       );
 
-    /** A call made once: an unclear outcome fails it. */
-    const once = <A>(call: Call, schema: Schema.Decoder<A>): Effect.Effect<A, HostError> =>
-      Effect.catchTag(attempt(call, request(call), schema), "Unclear", (unclear) =>
-        Effect.fail(new Internal({ message: unclear.message })),
-      );
-
     /**
-     * A call that carries an `Idempotency-Key`: while its outcome is unclear it is repeated with
-     * the same key and body, with backoff, for `retryWindow` from its first unclear answer, far
-     * inside boat's 24-hour key window. Then it fails. A `Capacity` refusal of a repeat is
-     * `Internal`: the unclear attempt may have made a sandbox, which the refusal may be counting.
+     * A call, answered. One safe to repeat, a `GET` or one with an `Idempotency-Key`, is repeated
+     * while its outcome is unclear, with the same request and backoff, for `retryWindow` from its
+     * first unclear answer, far inside boat's 24-hour key window; then it fails. Any other call is
+     * made once, and an unclear outcome fails it. After an unclear attempt no refusal is trusted
+     * as one: that attempt may have made a sandbox, which the refusal may be counting.
      */
-    const idempotent = <A>(
-      call: Call,
-      key: string,
-      schema: Schema.Decoder<A>,
-    ): Effect.Effect<A, HostError> =>
+    const send = <A>(call: Call, schema: Schema.Decoder<A>): Effect.Effect<A, HostError> =>
       Effect.gen(function* () {
-        const keyed = { ...call, headers: { ...call.headers, "Idempotency-Key": key } };
-        const built = request(keyed);
-        const repeated = yield* Ref.make(false);
+        const built = request(call);
 
-        return yield* attempt(keyed, built, schema).pipe(
+        if (call.method !== "GET" && call.key === undefined) {
+          return yield* Effect.catchTag(attempt(call, built, schema), "Unclear", (unclear) =>
+            Effect.fail(new Internal({ message: unclear.message })),
+          );
+        }
+
+        const unclear = yield* Ref.make(false);
+
+        const distrusted = (refused: Capacity | Precondition) =>
+          Effect.flatMap(Ref.get(unclear), (repeated) =>
+            Effect.fail(
+              repeated
+                ? new Internal({
+                    message: `${refused.message}, after an attempt whose outcome is unknown, so a sandbox may exist`,
+                  })
+                : refused,
+            ),
+          );
+
+        return yield* attempt(call, built, schema).pipe(
           Effect.tapError((error) =>
-            error instanceof Unclear ? Ref.set(repeated, true) : Effect.void,
+            error instanceof Unclear ? Ref.set(unclear, true) : Effect.void,
           ),
           Effect.retry({
             while: (error) => error instanceof Unclear,
-            schedule: Schedule.max([
-              Schedule.during(retryWindow),
-              Schedule.min([Schedule.exponential(firstPause), Schedule.spaced(longestPause)]),
-            ]),
+            schedule: Schedule.min([
+              Schedule.exponential(firstPause),
+              Schedule.spaced(longestPause),
+            ]).pipe(Schedule.upTo({ duration: retryWindow })),
           }),
-          Effect.catchTag("Unclear", (unclear) =>
-            Effect.fail(
-              new Internal({
-                message: `${unclear.message}, and repeats for ${Duration.format(retryWindow)} got no clearer answer`,
-              }),
-            ),
-          ),
-          Effect.catchTag("Capacity", (refused) =>
-            Effect.flatMap(Ref.get(repeated), (unclear) =>
+          Effect.catchTags({
+            Unclear: (last) =>
               Effect.fail(
-                unclear
-                  ? new Internal({
-                      message: `${refused.message}, after an attempt whose outcome is unknown, so a sandbox may exist`,
-                    })
-                  : refused,
+                new Internal({
+                  message: `${last.message}, and repeats for ${Duration.format(retryWindow)} got no clearer answer`,
+                }),
               ),
-            ),
-          ),
+            Capacity: distrusted,
+            Precondition: distrusted,
+          }),
         );
       });
 
     /** A sandbox, or none once boat answers 404. */
     const sandbox = (id: string) =>
-      once({ method: "GET", path: `/sandboxes/${id}` }, SandboxInfo).pipe(
+      send({ method: "GET", path: `/sandboxes/${id}` }, SandboxInfo).pipe(
         Effect.map(({ sandbox: found }) => Option.some(found)),
         Effect.catchTag("NotFound", () => Effect.succeedNone),
       );
@@ -405,13 +423,14 @@ export const make = (settings: Settings) =>
       /** Creates a sandbox of `type`, or from the named snapshot `from`; its ID. */
       create: (key: string, type: TypeName, from?: string) =>
         Effect.map(
-          idempotent(
+          send(
             {
               method: "POST",
               path: "/sandboxes",
               body: from === undefined ? { type, ...activation } : { type, from, ...activation },
+              key,
+              takesRoom: true,
             },
-            key,
             SandboxInfo,
           ),
           ({ sandbox: created }) => created.id,
@@ -419,9 +438,14 @@ export const make = (settings: Settings) =>
       /** Forks `source` into a new sandbox of `type`; its ID. */
       fork: (key: string, source: string, type: TypeName) =>
         Effect.map(
-          idempotent(
-            { method: "POST", path: `/sandboxes/${source}/fork`, body: { type, ...activation } },
-            key,
+          send(
+            {
+              method: "POST",
+              path: `/sandboxes/${source}/fork`,
+              body: { type, ...activation },
+              key,
+              takesRoom: true,
+            },
             Forked,
           ),
           (forked) => forked.id,
@@ -429,17 +453,20 @@ export const make = (settings: Settings) =>
       /** Resumes a stopped sandbox. boat takes no `Idempotency-Key` here. */
       resume: (id: string) =>
         Effect.asVoid(
-          once({ method: "POST", path: `/sandboxes/${id}/resume`, body: activation }, Accepted),
+          send(
+            { method: "POST", path: `/sandboxes/${id}/resume`, body: activation, takesRoom: true },
+            Accepted,
+          ),
         ),
       /**
        * Stops a sandbox after its final snapshot. Never with `force`, which drops everything
        * written since the last snapshot; a stop boat refuses is the error.
        */
       stop: (id: string) =>
-        Effect.asVoid(once({ method: "POST", path: `/sandboxes/${id}/stop`, body: {} }, Accepted)),
+        Effect.asVoid(send({ method: "POST", path: `/sandboxes/${id}/stop`, body: {} }, Accepted)),
       /** Deletes a sandbox; one boat no longer has is already gone. */
       delete: (id: string) =>
-        once(
+        send(
           {
             method: "DELETE",
             path: `/sandboxes/${id}`,
@@ -453,7 +480,7 @@ export const make = (settings: Settings) =>
       /** Sets the display name the operator sees on boat's dashboard. */
       rename: (id: string, name: string) =>
         Effect.asVoid(
-          once({ method: "PATCH", path: `/sandboxes/${id}`, body: { name } }, Accepted),
+          send({ method: "PATCH", path: `/sandboxes/${id}`, body: { name } }, Accepted),
         ),
       /**
        * Authorizes an OpenSSH public key for `user`. The answer's address and host key go unread:
@@ -461,7 +488,7 @@ export const make = (settings: Settings) =>
        */
       authorize: (id: string, publicKey: string) =>
         Effect.asVoid(
-          once(
+          send(
             { method: "POST", path: `/sandboxes/${id}/sshkey`, body: { key: publicKey } },
             Accepted,
           ),
@@ -471,7 +498,7 @@ export const make = (settings: Settings) =>
        * a call at 600 s. It reads the guest's host keys before the first SSH; it isn't the exec.
        */
       command: (id: string, command: string, timeoutSeconds: number) =>
-        once(
+        send(
           {
             method: "POST",
             path: `/sandboxes/${id}/commands`,
@@ -483,21 +510,26 @@ export const make = (settings: Settings) =>
       /** Saves the sandbox's disk under `name`; it is `saving` until `snapshot` reads it settled. */
       saveSnapshot: (sandboxId: string, name: string) =>
         Effect.map(
-          once(
-            { method: "POST", path: "/named-snapshots", body: { sandboxId, name } },
+          send(
+            {
+              method: "POST",
+              path: "/named-snapshots",
+              body: { sandboxId, name },
+              takesRoom: true,
+            },
             NamedSnapshotInfo,
           ),
           (saved) => saved.snapshot,
         ),
       /** A named snapshot, or none once boat answers 404. */
       snapshot: (name: string) =>
-        once({ method: "GET", path: `/named-snapshots/${name}` }, NamedSnapshotInfo).pipe(
+        send({ method: "GET", path: `/named-snapshots/${name}` }, NamedSnapshotInfo).pipe(
           Effect.map((info) => Option.some(info.snapshot)),
           Effect.catchTag("NotFound", () => Effect.succeedNone),
         ),
       /** Deletes a named snapshot; one boat no longer has is already gone. */
       deleteSnapshot: (name: string) =>
-        once({ method: "DELETE", path: `/named-snapshots/${name}` }, Accepted).pipe(
+        send({ method: "DELETE", path: `/named-snapshots/${name}` }, Accepted).pipe(
           Effect.asVoid,
           Effect.catchTag("NotFound", () => Effect.void),
         ),

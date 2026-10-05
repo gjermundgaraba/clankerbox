@@ -732,16 +732,19 @@ These are known, not guarded, and accepted:
   covers the request; none is `Precondition`, and a type the plan lacks is
   boat's 403, a `Precondition` refusal.
 - **Retries:** create, fork and restore carry an `Idempotency-Key`
-  (`clankerbox-<host>-<instance>`), and an unclear outcome is repeated for
-  5 minutes with backoff from 1 s to 30 s. A refusal that answers a repeat
-  isn't trusted as a refusal: the row stays `failed`. Resume takes no key and
-  is never repeated.
-- **Refusals** that leave nothing on boat remove the row: 429s and 503
+  (`clankerbox-<host>-<instance>`). They and every `GET` are repeated while
+  their outcome is unclear, or boat rate-limits a read, for 5 minutes with
+  backoff from 1 s to 30 s, or until the wait they serve ends. A refusal that
+  answers a repeat isn't trusted as a refusal: the row stays `failed`. Resume
+  takes no key, and it and the other calls are never repeated.
+- **Refusals** that leave nothing on boat remove the row: to a create, fork,
+  resume, restore or a named snapshot's save, 429s and 503
   `out_of_capacity`/`no_ready_machine` are `Capacity`, as is 409
   `named_snapshot_limit`, boat's cap on an account's named snapshots.
-- **State** is a `GET` of each recorded sandbox, never a list; a failed read
-  reads `unknown`, never `missing`. The SSH endpoint changes at every start
-  and is only reported for a running machine.
+- **State** is a `GET` of each recorded sandbox, never a list; a read that
+  still fails after its repeats, or takes over 2 minutes, reads `unknown`,
+  never `missing`. The SSH endpoint changes at every start and is only
+  reported for a running machine.
 - **Ready:** after a fork, a restore or any start the host waits for boat's
   lazy-restore marker before preparation writes `/var/lib/clankerbox/`. A
   start resumes only a sandbox boat doesn't read active; one it still makes,

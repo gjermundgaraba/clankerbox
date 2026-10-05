@@ -340,25 +340,89 @@ test("the bound counts from the first unclear answer, so a call can outlast it b
   expect(Duration.format(waited)).toBe("8m 7s");
 });
 
-test("a Capacity refusal after an unclear attempt isn't one: that attempt may have made a sandbox", async () => {
+test("no refusal after an unclear attempt is one, Capacity or a plan's Precondition: that attempt may have made a sandbox", async () => {
+  const refusals = [
+    [
+      refusal(429, "limit_reached", "2 concurrent sandboxes"),
+      "429 limit_reached: 2 concurrent sandboxes",
+    ],
+    [
+      refusal(403, "trial_machine_class_not_allowed", "no large"),
+      "403 trial_machine_class_not_allowed: no large",
+    ],
+  ] as const;
+
   for (const unclear of ["drop", refusal(500, "internal_error")] as const) {
-    const boat = fakeBoat((_sent, index) =>
-      index === 0 ? unclear : refusal(429, "limit_reached", "2 concurrent sandboxes"),
-    );
+    for (const [refused, said] of refusals) {
+      const boat = fakeBoat((_sent, index) => (index === 0 ? unclear : refused));
 
-    const { exit } = await runTimed(boat, (api) => Effect.flip(api.create("key-1", "small")));
-    const error = Exit.isSuccess(exit) ? exit.value : undefined;
+      const { exit } = await runTimed(boat, (api) => Effect.flip(api.create("key-1", "small")));
+      const error = Exit.isSuccess(exit) ? exit.value : undefined;
 
-    expect(boat.sent).toHaveLength(2);
-    expect(boat.sent[1]).toEqual(boat.sent[0]);
-    expect([error?._tag, error?.message]).toEqual([
-      "Internal",
-      "boat POST /sandboxes answered 429 limit_reached: 2 concurrent sandboxes (req_0123), after an attempt whose outcome is unknown, so a sandbox may exist",
-    ]);
+      expect(boat.sent).toHaveLength(2);
+      expect(boat.sent[1]).toEqual(boat.sent[0]);
+      expect([error?._tag, error?.message]).toEqual([
+        "Internal",
+        `boat POST /sandboxes answered ${said} (req_0123), after an attempt whose outcome is unknown, so a sandbox may exist`,
+      ]);
+    }
   }
 });
 
-test("calls without a key aren't repeated: an unclear outcome fails them", async () => {
+test("every GET is repeated while its outcome is unclear, a 429 included, until boat answers clearly", async () => {
+  const flaky = (answer: Answered) => (_sent: Sent, index: number) =>
+    [
+      "drop" as const,
+      refusal(503, "out_of_capacity"),
+      refusal(429, "rate_limited"),
+      { status: 200, cut: '{"ok":true,"sandbox":{"id":"bx_made0001",' },
+    ][index] ?? answer;
+
+  const sandboxBoat = fakeBoat(
+    flaky({ status: 200, body: { ok: true, sandbox: sandbox("bx_made0001") } }),
+  );
+
+  const found = await runTimed(sandboxBoat, (api) => api.sandbox("bx_made0001"));
+
+  expect(found.exit).toEqual(
+    Exit.succeed(
+      Option.some({
+        id: "bx_made0001",
+        state: "ready",
+        ip: "2001:db8::2c",
+        sshEndpoint: "203.0.113.10:19044",
+      }),
+    ),
+  );
+  expect(sandboxBoat.sent).toHaveLength(5);
+
+  const snapshotBoat = fakeBoat(
+    flaky({
+      status: 200,
+      body: { ok: true, snapshot: { name: "cbx-boat-01234567", status: "ready" } },
+    }),
+  );
+
+  const saved = await runTimed(snapshotBoat, (api) => api.snapshot("cbx-boat-01234567"));
+
+  expect(saved.exit).toEqual(
+    Exit.succeed(Option.some({ name: "cbx-boat-01234567", status: "ready" })),
+  );
+  expect(snapshotBoat.sent).toHaveLength(5);
+
+  // The bound is a keyed call's: 15 attempts in 5 minutes, then the read fails.
+  const down = fakeBoat(() => refusal(429, "rate_limited", "slow down"));
+  const { exit } = await runTimed(down, (api) => Effect.flip(api.sandbox("bx_made0001")));
+  const error = Exit.isSuccess(exit) ? exit.value : undefined;
+
+  expect(down.sent).toHaveLength(15);
+  expect([error?._tag, error?.message]).toEqual([
+    "Internal",
+    "boat GET /sandboxes/bx_made0001 answered 429 rate_limited: slow down (req_0123), and repeats for 5m got no clearer answer",
+  ]);
+});
+
+test("other calls without a key aren't repeated: an unclear outcome fails them", async () => {
   const boat = fakeBoat(() => refusal(500, "internal_error"));
 
   const error = await run(boat, (api) => Effect.flip(api.resume("bx_made0001")));
@@ -370,13 +434,13 @@ test("calls without a key aren't repeated: an unclear outcome fails them", async
   );
 
   // A 2xx whose body breaks off is unclear too, and fails a call made once.
-  const cut = fakeBoat(() => ({ status: 200, cut: '{"ok":true,"sandbox":{"id":"bx_made0001",' }));
-  const unread = await run(cut, (api) => Effect.flip(api.sandbox("bx_made0001")));
+  const cut = fakeBoat(() => ({ status: 200, cut: '{"ok":true,"type":"command.finished",' }));
+  const unread = await run(cut, (api) => Effect.flip(api.command("bx_made0001", "true", 30)));
 
   expect(cut.sent).toHaveLength(1);
   expect([unread._tag, unread.message]).toEqual([
     "Internal",
-    "boat GET /sandboxes/bx_made0001 answered 200, and its body didn't arrive whole: DecodeError",
+    "boat POST /sandboxes/bx_made0001/commands answered 200, and its body didn't arrive whole: DecodeError",
   ]);
 });
 
@@ -487,6 +551,27 @@ test("boat's refusals that leave nothing behind are Capacity, or Precondition fo
   );
 
   expect(snapshotError._tag).toBe("Capacity");
+
+  // A call that takes no room isn't refused for room: boat's limit on it passes, and the call,
+  // made once, fails.
+  for (const [status, code] of [
+    [429, "rate_limited"],
+    [429, "limit_reached"],
+    [503, "out_of_capacity"],
+  ] as const) {
+    const boat = fakeBoat(() => refusal(status, code));
+
+    const errors = await run(boat, (api) =>
+      Effect.all([
+        Effect.flip(api.stop("bx_made0001")),
+        Effect.flip(api.delete("bx_made0001")),
+        Effect.flip(api.authorize("bx_made0001", "ssh-ed25519 AAAAC3Nza host")),
+      ]),
+    );
+
+    expect(boat.sent).toHaveLength(3);
+    expect(errors.map((error) => error._tag)).toEqual(["Internal", "Internal", "Internal"]);
+  }
 
   // Other refusals are boat's to explain, and not the host's room.
   for (const [status, code] of [
@@ -635,12 +720,13 @@ const overFetch = <A, E>(serverUrl: string, use: (api: Api) => Effect.Effect<A, 
     ),
   );
 
-test("over a real connection: a drop fails a single call, and a create rides it out", async () => {
+test("over a real connection: a drop fails a call made once, and a create rides it out", async () => {
   const dropping = await loopback(() => "drop");
-  const error = await overFetch(dropping.url, (api) => Effect.flip(api.sandbox("bx_made0001")));
+  const error = await overFetch(dropping.url, (api) => Effect.flip(api.resume("bx_made0001")));
 
   expect(error._tag).toBe("Internal");
-  expect(error.message).toMatch(/^boat GET \/sandboxes\/bx_made0001: TransportError/u);
+  expect(error.message).toMatch(/^boat POST \/sandboxes\/bx_made0001\/resume: TransportError/u);
+  expect(dropping.received).toHaveLength(1);
   expect(dropping.received[0]?.headers.authorization).toBe(`Bearer ${apiKey}`);
 
   const flaky = await loopback((_request, _body, index) =>

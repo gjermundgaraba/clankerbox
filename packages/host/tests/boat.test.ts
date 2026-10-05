@@ -1028,7 +1028,7 @@ test("a machine no boat type covers is refused with Precondition, in admit and b
   );
 });
 
-test("observe reads each recorded sandbox with its own GET, none when no sandbox is recorded, and a failed read unknown", async () => {
+test("observe reads each recorded sandbox with its own GET, none when no sandbox is recorded, and a read that fails past its repeats unknown", async () => {
   const boat = fakeBoat({ instant: true });
   const rig = await rigOn(boat);
 
@@ -1068,10 +1068,19 @@ test("observe reads each recorded sandbox with its own GET, none when no sandbox
     ip: null,
     sshEndpoint: null,
   });
-  boat.hooks.answer = (sent) =>
-    sent.path.endsWith("/bx_broken") ? refusal(500, "internal_error") : undefined;
+  let blips = 0;
 
-  const observed = await succeeds(
+  boat.hooks.answer = (sent) => {
+    if (sent.path.endsWith("/bx_broken")) {
+      return refusal(500, "internal_error");
+    }
+
+    blips += sent.path.endsWith("/bx_up") ? 1 : 0;
+
+    return blips === 1 ? refusal(429, "rate_limited") : undefined;
+  };
+
+  const { exit, waited } = await timed(
     rig.runtime.observe([
       machineOn("up", { native: "bx_up" }),
       machineOn("own", { native: "bx_own" }),
@@ -1084,7 +1093,9 @@ test("observe reads each recorded sandbox with its own GET, none when no sandbox
     ]),
   );
 
-  expect(observed).toEqual([
+  // A blip is ridden out; a read boat keeps failing ends at its two minutes.
+  expect(Duration.format(waited)).toBe("2m");
+  expect(Exit.isSuccess(exit) ? exit.value : exit).toEqual([
     { state: "running", ssh: { host: "203.0.113.10", port: 19_044 } },
     { state: "running", ssh: { host: "198.51.100.7", port: 22 } },
     { state: "stopped" },
@@ -1097,15 +1108,19 @@ test("observe reads each recorded sandbox with its own GET, none when no sandbox
     { state: "unknown" },
   ]);
   // Never the operator's own sandbox: only the recorded ones are read.
-  expect(boat.sent.map((sent) => `${sent.method} ${sent.path}`).toSorted()).toEqual([
-    "GET /sandboxes/bx_booting",
-    "GET /sandboxes/bx_broken",
-    "GET /sandboxes/bx_cancelled",
-    "GET /sandboxes/bx_deleted",
-    "GET /sandboxes/bx_down",
-    "GET /sandboxes/bx_own",
-    "GET /sandboxes/bx_up",
-  ]);
+  expect(new Set(boat.sent.map((sent) => `${sent.method} ${sent.path}`))).toEqual(
+    new Set([
+      "GET /sandboxes/bx_booting",
+      "GET /sandboxes/bx_broken",
+      "GET /sandboxes/bx_cancelled",
+      "GET /sandboxes/bx_deleted",
+      "GET /sandboxes/bx_down",
+      "GET /sandboxes/bx_own",
+      "GET /sandboxes/bx_up",
+    ]),
+  );
+  expect(boat.sent.filter((sent) => sent.path.endsWith("/bx_up"))).toHaveLength(2);
+  expect(boat.sent.filter((sent) => sent.path.endsWith("/bx_broken")).length).toBeGreaterThan(2);
 
   boat.sent.length = 0;
 
