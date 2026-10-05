@@ -37,6 +37,7 @@ names the code it ran. The evidence also keeps a read-only snapshot of the appli
 settings.
 """
 import argparse
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -150,8 +151,18 @@ def control(state_file, op, args):
         return ran.returncode
     elif op == 'addresses':
         out = subprocess.run(['ifconfig'], capture_output=True, text=True, check=True).stdout
-        print(json.dumps(sorted({address for address in re.findall(r'^\tinet (\S+)', out, re.M)
-                                 if not address.startswith('127.')})))
+        # A subnet's network or broadcast address, which a bridge of OrbStack's can carry
+        # (192.168.215.0/24), takes no connection, from the Mac either (EADDRNOTAVAIL); a /31's
+        # or /32's, such as the tailnet's, does.
+        addresses = set()
+        for address, mask in re.findall(r'^\tinet (\S+) (?:--> \S+ )?netmask (0x[0-9a-f]+)', out, re.M):
+            network = ipaddress.ip_interface(f'{address}/{ipaddress.ip_address(int(mask, 16))}').network
+            ip = ipaddress.ip_address(address)
+            if ip.is_loopback or network.prefixlen <= 30 and ip in (network.network_address,
+                                                                    network.broadcast_address):
+                continue
+            addresses.add(address)
+        print(json.dumps(sorted(addresses)))
     elif op == 'listener':
         # A TCP port some process of the Mac listens on at every IPv4 address.
         out = subprocess.run(['lsof', '-nP', '-i4TCP', '-sTCP:LISTEN'], capture_output=True, text=True).stdout
