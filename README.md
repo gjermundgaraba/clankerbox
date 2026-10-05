@@ -250,7 +250,9 @@ digest.
 - On a smolvm host, check that no service listens on a public address or a
   wildcard before any guest runs (`ss -Hltnu`). smolvm's egress floor refuses
   loopback, private ranges and the tailnet, but not the host's public
-  addresses, so those are a guest's only way to a host service.
+  addresses, so those are a guest's only way to a host service. tailscaled's
+  WireGuard port (UDP, 41641 by default) listens on a wildcard and is
+  expected: a guest that reaches it gets nothing without WireGuard keys.
 - The macOS application firewall, if on, needs an "Allow incoming connections"
   entry for the binary, and each release's new binary prompts once. Where the
   firewall isn't managed by MDM, as root:
