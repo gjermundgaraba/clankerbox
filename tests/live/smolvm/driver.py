@@ -41,7 +41,8 @@ DIST = REPO / 'tools' / 'release' / 'dist'
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--ssh', required=True, help='USER@HOST of the Linux test host')
     parser.add_argument('--address', required=True, help="the test host's tailnet address")
     parser.add_argument('--root', required=True, help='the owned root on the test host')

@@ -9,7 +9,10 @@
     "ready": "vp run check && vp run -r test && vp run -r build",
     "sea:build": "sh tools/release/build-sea.sh",
     "sea:bundle": "sh tools/release/bundle.sh",
-    "sea:smoke": "sh tools/release/smoke.sh"
+    "sea:smoke": "sh tools/release/smoke.sh",
+    "live:smolvm": "python3 tests/live/smolvm/driver.py",
+    "live:tart": "python3 tests/live/tart/driver.py",
+    "live:boat": "python3 tests/live/boat/driver.py"
   },
   "devDependencies": {
     "@oxlint/plugins": "catalog:",

@@ -4,7 +4,7 @@ Tart host from a private Tart home, and runs the suite with the same binary as t
 
   python3 tests/live/tart/driver.py --seed SEED --address TAILNET_ADDRESS [--suite-args 'VP TEST ARGS']
 
-  python3 tests/live/tart/driver.py \
+  python3 tests/live/tart/driver.py \\
     --seed /Users/gg/ws/pers/clankerbox/.work/inputs/tart-cirrus-tahoe-base --address 100.122.69.11
 
 SEED is the absolute path of the stock Cirrus seed (PROVENANCE, READY and its VM under home/vms),
@@ -241,7 +241,8 @@ def firewall_state():
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--seed', required=True, help='the Cirrus seed, with its PROVENANCE and READY')
     parser.add_argument('--address', required=True, help="this Mac's tailnet address")
     parser.add_argument('--suite-args', default='', help='arguments for the suite run, such as -t PATTERN')

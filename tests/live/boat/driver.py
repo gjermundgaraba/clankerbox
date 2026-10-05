@@ -441,7 +441,8 @@ def preflight(boat, record, log):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Runs the boat live suite against boat\'s trial.')
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--address', help="this Mac's tailnet address; loopback when omitted or not assigned")
     parser.add_argument('--suite-args', default='', help='arguments for the suite run, such as -t PATTERN')
     options = parser.parse_args()
