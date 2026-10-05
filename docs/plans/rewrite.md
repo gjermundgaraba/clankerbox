@@ -1132,7 +1132,12 @@ Two rules for every VM job:
 - **The service:** boat.dev runs Linux sandboxes (x86_64 VMs) in its cloud.
   - The host calls boat's HTTP API v1 directly, with Effect's HTTP client and
     Schemas for the endpoints it uses. It uses no boat SDK or CLI.
-  - Host config holds a boat API key.
+  - Host config holds a boat API key. It travels only as the bearer token,
+    and never reaches a log, an error, evidence or a process list: errors
+    carry the method, path, status and boat's code and message, never a
+    request or a whole body (a sandbox's `desktopUrl` holds a token), and
+    anything boat or the transport says is scrubbed of the key. Calls carry
+    no trace headers.
   - The design is for boat's trial, which every check can run on: auto-stop
     within at most 2 hours, 2 active sandboxes, and no `large` type (a
     subscription stays on the trial until its first payment). Checks that
@@ -1149,10 +1154,16 @@ Two rules for every VM job:
   column. Create, fork and restore send an `Idempotency-Key` derived from the
   row's `instance` value, so a repeat within boat's 24-hour key window returns
   the original.
-  - An unclear outcome of the call (a dropped connection, a 5xx) is retried
-    inside the action, with backoff and the same key and body, for up to 5
-    minutes: long enough to ride out a brief outage, and far inside the key
-    window. Then the action fails.
+  - An unclear outcome of the call (a dropped connection, a 5xx, no answer
+    within 2 minutes) is retried inside the action, with backoff and the same
+    key and body, for up to 5 minutes: long enough to ride out a brief outage,
+    and far inside the key window. Then the action fails. The pauses double
+    from 1 s up to 30 s. A repeat that boat answers with 409
+    `idempotency_in_progress`, while the first call is still making the
+    sandbox, is unclear too.
+  - The key is `clankerbox-<host>-<instance>`. boat's resume takes no key
+    (`boat-v1.yaml`), so it is never repeated: an unclear resume fails the
+    `start`, and the next `start` reads the state again.
   - A row without its sandbox ID (that failure, or a host crash before the ID
     was recorded) is `failed` like on any runtime, and `delete` removes only
     the row. A sandbox may exist. boat's create takes no name or tag and a
@@ -1164,15 +1175,22 @@ Two rules for every VM job:
   one's state, in their order, which boat answers with one `GET /sandboxes`,
   filtered to the recorded IDs, because the account may also hold the
   operator's own sandboxes. Nothing caches it.
+  - The list is paged, at most 200 per page, and holds stopped sandboxes
+    too. When boat has more pages and a recorded ID isn't on the first, the
+    host can't tell that machine is gone, and `observe` fails with
+    `Internal` rather than read it `missing`.
   - `ready`, `idle` and `running` read as `running`.
   - 404 and `cancelled` read as `missing`.
   - Anything else reads as `stopped`. A machine that boat stopped on its own
     reads `stopped`, and `start` resumes it.
 - **Sizes:** boat has four fixed machine types, from `small` (2 vCPU, 4 GiB,
   12 GiB) to `xlarge` (16 vCPU, 32 GiB, 251 GiB, from the $100 plan).
-  - The host picks the smallest type that covers `cpu`, `ramMib` and
+  - The host asks only for the trial's: `small` and `default` (4 vCPU,
+    8 GiB, 50 GiB). The trial refuses `large`, `xlarge` needs the $100 plan,
+    and `boat-v1.yaml` lists only `small`, `default` and `large`.
+  - The host picks the smallest of those that covers `cpu`, `ramMib` and
     `diskGib`, and the machine reports that type's sizes.
-  - A request that no type covers is refused with `Precondition` in step 3.
+  - A request that neither covers is refused with `Precondition` in step 3.
 - **Refusals:** none of these leaves anything on boat, so all of them fall
   under the refusal rule and remove the row:
   - 429 (`limit_reached`, `rate_limited`, `daily_limit_reached`);
