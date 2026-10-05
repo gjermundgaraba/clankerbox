@@ -685,7 +685,7 @@ test("a setup that exits removes its file", async () => {
   const file = /running as (\S+)/u.exec(error.message)?.[1] ?? "";
 
   expect(file).toMatch(/^\/var\/tmp\/clankerbox-setup\./u);
-  await expect(stat(file)).rejects.toThrow();
+  await expect(stat(file)).rejects.toThrow("ENOENT");
 });
 
 test("a setup that runs past its timeout fails the create with the output so far", async () => {

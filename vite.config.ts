@@ -34,11 +34,8 @@ export default defineConfig({
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
       "oxc/no-accumulating-spread": "error",
-      // The vitest plugin's defaults: expect takes a message as its second argument, and the
-      // suites leave throw messages and live-only branches to the tests themselves.
+      // Vitest's expect takes a message as its second argument.
       "vitest/valid-expect": ["warn", { maxArgs: 2 }],
-      "vitest/require-to-throw-message": "off",
-      "vitest/no-conditional-expect": "off",
       "vitest/no-restricted-vi-methods": [
         "error",
         {

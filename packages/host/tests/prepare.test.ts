@@ -103,7 +103,7 @@ test("on Linux without perl, preparation says it needs perl", async () => {
 
   expect(code).toBe(1);
   expect(output).toContain("preparation needs perl");
-  await expect(stat(join(where.root, "var/lib/clankerbox/instance"))).rejects.toThrow();
+  await expect(stat(join(where.root, "var/lib/clankerbox/instance"))).rejects.toThrow("ENOENT");
 });
 
 test("on macOS the seed write is the whole reseed", async () => {
@@ -175,7 +175,7 @@ test("new-identity sees the new machine ID; when it fails, the instance stays ol
   expect(code).toBe(4);
   expect(output).toContain("linux_dev");
   expect(output).toContain("hook broke");
-  await expect(stat(join(where.root, "var/lib/clankerbox/instance"))).rejects.toThrow();
+  await expect(stat(join(where.root, "var/lib/clankerbox/instance"))).rejects.toThrow("ENOENT");
 });
 
 test("a failing start fails preparation with its output", async () => {

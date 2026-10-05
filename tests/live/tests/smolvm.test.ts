@@ -638,7 +638,8 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
       expect(each).toBeGreaterThanOrEqual(512);
 
-      const results = await Promise.all([createBare("ram-a", each), createBare("ram-b", each)]);
+      const names = ["ram-a", "ram-b"];
+      const results = await Promise.all(names.map((name) => createBare(name, each)));
       const passed = results.filter(({ code }) => code === 0);
 
       expect(passed).toHaveLength(1);
@@ -647,11 +648,14 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         expect(failure(refused).tag).toBe("Capacity");
       }
 
-      for (const name of ["ram-a", "ram-b"]) {
-        const row = await machine(name);
+      const rows = await Promise.all(names.map(machine));
 
-        if (row !== undefined) {
-          expect(row.action).toEqual({ name: "create", status: "done" });
+      expect(rows.map((row) => row?.action)).toEqual(
+        results.map(({ code }) => (code === 0 ? { name: "create", status: "done" } : undefined)),
+      );
+
+      for (const [index, name] of names.entries()) {
+        if (results[index]?.code === 0) {
           await removeMachine(name);
         }
       }
