@@ -1,4 +1,7 @@
-/** The CLI's exit code when a signal stops it mid-call: 130, as the host role's is. */
+/**
+ * The exit code when SIGINT or SIGTERM stops the process mid-call: 130, runMain's default
+ * teardown, which the host role shares. The live drivers check the host's own.
+ */
 import { type ChildProcess, spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
@@ -70,24 +73,27 @@ const silent = async () => {
   return { port, accepted: accepted.promise };
 };
 
-test("the CLI exits 130 when SIGINT stops it mid-call", async () => {
-  const dir = await scratch(owned);
-  const { port, accepted } = await silent();
-  const config = join(dir, "config.json");
+test.each(["SIGINT", "SIGTERM"] as const)(
+  "the CLI exits 130 when %s stops it mid-call",
+  async (signal) => {
+    const dir = await scratch(owned);
+    const { port, accepted } = await silent();
+    const config = join(dir, "config.json");
 
-  await writeFile(
-    config,
-    JSON.stringify({ hosts: [{ id: "linux", url: `http://127.0.0.1:${port}` }] }),
-  );
+    await writeFile(
+      config,
+      JSON.stringify({ hosts: [{ id: "linux", url: `http://127.0.0.1:${port}` }] }),
+    );
 
-  const { child, exited } = run(join(import.meta.dirname, "../src/main.ts"), [
-    "machines",
-    "--config",
-    config,
-  ]);
+    const { child, exited } = run(join(import.meta.dirname, "../src/main.ts"), [
+      "machines",
+      "--config",
+      config,
+    ]);
 
-  await accepted;
-  child.kill("SIGINT");
+    await accepted;
+    child.kill(signal);
 
-  expect(await exited).toBe(130);
-});
+    expect(await exited).toBe(130);
+  },
+);
