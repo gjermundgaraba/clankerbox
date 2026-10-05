@@ -1,5 +1,6 @@
 /** The host API over a real loopback server, called through the SDK's client and raw HTTP. */
 import { Client, type MachineSpec, version } from "@gjermundgaraba/clankerbox-sdk";
+import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
 import { Effect } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import type { MachineRecord } from "../src/store.ts";
@@ -27,7 +28,7 @@ const spec: MachineSpec = { base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
 
 const withClient = <A, E>(url: string, use: (client: Client.Interface) => Effect.Effect<A, E>) =>
   Effect.flatMap(Client.Client, use).pipe(
-    Effect.provide(Client.layer([{ id: "linux", url }])),
+    Effect.provide(NodeClient.layer([{ id: "linux", url }])),
     Effect.runPromise,
   );
 

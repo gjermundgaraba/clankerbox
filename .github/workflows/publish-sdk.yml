@@ -71,13 +71,17 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/sdk"
           pnpm --filter @gjermundgaraba/clankerbox-sdk pack --pack-destination "$RUNNER_TEMP/sdk"
-          tar -tzf "$RUNNER_TEMP/sdk/"*.tgz | grep -qx package/LICENSE
+          tar -tzf "$RUNNER_TEMP/sdk/"*.tgz > "$RUNNER_TEMP/sdk/files"
+          grep -qx package/LICENSE "$RUNNER_TEMP/sdk/files"
+          grep -qx package/dist/node.mjs "$RUNNER_TEMP/sdk/files"
           tar -xzOf "$RUNNER_TEMP/sdk/"*.tgz package/package.json | node --input-type=module -e '
             import assert from "node:assert/strict";
             import { readFileSync } from "node:fs";
             const text = readFileSync(0, "utf8");
             assert.doesNotMatch(text, /"(catalog|workspace):/);
-            assert.equal(JSON.parse(text).exports["."].import, "./dist/index.mjs");
+            const { exports } = JSON.parse(text);
+            assert.equal(exports["."].import, "./dist/index.mjs");
+            assert.equal(exports["./node"].import, "./dist/node.mjs");
           '
           git diff --exit-code
       - name: Publish with npm trusted publishing

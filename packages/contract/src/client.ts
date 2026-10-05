@@ -4,10 +4,9 @@
  * the client's mutation timeout, is `Unavailable`, and the caller reads the resource to see
  * what happened.
  */
-import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
-import { Context, Duration, Effect, Fiber, Layer, Match, Predicate, Result, Schema } from "effect";
+import { Context, Duration, Effect, Fiber, Match, Predicate, Result, Schema } from "effect";
 import type { HttpClient, HttpClientError } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 import { CheckpointGroup, HostGroup, Http, MachineGroup } from "./api.ts";
@@ -501,13 +500,3 @@ export const make = (
         ),
     } satisfies Interface;
   });
-
-/**
- * The client over Node's `http` module, which sets no timeout of its own: a mutation can run
- * for hours.
- */
-export const layer = (
-  hosts: ReadonlyArray<HostEntry>,
-  options?: Options,
-): Layer.Layer<Client, Invalid> =>
-  Layer.effect(Client, make(hosts, options)).pipe(Layer.provide(NodeHttpClient.layerNodeHttp));

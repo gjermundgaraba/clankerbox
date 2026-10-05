@@ -15,6 +15,7 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
+    "./node": "./src/node.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {
@@ -22,6 +23,10 @@
       ".": {
         "types": "./dist/index.d.mts",
         "import": "./dist/index.mjs"
+      },
+      "./node": {
+        "types": "./dist/node.d.mts",
+        "import": "./dist/node.mjs"
       },
       "./package.json": "./package.json"
     },
@@ -45,5 +50,10 @@
   "peerDependencies": {
     "@effect/platform-node": "^4.0.0",
     "effect": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@effect/platform-node": {
+      "optional": true
+    }
   }
 }

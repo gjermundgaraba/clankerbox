@@ -271,12 +271,14 @@ action groups, the errors, the profile file schema and the client library. It
 is versioned with the binaries: SDK 1.2.3 talks to hosts of release 1.2.x.
 Where it reads a host (`hosts` and placement), a host of another major.minor
 is `Invalid`, naming both versions.
-`effect` and `@effect/platform-node` `^4.0.0` are peer dependencies, so an app
-has one copy of Effect and Schema identity holds.
+`effect` `^4.0.0` is a peer dependency, so an app has one copy of Effect and
+Schema identity holds; so is `@effect/platform-node` `^4.0.0`, needed only by
+the `/node` entry.
 
 ```ts
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Client, readSetup } from "@gjermundgaraba/clankerbox-sdk";
+import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
 import { Console, Effect } from "effect";
 
 const program = Effect.gen(function* () {
@@ -299,14 +301,15 @@ const program = Effect.gen(function* () {
 }).pipe(Effect.catchTag("Capacity", (error) => Console.error(`no room: ${error.message}`)));
 
 program.pipe(
-  Effect.provide(Client.layer([{ id: "linux", url: "http://100.64.0.10:8484" }])),
+  Effect.provide(NodeClient.layer([{ id: "linux", url: "http://100.64.0.10:8484" }])),
   Effect.provide(NodeServices.layer),
   Effect.runPromise,
 );
 ```
 
-- `Client.layer` runs over Node's `http` module, which sets no timeout, so a
-  create with a long setup isn't cut off. `Client.make` takes the app's own
+- `NodeClient.layer` (the `/node` entry) runs over Node's `http` module, which
+  sets no timeout, so a create with a long setup isn't cut off. The main entry
+  never loads `@effect/platform-node`: `Client.make` takes the app's own
   `HttpClient` instead; one over `fetch` gives up on a reply after 300 s, and
   `NodeHttpClient.layerUndici` after an hour.
 - A read gives up on a host after 10 s (`readTimeout`); a mutation waits for

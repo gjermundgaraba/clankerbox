@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Client } from "@gjermundgaraba/clankerbox-sdk";
+import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
 import { DateTime, Effect, Layer, Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import type { HostConfig } from "../src/config.ts";
@@ -71,7 +72,7 @@ const whileServing = <A, E>(host: HostConfig, dir: string, use: Effect.Effect<A,
 
 const withClient = <A, E>(port: number, use: (client: Client.Interface) => Effect.Effect<A, E>) =>
   Effect.flatMap(Client.Client, use).pipe(
-    Effect.provide(Client.layer([{ id: "linux", url: `http://127.0.0.1:${port}` }])),
+    Effect.provide(NodeClient.layer([{ id: "linux", url: `http://127.0.0.1:${port}` }])),
   );
 
 test("the host fails the actions its last process left running before it serves", async () => {

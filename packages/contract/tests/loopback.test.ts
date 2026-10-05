@@ -4,6 +4,7 @@ import { Effect, Layer, Schema } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { afterEach, expect, test } from "vite-plus/test";
 import { Client, type MachineSpec } from "../src/index.ts";
+import * as NodeClient from "../src/node.ts";
 import { type StubHost, stubHost } from "./stub-host.ts";
 
 const stubs: Array<StubHost> = [];
@@ -54,7 +55,7 @@ const cutOff = (response: ServerResponse) => {
 
 const onLinux = <A, E>(url: string, use: (client: Client.Interface) => Effect.Effect<A, E>) =>
   Effect.flatMap(Client.Client, use).pipe(
-    Effect.provide(Client.layer([{ id: "linux", url }])),
+    Effect.provide(NodeClient.layer([{ id: "linux", url }])),
     Effect.runPromise,
   );
 
@@ -84,7 +85,7 @@ test("the client's Node transport calls a real loopback host", async () => {
 
     return yield* Effect.provide(
       Effect.flatMap(Client.Client, (client) => client.create("dev", spec)),
-      Client.layer([
+      NodeClient.layer([
         { id: "mac", url: "http://127.0.0.1:1" },
         { id: "linux", url },
       ]),
@@ -99,7 +100,7 @@ test("a refused connection is Unavailable through the Node transport", async () 
   const error = await Effect.flatMap(Client.Client, (client) =>
     Effect.flip(client.start("linux_dev")),
   ).pipe(
-    Effect.provide(Client.layer([{ id: "linux", url: "http://127.0.0.1:1" }])),
+    Effect.provide(NodeClient.layer([{ id: "linux", url: "http://127.0.0.1:1" }])),
     Effect.runPromise,
   );
 

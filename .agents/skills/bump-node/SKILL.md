@@ -95,7 +95,7 @@ minutes)
   300 000 ms (`kBodyTimeout`, `kHeadersTimeout`,
   N@v26.10.0:deps/undici/src/lib/dispatcher/client.js); a 330 s call failed at
   300.9 s with `UND_ERR_HEADERS_TIMEOUT`, and Node has no public API to change
-  them. Ours: the SDK's `Client.layer` uses `node:http`, which sets no client
+  them. Ours: the SDK's `/node` `layer` uses `node:http`, which sets no client
   timeout; README's SDK section says a `fetch` client gives up after 300 s.
 - The `node:http` server's defaults: `requestTimeout` 300 000 ms, covering only
   receiving the request, `headersTimeout` 60 000, `keepAliveTimeout` 5 000 and
