@@ -815,9 +815,12 @@ module, with no shared supervisor:
   on every `start`, including a restored machine's first start. Each VM gets
   its own `system.slice/smolvm-vm-<name>.scope` and survives its launcher. No
   `systemd-run` and no unit files. Verified for plain starts and restores.
-- **Tart, with one launchd job per VM (`tart.ts`):** the plist is written once
-  at create. Start runs `launchctl print`, then bootstrap if the job is
-  absent, then `kickstart` without `-k`.
+- **Tart, with one launchd job per VM (`tart.ts`):** every boot writes the
+  plist again, so it names the configured tart binary, and a missing plist is
+  replaced. Then it runs `launchctl print`, bootstrap if the job is
+  absent, and `kickstart` without `-k`. A job launchd still holds keeps the
+  program it was bootstrapped with until a bootout or a reboot; the host
+  doesn't boot it out to reload it.
   - One LaunchAgent per VM in the user's `gui/<uid>` domain, labelled with the
     VM's name, running `tart run --no-graphics --net-softnet-block=@host <vm>`
     with `RunAtLoad` and `KeepAlive` false. The plist and the job's log are in

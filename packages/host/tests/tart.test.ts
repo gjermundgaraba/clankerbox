@@ -587,18 +587,29 @@ test("a create, fork or restore whose forwarder can't listen is refused before a
   }
 });
 
-test("a machine whose job file is gone can't start, and says to delete it", async () => {
+test("start writes the job again, so a job file that's gone or names an older tart is replaced", async () => {
   const { mac, runtime } = await runtimeOn();
-  const machine = await machineOn("dev");
+  const [gone, stale] = await Promise.all([machineOn("gone"), machineOn("stale")]);
 
-  mac.vms.set(vmOf(machine), "stopped");
+  const file = (machine: MachineRef) =>
+    join(jobsDir(mac.settings.stateDir), `${vmOf(machine)}.plist`);
 
-  const error = await Effect.runPromise(Effect.flip(runtime.start(machine)));
+  await writeFile(file(stale), "names /opt/tart/2.40.0/tart.app/Contents/MacOS/tart\n");
 
-  expect(error._tag).toBe("Internal");
-  expect(error.message).toBe(
-    `machine mac_dev has no VM job at ${join(jobsDir(mac.settings.stateDir), `${vmOf(machine)}.plist`)}; delete it`,
-  );
+  for (const machine of [gone, stale]) {
+    mac.vms.set(vmOf(machine), "stopped");
+    await Effect.runPromise(runtime.start(machine));
+
+    expect(await readFile(file(machine), "utf8")).toBe(
+      plist({
+        label: vmOf(machine),
+        program: [binary, "run", "--no-graphics", "--net-softnet-block=@host", vmOf(machine)],
+        environment: environment(mac.settings),
+        log: join(jobsDir(mac.settings.stateDir), `${vmOf(machine)}.log`),
+      }),
+    );
+    expect(mac.vms.get(vmOf(machine))).toBe("running");
+  }
 });
 
 test("the two-VM count takes every running VM, the operator's too, and machines actions are booting", async () => {

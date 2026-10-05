@@ -267,7 +267,10 @@ export const make = (
       log: join(jobs, `${vm}.log`),
     });
 
-    /** Writes the machine's VM job once, at create; nothing rewrites it. */
+    /**
+     * Writes the machine's VM job, at every boot, so its plist names the configured tart. A job
+     * launchd already holds keeps the program it was bootstrapped with.
+     */
     const writeJob = (vm: string) => {
       const { plist: file, log } = job(vm);
 
@@ -384,8 +387,9 @@ export const make = (
       });
 
     /**
-     * Boots the machine's VM through its job: bootstrapped if launchd doesn't hold it (as after a
-     * reboot), then kickstarted without `-k`, which never touches a running VM. `kickstart`
+     * Boots the machine's VM through its job, written again first: bootstrapped if launchd
+     * doesn't hold it (as after a reboot), then kickstarted without `-k`, which never touches a
+     * running VM. `kickstart`
      * returns before Tart has started the VM, so `ready` waits for the guest agent. A boot that
      * fails from there leaves the VM as it is, reachable through its listener; a `start` of a
      * made machine that runs prepares it again.
@@ -394,15 +398,12 @@ export const make = (
       Effect.gen(function* () {
         const vm = vmOf(machine);
         const { target, plist: file, log } = job(vm);
+
+        yield* writeJob(vm);
+
         const loaded = yield* launchctl(["print", target], `print ${target}`);
 
         if (loaded.exitCode === 113) {
-          if (!(yield* files(`couldn't check ${file}`, fs.exists(file)))) {
-            return yield* new Internal({
-              message: `machine ${machine.id} has no VM job at ${file}; delete it`,
-            });
-          }
-
           yield* Effect.flatMap(launchctl(["bootstrap", domain, file], `bootstrap ${vm}`), (ran) =>
             expect(ran, `launchctl bootstrap ${vm}`),
           );
@@ -461,7 +462,7 @@ export const make = (
       });
 
     /**
-     * Clones `from` into the machine's VM with a new serial, and its job. The machine's listener
+     * Clones `from` into the machine's VM with a new serial, and boots it. The machine's listener
      * opens first, so a port it can't listen on is refused before anything native.
      */
     const cloneInto = (from: string, machine: MachineRef, sizes: ReadonlyArray<string>) => {
@@ -469,7 +470,6 @@ export const make = (
 
       return Effect.gen(function* () {
         yield* Effect.mapError(listen(machine), (error) => new Refusal({ error }));
-        yield* writeJob(vm);
         yield* call(["clone", from, vm], `clone ${from} ${vm}`);
         yield* call(["set", vm, "--random-serial", ...sizes], `set ${vm}`);
         yield* boot(machine);
