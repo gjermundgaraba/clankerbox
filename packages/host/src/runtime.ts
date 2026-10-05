@@ -155,12 +155,15 @@ export interface Interface {
   /**
    * Step 3 of an action that boots a machine: the runtime's capacity checks, such as the smolvm
    * host's RAM budget or Tart's two-VM count. A failure here writes nothing. Not called for
-   * `start` on a running machine.
+   * `start` on a running machine, but called for one whose state couldn't be read.
    */
   readonly admit: (activation: Activation) => Effect.Effect<void, HostError>;
   /** Makes the machine from `image` and boots it; it returns once exec works. */
   readonly create: (machine: MachineRef, image: string) => Effect.Effect<void, HostError | Refusal>;
-  /** Boots a stopped machine; it returns once exec works. */
+  /**
+   * Boots a stopped machine, and leaves a running one as it is; it returns once exec works. The
+   * core calls it on every start, before preparation, so it reads the machine's state itself.
+   */
   readonly start: (machine: MachineRef) => Effect.Effect<void, HostError | Refusal>;
   /** Stops a running machine. */
   readonly stop: (machine: MachineRef) => Effect.Effect<void, HostError>;

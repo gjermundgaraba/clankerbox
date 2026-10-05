@@ -303,7 +303,7 @@ export const make = (
       Effect.gen(function* () {
         const name = yield* nameOf(id);
 
-        const [token, { record, running }] = yield* admitted(
+        const [token, record] = yield* admitted(
           claimAndCheck(holding("start", name), (record) =>
             Effect.gen(function* () {
               yield* made(record);
@@ -320,7 +320,7 @@ export const make = (
                 yield* admit("start", record);
               }
 
-              return { record, running: state === "running" };
+              return record;
             }),
           ),
         );
@@ -330,9 +330,7 @@ export const make = (
         const hostKey = yield* native(
           token,
           `start ${id}`,
-          withRuntime(
-            Effect.andThen(running ? Effect.void : runtime.start(machine), prepare(machine)),
-          ),
+          withRuntime(Effect.andThen(runtime.start(machine), prepare(machine))),
         );
 
         yield* done(token, { prepared: { name, hostKey } });

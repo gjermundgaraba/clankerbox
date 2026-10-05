@@ -244,7 +244,7 @@ test("a fork or restore that fails only in preparation leaves its machine made, 
       state: "running",
       action: { name: "start", status: "done" },
     });
-    expect(linux.fake.calls).toEqual([`exec linux_${name}`]);
+    expect(linux.fake.calls).toEqual([`start linux_${name}`, `exec linux_${name}`]);
   }
 });
 

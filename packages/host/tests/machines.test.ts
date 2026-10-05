@@ -86,7 +86,7 @@ test("create runs setup once, then preparation, and reports the machine as the r
   ]);
 });
 
-test("start on a running machine boots nothing and runs preparation again; setup never runs again", async () => {
+test("start on a running machine calls the runtime's start, admits nothing and runs preparation again; setup never runs again", async () => {
   const linux = await host();
 
   await linux.run(linux.machines.create(request("dev", { setup: installsStart })));
@@ -95,7 +95,7 @@ test("start on a running machine boots nothing and runs preparation again; setup
   const started = await linux.run(linux.machines.start("linux_dev"));
 
   expect(started).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
-  expect(linux.fake.calls).toEqual(["exec linux_dev"]);
+  expect(linux.fake.calls).toEqual(["start linux_dev", "exec linux_dev"]);
   expect(await readFile(join(linux.fake.root("dev") ?? "", "starts"), "utf8")).toBe(
     "start\nstart\n",
   );
@@ -263,6 +263,19 @@ test("a machine has an SSH endpoint, on its port of the publish address, only wh
     ["stopped", undefined],
     ["missing", undefined],
   ]);
+});
+
+test("start on a machine the runtime can't read admits it and calls the runtime's start", async () => {
+  const linux = await host();
+
+  await linux.run(linux.machines.create(request("dev")));
+  linux.fake.machines.set("dev", { state: "unknown", root: linux.fake.root("dev") ?? "" });
+  linux.fake.calls.length = 0;
+
+  const started = await linux.run(linux.machines.start("linux_dev"));
+
+  expect(started).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
+  expect(linux.fake.calls).toEqual(["admit linux_dev", "start linux_dev", "exec linux_dev"]);
 });
 
 test("a duplicate name is Conflict{exists}, and the runtime is never called", async () => {
@@ -604,7 +617,7 @@ test("a create that fails only in preparation leaves its machine made, and start
   expect(error).toEqual(new Internal({ message: "sshd didn't start" }));
   expect(row).toMatchObject({ made: true, action: { name: "create", status: "failed" } });
   expect(started).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
-  expect(linux.fake.calls).toEqual(["exec linux_dev"]);
+  expect(linux.fake.calls).toEqual(["start linux_dev", "exec linux_dev"]);
 });
 
 test("after a restart during create's preparation, the machine is made, and start prepares it again", async () => {

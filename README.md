@@ -430,8 +430,10 @@ is afterwards or a tagged error. Each runs in this order (`actions.ts`):
   last action, `running` while held, `failed` with the error, or `done`. A
   checkpoint is ready once its action is `done`. A `stop` that does nothing
   writes nothing.
-- `start` on a running machine runs preparation again (the repair path) and
-  `stop` on a stopped one does nothing. `delete` of a missing resource is
+- `start` on a running machine runs preparation again (the repair path): every
+  start calls the runtime's start, which leaves a running machine as it is.
+  `stop` on a machine that doesn't read `running`, `unknown` included, does
+  nothing. `delete` of a missing resource is
   `NotFound`, which clients treat as done.
 - Ready checkpoints never change, so restores read them without a claim and
   run in parallel.
