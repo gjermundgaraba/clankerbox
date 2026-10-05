@@ -20,6 +20,8 @@ export default defineConfig({
   },
   lint: {
     options: { typeAware: true, typeCheck: true },
+    // Oxlint's defaults, and vitest for no-restricted-vi-methods.
+    plugins: ["unicorn", "typescript", "oxc", "vitest"],
     ignorePatterns: [...agentTooling, ".work/**", "tools/oxlint/anti-slop/**"],
     jsPlugins: [
       { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
@@ -32,17 +34,27 @@ export default defineConfig({
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
       "oxc/no-accumulating-spread": "error",
+      // The vitest plugin's defaults: expect takes a message as its second argument, and the
+      // suites leave throw messages and live-only branches to the tests themselves.
+      "vitest/valid-expect": ["warn", { maxArgs: 2 }],
+      "vitest/require-to-throw-message": "off",
+      "vitest/no-conditional-expect": "off",
+      "vitest/no-restricted-vi-methods": [
+        "error",
+        {
+          mock: "Pass a real dependency seam instead of mocking a module.",
+          doMock: "Pass a real dependency seam instead of mocking a module.",
+        },
+      ],
       "anti-slop/no-array-filter-map": "error",
       "anti-slop/no-reduce-accumulator-copy": "error",
       "anti-slop/no-chained-type-assertions": "error",
       "anti-slop/no-conditional-empty-object-spread": "error",
       "anti-slop/no-known-value-widening": "error",
-      "anti-slop/no-module-mocking": "error",
       "anti-slop/no-object-parameters": "error",
       "anti-slop/no-reflect-apply": "error",
       "anti-slop/no-reflect-get": "error",
       "anti-slop/no-runtime-typeof": ["error", { allowInTypeGuards: true }],
-      "anti-slop/no-shape-in-symbol-names": "error",
       "anti-slop/no-unknown-parameters": "error",
       "anti-slop/no-unknown-returns": "error",
       "anti-slop/no-unknown-type-aliases": "error",
