@@ -1163,7 +1163,9 @@ Two rules for every VM job:
     and far inside the key window. Then the action fails. The pauses double
     from 1 s up to 30 s. A repeat that boat answers with 409
     `idempotency_in_progress`, while the first call is still making the
-    sandbox, is unclear too.
+    sandbox, is unclear too. A refusal below that answers a repeat is not a
+    refusal: the unclear attempt may have made a sandbox, which the limit may
+    be counting, so the action fails `Internal` and the row stays.
   - The key is `clankerbox-<host>-<instance>`. boat's resume takes no key
     (`boat-v1.yaml`), so it is never repeated: an unclear resume fails the
     `start`, and the next `start` reads the state again.
@@ -1204,7 +1206,8 @@ Two rules for every VM job:
     operator's own, so boat's 429 `limit_reached`, under the refusal rule, is
     the count.
 - **Refusals:** none of these leaves anything on boat, so all of them fall
-  under the refusal rule and remove the row:
+  under the refusal rule and remove the row, unless they answer the repeat
+  of an unclear create, fork or restore (see IDs above):
   - 429 (`limit_reached`, `rate_limited`, `daily_limit_reached`);
   - 403 for a type the account's plan doesn't include
     (`trial_machine_class_not_allowed`, `machine_class_plan_required`);

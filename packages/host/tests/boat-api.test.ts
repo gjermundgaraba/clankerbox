@@ -298,6 +298,24 @@ test("the repeats stop at their bound, and the create fails without a second key
   }
 });
 
+test("a Capacity refusal after an unclear attempt isn't one: that attempt may have made a sandbox", async () => {
+  for (const unclear of ["drop", refusal(503, "out_of_capacity")] as const) {
+    const boat = fakeBoat((_sent, index) =>
+      index === 0 ? unclear : refusal(429, "limit_reached", "2 concurrent sandboxes"),
+    );
+
+    const { exit } = await runTimed(boat, (api) => Effect.flip(api.create("key-1", "small")));
+    const error = Exit.isSuccess(exit) ? exit.value : undefined;
+
+    expect(boat.sent).toHaveLength(2);
+    expect(boat.sent[1]).toEqual(boat.sent[0]);
+    expect([error?._tag, error?.message]).toEqual([
+      "Internal",
+      "boat POST /sandboxes answered 429 limit_reached: 2 concurrent sandboxes (req_0123), after an attempt whose outcome is unknown, so a sandbox may exist",
+    ]);
+  }
+});
+
 test("calls without a key aren't repeated: an unclear outcome fails them", async () => {
   const boat = fakeBoat(() => refusal(503, "out_of_capacity"));
 

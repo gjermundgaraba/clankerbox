@@ -16,7 +16,17 @@ import {
   NotFound,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Array as Arr, Data, Duration, Effect, Option, Redacted, Schedule, Schema } from "effect";
+import {
+  Array as Arr,
+  Data,
+  Duration,
+  Effect,
+  Option,
+  Redacted,
+  Ref,
+  Schedule,
+  Schema,
+} from "effect";
 import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http";
 import type { MachineRef } from "./runtime.ts";
 
@@ -334,33 +344,50 @@ export const make = (settings: Settings) =>
     /**
      * A call that carries an `Idempotency-Key`: while its outcome is unclear it is repeated with
      * the same key and body, with backoff, for up to `retryWindow`, far inside boat's 24-hour key
-     * window. Then it fails.
+     * window. Then it fails. A `Capacity` refusal of a repeat is `Internal`: the unclear attempt
+     * may have made a sandbox, which the refusal may be counting.
      */
     const idempotent = <A>(
       call: Call,
       key: string,
       schema: Schema.Decoder<A>,
-    ): Effect.Effect<A, HostError> => {
-      const keyed = { ...call, headers: { ...call.headers, "Idempotency-Key": key } };
-      const built = request(keyed);
+    ): Effect.Effect<A, HostError> =>
+      Effect.gen(function* () {
+        const keyed = { ...call, headers: { ...call.headers, "Idempotency-Key": key } };
+        const built = request(keyed);
+        const repeated = yield* Ref.make(false);
 
-      return attempt(keyed, built, schema).pipe(
-        Effect.retry({
-          while: (error) => error instanceof Unclear,
-          schedule: Schedule.max([
-            Schedule.during(retryWindow),
-            Schedule.min([Schedule.exponential(firstPause), Schedule.spaced(longestPause)]),
-          ]),
-        }),
-        Effect.catchTag("Unclear", (unclear) =>
-          Effect.fail(
-            new Internal({
-              message: `${unclear.message}, and repeats for ${Duration.format(retryWindow)} got no clearer answer`,
-            }),
+        return yield* attempt(keyed, built, schema).pipe(
+          Effect.tapError((error) =>
+            error instanceof Unclear ? Ref.set(repeated, true) : Effect.void,
           ),
-        ),
-      );
-    };
+          Effect.retry({
+            while: (error) => error instanceof Unclear,
+            schedule: Schedule.max([
+              Schedule.during(retryWindow),
+              Schedule.min([Schedule.exponential(firstPause), Schedule.spaced(longestPause)]),
+            ]),
+          }),
+          Effect.catchTag("Unclear", (unclear) =>
+            Effect.fail(
+              new Internal({
+                message: `${unclear.message}, and repeats for ${Duration.format(retryWindow)} got no clearer answer`,
+              }),
+            ),
+          ),
+          Effect.catchTag("Capacity", (refused) =>
+            Effect.flatMap(Ref.get(repeated), (unclear) =>
+              Effect.fail(
+                unclear
+                  ? new Internal({
+                      message: `${refused.message}, after an attempt whose outcome is unknown, so a sandbox may exist`,
+                    })
+                  : refused,
+              ),
+            ),
+          ),
+        );
+      });
 
     /** A sandbox, or none once boat answers 404. */
     const sandbox = (id: string) =>
