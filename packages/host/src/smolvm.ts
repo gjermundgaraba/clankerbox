@@ -425,7 +425,7 @@ export const make = (
       publishAddress: settings.publishAddress,
       pin,
       // Nothing is in flight at startup, so no fork's store is still needed.
-      startup: () =>
+      startup: Effect.fn("Smolvm.startup")(() =>
         Effect.gen(function* () {
           yield* removeAll(paths.forks);
 
@@ -436,10 +436,13 @@ export const make = (
             );
           }
         }),
-      observe,
+      ),
+      observe: Effect.fn("Smolvm.observe")(observe),
       checkpointKind: "ram",
-      admit: (activation) => checkRamBudget(settings.ramBudgetMib, activation, observe),
-      capture: (machine, checkpoint) =>
+      admit: Effect.fn("Smolvm.admit")((activation) =>
+        checkRamBudget(settings.ramBudgetMib, activation, observe),
+      ),
+      capture: Effect.fn("Smolvm.capture")((machine, checkpoint) =>
         Effect.andThen(
           copyable(
             machine,
@@ -447,9 +450,11 @@ export const make = (
           ),
           captureRam(machine, paths.store, checkpointDir(checkpoint)),
         ),
-      restore: (checkpoint, machine) =>
+      ),
+      restore: Effect.fn("Smolvm.restore")((checkpoint, machine) =>
         restoreRam(checkpointDir(checkpoint), checkpoint.port, machine),
-      fork: (source, machine) => {
+      ),
+      fork: Effect.fn("Smolvm.fork")((source, machine) => {
         const store = join(paths.forks, nativeName(machine));
         const output = join(store, `${nativeName(machine)}.checkpoint`);
 
@@ -471,8 +476,8 @@ export const make = (
             ),
           ),
         );
-      },
-      deleteCheckpoint: (checkpoint) => {
+      }),
+      deleteCheckpoint: Effect.fn("Smolvm.deleteCheckpoint")((checkpoint) => {
         const objects = join(paths.store, "objects");
 
         // Removing the directory drops the checkpoint's references; the prune frees what no
@@ -489,8 +494,8 @@ export const make = (
             );
           }
         });
-      },
-      create: (machine, image) =>
+      }),
+      create: Effect.fn("Smolvm.create")((machine, image) =>
         Effect.gen(function* () {
           const native = nativeName(machine);
           const port = yield* portOf(machine);
@@ -520,12 +525,13 @@ export const make = (
 
           yield* boot(native);
         }),
+      ),
       /**
        * Reads the status first, so a running machine is left as it is. An unreachable one, whose
        * VM runs but whose agent doesn't answer, is booted again: `machine start` kills its VMM
        * first (the bump-smolvm skill).
        */
-      start: (machine) =>
+      start: Effect.fn("Smolvm.start")((machine) =>
         Effect.gen(function* () {
           const native = nativeName(machine);
           const recorded = yield* status(native);
@@ -544,13 +550,14 @@ export const make = (
 
           yield* boot(native);
         }),
-      stop: (machine) => {
+      ),
+      stop: Effect.fn("Smolvm.stop")((machine) => {
         const native = nativeName(machine);
 
         return Effect.asVoid(call(["machine", "stop", "--name", native], `machine stop ${native}`));
-      },
-      delete: removeVm,
-      exec: (machine, { argv, stdin }) => {
+      }),
+      delete: Effect.fn("Smolvm.delete")(removeVm),
+      exec: Effect.fn("Smolvm.exec")((machine, { argv, stdin }) => {
         const native = nativeName(machine);
 
         return exec(
@@ -559,7 +566,7 @@ export const make = (
           stdin,
           `smolvm machine exec ${native}`,
         );
-      },
+      }),
     } satisfies Interface;
   });
 

@@ -520,7 +520,7 @@ export const make = (
       publishAddress: settings.publishAddress,
       pin: undefined,
       checkpointKind: "disk",
-      startup: (machines) =>
+      startup: Effect.fn("Tart.startup")((machines) =>
         Effect.gen(function* () {
           yield* files(
             `couldn't create ${jobs}`,
@@ -537,11 +537,12 @@ export const make = (
             );
           }
         }),
+      ),
       /**
        * One `tart list` for every machine. One that doesn't answer within `stateReadWait` fails
        * the read, and the core reads every machine `unknown`, so a list answers in time.
        */
-      observe: (machines) =>
+      observe: Effect.fn("Tart.observe")((machines) =>
         list.pipe(
           Effect.timeoutOrElse({
             duration: stateReadWait,
@@ -556,13 +557,14 @@ export const make = (
             machines.map((machine): Observed => ({ state: vms.get(vmOf(machine)) ?? "missing" })),
           ),
         ),
+      ),
       /**
        * The Mac must have room: every running VM in the Tart home counts, the operator's
        * included, and so does every machine an action is booting, the target too, since its VM
        * runs only once its job has started. The operator's Linux VMs count too, which Apple
        * doesn't limit, so the count is conservative; Apple's own refusal is the real guard.
        */
-      admit: ({ action, machine, machines }) =>
+      admit: Effect.fn("Tart.admit")(({ action, machine, machines }) =>
         Effect.gen(function* () {
           // Not `observe`, which answers only for the host's machines: every VM here counts.
           const vms = yield* list;
@@ -586,7 +588,8 @@ export const make = (
             });
           }
         }),
-      create: (machine, image) =>
+      ),
+      create: Effect.fn("Tart.create")((machine, image) =>
         cloneInto(image, machine, [
           "--cpu",
           String(machine.cpu),
@@ -595,16 +598,18 @@ export const make = (
           "--disk-size",
           String(diskGb(machine.diskGib)),
         ]),
+      ),
       /** Listens again, then boots the VM unless it runs already. */
-      start: (machine) =>
+      start: Effect.fn("Tart.start")((machine) =>
         Effect.andThen(
           listen(machine),
           Effect.flatMap(state(vmOf(machine)), (observed) =>
             observed === "running" ? Effect.void : boot(machine),
           ),
         ),
-      stop,
-      delete: (machine) =>
+      ),
+      stop: Effect.fn("Tart.stop")(stop),
+      delete: Effect.fn("Tart.delete")((machine) =>
         Effect.gen(function* () {
           const vm = vmOf(machine);
           const { target, plist: file, log } = job(vm);
@@ -623,7 +628,8 @@ export const make = (
           // Last, so a delete that fails leaves the machine reachable.
           yield* unlisten(machine);
         }),
-      capture: (machine, checkpoint) =>
+      ),
+      capture: Effect.fn("Tart.capture")((machine, checkpoint) =>
         Effect.andThen(
           copyable("checkpoint", machine),
           call(
@@ -631,14 +637,19 @@ export const make = (
             `clone ${checkpointVm(checkpoint)}`,
           ),
         ),
-      restore: (checkpoint, machine) => cloneInto(checkpointVm(checkpoint), machine, []),
-      fork: (source, machine) =>
+      ),
+      restore: Effect.fn("Tart.restore")((checkpoint, machine) =>
+        cloneInto(checkpointVm(checkpoint), machine, []),
+      ),
+      fork: Effect.fn("Tart.fork")((source, machine) =>
         Effect.andThen(copyable("fork", source), cloneInto(vmOf(source), machine, [])),
-      deleteCheckpoint: (checkpoint) =>
+      ),
+      deleteCheckpoint: Effect.fn("Tart.deleteCheckpoint")((checkpoint) =>
         Effect.asVoid(
           call(["delete", checkpointVm(checkpoint)], `delete ${checkpointVm(checkpoint)}`, [0, 2]),
         ),
-      exec: (machine, { argv, stdin }) => {
+      ),
+      exec: Effect.fn("Tart.exec")((machine, { argv, stdin }) => {
         const vm = vmOf(machine);
 
         return exec(
@@ -647,7 +658,7 @@ export const make = (
           stdin,
           `tart exec ${vm}`,
         );
-      },
+      }),
     } satisfies Interface;
   });
 

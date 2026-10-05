@@ -418,15 +418,20 @@ export const make = (
     return {
       list: Effect.flatMap(store.list, (records) =>
         Effect.map(observeAll(records), (observed) => Arr.zipWith(records, observed, resource)),
+      ).pipe(Effect.withSpan("Machines.list")),
+      get: Effect.fn("Machines.get")((id) => Effect.flatMap(nameOf(id), read)),
+      create: Effect.fn("Machines.create")((request) =>
+        detached(`create ${request.id}`, create(request)),
       ),
-      get: (id) => Effect.flatMap(nameOf(id), read),
-      create: (request) => detached(`create ${request.id}`, create(request)),
-      start: (id) => detached(`start ${id}`, start(id)),
-      stop: (id) => detached(`stop ${id}`, stop(id)),
-      delete: (id) => detached(`delete ${id}`, remove(id)),
-      fork: (id, name) => detached(`fork ${id} to ${name}`, fork(id, name)),
-      restore: (checkpoint, name) =>
+      start: Effect.fn("Machines.start")((id) => detached(`start ${id}`, start(id))),
+      stop: Effect.fn("Machines.stop")((id) => detached(`stop ${id}`, stop(id))),
+      delete: Effect.fn("Machines.delete")((id) => detached(`delete ${id}`, remove(id))),
+      fork: Effect.fn("Machines.fork")((id, name) =>
+        detached(`fork ${id} to ${name}`, fork(id, name)),
+      ),
+      restore: Effect.fn("Machines.restore")((checkpoint, name) =>
         detached(`restore ${checkpoint} to ${name}`, restore(checkpoint, name)),
+      ),
     } satisfies Interface;
   });
 

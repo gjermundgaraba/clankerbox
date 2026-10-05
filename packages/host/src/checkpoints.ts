@@ -121,11 +121,16 @@ export const make = (
       });
 
     return {
-      list: Effect.map(store.checkpoints, (records) => records.map(resource)),
-      get: (id) =>
+      list: Effect.map(store.checkpoints, (records) => records.map(resource)).pipe(
+        Effect.withSpan("Checkpoints.list"),
+      ),
+      get: Effect.fn("Checkpoints.get")((id) =>
         Effect.flatMap(nameOf(id), (name) => Effect.map(rows.checkpoint(name), resource)),
-      capture: (machine, name) => detached(`capture ${machine} to ${name}`, capture(machine, name)),
-      delete: (id) => detached(`delete ${id}`, remove(id)),
+      ),
+      capture: Effect.fn("Checkpoints.capture")((machine, name) =>
+        detached(`capture ${machine} to ${name}`, capture(machine, name)),
+      ),
+      delete: Effect.fn("Checkpoints.delete")((id) => detached(`delete ${id}`, remove(id))),
     } satisfies Interface;
   });
 

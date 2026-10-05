@@ -720,7 +720,7 @@ export const make = (
       publishAddress: undefined,
       pin: undefined,
       checkpointKind: "disk",
-      startup: () => Effect.void,
+      startup: Effect.fn("Boat.startup")(() => Effect.void),
       /**
        * A `GET` of each recorded sandbox, all at once: a host holds few machines, and boat limits
        * starts, not reads; a list would also hold the operator's own sandboxes, a page at a time.
@@ -728,7 +728,7 @@ export const make = (
        * whose read fails, its repeats included, or takes over `stateReadWait`, is unknown: a
        * few quick repeats ride out a blip, and a list still answers within the client's bound.
        */
-      observe: (machines) =>
+      observe: Effect.fn("Boat.observe")((machines) =>
         Effect.forEach(
           machines,
           (machine): Effect.Effect<Observed> =>
@@ -760,14 +760,15 @@ export const make = (
             }),
           { concurrency: "unbounded" },
         ),
+      ),
       /**
        * One of boat's types must cover the machine; whether the account's plan includes it is
        * boat's to say. boat's own count of active sandboxes includes the operator's, so its 429
        * refusal, under the refusal rule, is the count.
        */
-      admit: ({ machine }) => Effect.asVoid(machineType(machine)),
+      admit: Effect.fn("Boat.admit")(({ machine }) => Effect.asVoid(machineType(machine))),
       /** boat has one image, so `image` names it only in the host's bases. */
-      create: (machine) =>
+      create: Effect.fn("Boat.create")((machine) =>
         Effect.gen(function* () {
           const type = yield* typeOf(machine);
 
@@ -777,6 +778,7 @@ export const make = (
           yield* api.authorize(id, key.publicKey);
           yield* reachable(machine, id, ["touch", createdMark]);
         }).pipe(scrubbingRefusal),
+      ),
       /**
        * Resumes the sandbox unless boat reads it active: one boat still makes or resumes, or that
        * runs, isn't resumed again. Either way the start waits for it to run, for SSH and for the
@@ -784,7 +786,7 @@ export const make = (
        * ready before its marker exists; on the create's own machine, which boat restored nothing
        * into, it doesn't wait for the marker.
        */
-      start: (machine) =>
+      start: Effect.fn("Boat.start")((machine) =>
         Effect.gen(function* () {
           const id = yield* recordedSandbox(machine);
           const found = yield* api.sandbox(id);
@@ -797,19 +799,21 @@ export const make = (
           yield* reachable(machine, id);
           yield* restored(machine, id);
         }).pipe(scrubbingRefusal),
+      ),
       /** Never with `force`: a stop boat refuses, as when its final snapshot fails, is the error. */
-      stop: (machine) =>
+      stop: Effect.fn("Boat.stop")((machine) =>
         Effect.gen(function* () {
           const id = yield* recordedSandbox(machine);
 
           yield* api.stop(id);
           yield* archived(machine, id);
         }).pipe(scrubbing),
+      ),
       /**
        * Deletes the sandbox and waits until boat answers 404, never for its purge. A row without
        * a recorded sandbox has nothing on boat the host can find, so only the row goes.
        */
-      delete: (machine) =>
+      delete: Effect.fn("Boat.delete")((machine) =>
         Effect.gen(function* () {
           const id = sandboxOf(machine);
 
@@ -833,11 +837,12 @@ export const make = (
               ),
           );
         }).pipe(scrubbing),
+      ),
       /**
        * A named snapshot of a running or a stopped sandbox, always of its disk. A running one
        * syncs first, as a fork's source does.
        */
-      capture: (machine, checkpoint) =>
+      capture: Effect.fn("Boat.capture")((machine, checkpoint) =>
         Effect.gen(function* () {
           const source = yield* sourceSandbox(machine);
           const name = snapshotOf(checkpoint.instance);
@@ -868,7 +873,8 @@ export const make = (
             });
           }
         }).pipe(scrubbingRefusal),
-      restore: (checkpoint, machine) =>
+      ),
+      restore: Effect.fn("Boat.restore")((checkpoint, machine) =>
         Effect.gen(function* () {
           const type = yield* typeOf(machine);
 
@@ -878,12 +884,13 @@ export const make = (
 
           yield* restoredSandbox(machine, id);
         }).pipe(scrubbingRefusal),
+      ),
       /**
        * A stopped source forks at once, holding everything up to its stop. A running one keeps
        * running, and forks once a snapshot begun after its sync has completed. Forks carry the
        * disk only.
        */
-      fork: (source, machine) =>
+      fork: Effect.fn("Boat.fork")((source, machine) =>
         Effect.gen(function* () {
           const type = yield* typeOf(machine);
           const from = yield* sourceSandbox(source);
@@ -896,9 +903,11 @@ export const make = (
 
           yield* restoredSandbox(machine, id);
         }).pipe(scrubbingRefusal),
-      deleteCheckpoint: (checkpoint) =>
+      ),
+      deleteCheckpoint: Effect.fn("Boat.deleteCheckpoint")((checkpoint) =>
         scrubbing(api.deleteSnapshot(snapshotOf(checkpoint.instance))),
-      exec: (machine, command) => scrubbing(exec(machine, command)),
+      ),
+      exec: Effect.fn("Boat.exec")((machine, command) => scrubbing(exec(machine, command))),
     } satisfies Interface;
   });
 

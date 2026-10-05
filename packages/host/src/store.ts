@@ -677,8 +677,12 @@ export const open = (
       [...token.inserted, ...token.held].map((row) => id(row.name)).join(", ");
 
     const store: Interface = {
-      list: sql("list machines", () => selectAll.all().map((row) => fromRow(decodeRow(row)))),
-      find: (name) => sql(`read ${id(name)}`, () => Option.fromNullishOr(findSync(name))),
+      list: sql("list machines", () => selectAll.all().map((row) => fromRow(decodeRow(row)))).pipe(
+        Effect.withSpan("Store.list"),
+      ),
+      find: Effect.fn("Store.find")((name) =>
+        sql(`read ${id(name)}`, () => Option.fromNullishOr(findSync(name))),
+      ),
       ports: sql(
         "read ports",
         () =>
@@ -687,13 +691,14 @@ export const open = (
               selectPorts.all(),
             ).map(({ port }) => port),
           ),
-      ),
+      ).pipe(Effect.withSpan("Store.ports")),
       checkpoints: sql("list checkpoints", () =>
         selectCheckpoints.all().map((row) => fromCheckpointRow(decodeCheckpointRow(row))),
-      ),
-      findCheckpoint: (name) =>
+      ).pipe(Effect.withSpan("Store.checkpoints")),
+      findCheckpoint: Effect.fn("Store.findCheckpoint")((name) =>
         sql(`read checkpoint ${id(name)}`, () => Option.fromNullishOr(findCheckpointSync(name))),
-      hold: (action, row, joining) =>
+      ),
+      hold: Effect.fn("Store.hold")((action, row, joining) =>
         transaction(db, `claim ${id(row.name)} for ${action}`, () =>
           Result.map(holdSync(action, row), ({ row: held, record }) => ({
             token: {
@@ -704,7 +709,8 @@ export const open = (
             held: record,
           })),
         ),
-      insert: (action, row, joining) =>
+      ),
+      insert: Effect.fn("Store.insert")((action, row, joining) =>
         transaction(db, `claim ${id(row.record.name)} for ${action}`, () =>
           Result.map(insertSync(action, row), (inserted) => ({
             action,
@@ -712,7 +718,8 @@ export const open = (
             held: joining?.held ?? [],
           })),
         ),
-      release: (token) =>
+      ),
+      release: Effect.fn("Store.release")((token) =>
         transaction(db, `release ${named(token)} from ${token.action}`, () => {
           for (const row of token.inserted) {
             statements[row.table].remove.run(row.name);
@@ -724,7 +731,8 @@ export const open = (
 
           return Result.void;
         }),
-      markMade: (token) =>
+      ),
+      markMade: Effect.fn("Store.markMade")((token) =>
         transaction(db, `mark ${token.inserted.map((row) => id(row.name)).join(", ")} made`, () => {
           for (const row of token.inserted) {
             if (row.table === "machines") {
@@ -734,7 +742,8 @@ export const open = (
 
           return Result.void;
         }),
-      end: (token, { action, prepared }) =>
+      ),
+      end: Effect.fn("Store.end")((token, { action, prepared }) =>
         transaction(db, `record ${action.name} on ${named(token)}`, () => {
           for (const row of [...token.inserted, ...token.held]) {
             record(row, action);
@@ -746,7 +755,8 @@ export const open = (
 
           return Result.void;
         }),
-      recordNative: (name, instance, native) =>
+      ),
+      recordNative: Effect.fn("Store.recordNative")((name, instance, native) =>
         Effect.flatMap(
           sql(`record ${id(name)}'s native ID`, () =>
             Number(updateNative.run({ name, instance, native }).changes),
@@ -760,10 +770,12 @@ export const open = (
                   }),
                 ),
         ),
-      remove: (row) =>
+      ),
+      remove: Effect.fn("Store.remove")((row) =>
         sql(`remove ${kinds[row.table]} ${id(row.name)}`, () => {
           statements[row.table].remove.run(row.name);
         }),
+      ),
       failInterrupted: sql("fail interrupted actions", () => {
         for (const table of ["machines", "checkpoints"]) {
           db.exec(
@@ -772,7 +784,7 @@ export const open = (
              WHERE action_status = 'running'`,
           );
         }
-      }),
+      }).pipe(Effect.withSpan("Store.failInterrupted")),
     };
 
     return store;
