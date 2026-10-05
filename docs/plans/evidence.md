@@ -1327,6 +1327,74 @@ not through `clankerbox host`, with `network` empty instead of
   the private home's `tart list` empty, no process naming it; the seed's
   three checksums matched PROVENANCE afterwards.
 
+**Phase 5 live** (2026-10-05; runs `.work/runs/live-tart-b6e5a88d0c9b` and
+`live-tart-2fd8df6c4815`, driver `tests/live/tart/driver.py`, suite
+`tests/live/tests/tart.test.ts`). Both ran the same code, which each run's
+`resources.json` names: `4ddb4f9` plus the uncommitted tree (`git diff HEAD`
+sha256 `78c7bbad…`, the driver `30025939…` and the suite `48b321ba…`, both
+untracked then), one SEA (sha256 `d45ac58e…`, 140.2 MiB). The darwin-arm64
+SEA ran as `clankerbox host` from a private Tart home in the run's scratch,
+listening and publishing on the tailnet address (100.122.69.11), with
+`--net-softnet-block=@host` through Softnet 0.24.0 (SUID root in
+`/usr/local/bin`); the same binary's CLI drove it on this Mac. The base was an
+APFS clone of the `macos-tahoe-base` seed, never booted; machines had 2 vCPU,
+4096 MiB and `diskGib` 50. No other macOS VM ran, and at most two of the
+run's did at once.
+
+- **Result:** all 13 Tart tests passed in both runs, in 304 s and 254 s.
+  Teardown left no VM, launchd job, Softnet process or process naming the
+  run, and the seed's checksums matched PROVENANCE before and after each run.
+- **Verified:** setup ran once, before preparation, which replaced the
+  image's host key (setup's copy of it differed from `Machine.hostKey`, which
+  `clankerbox ssh` pinned). `start` ran after every activation (create, a cold
+  start, a start of a running machine, a fork, a restore), and `new-identity`
+  on create, fork, restore and a re-mint, not on a stop and cold start. Each
+  copy had its own port, host key, machine ID and instance, and the source's
+  disk marker. scp and rsync of 256 KiB both ways matched by hash. A re-mint
+  on start replaced the key, and ssh pinned to the old one was refused.
+- **Refusals:** a capture and a fork of a running machine were
+  `Precondition` ("stop it first"), with no row and no VM. With two copies
+  running, a third create and a start of the stopped source were `Capacity`
+  ("Apple allows 2"), with no row, VM, job or job file for the create, and
+  the source's action left as it was. A `diskGib` of 20 failed the create at
+  `tart set` ("new disk size of 22 GB should be larger than the current disk
+  size of 50 GB"), leaving the machine never made, which `delete` removed.
+- **Host restart and crash:** with the host stopped, a running copy's port
+  refused connections; after its start, the list read the same, both guests
+  kept their boot time, the copy's port served sshd's banner, and the stopped
+  source's port accepted and closed. A host SIGKILLed during a create's setup
+  left the create `Unavailable` ("may have run") and its row `failed`
+  ("host restarted during create"); stop, start, fork and capture were
+  `Precondition` ("was never made") writing nothing, and `delete` removed its
+  VM, job, job files and listener.
+- **Softnet:** the guest couldn't open the host's API port or a TCP listener
+  on every host address (an http.server of the operator's on `*:4320`) at
+  100.122.69.11, 192.168.1.151 (en0), 192.168.139.3 (bridge100) and its own
+  gateway (172.22.83.181 and 172.27.147.253 in the two runs); the host itself
+  reached each. The guest's probes timed out; the application firewall
+  logged one flow to the listener for each of the host's own probes of it (4
+  per run) and none for the guest's, so Softnet dropped them. The guest
+  reached 1.1.1.1:443 and `https://one.one.one.one/` by name, through the
+  public resolvers its setup set.
+- **Timings** (run 1 / run 2, through the CLI): create with setup 108.8 /
+  49.3 s (run 1's includes the firewall's 60.7 s hold, below; the host's
+  span for it was 48.3 s); stop (the guest's shutdown) 9.8 / 9.3 s; cold
+  start with preparation 38.3 / 36.0 s; start of a running machine (re-mint
+  and `start`) 0.58 / 0.82 s; disk capture 0.18 / 0.19 s; a fork and a
+  restore booting together 41.4 and 39.5 / 42.7 and 43.5 s; `clankerbox ssh
+  … true` through the forwarder 0.50–0.67 s (6 samples); scp and rsync of
+  256 KiB each way 1.30 s in all; host start with every machine's listener
+  0.35 / 0.34 s; delete of a running machine 1.45 / 1.58 s; checkpoint
+  delete 0.13 s; a create refused at `tart set` 0.22 / 0.24 s.
+- **The application firewall** (on; block-all and stealth mode off; signed
+  software allowed automatically) prompted for a decision on the first SEA's
+  first inbound connection and held its connections until a decision
+  allowing it came 60.7 s later; the log doesn't say whether someone answered
+  or the prompt timed out. It added an "Allow incoming connections" entry for
+  that SEA's path, which the second run's identical binary matched (by its
+  ad-hoc signature's identifier, `clankerbox-5555…`), so it wasn't prompted.
+  The runs ran no command that changes the firewall.
+
 ## Consumers and production
 
 - **Production hosts:** the Mac host runs Tart only and the Linux host smolvm
