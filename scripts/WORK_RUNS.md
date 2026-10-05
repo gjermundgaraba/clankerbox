@@ -79,10 +79,12 @@ invocation.
 from a private Tart home in the run's scratch, whose base is an APFS clone of the
 Cirrus seed named by `--seed` (the main checkout's
 `.work/inputs/tart-cirrus-tahoe-base`), on the tailnet address named by
-`--address`, and gives the suite the same host-control program. Its teardown
-stops the host, then deletes the home's VMs and boots out the launchd jobs
-carrying the run's host ID, natively, before scratch is deleted. Its docstring
-shows its invocation.
+`--address`, and gives the suite the same host-control program. It also runs a
+second Tart host, `<host ID>-b`, on the same home and address, which only the
+suite's placement test uses. Its teardown stops both hosts, then deletes the
+home's VMs and boots out the launchd jobs carrying the run's host ID, which the
+second host's ID starts with, natively, before scratch is deleted. Its
+docstring shows its invocation.
 
 `tests/live/boat/driver.py` runs a boat host on this Mac, unprivileged, against
 the operator's boat account on its trial, on loopback or the tailnet address

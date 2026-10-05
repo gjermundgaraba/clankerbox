@@ -17,10 +17,17 @@ the run's ID, so every VM and launchd label the host makes starts with `cbx-<hos
 listens on the tailnet address, or on loopback when that address isn't assigned here (recorded in
 evidence).
 
+A second Tart host of the run, `<host ID>-b`, which only the suite's placement test uses, shares
+the private home and the address, offers the base as `macos` and `macos-b`, and keeps its own
+state, pid, exit status and log under scratch/second and evidence/second. Its ID starts with the
+first host's, so the teardown below covers its VMs and launchd jobs too. The suite finds it in
+`CLANKERBOX_LIVE_PLACEMENT_CONFIG`, a client config listing it first and the host under test
+second.
+
 The host runs under a keeper process (`driver.py keep`), which records the host's pid and exit
 status, so the suite's host-control program (`driver.py control`, tests/live/tests/live.ts) can
 stop, kill and start it. Teardown, registered before anything it owns exists, works with the host
-down: it stops the host, then stops and deletes every VM in the private home and boots out every
+down: it stops both hosts, then stops and deletes every VM in the private home and boots out every
 launchd job carrying the run's prefix, natively, and checks that none remains. The suite's key and
 scripts stay in its temporary directory, under the run's scratch, which it removes; nothing here
 prints a setup script.
@@ -95,9 +102,10 @@ def labels(prefix):
     return sorted(line.split('\t')[-1] for line in listed.splitlines() if line.split('\t')[-1].startswith(prefix))
 
 
-def native_pattern(state, name):
-    """A machine's or checkpoint's VM name, launchd label and job files, by its name on the host."""
-    return re.compile(rf'^cbx-{re.escape(state["host_id"])}-[mc]-{re.escape(name)}-[0-9a-f]{{8}}(\.plist|\.log)?$')
+def native_pattern(host_id, name):
+    """A machine's or checkpoint's VM name, launchd label and job files, by its name on host
+    `host_id`."""
+    return re.compile(rf'^cbx-{re.escape(host_id)}-[mc]-{re.escape(name)}-[0-9a-f]{{8}}(\.plist|\.log)?$')
 
 
 # The suite's host-control program (tests/live/tests/live.ts).
@@ -113,14 +121,20 @@ def control(state_file, op, args):
     elif op == 'host-kill':
         host_end(state, signal.SIGKILL, -signal.SIGKILL)
     elif op == 'natives':
-        [name] = args
-        pattern = native_pattern(state, name)
+        # The second host's, when its ID follows the name.
+        name, host_id = args if len(args) == 2 else (*args, state['host_id'])
+        if host_id not in (state['host_id'], f'{state["host_id"]}-b'):
+            print(f'{host_id} is no host of the run', file=sys.stderr)
+            return 2
+        pattern = native_pattern(host_id, name)
         jobs = Path(state['state_dir']) / 'launchd'
+        if host_id != state['host_id']:
+            jobs = Path(state['scratch']) / 'second' / 'state' / 'launchd'
         files = [entry.name for entry in jobs.iterdir()] if jobs.exists() else []
         print(json.dumps({
             'machines': [{'name': vm['Name'], 'state': vm['State']} for vm in tart_list(state)
                          if pattern.match(vm['Name'])],
-            'jobs': [label for label in labels(f'cbx-{state["host_id"]}-') if pattern.match(label)],
+            'jobs': [label for label in labels(f'cbx-{host_id}-') if pattern.match(label)],
             'files': sorted(name for name in files if pattern.match(name)),
         }))
     elif op == 'guest':
@@ -165,9 +179,8 @@ def control(state_file, op, args):
 
 # Teardown, natively, by the run's own names.
 
-def teardown(state, log):
-    errors = []
-    scratch = Path(state['scratch'])
+def stop_host(scratch, log):
+    """Stops the host whose keeper records its pid in `scratch`, if it runs, and returns its pid."""
     pid = read_int(scratch / 'host.pid')
     if pid is not None and alive(pid) and not (scratch / 'host.exit').exists():
         os.kill(pid, signal.SIGTERM)
@@ -177,13 +190,21 @@ def teardown(state, log):
         if alive(pid):
             os.kill(pid, signal.SIGKILL)
         log(f'teardown: stopped the host (pid {pid})')
+    return pid
+
+
+def teardown(state, log):
+    errors = []
+    scratch = Path(state['scratch'])
+    pid = stop_host(scratch, log)
+    second_pid = stop_host(scratch / 'second', log)
     # The jobs' logs hold tart run's and Softnet's output, the only record of a failed boot.
-    jobs = Path(state['state_dir']) / 'launchd'
-    if jobs.exists():
-        kept = Path(state['evidence']) / 'launchd'
-        kept.mkdir(exist_ok=True)
-        for job_log in jobs.glob('*.log'):
-            shutil.copy2(job_log, kept / job_log.name)
+    for jobs, kept in ((Path(state['state_dir']) / 'launchd', Path(state['evidence']) / 'launchd'),
+                       (scratch / 'second' / 'state' / 'launchd', Path(state['evidence']) / 'second' / 'launchd')):
+        if jobs.exists():
+            kept.mkdir(parents=True, exist_ok=True)
+            for job_log in jobs.glob('*.log'):
+                shutil.copy2(job_log, kept / job_log.name)
     home = Path(state['tart_home'])
     if (home / 'vms').exists():
         for vm in tart_list(state):
@@ -221,7 +242,7 @@ def teardown(state, log):
         errors.append(f'processes left: {mine}')
     softnets = [line.strip() for line in procs.splitlines() if str(SOFTNET) in line]
     record = {'errors': errors, 'vz_processes': vz_processes(), 'softnet_processes': softnets,
-              'launchd_labels': labels(prefix), 'host_pid': pid}
+              'launchd_labels': labels(prefix), 'host_pid': pid, 'second_host_pid': second_pid}
     (Path(state['evidence']) / 'teardown.json').write_text(json.dumps(record, indent=2) + '\n')
     log(f'teardown: {record}')
     if errors:
@@ -342,7 +363,35 @@ def main():
         control_bin.chmod(0o755)
 
         log(f'host pid {host_start(state, __file__)}')
-        evidence.suite('tart', binary, client_config, control_bin, f'r{rid[:3]}-', options.suite_args)
+
+        # Picked once the first host listens, so the two never share a port.
+        second = dict(state, scratch=str(run.scratch / 'second'), evidence=str(run.evidence / 'second'),
+                      state_file=str(run.scratch / 'second' / 'state.json'),
+                      config=str(run.scratch / 'second' / 'host.json'), host_id=f'{host_id}-b',
+                      state_dir=str(run.scratch / 'second' / 'state'), api_port=free_port(address))
+        for directory in (second['scratch'], second['evidence']):
+            Path(directory).mkdir()
+        Path(second['state_file']).write_text(json.dumps(second, indent=2) + '\n')
+        Path(second['config']).write_text(json.dumps({
+            'id': second['host_id'],
+            'runtime': 'tart',
+            'listen': {'address': address, 'port': second['api_port']},
+            'stateDir': 'state',
+            'bases': {'macos': base, 'macos-b': base},
+            'tart': {'binary': str(TART)},
+        }, indent=2) + '\n')
+        placement_config = run.scratch / 'placement.json'
+        placement_config.write_text(json.dumps({'hosts': [
+            {'id': second['host_id'], 'url': f'http://{address}:{second["api_port"]}'},
+            {'id': host_id, 'url': f'http://{address}:{api_port}'},
+        ]}, indent=2) + '\n')
+        record(second_host={'host_id': second['host_id'], 'api_port': second['api_port'],
+                            'state_dir': second['state_dir'], 'config': second['config'],
+                            'host_pid_file': str(run.scratch / 'second' / 'host.pid')})
+        log(f'second host pid {host_start(second, __file__)}')
+
+        evidence.suite('tart', binary, client_config, control_bin, f'r{rid[:3]}-', options.suite_args,
+                       {'CLANKERBOX_LIVE_PLACEMENT_CONFIG': str(placement_config)})
 
 
 if __name__ == '__main__':

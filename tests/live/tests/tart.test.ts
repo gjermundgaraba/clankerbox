@@ -1,7 +1,7 @@
 /**
  * Live acceptance on a Tart host, through the CLI: lifecycle, setup and preparation on macOS
- * guests, the forwarder, Softnet, disk checkpoints and forks, Apple's two-VM limit, a host
- * restart and a crash. Apple runs at most two macOS VMs per Mac, so at most two of the run's VMs
+ * guests, the forwarder, Softnet, placement over two hosts, disk checkpoints and forks, Apple's
+ * two-VM limit, a host restart and a crash. Apple runs at most two macOS VMs per Mac, so at most two of the run's VMs
  * run at once. The tests run in order and share `main`, whose setup sets public resolvers,
  * installs the run's key for `admin`, and writes a `start` and a `new-identity` hook; the test
  * that made any other machine deletes it. Timings print as `[timing]` lines.
@@ -17,11 +17,13 @@ import {
   decode,
   harness,
   liveOn,
+  Machines,
   minutes,
   Names,
   OneCheckpoint,
   OneMachine,
   type Ran,
+  rebased,
   refusedBeforeTheRuntime,
   type Runtime,
   run,
@@ -116,6 +118,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
 
   const {
     cli,
+    cliWith,
     named,
     id,
     control,
@@ -329,6 +332,110 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       });
     },
     minutes(3),
+  );
+
+  test(
+    "placement: a create by name lands on the first host in list order that offers its base, a full ID and a profile's host send it to that host, and a base no host offers is Precondition naming each host's bases",
+    async () => {
+      const { host, second } = suite.env;
+
+      if (second === undefined) {
+        throw new Error(
+          "the Tart driver runs a second host, which CLANKERBOX_LIVE_PLACEMENT_CONFIG names",
+        );
+      }
+
+      const secondFirst = await writeFileIn(
+        suite.dir,
+        "second-first.json",
+        JSON.stringify({ hosts: [second, host] }),
+      );
+
+      const hostFirst = await writeFileIn(
+        suite.dir,
+        "host-first.json",
+        JSON.stringify({ hosts: [host, second] }),
+      );
+
+      const profile = await writeFileIn(
+        suite.dir,
+        "placed.json",
+        JSON.stringify({ base: "macos", cpu: 2, ramMib: 4096, diskGib: 20, host: host.id }),
+      );
+
+      // Each create asks for a disk below the base's, which `tart set` refuses once the chosen
+      // host has cloned the base: the row stays there, failed, and no VM boots.
+      const small = tart.sizes(20);
+
+      const placed = [
+        // Both hosts offer macos, and the second is listed first.
+        [secondFirst, named("pl-first"), small, second.id],
+        // Only the second host offers macos-b, and it is listed last.
+        [hostFirst, named("pl-skip"), rebased(small, "macos-b"), second.id],
+        // A full ID names the host, whatever placement by base would pick.
+        [secondFirst, id("pl-full"), small, host.id],
+        // So does the profile's host.
+        [secondFirst, named("pl-prof"), ["--profile", profile], host.id],
+      ] as const;
+
+      for (const [config, target, args] of placed) {
+        const error = failure(await cliWith(config, ["create"], target, ...args, "--json"));
+
+        expect(error.tag, target).toBe("Precondition");
+        expect(error.message, target).toContain("should be larger than the current disk size");
+      }
+
+      const nowhere = failure(
+        await cliWith(
+          hostFirst,
+          ["create"],
+          named("pl-none"),
+          ...rebased(small, "nowhere"),
+          "--json",
+        ),
+      );
+
+      expect(nowhere.tag).toBe("Precondition");
+      expect(nowhere.message).toContain("no host offers base nowhere");
+      expect(nowhere.message).toContain(`${host.id} offers macos`);
+      expect(nowhere.message).toContain(`${second.id} offers`);
+      expect(nowhere.message).toContain("macos-b");
+
+      const listed = decode(Machines, await cliWith(secondFirst, ["machines"], "--json"));
+
+      expect(listed.unreachable).toEqual([]);
+      expect(
+        Object.fromEntries(listed.machines.map((row) => [row.id, [row.action, row.profile]])),
+      ).toEqual({
+        [id("main")]: [{ name: "create", status: "done" }, undefined],
+        [`${second.id}_${named("pl-first")}`]: [
+          expect.objectContaining({ status: "failed" }),
+          undefined,
+        ],
+        [`${second.id}_${named("pl-skip")}`]: [
+          expect.objectContaining({ status: "failed" }),
+          undefined,
+        ],
+        [id("pl-full")]: [expect.objectContaining({ status: "failed" }), undefined],
+        [id("pl-prof")]: [expect.objectContaining({ status: "failed" }), "placed"],
+      });
+
+      for (const [, target, , landed] of placed) {
+        const name = target.slice(target.indexOf("_") + 1);
+        const full = target.includes("_") ? target : `${landed}_${target}`;
+        const deleted = await cliWith(secondFirst, ["delete"], full, "--json");
+
+        expect(deleted.code, deleted.stdout).toBe(0);
+        expect(await controlled(TartNatives, "natives", name, landed)).toEqual(tart.nothing);
+      }
+
+      expect(
+        decode(Machines, await cliWith(secondFirst, ["machines"], "--json")).machines.map(
+          (row) => row.id,
+        ),
+      ).toEqual([id("main")]);
+    },
+    minutes(5),
   );
 
   test(

@@ -65,9 +65,9 @@ const required = (name: string): string => {
   return value;
 };
 
-const ClientConfig = Schema.fromJsonString(
-  Schema.Struct({ hosts: Schema.Array(Schema.Struct({ id: Schema.String, url: Schema.String })) }),
-);
+const HostEntry = Schema.Struct({ id: Schema.String, url: Schema.String });
+
+const ClientConfig = Schema.fromJsonString(Schema.Struct({ hosts: Schema.Array(HostEntry) }));
 
 const ErrorDocument = Schema.Struct({
   message: Schema.String,
@@ -130,8 +130,11 @@ export const BoatAccount = Schema.fromJsonString(
  * run's ID, so the run's teardown finds, and only finds, what the run made (rewrite.md, "Test
  * machine footprint"). `CLANKERBOX_LIVE_RUNTIME` names the host's runtime, and only that
  * runtime's tests run. `smolvm/driver.py`, `tart/driver.py` and `boat/driver.py` provide all
- * five, and their teardown removes what the run left on the host. The program's ops, on every
- * runtime:
+ * five, and their teardown removes what the run left on the host.
+ *
+ * A driver that runs a second host of the run, which only placement uses, names it in
+ * `CLANKERBOX_LIVE_PLACEMENT_CONFIG`: a client config listing that host first and the host under
+ * test second (`tart/driver.py` does). The program's ops, on every runtime:
  *
  * - `host-stop`, `host-start`: stop the host process (SIGTERM), failing unless its exit status,
  *   as its unit or keeper records it, is 0, or start it;
@@ -157,8 +160,9 @@ export const BoatAccount = Schema.fromJsonString(
  *
  * On Tart:
  *
- * - `natives NAME`: print `{machines: [{name, state}], jobs, files}`, the VMs, launchd jobs and
- *   job files (plist and log) of machine or checkpoint NAME;
+ * - `natives NAME [HOST]`: print `{machines: [{name, state}], jobs, files}`, the VMs, launchd
+ *   jobs and job files (plist and log) of machine or checkpoint NAME on the host under test, or
+ *   on the run's second host when HOST names it;
  * - `addresses`: print the host's own IPv4 addresses, loopback aside;
  * - `listener`: print a TCP port that some process of the host listens on at every address.
  *
@@ -182,7 +186,31 @@ export const environment = async () => {
     throw new Error("the live client config lists only the host under test");
   }
 
-  return { binary, config, control, prefix, host };
+  return { binary, config, control, prefix, host, second: await secondHost(host) };
+};
+
+/** The second host `CLANKERBOX_LIVE_PLACEMENT_CONFIG` names, if the driver runs one. */
+const secondHost = async (host: typeof HostEntry.Type) => {
+  const file = process.env["CLANKERBOX_LIVE_PLACEMENT_CONFIG"];
+
+  if (file === undefined || file === "") {
+    return undefined;
+  }
+
+  const { hosts } = Schema.decodeUnknownSync(ClientConfig)(await readFile(file, "utf8"));
+  const [second, under, ...others] = hosts;
+
+  if (
+    second === undefined ||
+    under?.id !== host.id ||
+    under.url !== host.url ||
+    second.id === host.id ||
+    others.length > 0
+  ) {
+    throw new Error("the placement config lists a second host, then the host under test");
+  }
+
+  return second;
 };
 
 export type Environment = Awaited<ReturnType<typeof environment>>;
@@ -292,8 +320,15 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
   // the host down can't keep it there. This holds the run's private key and its setup scripts.
   afterAll(() => rm(dir, { recursive: true, force: true }));
 
+  /** Runs the CLI with the client config `config`. */
+  const cliWith = (
+    config: string,
+    command: ReadonlyArray<string>,
+    ...args: ReadonlyArray<string>
+  ) => run(env.binary, [...command, "--config", config, ...args]);
+
   const cli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
-    run(env.binary, [...command, "--config", env.config, ...args]);
+    cliWith(env.config, command, ...args);
 
   /** Starts the CLI, to SIGKILL it partway through its call. */
   const launchCli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
@@ -429,6 +464,7 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
       return mainSetup;
     },
     cli,
+    cliWith,
     launchCli,
     named,
     id,
