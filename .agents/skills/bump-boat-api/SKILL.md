@@ -121,7 +121,8 @@ Each: what boat does, and what of ours depends on it.
   `idempotencyKey` (`clankerbox-<host>-<instance>`), the unclear-outcome retry
   of every call safe to repeat, every `GET` and every keyed call (`retryWindow`
   5 minutes, `firstPause` to `longestPause`, `attemptTimeout`), cut short by a
-  caller's own wait, and a state read by `readWait`; `inProgress` repeated as
+  caller's own wait, and a state read by `stateReadWait` (8 s, under the
+  client's 10 s read bound); `inProgress` repeated as
   unclear; any refusal answering a repeat, a 429 or 503 `Capacity` or a 403
   plan `Precondition`, failing `Internal`.
 

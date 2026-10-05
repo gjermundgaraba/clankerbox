@@ -15,7 +15,7 @@ import {
   type Runtime as RuntimeName,
   type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Data, Effect, type Scope, type Stream } from "effect";
+import { Context, Data, Duration, Effect, type Scope, type Stream } from "effect";
 
 /** A machine as the runtime sees it: what its native names and native calls need. */
 export interface MachineRef {
@@ -63,6 +63,13 @@ export interface CheckpointRef {
   /** The source's host port at capture. A `ram` restore comes up on it. */
   readonly port: number | undefined;
 }
+
+/**
+ * How long a runtime's read of one machine's state may take, its repeats and its wait for a turn
+ * included, before the machine reads `unknown`: under the client's 10 s bound on a read
+ * (`readTimeout`), so a list answers in time however slow the runtime is.
+ */
+export const stateReadWait = Duration.seconds(8);
 
 /** What the runtime reports about a machine. Nothing here is stored. */
 export interface Observed {
@@ -142,9 +149,9 @@ export interface Interface {
   readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, HostError>;
   /**
    * Reads the machines' states in as few native calls as the runtime allows: one `tart list` on
-   * Tart; smolvm reads each machine on its own, at its own bound, and boat each recorded sandbox,
-   * all at once. A machine the runtime doesn't know is `missing`, not an error, and one whose
-   * read fails is `unknown`. Only a read of every machine at once may fail, and the core reads
+   * Tart; smolvm reads each machine on its own, and boat each recorded sandbox, all at once. A
+   * machine the runtime doesn't know is `missing`, not an error, and one whose read fails, or
+   * takes over `stateReadWait`, is `unknown`. Only a read of every machine at once may fail, and the core reads
    * every machine `unknown` then. Its contract is one state per machine, in their order: a
    * runtime builds its answer by mapping over `machines`, and callers rely on that without
    * checking.

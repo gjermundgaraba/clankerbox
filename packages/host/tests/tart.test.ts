@@ -94,8 +94,12 @@ const machineOn = async (name: string): Promise<MachineRef> => ({
   port: await freePort(),
 });
 
-/** What a test changes: the job's `tart run`, the agent's answer, a guest's shutdown, a delete. */
+/**
+ * What a test changes: the job's `tart run`, the agent's answer, a guest's shutdown, a delete,
+ * a `tart list`.
+ */
 interface Hooks {
+  list?: () => Reply | undefined;
   kickstart?: (vm: string) => void;
   probe?: (vm: string) => Reply;
   shutdown?: (vm: string) => Reply;
@@ -123,19 +127,21 @@ const scriptedMac = (stateDir: string) => {
       case "--version":
         return { stdout: "2.40.1\n" };
       case "list":
-        return {
-          stdout: JSON.stringify(
-            [...vms].map(([Name, State]) => ({
-              Source: "local",
-              Name,
-              Disk: 50,
-              Size: 31,
-              Accessed: "2026-10-04T12:00:00Z",
-              Running: State === "running",
-              State,
-            })),
-          ),
-        };
+        return (
+          hooks.list?.() ?? {
+            stdout: JSON.stringify(
+              [...vms].map(([Name, State]) => ({
+                Source: "local",
+                Name,
+                Disk: 50,
+                Size: 31,
+                Accessed: "2026-10-04T12:00:00Z",
+                Running: State === "running",
+                State,
+              })),
+            ),
+          }
+        );
       case "clone":
         vms.set(rest[1] ?? "", "stopped");
 
@@ -1092,6 +1098,33 @@ test("delete works for a machine whose port startup couldn't listen on", async (
       taken.close(resolve);
     });
   }
+});
+
+test("observe fails when tart list doesn't answer within 8 s, so the core reads every machine unknown", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const machine = await machineOn("dev");
+
+  mac.hooks.list = () => ({ hangs: true });
+
+  const observing = Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(Effect.flip(runtime.observe([machine])));
+    let waited = Duration.zero;
+
+    while (fiber.pollUnsafe() === undefined) {
+      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
+      yield* TestClock.adjust(Duration.seconds(1));
+      waited = Duration.sum(waited, Duration.seconds(1));
+    }
+
+    return [yield* Fiber.join(fiber), waited] as const;
+  });
+
+  const [error, waited] = await Effect.runPromise(
+    observing.pipe(Effect.provide(TestClock.layer())),
+  );
+
+  expect(error.message).toBe("tart list didn't answer within 8s");
+  expect(Duration.format(waited)).toBe("8s");
 });
 
 test("observe reads every machine's state with one tart list", async () => {

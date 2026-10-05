@@ -13,6 +13,8 @@ export interface Call {
 /** What a scripted process prints and how it exits. */
 export interface Reply {
   readonly exitCode?: number;
+  /** Whether the process never exits. */
+  readonly hangs?: boolean;
   readonly stdout?: string;
   readonly stderr?: string;
 }
@@ -53,7 +55,10 @@ export const scripted = (reply: (call: Call) => Reply | undefined) => {
 
       return ChildProcessSpawner.makeHandle({
         pid: ChildProcessSpawner.ProcessId(1),
-        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(answer.exitCode ?? 0)),
+        exitCode:
+          answer.hangs === true
+            ? Effect.never
+            : Effect.succeed(ChildProcessSpawner.ExitCode(answer.exitCode ?? 0)),
         isRunning: Effect.succeed(false),
         kill: () => Effect.void,
         stdin: Sink.drain,

@@ -7,7 +7,8 @@ import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Layer, Logger, Stream } from "effect";
+import { Duration, Effect, Fiber, Layer, Logger, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
 import { type CheckpointRef, type MachineRef, Refusal } from "../src/runtime.ts";
@@ -274,6 +275,50 @@ test("observe reads a machine whose status fails for another reason unknown, and
       "couldn't read linux_dev's state: smolvm machine status dev-01234567 exited 1: Error: database is locked",
     ],
   ]);
+});
+
+/** Runs `effect` on the test clock, a second at a time until it ends, and how long it took. */
+const timed = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(effect);
+      let waited = Duration.zero;
+
+      while (fiber.pollUnsafe() === undefined) {
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
+        yield* TestClock.adjust(Duration.seconds(1));
+        waited = Duration.sum(waited, Duration.seconds(1));
+      }
+
+      return { value: yield* Fiber.join(fiber), waited };
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+test("observe reads a status that doesn't answer unknown within 8 s, its wait for a turn included", async () => {
+  const spawner = scripted((call) =>
+    call.args[0] === "machine"
+      ? call.args[3] === "two-01234567"
+        ? status("stopped")
+        : { hangs: true }
+      : undefined,
+  );
+
+  const runtime = await runtimeOf(await prepared(), spawner);
+
+  const hanging = Array.from({ length: 9 }, (_, index) => ({
+    ...machine,
+    id: `linux_h${index}`,
+    name: `h${index}`,
+  }));
+
+  const { value, waited } = await timed(
+    runtime
+      .observe([{ ...machine, id: "linux_two", name: "two" }, ...hanging])
+      .pipe(Effect.provide(Logger.layer([]))),
+  );
+
+  expect(Duration.format(waited)).toBe("8s");
+  expect(value).toEqual([{ state: "stopped" }, ...hanging.map(() => ({ state: "unknown" }))]);
 });
 
 test("create makes the machine with its sizes and published port, then boots it branchable", async () => {

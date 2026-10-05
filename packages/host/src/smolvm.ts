@@ -11,7 +11,7 @@
  */
 import { join } from "node:path";
 import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, FileSystem, Layer, Schema } from "effect";
+import { Duration, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { cliIn, expect, failure, files, portOf } from "./cli.ts";
 import type { Smolvm, SmolvmHost } from "./config.ts";
@@ -24,6 +24,7 @@ import {
   type Observed,
   Refusal,
   Runtime,
+  stateReadWait,
 } from "./runtime.ts";
 
 /**
@@ -64,7 +65,8 @@ export const nativeName = (resource: Pick<MachineRef, "name" | "instance">): str
 
 /**
  * How many `machine status` processes an `observe` runs at once, so a list or a RAM budget check
- * on a host with many machines doesn't start them all together.
+ * on a host with many machines doesn't start them all together. A machine's wait for its turn
+ * counts toward its `stateReadWait`, so a list answers in time however many machines wait.
  */
 const observeConcurrency = 8;
 
@@ -235,19 +237,38 @@ export const make = (
         recorded === "missing" ? recorded : stateOf(recorded),
       );
 
-    /** A machine's state, `unknown` when smolvm can't read it. */
-    const observeOne = (machine: MachineRef): Effect.Effect<Observed> =>
-      state(nativeName(machine)).pipe(
-        Effect.map((observed): Observed => ({ state: observed })),
-        Effect.catch((error) =>
-          Effect.as(Effect.logWarning(`couldn't read ${machine.id}'s state: ${error.message}`), {
-            state: "unknown",
-          } satisfies Observed),
+    /**
+     * Each machine's state, read `observeConcurrency` at a time; `unknown` when smolvm can't
+     * read it, or doesn't answer within `stateReadWait` of the observe's start.
+     */
+    const observe = (machines: ReadonlyArray<MachineRef>) =>
+      Effect.flatMap(Semaphore.make(observeConcurrency), (turns) =>
+        Effect.forEach(
+          machines,
+          (machine): Effect.Effect<Observed> =>
+            turns
+              .withPermits(1)(state(nativeName(machine)))
+              .pipe(
+                Effect.timeoutOrElse({
+                  duration: stateReadWait,
+                  orElse: () =>
+                    Effect.fail(
+                      new Internal({
+                        message: `smolvm machine status ${nativeName(machine)} didn't answer within ${Duration.format(stateReadWait)}`,
+                      }),
+                    ),
+                }),
+                Effect.map((observed): Observed => ({ state: observed })),
+                Effect.catch((error) =>
+                  Effect.as(
+                    Effect.logWarning(`couldn't read ${machine.id}'s state: ${error.message}`),
+                    { state: "unknown" } satisfies Observed,
+                  ),
+                ),
+              ),
+          { concurrency: "unbounded" },
         ),
       );
-
-    const observe = (machines: ReadonlyArray<MachineRef>) =>
-      Effect.forEach(machines, observeOne, { concurrency: observeConcurrency });
 
     /** Every machine starts branchable: store capture needs it. */
     const boot = (native: string) =>

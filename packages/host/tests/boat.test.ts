@@ -1131,8 +1131,8 @@ test("observe reads each recorded sandbox with its own GET, none when no sandbox
     ]),
   );
 
-  // A blip is ridden out; a read boat keeps failing ends at its two minutes.
-  expect(Duration.format(waited)).toBe("2m");
+  // A blip is ridden out; a read boat keeps failing ends at its 8 s.
+  expect(Duration.format(waited)).toBe("8s");
   expect(Exit.isSuccess(exit) ? exit.value : exit).toEqual([
     { state: "running", ssh: { host: "203.0.113.10", port: 19_044 } },
     { state: "running", ssh: { host: "198.51.100.7", port: 22 } },

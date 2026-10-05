@@ -358,8 +358,10 @@ every bump of it:
   machine and checkpoint rows, and their ports. Machine state (`running`,
   `stopped`, `missing`) is always read from the runtime, never stored; a
   machine whose state couldn't be read is `unknown`, so a failed read never
-  fails a list or the action it follows. A
-  machine and its checkpoints stay on the host that made them.
+  fails a list or the action it follows. Each runtime gives up on a machine's
+  state after 8 s (`stateReadWait`), under the client's 10 s bound on a read,
+  so a list answers however slow the runtime is. A machine and its
+  checkpoints stay on the host that made them.
 - **One runtime per host process**, behind the `Runtime` interface
   (`runtime.ts`), picked by the config's `runtime` from the registry in
   `runtimes.ts`. State, claims, setup and preparation are shared; fork,
@@ -673,8 +675,10 @@ These are known, not guarded, and accepted:
 - **Disks:** `diskGib` is `--storage`, where workload writes land. smolvm
   builds its host-side image seed only at the default 20 GiB; other sizes pull
   the image in the guest on first start.
-- **State** comes from `machine status --name X --json`, at most 8 at once.
-  smolvm's exit codes are trusted: no polling around calls.
+- **State** comes from `machine status --name X --json`, at most 8 at once;
+  a machine whose status hasn't answered 8 s after the read began, its wait
+  for a turn included, reads `unknown`. smolvm's exit codes are trusted: no
+  polling around calls.
 - **RAM budget** (`ram-budget.ts`): every boot checks that running and booting
   machines' `ramMib` fit `ramBudgetMib`, else `Capacity`; a machine whose
   state couldn't be read counts as running. Set it above physical RAM to
@@ -720,6 +724,8 @@ These are known, not guarded, and accepted:
   `diskGib` up to whole GB and only grows a disk. Never `--overwrite`.
 - **Fork and capture need a stopped machine** (our rule); checkpoints are
   `disk` clones.
+- **State** is one `tart list` for every machine; one that doesn't answer
+  within 8 s reads them all `unknown`.
 - **Capacity:** Apple runs two macOS VMs per Mac, the operator's included. Each
   boot counts `tart list` plus machines being booted and refuses with
   `Capacity` at two.
@@ -763,7 +769,7 @@ These are known, not guarded, and accepted:
   `out_of_capacity`/`no_ready_machine` are `Capacity`, as is 409
   `named_snapshot_limit`, boat's cap on an account's named snapshots.
 - **State** is a `GET` of each recorded sandbox, never a list; a read that
-  still fails after its repeats, or takes over 2 minutes, reads `unknown`,
+  still fails after its repeats, or takes over 8 s, reads `unknown`,
   never `missing`. The SSH endpoint changes at every start and is only
   reported for a running machine.
 - **Ready:** after a fork, a restore or any start the host waits for boat's

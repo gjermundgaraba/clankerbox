@@ -176,7 +176,9 @@ citation moved to the new tag.
   lock taken by `stop_vm_named` and `delete_vm`
   (S@1.22.2:src/cli/vm_common.rs). Only a prefix's first
   use races (the templates above). Ours: `observeConcurrency` 8, no host-side
-  lock around smolvm.
+  lock around smolvm, and each machine's status bounded by `stateReadWait`
+  (8 s from the read's start, its turn included, under the client's 10 s read
+  bound), so a status held by the busy timeout reads `unknown`.
 - When a `machine exec` client is signalled, smolvm SIGKILLs the guest command
   and every descendant; a `setsid -f` child whose parent exits at once
   survives. Ours: a setup killed by its timeout or a host crash runs no exit

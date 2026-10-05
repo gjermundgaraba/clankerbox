@@ -98,8 +98,10 @@ Each: what Tart does, where, and what of ours depends on it.
   `Size`, `Accessed`, `Running` (deprecated, kept in JSON for compatibility,
   T@2.40.1:Formatter/Format.swift) and `State`: `running`, `suspended` or
   `stopped` (`VMDirectory.State`, VMDirectory.swift), from the VM's lock,
-  which `tart run` holds. It sees one Tart home only. Ours: `VmState`, `decodeList`, `stateOf`
-  (suspended reads stopped), and the two-VM count.
+  which `tart run` holds. It sees one Tart home only. Ours: `VmState`,
+  `decodeList`, `stateOf` (suspended reads stopped), the two-VM count, and
+  `observe`'s `tart list` bounded by `stateReadWait` (8 s, under the client's
+  10 s read bound), past which every machine reads `unknown`.
 - `tart stop` sends SIGINT to `tart run`, waits up to `--timeout` (default 30 s)
   for the lock to clear, then SIGKILLs it; a stopped VM exits 2 (`stopRunning`,
   T@2.40.1:Commands/Stop.swift). Its return doesn't mean the VM is gone: once

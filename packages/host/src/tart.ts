@@ -27,6 +27,7 @@ import {
   type Observed,
   Refusal,
   Runtime,
+  stateReadWait,
 } from "./runtime.ts";
 
 /**
@@ -536,9 +537,24 @@ export const make = (
             );
           }
         }),
+      /**
+       * One `tart list` for every machine. One that doesn't answer within `stateReadWait` fails
+       * the read, and the core reads every machine `unknown`, so a list answers in time.
+       */
       observe: (machines) =>
-        Effect.map(list, (vms) =>
-          machines.map((machine): Observed => ({ state: vms.get(vmOf(machine)) ?? "missing" })),
+        list.pipe(
+          Effect.timeoutOrElse({
+            duration: stateReadWait,
+            orElse: () =>
+              Effect.fail(
+                new Internal({
+                  message: `tart list didn't answer within ${Duration.format(stateReadWait)}`,
+                }),
+              ),
+          }),
+          Effect.map((vms) =>
+            machines.map((machine): Observed => ({ state: vms.get(vmOf(machine)) ?? "missing" })),
+          ),
         ),
       /**
        * The Mac must have room: every running VM in the Tart home counts, the operator's
