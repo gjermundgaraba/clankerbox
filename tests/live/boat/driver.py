@@ -368,18 +368,35 @@ def teardown(state, boat, before, log, record):
 
     named_prefix = f'{state["host_id"]}_'
     snapshot_prefix = f'cbx-{state["host_id"]}-'
-    ids = recorded_sandboxes(state, log, errors)
-    listed = boat.sandboxes()
-    ids |= {sandbox['id'] for sandbox in listed if (sandbox.get('name') or '').startswith(named_prefix)}
-    for sandbox_id in sorted(ids):
+
+    def listing(what, read):
+        """`read()`, or None with the error noted, so one failed listing stops no deletion."""
         try:
-            boat.delete(sandbox_id)
-            if not boat.gone(sandbox_id):
-                errors.append(f'boat still has sandbox {sandbox_id} a minute after its delete')
-            log(f'teardown: deleted sandbox {sandbox_id}')
+            return read()
         except RuntimeError as error:
-            errors.append(str(error))
-    names = sorted(snapshot['name'] for snapshot in boat.snapshots() if snapshot['name'].startswith(snapshot_prefix))
+            errors.append(f"couldn't list {what}: {error}")
+            return None
+
+    def delete_sandboxes(ids):
+        for sandbox_id in sorted(ids):
+            try:
+                boat.delete(sandbox_id)
+                if not boat.gone(sandbox_id):
+                    errors.append(f'boat still has sandbox {sandbox_id} a minute after its delete')
+                log(f'teardown: deleted sandbox {sandbox_id}')
+            except RuntimeError as error:
+                errors.append(str(error))
+
+    # By ID first, so a failed listing can't keep a recorded sandbox; then by run name.
+    ids = recorded_sandboxes(state, log, errors)
+    delete_sandboxes(ids)
+    listed = listing('sandboxes', boat.sandboxes) or []
+    swept = {sandbox['id'] for sandbox in listed
+             if sandbox['id'] not in ids and (sandbox.get('name') or '').startswith(named_prefix)}
+    delete_sandboxes(swept)
+    ids |= swept
+    names = sorted(snapshot['name'] for snapshot in listing('named snapshots', boat.snapshots) or []
+                   if snapshot['name'].startswith(snapshot_prefix))
     for name in names:
         try:
             boat.delete_snapshot(name)
@@ -387,12 +404,13 @@ def teardown(state, boat, before, log, record):
         except RuntimeError as error:
             errors.append(str(error))
 
-    listed = boat.sandboxes()
+    listed = listing('sandboxes', boat.sandboxes) or []
     left = [sandbox['id'] for sandbox in listed
             if sandbox['id'] in ids or (sandbox.get('name') or '').startswith(named_prefix)]
     if left:
         errors.append(f'sandboxes left: {left}')
-    left_snapshots = [snapshot['name'] for snapshot in boat.snapshots() if snapshot['name'].startswith(snapshot_prefix)]
+    left_snapshots = [snapshot['name'] for snapshot in listing('named snapshots', boat.snapshots) or []
+                      if snapshot['name'].startswith(snapshot_prefix)]
     if left_snapshots:
         errors.append(f'named snapshots left: {left_snapshots}')
     # A sandbox made during the run that carries no run name may be one whose create the host
@@ -404,16 +422,16 @@ def teardown(state, boat, before, log, record):
     if mine:
         errors.append(f'processes left: {mine}')
 
-    limits = boat.limits()
-    after = starts_of(limits)
+    limits = listing('limits', boat.limits)
+    after = None if limits is None else starts_of(limits)
     suite_log = Path(state['evidence']) / 'suite.log'
     lines = re.findall(r'^\[start\] (\S+) (\S+) (\S+)\s*$', suite_log.read_text(), re.M) if suite_log.exists() else []
     record(starts={
         'suite': {'count': len(lines), 'refused_429': sum(1 for line in lines if line[2] == '429'),
                   'lines': [' '.join(line) for line in lines]},
         'account_before': before['starts'], 'account_after': after,
-        'account_hour_delta': after['hour']['used'] - before['starts']['hour']['used'],
-        'active_after': limits.get('activeSandboxes'),
+        'account_hour_delta': None if after is None else after['hour']['used'] - before['starts']['hour']['used'],
+        'active_after': None if limits is None else limits.get('activeSandboxes'),
     })
     result = {'errors': errors, 'deleted_sandboxes': sorted(ids), 'deleted_snapshots': names,
               'unnamed_sandboxes_made_during_the_run': unnamed, 'host_pid': pid}
