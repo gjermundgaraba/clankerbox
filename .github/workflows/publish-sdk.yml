@@ -1,8 +1,8 @@
 name: Release
-# Release tags only, vX.Y.Z, naming the SDK's version, which the binaries share: runs Quality,
-# whose sea job builds, bundles and smokes both targets, uploads every bundle and its .sha256
-# to the tag's GitHub release, then publishes the SDK to npm. The npm trusted publisher is
-# bound to this file's name.
+# Release tags only, vX.Y.Z, naming the SDK's version, which the binaries share. It runs Quality
+# first, whose sea job builds, bundles and smokes both targets; then it uploads those bundles and
+# their .sha256 files to the tag's GitHub release and publishes the SDK to npm. The npm trusted
+# publisher is bound to this file's name.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]

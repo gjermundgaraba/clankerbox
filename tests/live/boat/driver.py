@@ -16,11 +16,11 @@ argument list:
     os.write(os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), key.encode())' \\
     "$HOME/Library/Application Support/ascii/boat/config.json" KEY_FILE
 
-The driver reads the key there and writes it only into the host's config in the run's scratch
-(mode 0600), which the host and the host-control program read. It never reaches an argument list,
-an environment, a log or evidence: the driver's own calls log their method, path, status and
-boat's code only, and the last teardown step redacts the key from every evidence file and fails
-the run if it finds it there.
+The driver reads the key from KEY_FILE and writes it only into the host's config in the run's
+scratch (mode 0600), which the host and the host-control program read. It never reaches an argument
+list, an environment, a log or evidence: the driver's own calls log their method, path, status and
+boat's code only, and the last teardown step redacts the key from every evidence file and fails the
+run if it finds it there.
 
 The run owns one WorkRun (scripts/WORK_RUNS.md) and a host ID of its own,
 `clankerbox-live-b<5 hex>`, so the display name of every sandbox the run makes (its machine

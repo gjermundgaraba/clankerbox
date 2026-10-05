@@ -92,9 +92,9 @@ shows its invocation.
 `tests/live/boat/driver.py` runs a boat host on this Mac, unprivileged, against
 the operator's boat account on its trial, on loopback or the tailnet address
 named by `--address`. The host's config, in scratch with mode 0600, holds the
-API key from the file `--key-file` names, which holds it alone and which nothing
-else writes down: the driver logs its own calls as method, path, status and boat's
-code, and its last teardown step redacts the key from every evidence file and
+API key, read from the file `--key-file` names, which holds the key alone.
+Nothing else writes the key down: the driver logs its own calls as method, path,
+status and boat's code, and its last teardown step redacts the key from every evidence file and
 fails the run if it was there. A read-only pre-flight records the account's
 counts (never the operator's names or IDs) and stops the run before it makes
 anything unless two active sandboxes are free and its starts and named snapshots
