@@ -1,6 +1,6 @@
 /**
  * boat's API client over a fake boat: an `HttpClient` that records every request and answers as
- * boat's API v1 does (evidence.md, boat claims), and a loopback server for real dropped
+ * boat's API v1 does (the bump-boat-api skill), and a loopback server for real dropped
  * connections. Nothing here reaches boat.
  */
 import { createServer, type IncomingMessage, type Server } from "node:http";

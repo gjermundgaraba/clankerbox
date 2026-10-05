@@ -82,7 +82,7 @@ test("a host ID is a lowercase letter, then up to 31 lowercase letters, digits a
   }
 });
 
-/** boat's named-snapshot names (`boat-v1.yaml`, see evidence.md "Names"). */
+/** boat's named-snapshot names (`boat-v1.yaml`; the bump-boat-api skill). */
 const boatAccepts = (name: string): boolean => /^[a-z0-9][a-z0-9-]{0,62}$/u.test(name);
 
 test("boat accepts cbx-<host>-<inst> for every host ID, the longest included", () => {

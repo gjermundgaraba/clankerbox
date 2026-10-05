@@ -88,7 +88,7 @@ const smolvm: Runtime<typeof Natives.Type> = {
   user: "root",
   /**
    * `main` is 20 GiB, which smolvm boots from its image seed; the other creates' 10 GiB pull the
-   * base in the guest (rewrite.md, Disk sizing). Both fetch from the base's registry.
+   * base in the guest (README, Runtime notes). Both fetch from the base's registry.
    */
   sizes: (ramMib = 512, diskGib = 10) => [
     "--base",

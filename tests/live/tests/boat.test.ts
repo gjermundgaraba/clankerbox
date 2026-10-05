@@ -6,7 +6,7 @@
  *
  * The trial runs 2 sandboxes at once and allows 5 starts a minute, 25 an hour and 75 a day; a
  * create, fork, resume and restore each count, and so does a 429 refusal, but not a 403 for a
- * type the plan lacks (evidence.md, boat claims). So at most two of the run's sandboxes are
+ * type the plan lacks (the bump-boat-api skill). So at most two of the run's sandboxes are
  * active at once, and every start goes through `counted`, which keeps them to `startsPerMinute`
  * and prints a `[start]` line that the driver counts: one run makes 7, the 429 included.
  *
@@ -373,8 +373,8 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       const before = await account();
 
       // 8 vCPU is boat's `large`, which the trial refuses. boat didn't count its 403 as a start
-      // (evidence.md), so it isn't `counted`; the driver's account count before and after shows
-      // if it ever does.
+      // (the bump-boat-api skill), so it isn't `counted`; the driver's account count before and
+      // after shows if it ever does.
       const large = failure(await createBare("large", 8));
 
       expect(large.tag).toBe("Precondition");

@@ -77,7 +77,7 @@ export interface MachineType {
 }
 
 /**
- * boat's types, smallest first (evidence.md, boat claims). The host asks for any of them, and a
+ * boat's types, smallest first (the bump-boat-api skill). The host asks for any of them, and a
  * type the account's plan doesn't include is boat's to refuse: the trial refuses `large` and
  * `xlarge`, which needs the $100 plan.
  */

@@ -9,7 +9,7 @@
  * passes; a row without one has nothing on boat the host can find. A named snapshot's name
  * derives from the host ID and the row's instance, so a checkpoint row needs none.
  *
- * The refusal rule covers boat's answers that leave nothing on boat (evidence.md, boat claims):
+ * The refusal rule covers boat's answers that leave nothing on boat (the bump-boat-api skill):
  * its `Capacity` refusals of a create, fork, resume, restore or capture (the account's limits,
  * no machine, an 11th named snapshot), its `Precondition` refusal of a type the account's plan
  * lacks, a create, fork or restore that ends `cancelled` or gone because boat found no machine,
@@ -183,7 +183,7 @@ const deletePause = Duration.millis(500);
 /**
  * How long a running fork source may take to complete a snapshot attempt begun after its sync:
  * 41 s with little new data, 102 s after writing 3 GiB. boat starts one every 60 s, and one
- * attempt took 3.8–24.4 s in the timing spike (evidence.md, Phase 6).
+ * attempt took 3.8–24.4 s in the timing spike (the bump-boat-api skill).
  */
 const snapshotWait = Duration.minutes(10);
 
@@ -580,10 +580,9 @@ export const make = (
     /**
      * Waits until a snapshot attempt that began after the source's sync has completed, so the
      * fork holds everything written before it. boat stamps `lastSnapshotAttemptAt` when an
-     * attempt starts (evidence.md, Phase 6, snapshot attempt timing), so the value read after
-     * the sync names the last attempt begun before it; once it changes, a later attempt has
-     * begun, and `completed` says that one is done. Only boat's own values are compared, never
-     * against the host's clock.
+     * attempt starts (the bump-boat-api skill), so the value read after the sync names the last
+     * attempt begun before it; once it changes, a later attempt has begun, and `completed` says
+     * that one is done. Only boat's own values are compared, never against the host's clock.
      */
     const freshSnapshot = (source: MachineRef, id: string) =>
       Effect.gen(function* () {

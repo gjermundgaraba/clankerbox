@@ -36,7 +36,7 @@ import {
 
 /**
  * The setup of `main`. Softnet's block of the host also blocks the gateway's DNS, so public
- * resolvers come first (rewrite.md, Runtimes: Tart). `admin` is the Cirrus image's user. Setup
+ * resolvers come first (README, Runtime notes). `admin` is the Cirrus image's user. Setup
  * runs before preparation, so it records the image's host key, which preparation replaces.
  */
 const mainScript = (publicKey: string) => `#!/bin/sh
@@ -96,7 +96,7 @@ const answer = (endpoint: SshEndpoint) =>
 const tart: Runtime<typeof TartNatives.Type> = {
   /** The Cirrus image's user. */
   user: "admin",
-  /** The base's disk is 50 GB, and Tart only grows a disk (rewrite.md, Runtimes: Tart). */
+  /** The base's disk is 50 GB, and Tart only grows a disk (README, Runtime notes). */
   sizes: (diskGib = 50) => [
     "--base",
     "macos",

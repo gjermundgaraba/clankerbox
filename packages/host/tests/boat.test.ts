@@ -1,6 +1,6 @@
 /**
  * The boat runtime over a fake boat: an `HttpClient` that keeps sandboxes and named snapshots in
- * memory and answers as boat's API v1 does (evidence.md, boat claims), and a scripted `ssh` that
+ * memory and answers as boat's API v1 does (the bump-boat-api skill), and a scripted `ssh` that
  * stands for the guest. Nothing here reaches boat, and nothing runs ssh.
  */
 import { execFileSync } from "node:child_process";

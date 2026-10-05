@@ -127,10 +127,10 @@ export const BoatAccount = Schema.fromJsonString(
  * client config whose one host is the host under test; `CLANKERBOX_LIVE_HOST_CONTROL`, a
  * program run as `CONTROL OP ARGS…` on this machine that acts on the host under test; and
  * `CLANKERBOX_LIVE_PREFIX`, which every machine name of the run starts with. It carries the
- * run's ID, so the run's teardown finds, and only finds, what the run made (rewrite.md, "Test
- * machine footprint"). `CLANKERBOX_LIVE_RUNTIME` names the host's runtime, and only that
- * runtime's tests run. `smolvm/driver.py`, `tart/driver.py` and `boat/driver.py` provide all
- * five, and their teardown removes what the run left on the host.
+ * run's ID, so the run's teardown finds, and only finds, what the run made.
+ * `CLANKERBOX_LIVE_RUNTIME` names the host's runtime, and only that runtime's tests run.
+ * `smolvm/driver.py`, `tart/driver.py` and `boat/driver.py` provide all five, and their teardown
+ * removes what the run left on the host.
  *
  * A driver that runs a second host of the run, which only placement uses, names it in
  * `CLANKERBOX_LIVE_PLACEMENT_CONFIG`: a client config listing that host first and the host under

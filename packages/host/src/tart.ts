@@ -47,8 +47,8 @@ export interface Settings extends Tart {
 }
 
 /**
- * Softnet, blocking the Mac itself: guests can't reach the host's services (rewrite.md). `tart
- * run` without it falls back to Tart's shared NAT.
+ * Softnet, blocking the Mac itself: guests can't reach the host's services (README, Runtime
+ * notes). `tart run` without it falls back to Tart's shared NAT.
  */
 const softnet = "--net-softnet-block=@host";
 
