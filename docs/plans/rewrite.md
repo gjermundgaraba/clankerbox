@@ -1439,9 +1439,15 @@ tests use real VMs.
      Production's Tart host is
      macbook-workstation (100.73.230.122, `tag:agent-host`), not the MacBook
      Pro (100.122.69.11) where phase 5 develops and tests. Its pf passes the
-     Tart host's API port and 10000–19999 on its tailnet address. Pull the
-     Cirrus images on the workstation: the 31 GiB seed P3 pulled is on the
-     MacBook Pro.
+     Tart host's API port and 10000–19999 on its tailnet address. Its
+     application firewall is off (garaba-home); if it's ever turned on, the
+     clankerbox binary needs an "Allow incoming connections" entry, and each
+     release's new binary prompts once (evidence.md, phase 5). The workstation
+     isn't MDM-managed, so as root this adds the entry there:
+     `/usr/libexec/ApplicationFirewall/socketfilterfw --add <binary> &&
+     /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp <binary>`.
+     Pull the Cirrus images on the workstation: the 31 GiB seed P3 pulled is
+     on the MacBook Pro.
    - Run the smolvm host as root: system units, and host state out of
      `/home/clanker`. As root, smolvm adds others-execute to every directory
      above its data root.
