@@ -118,8 +118,9 @@ clankerbox host --config /etc/clankerbox/linux.json
 
 There is no default config path: a unit passes it. A smolvm host runs as root
 (a system unit); a Tart host as the operator's user, in its GUI session, since
-its VMs are LaunchAgents in `gui/<uid>`; a boat host unprivileged. The host
-exits 0 when a signal stops it, so a unit needs no `SuccessExitStatus`.
+its VMs are LaunchAgents in `gui/<uid>`; a boat host unprivileged. Like the
+CLI, the host exits 130 when SIGINT or SIGTERM stops it, and 1 when it fails;
+[Deploy](#deploy) says what a unit or LaunchAgent makes of that.
 
 ### Use the CLI
 
@@ -221,6 +222,7 @@ release replaces it while machines run.
    Type=exec
    ExecStart=/opt/clankerbox/<version>/clankerbox host --config /etc/clankerbox/linux.json
    KillMode=control-group
+   SuccessExitStatus=130
    Restart=on-failure
    RestartSec=5
 
@@ -229,7 +231,8 @@ release replaces it while machines run.
    ```
 
    Each VM runs in its own scope, outside the unit's cgroup, so stopping or
-   restarting the unit leaves machines running.
+   restarting the unit leaves machines running. `SuccessExitStatus=130` makes
+   the host's exit on SIGTERM a clean stop rather than a failure.
 
 **Tart host** (Apple Silicon, macOS 26), as the operator's user:
 
@@ -237,7 +240,12 @@ release replaces it while machines run.
    root in `/usr/local/bin`:
    `sudo install -o root -g wheel -m 4755 softnet /usr/local/bin/softnet`.
 2. Run the host as a LaunchAgent of that user, in its GUI session, since its
-   VMs are LaunchAgents in `gui/<uid>`.
+   VMs are LaunchAgents in `gui/<uid>`. launchd has no list of clean exit
+   codes, so it counts the host's 130 on SIGTERM as a failure. Set `KeepAlive`
+   to `{SuccessfulExit: false}`, which restarts the host after any exit but 0,
+   a crash included, and stop it with `launchctl bootout gui/<uid>/<label>`,
+   which unloads the job, so nothing restarts it. A bare SIGTERM (`kill`,
+   `launchctl kill`) leaves the job loaded, and launchd restarts the host.
 3. Pull each base as that user, into the Tart home the host uses
    (`tart pull <image>`), before its first create; a macOS image is tens of
    GiB.

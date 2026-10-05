@@ -407,10 +407,10 @@ def host_start():
     sudo(['systemctl', 'reset-failed', UNIT], touched=f'clears {UNIT} if it is left failed')
     # $$ passes a literal $ through systemd's own expansion to the shell.
     record_exit = f'/bin/sh -c \'echo "$$EXIT_CODE $$EXIT_STATUS" >{shlex.quote(str(HOST_EXIT))}\''
-    # A global flag before `host`, which mustn't change the exit code host-stop checks.
+    # As README's unit: 130, the host's exit on SIGTERM, is a clean stop.
     must(sudo(['systemd-run', f'--unit={UNIT}', '--collect', '--property=Type=exec',
                f'--property=WorkingDirectory={SCRATCH}', '--property=KillMode=control-group',
-               f'--property=ExecStopPost={record_exit}',
+               '--property=SuccessExitStatus=130', f'--property=ExecStopPost={record_exit}',
                str(BINARY), '--log-level', 'info', 'host', '--config', str(CONFIG)],
               touched=f'starts transient system unit {UNIT} (the clankerbox host as root)'), 'systemd-run')
     deadline = time.monotonic() + 60
@@ -605,7 +605,7 @@ def host_exit():
 
 
 def host_stop():
-    """Stops the host with SIGTERM, as its unit's stop does, and checks it exited 0: systemd
+    """Stops the host with SIGTERM, as its unit's stop does, and checks it exited 130: systemd
     counts a death by SIGTERM as a clean stop too, so only the exit status shows the host
     handled the signal."""
     t0 = time.monotonic()
@@ -614,8 +614,8 @@ def host_stop():
     wait_unit_gone()
     ended = host_exit()
     note(f'host stopped in {time.monotonic() - t0:.2f}s: {ended}')
-    if ended != 'exited 0':
-        raise RuntimeError(f'the host\'s exit after SIGTERM reads {ended!r}, not exited 0')
+    if ended != 'exited 130':
+        raise RuntimeError(f'the host\'s exit after SIGTERM reads {ended!r}, not exited 130')
 
 
 # ---------------------------------------------------------------- teardown and finish

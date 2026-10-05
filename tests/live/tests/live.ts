@@ -137,7 +137,7 @@ export const BoatAccount = Schema.fromJsonString(
  * test or alone (`tart/driver.py` does). The program's ops, on every runtime:
  *
  * - `host-stop`, `host-start`: stop the host process (SIGTERM), failing unless its exit status,
- *   as its unit or keeper records it, is 0, or start it;
+ *   as its unit or keeper records it, is 130, or start it;
  * - `host-kill`: SIGKILL the host process, as a crash, failing unless that is how it ended;
  * - `guest NAME COMMAND`: run COMMAND with `/bin/sh -c` as root in the guest of machine NAME,
  *   through the runtime (on boat, its command API), printing its output;

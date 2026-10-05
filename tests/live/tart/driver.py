@@ -125,7 +125,7 @@ def control(state_file, op, args):
     if op == 'host-start':
         host_start(state, __file__)
     elif op == 'host-stop':
-        host_end(state, signal.SIGTERM, 0)
+        host_end(state, signal.SIGTERM, 130)
     elif op == 'host-kill':
         host_end(state, signal.SIGKILL, -signal.SIGKILL)
     elif op == 'natives':

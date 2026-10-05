@@ -1,14 +1,10 @@
-/** Exit codes when a signal stops the process: the CLI's 130 and the host role's 0. */
+/** The CLI's exit code when a signal stops it mid-call: 130, as the host role's is. */
 import { type ChildProcess, spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
-import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Exit, Layer, Schema } from "effect";
-import { TestConsole } from "effect/testing";
+import { Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { dispatch, type Role, teardown } from "../src/roles.ts";
 import { cleanup, scratch } from "./support.ts";
 
 const owned: Array<string> = [];
@@ -35,43 +31,6 @@ afterEach(async () => {
     ),
   );
   await cleanup(owned, []);
-});
-
-const codeOf = (exit: Exit.Exit<unknown, unknown>, role: Role) => {
-  let code = -1;
-
-  teardown(role)(exit, (exitCode) => {
-    code = exitCode;
-  });
-
-  return code;
-};
-
-test("an interrupt exits 130 for the CLI and 0 for the host role; a failure exits 1 for both", () => {
-  const failed = Exit.fail(new Error("broke"));
-  const cli: Role = { host: false };
-  const host: Role = { host: true };
-
-  expect(codeOf(Exit.interrupt(), cli)).toBe(130);
-  expect(codeOf(Exit.interrupt(), host)).toBe(0);
-  expect(codeOf(failed, cli)).toBe(1);
-  expect(codeOf(failed, host)).toBe(1);
-  expect(codeOf(Exit.void, host)).toBe(0);
-});
-
-test("the host role is marked by its handler, whatever global flags come before it", async () => {
-  const role: Role = { host: false };
-
-  await Effect.runPromise(
-    dispatch(role)(["--log-level", "error", "host", "--config", "/nonexistent/host.json"]).pipe(
-      Effect.exit,
-      Effect.provide(
-        Layer.mergeAll(NodeServices.layer, NodeHttpClient.layerNodeHttp, TestConsole.layer),
-      ),
-    ),
-  );
-
-  expect(role.host).toBe(true);
 });
 
 /** Runs `file` under this Node, with `args`, and resolves with its exit code. */
@@ -103,29 +62,12 @@ const silent = async () => {
     server.listen(0, "127.0.0.1", resolve);
   });
 
-  return { port: portOf(server), accepted: accepted.promise };
-};
+  const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
+    server.address(),
+    { onExcessProperty: "ignore" },
+  );
 
-const portOf = (server: Server) =>
-  Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(server.address(), {
-    onExcessProperty: "ignore",
-  }).port;
-
-/** A port that was free on loopback a moment ago. */
-const freePort = async () => {
-  const server = createServer();
-
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-
-  const port = portOf(server);
-
-  await new Promise((resolve) => {
-    server.close(resolve);
-  });
-
-  return port;
+  return { port, accepted: accepted.promise };
 };
 
 test("the CLI exits 130 when SIGINT stops it mid-call", async () => {
@@ -148,32 +90,4 @@ test("the CLI exits 130 when SIGINT stops it mid-call", async () => {
   child.kill("SIGINT");
 
   expect(await exited).toBe(130);
-});
-
-test("the host role exits 0 when SIGTERM stops it", async () => {
-  const dir = await scratch(owned);
-  const port = await freePort();
-  const { child, exited } = run(join(import.meta.dirname, "host-role.ts"), [dir, String(port)]);
-
-  let served = false;
-
-  for (let tries = 0; tries < 100 && !served; tries++) {
-    served = await fetch(`http://127.0.0.1:${port}/api/host/get`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
-    }).then(
-      (response) => response.ok,
-      () => false,
-    );
-
-    if (!served) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-
-  child.kill("SIGTERM");
-
-  expect(served).toBe(true);
-  expect(await exited).toBe(0);
 });
