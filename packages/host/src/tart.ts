@@ -579,7 +579,14 @@ export const make = (
           "--disk-size",
           String(diskGb(machine.diskGib)),
         ]),
-      start: (machine) => Effect.andThen(listen(machine), boot(machine)),
+      /** Listens again, then boots the VM unless it runs already. */
+      start: (machine) =>
+        Effect.andThen(
+          listen(machine),
+          Effect.flatMap(state(vmOf(machine)), (observed) =>
+            observed === "running" ? Effect.void : boot(machine),
+          ),
+        ),
       stop,
       delete: (machine) =>
         Effect.gen(function* () {

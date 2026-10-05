@@ -480,6 +480,21 @@ test("start kickstarts a job launchd holds, without -k, and waits while the gues
   ]);
 });
 
+test("start of a running VM listens and boots nothing", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const machine = await machineOn("dev");
+
+  mac.vms.set(vmOf(machine), "running");
+
+  const listened = await accepts(machine.port ?? 0);
+
+  await Effect.runPromise(runtime.start(machine));
+
+  expect(listened).toBe(false);
+  expect(calls(mac)).toEqual([]);
+  expect(await accepts(machine.port ?? 0)).toBe(true);
+});
+
 test("after a reboot, start bootstraps the job again from its plist", async () => {
   const { mac, runtime } = await runtimeOn();
   const machine = await machineOn("dev");
