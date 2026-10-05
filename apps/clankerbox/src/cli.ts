@@ -103,7 +103,7 @@ const nameArgument = Argument.String("name").pipe(
 
 /**
  * A list over every host: a table, or with `--json` the answers under `key`. The hosts that
- * didn't answer go to stderr, or to `unreachable` with `--json`. When no host answered, the
+ * didn't answer go to stderr, or to `unreachable` with `--json`. When every host failed, the
  * command exits 1, as a failed call does; a partial answer exits 0.
  */
 const listCommand = <A, Encoded>(options: {
