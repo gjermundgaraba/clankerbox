@@ -1596,6 +1596,19 @@ darwin-arm64 here, linux-x64 on the Linux test host (Linux 7.0.0, x86_64) in
 `~/clankerbox-rewrite/runs/rel-04f6`, which the run deleted after copying its
 log back. The run keeps 40 KiB of evidence and no scratch.
 
+**Release bundles, from `tools/release/build.sh`** (run
+`.work/runs/release-bundles-b02bc2072077`, the tree of `c4bd07c`, a one-off
+driver). The merged build-and-bundle built both targets on this Mac:
+`clankerbox-1.0.0-darwin-arm64.tar.gz` 44.3 MB and
+`clankerbox-1.0.0-linux-x64.tar.gz` 47.5 MB, each matching its `.sha256`.
+`smoke.sh` passed on each bundle, darwin-arm64 here and linux-x64 on the Linux
+test host in `~/clankerbox-rewrite/runs/release-bundles-b02bc2072077`, which
+the run deleted; `smoke.sh` given no bundle fails with its usage. A second run
+(`release-helper-check-4e82c8b99ae9`) listed the darwin bundle (root:0, no
+AppleDouble entries, 28 entries) and took its binary out with the live
+drivers' `install_binary`: mode 0755, `clankerbox v1.0.0`. Both keep only
+evidence.
+
 - **Node's LICENSE** is `node-v26.10.0-<target>/LICENSE` in the pinned
   archive, 156,386 bytes on both targets.
 - **npm notices:** `pnpm --filter '@clankerbox/clankerbox...' licenses list

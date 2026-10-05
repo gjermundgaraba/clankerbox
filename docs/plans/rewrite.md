@@ -1431,9 +1431,9 @@ Two rules for every VM job:
 
 ## Release
 
-**Node SEA pipeline:** three shell scripts in `tools/release`, validated on
-26.10.0 (`build-sea.sh`, `bundle.sh`, `smoke.sh`; `pnpm sea:build`,
-`sea:bundle`, `sea:smoke`):
+**Node SEA pipeline:** two shell scripts in `tools/release`, validated on
+26.10.0 (`build.sh`, which builds and bundles each target, and `smoke.sh`,
+which smokes a bundle; `pnpm sea:build`, `sea:smoke`):
 
 1. Pin the Node archives by SHASUMS256.
 2. Download and verify each target's archive, and keep its `bin/node` and
@@ -1471,16 +1471,20 @@ is the lockfile's, a superset of what the bundle inlines: it includes
 `undici`, `redis` (platform-node's peer), and `@types/*`. The `redis`
 packages ship no license file and are listed with none.
 
-**Pins:** one `release-inputs.json` keyed by platform, with the Node SEA base
-binaries. The smolvm version the release was tested on is a constant in the
+**Pins:** one Node version, in `.node-version`, which `setup-node` and the
+build read; `release-inputs.json` keeps each target's archive checksum under
+that version. The smolvm version the release was tested on is a constant in the
 host.
 
 **CI:** one vite-plus job, plus a SEA build, bundle and smoke test on both
-targets (`ubuntu-24.04` and `macos-latest`, arm64). `publish-sdk` publishes
-`packages/contract` only on a push of a release tag, `v<major>.<minor>.<patch>`,
-after checking that the tag names the package's version, through npm trusted
-publishing with provenance (the `npm` environment, as on `main`). It has no
-manual trigger, so nothing publishes from a branch.
+targets (`ubuntu-24.04` and `macos-15`, arm64), on pull requests and pushes to
+`main` and release tags. The release workflow, `publish-sdk.yml` (the file
+name npm's trusted publisher is bound to), runs only on a push of a release
+tag, `v<major>.<minor>.<patch>`: it checks that the tag names the SDK's
+version, builds, bundles and smokes both targets, uploads every bundle and its
+`.sha256` to the tag's GitHub release, then publishes `packages/contract`
+through npm trusted publishing with provenance (the `npm` environment, as on
+`main`). It has no manual trigger, so nothing publishes from a branch.
 
 ## Phases
 
