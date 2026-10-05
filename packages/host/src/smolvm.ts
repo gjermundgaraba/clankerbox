@@ -135,6 +135,12 @@ const decodeStatus = Schema.decodeUnknownEffect(
  */
 const alive: ReadonlySet<RecordState> = new Set(["running", "pausing", "unreachable", "frozen"]);
 
+/**
+ * The states `machine start` refuses: a frozen fork base, and a machine with saved execution,
+ * which only smolvm's resume continues (`start_vm_named_with_db`, S@1.22.2:src/cli/vm_common.rs).
+ */
+const unstartable: ReadonlySet<RecordState | "missing"> = new Set(["frozen", "pausing", "paused"]);
+
 export const stateOf = (state: RecordState): MachineState =>
   alive.has(state) ? "running" : "stopped";
 
@@ -200,14 +206,14 @@ export const make = (
       });
     }
 
-    /** A machine's state, or `missing` for a name smolvm doesn't know. */
-    const state = (native: string): Effect.Effect<MachineState, Internal> =>
+    /** A machine's state as smolvm records it, or `missing` for a name smolvm doesn't know. */
+    const status = (native: string): Effect.Effect<RecordState | "missing", Internal> =>
       Effect.flatMap(
         smolvm(["machine", "status", "--name", native, "--json"], `machine status ${native}`),
         (ran) => {
           if (ran.exitCode === 0) {
             return decodeStatus(ran.stdout).pipe(
-              Effect.map(({ state }) => stateOf(state)),
+              Effect.map(({ state }) => state),
               Effect.mapError(
                 (error) =>
                   new Internal({
@@ -218,9 +224,15 @@ export const make = (
           }
 
           return ran.stderr.includes(`machine '${native}' not found`)
-            ? Effect.succeed("missing")
+            ? Effect.succeed("missing" as const)
             : Effect.fail(failure(`smolvm machine status ${native}`, ran));
         },
+      );
+
+    /** A machine's state, or `missing` for a name smolvm doesn't know. */
+    const state = (native: string): Effect.Effect<MachineState, Internal> =>
+      Effect.map(status(native), (recorded) =>
+        recorded === "missing" ? recorded : stateOf(recorded),
       );
 
     /** A machine's state, `unknown` when smolvm can't read it. */
@@ -242,25 +254,26 @@ export const make = (
       call(["machine", "start", "--name", native, "--branchable"], `machine start ${native}`);
 
     /**
-     * A fork and a capture copy RAM, which only a running machine has. Any other state is
-     * refused before anything native.
+     * A fork and a capture copy RAM, which only a running machine has, and read it through its
+     * agent, so an unreachable one is no source. Any other state is refused before anything
+     * native.
      */
     const copyable = (machine: MachineRef, stopped: string) =>
-      Effect.flatMap(state(nativeName(machine)), (observed) => {
-        if (observed === "running") {
+      Effect.flatMap(status(nativeName(machine)), (recorded) => {
+        if (recorded === "running") {
           return Effect.void;
         }
 
-        return Effect.fail(
-          new Refusal({
-            error: new Precondition({
-              message:
-                observed === "missing"
-                  ? `machine ${machine.id} is missing from the smolvm runtime; delete it`
-                  : stopped,
-            }),
-          }),
-        );
+        const message =
+          recorded === "missing"
+            ? `machine ${machine.id} is missing from the smolvm runtime; delete it`
+            : recorded === "unreachable"
+              ? `smolvm reads machine ${machine.id} unreachable: its VM runs, but its agent doesn't answer; start it to boot it again`
+              : alive.has(recorded)
+                ? `smolvm reads machine ${machine.id} ${recorded}, and copies only a running machine`
+                : stopped;
+
+        return Effect.fail(new Refusal({ error: new Precondition({ message }) }));
       });
 
     /** A checkpoint's directory in the host's store. */
@@ -486,7 +499,30 @@ export const make = (
 
           yield* boot(native);
         }),
-      start: (machine) => Effect.asVoid(boot(nativeName(machine))),
+      /**
+       * Reads the status first, so a running machine is left as it is. An unreachable one, whose
+       * VM runs but whose agent doesn't answer, is booted again: `machine start` kills its VMM
+       * first (the bump-smolvm skill).
+       */
+      start: (machine) =>
+        Effect.gen(function* () {
+          const native = nativeName(machine);
+          const recorded = yield* status(native);
+
+          if (recorded === "running") {
+            return;
+          }
+
+          if (unstartable.has(recorded)) {
+            return yield* new Refusal({
+              error: new Precondition({
+                message: `smolvm reads machine ${machine.id} ${recorded}, and doesn't start it from there`,
+              }),
+            });
+          }
+
+          yield* boot(native);
+        }),
       stop: (machine) => {
         const native = nativeName(machine);
 

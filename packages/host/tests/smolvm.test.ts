@@ -325,15 +325,19 @@ test("a failed machine create fails with smolvm's last output and boots nothing"
   expect(smolvmArgs(spawner.calls)).toHaveLength(1);
 });
 
-test("start boots branchable, and stop is machine stop, its failure returned as it is", async () => {
-  const spawner = scripted((call) =>
-    call.args[1] === "stop"
+test("start reads the status, then boots a stopped machine branchable, and stop is machine stop, its failure returned as it is", async () => {
+  const spawner = scripted((call) => {
+    if (call.args[1] === "status") {
+      return status("stopped");
+    }
+
+    return call.args[1] === "stop"
       ? {
           exitCode: 1,
           stderr: "Error: guest did not confirm the flush; left the VM alive for retry\n",
         }
-      : undefined,
-  );
+      : undefined;
+  });
 
   const runtime = await runtimeOf(await prepared(), spawner);
 
@@ -344,8 +348,41 @@ test("start boots branchable, and stop is machine stop, its failure returned as 
     "smolvm machine stop dev-01234567 exited 1: Error: guest did not confirm the flush; left the VM alive for retry",
   );
   expect(smolvmArgs(spawner.calls)).toEqual([
+    ["machine", "status", "--name", "dev-01234567", "--json"],
     ["machine", "start", "--name", "dev-01234567", "--branchable"],
     ["machine", "stop", "--name", "dev-01234567"],
+  ]);
+});
+
+test("start leaves a running machine as it is, boots an unreachable one again, and refuses a frozen or pausing one before anything native", async () => {
+  let reply = status("running");
+
+  const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+  const runtime = await runtimeOf(await prepared(), spawner);
+
+  await Effect.runPromise(runtime.start(machine));
+
+  reply = status("unreachable");
+  await Effect.runPromise(runtime.start(machine));
+
+  reply = status("frozen");
+
+  const frozen = await Effect.runPromise(Effect.flip(runtime.start(machine)));
+
+  reply = status("pausing");
+
+  const pausing = await Effect.runPromise(Effect.flip(runtime.start(machine)));
+
+  expect([frozen, pausing].map(refused)).toEqual([
+    ["Precondition", "smolvm reads machine linux_dev frozen, and doesn't start it from there"],
+    ["Precondition", "smolvm reads machine linux_dev pausing, and doesn't start it from there"],
+  ]);
+  expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual([
+    "status",
+    "status",
+    "start",
+    "status",
+    "status",
   ]);
 });
 
@@ -614,7 +651,7 @@ test("startup empties the forks area and makes the runtime's directories", async
   expect((await readdir(settings.stateDir)).sort()).toEqual(["checkpoints", "forks"]);
 });
 
-test("a capture or a fork of a machine that isn't running is refused before anything native", async () => {
+test("a capture or a fork of a machine smolvm doesn't read running is refused before anything native", async () => {
   let reply = status("stopped");
 
   const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
@@ -627,7 +664,15 @@ test("a capture or a fork of a machine that isn't running is refused before anyt
 
   const missing = await Effect.runPromise(Effect.flip(runtime.capture(machine, ramCheckpoint)));
 
-  expect([capture, fork, missing].map(refused)).toEqual([
+  reply = status("unreachable");
+
+  const unreachable = await Effect.runPromise(Effect.flip(runtime.fork(machine, copy)));
+
+  reply = status("frozen");
+
+  const frozen = await Effect.runPromise(Effect.flip(runtime.capture(machine, ramCheckpoint)));
+
+  expect([capture, fork, missing, unreachable, frozen].map(refused)).toEqual([
     [
       "Precondition",
       "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",
@@ -637,8 +682,19 @@ test("a capture or a fork of a machine that isn't running is refused before anyt
       "a fork copies a running machine, RAM included, and linux_dev is stopped: start it first",
     ],
     ["Precondition", "machine linux_dev is missing from the smolvm runtime; delete it"],
+    [
+      "Precondition",
+      "smolvm reads machine linux_dev unreachable: its VM runs, but its agent doesn't answer; start it to boot it again",
+    ],
+    ["Precondition", "smolvm reads machine linux_dev frozen, and copies only a running machine"],
   ]);
-  expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["status", "status", "status"]);
+  expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual([
+    "status",
+    "status",
+    "status",
+    "status",
+    "status",
+  ]);
 });
 
 test("a ram capture goes into the host's one store, with no history", async () => {

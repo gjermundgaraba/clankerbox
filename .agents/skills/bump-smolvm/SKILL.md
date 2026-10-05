@@ -131,6 +131,16 @@ citation moved to the new tag.
 
 - `machine start` returns once the agent is ready and kills the child on
   failure (`finalize_launch`, S@1.22.2:src/agent/manager.rs).
+- `machine start` resolves the state with an agent ping first
+  (`resolve_state`, S@1.22.2:src/agent/state_probe.rs): `running` returns at
+  once, `unreachable` (VMM alive, agent silent) has its VMM killed and its
+  record cleared, then starts afresh (`cli_recover_if_unreachable` in
+  `start_vm_named_with_db`, S@1.22.2:src/cli/vm_common.rs), and `frozen`,
+  `paused` and `pausing` are refused. Ours: `start` reads `machine status`
+  first, leaves `running` as it is, boots `unreachable` again and refuses
+  `unstartable` before anything native.
+  `copyable` takes only `running`, so an unreachable source is refused, and
+  the RAM budget counts `unreachable` as running.
 - `stop` returns after the process is dead. It needs the guest's shutdown ack;
   it hard-kills an unreachable VM or an orphaned VMM
   (`cli_recover_if_unreachable`, `kill_orphaned_boot_process`,

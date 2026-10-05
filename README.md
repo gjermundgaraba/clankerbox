@@ -671,6 +671,10 @@ These are known, not guarded, and accepted:
   cache off). A checkpoint records `smolvm <version> <platform>`, and a restore
   under another pin is refused. A restored machine keeps its own RAM file for
   its life.
+- **Start** reads status first: a running machine is left as it is, and an
+  unreachable one (its VMM alive, its agent silent) is booted again, as
+  `machine start` kills its VMM first. A fork or capture of an unreachable
+  machine is refused.
 - **Stop** is `machine stop` only; a guest that doesn't confirm its flush stays
   running and the stop fails, rather than risk lost writes. **Delete** reads
   status, stops gracefully, then SIGKILLs the VM's scope if it is still loaded,
