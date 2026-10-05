@@ -5,13 +5,16 @@
  *
  * The trial runs 2 sandboxes at once and allows 5 starts a minute, 25 an hour and 75 a day; a
  * create, fork, resume and restore each count, and so does a 429 refusal, but not a 403 for a
- * type the plan lacks (evidence.md, boat claims). So at most two of the run's sandboxes are active at once, and every start goes
- * through `counted`, which keeps them to `startsPerMinute` and prints a `[start]` line that the
- * driver counts: one run makes 7, the 429 included. The driver passes the account's limit of
- * active sandboxes in `CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT`; unless it is the trial's 2, the test
- * of that 429 is skipped, since it would make a third sandbox, and the rest run. The account may
- * hold the operator's own sandboxes and snapshots, which the host-control program's `account`
- * counts but never names.
+ * type the plan lacks (evidence.md, boat claims). So at most two of the run's sandboxes are
+ * active at once, and every start goes through `counted`, which keeps them to `startsPerMinute`
+ * and prints a `[start]` line that the driver counts: one run makes 7, the 429 included.
+ *
+ * The driver passes the account's limit of active sandboxes in
+ * `CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT`, and its tier in `CLANKERBOX_LIVE_BOAT_TIER`. Unless the
+ * limit is the trial's 2, the test of that 429 is skipped, since it would make a third sandbox;
+ * unless the tier is `trial`, so is the large create, which a plan with `large` would make. The
+ * rest run. The account may hold the operator's own sandboxes and snapshots, which the
+ * host-control program's `account` counts but never names.
  *
  * The tests run in order and share `main`, whose setup authorizes the run's key for root, and
  * writes a `start` and a `new-identity` hook; the test that made any other machine deletes it,
@@ -79,6 +82,9 @@ const trialActive = 2;
 
 /** The account's limit of active sandboxes, as the driver read it; the trial's when unset. */
 const activeLimit = Number(process.env["CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT"] ?? trialActive);
+
+/** Whether the account is on boat's trial, as the driver read its tier; the trial when unset. */
+const onTrial = (process.env["CLANKERBOX_LIVE_BOAT_TIER"] ?? "trial") === "trial";
 
 /** What the harness drives a boat host with. */
 const boat: Runtime<typeof BoatNatives.Type> = {
@@ -332,15 +338,24 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   );
 
   test(
-    "a size no boat type covers is refused with Precondition before any call to boat, and a large create boat's 403 refuses with Precondition, each leaving no row and nothing on boat",
+    "a size no boat type covers is refused with Precondition before any call to boat, leaving no row and nothing on boat",
     async () => {
       const before = await account();
-      const tooBig = failure(await createBare("big", 17));
+      const refused = failure(await createBare("big", 17));
 
-      expect(tooBig.tag).toBe("Precondition");
-      expect(tooBig.message).toContain("no boat machine type");
+      expect(refused.tag).toBe("Precondition");
+      expect(refused.message).toContain("no boat machine type");
       expect(await machine("big")).toBeUndefined();
       expect(await natives("big")).toEqual(boat.nothing);
+      expect(await account()).toEqual(before);
+    },
+    minutes(2),
+  );
+
+  test.skipIf(!onTrial)(
+    "a large create, which the trial's plan lacks, is boat's 403 and a Precondition refusal, leaving no row and nothing on boat",
+    async () => {
+      const before = await account();
 
       // 8 vCPU is boat's `large`, which the trial refuses. boat didn't count its 403 as a start
       // (evidence.md), so it isn't `counted`; the driver's account count before and after shows
@@ -353,7 +368,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       expect(await natives("large")).toEqual(boat.nothing);
       expect(await account()).toEqual(before);
     },
-    minutes(3),
+    minutes(2),
   );
 
   test(

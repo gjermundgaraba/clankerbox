@@ -93,14 +93,15 @@ redacts the key from every evidence file and fails the run if it was there. A
 read-only pre-flight records the account's counts (never the operator's names
 or IDs) and stops the run before it makes anything unless two active sandboxes
 are free and its starts and named snapshots have room for the run. When the
-account's active limit isn't the trial's two, the suite skips only its test of
-boat's 429 for a third sandbox. The run's host ID carries its run ID, so its sandboxes' display names start
-`<host ID>_` and its named snapshots `cbx-<host ID>-`. Its teardown stops the
-host, deletes by ID every sandbox the host's database records or the suite's
-host-control program saw, sweeps those two prefixes, and checks that nothing of
-the run's remains; it touches nothing else on the account. The evidence keeps
-the suite's starts and the account's start count before and after. Its
-docstring shows its invocation.
+account's active limit isn't the trial's two, the suite skips its test of
+boat's 429 for a third sandbox, and when its tier isn't the trial, its large
+create. The run's host ID carries its run ID, so its sandboxes' display names
+start `<host ID>_` and its named snapshots `cbx-<host ID>-`. Its teardown stops
+the host, deletes by ID every sandbox the host's database records or the
+suite's host-control program saw, sweeps those two prefixes, and checks that
+nothing of the run's remains; it touches nothing else on the account. The
+evidence keeps the suite's starts and the account's start count before and
+after. Its docstring shows its invocation.
 
 The drivers share `tests/live/driver_common.py`, which holds their evidence
 (`driver.log`, `resources.json` and each command's log) and runs the suite with

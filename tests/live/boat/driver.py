@@ -22,8 +22,9 @@ snapshots, and reads its start limits; the evidence keeps the counts, never the 
 names or IDs. The run stops there unless two active sandboxes are free, the hour's and day's
 starts cover the suite's `STARTS`, and the account has room for its `SNAPSHOTS` named snapshots
 under boat's cap of 10. The suite learns the account's active limit
-(`CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT`), and skips only its test of boat's 429 for a third active
-sandbox unless that limit is the trial's two; the pre-flight records the skip.
+(`CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT`) and tier (`CLANKERBOX_LIVE_BOAT_TIER`). It skips its test of
+boat's 429 for a third active sandbox unless that limit is the trial's two, and its large create,
+which expects the trial's 403, unless the tier is `trial`; the pre-flight records each skip.
 
 The host runs under a keeper process (`driver.py keep`), which records the host's pid and exit
 status, so the suite's host-control program (`driver.py control`, tests/live/tests/live.ts) can
@@ -408,11 +409,19 @@ def preflight(boat, record, log):
     counts = {'access_tier': limits.get('accessTier'), 'sandboxes': len(sandboxes), 'active_sandboxes': active,
               'max_active_sandboxes': max_active, 'named_snapshots': len(snapshots), 'starts': starts,
               'needs': {'starts': STARTS, 'active': ACTIVE, 'snapshots': SNAPSHOTS}}
+    skips = []
     if max_active != ACTIVE:
         # The suite's Capacity test fills the trial's two to provoke boat's 429; on another limit
         # it would make a third sandbox, so the suite skips that test and runs the rest.
-        counts['skips'] = (f"the account allows {max_active} active sandboxes, not the trial's {ACTIVE}: "
-                           'the suite skips its 429 test')
+        skips.append(f"the account allows {max_active} active sandboxes, not the trial's {ACTIVE}: "
+                     'the suite skips its 429 test')
+    if limits.get('accessTier') != 'trial':
+        # The suite's large create expects the trial's 403; a plan that includes `large` would
+        # make a sandbox, so the suite skips that test.
+        skips.append(f"the account's tier is {limits.get('accessTier')}, not the trial: "
+                     'the suite skips its large create')
+    if skips:
+        counts['skips'] = skips
     record(preflight=counts)
     log(f'pre-flight: {counts}')
     reasons = []
@@ -427,7 +436,8 @@ def preflight(boat, record, log):
     if reasons:
         record(preflight=dict(counts, refused=reasons))
         raise NoRoom('; '.join(reasons))
-    return {'at': at, 'ids': {sandbox['id'] for sandbox in sandboxes}, 'starts': starts, 'max_active': max_active}
+    return {'at': at, 'ids': {sandbox['id'] for sandbox in sandboxes}, 'starts': starts, 'max_active': max_active,
+            'tier': limits.get('accessTier')}
 
 
 def main():
@@ -509,7 +519,8 @@ def main():
 
         log(f'host pid {host_start(state, __file__)}')
         evidence.suite('boat', binary, client_config, control_bin, f'r{rid[:3]}-', options.suite_args,
-                       {'CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT': str(before['max_active'])})
+                       {'CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT': str(before['max_active']),
+                        'CLANKERBOX_LIVE_BOAT_TIER': str(before['tier'])})
 
 
 if __name__ == '__main__':
