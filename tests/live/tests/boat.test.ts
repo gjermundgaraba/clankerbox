@@ -123,16 +123,17 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
     removeMachine,
   } = suite;
 
-  const begun: Array<number> = [];
+  const ended: Array<number> = [];
   const outcomes: Array<string> = [];
 
   /**
    * Runs `call`, which makes boat start a sandbox, once fewer than `startsPerMinute` of the
    * run's starts fall in the last minute, and prints a `[start]` line, which the driver counts.
-   * Nothing repeats a start.
+   * A start is timed when its call returns, since boat may start late in it (a running source's
+   * fork, after its snapshot wait). Nothing repeats a start.
    */
   const counted = async (kind: string, name: string, call: () => Promise<Ran>) => {
-    const recent = () => begun.filter((at) => performance.now() - at < 61_000);
+    const recent = () => ended.filter((at) => performance.now() - at < 61_000);
 
     while (recent().length >= startsPerMinute) {
       const oldest = recent()[0] ?? performance.now();
@@ -140,9 +141,9 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       await new Promise((resolve) => setTimeout(resolve, 61_000 - (performance.now() - oldest)));
     }
 
-    begun.push(performance.now());
-
     const ran = await call();
+
+    ended.push(performance.now());
     const outcome = ran.code === 0 ? "ok" : refusedWith(ran);
 
     outcomes.push(outcome);
