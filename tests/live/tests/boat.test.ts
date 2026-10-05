@@ -560,7 +560,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         starts: atCapture.starts + 1,
         setups: 1,
       });
-      // A fork runs on a fresh machine, without the create's mark, so it waited for boat's marker.
+      // The fork's fresh machine carries no mark, and holds boat's marker.
       expect(await marks("fork-a")).toBe(restoredMarker);
     },
     minutes(50),
