@@ -1200,7 +1200,8 @@ Two rules for every VM job:
     8 GiB, 50 GiB). The trial refuses `large`, `xlarge` needs the $100 plan,
     and `boat-v1.yaml` lists only `small`, `default` and `large`.
   - The host picks the smallest of those that covers `cpu`, `ramMib` and
-    `diskGib`, and the machine reports that type's sizes.
+    `diskGib`. The machine reports the sizes it was asked for, which the row
+    keeps; boat gives it the type's, which may be larger.
   - A request that neither covers is refused with `Precondition` in step 3.
     Step 3 checks nothing else: boat's count of active sandboxes includes the
     operator's own, so boat's 429 `limit_reached`, under the refusal rule, is
