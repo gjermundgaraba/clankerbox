@@ -1199,8 +1199,9 @@ Two rules for every VM job:
     there at ready but fetched on first read. 2 GiB in `/home/user` took
     24–277 s to read after a restore.
 - **Exec:** SSH as `user`, through `sudo -n`.
-  - The host owns one ed25519 key, generated at init, and authorizes it with
-    `POST /sshkey` after create. Forks, resumes and restores carry it in
+  - The host owns one ed25519 key, `boat-ssh/id_ed25519` in its state dir,
+    which `ssh-keygen` generates when the boat runtime first starts there,
+    and authorizes it with `POST /sshkey` after create. Forks, resumes and restores carry it in
     `/home/user/.ssh/authorized_keys`.
   - ssh joins argv into one string, so the runtime quotes it.
   - Before its first SSH to a new activation, the host reads the guest's host
