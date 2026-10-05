@@ -1,5 +1,10 @@
 name: Quality
-on: [push, pull_request]
+# A pull request's branch runs once, as the pull request; pushes run on main and release tags.
+on:
+  push:
+    branches: [main]
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  pull_request:
 permissions:
   contents: read
 jobs:
@@ -17,7 +22,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: macos-latest
+          - runner: macos-15 # arm64
             target: darwin-arm64
           - runner: ubuntu-24.04
             target: linux-x64

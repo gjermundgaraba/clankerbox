@@ -113,7 +113,7 @@ minutes)
 - `pnpm install` after the catalog change, then `vp run --no-cache ready`.
 - Build, bundle and smoke both targets: `pnpm build`, `pnpm sea:build` (both on
   macOS), then `pnpm sea:smoke <bundle>` for each, the linux-x64 one on a
-  Linux/amd64 machine. CI's `sea` job does the same on `macos-latest` and
+  Linux/amd64 machine. CI's `sea` job does the same on `macos-15` (arm64) and
   `ubuntu-24.04`. Builds run as work runs
   (`scripts/WORK_RUNS.md`); keep the bundles you need outside scratch.
 - Live: at least `pnpm live:smolvm` (its suite has the create whose setup runs
