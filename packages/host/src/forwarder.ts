@@ -5,8 +5,9 @@
  * 127.0.0.1 22`. That needs no guest IP, no Softnet exception and no Local Network permission.
  *
  * A connection ends by closing the command's stdin, never by killing it: a killed `tart exec`
- * leaves the guest's `nc` and `sshd-session` running until the session next writes (P2). Only
- * the host's own shutdown kills them, and a host restart drops open connections.
+ * leaves the guest's `nc` and `sshd-session` running until the session next writes (the
+ * bump-tart skill). Only the host's own shutdown kills them, and a host restart drops open
+ * connections.
  */
 import { createServer, type Server, type Socket } from "node:net";
 import * as NodeStream from "@effect/platform-node/NodeStream";

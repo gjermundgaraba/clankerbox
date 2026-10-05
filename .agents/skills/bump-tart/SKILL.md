@@ -95,6 +95,9 @@ Each: what Tart does, where, and what of ours depends on it.
   is the guest's `shutdown -h now`, then `tart stop --timeout 0` after
   `shutdownWait`, and both wait for `tart list` to read it stopped
   (`forcedStopWait`).
+- Stock Cirrus guests stopped 2.3–7.8 s after `shutdown -h now` on 2.40.1,
+  and 25.6 s for one whose agent was still coming up, since the exec waits for
+  the agent. Ours: `shutdownWait`, a minute.
 - Apple allows two running macOS VMs per Mac, system-wide. Tart catches
   `virtualMachineLimitExceeded` (T@2.40.1:Commands/Run.swift:537-559), prints
   "The number of VMs exceeds the system limit" (VMStorageHelper.swift:146-147)

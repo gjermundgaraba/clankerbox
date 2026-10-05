@@ -355,8 +355,8 @@ def cmd_setup():
     port = next(p for p in range(9460, 9500) if port_free(p))
     check_binary()
     must(run([BINARY, '--version']), 'binary --version')
-    # The host refuses a prefix without expanded templates (P12). As the prefix's owner, so
-    # nothing root-owned lands there; finish removes them.
+    # The host refuses a prefix without expanded templates (the bump-smolvm skill). As the
+    # prefix's owner, so nothing root-owned lands there; finish removes them.
     for name in TEMPLATES:
         target = prefix() / name
         if not target.exists():

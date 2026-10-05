@@ -2,7 +2,7 @@
  * The smolvm runtime: Linux guests through the smolvm CLI of a versioned install prefix, on a
  * host that runs as root. smolvm's exit codes are trusted: `machine start` returns once the
  * agent answers, `stop` once the VM is dead, and nothing polls around them. Every call runs
- * with the same environment, the one the spikes ran smolvm in.
+ * with the same environment, `environment()`; the bump-smolvm skill holds the claims behind it.
  *
  * A checkpoint is always `ram`: a running machine's RAM and disks, as a store checkpoint in the
  * host's one store. A fork is such a checkpoint into a store of its own, restored, then the
@@ -294,8 +294,8 @@ export const make = (
      * gracefully. A scope still loaded then holds a VMM that `machine delete` would leave
      * running, on the machine's port and outside the RAM budget: one whose stop failed, or one
      * whose boot was cut short, as by a host killed mid-boot, before smolvm recorded its pid, so
-     * that smolvm reads it as stopped (phase 4, live). It is killed with the signal smolvm's own
-     * `kill_scope` uses, and reset once the machine is deleted.
+     * that smolvm reads it as stopped (seen live; the bump-smolvm skill). It is killed with the
+     * signal smolvm's own `kill_scope` uses, and reset once the machine is deleted.
      */
     const removeVm = (machine: MachineRef) =>
       Effect.gen(function* () {

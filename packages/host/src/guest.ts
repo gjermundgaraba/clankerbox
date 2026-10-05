@@ -98,7 +98,7 @@ const succeeded = (what: string, timeout: Duration.Duration, ran: Ran) =>
  * as its own file, honouring its `#!` line, with stdin closed. The file is under `/var/tmp`,
  * which nothing mounts `noexec`, and the exit trap removes it when the shell exits. A killed
  * exec (a timeout, or a host crash) may leave it: smolvm SIGKILLs the guest command and every
- * process descended from it, so no trap runs (phase 3, live).
+ * process descended from it, so no trap runs (seen live; the bump-smolvm skill).
  */
 const setupRunner = [
   "set -eu",

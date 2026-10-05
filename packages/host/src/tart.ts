@@ -54,7 +54,7 @@ const softnet = "--net-softnet-block=@host";
 
 /**
  * Two running macOS VMs per Mac is Apple's limit, the operator's own VMs included. Tart reports
- * Apple's refusal of a third with this text (T:VMStorageHelper.swift:146-147).
+ * Apple's refusal of a third with this text (T@2.40.1:VMStorageHelper.swift:146-147).
  */
 const vmLimit = 2;
 
@@ -62,14 +62,14 @@ const limitRefusal = "The number of VMs exceeds the system limit";
 
 /**
  * `tart set --disk-size` only grows a disk, and refuses a smaller size with this text
- * (T:VMDirectory.swift:287-319).
+ * (T@2.40.1:VMDirectory.swift:287-319).
  */
 const shrinkRefusal = "should be larger than the current disk size";
 
 /**
- * How long a boot may take until `tart exec` answers. Alone, a stock Cirrus image answered
- * 18.5–32.3 s after `tart run` (P3); two booting together answered after about 61 and 93 s
- * (P11), and two is as many as Apple runs at once.
+ * How long a boot may take until `tart exec` answers. On Tart 2.40.1, a stock Cirrus image
+ * answered 18.5–32.3 s after `tart run` alone, and two booting together after about 61 and 93 s
+ * (the bump-tart skill); two is as many as Apple runs at once.
  */
 const bootWait = Duration.minutes(3);
 
@@ -78,14 +78,14 @@ const probePause = Duration.seconds(1);
 
 /**
  * How long the guest's own `shutdown -h now` may take before Tart's forced stop. Stock Cirrus
- * guests stopped 2.3–7.8 s after it, and 25.6 s for one whose agent was still coming up, as the
- * exec waits for it (phase 5, native).
+ * guests stopped 2.3–7.8 s after it on Tart 2.40.1, and 25.6 s for one whose agent was still
+ * coming up, as the exec waits for it (the bump-tart skill).
  */
 const shutdownWait = Duration.minutes(1);
 
 /**
  * How long a VM may take to leave `running` after `tart stop --timeout 0`, which SIGKILLs `tart
- * run` right after its SIGINT (T:Commands/Stop.swift:51-68); the VM's lock goes with the
+ * run` right after its SIGINT (T@2.40.1:Commands/Stop.swift:51-68); the VM's lock goes with the
  * process.
  */
 const forcedStopWait = Duration.seconds(10);
@@ -95,8 +95,8 @@ const stopPause = Duration.millis(500);
 
 /**
  * The search path of every tart call and VM job. Tart finds `softnet` (and `sudo`) on it
- * (T:Network/Softnet.swift:86-94, Utils.swift:30-45): the operator installs Softnet, SUID root,
- * in `/usr/local/bin`, and Homebrew in `/opt/homebrew/bin`.
+ * (T@2.40.1:Network/Softnet.swift:86-94, Utils.swift:30-45): the operator installs Softnet,
+ * SUID root, in `/usr/local/bin`, and Homebrew in `/opt/homebrew/bin`.
  */
 const searchPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
@@ -126,7 +126,7 @@ export const checkpointName = (
  */
 export const jobsDir = (stateDir: string): string => join(stateDir, "launchd");
 
-/** Tart sizes disks in GB (10^9 bytes, T:VMDirectory.swift:287-301); rounded up from GiB. */
+/** Tart sizes disks in GB (10^9 bytes, T@2.40.1:VMDirectory.swift:287-301); rounded up from GiB. */
 export const diskGb = (diskGib: number): number => Math.ceil((diskGib * 1024 ** 3) / 1e9);
 
 const xml = (text: string): string =>
@@ -175,7 +175,7 @@ export const plist = (job: {
     ``,
   ].join("\n");
 
-/** Every state `tart list` reports (T:VMDirectory.swift:6-10). */
+/** Every state `tart list` reports (T@2.40.1:VMDirectory.swift:6-10). */
 const VmState = Schema.Literals(["running", "suspended", "stopped"]);
 
 const decodeList = Schema.decodeUnknownEffect(
@@ -297,8 +297,9 @@ export const make = (
     /**
      * Waits until the VM's guest agent answers `tart exec`. Before `tart run` holds the VM, an
      * exec fails at once; while the guest boots, it blocks, and fails after about 30 s if the
-     * agent isn't up yet (P11), so it is tried again until `bootWait` passes. A job that exits
-     * instead failed the boot: its log says why, and Apple's refusal of a third VM is `Capacity`.
+     * agent isn't up yet (the bump-tart skill), so it is tried again until `bootWait` passes. A
+     * job that exits instead failed the boot: its log says why, and Apple's refusal of a third VM
+     * is `Capacity`.
      */
     const ready = (machine: MachineRef) => {
       const vm = vmOf(machine);
