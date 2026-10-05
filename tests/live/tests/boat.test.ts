@@ -531,7 +531,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   );
 
   test(
-    "a stopped machine captures in seconds and forks at once, the fork holding everything up to the stop",
+    "a stopped machine captures, then forks at once, the fork holding everything up to the stop",
     async () => {
       const source = await facts("main");
 
