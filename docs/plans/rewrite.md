@@ -1161,9 +1161,9 @@ Two rules for every VM job:
   - After a create, fork or restore, the host sets boat's display name to the
     machine ID, for the operator's boat dashboard.
 - **State:** the runtime's `observe` takes the machines and returns each
-  one's state, in their order, which boat answers with one `GET /sandboxes`, filtered to the
-  recorded IDs, because the account may also hold the operator's own
-  sandboxes. Nothing caches it.
+  one's state, in their order, which boat answers with one `GET /sandboxes`,
+  filtered to the recorded IDs, because the account may also hold the
+  operator's own sandboxes. Nothing caches it.
   - `ready`, `idle` and `running` read as `running`.
   - 404 and `cancelled` read as `missing`.
   - Anything else reads as `stopped`. A machine that boat stopped on its own
