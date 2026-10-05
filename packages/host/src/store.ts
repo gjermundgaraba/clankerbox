@@ -1,8 +1,9 @@
 /**
- * The host's state: one SQLite database in its state dir, through `node:sqlite`. It holds one
- * row per machine with its spec, `instance`, `native`, `createdAt`, host `port`, `hostKey`,
- * whether it was made, and its last `action`, and one row per checkpoint, and nothing else: machine state is always read from
- * the runtime, and no setup script is kept.
+ * The host's state: one SQLite database in its state dir, through `node:sqlite`. It holds the
+ * host ID and runtime it was created for, one row per machine with its spec, `instance`,
+ * `native`, `createdAt`, host `port`, `hostKey`, whether it was made, and its last `action`, and
+ * one row per checkpoint, and nothing else: machine state is always read from the runtime, and
+ * no setup script is kept.
  */
 import { DatabaseSync } from "node:sqlite";
 import {
@@ -13,8 +14,10 @@ import {
   Internal,
   type NotFound,
   Precondition,
+  Runtime,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, FileSystem, Option, Result, Schema, type Scope } from "effect";
+import type { HostConfig } from "./config.ts";
 import { idOn, type Kind, notFoundOn } from "./ids.ts";
 
 /** The database's file in the state dir. */
@@ -64,6 +67,11 @@ export const migrations: ReadonlyArray<string> = [
     action_status TEXT NOT NULL,
     action_error_tag TEXT,
     action_error_message TEXT
+  ) STRICT`,
+  `CREATE TABLE host (
+    one INTEGER PRIMARY KEY CHECK (one = 1),
+    id TEXT NOT NULL,
+    runtime TEXT NOT NULL
   ) STRICT`,
 ];
 
@@ -438,16 +446,55 @@ const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, Preconditi
     });
   });
 
+const decodeOwner = Schema.decodeUnknownSync(
+  Schema.Struct({ id: Schema.String, runtime: Runtime }),
+);
+
+/**
+ * Records the host ID and runtime the database is created for, or refuses a config that names
+ * others. Tart names its VMs and launchd jobs after the host ID, and each runtime knows only its
+ * own machines, so under another ID or runtime the rows' machines would read `missing`, and
+ * deleting the rows would orphan what the runtime made for them.
+ */
+const own = (
+  db: DatabaseSync,
+  file: string,
+  { id, runtime }: Owner,
+): Effect.Effect<void, Precondition | Internal> =>
+  transaction(db, "record its host", () => {
+    const row = db.prepare("SELECT id, runtime FROM host").get();
+
+    if (row === undefined) {
+      db.prepare("INSERT INTO host (one, id, runtime) VALUES (1, ?, ?)").run(id, runtime);
+
+      return Result.void;
+    }
+
+    const owner = decodeOwner(row);
+
+    return owner.id === id && owner.runtime === runtime
+      ? Result.void
+      : Result.fail(
+          new Precondition({
+            message: `${file} holds host ${owner.id} on ${owner.runtime}, and this config names host ${id} on ${runtime}: run it as ${owner.id} on ${owner.runtime}, or give it a new state dir`,
+          }),
+        );
+  });
+
+/** Whose state the database holds: the host config's ID and runtime, in its state dir. */
+export type Owner = Pick<HostConfig, "id" | "runtime" | "stateDir">;
+
 /**
  * Opens the state dir's database for the scope: creates the directory if needed, takes the
- * owner lock and migrates. Other files in the directory, such as a mount point's `lost+found`,
- * are left alone: `application_id` refuses a foreign database, and the lock a second host.
+ * owner lock, migrates, and records or checks the host ID and runtime. Other files in the
+ * directory, such as a mount point's `lost+found`, are left alone: `application_id` refuses a
+ * foreign database, and the lock a second host.
  */
 export const open = (
-  stateDir: string,
-  hostId: string,
+  owner: Owner,
 ): Effect.Effect<Interface, Precondition | Internal, FileSystem.FileSystem | Scope.Scope> =>
   Effect.gen(function* () {
+    const { stateDir, id: hostId } = owner;
     const fs = yield* FileSystem.FileSystem;
     const file = `${stateDir}/${databaseFile}`;
 
@@ -467,6 +514,7 @@ export const open = (
 
     yield* lock(db, stateDir);
     yield* migrate(db, file);
+    yield* own(db, file, owner);
 
     const id = idOn(hostId);
     const notFound = notFoundOn(hostId);

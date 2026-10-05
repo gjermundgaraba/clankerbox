@@ -41,7 +41,7 @@ export const hostLayer = <E, R>(
     Layer.provide(
       Layer.unwrap(
         Effect.map(Effect.service(Store.Store), (store) => runtime(store.recordNative)),
-      ).pipe(Layer.provideMerge(Layer.effect(Store.Store, Store.open(config.stateDir, config.id)))),
+      ).pipe(Layer.provideMerge(Layer.effect(Store.Store, Store.open(config)))),
     ),
   );
 

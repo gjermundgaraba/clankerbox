@@ -3,7 +3,7 @@ import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Conflict, NotFound } from "@gjermundgaraba/clankerbox-sdk";
+import { Conflict, NotFound, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Option, Result } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import {
@@ -15,6 +15,7 @@ import {
   type NewMachine,
   type NewRow,
   open,
+  type Owner,
   type RowRef,
   transaction,
 } from "../src/store.ts";
@@ -29,14 +30,14 @@ const withStore = <A, E>(
   stateDir: string,
   use: (store: Effect.Success<ReturnType<typeof open>>) => Effect.Effect<A, E>,
 ) =>
-  Effect.flatMap(open(stateDir, "linux"), use).pipe(
+  Effect.flatMap(open({ stateDir, id: "linux", runtime: "smolvm" }), use).pipe(
     Effect.scoped,
     Effect.provide(NodeServices.layer),
     Effect.runPromise,
   );
 
-const opening = (stateDir: string) =>
-  Effect.flip(open(stateDir, "linux")).pipe(
+const opening = (stateDir: string, owner?: Partial<Owner>) =>
+  Effect.flip(open({ stateDir, id: "linux", runtime: "smolvm", ...owner })).pipe(
     Effect.scoped,
     Effect.provide(NodeServices.layer),
     Effect.runPromise,
@@ -177,6 +178,43 @@ test("a database newer than the binary is refused", async () => {
 
   expect(error._tag).toBe("Precondition");
   expect(error.message).toContain("newer than this binary");
+});
+
+test("a database refuses a host of another ID or runtime, and keeps its rows for its own", async () => {
+  const stateDir = join(await scratch(owned), "state");
+
+  await withStore(stateDir, (store) => store.insert("create", inserting(record("dev"))));
+
+  const renamed = await opening(stateDir, { id: "mac" });
+  const moved = await opening(stateDir, { runtime: "tart" });
+  const kept = await withStore(stateDir, (store) => store.list);
+
+  expect(renamed).toEqual(
+    new Precondition({
+      message: `${join(stateDir, databaseFile)} holds host linux on smolvm, and this config names host mac on smolvm: run it as linux on smolvm, or give it a new state dir`,
+    }),
+  );
+  expect(moved.message).toContain("this config names host linux on tart");
+  expect(kept.map(({ name }) => name)).toEqual(["dev"]);
+});
+
+test("a database from before hosts were recorded takes the first host that opens it", async () => {
+  const stateDir = join(await scratch(owned), "state");
+
+  await mkdir(stateDir);
+
+  const db = new DatabaseSync(join(stateDir, databaseFile));
+
+  for (const migration of migrations.slice(0, 2)) {
+    db.exec(migration);
+  }
+
+  db.exec(`PRAGMA user_version = 2; PRAGMA application_id = ${applicationId}`);
+  db.close();
+
+  await withStore(stateDir, (store) => store.list);
+
+  expect((await opening(stateDir, { id: "mac" }))._tag).toBe("Precondition");
 });
 
 test("a full database fails a transaction with SQLite's own error, which rolled it back", async () => {

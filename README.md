@@ -91,7 +91,12 @@ processes, each with its own ID, state dir and port.
   fd7a:115c:a1e0::/48) or loopback; a wildcard or public address is refused.
   `listen.port` must lie outside 10000–19999, the machines' range.
 - `stateDir` is relative to the config file. It holds the database and the
-  runtime's own state; one host process owns it at a time.
+  runtime's own state; one host process owns it at a time. The database
+  records the host ID and runtime it was created for, and the host refuses to
+  start when its config names others: under another ID or runtime its
+  machines would read `missing` (Tart names VMs and their launchd jobs after
+  the host ID), and deleting their rows would orphan them. Keep both, or give
+  the host a new state dir.
 - `bases` maps the names clients ask for to images. Hosts that offer the same
   image should use the same name: placement matches on it.
 - Runtime settings, one block named after the runtime:
@@ -468,8 +473,9 @@ encode is `Invalid` and sends nothing; a reply that fails to decode is
 - **SQLite through `node:sqlite`**, one database per host,
   `<stateDir>/host.db` (`store.ts`). `PRAGMA application_id` (`cbxh`) refuses
   a foreign database, and an ordered migration list on `PRAGMA user_version`
-  refuses one newer than the binary. Other files in the state dir are left
-  alone.
+  refuses one newer than the binary. A one-row `host` table records the host
+  ID and runtime at creation, and a config that names others is refused before
+  the runtime starts. Other files in the state dir are left alone.
 - **The owner lock is SQLite's own:** the host opens the database with
   `locking_mode = EXCLUSIVE` and holds it until it exits, so a second host on
   the same state dir refuses to start and a crash leaves no stale lock. The

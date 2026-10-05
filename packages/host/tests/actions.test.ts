@@ -44,7 +44,7 @@ const withFailing = async <A>(
   const logged: Array<unknown> = [];
 
   const result = await Effect.gen(function* () {
-    const store = yield* open(stateDir, "linux");
+    const store = yield* open({ stateDir, id: "linux", runtime: "smolvm" });
 
     const claims = claimsOn({ ...store, [failing]: diskFull });
 

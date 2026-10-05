@@ -490,7 +490,10 @@ const rigOn = async (boat = fakeBoat()): Promise<Rig> => {
   scopes.push(scope);
 
   const store = await Effect.runPromise(
-    Store.open(stateDir, "boat").pipe(Scope.provide(scope), Effect.provide(NodeServices.layer)),
+    Store.open({ stateDir, id: "boat", runtime: "boat" }).pipe(
+      Scope.provide(scope),
+      Effect.provide(NodeServices.layer),
+    ),
   );
 
   const runtime = await Effect.runPromise(
@@ -1820,7 +1823,11 @@ const hostOn = async (boat: FakeBoat) => {
           Effect.map(Effect.service(Store.Store), (store) =>
             Layer.effect(Runtime, make(settingsOf(stateDir, store))),
           ),
-        ).pipe(Layer.provideMerge(Layer.effect(Store.Store, Store.open(stateDir, "boat")))),
+        ).pipe(
+          Layer.provideMerge(
+            Layer.effect(Store.Store, Store.open({ stateDir, id: "boat", runtime: "boat" })),
+          ),
+        ),
       ),
       Layer.provideMerge(Logger.layer([])),
       Layer.provide(Layer.mergeAll(NodeServices.layer, guest.spawner.layer, boat.layer)),

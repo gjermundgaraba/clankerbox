@@ -48,7 +48,10 @@ export const coreLayer = (stateDir: string, fake: FakeRuntime) =>
   Layer.merge(Machines.layer(hostConfig(stateDir)), Checkpoints.layer(hostConfig(stateDir))).pipe(
     Layer.provide(startup(hostConfig(stateDir))),
     Layer.provideMerge(
-      Layer.merge(Layer.effect(Store.Store, Store.open(stateDir, "linux")), fake.layer),
+      Layer.merge(
+        Layer.effect(Store.Store, Store.open({ stateDir, id: "linux", runtime: "smolvm" })),
+        fake.layer,
+      ),
     ),
     Layer.provideMerge(Logger.layer([])),
     Layer.provide(NodeServices.layer),

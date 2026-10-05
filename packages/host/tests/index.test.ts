@@ -80,7 +80,7 @@ test("the host fails the actions its last process left running before it serves"
   const port = await loopbackPort();
   const host = config(dir, port);
 
-  await Effect.flatMap(open(host.stateDir, "linux"), (store) =>
+  await Effect.flatMap(open(host), (store) =>
     store.insert("create", {
       table: "machines",
       record: {
