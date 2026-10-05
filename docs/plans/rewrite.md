@@ -769,7 +769,11 @@ which only `delete` takes (see [State and claims](#state-and-claims)).
     review): it opens at create, fork or restore, before the clone, so a port
     it can't listen on is refused (the refusal rule) and makes nothing native;
     it opens again at host startup for every machine; and it closes at
-    delete, last, so a delete that fails leaves the machine reachable. A boot
+    delete, last, so a delete that fails leaves the machine reachable. A port
+    it can't listen on at startup fails the host's startup with `Internal`,
+    naming the machine and the port (phase-5 review): ports 10000–19999 sit
+    below macOS's ephemeral range, so a holder is something the operator must
+    see and free, and a loud stop beats a silently unreachable machine. A boot
     that fails after its kickstart leaves the VM as it is, reachable, and a
     `start` of a made machine that runs prepares it again. A stopped machine's
     port accepts and closes the connection instead of refusing it. The port

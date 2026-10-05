@@ -527,11 +527,16 @@ export const make = (
             fs.makeDirectory(jobs, { recursive: true, mode: 0o700 }),
           );
 
+          // Host ports sit below macOS's ephemeral range, so whatever holds one is the
+          // operator's to see and free; a host that served without it would leave the machine
+          // silently unreachable.
           for (const machine of machines) {
-            yield* listen(machine).pipe(
-              Effect.catch((error) =>
-                Effect.logWarning(`startup: no forwarder for ${machine.id}: ${error.message}`),
-              ),
+            yield* Effect.mapError(
+              listen(machine),
+              (error) =>
+                new Internal({
+                  message: `startup: no forwarder for ${machine.id}: ${error.message}`,
+                }),
             );
           }
         }),

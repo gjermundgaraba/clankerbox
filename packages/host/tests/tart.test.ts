@@ -902,6 +902,34 @@ test("startup makes the jobs dir and listens again for every machine, running or
   expect([await accepts(up.port ?? 0), await accepts(down.port ?? 0)]).toEqual([true, true]);
 });
 
+test("startup fails, naming the machine and its port, when the forwarder can't listen for it", async () => {
+  const { runtime } = await runtimeOn();
+  const machine = await machineOn("dev");
+  const taken = createServer();
+
+  await new Promise<void>((resolve) => {
+    taken.listen({ host: "127.0.0.1", port: machine.port }, resolve);
+  });
+
+  try {
+    const error = await Effect.runPromise(Effect.flip(runtime.startup([machine])));
+
+    expect([error._tag, error.message]).toEqual([
+      "Internal",
+      expect.stringMatching(
+        new RegExp(
+          `^startup: no forwarder for mac_dev: the forwarder couldn't listen on 127\\.0\\.0\\.1:${machine.port}: `,
+          "u",
+        ),
+      ),
+    ]);
+  } finally {
+    await new Promise((resolve) => {
+      taken.close(resolve);
+    });
+  }
+});
+
 test("observe reads every machine's state with one tart list", async () => {
   const { mac, runtime } = await runtimeOn();
 
