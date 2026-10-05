@@ -1131,7 +1131,7 @@ Two rules for every VM job:
   - After a create, fork or restore, the host sets boat's display name to the
     machine ID, for the operator's boat dashboard.
 - **State:** the runtime's `observe` takes the machines and returns each
-  one's state, which boat answers with one `GET /sandboxes`, filtered to the
+  one's state, in their order, which boat answers with one `GET /sandboxes`, filtered to the
   recorded IDs, because the account may also hold the operator's own
   sandboxes. Nothing caches it.
   - `ready`, `idle` and `running` read as `running`.
@@ -1365,6 +1365,16 @@ tests use real VMs.
        state is a `Refusal` from the runtime's `fork` or `capture`, after the
        claim (phase-5 review). `admit` keeps capacity only: `Activation` lost
        its `source`, and a capture one `observe`.
+
+     A review-directed change since it froze, with its reason:
+
+     - `observe`'s contract is written on the interface: one state per
+       machine, in their order, which each runtime returns by construction,
+       building its answer by mapping over the machines (boat must too).
+       Callers call `observe` directly and rely on it; the core's
+       `observeAll` and `observeOne`, which failed `Internal` on any other
+       count, are gone (phase-5 review, finding I): they checked a count
+       that an answer built by mapping can't get wrong.
 6. **boat.** The runtime, the machine-type choice, its refusals and its
    bounded retry. `stop` and `delete` after an interrupted operation. Built
    and tested on boat's trial, live tests included.

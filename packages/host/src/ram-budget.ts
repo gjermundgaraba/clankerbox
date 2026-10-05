@@ -4,7 +4,7 @@
  */
 import { Capacity, type HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Array as Arr, Effect } from "effect";
-import { type Activation, type Interface, observeAll } from "./runtime.ts";
+import type { Activation, Interface } from "./runtime.ts";
 
 /**
  * Sums the `ramMib` of every machine that is running or that an action is booting, each once,
@@ -22,10 +22,7 @@ export const checkRamBudget = (
     const booting = activation.machines.filter((held) => held.booting);
     const others = activation.machines.filter((held) => !held.booting);
 
-    const observed = yield* observeAll(
-      observe,
-      others.map(({ machine }) => machine),
-    );
+    const observed = yield* observe(others.map(({ machine }) => machine));
 
     const running = Arr.zip(others, observed)
       .filter(([, { state }]) => state === "running")

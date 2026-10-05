@@ -17,14 +17,7 @@ import type { HostConfig } from "./config.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
-import {
-  type MachineRef,
-  type Observed,
-  observeAll,
-  observeOne,
-  type Refusal,
-  Runtime,
-} from "./runtime.ts";
+import { type MachineRef, type Observed, type Refusal, Runtime } from "./runtime.ts";
 import { type MachineRecord, type NewMachine, type NewRow, Store } from "./store.ts";
 
 export interface Interface {
@@ -121,7 +114,8 @@ export const make = (
     };
 
     /** One machine's state, read from the runtime. */
-    const observe = (record: MachineRecord) => observeOne(runtime.observe, ref(record));
+    const observe = (record: MachineRecord) =>
+      Effect.map(runtime.observe([ref(record)]), ([observed]) => observed);
 
     const read = (name: string) =>
       Effect.flatMap(rows.machine(name), (record) =>
@@ -389,7 +383,7 @@ export const make = (
 
     return {
       list: Effect.flatMap(store.list, (records) =>
-        Effect.map(observeAll(runtime.observe, records.map(ref)), (observed) =>
+        Effect.map(runtime.observe(records.map(ref)), (observed) =>
           Arr.zipWith(records, observed, resource),
         ),
       ),

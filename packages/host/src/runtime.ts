@@ -4,13 +4,12 @@
  * service. The core allocates a machine's host port when it claims the row, for a runtime that
  * has a `publishAddress`; the RAM budget is a helper a runtime's `admit` calls when it needs one.
  * The interface froze when phase 5's live tests passed on the Mac; the plan records the changes
- * made before then, with their reasons.
+ * made before then, and any review-directed one since, with their reasons.
  */
 import {
   type ActionName,
   type Checkpoint,
   type HostError,
-  Internal,
   type Machine,
   type Runtime as RuntimeName,
   type SshEndpoint,
@@ -127,10 +126,11 @@ export interface Interface {
    */
   readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, HostError>;
   /**
-   * Reads the machines' states, one per machine, in their order, in as few native calls as the
-   * runtime allows: one `tart list` on Tart, and one `GET /sandboxes` on boat; smolvm reads
-   * each machine on its own, at its own bound. A machine the runtime doesn't know is
-   * `missing`, not an error.
+   * Reads the machines' states in as few native calls as the runtime allows: one `tart list` on
+   * Tart, and one `GET /sandboxes` on boat; smolvm reads each machine on its own, at its own
+   * bound. A machine the runtime doesn't know is `missing`, not an error. Its contract is one
+   * state per machine, in their order: a runtime builds its answer by mapping over `machines`,
+   * and callers rely on that without checking.
    */
   readonly observe: (
     machines: ReadonlyArray<MachineRef>,
@@ -188,34 +188,3 @@ export interface Interface {
 }
 
 export class Runtime extends Context.Service<Runtime, Interface>()("@clankerbox/host/Runtime") {}
-
-/**
- * Reads the machines' states through a runtime's `observe`, held to its contract of one state per
- * machine, in their order. Any other answer is the runtime's bug, so it fails here rather than
- * reading a machine as `missing` or dropping it.
- */
-export const observeAll = (
-  observe: Interface["observe"],
-  machines: ReadonlyArray<MachineRef>,
-): Effect.Effect<ReadonlyArray<Observed>, HostError> =>
-  Effect.flatMap(observe(machines), (states) =>
-    states.length === machines.length
-      ? Effect.succeed(states)
-      : Effect.fail(
-          new Internal({
-            message: `observe read ${states.length} states for ${machines.length} machines: ${machines.map(({ id }) => id).join(", ")}`,
-          }),
-        ),
-  );
-
-/** One machine's state, through `observeAll`. */
-export const observeOne = (
-  observe: Interface["observe"],
-  machine: MachineRef,
-): Effect.Effect<Observed, HostError> =>
-  Effect.flatMap(observeAll(observe, [machine]), ([state]) =>
-    // `observeAll` checked there is one; this only narrows the type.
-    state === undefined
-      ? Effect.fail(new Internal({ message: `observe read no state for ${machine.id}` }))
-      : Effect.succeed(state),
-  );
