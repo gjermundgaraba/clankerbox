@@ -1199,15 +1199,16 @@ Two rules for every VM job:
     sandbox ID. When no row has one, `observe` makes no call.
   - Anything else reads as `stopped`. A machine that boat stopped on its own
     reads `stopped`, and `start` resumes it.
-- **Sizes:** boat has four fixed machine types, from `small` (2 vCPU, 4 GiB,
-  12 GiB) to `xlarge` (16 vCPU, 32 GiB, 251 GiB, from the $100 plan).
-  - The host asks only for the trial's: `small` and `default` (4 vCPU,
-    8 GiB, 50 GiB). The trial refuses `large`, `xlarge` needs the $100 plan,
-    and `boat-v1.yaml` lists only `small`, `default` and `large`.
-  - The host picks the smallest of those that covers `cpu`, `ramMib` and
-    `diskGib`. The machine reports the sizes it was asked for, which the row
-    keeps; boat gives it the type's, which may be larger.
-  - A request that neither covers is refused with `Precondition` in step 3.
+- **Sizes:** boat has four fixed machine types: `small` (2 vCPU, 4 GiB,
+  12 GiB), `default` (4 vCPU, 8 GiB, 50 GiB), `large` (8 vCPU, 16 GiB,
+  125 GiB) and `xlarge` (16 vCPU, 32 GiB, 251 GiB, from the $100 plan).
+  `boat-v1.yaml` lists only `small`, `default` and `large`.
+  - The host picks the smallest of the four that covers `cpu`, `ramMib` and
+    `diskGib`, and lets boat refuse a type the account's plan doesn't
+    include: the trial refuses `large` and `xlarge` (see Refusals). The
+    machine reports the sizes it was asked for, which the row keeps; boat
+    gives it the type's, which may be larger.
+  - A request that none covers is refused with `Precondition` in step 3.
     Step 3 checks nothing else: boat's count of active sandboxes includes the
     operator's own, so boat's 429 `limit_reached`, under the refusal rule, is
     the count.
@@ -1215,8 +1216,6 @@ Two rules for every VM job:
   under the refusal rule and remove the row, unless they answer the repeat
   of an unclear create, fork or restore (see IDs above):
   - 429 (`limit_reached`, `rate_limited`, `daily_limit_reached`);
-  - 403 for a type the account's plan doesn't include
-    (`trial_machine_class_not_allowed`, `machine_class_plan_required`);
   - 503 `out_of_capacity` and `no_ready_machine`, which boat's docs say
     create nothing; other 5xx answers are unclear (see IDs above);
   - 409 `named_snapshot_limit`, for an 11th checkpoint;
@@ -1226,11 +1225,15 @@ Two rules for every VM job:
   - the same 429s and 503s on a resume, which leave the machine stopped: the
     `start` is released, and the row keeps its last action.
 
-  They map to `Capacity`. A fork's or capture's source without a sandbox, or
-  one boat reads cancelled or gone, is refused with `Precondition` before
-  anything native, as on smolvm and Tart. Every call waits for a machine; none sends
-  `failFast`, which asks boat for 503 `no_ready_machine` at once rather than
-  wait.
+  They map to `Capacity`. A 403 for a type the account's plan doesn't include
+  (`trial_machine_class_not_allowed`, `machine_class_plan_required`) leaves
+  nothing either, and is a refusal with `Precondition`: waiting won't make
+  the plan allow it. A repeat sends the same type, so the first call was
+  refused too, and it stays a refusal there. A fork's or capture's source
+  without a sandbox, or one boat reads cancelled or gone, is refused with
+  `Precondition` before anything native, as on smolvm and Tart. Every call
+  waits for a machine; none sends `failFast`, which asks boat for 503
+  `no_ready_machine` at once rather than wait.
 - **Ready:** boat reports `ready` before its lazy restore has finished.
   - `/var/lib` and `/var/opt` are restored in full before boat's marker
     `/var/lib/ascii-lazy/sys-done` appears: a few seconds after ready with

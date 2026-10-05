@@ -10,9 +10,10 @@
  * row needs none.
  *
  * The refusal rule covers boat's answers that leave nothing on boat (evidence.md, boat claims):
- * its `Capacity` refusals of a create, fork, resume, restore or capture (the account's limits, a
- * type its plan lacks, an 11th named snapshot), a create, fork or restore that ends `cancelled`
- * or gone because boat found no machine, and a fork's or capture's source boat doesn't have.
+ * its `Capacity` refusals of a create, fork, resume, restore or capture (the account's limits,
+ * no machine, an 11th named snapshot), its `Precondition` refusal of a type the account's plan
+ * lacks, a create, fork or restore that ends `cancelled` or gone because boat found no machine,
+ * and a fork's or capture's source boat doesn't have.
  */
 import { join } from "node:path";
 import {
@@ -268,15 +269,19 @@ export const make = (
       });
 
     /**
-     * Calls that make or resume a sandbox, or save a snapshot: boat's `Capacity` refusals leave
-     * nothing on boat, so they fall under the refusal rule. A 404 from them is boat's own (a
-     * restore's snapshot deleted under it), not a resource of the host's, so it is `Internal`.
+     * Calls that make or resume a sandbox, or save a snapshot: boat's `Capacity` refusals, and
+     * its `Precondition` refusal of a type the plan lacks, leave nothing on boat, so they fall
+     * under the refusal rule. A 404 from them is boat's own (a restore's snapshot deleted under
+     * it), not a resource of the host's, so it is `Internal`.
      */
     const refusing = <A>(
       call: Effect.Effect<A, HostError>,
     ): Effect.Effect<A, HostError | Refusal> =>
       call.pipe(
-        Effect.catchTag("Capacity", (error) => Effect.fail(new Refusal({ error }))),
+        Effect.catchTags({
+          Capacity: (error) => Effect.fail(new Refusal({ error })),
+          Precondition: (error) => Effect.fail(new Refusal({ error })),
+        }),
         Effect.catchTag("NotFound", (error) =>
           Effect.fail(new Internal({ message: error.message })),
         ),
@@ -600,8 +605,9 @@ export const make = (
           });
         }),
       /**
-       * A type the trial gives must cover the machine. boat's own count of active sandboxes
-       * includes the operator's, so its 429 refusal, under the refusal rule, is the count.
+       * One of boat's types must cover the machine; whether the account's plan includes it is
+       * boat's to say. boat's own count of active sandboxes includes the operator's, so its 429
+       * refusal, under the refusal rule, is the count.
        */
       admit: ({ machine }) => Effect.asVoid(machineType(machine)),
       /** boat has one image, so `image` names it only in the host's bases. */

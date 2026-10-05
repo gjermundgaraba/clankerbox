@@ -63,7 +63,7 @@ const attemptTimeout = Duration.minutes(2);
 const commandMargin = Duration.seconds(30);
 
 /** boat's machine types, by the name its API takes. */
-export type TypeName = "small" | "default";
+export type TypeName = "small" | "default" | "large" | "xlarge";
 
 export interface MachineType {
   readonly name: TypeName;
@@ -73,14 +73,16 @@ export interface MachineType {
 }
 
 /**
- * The types the host asks for, smallest first. They are the trial's: it refuses `large` with 403
- * `trial_machine_class_not_allowed`, and `xlarge` needs the $100 plan, so the host never asks
- * for either (evidence.md, boat claims).
+ * boat's types, smallest first (evidence.md, boat claims). The host asks for any of them, and a
+ * type the account's plan doesn't include is boat's to refuse: the trial refuses `large` and
+ * `xlarge`, which needs the $100 plan.
  */
-const largest: MachineType = { name: "default", cpu: 4, ramMib: 8192, diskGib: 50 };
+const largest: MachineType = { name: "xlarge", cpu: 16, ramMib: 32_768, diskGib: 251 };
 
 const machineTypes: ReadonlyArray<MachineType> = [
   { name: "small", cpu: 2, ramMib: 4096, diskGib: 12 },
+  { name: "default", cpu: 4, ramMib: 8192, diskGib: 50 },
+  { name: "large", cpu: 8, ramMib: 16_384, diskGib: 125 },
   largest,
 ];
 
@@ -98,7 +100,7 @@ export const machineType = (
       onNone: () =>
         Effect.fail(
           new Precondition({
-            message: `no boat machine type has ${sizes.cpu} vCPU, ${sizes.ramMib} MiB of RAM and ${sizes.diskGib} GiB of disk; the largest the host asks for, ${largest.name}, has ${largest.cpu} vCPU, ${largest.ramMib} MiB and ${largest.diskGib} GiB`,
+            message: `no boat machine type has ${sizes.cpu} vCPU, ${sizes.ramMib} MiB of RAM and ${sizes.diskGib} GiB of disk; the largest, ${largest.name}, has ${largest.cpu} vCPU, ${largest.ramMib} MiB and ${largest.diskGib} GiB`,
           }),
         ),
       onSome: Effect.succeed,
@@ -185,18 +187,25 @@ const decodeRefused = Schema.decodeUnknownEffect(Refused);
 
 /**
  * boat's answers that leave nothing on boat and mean "no room now", by status and code: the
- * account's active or start limits, a type its plan doesn't include, no machine to run it on,
- * and an 11th named snapshot. A create or fork that ends `cancelled` is the runtime's to read.
+ * account's active or start limits, no machine to run it on, and an 11th named snapshot. A
+ * create or fork that ends `cancelled` is the runtime's to read.
  */
 const capacityRefusals: ReadonlyArray<readonly [number, string]> = [
   [429, "limit_reached"],
   [429, "rate_limited"],
   [429, "daily_limit_reached"],
-  [403, "trial_machine_class_not_allowed"],
-  [403, "machine_class_plan_required"],
   [503, "out_of_capacity"],
   [503, "no_ready_machine"],
   [409, "named_snapshot_limit"],
+];
+
+/**
+ * boat's answers for a type the account's plan doesn't include. They leave nothing on boat
+ * either, but waiting won't help: the plan doesn't allow it.
+ */
+const planRefusals: ReadonlyArray<string> = [
+  "trial_machine_class_not_allowed",
+  "machine_class_plan_required",
 ];
 
 /** A repeat that arrives while the first call is still making the sandbox: repeat it again. */
@@ -266,6 +275,10 @@ export const make = (settings: Settings) =>
 
         if (capacityRefusals.some(([refused, known]) => refused === status && coded(known))) {
           return yield* new Capacity({ message: said });
+        }
+
+        if (status === 403 && planRefusals.some(coded)) {
+          return yield* new Precondition({ message: said });
         }
 
         if (status >= 500 || (status === 409 && coded(inProgress))) {

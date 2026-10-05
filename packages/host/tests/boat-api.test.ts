@@ -191,7 +191,7 @@ const expectNoKey = (error: Error) => {
   }
 };
 
-test("the host picks the smallest type that covers a machine, and never large or xlarge", async () => {
+test("the host picks the smallest of boat's four types that covers a machine", async () => {
   const pick = (cpu: number, ramMib: number, diskGib: number) =>
     Effect.runPromise(
       Effect.match(machineType({ cpu, ramMib, diskGib }), {
@@ -206,15 +206,19 @@ test("the host picks the smallest type that covers a machine, and never large or
   expect(await pick(2, 4097, 10)).toBe("default");
   expect(await pick(2, 4096, 13)).toBe("default");
   expect(await pick(4, 8192, 50)).toBe("default");
+  expect(await pick(5, 1024, 10)).toBe("large");
+  expect(await pick(2, 8193, 10)).toBe("large");
+  expect(await pick(8, 16_384, 125)).toBe("large");
+  expect(await pick(2, 1024, 126)).toBe("xlarge");
+  expect(await pick(16, 32_768, 251)).toBe("xlarge");
 
   for (const [cpu, ramMib, diskGib] of [
-    [5, 1024, 10],
-    [2, 8193, 10],
-    [2, 1024, 51],
-    [16, 32_768, 251],
+    [17, 1024, 10],
+    [2, 32_769, 10],
+    [2, 1024, 252],
   ] as const) {
     expect(await pick(cpu, ramMib, diskGib)).toBe(
-      `Precondition: no boat machine type has ${cpu} vCPU, ${ramMib} MiB of RAM and ${diskGib} GiB of disk; the largest the host asks for, default, has 4 vCPU, 8192 MiB and 50 GiB`,
+      `Precondition: no boat machine type has ${cpu} vCPU, ${ramMib} MiB of RAM and ${diskGib} GiB of disk; the largest, xlarge, has 16 vCPU, 32768 MiB and 251 GiB`,
     );
   }
 });
@@ -404,13 +408,11 @@ test("a 4xx is a definite answer whatever its body, and is never repeated", asyn
   expect(gone).toEqual([Option.none(), Option.none(), undefined, undefined]);
 });
 
-test("boat's refusals that leave nothing behind are Capacity, answered at once", async () => {
+test("boat's refusals that leave nothing behind are Capacity, or Precondition for a type, answered at once", async () => {
   const refusals: ReadonlyArray<readonly [number, string]> = [
     [429, "limit_reached"],
     [429, "rate_limited"],
     [429, "daily_limit_reached"],
-    [403, "trial_machine_class_not_allowed"],
-    [403, "machine_class_plan_required"],
     [503, "out_of_capacity"],
     [503, "no_ready_machine"],
   ];
@@ -423,6 +425,21 @@ test("boat's refusals that leave nothing behind are Capacity, answered at once",
     expect([error._tag, error.message]).toEqual([
       "Capacity",
       `boat POST /sandboxes answered ${status} ${code}: refused by ${code} (req_0123)`,
+    ]);
+  }
+
+  // A type the account's plan doesn't include won't come with waiting: Precondition.
+  for (const [code, type] of [
+    ["trial_machine_class_not_allowed", "large"],
+    ["machine_class_plan_required", "xlarge"],
+  ] as const) {
+    const boat = fakeBoat(() => refusal(403, code, `no ${type} on this plan`));
+    const error = await run(boat, (api) => Effect.flip(api.create("key-1", type)));
+
+    expect(boat.sent.map(json)).toEqual([{ type, noEnv: true, ttlSeconds: 7200 }]);
+    expect([error._tag, error.message]).toEqual([
+      "Precondition",
+      `boat POST /sandboxes answered 403 ${code}: no ${type} on this plan (req_0123)`,
     ]);
   }
 

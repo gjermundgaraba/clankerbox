@@ -816,15 +816,17 @@ test("a create waits while SSH or boat's command API doesn't answer yet, and fai
   expect(await nativeOf(rig, "other")).toBe("bx_made0002");
 });
 
-test("boat's refusals of a create leave nothing: Refusal with Capacity, and no sandbox recorded", async () => {
+test("boat's refusals of a create leave nothing: a Refusal, and no sandbox recorded", async () => {
   const rig = await rigOn();
 
-  for (const [status, code] of [
-    [429, "limit_reached"],
-    [429, "rate_limited"],
-    [429, "daily_limit_reached"],
-    [403, "trial_machine_class_not_allowed"],
-    [403, "machine_class_plan_required"],
+  for (const [status, code, tag] of [
+    [429, "limit_reached", "Capacity"],
+    [429, "rate_limited", "Capacity"],
+    [429, "daily_limit_reached", "Capacity"],
+    [503, "out_of_capacity", "Capacity"],
+    [503, "no_ready_machine", "Capacity"],
+    [403, "trial_machine_class_not_allowed", "Precondition"],
+    [403, "machine_class_plan_required", "Precondition"],
   ] as const) {
     const machine = machineOn(`m${code.length}${status}`);
 
@@ -836,7 +838,7 @@ test("boat's refusals of a create leave nothing: Refusal with Capacity, and no s
     const error = await fails(rig.runtime.create(machine, "boat"));
 
     expect(refused(error)).toEqual([
-      "Capacity",
+      tag,
       `boat POST /sandboxes answered ${status} ${code}: no room (req_0123)`,
     ]);
     expect(rig.boat.calls()).toEqual(["POST /sandboxes"]);
@@ -882,16 +884,16 @@ test("a create, fork or restore that boat cancels, or that is gone, found no mac
   expect(rig.guest.calls).toEqual([]);
 });
 
-test("a machine no type the trial gives covers is refused with Precondition, in admit and before any call", async () => {
+test("a machine no boat type covers is refused with Precondition, in admit and before any call", async () => {
   const rig = await rigOn();
-  const big = machineOn("big", { cpu: 8, ramMib: 16_384, diskGib: 125 });
+  const big = machineOn("big", { cpu: 16, ramMib: 32_768, diskGib: 252 });
 
   const admitted = await fails(rig.runtime.admit({ action: "create", machine: big, machines: [] }));
 
   expect(refused(admitted)).toEqual([
     "not refused",
     "Precondition",
-    "no boat machine type has 8 vCPU, 16384 MiB of RAM and 125 GiB of disk; the largest the host asks for, default, has 4 vCPU, 8192 MiB and 50 GiB",
+    "no boat machine type has 16 vCPU, 32768 MiB of RAM and 252 GiB of disk; the largest, xlarge, has 16 vCPU, 32768 MiB and 251 GiB",
   ]);
 
   const created = await fails(rig.runtime.create(big, "boat"));
@@ -902,7 +904,7 @@ test("a machine no type the trial gives covers is refused with Precondition, in 
   await succeeds(
     rig.runtime.admit({
       action: "create",
-      machine: machineOn("fits", { cpu: 4, ramMib: 8192, diskGib: 50 }),
+      machine: machineOn("fits", { cpu: 16, ramMib: 32_768, diskGib: 251 }),
       machines: [],
     }),
   );
