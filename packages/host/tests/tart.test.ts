@@ -139,6 +139,19 @@ const scriptedMac = (stateDir: string) => {
         vms.set(rest[1] ?? "", "stopped");
 
         return undefined;
+      case "set": {
+        // Every scripted VM's disk is 50 GB, and Tart only grows a disk.
+        const at = rest.indexOf("--disk-size");
+        const size = at === -1 ? 50 : Number(rest[at + 1]);
+
+        return size < 50
+          ? {
+              exitCode: 1,
+              stderr: `new disk size of ${size} GB should be larger than the current disk size of 50 GB\n`,
+            }
+          : undefined;
+      }
+
       case "exec":
         if (vm === "-i") {
           return { exitCode: 0, stdout: "ran\n" };
@@ -585,6 +598,24 @@ test("a create, fork or restore whose forwarder can't listen is refused before a
       taken.close(resolve);
     });
   }
+});
+
+test("a diskGib below the base's disk is Precondition at tart set, after the clone, and nothing boots", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const machine = { ...(await machineOn("small")), diskGib: 20 };
+  const vm = vmOf(machine);
+
+  const error = await Effect.runPromise(Effect.flip(runtime.create(machine, "base")));
+
+  expect([error._tag, error.message]).toEqual([
+    "Precondition",
+    "machine mac_small's disk of 20 GiB is below its base's, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB",
+  ]);
+  expect(calls(mac)).toEqual([
+    `tart clone base ${vm}`,
+    `tart set ${vm} --random-serial --cpu 4 --memory 8192 --disk-size 22`,
+  ]);
+  expect(mac.vms.get(vm)).toBe("stopped");
 });
 
 test("start writes the job again, so a job file that's gone or names an older tart is replaced", async () => {

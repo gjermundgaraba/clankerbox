@@ -791,14 +791,14 @@ describe.skipIf(!live)("a Tart host, through the CLI", () => {
   );
 
   test(
-    "a diskGib below the base's disk fails the create at tart set, leaving the machine never made, which delete removes",
+    "a diskGib below the base's disk fails the create at tart set with Precondition, leaving the machine never made, which delete removes",
     async () => {
       const started = performance.now();
       const error = failure(await createBare("small", 20));
 
       timing("create refused at tart set", started);
-      expect(error.tag).toBe("Internal");
-      expect(error.message).toContain("tart set");
+      expect(error.tag).toBe("Precondition");
+      expect(error.message).toContain("should be larger than the current disk size");
       expect(await machine("small")).toMatchObject({
         state: "stopped",
         action: { name: "create", status: "failed" },

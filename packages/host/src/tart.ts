@@ -63,6 +63,12 @@ const vmLimit = 2;
 const limitRefusal = "The number of VMs exceeds the system limit";
 
 /**
+ * `tart set --disk-size` only grows a disk, and refuses a smaller size with this text
+ * (T:VMDirectory.swift:287-319).
+ */
+const shrinkRefusal = "should be larger than the current disk size";
+
+/**
  * How long a boot may take until `tart exec` answers. Alone, a stock Cirrus image answered
  * 18.5–32.3 s after `tart run` (P3); two booting together answered after about 61 and 93 s
  * (P11), and two is as many as Apple runs at once.
@@ -463,7 +469,8 @@ export const make = (
 
     /**
      * Clones `from` into the machine's VM with a new serial, and boots it. The machine's listener
-     * opens first, so a port it can't listen on is refused before anything native.
+     * opens first, so a port it can't listen on is refused before anything native. A `diskGib`
+     * below the base's disk is the caller's to fix, so Tart's refusal of it is `Precondition`.
      */
     const cloneInto = (from: string, machine: MachineRef, sizes: ReadonlyArray<string>) => {
       const vm = vmOf(machine);
@@ -471,7 +478,16 @@ export const make = (
       return Effect.gen(function* () {
         yield* Effect.mapError(listen(machine), (error) => new Refusal({ error }));
         yield* call(["clone", from, vm], `clone ${from} ${vm}`);
-        yield* call(["set", vm, "--random-serial", ...sizes], `set ${vm}`);
+
+        const set = yield* tart(["set", vm, "--random-serial", ...sizes], `set ${vm}`);
+
+        if (set.exitCode !== 0 && set.stderr.includes(shrinkRefusal)) {
+          return yield* new Precondition({
+            message: `machine ${machine.id}'s disk of ${machine.diskGib} GiB is below its base's, and Tart only grows a disk: ${lastLines(set.stderr)}`,
+          });
+        }
+
+        yield* expect(set, `tart set ${vm}`);
         yield* boot(machine);
       });
     };
