@@ -439,15 +439,15 @@ Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
 - **Ports** (`ports.ts`), for smolvm and Tart: one per machine, the lowest
   free port in 10000–19999 (below smolvm's fork range and the Linux ephemeral
   range), confirmed with a bind probe on the publish address and recorded with
-  the claim; a unique index backs it up. Forks and restores get their own. The
-  host's API port must sit outside the range, and a tailnet policy can then
-  open 10000–19999 to the clients that run `clankerbox ssh`.
+  the claim; a unique index backs it up. Forks and restores get their own.
+  Keep the host's API port outside the range (nothing checks it), so a tailnet
+  policy can open 10000–19999 to the clients that run `clankerbox ssh`.
 - **Security:** a published port is reachable by whatever the tailnet policy
   lets reach the host; sshd and the pinned key protect it. smolvm's strict
   egress floor and Softnet keep guests off private ranges, the floor the
   tailnet's too, but it doesn't block the host's public addresses, so no host
-  service may listen on one. A guest must not reach its own host's API port. boat guests
-  have full outbound internet, and their SSH relay is public.
+  service may listen on one. A guest must not reach its own host's API port.
+  boat guests have full outbound internet, and their SSH relay is public.
 
 ### Supervision
 
@@ -552,11 +552,11 @@ These are known, not guarded, and accepted:
   root restore leaves `/dev/shm/smolvm-restore`).
 - **State dir:** at most 52 bytes, so the control socket path fits Linux's
   108-byte limit; startup checks it.
-- **Machines** run a digest-pinned OCI image with `--net --net-backend
-virtio-net -p <port>:22` and `--branchable`, each as its own uid. Reference
-  the base by digest only, from `mirror.gcr.io` (avoids Docker Hub's anonymous
-  pull limit; smolvm's own mirror setting breaks `machine start`): a tag plus a
-  digest makes smolvm pull inside every guest. The stock image has no sshd;
+- **Machines** run a digest-pinned OCI image with
+  `--net --net-backend virtio-net -p <port>:22` and `--branchable`, each as its
+  own uid. Reference the base by digest only, from `mirror.gcr.io` (avoids
+  Docker Hub's anonymous pull limit; smolvm's own mirror setting breaks
+  `machine start`): a tag plus a digest makes smolvm pull inside every guest. The stock image has no sshd;
   setup installs it. Install packages with `--no-install-recommends`.
 - **Disks:** `diskGib` is `--storage`, where workload writes land. smolvm
   builds its host-side image seed only at the default 20 GiB; other sizes pull
