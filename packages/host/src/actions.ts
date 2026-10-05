@@ -17,7 +17,7 @@ import {
   type NotFound,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Fiber, FiberSet, Option, Ref } from "effect";
+import { Cause, Effect, Fiber, FiberSet, Option, Ref } from "effect";
 import { idOn, type Kind, notFoundOn } from "./ids.ts";
 import { type CheckpointRef, type MachineRef, Refusal } from "./runtime.ts";
 import type {
@@ -158,7 +158,8 @@ export const claimsOn = (store: StoreInterface) => {
   /**
    * Step 4 on; `what` names the action in a defect's error. A runtime `Refusal` releases the
    * claim like a failed check; any other failure ends the action failed with the error the call
-   * replies with. A defect is recorded as `Internal`, so the rows stay deletable.
+   * replies with. A defect is logged with its cause, then recorded as `Internal`, so the rows
+   * stay deletable; the reply carries only its message.
    */
   const native = <A>(
     token: Token,
@@ -166,8 +167,11 @@ export const claimsOn = (store: StoreInterface) => {
     work: Effect.Effect<A, HostError | Refusal>,
   ): Effect.Effect<A, HostError> =>
     work.pipe(
-      Effect.catchDefect((defect) =>
-        Effect.fail(new Internal({ message: `${what} died: ${String(defect)}` })),
+      Effect.catchCauseFilter(Cause.findDefect, (defect, cause) =>
+        Effect.andThen(
+          Effect.logError(`${what} died:\n${Cause.pretty(cause)}`),
+          Effect.fail(new Internal({ message: `${what} died: ${String(defect)}` })),
+        ),
       ),
       Effect.catch((error) =>
         error instanceof Refusal

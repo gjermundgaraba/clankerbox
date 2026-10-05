@@ -97,3 +97,16 @@ test("an end that fails after a runtime's failure is logged, and the runtime's e
   expect([result._tag, result.message]).toEqual(["Capacity", "no machine"]);
   expect(logged).toEqual([["couldn't record the failure of a create: disk full"]]);
 });
+
+test("a defect is logged with its cause, and the reply is Internal with its message alone", async () => {
+  const { result, logged } = await withFailing("release", ({ claimAndCheck, native }, store) =>
+    Effect.flatMap(
+      claimAndCheck(inserting(store), () => Effect.void),
+      ([token]) => native(token, "create linux_dev", Effect.die(new Error("bad state"))),
+    ),
+  );
+
+  expect(result).toEqual(new Internal({ message: "create linux_dev died: Error: bad state" }));
+  expect(logged).toHaveLength(1);
+  expect(String(logged[0])).toMatch(/^create linux_dev died:\nError: bad state\n\s+at /u);
+});
