@@ -227,6 +227,12 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   /** What `main` showed when its running capture began. */
   let atCapture: Awaited<ReturnType<typeof facts>>;
 
+  /**
+   * The marker `main` writes just before its running capture, with no sync of its own: the
+   * capture's sync puts it in the snapshot, which the restore reads.
+   */
+  const captured = randomBytes(8).toString("hex");
+
   test(
     "create runs setup once and then preparation, names the sandbox after the machine, and reports boat's endpoint and a fresh host key",
     async () => {
@@ -432,16 +438,17 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   );
 
   test(
-    "a checkpoint captures a running machine, and a fork of it, once a snapshot begun after its sync has completed, holds a file written just before while the source keeps running",
+    "a checkpoint captures a running machine, a file written just before it included (the restore reads it), and a fork of it, once a snapshot begun after its sync has completed, holds a file written just before while the source keeps running",
     async () => {
       atCapture = await facts("main");
+      await inGuest("main", `echo ${captured} >~/live-capture`);
 
       let started = performance.now();
-      const captured = await cli(["checkpoint", "capture"], id("main"), named("snap"), "--json");
+      const capture = await cli(["checkpoint", "capture"], id("main"), named("snap"), "--json");
 
       timing("capture (named snapshot of a running sandbox)", started);
-      expect(captured.code, captured.stdout).toBe(0);
-      expect(decode(OneCheckpoint, captured)).toMatchObject({
+      expect(capture.code, capture.stdout).toBe(0);
+      expect(decode(OneCheckpoint, capture)).toMatchObject({
         id: id("snap"),
         machine: id("main"),
         kind: "disk",
@@ -585,7 +592,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   );
 
   test(
-    "a fork keeps running once its source is deleted, and a checkpoint captured from the running source restores after it: its own endpoint, host key and identity, with the disk as captured",
+    "a fork keeps running once its source is deleted, and a checkpoint captured from the running source restores after it: its own endpoint, host key and identity, with the disk as captured, the file written just before the capture included",
     async () => {
       await removeMachine("main");
       expect(await inGuest("fork-b", "echo up")).toBe("up");
@@ -619,6 +626,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         starts: atCapture.starts + 1,
         setups: 1,
       });
+      expect(await inGuest("restore-a", "cat ~/live-capture")).toBe(captured);
     },
     minutes(30),
   );
