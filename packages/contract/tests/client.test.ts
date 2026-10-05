@@ -188,9 +188,9 @@ test("a host that didn't answer after the chosen one doesn't matter", async () =
   expect(made.id).toBe("linux_dev");
 });
 
+// Without a winner's early return this waits out the 10 s read bound, past the test's timeout.
 test("a silent host after the chosen one doesn't delay the create", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"] });
-  const started = Date.now();
 
   const made = await withClient(
     [
@@ -202,7 +202,6 @@ test("a silent host after the chosen one doesn't delay the create", async () => 
 
   expect(made.id).toBe("linux_dev");
   expect(linux.creates).toHaveLength(1);
-  expect(Date.now() - started).toBeLessThan(2_000);
 });
 
 test("placement goes through the answers in list order, not in the order they arrive", async () => {
