@@ -67,9 +67,11 @@ export interface MachineType {
  * `trial_machine_class_not_allowed`, and `xlarge` needs the $100 plan, so the host never asks
  * for either (evidence.md, boat claims).
  */
+const largest: MachineType = { name: "default", cpu: 4, ramMib: 8192, diskGib: 50 };
+
 export const machineTypes: ReadonlyArray<MachineType> = [
   { name: "small", cpu: 2, ramMib: 4096, diskGib: 12 },
-  { name: "default", cpu: 4, ramMib: 8192, diskGib: 50 },
+  largest,
 ];
 
 /** The smallest type that covers the machine's sizes; none is `Precondition`, in step 3. */
@@ -86,7 +88,7 @@ export const machineType = (
       onNone: () =>
         Effect.fail(
           new Precondition({
-            message: `no boat machine type has ${sizes.cpu} vCPU, ${sizes.ramMib} MiB of RAM and ${sizes.diskGib} GiB of disk; the largest the host asks for, default, has 4 vCPU, 8192 MiB and 50 GiB`,
+            message: `no boat machine type has ${sizes.cpu} vCPU, ${sizes.ramMib} MiB of RAM and ${sizes.diskGib} GiB of disk; the largest the host asks for, ${largest.name}, has ${largest.cpu} vCPU, ${largest.ramMib} MiB and ${largest.diskGib} GiB`,
           }),
         ),
       onSome: Effect.succeed,
