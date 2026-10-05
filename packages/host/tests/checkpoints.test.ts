@@ -17,8 +17,11 @@ const hosts: Array<TestHost> = [];
 
 afterEach(() => cleanup(owned, hosts));
 
+/** This file's machine ports, which no other test file's host gives out. */
+const ports = { first: 21_110, last: 21_119 };
+
 const host = async (options?: Parameters<typeof startHost>[1] & { readonly dir?: string }) => {
-  const started = await startHost(options?.dir ?? (await scratch(owned)), options);
+  const started = await startHost(options?.dir ?? (await scratch(owned)), { ports, ...options });
 
   hosts.push(started);
 
@@ -79,7 +82,7 @@ test("a fork copies the running machine to a new one, prepared with its own iden
     state: "running",
     action: { name: "fork", status: "done" },
   });
-  expect(copy.ssh?.port).not.toBe(source.ssh?.port);
+  expect([source.ssh?.port, copy.ssh?.port]).toEqual([ports.first, ports.first + 1]);
   expect(copy.hostKey).toMatch(/^ssh-ed25519 AAAA[0-9a-f]+$/u);
   expect(copy.hostKey).not.toBe(source.hostKey);
   expect(await machineId(linux, "copy")).toBe("linux_copy\n");
@@ -399,9 +402,7 @@ test("a restore makes a machine with the checkpoint's spec, prepared with a new 
   await linux.run(linux.machines.delete("linux_dev"));
   linux.fake.calls.length = 0;
 
-  // The deleted source's name is free again. Its port usually is too, but not always: other
-  // test files probe the same loopback ports at the same time, and a probe in flight makes a
-  // port briefly unbindable, so either machine may have skipped one.
+  // The deleted source's name and port are free again.
   const restored = await linux.run(linux.machines.restore("linux_snap", "dev"));
 
   expect(restored).toMatchObject({
@@ -409,8 +410,9 @@ test("a restore makes a machine with the checkpoint's spec, prepared with a new 
     profile: "small",
     state: "running",
     action: { name: "restore", status: "done" },
-    ssh: { host: source.ssh?.host },
+    ssh: { host: "127.0.0.1", port: ports.first },
   });
+  expect(source.ssh).toEqual({ host: "127.0.0.1", port: ports.first });
   expect(restored.hostKey).not.toBe(source.hostKey);
   expect(await machineId(linux, "dev")).toBe("linux_dev\n");
   expect(linux.fake.calls).toEqual(["admit linux_dev", "restore linux_dev", "exec linux_dev"]);
@@ -434,7 +436,7 @@ test("restores of one checkpoint don't claim it, so they run side by side", asyn
   const one = await Effect.runPromise(Fiber.join(first));
 
   expect([one.state, second.state]).toEqual(["running", "running"]);
-  expect(one.ssh?.port).not.toBe(second.ssh?.port);
+  expect([one.ssh?.port, second.ssh?.port]).toEqual([ports.first + 1, ports.first + 2]);
 });
 
 test("a restore whose checkpoint is deleted under it fails like any runtime failure", async () => {

@@ -20,6 +20,7 @@ const config = {
   listen: { address: "127.0.0.1", port: Number(port) },
   stateDir: join(dir, "state"),
   bases: new Map([["ubuntu", "mirror.gcr.io/library/ubuntu@sha256:f144"]]),
+  machinePorts: { first: 21_000, last: 21_099 },
 } as const;
 
 const role: Role = { host: false };

@@ -251,7 +251,7 @@ citation moved to the new tag.
   first start.
 - smolvm's own fork ports come from 20000–32000 (`CLONE_PORT_FLOOR`,
   `CLONE_PORT_CEILING`, S@1.22.2:src/agent/fork.rs). Ours: machine ports come from
-  10000–19999, below it.
+  the host config's `machinePorts`, 10000–19999 by default, below it.
 
 **Checkpoints, forks and identity**
 

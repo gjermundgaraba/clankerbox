@@ -32,7 +32,7 @@ const load = async (contents: Schema.Json) => {
   return { file, loaded: loadConfig(file).pipe(Effect.provide(NodeServices.layer)) };
 };
 
-test("a host config resolves its state dir against its own directory and defaults the RAM budget", async () => {
+test("a host config resolves its state dir against its own directory and defaults the RAM budget and machine ports", async () => {
   const { file, loaded } = await load(config);
   const host = await Effect.runPromise(loaded);
 
@@ -42,6 +42,7 @@ test("a host config resolves its state dir against its own directory and default
     listen: { address: "100.95.240.37", port: 8484 },
     stateDir: join(file, "..", "state"),
     bases: new Map([["ubuntu", image]]),
+    machinePorts: { first: 10_000, last: 19_999 },
     smolvm: {
       prefix: "/opt/smolvm/1.22.2",
       publishAddress: "100.95.240.37",
@@ -95,6 +96,7 @@ test("a Tart host config names its tart binary, and its publish address defaults
     listen: { address: "100.122.69.11", port: 8484 },
     stateDir: join(file, "..", "state"),
     bases: new Map([["tahoe", "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3"]]),
+    machinePorts: { first: 10_000, last: 19_999 },
     tart: {
       binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart",
       publishAddress: "100.122.69.11",
@@ -221,6 +223,28 @@ test("a host's API port lies outside the machines' range, 10000-19999", async ()
       expect(error.message, String(port)).toContain("outside 10000-19999");
     }
   }
+});
+
+test("machinePorts moves the machines' range, which the API's port must still lie outside", async () => {
+  const machinePorts = { first: 20_000, last: 20_099 };
+  const moved = await load({ ...config, listen: { ...config.listen, port: 15_000 }, machinePorts });
+
+  const inside = await load({
+    ...config,
+    listen: { ...config.listen, port: 20_050 },
+    machinePorts,
+  });
+
+  const backwards = await load({ ...config, machinePorts: { first: 20_099, last: 20_000 } });
+
+  expect(await Effect.runPromise(moved.loaded)).toMatchObject({
+    listen: { port: 15_000 },
+    machinePorts,
+  });
+  expect((await Effect.runPromise(Effect.flip(inside.loaded))).message).toContain(
+    "outside 20000-20099",
+  );
+  expect((await Effect.runPromise(Effect.flip(backwards.loaded)))._tag).toBe("Invalid");
 });
 
 test("an unknown key, another runtime or a bad host ID is Invalid", async () => {

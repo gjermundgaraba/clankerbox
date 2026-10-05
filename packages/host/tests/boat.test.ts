@@ -49,6 +49,7 @@ import {
 import * as Checkpoints from "../src/checkpoints.ts";
 import { preparationScript } from "../src/guest.ts";
 import * as Machines from "../src/machines.ts";
+import { defaultMachinePorts } from "../src/ports.ts";
 import {
   type CheckpointRef,
   type Interface,
@@ -1813,7 +1814,13 @@ test("whatever boat or the transport echoes leaves the runtime without the API k
 const hostOn = async (boat: FakeBoat) => {
   const stateDir = await stateDirIn(await scratch(owned));
   const guest = fakeGuest();
-  const config = { id: "boat", bases: new Map([["boat", "boat"]]), stateDir };
+
+  const config = {
+    id: "boat",
+    bases: new Map([["boat", "boat"]]),
+    stateDir,
+    machinePorts: defaultMachinePorts,
+  };
 
   const host = ManagedRuntime.make(
     Layer.merge(Machines.layer(config), Checkpoints.layer(config)).pipe(

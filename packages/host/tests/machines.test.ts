@@ -29,9 +29,12 @@ afterEach(async () => {
   await cleanup(owned, hosts);
 });
 
+/** This file's machine ports, which no other test file's host gives out. */
+const ports = { first: 21_100, last: 21_109 };
+
 /** A host in a fresh scratch directory, or, after a restart, in its predecessor's. */
 const host = async (options?: Parameters<typeof startHost>[1] & { readonly dir?: string }) => {
-  const started = await startHost(options?.dir ?? (await scratch(owned)), options);
+  const started = await startHost(options?.dir ?? (await scratch(owned)), { ports, ...options });
 
   hosts.push(started);
 
@@ -71,9 +74,8 @@ test("create runs setup once, then preparation, and reports the machine as the r
     base: "ubuntu",
     state: "running",
     action: { name: "create", status: "done" },
-    ssh: { host: "127.0.0.1" },
+    ssh: { host: "127.0.0.1", port: ports.first },
   });
-  expect(made.ssh?.port).toBeGreaterThanOrEqual(10_000);
   expect(made.hostKey).toMatch(/^ssh-ed25519 AAAA[0-9a-f]+$/u);
   expect(await readFile(join(root, "var/lib/clankerbox/machine-id"), "utf8")).toBe("linux_dev\n");
   expect(await readFile(join(root, "starts"), "utf8")).toBe("start\n");
@@ -147,7 +149,7 @@ test("a stop that does nothing replies with the machine when giving back its cla
 
   const again = await linux.run(
     Effect.gen(function* () {
-      const machines = yield* Machines.make(hostConfig(linux.stateDir)).pipe(
+      const machines = yield* Machines.make(hostConfig(linux.stateDir, ports)).pipe(
         Effect.provideService(Store.Store, {
           ...linux.store,
           release: () => Effect.fail(new Internal({ message: "disk full" })),
@@ -813,26 +815,14 @@ test("of two concurrent starts that each fit only alone, exactly one passes", as
   expect(refused).toEqual(["Capacity"]);
 });
 
-/** Listens on the first port from 10000 that is free on 127.0.0.1, and returns it. */
-const occupy = async (): Promise<number> => {
-  for (let port = 10_000; ; port++) {
-    const server = createServer();
-
-    const bound = await new Promise<boolean>((resolve) => {
-      server.once("error", () => resolve(false));
-      server.listen({ host: "127.0.0.1", port, exclusive: true }, () => resolve(true));
-    });
-
-    if (bound) {
-      servers.push(server);
-
-      return port;
-    }
-  }
-};
-
 test("ports skip one that something else listens on, and concurrent creates get distinct ones", async () => {
-  const taken = await occupy();
+  const server = createServer();
+
+  servers.push(server);
+  await new Promise<void>((resolve) => {
+    server.listen({ host: "127.0.0.1", port: ports.first, exclusive: true }, resolve);
+  });
+
   const linux = await host();
 
   const made = await linux.run(
@@ -842,11 +832,21 @@ test("ports skip one that something else listens on, and concurrent creates get 
     ),
   );
 
-  const ports = made.map(({ ssh }) => ssh?.port);
+  const taken = made.map(({ ssh }) => ssh?.port ?? 0).sort((a, b) => a - b);
 
-  expect(new Set(ports).size).toBe(3);
-  expect(ports).not.toContain(taken);
-  expect(ports.every((port) => port !== undefined && port >= 10_000 && port <= 19_999)).toBe(true);
+  expect(taken).toEqual([ports.first + 1, ports.first + 2, ports.first + 3]);
+});
+
+test("a host whose ports are all taken refuses a create with Capacity", async () => {
+  const linux = await host({ ports: { first: ports.first, last: ports.first + 1 } });
+
+  await linux.run(linux.machines.create(request("a")));
+  await linux.run(linux.machines.create(request("b")));
+
+  const full = await failure(linux, linux.machines.create(request("c")));
+
+  expect(full._tag).toBe("Capacity");
+  expect(full.message).toBe(`no free port in ${ports.first}-${ports.first + 1} on 127.0.0.1`);
 });
 
 test("a runtime without a publish address gives machines no port", async () => {

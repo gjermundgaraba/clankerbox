@@ -66,7 +66,7 @@ type Making =
 
 /** Builds the actions, once the host's startup step has run (`index.ts`). */
 export const make = (
-  config: Pick<HostConfig, "id" | "bases">,
+  config: Pick<HostConfig, "id" | "bases" | "machinePorts">,
 ): Effect.Effect<Interface, HostError, Store | Runtime | Scope.Scope> =>
   Effect.gen(function* () {
     const store = yield* Store;
@@ -169,7 +169,10 @@ export const make = (
           cpu: spec.cpu,
           ramMib: spec.ramMib,
           diskGib: spec.diskGib,
-          port: address === undefined ? undefined : yield* pickPort(address, yield* store.ports),
+          port:
+            address === undefined
+              ? undefined
+              : yield* pickPort(address, config.machinePorts, yield* store.ports),
           hostKey: undefined,
         };
 
@@ -436,5 +439,5 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<HostConfig, "id" | "bases">,
+  config: Pick<HostConfig, "id" | "bases" | "machinePorts">,
 ): Layer.Layer<Machines, HostError, Store | Runtime> => Layer.effect(Machines, make(config));

@@ -6,7 +6,7 @@ import { BlockList, isIP } from "node:net";
 import { totalmem } from "node:os";
 import { HostId, Invalid } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path, Schema } from "effect";
-import { firstPort, lastPort } from "./ports.ts";
+import { defaultMachinePorts, type PortRange } from "./ports.ts";
 
 /**
  * Where a host may listen and publish: its tailnet address, or loopback for a local host. The
@@ -39,21 +39,11 @@ const Address = Schema.String.check(
   }),
 );
 
-/**
- * The API's port, outside the machines' range, on every runtime. The tailnet is the API's only
- * gate, so a policy that opens that range to the clients that run `clankerbox ssh` would open an
- * API port inside it to them too. That holds for a boat host, which publishes no machine ports:
- * in production it shares the Linux host's tailnet address with the smolvm host, whose range such
- * a policy opens. The API never takes a port a machine would be given, either.
- */
-const Port = Schema.Int.check(
-  Schema.isBetween({ minimum: 1, maximum: 65_535 }),
-  Schema.makeFilter(
-    (port: number) =>
-      port < firstPort ||
-      port > lastPort ||
-      `a port outside ${firstPort}-${lastPort}, the machines' range`,
-  ),
+const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }));
+
+/** The machines' ports, both ends included. */
+const MachinePorts = Schema.Struct({ first: Port, last: Port }).check(
+  Schema.makeFilter(({ first, last }) => first <= last || "first at most last"),
 );
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
@@ -97,6 +87,8 @@ const common = {
   stateDir: Schema.String,
   /** Base name to image. Hosts that offer the same image use the same name. */
   bases: Schema.Record(Schema.String, Schema.String),
+  /** Where machines' host ports come from. Default: 10000–19999. */
+  machinePorts: Schema.optionalKey(MachinePorts),
 };
 
 const HostConfigFile = Schema.Union([
@@ -122,6 +114,7 @@ interface Common {
   readonly listen: { readonly address: string; readonly port: number };
   readonly stateDir: string;
   readonly bases: ReadonlyMap<string, string>;
+  readonly machinePorts: PortRange;
 }
 
 /** A smolvm host's config. */
@@ -159,12 +152,26 @@ const resolveConfig = (
 ): Effect.Effect<HostConfig, Invalid, Path.Path> =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
+    const machinePorts = decoded.machinePorts ?? defaultMachinePorts;
+    const { port } = decoded.listen;
+
+    // On every runtime: the tailnet is the API's only gate, so a policy that opens the machines'
+    // range to the clients that run `clankerbox ssh` would open an API port inside it to them
+    // too. That holds for a boat host, which publishes no machine ports: in production it shares
+    // the Linux host's tailnet address with the smolvm host, whose range such a policy opens.
+    // The API never takes a port a machine would be given, either.
+    if (port >= machinePorts.first && port <= machinePorts.last) {
+      return yield* new Invalid({
+        message: `listen.port ${port}: must lie outside ${machinePorts.first}-${machinePorts.last}, the machines' range`,
+      });
+    }
 
     const common: Common = {
       id: decoded.id,
       listen: decoded.listen,
       stateDir: path.resolve(directory, decoded.stateDir),
       bases: new Map(Object.entries(decoded.bases)),
+      machinePorts,
     };
 
     if (decoded.runtime === "boat") {

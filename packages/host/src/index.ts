@@ -20,7 +20,10 @@ import { startup } from "./startup.ts";
 import * as Store from "./store.ts";
 
 /** What the host layer reads of its config: the runtime's own settings go to `runtime`. */
-export type HostLayerConfig = Pick<HostConfig, "id" | "runtime" | "listen" | "stateDir" | "bases">;
+export type HostLayerConfig = Pick<
+  HostConfig,
+  "id" | "runtime" | "listen" | "stateDir" | "bases" | "machinePorts"
+>;
 
 /** What the API needs of its HTTP server, all of which `NodeHttpServer.layer` provides. */
 export type ServerLayer = Layer.Layer<

@@ -89,7 +89,11 @@ processes, each with its own ID, state dir and port.
   host holds, so keep it short (`linux`, `mac`).
 - `listen.address` must be a tailnet address (100.64.0.0/10 or
   fd7a:115c:a1e0::/48) or loopback; a wildcard or public address is refused.
-  `listen.port` must lie outside 10000–19999, the machines' range.
+  `listen.port` must lie outside the machines' range.
+- `machinePorts: {first, last}`, optional, is the machines' range: the host
+  ports smolvm and Tart machines get, 10000–19999 by default. Another range
+  should stay below smolvm's fork range (20000–32000) and the ephemeral ports
+  (32768 and up on Linux).
 - `stateDir` is relative to the config file. It holds the database and the
   runtime's own state; one host process owns it at a time. The database
   records the host ID and runtime it was created for, and the host refuses to
@@ -244,16 +248,16 @@ its config readable by its user only, since it holds the key. Nothing backs up
 its database; a lost one leaves its sandboxes to be found by display name.
 
 **Host config:** one per host, as in [Run a host](#run-a-host), listening on
-the machine's tailnet address. Each API port lies outside 10000–19999, the
-machines' range; the host refuses one inside it. Pin every stock base by
-digest.
+the machine's tailnet address. Each API port lies outside the machines' range
+(`machinePorts`, 10000–19999 by default); the host refuses one inside it. Pin
+every stock base by digest.
 
 **Network and firewalls:**
 
 - The tailnet policy opens each host's API port to the clients that call that
-  host, and 10000–19999 on smolvm and Tart hosts to the clients that run
-  `clankerbox ssh`.
-- A packet filter on a host passes the API port and 10000–19999 on its
+  host, and the machines' range (10000–19999 by default) on smolvm and Tart
+  hosts to the clients that run `clankerbox ssh`.
+- A packet filter on a host passes the API port and the machines' range on its
   tailnet address.
 - On a smolvm host, check that no service listens on a public address or a
   wildcard before any guest runs (`ss -Hltnu`). smolvm's egress floor refuses
@@ -561,11 +565,12 @@ Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
   through the host's forwarder (`forwarder.ts`), and boat through its own
   relay. `clankerbox ssh` pins the reported host key.
 - **Ports** (`ports.ts`), for smolvm and Tart: one per machine, the lowest
-  free port in 10000–19999 (below smolvm's fork range and the Linux ephemeral
-  range), confirmed with a bind probe on the publish address and recorded with
-  the claim; a unique index backs it up. Forks and restores get their own.
-  The host refuses an API port inside the range, so a tailnet policy can open
-  10000–19999 to the clients that run `clankerbox ssh`.
+  free port in the machines' range (`machinePorts`, 10000–19999 by default,
+  below smolvm's fork range and the Linux ephemeral range), confirmed with a
+  bind probe on the publish address and recorded with the claim; a unique
+  index backs it up. Forks and restores get their own. The host refuses an API
+  port inside the range, so a tailnet policy can open the range (10000–19999
+  by default) to the clients that run `clankerbox ssh`.
 - **Security:** a published port is reachable by whatever the tailnet policy
   lets reach the host; sshd and the pinned key protect it. smolvm's strict
   egress floor and Softnet keep guests off private ranges, the floor the

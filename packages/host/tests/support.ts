@@ -9,6 +9,7 @@ import { HttpServer } from "effect/http";
 import * as Checkpoints from "../src/checkpoints.ts";
 import { type HostLayerConfig, hostLayer } from "../src/index.ts";
 import * as Machines from "../src/machines.ts";
+import type { PortRange } from "../src/ports.ts";
 import * as Store from "../src/store.ts";
 import { type FakeOptions, type FakeRuntime, fakeRuntime } from "./fake-runtime.ts";
 import { removeScratch } from "./scratch.ts";
@@ -16,13 +17,20 @@ import { removeScratch } from "./scratch.ts";
 export const image =
   "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
 
+/**
+ * The machines' ports of a test host whose file names none. A file that asserts ports passes a
+ * range of its own, so files running at once never probe each other's ports.
+ */
+const sharedPorts: PortRange = { first: 21_000, last: 21_099 };
+
 /** Host `linux` on the smolvm runtime, which the fake runtime stands in for. */
-export const hostConfig = (stateDir: string): HostLayerConfig => ({
+export const hostConfig = (stateDir: string, machinePorts = sharedPorts): HostLayerConfig => ({
   id: "linux",
   runtime: "smolvm",
   listen: { address: "127.0.0.1", port: 0 },
   bases: new Map([["ubuntu", image]]),
   stateDir,
+  machinePorts,
 });
 
 /** A create request for the machine named `name` on host `linux`. */
@@ -64,18 +72,22 @@ export interface TestHost {
 
 /**
  * Runs host `linux` as `clankerbox host` does, over `fake`, or a new fake in `dir`, with its
- * state dir in `dir`, served on a loopback port. Failed actions log no warnings here: the tests
- * read their errors.
+ * state dir in `dir`, served on a loopback port, giving machines `ports`. Failed actions log no
+ * warnings here: the tests read their errors.
  */
 export const startHost = async (
   dir: string,
-  options?: { readonly fake?: FakeRuntime; readonly runtime?: Omit<FakeOptions, "dir"> },
+  options?: {
+    readonly fake?: FakeRuntime;
+    readonly runtime?: Omit<FakeOptions, "dir">;
+    readonly ports?: PortRange;
+  },
 ): Promise<TestHost> => {
   const fake = options?.fake ?? fakeRuntime({ dir, ...options?.runtime });
   const stateDir = join(dir, "state");
 
   const runtime = ManagedRuntime.make(
-    hostLayer(hostConfig(stateDir), () => fake.layer, loopbackServer()).pipe(
+    hostLayer(hostConfig(stateDir, options?.ports), () => fake.layer, loopbackServer()).pipe(
       Layer.provideMerge(Logger.layer([])),
       Layer.provide(NodeServices.layer),
     ),
