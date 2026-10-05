@@ -21,9 +21,9 @@ qualified release.
   (`smolvm <version> <platform>-<arch>`) and is recorded on every `ram`
   checkpoint. The version also appears in tests, docs and examples:
   `git grep -n '1\.22\.2'` (README's install table, host config example and
-  install command; `tests/live/README.md`; `tests/live/smolvm/driver.py`;
-  `packages/host/tests/{smolvm,store,config,index}.test.ts`;
-  `apps/clankerbox/tests/host-role.ts`; `packages/contract/tests/stub-host.ts`).
+  install command; `tests/live/README.md`; `tests/live/smolvm/{driver,remote}.py`;
+  `packages/host/tests/{smolvm,store,config}.test.ts`;
+  `packages/contract/tests/{ids.test,stub-host}.ts`).
   Source citations in comments use the form below: `git grep -n 'S@1\.22'`.
 - **Target:** the latest stable published `smol-machines/smolvm` release (its
   release metadata, such as `gh release view --repo smol-machines/smolvm`),
