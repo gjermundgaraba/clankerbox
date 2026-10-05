@@ -774,6 +774,13 @@ repaired with `start` (see [State and claims](#state-and-claims)).
     machine moves to its own before its first boot. smolvm's own fork range
     (20000–32000) is never used, since `machine branch` is never called.
     garaba-home opens only TCP 10000–19999 for `clankerbox ssh`.
+  - The 10000–19999 rule covers machine ports only. Each host's API port
+    (`listen.port`) is separate: garaba-home opens it on its own, to the
+    clients that call that host, and it must stay outside 10000–19999 so it
+    can never collide with a machine port. The live suites' API ports are
+    outside it (9460–9499 on the Linux test host, 47000–47999 on the Mac).
+    Production's three API ports are fixed in phase 9 and handed to
+    garaba-home.
 - **Tart:**
   - Tart has no port publishing, and the guest's Softnet address is reachable
     only from the Mac.
@@ -1627,7 +1634,8 @@ tests use real VMs.
      launches. Recipes keep their `files/`; `machine.json` goes.
      `gg-linux-dev` installs `libatomic1` first: Node needs it and stock 26.04
      lacks it (P3).
-   - Hand garaba-home the three host API ports, each caller's tag and which
+   - Fix the three host API ports, each outside 10000–19999 (see Port
+     allocation), and hand them to garaba-home with each caller's tag, which
      callers run `clankerbox ssh`, the elevated profiles' tags, and the live
      suite's result.
    - Update the consumers' docs: `clankercreds/docs/recipe.md`, which still
