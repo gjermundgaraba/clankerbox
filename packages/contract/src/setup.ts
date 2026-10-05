@@ -3,7 +3,7 @@
  * recipe directory (a `setup.sh` and the files it needs) is packed into one self-extracting
  * script. Nothing here logs a script or a packed recipe: a recipe can carry secrets.
  */
-import { Effect, FileSystem, Stream } from "effect";
+import { Effect, FileSystem, Predicate, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Invalid } from "./errors.ts";
 
@@ -64,7 +64,13 @@ export const packRecipe = (
 
     const noSetup = new Invalid({ message: `recipe ${directory} has no setup.sh` });
 
-    const setup = yield* fs.stat(`${directory}/setup.sh`).pipe(Effect.mapError(() => noSetup));
+    const setup = yield* fs
+      .stat(`${directory}/setup.sh`)
+      .pipe(
+        Effect.mapError((error) =>
+          Predicate.isTagged(error.reason, "NotFound") ? noSetup : error,
+        ),
+      );
 
     if (setup.type !== "File") {
       return yield* noSetup;
