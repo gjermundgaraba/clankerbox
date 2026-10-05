@@ -5,7 +5,7 @@
  * some of its copies; the test that made any other machine deletes it. Timings print as
  * `[timing]` lines.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
@@ -13,10 +13,12 @@ import { Schema } from "effect";
 import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 import {
   Checkpoints,
+  decode,
   type Environment,
   environment,
   Failure,
   Machines,
+  minutes,
   Names,
   Natives,
   OneCheckpoint,
@@ -25,12 +27,13 @@ import {
   run,
   Store,
   scratch,
+  sha256,
+  timing,
   writeFileIn,
 } from "./live.ts";
 
-const live = process.env["CLANKERBOX_LIVE"] === "1";
-
-const minutes = (count: number) => count * 60_000;
+const live =
+  process.env["CLANKERBOX_LIVE"] === "1" && process.env["CLANKERBOX_LIVE_RUNTIME"] === "smolvm";
 
 /** The setup of `main`: sshd, rsync and the run's key, a `start` and a `new-identity` hook. */
 const mainSetup = (publicKey: string) => `#!/bin/sh
@@ -72,22 +75,6 @@ cp /run/sshd.pid /var/lib/clankerbox-live/setup-sshd-pid
 /** A guest command that prints whether a TCP connection to `address:port` opens. */
 const guestProbe = (address: string, port: string) =>
   `timeout 5 bash -c 'echo >/dev/tcp/${address}/${port}' 2>/dev/null && echo reached || echo refused`;
-
-const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
-
-const timing = (label: string, started: number) => {
-  console.log(`[timing] ${label} ${((performance.now() - started) / 1000).toFixed(2)}s`);
-};
-
-const decode = <A>(schema: Schema.Codec<A, string>, ran: Ran): A => {
-  try {
-    return Schema.decodeUnknownSync(schema)(ran.stdout);
-  } catch (error) {
-    throw new Error(`couldn't decode (exit ${ran.code}): ${ran.stdout}\n${ran.stderr}`, {
-      cause: error,
-    });
-  }
-};
 
 describe.skipIf(!live)("a smolvm host, through the CLI", () => {
   let env: Environment;

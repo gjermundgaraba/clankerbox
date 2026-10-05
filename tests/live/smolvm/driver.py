@@ -231,8 +231,9 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
 ''')
         control_bin.chmod(0o755)
 
-        suite_env = dict(os.environ, CLANKERBOX_LIVE='1', CLANKERBOX_BIN=str(darwin_bin),
-                         CLANKERBOX_LIVE_CONFIG=str(client_config), CLANKERBOX_LIVE_HOST_CONTROL=str(control_bin),
+        suite_env = dict(os.environ, CLANKERBOX_LIVE='1', CLANKERBOX_LIVE_RUNTIME='smolvm',
+                         CLANKERBOX_BIN=str(darwin_bin), CLANKERBOX_LIVE_CONFIG=str(client_config),
+                         CLANKERBOX_LIVE_HOST_CONTROL=str(control_bin),
                          CLANKERBOX_LIVE_PREFIX=remote_state['machine_prefix'])
         # Verbose, so the evidence names every test's result and keeps its [timing] lines.
         rc = sh(['vp', 'test', '--reporter=verbose', *shlex.split(options.suite_args)], 'suite', env=suite_env,
