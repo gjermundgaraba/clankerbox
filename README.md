@@ -26,9 +26,10 @@ client library the CLI uses.
 
 Releases are on the repository's GitHub releases page,
 <https://github.com/gjermundgaraba/clankerbox/releases>, tagged `v<version>`.
-Each release has one bundle per target, `clankerbox-<version>-<target>.tar.gz`,
-beside its `.sha256`. The targets are `darwin-arm64` and `linux-x64`. A bundle
-holds, with no top directory:
+Each release has one bundle per target, `clankerbox-<target>.tar.gz`, beside
+its `.sha256`. The targets are `darwin-arm64` and `linux-x64`. The names carry
+no version: the tag does, and so does `clankerbox --version`. A bundle holds,
+with no top directory:
 
 - `clankerbox`, a Node single-executable binary (Node 26.10.0 inside; nothing
   else to install);
@@ -41,13 +42,15 @@ against it before extracting it: the `.sha256` holds `<sha256>  <bundle name>`,
 which `shasum -a 256 -c` (macOS) and `sha256sum -c` (Linux) check.
 
 ```sh
-base=https://github.com/gjermundgaraba/clankerbox/releases/download/v0.12.0
-curl -fLO "$base/clankerbox-0.12.0-linux-x64.tar.gz"
-curl -fLO "$base/clankerbox-0.12.0-linux-x64.tar.gz.sha256"
-shasum -a 256 -c clankerbox-0.12.0-linux-x64.tar.gz.sha256   # or sha256sum -c
-mkdir clankerbox && tar -xzf clankerbox-0.12.0-linux-x64.tar.gz -C clankerbox
+base=https://github.com/gjermundgaraba/clankerbox/releases/latest/download
+curl -fLO "$base/clankerbox-linux-x64.tar.gz"
+curl -fLO "$base/clankerbox-linux-x64.tar.gz.sha256"
+shasum -a 256 -c clankerbox-linux-x64.tar.gz.sha256   # or sha256sum -c
+mkdir clankerbox && tar -xzf clankerbox-linux-x64.tar.gz -C clankerbox
 clankerbox/clankerbox --version
 ```
+
+A release's own bundles are under `releases/download/v<version>/`.
 
 The darwin binary is ad-hoc signed and not notarized, which a curl, tar or scp
 install doesn't need. The binary ignores `NODE_OPTIONS`.
@@ -841,7 +844,7 @@ checksums in `release-inputs.json`):
 ```sh
 pnpm build
 pnpm sea:build [--out DIR] [darwin-arm64|linux-x64]   # into DIR, by default tools/release/dist; darwin needs macOS
-pnpm sea:smoke tools/release/dist/clankerbox-<version>-<target>.tar.gz
+pnpm sea:smoke tools/release/dist/clankerbox-<target>.tar.gz
 ```
 
 CI (`.github/workflows/quality.yml`) runs `ready` and builds, bundles and

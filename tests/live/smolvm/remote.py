@@ -76,7 +76,7 @@ STATE_DIR = SCRATCH / 's'
 DATA = STATE_DIR / 'smolvm'
 BINARY = SCRATCH / 'clankerbox'
 # What driver.py uploads into scratch, beside its .sha256: build.sh's linux-x64 bundle.
-BUNDLE_NAME = re.compile(r'clankerbox-[0-9][0-9A-Za-z.+-]*-linux-x64\.tar\.gz')
+BUNDLE_NAME = 'clankerbox-linux-x64.tar.gz'
 CONFIG = SCRATCH / 'host.json'
 ROOTLOG = EVIDENCE / 'root-runs.log'
 # The host unit's ExecStopPost writes how its process ended: systemd's $EXIT_CODE and $EXIT_STATUS.
@@ -351,7 +351,7 @@ def answers(port):
 def install_bundle(name):
     """Checks the bundle `name` in scratch against its .sha256, which must name it, extracts its
     binary to BINARY and records the binary's checksum, which every host start checks."""
-    if not BUNDLE_NAME.fullmatch(name):
+    if name != BUNDLE_NAME:
         raise RuntimeError(f'not a linux-x64 bundle: {name}')
     bundle = SCRATCH / name
     fields = (SCRATCH / f'{name}.sha256').read_text().split()

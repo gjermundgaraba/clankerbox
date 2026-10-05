@@ -198,12 +198,7 @@ class Evidence:
         targets = ('darwin-arm64', *also)
         self.sh(['vp', 'run', '-r', 'build'], 'build', cwd=REPO)
         self.sh(['sh', str(RELEASE / 'build.sh'), '--out', str(out), *targets], 'bundle', cwd=REPO)
-        bundles = {}
-        for target in targets:
-            found = sorted(out.glob(f'clankerbox-*-{target}.tar.gz'))
-            if len(found) != 1:
-                raise RuntimeError(f'build.sh left {len(found)} {target} bundles in {out}, not one')
-            bundles[target] = found[0]
+        bundles = {target: out / f'clankerbox-{target}.tar.gz' for target in targets}
         # Smoke's own temporary directory stays in scratch.
         self.sh(['sh', str(RELEASE / 'smoke.sh'), str(bundles['darwin-arm64'])], 'smoke',
                 env=dict(os.environ, TMPDIR=str(self.run.scratch)))

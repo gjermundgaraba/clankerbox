@@ -1,13 +1,13 @@
 #!/bin/sh
-# Build and bundle clankerbox for each target: OUT/clankerbox-<version>-<target>.tar.gz,
+# Build and bundle clankerbox for each target: OUT/clankerbox-<target>.tar.gz,
 # beside <bundle>.sha256, which `sha256sum -c` and `shasum -a 256 -c` check.
 # Usage: build.sh [--out OUT] [TARGET...], TARGET darwin-arm64 or linux-x64; OUT defaults to
 # tools/release/dist. By default it builds what this machine can: both targets on macOS,
 # linux-x64 on Linux (darwin needs codesign).
 # Bundle the code first (vp run -r build). The Node is the one .node-version pins, its
 # archives' checksums in release-inputs.json. The first run downloads them into
-# tools/release/cache/, so `vp run ready` doesn't include it and stays offline. The version
-# is the SDK's, which the binaries share. A bundle holds, at its top level:
+# tools/release/cache/, so `vp run ready` doesn't include it and stays offline. The names carry
+# no version: the release's tag and the binary's --version do. A bundle holds, at its top level:
 #   clankerbox                       the SEA binary
 #   LICENSE                          clankerbox's own
 #   notices/node/LICENSE             Node's, from the archive the SEA was built on
@@ -26,7 +26,6 @@ fi
 code="$root/apps/clankerbox/dist/clankerbox.mjs"
 inputs="$here/release-inputs.json"
 node_version=$(tr -d '[:space:]' <"$root/.node-version")
-version=$(node -p 'require(process.argv[1]).version' "$root/packages/contract/package.json")
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) builder_platform=darwin-arm64 ;;
   Linux-x86_64) builder_platform=linux-x64 ;;
@@ -103,7 +102,7 @@ writeFileSync(join(out, "licenses.json"), `${JSON.stringify(index, null, 2)}\n`)
 NODE
 
 for target in "$@"; do
-  name="clankerbox-$version-$target"
+  name="clankerbox-$target"
   stage="$out/$name"
   node_dir=$(node_for "$target")
   rm -rf "$stage" && mkdir -p "$stage/notices/node"

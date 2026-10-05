@@ -44,8 +44,8 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           for target in darwin-arm64 linux-x64; do
-            test -s "clankerbox-${TAG#v}-$target.tar.gz"
-            test -s "clankerbox-${TAG#v}-$target.tar.gz.sha256"
+            test -s "clankerbox-$target.tar.gz"
+            test -s "clankerbox-$target.tar.gz.sha256"
           done
           sha256sum -c ./*.sha256
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
