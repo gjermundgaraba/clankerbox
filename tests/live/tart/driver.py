@@ -21,8 +21,8 @@ A second Tart host of the run, `<host ID>-b`, which only the suite's placement t
 the private home and the address, offers the base as `macos` and `macos-b`, and keeps its own
 state, pid, exit status and log under scratch/second and evidence/second. Its ID starts with the
 first host's, so the teardown below covers its VMs and launchd jobs too. The suite finds it in
-`CLANKERBOX_LIVE_PLACEMENT_CONFIG`, a client config listing it first and the host under test
-second.
+`CLANKERBOX_LIVE_PLACEMENT_CONFIG`, a client config listing it alone; the placement test writes
+its own configs with both hosts, in each order.
 
 The host runs under a keeper process (`driver.py keep`), which records the host's pid and exit
 status, so the suite's host-control program (`driver.py control`, tests/live/tests/live.ts) can
@@ -393,7 +393,6 @@ def main():
         placement_config = run.scratch / 'placement.json'
         placement_config.write_text(json.dumps({'hosts': [
             {'id': second['host_id'], 'url': f'http://{address}:{second["api_port"]}'},
-            {'id': host_id, 'url': f'http://{address}:{api_port}'},
         ]}, indent=2) + '\n')
         record(second_host={'host_id': second['host_id'], 'api_port': second['api_port'],
                             'state_dir': second['state_dir'], 'config': second['config'],

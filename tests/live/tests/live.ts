@@ -133,8 +133,8 @@ export const BoatAccount = Schema.fromJsonString(
  * removes what the run left on the host.
  *
  * A driver that runs a second host of the run, which only placement uses, names it in
- * `CLANKERBOX_LIVE_PLACEMENT_CONFIG`: a client config listing that host first and the host under
- * test second (`tart/driver.py` does). The program's ops, on every runtime:
+ * `CLANKERBOX_LIVE_PLACEMENT_CONFIG`: a client config listing that host, beside the host under
+ * test or alone (`tart/driver.py` does). The program's ops, on every runtime:
  *
  * - `host-stop`, `host-start`: stop the host process (SIGTERM), failing unless its exit status,
  *   as its unit or keeper records it, is 0, or start it;
@@ -198,16 +198,10 @@ const secondHost = async (host: typeof HostEntry.Type) => {
   }
 
   const { hosts } = Schema.decodeUnknownSync(ClientConfig)(await readFile(file, "utf8"));
-  const [second, under, ...others] = hosts;
+  const [second, ...others] = hosts.filter((entry) => entry.id !== host.id);
 
-  if (
-    second === undefined ||
-    under?.id !== host.id ||
-    under.url !== host.url ||
-    second.id === host.id ||
-    others.length > 0
-  ) {
-    throw new Error("the placement config lists a second host, then the host under test");
+  if (second === undefined || others.length > 0) {
+    throw new Error("the placement config lists one host besides the host under test");
   }
 
   return second;
