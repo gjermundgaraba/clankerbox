@@ -199,7 +199,8 @@ const waitFor = async (file: string, text: string) => {
 /**
  * A process standing in for sshd's listener, which records the SIGHUP that makes it re-exec.
  * It writes `ready` once its traps are in, and `usr1` on SIGUSR1, which `settled` sends: the
- * shell runs pending traps in signal order, so a SIGHUP sent before it is recorded first.
+ * shell runs pending traps in signal-number order, HUP before USR1, so a SIGHUP sent before it
+ * is recorded first.
  */
 const listener = async (root: string, comm: string) => {
   const marker = join(root, "listener");
