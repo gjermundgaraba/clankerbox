@@ -258,7 +258,7 @@ test("a claimed row is busy until its action ends, and a claim returns its recor
     new Conflict({ message: "machine linux_dev is busy: create is running", kind: "busy" }),
   );
   expect(missing).toEqual(new NotFound({ message: "no machine linux_gone" }));
-  const stopping = { ...record("dev"), made: false, action: { name: "stop", status: "running" } };
+  const stopping = { ...record("dev"), made: true, action: { name: "stop", status: "running" } };
 
   expect(claimed).toEqual([
     [{ table: "machines", name: "dev", before: { name: "create", status: "done" } }],
@@ -319,7 +319,7 @@ test("an end records the outcome on every claimed row, and the host key on the p
   ]);
 });
 
-test("an end marks the machine it names made, and a failed end none", async () => {
+test("a done end marks the machines its claim inserted made, and a failed end none", async () => {
   const stateDir = join(await scratch(owned), "state");
 
   const made = await withStore(stateDir, (store) =>
@@ -330,16 +330,16 @@ test("an end marks the machine it names made, and a failed end none", async () =
         action: { name: "create", status: "failed", error: { tag: "Internal", message: "no" } },
       });
 
-      const created = yield* store.insert("create", inserting(record("dev", { port: 10_001 })));
+      const fork = yield* forking(store, "failed", record("copy", { port: 10_001 }));
 
-      yield* store.end(created, { action: { name: "create", status: "done" }, made: "dev" });
+      yield* store.end(fork, { action: { name: "fork", status: "done" } });
 
       return (yield* store.list).map(({ name, made }) => [name, made]);
     }),
   );
 
   expect(made).toEqual([
-    ["dev", true],
+    ["copy", true],
     ["failed", false],
   ]);
 });

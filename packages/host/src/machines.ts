@@ -237,7 +237,7 @@ export const make = (
             withRuntime(Effect.andThen(work(machine), prepare(machine))),
           );
 
-          yield* done(token, { prepared: { name, hostKey }, made: name });
+          yield* done(token, { prepared: { name, hostKey } });
 
           return yield* read(name);
         }),

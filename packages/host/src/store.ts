@@ -262,8 +262,6 @@ export interface Outcome {
    * preparation that printed none leaves the row's key as it was.
    */
   readonly prepared?: { readonly name: string; readonly hostKey: string | undefined } | undefined;
-  /** The machine a create, fork or restore made, which the end marks made. */
-  readonly made?: string | undefined;
 }
 
 export interface Interface {
@@ -298,7 +296,10 @@ export interface Interface {
   ) => Effect.Effect<Token, Conflict | Internal>;
   /** Gives back a claim in one transaction: its inserted rows go, its held rows get `before`. */
   readonly release: (token: Token) => Effect.Effect<void, Internal>;
-  /** Ends a claim in one transaction, recording `outcome` on its rows. */
+  /**
+   * Ends a claim in one transaction, recording `outcome` on its rows. A `done` end marks every
+   * machine row the claim inserted made: the machine its create, fork or restore made.
+   */
   readonly end: (token: Token, outcome: Outcome) => Effect.Effect<void, Internal>;
   /** Removes a row, as a successful delete does. */
   readonly remove: (row: RowRef) => Effect.Effect<void, Internal>;
@@ -654,7 +655,7 @@ export const open = (
 
           return Result.void;
         }),
-      end: (token, { action, prepared, made }) =>
+      end: (token, { action, prepared }) =>
         transaction(db, `record ${action.name} on ${named(token)}`, () => {
           for (const row of [...token.inserted, ...token.held]) {
             record(row, action);
@@ -664,8 +665,12 @@ export const open = (
             updateHostKey.run(prepared.hostKey, prepared.name);
           }
 
-          if (made !== undefined) {
-            markMade.run(made);
+          if (action.status === "done") {
+            for (const row of token.inserted) {
+              if (row.table === "machines") {
+                markMade.run(row.name);
+              }
+            }
           }
 
           return Result.void;

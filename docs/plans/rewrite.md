@@ -459,8 +459,8 @@ listed to keep them from being ported):
   transaction: `hold` claims a row and returns a token and the row's record
   (every action holds at most one row, and read it again right after until
   the phase-5 review), and `insert` inserts one and returns a token. An end
-  names the machine row that gets the host key
-  preparation read, and the one a create, fork or restore made. A claimed row has
+  names the machine row that gets the host key preparation read, and a `done`
+  end marks the machine rows its token inserted made. A claimed row has
   `action.status = running`. A missing row is `NotFound`, one already running
   `Conflict{kind: busy}` and a taken new name `Conflict{kind: exists}` (the
   primary key's refusal), and then nothing is written. A claim can join an
@@ -515,8 +515,8 @@ listed to keep them from being ported):
 - **No lineage:** a fork is an independent machine, so a source can be stopped
   or deleted while its forks run.
 - **A machine is made only when its create, fork or restore succeeds:** the
-  machine row's `made` column is false at insert, and the end of a successful
-  create, fork or restore sets it (phase-5 review). Until then the machine
+  machine row's `made` column is false at insert, and the `done` end of the
+  create, fork or restore that inserted the row sets it (phase-5 review). Until then the machine
   can only be read or deleted: `start`, `stop`, `fork` and `capture` refuse it
   with `Precondition` in step 3 ("its create, fork or restore failed; delete
   it"), so a half-made machine never boots. Without it, `start` repaired a
