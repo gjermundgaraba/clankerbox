@@ -75,6 +75,12 @@ run's VMs and scopes natively, by the run's own smolvm data dir, so a test that
 leaves the host down leaves nothing behind. The driver's docstring shows its
 invocation.
 
+`tests/live/tart/driver.py` is its counterpart on this Mac: it runs a Tart host
+from a private Tart home in the run's scratch, whose base is an APFS clone of the
+Cirrus seed, and gives the suite the same host-control program. Its teardown stops
+the host, then deletes the home's VMs and boots out the launchd jobs carrying the
+run's host ID, natively, before scratch is deleted.
+
 ## Abandoned runs
 
 ```sh
