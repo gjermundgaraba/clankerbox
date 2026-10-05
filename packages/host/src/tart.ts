@@ -538,6 +538,7 @@ export const make = (
        */
       admit: ({ action, machine, machines }) =>
         Effect.gen(function* () {
+          // Not `observe`, which answers only for the host's machines: every VM here counts.
           const vms = yield* list;
           const counted = new Set<string>();
 
