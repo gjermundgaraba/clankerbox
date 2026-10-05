@@ -789,7 +789,10 @@ repaired with `start` (see [State and claims](#state-and-claims)).
     would leave that machine undeletable through the host, and `delete` must
     always work. `start` listens again before it boots, and fails with
     `Internal` naming the port while something else still holds it; the
-    operator frees the port, and `start` works again. A boot
+    operator frees the port, and `start` works again. A `start` of a machine
+    that runs boots nothing and doesn't listen, so a running machine's
+    endpoint stays unserved until a stop and a start, or the next host
+    startup, listens for it. A boot
     that fails after its kickstart leaves the VM as it is, reachable, and a
     `start` of a made machine that runs prepares it again. A stopped machine's
     port accepts and closes the connection instead of refusing it, and its
