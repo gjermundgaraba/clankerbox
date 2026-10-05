@@ -7,9 +7,9 @@ import { createServer } from "node:net";
 import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
 
-const firstPort = 10_000;
+export const firstPort = 10_000;
 
-const lastPort = 19_999;
+export const lastPort = 19_999;
 
 /** Whether `address:port` can be bound now. Something else listening there makes it false. */
 const probe = (address: string, port: number): Effect.Effect<boolean, Internal> =>

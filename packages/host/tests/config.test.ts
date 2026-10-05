@@ -201,6 +201,28 @@ test("a host listens and publishes only on a tailnet or loopback address", async
   }
 });
 
+test("a host's API port lies outside the machines' range, 10000-19999", async () => {
+  for (const port of [9999, 20_000, 65_535]) {
+    const { loaded } = await load({ ...config, listen: { ...config.listen, port } });
+
+    await expect(Effect.runPromise(loaded), String(port)).resolves.toMatchObject({
+      listen: { port },
+    });
+  }
+
+  for (const port of [10_000, 14_000, 19_999]) {
+    const smolvm = await load({ ...config, listen: { ...config.listen, port } });
+    const onBoat = await load({ ...boat, listen: { ...boat.listen, port } });
+
+    for (const { loaded } of [smolvm, onBoat]) {
+      const error = await Effect.runPromise(Effect.flip(loaded));
+
+      expect(error._tag, String(port)).toBe("Invalid");
+      expect(error.message, String(port)).toContain("outside 10000-19999");
+    }
+  }
+});
+
 test("an unknown key, another runtime or a bad host ID is Invalid", async () => {
   for (const contents of [
     { ...config, labels: [] },

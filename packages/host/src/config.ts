@@ -6,6 +6,7 @@ import { BlockList, isIP } from "node:net";
 import { totalmem } from "node:os";
 import { HostId, Invalid } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path, Schema } from "effect";
+import { firstPort, lastPort } from "./ports.ts";
 
 /**
  * Where a host may listen and publish: its tailnet address, or loopback for a local host. The
@@ -38,7 +39,20 @@ const Address = Schema.String.check(
   }),
 );
 
-const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }));
+/**
+ * The API's port, outside the machines' range: a tailnet policy can then open that range to the
+ * clients that run `clankerbox ssh` without opening the API, and the API never takes a port a
+ * machine would be given.
+ */
+const Port = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: 65_535 }),
+  Schema.makeFilter(
+    (port: number) =>
+      port < firstPort ||
+      port > lastPort ||
+      `a port outside ${firstPort}-${lastPort}, the machines' range`,
+  ),
+);
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 

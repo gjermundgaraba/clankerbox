@@ -89,7 +89,7 @@ processes, each with its own ID, state dir and port.
   host holds, so keep it short (`linux`, `mac`).
 - `listen.address` must be a tailnet address (100.64.0.0/10 or
   fd7a:115c:a1e0::/48) or loopback; a wildcard or public address is refused.
-  Keep `listen.port` outside 10000–19999, the machines' range.
+  `listen.port` must lie outside 10000–19999, the machines' range.
 - `stateDir` is relative to the config file. It holds the database and the
   runtime's own state; one host process owns it at a time.
 - `bases` maps the names clients ask for to images. Hosts that offer the same
@@ -449,8 +449,8 @@ Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
   free port in 10000–19999 (below smolvm's fork range and the Linux ephemeral
   range), confirmed with a bind probe on the publish address and recorded with
   the claim; a unique index backs it up. Forks and restores get their own.
-  Keep the host's API port outside the range (nothing checks it), so a tailnet
-  policy can open 10000–19999 to the clients that run `clankerbox ssh`.
+  The host refuses an API port inside the range, so a tailnet policy can open
+  10000–19999 to the clients that run `clankerbox ssh`.
 - **Security:** a published port is reachable by whatever the tailnet policy
   lets reach the host; sshd and the pinned key protect it. smolvm's strict
   egress floor and Softnet keep guests off private ranges, the floor the
