@@ -103,12 +103,14 @@ interface Hooks {
 }
 
 /**
- * A scripted Mac. `vms` holds Tart's VMs and their states, `jobs` the labels launchd holds.
- * `kickstart` runs the job's `tart run`; by default the VM then runs and its agent answers.
+ * A scripted Mac. `vms` holds Tart's VMs and their states, `jobs` the labels launchd holds, and
+ * `programs` the tart each was bootstrapped with, if not the configured one. `kickstart` runs the
+ * job's `tart run`; by default the VM then runs and its agent answers.
  */
 const scriptedMac = (stateDir: string) => {
   const vms = new Map<string, "running" | "stopped" | "suspended">();
   const jobs = new Set<string>();
+  const programs = new Map<string, string>();
   const exited = new Map<string, number>();
 
   const hooks: Hooks = {};
@@ -217,11 +219,12 @@ const scriptedMac = (stateDir: string) => {
         return {
           stdout:
             vms.get(label) === "running" || !exited.has(label)
-              ? `${target} = {\n\tstate = running\n\tlast exit code = (never exited)\n}\n`
-              : `${target} = {\n\tstate = not running\n\tlast exit code = ${exited.get(label)}\n\tjob state = exited\n}\n`,
+              ? `${target} = {\n\tstate = running\n\tprogram = ${programs.get(label) ?? binary}\n\tlast exit code = (never exited)\n}\n`
+              : `${target} = {\n\tstate = not running\n\tprogram = ${programs.get(label) ?? binary}\n\tlast exit code = ${exited.get(label)}\n\tjob state = exited\n}\n`,
         };
       case "bootstrap":
         jobs.add(basename(args[2] ?? "", ".plist"));
+        programs.delete(basename(args[2] ?? "", ".plist"));
 
         return undefined;
       case "kickstart":
@@ -233,6 +236,8 @@ const scriptedMac = (stateDir: string) => {
 
         return undefined;
       case "bootout":
+        programs.delete(label);
+
         return jobs.delete(label) ? undefined : { exitCode: 3, stderr: "Boot-out failed: 3\n" };
       default:
         return undefined;
@@ -256,7 +261,7 @@ const scriptedMac = (stateDir: string) => {
     tartHome: "/Users/operator/.tart-test",
   };
 
-  return { vms, jobs, exited, hooks, spawner, settings };
+  return { vms, jobs, programs, exited, hooks, spawner, settings };
 };
 
 type ScriptedMac = ReturnType<typeof scriptedMac>;
@@ -651,6 +656,45 @@ test("start writes the job again, so a job file that's gone or names an older ta
     );
     expect(mac.vms.get(vmOf(machine))).toBe("running");
   }
+});
+
+test("start reloads a stopped job launchd holds that names an older tart, and only kickstarts one that names this tart", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const [current, older] = await Promise.all([machineOn("current"), machineOn("older")]);
+  const plistOf = (vm: string) => join(jobsDir(mac.settings.stateDir), `${vm}.plist`);
+
+  for (const machine of [current, older]) {
+    await Effect.runPromise(runtime.create(machine, "base"));
+    await Effect.runPromise(runtime.stop(machine));
+    mac.exited.set(vmOf(machine), 0);
+  }
+
+  mac.programs.set(vmOf(older), "/opt/tart/2.40.0/tart.app/Contents/MacOS/tart");
+
+  const ran = [];
+
+  for (const machine of [current, older]) {
+    const before = calls(mac).length;
+
+    await Effect.runPromise(runtime.start(machine));
+    ran.push(calls(mac).slice(before));
+  }
+
+  expect(ran).toEqual([
+    [
+      `launchctl print gui/501/${vmOf(current)}`,
+      `launchctl kickstart gui/501/${vmOf(current)}`,
+      `tart exec ${vmOf(current)} true`,
+    ],
+    [
+      `launchctl print gui/501/${vmOf(older)}`,
+      `launchctl bootout gui/501/${vmOf(older)}`,
+      `launchctl bootstrap gui/501 ${plistOf(vmOf(older))}`,
+      `launchctl kickstart gui/501/${vmOf(older)}`,
+      `tart exec ${vmOf(older)} true`,
+    ],
+  ]);
+  expect(mac.programs.has(vmOf(older))).toBe(false);
 });
 
 test("the two-VM count takes every running VM, the operator's too, and machines actions are booting", async () => {

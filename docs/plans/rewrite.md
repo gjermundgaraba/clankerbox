@@ -822,9 +822,12 @@ module, with no shared supervisor:
 - **Tart, with one launchd job per VM (`tart.ts`):** every boot writes the
   plist again, so it names the configured tart binary, and a missing plist is
   replaced. Then it runs `launchctl print`, bootstrap if the job is
-  absent, and `kickstart` without `-k`. A job launchd still holds keeps the
-  program it was bootstrapped with until a bootout or a reboot; the host
-  doesn't boot it out to reload it.
+  absent, and `kickstart` without `-k`. A job launchd still holds runs the
+  program it was bootstrapped with, not the plist's, so a held job that
+  doesn't run and whose printed `program` is another tart is booted out and
+  bootstrapped again first; a running job is never touched. The reload isn't
+  verified live yet: if its bootstrap fails, the start fails `Internal`, and
+  the next start finds the job absent and bootstraps it.
   - One LaunchAgent per VM in the user's `gui/<uid>` domain, labelled with the
     VM's name, running `tart run --no-graphics --net-softnet-block=@host <vm>`
     with `RunAtLoad` and `KeepAlive` false. The plist and the job's log are in

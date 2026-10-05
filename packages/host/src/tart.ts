@@ -257,8 +257,8 @@ export const make = (
     });
 
     /**
-     * Writes the machine's VM job, at every boot, so its plist names the configured tart. A job
-     * launchd already holds keeps the program it was bootstrapped with.
+     * Writes the machine's VM job, at every boot, so its plist names the configured tart; `boot`
+     * reloads a job launchd holds that names another.
      */
     const writeJob = (vm: string) => {
       const { plist: file, log } = job(vm);
@@ -377,11 +377,11 @@ export const make = (
 
     /**
      * Boots the machine's VM through its job, written again first: bootstrapped if launchd
-     * doesn't hold it (as after a reboot), then kickstarted without `-k`, which never touches a
-     * running VM. `kickstart`
-     * returns before Tart has started the VM, so `ready` waits for the guest agent. A boot that
-     * fails from there leaves the VM as it is, reachable through its listener; a `start` of a
-     * made machine that runs prepares it again.
+     * doesn't hold it (as after a reboot), or booted out and bootstrapped again if it holds a
+     * job that doesn't run and names another tart, then kickstarted without `-k`, which never
+     * touches a running VM. `kickstart` returns before Tart has started the VM, so `ready` waits
+     * for the guest agent. A boot that fails from there leaves the VM as it is, reachable
+     * through its listener; a `start` of a made machine that runs prepares it again.
      */
     const boot = (machine: MachineRef) =>
       Effect.gen(function* () {
@@ -391,8 +391,22 @@ export const make = (
         yield* writeJob(vm);
 
         const loaded = yield* launchctl(["print", target], `print ${target}`);
+        const program = printed(loaded.stdout, "program");
 
-        if (loaded.exitCode === 113) {
+        // A job launchd holds runs the program it was bootstrapped with, not the plist's.
+        const stale =
+          loaded.exitCode === 0 &&
+          printed(loaded.stdout, "state") === "not running" &&
+          program !== undefined &&
+          program !== settings.binary;
+
+        if (stale) {
+          yield* Effect.flatMap(launchctl(["bootout", target], `bootout ${vm}`), (ran) =>
+            expect(ran, `launchctl bootout ${vm}`),
+          );
+        }
+
+        if (stale || loaded.exitCode === 113) {
           yield* Effect.flatMap(launchctl(["bootstrap", domain, file], `bootstrap ${vm}`), (ran) =>
             expect(ran, `launchctl bootstrap ${vm}`),
           );
