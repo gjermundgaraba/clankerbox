@@ -14,7 +14,7 @@ root:
 ```sh
 pnpm live:smolvm --ssh USER@HOST --address TAILNET_ADDRESS --root OWNED_ROOT --smolvm-prefix PREFIX
 pnpm live:tart --tart TART --seed SEED --address TAILNET_ADDRESS
-pnpm live:boat [--key-file KEY_FILE] [--address TAILNET_ADDRESS]
+pnpm live:boat --key-file KEY_FILE [--address TAILNET_ADDRESS]
 ```
 
 Each is `python3 tests/live/<runtime>/driver.py`, whose `--help` prints its full
@@ -129,11 +129,19 @@ and a stopped machine, a fork holding a file written just before it, and a
 checkpoint restored after its source is deleted; a host restart; and a host
 killed during a setup.
 
-- `--key-file`, optional: a file holding the boat API key, alone or as the
-  `token` of a JSON object; by default the boat CLI's config,
-  `~/Library/Application Support/ascii/boat/config.json`. The driver writes the
-  key only into the host's config in scratch (mode 0600) and fails the run if
-  it ever reaches evidence.
+- `--key-file`: a file holding the boat API key alone, outside the repository
+  and mode 0600. The boat CLI's config holds the key as its JSON `token`; this
+  writes it to `KEY_FILE` without the key reaching an argument list:
+
+  ```sh
+  python3 -c 'import json, os, sys; key = json.load(open(sys.argv[1]))["token"]; \
+    os.write(os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), key.encode())' \
+    "$HOME/Library/Application Support/ascii/boat/config.json" KEY_FILE
+  ```
+
+  The driver writes the key only into the host's config in scratch (mode 0600)
+  and fails the run if it ever reaches evidence.
+
 - Room on the account, which a read-only pre-flight checks before anything is
   made: two free active sandboxes, 7 starts left this hour and this day (one
   run makes 7, of the trial's 5 a minute, 25 an hour and 75 a day, which the

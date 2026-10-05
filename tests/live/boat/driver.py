@@ -2,19 +2,25 @@
 """Runs the boat live suite (tests/live) on this Mac against boat's trial: builds the darwin-arm64
 SEA, runs it unprivileged as a boat host, and runs the suite with the same binary as the CLI.
 
-  python3 tests/live/boat/driver.py [--key-file KEY_FILE] [--address TAILNET_ADDRESS] \\
+  python3 tests/live/boat/driver.py --key-file KEY_FILE [--address TAILNET_ADDRESS] \\
     [--suite-args 'VP TEST ARGS']
 
 The host listens on TAILNET_ADDRESS when it is assigned here, and on loopback otherwise or when
 none is given (recorded in evidence). It needs no root, and the driver refuses to run as root.
 
-KEY_FILE holds the boat API key: a JSON object whose `token` is the key, as the boat CLI's config
-is, or the key alone. It defaults to the boat CLI's config,
-~/Library/Application Support/ascii/boat/config.json. The driver reads the key there and writes it
-only into the host's config in the run's scratch (mode 0600), which the host and the host-control
-program read. It never reaches an argument list, an environment, a log or evidence: the driver's
-own calls log their method, path, status and boat's code only, and the last teardown step redacts
-the key from every evidence file and fails the run if it finds it there.
+KEY_FILE holds the boat API key alone; keep it outside the repository, mode 0600. The boat CLI's
+config holds the key as its JSON `token`; this writes it to KEY_FILE without the key reaching an
+argument list:
+
+  python3 -c 'import json, os, sys; key = json.load(open(sys.argv[1]))["token"]; \\
+    os.write(os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), key.encode())' \\
+    "$HOME/Library/Application Support/ascii/boat/config.json" KEY_FILE
+
+The driver reads the key there and writes it only into the host's config in the run's scratch
+(mode 0600), which the host and the host-control program read. It never reaches an argument list,
+an environment, a log or evidence: the driver's own calls log their method, path, status and
+boat's code only, and the last teardown step redacts the key from every evidence file and fails
+the run if it finds it there.
 
 The run owns one WorkRun (scripts/WORK_RUNS.md) and a host ID of its own,
 `clankerbox-live-b<5 hex>`, so the display name of every sandbox the run makes (its machine
@@ -63,7 +69,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from driver_common import (Evidence, Failed, WorkRun, alive, clean_commit, free_port, host_end, host_start,  # noqa: E402
                            keep, read_int, stop_on_signals)
 
-KEY_SOURCE = Path.home() / 'Library' / 'Application Support' / 'ascii' / 'boat' / 'config.json'
 API = 'https://boat.dev/api/v1'
 # What one run uses (tests/live/tests/boat.test.ts): its starts, the 429 refusal included, the
 # sandboxes it has active at once, which is the trial's limit, and its named snapshots.
@@ -78,18 +83,14 @@ class NoRoom(Exception):
 
 
 def read_key(path):
-    """The API key in `path`: the `token` of a JSON object, as in the boat CLI's config, or the
-    file's whole text. Errors name the file, never what it holds."""
+    """The API key in `path`, which holds it alone. Errors name the file, never what it holds."""
     try:
-        text = path.read_text()
+        token = path.read_text().strip()
     except OSError as error:
         sys.exit(f"couldn't read the API key at {path}: {type(error).__name__}")
-    try:
-        held = json.loads(text)
-    except ValueError:
-        held = None
-    token = held.get('token') if isinstance(held, dict) else text.strip()
-    if not isinstance(token, str) or not token or any(c.isspace() for c in token):
+    if token.startswith('{'):
+        sys.exit(f'{path} holds JSON, not the API key alone; --help shows how to write the key file')
+    if not token or any(c.isspace() for c in token):
         sys.exit(f'{path} holds no API key')
     return token
 
@@ -450,8 +451,7 @@ def preflight(boat, record, log):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--key-file', type=Path, default=KEY_SOURCE,
-                        help="the API key, alone or as a JSON object's `token`; default: the boat CLI's config")
+    parser.add_argument('--key-file', type=Path, required=True, help='a file holding the boat API key alone')
     parser.add_argument('--address', help="this Mac's tailnet address; loopback when omitted or not assigned")
     parser.add_argument('--suite-args', default='', help='arguments for the suite run, such as -t PATTERN')
     options = parser.parse_args()
