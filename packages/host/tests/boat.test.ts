@@ -152,7 +152,7 @@ const refusal = (status: number, code: string, message = `boat says ${code}`): A
 const minute = 60_000;
 
 /**
- * A fake boat. Created, forked and restored sandboxes start `provisioning` or `cloning` and run
+ * A fake boat. Created, forked and restored sandboxes start `provisioned` or `cloning` and run
  * after one read; a stop archives after one read, a named snapshot is saved after one read.
  * `instant` skips those steps. `answer` overrides any request.
  */
@@ -262,7 +262,7 @@ const fakeBoat = (options?: { readonly instant?: boolean }) => {
         return refusal(404, "named_snapshot_not_found");
       }
 
-      return { status: 202, body: { ok: true, sandbox: step(newSandbox("provisioning"), now) } };
+      return { status: 202, body: { ok: true, sandbox: step(newSandbox("provisioned"), now) } };
     }
 
     if (sandbox === undefined) {
@@ -535,11 +535,16 @@ const remotes = (guest: FakeGuest) => guest.calls.map((call) => call.remote);
 
 const activations = ["/sandboxes", "/fork", "/resume"];
 
-test("states read from boat's: ready, idle and running run, cancelled is gone, anything else is stopped", () => {
-  expect(["ready", "idle", "running"].map(stateOf)).toEqual(["running", "running", "running"]);
+test("states read from boat's: the active ones run, cancelled is gone, anything else is stopped", () => {
+  expect(["provisioned", "cloning", "ready", "idle", "running"].map(stateOf)).toEqual([
+    "running",
+    "running",
+    "running",
+    "running",
+    "running",
+  ]);
   expect(stateOf("cancelled")).toBe("missing");
-  expect(["archived", "archiving", "provisioning", "cloning", "error"].map(stateOf)).toEqual([
-    "stopped",
+  expect(["archived", "archiving", "error", "unheard-of"].map(stateOf)).toEqual([
     "stopped",
     "stopped",
     "stopped",
@@ -935,6 +940,12 @@ test("observe reads each recorded sandbox with its own GET, and none when no san
     ip: null,
     sshEndpoint: "203.0.113.10:19045",
   });
+  boat.sandboxes.set("bx_booting", {
+    id: "bx_booting",
+    state: "cloning",
+    ip: null,
+    sshEndpoint: "203.0.113.10:19046",
+  });
   boat.sandboxes.set("bx_cancelled", {
     id: "bx_cancelled",
     state: "cancelled",
@@ -953,6 +964,7 @@ test("observe reads each recorded sandbox with its own GET, and none when no san
       machineOn("up", { native: "bx_up" }),
       machineOn("own", { native: "bx_own" }),
       machineOn("down", { native: "bx_down" }),
+      machineOn("booting", { native: "bx_booting" }),
       machineOn("cancelled", { native: "bx_cancelled" }),
       machineOn("deleted", { native: "bx_deleted" }),
       machineOn("unrecorded"),
@@ -963,12 +975,15 @@ test("observe reads each recorded sandbox with its own GET, and none when no san
     { state: "running", ssh: { host: "203.0.113.10", port: 19_044 } },
     { state: "running", ssh: { host: "198.51.100.7", port: 22 } },
     { state: "stopped" },
+    // Active but not up yet: it runs, with no endpoint until it answers.
+    { state: "running" },
     { state: "missing" },
     { state: "missing" },
     { state: "missing" },
   ]);
   // Never the operator's own sandbox: only the recorded ones are read.
   expect(boat.sent.map((sent) => `${sent.method} ${sent.path}`).toSorted()).toEqual([
+    "GET /sandboxes/bx_booting",
     "GET /sandboxes/bx_cancelled",
     "GET /sandboxes/bx_deleted",
     "GET /sandboxes/bx_down",
@@ -1494,4 +1509,28 @@ test("through the host: stop and delete after a crash before the sandbox was rec
 
   expect(await Effect.runPromise(store.list)).toEqual([]);
   expect(boat.sent.filter((sent) => sent.method !== "GET")).toEqual([]);
+});
+
+test("through the host: after a crash mid-create, a stop stops the sandbox boat is still making", async () => {
+  const boat = fakeBoat({ instant: true });
+  const { machines, store } = await hostOn(boat);
+
+  boat.sandboxes.set("bx_booting", {
+    id: "bx_booting",
+    state: "provisioned",
+    ip: null,
+    sshEndpoint: null,
+  });
+  await Effect.runPromise(
+    store.insert("create", {
+      table: "machines",
+      record: row(machineOn("dev", { native: "bx_booting" })),
+    }),
+  );
+  await Effect.runPromise(store.failInterrupted);
+
+  const stopped = await Effect.runPromise(machines.stop("boat_dev"));
+
+  expect([stopped.state, stopped.action]).toEqual(["stopped", { name: "stop", status: "done" }]);
+  expect(boat.calls()).toEqual(["POST /sandboxes/bx_booting/stop"]);
 });

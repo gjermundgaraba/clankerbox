@@ -1197,11 +1197,17 @@ Two rules for every VM job:
     holds few machines, and boat limits starts, not reads.
   - Any failure other than a 404 fails `observe`: a machine the host can't
     read isn't `missing`.
-  - `ready`, `idle` and `running` read as `running`.
+  - The states `GET /limits` counts as active, `provisioned`, `cloning`,
+    `ready`, `idle` and `running`, read as `running`, so a `stop` after a
+    host crash mid-create, mid-fork or mid-restore stops a sandbox boat is
+    still making rather than skip it. Only `ready`, `idle` and `running`
+    report an endpoint. A `start` of a machine that reads `running` while
+    boat still makes or resumes it skips the resume, and its preparation's
+    exec fails until boat reads the sandbox up.
   - 404 and `cancelled` read as `missing`, and so does a row without a
     sandbox ID. When no row has one, `observe` makes no call.
-  - Anything else reads as `stopped`. A machine that boat stopped on its own
-    reads `stopped`, and `start` resumes it.
+  - Anything else, `error` included, reads as `stopped`. A machine that boat
+    stopped on its own reads `stopped`, and `start` resumes it.
 - **Sizes:** boat has four fixed machine types: `small` (2 vCPU, 4 GiB,
   12 GiB), `default` (4 vCPU, 8 GiB, 50 GiB), `large` (8 vCPU, 16 GiB,
   125 GiB) and `xlarge` (16 vCPU, 32 GiB, 251 GiB, from the $100 plan).

@@ -74,9 +74,18 @@ const apiVersion = "v1";
 /** The states of a sandbox that runs; boat reports `ready` before its lazy restore is done. */
 const upStates: ReadonlySet<string> = new Set(["ready", "idle", "running"]);
 
-/** A machine's state from its sandbox's: a cancelled sandbox is gone, and anything else stopped. */
+/**
+ * The states boat counts as active (`GET /limits`): those that run, and a sandbox still being
+ * made or resumed, which `stop` must not skip.
+ */
+const activeStates: ReadonlySet<string> = new Set([...upStates, "provisioned", "cloning"]);
+
+/**
+ * A machine's state from its sandbox's: an active sandbox runs, a cancelled one is gone, and
+ * anything else, `error` included, is stopped.
+ */
 export const stateOf = (state: string): MachineState =>
-  upStates.has(state) ? "running" : state === "cancelled" ? "missing" : "stopped";
+  activeStates.has(state) ? "running" : state === "cancelled" ? "missing" : "stopped";
 
 /**
  * Where guest port 22 is: boat's public IPv4 relay `host:port` when the sandbox has one, else
@@ -606,7 +615,7 @@ export const make = (
             }
 
             const state = stateOf(sandbox.state);
-            const ssh = state === "running" ? endpointOf(sandbox) : undefined;
+            const ssh = upStates.has(sandbox.state) ? endpointOf(sandbox) : undefined;
 
             return ssh === undefined ? { state } : { state, ssh };
           });
