@@ -325,7 +325,8 @@ def teardown(state, boat, before, log, record):
     snapshot_prefix = f'cbx-{state["host_id"]}-'
 
     # By ID first, so a failed listing can't keep a recorded sandbox; then by run name.
-    ids = (step('read the host database', database_sandboxes, state, log) or set()) | ledger_sandboxes(state)
+    ids = ((step('read the host database', database_sandboxes, state, log) or set())
+           | (step('read the sandbox ledger', ledger_sandboxes, state) or set()))
     for sandbox_id in sorted(ids):
         step(f'delete sandbox {sandbox_id}', delete_sandbox, boat, sandbox_id, log)
     swept = {sandbox['id'] for sandbox in step('list sandboxes', boat.sandboxes) or []
