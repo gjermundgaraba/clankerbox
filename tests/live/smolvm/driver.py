@@ -4,12 +4,17 @@ host, over the tailnet: builds both SEAs, runs the linux one as root on the test
 remote.py, and runs the suite with the darwin one as the CLI.
 
   python3 tests/live/smolvm/driver.py --ssh USER@HOST --address TAILNET_ADDRESS \\
-    --root OWNED_ROOT --smolvm-prefix PREFIX [--suite-args 'VP TEST ARGS']
+    --root OWNED_ROOT --smolvm-prefix PREFIX [--recipe DIR [--recipe-check CMD]] \\
+    [--suite-args 'VP TEST ARGS']
 
 OWNED_ROOT is the test host's directory for this work (runs/ and CLEANUP.md live there), and
-PREFIX the smolvm 1.22.2 install the host uses; both absolute. The driver runs the suite once,
-tears down, and exits with the suite's code. It refuses a tree with uncommitted changes, so the
-commit it records (resources.json `commit`) names the code it ran.
+PREFIX the smolvm 1.22.2 install the host uses; both absolute. DIR, when given, is a real recipe
+directory (setup.sh and files/, such as gg-linux-dev's), whose test is skipped without it: the
+suite creates a machine from it, then runs CMD (default `true`) over ssh as root after the create
+and after a cold start. Only DIR's path reaches evidence, never what it holds, which can carry
+credentials. The driver runs the suite once, tears down, and exits with the suite's code. It
+refuses a tree with uncommitted changes, so the commit it records (resources.json `commit`) names
+the code it ran.
 
 The run owns a local WorkRun (scripts/WORK_RUNS.md) and one remote run directory,
 OWNED_ROOT/runs/l<3 hex>, short because smolvm's socket paths limit the host's state dir (the
@@ -47,10 +52,15 @@ def main():
     parser.add_argument('--address', required=True, help="the test host's tailnet address")
     parser.add_argument('--root', required=True, help='the owned root on the test host')
     parser.add_argument('--smolvm-prefix', required=True, help='the smolvm 1.22.2 install prefix there')
+    parser.add_argument('--recipe', help='a real recipe directory, absolute, for its opt-in test')
+    parser.add_argument('--recipe-check', default='true', help="what shows the recipe's services work, over ssh")
     parser.add_argument('--suite-args', default='', help='arguments for the suite run, such as -t PATTERN')
     options = parser.parse_args()
     if not (options.root.startswith('/') and options.smolvm_prefix.startswith('/')):
         parser.error('--root and --smolvm-prefix must be absolute')
+    if options.recipe is not None and not (options.recipe.startswith('/') and
+                                           Path(options.recipe, 'setup.sh').is_file()):
+        parser.error('--recipe must be an absolute directory holding setup.sh')
     commit = clean_commit()
     stop_on_signals()
 
@@ -157,7 +167,7 @@ def main():
             remote(f'set-binary-sha {sha}', 'set-sha', timeout=60)
 
         record(commit=commit, remote_host=options.ssh, remote_run=rdir, smolvm_prefix=options.smolvm_prefix,
-               address=options.address)
+               address=options.address, recipe=options.recipe)
         log(f'local run {run.path.name}; remote run {rdir}')
         linux, sha = build()
         sh(ssh + [f'mkdir -p {q_root}/runs && mkdir -m 700 {q_rdir}'], 'mkdir', timeout=60)
@@ -186,8 +196,10 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
 ''')
         control_bin.chmod(0o755)
 
+        recipe_env = {} if options.recipe is None else {'CLANKERBOX_LIVE_RECIPE': options.recipe,
+                                                         'CLANKERBOX_LIVE_RECIPE_CHECK': options.recipe_check}
         evidence.suite('smolvm', darwin_bin, client_config, control_bin, remote_state['machine_prefix'],
-                       options.suite_args)
+                       options.suite_args, recipe_env)
 
 
 if __name__ == '__main__':
