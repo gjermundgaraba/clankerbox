@@ -616,8 +616,6 @@ These are known, not guarded, and accepted:
   database leaves its sandboxes to be found by display name (the machine ID).
 - boat: the ready marker `/var/lib/ascii-lazy/sys-done` is undocumented;
   re-check it at every change of boat's API or image.
-- boat: a `start` of a machine boat still makes or resumes skips the resume,
-  and its preparation fails until boat reads the sandbox up.
 
 ## Runtime notes
 
@@ -741,8 +739,10 @@ These are known, not guarded, and accepted:
 - **State** is a `GET` of each recorded sandbox, never a list; a failed read
   reads `unknown`, never `missing`. The SSH endpoint changes at every start
   and is only reported for a running machine.
-- **Ready:** after a fork, start or restore the host waits for boat's
-  lazy-restore marker before preparation writes `/var/lib/clankerbox/`.
+- **Ready:** after a fork, a restore or any start the host waits for boat's
+  lazy-restore marker before preparation writes `/var/lib/clankerbox/`. A
+  start resumes only a sandbox boat doesn't read active; one it still makes,
+  resumes or runs is waited for instead.
 - **Exec** is SSH as `user` with `sudo -n`, one connection per exec, with the
   host's own key (`<stateDir>/boat-ssh/id_ed25519`, authorized after create)
   and the guest's host keys read through boat's command API and pinned per

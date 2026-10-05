@@ -173,8 +173,11 @@ Each: what boat does, and what of ours depends on it.
   in full before `/var/lib/ascii-lazy/sys-done` appears, a few seconds after
   ready, 9–14 s with 1 GiB. That marker is undocumented; the documented signal
   is the `sandbox.hydrated` webhook, which can't reach a tailnet host. Ours:
-  `restoredMarker` and `markerWait` before preparation after a fork, start or
-  restore. Ask whether boat now documents a signal a host can poll.
+  `restoredMarker` and `markerWait` before preparation after a fork, restore
+  or any start, a running machine's included. Ask whether boat now documents a
+  signal a host can poll. Unverified: whether a fresh create's sandbox writes
+  the marker too; if not, a start of a running machine never stopped since its
+  create waits `markerWait` and fails. Check it live.
 
 **Delete** (D, O)
 

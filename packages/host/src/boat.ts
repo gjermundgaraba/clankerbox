@@ -82,7 +82,7 @@ const upStates: ReadonlySet<string> = new Set(["ready", "idle", "running"]);
 
 /**
  * The states boat counts as active (`GET /limits`): those that run, and a sandbox still being
- * made or resumed, which `stop` must not skip.
+ * made or resumed, which `stop` must not skip and `start` doesn't resume again.
  */
 const activeStates: ReadonlySet<string> = new Set([...upStates, "provisioned", "cloning"]);
 
@@ -519,7 +519,8 @@ export const make = (
 
     /**
      * Waits, in one SSH session, for boat's marker that `/var/lib` and `/var/opt` are restored,
-     * where preparation keeps its state and enabled units start from. A fresh create has none.
+     * where preparation keeps its state and enabled units start from. A create restores nothing,
+     * so it doesn't wait.
      */
     const restored = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
@@ -701,11 +702,21 @@ export const make = (
           yield* api.authorize(id, key.publicKey);
           yield* reachable(machine, id);
         }),
+      /**
+       * Resumes the sandbox unless boat reads it active: one boat still makes or resumes, or that
+       * runs, isn't resumed again. Either way the start waits for it to run, for SSH and for the
+       * marker, so preparation never meets a half-restored `/var/lib`, as boat reads a sandbox
+       * ready before its marker exists.
+       */
       start: (machine) =>
         Effect.gen(function* () {
           const id = yield* recordedSandbox(machine);
+          const found = yield* api.sandbox(id);
 
-          yield* refusing(api.resume(id));
+          if (Option.isNone(found) || !activeStates.has(found.value.state)) {
+            yield* refusing(api.resume(id));
+          }
+
           yield* running(machine, id, false);
           yield* reachable(machine, id);
           yield* restored(machine, id);

@@ -1128,6 +1128,45 @@ test("start resumes, waits for SSH, then for boat's marker that /var/lib is rest
   expect(rig.guest.calls.map((call) => call.args.at(-2))).toEqual(["203.0.113.11", "203.0.113.11"]);
 });
 
+test("start of a sandbox boat reads ready skips the resume, and still waits for SSH and boat's marker", async () => {
+  const rig = await rigOn();
+  const machine = machineOn("dev");
+
+  await rig.insert(machine);
+  await succeeds(rig.runtime.create(machine, "boat"));
+  rig.boat.sent.length = 0;
+  rig.guest.calls.length = 0;
+
+  await succeeds(rig.runtime.start({ ...machine, native: "bx_made0001" }));
+
+  expect(rig.boat.calls()).toEqual([]);
+  expect(remotes(rig.guest)).toEqual([
+    remoteCommand(["true"]),
+    remoteCommand(["/bin/sh", "-c", `until [ -e ${restoredMarker} ]; do sleep 0.25; done`]),
+  ]);
+});
+
+test("start of a sandbox boat still resumes waits for it to run, and doesn't resume it again", async () => {
+  const rig = await rigOn();
+
+  rig.boat.sandboxes.set("bx_resuming", {
+    id: "bx_resuming",
+    state: "provisioned",
+    next: "ready",
+    ip: null,
+    sshEndpoint: "203.0.113.11:19500",
+  });
+
+  await succeeds(rig.runtime.start(machineOn("dev", { native: "bx_resuming" })));
+
+  expect(rig.boat.calls()).toEqual([]);
+  expect(rig.boat.sent.filter((sent) => sent.method === "GET").length).toBeGreaterThan(1);
+  expect(remotes(rig.guest)).toEqual([
+    remoteCommand(["true"]),
+    remoteCommand(["/bin/sh", "-c", `until [ -e ${restoredMarker} ]; do sleep 0.25; done`]),
+  ]);
+});
+
 test("a resume boat refuses for the account's limit is a Capacity refusal", async () => {
   const rig = await rigOn(fakeBoat({ instant: true }));
 
