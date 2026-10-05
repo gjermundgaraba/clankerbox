@@ -457,9 +457,10 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
   );
 
   test(
-    "a re-mint on start gives a fresh host key, which becomes Machine.hostKey, and the old pin is refused",
+    "a re-mint on start of a running machine gives a fresh host key, which becomes Machine.hostKey, leaving the VM running as it was, and the old pin is refused",
     async () => {
       const before = await machine("main");
+      const boot = await bootTime("main");
 
       if (before?.ssh === undefined) {
         throw new Error("main has no endpoint");
@@ -479,6 +480,8 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
 
       expect(after.hostKey).toMatch(/^ssh-ed25519 /u);
       expect(after.hostKey).not.toBe(before.hostKey);
+      expect(after.ssh).toEqual(before.ssh);
+      expect(await bootTime("main")).toBe(boot);
       expect(await facts("main")).toMatchObject({ identities: 2, starts: 3 });
 
       const stale = await run("ssh", [
