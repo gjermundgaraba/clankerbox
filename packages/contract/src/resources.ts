@@ -1,5 +1,6 @@
 /** The resources a host reports: machines, checkpoints and the host itself. */
 import { Schema } from "effect";
+import packageJson from "../package.json" with { type: "json" };
 import { HostErrorTag } from "./errors.ts";
 import { HostId, Id } from "./ids.ts";
 
@@ -81,6 +82,9 @@ export const Checkpoint = Schema.Struct({
 }).annotate({ identifier: "Checkpoint" });
 
 export type Checkpoint = typeof Checkpoint.Type;
+
+/** The SDK's version, which is also the version of the clankerbox binaries it ships with. */
+export const version: string = packageJson.version;
 
 export const Host = Schema.Struct({
   id: HostId,

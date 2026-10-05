@@ -20,7 +20,13 @@ import {
   Unavailable,
 } from "./errors.ts";
 import { formatId, HostId, isId, parseId, parseName } from "./ids.ts";
-import type { Checkpoint, Host, Machine, MachineSpec } from "./resources.ts";
+import {
+  type Checkpoint,
+  type Host,
+  type Machine,
+  type MachineSpec,
+  version,
+} from "./resources.ts";
 
 /** One host a client talks to. `id` is the host part of every ID it holds. */
 export const HostEntry = Schema.Struct({
@@ -208,6 +214,30 @@ const settle = <A>(
     ),
   );
 
+/** A version's major.minor: releases that share it speak the same API. */
+const release = (of: string) => of.split(".").slice(0, 2).join(".");
+
+/** A host this client can use: it calls itself by its entry's ID and runs this release. */
+const checkHost = (entry: HostEntry, host: Host): Effect.Effect<Host, Invalid> => {
+  if (host.id !== entry.id) {
+    return Effect.fail(
+      new Invalid({
+        message: `host ${entry.id} (${entry.url}) calls itself ${host.id}; its entry in the host list must use that ID`,
+      }),
+    );
+  }
+
+  if (release(host.version) !== release(version)) {
+    return Effect.fail(
+      new Invalid({
+        message: `host ${entry.id} runs clankerbox ${host.version} and this client is ${version}; their major.minor must match`,
+      }),
+    );
+  }
+
+  return Effect.succeed(host);
+};
+
 /** Every entry is checked here, so a call never meets a malformed URL. */
 const decodeHosts = Schema.decodeUnknownEffect(Schema.Array(HostEntry));
 
@@ -320,21 +350,11 @@ export const make = (
 
     /**
      * Reads a host. IDs route by its entry's ID, so a host that calls itself something else
-     * fails rather than being placed on.
+     * fails rather than being placed on, and so does a host of another release.
      */
     const readHost = (route: Route) =>
       ask(route, actions["host.get"], "get host", (api) =>
-        api.host.get({ payload: {} }).pipe(
-          Effect.flatMap((host) =>
-            host.id === route.entry.id
-              ? Effect.succeed(host)
-              : Effect.fail(
-                  new Invalid({
-                    message: `host ${route.entry.id} (${route.entry.url}) calls itself ${host.id}; its entry in the host list must use that ID`,
-                  }),
-                ),
-          ),
-        ),
+        Effect.flatMap(api.host.get({ payload: {} }), (host) => checkHost(route.entry, host)),
       );
 
     const createOn = (host: string, name: string, spec: MachineSpec) =>

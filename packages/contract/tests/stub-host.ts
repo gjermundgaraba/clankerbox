@@ -22,6 +22,8 @@ export interface StubHostOptions {
   readonly id: string;
   readonly bases: ReadonlyArray<string>;
   readonly runtime?: Runtime;
+  /** The clankerbox version the host reports, the SDK's by default. */
+  readonly version?: string;
   /** Replaces the create handler, for example to refuse with `Capacity` or to run long. */
   readonly create?: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
   /** Machines the host already holds. */
@@ -176,7 +178,7 @@ export const stubHost = (options: StubHostOptions) => {
       Effect.as(record("host.get"), {
         id: options.id,
         runtime,
-        version,
+        version: options.version ?? version,
         runtimeVersion: "1.22.2",
         bases: options.bases,
       }),

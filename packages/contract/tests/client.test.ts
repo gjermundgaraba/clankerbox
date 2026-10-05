@@ -1,7 +1,7 @@
 import { Duration, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
-import { Capacity, Client, type MachineSpec } from "../src/index.ts";
+import { Capacity, Client, type MachineSpec, version } from "../src/index.ts";
 import { type Endpoint, machine, type StubHost, stubHost, transport } from "./stub-host.ts";
 
 const stubs: Array<StubHost> = [];
@@ -331,6 +331,41 @@ test("a host that calls itself by another ID is unreachable, and placement never
   expect(error.message).toContain("mis");
   expect(error.message).toContain("other");
   expect(other.creates).toHaveLength(0);
+});
+
+/** `version` with its minor, or its patch, moved on by one. */
+const bump = (part: 1 | 2) =>
+  version
+    .split(".")
+    .map((value, index) => (index === part ? String(Number(value) + 1) : value))
+    .join(".");
+
+test("a host of another major.minor is Invalid naming both versions, and placement skips it", async () => {
+  const older = host({ id: "linux", bases: ["ubuntu"], version: bump(1) });
+  const patched = host({ id: "hetzner", bases: ["ubuntu"], version: bump(2) });
+
+  const endpoints = [
+    ["linux", older],
+    ["hetzner", patched],
+  ] as const;
+
+  const listed = await withClient(endpoints, (client) => client.hosts);
+  const made = await withClient(endpoints, (client) => client.create("dev", spec));
+
+  const refused = await withClient([["linux", older]], (client) =>
+    Effect.flip(client.create("dev", spec)),
+  );
+
+  expect(listed.answers.map(({ id }) => id)).toEqual(["hetzner"]);
+  expect(listed.unreachable.map(({ host: id, error: { _tag } }) => [id, _tag])).toEqual([
+    ["linux", "Invalid"],
+  ]);
+  expect(listed.unreachable[0]?.error.message).toContain(`runs clankerbox ${bump(1)}`);
+  expect(listed.unreachable[0]?.error.message).toContain(`this client is ${version}`);
+  expect(made.id).toBe("hetzner_dev");
+  expect(refused._tag).toBe("Precondition");
+  expect(refused.message).toContain(bump(1));
+  expect(older.creates).toHaveLength(0);
 });
 
 test("Capacity from the chosen host is the reply; placement never moves on", async () => {

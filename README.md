@@ -267,7 +267,9 @@ digest.
 
 `@gjermundgaraba/clankerbox-sdk` (`packages/contract`) holds the Schemas, the
 action groups, the errors, the profile file schema and the client library. It
-is versioned with the binaries: SDK 1.2.3 talks to hosts of release 1.2.3.
+is versioned with the binaries: SDK 1.2.3 talks to hosts of release 1.2.x.
+Where it reads a host (`hosts` and placement), a host of another major.minor
+is `Invalid`, naming both versions.
 `effect` and `@effect/platform-node` `^4.0.0` are peer dependencies, so an app
 has one copy of Effect and Schema identity holds.
 
