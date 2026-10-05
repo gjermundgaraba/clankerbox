@@ -332,12 +332,13 @@ def control(state_file, op, args):
 
 def recorded_sandboxes(state, log, errors):
     """The sandbox IDs the host's database records, and those the control program saw. The host
-    holds its database exclusively, so this reads it once the host is down."""
+    holds its database exclusively, so this reads it once the host is down, read-write: a host
+    killed mid-write leaves a hot journal, which only a writer can roll back."""
     ids = set()
     database = Path(state['state_dir']) / 'host.db'
     if database.exists():
         try:
-            with closing(sqlite3.connect(f'file:{database}?mode=ro', uri=True)) as db:
+            with closing(sqlite3.connect(str(database))) as db:
                 ids |= {row[0] for row in db.execute('SELECT native FROM machines WHERE native IS NOT NULL')}
             log(f'teardown: the host database records {len(ids)} sandboxes')
         except sqlite3.Error as error:
@@ -406,7 +407,7 @@ def teardown(state, boat, before, log, record):
     limits = boat.limits()
     after = starts_of(limits)
     suite_log = Path(state['evidence']) / 'suite.log'
-    lines = re.findall(r'^\[start\] (\S+) (\S+) (\S+)$', suite_log.read_text(), re.M) if suite_log.exists() else []
+    lines = re.findall(r'^\[start\] (\S+) (\S+) (\S+)\s*$', suite_log.read_text(), re.M) if suite_log.exists() else []
     record(starts={
         'suite': {'count': len(lines), 'refused_429': sum(1 for line in lines if line[2] == '429'),
                   'lines': [' '.join(line) for line in lines]},
