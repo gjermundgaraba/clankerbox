@@ -1709,6 +1709,79 @@ sandboxes, 0 named snapshots, 0 of 2 active).
   The API key is in no evidence file (compared by bytes). The run keeps
   68 KiB of evidence and no scratch.
 
+## Phase 8 acceptance (2026-10-05)
+
+The full live acceptance suite passed on all three runtimes at `dd31dcf`, each
+through its entry point from a clean tree, first time and in this order, with
+no fix needed. The SEAs are 0.12.0's (darwin-arm64 and linux-x64, from
+`tools/release/build.sh`); the base, seed, smolvm prefix, Tart, Softnet and
+tailnet addresses are those of phase 7.
+
+**smolvm** (local run `.work/runs/live-smolvm-dda8e3b8020c`, remote `runs/ldda`,
+`pnpm live:smolvm` as root on the Linux test host).
+
+- **Result:** all 27 tests (26 smolvm and the binary's) passed in 577 s, with
+  Tart's and boat's suites skipped. The real-recipe test is gone since phase 7
+  (`c7e4617`). The run's unit, scopes and machines were named
+  `clankerbox-live-ldda-*`.
+- **Timings** (this run / phase 7's `le80`): create with setup 20.14 / 21.96 s;
+  stop 0.71 / 0.85 s; cold start 1.04 / 0.93 s; start of a running machine
+  0.48 / 0.31 s; a create whose setup slept 310 s 317.96 / 318.45 s; `ram`
+  capture 1.27 / 1.26 s; fork 2.83 / 2.78 s; two concurrent restores 2.12 /
+  1.95 s; one restore 1.48 / 1.45 s; delete after a failed stop 2.83 / 2.87 s;
+  delete of a running machine 1.44 / 0.87 s. The SEA (45.3 MiB gzipped)
+  uploaded at 0.48 MiB/s (0.85 in phase 7).
+- Teardown left no unit, scope, VM, uid ≥ 2000000 process, run process or
+  tailnet listener of the run (the listener set matched the one before,
+  `100.95.240.37:34149`); directory modes and the prefix matched the "before"
+  snapshot, whose only other difference was a logind session scope, and the
+  run's five CLEANUP.md entries read REVERTED. Its 205 root commands are in the
+  remote evidence's `root-runs.log` (132 read-only), and 2 more, `chown`s of
+  the run's own evidence, in `local-root-runs.log`. The run keeps 564 KiB of
+  evidence here and 504 KiB in `runs/ldda`.
+
+**Tart** (run `.work/runs/live-tart-c6cc0d6d4e98`, `pnpm live:tart`, on the
+tailnet address).
+
+- **Result:** all 16 tests (15 Tart and the binary's) passed in 308 s, with
+  smolvm's and boat's skipped, placement over the run's two hosts included.
+  The Mac was loaded (1-minute load average 12–23 around the run, `syspolicyd`
+  the busiest process); the application firewall was on, and no timing shows
+  a held connection.
+- **Timings** (this run / phase 7's `live-tart-d4ffab0715a1`): create with
+  setup 51.65 / 44.8 s; stop 9.77 / 9.7 s; cold start 39.11 / 47.8 s; start of
+  a running machine 0.74 / 0.60 s; disk capture 0.20 / 0.20 s; a fork and a
+  restore booting together 61.36 and 51.11 / 60.2 and 63.2 s; `clankerbox ssh
+  … true` 0.40–0.64 / 0.49–0.65 s; scp and rsync each way 1.32 / 1.33 s; host
+  start 0.36 / 0.96 s; delete of a running machine 3.63 / 7.05 s; checkpoint
+  delete 0.14 / 0.13 s; a create refused at `tart set` 0.24 / 0.21 s.
+- Teardown left no VM, launchd job, Softnet or Virtualization process, with
+  both hosts stopped; the seed's checksums matched PROVENANCE before and
+  after. The run keeps 64 KiB of evidence and no scratch.
+
+**boat** (run `.work/runs/live-boat-8ea30b68137e`, `pnpm live:boat` on the
+tailnet address; trial tier, pre-flight 0 sandboxes, 0 named snapshots, 0 of 2
+active).
+
+- **Result:** all 16 tests (15 boat tests and the binary's) passed in 233 s,
+  with the 429 test and the large create run.
+- **Starts:** 7, the suite's `[start]` lines (3 creates, one the expected 429
+  and one the crash test's; 1 resume; 2 forks; 1 restore). The account read 0
+  of 25 for the hour and 29 of 75 for the day before, and 7 and 36 after.
+- **Timings** (this run / phase 7's `live-boat-d6c2f95d4759`): create with
+  setup 3.73 / 2.95 s; ssh `true` 0.48–0.49 / 0.61–0.78 s; scp and rsync each
+  way 2.11 / 2.37 s; stop 14.51 / 16.79 s; start (resume) 16.32 / 5.84 s;
+  start of a running machine 1.08 / 2.54 s; capture of a running sandbox
+  16.39 / 10.10 s; fork of a running source 74.82 / 26.85 s; capture of a
+  stopped sandbox 6.52 / 123.57 s; fork of a stopped source 6.05 / 8.13 s;
+  restore 5.74 / 7.60 s; delete of a running machine 0.47 / 0.52 s;
+  checkpoint delete 0.18–0.20 / 0.25–0.52 s; host start 0.34 / 0.36 s.
+- **Cleanup:** teardown deleted the 2 sandboxes its ledger recorded and stopped
+  the `ssh` child the crash test's SIGKILL left; afterwards the account held 0
+  sandboxes, 0 named snapshots and 0 active. The API key is in none of the
+  three runs' evidence files (compared by bytes). The run keeps 68 KiB of
+  evidence and no scratch.
+
 ## Consumers and production
 
 - **Production hosts:** the Mac host runs Tart only and the Linux host smolvm
