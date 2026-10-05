@@ -239,7 +239,9 @@ every bump of it:
    comment beside it.
 4. Our comments are not evidence: check each claim against the dependency's
    source or docs at the pinned version.
-5. A bump re-checks that dependency's claims, not just the tests.
+5. A bump re-checks that dependency's claims, not just the tests. The bump
+   skills in `.agents/skills/` (`bump-smolvm`, `bump-tart`, `bump-boat-api`,
+   `bump-node`) carry each one's claims with their source lines.
 
 ### Architecture
 

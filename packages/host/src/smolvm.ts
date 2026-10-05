@@ -28,7 +28,7 @@ import {
 
 /**
  * The smolvm release this host was tested on. Another release is refused at startup: a bump
- * re-checks smolvm's claims (evidence.md) before this changes.
+ * re-checks smolvm's claims (the bump-smolvm skill) before this changes.
  */
 export const testedVersion = "1.22.2";
 

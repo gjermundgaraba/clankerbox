@@ -32,7 +32,7 @@ import {
 /**
  * The oldest Tart this host runs on: from 2.40.1 clone refuses an existing destination, delete's
  * exit codes are reliable, one accept error no longer disables `tart exec`, and `tart list` no
- * longer fails on running VMs (evidence.md, Tart claims).
+ * longer fails on running VMs. The bump-tart skill re-checks these at a new release.
  */
 export const minimumVersion = "2.40.1";
 
@@ -85,7 +85,8 @@ const shutdownWait = Duration.minutes(1);
 
 /**
  * How long a VM may take to leave `running` after `tart stop --timeout 0`, which SIGKILLs `tart
- * run` (T:Commands/Stop.swift:80-93); the VM's lock goes with the process.
+ * run` right after its SIGINT (T:Commands/Stop.swift:51-68); the VM's lock goes with the
+ * process.
  */
 const forcedStopWait = Duration.seconds(10);
 

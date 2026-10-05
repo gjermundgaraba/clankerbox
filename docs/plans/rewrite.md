@@ -1605,6 +1605,12 @@ tests use real VMs.
 
      gg-linux-dev can't run before phase 9 rewrites it: unmodified it fails
      on 26.04 and installs no sshd, key or `start` (evidence.md, P3).
+   - The bump skills are written: `.agents/skills/bump-smolvm`, `bump-tart`,
+     `bump-boat-api` and `bump-node`, each linked from `.claude/skills/`. Each
+     carries its dependency's claims from this file's evidence, with their
+     source lines and the code that depends on them, where the version is
+     pinned, the tests and live runs to repeat, and what to update after, so
+     they outlive these plans.
 8. **Cut over.**
    - Cut-over waits until every API consumer runs on the new SDK, or the
      operator accepts that consumer's downtime.
