@@ -14,7 +14,6 @@ import {
   migrations,
   type NewCheckpoint,
   type NewMachine,
-  type NewRow,
   open,
   type RowRef,
 } from "../src/store.ts";
@@ -80,10 +79,17 @@ const inserting = (made: NewMachine): Inserting => ({
   insert: { table: "machines", record: made },
 });
 
-const capturing = (made: NewCheckpoint) => ({
-  hold: machine(made.machine),
-  insert: { table: "checkpoints", record: made } satisfies NewRow,
-});
+/** A fork's claims: its source, then its copy joined to it. */
+const forking = (store: Interface, source: string, made: NewMachine) =>
+  Effect.flatMap(store.claim("fork", { hold: machine(source) }), ({ token }) =>
+    store.claim("fork", inserting(made), token),
+  );
+
+/** A capture's claims: its source, then its checkpoint joined to it. */
+const capturing = (store: Interface, made: NewCheckpoint) =>
+  Effect.flatMap(store.claim("capture", { hold: machine(made.machine) }), ({ token }) =>
+    store.claim("capture", { insert: { table: "checkpoints", record: made } }, token),
+  );
 
 /** Inserts a machine row whose create is done. */
 const planted = (store: Interface, made: NewMachine) =>
@@ -270,10 +276,7 @@ test("a release removes the rows its claim inserted and puts back what it replac
     Effect.gen(function* () {
       yield* planted(store, record("dev"));
 
-      const { token } = yield* store.claim("fork", {
-        hold: machine("dev"),
-        ...inserting(record("copy", { port: 10_001 })),
-      });
+      const { token } = yield* forking(store, "dev", record("copy", { port: 10_001 }));
 
       yield* store.release(token);
 
@@ -291,10 +294,7 @@ test("an end records the outcome on every claimed row, and the host key on the p
     Effect.gen(function* () {
       yield* planted(store, record("dev"));
 
-      const fork = yield* store.claim("fork", {
-        hold: machine("dev"),
-        ...inserting(record("copy", { port: 10_001 })),
-      });
+      const fork = yield* forking(store, "dev", record("copy", { port: 10_001 }));
 
       yield* store.end(fork.token, {
         action: { name: "fork", status: "done" },
@@ -441,9 +441,9 @@ test("checkpoint rows round-trip, and a capture claims its source in the same tr
     Effect.gen(function* () {
       yield* planted(store, record("dev"));
 
-      const { token } = yield* store.claim("capture", capturing(made));
+      const { token } = yield* capturing(store, made);
       const source = yield* store.find("dev");
-      const busy = yield* Effect.flip(store.claim("capture", capturing(checkpoint("other"))));
+      const busy = yield* Effect.flip(capturing(store, checkpoint("other")));
 
       return [token, source, busy, yield* store.findCheckpoint("snap")] as const;
     }),
@@ -464,25 +464,37 @@ test("checkpoint rows round-trip, and a capture claims its source in the same tr
   });
 });
 
-test("a taken new name rolls back the source's claim with it", async () => {
+test("a join with a taken new name writes nothing; the source stays held until its own release", async () => {
   const stateDir = join(await scratch(owned), "state");
 
-  const [fork, capture, source] = await withStore(stateDir, (store) =>
+  const [fork, capture, held, source] = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
       yield* planted(store, record("dev"));
       yield* planted(store, record("copy", { port: 10_001 }));
 
-      const captured = yield* store.claim("capture", capturing(checkpoint("snap")));
+      const captured = yield* capturing(store, checkpoint("snap"));
 
       yield* store.end(captured.token, { action: { name: "capture", status: "done" } });
 
-      return [
-        yield* Effect.flip(
-          store.claim("fork", { hold: machine("dev"), ...inserting(record("copy")) }),
+      const forked = yield* store.claim("fork", { hold: machine("dev") });
+      const fork = yield* Effect.flip(store.claim("fork", inserting(record("copy")), forked.token));
+      const held = Option.getOrUndefined(yield* store.find("dev"))?.action;
+
+      yield* store.release(forked.token);
+
+      const again = yield* store.claim("capture", { hold: machine("dev") });
+
+      const capture = yield* Effect.flip(
+        store.claim(
+          "capture",
+          { insert: { table: "checkpoints", record: checkpoint("snap") } },
+          again.token,
         ),
-        yield* Effect.flip(store.claim("capture", capturing(checkpoint("snap")))),
-        yield* store.find("dev"),
-      ] as const;
+      );
+
+      yield* store.release(again.token);
+
+      return [fork, capture, held, yield* store.find("dev")] as const;
     }),
   );
 
@@ -490,19 +502,20 @@ test("a taken new name rolls back the source's claim with it", async () => {
   expect(capture).toEqual(
     new Conflict({ message: "checkpoint linux_snap exists", kind: "exists" }),
   );
+  expect(held).toEqual({ name: "fork", status: "running" });
   expect(Option.getOrUndefined(source)?.action).toEqual({ name: "capture", status: "done" });
 });
 
 test("a fork inserts its row and claims its source; a missing source is NotFound", async () => {
   const stateDir = join(await scratch(owned), "state");
-  const forking = { hold: machine("dev"), ...inserting(record("copy", { port: 10_001 })) };
+  const copy = record("copy", { port: 10_001 });
 
   const [missing, rows] = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
-      const missing = yield* Effect.flip(store.claim("fork", forking));
+      const missing = yield* Effect.flip(forking(store, "dev", copy));
 
       yield* planted(store, record("dev"));
-      yield* store.claim("fork", forking);
+      yield* forking(store, "dev", copy);
 
       return [missing, (yield* store.list).map(({ name, action }) => [name, action])];
     }),
@@ -522,7 +535,7 @@ test("a claimed checkpoint is busy; a missing one is NotFound; startup fails its
   const [busy, missing, actions] = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
       yield* planted(store, record("dev"));
-      yield* store.claim("capture", capturing(checkpoint("snap")));
+      yield* capturing(store, checkpoint("snap"));
 
       const busy = yield* Effect.flip(store.claim("delete", snap("snap")));
       const missing = yield* Effect.flip(store.claim("delete", snap("gone")));
