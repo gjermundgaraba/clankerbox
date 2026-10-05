@@ -503,8 +503,14 @@ listed to keep them from being ported):
   something to own.
 - **Native IDs:** machine and checkpoint rows have one `native` column that the
   runtime owns. boat keeps its sandbox ID on the machine row, and records it
-  itself, with the store's `recordNative`, as soon as boat answers: the
-  `Runtime` interface returns nothing from a create, fork or restore. boat's
+  itself as soon as boat answers: the `Runtime` interface returns nothing
+  from a create, fork or restore. The runtime gets no store, only the
+  store's `recordNative`, which the core passes when it builds the runtime's
+  layer (`RecordNative` in `runtime.ts`). After a create's, fork's or
+  restore's native work the core reads the row again, so the create's setup
+  and every preparation get the machine with its `native`, and the runtime
+  reads the ID from the machine it is given; its own steps within one call
+  pass on the ID they made. boat's
   snapshot names, like smolvm's and Tart's native names, derive from the host
   ID and the instance (see IDs and names under [API contract](#api-contract)),
   so checkpoint rows leave it empty, and so do smolvm's and Tart's machines.

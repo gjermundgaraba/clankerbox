@@ -10,6 +10,7 @@ import {
   type ActionName,
   type Checkpoint,
   type HostError,
+  type Internal,
   type Machine,
   type Runtime as RuntimeName,
   type SshEndpoint,
@@ -38,6 +39,17 @@ export interface MachineRef {
 export type MachineState = Machine["state"];
 
 export type CheckpointKind = Checkpoint["kind"];
+
+/**
+ * Records a runtime-assigned ID in the `native` column of the machine row `name` of
+ * `instance`: the one write to the host's state a runtime makes, as boat does its sandbox ID as
+ * soon as boat answers. The core provides it when it builds the runtime's layer.
+ */
+export type RecordNative = (
+  name: string,
+  instance: string,
+  native: string,
+) => Effect.Effect<void, Internal>;
 
 /** A checkpoint as the runtime sees it. */
 export interface CheckpointRef {

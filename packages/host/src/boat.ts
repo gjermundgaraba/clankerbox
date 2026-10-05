@@ -5,8 +5,8 @@
  * the sandbox's own address.
  *
  * boat assigns sandbox IDs, so the runtime records each one on its row (`native`) as soon as
- * boat answers, and reads it from there; a row without one has nothing on boat the host can
- * find. A named snapshot's name derives from the host ID and the row's instance, so a checkpoint
+ * boat answers, through the core's `recordNative`, and reads it from the machine the core
+ * passes; a row without one has nothing on boat the host can find. A named snapshot's name derives from the host ID and the row's instance, so a checkpoint
  * row needs none.
  *
  * The refusal rule covers boat's answers that leave nothing on boat (evidence.md, boat claims):
@@ -50,22 +50,27 @@ import { cliIn, describe, files } from "./cli.ts";
 import type { BoatHost } from "./config.ts";
 import { lastLines } from "./guest.ts";
 import {
+  type Command,
   type Interface,
   type MachineRef,
   type MachineState,
   type Observed,
+  type RecordNative,
   Refusal,
   Runtime,
 } from "./runtime.ts";
-import { Store } from "./store.ts";
 
-/** What the runtime needs: the API key and where boat is, and the host it runs for. */
+/**
+ * What the runtime needs: the API key and where boat is, the host it runs for, and the core's
+ * record of a sandbox ID on its machine's row.
+ */
 export interface Settings {
   readonly apiKey: Redacted.Redacted<string>;
   /** `baseUrl` in production; tests point it at a fake. */
   readonly url: string;
   readonly hostId: string;
   readonly stateDir: string;
+  readonly recordNative: RecordNative;
 }
 
 /** The API version the host is built for, which the host reports as its runtime's version. */
@@ -210,11 +215,10 @@ export const make = (
 ): Effect.Effect<
   Interface,
   HostError,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | HttpClient.HttpClient | Store
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | HttpClient.HttpClient
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const store = yield* Store;
     const api = yield* makeApi({ apiKey: settings.apiKey, url: settings.url });
     const { exec: spawn } = yield* cliIn({ PATH: searchPath });
 
@@ -226,29 +230,20 @@ export const make = (
     const snapshotOf = (instance: string) => snapshotName(settings.hostId, instance);
 
     /**
-     * The machine's sandbox ID: its row's, which a create, fork or restore records as soon as
-     * boat answers, so an action that made the sandbox reads it from the store.
+     * The machine's sandbox ID, from its row. The core reads the row again after a create, fork
+     * or restore, and the runtime's own steps pass on the ID they made.
      */
-    const sandboxOf = (machine: MachineRef): Effect.Effect<Option.Option<string>, Internal> =>
-      machine.native === undefined
-        ? Effect.map(store.find(machine.name), (found) =>
-            Option.flatMap(
-              Option.filter(found, (row) => row.instance === machine.instance),
-              (row) => Option.fromNullishOr(row.native),
-            ),
-          )
-        : Effect.succeed(Option.some(machine.native));
+    const sandboxOf = (machine: MachineRef): Option.Option<string> =>
+      Option.fromNullishOr(machine.native);
 
     const recordedSandbox = (machine: MachineRef) =>
-      Effect.flatMap(sandboxOf(machine), (found) =>
-        Option.match(found, {
-          onNone: () =>
-            Effect.fail(
-              new Internal({ message: `machine ${machine.id} has no boat sandbox recorded` }),
-            ),
-          onSome: Effect.succeed,
-        }),
-      );
+      Option.match(sandboxOf(machine), {
+        onNone: () =>
+          Effect.fail(
+            new Internal({ message: `machine ${machine.id} has no boat sandbox recorded` }),
+          ),
+        onSome: Effect.succeed,
+      });
 
     /**
      * A source boat has, for a fork or a capture: one without a recorded sandbox, or one boat
@@ -262,7 +257,7 @@ export const make = (
           }),
         });
 
-        const id = yield* sandboxOf(machine);
+        const id = sandboxOf(machine);
 
         if (Option.isNone(id)) {
           return yield* missing;
@@ -386,9 +381,8 @@ export const make = (
      * the guest's host keys pinned, at the endpoint boat reports now. Each exec opens its own
      * connection. Errors name the machine, never the command.
      */
-    const exec: Interface["exec"] = (machine, { argv, stdin }) =>
+    const execIn = (machine: MachineRef, id: string, { argv, stdin }: Command) =>
       Effect.gen(function* () {
-        const id = yield* recordedSandbox(machine);
         const found = yield* api.sandbox(id);
 
         if (Option.isNone(found) || !upStates.has(found.value.state)) {
@@ -450,10 +444,13 @@ export const make = (
         );
       });
 
+    const exec: Interface["exec"] = (machine, command) =>
+      Effect.flatMap(recordedSandbox(machine), (id) => execIn(machine, id, command));
+
     /** Runs a command to its end; its exit code, and the last lines of its output. */
-    const runToEnd = (machine: MachineRef, argv: ReadonlyArray<string>) =>
+    const runToEnd = (machine: MachineRef, id: string, argv: ReadonlyArray<string>) =>
       Effect.scoped(
-        Effect.flatMap(exec(machine, { argv }), (execution) =>
+        Effect.flatMap(execIn(machine, id, { argv }), (execution) =>
           Effect.all(
             {
               exitCode: execution.exitCode,
@@ -469,11 +466,11 @@ export const make = (
      * Reading the host keys through boat's command API may fail that early too, so a failed
      * probe is tried again; the last one's output or error is the timeout's.
      */
-    const reachable = (machine: MachineRef) =>
+    const reachable = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
         const last = yield* Ref.make("");
 
-        const answered = yield* runToEnd(machine, ["true"]).pipe(
+        const answered = yield* runToEnd(machine, id, ["true"]).pipe(
           Effect.catch((error) => Effect.succeed({ exitCode: -1, output: error.message })),
           Effect.tap(({ output }) => Ref.set(last, output)),
           Effect.repeat({
@@ -494,9 +491,9 @@ export const make = (
      * Waits, in one SSH session, for boat's marker that `/var/lib` and `/var/opt` are restored,
      * where preparation keeps its state and enabled units start from. A fresh create has none.
      */
-    const restored = (machine: MachineRef) =>
+    const restored = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
-        const waited = yield* runToEnd(machine, [
+        const waited = yield* runToEnd(machine, id, [
           "/bin/sh",
           "-c",
           `until [ -e ${restoredMarker} ]; do sleep 0.25; done`,
@@ -523,7 +520,7 @@ export const make = (
      */
     const made = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
-        yield* store.recordNative(machine.name, machine.instance, id);
+        yield* settings.recordNative(machine.name, machine.instance, id);
         yield* running(machine, id, true);
         yield* api
           .rename(id, machine.id)
@@ -538,7 +535,10 @@ export const make = (
 
     /** A fork's or restore's sandbox, once made: SSH answers and `/var/lib` is restored. */
     const restoredSandbox = (machine: MachineRef, id: string) =>
-      Effect.andThen(made(machine, id), Effect.andThen(reachable(machine), restored(machine)));
+      Effect.andThen(
+        made(machine, id),
+        Effect.andThen(reachable(machine, id), restored(machine, id)),
+      );
 
     /**
      * Waits until a snapshot attempt that began after the source's sync has completed, so the
@@ -547,7 +547,7 @@ export const make = (
      */
     const freshSnapshot = (source: MachineRef, id: string) =>
       Effect.gen(function* () {
-        const synced = yield* runToEnd(source, ["sync"]).pipe(Effect.timeoutOption(syncWait));
+        const synced = yield* runToEnd(source, id, ["sync"]).pipe(Effect.timeoutOption(syncWait));
 
         if (Option.isNone(synced) || synced.value.exitCode !== 0) {
           return yield* new Internal({
@@ -645,7 +645,7 @@ export const make = (
 
           yield* made(machine, id);
           yield* api.authorize(id, key.publicKey);
-          yield* reachable(machine);
+          yield* reachable(machine, id);
         }),
       start: (machine) =>
         Effect.gen(function* () {
@@ -653,8 +653,8 @@ export const make = (
 
           yield* refusing(api.resume(id));
           yield* running(machine, id, false);
-          yield* reachable(machine);
-          yield* restored(machine);
+          yield* reachable(machine, id);
+          yield* restored(machine, id);
         }),
       /** Never with `force`: a stop boat refuses, as when its final snapshot fails, is the error. */
       stop: (machine) =>
@@ -670,7 +670,7 @@ export const make = (
        */
       delete: (machine) =>
         Effect.gen(function* () {
-          const id = yield* sandboxOf(machine);
+          const id = sandboxOf(machine);
 
           if (Option.isNone(id)) {
             return;
@@ -756,10 +756,11 @@ export const make = (
 
 export const layer = (
   config: Pick<BoatHost, "id" | "stateDir" | "boat">,
+  recordNative: RecordNative,
 ): Layer.Layer<
   Runtime,
   HostError,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | HttpClient.HttpClient | Store
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | HttpClient.HttpClient
 > =>
   Layer.effect(
     Runtime,
@@ -768,5 +769,6 @@ export const layer = (
       url: baseUrl,
       hostId: config.id,
       stateDir: config.stateDir,
+      recordNative,
     }),
   );

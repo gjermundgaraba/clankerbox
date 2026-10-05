@@ -442,11 +442,12 @@ const stateDirIn = async (dir: string) => {
   return stateDir;
 };
 
-const settingsOf = (stateDir: string): Settings => ({
+const settingsOf = (stateDir: string, store: Store.Interface): Settings => ({
   apiKey: Redacted.make(apiKey),
   url: "https://boat.test/api/v1",
   hostId: "boat",
   stateDir,
+  recordNative: store.recordNative,
 });
 
 interface Rig {
@@ -472,8 +473,7 @@ const rigOn = async (boat = fakeBoat()): Promise<Rig> => {
   );
 
   const runtime = await Effect.runPromise(
-    make(settingsOf(stateDir)).pipe(
-      Effect.provideService(Store.Store, store),
+    make(settingsOf(stateDir, store)).pipe(
       Effect.provide(Layer.mergeAll(NodeServices.layer, guest.spawner.layer, boat.layer)),
     ),
   );
@@ -695,10 +695,13 @@ test("exec runs as user through sudo -n, quoted, with the host's key and the gue
 
   const ran = await succeeds(
     Effect.flatMap(
-      rig.runtime.exec(machine, {
-        argv: ["/bin/sh", "-c", "cat; exit 3"],
-        stdin: new TextEncoder().encode("from stdin"),
-      }),
+      rig.runtime.exec(
+        { ...machine, native: "bx_made0001" },
+        {
+          argv: ["/bin/sh", "-c", "cat; exit 3"],
+          stdin: new TextEncoder().encode("from stdin"),
+        },
+      ),
       (execution) =>
         Effect.all([Stream.mkString(Stream.decodeText(execution.output)), execution.exitCode]),
     ),
@@ -1444,9 +1447,11 @@ const hostOn = async (boat: FakeBoat) => {
     Layer.merge(Machines.layer(config), Checkpoints.layer(config)).pipe(
       Layer.provide(startup(config)),
       Layer.provideMerge(
-        Layer.effect(Runtime, make(settingsOf(stateDir))).pipe(
-          Layer.provideMerge(Layer.effect(Store.Store, Store.open(stateDir, "boat"))),
-        ),
+        Layer.unwrap(
+          Effect.map(Effect.service(Store.Store), (store) =>
+            Layer.effect(Runtime, make(settingsOf(stateDir, store))),
+          ),
+        ).pipe(Layer.provideMerge(Layer.effect(Store.Store, Store.open(stateDir, "boat")))),
       ),
       Layer.provideMerge(Logger.layer([])),
       Layer.provide(Layer.mergeAll(NodeServices.layer, guest.spawner.layer, boat.layer)),
@@ -1484,6 +1489,30 @@ test("through the host: a create records the sandbox and reads running at boat's
   expect((await Effect.runPromise(store.list)).map((found) => found.native)).toEqual([
     "bx_made0001",
   ]);
+});
+
+test("through the host: setup and preparation run in the sandbox the create recorded, read from the row again", async () => {
+  const boat = fakeBoat({ instant: true });
+  const { guest, machines } = await hostOn(boat);
+
+  await Effect.runPromise(
+    machines.create({
+      id: "boat_dev",
+      base: "boat",
+      cpu: 2,
+      ramMib: 4096,
+      diskGib: 12,
+      setup: { script: "#!/bin/sh\ntrue\n", timeoutSeconds: 30 },
+    }),
+  );
+
+  // The probe, the setup and preparation each pinned the sandbox's keys under its ID.
+  expect(guest.calls).toHaveLength(3);
+
+  for (const call of guest.calls) {
+    expect(call.args).toContain("HostKeyAlias=bx_made0001");
+    expect(call.pinned).toContain(`bx_made0001 ${guestKey}`);
+  }
 });
 
 test("through the host: boat's refusals leave no row, and a refused start keeps the machine as it was", async () => {

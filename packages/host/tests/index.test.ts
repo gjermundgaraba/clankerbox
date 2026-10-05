@@ -62,7 +62,7 @@ const config = (dir: string, port: number): HostConfig => ({
 
 /** Runs `use` while the host runs on `host`, then stops the host. */
 const whileServing = <A, E>(host: HostConfig, dir: string, use: Effect.Effect<A, E>) =>
-  Layer.build(hostLayer(host, fakeRuntime({ dir }).layer)).pipe(
+  Layer.build(hostLayer(host, () => fakeRuntime({ dir }).layer)).pipe(
     Effect.andThen(use),
     Effect.scoped,
     Effect.provide(NodeServices.layer),
@@ -120,7 +120,7 @@ test("a second host on the same state dir refuses to start, before it builds its
   const error = await whileServing(
     first,
     dir,
-    Effect.flip(Layer.build(hostLayer(second, secondFake.layer))).pipe(
+    Effect.flip(Layer.build(hostLayer(second, () => secondFake.layer))).pipe(
       Effect.scoped,
       Effect.provide(NodeServices.layer),
     ),
@@ -135,12 +135,9 @@ test("a host whose address is taken says where it couldn't listen", async () => 
   const dir = await scratch(owned);
   const port = await loopbackPort(true);
 
-  const error = await Layer.build(hostLayer(config(dir, port), fakeRuntime({ dir }).layer)).pipe(
-    Effect.flip,
-    Effect.scoped,
-    Effect.provide(NodeServices.layer),
-    Effect.runPromise,
-  );
+  const error = await Layer.build(
+    hostLayer(config(dir, port), () => fakeRuntime({ dir }).layer),
+  ).pipe(Effect.flip, Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);
 
   expect(error._tag).toBe("Internal");
   expect(error.message).toContain(`couldn't listen on 127.0.0.1:${port}`);

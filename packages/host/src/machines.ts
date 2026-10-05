@@ -10,6 +10,7 @@ import {
   type HostError,
   type Machine,
   Precondition,
+  type Setup,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Array as Arr, Context, DateTime, Effect, Layer, type Scope, Semaphore } from "effect";
 import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./actions.ts";
@@ -50,10 +51,14 @@ type Work = Effect.Effect<void, HostError | Refusal, Runtime>;
 
 /**
  * What a new machine is made from: a spec, or for a fork, the machine it copies, which the fork
- * holds and whose spec it takes. `work` makes it.
+ * holds and whose spec it takes. `work` makes it; a create's `setup` then runs in it.
  */
 type Making =
-  | { readonly spec: Spec; readonly work: (machine: MachineRef) => Work }
+  | {
+      readonly spec: Spec;
+      readonly work: (machine: MachineRef) => Work;
+      readonly setup?: Setup | undefined;
+    }
   | {
       readonly source: string;
       readonly work: (machine: MachineRef, source: MachineRef) => Work;
@@ -181,9 +186,11 @@ export const make = (
     /**
      * Create, fork and restore: under the admission permit, a create or restore claims its new
      * row, with the lowest free port; a fork claims its source, then joins the new row, with the
-     * source's spec. The new row is admitted, the work makes the machine, which is then marked
-     * made, preparation runs, and the action ends done. A failure in preparation leaves the
-     * machine made, so `start` prepares it again; one before, or in the marking, leaves it unmade.
+     * source's spec. The new row is admitted, the work makes the machine, a create's setup runs,
+     * the machine is marked made, preparation runs, and the action ends done. The work may have
+     * recorded the runtime's own ID on the row, so setup and preparation read the row again. A
+     * failure in preparation leaves the machine made, so `start` prepares it again; one before,
+     * or in the marking, leaves it unmade.
      */
     const makeMachine = (action: "create" | "fork" | "restore", name: string, making: Making) =>
       Effect.gen(function* () {
@@ -216,15 +223,25 @@ export const make = (
         );
 
         const machine = ref(row);
+        const setup = "setup" in making ? making.setup : undefined;
 
         const hostKey = yield* native(
           token,
           `${action} ${machine.id}`,
           withRuntime(
-            work(machine).pipe(
-              Effect.andThen(store.markMade(token)),
-              Effect.andThen(prepare(machine)),
-            ),
+            Effect.gen(function* () {
+              yield* work(machine);
+
+              const current = ref(yield* rows.machine(name));
+
+              if (setup !== undefined) {
+                yield* runSetup(current, setup);
+              }
+
+              yield* store.markMade(token);
+
+              return yield* prepare(current);
+            }),
           ),
         );
 
@@ -246,11 +263,8 @@ export const make = (
 
         return yield* makeMachine("create", name, {
           spec: request,
-          work: (machine: MachineRef) =>
-            Effect.andThen(
-              runtime.create(machine, image),
-              request.setup === undefined ? Effect.void : runSetup(machine, request.setup),
-            ),
+          work: (machine: MachineRef) => runtime.create(machine, image),
+          setup: request.setup,
         });
       });
 

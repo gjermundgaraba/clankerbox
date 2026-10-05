@@ -4,20 +4,21 @@ import { Effect, type FileSystem, Layer } from "effect";
 import * as Checkpoints from "./checkpoints.ts";
 import { type HostConfig, loadConfig } from "./config.ts";
 import * as Machines from "./machines.ts";
-import type { Runtime } from "./runtime.ts";
+import type { RecordNative, Runtime } from "./runtime.ts";
 import { runtimeLayer } from "./runtimes.ts";
 import { serve } from "./server.ts";
 import { startup } from "./startup.ts";
 import * as Store from "./store.ts";
 
 /**
- * The whole host over `runtime`: the state dir's database with its owner lock, startup
- * recovery, then the API. The server binds only after recovery.
+ * The whole host over the runtime `runtime` builds: the state dir's database with its owner
+ * lock, startup recovery, then the API. The server binds only after recovery. `runtime` gets
+ * the store's `recordNative`, for a runtime that assigns its own IDs, and nothing else of it.
  */
 export const hostLayer = <E, R>(
   config: HostConfig,
-  runtime: Layer.Layer<Runtime, E, R>,
-): Layer.Layer<never, HostError | E, Exclude<R, Store.Store> | FileSystem.FileSystem> =>
+  runtime: (recordNative: RecordNative) => Layer.Layer<Runtime, E, R>,
+): Layer.Layer<never, HostError | E, R | FileSystem.FileSystem> =>
   serve(config).pipe(
     Layer.catchTag("ServeError", (error) =>
       Layer.effectDiscard(
@@ -35,11 +36,12 @@ export const hostLayer = <E, R>(
     ),
     // The runtime is built only once the store holds the state dir's owner lock: a runtime may
     // write there (smolvm creates its inventory), and a second host must not touch it at all.
-    // A runtime that owns a native ID, as boat does its sandbox's, records it in the store.
+    // A runtime that owns a native ID, as boat does its sandbox's, records it through the
+    // store's `recordNative`, which is all of the store it gets.
     Layer.provide(
-      runtime.pipe(
-        Layer.provideMerge(Layer.effect(Store.Store, Store.open(config.stateDir, config.id))),
-      ),
+      Layer.unwrap(
+        Effect.map(Effect.service(Store.Store), (store) => runtime(store.recordNative)),
+      ).pipe(Layer.provideMerge(Layer.effect(Store.Store, Store.open(config.stateDir, config.id)))),
     ),
   );
 
@@ -48,5 +50,7 @@ export const runHost = (file: string) =>
   Effect.gen(function* () {
     const config = yield* loadConfig(file);
 
-    return yield* Layer.launch(hostLayer(config, runtimeLayer(config)));
+    return yield* Layer.launch(
+      hostLayer(config, (recordNative) => runtimeLayer(config, recordNative)),
+    );
   });

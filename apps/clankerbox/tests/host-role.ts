@@ -24,7 +24,7 @@ const config = {
 
 const role: Role = { host: false };
 
-asHost(role, Layer.launch(hostLayer(config, fakeRuntime({ dir }).layer))).pipe(
+asHost(role, Layer.launch(hostLayer(config, () => fakeRuntime({ dir }).layer))).pipe(
   Effect.provide(NodeServices.layer),
   NodeRuntime.runMain({ teardown: teardown(role) }),
 );
