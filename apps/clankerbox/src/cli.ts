@@ -1,6 +1,6 @@
 /**
  * The CLI's commands. Every command takes IDs, except `create`, which takes a name or a full
- * ID. A mutation returns when its action has finished; `--timeout` only stops waiting.
+ * ID. A mutation returns when its action has finished; its `--timeout` only stops waiting.
  */
 import {
   type ClankerboxError,
@@ -34,16 +34,6 @@ export const clientFlags = {
     Flag.withDescription("Print JSON: the result, or {error: {message, tag, retryable}}."),
     Flag.withDefault(false),
   ),
-  timeout: Flag.Int("timeout").pipe(
-    Flag.withDescription(
-      "Stop waiting for each host's reply after SECONDS. It cancels nothing on the host.",
-    ),
-    Flag.filter(
-      (seconds) => seconds > 0,
-      () => "a positive number of seconds",
-    ),
-    Flag.optional,
-  ),
   config: Flag.String("config").pipe(
     Flag.withDescription(
       "The client config file. Default: $XDG_CONFIG_HOME/clankerbox/config.json.",
@@ -52,7 +42,24 @@ export const clientFlags = {
   ),
 };
 
-type ClientFlags = Command.Command.Config.Infer<typeof clientFlags>;
+/** A mutation's flags: a read gives up after 10 s of its own, and takes no `--timeout`. */
+const mutationFlags = {
+  ...clientFlags,
+  timeout: Flag.Int("timeout").pipe(
+    Flag.withDescription(
+      "Stop waiting for the mutation's reply after SECONDS; unbounded by default. It cancels nothing on the host.",
+    ),
+    Flag.filter(
+      (seconds) => seconds > 0,
+      () => "a positive number of seconds",
+    ),
+    Flag.optional,
+  ),
+};
+
+type ClientFlags = Command.Command.Config.Infer<typeof clientFlags> & {
+  readonly timeout?: Option.Option<number>;
+};
 
 type Services =
   | FileSystem.FileSystem
@@ -62,8 +69,8 @@ type Services =
 
 /**
  * Runs a command against the configured hosts. Its failure is printed, and the process exits
- * 1. `--timeout` bounds the wait for each host's reply, and ends only the wait: the host's
- * action runs on.
+ * 1. A mutation's `--timeout` bounds the wait for its reply, and ends only the wait: the
+ * host's action runs on.
  */
 export const withClient = <A, R>(
   flags: ClientFlags,
@@ -73,7 +80,7 @@ export const withClient = <A, R>(
     const config = yield* loadConfig(flags.config);
 
     const client = yield* Client.make(config.hosts, {
-      timeout: Option.getOrUndefined(Option.map(flags.timeout, Duration.seconds)),
+      timeout: Option.getOrUndefined(Option.map(flags.timeout ?? Option.none(), Duration.seconds)),
     });
 
     return yield* body(client, config);
@@ -205,7 +212,7 @@ const createArguments = {
   ),
 };
 
-type CreateFlags = Command.Command.Config.Infer<typeof clientFlags & typeof createArguments>;
+type CreateFlags = Command.Command.Config.Infer<typeof mutationFlags & typeof createArguments>;
 
 /** `--setup` and `--setup-timeout`, which go together, with the path resolved against the cwd. */
 const flagSetup = (flags: CreateFlags) =>
@@ -269,7 +276,7 @@ const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
     return { spec, host: profile?.host };
   });
 
-const create = Command.make("create", { ...clientFlags, ...createArguments }, (flags) =>
+const create = Command.make("create", { ...mutationFlags, ...createArguments }, (flags) =>
   printResource(flags, {
     call: (client, config) =>
       Effect.flatMap(createRequest(flags, config), ({ spec, host }) =>
@@ -288,7 +295,7 @@ const create = Command.make("create", { ...clientFlags, ...createArguments }, (f
 const machineState = (machine: { readonly id: string; readonly state: string }) =>
   `${machine.id} ${machine.state}`;
 
-const start = Command.make("start", { ...clientFlags, machine: machineArgument }, (flags) =>
+const start = Command.make("start", { ...mutationFlags, machine: machineArgument }, (flags) =>
   printResource(flags, {
     call: (client) => client.start(flags.machine),
     encode: encodeMachine,
@@ -296,7 +303,7 @@ const start = Command.make("start", { ...clientFlags, machine: machineArgument }
   }),
 ).pipe(Command.withDescription("Start a machine. On a running machine, run preparation again."));
 
-const stop = Command.make("stop", { ...clientFlags, machine: machineArgument }, (flags) =>
+const stop = Command.make("stop", { ...mutationFlags, machine: machineArgument }, (flags) =>
   printResource(flags, {
     call: (client) => client.stop(flags.machine),
     encode: encodeMachine,
@@ -325,7 +332,7 @@ const deleted = (json: boolean, id: string, removal: Effect.Effect<void, Clanker
 
 const deleteMachine = Command.make(
   "delete",
-  { ...clientFlags, machine: machineArgument },
+  { ...mutationFlags, machine: machineArgument },
   (flags) =>
     withClient(flags, (client) => deleted(flags.json, flags.machine, client.delete(flags.machine))),
 ).pipe(
@@ -334,7 +341,7 @@ const deleteMachine = Command.make(
 
 const fork = Command.make(
   "fork",
-  { ...clientFlags, machine: machineArgument, name: nameArgument },
+  { ...mutationFlags, machine: machineArgument, name: nameArgument },
   (flags) =>
     printResource(flags, {
       call: (client) => client.fork(flags.machine, flags.name),
@@ -345,7 +352,7 @@ const fork = Command.make(
 
 const restore = Command.make(
   "restore",
-  { ...clientFlags, checkpoint: checkpointArgument, name: nameArgument },
+  { ...mutationFlags, checkpoint: checkpointArgument, name: nameArgument },
   (flags) =>
     printResource(flags, {
       call: (client) => client.restore(flags.checkpoint, flags.name),
@@ -360,7 +367,7 @@ const restore = Command.make(
 
 const capture = Command.make(
   "capture",
-  { ...clientFlags, machine: machineArgument, name: nameArgument },
+  { ...mutationFlags, machine: machineArgument, name: nameArgument },
   (flags) =>
     printResource(flags, {
       call: (client) => client.capture(flags.machine, flags.name),
@@ -395,7 +402,7 @@ const getCheckpoint = Command.make(
 
 const deleteCheckpoint = Command.make(
   "delete",
-  { ...clientFlags, checkpoint: checkpointArgument },
+  { ...mutationFlags, checkpoint: checkpointArgument },
   (flags) =>
     withClient(flags, (client) =>
       deleted(flags.json, flags.checkpoint, client.deleteCheckpoint(flags.checkpoint)),

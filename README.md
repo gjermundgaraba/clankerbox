@@ -173,8 +173,9 @@ clankerbox checkpoint delete linux_base
   ID, so `-l USER` or a `Host` block in `~/.ssh/config` picks the user; other
   ports go through `-L`. For scp or rsync, take `ssh` and `hostKey` from
   `clankerbox machines --json`.
-- A mutation returns when its action has finished. `--timeout SECONDS` only
-  stops waiting: the action runs on, and the CLI says it may have run.
+- A mutation returns when its action has finished, however long that takes.
+  Its `--timeout SECONDS` only stops waiting: the action runs on, and the CLI
+  says it may have run. A read gives up on a host after 10 s.
 - `--json` prints the resource, or `{"error": {"message", "tag", "retryable"}}`.
   Lists print what reachable hosts answered and name the unreachable ones.
 - The CLI exits 0 or 1, 130 on Ctrl-C, and `ssh` with ssh's code. Deleting
@@ -305,6 +306,8 @@ program.pipe(
   create with a long setup isn't cut off. `Client.make` takes the app's own
   `HttpClient` instead; one over `fetch` gives up on a reply after 300 s, and
   `NodeHttpClient.layerUndici` after an hour.
+- A read gives up on a host after 10 s (`readTimeout`); a mutation waits for
+  as long as it runs, unless `timeout` is set.
 - `readSetup` sends a file as its text and packs a directory into one
   self-extracting script (`packRecipe`). `loadProfile` reads a profile file.
 - Every call but the lists fails with one of seven tagged errors

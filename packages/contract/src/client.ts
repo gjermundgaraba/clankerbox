@@ -1,8 +1,8 @@
 /**
  * The client library: a host list in placement order, routing by ID, list fan-out and
  * create placement. Nothing here retries: a mutation whose reply is lost, or that outlasts
- * the client's timeout, is `Unavailable`, and the caller reads the resource to see what
- * happened.
+ * the client's mutation timeout, is `Unavailable`, and the caller reads the resource to see
+ * what happened.
  */
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
@@ -46,12 +46,19 @@ export interface Gathered<A> {
 
 export interface Options {
   /**
-   * How long to wait for each request's reply, unbounded by default. It only stops the
-   * wait, and a mutation that outlasts it fails like a lost reply. A fan-out bounds each host's
-   * request on its own, so a host that doesn't answer in time is named among the unreachable.
+   * How long to wait for a mutation's reply, unbounded by default: a create with a long setup
+   * runs for as long as it takes. It only stops the wait, and a mutation that outlasts it fails
+   * like a lost reply.
    */
   readonly timeout?: Duration.Duration | undefined;
+  /**
+   * How long to wait for a read's reply, 10 s by default. A fan-out bounds each host's request
+   * on its own, so a host that doesn't answer in time is named among the unreachable.
+   */
+  readonly readTimeout?: Duration.Duration | undefined;
 }
+
+const defaultReadTimeout = Duration.seconds(10);
 
 export interface CreateOptions {
   /** The host to create on, normally a profile's `host`. A full ID in `target` wins over it. */
@@ -235,7 +242,11 @@ export const make = (
 
     const routes = new Map(routed.map((route) => [route.entry.id, route]));
 
-    const timeout = options?.timeout;
+    /** How long a call waits for its reply, by its action's access. */
+    const bounds = {
+      read: options?.readTimeout ?? defaultReadTimeout,
+      write: options?.timeout,
+    } satisfies Record<Action.Access, Duration.Duration | undefined>;
 
     const route = (host: string) => {
       const found = routes.get(host);
@@ -262,7 +273,7 @@ export const make = (
 
         return yield* settle(call(api), {
           host: entry,
-          timeout,
+          timeout: bounds[contract.access],
           access: contract.access,
           action,
           target: made ?? id,
@@ -282,7 +293,7 @@ export const make = (
             Effect.result(
               settle(call(route), {
                 host: route.entry,
-                timeout,
+                timeout: bounds[contract.access],
                 access: contract.access,
                 action,
               }),
@@ -332,7 +343,7 @@ export const make = (
 
         return yield* settle(api.machine.create({ payload: { ...spec, id } }), {
           host: entry,
-          timeout,
+          timeout: bounds[actions["machine.create"].access],
           access: actions["machine.create"].access,
           action: `create ${id}`,
           target: id,

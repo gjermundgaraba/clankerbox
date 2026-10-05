@@ -1,4 +1,5 @@
-import { Duration, Effect } from "effect";
+import { Duration, Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
 import { Capacity, Client, type MachineSpec } from "../src/index.ts";
 import { type Endpoint, machine, type StubHost, stubHost, transport } from "./stub-host.ts";
@@ -350,7 +351,9 @@ test("restore sends the checkpoint to its host and makes the machine from it", a
 
 const briefly = { timeout: Duration.millis(50) };
 
-test("with a timeout, a fan-out names the host that didn't answer in time and keeps the rest", async () => {
+const readBriefly = { readTimeout: Duration.millis(50) };
+
+test("with a read timeout, a fan-out names the host that didn't answer in time and keeps the rest", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_dev")] });
 
   const { answers, unreachable } = await withClient(
@@ -359,7 +362,7 @@ test("with a timeout, a fan-out names the host that didn't answer in time and ke
       ["linux", linux],
     ],
     (client) => client.machines,
-    briefly,
+    readBriefly,
   );
 
   expect(answers.map(({ id }) => id)).toEqual(["linux_dev"]);
@@ -377,7 +380,7 @@ test("placement skips a host that didn't answer in time, and the create is still
       ["linux", linux],
     ],
     (client) => client.create("dev", spec),
-    briefly,
+    { ...readBriefly, ...briefly },
   );
 
   expect(made.id).toBe("linux_dev");
@@ -400,15 +403,54 @@ test("a mutation that outlasts the timeout is a lost reply: Unavailable, naming 
   expect(linux.creates).toHaveLength(1);
 });
 
-test("a read that outlasts the timeout is Unavailable and retryable", async () => {
+test("a read that outlasts the read timeout is Unavailable and retryable", async () => {
   const error = await withClient(
     [["linux", "silent"]],
     (client) => Effect.flip(client.machine("linux_dev")),
-    briefly,
+    readBriefly,
   );
 
   expect(error._tag).toBe("Unavailable");
   expect(error.retryable).toBe(true);
+});
+
+test("a read gives up after 10 s by default, and the mutation timeout doesn't bound it", async () => {
+  const error = await withClient(
+    [["linux", "silent"]],
+    (client) =>
+      Effect.gen(function* () {
+        const read = yield* Effect.forkChild(Effect.flip(client.machine("linux_dev")));
+
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(Duration.millis(9_999));
+
+        expect(read.pollUnsafe()).toBeUndefined();
+
+        yield* TestClock.adjust(Duration.millis(1));
+
+        return yield* Fiber.join(read);
+      }).pipe(Effect.provide(TestClock.layer())),
+    briefly,
+  );
+
+  expect(error._tag).toBe("Unavailable");
+  expect(error.message).toContain("timed out after 10s");
+});
+
+test("the read timeout doesn't bound a mutation", async () => {
+  const linux = host({
+    id: "linux",
+    bases: ["ubuntu"],
+    create: (request) => Effect.as(Effect.sleep(Duration.millis(100)), machine(request.id)),
+  });
+
+  const made = await withClient(
+    [["linux", linux]],
+    (client) => client.create("linux_dev", spec),
+    readBriefly,
+  );
+
+  expect(made.id).toBe("linux_dev");
 });
 
 test("a read that can't reach its host is Unavailable and retryable", async () => {

@@ -236,48 +236,17 @@ test("--timeout stops waiting, says the action may have run, and exits 1", async
   expect(linux.creates).toHaveLength(2);
 });
 
-test("--timeout bounds each host's reply: a list keeps what the others answered", async () => {
+test("a read takes no --timeout", async () => {
   const dir = await scratch(owned);
-  const config = await writeConfig(dir, ["mac", "linux"]);
-
-  const { code, stdout } = await cli(["machines", "--timeout", "1", "--json", "--config", config], {
-    endpoints: [
-      ["mac", "silent"],
-      ["linux", host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_dev")] })],
-    ],
-  });
-
-  const document = Schema.decodeUnknownSync(
-    Schema.fromJsonString(
-      Schema.Struct({
-        machines: Schema.Array(Schema.Struct({ id: Schema.String })),
-        unreachable: Schema.Array(Schema.Struct({ host: Schema.String })),
-      }),
-    ),
-  )(stdout, { onExcessProperty: "ignore" });
-
-  expect(code).toBe(0);
-  expect(document).toEqual({ machines: [{ id: "linux_dev" }], unreachable: [{ host: "mac" }] });
-});
-
-test("--timeout starts when the create is sent: placement past a silent host still creates", async () => {
-  const dir = await scratch(owned);
-  const config = await writeConfig(dir, ["mac", "linux"]);
+  const config = await writeConfig(dir, ["linux"]);
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 
-  const { code, stdout } = await cli(
-    ["create", "dev", ...sizes, "--timeout", "1", "--config", config],
-    {
-      endpoints: [
-        ["mac", "silent"],
-        ["linux", linux],
-      ],
-    },
-  );
+  const { code } = await cli(["machines", "--timeout", "1", "--config", config], {
+    endpoints: [["linux", linux]],
+  });
 
-  expect(code).toBe(0);
-  expect(stdout).toBe("linux_dev");
-  expect(linux.creates).toHaveLength(1);
+  expect(code).toBe(1);
+  expect(linux.calls).toEqual([]);
 });
 
 test("--timeout must be a positive number of seconds", async () => {
@@ -286,7 +255,7 @@ test("--timeout must be a positive number of seconds", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 
   for (const seconds of ["0", "-1"]) {
-    const { code } = await cli(["machines", "--timeout", seconds, "--config", config], {
+    const { code } = await cli(["start", "linux_dev", "--timeout", seconds, "--config", config], {
       endpoints: [["linux", linux]],
     });
 
