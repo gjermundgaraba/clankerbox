@@ -504,6 +504,10 @@ def control(op, rest):
             raise RuntimeError(f'refusing to remove {native}')
         smol('machine', 'stop', '--name', native, touched=f'stops {native}')
         must(smol('machine', 'delete', '--name', native, '--force', touched=f'deletes {native}'), 'delete')
+    elif op == 'status':
+        print(json.dumps(machine_status(native_for(rest[0]))))
+    elif op == 'stall':
+        stall(native_for(rest[0]))
     elif op == 'freeze':
         native = native_for(rest[0])
         # The exec doesn't return once its own guest filesystem is frozen; the freeze holds.
@@ -542,6 +546,37 @@ def control(op, rest):
     else:
         raise RuntimeError(f'unknown control op {op}')
     return 0
+
+
+def machine_status(native):
+    """smolvm's own reading of the machine, `unreachable` included, and its VMM's pid."""
+    found = json.loads(must(smol('machine', 'status', '--name', native, '--json', touched='read-only'),
+                            'machine status'))
+    return {'state': found['state'], 'pid': found.get('pid')}
+
+
+def stall(native):
+    """SIGSTOPs the VMM of the run's machine `native`, which smolvm then reads unreachable: its
+    pid lives, but its agent doesn't answer (resolve_state, S@1.22.2:src/agent/state_probe.rs).
+    The agent is the guest's PID 1, which no signal from inside the guest stops. smolvm's start
+    and stop end such a VMM with SIGKILL, which ends a stopped process too, so teardown needs
+    nothing more. Prints the pid."""
+    status = machine_status(native)
+    pid, scope = status['pid'], f'smolvm-vm-{native}.scope'
+    try:
+        cgroup = Path(f'/proc/{pid}/cgroup').read_text() if pid else ''
+    except FileNotFoundError:
+        cgroup = ''
+    if status['state'] != 'running' or not native.startswith(NAME_PREFIX) or f'/{scope}' not in cgroup:
+        raise RuntimeError(f'{native} reads {status["state"]} with VMM pid {pid}, not one in {scope}: not stalled')
+    must(sudo(['kill', '-STOP', str(pid)],
+              touched=f'SIGSTOPs VMM pid {pid} of the run\'s machine {native}, in {scope}'), 'kill -STOP')
+    deadline = time.monotonic() + 60
+    while (state := machine_status(native)['state']) != 'unreachable':
+        if time.monotonic() > deadline:
+            raise RuntimeError(f'smolvm reads {native} {state}, not unreachable, a minute after its VMM stopped')
+        time.sleep(1)
+    print(pid)
 
 
 def call_pattern(name, verb):

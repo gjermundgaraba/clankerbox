@@ -25,6 +25,7 @@ import {
   run,
   Store,
   sha256,
+  SmolvmStatus,
   timing,
   waitFor,
   writeFileIn,
@@ -131,6 +132,12 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
   } = suite;
 
   let routeBefore: string;
+
+  /** The guest kernel's boot ID; a VM that kept running keeps it. */
+  const bootId = (name: string) => inGuest(name, "cat /proc/sys/kernel/random/boot_id");
+
+  /** smolvm's own reading of the machine, `unreachable` included, and its VMM's pid. */
+  const smolvmStatus = (name: string) => controlled(SmolvmStatus, "status", named(name));
 
   const count = async (name: string, file: string) =>
     (await inGuest(name, `cat /var/lib/clankerbox-live/${file}`)).split("\n").length;
@@ -362,8 +369,10 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "start on a running machine runs preparation again, which relaunches a killed sshd",
+    "start on a running machine leaves its VM running and runs preparation again, which relaunches a killed sshd",
     async () => {
+      const boot = await bootId("main");
+
       await ssh("main", "kill $(cat /run/sshd.pid)");
       expect((await ssh("main", "true")).code).not.toBe(0);
 
@@ -374,8 +383,54 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(repaired.code, repaired.stdout).toBe(0);
       expect(await count("main", "starts")).toBe(3);
       expect(await count("main", "identities")).toBe(1);
+      expect(await bootId("main")).toBe(boot);
     },
     minutes(3),
+  );
+
+  test(
+    "a machine smolvm reads unreachable, its VMM stopped so its agent doesn't answer, reads running and refuses a fork; start boots it again, with its key, and runs start but not new-identity",
+    async () => {
+      const before = await machine("main");
+      const boot = await bootId("main");
+      const source = await facts("main");
+      const stalled = await control("stall", named("main"));
+
+      expect(stalled.code, stalled.stderr).toBe(0);
+
+      const vmm = Number(stalled.stdout);
+
+      expect(await smolvmStatus("main")).toEqual({ state: "unreachable", pid: vmm });
+      expect(await machine("main")).toMatchObject({ state: "running" });
+
+      const fork = failure(await cli(["fork"], id("main"), named("stalled-fork"), "--json"));
+
+      expect(fork.tag).toBe("Precondition");
+      expect(fork.message).toContain("unreachable");
+      expect(await machine("stalled-fork")).toBeUndefined();
+      expect(await natives("stalled-fork")).toEqual(smolvm.nothing);
+
+      const started = performance.now();
+      const recovered = await cli(["start"], id("main"), "--json");
+
+      timing("start (unreachable machine: boot again, then preparation)", started);
+      expect(recovered.code, recovered.stdout).toBe(0);
+      expect(decode(OneMachine, recovered)).toMatchObject({
+        state: "running",
+        action: { name: "start", status: "done" },
+        hostKey: before?.hostKey,
+        ssh: before?.ssh,
+      });
+
+      const after = await smolvmStatus("main");
+
+      expect(after.state).toBe("running");
+      expect(after.pid).not.toBe(vmm);
+      // clankerbox ssh pins the key the machine kept, so this proves sshd serves it again.
+      expect(await bootId("main")).not.toBe(boot);
+      expect(await facts("main")).toEqual({ ...source, starts: source.starts + 1 });
+    },
+    minutes(5),
   );
 
   test(

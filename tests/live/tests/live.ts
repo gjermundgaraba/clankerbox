@@ -104,6 +104,10 @@ export const Natives = Schema.fromJsonString(
   }),
 );
 
+export const SmolvmStatus = Schema.fromJsonString(
+  Schema.Struct({ state: Schema.String, pid: Schema.NullOr(Schema.Number) }),
+);
+
 export const TartNatives = Schema.fromJsonString(
   Schema.Struct({
     machines: Schema.Array(Schema.Struct({ name: Schema.String, state: Schema.String })),
@@ -150,6 +154,10 @@ export const BoatAccount = Schema.fromJsonString(
  * - `decoy NAME`: make and boot a native machine `NAME-<8 hex>` the host didn't make, and
  *   print its native name; `remove-native NATIVE` removes it;
  * - `freeze NAME`: freeze the guest's storage filesystem, so smolvm's stop can't quiesce it;
+ * - `status NAME`: print `{state, pid}`, smolvm's own reading of machine NAME's state,
+ *   `unreachable` included, and its VMM's pid;
+ * - `stall NAME`: SIGSTOP machine NAME's VMM, wait until smolvm reads the machine unreachable,
+ *   and print the VMM's pid;
  * - `forks`: print the names in the host's forks area; `plant-fork NAME` leaves a fork store
  *   named NAME there, as a crash during a fork would;
  * - `store`: print `{checkpoints}`, the names in the host's checkpoint store;
