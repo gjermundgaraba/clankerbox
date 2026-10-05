@@ -5,12 +5,13 @@
  * happened.
  */
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
+import type * as Action from "@gjermundgaraba/effect-actions/Action";
+import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
 import { Context, Duration, Effect, Layer, Match, Result, Schema } from "effect";
 import type { HttpClient, HttpClientError } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
-import { Http } from "./api.ts";
+import { CheckpointGroup, HostGroup, Http, MachineGroup } from "./api.ts";
 import {
-  type Access,
   type ClankerboxError,
   type HostError,
   Internal,
@@ -114,11 +115,14 @@ interface Route {
 
 type CallError = HostError | HttpClientError.HttpClientError | Schema.SchemaError;
 
+/** Every action's contract, keyed `<group>.<action>`: a call reads its access from its action. */
+const actions = ActionGroup.contracts(MachineGroup, CheckpointGroup, HostGroup);
+
 /** Which call met an error, for its message and for whether it is retryable. */
 interface CallContext {
   readonly host: HostEntry;
   readonly timeout: Duration.Duration | undefined;
-  readonly access: Access;
+  readonly access: Action.Access;
   /** What the call does, such as `start linux_dev` or `list machines`. */
   readonly action: string;
   /** The ID to read when a mutation's reply is lost. */
@@ -247,7 +251,7 @@ export const make = (
      */
     const byId = <A>(
       id: string,
-      access: Access,
+      contract: { readonly access: Action.Access },
       action: string,
       call: (api: HostApi) => Effect.Effect<A, CallError>,
       made?: string,
@@ -259,7 +263,7 @@ export const make = (
         return yield* settle(call(api), {
           host: entry,
           timeout,
-          access,
+          access: contract.access,
           action,
           target: made ?? id,
         });
@@ -267,6 +271,7 @@ export const make = (
 
     /** Asks every host at once; a host that fails is named rather than failing the whole. */
     const gather = <A>(
+      contract: { readonly access: Action.Access },
       action: string,
       call: (route: Route) => Effect.Effect<ReadonlyArray<A>, CallError>,
     ): Effect.Effect<Gathered<A>> =>
@@ -275,7 +280,12 @@ export const make = (
         (route) =>
           Effect.map(
             Effect.result(
-              settle(call(route), { host: route.entry, timeout, access: "read", action }),
+              settle(call(route), {
+                host: route.entry,
+                timeout,
+                access: contract.access,
+                action,
+              }),
             ),
             (result) => ({ host: route.entry.id, result }),
           ),
@@ -301,7 +311,7 @@ export const make = (
      * Every host, paired with its entry. IDs route by the entry's ID, so a host that calls
      * itself something else is listed as unreachable rather than placed on.
      */
-    const listed = gather("get host", ({ entry, api }) =>
+    const listed = gather(actions["host.get"], "get host", ({ entry, api }) =>
       api.host.get({ payload: {} }).pipe(
         Effect.flatMap((host) =>
           host.id === entry.id
@@ -323,7 +333,7 @@ export const make = (
         return yield* settle(api.machine.create({ payload: { ...spec, id } }), {
           host: entry,
           timeout,
-          access: "write",
+          access: actions["machine.create"].access,
           action: `create ${id}`,
           target: id,
         });
@@ -385,22 +395,38 @@ export const make = (
         answers: answers.map(({ host }) => host),
         unreachable,
       })),
-      machines: gather("list machines", ({ api }) => api.machine.list({ payload: {} })),
-      checkpoints: gather("list checkpoints", ({ api }) => api.checkpoint.list({ payload: {} })),
-      machine: (id) => byId(id, "read", `get ${id}`, (api) => api.machine.get({ payload: { id } })),
+      machines: gather(actions["machine.list"], "list machines", ({ api }) =>
+        api.machine.list({ payload: {} }),
+      ),
+      checkpoints: gather(actions["checkpoint.list"], "list checkpoints", ({ api }) =>
+        api.checkpoint.list({ payload: {} }),
+      ),
+      machine: (id) =>
+        byId(id, actions["machine.get"], `get ${id}`, (api) =>
+          api.machine.get({ payload: { id } }),
+        ),
       checkpoint: (id) =>
-        byId(id, "read", `get ${id}`, (api) => api.checkpoint.get({ payload: { id } })),
+        byId(id, actions["checkpoint.get"], `get ${id}`, (api) =>
+          api.checkpoint.get({ payload: { id } }),
+        ),
       create,
       start: (id) =>
-        byId(id, "write", `start ${id}`, (api) => api.machine.start({ payload: { id } })),
-      stop: (id) => byId(id, "write", `stop ${id}`, (api) => api.machine.stop({ payload: { id } })),
+        byId(id, actions["machine.start"], `start ${id}`, (api) =>
+          api.machine.start({ payload: { id } }),
+        ),
+      stop: (id) =>
+        byId(id, actions["machine.stop"], `stop ${id}`, (api) =>
+          api.machine.stop({ payload: { id } }),
+        ),
       delete: (id) =>
-        byId(id, "write", `delete ${id}`, (api) => api.machine.delete({ payload: { id } })),
+        byId(id, actions["machine.delete"], `delete ${id}`, (api) =>
+          api.machine.delete({ payload: { id } }),
+        ),
       fork: (machine, name) =>
         Effect.flatMap(sibling(machine, name), (made) =>
           byId(
             machine,
-            "write",
+            actions["machine.fork"],
             `fork ${machine} to ${made}`,
             (api) => api.machine.fork({ payload: { machine, name } }),
             made,
@@ -410,7 +436,7 @@ export const make = (
         Effect.flatMap(sibling(checkpoint, name), (made) =>
           byId(
             checkpoint,
-            "write",
+            actions["machine.restore"],
             `restore ${checkpoint} to ${made}`,
             (api) => api.machine.restore({ payload: { checkpoint, name } }),
             made,
@@ -420,14 +446,16 @@ export const make = (
         Effect.flatMap(sibling(machine, name), (made) =>
           byId(
             machine,
-            "write",
+            actions["checkpoint.capture"],
             `capture ${machine} to ${made}`,
             (api) => api.checkpoint.capture({ payload: { machine, name } }),
             made,
           ),
         ),
       deleteCheckpoint: (id) =>
-        byId(id, "write", `delete ${id}`, (api) => api.checkpoint.delete({ payload: { id } })),
+        byId(id, actions["checkpoint.delete"], `delete ${id}`, (api) =>
+          api.checkpoint.delete({ payload: { id } }),
+        ),
     } satisfies Interface;
   });
 

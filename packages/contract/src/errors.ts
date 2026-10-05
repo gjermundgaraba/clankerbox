@@ -2,6 +2,7 @@
  * The seven errors every clankerbox call can fail with. `retryable` is derived from the
  * tag, so callers never keep their own table of which failures to repeat.
  */
+import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Schema } from "effect";
 
 /** The request is malformed: a bad ID or name, an undeclared field, a value out of range. */
@@ -63,18 +64,14 @@ export class Capacity extends Schema.TaggedError<Capacity>()(
   }
 }
 
-/** Whether the call that met an error only reads, or changes something. */
-export const Access = Schema.Literals(["read", "write"]);
-
-export type Access = typeof Access.Type;
-
 /**
  * The client couldn't reach the host, or lost its reply. Only the client library produces
- * it. A mutation's request may have reached the host and run, so it is never retryable.
+ * it. `access` is the access of the action that met it: a mutation's request may have
+ * reached the host and run, so it is never retryable.
  */
 export class Unavailable extends Schema.TaggedError<Unavailable>()("Unavailable", {
   message: Schema.String,
-  access: Access,
+  access: Schema.Literals(["read", "write"] satisfies ReadonlyArray<Action.Access>),
 }) {
   get retryable(): boolean {
     return this.access === "read";
