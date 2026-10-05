@@ -311,7 +311,7 @@ test("delete removes a row whose create never reached the runtime", async () => 
   // A crash between inserting the row and the first runtime call leaves this row and nothing
   // native.
   await linux.run(linux.machines.delete("linux_dev"));
-  await linux.run(linux.store.claim("create", { insert: { table: "machines", record: row } }));
+  await linux.run(linux.store.insert("create", { table: "machines", record: row }));
   await linux.dispose();
   linux.fake.calls.length = 0;
 

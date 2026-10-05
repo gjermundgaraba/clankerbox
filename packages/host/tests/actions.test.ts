@@ -26,6 +26,13 @@ const row: NewMachine = {
   hostKey: undefined,
 };
 
+/** A create's claim of `row`, as `claimAndCheck` takes it. */
+const inserting = (store: Interface) =>
+  Effect.map(store.insert("create", { table: "machines", record: row }), (token) => ({
+    token,
+    held: row,
+  }));
+
 /** Runs `use` with the claims over a store whose release fails, and what it logged. */
 const withFailingRelease = async <A>(
   use: (claims: ReturnType<typeof claimsOn>, store: Interface) => Effect.Effect<A, HostError>,
@@ -54,9 +61,7 @@ const withFailingRelease = async <A>(
 
 test("a release that fails after a failed check is logged, and the check's error is the reply", async () => {
   const { result, logged } = await withFailingRelease(({ claimAndCheck }, store) =>
-    claimAndCheck(store.claim("create", { insert: { table: "machines", record: row } }), () =>
-      Effect.fail(new Precondition({ message: "no room" })),
-    ),
+    claimAndCheck(inserting(store), () => Effect.fail(new Precondition({ message: "no room" }))),
   );
 
   expect(result).toEqual(new Precondition({ message: "no room" }));
@@ -66,10 +71,7 @@ test("a release that fails after a failed check is logged, and the check's error
 test("a release that fails after a runtime's refusal is logged, and the refusal's error is the reply", async () => {
   const { result, logged } = await withFailingRelease(({ claimAndCheck, native }, store) =>
     Effect.flatMap(
-      claimAndCheck(
-        store.claim("create", { insert: { table: "machines", record: row } }),
-        () => Effect.void,
-      ),
+      claimAndCheck(inserting(store), () => Effect.void),
       ([token]) =>
         native(
           token,

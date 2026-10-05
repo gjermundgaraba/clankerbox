@@ -225,23 +225,13 @@ export interface RowRef<T extends Table = Table> {
   readonly name: string;
 }
 
-/** A row for a claim to insert. */
+/** A row for `insert`. */
 export type NewRow =
   | { readonly table: "machines"; readonly record: NewMachine }
   | { readonly table: "checkpoints"; readonly record: NewCheckpoint };
 
 /** Reads a row of each table by name, inside a transaction. */
 type Finders = { readonly [T in Table]: (name: string) => Records[T] | undefined };
-
-/** A claim that holds an existing row. */
-export interface Holding<T extends Table> {
-  readonly hold: RowRef<T>;
-}
-
-/** A claim that inserts a new row. */
-export interface Inserting {
-  readonly insert: NewRow;
-}
 
 /** A row a claim holds, and the action the claim replaced on it. */
 export interface HeldRow extends RowRef {
@@ -258,7 +248,7 @@ export interface Token {
   readonly held: ReadonlyArray<HeldRow>;
 }
 
-/** What a claim returns: its token, and the record of the row it held, as the claim left it. */
+/** What a hold returns: its token, and the record of the row it held, as the hold left it. */
 export interface Claim<A> {
   readonly token: Token;
   readonly held: A;
@@ -286,25 +276,26 @@ export interface Interface {
     name: string,
   ) => Effect.Effect<Option.Option<CheckpointRecord>, Internal>;
   /**
-   * Claims a row for `action` in one transaction: holds `rows.hold`, or inserts `rows.insert`,
-   * held by the action from the start. A missing row is NotFound, one another action holds
-   * `Conflict{busy}` and a taken new name `Conflict{exists}`, and then nothing is written. The
-   * token covers `joining`'s rows too, so an action can claim in steps, such as a fork's source
-   * and then its copy, and still release or end everything at once. Actions pick ports one at a
-   * time, so the port's unique index is only a backstop.
+   * Claims an existing row for `action` in one transaction. A missing row is NotFound and one
+   * another action holds `Conflict{busy}`, and then nothing is written. The token covers
+   * `joining`'s rows too, so an action can claim in steps, such as a fork's source and then its
+   * copy, and still release or end everything at once.
    */
-  readonly claim: {
-    <T extends Table>(
-      action: ActionName,
-      rows: Holding<T>,
-      joining?: Token,
-    ): Effect.Effect<Claim<Records[T]>, NotFound | Conflict | Internal>;
-    (
-      action: ActionName,
-      rows: Inserting,
-      joining?: Token,
-    ): Effect.Effect<Claim<undefined>, Conflict | Internal>;
-  };
+  readonly hold: <T extends Table>(
+    action: ActionName,
+    row: RowRef<T>,
+    joining?: Token,
+  ) => Effect.Effect<Claim<Records[T]>, NotFound | Conflict | Internal>;
+  /**
+   * Inserts a new row in one transaction, held by `action` from the start, and joins it to
+   * `joining` as `hold` does. A taken name is `Conflict{exists}`, and then nothing is written.
+   * Actions pick ports one at a time, so the port's unique index is only a backstop.
+   */
+  readonly insert: (
+    action: ActionName,
+    row: NewRow,
+    joining?: Token,
+  ) => Effect.Effect<Token, Conflict | Internal>;
   /** Gives back a claim in one transaction: its inserted rows go, its held rows get `before`. */
   readonly release: (token: Token) => Effect.Effect<void, Internal>;
   /** Ends a claim in one transaction, recording `outcome` on its rows. */
@@ -611,52 +602,6 @@ export const open = (
       return Result.succeed({ table: row.table, name: row.record.name });
     };
 
-    /** Holds or inserts, as `claim` describes, inside a transaction. */
-    const claimSync = <T extends Table>(
-      action: ActionName,
-      rows: Holding<T> | Inserting,
-      joining: Token | undefined,
-    ): Result.Result<Claim<Records[T] | undefined>, NotFound | Conflict> => {
-      const held = joining?.held ?? [];
-      const inserted = joining?.inserted ?? [];
-
-      if ("hold" in rows) {
-        return Result.map(holdSync(action, rows.hold), ({ row, record }) => ({
-          token: { action, inserted, held: [...held, row] },
-          held: record,
-        }));
-      }
-
-      return Result.map(insertSync(action, rows.insert), (row) => ({
-        token: { action, inserted: [...inserted, row], held },
-        held: undefined,
-      }));
-    };
-
-    /** The row a claim takes, for errors. */
-    const claimed = (rows: Holding<Table> | Inserting) =>
-      id("hold" in rows ? rows.hold.name : rows.insert.record.name);
-
-    function claim<T extends Table>(
-      action: ActionName,
-      rows: Holding<T>,
-      joining?: Token,
-    ): Effect.Effect<Claim<Records[T]>, NotFound | Conflict | Internal>;
-    function claim(
-      action: ActionName,
-      rows: Inserting,
-      joining?: Token,
-    ): Effect.Effect<Claim<undefined>, Conflict | Internal>;
-    function claim<T extends Table>(
-      action: ActionName,
-      rows: Holding<T> | Inserting,
-      joining?: Token,
-    ): Effect.Effect<Claim<Records[T] | undefined>, NotFound | Conflict | Internal> {
-      return transaction(db, `claim ${claimed(rows)} for ${action}`, () =>
-        claimSync(action, rows, joining),
-      );
-    }
-
     /** The rows a token names, for errors. */
     const named = (token: Token) =>
       [...token.inserted, ...token.held].map((row) => id(row.name)).join(", ");
@@ -678,7 +623,25 @@ export const open = (
       ),
       findCheckpoint: (name) =>
         sql(`read checkpoint ${id(name)}`, () => Option.fromNullishOr(findCheckpointSync(name))),
-      claim,
+      hold: (action, row, joining) =>
+        transaction(db, `claim ${id(row.name)} for ${action}`, () =>
+          Result.map(holdSync(action, row), ({ row: held, record }) => ({
+            token: {
+              action,
+              inserted: joining?.inserted ?? [],
+              held: [...(joining?.held ?? []), held],
+            },
+            held: record,
+          })),
+        ),
+      insert: (action, row, joining) =>
+        transaction(db, `claim ${id(row.record.name)} for ${action}`, () =>
+          Result.map(insertSync(action, row), (inserted) => ({
+            action,
+            inserted: [...(joining?.inserted ?? []), inserted],
+            held: joining?.held ?? [],
+          })),
+        ),
       release: (token) =>
         transaction(db, `release ${named(token)} from ${token.action}`, () => {
           for (const row of token.inserted) {

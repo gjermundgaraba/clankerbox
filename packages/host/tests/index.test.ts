@@ -80,22 +80,20 @@ test("the host fails the actions its last process left running before it serves"
   const host = config(dir, port);
 
   await Effect.flatMap(open(host.stateDir, "linux"), (store) =>
-    store.claim("create", {
-      insert: {
-        table: "machines",
-        record: {
-          name: "dev",
-          instance: "0123456789abcdef0123456789abcdef",
-          native: undefined,
-          createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
-          base: "ubuntu",
-          profile: undefined,
-          cpu: 1,
-          ramMib: 1024,
-          diskGib: 10,
-          port: undefined,
-          hostKey: undefined,
-        },
+    store.insert("create", {
+      table: "machines",
+      record: {
+        name: "dev",
+        instance: "0123456789abcdef0123456789abcdef",
+        native: undefined,
+        createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
+        base: "ubuntu",
+        profile: undefined,
+        cpu: 1,
+        ramMib: 1024,
+        diskGib: 10,
+        port: undefined,
+        hostKey: undefined,
       },
     }),
   ).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.runPromise);

@@ -455,10 +455,11 @@ listed to keep them from being ported):
   also holds its host `port` (see [Guest access](#guest-access)) and `hostKey`,
   the key the last successful preparation printed. Checkpoint rows arrive with
   phase 4, as the second migration; phase 3 has no action that writes one.
-- **Claims:** the store has one claim primitive: hold a row, insert one,
-  return a token and the held row's record, in one SQLite transaction (every
-  action holds at most one row, and read it again right after until the
-  phase-5 review). An end names the machine row that gets the host key
+- **Claims:** the store has two claim primitives, each one SQLite
+  transaction: `hold` claims a row and returns a token and the row's record
+  (every action holds at most one row, and read it again right after until
+  the phase-5 review), and `insert` inserts one and returns a token. An end
+  names the machine row that gets the host key
   preparation read, and the one a create, fork or restore made. A claimed row has
   `action.status = running`. A missing row is `NotFound`, one already running
   `Conflict{kind: busy}` and a taken new name `Conflict{kind: exists}` (the

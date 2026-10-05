@@ -102,7 +102,7 @@ export const claimsOn = (store: StoreInterface) => {
       );
 
   /**
-   * Steps 2 and 3: runs `claim`, then `check` with the record of the row it held, if any. The
+   * Steps 2 and 3: runs `claim`, then `check` with the record of the row it claimed. The
    * check can insert a row through `join`, which joins the claim, so one token covers them all.
    * A check that fails, or is interrupted, releases every row claimed so far, so nothing is
    * written.
@@ -122,8 +122,8 @@ export const claimsOn = (store: StoreInterface) => {
         const join = (row: NewRow) =>
           Effect.uninterruptible(
             Effect.flatMap(Ref.get(claimed), (joining) =>
-              Effect.flatMap(store.claim(joining.action, { insert: row }, joining), (joined) =>
-                Ref.set(claimed, joined.token),
+              Effect.flatMap(store.insert(joining.action, row, joining), (joined) =>
+                Ref.set(claimed, joined),
               ),
             ),
           );

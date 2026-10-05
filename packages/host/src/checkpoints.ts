@@ -64,7 +64,7 @@ export const make = (
         const id = yield* formatId(config.id, name);
 
         const [token, { source, row }] = yield* claimAndCheck(
-          store.claim("capture", { hold: { table: "machines", name: sourceName } }),
+          store.hold("capture", { table: "machines", name: sourceName }),
           (source, join) =>
             Effect.gen(function* () {
               yield* made(source);
@@ -108,7 +108,7 @@ export const make = (
         const name = yield* nameOf(id);
 
         const [token, record] = yield* claimAndCheck(
-          store.claim("delete", { hold: { table: "checkpoints", name } }),
+          store.hold("delete", { table: "checkpoints", name }),
           Effect.succeed,
         );
 
