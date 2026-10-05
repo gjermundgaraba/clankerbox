@@ -2,7 +2,7 @@ import { Duration, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
 import { Capacity, Client, type MachineSpec, version } from "../src/index.ts";
-import { type Endpoint, machine, type StubHost, stubHost, transport } from "./stub-host.ts";
+import { type Endpoint, machine, Silent, type StubHost, stubHost, transport } from "./stub-host.ts";
 
 const stubs: Array<StubHost> = [];
 
@@ -189,19 +189,21 @@ test("a host that didn't answer after the chosen one doesn't matter", async () =
 });
 
 // Without a winner's early return this waits out the 10 s read bound, past the test's timeout.
-test("a silent host after the chosen one doesn't delay the create", async () => {
+test("a silent host after the chosen one doesn't delay the create, and its read is interrupted", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"] });
+  const mac = new Silent();
 
   const made = await withClient(
     [
       ["linux", linux],
-      ["mac", "silent"],
+      ["mac", mac],
     ],
     (client) => client.create("dev", spec),
   );
 
   expect(made.id).toBe("linux_dev");
   expect(linux.creates).toHaveLength(1);
+  expect(mac.aborted).toBe(1);
 });
 
 test("placement goes through the answers in list order, not in the order they arrive", async () => {
@@ -445,7 +447,7 @@ test("with a read timeout, a fan-out names the host that didn't answer in time a
 
   const { answers, unreachable } = await withClient(
     [
-      ["mac", "silent"],
+      ["mac", new Silent()],
       ["linux", linux],
     ],
     (client) => client.machines,
@@ -463,7 +465,7 @@ test("placement skips a host that didn't answer in time, and the create is still
 
   const made = await withClient(
     [
-      ["mac", "silent"],
+      ["mac", new Silent()],
       ["linux", linux],
     ],
     (client) => client.create("dev", spec),
@@ -492,7 +494,7 @@ test("a mutation that outlasts the timeout is a lost reply: Unavailable, naming 
 
 test("a read that outlasts the read timeout is Unavailable and retryable", async () => {
   const error = await withClient(
-    [["linux", "silent"]],
+    [["linux", new Silent()]],
     (client) => Effect.flip(client.machine("linux_dev")),
     readBriefly,
   );
@@ -503,7 +505,7 @@ test("a read that outlasts the read timeout is Unavailable and retryable", async
 
 test("a read gives up after 10 s by default, and the mutation timeout doesn't bound it", async () => {
   const error = await withClient(
-    [["linux", "silent"]],
+    [["linux", new Silent()]],
     (client) =>
       Effect.gen(function* () {
         const read = yield* Effect.forkChild(Effect.flip(client.machine("linux_dev")));

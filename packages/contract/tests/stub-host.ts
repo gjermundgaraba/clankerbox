@@ -205,6 +205,11 @@ export const stubHost = (options: StubHostOptions) => {
 
 export type StubHost = ReturnType<typeof stubHost>;
 
+/** A host that never answers; `aborted` counts the requests the client gave up on. */
+export class Silent {
+  aborted = 0;
+}
+
 /**
  * How a host behaves on the network: served, down, never answering, answering 100 ms late,
  * or losing every reply after running it.
@@ -212,7 +217,7 @@ export type StubHost = ReturnType<typeof stubHost>;
 export type Endpoint =
   | StubHost
   | "down"
-  | "silent"
+  | Silent
   | { readonly slow: StubHost }
   | { readonly lost: StubHost };
 
@@ -220,9 +225,10 @@ const requestUrl = (input: string | URL | Request): URL =>
   new URL(input instanceof Request ? input.url : input);
 
 /** A request that never gets an answer, until the client gives up on it. */
-const unanswered = (signal: AbortSignal | null | undefined) =>
+const unanswered = (silent: Silent, signal: AbortSignal | null | undefined) =>
   new Promise<Response>((_resolve, reject) => {
     signal?.addEventListener("abort", () => {
+      silent.aborted += 1;
       reject(new Error("aborted"));
     });
   });
@@ -241,8 +247,8 @@ export const transport = (
       throw new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED") });
     }
 
-    if (endpoint === "silent") {
-      return unanswered(init?.signal);
+    if (endpoint instanceof Silent) {
+      return unanswered(endpoint, init?.signal);
     }
 
     if ("slow" in endpoint) {

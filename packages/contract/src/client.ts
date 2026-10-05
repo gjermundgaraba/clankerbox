@@ -386,13 +386,13 @@ export const make = (
 
         /** What each host answered, in list order. */
         const misses: Array<string> = [];
-        let unanswered = false;
+        let noReply = false;
 
         for (const { host, fiber } of asked) {
           const result = yield* Fiber.join(fiber);
 
           if (Result.isFailure(result)) {
-            unanswered ||= Predicate.isTagged(result.failure, "Unavailable");
+            noReply ||= Predicate.isTagged(result.failure, "Unavailable");
             misses.push(`${host} failed: ${result.failure._tag}: ${result.failure.message}`);
           } else if (result.success.bases.includes(base)) {
             return host;
@@ -405,7 +405,7 @@ export const make = (
 
         const message = `no host offers base ${base}: ${misses.join("; ")}`;
 
-        return yield* unanswered
+        return yield* noReply
           ? new Unavailable({ message, access: "read" })
           : new Precondition({ message });
       }).pipe(Effect.scoped);
