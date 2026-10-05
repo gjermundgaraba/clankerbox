@@ -93,7 +93,7 @@ const searchPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
  * smolvm moves `HOME` to the data root anyway (S@1.22.2:src/main.rs:132-136); passing it there
  * keeps the original from being read at all. `SMOLVM_AGENT_ROOTFS` is needed for the same
  * reason. `SMOLVM_RESTORE_TMPFS=0` keeps every root restore from leaving
- * `/dev/shm/smolvm-restore` behind, at no cost (README, Runtime notes). `NO_COLOR` keeps
+ * `/dev/shm/smolvm-restore` behind, at no cost (the bump-smolvm skill). `NO_COLOR` keeps
  * ANSI colours out of smolvm's log lines, which errors carry: its tracing-subscriber 0.3.23
  * colours them even into a pipe unless `NO_COLOR` is set (tracing-subscriber
  * src/fmt/fmt_layer.rs:739-743). `SMOLVM_BOOT_BINARY` is never set: it arms a parent-death

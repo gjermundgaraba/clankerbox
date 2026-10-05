@@ -250,7 +250,8 @@ every bump of it:
    source or docs at the pinned version.
 5. A bump re-checks that dependency's claims, not just the tests. The bump
    skills in `.agents/skills/` (`bump-smolvm`, `bump-tart`, `bump-boat-api`,
-   `bump-node`) carry each one's claims with their source lines.
+   `bump-node`) carry each one's claims with their sources, and so the
+   reasons behind the runtime notes below, which point to them.
 
 ### Architecture
 
@@ -465,16 +466,16 @@ Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
 The smolvm CLI starts the VMM in its caller's cgroup, so without its own job a
 host restart would kill every VM. Each runtime supervises its own:
 
-- smolvm: `SMOLVM_VM_USE_SCOPE=1` on every start puts each VM in its own
-  `smolvm-vm-<name>.scope`, with no unit files.
+- smolvm: each VM runs in its own systemd scope, `smolvm-vm-<name>.scope`,
+  with no unit files.
 - Tart: one launchd job per VM (`tart.ts`), with its plist and log in the
   state dir's `launchd/`, rewritten at every boot.
 - boat runs its own machines.
 
 Every VM job references only smolvm or tart at their versioned install paths,
 never the clankerbox binary, so a release leaves running VMs alone and a
-runtime upgrade goes into a new prefix. Never set `SMOLVM_BOOT_BINARY`: it arms
-a parent-death watchdog.
+runtime upgrade goes into a new prefix. The bump-smolvm and bump-tart skills
+hold the claims each runtime's supervision rests on.
 
 ### Deliberately absent
 
@@ -541,9 +542,8 @@ These are known, not guarded, and accepted:
 ### smolvm
 
 - **Install** upstream smolvm with its own installer into a versioned prefix,
-  then expand both disk templates beside their `.zst` files (smolvm expands
-  them lazily with no lock, and concurrent first starts destroyed both). The
-  host refuses a prefix without them.
+  then expand both disk templates beside their `.zst` files; the host refuses
+  a prefix without them (the bump-smolvm skill says why).
 
   ```sh
   HOME=/opt/smolvm/1.22.2 install.sh --version 1.22.2 --prefix /opt/smolvm/1.22.2 --no-modify-path
@@ -556,19 +556,17 @@ These are known, not guarded, and accepted:
   is deleted. The host refuses to start unless it is root and
   `smolvm --version` is the tested one (`testedVersion` in `smolvm.ts`).
 
-- **Environment** (`smolvm.ts`): every call gets the same one,
-  `SMOLVM_DATA_DIR` and `HOME` at `<stateDir>/smolvm` (one inventory per
-  host), `SMOLVM_AGENT_ROOTFS` in the prefix, `SMOLVM_PUBLISH_ADDR`,
-  `SMOLVM_EGRESS_FLOOR=strict` and `SMOLVM_RESTORE_TMPFS=0` (otherwise every
-  root restore leaves `/dev/shm/smolvm-restore`).
+- **Environment:** every smolvm call runs with one fixed environment
+  (`environment` in `smolvm.ts`), with smolvm's state under
+  `<stateDir>/smolvm`, one inventory per host. The bump-smolvm skill lists
+  each variable and its reason.
 - **State dir:** at most 52 bytes, so the control socket path fits Linux's
   108-byte limit; startup checks it.
 - **Machines** run a digest-pinned OCI image with
   `--net --net-backend virtio-net -p <port>:22` and `--branchable`, each as its
-  own uid. Reference the base by digest only, from `mirror.gcr.io` (avoids
-  Docker Hub's anonymous pull limit; smolvm's own mirror setting breaks
-  `machine start`): a tag plus a digest makes smolvm pull inside every guest.
-  The stock image has no sshd; setup installs it. Install packages with
+  own uid. Reference the base by digest only, with no tag, from
+  `mirror.gcr.io`, as the config example does (the bump-smolvm skill says
+  why). The stock image has no sshd; setup installs it. Install packages with
   `--no-install-recommends`.
 - **Disks:** `diskGib` is `--storage`, where workload writes land. smolvm
   builds its host-side image seed only at the default 20 GiB; other sizes pull
@@ -583,10 +581,8 @@ These are known, not guarded, and accepted:
   start, then the store is removed whole, whatever happened. The child
   continues the source's RAM, with a fresh identity and no lineage. A failed
   fork or `ram` restore stays unmade for `delete`, since its VM may still hold
-  the source's port.
-- **Never call `machine branch`:** each branch adds a backing layer to the
-  source (smolvm refuses the 33rd), and a cold-restarted source with a kept
-  branch child reads `frozen` and refuses stop and delete.
+  the source's port. smolvm's own `machine branch` is never used (the
+  bump-smolvm skill says why).
 - **Checkpoints** are always `ram`, of a running machine, in one store per host
   (`<stateDir>/checkpoints/`, `--history 0` so deletes free space, restore
   cache off). A checkpoint records `smolvm <version> <platform>`, and a restore
@@ -601,18 +597,18 @@ These are known, not guarded, and accepted:
 ### Tart
 
 - **Softnet:** VMs run with `--net-softnet-block=@host`, which also blocks
-  gateway DNS, so setup sets public resolvers. Tart sets Softnet's SUID bit
-  only from a terminal, never under launchd, so install it first:
+  gateway DNS, so setup sets public resolvers. Install Softnet SUID root
+  before the host starts (the bump-tart skill says why):
   `sudo install -o root -g wheel -m 4755 softnet /usr/local/bin/softnet`.
 - **Jobs** run `tart run --no-graphics --net-softnet-block=@host <vm>` with a
-  fixed `PATH` (holding `/usr/local/bin` and `/opt/homebrew/bin`), `HOME` and
-  the host's `TART_HOME` if set. Each boot waits up to three minutes for
+  fixed environment, the same as every tart call's (`environment` in
+  `tart.ts`; the bump-tart skill). Each boot waits up to three minutes for
   `tart exec` to answer, retrying, since the guest agent starts after
   auto-login.
 - **Bases** are stock Cirrus images (`ghcr.io/cirruslabs/macos-<version>-base`
-  or `-xcode`), pinned by digest. They ship sshd, tart-guest-agent and
-  passwordless sudo for `admin`; exec runs through `sudo -n`, so a base
-  without it fails the create.
+  or `-xcode`), pinned by digest; the bump-tart skill records the tested
+  one's. They ship sshd, tart-guest-agent and passwordless sudo for `admin`;
+  exec runs through `sudo -n`, so a base without it fails the create.
 - **Clones** get `tart set --random-serial` and the sizes; Tart rounds
   `diskGib` up to whole GB and only grows a disk. Never `--overwrite`.
 - **Fork and capture need a stopped machine** (our rule); checkpoints are
@@ -636,9 +632,10 @@ These are known, not guarded, and accepted:
   API key is held `Redacted` from decoding on and travels only as the bearer
   token; errors carry method, path, status and boat's code and message, never
   a request or body, and are scrubbed of the key.
-- **Designed for boat's trial:** two active sandboxes, auto-stop within two
-  hours, no `large` type. Every create, fork, resume and restore sends
-  `noEnv: true` (no account secrets in the guest) and `ttlSeconds: 7200`.
+- **Designed for boat's trial,** whose limits the bump-boat-api skill lists.
+  Every create, fork, resume and restore sends `noEnv: true` (no account
+  secrets in the guest) and `ttlSeconds: 7200`, so boat stops a machine two
+  hours after each activation.
 - **Bases:** boat's one image (Ubuntu 24.04, x86_64, with sshd), which boat
   updates, so it isn't pinned and the base's image value is only a label. Name
   it apart from stock images unless every profile on that name handles both.
@@ -652,7 +649,7 @@ These are known, not guarded, and accepted:
   is never repeated.
 - **Refusals** that leave nothing on boat remove the row: 429s and 503
   `out_of_capacity`/`no_ready_machine` are `Capacity`, as is 409
-  `named_snapshot_limit` (boat keeps 10 named snapshots per account).
+  `named_snapshot_limit`, boat's cap on an account's named snapshots.
 - **State** is a `GET` of each recorded sandbox, never a list; a failed read
   fails rather than reading `missing`. The SSH endpoint changes at every start
   and is only reported for a running machine.

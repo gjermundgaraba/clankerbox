@@ -45,6 +45,18 @@ Each: what smolvm does, where, and what of ours depends on it. A claim that no
 longer holds needs a code change and a regression test; one that holds gets its
 citation moved to the new tag.
 
+**The environment** (README's smolvm notes point here)
+
+- Every smolvm call, and so every VM, runs with one environment
+  (`environment` in `smolvm.ts`): a fixed `PATH` (`searchPath`), `HOME` and
+  `SMOLVM_DATA_DIR` at `<stateDir>/smolvm` (one inventory per host),
+  `SMOLVM_AGENT_ROOTFS` in the prefix, `SMOLVM_PUBLISH_ADDR` at the host's
+  `publishAddress`, `SMOLVM_EGRESS_FLOOR=strict`, `SMOLVM_RESTORE_TMPFS=0`
+  (otherwise every root restore leaves `/dev/shm/smolvm-restore`),
+  `SMOLVM_VM_USE_SCOPE=1` and `NO_COLOR=1`; never `SMOLVM_BOOT_BINARY`. The
+  claims below give each variable's reason; re-check the set as a whole, and
+  any variable the target adds.
+
 **Install and prefix**
 
 - The installer is `install.sh --version V --prefix DIR --no-modify-path`. It
