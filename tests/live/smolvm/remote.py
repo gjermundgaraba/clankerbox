@@ -41,7 +41,7 @@ IMAGE = 'mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23
 TEMPLATES = ('storage-template.ext4', 'overlay-template.ext4')
 # Every live run's host unit and machines carry it; init refuses to start while any run's unit or
 # scope is there.
-RUNS_PREFIX = 'clankerbox-rewrite-'
+RUNS_PREFIX = 'clankerbox-live-'
 # The scopes of smolvm's image-seed builder VMs, whose names smolvm fixes (S@1.22.2:src/image_seed.rs:381).
 HELPER_PATTERNS = ('smolvm-vm-image-seed-*',)
 RAM_BUDGET_MIB = 8192
@@ -64,6 +64,8 @@ HOST_ID = f'{RUNS_PREFIX}{RID}'
 # This run's machines carry its ID, so its teardown stops only its own scopes.
 NAME_PREFIX = f'{HOST_ID}-'
 SCOPE_PATTERN = f'smolvm-vm-{NAME_PREFIX}*'
+# The run's host unit, and any other unit carrying its ID.
+UNIT_PATTERN = f'{HOST_ID}*'
 LEDGER = OWNED / 'CLEANUP.md'
 SCRATCH = RUN / 'scratch'
 EVIDENCE = RUN / 'evidence'
@@ -75,7 +77,7 @@ CONFIG = SCRATCH / 'host.json'
 ROOTLOG = EVIDENCE / 'root-runs.log'
 # The host unit's ExecStopPost writes how its process ended: systemd's $EXIT_CODE and $EXIT_STATUS.
 HOST_EXIT = EVIDENCE / 'host-exit'
-UNIT = f'clankerbox-rewrite-{RID}-host.service'
+UNIT = f'{HOST_ID}-host.service'
 os.chdir('/')
 
 
@@ -638,7 +640,7 @@ def remove_natives(report):
     scopes = attempt(report, 'list the run\'s scopes', lambda: list_units(SCOPE_PATTERN) + new_helper_units())
     for unit in scopes or []:
         attempt(report, f'stop {unit}', lambda: stop_scope(report, unit))
-    for unit in attempt(report, 'list the run\'s units', lambda: list_units(f'clankerbox-rewrite-{RID}*')) or []:
+    for unit in attempt(report, 'list the run\'s units', lambda: list_units(UNIT_PATTERN)) or []:
         attempt(report, f'reset {unit}',
                 lambda: sudo(['systemctl', 'reset-failed', unit], touched=f'teardown: resets {unit}'))
     def wait_processes():
@@ -652,7 +654,7 @@ def remove_natives(report):
                   scopes_left=attempt(report, 'list the run\'s scopes again',
                                       lambda: list_units(SCOPE_PATTERN) + new_helper_units()),
                   units_left=attempt(report, 'list the run\'s units again',
-                                     lambda: list_units(f'clankerbox-rewrite-{RID}*')),
+                                     lambda: list_units(UNIT_PATTERN)),
                   vm_uid_processes=attempt(report, 'list VM-uid processes', vm_uid_processes),
                   run_processes=attempt(report, 'list the run\'s processes', run_processes),
                   tailnet_listeners=attempt(report, 'list the tailnet listeners', tailnet_listeners))
@@ -684,7 +686,7 @@ def cmd_finish():
         sys.exit('no verified teardown; scratch and outside changes retained')
     st = load_state()
     result = {}
-    units = list_units(SCOPE_PATTERN) + list_units(f'clankerbox-rewrite-{RID}*') + new_helper_units()
+    units = list_units(SCOPE_PATTERN) + list_units(UNIT_PATTERN) + new_helper_units()
     result['units'] = (f'REVERTED {now()} (no {UNIT}, no {SCOPE_PATTERN} scope and no image-seed '
                        'helper scope that was not there before, per systemctl list-units --all)'
                        if not units else f'NOT REVERTED: {units}')

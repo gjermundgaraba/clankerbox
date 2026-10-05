@@ -17,7 +17,7 @@ own calls log their method, path, status and boat's code only, and the last tear
 the key from every evidence file and fails the run if it finds it there.
 
 The run owns one WorkRun (scripts/WORK_RUNS.md) and a host ID of its own,
-`clankerbox-rewrite-b<5 hex>`, so the display name of every sandbox the run makes (its machine
+`clankerbox-live-b<5 hex>`, so the display name of every sandbox the run makes (its machine
 ID) starts `<host ID>_`, and every named snapshot's name `cbx-<host ID>-`. Before it builds
 anything, a read-only pre-flight counts the account's sandboxes, active sandboxes and named
 snapshots, and reads its start limits; the evidence keeps the counts, never the operator's
@@ -465,7 +465,7 @@ def main():
 
     with WorkRun('live-boat') as run:
         rid = run.path.name.rsplit('-', 1)[1][:5]
-        host_id = f'clankerbox-rewrite-b{rid}'
+        host_id = f'clankerbox-live-b{rid}'
         config = run.scratch / 'host.json'
         client_config = run.scratch / 'client.json'
         control_bin = run.scratch / 'host-control'

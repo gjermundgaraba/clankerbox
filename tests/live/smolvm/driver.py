@@ -114,7 +114,7 @@ def main():
                           'stat -c "%a %U:%G %n" "$HOME"; getfacl -p "$HOME" 2>/dev/null; '
                           f'ls -la {shlex.quote(options.smolvm_prefix)}; '
                           "ps -eo pid,uid,args | awk '$2>=2000000' | grep -v PID || echo 'no uid>=2000000 process'; "
-                          'systemctl list-units --all --no-legend "smolvm-vm-*" "clankerbox-rewrite*"; '
+                          'systemctl list-units --all --no-legend "smolvm-vm-*" "clankerbox-live*"; '
                           'echo "units listed above (empty = none)"'], 'final-check', timeout=300, check=False)
             finally:
                 subprocess.run(['ssh', '-o', f'ControlPath={control_path}', '-O', 'exit', options.ssh],

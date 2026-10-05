@@ -9,7 +9,7 @@ Tart host from a private Tart home, and runs the suite with the same binary as t
     --seed /path/to/main-checkout/.work/inputs/tart-cirrus-tahoe-base --address TAILNET_ADDRESS
 
 TART is the absolute path of the tart binary the host runs (inside its tart.app), SEED that of
-the stock Cirrus seed (PROVENANCE, READY and its VM under home/vms), in the main checkout's
+the stock Cirrus seed (PROVENANCE, READY and its one VM under home/vms), in the main checkout's
 .work/inputs, and TAILNET_ADDRESS this Mac's tailnet address.
 
 The run owns one WorkRun (scripts/WORK_RUNS.md). Its scratch holds the private TART_HOME, whose
@@ -56,11 +56,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from driver_common import (DIST, REPO, Evidence, Failed, WorkRun, alive, clean_commit, free_port,  # noqa: E402
                            host_end, host_start, install_binary, keep, read_int, sha256, stop_on_signals)
 
-SEED_VM = 'home/vms/clankerbox-rewrite-seed-macos-tahoe-base'
 SEED_FILES = ('config.json', 'disk.img', 'nvram.bin')
 SOFTNET = Path('/usr/local/bin/softnet')
 VZ = 'com.apple.Virtualization.VirtualMachine'
 DOMAIN = f'gui/{os.getuid()}'
+
+
+def seed_vm(seed):
+    """The seed's one VM, under home/vms. A seed prepared now names it
+    `clankerbox-live-seed-<base>`; the driver takes it whatever its name."""
+    vms = [entry for entry in (seed / 'home' / 'vms').iterdir() if entry.is_dir()]
+    if len(vms) != 1:
+        sys.exit(f'the seed at {seed} holds {len(vms)} VMs under home/vms, not one')
+    return vms[0]
 
 
 def provenance_sums(seed):
@@ -291,6 +299,7 @@ def main():
         sys.exit(f'{SOFTNET} is not installed SUID root (4755, root:wheel)')
     if not (seed / 'READY').exists():
         sys.exit(f'the seed at {seed} is not READY')
+    seed_files = seed_vm(seed)
     if vz_processes():
         sys.exit(f'macOS VMs already run on this Mac, and Apple allows two: {vz_processes()}')
     commit = clean_commit()
@@ -298,8 +307,8 @@ def main():
 
     with WorkRun('live-tart') as run:
         rid = run.path.name.rsplit('-', 1)[1][:5]
-        host_id = f'clankerbox-rewrite-t{rid}'
-        base = f'clankerbox-rewrite-t{rid}-base'
+        host_id = f'clankerbox-live-t{rid}'
+        base = f'clankerbox-live-t{rid}-base'
         home = run.scratch / 'tart-home'
         config = run.scratch / 'host.json'
         client_config = run.scratch / 'client.json'
@@ -314,7 +323,7 @@ def main():
 
         def seed_check(when):
             started = time.monotonic()
-            found = {name: sha256(seed / SEED_VM / name) for name in SEED_FILES}
+            found = {name: sha256(seed_files / name) for name in SEED_FILES}
             matches = found == sums
             log(f'seed checksums {when}: {"match" if matches else "DIFFER from"} PROVENANCE '
                 f'({time.monotonic() - started:.1f}s)')
@@ -337,7 +346,7 @@ def main():
             'host_id': host_id, 'state_dir': str(run.scratch / 'state'), 'address': address, 'api_port': api_port,
         }
         state_file.write_text(json.dumps(state, indent=2) + '\n')
-        record(seed=str(seed), tart_home=str(home), base_vm=base, host_id=host_id,
+        record(seed=str(seed), seed_vm=seed_files.name, tart_home=str(home), base_vm=base, host_id=host_id,
                vm_and_label_prefix=f'cbx-{host_id}-', domain=DOMAIN, state_dir=state['state_dir'],
                config=str(config), address=address,
                address_reason=why, api_port=api_port, host_pid_file=str(run.scratch / 'host.pid'),
@@ -360,7 +369,7 @@ def main():
 
         (home / 'vms' / base).mkdir(parents=True)
         for name in SEED_FILES:
-            subprocess.run(['cp', '-c', str(seed / SEED_VM / name), str(home / 'vms' / base / name)], check=True)
+            subprocess.run(['cp', '-c', str(seed_files / name), str(home / 'vms' / base / name)], check=True)
         log(f'base {base}: an APFS clone of the seed')
 
         config.write_text(json.dumps({
