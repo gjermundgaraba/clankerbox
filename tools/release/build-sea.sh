@@ -3,13 +3,14 @@
 # node-LICENSE, the LICENSE from the same verified Node archive.
 # Usage: build-sea.sh [TARGET...], TARGET darwin-arm64 or linux-x64. By default it builds
 # what this machine can: both targets on macOS, linux-x64 on Linux (darwin needs codesign).
-# Bundle first (vp run -r build). The first run downloads the pinned Node archives into
-# tools/release/cache/, so `vp run ready` doesn't include it and stays offline.
+# Bundle first (vp run -r build). The Node is the one .node-version pins, its archives'
+# checksums in release-inputs.json. The first run downloads them into tools/release/cache/,
+# so `vp run ready` doesn't include it and stays offline.
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 bundle="$here/../../apps/clankerbox/dist/clankerbox.mjs"
 inputs="$here/release-inputs.json"
-version=$(node -p 'require(process.argv[1]).node' "$inputs")
+version=$(tr -d '[:space:]' <"$here/../../.node-version")
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64) builder_platform=darwin-arm64 ;;
   Linux-x86_64) builder_platform=linux-x64 ;;
@@ -20,7 +21,9 @@ if command -v sha256sum >/dev/null; then sha256() { sha256sum "$1"; }; else sha2
 # Print the directory holding the platform's verified bin/node and Node's LICENSE,
 # downloading them on first use.
 node_for() {
-  sum=$(node -p 'require(process.argv[1]).platforms[process.argv[2]].sha256' "$inputs" "$1")
+  sum=$(node -p 'require(process.argv[1]).nodeArchiveSha256[process.argv[2]]?.[process.argv[3]] ?? ""' \
+    "$inputs" "$version" "$1")
+  [ -n "$sum" ] || { echo "release-inputs.json has no checksum for node-v$version-$1" >&2; exit 1; }
   dir="$here/cache/$sum"
   if [ ! -x "$dir/node" ] || [ ! -f "$dir/LICENSE" ]; then
     name="node-v$version-$1"

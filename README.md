@@ -684,8 +684,8 @@ vp run -r build
 vp run ready            # all three; CI runs it
 ```
 
-Release builds (`tools/release`, Node archives pinned in
-`release-inputs.json`):
+Release builds (`tools/release`, on the Node `.node-version` pins, its archives'
+checksums in `release-inputs.json`):
 
 ```sh
 pnpm build

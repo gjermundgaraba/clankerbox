@@ -21,14 +21,15 @@ packages, not this one.
 
 ## Source and scope
 
-- **Pinned in this repo:** `tools/release/release-inputs.json` (`node`, and each
-  target's archive sha256: `node-v<version>-darwin-arm64.tar.xz` and
-  `node-v<version>-linux-x64.tar.xz`); `node-version` in
-  `.github/workflows/quality.yml` (both jobs) and `publish-sdk.yml`;
-  `@types/node` in `pnpm-workspace.yaml`'s catalog; `engines` in the root
-  `package.json`; README ("Node 26.10.0 inside", "Node 26 and pnpm 12").
-  `git grep -n '26\.10'` finds them. CI's SEA cache key hashes
-  `release-inputs.json`, so it follows.
+- **Pinned in this repo:** `.node-version`, the one Node pin, which the
+  workflows' `setup-node` (`node-version-file`) and the release build read;
+  `tools/release/release-inputs.json`, each target's archive sha256 under
+  `nodeArchiveSha256.<version>` (`node-v<version>-darwin-arm64.tar.xz` and
+  `node-v<version>-linux-x64.tar.xz`); `@types/node` in
+  `pnpm-workspace.yaml`'s catalog; `engines` in the root `package.json`; README
+  ("Node 26.10.0 inside", "Node 26 and pnpm 12"). `git grep -n '26\.10'` finds
+  them. CI's SEA cache key hashes `.node-version` and `release-inputs.json`, so
+  it follows.
 - **Target:** the latest release of the current major on
   `https://nodejs.org/dist/` (its `index.json`), unless the user names one. A
   new major is a larger change: also `engines`, the `@types/node` major and
@@ -122,10 +123,10 @@ minutes)
 
 ## After
 
-- Update `release-inputs.json` (version and both checksums together), the
-  workflows' `node-version`, `@types/node` (the newest of the major, which waits
-  a day under the workspace's `minimumReleaseAge`), README, and for a new major
-  `engines`.
+- Update `.node-version` and `release-inputs.json` (the new version's two
+  checksums; drop the old version's) together, `@types/node` (the newest of the
+  major, which waits a day under the workspace's `minimumReleaseAge`), README,
+  and for a new major `engines`.
 - Move each `N@v<old>` citation, here and in comments, to the new tag, and add
   claims the release introduced.
 - Hosts pick the new Node up only with a new clankerbox release; running VMs
