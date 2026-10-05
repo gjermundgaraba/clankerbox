@@ -25,7 +25,12 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/http";
+import {
+  HttpClient,
+  HttpClientError,
+  HttpClientResponse,
+  type HttpClientRequest,
+} from "effect/http";
 import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
 import {
@@ -89,9 +94,9 @@ interface Sent {
 
 type Answer = { readonly status: number; readonly body: Schema.Json };
 
-/** What a test changes: any answer, or a sandbox as boat makes it. */
+/** What a test changes: any answer, a dropped connection, or a sandbox as boat makes it. */
 interface BoatHooks {
-  answer?: (sent: Sent) => Answer | undefined;
+  answer?: (sent: Sent) => Answer | "drop" | undefined;
   made?: (sandbox: FakeSandbox) => void;
 }
 
@@ -217,7 +222,7 @@ const fakeBoat = (options?: { readonly instant?: boolean }) => {
     return sandbox;
   };
 
-  const route = (request: Sent, now: number): Answer => {
+  const route = (request: Sent, now: number): Answer | "drop" => {
     const overridden = hooks.answer?.(request);
 
     if (overridden !== undefined) {
@@ -330,6 +335,15 @@ const fakeBoat = (options?: { readonly instant?: boolean }) => {
       sent.push(recorded);
 
       const answer = route(recorded, DateTime.toEpochMillis(yield* DateTime.now));
+
+      if (answer === "drop") {
+        return yield* new HttpClientError.HttpClientError({
+          reason: new HttpClientError.TransportError({
+            request,
+            description: `socket hang up after Authorization: Bearer ${apiKey}`,
+          }),
+        });
+      }
 
       return HttpClientResponse.fromWeb(
         request,
@@ -1640,6 +1654,105 @@ test("the API key reaches neither ssh's command line nor its environment, nor an
 
   for (const call of rig.guest.calls) {
     expect(JSON.stringify(call)).not.toContain(apiKey);
+  }
+});
+
+test("whatever boat or the transport echoes leaves the runtime without the API key: refusals, boat's errors, states and warnings", async () => {
+  const rig = await rigOn(fakeBoat({ instant: true }));
+  const echo = `Bearer ${apiKey}`;
+  const logged: Array<unknown> = [];
+
+  const logging = Effect.provide(
+    Logger.layer([Logger.make(({ message }) => logged.push(message))]),
+  );
+
+  const errors: Array<Refusal | HostError> = [];
+
+  rig.boat.sandboxes.set("bx_stopped", {
+    id: "bx_stopped",
+    state: "archived",
+    ip: null,
+    sshEndpoint: null,
+  });
+  rig.boat.sandboxes.set("bx_failing", {
+    id: "bx_failing",
+    state: "ready",
+    ip: null,
+    sshEndpoint: null,
+  });
+  rig.boat.snapshots.set("cbx-boat-cafe0001", { name: "cbx-boat-cafe0001", status: "saving" });
+
+  // A refusal: boat's 429 to a resume.
+  rig.boat.hooks.answer = (sent) =>
+    sent.path.endsWith("/resume") ? refusal(429, "limit_reached", echo) : undefined;
+  errors.push(await fails(rig.runtime.start(machineOn("refused", { native: "bx_stopped" }))));
+
+  // A dropped connection, whose description echoes the request.
+  rig.boat.hooks.answer = (sent) => (sent.path.endsWith("/resume") ? "drop" : undefined);
+  errors.push(await fails(rig.runtime.start(machineOn("dropped", { native: "bx_stopped" }))));
+
+  // boat's own error, and a state, on a sandbox it fails.
+  rig.boat.hooks.answer = (sent) =>
+    sent.path.endsWith("/resume") ? { status: 202, body: { ok: true } } : undefined;
+  rig.boat.sandboxes.set("bx_stopped", {
+    id: "bx_stopped",
+    state: "archived",
+    next: "error",
+    error: echo,
+    ip: null,
+    sshEndpoint: null,
+  });
+  errors.push(await fails(rig.runtime.start(machineOn("failed", { native: "bx_stopped" }))));
+  rig.boat.hooks.answer = (sent): Answer | undefined =>
+    sent.path.endsWith("/stop")
+      ? { status: 202, body: { ok: true } }
+      : sent.path.endsWith("/bx_failing")
+        ? {
+            status: 200,
+            body: {
+              ok: true,
+              sandbox: { id: "bx_failing", state: apiKey, error: echo, ip: null },
+            },
+          }
+        : undefined;
+  errors.push(
+    await fails(rig.runtime.stop(machineOn("stuck", { native: "bx_failing" })).pipe(logging)),
+  );
+
+  // A snapshot boat fails.
+  rig.boat.hooks.answer = (sent) =>
+    sent.path.endsWith("/cbx-boat-cafe0001") && sent.method === "GET"
+      ? {
+          status: 200,
+          body: {
+            ok: true,
+            snapshot: { name: "cbx-boat-cafe0001", status: "failed", error: echo },
+          },
+        }
+      : undefined;
+  errors.push(
+    await fails(
+      rig.runtime.capture(machineOn("source", { native: "bx_stopped" }), checkpointOn("source")),
+    ),
+  );
+
+  // A warning: a state read boat refuses.
+  rig.boat.hooks.answer = () => refusal(400, "bad", echo);
+  await succeeds(
+    rig.runtime.observe([machineOn("unread", { native: "bx_failing" })]).pipe(logging),
+  );
+
+  expect(errors.map((error) => (error instanceof Refusal ? error.error : error).message)).toEqual([
+    "boat POST /sandboxes/bx_stopped/resume answered 429 limit_reached: Bearer <redacted> (req_0123)",
+    "boat POST /sandboxes/bx_stopped/resume: TransportError: socket hang up after Authorization: Bearer <redacted>",
+    "boat's sandbox bx_stopped of boat_failed failed: Bearer <redacted>",
+    "boat didn't archive boat_stuck's sandbox bx_failing within 5m of its stop: it reads <redacted>: Bearer <redacted>",
+    "boat's snapshot cbx-boat-cafe0001 of boat_source is failed: Bearer <redacted>",
+  ]);
+  expect(logged).toHaveLength(1);
+
+  for (const text of [...errors.map((error) => inspect(error, { depth: 10 })), inspect(logged)]) {
+    expect(text).not.toContain(apiKey);
   }
 });
 

@@ -7,8 +7,8 @@
  *
  * The API key travels only in the `Authorization` header, held `Redacted`. Errors are built from
  * the method, the path, the status and boat's own code and message, never from a request or a
- * whole body (a sandbox's `desktopUrl` carries a token), and whatever boat says is scrubbed of
- * the key before it reaches an error.
+ * whole body (a sandbox's `desktopUrl` carries a token). The runtime scrubs the key from them
+ * where they leave it, as it does every other string boat sends.
  */
 import {
   Capacity,
@@ -231,11 +231,6 @@ interface Call {
 export const make = (settings: Settings) =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;
-    const key = Redacted.value(settings.apiKey);
-
-    /** Text from boat or the transport, without the key in it. */
-    const scrub = (text: string) => (key === "" ? text : text.replaceAll(key, "<redacted>"));
-
     const named = ({ method, path }: Call) => `boat ${method} ${path}`;
 
     const request = (call: Call) =>
@@ -262,7 +257,7 @@ export const make = (settings: Settings) =>
         const said = Option.match(decoded, {
           onNone: () => `${named(call)} answered ${status} without boat's error`,
           onSome: ({ code, message, requestId }) =>
-            `${named(call)} answered ${status} ${code}: ${scrub(message)}${requestId === undefined ? "" : ` (${requestId})`}`,
+            `${named(call)} answered ${status} ${code}: ${message}${requestId === undefined ? "" : ` (${requestId})`}`,
         });
 
         const code = Option.map(decoded, (refused) => refused.code);
@@ -312,7 +307,7 @@ export const make = (settings: Settings) =>
           Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text),
           (error) =>
             new Internal({
-              message: `${named(call)} answered ${status} with a body the host can't read: ${scrub(error.message)}`,
+              message: `${named(call)} answered ${status} with a body the host can't read: ${error.message}`,
             }),
         );
       });
@@ -329,7 +324,7 @@ export const make = (settings: Settings) =>
         Effect.mapError(
           (error) =>
             new Unclear({
-              message: `${named(call)}: ${error.reason._tag}${error.reason.description === undefined ? "" : `: ${scrub(error.reason.description)}`}`,
+              message: `${named(call)}: ${error.reason._tag}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`,
             }),
         ),
         Effect.flatMap((response) => answer(call, schema, response)),

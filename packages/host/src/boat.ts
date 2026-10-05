@@ -14,11 +14,15 @@
  * no machine, an 11th named snapshot), its `Precondition` refusal of a type the account's plan
  * lacks, a create, fork or restore that ends `cancelled` or gone because boat found no machine,
  * and a fork's or capture's source boat doesn't have.
+ *
+ * Errors and warnings are scrubbed of the API key where they leave the runtime, so nothing boat
+ * or the guest echoes carries it out.
  */
 import { join } from "node:path";
 import {
   Capacity,
   type HostError,
+  hostErrors,
   Internal,
   Precondition,
   type SshEndpoint,
@@ -30,9 +34,10 @@ import {
   FileSystem,
   Layer,
   Option,
-  type Redacted,
+  Redacted,
   Ref,
   Schedule,
+  Schema,
   Stream,
 } from "effect";
 import type { HttpClient } from "effect/http";
@@ -226,6 +231,13 @@ const poll = <A, E, R>(
     Effect.map(Option.flatten),
   );
 
+/** The contract's errors, to rebuild one with its message scrubbed. */
+const HostErrors = Schema.Union(hostErrors);
+
+const encodeError = Schema.encodeSync(HostErrors);
+
+const decodeError = Schema.decodeSync(HostErrors);
+
 export const make = (
   settings: Settings,
 ): Effect.Effect<
@@ -235,6 +247,28 @@ export const make = (
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const secret = Redacted.value(settings.apiKey);
+
+    /** Text that may hold what boat or the guest echoed, without the API key. */
+    const scrub = (text: string) => (secret === "" ? text : text.replaceAll(secret, "<redacted>"));
+
+    const scrubbed = (error: HostError): HostError => {
+      const encoded = encodeError(error);
+
+      return decodeError({ ...encoded, message: scrub(encoded.message) });
+    };
+
+    /** An action's errors as they leave the runtime. */
+    const scrubbing = <A, R>(action: Effect.Effect<A, HostError, R>) =>
+      Effect.mapError(action, scrubbed);
+
+    const scrubbingRefusal = <A, R>(action: Effect.Effect<A, HostError | Refusal, R>) =>
+      Effect.mapError(action, (error) =>
+        error instanceof Refusal ? new Refusal({ error: scrubbed(error.error) }) : scrubbed(error),
+      );
+
+    const warn = (message: string) => Effect.logWarning(scrub(message));
+
     const api = yield* makeApi({ apiKey: settings.apiKey, url: settings.url });
     const { exec: spawn } = yield* cliIn({ PATH: searchPath });
 
@@ -557,7 +591,7 @@ export const make = (
           .rename(id, machine.id)
           .pipe(
             Effect.catch((error) =>
-              Effect.logWarning(
+              warn(
                 `couldn't name ${machine.id}'s boat sandbox ${id} on boat's dashboard: ${error.message}`,
               ),
             ),
@@ -676,10 +710,9 @@ export const make = (
                     }),
                   ),
                   Effect.catch((error) =>
-                    Effect.as(
-                      Effect.logWarning(`couldn't read ${machine.id}'s state: ${error.message}`),
-                      { state: "unknown" } satisfies Observed,
-                    ),
+                    Effect.as(warn(`couldn't read ${machine.id}'s state: ${error.message}`), {
+                      state: "unknown",
+                    } satisfies Observed),
                   ),
                 ),
             }),
@@ -701,7 +734,7 @@ export const make = (
           yield* made(machine, id);
           yield* api.authorize(id, key.publicKey);
           yield* reachable(machine, id);
-        }),
+        }).pipe(scrubbingRefusal),
       /**
        * Resumes the sandbox unless boat reads it active: one boat still makes or resumes, or that
        * runs, isn't resumed again. Either way the start waits for it to run, for SSH and for the
@@ -720,7 +753,7 @@ export const make = (
           yield* running(machine, id, false);
           yield* reachable(machine, id);
           yield* restored(machine, id);
-        }),
+        }).pipe(scrubbingRefusal),
       /** Never with `force`: a stop boat refuses, as when its final snapshot fails, is the error. */
       stop: (machine) =>
         Effect.gen(function* () {
@@ -728,7 +761,7 @@ export const make = (
 
           yield* api.stop(id);
           yield* archived(machine, id);
-        }),
+        }).pipe(scrubbing),
       /**
        * Deletes the sandbox and waits until boat answers 404, never for its purge. A row without
        * a recorded sandbox has nothing on boat the host can find, so only the row goes.
@@ -756,7 +789,7 @@ export const make = (
               message: `boat still has ${machine.id}'s sandbox ${id.value} ${Duration.format(deleteWait)} after its delete`,
             });
           }
-        }),
+        }).pipe(scrubbing),
       /**
        * A named snapshot of a running or a stopped sandbox, always of its disk. A running one
        * syncs first, as a fork's source does.
@@ -791,7 +824,7 @@ export const make = (
               message: `boat's snapshot ${name} of ${machine.id} is ${settled.value.status}${settled.value.error === undefined ? "" : `: ${settled.value.error}`}`,
             });
           }
-        }),
+        }).pipe(scrubbingRefusal),
       restore: (checkpoint, machine) =>
         Effect.gen(function* () {
           const type = yield* typeOf(machine);
@@ -801,7 +834,7 @@ export const make = (
           );
 
           yield* restoredSandbox(machine, id);
-        }),
+        }).pipe(scrubbingRefusal),
       /**
        * A stopped source forks at once, holding everything up to its stop. A running one keeps
        * running, and forks once a snapshot begun after its sync has completed. Forks carry the
@@ -819,9 +852,10 @@ export const make = (
           const id = yield* refusing(api.fork(keyOf(machine), from.id, type.name));
 
           yield* restoredSandbox(machine, id);
-        }),
-      deleteCheckpoint: (checkpoint) => api.deleteSnapshot(snapshotOf(checkpoint.instance)),
-      exec,
+        }).pipe(scrubbingRefusal),
+      deleteCheckpoint: (checkpoint) =>
+        scrubbing(api.deleteSnapshot(snapshotOf(checkpoint.instance))),
+      exec: (machine, command) => scrubbing(exec(machine, command)),
     } satisfies Interface;
   });
 
