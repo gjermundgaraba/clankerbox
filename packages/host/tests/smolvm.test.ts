@@ -108,7 +108,7 @@ test("a native name is the machine's name and its instance's first 8 characters"
   expect(nativeName(machine)).toBe("dev-01234567");
 });
 
-test("every smolvm call runs the prefix's wrapper in the spikes' environment, and nothing else", async () => {
+test("every smolvm call runs the prefix's wrapper in one fixed environment, and nothing else", async () => {
   const settings = await prepared();
   const spawner = scripted(() => undefined);
 
