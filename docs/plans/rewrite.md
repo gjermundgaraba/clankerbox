@@ -1186,8 +1186,8 @@ Two rules for every VM job:
     failure finds it.
   - After a create, fork or restore, once the sandbox runs, the host sets
     boat's display name to the machine ID, for the operator's boat dashboard.
-    A rename boat refuses fails the action like any runtime failure, and
-    leaves the machine unmade, to delete.
+    The name is only that label, and `delete` goes by the recorded ID, so a
+    rename boat refuses is logged as a warning and the action goes on.
 - **State:** the runtime's `observe` takes the machines and returns each
   one's state, in their order, from a `GET /sandboxes/{id}` of each recorded
   sandbox, all at once. Nothing caches it.

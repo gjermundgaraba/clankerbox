@@ -619,6 +619,35 @@ test("create sends noEnv and the trial's TTL under the row's key, records the sa
   expect(remotes(rig.guest)).toEqual([remoteCommand(["true"])]);
 });
 
+test("a rename boat refuses is only a warning: the create goes on and the sandbox stays recorded", async () => {
+  const rig = await rigOn(fakeBoat({ instant: true }));
+  const machine = machineOn("dev");
+  const logged: Array<unknown> = [];
+
+  await rig.insert(machine);
+  rig.boat.hooks.answer = (sent) =>
+    sent.method === "PATCH" ? refusal(500, "rename_failed", "try later") : undefined;
+
+  await succeeds(
+    rig.runtime
+      .create(machine, "boat")
+      .pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))]))),
+  );
+
+  expect(rig.boat.calls()).toEqual([
+    "POST /sandboxes",
+    "PATCH /sandboxes/bx_made0001",
+    "POST /sandboxes/bx_made0001/sshkey",
+  ]);
+  expect(logged).toEqual([
+    [
+      "couldn't name boat_dev's boat sandbox bx_made0001 on boat's dashboard: boat PATCH /sandboxes/bx_made0001 answered 500 rename_failed: try later (req_0123)",
+    ],
+  ]);
+  expect(await nativeOf(rig, "dev")).toBe("bx_made0001");
+  expect(remotes(rig.guest)).toEqual([remoteCommand(["true"])]);
+});
+
 test("every create, fork, start and restore sends noEnv: true and ttlSeconds: 7200", async () => {
   const rig = await rigOn();
   const dev = machineOn("dev");
@@ -1134,7 +1163,7 @@ test("after a crash once the sandbox was recorded, stop stops it and delete dele
   // The create's call answered and the sandbox was recorded, then the host died.
   rig.guest.hooks.answer = () => ({ exitCode: 255 });
   rig.boat.hooks.answer = (sent) =>
-    sent.method === "PATCH" ? refusal(500, "host_died_here") : undefined;
+    sent.path.endsWith("/sshkey") ? refusal(400, "host_died_here") : undefined;
   await fails(rig.runtime.create(machine, "boat"));
   rig.boat.hooks.answer = undefined;
 
@@ -1373,11 +1402,27 @@ test("the API key reaches neither ssh's command line nor its environment, nor an
   await rig.insert(machine);
   rig.guest.hooks.answer = () => ({ exitCode: 255, stderr: `Bearer ${apiKey}?\n` });
   rig.boat.hooks.answer = (sent) =>
-    sent.method === "PATCH" ? refusal(400, "bad", `you sent ${apiKey}`) : undefined;
+    sent.method === "PATCH" || sent.path.endsWith("/sshkey")
+      ? refusal(400, "bad", `you sent ${apiKey}`)
+      : undefined;
 
-  const error = await fails(rig.runtime.create(machine, "boat"));
+  const logged: Array<unknown> = [];
 
-  for (const text of [error.message, String(error), inspect(error, { depth: 10 })]) {
+  const error = await fails(
+    rig.runtime
+      .create(machine, "boat")
+      .pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))]))),
+  );
+
+  // The rename's refusal is a warning, the authorization's the error.
+  expect(logged).toHaveLength(1);
+
+  for (const text of [
+    error.message,
+    String(error),
+    inspect(error, { depth: 10 }),
+    inspect(logged),
+  ]) {
     expect(text).not.toContain(apiKey);
   }
 

@@ -517,13 +517,23 @@ export const make = (
 
     /**
      * After a create, fork or restore answers: records the sandbox on the row before anything
-     * else, waits for it to run, and names it after the machine on boat's dashboard.
+     * else, waits for it to run, and names it after the machine on boat's dashboard. The name
+     * is only the operator's label, and delete goes by the recorded ID, so a rename boat refuses
+     * is a warning.
      */
     const made = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
         yield* store.recordNative(machine.name, machine.instance, id);
         yield* running(machine, id, true);
-        yield* api.rename(id, machine.id);
+        yield* api
+          .rename(id, machine.id)
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(
+                `couldn't name ${machine.id}'s boat sandbox ${id} on boat's dashboard: ${error.message}`,
+              ),
+            ),
+          );
       });
 
     /** A fork's or restore's sandbox, once made: SSH answers and `/var/lib` is restored. */
