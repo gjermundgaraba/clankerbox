@@ -689,8 +689,7 @@ checksums in `release-inputs.json`):
 
 ```sh
 pnpm build
-pnpm sea:build [darwin-arm64|linux-x64]   # darwin needs macOS
-pnpm sea:bundle
+pnpm sea:build [darwin-arm64|linux-x64]   # build and bundle; darwin needs macOS
 pnpm sea:smoke tools/release/dist/clankerbox-<version>-<target>.tar.gz
 ```
 

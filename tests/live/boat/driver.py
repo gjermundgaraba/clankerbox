@@ -59,12 +59,11 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from driver_common import (REPO, Evidence, Failed, WorkRun, alive, clean_commit, free_port, host_end,  # noqa: E402
-                           host_start, keep, read_int, sha256, stop_on_signals)
+from driver_common import (DIST, REPO, Evidence, Failed, WorkRun, alive, clean_commit, free_port,  # noqa: E402
+                           host_end, host_start, install_binary, keep, read_int, sha256, stop_on_signals)
 
 KEY_SOURCE = Path.home() / 'Library' / 'Application Support' / 'ascii' / 'boat' / 'config.json'
 API = 'https://boat.dev/api/v1'
-DIST = REPO / 'tools' / 'release' / 'dist'
 # What one run uses (tests/live/tests/boat.test.ts): its starts, the 429 refusal included, the
 # sandboxes it has active at once, which is the trial's limit, and its named snapshots.
 STARTS = 7
@@ -494,8 +493,8 @@ def main():
         run.on_cleanup(lambda: teardown(state, boat, before, log, record))
 
         sh(['vp', 'run', '-r', 'build'], 'build', cwd=REPO)
-        sh(['sh', 'tools/release/build-sea.sh', 'darwin-arm64'], 'build-sea', cwd=REPO)
-        shutil.copy2(DIST / 'darwin-arm64' / 'clankerbox', binary)
+        sh(['sh', 'tools/release/build.sh', 'darwin-arm64'], 'build-sea', cwd=REPO)
+        install_binary('darwin-arm64', binary)
         shutil.rmtree(DIST)
         record(sea={'bytes': binary.stat().st_size, 'sha256': sha256(binary)})
         log(f'SEA from {commit}: {binary.stat().st_size / 2**20:.1f} MiB, sha256 {sha256(binary)}')

@@ -45,7 +45,7 @@ packages, not this one.
 
 Each: what Node does, where, and what of ours depends on it.
 
-**Building the SEA** (`tools/release/build-sea.sh`)
+**Building the SEA** (`tools/release/build.sh`)
 
 - `node --build-sea <config>` builds a SEA for another target, given that
   target's official `node` as `executable`, from a builder Node of the same
@@ -55,20 +55,20 @@ Each: what Node does, where, and what of ours depends on it.
   `output`, `disableExperimentalSEAWarning`, `useSnapshot: false` and
   `useCodeCache: false` (both work only for same-platform builds), and
   `execArgvExtension: "none"`, which makes the binary ignore `NODE_OPTIONS`.
-  Ours: the config `build-sea.sh` writes; `smoke.sh` checks that
+  Ours: the config `build.sh` writes; `smoke.sh` checks that
   `NODE_OPTIONS` is ignored. Check whether any field was renamed, became the
   default or was removed.
 - darwin-arm64 needs re-signing after `--build-sea`: an ad-hoc signature with the
   hardened runtime and the `com.apple.security.cs.allow-jit` entitlement
   (`tools/release/entitlements.plist`). curl and scp downloads get no
   quarantine attribute, so no notarization. Ours: `codesign --force --sign -
-  --options runtime --entitlements …` in `build-sea.sh`.
+  --options runtime --entitlements …` in `build.sh`.
 - The official linux-x64 `node` is non-PIE; `--build-sea` adds two read-only
   segments, and the result ran on a glibc 2.43 host. Check the official build's
   glibc floor against the hosts' (Ubuntu 24.04 on CI).
 - The archive holds `bin/node` and `LICENSE` under `node-v<version>-<target>/`
-  (`LICENSE` 156,386 bytes at 26.10.0). Ours: `build-sea.sh` extracts both, and
-  `bundle.sh` ships `LICENSE` as `notices/node/LICENSE`. A big change in the
+  (`LICENSE` 156,386 bytes at 26.10.0). Ours: `build.sh` extracts both, and
+  ships `LICENSE` as `notices/node/LICENSE`. A big change in the
   LICENSE (a newly bundled dependency) is worth a look.
 
 **Inside the binary**
@@ -112,9 +112,9 @@ minutes)
 
 - `pnpm install` after the catalog change, then `vp run --no-cache ready`.
 - Build, bundle and smoke both targets: `pnpm build`, `pnpm sea:build` (both on
-  macOS), `pnpm sea:bundle`, then `pnpm sea:smoke <bundle>` for each, the
-  linux-x64 one on a Linux/amd64 machine. CI's `sea` job does the same on
-  `macos-latest` and `ubuntu-24.04`. Builds run as work runs
+  macOS), then `pnpm sea:smoke <bundle>` for each, the linux-x64 one on a
+  Linux/amd64 machine. CI's `sea` job does the same on `macos-latest` and
+  `ubuntu-24.04`. Builds run as work runs
   (`scripts/WORK_RUNS.md`); keep the bundles you need outside scratch.
 - Live: at least `pnpm live:smolvm` (its suite has the create whose setup runs
   past 300 s, and a client that goes away mid-call), since every live suite runs

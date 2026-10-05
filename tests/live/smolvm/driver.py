@@ -40,9 +40,8 @@ import time
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from driver_common import REPO, Evidence, Failed, WorkRun, clean_commit, stop_on_signals  # noqa: E402
-
-DIST = REPO / 'tools' / 'release' / 'dist'
+from driver_common import (DIST, REPO, Evidence, Failed, WorkRun, bundled_binary, clean_commit,  # noqa: E402
+                           install_binary, stop_on_signals)
 
 
 def main():
@@ -144,10 +143,10 @@ def main():
 
         def build():
             sh(['vp', 'run', '-r', 'build'], 'build', cwd=REPO)
-            sh(['sh', 'tools/release/build-sea.sh', 'darwin-arm64', 'linux-x64'], 'build-sea', cwd=REPO)
-            shutil.copy2(DIST / 'darwin-arm64' / 'clankerbox', darwin_bin)
+            sh(['sh', 'tools/release/build.sh', 'darwin-arm64', 'linux-x64'], 'build-sea', cwd=REPO)
+            install_binary('darwin-arm64', darwin_bin)
             linux = run.scratch / 'clankerbox-linux-x64.gz'
-            raw = (DIST / 'linux-x64' / 'clankerbox').read_bytes()
+            raw = bundled_binary('linux-x64')
             sha = hashlib.sha256(raw).hexdigest()
             with gzip.open(linux, 'wb', compresslevel=6) as f:
                 f.write(raw)

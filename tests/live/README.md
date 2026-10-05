@@ -28,10 +28,11 @@ share machines, so a subset can fail where the whole suite passes.
   `vp`, `python3`, and `ssh`, `scp`, `rsync` and `ssh-keygen` on the path.
 - A tree with no uncommitted changes: the driver refuses one, so the commit it
   records names the code it ran.
-- The release tooling's Node archives, pinned in
-  `tools/release/release-inputs.json`; `tools/release/build-sea.sh` downloads
-  them into `tools/release/cache/` on first use. The driver removes
-  `tools/release/dist/` once it has copied the binary out.
+- The release tooling's Node archives, for the Node `.node-version` pins, with
+  their checksums in `tools/release/release-inputs.json`;
+  `tools/release/build.sh` downloads them into `tools/release/cache/` on first
+  use. The driver builds the bundles there and removes `tools/release/dist/`
+  once it has taken the binary out of its bundle.
 - Each run is a work run (`scripts/WORK_RUNS.md`): it owns
   `.work/runs/live-<runtime>-<id>/`, whose `evidence/` it keeps (driver log,
   `resources.json`, the suite's verbose log with its `[timing]` lines, the

@@ -1,7 +1,7 @@
 """What the live drivers (smolvm/driver.py, tart/driver.py, boat/driver.py) share: the commit a
-run names, its signals, its evidence and the suite's run, and for a host on this Mac, its keeper,
-its start and end, its API port and a file's checksum. A driver puts tests/live on its import
-path and imports this module by name.
+run names, its signals, its evidence and the suite's run, the binary from a release bundle, and for
+a host on this Mac, its keeper, its start and end, its API port and a file's checksum. A driver
+puts tests/live on its import path and imports this module by name.
 """
 import hashlib
 import json
@@ -12,9 +12,11 @@ import signal
 import socket
 import subprocess
 import sys
+import tarfile
 import time
 
 REPO = Path(__file__).resolve().parents[2]
+DIST = REPO / 'tools' / 'release' / 'dist'
 sys.path.insert(0, str(REPO))
 from scripts.work_runs import WorkRun  # noqa: E402, F401
 
@@ -57,6 +59,19 @@ def sha256(path):
         for chunk in iter(lambda: f.read(1 << 22), b''):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def bundled_binary(target):
+    """The clankerbox binary in the bundle tools/release/build.sh built for `target`, as bytes."""
+    version = json.loads((REPO / 'packages' / 'contract' / 'package.json').read_text())['version']
+    with tarfile.open(DIST / f'clankerbox-{version}-{target}.tar.gz') as bundle:
+        return bundle.extractfile('clankerbox').read()
+
+
+def install_binary(target, path):
+    """Writes the bundled binary for `target` to `path`, executable."""
+    path.write_bytes(bundled_binary(target))
+    path.chmod(0o755)
 
 
 def alive(pid):

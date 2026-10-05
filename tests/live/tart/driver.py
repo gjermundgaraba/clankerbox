@@ -51,14 +51,13 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from driver_common import (REPO, Evidence, Failed, WorkRun, alive, clean_commit, free_port, host_end,  # noqa: E402
-                           host_start, keep, read_int, sha256, stop_on_signals)
+from driver_common import (DIST, REPO, Evidence, Failed, WorkRun, alive, clean_commit, free_port,  # noqa: E402
+                           host_end, host_start, install_binary, keep, read_int, sha256, stop_on_signals)
 
 TART = REPO / '.work/inputs/tart-2.40.1/tart.app/Contents/MacOS/tart'
 SEED_VM = 'home/vms/clankerbox-rewrite-seed-macos-tahoe-base'
 SEED_FILES = ('config.json', 'disk.img', 'nvram.bin')
 SOFTNET = Path('/usr/local/bin/softnet')
-DIST = REPO / 'tools' / 'release' / 'dist'
 VZ = 'com.apple.Virtualization.VirtualMachine'
 DOMAIN = f'gui/{os.getuid()}'
 
@@ -348,8 +347,8 @@ def main():
         record(commit=commit, firewall=firewall_state())
         seed_check('before')
         sh(['vp', 'run', '-r', 'build'], 'build', cwd=REPO)
-        sh(['sh', 'tools/release/build-sea.sh', 'darwin-arm64'], 'build-sea', cwd=REPO)
-        shutil.copy2(DIST / 'darwin-arm64' / 'clankerbox', binary)
+        sh(['sh', 'tools/release/build.sh', 'darwin-arm64'], 'build-sea', cwd=REPO)
+        install_binary('darwin-arm64', binary)
         shutil.rmtree(DIST)
         record(sea={'bytes': binary.stat().st_size, 'sha256': sha256(binary)})
         log(f'SEA from {commit}: {binary.stat().st_size / 2**20:.1f} MiB, sha256 {sha256(binary)}')
