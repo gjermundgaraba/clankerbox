@@ -141,7 +141,7 @@ const alive: ReadonlySet<RecordState> = new Set(["running", "pausing", "unreacha
  * The states `machine start` refuses: a frozen fork base, and a machine with saved execution,
  * which only smolvm's resume continues (`start_vm_named_with_db`, S@1.22.2:src/cli/vm_common.rs).
  */
-const unstartable: ReadonlySet<RecordState | "missing"> = new Set(["frozen", "pausing", "paused"]);
+const unstartable: ReadonlySet<RecordState> = new Set(["frozen", "pausing", "paused"]);
 
 export const stateOf = (state: RecordState): MachineState =>
   alive.has(state) ? "running" : "stopped";
@@ -290,7 +290,7 @@ export const make = (
             ? `machine ${machine.id} is missing from the smolvm runtime; delete it`
             : recorded === "unreachable"
               ? `smolvm reads machine ${machine.id} unreachable: its VM runs, but its agent doesn't answer; start it to boot it again`
-              : alive.has(recorded)
+              : alive.has(recorded) || unstartable.has(recorded)
                 ? `smolvm reads machine ${machine.id} ${recorded}, and copies only a running machine`
                 : stopped;
 
@@ -538,6 +538,14 @@ export const make = (
 
           if (recorded === "running") {
             return;
+          }
+
+          if (recorded === "missing") {
+            return yield* new Refusal({
+              error: new Precondition({
+                message: `machine ${machine.id} is missing from the smolvm runtime; delete it`,
+              }),
+            });
           }
 
           if (unstartable.has(recorded)) {

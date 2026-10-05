@@ -719,8 +719,9 @@ These are known, not guarded, and accepted:
   its life.
 - **Start** reads status first: a running machine is left as it is, and an
   unreachable one (its VMM alive, its agent silent) is booted again, as
-  `machine start` kills its VMM first. A fork or capture of an unreachable
-  machine is refused.
+  `machine start` kills its VMM first. A frozen, paused or pausing one is
+  refused with `Precondition`, as is a fork or capture of an unreachable
+  machine.
 - **Stop** is `machine stop` only; a guest that doesn't confirm its flush stays
   running and the stop fails, rather than risk lost writes. **Delete** reads
   status, stops gracefully, then SIGKILLs the VM's scope if it is still loaded,
