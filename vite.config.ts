@@ -35,7 +35,9 @@ export default defineConfig({
       "vite-plus/prefer-vite-plus-imports": "error",
       "oxc/no-accumulating-spread": "error",
       // Vitest's expect takes a message as its second argument.
-      "vitest/valid-expect": ["warn", { maxArgs: 2 }],
+      "vitest/valid-expect": ["error", { maxArgs: 2 }],
+      "vitest/require-to-throw-message": "error",
+      "vitest/no-conditional-expect": "error",
       "vitest/no-restricted-vi-methods": [
         "error",
         {
