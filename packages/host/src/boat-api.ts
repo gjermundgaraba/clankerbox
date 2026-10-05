@@ -142,11 +142,6 @@ export const Sandbox = Schema.Struct({
 
 export type Sandbox = typeof Sandbox.Type;
 
-const SandboxList = Schema.Struct({
-  sandboxes: Schema.Array(Sandbox),
-  pageInfo: Schema.optionalKey(Schema.Struct({ hasMore: Schema.Boolean })),
-});
-
 const SandboxInfo = Schema.Struct({ sandbox: Sandbox });
 
 /** A fork's answer: `id` is the new sandbox. */
@@ -411,30 +406,21 @@ export const make = (settings: Settings) =>
 
     return {
       /**
-       * The sandboxes among `ids`, from one `GET /sandboxes`: the account may also hold the
-       * operator's own. One page holds up to 200; when boat has more and one of `ids` isn't on
-       * it, the answer can't say it is gone, so it fails.
+       * The sandboxes among `ids` that boat has, each read with its own `GET`, all at once. A
+       * host holds few machines, and boat limits starts, not reads; a list would also hold the
+       * operator's own sandboxes, a page at a time.
        */
       sandboxes: (ids: ReadonlyArray<string>) =>
-        Effect.flatMap(
-          once({ method: "GET", path: "/sandboxes?limit=200" }, SandboxList),
-          ({ sandboxes, pageInfo }) => {
-            const wanted = new Set(ids);
-
-            const found = new Map(
-              sandboxes
-                .filter((listed) => wanted.has(listed.id))
-                .map((listed) => [listed.id, listed]),
-            );
-
-            return pageInfo?.hasMore === true && found.size < wanted.size
-              ? Effect.fail(
-                  new Internal({
-                    message: `boat lists more than ${sandboxes.length} sandboxes, so the host can't tell which of ${ids.join(", ")} are gone`,
-                  }),
-                )
-              : Effect.succeed(found);
-          },
+        Effect.map(
+          Effect.forEach(
+            ids,
+            (id) =>
+              Effect.map(sandbox(id), (found) =>
+                Option.map(found, (existing) => [id, existing] as const),
+              ),
+            { concurrency: "unbounded" },
+          ),
+          (found) => new Map(Arr.getSomes(found)),
         ),
       sandbox,
       /** Creates a sandbox of `type`, or from the named snapshot `from`; its ID. */

@@ -583,8 +583,8 @@ export const make = (
       checkpointKind: "disk",
       startup: () => Effect.void,
       /**
-       * One `GET /sandboxes` for every machine with a recorded sandbox, and none when no machine
-       * has one. A machine whose sandbox boat doesn't list, or has none recorded, is missing.
+       * A `GET` of each recorded sandbox, all at once, and none when no machine has one. A
+       * machine whose sandbox boat answers 404 for, or has none recorded, is missing.
        */
       observe: (machines) =>
         Effect.gen(function* () {

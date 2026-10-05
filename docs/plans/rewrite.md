@@ -1187,13 +1187,14 @@ Two rules for every VM job:
     A rename boat refuses fails the action like any runtime failure, and
     leaves the machine unmade, to delete.
 - **State:** the runtime's `observe` takes the machines and returns each
-  one's state, in their order, which boat answers with one `GET /sandboxes`,
-  filtered to the recorded IDs, because the account may also hold the
-  operator's own sandboxes. Nothing caches it.
-  - The list is paged, at most 200 per page, and holds stopped sandboxes
-    too. When boat has more pages and a recorded ID isn't on the first, the
-    host can't tell that machine is gone, and `observe` fails with
-    `Internal` rather than read it `missing`.
+  one's state, in their order, from a `GET /sandboxes/{id}` of each recorded
+  sandbox, all at once. Nothing caches it.
+  - It doesn't list: `GET /sandboxes` holds the operator's sandboxes too, at
+    most 200 to a page, and past one page a recorded sandbox missing from
+    it, even one deleted outside the host, couldn't be told gone. A host
+    holds few machines, and boat limits starts, not reads.
+  - Any failure other than a 404 fails `observe`: a machine the host can't
+    read isn't `missing`.
   - `ready`, `idle` and `running` read as `running`.
   - 404 and `cancelled` read as `missing`, and so does a row without a
     sandbox ID. When no row has one, `observe` makes no call.
@@ -1466,8 +1467,10 @@ tests use real VMs.
      - `observe` takes the machines and returns each one's state (phase-5
        review): a list of N Tart machines ran N `tart list` calls, and the
        RAM budget N `machine status` calls under the admission permit. Tart
-       now answers with one `tart list` and boat with one `GET /sandboxes`;
-       smolvm reads each machine inside its runtime, at its own bound of 8.
+       now answers with one `tart list`, and smolvm reads each machine inside
+       its runtime, at its own bound of 8. boat answered with one
+       `GET /sandboxes` until phase 6's review, and now reads each recorded
+       sandbox on its own (see [Runtimes: boat](#runtimes-boat)).
      - The checkpoint kind is the runtime's constant `checkpointKind`, like
        `pin`, in place of `captureKind`, and a fork's or capture's source
        state is a `Refusal` from the runtime's `fork` or `capture`, after the

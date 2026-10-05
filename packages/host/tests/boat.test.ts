@@ -257,17 +257,6 @@ const fakeBoat = (options?: { readonly instant?: boolean }) => {
       return { status: 200, body: { ok: true, snapshot: shown } };
     }
 
-    if (request.method === "GET" && id === "") {
-      return {
-        status: 200,
-        body: {
-          ok: true,
-          sandboxes: [...sandboxes.values()].map((listed) => step(listed, now)),
-          pageInfo: { hasMore: false },
-        },
-      };
-    }
-
     if (request.method === "POST" && id === "") {
       if (body.from !== undefined && !snapshots.has(body.from)) {
         return refusal(404, "named_snapshot_not_found");
@@ -910,7 +899,7 @@ test("a machine no boat type covers is refused with Precondition, in admit and b
   );
 });
 
-test("observe reads every machine with one GET /sandboxes, and none when no sandbox is recorded", async () => {
+test("observe reads each recorded sandbox with its own GET, and none when no sandbox is recorded", async () => {
   const boat = fakeBoat({ instant: true });
   const rig = await rigOn(boat);
 
@@ -964,8 +953,13 @@ test("observe reads every machine with one GET /sandboxes, and none when no sand
     { state: "missing" },
     { state: "missing" },
   ]);
-  expect(boat.sent.map((sent) => `${sent.method} ${sent.path}`)).toEqual([
-    "GET /sandboxes?limit=200",
+  // Never the operator's own sandbox: only the recorded ones are read.
+  expect(boat.sent.map((sent) => `${sent.method} ${sent.path}`).toSorted()).toEqual([
+    "GET /sandboxes/bx_cancelled",
+    "GET /sandboxes/bx_deleted",
+    "GET /sandboxes/bx_down",
+    "GET /sandboxes/bx_own",
+    "GET /sandboxes/bx_up",
   ]);
 
   boat.sent.length = 0;

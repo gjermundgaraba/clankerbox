@@ -108,8 +108,11 @@ const created = (id: string): Answered => ({
   body: { ok: true, type: "sandbox.created", status: "provisioning", sandbox: sandbox(id) },
 });
 
-/** A fake boat that answers with `reply` and records every request in `sent`. */
-const fakeBoat = (reply: (sent: Sent, index: number) => Reply) => {
+/**
+ * A fake boat that answers with `reply`, `delay` after each request arrives, and records every
+ * request in `sent`.
+ */
+const fakeBoat = (reply: (sent: Sent, index: number) => Reply, delay = Duration.zero) => {
   const sent: Array<Sent> = [];
 
   const client = HttpClient.make((request, requestUrl) =>
@@ -125,24 +128,27 @@ const fakeBoat = (reply: (sent: Sent, index: number) => Reply) => {
 
       const answer = reply(recorded, sent.length - 1);
 
-      return answer === "drop"
-        ? Effect.fail(
-            new HttpClientError.HttpClientError({
-              reason: new HttpClientError.TransportError({
+      const answered =
+        answer === "drop"
+          ? Effect.fail(
+              new HttpClientError.HttpClientError({
+                reason: new HttpClientError.TransportError({
+                  request,
+                  description: `socket hang up after Authorization: Bearer ${apiKey}`,
+                }),
+              }),
+            )
+          : Effect.succeed(
+              HttpClientResponse.fromWeb(
                 request,
-                description: `socket hang up after Authorization: Bearer ${apiKey}`,
-              }),
-            }),
-          )
-        : Effect.succeed(
-            HttpClientResponse.fromWeb(
-              request,
-              new Response(bodyOf(answer), {
-                status: answer.status,
-                headers: { "content-type": "application/json" },
-              }),
-            ),
-          );
+                new Response(bodyOf(answer), {
+                  status: answer.status,
+                  headers: { "content-type": "application/json" },
+                }),
+              ),
+            );
+
+      return Duration.isZero(delay) ? answered : Effect.delay(answered, delay);
     }),
   );
 
@@ -509,45 +515,50 @@ test("a stop never forces, and its refusal is the error", async () => {
   );
 });
 
-test("one GET /sandboxes answers for the recorded sandboxes, and not for the operator's own", async () => {
-  const listed = (hasMore: boolean): Reply => ({
-    status: 200,
-    body: {
-      ok: true,
-      type: "sandbox.list",
-      sandboxes: [
-        sandbox("bx_mine0001"),
-        sandbox("bx_oper0001"),
-        sandbox("bx_mine0002", "archived"),
-      ],
-      pageInfo: { nextCursor: hasMore ? "next" : null, hasMore, limit: 200 },
-    },
-  });
-
-  const boat = fakeBoat(() => listed(false));
-
-  const found = await run(boat, (api) =>
-    api.sandboxes(["bx_mine0001", "bx_mine0002", "bx_gone0001"]),
-  );
-
-  expect(boat.sent.map((sent) => [sent.method, sent.path])).toEqual([
-    ["GET", "/sandboxes?limit=200"],
+test("the recorded sandboxes are read each with its own GET, at once, and a 404 is gone", async () => {
+  const states = new Map([
+    ["bx_mine0001", "ready"],
+    ["bx_mine0002", "archived"],
   ]);
-  expect([...found.keys()]).toEqual(["bx_mine0001", "bx_mine0002"]);
-  expect(found.get("bx_mine0002")?.state).toBe("archived");
-  expect(found.get("bx_mine0001")?.sshEndpoint).toBe("203.0.113.10:19044");
 
-  // With more pages, an ID not on the first can't be called gone.
-  const paged = fakeBoat(() => listed(true));
+  // Each answer takes a second: read one after another, three would take three.
+  const boat = fakeBoat((sent) => {
+    const id = sent.path.split("/")[2] ?? "";
+    const state = states.get(id);
 
-  const all = await run(paged, (api) => api.sandboxes(["bx_mine0001"]));
+    return state === undefined
+      ? refusal(404, "not_found")
+      : { status: 200, body: { ok: true, type: "sandbox.info", sandbox: sandbox(id, state) } };
+  }, Duration.seconds(1));
 
-  const error = await run(paged, (api) =>
-    Effect.flip(api.sandboxes(["bx_mine0001", "bx_gone0001"])),
+  const { exit, waited } = await runTimed(boat, (api) =>
+    api.sandboxes(["bx_mine0001", "bx_gone0001", "bx_mine0002"]),
   );
 
-  expect(all.size).toBe(1);
-  expect(error._tag).toBe("Internal");
+  const found = Exit.isSuccess(exit) ? exit.value : undefined;
+
+  expect(Duration.format(waited)).toBe("1s");
+  expect(boat.sent.map((sent) => `${sent.method} ${sent.path}`).toSorted()).toEqual([
+    "GET /sandboxes/bx_gone0001",
+    "GET /sandboxes/bx_mine0001",
+    "GET /sandboxes/bx_mine0002",
+  ]);
+  expect([...(found?.keys() ?? [])].toSorted()).toEqual(["bx_mine0001", "bx_mine0002"]);
+  expect(found?.get("bx_mine0002")?.state).toBe("archived");
+  expect(found?.get("bx_mine0001")?.sshEndpoint).toBe("203.0.113.10:19044");
+
+  // Any other failure fails the whole read: a machine that can't be read isn't gone.
+  const failing = fakeBoat((sent) =>
+    sent.path.endsWith("bx_mine0002") ? refusal(500, "internal_error") : refusal(404, "not_found"),
+  );
+
+  const error = await run(failing, (api) =>
+    Effect.flip(api.sandboxes(["bx_mine0001", "bx_mine0002"])),
+  );
+
+  expect(error.message).toBe(
+    "boat GET /sandboxes/bx_mine0002 answered 500 internal_error: boat says internal_error (req_0123)",
+  );
 });
 
 test("a cancelled sandbox, reported with only its ID, state and error, still reads", async () => {

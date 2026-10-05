@@ -127,8 +127,8 @@ export interface Interface {
   readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, HostError>;
   /**
    * Reads the machines' states in as few native calls as the runtime allows: one `tart list` on
-   * Tart, and one `GET /sandboxes` on boat; smolvm reads each machine on its own, at its own
-   * bound. A machine the runtime doesn't know is `missing`, not an error. Its contract is one
+   * Tart; smolvm reads each machine on its own, at its own bound, and boat each recorded sandbox,
+   * all at once. A machine the runtime doesn't know is `missing`, not an error. Its contract is one
    * state per machine, in their order: a runtime builds its answer by mapping over `machines`,
    * and callers rely on that without checking.
    */
