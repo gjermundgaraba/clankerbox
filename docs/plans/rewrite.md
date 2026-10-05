@@ -1230,7 +1230,9 @@ Two rules for every VM job:
   - Before that, every create, fork, start and restore waits for boat to read
     the sandbox running (polled each second, at most 10 minutes), then for
     SSH to answer `true` (every 2 s, at most 3 minutes): a fresh activation
-    may refuse the first connection.
+    may refuse the first connection, and a failed read of its host keys
+    through the command API is tried again too. Whether the command API
+    answers at `ready` is for the live tests to show.
   - The marker is undocumented. boat's documented signal, the
     `sandbox.hydrated` webhook, can't reach a host on the tailnet. Ask boat
     for a documented one, and re-check the marker at every change of boat's

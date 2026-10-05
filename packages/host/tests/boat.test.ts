@@ -766,7 +766,7 @@ test("exec on a sandbox that doesn't run, or without one recorded, fails before 
   expect(rig.guest.calls).toEqual([]);
 });
 
-test("a create waits while SSH doesn't answer yet, and fails with ssh's output after three minutes", async () => {
+test("a create waits while SSH or boat's command API doesn't answer yet, and fails with ssh's output after three minutes", async () => {
   const rig = await rigOn(fakeBoat({ instant: true }));
   const machine = machineOn("dev");
   let refusals = 2;
@@ -779,8 +779,23 @@ test("a create waits while SSH doesn't answer yet, and fails with ssh's output a
     return refusals >= 0 ? { exitCode: 255, stderr: "Connection refused\n" } : undefined;
   };
 
+  // boat's command API isn't up yet either, at first.
+  let unready = 1;
+
+  rig.boat.hooks.answer = (sent) => {
+    if (!sent.path.endsWith("/commands") || unready === 0) {
+      return undefined;
+    }
+
+    unready -= 1;
+
+    return refusal(503, "agent_unavailable");
+  };
+
   await succeeds(rig.runtime.create(machine, "boat"));
   expect(remotes(rig.guest)).toHaveLength(3);
+  expect(rig.boat.sent.filter((sent) => sent.path.endsWith("/commands"))).toHaveLength(4);
+  rig.boat.hooks.answer = undefined;
 
   const other = machineOn("other");
 

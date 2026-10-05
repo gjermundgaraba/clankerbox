@@ -443,12 +443,17 @@ export const make = (
         ),
       ).pipe(Effect.map(({ exitCode, output }) => ({ exitCode, output: lastLines(output) })));
 
-    /** Waits until SSH answers, which it may not for a moment after boat reads the sandbox ready. */
+    /**
+     * Waits until SSH answers, which it may not for a moment after boat reads the sandbox ready.
+     * Reading the host keys through boat's command API may fail that early too, so a failed
+     * probe is tried again; the last one's output or error is the timeout's.
+     */
     const reachable = (machine: MachineRef) =>
       Effect.gen(function* () {
         const last = yield* Ref.make("");
 
         const answered = yield* runToEnd(machine, ["true"]).pipe(
+          Effect.catch((error) => Effect.succeed({ exitCode: -1, output: error.message })),
           Effect.tap(({ output }) => Ref.set(last, output)),
           Effect.repeat({
             until: ({ exitCode }) => exitCode === 0,
