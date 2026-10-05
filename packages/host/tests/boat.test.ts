@@ -967,17 +967,19 @@ test("a machine no boat type covers is refused with Precondition, in admit and b
   expect(refused(restored)[0]).toBe("Precondition");
   expect(rig.boat.sent).toEqual([]);
 
+  // A running source would sync and wait for a snapshot: the type is refused before either.
   rig.boat.sandboxes.set("bx_source", {
     id: "bx_source",
-    state: "archived",
+    state: "idle",
     ip: null,
-    sshEndpoint: null,
+    sshEndpoint: "203.0.113.10:19044",
   });
 
   const forked = await fails(rig.runtime.fork(machineOn("dev", { native: "bx_source" }), big));
 
   expect(refused(forked)[0]).toBe("Precondition");
-  expect(rig.boat.calls()).toEqual([]);
+  expect(rig.boat.sent).toEqual([]);
+  expect(rig.guest.calls).toEqual([]);
 
   await succeeds(
     rig.runtime.admit({

@@ -783,13 +783,12 @@ export const make = (
        */
       fork: (source, machine) =>
         Effect.gen(function* () {
+          const type = yield* typeOf(machine);
           const from = yield* sourceSandbox(source);
 
           if (upStates.has(from.state)) {
             yield* freshSnapshot(source, from.id);
           }
-
-          const type = yield* typeOf(machine);
 
           const id = yield* refusing(api.fork(keyOf(machine), from.id, type.name));
 
