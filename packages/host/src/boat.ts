@@ -541,19 +541,28 @@ export const make = (
       );
 
     /**
+     * Writes the running guest's filesystems out with `sync`, before boat snapshots its disk for
+     * a fork or a capture, so the snapshot holds everything written before the call.
+     */
+    const sync = (machine: MachineRef, id: string, before: "fork" | "capture") =>
+      Effect.gen(function* () {
+        const synced = yield* runToEnd(machine, id, ["sync"]).pipe(Effect.timeoutOption(syncWait));
+
+        if (Option.isNone(synced) || synced.value.exitCode !== 0) {
+          return yield* new Internal({
+            message: `sync in ${machine.id} before its ${before} ${Option.isNone(synced) ? `ran past ${Duration.format(syncWait)}` : `exited ${synced.value.exitCode}: ${synced.value.output}`}`,
+          });
+        }
+      });
+
+    /**
      * Waits until a snapshot attempt that began after the source's sync has completed, so the
      * fork holds everything written before it. The times are boat's, and "after" is read
      * against the host's clock.
      */
     const freshSnapshot = (source: MachineRef, id: string) =>
       Effect.gen(function* () {
-        const synced = yield* runToEnd(source, id, ["sync"]).pipe(Effect.timeoutOption(syncWait));
-
-        if (Option.isNone(synced) || synced.value.exitCode !== 0) {
-          return yield* new Internal({
-            message: `sync in ${source.id} before its fork ${Option.isNone(synced) ? `ran past ${Duration.format(syncWait)}` : `exited ${synced.value.exitCode}: ${synced.value.output}`}`,
-          });
-        }
+        yield* sync(source, id, "fork");
 
         const noted = yield* DateTime.now;
 
@@ -692,11 +701,18 @@ export const make = (
             });
           }
         }),
-      /** A named snapshot of a running or a stopped sandbox, always of its disk. */
+      /**
+       * A named snapshot of a running or a stopped sandbox, always of its disk. A running one
+       * syncs first, as a fork's source does.
+       */
       capture: (machine, checkpoint) =>
         Effect.gen(function* () {
           const source = yield* sourceSandbox(machine);
           const name = snapshotOf(checkpoint.instance);
+
+          if (upStates.has(source.state)) {
+            yield* sync(machine, source.id, "capture");
+          }
 
           yield* refusing(api.saveSnapshot(source.id, name));
 

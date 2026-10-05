@@ -1308,7 +1308,11 @@ Two rules for every VM job:
   - The source keeps running, and a stopped source forks at once.
   - Forks carry the disk only, never RAM.
 - **Checkpoints** are boat named snapshots, always `disk`, from a running or a
-  stopped machine. Capture takes about two minutes from a running machine.
+  stopped machine. From a running machine the host first syncs the guest's
+  filesystems over SSH, as before a fork, so the snapshot holds everything
+  written before the capture; a sync that fails or runs past 5 minutes
+  fails the capture before anything is saved. Capture takes about two
+  minutes from a running machine.
   From a stopped one it took 0.2–21 s in the spikes, and 121 s and 0.4 s in
   phase 6's two live runs, so a capture can take minutes either way.
   - The host polls the snapshot every 3 s, for at most 15 minutes, until it

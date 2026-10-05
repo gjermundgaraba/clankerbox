@@ -1317,18 +1317,26 @@ test("a checkpoint is a named snapshot cbx-<host>-<inst>: captured from a runnin
   const recorded = { ...machine, native: "bx_made0001" };
 
   rig.boat.sent.length = 0;
+  rig.guest.calls.length = 0;
   await succeeds(rig.runtime.capture(recorded, checkpoint));
 
+  // A running machine syncs over SSH before boat saves its disk.
   expect(rig.boat.sent.map((sent) => `${sent.method} ${sent.path}`)).toEqual([
     "GET /sandboxes/bx_made0001",
+    "GET /sandboxes/bx_made0001",
+    "POST /sandboxes/bx_made0001/commands",
     "POST /named-snapshots",
     "GET /named-snapshots/cbx-boat-cafe0001",
     "GET /named-snapshots/cbx-boat-cafe0001",
   ]);
-  expect(rig.boat.sent[1]?.body).toEqual({ sandboxId: "bx_made0001", name: "cbx-boat-cafe0001" });
+  expect(rig.boat.sent[3]?.body).toEqual({ sandboxId: "bx_made0001", name: "cbx-boat-cafe0001" });
+  expect(remotes(rig.guest)).toEqual([remoteCommand(["sync"])]);
 
+  // A stopped one doesn't.
   await succeeds(rig.runtime.stop(recorded));
+  rig.guest.calls.length = 0;
   await succeeds(rig.runtime.capture(recorded, checkpointOn("cq", 2)));
+  expect(rig.guest.calls).toEqual([]);
 
   rig.boat.sent.length = 0;
   rig.guest.calls.length = 0;
@@ -1349,6 +1357,29 @@ test("a checkpoint is a named snapshot cbx-<host>-<inst>: captured from a runnin
     "DELETE /named-snapshots/cbx-boat-cafe0001",
   ]);
   expect([...rig.boat.snapshots.keys()]).toEqual(["cbx-boat-cafe0002"]);
+});
+
+test("a running machine whose sync fails isn't captured", async () => {
+  const rig = await rigOn(fakeBoat({ instant: true }));
+
+  rig.boat.sandboxes.set("bx_source", {
+    id: "bx_source",
+    state: "idle",
+    ip: null,
+    sshEndpoint: "203.0.113.10:19044",
+  });
+  rig.guest.hooks.answer = () => ({ exitCode: 1, stderr: "sync: I/O error\n" });
+
+  const error = await fails(
+    rig.runtime.capture(machineOn("dev", { native: "bx_source" }), checkpointOn("cp")),
+  );
+
+  expect(refused(error)).toEqual([
+    "not refused",
+    "Internal",
+    "sync in boat_dev before its capture exited 1: sync: I/O error",
+  ]);
+  expect(rig.boat.calls()).toEqual([]);
 });
 
 test("an 11th named snapshot is a Capacity refusal; a failed save and a deleted snapshot's restore are failures", async () => {
