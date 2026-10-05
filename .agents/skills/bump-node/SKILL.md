@@ -113,11 +113,12 @@ minutes)
 ## Verify
 
 - `pnpm install` after the catalog change, then `vp run --no-cache ready`.
-- Build, bundle and smoke both targets: `pnpm build`, `pnpm sea:build` (both on
-  macOS), then `pnpm sea:smoke <bundle>` for each, the linux-x64 one on a
-  Linux/amd64 machine. CI's `sea` job does the same on `macos-15` (arm64) and
-  `ubuntu-24.04`. Builds run as work runs
-  (`scripts/WORK_RUNS.md`); keep the bundles you need outside scratch.
+- Build, bundle and smoke both targets: `pnpm build`,
+  `pnpm sea:build --out "$WORK_RUN_SCRATCH/bundles"` (both on macOS), then
+  `pnpm sea:smoke <bundle>` for each, the linux-x64 one on a Linux/amd64
+  machine. CI's `sea` job does the same on `macos-15` (arm64) and
+  `ubuntu-24.04`. Builds run as work runs (`scripts/WORK_RUNS.md`); keep the
+  bundles you need outside scratch.
 - Live: at least `pnpm live:smolvm` (its suite has the create whose setup runs
   past 300 s, and a client that goes away mid-call), since every live suite runs
   the new binary as host and CLI; Tart's and boat's suites if the bump touched
