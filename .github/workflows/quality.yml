@@ -16,6 +16,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup
+      # ready checks the Python of scripts/ and tests/live/ with uvx's ruff.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.23"
+          enable-cache: false
       - run: pnpm ready
   sea:
     strategy:

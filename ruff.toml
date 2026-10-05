@@ -1,0 +1,6 @@
+# The Python of scripts/ and tests/live/, which ready checks with `uvx ruff@0.16.10`: pyflakes,
+# and pycodestyle's errors short of line length.
+required-version = "==0.16.10"
+
+[lint]
+select = ["E4", "E7", "E9", "F"]

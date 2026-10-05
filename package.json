@@ -6,7 +6,7 @@
     "build": "vp run -r build",
     "check": "vp check",
     "test": "vp run -r test",
-    "check:py": "python3 -m unittest discover -s scripts",
+    "check:py": "uvx ruff@0.16.10 check scripts tests/live && python3 -m unittest discover -s scripts",
     "ready": "vp run check && vp run check:py && vp run -r test && vp run -r build",
     "sea:build": "sh tools/release/build.sh",
     "sea:smoke": "sh tools/release/smoke.sh",
