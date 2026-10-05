@@ -19,8 +19,9 @@ without the live run below is an **unqualified candidate**.
   floor: `supported` accepts any `major.minor.patch` at or above it, and startup
   refuses the rest. Its comment lists why the floor is where it is. The tested
   release also appears in README (install table, the `tart.binary` example),
-  `tests/live/README.md` (the live driver's `--tart`, a release staged at
-  `.work/inputs/tart-<version>/tart.app`), `scripts/WORK_RUNS.md` and the tests
+  `tests/live/README.md` and `tests/live/tart/driver.py`'s usage (its `--tart`,
+  a release staged at `.work/inputs/tart-<version>/tart.app`),
+  `scripts/WORK_RUNS.md` and the tests
   (`packages/host/tests/tart.test.ts`, whose fake `tart` answers as the tested
   release; `config.test.ts`): `git grep -n '2\.40'`.
 - **Companions** pinned beside it, re-checked only when they change: Softnet
