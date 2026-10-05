@@ -520,6 +520,43 @@ test("a create, fork or restore that succeeds marks its machine made", async () 
   ]);
 });
 
+test("a create that fails only in preparation leaves its machine made, and start prepares it again", async () => {
+  const linux = await host();
+
+  // With no setup, the first guest command is preparation's.
+  linux.fake.failNext("exec", new Internal({ message: "sshd didn't start" }));
+
+  const error = await failure(linux, linux.machines.create(request("dev")));
+  const [row] = await rows(linux);
+
+  linux.fake.calls.length = 0;
+
+  const started = await linux.run(linux.machines.start("linux_dev"));
+
+  expect(error).toEqual(new Internal({ message: "sshd didn't start" }));
+  expect(row).toMatchObject({ made: true, action: { name: "create", status: "failed" } });
+  expect(started).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
+  expect(linux.fake.calls).toEqual(["exec linux_dev"]);
+});
+
+test("after a restart during create's preparation, the machine is made, and start prepares it again", async () => {
+  const linux = await host();
+
+  // Held in preparation's exec: with no setup, the runtime's create is all the work.
+  const { entered } = linux.fake.holdNext("exec");
+
+  Effect.runFork(linux.machines.create(request("dev")));
+  await entered;
+  await linux.dispose();
+
+  const restarted = await host({ fake: linux.fake, dir: linux.dir });
+  const [row] = await rows(restarted);
+  const started = await restarted.run(restarted.machines.start("linux_dev"));
+
+  expect(row).toMatchObject({ made: true, action: restartedDuringCreate });
+  expect(started).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
+});
+
 const marker = "setup-text-marker";
 
 test("a failing setup fails the create with its last lines of output, never its text", async () => {

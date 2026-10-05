@@ -89,10 +89,13 @@ const capturing = (store: Interface, made: NewCheckpoint) =>
     store.insert("capture", { table: "checkpoints", record: made }, token),
   );
 
-/** Inserts a machine row whose create is done. */
+/** Inserts a machine row whose create is done, and so made. */
 const planted = (store: Interface, made: NewMachine) =>
   Effect.flatMap(store.insert("create", inserting(made)), (token) =>
-    store.end(token, { action: { name: "create", status: "done" } }),
+    Effect.andThen(
+      store.markMade(token),
+      store.end(token, { action: { name: "create", status: "done" } }),
+    ),
   );
 
 test("init makes the state dir and a database at the binary's schema version", async () => {
@@ -258,7 +261,7 @@ test("a claimed row is busy until its action ends, and a claim returns its recor
     new Conflict({ message: "machine linux_dev is busy: create is running", kind: "busy" }),
   );
   expect(missing).toEqual(new NotFound({ message: "no machine linux_gone" }));
-  const stopping = { ...record("dev"), made: true, action: { name: "stop", status: "running" } };
+  const stopping = { ...record("dev"), made: false, action: { name: "stop", status: "running" } };
 
   expect(claimed).toEqual([
     [{ table: "machines", name: "dev", before: { name: "create", status: "done" } }],
@@ -319,20 +322,21 @@ test("an end records the outcome on every claimed row, and the host key on the p
   ]);
 });
 
-test("a done end marks the machines its claim inserted made, and a failed end none", async () => {
+test("markMade marks the machines its claim inserted made, not those it holds; an end marks none", async () => {
   const stateDir = join(await scratch(owned), "state");
 
   const made = await withStore(stateDir, (store) =>
     Effect.gen(function* () {
-      const failed = yield* store.insert("create", inserting(record("failed")));
+      const created = yield* store.insert("create", inserting(record("dev")));
 
-      yield* store.end(failed, {
-        action: { name: "create", status: "failed", error: { tag: "Internal", message: "no" } },
+      yield* store.end(created, { action: { name: "create", status: "done" } });
+
+      const fork = yield* forking(store, "dev", record("copy", { port: 10_001 }));
+
+      yield* store.markMade(fork);
+      yield* store.end(fork, {
+        action: { name: "fork", status: "failed", error: { tag: "Internal", message: "no" } },
       });
-
-      const fork = yield* forking(store, "failed", record("copy", { port: 10_001 }));
-
-      yield* store.end(fork, { action: { name: "fork", status: "done" } });
 
       return (yield* store.list).map(({ name, made }) => [name, made]);
     }),
@@ -340,7 +344,7 @@ test("a done end marks the machines its claim inserted made, and a failed end no
 
   expect(made).toEqual([
     ["copy", true],
-    ["failed", false],
+    ["dev", false],
   ]);
 });
 

@@ -87,7 +87,8 @@ export interface MachineRecord extends Resource {
   /** The guest's SSH host public key, as the last preparation printed it. */
   readonly hostKey: string | undefined;
   /**
-   * Whether the create, fork or restore that inserted the row succeeded. Until then the machine
+   * Whether the runtime's work of the create, fork or restore that inserted the row succeeded:
+   * the create with its setup, or the fork's or restore's native work. Until then the machine
    * can only be read, stopped or deleted.
    */
   readonly made: boolean;
@@ -297,9 +298,11 @@ export interface Interface {
   /** Gives back a claim in one transaction: its inserted rows go, its held rows get `before`. */
   readonly release: (token: Token) => Effect.Effect<void, Internal>;
   /**
-   * Ends a claim in one transaction, recording `outcome` on its rows. A `done` end marks every
-   * machine row the claim inserted made: the machine its create, fork or restore made.
+   * Marks every machine row the claim inserted made, in one transaction: the machine its create,
+   * fork or restore made, once the runtime's work is done and before its preparation.
    */
+  readonly markMade: (token: Token) => Effect.Effect<void, Internal>;
+  /** Ends a claim in one transaction, recording `outcome` on its rows. */
   readonly end: (token: Token, outcome: Outcome) => Effect.Effect<void, Internal>;
   /** Removes a row, as a successful delete does. */
   readonly remove: (row: RowRef) => Effect.Effect<void, Internal>;
@@ -481,7 +484,7 @@ export const open = (
 
     const updateHostKey = db.prepare("UPDATE machines SET host_key = ? WHERE name = ?");
 
-    const markMade = db.prepare("UPDATE machines SET made = 1 WHERE name = ?");
+    const updateMade = db.prepare("UPDATE machines SET made = 1 WHERE name = ?");
 
     /** The statements that record a row's action and remove the row, per table. */
     const statementsOf = (table: Table) => ({
@@ -655,6 +658,16 @@ export const open = (
 
           return Result.void;
         }),
+      markMade: (token) =>
+        transaction(db, `mark ${token.inserted.map((row) => id(row.name)).join(", ")} made`, () => {
+          for (const row of token.inserted) {
+            if (row.table === "machines") {
+              updateMade.run(row.name);
+            }
+          }
+
+          return Result.void;
+        }),
       end: (token, { action, prepared }) =>
         transaction(db, `record ${action.name} on ${named(token)}`, () => {
           for (const row of [...token.inserted, ...token.held]) {
@@ -663,14 +676,6 @@ export const open = (
 
           if (prepared?.hostKey !== undefined) {
             updateHostKey.run(prepared.hostKey, prepared.name);
-          }
-
-          if (action.status === "done") {
-            for (const row of token.inserted) {
-              if (row.table === "machines") {
-                markMade.run(row.name);
-              }
-            }
           }
 
           return Result.void;

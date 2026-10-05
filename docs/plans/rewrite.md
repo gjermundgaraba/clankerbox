@@ -459,8 +459,9 @@ listed to keep them from being ported):
   transaction: `hold` claims a row and returns a token and the row's record
   (every action holds at most one row, and read it again right after until
   the phase-5 review), and `insert` inserts one and returns a token. An end
-  names the machine row that gets the host key preparation read, and a `done`
-  end marks the machine rows its token inserted made. A claimed row has
+  names the machine row that gets the host key preparation read.
+  `markMade(token)` marks the machine rows a token inserted made, in one
+  transaction, once the runtime's work is done. A claimed row has
   `action.status = running`. A missing row is `NotFound`, one already running
   `Conflict{kind: busy}` and a taken new name `Conflict{kind: exists}` (the
   primary key's refusal), and then nothing is written. A claim can join an
@@ -515,18 +516,23 @@ listed to keep them from being ported):
   errors that a runtime documents as creating nothing, listed per runtime.
 - **No lineage:** a fork is an independent machine, so a source can be stopped
   or deleted while its forks run.
-- **A machine is made only when its create, fork or restore succeeds:** the
-  machine row's `made` column is false at insert, and the `done` end of the
-  create, fork or restore that inserted the row sets it (phase-5 review). Until then the machine
-  can only be read, stopped or deleted: `start`, `fork` and `capture` refuse it
-  with `Precondition` in step 3 ("its create, fork or restore failed; delete
-  it"), so a half-made machine never boots. Without it, `start` repaired a
+- **A machine is made only when the runtime's work of its create, fork or
+  restore succeeds:** the machine row's `made` column is false at insert, and
+  the create, fork or restore that inserted the row sets it once that work is
+  done, before preparation (phase-5 review): the create with its setup, or
+  the fork's or restore's native work. Until then the machine can only be
+  read, stopped or deleted: `start`, `fork` and `capture` refuse it with
+  `Precondition` in step 3 ("its create, fork or restore failed; delete it"),
+  so a half-made machine never boots. Without it, `start` repaired a
   half-made machine and recorded `done`: a Tart clone whose `tart set` never
   ran booted with the base's serial and sizes, and a create whose setup failed
   read healthy after a start. `stop` boots nothing, so it takes an unmade
   machine too: a host crash during setup leaves the VM running, which would
-  otherwise hold its Tart slot or its RAM until `delete`. The cost, accepted: a create that failed only in
-  preparation can't be repaired with `start`; delete it and create it again.
+  otherwise hold its Tart slot or its RAM until `delete`. A failure, or a
+  host crash, only in preparation leaves the machine made, with its action
+  `failed`, and `start` prepares it again. The cost, accepted: a create whose
+  setup failed, or a fork or restore whose native work did, can't be repaired
+  with `start`; delete it and make it again.
 - **Delete after a failure:** never refused because of an earlier failure, and
   it copes with leftover native state, including a live orphan VM process.
   `stop` is never refused for an earlier failure either, made or not. Both
@@ -542,11 +548,14 @@ listed to keep them from being ported):
   the first boot, and `machine start` never re-applies ports, so a VM left
   between would publish on another machine's port if it ever booted. `start`
   couldn't repair it: `machine status --json` and `machine ls --json` report
-  only a port count (S@1.22.2:src/cli/vm_common.rs:3102). A failed fork or
-  restore is never made, so nothing boots it again, and `delete` removes it
+  only a port count (S@1.22.2:src/cli/vm_common.rs:3102). A fork or restore
+  whose native work failed is never made, so nothing boots it again, and
+  `delete` removes it
   (see [Runtimes: smolvm](#runtimes-smolvm), Stop), including a VMM that a
-  first boot cut short left in its scope. The fork's source ends `fork`
-  `failed` like any fork's, which blocks nothing.
+  first boot cut short left in its scope. One whose native work succeeded
+  has moved its port, so a failure only in its preparation leaves it made.
+  The fork's source ends `fork` `failed` like any fork's, which blocks
+  nothing.
 - **Completion is recorded even when the caller has gone away.**
 - **Schema:** `PRAGMA user_version` and an ordered list of migrations, starting
   at version 1. A database newer than the binary is refused.
@@ -716,9 +725,9 @@ instance and the machine's ID, and a fresh 64-byte seed arrives on stdin. The
    else ecdsa, else rsa, after a marker line. It becomes `Machine.hostKey`.
 
 A crashed preparation is simply run again on the next activation; no
-`prepared` flag is needed. That holds for `start` of a made machine; a
-create, fork or restore whose preparation fails leaves its machine unmade,
-which only `delete` takes (see [State and claims](#state-and-claims)).
+`prepared` flag is needed. That holds for a create, fork or restore too: its
+machine is made before preparation, so one that fails only in preparation is
+repaired with `start` (see [State and claims](#state-and-claims)).
 
 ### Guest access
 
@@ -883,7 +892,8 @@ Two rules for every VM job:
     only alone, exactly one passes.
   - The rows tell which machines are booting: a row whose running action is
     `create`, `restore` or `start`, or `fork` on a row not yet made. A fork
-    holds its source, which is made, but boots only the copy. Booting actions
+    holds its source, which is made, but boots only the copy, which is made
+    once its VM runs and then counts as running. Booting actions
     claim under the admission permit, so every such row is past its check. A
     start on a running machine reads booting too, which counts nothing twice,
     and a row whose release or end failed reads booting until the next host

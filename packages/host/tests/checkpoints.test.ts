@@ -221,6 +221,33 @@ test("after a failed fork or restore, the source starts, and the new machine, ne
   expect(Object.keys(await actions(linux))).toEqual(["dev"]);
 });
 
+test("a fork or restore that fails only in preparation leaves its machine made, and start prepares it again", async () => {
+  const linux = await withSource();
+
+  await linux.run(linux.checkpoints.capture("linux_dev", "snap"));
+
+  for (const [name, operation, make] of [
+    ["forked", "fork", () => linux.machines.fork("linux_dev", "forked")],
+    ["restored", "restore", () => linux.machines.restore("linux_snap", "restored")],
+  ] as const) {
+    linux.fake.failNext("exec", new Internal({ message: "sshd didn't start" }));
+    await failure(linux, make());
+
+    const [row] = (await linux.run(linux.store.list)).filter((record) => record.name === name);
+
+    linux.fake.calls.length = 0;
+
+    const started = await linux.run(linux.machines.start(`linux_${name}`));
+
+    expect(row).toMatchObject({ made: true, action: { name: operation, status: "failed" } });
+    expect(started).toMatchObject({
+      state: "running",
+      action: { name: "start", status: "done" },
+    });
+    expect(linux.fake.calls).toEqual([`exec linux_${name}`]);
+  }
+});
+
 test("a fork to a taken name is Conflict{exists}, and the source isn't claimed", async () => {
   const linux = await withSource();
 

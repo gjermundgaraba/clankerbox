@@ -155,10 +155,11 @@ export const make = (
 
     /**
      * Whether an action is booting the machine: a running create, restore or start, or a running
-     * fork on the copy it hasn't made yet, not on its made source. Booting actions claim under
-     * the admission permit, so any other such row is past its check, and the target's row is
-     * already claimed. A start on a running machine boots nothing yet reads booting, which counts
-     * no machine twice; a row whose release or end failed reads booting until the next host start.
+     * fork on the copy it hasn't made yet, not on its made source. A copy is made once its VM
+     * runs, so in preparation it counts as running instead. Booting actions claim under the
+     * admission permit, so any other such row is past its check, and the target's row is already
+     * claimed. A start on a running machine boots nothing yet reads booting, which counts no
+     * machine twice; a row whose release or end failed reads booting until the next host start.
      */
     const boots = ({ action, made }: MachineRecord) =>
       action.status === "running" &&
@@ -180,8 +181,9 @@ export const make = (
     /**
      * Create, fork and restore: under the admission permit, a create or restore claims its new
      * row, with the lowest free port; a fork claims its source, then joins the new row, with the
-     * source's spec. The new row is admitted, the work makes the machine, preparation runs, and
-     * the action ends done.
+     * source's spec. The new row is admitted, the work makes the machine, which is then marked
+     * made, preparation runs, and the action ends done. A failure in preparation leaves the
+     * machine made, so `start` prepares it again; one before, or in the marking, leaves it unmade.
      */
     const makeMachine = (action: "create" | "fork" | "restore", name: string, making: Making) =>
       Effect.gen(function* () {
@@ -218,7 +220,12 @@ export const make = (
         const hostKey = yield* native(
           token,
           `${action} ${machine.id}`,
-          withRuntime(Effect.andThen(work(machine), prepare(machine))),
+          withRuntime(
+            work(machine).pipe(
+              Effect.andThen(store.markMade(token)),
+              Effect.andThen(prepare(machine)),
+            ),
+          ),
         );
 
         yield* done(token, { prepared: { name, hostKey } });
