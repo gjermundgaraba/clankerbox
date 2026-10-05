@@ -886,9 +886,23 @@ test("a machine no boat type covers is refused with Precondition, in admit and b
   ]);
 
   const created = await fails(rig.runtime.create(big, "boat"));
+  const restored = await fails(rig.runtime.restore(checkpointOn("cp"), big));
 
   expect(refused(created)[0]).toBe("Precondition");
+  expect(refused(restored)[0]).toBe("Precondition");
   expect(rig.boat.sent).toEqual([]);
+
+  rig.boat.sandboxes.set("bx_source", {
+    id: "bx_source",
+    state: "archived",
+    ip: null,
+    sshEndpoint: null,
+  });
+
+  const forked = await fails(rig.runtime.fork(machineOn("dev", { native: "bx_source" }), big));
+
+  expect(refused(forked)[0]).toBe("Precondition");
+  expect(rig.boat.calls()).toEqual([]);
 
   await succeeds(
     rig.runtime.admit({

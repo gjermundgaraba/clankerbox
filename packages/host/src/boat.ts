@@ -269,6 +269,13 @@ export const make = (
       });
 
     /**
+     * The boat type that covers a new machine; none is a `Precondition`, refused before
+     * anything native.
+     */
+    const typeOf = (machine: MachineRef) =>
+      Effect.mapError(machineType(machine), (error) => new Refusal({ error }));
+
+    /**
      * Calls that make or resume a sandbox, or save a snapshot: boat's `Capacity` refusals, and
      * its `Precondition` refusal of a type the plan lacks, leave nothing on boat, so they fall
      * under the refusal rule. A 404 from them is boat's own (a restore's snapshot deleted under
@@ -613,10 +620,7 @@ export const make = (
       /** boat has one image, so `image` names it only in the host's bases. */
       create: (machine) =>
         Effect.gen(function* () {
-          const type = yield* Effect.mapError(
-            machineType(machine),
-            (error) => new Refusal({ error }),
-          );
+          const type = yield* typeOf(machine);
 
           const id = yield* refusing(api.create(keyOf(machine), type.name));
 
@@ -699,10 +703,7 @@ export const make = (
         }),
       restore: (checkpoint, machine) =>
         Effect.gen(function* () {
-          const type = yield* Effect.mapError(
-            machineType(machine),
-            (error) => new Refusal({ error }),
-          );
+          const type = yield* typeOf(machine);
 
           const id = yield* refusing(
             api.create(keyOf(machine), type.name, snapshotOf(checkpoint.instance)),
@@ -723,10 +724,7 @@ export const make = (
             yield* freshSnapshot(source, from.id);
           }
 
-          const type = yield* Effect.mapError(
-            machineType(machine),
-            (error) => new Refusal({ error }),
-          );
+          const type = yield* typeOf(machine);
 
           const id = yield* refusing(api.fork(keyOf(machine), from.id, type.name));
 
