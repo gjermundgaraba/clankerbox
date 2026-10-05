@@ -38,8 +38,33 @@ interface Sent {
   readonly text: string | undefined;
 }
 
-/** How the fake answers a request: a status and JSON body, or a dropped connection. */
-type Reply = { readonly status: number; readonly body: Schema.Json } | "drop";
+/** A status and a JSON body. */
+interface Answered {
+  readonly status: number;
+  readonly body: Schema.Json;
+}
+
+/**
+ * How the fake answers a request: a status and JSON body, a status and some other text (a
+ * proxy's page), a status and a body cut off after `cut`, or a dropped connection.
+ */
+type Reply =
+  | Answered
+  | { readonly status: number; readonly text: string }
+  | { readonly status: number; readonly cut: string }
+  | "drop";
+
+/** A response body that breaks off after `text`, as a dropped connection leaves it. */
+const cutOff = (text: string) =>
+  new ReadableStream<Uint8Array>({
+    start: (controller) => {
+      controller.enqueue(new TextEncoder().encode(text));
+      controller.error(new Error("connection reset"));
+    },
+  });
+
+const bodyOf = (reply: Exclude<Reply, "drop">) =>
+  "body" in reply ? JSON.stringify(reply.body) : "text" in reply ? reply.text : cutOff(reply.cut);
 
 const decoder = new TextDecoder();
 
@@ -78,7 +103,7 @@ const sandbox = (id: string, state = "ready") => ({
   snapshotAvailable: false,
 });
 
-const created = (id: string): Reply => ({
+const created = (id: string): Answered => ({
   status: 202,
   body: { ok: true, type: "sandbox.created", status: "provisioning", sandbox: sandbox(id) },
 });
@@ -112,7 +137,7 @@ const fakeBoat = (reply: (sent: Sent, index: number) => Reply) => {
         : Effect.succeed(
             HttpClientResponse.fromWeb(
               request,
-              new Response(JSON.stringify(answer.body), {
+              new Response(bodyOf(answer), {
                 status: answer.status,
                 headers: { "content-type": "application/json" },
               }),
@@ -256,16 +281,17 @@ test("an unclear create is repeated with the same key and body until boat answer
     (_sent, index) =>
       [
         "drop" as const,
-        refusal(503, "out_of_capacity"),
-        { status: 502, body: "bad gateway" },
+        refusal(500, "internal_error"),
+        { status: 502, text: "<html><body>Bad Gateway</body></html>" },
         refusal(409, "idempotency_in_progress"),
+        { status: 202, cut: '{"ok":true,"type":"sandbox.created","sandbox":{"id":"bx_ma' },
       ][index] ?? created("bx_made0001"),
   );
 
   const { exit } = await runTimed(boat, (api) => api.create("key-1", "small"));
 
   expect(exit).toEqual(Exit.succeed("bx_made0001"));
-  expect(boat.sent).toHaveLength(5);
+  expect(boat.sent).toHaveLength(6);
 
   for (const sent of boat.sent) {
     expect(sent).toEqual(boat.sent[0]);
@@ -275,7 +301,7 @@ test("an unclear create is repeated with the same key and body until boat answer
 });
 
 test("the repeats stop at their bound, and the create fails without a second key or body", async () => {
-  const boat = fakeBoat(() => refusal(503, "out_of_capacity"));
+  const boat = fakeBoat(() => ({ status: 503, text: "<html>Service Unavailable</html>" }));
 
   const { exit, waited } = await runTimed(boat, (api) =>
     Effect.flip(api.create("key-1", "small", "cbx-boat-01234567")),
@@ -285,7 +311,7 @@ test("the repeats stop at their bound, and the create fails without a second key
 
   expect([error?._tag, error?.message]).toEqual([
     "Internal",
-    "boat POST /sandboxes answered 503, and repeats for 5m got no clearer answer",
+    "boat POST /sandboxes answered 503 without boat's error, and repeats for 5m got no clearer answer",
   ]);
 
   // Pauses of 1, 2, 4, 8 and 16 s, then 30 s each, until 5 minutes have passed: 15 attempts.
@@ -299,7 +325,7 @@ test("the repeats stop at their bound, and the create fails without a second key
 });
 
 test("a Capacity refusal after an unclear attempt isn't one: that attempt may have made a sandbox", async () => {
-  for (const unclear of ["drop", refusal(503, "out_of_capacity")] as const) {
+  for (const unclear of ["drop", refusal(500, "internal_error")] as const) {
     const boat = fakeBoat((_sent, index) =>
       index === 0 ? unclear : refusal(429, "limit_reached", "2 concurrent sandboxes"),
     );
@@ -317,13 +343,65 @@ test("a Capacity refusal after an unclear attempt isn't one: that attempt may ha
 });
 
 test("calls without a key aren't repeated: an unclear outcome fails them", async () => {
-  const boat = fakeBoat(() => refusal(503, "out_of_capacity"));
+  const boat = fakeBoat(() => refusal(500, "internal_error"));
 
   const error = await run(boat, (api) => Effect.flip(api.resume("bx_made0001")));
 
   expect(boat.sent).toHaveLength(1);
   expect(error._tag).toBe("Internal");
-  expect(error.message).toBe("boat POST /sandboxes/bx_made0001/resume answered 503");
+  expect(error.message).toBe(
+    "boat POST /sandboxes/bx_made0001/resume answered 500 internal_error: boat says internal_error (req_0123)",
+  );
+
+  // A 2xx whose body breaks off is unclear too, and fails a call made once.
+  const cut = fakeBoat(() => ({ status: 200, cut: '{"ok":true,"sandbox":{"id":"bx_made0001",' }));
+  const unread = await run(cut, (api) => Effect.flip(api.sandbox("bx_made0001")));
+
+  expect(cut.sent).toHaveLength(1);
+  expect([unread._tag, unread.message]).toEqual([
+    "Internal",
+    "boat GET /sandboxes/bx_made0001 answered 200, and its body didn't arrive whole: DecodeError",
+  ]);
+});
+
+test("a 4xx is a definite answer whatever its body, and is never repeated", async () => {
+  const bare = "without boat's error";
+
+  const answers: ReadonlyArray<readonly [Reply, string, string]> = [
+    [{ status: 403, text: "<html>Forbidden</html>" }, "Internal", `403 ${bare}`],
+    [{ status: 429, text: "<html>Too Many Requests</html>" }, "Internal", `429 ${bare}`],
+    [{ status: 403, cut: '{"ok":false,"code":"trial_' }, "Internal", `403 ${bare}`],
+    [{ status: 404, text: "" }, "NotFound", `404 ${bare}`],
+    [{ status: 404, cut: '{"ok":false,' }, "NotFound", `404 ${bare}`],
+    [
+      refusal(400, "trial_auto_stop_required", "at most 7200"),
+      "Internal",
+      "400 trial_auto_stop_required: at most 7200 (req_0123)",
+    ],
+  ];
+
+  for (const [reply, tag, said] of answers) {
+    const boat = fakeBoat(() => reply);
+    const { exit } = await runTimed(boat, (api) => Effect.flip(api.create("key-1", "small")));
+    const error = Exit.isSuccess(exit) ? exit.value : undefined;
+
+    expect(boat.sent).toHaveLength(1);
+    expect([error?._tag, error?.message]).toEqual([tag, `boat POST /sandboxes answered ${said}`]);
+  }
+
+  // A 404 without a body still means boat has no such sandbox or snapshot.
+  const bodiless = fakeBoat(() => ({ status: 404, text: "" }));
+
+  const gone = await run(bodiless, (api) =>
+    Effect.all([
+      api.sandbox("bx_gone0001"),
+      api.snapshot("cbx-boat-01234567"),
+      api.delete("bx_gone0001"),
+      api.deleteSnapshot("cbx-boat-01234567"),
+    ]),
+  );
+
+  expect(gone).toEqual([Option.none(), Option.none(), undefined, undefined]);
 });
 
 test("boat's refusals that leave nothing behind are Capacity, answered at once", async () => {
@@ -333,6 +411,8 @@ test("boat's refusals that leave nothing behind are Capacity, answered at once",
     [429, "daily_limit_reached"],
     [403, "trial_machine_class_not_allowed"],
     [403, "machine_class_plan_required"],
+    [503, "out_of_capacity"],
+    [503, "no_ready_machine"],
   ];
 
   for (const [status, code] of refusals) {
@@ -508,7 +588,7 @@ test("the API key never reaches an error, whatever boat or the transport echoes"
 
 /** A loopback server that answers each request with `respond`, recording what it was sent. */
 const loopback = async (
-  respond: (request: IncomingMessage, body: string, index: number) => Reply,
+  respond: (request: IncomingMessage, body: string, index: number) => Answered | "drop",
 ) => {
   const received: Array<{ headers: IncomingMessage["headers"]; body: string }> = [];
 

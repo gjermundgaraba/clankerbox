@@ -185,8 +185,8 @@ const decodeRefused = Schema.decodeUnknownEffect(Refused);
 
 /**
  * boat's answers that leave nothing on boat and mean "no room now", by status and code: the
- * account's active or start limits, a type its plan doesn't include, and an 11th named
- * snapshot. A create or fork that ends `cancelled` is the runtime's to read.
+ * account's active or start limits, a type its plan doesn't include, no machine to run it on,
+ * and an 11th named snapshot. A create or fork that ends `cancelled` is the runtime's to read.
  */
 const capacityRefusals: ReadonlyArray<readonly [number, string]> = [
   [429, "limit_reached"],
@@ -194,13 +194,18 @@ const capacityRefusals: ReadonlyArray<readonly [number, string]> = [
   [429, "daily_limit_reached"],
   [403, "trial_machine_class_not_allowed"],
   [403, "machine_class_plan_required"],
+  [503, "out_of_capacity"],
+  [503, "no_ready_machine"],
   [409, "named_snapshot_limit"],
 ];
 
 /** A repeat that arrives while the first call is still making the sandbox: repeat it again. */
 const inProgress = "idempotency_in_progress";
 
-/** An attempt whose outcome isn't known: a dropped connection, a timeout or a 5xx. */
+/**
+ * An attempt whose outcome isn't known: a dropped connection, a timeout, a 5xx boat doesn't
+ * call a refusal, a repeat still in progress or a 2xx whose body didn't arrive whole.
+ */
 class Unclear extends Data.TaggedError("Unclear")<{ readonly message: string }> {}
 
 /** What the host needs to call boat. */
@@ -237,29 +242,40 @@ export const make = (settings: Settings) =>
         call.body === undefined ? built : HttpClientRequest.bodyJsonUnsafe(built, call.body),
       );
 
-    /** boat's answer to a call that isn't a 2xx: one of the contract's errors. */
+    /**
+     * boat's answer to a call that isn't a 2xx, decided by its status; boat's code, when the body
+     * holds one, refines it. A 4xx is definite whatever its body: a proxy's HTML 403 is
+     * `Internal`, and a 404 without a body is `NotFound`.
+     */
     const refusal = (
       call: Call,
-      status: number,
-      decoded: Option.Option<typeof Refused.Type>,
-    ): HostError | Unclear => {
-      if (Option.isNone(decoded)) {
-        return new Internal({ message: `${named(call)} answered ${status} without boat's error` });
-      }
+      response: HttpClientResponse.HttpClientResponse,
+    ): Effect.Effect<never, HostError | Unclear> =>
+      Effect.gen(function* () {
+        const { status } = response;
+        const decoded = yield* Effect.option(Effect.flatMap(response.json, decodeRefused));
 
-      const { code, message, requestId } = decoded.value;
-      const said = `${named(call)} answered ${status} ${code}: ${scrub(message)}${requestId === undefined ? "" : ` (${requestId})`}`;
+        const said = Option.match(decoded, {
+          onNone: () => `${named(call)} answered ${status} without boat's error`,
+          onSome: ({ code, message, requestId }) =>
+            `${named(call)} answered ${status} ${code}: ${scrub(message)}${requestId === undefined ? "" : ` (${requestId})`}`,
+        });
 
-      if (status === 409 && code === inProgress) {
-        return new Unclear({ message: said });
-      }
+        const code = Option.map(decoded, (refused) => refused.code);
+        const coded = (known: string) => Option.contains(code, known);
 
-      if (capacityRefusals.some(([refused, known]) => refused === status && known === code)) {
-        return new Capacity({ message: said });
-      }
+        if (capacityRefusals.some(([refused, known]) => refused === status && coded(known))) {
+          return yield* new Capacity({ message: said });
+        }
 
-      return status === 404 ? new NotFound({ message: said }) : new Internal({ message: said });
-    };
+        if (status >= 500 || (status === 409 && coded(inProgress))) {
+          return yield* new Unclear({ message: said });
+        }
+
+        return yield* status === 404
+          ? new NotFound({ message: said })
+          : new Internal({ message: said });
+      });
 
     /** Reads an answer: its body when it is a 2xx, else boat's refusal. */
     const answer = <A>(
@@ -270,8 +286,8 @@ export const make = (settings: Settings) =>
       Effect.gen(function* () {
         const { status } = response;
 
-        if (status >= 500) {
-          return yield* new Unclear({ message: `${named(call)} answered ${status}` });
+        if (status < 200 || status >= 300) {
+          return yield* refusal(call, response);
         }
 
         // A body cut off midway leaves the outcome unknown, as a dropped connection does.
@@ -282,12 +298,6 @@ export const make = (settings: Settings) =>
               message: `${named(call)} answered ${status}, and its body didn't arrive whole: ${error.reason._tag}`,
             }),
         );
-
-        if (status < 200 || status >= 300) {
-          return yield* Effect.fail(
-            refusal(call, status, yield* Effect.option(decodeRefused(json))),
-          );
-        }
 
         return yield* Effect.mapError(
           Schema.decodeUnknownEffect(schema)(json),

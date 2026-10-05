@@ -1157,15 +1157,20 @@ Two rules for every VM job:
   column. Create, fork and restore send an `Idempotency-Key` derived from the
   row's `instance` value, so a repeat within boat's 24-hour key window returns
   the original.
-  - An unclear outcome of the call (a dropped connection, a 5xx, no answer
-    within 2 minutes) is retried inside the action, with backoff and the same
-    key and body, for up to 5 minutes: long enough to ride out a brief outage,
-    and far inside the key window. Then the action fails. The pauses double
-    from 1 s up to 30 s. A repeat that boat answers with 409
+  - An unclear outcome of the call (a dropped connection, no answer within
+    2 minutes, a 5xx that isn't a refusal below, or a 2xx whose body breaks
+    off) is retried inside the action, with backoff and the same key and
+    body, for up to 5 minutes: long enough to ride out a brief outage, and
+    far inside the key window. Then the action fails. The pauses double from
+    1 s up to 30 s. A repeat that boat answers with 409
     `idempotency_in_progress`, while the first call is still making the
-    sandbox, is unclear too. A refusal below that answers a repeat is not a
-    refusal: the unclear attempt may have made a sandbox, which the limit may
-    be counting, so the action fails `Internal` and the row stays.
+    sandbox, is unclear too.
+  - The status decides before the body: any other 4xx is a definite answer,
+    whether or not its body is boat's. A proxy's HTML 403 or 429 fails the
+    action `Internal` at once, and a 404 without a body reads as gone.
+  - A refusal below that answers a repeat is not a refusal: the unclear
+    attempt may have made a sandbox, which the limit may be counting, so the
+    action fails `Internal` and the row stays.
   - The key is `clankerbox-<host>-<instance>`. boat's resume takes no key
     (`boat-v1.yaml`), so it is never repeated: an unclear resume fails the
     `start`, and the next `start` reads the state again.
@@ -1212,17 +1217,20 @@ Two rules for every VM job:
   - 429 (`limit_reached`, `rate_limited`, `daily_limit_reached`);
   - 403 for a type the account's plan doesn't include
     (`trial_machine_class_not_allowed`, `machine_class_plan_required`);
+  - 503 `out_of_capacity` and `no_ready_machine`, which boat's docs say
+    create nothing; other 5xx answers are unclear (see IDs above);
   - 409 `named_snapshot_limit`, for an 11th checkpoint;
   - a create, fork or restore that ends in state `cancelled` when boat finds
     no machine, or that boat already answers 404 for, as it does once it has
     reported the cancelled sandbox;
-  - the same 429s on a resume, which leave the machine stopped: the `start`
-    is released, and the row keeps its last action.
+  - the same 429s and 503s on a resume, which leave the machine stopped: the
+    `start` is released, and the row keeps its last action.
 
   They map to `Capacity`. A fork's or capture's source without a sandbox, or
   one boat reads cancelled or gone, is refused with `Precondition` before
   anything native, as on smolvm and Tart. Every call waits for a machine; none sends
-  `failFast`, whose 503 `no_ready_machine` only helped placement move on.
+  `failFast`, which asks boat for 503 `no_ready_machine` at once rather than
+  wait.
 - **Ready:** boat reports `ready` before its lazy restore has finished.
   - `/var/lib` and `/var/opt` are restored in full before boat's marker
     `/var/lib/ascii-lazy/sys-done` appears: a few seconds after ready with
