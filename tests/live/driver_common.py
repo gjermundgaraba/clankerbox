@@ -186,15 +186,15 @@ class Evidence:
             raise RuntimeError(f'{label} failed rc={rc}; see evidence/{label}.log')
         return rc
 
-    def suite(self, runtime, binary, client_config, control, prefix, suite_args):
-        """Runs the live suite on `runtime` (tests/live/tests/live.ts names the environment), and
-        raises Failed unless it passes. The suite's key and scripts live in scratch, even if the
-        suite dies before its afterAll."""
+    def suite(self, runtime, binary, client_config, control, prefix, suite_args, extra_env=None):
+        """Runs the live suite on `runtime` (tests/live/tests/live.ts names the environment, and
+        `extra_env` adds the runtime's own), and raises Failed unless it passes. The suite's key
+        and scripts live in scratch, even if the suite dies before its afterAll."""
         tmp = self.run.scratch / 'tmp'
         tmp.mkdir()
         env = dict(os.environ, TMPDIR=str(tmp), CLANKERBOX_LIVE='1', CLANKERBOX_LIVE_RUNTIME=runtime,
                    CLANKERBOX_BIN=str(binary), CLANKERBOX_LIVE_CONFIG=str(client_config),
-                   CLANKERBOX_LIVE_HOST_CONTROL=str(control), CLANKERBOX_LIVE_PREFIX=prefix)
+                   CLANKERBOX_LIVE_HOST_CONTROL=str(control), CLANKERBOX_LIVE_PREFIX=prefix, **(extra_env or {}))
         # Verbose, so the evidence names every test's result and keeps its [timing] lines.
         rc = self.sh(['vp', 'test', '--reporter=verbose', *shlex.split(suite_args)], 'suite', env=env,
                      cwd=REPO / 'tests' / 'live', timeout=5400, check=False)

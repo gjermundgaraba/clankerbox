@@ -7,8 +7,11 @@
  * create, fork, resume and restore each count, and so does a 429 refusal (evidence.md, boat
  * claims). So at most two of the run's sandboxes are active at once, and every start goes
  * through `counted`, which keeps them to `startsPerMinute` and prints a `[start]` line that the
- * driver counts: one run makes 7, the 429 included. The account may hold the operator's own
- * sandboxes and snapshots, which the host-control program's `account` counts but never names.
+ * driver counts: one run makes 7, the 429 included. The driver passes the account's limit of
+ * active sandboxes in `CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT`; unless it is the trial's 2, the test
+ * of that 429 is skipped, since it would make a third sandbox, and the rest run. The account may
+ * hold the operator's own sandboxes and snapshots, which the host-control program's `account`
+ * counts but never names.
  *
  * The tests run in order and share `main`, whose setup authorizes the run's key for root, and
  * writes a `start` and a `new-identity` hook; the test that made any other machine deletes it,
@@ -70,6 +73,12 @@ const upStates = ["ready", "idle", "running"];
 
 /** boat's trial allows 5 starts a minute; the suite keeps to one fewer. */
 const startsPerMinute = 4;
+
+/** The trial's limit of active sandboxes, which the 429 test fills. */
+const trialActive = 2;
+
+/** The account's limit of active sandboxes, as the driver read it; the trial's when unset. */
+const activeLimit = Number(process.env["CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT"] ?? trialActive);
 
 /** What the harness drives a boat host with. */
 const boat: Runtime<typeof BoatNatives.Type> = {
@@ -480,7 +489,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
     minutes(50),
   );
 
-  test(
+  test.skipIf(activeLimit !== trialActive)(
     "with two sandboxes active, boat refuses a third create with 429: Capacity, leaving no row and nothing on boat",
     async () => {
       const states = Object.fromEntries(

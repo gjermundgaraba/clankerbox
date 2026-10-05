@@ -19,9 +19,11 @@ The run owns one WorkRun (scripts/WORK_RUNS.md) and a host ID of its own,
 ID) starts `<host ID>_`, and every named snapshot's name `cbx-<host ID>-`. Before it builds
 anything, a read-only pre-flight counts the account's sandboxes, active sandboxes and named
 snapshots, and reads its start limits; the evidence keeps the counts, never the operator's
-names or IDs. The run stops there unless the trial's two active sandboxes are both free, the
-hour's and day's starts cover the suite's `STARTS`, and the account has room for its `SNAPSHOTS`
-named snapshots under boat's cap of 10.
+names or IDs. The run stops there unless two active sandboxes are free, the hour's and day's
+starts cover the suite's `STARTS`, and the account has room for its `SNAPSHOTS` named snapshots
+under boat's cap of 10. The suite learns the account's active limit
+(`CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT`), and skips only its test of boat's 429 for a third active
+sandbox unless that limit is the trial's two; the pre-flight records the skip.
 
 The host runs under a keeper process (`driver.py keep`), which records the host's pid and exit
 status, so the suite's host-control program (`driver.py control`, tests/live/tests/live.ts) can
@@ -63,7 +65,7 @@ KEY_SOURCE = Path.home() / 'Library' / 'Application Support' / 'ascii' / 'boat' 
 API = 'https://boat.dev/api/v1'
 DIST = REPO / 'tools' / 'release' / 'dist'
 # What one run uses (tests/live/tests/boat.test.ts): its starts, the 429 refusal included, the
-# sandboxes it has active at once, and its named snapshots.
+# sandboxes it has active at once, which is the trial's limit, and its named snapshots.
 STARTS = 7
 ACTIVE = 2
 SNAPSHOTS = 2
@@ -406,12 +408,14 @@ def preflight(boat, record, log):
     counts = {'access_tier': limits.get('accessTier'), 'sandboxes': len(sandboxes), 'active_sandboxes': active,
               'max_active_sandboxes': max_active, 'named_snapshots': len(snapshots), 'starts': starts,
               'needs': {'starts': STARTS, 'active': ACTIVE, 'snapshots': SNAPSHOTS}}
+    if max_active != ACTIVE:
+        # The suite's Capacity test fills the trial's two to provoke boat's 429; on another limit
+        # it would make a third sandbox, so the suite skips that test and runs the rest.
+        counts['skips'] = (f"the account allows {max_active} active sandboxes, not the trial's {ACTIVE}: "
+                           'the suite skips its 429 test')
     record(preflight=counts)
     log(f'pre-flight: {counts}')
     reasons = []
-    if max_active != ACTIVE:
-        reasons.append(f"the account allows {max_active} active sandboxes; the suite's Capacity test needs "
-                       f"the trial's {ACTIVE}")
     if active + ACTIVE > max_active:
         reasons.append(f'{active} of the {max_active} active sandboxes are in use; the run needs {ACTIVE}')
     for window in ('hour', 'day'):
@@ -423,7 +427,7 @@ def preflight(boat, record, log):
     if reasons:
         record(preflight=dict(counts, refused=reasons))
         raise NoRoom('; '.join(reasons))
-    return {'at': at, 'ids': {sandbox['id'] for sandbox in sandboxes}, 'starts': starts}
+    return {'at': at, 'ids': {sandbox['id'] for sandbox in sandboxes}, 'starts': starts, 'max_active': max_active}
 
 
 def main():
@@ -504,7 +508,8 @@ def main():
         control_bin.chmod(0o755)
 
         log(f'host pid {host_start(state, __file__)}')
-        evidence.suite('boat', binary, client_config, control_bin, f'r{rid[:3]}-', options.suite_args)
+        evidence.suite('boat', binary, client_config, control_bin, f'r{rid[:3]}-', options.suite_args,
+                       {'CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT': str(before['max_active'])})
 
 
 if __name__ == '__main__':

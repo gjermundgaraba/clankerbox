@@ -1531,7 +1531,8 @@ tests use real VMs.
      starts, the 429 refusal of a third sandbox included, with at most two
      sandboxes active, and 2 named snapshots; the driver's read-only
      pre-flight stops it before anything is made when the account has no
-     room. `GET /limits` lists `provisioned`, `cloning`, `ready`, `idle` and
+     room. When the account's active limit isn't the trial's 2, the suite
+     skips only its 429 test, which would otherwise make a third sandbox. `GET /limits` lists `provisioned`, `cloning`, `ready`, `idle` and
      `running` as the active states, so a stopped (`archived`) sandbox
      doesn't count toward the two.
 7. **Release and live tests.** `tools/release` (SEA, bundle, notices) and the
