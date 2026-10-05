@@ -45,8 +45,5 @@
   "peerDependencies": {
     "@effect/platform-node": "^4.0.0",
     "effect": "^4.0.0"
-  },
-  "engines": {
-    "node": ">=26"
   }
 }
