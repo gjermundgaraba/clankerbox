@@ -39,6 +39,7 @@ import {
   OneCheckpoint,
   OneMachine,
   type Ran,
+  refusedBeforeTheRuntime,
   type Runtime,
   run,
   sha256,
@@ -351,6 +352,8 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
     },
     minutes(2),
   );
+
+  refusedBeforeTheRuntime(suite, boat, "main");
 
   test.skipIf(!onTrial)(
     "a large create, which the trial's plan lacks, is boat's 403 and a Precondition refusal, leaving no row and nothing on boat",

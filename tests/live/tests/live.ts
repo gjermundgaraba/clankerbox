@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Checkpoint, ErrorTag, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
-import { afterAll, beforeAll, expect } from "vite-plus/test";
+import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 export interface Ran {
   readonly code: number;
@@ -425,3 +425,48 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     removeMachine,
   };
 };
+
+export type Harness<Native> = ReturnType<typeof harness<Native>>;
+
+/** `args` with the value of its `--base` replaced by `base`. */
+export const rebased = (args: ReadonlyArray<string>, base: string) =>
+  args.map((arg, index) => (args[index - 1] === "--base" ? base : arg));
+
+/**
+ * Registers the test of what is refused before any runtime call, so it costs nothing native,
+ * and on boat no start: a create under a taken name, which the host refuses, and a create by name
+ * of a base no host offers, which placement refuses once it has read every host's bases. `taken`
+ * names a machine the suite holds when the test runs.
+ */
+export const refusedBeforeTheRuntime = <Native>(
+  suite: Harness<Native>,
+  runtime: Runtime<Native>,
+  taken: string,
+) =>
+  test(
+    "a taken name is Conflict{exists}, and a base no host offers is Precondition naming the host's bases; neither writes anything",
+    async () => {
+      const before = await suite.machines();
+      const exists = suite.failure(await suite.createBare(taken));
+
+      expect(exists).toMatchObject({ tag: "Conflict", retryable: false });
+      expect(exists.message).toContain("exists");
+
+      // A name, not a full ID, so the client places it.
+      const nowhere = suite.failure(
+        await suite.cli(
+          ["create"],
+          suite.named("nowhere"),
+          ...rebased(runtime.sizes(), "nowhere"),
+          "--json",
+        ),
+      );
+
+      expect(nowhere.tag).toBe("Precondition");
+      expect(nowhere.message).toContain("no host offers base nowhere");
+      expect(nowhere.message).toContain(`${suite.env.host.id} offers`);
+      expect(await suite.machines()).toEqual(before);
+      expect(await suite.natives("nowhere")).toEqual(runtime.nothing);
+    },
+    minutes(3),
+  );

@@ -20,6 +20,7 @@ import {
   OneCheckpoint,
   OneMachine,
   type Ran,
+  refusedBeforeTheRuntime,
   type Runtime,
   run,
   Store,
@@ -435,6 +436,8 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
     // The same probe reaches the internet, so the refusal is the host's address.
     expect(await inGuest("main", guestProbe("1.1.1.1", "443"))).toBe("reached");
   });
+
+  refusedBeforeTheRuntime(suite, smolvm, "main");
 
   test(
     "a taken name is Conflict{exists}, and an action on a claimed machine is Conflict{busy}",

@@ -22,6 +22,7 @@ import {
   OneCheckpoint,
   OneMachine,
   type Ran,
+  refusedBeforeTheRuntime,
   type Runtime,
   run,
   sha256,
@@ -264,6 +265,8 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
     },
     minutes(5),
   );
+
+  refusedBeforeTheRuntime(suite, tart, "main");
 
   test(
     "under Softnet a guest can't reach its host's API port or any of the host's addresses, and reaches the internet by name",
