@@ -805,9 +805,15 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         expect(refused.message).toContain("was never made");
         await removeMachine(name);
 
-        // No VMM a cut-short boot started is left publishing on the copy's port.
-        expect(copy?.ssh).toBeDefined();
-        expect(await probe(copy?.ssh?.host ?? "", String(copy?.ssh?.port))).toBe("unreachable");
+        // The copy has an endpoint only while it reads running. removeMachine found its scope
+        // gone, so no VMM a cut-short boot started is left; one the copy read running for no
+        // longer publishes on its port either.
+        expect(copy?.ssh === undefined).toBe(copy?.state !== "running");
+        expect(
+          copy?.ssh === undefined
+            ? "unreachable"
+            : await probe(copy.ssh.host, String(copy.ssh.port)),
+        ).toBe("unreachable");
       }
 
       expect((await machine("main"))?.action).toMatchObject({ name: "fork", status: "failed" });
