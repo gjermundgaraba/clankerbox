@@ -829,14 +829,16 @@ These are known, not guarded, and accepted:
 
 ## Development
 
-Node 26 and pnpm 12, through vite-plus (`vp`):
+Node 26 and pnpm 12, through vite-plus (`vp`), and python3 and uv for the
+Python of `scripts/` and `tests/live/`:
 
 ```sh
 pnpm install
 vp check                # format, lint and type-check
+vp run check:py         # ruff 0.16.10 through uvx, and scripts/' unit tests
 vp run -r test          # unit tests, over a fake runtime and a fake boat
 vp run -r build
-vp run ready            # all three; CI runs it
+vp run ready            # all four; CI runs it
 ```
 
 Release builds (`tools/release`, on the Node `.node-version` pins, its archives'
