@@ -31,6 +31,8 @@ jobs:
       - uses: actions/cache@v6.1.0
         with:
           path: tools/release/cache
-          key: sea-node-${{ matrix.target }}-${{ hashFiles('tools/release/release-inputs.json') }}
+          key: sea-node-${{ matrix.target }}-${{ hashFiles('tools/release/release-inputs.json', 'tools/release/build-sea.sh') }}
       - run: pnpm sea:build ${{ matrix.target }}
       - run: pnpm sea:smoke
+      - run: pnpm sea:bundle ${{ matrix.target }}
+      - run: pnpm sea:smoke "tools/release/dist/clankerbox-$(node -p "require('./packages/contract/package.json').version")-${{ matrix.target }}.tar.gz"
