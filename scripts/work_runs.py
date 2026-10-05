@@ -139,35 +139,40 @@ def clean(root, run_id, *, resources_stopped=False):
         save(path, data)
 
 
-def stop_group(process):
-    """Reap the direct child and stop any children left in its process group."""
+def group_left(process, sig=0):
+    """Sends `sig` to the process group `process` leads, and says whether any member is left.
+
+    The leader, our child, is reaped first once it has exited: macOS refuses a signal to a
+    group whose members have all exited but aren't reaped yet (EPERM). A refusal still counts
+    as a member left, so a member we may not signal keeps the group until the caller's deadline.
+    """
+    process.poll()
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(process.pid, sig)
     except ProcessLookupError:
-        process.wait()
-        return
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        process.poll()
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            process.wait()
-            return
-        time.sleep(.05)
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
+        return False
+    except PermissionError:
         pass
-    process.wait()
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            return
+    return True
+
+
+def group_ends(process, seconds):
+    deadline = time.monotonic() + seconds
+    while group_left(process):
+        if time.monotonic() > deadline:
+            return False
         time.sleep(.05)
-    raise RuntimeError('subprocess group still exists after shutdown; inspect before cleaning')
+    return True
+
+
+def stop_group(process):
+    """Stops the process group `process` leads, with SIGTERM and then SIGKILL, and reaps its
+    leader: no descendant left in the group outlives it, even after the leader exited."""
+    if group_left(process, signal.SIGTERM) and not group_ends(process, 5):
+        group_left(process, signal.SIGKILL)
+        if not group_ends(process, 5):
+            raise RuntimeError('subprocess group still exists after shutdown; inspect before cleaning')
+    process.wait()
 
 
 def main(argv=None):

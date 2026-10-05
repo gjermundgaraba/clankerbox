@@ -19,7 +19,7 @@ import time
 REPO = Path(__file__).resolve().parents[2]
 RELEASE = REPO / 'tools' / 'release'
 sys.path.insert(0, str(REPO))
-from scripts.work_runs import WorkRun  # noqa: E402, F401
+from scripts.work_runs import WorkRun, stop_group  # noqa: E402, F401
 
 
 class Stop(Exception):
@@ -174,16 +174,11 @@ class Evidence:
         with open(self.run.evidence / f'{label}.log', 'a') as out:
             proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                     env=env, cwd=cwd, start_new_session=True)
+            # Its group goes with it, after its exit too, so no descendant outlives the command.
             try:
                 rc = proc.wait(timeout)
-            except BaseException:
-                os.killpg(proc.pid, signal.SIGTERM)
-                try:
-                    proc.wait(15)
-                except subprocess.TimeoutExpired:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                    proc.wait()
-                raise
+            finally:
+                stop_group(proc)
         self.log(f'{label}: rc={rc}')
         if check and rc != 0:
             raise RuntimeError(f'{label} failed rc={rc}; see evidence/{label}.log')
