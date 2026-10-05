@@ -1402,8 +1402,8 @@ host and sizes as the phase-4 live runs, fresh inventory on the mirror base). Th
 machine made before its preparation, and reads which machines are booting
 from the rows; the suite runs through the harness it shares with Tart's.
 
-- **Result:** all 24 smolvm tests passed in 230 s (Tart's 13 skipped), in the
-  first run. A create killed during its setup read `failed`, `stop` took it
+- **Result:** all 24 tests (23 smolvm and the binary's) passed in 230 s, with
+  Tart's 13 skipped, in the first run. A create killed during its setup read `failed`, `stop` took it
   while it stayed never made, and start, fork and capture refused it; both
   holds of the host's `machine start` (13 and 6 `pkill` attempts) left the
   copy never made, which start refused and delete removed. A machine whose
