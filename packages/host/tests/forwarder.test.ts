@@ -8,7 +8,7 @@ import { readFile } from "node:fs/promises";
 import { connect, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Exit, Fiber, Schema, Scope, type Stream } from "effect";
+import { Effect, Exit, Fiber, Scope, type Stream } from "effect";
 import { ChildProcess } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
 import { type Forwarder, make } from "../src/forwarder.ts";
@@ -51,25 +51,13 @@ const echo = (marker: string) => (input: Stream.Stream<Uint8Array>) =>
     { stdin: input },
   );
 
-/** A loopback port that was free a moment ago. */
-const freePort = async () => {
-  const server = createServer();
+/**
+ * Each test's own loopback port, from this file's range, which no other test file uses: below
+ * the ephemeral ports, so no outgoing connection takes one between tests.
+ */
+let nextPort = 21_300;
 
-  await new Promise<void>((resolve) => {
-    server.listen({ host: "127.0.0.1", port: 0 }, resolve);
-  });
-
-  const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
-    server.address(),
-    { onExcessProperty: "ignore" },
-  );
-
-  await new Promise((resolve) => {
-    server.close(resolve);
-  });
-
-  return port;
-};
+const ownPort = () => nextPort++;
 
 const connected = (port: number) =>
   new Promise<Socket>((resolve, reject) => {
@@ -120,7 +108,7 @@ const closedLines = async (marker: string, count: number) => {
 
 test("bytes go both ways, and a half-closed client still gets the rest of the output", async () => {
   const marker = join(await scratch(owned), "marker");
-  const port = await freePort();
+  const port = ownPort();
   const payload = randomBytes(4 * 1024 * 1024);
 
   await Effect.runPromise((await forwarder()).listen(port, echo(marker)));
@@ -131,7 +119,7 @@ test("bytes go both ways, and a half-closed client still gets the rest of the ou
 
 test("a client that resets its connection ends the command by closing its stdin", async () => {
   const marker = join(await scratch(owned), "marker");
-  const port = await freePort();
+  const port = ownPort();
 
   await Effect.runPromise((await forwarder()).listen(port, echo(marker)));
 
@@ -145,7 +133,7 @@ test("a client that resets its connection ends the command by closing its stdin"
 
 test("many connections at once each get their own command and their own bytes", async () => {
   const marker = join(await scratch(owned), "marker");
-  const port = await freePort();
+  const port = ownPort();
   const payloads = Array.from({ length: 24 }, () => randomBytes(64 * 1024));
 
   await Effect.runPromise((await forwarder()).listen(port, echo(marker)));
@@ -160,7 +148,7 @@ test("many connections at once each get their own command and their own bytes", 
 
 test("listening twice keeps one listener, and closing it leaves open connections running", async () => {
   const marker = join(await scratch(owned), "marker");
-  const port = await freePort();
+  const port = ownPort();
   const forwarding = await forwarder();
 
   await Effect.runPromise(forwarding.listen(port, echo(marker)));
@@ -196,7 +184,7 @@ test("listening twice keeps one listener, and closing it leaves open connections
 
 test("a port something else holds is Internal, naming the address", async () => {
   const marker = join(await scratch(owned), "marker");
-  const port = await freePort();
+  const port = ownPort();
   const holder = createServer();
 
   await new Promise<void>((resolve) => {
@@ -219,7 +207,7 @@ test("a port something else holds is Internal, naming the address", async () => 
 
 test("a listen interrupted before it listens leaves the port free, and a later listen takes it", async () => {
   const marker = join(await scratch(owned), "marker");
-  const port = await freePort();
+  const port = ownPort();
   const forwarding = await forwarder();
 
   await Effect.runPromise(

@@ -10,7 +10,7 @@ import { basename, join } from "node:path";
 import { connect, createServer } from "node:net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Exit, Fiber, Layer, Logger, Schema, Scope, Stream } from "effect";
+import { Duration, Effect, Exit, Fiber, Layer, Logger, Scope, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
 import { type Interface, type MachineRef, Refusal } from "../src/runtime.ts";
@@ -50,25 +50,13 @@ const binary = "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart";
 
 const launchctl = "/bin/launchctl";
 
-/** A loopback port that was free a moment ago. */
-const freePort = async () => {
-  const server = createServer();
+/**
+ * Each test's own loopback port, from this file's range, which no other test file uses: below
+ * the ephemeral ports, so no outgoing connection takes one between tests.
+ */
+let nextPort = 21_200;
 
-  await new Promise<void>((resolve) => {
-    server.listen({ host: "127.0.0.1", port: 0 }, resolve);
-  });
-
-  const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
-    server.address(),
-    { onExcessProperty: "ignore" },
-  );
-
-  await new Promise((resolve) => {
-    server.close(resolve);
-  });
-
-  return port;
-};
+const ownPort = () => nextPort++;
 
 /** Whether something accepts connections on loopback `port`. */
 const accepts = (port: number) =>
@@ -91,7 +79,7 @@ const machineOn = async (name: string): Promise<MachineRef> => ({
   cpu: 4,
   ramMib: 8192,
   diskGib: 60,
-  port: await freePort(),
+  port: ownPort(),
 });
 
 /**
