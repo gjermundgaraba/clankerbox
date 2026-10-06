@@ -19,7 +19,7 @@ reachable over SSH.
   the API has no keys and no TLS.
 
 One `clankerbox` binary is both the CLI and the host (`clankerbox host`). The
-TypeScript SDK, `@gjermundgaraba/clankerbox-sdk`, holds the contract and the
+TypeScript SDK, `@gjermundgaraba/clankerbox-sdk`, holds the API contract and the
 client library the CLI uses.
 
 ## Install
@@ -289,7 +289,7 @@ every stock base by digest.
 
 ## SDK
 
-`@gjermundgaraba/clankerbox-sdk` (`packages/contract`) holds the Schemas, the
+`@gjermundgaraba/clankerbox-sdk` (`packages/sdk`) holds the Schemas, the
 action groups, the errors, the profile file schema and the client library. It
 is versioned with the binaries: SDK 1.2.3 talks to hosts of release 1.2.x.
 Every request carries the client's version in a `clankerbox-version` header,
@@ -370,7 +370,7 @@ every bump of it:
 
 ### Architecture
 
-- **Clients** (`packages/contract/src/client.ts`) hold the host list.
+- **Clients** (`packages/sdk/src/client.ts`) hold the host list.
   `create` is placed; every other call names an ID and is routed by its host
   part, without the network. Lists fan out to every host and return partial
   results. There is no name lookup and no client-side state beyond config and
@@ -393,7 +393,7 @@ every bump of it:
   module behind its own host.
 - **No clankerbox code runs in a guest.** Setup and preparation are host-side
   scripts over the runtime's exec.
-- **The API** (`packages/contract/src/api.ts`) is unary HTTP through
+- **The API** (`packages/sdk/src/api.ts`) is unary HTTP through
   effect-actions: machine, checkpoint and host action groups under `/api`.
   Input is closed: undeclared fields are refused, and a Schema error in input
   is `Invalid`. A request of another release, by its `clankerbox-version`
@@ -402,7 +402,7 @@ every bump of it:
 
 ### IDs and names
 
-- Every machine and checkpoint ID is `<host>_<name>` (`packages/contract/src/ids.ts`).
+- Every machine and checkpoint ID is `<host>_<name>` (`packages/sdk/src/ids.ts`).
   A host ID matches `^[a-z][a-z0-9-]{0,31}$`; a name matches
   `^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$` (no `--`, no trailing `-`, which
   smolvm refuses in native names). Neither has `_`, so an ID splits at its one
@@ -489,7 +489,7 @@ is afterwards or a tagged error. Each runs in this order (`actions.ts`):
 
 ### Errors
 
-Seven tags (`packages/contract/src/errors.ts`): `Invalid`, `NotFound`,
+Seven tags (`packages/sdk/src/errors.ts`): `Invalid`, `NotFound`,
 `Conflict{kind: exists | busy}`, `Precondition` (the request can't apply as
 things are; also a guest script that failed), `Capacity` (no room: Tart's two
 VMs, smolvm's RAM budget, boat's account limits), `Unavailable` (the client
@@ -539,7 +539,7 @@ Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
   fails the create with `Precondition` and the output's last 20 lines (at most
   4000 characters). Nothing runs setup again; forks and restores carry its
   results.
-- **Recipes** are packed by the client (`packages/contract/src/setup.ts`) into
+- **Recipes** are packed by the client (`packages/sdk/src/setup.ts`) into
   one script: a base64 tar piped into `tar -x` in a fresh directory under
   `/var/tmp`, which marks `setup.sh` executable and runs `./setup.sh` there,
   so its `#!` line counts as a single file's does. The packer leaves out
@@ -858,7 +858,7 @@ These are known, not guarded, and accepted:
 | Path                   | Contents                                                                                        |
 | ---------------------- | ----------------------------------------------------------------------------------------------- |
 | `apps/clankerbox/`     | The binary: the CLI commands, `ssh`, and the `host` role                                        |
-| `packages/contract/`   | The SDK: Schemas, action groups, errors, IDs, the profile schema, recipe packing and the client |
+| `packages/sdk/`        | The SDK: Schemas, action groups, errors, IDs, the profile schema, recipe packing and the client |
 | `packages/host/`       | The host: state, claims, actions, setup and preparation, ports, and the three runtimes          |
 | `tools/release/`       | The SEA build, bundles with their notices, and the smoke test                                   |
 | `tools/oxlint/`        | The anti-slop lint plugin, vendored from upstream                                               |
@@ -905,7 +905,7 @@ covers. Every disposable build or live run goes through
 ## Releasing
 
 The binaries and the SDK share one version, the SDK's, in
-`packages/contract/package.json`.
+`packages/sdk/package.json`.
 
 1. Set that `version` to `X.Y.Z` and merge to `main`.
 2. Tag the merge commit `vX.Y.Z` and push the tag:

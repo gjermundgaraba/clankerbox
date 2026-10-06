@@ -7,11 +7,7 @@ import { ConfigProvider, Effect, Layer, Runtime } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { TestConsole } from "effect/testing";
-import {
-  type Endpoint,
-  type StubHost,
-  transport,
-} from "../../../packages/contract/tests/stub-host.ts";
+import { type Endpoint, type StubHost, transport } from "../../../packages/sdk/tests/stub-host.ts";
 import { dispatch } from "../src/roles.ts";
 
 export const url = (id: string) => `http://${id}.test`;

@@ -222,7 +222,7 @@ importers:
         version: 4.0.0(effect@4.0.0)(redis@6.3.0)
       '@gjermundgaraba/clankerbox-sdk':
         specifier: workspace:*
-        version: link:../../packages/contract
+        version: link:../../packages/sdk
       effect:
         specifier: 'catalog:'
         version: 4.0.0
@@ -240,7 +240,32 @@ importers:
         specifier: 'catalog:'
         version: 1.0.0(@types/node@26.6.4)(@vitest/ui@5.0.1)(typescript@7.0.2)
 
-  packages/contract:
+  packages/host:
+    dependencies:
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0(effect@4.0.0)(redis@6.3.0)
+      '@gjermundgaraba/clankerbox-sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.0
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 26.6.4
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: '@voidzero-dev/vite-plus-core@1.0.0(@types/node@26.6.4)(typescript@7.0.2)'
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.0.0(@types/node@26.6.4)(@vitest/ui@5.0.1)(typescript@7.0.2)
+
+  packages/sdk:
     dependencies:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
@@ -265,36 +290,11 @@ importers:
         specifier: 'catalog:'
         version: 1.0.0(@types/node@26.6.4)(@vitest/ui@5.0.1)(typescript@7.0.2)
 
-  packages/host:
-    dependencies:
-      '@effect/platform-node':
-        specifier: 'catalog:'
-        version: 4.0.0(effect@4.0.0)(redis@6.3.0)
-      '@gjermundgaraba/clankerbox-sdk':
-        specifier: workspace:*
-        version: link:../contract
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.0
-    devDependencies:
-      '@types/node':
-        specifier: 'catalog:'
-        version: 26.6.4
-      typescript:
-        specifier: 'catalog:'
-        version: 7.0.2
-      vite:
-        specifier: 'catalog:'
-        version: '@voidzero-dev/vite-plus-core@1.0.0(@types/node@26.6.4)(typescript@7.0.2)'
-      vite-plus:
-        specifier: 'catalog:'
-        version: 1.0.0(@types/node@26.6.4)(@vitest/ui@5.0.1)(typescript@7.0.2)
-
   tests/live:
     dependencies:
       '@gjermundgaraba/clankerbox-sdk':
         specifier: workspace:*
-        version: link:../../packages/contract
+        version: link:../../packages/sdk
       effect:
         specifier: 'catalog:'
         version: 4.0.0

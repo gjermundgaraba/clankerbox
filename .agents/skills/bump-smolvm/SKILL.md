@@ -23,7 +23,7 @@ qualified release.
   `git grep -n '1\.22\.2'` (README's install table, host config example and
   install command; `tests/live/README.md`; `tests/live/smolvm/{driver,remote}.py`;
   `packages/host/tests/{smolvm,store,config}.test.ts`;
-  `packages/contract/tests/{ids.test,stub-host}.ts`).
+  `packages/sdk/tests/{ids.test,stub-host}.ts`).
   Source citations in comments use the form below: `git grep -n 'S@1\.22'`.
 - **Target:** the latest stable published `smol-machines/smolvm` release (its
   release metadata, such as `gh release view --repo smol-machines/smolvm`),
@@ -119,7 +119,7 @@ citation moved to the new tag.
   `[A-Za-z0-9_-]`, has no `--` and no trailing `-` (`validate_vm_name`,
   S@1.22.2:src/data/mod.rs); the scope name `smolvm-vm-<name>.scope` adds
   nothing stricter (`scope_name`, src/systemd_scope.rs). Ours: the contract's
-  `Name` rule and `packages/contract/tests/ids.test.ts`; `nativeName` and
+  `Name` rule and `packages/sdk/tests/ids.test.ts`; `nativeName` and
   `scopeName` in `smolvm.ts`.
 - A machine's sockets live under `<data root>/.cache/smolvm/vms/<16 hex>/`, so
   the control socket's path depends only on the data root (`vm_data_dir`,
@@ -341,7 +341,7 @@ citation moved to the new tag.
 ## Verify
 
 - Unit: `vp test` in `packages/host` (`smolvm.test.ts` fakes each smolvm call
-  as the tested release answers it; `store.test.ts`) and `packages/contract`
+  as the tested release answers it; `store.test.ts`) and `packages/sdk`
   (`ids.test.ts`), then `vp run --no-cache ready`. Update a fake only to match
   smolvm's real behaviour at the target.
 - Live: `pnpm live:smolvm --ssh USER@HOST --address TAILNET_ADDRESS --root OWNED_ROOT --smolvm-prefix PREFIX`,

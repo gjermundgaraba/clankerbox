@@ -6,7 +6,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/gjermundgaraba/clankerbox.git",
-    "directory": "packages/contract"
+    "directory": "packages/sdk"
   },
   "files": [
     "dist"

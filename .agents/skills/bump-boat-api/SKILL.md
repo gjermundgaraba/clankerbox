@@ -29,7 +29,7 @@ back.
   runtime's version; `API` in `tests/live/boat/driver.py`. The Schemas, refusal
   tables and constants in `boat-api.ts` and `boat.ts` (named below) follow the
   spec, and so do the fakes in `packages/host/tests/boat-api.test.ts` and
-  `boat.test.ts`. `packages/contract/tests/ids.test.ts` holds the named-snapshot
+  `boat.test.ts`. `packages/sdk/tests/ids.test.ts` holds the named-snapshot
   name rule.
 - **Sources:** the spec at `https://docs.boat.dev/openapi/boat-v1.yaml`, and
   the docs at `docs.boat.dev`. The audited spec has sha256
@@ -239,7 +239,7 @@ Each: what boat does, and what of ours depends on it.
 ## Verify
 
 - Unit: `vp test` in `packages/host` (`boat-api.test.ts`, `boat.test.ts`, whose
-  fake answers as boat's API does) and `packages/contract` (`ids.test.ts`),
+  fake answers as boat's API does) and `packages/sdk` (`ids.test.ts`),
   then `vp run --no-cache ready`. Change a fake only to match boat's real answers.
 - Live: `pnpm live:boat [--address TAILNET_ADDRESS]` on a trial account with
   room for it (`tests/live/README.md`: two free active sandboxes, 7 starts left

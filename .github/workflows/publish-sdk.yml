@@ -20,7 +20,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Check that the tag names the SDK's version
-        run: test "$GITHUB_REF_NAME" = "v$(jq -r .version packages/contract/package.json)"
+        run: test "$GITHUB_REF_NAME" = "v$(jq -r .version packages/sdk/package.json)"
   quality:
     needs: tag
     uses: ./.github/workflows/quality.yml
