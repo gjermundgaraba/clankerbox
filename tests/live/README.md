@@ -190,11 +190,13 @@ sandboxes' display names start `<host ID>_` and its named snapshots
 - **100.100.100.100 and the tailnet route, on Tart:** they check smolvm's
   egress floor and its host routes; on Tart, the suite checks Softnet's block
   of every host address instead.
-- **boat's repeats of a call whose outcome is unclear:** they need a dropped
-  connection, a timeout or a 5xx from boat, which a live run can't cause; the
-  unit suite covers them, and the refusals it no longer trusts after one,
-  against a fake boat (`packages/host/tests/boat-api.test.ts`). Live, a 429 to
-  a create on the first attempt is still `Capacity`.
+- **boat's repeats of a call whose outcome is unclear, or that boat
+  throttled:** they need a dropped connection, a timeout or a 5xx from boat,
+  which a live run can't cause, or a `rate_limited` 429, which would take more
+  starts in a minute than the trial's 5 and cost more on repeat; the unit suite
+  covers them, and the refusals it no longer trusts after an unclear one,
+  against a fake boat (`packages/host/tests/boat-api.test.ts`). Live, a 429
+  `limit_reached` to a create on the first attempt is still `Capacity`.
 - **A machine whose state can't be read (`unknown`):** it needs the runtime's
   read to fail; the unit suite covers it on smolvm and boat and in the core
   (`packages/host/tests/machines.test.ts`).

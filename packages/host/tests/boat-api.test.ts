@@ -444,6 +444,133 @@ test("other calls without a key aren't repeated: an unclear outcome fails them",
   ]);
 });
 
+test("a keyed call boat throttles is repeated twice, 65 s apart; what boat answers then is trusted", async () => {
+  const calls: ReadonlyArray<readonly [string, (api: Api) => Effect.Effect<string, unknown>]> = [
+    ["/sandboxes", (api) => api.create("key-1", "small")],
+    ["/sandboxes/bx_source01/fork", (api) => api.fork("key-1", "bx_source01", "small")],
+    ["/sandboxes", (api) => api.create("key-1", "small", "cbx-boat-01234567")],
+  ];
+
+  for (const [path, call] of calls) {
+    const boat = fakeBoat(
+      (sent, index) =>
+        [refusal(429, "rate_limited"), refusal(429, "slow_down")][index] ??
+        (sent.path.endsWith("/fork")
+          ? { status: 202, body: { ok: true, type: "sandbox.forking", id: "bx_made0001" } }
+          : created("bx_made0001")),
+    );
+
+    const { exit, waited } = await runTimed(boat, call);
+
+    expect(exit).toEqual(Exit.succeed("bx_made0001"));
+    expect(Duration.format(waited)).toBe("2m 10s");
+    expect(boat.sent.map((sent) => sent.path)).toEqual([path, path, path]);
+
+    for (const sent of boat.sent) {
+      expect(sent).toEqual(boat.sent[0]);
+    }
+  }
+
+  // Each 429 made nothing, so a refusal after them is boat's word: Capacity, or a plan's
+  // Precondition, as on a first attempt.
+  for (const [refused, tag] of [
+    [refusal(429, "limit_reached", "2 active"), "Capacity"],
+    [refusal(403, "trial_machine_class_not_allowed", "no large"), "Precondition"],
+  ] as const) {
+    const boat = fakeBoat((_sent, index) => (index === 0 ? refusal(429, "rate_limited") : refused));
+    const { exit } = await runTimed(boat, (api) => Effect.flip(api.create("key-1", "small")));
+    const error = Exit.isSuccess(exit) ? exit.value : undefined;
+
+    expect(boat.sent).toHaveLength(2);
+    expect(error?._tag).toBe(tag);
+    expect(error?.message).not.toContain("outcome is unknown");
+  }
+});
+
+test("a throttle that outlasts the repeats is Capacity when boat said rate_limited, else Internal", async () => {
+  for (const [reply, tag, said] of [
+    [
+      refusal(429, "rate_limited", "5 per hour"),
+      "Capacity",
+      "429 rate_limited: 5 per hour (req_0123)",
+    ],
+    [refusal(429, "slow_down", "later"), "Internal", "429 slow_down: later (req_0123)"],
+    [
+      { status: 429, text: "<html>Too Many Requests</html>" },
+      "Internal",
+      "429 without boat's error",
+    ],
+  ] as const) {
+    const boat = fakeBoat(() => reply);
+
+    const { exit, waited } = await runTimed(boat, (api) =>
+      Effect.flip(api.create("key-1", "small")),
+    );
+
+    const error = Exit.isSuccess(exit) ? exit.value : undefined;
+
+    expect(boat.sent).toHaveLength(3);
+    expect(Duration.format(waited)).toBe("2m 10s");
+    expect([error?._tag, error?.message]).toEqual([
+      tag,
+      `boat POST /sandboxes answered ${said}, and 2 repeats 1m 5s apart met the same`,
+    ]);
+  }
+});
+
+test("after an unclear attempt a 429 is repeated 65 s on, within the bound, and never trusted", async () => {
+  const recovers = fakeBoat(
+    (_sent, index) =>
+      ["drop" as const, refusal(429, "rate_limited"), refusal(500, "internal_error")][index] ??
+      created("bx_made0001"),
+  );
+
+  const recovered = await runTimed(recovers, (api) => api.create("key-1", "small"));
+
+  // The drop, the 429 a second later, the 5xx 65 s after it, and the create after the next
+  // doubled pause, 4 s.
+  expect(recovered.exit).toEqual(Exit.succeed("bx_made0001"));
+  expect(recovers.sent).toHaveLength(4);
+  expect(Duration.format(recovered.waited)).toBe("1m 10s");
+
+  const throttled = fakeBoat((_sent, index) =>
+    index === 0 ? "drop" : refusal(429, "rate_limited", "5 per minute"),
+  );
+
+  const { exit, waited } = await runTimed(throttled, (api) =>
+    Effect.flip(api.create("key-1", "small")),
+  );
+
+  const error = Exit.isSuccess(exit) ? exit.value : undefined;
+
+  // Repeats at 1, 66, 131, 196, 261 and 326 s: the last is begun inside the 5 minutes.
+  expect(throttled.sent).toHaveLength(7);
+  expect(Duration.format(waited)).toBe("5m 26s");
+  expect([error?._tag, error?.message]).toEqual([
+    "Internal",
+    "boat POST /sandboxes answered 429 rate_limited: 5 per minute (req_0123), after an attempt whose outcome is unknown, so a sandbox may exist",
+  ]);
+});
+
+test("a call that takes room without a key isn't repeated after a 429: rate_limited is Capacity, any other Internal", async () => {
+  for (const [code, tag] of [
+    ["rate_limited", "Capacity"],
+    ["slow_down", "Internal"],
+  ] as const) {
+    const boat = fakeBoat(() => refusal(429, code));
+
+    const errors = await run(boat, (api) =>
+      Effect.all([
+        Effect.flip(api.resume("bx_made0001")),
+        Effect.flip(api.saveSnapshot("bx_made0001", "cbx-boat-01234567")),
+      ]),
+    );
+
+    expect(boat.sent).toHaveLength(2);
+    expect(errors.map((error) => error._tag)).toEqual([tag, tag]);
+  }
+});
+
 test("a 2xx whose body arrived whole but isn't boat's answer is Internal at once, even for a keyed call", async () => {
   for (const reply of [
     { status: 202, text: "<html><body>Accepted</body></html>" },
@@ -466,7 +593,6 @@ test("a 4xx is a definite answer whatever its body, and is never repeated", asyn
 
   const answers: ReadonlyArray<readonly [Reply, string, string]> = [
     [{ status: 403, text: "<html>Forbidden</html>" }, "Internal", `403 ${bare}`],
-    [{ status: 429, text: "<html>Too Many Requests</html>" }, "Internal", `429 ${bare}`],
     [{ status: 403, cut: '{"ok":false,"code":"trial_' }, "Internal", `403 ${bare}`],
     [{ status: 404, text: "" }, "NotFound", `404 ${bare}`],
     [{ status: 404, cut: '{"ok":false,' }, "NotFound", `404 ${bare}`],
@@ -504,7 +630,7 @@ test("a 4xx is a definite answer whatever its body, and is never repeated", asyn
 test("boat's refusals that leave nothing behind are Capacity, or Precondition for a type, answered at once", async () => {
   const refusals: ReadonlyArray<readonly [number, string]> = [
     [429, "limit_reached"],
-    [429, "rate_limited"],
+    [429, "member_limit_reached"],
     [429, "daily_limit_reached"],
     [503, "out_of_capacity"],
     [503, "no_ready_machine"],

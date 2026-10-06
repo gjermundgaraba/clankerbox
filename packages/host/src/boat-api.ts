@@ -51,7 +51,7 @@ const activation = { noEnv: true, ttlSeconds } as const;
  * How long a call safe to repeat is repeated while its outcome is unclear, counted from the first
  * unclear answer; a caller with a deadline of its own cuts it short. That answer can take
  * `attemptTimeout`, and so can the last repeat, begun after a pause decided inside the window: a
- * call can take up to 9.5 minutes.
+ * call can take up to 9.5 minutes, after a throttled call's repeats (`throttledPause`).
  */
 export const retryWindow = Duration.minutes(5);
 
@@ -59,6 +59,17 @@ export const retryWindow = Duration.minutes(5);
 const firstPause = Duration.seconds(1);
 
 const longestPause = Duration.seconds(30);
+
+/**
+ * The pause before repeating a call that boat throttled with a 429, which made nothing. A 429
+ * to a create, fork or restore counts as a start against boat's rolling minute, hour and day
+ * windows, so a repeat waits until the minute has rolled past, and there are at most
+ * `throttledRepeats` of them: a throttle that outlasts them, as an hour's or a day's does, has
+ * cost at most three starts.
+ */
+const throttledPause = Duration.seconds(65);
+
+const throttledRepeats = 2;
 
 /**
  * How long one attempt may take before its outcome counts as unclear. A create answers in about
@@ -184,13 +195,13 @@ const decodeRefused = Schema.decodeUnknownEffect(Refused);
 
 /**
  * boat's answers that leave nothing on boat and mean "no room now", by status and code: the
- * account's active or start limits, no machine to run it on, and an 11th named snapshot. They
- * count only for a call that takes room (`Call.takesRoom`). A create or fork that ends
- * `cancelled` is the runtime's to read.
+ * account's, or an organization member's, active limit, its daily start limit, no machine to
+ * run it on, and an 11th named snapshot. They count only for a call that takes room
+ * (`Call.takesRoom`). A create or fork that ends `cancelled` is the runtime's to read.
  */
 const capacityRefusals: ReadonlyArray<readonly [number, string]> = [
   [429, "limit_reached"],
-  [429, "rate_limited"],
+  [429, "member_limit_reached"],
   [429, "daily_limit_reached"],
   [503, "out_of_capacity"],
   [503, "no_ready_machine"],
@@ -209,12 +220,25 @@ const planRefusals: ReadonlyArray<string> = [
 /** A repeat that arrives while the first call is still making the sandbox: repeat it again. */
 const inProgress = "idempotency_in_progress";
 
+/** boat's start limit of a rolling window, which names the window it hit. */
+const rateLimited = "rate_limited";
+
 /**
  * An attempt whose outcome isn't known, or that may go through later: a dropped connection, a
  * timeout, a 5xx boat doesn't call a refusal, a repeat still in progress, a 2xx whose body
  * didn't arrive whole, or a 429 to a call that takes no room.
  */
 class Unclear extends Data.TaggedError("Unclear")<{ readonly message: string }> {}
+
+/**
+ * A 429 to a create, fork or restore that isn't one of `capacityRefusals`: boat made nothing, and
+ * the call carries its key, so it is repeated (`throttledPause`). One that outlasts its repeats
+ * is `Capacity` when boat said `rate_limited`, and `Internal` for a code the host doesn't know.
+ */
+class Throttled extends Data.TaggedError("Throttled")<{
+  readonly message: string;
+  readonly rateLimited: boolean;
+}> {}
 
 /** What the host needs to call boat. */
 export interface Settings {
@@ -257,12 +281,13 @@ export const make = (settings: Settings) =>
      * boat's answer to a call that isn't a 2xx, decided by its status; boat's code, when the body
      * holds one, refines it. A 4xx is definite whatever its body: a proxy's HTML 403 is
      * `Internal`, and a 404 without a body is `NotFound`. A 429 to a call that takes no room is
-     * boat's rate limit on reads and the like, which passes.
+     * boat's rate limit on reads and the like, which passes; one to a call that takes room, but
+     * isn't one of `capacityRefusals`, is a start limit that may pass (`Throttled`).
      */
     const refusal = (
       call: Call,
       response: HttpClientResponse.HttpClientResponse,
-    ): Effect.Effect<never, HostError | Unclear> =>
+    ): Effect.Effect<never, HostError | Unclear | Throttled> =>
       Effect.gen(function* () {
         const { status } = response;
         const decoded = yield* Effect.option(Effect.flatMap(response.json, decodeRefused));
@@ -287,11 +312,17 @@ export const make = (settings: Settings) =>
           return yield* new Precondition({ message: said });
         }
 
-        if (
-          status >= 500 ||
-          (status === 429 && call.takesRoom !== true) ||
-          (status === 409 && coded(inProgress))
-        ) {
+        if (status === 429 && call.takesRoom === true) {
+          if (call.key !== undefined) {
+            return yield* new Throttled({ message: said, rateLimited: coded(rateLimited) });
+          }
+
+          return yield* coded(rateLimited)
+            ? new Capacity({ message: said })
+            : new Internal({ message: said });
+        }
+
+        if (status >= 500 || status === 429 || (status === 409 && coded(inProgress))) {
           return yield* new Unclear({ message: said });
         }
 
@@ -305,7 +336,7 @@ export const make = (settings: Settings) =>
       call: Call,
       schema: Schema.Decoder<A>,
       response: HttpClientResponse.HttpClientResponse,
-    ): Effect.Effect<A, HostError | Unclear> =>
+    ): Effect.Effect<A, HostError | Unclear | Throttled> =>
       Effect.gen(function* () {
         const { status } = response;
 
@@ -337,7 +368,7 @@ export const make = (settings: Settings) =>
       call: Call,
       built: HttpClientRequest.HttpClientRequest,
       schema: Schema.Decoder<A>,
-    ): Effect.Effect<A, HostError | Unclear> =>
+    ): Effect.Effect<A, HostError | Unclear | Throttled> =>
       http.execute(built).pipe(
         // No span and no trace headers: boat is a third party, and a span would record the call.
         Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
@@ -363,32 +394,57 @@ export const make = (settings: Settings) =>
      * A call, answered. One safe to repeat, a `GET`, a `DELETE` (a 404 counts as done) or one
      * with an `Idempotency-Key`, is repeated while its outcome is unclear, with the same request
      * and backoff, for `retryWindow` from its first unclear answer, far inside boat's 24-hour key
-     * window; then it fails. Any other call is made once, and an unclear outcome fails it. After
-     * an unclear attempt no refusal is trusted as one: that attempt may have made a sandbox,
-     * which the refusal may be counting.
+     * window; then it fails. Any other call is made once, and an unclear outcome fails it. A keyed
+     * call boat throttled is repeated too, `throttledPause` apart. After an unclear attempt no
+     * refusal is trusted as one: that attempt may have made a sandbox, which the refusal may be
+     * counting.
      */
     const send = <A>(call: Call, schema: Schema.Decoder<A>): Effect.Effect<A, HostError> => {
       const once = attempt(call, request(call), schema);
 
-      const distrusted = (refused: Capacity | Precondition) =>
+      const distrusted = (refused: Capacity | Precondition | Throttled) =>
         Effect.fail(
           new Internal({
             message: `${refused.message}, after an attempt whose outcome is unknown, so a sandbox may exist`,
           }),
         );
 
+      /** The repeats after a 429 that made nothing, whose refusals are trusted. */
+      const paced = Effect.retry(once, {
+        while: (error) => error instanceof Throttled,
+        schedule: Schedule.spaced(throttledPause).pipe(
+          Schedule.upTo({ times: throttledRepeats - 1 }),
+        ),
+      }).pipe(
+        Effect.delay(throttledPause),
+        Effect.catchTag("Throttled", (last) => {
+          const message = `${last.message}, and ${throttledRepeats} repeats ${Duration.format(throttledPause)} apart met the same`;
+
+          return Effect.fail(
+            last.rateLimited ? new Capacity({ message }) : new Internal({ message }),
+          );
+        }),
+      );
+
       /**
        * The repeats after an unclear answer at `since`: the first `firstPause` later, then with
-       * the pause doubling, while `retryWindow` hasn't passed since. Their refusals aren't
-       * trusted.
+       * the pause doubling, or `throttledPause` after a 429, while `retryWindow` hasn't passed
+       * since.
        */
       const repeats = (since: number) =>
         Effect.retry(once, {
-          while: (error) => error instanceof Unclear,
+          while: (error) => error instanceof Unclear || error instanceof Throttled,
           schedule: Schedule.min([
             Schedule.exponential(Duration.times(firstPause, 2)),
             Schedule.spaced(longestPause),
-          ]).pipe(Schedule.while(({ now }) => now - since < Duration.toMillis(retryWindow))),
+          ]).pipe(
+            Schedule.modifyDelay(({ input, duration }) =>
+              Effect.succeed(
+                input instanceof Throttled ? Duration.max(duration, throttledPause) : duration,
+              ),
+            ),
+            Schedule.while(({ now }) => now - since < Duration.toMillis(retryWindow)),
+          ),
         }).pipe(
           Effect.delay(firstPause),
           Effect.catchTags({
@@ -398,6 +454,7 @@ export const make = (settings: Settings) =>
                   message: `${last.message}, and repeats for ${Duration.format(retryWindow)} got no clearer answer`,
                 }),
               ),
+            Throttled: distrusted,
             Capacity: distrusted,
             Precondition: distrusted,
           }),
@@ -406,10 +463,13 @@ export const make = (settings: Settings) =>
       const repeatable =
         call.method === "GET" || call.method === "DELETE" || call.key !== undefined;
 
-      return Effect.catchTag(once, "Unclear", (first) =>
-        repeatable
-          ? Effect.flatMap(Clock.currentTimeMillis, repeats)
-          : Effect.fail(new Internal({ message: first.message })),
+      return once.pipe(
+        Effect.catchTag("Throttled", () => paced),
+        Effect.catchTag("Unclear", (first) =>
+          repeatable
+            ? Effect.flatMap(Clock.currentTimeMillis, repeats)
+            : Effect.fail(new Internal({ message: first.message })),
+        ),
       );
     };
 

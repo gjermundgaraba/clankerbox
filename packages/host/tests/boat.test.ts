@@ -962,7 +962,7 @@ test("boat's refusals of a create leave nothing: a Refusal, and no sandbox recor
 
   for (const [status, code, tag] of [
     [429, "limit_reached", "Capacity"],
-    [429, "rate_limited", "Capacity"],
+    [429, "member_limit_reached", "Capacity"],
     [429, "daily_limit_reached", "Capacity"],
     [503, "out_of_capacity", "Capacity"],
     [503, "no_ready_machine", "Capacity"],
@@ -986,6 +986,27 @@ test("boat's refusals of a create leave nothing: a Refusal, and no sandbox recor
     expect(await nativeOf(rig, machine.name)).toBeUndefined();
   }
 
+  expect(rig.guest.calls).toEqual([]);
+});
+
+test("a create boat keeps throttling past its repeats is a Capacity refusal, and no sandbox is recorded", async () => {
+  const rig = await rigOn();
+  const machine = machineOn("dev");
+
+  await rig.insert(machine);
+  rig.boat.hooks.answer = (sent) =>
+    sent.method === "POST" ? refusal(429, "rate_limited", "5 starts per minute") : undefined;
+
+  const { exit, waited } = await timed(rig.runtime.create(machine, "boat"));
+  const error = Exit.isFailure(exit) ? Option.getOrThrow(Exit.findErrorOption(exit)) : undefined;
+
+  expect(error === undefined ? undefined : refused(error)).toEqual([
+    "Capacity",
+    "boat POST /sandboxes answered 429 rate_limited: 5 starts per minute (req_0123), and 2 repeats 1m 5s apart met the same",
+  ]);
+  expect(Duration.format(waited)).toBe("2m 10s");
+  expect(rig.boat.calls()).toEqual(["POST /sandboxes", "POST /sandboxes", "POST /sandboxes"]);
+  expect(await nativeOf(rig, machine.name)).toBeUndefined();
   expect(rig.guest.calls).toEqual([]);
 });
 

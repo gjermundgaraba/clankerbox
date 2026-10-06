@@ -108,11 +108,21 @@ Each: what boat does, and what of ours depends on it.
   `daily_limit_reached`; 503 `out_of_capacity` and `no_ready_machine` (with
   `failFast`, within about 1.5 s); 409 `named_snapshot_limit` for an 11th named
   snapshot. None creates anything. A create or fork that finds no machine ends
-  `cancelled`, reported once, then 404. Ours: `capacityRefusals` as `Capacity`
-  under the refusal rule, only for the calls that take room (`takesRoom`:
-  create, fork, resume, restore and a named snapshot's save); a 429 to any
-  other call is a passing limit, repeated for a `GET` and failing `Internal`
-  otherwise; no call sends `failFast`.
+  `cancelled`, reported once, then 404. The spec (D, not seen live) adds 429
+  `member_limit_reached`, an organization owner's cap below the plan's active
+  limit, and says `rate_limited` names the rolling start window it hit,
+  minute, hour or day; no `Retry-After` is documented. Ours:
+  `capacityRefusals` (all but `rate_limited`) as `Capacity` under the refusal
+  rule, only for the calls that take room (`takesRoom`: create, fork, resume,
+  restore and a named snapshot's save). Any other 429 to a keyed call
+  (`Throttled`) is repeated `throttledRepeats` (2) times `throttledPause` (65 s)
+  apart, past the minute window, so an hour's or a day's limit costs at most
+  three starts; then `rate_limited` is `Capacity` and an unknown code
+  `Internal`. Resume and a save, which take no key, map `rate_limited` to
+  `Capacity` at once. A 429 to any other call is a passing limit, repeated for
+  a `GET` or `DELETE` and failing `Internal` otherwise; no call sends
+  `failFast`. Check live, when a run hits it: the `rate_limited` message's
+  window, and whether a refused start still counts.
 - `Idempotency-Key` on create (also with `from`) and fork: the same key and body
   return the same sandbox, also once ready; another body is 409
   `idempotency_key_reused`; a retry during creation is 409
@@ -122,9 +132,10 @@ Each: what boat does, and what of ours depends on it.
   of every call safe to repeat, every `GET`, `DELETE` and keyed call
   (`retryWindow` 5 minutes, `firstPause` to `longestPause`, `attemptTimeout`),
   cut short by a caller's own wait, and a state read by `machineReadWait` (7 s,
-  under the core's `stateReadWait`); `inProgress` repeated as unclear; any
-  refusal answering a repeat, a 429 or 503 `Capacity` or a 403 plan
-  `Precondition`, failing `Internal`.
+  under the core's `stateReadWait`); `inProgress` repeated as unclear, and a
+  429 too, at least `throttledPause` on; any refusal answering a repeat after
+  an unclear one, a 429 or 503 `Capacity` or a 403 plan `Precondition`, failing
+  `Internal`. A refusal after only 429s is trusted, as they made nothing.
 
 **Access and exec** (D, O)
 

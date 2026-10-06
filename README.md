@@ -807,10 +807,17 @@ These are known, not guarded, and accepted:
   minutes with backoff from 1 s to 30 s, or until the wait they serve ends. A
   refusal that answers a repeat isn't trusted as a refusal: the row stays
   `failed`. Resume takes no key, and it and the other calls are never repeated.
+  A 429 to a create, fork or restore that isn't a limit below (boat's
+  `rate_limited` start window, or a code the host doesn't know) made nothing,
+  but counts as a start: it is repeated twice, 65 s apart, so the minute window
+  rolls past and a longer one costs at most three starts. A `rate_limited` that
+  outlasts them is `Capacity`, any other 429 `Internal`. After an unclear
+  attempt a 429 is repeated within the 5 minutes, at least 65 s apart.
 - **Refusals** that leave nothing on boat remove the row: to a create, fork,
   resume, restore or a named snapshot's save, 429
-  `limit_reached`/`rate_limited`/`daily_limit_reached` and 503
-  `out_of_capacity`/`no_ready_machine` are `Capacity`, as is 409
+  `limit_reached`/`member_limit_reached`/`daily_limit_reached` (and
+  `rate_limited` once its repeats run out, or at once to a resume or save) and
+  503 `out_of_capacity`/`no_ready_machine` are `Capacity`, as is 409
   `named_snapshot_limit`, boat's cap on an account's named snapshots.
 - **State** is a `GET` of each recorded sandbox, never a list; a read that
   still fails after its repeats, or takes over 7 s, reads `unknown`,
