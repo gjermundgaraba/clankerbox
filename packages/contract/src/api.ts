@@ -73,7 +73,8 @@ export const MachineGroup = ActionGroup.make(
     access: "write",
   }),
   Action.make("stop", {
-    description: "Stop a machine. Stopping a stopped machine does nothing.",
+    description:
+      "Stop a machine. A stopped machine stays stopped, and the stop is still its last action.",
     input: ById,
     success: Machine,
     access: "write",

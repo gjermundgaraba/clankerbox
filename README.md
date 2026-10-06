@@ -481,7 +481,8 @@ is afterwards or a tagged error. Each runs in this order (`actions.ts`):
   machine the runtime no longer has with `Precondition` before anything native,
   and leaves a running machine as it is, so a start on one runs preparation
   again (the repair path). Every `stop` calls the runtime's stop, which reads
-  the machine's state itself and does nothing on one that doesn't run.
+  the machine's state itself and does nothing on one that doesn't run; the
+  stop is still recorded `done`, replacing the last action and its error.
   `delete` of a missing resource is `NotFound`, which clients treat as done.
 - Ready checkpoints never change, so restores read them without a claim and
   run in parallel.

@@ -318,7 +318,11 @@ const stop = Command.make("stop", { ...mutationFlags, machine: machineArgument }
     encode: encodeMachine,
     text: machineState,
   }),
-).pipe(Command.withDescription("Stop a machine. Stopping a stopped machine does nothing."));
+).pipe(
+  Command.withDescription(
+    "Stop a machine. A stopped machine stays stopped, and the stop is still its last action.",
+  ),
+);
 
 /**
  * Deleting what is already gone is done: the host answers NotFound, the CLI says so on stderr,
