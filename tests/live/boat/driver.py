@@ -298,9 +298,9 @@ def stop_left_processes(state, log):
         raise RuntimeError(f'processes left: {mine}')
 
 
-def teardown(state, boat, before, log, record):
+def teardown(state, boat, before, log, record, fail):
     step = Steps(log)
-    pid = step('stop the host', stop_host, Path(state['scratch']), log)
+    pid = step('stop the host', stop_host, Path(state['scratch']), log, fail)
     named_prefix = f'{state["host_id"]}_'
     snapshot_prefix = f'cbx-{state["host_id"]}-'
 
@@ -454,7 +454,7 @@ def main():
         log(f'run {run.path.name}: host {host_id} on {address}:{api_port} ({why})')
 
         before = preflight(boat, record, log)
-        run.on_cleanup(lambda: teardown(state, boat, before, log, record))
+        run.on_cleanup(lambda: teardown(state, boat, before, log, record, run.fail))
 
         evidence.build_binary(binary)
 

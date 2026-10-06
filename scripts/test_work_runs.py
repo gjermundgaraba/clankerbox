@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import unittest
 
-from work_runs import TEARDOWN_SIGNALS, WorkRun, stop_group
+from work_runs import TEARDOWN_SIGNALS, RunFailed, WorkRun, stop_group
 
 
 class Interrupted(Exception):
@@ -48,6 +48,31 @@ class Teardown(unittest.TestCase):
         self.assertFalse(run.scratch.exists())
         for sig in TEARDOWN_SIGNALS:
             self.assertIs(signal.getsignal(sig), interrupt)
+
+    def test_a_failed_verdict_lets_teardown_finish_and_fails_the_run(self):
+        """As a host that exits other than 130 at teardown: every callback still runs, scratch
+        goes, and the run fails once teardown ends."""
+        finished = []
+        with self.assertRaises(RunFailed) as raised:
+            with WorkRun('verdict', root=self.root) as run:
+                run.on_cleanup(lambda: finished.append('second'))
+                run.on_cleanup(lambda: (run.fail('the host exited 0, not 130'), finished.append('first')))
+        self.assertEqual(finished, ['first', 'second'])
+        self.assertEqual(raised.exception.code, 'the run failed: the host exited 0, not 130')
+        manifest = json.loads((run.path / 'manifest.json').read_text())
+        self.assertEqual((manifest['state'], manifest['outcome'], manifest['failures']),
+                         ('cleaned', 'failed', ['the host exited 0, not 130']))
+
+    def test_a_failed_verdict_leaves_the_runs_own_exit(self):
+        """A suite that failed keeps its own exit code; the verdict's reason is still recorded."""
+        with self.assertRaises(SystemExit) as raised:
+            with WorkRun('verdict-after-exit', root=self.root) as run:
+                run.on_cleanup(lambda: run.fail('the host exited 0, not 130'))
+                raise SystemExit(3)
+        self.assertNotIsInstance(raised.exception, RunFailed)
+        self.assertEqual(raised.exception.code, 3)
+        self.assertEqual(json.loads((run.path / 'manifest.json').read_text())['failures'],
+                         ['the host exited 0, not 130'])
 
     def test_a_child_teardown_starts_ignores_them_too(self):
         """A teardown step's command, such as `tart stop`, outlives a signal sent to it."""

@@ -685,11 +685,13 @@ def remove_natives(report):
     """Stops the host, then deletes every VM of the run's inventory and stops the run's scopes,
     natively, each item best effort; what is left, and every failure, goes into `report`."""
     def stop_unit():
+        """Records how the host ended, which driver.py checks against its contract, exited 130."""
         if unit_active():
             HOST_EXIT.unlink(missing_ok=True)
             sudo(['systemctl', 'stop', UNIT], touched=f'stops {UNIT}')
             wait_unit_gone()
-            report['steps'].append(f'unit stopped: {host_exit()}')
+            report['host_exit'] = host_exit()
+            report['steps'].append(f'unit stopped: {report["host_exit"]}')
 
     attempt(report, 'stop the host unit', stop_unit)
     for m in attempt(report, 'list the inventory', machines) or []:

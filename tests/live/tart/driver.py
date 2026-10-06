@@ -224,11 +224,11 @@ def processes_end(state, prefix):
         raise RuntimeError(f'processes left: {mine}')
 
 
-def teardown(state, log):
+def teardown(state, log, fail):
     step = Steps(log)
     scratch = Path(state['scratch'])
-    pid = step('stop the host', stop_host, scratch, log)
-    second_pid = step('stop the second host', stop_host, scratch / 'second', log)
+    pid = step('stop the host', stop_host, scratch, log, fail)
+    second_pid = step('stop the second host', stop_host, scratch / 'second', log, fail)
     step("keep the launchd jobs' logs", keep_job_logs, state)
     home = Path(state['tart_home'])
     if (home / 'vms').exists():
@@ -334,7 +334,7 @@ def main():
                                               text=True).stdout.strip())
         log(f'run {run.path.name}: host {host_id} on {address}:{api_port} ({why}); home {home}')
 
-        run.on_cleanup(lambda: teardown(state, log))
+        run.on_cleanup(lambda: teardown(state, log, run.fail))
 
         record(commit=commit, firewall=firewall_state())
         seed_check('before')

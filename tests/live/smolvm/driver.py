@@ -132,6 +132,17 @@ def main():
             remote('teardown', 'teardown')
             state['remote_clean'] = True
             log('remote teardown verified')
+            # host_exit is there when teardown stopped a running host, whose contract is to exit 130.
+            try:
+                report = json.loads(subprocess.run(ssh + [f'cat {q_rdir}/evidence/teardown.json'],
+                                                   capture_output=True, text=True, check=True, timeout=60).stdout)
+            except (subprocess.SubprocessError, ValueError) as error:
+                run.fail(f"couldn't read how teardown's stop ended the host: {error}")
+                return
+            if 'host_exit' in report:
+                log(f'teardown stopped the host, which reads {report["host_exit"]!r}')
+                if report['host_exit'] != 'exited 130':
+                    run.fail(f'the host reads {report["host_exit"]!r} after teardown\'s stop, not exited 130')
 
         run.on_cleanup(remote_teardown)
 

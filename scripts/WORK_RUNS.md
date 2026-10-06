@@ -65,7 +65,12 @@ All callbacks are attempted. If one fails, scratch remains with state
 From teardown's start to its end, `WorkRun` ignores SIGINT, SIGTERM and SIGHUP,
 and the commands teardown starts inherit that, so a second Ctrl-C can't cut a
 step short, such as a host's stop before its VMs are deleted; the driver's own
-handlers return once teardown ends.
+handlers return once teardown ends. A callback that finds the run failed
+without failing teardown, such as a host that ended other than as its contract
+says, calls `run.fail(reason)`: the manifest records the reason under
+`failures` and the outcome `failed`, teardown goes on, scratch is removed, and
+`RunFailed`, a `SystemExit`, ends the driver with status 1 unless the run had
+already ended with an exception of its own.
 
 Use the same layout on remote hosts, and collect their evidence before deleting
 remote scratch. The local helper does not automatically manage remote resources.

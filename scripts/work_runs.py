@@ -67,6 +67,11 @@ def remove_scratch(path):
         shutil.rmtree(scratch)
 
 
+class RunFailed(SystemExit):
+    """A run whose teardown completed but failed its verdict (WorkRun.fail): raised once scratch
+    is gone, it exits with the reasons and status 1."""
+
+
 class WorkRun:
     def __init__(self, label, *, root=DEFAULT_ROOT, keep=False):
         self.root = safe_path(root)
@@ -87,6 +92,12 @@ class WorkRun:
     def on_cleanup(self, callback):
         """Register a synchronous teardown callback; callbacks run in reverse order."""
         self.callbacks.append(callback)
+
+    def fail(self, reason):
+        """Fails the run's outcome but not its teardown, as a check a teardown callback makes:
+        recorded in the manifest, and raised as RunFailed once teardown ends, unless the run
+        ended with an exception of its own."""
+        self.data.setdefault('failures', []).append(reason)
 
     def __enter__(self):
         self._lock = locked(self.path)
@@ -112,7 +123,7 @@ class WorkRun:
                     callback()
                 except BaseException as error:
                     errors.append(str(error))
-            self.data['outcome'] = 'failed' if exc_type else 'succeeded'
+            self.data['outcome'] = 'failed' if exc_type or 'failures' in self.data else 'succeeded'
             if errors:
                 self.data.update(state='needs_teardown', cleanup_errors=errors)
             elif self.keep:
@@ -123,6 +134,8 @@ class WorkRun:
             save(self.path, self.data)
             if errors:
                 raise RuntimeError('teardown failed; scratch retained: ' + '; '.join(errors))
+            if exc_type is None and 'failures' in self.data:
+                raise RunFailed('the run failed: ' + '; '.join(self.data['failures']))
         finally:
             self._lock.__exit__(None, None, None)
             for sig, handler in handlers.items():

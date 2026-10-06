@@ -8,8 +8,11 @@ they run only with `CLANKERBOX_LIVE=1` and the environment their driver sets.
 
 Each runtime has one entry point, a Python driver that builds the binary from
 the committed tree, provisions the host, runs that runtime's suite once, tears
-everything down and exits with the suite's code. Run them from the repository
-root:
+everything down and exits with the suite's code. A host's exit on SIGTERM is
+130, its contract: when teardown stops a host that is still running and it
+ends any other way, teardown still completes, the run's manifest records why
+(`failures`, outcome `failed`) and a run whose suite passed exits 1. Run them
+from the repository root:
 
 ```sh
 pnpm live:smolvm --ssh USER@HOST --address TAILNET_ADDRESS --root OWNED_ROOT --smolvm-prefix PREFIX

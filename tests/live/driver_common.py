@@ -174,10 +174,12 @@ def host_end(state, sig, expected, wait=60):
     raise RuntimeError(f'the host did not end within {wait} s of signal {sig}')
 
 
-def stop_host(scratch, log):
+def stop_host(scratch, log, fail):
     """Stops the host whose keeper records its pid in `scratch`, if it runs: SIGTERM, then
-    SIGKILL after 30 s. Waits up to 10 s for its keeper to record its exit, which reads 130 once
-    the host handled the SIGTERM, and logs it. Returns the host's pid."""
+    SIGKILL after 30 s. Waits up to 10 s for its keeper to record its exit, and logs it. 130, the
+    host's exit on SIGTERM, is its contract: any other exit, or none recorded, goes to `fail`
+    (WorkRun.fail), which fails the run's verdict while its teardown goes on. Returns the host's
+    pid."""
     pid = read_int(scratch / 'host.pid')
     if pid is None or (scratch / 'host.exit').exists():
         return pid
@@ -195,6 +197,8 @@ def stop_host(scratch, log):
         raise RuntimeError(f'the host (pid {pid}) still runs after SIGKILL')
     ended = 'left no exit status' if code is None else f'exited {code}{"" if code == 130 else ", not 130"}'
     log(f'teardown: stopped the host (pid {pid}); it {ended}')
+    if code != 130:
+        fail(f'the host (pid {pid}) {ended} on teardown\'s SIGTERM')
     return pid
 
 
