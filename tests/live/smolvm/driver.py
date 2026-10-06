@@ -29,6 +29,7 @@ which it removes.
 import argparse
 import json
 from pathlib import Path
+import re
 import secrets
 import shlex
 import subprocess
@@ -147,10 +148,18 @@ def main():
         # Reserved before the build, under a name no run there holds: remote.py takes l<3 hex>,
         # short because smolvm's socket paths limit the host's state dir, and every run keeps its
         # directory for its evidence.
+        # Its name comes from stdout alone, never from what ssh or the remote shell says on stderr.
         names = ' '.join(f'l{secrets.token_hex(2)[:3]}' for _ in range(16))
-        sh(ssh + [f'mkdir -p {q_root}/runs && cd {q_root}/runs && for name in {names}; do '
-                  'mkdir -m 700 "$name" && echo "reserved $name" && exit 0; done; exit 1'], 'reserve', timeout=60)
-        rdir = f'{options.root}/runs/{(run.evidence / "reserve.log").read_text().split()[-1]}'
+        log('reserving the remote run directory')
+        reserved = subprocess.run(ssh + [f'mkdir -p {q_root}/runs && cd {q_root}/runs && for name in {names}; do '
+                                         'mkdir -m 700 "$name" && echo "reserved $name" && exit 0; done; exit 1'],
+                                  capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+        (run.evidence / 'reserve.log').write_text(f'rc={reserved.returncode}\n--- stdout\n{reserved.stdout}'
+                                                  f'--- stderr\n{reserved.stderr}')
+        found = re.search(r'^reserved (l[0-9a-f]{3})$', reserved.stdout, re.M)
+        if reserved.returncode != 0 or found is None:
+            raise RuntimeError(f'reserve failed rc={reserved.returncode}; see evidence/reserve.log')
+        rdir = f'{options.root}/runs/{found[1]}'
         remote_py = f'{rdir}/remote.py'
         # Quoted for the remote shell.
         q_rdir, q_remote_py = shlex.quote(rdir), shlex.quote(remote_py)
