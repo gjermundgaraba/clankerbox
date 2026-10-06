@@ -116,6 +116,8 @@ export const TartNatives = Schema.fromJsonString(
   }),
 );
 
+export const Ports = Schema.fromJsonString(Schema.Array(Schema.Int));
+
 export const BoatNatives = Schema.fromJsonString(
   Schema.Struct({
     sandboxes: Schema.Array(Schema.Struct({ id: Schema.String, state: Schema.String })),
@@ -172,7 +174,9 @@ export const BoatAccount = Schema.fromJsonString(
  *   jobs and job files (plist and log) of machine or checkpoint NAME on the host under test, or
  *   on the run's second host when HOST names it;
  * - `addresses`: print the host's own IPv4 addresses, loopback aside;
- * - `listener`: print a TCP port that some process of the host listens on at every address.
+ * - `listener`: print a TCP port that some process of the host listens on at every address;
+ * - `host-ports`: print the TCP ports the host under test listens on, its API's and its
+ *   forwarder's for every machine, whatever the machine's state.
  *
  * On boat, whose account may also hold the operator's own sandboxes and snapshots:
  *

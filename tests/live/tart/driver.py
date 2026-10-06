@@ -51,7 +51,7 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from driver_common import (Evidence, Steps, WorkRun, choose_address, clean_commit, free_port,  # noqa: E402
-                           host_start, processes, run_driver, sha256, stop_host, stop_on_signals,
+                           host_start, processes, read_int, run_driver, sha256, stop_host, stop_on_signals,
                            write_client_config, write_control_stub)
 
 SEED_FILES = ('config.json', 'disk.img', 'nvram.bin')
@@ -177,7 +177,20 @@ def listener(state, args):
     print(port)
 
 
-OPS = {'natives': natives, 'guest': guest, 'addresses': addresses, 'listener': listener}
+def host_ports(state, args):
+    """The TCP ports the host under test listens on: its API's, and its forwarder's, one for each
+    of its machines, whatever the machine's state."""
+    scratch = Path(state['scratch'])
+    pid = read_int(scratch / 'host.pid')
+    if pid is None or (scratch / 'host.exit').exists():
+        print('the host does not run', file=sys.stderr)
+        return 1
+    out = subprocess.run(['lsof', '-nP', '-a', '-p', str(pid), '-iTCP', '-sTCP:LISTEN', '-Fn'], capture_output=True,
+                         text=True).stdout
+    print(json.dumps(sorted({int(port) for port in re.findall(r'^n.*:(\d+)$', out, re.M)})))
+
+
+OPS = {'natives': natives, 'guest': guest, 'addresses': addresses, 'listener': listener, 'host-ports': host_ports}
 
 
 # Teardown, natively, by the run's own names.

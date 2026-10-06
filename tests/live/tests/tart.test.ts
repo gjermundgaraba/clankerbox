@@ -22,6 +22,7 @@ import {
   Names,
   OneCheckpoint,
   OneMachine,
+  Ports,
   type Ran,
   rebased,
   refusedBeforeTheRuntime,
@@ -136,20 +137,33 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
   } = suite;
 
   /**
-   * Each machine's endpoint, as its create reported it. A machine keeps its port, but the host
-   * reports it only while the machine runs.
+   * Each machine's endpoint, as the host reported it while the machine ran. A machine keeps its
+   * port, but the host reports it only while the machine runs.
    */
   const endpoints = new Map<string, SshEndpoint>();
 
-  /** Deletes the machine as the harness does, then checks that its listener is gone too. */
+  /**
+   * Deletes the machine as the harness does, then checks that its listener is gone: exactly one
+   * of the host's ports closes, the one the machine had while it ran, and it refuses a connection.
+   * A machine that never ran, its create failed, has its port only in its row, which the host
+   * holds exclusively, so its port is the one that closes.
+   */
   const removeMachine = async (name: string) => {
     const endpoint = (await machine(name))?.ssh ?? endpoints.get(name);
+    const before = await controlled(Ports, "host-ports");
 
     await suite.removeMachine(name);
 
-    if (endpoint !== undefined) {
-      expect(await answer(endpoint)).toBe("refused");
+    const after = new Set(await controlled(Ports, "host-ports"));
+    const [port, ...others] = before.filter((open) => !after.has(open));
+
+    if (port === undefined) {
+      throw new Error(`no port of the host closed with ${name}'s delete`);
     }
+
+    expect(others).toEqual([]);
+    expect(port).toBe(endpoint?.port ?? port);
+    expect(await answer({ host: new URL(suite.env.host.url).hostname, port })).toBe("refused");
   };
 
   /** When the guest booted; a VM that kept running keeps it. */
@@ -733,6 +747,12 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
           error: { tag: "Internal", message: "host restarted during create" },
         },
       });
+
+      if (crashed?.ssh === undefined) {
+        throw new Error("crash runs but has no endpoint");
+      }
+
+      endpoints.set("crash", crashed.ssh);
 
       const stopped = await cli(["stop"], id("crash"), "--json");
 
