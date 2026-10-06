@@ -831,8 +831,11 @@ These are known, not guarded, and accepted:
   lazy-restore marker before preparation writes `/var/lib/clankerbox/`, except
   on the machine a create made: its SSH wait leaves `/run/clankerbox-created`,
   which no snapshot or new machine carries, and boat restores nothing there,
-  so no marker comes. A start resumes only a sandbox boat doesn't read active;
-  one it still makes, resumes or runs is waited for instead.
+  so no marker comes. A reboot inside that guest clears the mark, so a start
+  of it then waits 10 minutes for a marker that never comes and fails; stop
+  and start it instead, as a resume restores and leaves the marker. A start
+  resumes only a sandbox boat doesn't read active; one it still makes,
+  resumes or runs is waited for instead.
 - **Exec** is SSH as `user` with `sudo -n`, one connection per exec, with the
   host's own key (`<stateDir>/boat-ssh/id_ed25519`, authorized after create)
   and the guest's host keys read through boat's command API and pinned per
