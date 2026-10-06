@@ -1,13 +1,15 @@
 """What the live drivers (smolvm/driver.py, tart/driver.py, boat/driver.py) share: the commit a
 run names, its signals, its evidence and the suite's run, the release bundles it builds in its
-scratch and the binary it takes from one, a teardown's steps, and for a host on this Mac, its
-keeper, its start and end, its stop at teardown, its API port and a file's checksum. A driver puts
-tests/live on its import path and imports this module by name.
+scratch and the binary it takes from one, a teardown's steps, the client config, the processes
+naming some text, and for a host on this Mac, its address, API port, keeper, start and end, its
+stop at teardown, the host-control program's host ops and its stub, the driver's entry and a
+file's checksum. A driver puts tests/live on its import path and imports this module by name.
 """
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import signal
 import socket
@@ -24,14 +26,6 @@ from scripts.work_runs import WorkRun, stop_group  # noqa: E402, F401
 
 class Stop(Exception):
     pass
-
-
-class Failed(Exception):
-    """A failed suite, raised inside the WorkRun so its manifest's outcome reads failed."""
-
-    def __init__(self, code):
-        super().__init__(f'exit code {code}')
-        self.code = code
 
 
 def raise_stop(signum, frame):
@@ -76,6 +70,34 @@ def read_int(path):
         return int(path.read_text().strip())
     except (FileNotFoundError, ValueError):
         return None
+
+
+def processes(text):
+    """(PID, command line) of every other process whose command line holds `text`."""
+    out = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True, check=True).stdout
+    found = []
+    for line in out.splitlines():
+        pid, _, command = line.strip().partition(' ')
+        if text in command and int(pid) != os.getpid():
+            found.append((int(pid), command))
+    return found
+
+
+def write_client_config(path, hosts):
+    """A client config listing `hosts`, each (ID, address, API port), in order."""
+    path.write_text(json.dumps({'hosts': [{'id': host_id, 'url': f'http://{address}:{port}'}
+                                          for host_id, address, port in hosts]}, indent=2) + '\n')
+
+
+def choose_address(wanted):
+    """Where a host on this Mac listens, and why: `wanted`, this Mac's tailnet address, when it is
+    assigned here, and loopback otherwise or when it is None."""
+    if wanted is None:
+        return '127.0.0.1', 'no address given'
+    if not re.search(rf'^\tinet {re.escape(wanted)} ',
+                     subprocess.run(['ifconfig'], capture_output=True, text=True).stdout, re.M):
+        return '127.0.0.1', f'{wanted} is not assigned on this Mac'
+    return wanted, 'the tailnet address, as production listens'
 
 
 def free_port(address):
@@ -176,6 +198,59 @@ def stop_host(scratch, log):
     return pid
 
 
+# The suite's host-control program (tests/live/tests/live.ts) and the driver's entry.
+
+def write_control_stub(path, driver, state_file):
+    """The program the suite runs as its host control: `driver control STATE_FILE OP ARGS`."""
+    path.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(driver))} control '
+                    f'{shlex.quote(str(state_file))} "$@"\n')
+    path.chmod(0o755)
+
+
+def control(driver, state_file, op, args, ops):
+    """Runs the host ops and `probe` here, and the runtime's own `op` as `ops[op](state, args)`,
+    whose result is the exit code (None: 0)."""
+    state = json.loads(Path(state_file).read_text())
+    with open(Path(state['evidence']) / 'control.log', 'a') as log:
+        log.write(f'{time.strftime("%H:%M:%S")} {shlex.join([op, *args])}\n')
+    if op == 'host-start':
+        host_start(state, driver)
+    elif op == 'host-stop':
+        host_end(state, signal.SIGTERM, 130)
+    elif op == 'host-kill':
+        host_end(state, signal.SIGKILL, -signal.SIGKILL)
+    elif op == 'probe':
+        address, port = args
+        try:
+            with socket.create_connection((address, int(port)), timeout=5):
+                print('reached')
+        except OSError:
+            print('unreachable')
+    elif op in ops:
+        return ops[op](state, args) or 0
+    else:
+        print(f'unknown op {op}', file=sys.stderr)
+        return 2
+    return 0
+
+
+def run_driver(driver, main, ops, keep_env=None):
+    """A driver's entry: `driver keep STATE_FILE` runs the host under its keeper, with environment
+    `keep_env(state)` (None: the keeper's own), `driver control STATE_FILE OP ARGS` is the
+    host-control program, and anything else runs `main`."""
+    if sys.argv[1:2] == ['keep']:
+        state = json.loads(Path(sys.argv[2]).read_text())
+        keep(state, keep_env and keep_env(state))
+    elif sys.argv[1:2] == ['control']:
+        try:
+            sys.exit(control(driver, sys.argv[2], sys.argv[3], sys.argv[4:], ops))
+        except RuntimeError as error:
+            print(error, file=sys.stderr)
+            sys.exit(1)
+    else:
+        main()
+
+
 class Steps:
     """A teardown's steps: every step runs even after one failed, each failure is logged and
     noted, and `done` raises with them all."""
@@ -260,7 +335,8 @@ class Evidence:
 
     def suite(self, runtime, binary, client_config, control, prefix, suite_args, extra_env=None):
         """Runs the live suite on `runtime` (tests/live/tests/live.ts names the environment, and
-        `extra_env` adds the runtime's own), and raises Failed unless it passes. The suite's key
+        `extra_env` adds the runtime's own), and exits with its code unless it passes, inside the
+        WorkRun, so its manifest's outcome reads failed and teardown still runs. The suite's key
         and scripts live in scratch, even if the suite dies before its afterAll."""
         tmp = self.run.scratch / 'tmp'
         tmp.mkdir()
@@ -273,5 +349,4 @@ class Evidence:
         self.record(suite={'rc': rc})
         if rc != 0:
             self.log(f'suite: rc={rc}; see evidence/suite.log')
-            # Teardown still runs on the way out.
-            raise Failed(rc)
+            raise SystemExit(rc)

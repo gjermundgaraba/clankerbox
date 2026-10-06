@@ -57,17 +57,16 @@ from pathlib import Path
 import re
 import shlex
 import signal
-import socket
 import sqlite3
-import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from driver_common import (Evidence, Failed, Steps, WorkRun, clean_commit, free_port, host_end, host_start,  # noqa: E402
-                           keep, stop_host, stop_on_signals)
+from driver_common import (Evidence, Steps, WorkRun, choose_address, clean_commit, free_port,  # noqa: E402
+                           host_start, processes, run_driver, stop_host, stop_on_signals, write_client_config,
+                           write_control_stub)
 
 API = 'https://boat.dev/api/v1'
 # What one run uses (tests/live/tests/boat.test.ts): its starts, the 429 refusal included, the
@@ -76,10 +75,6 @@ STARTS = 7
 ACTIVE = 2
 SNAPSHOTS = 2
 SNAPSHOT_CAP = 10
-
-
-class NoRoom(Exception):
-    """The account can't hold the run: it stops before creating anything."""
 
 
 def read_key(path):
@@ -195,14 +190,6 @@ def starts_of(limits):
             for window in ('minute', 'hour', 'day')}
 
 
-def scratch_processes(scratch):
-    """(PID, program) of every other process whose command line names the run's scratch."""
-    procs = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True).stdout
-    return [(pid_text, Path(command.split(' ', 1)[0]).name)
-            for pid_text, command in (line.strip().split(' ', 1) for line in procs.splitlines() if scratch in line)
-            if int(pid_text) != os.getpid()]
-
-
 def note_sandboxes(state, ids):
     """Adds sandbox IDs of the run's to the ledger teardown deletes by."""
     if ids:
@@ -217,52 +204,40 @@ def machine_sandboxes(state, boat, name):
     return found
 
 
-# The suite's host-control program (tests/live/tests/live.ts).
+# The suite's host-control program's own ops on boat (tests/live/tests/live.ts).
 
-def control(state_file, op, args):
-    state = json.loads(Path(state_file).read_text())
-    with open(Path(state['evidence']) / 'control.log', 'a') as log:
-        log.write(f'{time.strftime("%H:%M:%S")} {shlex.join([op, *args])}\n')
-    if op == 'host-start':
-        host_start(state, __file__)
-    elif op == 'host-stop':
-        host_end(state, signal.SIGTERM, 130)
-    elif op == 'host-kill':
-        host_end(state, signal.SIGKILL, -signal.SIGKILL)
-    elif op == 'natives':
-        [name] = args
-        found = machine_sandboxes(state, boat_of(state), name)
-        print(json.dumps({'sandboxes': [{'id': sandbox['id'], 'state': sandbox['state']} for sandbox in found]}))
-    elif op == 'snapshots':
-        prefix = f'cbx-{state["host_id"]}-'
-        print(json.dumps(sorted(snapshot['name'] for snapshot in boat_of(state).snapshots()
-                                if snapshot['name'].startswith(prefix))))
-    elif op == 'account':
-        boat = boat_of(state)
-        print(json.dumps({'sandboxes': len(boat.sandboxes()), 'snapshots': len(boat.snapshots())}))
-    elif op == 'guest':
-        name, command = args
-        boat = boat_of(state)
-        found = machine_sandboxes(state, boat, name)
-        if len(found) != 1:
-            print(f'{len(found)} sandboxes for machine {name}', file=sys.stderr)
-            return 3
-        # boat's command API runs bash as `user`, who has passwordless sudo.
-        ran = boat.command(found[0]['id'], f'sudo -n /bin/sh -c {shlex.quote(command)}')
-        sys.stdout.write(ran.get('stdout', ''))
-        sys.stderr.write(ran.get('stderr', ''))
-        return ran['exitCode'] if isinstance(ran.get('exitCode'), int) else 1
-    elif op == 'probe':
-        address, port = args
-        try:
-            with socket.create_connection((address, int(port)), timeout=5):
-                print('reached')
-        except OSError:
-            print('unreachable')
-    else:
-        print(f'unknown op {op}', file=sys.stderr)
-        return 2
-    return 0
+def natives(state, args):
+    [name] = args
+    found = machine_sandboxes(state, boat_of(state), name)
+    print(json.dumps({'sandboxes': [{'id': sandbox['id'], 'state': sandbox['state']} for sandbox in found]}))
+
+
+def snapshots(state, args):
+    prefix = f'cbx-{state["host_id"]}-'
+    print(json.dumps(sorted(snapshot['name'] for snapshot in boat_of(state).snapshots()
+                            if snapshot['name'].startswith(prefix))))
+
+
+def account(state, args):
+    boat = boat_of(state)
+    print(json.dumps({'sandboxes': len(boat.sandboxes()), 'snapshots': len(boat.snapshots())}))
+
+
+def guest(state, args):
+    name, command = args
+    boat = boat_of(state)
+    found = machine_sandboxes(state, boat, name)
+    if len(found) != 1:
+        print(f'{len(found)} sandboxes for machine {name}', file=sys.stderr)
+        return 3
+    # boat's command API runs bash as `user`, who has passwordless sudo.
+    ran = boat.command(found[0]['id'], f'sudo -n /bin/sh -c {shlex.quote(command)}')
+    sys.stdout.write(ran.get('stdout', ''))
+    sys.stderr.write(ran.get('stderr', ''))
+    return ran['exitCode'] if isinstance(ran.get('exitCode'), int) else 1
+
+
+OPS = {'natives': natives, 'snapshots': snapshots, 'account': account, 'guest': guest}
 
 
 # Teardown, by the run's recorded IDs and its own names.
@@ -298,14 +273,19 @@ def delete_snapshot(boat, name, log):
     log(f'teardown: deleted named snapshot {name}')
 
 
+def scratch_processes(scratch):
+    """'PID program' of every other process whose command line names the run's scratch: never
+    its argv, which for a host's ssh child carries the exec's wrapper."""
+    return [(pid, f'{pid} {Path(command.split(" ", 1)[0]).name}') for pid, command in processes(scratch)]
+
+
 def stop_left_processes(state, log):
-    """A host killed mid-exec leaves its ssh child behind, holding the run's key: stops it. Only
-    the PID and program go to the log, since a child's argv carries the exec's wrapper."""
+    """A host killed mid-exec leaves its ssh child behind, holding the run's key: stops it."""
     stopped = []
-    for pid_text, program in scratch_processes(state['scratch']):
+    for pid, shown in scratch_processes(state['scratch']):
         try:
-            os.kill(int(pid_text), signal.SIGTERM)
-            stopped.append(f'{pid_text} {program}')
+            os.kill(pid, signal.SIGTERM)
+            stopped.append(shown)
         except ProcessLookupError:
             pass
     if stopped:
@@ -313,7 +293,7 @@ def stop_left_processes(state, log):
     deadline = time.monotonic() + 5
     while scratch_processes(state['scratch']) and time.monotonic() < deadline:
         time.sleep(0.2)
-    mine = [f'{pid_text} {program}' for pid_text, program in scratch_processes(state['scratch'])]
+    mine = [shown for _, shown in scratch_processes(state['scratch'])]
     if mine:
         raise RuntimeError(f'processes left: {mine}')
 
@@ -387,7 +367,7 @@ def redact_evidence(evidence, config, token, log):
 
 
 def preflight(boat, record, log):
-    """Reads the account, changing nothing, and raises NoRoom unless the run fits. Returns what
+    """Reads the account, changing nothing, and exits unless the run fits. Returns what
     teardown compares against: the IDs already there, kept in memory only."""
     at = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
     limits = boat.limits()
@@ -424,7 +404,7 @@ def preflight(boat, record, log):
                        f'the run needs {SNAPSHOTS}')
     if reasons:
         record(preflight=dict(counts, refused=reasons))
-        raise NoRoom('; '.join(reasons))
+        sys.exit(f'the account has no room for the run, so it made nothing: {"; ".join(reasons)}')
     return {'at': at, 'ids': {sandbox['id'] for sandbox in sandboxes}, 'starts': starts, 'max_active': max_active,
             'tier': limits.get('accessTier')}
 
@@ -459,14 +439,7 @@ def main():
         run.on_cleanup(lambda: redact_evidence(run.evidence, config, token, log))
 
         boat = Boat(token, run.evidence / 'api.log')
-        assigned = options.address is not None and re.search(
-            rf'^\tinet {re.escape(options.address)} ',
-            subprocess.run(['ifconfig'], capture_output=True, text=True).stdout, re.M)
-        if assigned:
-            address, why = options.address, 'the tailnet address, as production listens'
-        else:
-            address = '127.0.0.1'
-            why = 'no address given' if options.address is None else f'{options.address} is not assigned on this Mac'
+        address, why = choose_address(options.address)
         api_port = free_port(address)
         state = {
             'scratch': str(run.scratch), 'evidence': str(run.evidence), 'state_file': str(state_file),
@@ -497,11 +470,8 @@ def main():
                 'boat': {'apiKey': token},
             }, f, indent=2)
             f.write('\n')
-        client_config.write_text(json.dumps({'hosts': [{'id': host_id, 'url': f'http://{address}:{api_port}'}]},
-                                            indent=2) + '\n')
-        control_bin.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(__file__)} control '
-                               f'{shlex.quote(str(state_file))} "$@"\n')
-        control_bin.chmod(0o755)
+        write_client_config(client_config, [(host_id, address, api_port)])
+        write_control_stub(control_bin, __file__, state_file)
 
         log(f'host pid {host_start(state, __file__)}')
         evidence.suite('boat', binary, client_config, control_bin, f'r{rid[:3]}-', options.suite_args,
@@ -510,18 +480,4 @@ def main():
 
 
 if __name__ == '__main__':
-    if sys.argv[1:2] == ['keep']:
-        keep(json.loads(Path(sys.argv[2]).read_text()))
-    elif sys.argv[1:2] == ['control']:
-        try:
-            sys.exit(control(sys.argv[2], sys.argv[3], sys.argv[4:]))
-        except RuntimeError as error:
-            print(error, file=sys.stderr)
-            sys.exit(1)
-    else:
-        try:
-            main()
-        except Failed as failure:
-            sys.exit(failure.code)
-        except NoRoom as refused:
-            sys.exit(f'the account has no room for the run, so it made nothing: {refused}')
+    run_driver(__file__, main, OPS)

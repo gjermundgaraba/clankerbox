@@ -38,7 +38,7 @@ import time
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from driver_common import Evidence, Failed, WorkRun, clean_commit, stop_on_signals  # noqa: E402
+from driver_common import Evidence, WorkRun, clean_commit, stop_on_signals, write_client_config  # noqa: E402
 
 
 def main():
@@ -177,9 +177,7 @@ def main():
         remote_state = json.loads((run.scratch / 'remote-state.json').read_text())
         record(**{key: remote_state[key] for key in ('host_id', 'unit', 'machine_prefix', 'scope_pattern',
                                                        'state_dir', 'inventory', 'api_port')})
-        client_config.write_text(json.dumps({'hosts': [{'id': remote_state['host_id'],
-                                                        'url': f'http://{options.address}:{remote_state["api_port"]}'}]},
-                                            indent=2) + '\n')
+        write_client_config(client_config, [(remote_state['host_id'], options.address, remote_state['api_port'])])
         remote_control = f'python3 {q_remote_py} --run {q_rdir} control '
         control_bin.write_text(f'''#!/usr/bin/env python3
 # The live suite's host-control program: runs remote.py's `control OP ARGS` on the test host.
@@ -197,7 +195,4 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
 
 
 if __name__ == '__main__':
-    try:
-        main()
-    except Failed as failure:
-        sys.exit(failure.code)
+    main()

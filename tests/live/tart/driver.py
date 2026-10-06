@@ -44,17 +44,15 @@ import json
 import os
 from pathlib import Path
 import re
-import shlex
 import shutil
-import signal
-import socket
 import subprocess
 import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from driver_common import (Evidence, Failed, Steps, WorkRun, clean_commit, free_port, host_end, host_start,  # noqa: E402
-                           keep, sha256, stop_host, stop_on_signals)
+from driver_common import (Evidence, Steps, WorkRun, choose_address, clean_commit, free_port,  # noqa: E402
+                           host_start, processes, run_driver, sha256, stop_host, stop_on_signals,
+                           write_client_config, write_control_stub)
 
 SEED_FILES = ('config.json', 'disk.img', 'nvram.bin')
 SOFTNET = Path('/usr/local/bin/softnet')
@@ -77,12 +75,6 @@ def provenance_sums(seed):
     if sorted(sums) != sorted(SEED_FILES):
         raise RuntimeError(f'PROVENANCE lists checksums for {sorted(sums)}, not {sorted(SEED_FILES)}')
     return sums
-
-
-def processes(text):
-    """The processes whose command line holds `text`."""
-    out = subprocess.run(['ps', '-axo', 'pid,command'], capture_output=True, text=True).stdout
-    return [line.strip() for line in out.splitlines() if text in line]
 
 
 def vz_processes():
@@ -121,83 +113,71 @@ def native_pattern(host_id, name):
     return re.compile(rf'^cbx-{re.escape(host_id)}-[mc]-{re.escape(name)}-[0-9a-f]{{8}}(\.plist|\.log)?$')
 
 
-# The suite's host-control program (tests/live/tests/live.ts).
+# The suite's host-control program's own ops on Tart (tests/live/tests/live.ts).
 
-def control(state_file, op, args):
-    state = json.loads(Path(state_file).read_text())
-    with open(Path(state['evidence']) / 'control.log', 'a') as log:
-        log.write(f'{time.strftime("%H:%M:%S")} {shlex.join([op, *args])}\n')
-    if op == 'host-start':
-        host_start(state, __file__)
-    elif op == 'host-stop':
-        host_end(state, signal.SIGTERM, 130)
-    elif op == 'host-kill':
-        host_end(state, signal.SIGKILL, -signal.SIGKILL)
-    elif op == 'natives':
-        # The second host's, when its ID follows the name.
-        name, host_id = args if len(args) == 2 else (*args, state['host_id'])
-        if host_id not in (state['host_id'], f'{state["host_id"]}-b'):
-            print(f'{host_id} is no host of the run', file=sys.stderr)
-            return 2
-        pattern = native_pattern(host_id, name)
-        jobs = Path(state['state_dir']) / 'launchd'
-        if host_id != state['host_id']:
-            jobs = Path(state['scratch']) / 'second' / 'state' / 'launchd'
-        files = [entry.name for entry in jobs.iterdir()] if jobs.exists() else []
-        print(json.dumps({
-            'machines': [{'name': vm['Name'], 'state': vm['State']} for vm in tart_list(state)
-                         if pattern.match(vm['Name'])],
-            'jobs': [label for label in labels(f'cbx-{host_id}-') if pattern.match(label)],
-            'files': sorted(name for name in files if pattern.match(name)),
-        }))
-    elif op == 'guest':
-        name, command = args
-        pattern = re.compile(rf'^cbx-{re.escape(state["host_id"])}-m-{re.escape(name)}-[0-9a-f]{{8}}$')
-        vms = [vm['Name'] for vm in tart_list(state) if pattern.match(vm['Name'])]
-        if len(vms) != 1:
-            print(f'{len(vms)} VMs for machine {name}', file=sys.stderr)
-            return 3
-        ran = tart(state, 'exec', vms[0], 'sudo', '-n', '/bin/sh', '-c', command, timeout=300)
-        sys.stdout.write(ran.stdout)
-        sys.stderr.write(ran.stderr)
-        return ran.returncode
-    elif op == 'addresses':
-        out = subprocess.run(['ifconfig'], capture_output=True, text=True, check=True).stdout
-        # A subnet's network or broadcast address, which a bridge of OrbStack's can carry
-        # (192.168.215.0/24), takes no connection, from the Mac either (EADDRNOTAVAIL); a /31's
-        # or /32's, such as the tailnet's, does.
-        addresses = set()
-        for address, mask in re.findall(r'^\tinet (\S+) (?:--> \S+ )?netmask (0x[0-9a-f]+)', out, re.M):
-            network = ipaddress.ip_interface(f'{address}/{ipaddress.ip_address(int(mask, 16))}').network
-            ip = ipaddress.ip_address(address)
-            if ip.is_loopback or network.prefixlen <= 30 and ip in (network.network_address,
-                                                                    network.broadcast_address):
-                continue
-            addresses.add(address)
-        print(json.dumps(sorted(addresses)))
-    elif op == 'listener':
-        # A TCP port some process of the Mac listens on at every IPv4 address.
-        out = subprocess.run(['lsof', '-nP', '-i4TCP', '-sTCP:LISTEN'], capture_output=True, text=True).stdout
-        listening = sorted({(int(port), command) for command, port in
-                            re.findall(r'^(\S+)\s.*\s\*:(\d+) \(LISTEN\)', out, re.M)})
-        if not listening:
-            print('no process listens on every address', file=sys.stderr)
-            return 1
-        port, command = listening[0]
-        with open(Path(state['evidence']) / 'control.log', 'a') as log:
-            log.write(f'  listener: {command} on *:{port}\n')
-        print(port)
-    elif op == 'probe':
-        address, port = args
-        try:
-            with socket.create_connection((address, int(port)), timeout=5):
-                print('reached')
-        except OSError:
-            print('unreachable')
-    else:
-        print(f'unknown op {op}', file=sys.stderr)
+def natives(state, args):
+    # The second host's, when its ID follows the name.
+    name, host_id = args if len(args) == 2 else (*args, state['host_id'])
+    if host_id not in (state['host_id'], f'{state["host_id"]}-b'):
+        print(f'{host_id} is no host of the run', file=sys.stderr)
         return 2
-    return 0
+    pattern = native_pattern(host_id, name)
+    jobs = Path(state['state_dir']) / 'launchd'
+    if host_id != state['host_id']:
+        jobs = Path(state['scratch']) / 'second' / 'state' / 'launchd'
+    files = [entry.name for entry in jobs.iterdir()] if jobs.exists() else []
+    print(json.dumps({
+        'machines': [{'name': vm['Name'], 'state': vm['State']} for vm in tart_list(state)
+                     if pattern.match(vm['Name'])],
+        'jobs': [label for label in labels(f'cbx-{host_id}-') if pattern.match(label)],
+        'files': sorted(name for name in files if pattern.match(name)),
+    }))
+
+
+def guest(state, args):
+    name, command = args
+    pattern = re.compile(rf'^cbx-{re.escape(state["host_id"])}-m-{re.escape(name)}-[0-9a-f]{{8}}$')
+    vms = [vm['Name'] for vm in tart_list(state) if pattern.match(vm['Name'])]
+    if len(vms) != 1:
+        print(f'{len(vms)} VMs for machine {name}', file=sys.stderr)
+        return 3
+    ran = tart(state, 'exec', vms[0], 'sudo', '-n', '/bin/sh', '-c', command, timeout=300)
+    sys.stdout.write(ran.stdout)
+    sys.stderr.write(ran.stderr)
+    return ran.returncode
+
+
+def addresses(state, args):
+    out = subprocess.run(['ifconfig'], capture_output=True, text=True, check=True).stdout
+    # A subnet's network or broadcast address, which a bridge of OrbStack's can carry
+    # (192.168.215.0/24), takes no connection, from the Mac either (EADDRNOTAVAIL); a /31's or
+    # /32's, such as the tailnet's, does.
+    found = set()
+    for address, mask in re.findall(r'^\tinet (\S+) (?:--> \S+ )?netmask (0x[0-9a-f]+)', out, re.M):
+        network = ipaddress.ip_interface(f'{address}/{ipaddress.ip_address(int(mask, 16))}').network
+        ip = ipaddress.ip_address(address)
+        if ip.is_loopback or network.prefixlen <= 30 and ip in (network.network_address,
+                                                                network.broadcast_address):
+            continue
+        found.add(address)
+    print(json.dumps(sorted(found)))
+
+
+def listener(state, args):
+    # A TCP port some process of the Mac listens on at every IPv4 address.
+    out = subprocess.run(['lsof', '-nP', '-i4TCP', '-sTCP:LISTEN'], capture_output=True, text=True).stdout
+    listening = sorted({(int(port), command) for command, port in
+                        re.findall(r'^(\S+)\s.*\s\*:(\d+) \(LISTEN\)', out, re.M)})
+    if not listening:
+        print('no process listens on every address', file=sys.stderr)
+        return 1
+    port, command = listening[0]
+    with open(Path(state['evidence']) / 'control.log', 'a') as log:
+        log.write(f'  listener: {command} on *:{port}\n')
+    print(port)
+
+
+OPS = {'natives': natives, 'guest': guest, 'addresses': addresses, 'listener': listener}
 
 
 # Teardown, natively, by the run's own names.
@@ -336,11 +316,7 @@ def main():
         # Runs last, after the VMs are gone.
         run.on_cleanup(lambda: seed_check('after'))
 
-        if not re.search(rf'^\tinet {re.escape(options.address)} ',
-                         subprocess.run(['ifconfig'], capture_output=True, text=True).stdout, re.M):
-            address, why = '127.0.0.1', f'{options.address} is not assigned on this Mac'
-        else:
-            address, why = options.address, 'the tailnet address, as production listens'
+        address, why = choose_address(options.address)
         api_port = free_port(address)
         state = {
             'scratch': str(run.scratch), 'evidence': str(run.evidence), 'state_file': str(state_file),
@@ -377,11 +353,8 @@ def main():
             'bases': {'macos': base},
             'tart': {'binary': str(tart_bin)},
         }, indent=2) + '\n')
-        client_config.write_text(json.dumps({'hosts': [{'id': host_id, 'url': f'http://{address}:{api_port}'}]},
-                                            indent=2) + '\n')
-        control_bin.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(__file__)} control '
-                               f'{shlex.quote(str(state_file))} "$@"\n')
-        control_bin.chmod(0o755)
+        write_client_config(client_config, [(host_id, address, api_port)])
+        write_control_stub(control_bin, __file__, state_file)
 
         log(f'host pid {host_start(state, __file__)}')
 
@@ -402,9 +375,7 @@ def main():
             'tart': {'binary': str(tart_bin)},
         }, indent=2) + '\n')
         placement_config = run.scratch / 'placement.json'
-        placement_config.write_text(json.dumps({'hosts': [
-            {'id': second['host_id'], 'url': f'http://{address}:{second["api_port"]}'},
-        ]}, indent=2) + '\n')
+        write_client_config(placement_config, [(second['host_id'], address, second['api_port'])])
         record(second_host={'host_id': second['host_id'], 'api_port': second['api_port'],
                             'state_dir': second['state_dir'], 'config': second['config'],
                             'host_pid_file': str(run.scratch / 'second' / 'host.pid')})
@@ -415,17 +386,4 @@ def main():
 
 
 if __name__ == '__main__':
-    if sys.argv[1:2] == ['keep']:
-        kept = json.loads(Path(sys.argv[2]).read_text())
-        keep(kept, dict(os.environ, TART_HOME=kept['tart_home']))
-    elif sys.argv[1:2] == ['control']:
-        try:
-            sys.exit(control(sys.argv[2], sys.argv[3], sys.argv[4:]))
-        except RuntimeError as error:
-            print(error, file=sys.stderr)
-            sys.exit(1)
-    else:
-        try:
-            main()
-        except Failed as failure:
-            sys.exit(failure.code)
+    run_driver(__file__, main, OPS, lambda state: dict(os.environ, TART_HOME=state['tart_home']))

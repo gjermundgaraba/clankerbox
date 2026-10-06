@@ -115,7 +115,10 @@ count before and after. Its docstring shows its invocation.
 
 The drivers share `tests/live/driver_common.py`, which holds their evidence
 (`driver.log`, `resources.json` and each command's log) and runs the suite with
-its temporary directory in the run's scratch. It runs each command in a process
+its temporary directory in the run's scratch. For the Tart and boat hosts on
+this Mac it also holds the host's address, keeper, start and stop, the
+host-control program's host ops and `probe`, its stub, and the driver's entry,
+which dispatches the keeper, the control program and the run. It runs each command in a process
 group of its own, which it stops through `stop_group` once the command ends, so
 no descendant outlives it, and runs a teardown's steps one after another: a
 failed step is logged and the next still runs, and the teardown fails with them
