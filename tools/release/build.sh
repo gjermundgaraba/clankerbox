@@ -6,8 +6,8 @@
 # linux-x64 on Linux (darwin needs codesign).
 # Bundle the code first (vp run -r build). The Node is the one .node-version pins, its
 # archives' checksums in release-inputs.json. The first run downloads them into
-# tools/release/cache/, so `vp run ready` doesn't include it and stays offline. The names carry
-# no version: the release's tag and the binary's --version do. A bundle holds, at its top level:
+# tools/release/cache/, which is why `vp run ready` doesn't run it. The names carry no version:
+# the release's tag and the binary's --version do. A bundle holds, at its top level:
 #   clankerbox                       the SEA binary
 #   LICENSE                          clankerbox's own
 #   notices/node/LICENSE             Node's, from the archive the SEA was built on
