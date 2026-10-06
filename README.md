@@ -447,9 +447,9 @@ is afterwards or a tagged error. Each runs in this order (`actions.ts`):
   back.
 - **The refusal rule:** a runtime error the runtime knows created nothing
   native (a `Refusal` in `runtime.ts`) is handled the same way. Each runtime
-  documents its list: a fork or capture source in a state it doesn't copy,
-  Tart's forwarder failing to listen on a new port, and boat's limit, capacity
-  and plan refusals.
+  documents its list: a start of a machine the runtime no longer has, a fork
+  or capture source in a state it doesn't copy, Tart's forwarder failing to
+  listen on a new port, and boat's limit, capacity and plan refusals.
 - **Any other runtime error** leaves the row with `action.status = failed` and
   the same error as the reply. Nothing native is released without an explicit
   `delete`, so no failure needs a proof that it left nothing behind. `delete`
@@ -466,13 +466,14 @@ is afterwards or a tagged error. Each runs in this order (`actions.ts`):
   preparation leaves the machine made, and `start` repairs it.
 - **`action: {name, status, error?}`** is a resource's one record of work: its
   last action, `running` while held, `failed` with the error, or `done`. A
-  checkpoint is ready once its action is `done`. A `stop` that does nothing
-  writes nothing.
-- `start` on a running machine runs preparation again (the repair path): every
-  start calls the runtime's start, which leaves a running machine as it is.
-  `stop` on a machine that doesn't read `running`, `unknown` included, does
-  nothing. `delete` of a missing resource is
-  `NotFound`, which clients treat as done.
+  checkpoint is ready once its action is `done`.
+- The runtime decides `start` and `stop`; the core reads no state for either.
+  Every `start` is admitted and calls the runtime's start, which refuses a
+  machine the runtime no longer has with `Precondition` before anything native,
+  and leaves a running machine as it is, so a start on one runs preparation
+  again (the repair path). Every `stop` calls the runtime's stop, which reads
+  the machine's state itself and does nothing on one that doesn't run.
+  `delete` of a missing resource is `NotFound`, which clients treat as done.
 - Ready checkpoints never change, so restores read them without a claim and
   run in parallel.
 
@@ -702,9 +703,10 @@ These are known, not guarded, and accepted:
   a machine whose status hasn't answered 8 s after the read began, its wait
   for a turn included, reads `unknown`. smolvm's exit codes are trusted: no
   polling around calls.
-- **RAM budget** (`ram-budget.ts`): every boot checks that running and booting
-  machines' `ramMib` fit `ramBudgetMib`, else `Capacity`; a machine whose
-  state couldn't be read counts as running. Set it above physical RAM to
+- **RAM budget** (`ram-budget.ts`): every start and every new machine checks
+  that running and booting machines' `ramMib` fit `ramBudgetMib`, each once,
+  else `Capacity`; a running target counts once, and a machine whose state
+  couldn't be read counts as running. Set it above physical RAM to
   overcommit on purpose.
 - **Fork** is a checkpoint of the running source into a store of its own,
   `create --from` it, a port swap (`machine update --remove-port … -p …`),
@@ -723,8 +725,10 @@ These are known, not guarded, and accepted:
   `machine start` kills its VMM first. A frozen, paused or pausing one is
   refused with `Precondition`, as is a fork or capture of an unreachable
   machine.
-- **Stop** is `machine stop` only; a guest that doesn't confirm its flush stays
-  running and the stop fails, rather than risk lost writes. **Delete** reads
+- **Stop** reads status first and runs `machine stop` only on a running
+  machine, since a stop of an unknown name leaks a directory; a guest that
+  doesn't confirm its flush stays running and the stop fails, rather than risk
+  lost writes. **Delete** reads
   status, stops gracefully, then SIGKILLs the VM's scope if it is still loaded,
   which also ends a VMM that smolvm reads as stopped, then runs
   `machine delete -f` and `systemctl reset-failed`.
@@ -752,10 +756,15 @@ These are known, not guarded, and accepted:
 - **State** is one `tart list` for every machine; one that doesn't answer
   within 8 s reads them all `unknown`.
 - **Capacity:** Apple runs two macOS VMs per Mac, the operator's included. Each
-  boot counts `tart list` plus machines being booted and refuses with
-  `Capacity` at two.
-- **Stop** runs `shutdown -h now` in the guest, then `tart stop --timeout 0`
-  after a minute, and waits for `tart list` to read it stopped. **Delete**
+  boot counts the VMs `tart list` reads running plus machines being booted, the
+  target included, each VM once, and refuses with `Capacity` past two; a start
+  of a running machine adds nothing.
+- **Start** reads `tart list` first and refuses a VM Tart no longer has before
+  it writes a job or listens; it boots only a stopped VM.
+- **Stop** reads `tart list` first and does nothing to a VM that doesn't run.
+  A running one gets `shutdown -h now` in the guest, then
+  `tart stop --timeout 0` after a minute, and the stop waits for `tart list` to
+  read it stopped. **Delete**
   forces a running VM off, then boots out its job.
 - **The forwarder** listens for each machine from its create until its delete,
   whatever its state, and carries each connection over
@@ -811,8 +820,11 @@ These are known, not guarded, and accepted:
 - **Fork** syncs the guest, then waits for a boat snapshot begun after the
   sync; forks carry the disk only. **Checkpoints** are named snapshots
   (`disk`), from a running or stopped machine, and outlive their source.
-- **Stop** never passes `force`, which drops writes since the last snapshot;
-  a stop boat refuses keeps the machine running and is the error.
+- **Start** refuses a machine with no recorded sandbox, or one boat reports
+  cancelled or gone, before anything native. **Stop** does nothing then, or
+  when boat doesn't read the sandbox active; it never passes `force`, which
+  drops writes since the last snapshot, and a stop boat refuses keeps the
+  machine running and is the error.
 - **Setup rules:** state that must survive a stop, fork or checkpoint lives
   under `/home/user`, `/etc`, `/usr`, `/opt`, `/srv`, `/root`, `/var/lib` or
   `/var/opt`. Leave boat's sshd, `user`'s `authorized_keys`, TCP 8911 and its

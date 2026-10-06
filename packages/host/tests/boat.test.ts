@@ -1241,12 +1241,55 @@ test("a resume boat refuses for the account's limit is a Capacity refusal", asyn
   rig.boat.hooks.answer = (sent) =>
     sent.path.endsWith("/resume") ? refusal(429, "limit_reached", "2 active") : undefined;
 
+  rig.boat.sandboxes.set("bx_made0009", {
+    id: "bx_made0009",
+    state: "archived",
+    ip: null,
+    sshEndpoint: null,
+  });
+
   const error = await fails(rig.runtime.start(machineOn("dev", { native: "bx_made0009" })));
 
   expect(refused(error)).toEqual([
     "Capacity",
     "boat POST /sandboxes/bx_made0009/resume answered 429 limit_reached: 2 active (req_0123)",
   ]);
+});
+
+test("start of a machine boat doesn't have is refused before anything native, and stop of one, or of a sandbox boat doesn't read active, does nothing", async () => {
+  const rig = await rigOn(fakeBoat({ instant: true }));
+
+  rig.boat.sandboxes.set("bx_cancelled", {
+    id: "bx_cancelled",
+    state: "cancelled",
+    ip: null,
+    sshEndpoint: null,
+  });
+  rig.boat.sandboxes.set("bx_archived", {
+    id: "bx_archived",
+    state: "archived",
+    ip: null,
+    sshEndpoint: null,
+  });
+
+  const gone = [undefined, "bx_gone", "bx_cancelled"].map((native) => machineOn("dev", { native }));
+
+  const errors: Array<ReadonlyArray<string>> = [];
+
+  for (const machine of gone) {
+    errors.push(refused(await fails(rig.runtime.start(machine))));
+    await succeeds(rig.runtime.stop(machine));
+  }
+
+  await succeeds(rig.runtime.stop(machineOn("dev", { native: "bx_archived" })));
+
+  expect(errors).toEqual(
+    Array.from({ length: 3 }, () => [
+      "Precondition",
+      "machine boat_dev is missing from the boat runtime; delete it",
+    ]),
+  );
+  expect(rig.boat.calls()).toEqual([]);
 });
 
 test("stop asks boat to stop, never with force, and waits for archived; a stop boat refuses is the error", async () => {
@@ -1266,6 +1309,12 @@ test("stop asks boat to stop, never with force, and waits for archived; a stop b
   expect([stop?.path, stop?.body]).toEqual(["/sandboxes/bx_made0001/stop", {}]);
   expect(rig.boat.sandboxes.get("bx_made0001")?.state).toBe("archived");
 
+  rig.boat.sandboxes.set("bx_made0001", {
+    id: "bx_made0001",
+    state: "running",
+    ip: null,
+    sshEndpoint: null,
+  });
   rig.boat.hooks.answer = (sent) =>
     sent.path.endsWith("/stop")
       ? refusal(409, "snapshot_failed", "the final snapshot failed; the sandbox keeps running")
@@ -1757,6 +1806,9 @@ test("whatever boat or the transport echoes leaves the runtime without the API k
     sshEndpoint: null,
   });
   errors.push(await fails(rig.runtime.start(machineOn("failed", { native: "bx_stopped" }))));
+  // The stop reads the sandbox running; every read after it, a state that echoes the key.
+  let failingReads = 0;
+
   rig.boat.hooks.answer = (sent): Answer | undefined =>
     sent.path.endsWith("/stop")
       ? { status: 202, body: { ok: true } }
@@ -1765,7 +1817,12 @@ test("whatever boat or the transport echoes leaves the runtime without the API k
             status: 200,
             body: {
               ok: true,
-              sandbox: { id: "bx_failing", state: apiKey, error: echo, ip: null },
+              sandbox: {
+                id: "bx_failing",
+                state: failingReads++ === 0 ? "running" : apiKey,
+                error: echo,
+                ip: null,
+              },
             },
           }
         : undefined;

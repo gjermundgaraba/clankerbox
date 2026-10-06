@@ -24,6 +24,7 @@ import {
   type Interface,
   type MachineRef,
   type MachineState,
+  missing,
   type Observed,
   Refusal,
   Runtime,
@@ -425,13 +426,18 @@ export const make = (
       });
 
     /**
-     * The guest's own `shutdown -h now`, which flushes its disks, then Tart's forced stop if the
+     * Reads the VM's state first, and does nothing to one that doesn't run. A running one gets
+     * the guest's own `shutdown -h now`, which flushes its disks, then Tart's forced stop if the
      * guest hasn't stopped within `shutdownWait`. The exec may die with the guest, so only the
      * VM's state counts.
      */
     const stop = (machine: MachineRef) =>
       Effect.gen(function* () {
         const vm = vmOf(machine);
+
+        if ((yield* state(vm)) !== "running") {
+          return;
+        }
 
         const shutdown = Effect.andThen(
           Effect.ignore(
@@ -502,14 +508,13 @@ export const make = (
         }
 
         return Effect.fail(
-          new Refusal({
-            error: new Precondition({
-              message:
-                observed === "missing"
-                  ? `machine ${machine.id} is missing from the tart runtime; delete it`
-                  : `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is running: stop it first`,
-            }),
-          }),
+          observed === "missing"
+            ? missing("tart", machine)
+            : new Refusal({
+                error: new Precondition({
+                  message: `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is running: stop it first`,
+                }),
+              }),
         );
       });
 
@@ -560,8 +565,10 @@ export const make = (
       /**
        * The Mac must have room: every running VM in the Tart home counts, the operator's
        * included, and so does every machine an action is booting, the target too, since its VM
-       * runs only once its job has started. The operator's Linux VMs count too, which Apple
-       * doesn't limit, so the count is conservative; Apple's own refusal is the real guard.
+       * runs only once its job has started. The count is a set of VM names, so a running target,
+       * as a start of a running machine has, counts once and adds nothing. The operator's Linux
+       * VMs count too, which Apple doesn't limit, so the count is conservative; Apple's own
+       * refusal is the real guard.
        */
       admit: Effect.fn("Tart.admit")(({ action, machine, machines }) =>
         Effect.gen(function* () {
@@ -598,14 +605,24 @@ export const make = (
           String(diskGb(machine.diskGib)),
         ]),
       ),
-      /** Listens again, then boots the VM unless it runs already. */
+      /**
+       * Reads the VM's state first, so a VM Tart no longer has is refused before anything is
+       * written, then listens again, and boots the VM unless it runs already.
+       */
       start: Effect.fn("Tart.start")((machine) =>
-        Effect.andThen(
-          listen(machine),
-          Effect.flatMap(state(vmOf(machine)), (observed) =>
-            observed === "running" ? Effect.void : boot(machine),
-          ),
-        ),
+        Effect.gen(function* () {
+          const observed = yield* state(vmOf(machine));
+
+          if (observed === "missing") {
+            return yield* missing("tart", machine);
+          }
+
+          yield* listen(machine);
+
+          if (observed === "stopped") {
+            yield* boot(machine);
+          }
+        }),
       ),
       stop: Effect.fn("Tart.stop")(stop),
       delete: Effect.fn("Tart.delete")((machine) =>

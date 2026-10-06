@@ -489,6 +489,26 @@ test("start of a running VM listens and boots nothing", async () => {
   expect(await accepts(machine.port ?? 0)).toBe(true);
 });
 
+test("start of a VM Tart no longer has is refused before anything is written: no job, no log, no listener", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const machine = await machineOn("dev");
+  const vm = vmOf(machine);
+  const dir = jobsDir(mac.settings.stateDir);
+
+  const error = await Effect.runPromise(Effect.flip(runtime.start(machine)));
+
+  expect(refused(error)).toEqual([
+    "Precondition",
+    "machine mac_dev is missing from the tart runtime; delete it",
+  ]);
+  expect(calls(mac)).toEqual([]);
+  expect([existsSync(join(dir, `${vm}.plist`)), existsSync(join(dir, `${vm}.log`))]).toEqual([
+    false,
+    false,
+  ]);
+  expect(await accepts(machine.port ?? 0)).toBe(false);
+});
+
 test("after a reboot, start bootstraps the job again from its plist", async () => {
   const { mac, runtime } = await runtimeOn();
   const machine = await machineOn("dev");
@@ -771,6 +791,37 @@ test("the two-VM count takes every running VM, the operator's too, and machines 
   );
 });
 
+test("the two-VM count takes a running target once: a start of a running machine adds nothing", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const target = await machineOn("dev");
+
+  mac.vms.set("operators-own", "running");
+  mac.vms.set(vmOf(target), "running");
+
+  await Effect.runPromise(
+    runtime.admit({
+      action: "start",
+      machine: target,
+      machines: [{ machine: target, booting: true }],
+    }),
+  );
+
+  // Once a third VM runs, the same start is refused.
+  mac.vms.set("operators-other", "running");
+
+  const crowded = await Effect.runPromise(
+    Effect.flip(
+      runtime.admit({
+        action: "start",
+        machine: target,
+        machines: [{ machine: target, booting: true }],
+      }),
+    ),
+  );
+
+  expect(crowded._tag).toBe("Capacity");
+});
+
 test("a fork's source and a capture's machine must be stopped: anything else is refused before a clone", async () => {
   const { mac, runtime } = await runtimeOn();
   const [source, copy] = await Promise.all([machineOn("src"), machineOn("copy")]);
@@ -887,6 +938,20 @@ test("stop shuts the guest down from inside and waits for its VM to stop; its li
   expect(calls(mac).slice(before)).toEqual([`tart exec ${vm} sudo -n /sbin/shutdown -h now`]);
   expect(mac.vms.get(vm)).toBe("stopped");
   expect(await accepts(machine.port ?? 0)).toBe(true);
+});
+
+test("stop of a stopped VM, or one Tart no longer has, reads its state and does nothing", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const [stopped, gone] = await Promise.all([machineOn("down"), machineOn("gone")]);
+
+  mac.vms.set(vmOf(stopped), "stopped");
+
+  const before = mac.spawner.calls.length;
+
+  await Effect.runPromise(runtime.stop(stopped));
+  await Effect.runPromise(runtime.stop(gone));
+
+  expect(mac.spawner.calls.slice(before).map(({ args }) => args[0])).toEqual(["list", "list"]);
 });
 
 test("a guest that doesn't shut down within a minute is forced off", async () => {

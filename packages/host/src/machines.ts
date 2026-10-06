@@ -25,11 +25,15 @@ export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Machine>, HostError>;
   readonly get: (id: string) => Effect.Effect<Machine, HostError>;
   readonly create: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
-  /** Boots a stopped machine and prepares it; on a running machine, prepares it again. */
+  /**
+   * Boots a stopped machine and prepares it; on a running machine, prepares it again. Every
+   * start is admitted and calls the runtime's start, which refuses a missing machine.
+   */
   readonly start: (id: string) => Effect.Effect<Machine, HostError>;
   /**
-   * Stops a running machine, made or not: a stop boots nothing, so it may stop the VM a failed
-   * create, fork or restore left running. On any other machine, it does nothing.
+   * Stops the machine through the runtime's stop, made or not: a stop boots nothing, so it may
+   * stop the VM a failed create, fork or restore left running. The runtime's stop does nothing
+   * on a machine that doesn't run.
    */
   readonly stop: (id: string) => Effect.Effect<Machine, HostError>;
   readonly delete: (id: string) => Effect.Effect<void, HostError>;
@@ -78,7 +82,7 @@ export const make = (
     const nameOf = nameOn(config.id);
     const rows = rowsOn(store, config.id);
     const made = madeOn(config.id);
-    const { claimAndCheck, native, done, release } = claimsOn(store);
+    const { claimAndCheck, native, done } = claimsOn(store);
     const ref = (record: NewMachine) => machineRef(config.id, record);
 
     /** Runs native work that may need the runtime, such as preparation. */
@@ -145,13 +149,9 @@ export const make = (
         ),
       );
 
-    /** One machine's state, read from the runtime. */
-    const observe = (record: MachineRecord) =>
-      Effect.map(observeAll([record]), ([observed]) => observed);
-
     const read = (name: string) =>
       Effect.flatMap(rows.machine(name), (record) =>
-        Effect.map(observe(record), (observed) => resource(record, observed)),
+        Effect.map(observeAll([record]), ([observed]) => resource(record, observed)),
       );
 
     /** A new row, with the lowest port that no row holds and nothing listens on. */
@@ -308,23 +308,7 @@ export const make = (
 
         const [token, record] = yield* admitted(
           claimAndCheck(holding("start", name), (record) =>
-            Effect.gen(function* () {
-              yield* made(record);
-
-              const { state } = yield* observe(record);
-
-              if (state === "missing") {
-                return yield* new Precondition({
-                  message: `machine ${id} is missing from the ${runtime.name} runtime; delete it`,
-                });
-              }
-
-              if (state !== "running") {
-                yield* admit("start", record);
-              }
-
-              return record;
-            }),
+            Effect.andThen(made(record), Effect.as(admit("start", record), record)),
           ),
         );
 
@@ -345,16 +329,10 @@ export const make = (
       Effect.gen(function* () {
         const name = yield* nameOf(id);
 
-        const [token, { record, state }] = yield* claimAndCheck(holding("stop", name), (record) =>
-          Effect.map(observe(record), ({ state }) => ({ record, state })),
-        );
+        const [token, record] = yield* claimAndCheck(holding("stop", name), Effect.succeed);
 
-        if (state === "running") {
-          yield* native(token, `stop ${id}`, runtime.stop(ref(record)));
-          yield* done(token);
-        } else {
-          yield* release(token);
-        }
+        yield* native(token, `stop ${id}`, runtime.stop(ref(record)));
+        yield* done(token);
 
         return yield* read(name);
       });

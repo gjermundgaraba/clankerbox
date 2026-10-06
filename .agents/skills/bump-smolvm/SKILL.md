@@ -157,8 +157,8 @@ citation moved to the new tag.
   (`StopCmd`, `DeleteCmd`, S@1.22.2:src/cli/machine.rs). `exec` refuses a stopped
   machine. `delete` removes the record only after the process is dead and
   storage removed. A `machine stop` of an unknown name says "vm not found" but
-  leaves an empty `vms/<hash>/`. Ours: delete reads `machine status` first,
-  stops gracefully, kills a still-loaded scope with SIGKILL (the signal smolvm's
+  leaves an empty `vms/<hash>/`. Ours: stop reads `machine status` first and
+  stops only a running machine; delete reads it first too, stops gracefully, kills a still-loaded scope with SIGKILL (the signal smolvm's
   own `kill_scope` sends, S@1.22.2:src/systemd_scope.rs), then
   `machine delete -f` and `systemctl reset-failed`. A host SIGKILLed mid-boot
   can leave a VMM smolvm reads as stopped, because the boot started it before

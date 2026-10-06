@@ -19,6 +19,7 @@ import {
   type CheckpointRef,
   type MachineRef,
   type MachineState,
+  missing,
   type Observed,
   Refusal,
   Runtime,
@@ -191,14 +192,11 @@ export const fakeRuntime = (options: FakeOptions) => {
     }
 
     return Effect.fail(
-      new Refusal({
-        error: new Precondition({
-          message:
-            state === "missing"
-              ? `machine ${machine.id} is missing`
-              : `${machine.id} is stopped: start it first`,
-        }),
-      }),
+      state === "missing"
+        ? missing("smolvm", machine)
+        : new Refusal({
+            error: new Precondition({ message: `${machine.id} is stopped: start it first` }),
+          }),
     );
   };
 
@@ -256,15 +254,21 @@ export const fakeRuntime = (options: FakeOptions) => {
               machines.set(machine.name, { state: "running", root });
             }),
           ),
+        // Like smolvm's: a start refuses a machine the fake doesn't have, and a stop does
+        // nothing to one.
         start: (machine) =>
           Effect.andThen(
             enterRefusable("start", machine),
-            Effect.sync(() => {
+            Effect.suspend(() => {
               const found = machines.get(machine.name);
 
-              if (found !== undefined) {
-                found.state = "running";
+              if (found === undefined) {
+                return Effect.fail(missing("smolvm", machine));
               }
+
+              found.state = "running";
+
+              return Effect.void;
             }),
           ),
         stop: (machine) =>

@@ -370,10 +370,16 @@ test("a failed machine create fails with smolvm's last output and boots nothing"
   expect(smolvmArgs(spawner.calls)).toHaveLength(1);
 });
 
-test("start reads the status, then boots a stopped machine branchable, and stop is machine stop, its failure returned as it is", async () => {
+test("start reads the status, then boots a stopped machine branchable, and stop reads it, then is machine stop, its failure returned as it is", async () => {
+  let booted = false;
+
   const spawner = scripted((call) => {
     if (call.args[1] === "status") {
-      return status("stopped");
+      return status(booted ? "running" : "stopped");
+    }
+
+    if (call.args[1] === "start") {
+      booted = true;
     }
 
     return call.args[1] === "stop"
@@ -395,8 +401,22 @@ test("start reads the status, then boots a stopped machine branchable, and stop 
   expect(smolvmArgs(spawner.calls)).toEqual([
     ["machine", "status", "--name", "dev-01234567", "--json"],
     ["machine", "start", "--name", "dev-01234567", "--branchable"],
+    ["machine", "status", "--name", "dev-01234567", "--json"],
     ["machine", "stop", "--name", "dev-01234567"],
   ]);
+});
+
+test("stop of a stopped machine, or one smolvm doesn't know, reads its status and stops nothing", async () => {
+  for (const reply of [status("stopped"), unknown]) {
+    const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+    const runtime = await runtimeOf(await prepared(), spawner);
+
+    await Effect.runPromise(runtime.stop(machine));
+
+    expect(smolvmArgs(spawner.calls)).toEqual([
+      ["machine", "status", "--name", "dev-01234567", "--json"],
+    ]);
+  }
 });
 
 test("start leaves a running machine as it is, boots an unreachable one again, and refuses a frozen, paused, pausing or missing one before anything native", async () => {

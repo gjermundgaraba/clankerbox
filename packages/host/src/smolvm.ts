@@ -21,6 +21,7 @@ import {
   type Interface,
   type MachineRef,
   type MachineState,
+  missing,
   type Observed,
   Refusal,
   Runtime,
@@ -285,14 +286,16 @@ export const make = (
           return Effect.void;
         }
 
+        if (recorded === "missing") {
+          return Effect.fail(missing("smolvm", machine));
+        }
+
         const message =
-          recorded === "missing"
-            ? `machine ${machine.id} is missing from the smolvm runtime; delete it`
-            : recorded === "unreachable"
-              ? `smolvm reads machine ${machine.id} unreachable: its VM runs, but its agent doesn't answer; start it to boot it again`
-              : alive.has(recorded) || unstartable.has(recorded)
-                ? `smolvm reads machine ${machine.id} ${recorded}, and copies only a running machine`
-                : stopped;
+          recorded === "unreachable"
+            ? `smolvm reads machine ${machine.id} unreachable: its VM runs, but its agent doesn't answer; start it to boot it again`
+            : alive.has(recorded) || unstartable.has(recorded)
+              ? `smolvm reads machine ${machine.id} ${recorded}, and copies only a running machine`
+              : stopped;
 
         return Effect.fail(new Refusal({ error: new Precondition({ message }) }));
       });
@@ -541,11 +544,7 @@ export const make = (
           }
 
           if (recorded === "missing") {
-            return yield* new Refusal({
-              error: new Precondition({
-                message: `machine ${machine.id} is missing from the smolvm runtime; delete it`,
-              }),
-            });
+            return yield* missing("smolvm", machine);
           }
 
           if (unstartable.has(recorded)) {
@@ -559,11 +558,19 @@ export const make = (
           yield* boot(native);
         }),
       ),
-      stop: Effect.fn("Smolvm.stop")((machine) => {
-        const native = nativeName(machine);
+      /**
+       * Reads the state first, and stops only a running machine: a `machine stop` of a name smolvm
+       * doesn't know leaks an empty `vms/<hash>/`, as for delete.
+       */
+      stop: Effect.fn("Smolvm.stop")((machine) =>
+        Effect.gen(function* () {
+          const native = nativeName(machine);
 
-        return Effect.asVoid(call(["machine", "stop", "--name", native], `machine stop ${native}`));
-      }),
+          if ((yield* state(native)) === "running") {
+            yield* call(["machine", "stop", "--name", native], `machine stop ${native}`);
+          }
+        }),
+      ),
       delete: Effect.fn("Smolvm.delete")(removeVm),
       exec: Effect.fn("Smolvm.exec")((machine, { argv, stdin }) => {
         const native = nativeName(machine);

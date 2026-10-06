@@ -1,15 +1,12 @@
 import { readFile, rm, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Capacity, Conflict, type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Fiber, Logger, Option, Result } from "effect";
+import { Effect, Fiber, Option, Result } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import * as Machines from "../src/machines.ts";
 import { Refusal } from "../src/runtime.ts";
-import * as Store from "../src/store.ts";
 import { scratch } from "./scratch.ts";
-import { cleanup, hostConfig, request, startHost, type TestHost } from "./support.ts";
+import { cleanup, request, startHost, type TestHost } from "./support.ts";
 
 const owned: Array<string> = [];
 
@@ -88,7 +85,7 @@ test("create runs setup once, then preparation, and reports the machine as the r
   ]);
 });
 
-test("start on a running machine calls the runtime's start, admits nothing and runs preparation again; setup never runs again", async () => {
+test("start on a running machine is admitted, calls the runtime's start and runs preparation again; setup never runs again", async () => {
   const linux = await host();
 
   await linux.run(linux.machines.create(request("dev", { setup: installsStart })));
@@ -97,7 +94,7 @@ test("start on a running machine calls the runtime's start, admits nothing and r
   const started = await linux.run(linux.machines.start("linux_dev"));
 
   expect(started).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
-  expect(linux.fake.calls).toEqual(["start linux_dev", "exec linux_dev"]);
+  expect(linux.fake.calls).toEqual(["admit linux_dev", "start linux_dev", "exec linux_dev"]);
   expect(await readFile(join(linux.fake.root("dev") ?? "", "starts"), "utf8")).toBe(
     "start\nstart\n",
   );
@@ -127,7 +124,7 @@ test("stop, start and delete run the runtime's calls in turn", async () => {
   expect(linux.fake.machines.size).toBe(0);
 });
 
-test("stop on a stopped machine does nothing and writes nothing", async () => {
+test("stop on a stopped machine calls the runtime's stop, which leaves it stopped", async () => {
   const linux = await host();
 
   await linux.run(linux.machines.create(request("dev")));
@@ -137,36 +134,7 @@ test("stop on a stopped machine does nothing and writes nothing", async () => {
   const again = await linux.run(linux.machines.stop("linux_dev"));
 
   expect(again).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
-  expect(linux.fake.calls).toEqual([]);
-});
-
-test("a stop that does nothing replies with the machine when giving back its claim fails, and logs it", async () => {
-  const linux = await host();
-  const logged: Array<unknown> = [];
-
-  await linux.run(linux.machines.create(request("dev")));
-  await linux.run(linux.machines.stop("linux_dev"));
-
-  const again = await linux.run(
-    Effect.gen(function* () {
-      const machines = yield* Machines.make(hostConfig(linux.stateDir, ports)).pipe(
-        Effect.provideService(Store.Store, {
-          ...linux.store,
-          release: () => Effect.fail(new Internal({ message: "disk full" })),
-        }),
-        Effect.provide(linux.fake.layer),
-      );
-
-      return yield* machines.stop("linux_dev");
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))])),
-      Effect.provide(NodeServices.layer),
-    ),
-  );
-
-  expect(again).toMatchObject({ state: "stopped", action: { name: "stop", status: "running" } });
-  expect(logged).toEqual([["couldn't release the rows of a stop: disk full"]]);
+  expect(linux.fake.calls).toEqual(["stop linux_dev"]);
 });
 
 test("a machine's state is read from the runtime every time", async () => {
@@ -236,7 +204,7 @@ test("one machine the runtime can't read is unknown, and the list still reads th
   ]);
 });
 
-test("stop on a machine the runtime can't read does nothing and writes nothing", async () => {
+test("stop on a machine the runtime can't read calls the runtime's stop", async () => {
   const linux = await host();
 
   await linux.run(linux.machines.create(request("dev")));
@@ -245,8 +213,8 @@ test("stop on a machine the runtime can't read does nothing and writes nothing",
 
   const stopped = await linux.run(linux.machines.stop("linux_dev"));
 
-  expect(stopped).toMatchObject({ state: "unknown", action: { name: "create", status: "done" } });
-  expect(linux.fake.calls).toEqual([]);
+  expect(stopped).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
+  expect(linux.fake.calls).toEqual(["stop linux_dev"]);
 });
 
 test("a machine has an SSH endpoint, on its port of the publish address, only while it runs", async () => {
@@ -380,7 +348,7 @@ test("stop and delete of a made machine are never refused for an earlier failure
 
   await linux.run(linux.machines.delete("linux_dev"));
 
-  expect(stopped.action).toMatchObject({ name: "start", status: "failed" });
+  expect(stopped.action).toEqual({ name: "stop", status: "done" });
   expect(stopFailed.message).toBe("guest didn't flush");
   expect(await rows(linux)).toEqual([]);
 });
@@ -430,7 +398,10 @@ test("start of a machine the runtime no longer has is Precondition and writes no
   const error = await failure(linux, linux.machines.start("linux_dev"));
   const [row] = await rows(linux);
 
-  expect(error._tag).toBe("Precondition");
+  expect([error._tag, error.message]).toEqual([
+    "Precondition",
+    "machine linux_dev is missing from the smolvm runtime; delete it",
+  ]);
   expect(row?.action).toEqual({ name: "create", status: "done" });
 });
 
@@ -619,7 +590,7 @@ test("a create that fails only in preparation leaves its machine made, and start
   expect(error).toEqual(new Internal({ message: "sshd didn't start" }));
   expect(row).toMatchObject({ made: true, action: { name: "create", status: "failed" } });
   expect(started).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
-  expect(linux.fake.calls).toEqual(["start linux_dev", "exec linux_dev"]);
+  expect(linux.fake.calls).toEqual(["admit linux_dev", "start linux_dev", "exec linux_dev"]);
 });
 
 test("after a restart during create's preparation, the machine is made, and start prepares it again", async () => {
@@ -741,6 +712,38 @@ test("the RAM budget counts a machine the runtime can't read as running", async 
 
   expect(full._tag).toBe("Capacity");
   expect(full.message).toContain("3072 MiB");
+});
+
+test("the RAM budget counts a running machine's start once: it already runs", async () => {
+  const linux = await host({ runtime: { ramBudgetMib: 2048 } });
+
+  await linux.run(linux.machines.create(request("a")));
+  await linux.run(linux.machines.create(request("b")));
+
+  const started = await linux.run(linux.machines.start("linux_b"));
+
+  expect(started.action).toEqual({ name: "start", status: "done" });
+});
+
+test("a start reads state once under the admission permit: the RAM budget's one observe", async () => {
+  const linux = await host({ runtime: { ramBudgetMib: 4096 } });
+
+  await linux.run(linux.machines.create(request("a")));
+  await linux.run(linux.machines.create(request("b")));
+  await linux.run(linux.machines.stop("linux_b"));
+  linux.fake.observed.length = 0;
+
+  const { release, entered } = linux.fake.holdNext("start");
+  const start = Effect.runFork(linux.machines.start("linux_b"));
+
+  await entered;
+
+  const read = [...linux.fake.observed];
+
+  release();
+  await Effect.runPromise(Fiber.join(start));
+
+  expect(read).toEqual([["linux_a"]]);
 });
 
 test("the RAM budget reads the machines no action boots in one observe", async () => {

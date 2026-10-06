@@ -12,6 +12,7 @@ import {
   type HostError,
   type Internal,
   type Machine,
+  Precondition,
   type Runtime as RuntimeName,
   type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -134,6 +135,14 @@ export interface Execution {
  */
 export class Refusal extends Data.TaggedError("Refusal")<{ readonly error: HostError }> {}
 
+/** The refusal of an action on a machine the runtime `runtime` no longer has. */
+export const missing = (runtime: RuntimeName, machine: Pick<MachineRef, "id">): Refusal =>
+  new Refusal({
+    error: new Precondition({
+      message: `machine ${machine.id} is missing from the ${runtime} runtime; delete it`,
+    }),
+  });
+
 export interface Interface {
   readonly name: RuntimeName;
   /** The runtime's version, read when the runtime starts; for boat, its API version. */
@@ -170,18 +179,24 @@ export interface Interface {
   ) => Effect.Effect<ReadonlyArray<Observed>, HostError>;
   /**
    * Step 3 of an action that boots a machine: the runtime's capacity checks, such as the smolvm
-   * host's RAM budget or Tart's two-VM count. A failure here writes nothing. Not called for
-   * `start` on a running machine, but called for one whose state couldn't be read.
+   * host's RAM budget or Tart's two-VM count. A failure here writes nothing. Called for every
+   * `start`, whatever the machine's state: a running target counts once, as it already runs.
    */
   readonly admit: (activation: Activation) => Effect.Effect<void, HostError>;
   /** Makes the machine from `image` and boots it; it returns once exec works. */
   readonly create: (machine: MachineRef, image: string) => Effect.Effect<void, HostError | Refusal>;
   /**
    * Boots a stopped machine, and leaves a running one as it is; it returns once exec works. The
-   * core calls it on every start, before preparation, so it reads the machine's state itself.
+   * core calls it on every start, before preparation, and reads no state of its own, so the
+   * runtime reads the machine's state itself and refuses one it no longer has (`missing`)
+   * before anything native.
    */
   readonly start: (machine: MachineRef) => Effect.Effect<void, HostError | Refusal>;
-  /** Stops a running machine. */
+  /**
+   * Stops a running machine. The core calls it on every stop, and reads no state of its own, so
+   * the runtime reads the machine's state itself and does nothing on one that doesn't run or
+   * that it no longer has.
+   */
   readonly stop: (machine: MachineRef) => Effect.Effect<void, HostError>;
   /**
    * Removes everything native the machine's row could have made, coping with whatever an

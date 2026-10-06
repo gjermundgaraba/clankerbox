@@ -184,7 +184,7 @@ export const claimsOn = (store: StoreInterface) => {
   const done = (token: Token, recorded?: Omit<Outcome, "action">) =>
     store.end(token, { ...recorded, action: { name: token.action, status: "done" } });
 
-  return { claimAndCheck, native, done, release };
+  return { claimAndCheck, native, done };
 };
 
 /**

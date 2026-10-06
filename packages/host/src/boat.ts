@@ -13,7 +13,7 @@
  * its `Capacity` refusals of a create, fork, resume, restore or capture (the account's limits,
  * no machine, an 11th named snapshot), its `Precondition` refusal of a type the account's plan
  * lacks, a create, fork or restore that ends `cancelled` or gone because boat found no machine,
- * and a fork's or capture's source boat doesn't have.
+ * and a machine to start, or a fork's or capture's source, that boat doesn't have.
  *
  * Errors and warnings are scrubbed of the API key where they leave the runtime, so nothing boat
  * or the guest echoes carries it out.
@@ -24,7 +24,6 @@ import {
   type HostError,
   hostErrors,
   Internal,
-  Precondition,
   type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -60,6 +59,7 @@ import {
   type Interface,
   type MachineRef,
   type MachineState,
+  missing,
   type Observed,
   type RecordNative,
   Refusal,
@@ -308,27 +308,21 @@ export const make = (
       });
 
     /**
-     * A source boat has, for a fork or a capture: one without a recorded sandbox, or one boat
-     * reports cancelled or gone, is refused before anything native.
+     * The sandbox boat has for a machine to start, fork or capture: one without a recorded
+     * sandbox, or one boat reports cancelled or gone, is refused before anything native.
      */
-    const sourceSandbox = (machine: MachineRef) =>
+    const presentSandbox = (machine: MachineRef) =>
       Effect.gen(function* () {
-        const missing = new Refusal({
-          error: new Precondition({
-            message: `machine ${machine.id} is missing from the boat runtime; delete it`,
-          }),
-        });
-
         const id = sandboxOf(machine);
 
         if (Option.isNone(id)) {
-          return yield* missing;
+          return yield* missing("boat", machine);
         }
 
         const found = yield* api.sandbox(id.value);
 
         if (Option.isNone(found) || stateOf(found.value.state) === "missing") {
-          return yield* missing;
+          return yield* missing("boat", machine);
         }
 
         return found.value;
@@ -779,18 +773,17 @@ export const make = (
         }).pipe(scrubbingRefusal),
       ),
       /**
-       * Resumes the sandbox unless boat reads it active: one boat still makes or resumes, or that
-       * runs, isn't resumed again. Either way the start waits for it to run, for SSH and for the
-       * marker, so preparation never meets a half-restored `/var/lib`, as boat reads a sandbox
-       * ready before its marker exists; on the create's own machine, which boat restored nothing
-       * into, it doesn't wait for the marker.
+       * Refuses a machine boat doesn't have, and resumes the sandbox unless boat reads it active:
+       * one boat still makes or resumes, or that runs, isn't resumed again. Either way the start
+       * waits for it to run, for SSH and for the marker, so preparation never meets a
+       * half-restored `/var/lib`, as boat reads a sandbox ready before its marker exists; on the
+       * create's own machine, which boat restored nothing into, it doesn't wait for the marker.
        */
       start: Effect.fn("Boat.start")((machine) =>
         Effect.gen(function* () {
-          const id = yield* recordedSandbox(machine);
-          const found = yield* api.sandbox(id);
+          const { id, state } = yield* presentSandbox(machine);
 
-          if (Option.isNone(found) || !activeStates.has(found.value.state)) {
+          if (!activeStates.has(state)) {
             yield* refusing(api.resume(id));
           }
 
@@ -799,13 +792,26 @@ export const make = (
           yield* restored(machine, id);
         }).pipe(scrubbingRefusal),
       ),
-      /** Never with `force`: a stop boat refuses, as when its final snapshot fails, is the error. */
+      /**
+       * Does nothing when no sandbox is recorded, or boat doesn't read it active. Never with
+       * `force`: a stop boat refuses, as when its final snapshot fails, is the error.
+       */
       stop: Effect.fn("Boat.stop")((machine) =>
         Effect.gen(function* () {
-          const id = yield* recordedSandbox(machine);
+          const id = sandboxOf(machine);
 
-          yield* api.stop(id);
-          yield* archived(machine, id);
+          if (Option.isNone(id)) {
+            return;
+          }
+
+          const found = yield* api.sandbox(id.value);
+
+          if (Option.isNone(found) || !activeStates.has(found.value.state)) {
+            return;
+          }
+
+          yield* api.stop(id.value);
+          yield* archived(machine, id.value);
         }).pipe(scrubbing),
       ),
       /**
@@ -844,7 +850,7 @@ export const make = (
        */
       capture: Effect.fn("Boat.capture")((machine, checkpoint) =>
         Effect.gen(function* () {
-          const source = yield* sourceSandbox(machine);
+          const source = yield* presentSandbox(machine);
           const name = snapshotOf(checkpoint.instance);
 
           if (upStates.has(source.state)) {
@@ -894,7 +900,7 @@ export const make = (
       fork: Effect.fn("Boat.fork")((source, machine) =>
         Effect.gen(function* () {
           const type = yield* typeOf(machine);
-          const from = yield* sourceSandbox(source);
+          const from = yield* presentSandbox(source);
 
           if (upStates.has(from.state)) {
             yield* freshSnapshot(source, from.id);
