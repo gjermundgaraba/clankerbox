@@ -914,16 +914,13 @@ The binaries and the SDK share one version, the SDK's, in
 The tag runs `.github/workflows/publish-sdk.yml`, which refuses a tag that
 doesn't name the version, runs CI on the tagged commit, uploads the two bundles
 CI smoked and their `.sha256` files to the `vX.Y.Z` GitHub release, then
-publishes `@gjermundgaraba/clankerbox-sdk@X.Y.Z` from the `npm` environment.
-A failing CI stops it before anything is uploaded. A failed run can be re-run:
-the upload replaces the release's files.
+publishes `@gjermundgaraba/clankerbox-sdk@X.Y.Z` through npm's trusted
+publishing, with provenance. A failing CI stops it before anything is uploaded.
+A failed run can be re-run: the upload replaces the release's files.
 
-Before the first release, the repository's owner checks two settings:
-
-- npm's trusted publisher for `@gjermundgaraba/clankerbox-sdk` names this
-  repository, the workflow `publish-sdk.yml` and the environment `npm`;
-- the `npm` environment's protection rules: required reviewers, if any, and
-  deployments limited to `v*` tags, so only a release tag can publish.
+npm's trusted publisher for `@gjermundgaraba/clankerbox-sdk` names this
+repository and the workflow `publish-sdk.yml`, with no environment. Only the
+workflow's `vX.Y.Z` tag trigger gates publishing.
 
 ## License
 
