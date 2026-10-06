@@ -62,6 +62,10 @@ VMs/processes, unregister native jobs, and verify their absence. Register callba
 in acquisition order; they run in reverse order, even if qualification raises.
 All callbacks are attempted. If one fails, scratch remains with state
 `needs_teardown`; cleanup must not erase the evidence needed to recover.
+From teardown's start to its end, `WorkRun` ignores SIGINT, SIGTERM and SIGHUP,
+and the commands teardown starts inherit that, so a second Ctrl-C can't cut a
+step short, such as a host's stop before its VMs are deleted; the driver's own
+handlers return once teardown ends.
 
 Use the same layout on remote hosts, and collect their evidence before deleting
 remote scratch. The local helper does not automatically manage remote resources.

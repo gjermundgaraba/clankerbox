@@ -39,7 +39,8 @@ def raise_stop(signum, frame):
 
 
 def stop_on_signals():
-    """Turns SIGTERM, SIGHUP and SIGINT into Stop, so the WorkRun's teardown runs."""
+    """Turns SIGTERM, SIGHUP and SIGINT into Stop, so the WorkRun's teardown runs; the WorkRun
+    ignores them while it does."""
     for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
         signal.signal(sig, raise_stop)
 

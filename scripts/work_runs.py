@@ -21,6 +21,7 @@ import uuid
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1] / '.work' / 'runs'
 OWNER = 'clankerbox-work-run-v1'
+TEARDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 def safe_path(path):
@@ -101,6 +102,9 @@ class WorkRun:
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        # A second Ctrl-C or SIGTERM must not cut a teardown step short, such as a host's stop
+        # before its VMs are deleted: teardown ignores them, and its children inherit that.
+        handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in TEARDOWN_SIGNALS}
         errors = []
         try:
             for callback in reversed(self.callbacks):
@@ -121,6 +125,8 @@ class WorkRun:
                 raise RuntimeError('teardown failed; scratch retained: ' + '; '.join(errors))
         finally:
             self._lock.__exit__(None, None, None)
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
 
 
 def clean(root, run_id, *, resources_stopped=False):

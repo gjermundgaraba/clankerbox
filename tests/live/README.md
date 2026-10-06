@@ -37,9 +37,11 @@ share machines, so a subset can fail where the whole suite passes.
 - Each run is a work run (`scripts/WORK_RUNS.md`): it owns
   `.work/runs/live-<runtime>-<id>/`, whose `evidence/` it keeps (driver log,
   `resources.json`, the suite's verbose log with its `[timing]` lines, the
-  host's log, teardown results) and whose `scratch/` it removes. Evidence can
-  hold credentials; don't publish it. Nothing in a run logs a setup script, a
-  packed recipe or the preparation script.
+  host's log, teardown results) and whose `scratch/` it removes. A first
+  Ctrl-C or SIGTERM stops the run and starts its teardown, which ignores any
+  further one until it ends. Evidence can hold credentials; don't publish it.
+  Nothing in a run logs a setup script, a packed recipe or the preparation
+  script.
 
 ## smolvm: `pnpm live:smolvm`
 
