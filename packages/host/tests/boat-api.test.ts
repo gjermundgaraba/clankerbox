@@ -518,7 +518,7 @@ test("a throttle that outlasts the repeats is Capacity when boat said rate_limit
   }
 });
 
-test("after an unclear attempt a 429 is repeated 65 s on, within the bound, and never trusted", async () => {
+test("after an unclear attempt a 429 is repeated 65 s on, once, and never trusted", async () => {
   const recovers = fakeBoat(
     (_sent, index) =>
       ["drop" as const, refusal(429, "rate_limited"), refusal(500, "internal_error")][index] ??
@@ -543,9 +543,10 @@ test("after an unclear attempt a 429 is repeated 65 s on, within the bound, and 
 
   const error = Exit.isSuccess(exit) ? exit.value : undefined;
 
-  // Repeats at 1, 66, 131, 196, 261 and 326 s: the last is begun inside the 5 minutes.
-  expect(throttled.sent).toHaveLength(7);
-  expect(Duration.format(waited)).toBe("5m 26s");
+  // Each 429 counts as a start: the drop, the 429 a second later and the one 65 s after it are
+  // at most three, as without the drop.
+  expect(throttled.sent).toHaveLength(3);
+  expect(Duration.format(waited)).toBe("1m 6s");
   expect([error?._tag, error?.message]).toEqual([
     "Internal",
     "boat POST /sandboxes answered 429 rate_limited: 5 per minute (req_0123), after an attempt whose outcome is unknown, so a sandbox may exist",

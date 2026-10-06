@@ -813,7 +813,7 @@ These are known, not guarded, and accepted:
   but counts as a start: it is repeated twice, 65 s apart, so the minute window
   rolls past and a longer one costs at most three starts. A `rate_limited` that
   outlasts them is `Capacity`, any other 429 `Internal`. After an unclear
-  attempt a 429 is repeated within the 5 minutes, at least 65 s apart.
+  attempt a 429 is repeated once, at least 65 s on, within the 5 minutes.
 - **Refusals** that leave nothing on boat remove the row: to a create, fork,
   resume, restore or a named snapshot's save, 429
   `limit_reached`/`member_limit_reached`/`daily_limit_reached` (and

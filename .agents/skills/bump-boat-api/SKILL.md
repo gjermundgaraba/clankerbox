@@ -136,7 +136,8 @@ Each: what boat does, and what of ours depends on it.
   (`retryWindow` 5 minutes, `firstPause` to `longestPause`, `attemptTimeout`),
   cut short by a caller's own wait, and a state read by `machineReadWait` (7 s,
   under the core's `stateReadWait`); `inProgress` repeated as unclear, and a
-  429 too, at least `throttledPause` on; any refusal answering a repeat after
+  429 too, at least `throttledPause` on, until the `throttledRepeats`th 429,
+  so at most three starts; any refusal answering a repeat after
   an unclear one, a 429 or 503 `Capacity` or a 403 plan `Precondition`, failing
   `Internal`. A refusal after only 429s is trusted, as they made nothing.
 

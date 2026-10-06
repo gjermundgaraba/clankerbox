@@ -26,6 +26,7 @@ import {
   Effect,
   Option,
   Redacted,
+  Ref,
   Schedule,
   Schema,
 } from "effect";
@@ -395,9 +396,9 @@ export const make = (settings: Settings) =>
      * with an `Idempotency-Key`, is repeated while its outcome is unclear, with the same request
      * and backoff, for `retryWindow` from its first unclear answer, far inside boat's 24-hour key
      * window; then it fails. Any other call is made once, and an unclear outcome fails it. A keyed
-     * call boat throttled is repeated too, `throttledPause` apart. After an unclear attempt no
-     * refusal is trusted as one: that attempt may have made a sandbox, which the refusal may be
-     * counting.
+     * call boat throttled is repeated too, `throttledPause` apart, `throttledRepeats` times at
+     * most. After an unclear attempt no refusal is trusted as one: that attempt may have made a
+     * sandbox, which the refusal may be counting.
      */
     const send = <A>(call: Call, schema: Schema.Decoder<A>): Effect.Effect<A, HostError> => {
       const once = attempt(call, request(call), schema);
@@ -429,23 +430,29 @@ export const make = (settings: Settings) =>
       /**
        * The repeats after an unclear answer at `since`: the first `firstPause` later, then with
        * the pause doubling, or `throttledPause` after a 429, while `retryWindow` hasn't passed
-       * since.
+       * since. Each 429 counts as a start, so the `throttledRepeats`th ends them: with the
+       * unclear attempt, at most three starts, as for `paced`.
        */
       const repeats = (since: number) =>
-        Effect.retry(once, {
-          while: (error) => error instanceof Unclear || error instanceof Throttled,
-          schedule: Schedule.min([
-            Schedule.exponential(Duration.times(firstPause, 2)),
-            Schedule.spaced(longestPause),
-          ]).pipe(
-            Schedule.modifyDelay(({ input, duration }) =>
-              Effect.succeed(
-                input instanceof Throttled ? Duration.max(duration, throttledPause) : duration,
+        Effect.flatMap(Ref.make(0), (throttles) =>
+          Effect.retry(once, {
+            while: (error) =>
+              error instanceof Throttled
+                ? Ref.modify(throttles, (seen) => [seen + 1 < throttledRepeats, seen + 1])
+                : error instanceof Unclear,
+            schedule: Schedule.min([
+              Schedule.exponential(Duration.times(firstPause, 2)),
+              Schedule.spaced(longestPause),
+            ]).pipe(
+              Schedule.modifyDelay(({ input, duration }) =>
+                Effect.succeed(
+                  input instanceof Throttled ? Duration.max(duration, throttledPause) : duration,
+                ),
               ),
+              Schedule.while(({ now }) => now - since < Duration.toMillis(retryWindow)),
             ),
-            Schedule.while(({ now }) => now - since < Duration.toMillis(retryWindow)),
-          ),
-        }).pipe(
+          }),
+        ).pipe(
           Effect.delay(firstPause),
           Effect.catchTags({
             Unclear: (last) =>
