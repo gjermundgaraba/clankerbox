@@ -1010,7 +1010,7 @@ test("a create boat keeps throttling past its repeats is a Capacity refusal, and
   expect(rig.guest.calls).toEqual([]);
 });
 
-test("a create, fork or restore that boat cancels, or that is gone, found no machine: a Capacity refusal", async () => {
+test("a create, fork or restore that boat cancels found no machine: a Capacity refusal; one gone after boat accepted it is a failure that keeps its sandbox ID", async () => {
   const boat = fakeBoat();
   const rig = await rigOn(boat);
   const machine = machineOn("dev");
@@ -1039,10 +1039,14 @@ test("a create, fork or restore that boat cancels, or that is gone, found no mac
 
   const gone = await fails(rig.runtime.create(other, "boat"));
 
+  // boat accepted the create, so a 404 doesn't say it made nothing: the row stays, failed, with
+  // the sandbox ID to find it by.
   expect(refused(gone)).toEqual([
-    "Capacity",
-    "boat no longer has sandbox bx_made0002 of boat_other; it found no machine",
+    "not refused",
+    "Internal",
+    "boat no longer has sandbox bx_made0002 of boat_other",
   ]);
+  expect(await nativeOf(rig, other.name)).toBe("bx_made0002");
   expect(rig.guest.calls).toEqual([]);
 });
 

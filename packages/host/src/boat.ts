@@ -12,8 +12,8 @@
  * The refusal rule covers boat's answers that leave nothing on boat (the bump-boat-api skill):
  * its `Capacity` refusals of a create, fork, resume, restore or capture (the account's limits,
  * no machine, an 11th named snapshot), its `Precondition` refusal of a type the account's plan
- * lacks, a create, fork or restore that ends `cancelled` or gone because boat found no machine,
- * and a machine to start, or a fork's or capture's source, that boat doesn't have.
+ * lacks, a create, fork or restore that ends `cancelled` because boat found no machine, and a
+ * machine to start, or a fork's or capture's source, that boat doesn't have.
  *
  * Errors and warnings are scrubbed of the API key where they leave the runtime, so nothing boat
  * or the guest echoes carries it out.
@@ -373,9 +373,11 @@ export const make = (
       );
 
     /**
-     * Waits until boat reads the sandbox running. A create, fork or restore that ends cancelled,
-     * or gone, found no machine and left nothing: a refusal. At a start, either is a failure.
-     * An `error` state is boat's failure.
+     * Waits until boat reads the sandbox running. A create, fork or restore that ends cancelled
+     * found no machine and left nothing: a refusal. One boat answers 404 for after accepting it
+     * is unclear, as boat reports a cancelled sandbox once before its 404 and nothing else says
+     * what became of it: a failure, so its row and sandbox ID stay. At a start, either is a
+     * failure. An `error` state is boat's failure.
      */
     const running = (machine: MachineRef, id: string, fresh: boolean) => {
       const read = Effect.flatMap(
@@ -385,8 +387,14 @@ export const make = (
             return Effect.succeed(found);
           }
 
-          if (Option.isNone(found) || found.value.state === "cancelled") {
-            const said = `boat ${Option.isNone(found) ? "no longer has" : "cancelled"} sandbox ${id} of ${machine.id}${Option.isSome(found) ? why(found.value) : ""}`;
+          if (Option.isNone(found)) {
+            return Effect.fail(
+              new Internal({ message: `boat no longer has sandbox ${id} of ${machine.id}` }),
+            );
+          }
+
+          if (found.value.state === "cancelled") {
+            const said = `boat cancelled sandbox ${id} of ${machine.id}${why(found.value)}`;
 
             return Effect.fail(
               fresh

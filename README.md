@@ -818,7 +818,9 @@ These are known, not guarded, and accepted:
   `limit_reached`/`member_limit_reached`/`daily_limit_reached` (and
   `rate_limited` once its repeats run out, or at once to a resume or save) and
   503 `out_of_capacity`/`no_ready_machine` are `Capacity`, as is 409
-  `named_snapshot_limit`, boat's cap on an account's named snapshots.
+  `named_snapshot_limit`, boat's cap on an account's named snapshots. So is a
+  create, fork or restore boat cancels for want of a machine; one boat answers
+  404 for after accepting it fails and keeps its row, with its sandbox ID.
 - **State** is a `GET` of each recorded sandbox, never a list; a read that
   still fails after its repeats, or takes over 7 s, reads `unknown`,
   never `missing`. The SSH endpoint changes at every start and is only

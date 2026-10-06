@@ -122,7 +122,10 @@ Each: what boat does, and what of ours depends on it.
   `Capacity` at once. A 429 to any other call is a passing limit, repeated for
   a `GET` or `DELETE` and failing `Internal` otherwise; no call sends
   `failFast`. Check live, when a run hits it: the `rate_limited` message's
-  window, and whether a refused start still counts.
+  window, and whether a refused start still counts. `running` refuses a
+  cancelled create, fork or restore as `Capacity`; a 404 after boat accepted
+  one is `Internal`, keeping the row `failed` with its sandbox ID, as a poll
+  that missed the one `cancelled` read can't tell it from a sandbox boat lost.
 - `Idempotency-Key` on create (also with `from`) and fork: the same key and body
   return the same sandbox, also once ready; another body is 409
   `idempotency_key_reused`; a retry during creation is 409
