@@ -6,7 +6,7 @@
 import { randomBytes } from "node:crypto";
 import { type HostError, Precondition, type Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Stream } from "effect";
-import { type Command, type MachineRef, Runtime } from "./runtime.ts";
+import { type Command, type MachineRef, Runtime, timeoutFail } from "./runtime.ts";
 
 /** How much of a script's output an error carries: its last lines, and at most this many characters. */
 const tailLines = 20;
@@ -63,15 +63,13 @@ const runInGuest = (
         ),
       ),
     ).pipe(
-      Effect.timeoutOrElse({
-        duration: timeout,
-        orElse: () =>
-          Effect.fail(
-            new Precondition({
-              message: `${what} ran past its ${Duration.format(timeout)} timeout; its last output:\n${tail.text()}`,
-            }),
-          ),
-      }),
+      timeoutFail(
+        timeout,
+        () =>
+          new Precondition({
+            message: `${what} ran past its ${Duration.format(timeout)} timeout; its last output:\n${tail.text()}`,
+          }),
+      ),
     );
 
     const output = tail.text();

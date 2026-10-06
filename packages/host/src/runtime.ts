@@ -71,6 +71,15 @@ export interface CheckpointRef {
  */
 export const stateReadWait = Duration.seconds(8);
 
+/**
+ * Fails with `error` once `self` runs past `duration`, interrupting it: Effect's `timeoutOrElse`
+ * for the waits whose timeout is one error.
+ */
+export const timeoutFail =
+  <E2>(duration: Duration.Input, error: () => E2) =>
+  <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E | E2, R> =>
+    Effect.timeoutOrElse(self, { duration, orElse: () => Effect.fail(error()) });
+
 /** What the runtime reports about a machine. Nothing here is stored. */
 export interface Observed {
   readonly state: MachineState;

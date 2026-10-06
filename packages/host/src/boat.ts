@@ -65,6 +65,7 @@ import {
   Refusal,
   Runtime,
   stateReadWait,
+  timeoutFail,
 } from "./runtime.ts";
 
 /**
@@ -234,18 +235,12 @@ const hostKeysTimeoutSeconds = 30;
  */
 class HostKeysUnread extends Data.TaggedError("HostKeysUnread")<{ readonly message: string }> {}
 
-/** Waits until `read` answers `Some`, polling every `pause`; `late` once `wait` has passed. */
-const poll = <A, E, R, E2, R2>(
-  read: Effect.Effect<Option.Option<A>, E, R>,
-  pause: Duration.Duration,
-  wait: Duration.Duration,
-  late: () => Effect.Effect<never, E2, R2>,
-) =>
+/** Waits until `read` answers `Some`, polling every `pause`; its caller bounds the wait. */
+const poll = <A, E, R>(read: Effect.Effect<Option.Option<A>, E, R>, pause: Duration.Duration) =>
   read.pipe(
     Effect.repeat({ until: Option.isSome, schedule: Schedule.spaced(pause) }),
     // The repeat ends only on `Some`.
     Effect.map(Option.getOrThrow),
-    Effect.timeoutOrElse({ duration: wait, orElse: late }),
   );
 
 /** The contract's errors, to rebuild one with its message scrubbed. */
@@ -399,11 +394,13 @@ export const make = (
       );
 
       return Effect.asVoid(
-        poll(read, upPause, upWait, () =>
-          Effect.fail(
-            new Internal({
-              message: `boat's sandbox ${id} of ${machine.id} didn't run within ${Duration.format(upWait)}`,
-            }),
+        poll(read, upPause).pipe(
+          timeoutFail(
+            upWait,
+            () =>
+              new Internal({
+                message: `boat's sandbox ${id} of ${machine.id} didn't run within ${Duration.format(upWait)}`,
+              }),
           ),
         ),
       );
@@ -579,15 +576,13 @@ export const make = (
     const restored = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
         const waited = yield* runToEnd(machine, id, ["/bin/sh", "-c", restoredWait]).pipe(
-          Effect.timeoutOrElse({
-            duration: markerWait,
-            orElse: () =>
-              Effect.fail(
-                new Internal({
-                  message: `${machine.id}'s /var/lib wasn't restored within ${Duration.format(markerWait)}: no ${restoredMarker}`,
-                }),
-              ),
-          }),
+          timeoutFail(
+            markerWait,
+            () =>
+              new Internal({
+                message: `${machine.id}'s /var/lib wasn't restored within ${Duration.format(markerWait)}: no ${restoredMarker}`,
+              }),
+          ),
         );
 
         if (waited.exitCode !== 0) {
@@ -632,15 +627,13 @@ export const make = (
     const sync = (machine: MachineRef, id: string, before: "fork" | "capture") =>
       Effect.gen(function* () {
         const synced = yield* runToEnd(machine, id, ["sync"]).pipe(
-          Effect.timeoutOrElse({
-            duration: syncWait,
-            orElse: () =>
-              Effect.fail(
-                new Internal({
-                  message: `sync in ${machine.id} before its ${before} ran past ${Duration.format(syncWait)}`,
-                }),
-              ),
-          }),
+          timeoutFail(
+            syncWait,
+            () =>
+              new Internal({
+                message: `sync in ${machine.id} before its ${before} ran past ${Duration.format(syncWait)}`,
+              }),
+          ),
         );
 
         if (synced.exitCode !== 0) {
@@ -682,11 +675,13 @@ export const make = (
           ),
         );
 
-        yield* poll(read, snapshotPause, snapshotWait, () =>
-          Effect.fail(
-            new Internal({
-              message: `boat completed no snapshot of ${source.id} within ${Duration.format(snapshotWait)} of its sync, so the fork wouldn't hold its latest writes`,
-            }),
+        yield* poll(read, snapshotPause).pipe(
+          timeoutFail(
+            snapshotWait,
+            () =>
+              new Internal({
+                message: `boat completed no snapshot of ${source.id} within ${Duration.format(snapshotWait)} of its sync, so the fork wouldn't hold its latest writes`,
+              }),
           ),
         );
       });
@@ -703,14 +698,18 @@ export const make = (
           ),
         );
 
-        yield* poll(read, stopPause, stopWait, () =>
-          Effect.flatMap(Ref.get(last), (seen) =>
-            Effect.fail(
-              new Internal({
-                message: `boat didn't archive ${machine.id}'s sandbox ${id} within ${Duration.format(stopWait)} of its stop: ${Option.match(seen, { onNone: () => "it is gone", onSome: (sandbox) => `it reads ${sandbox.state}${why(sandbox)}` })}`,
-              }),
-            ),
-          ),
+        yield* poll(read, stopPause).pipe(
+          Effect.timeoutOrElse({
+            duration: stopWait,
+            orElse: () =>
+              Effect.flatMap(Ref.get(last), (seen) =>
+                Effect.fail(
+                  new Internal({
+                    message: `boat didn't archive ${machine.id}'s sandbox ${id} within ${Duration.format(stopWait)} of its stop: ${Option.match(seen, { onNone: () => "it is gone", onSome: (sandbox) => `it reads ${sandbox.state}${why(sandbox)}` })}`,
+                  }),
+                ),
+              ),
+          }),
         );
       });
 
@@ -828,13 +827,14 @@ export const make = (
               Option.isNone(found) ? Option.some(true) : Option.none(),
             ),
             deletePause,
-            deleteWait,
-            () =>
-              Effect.fail(
+          ).pipe(
+            timeoutFail(
+              deleteWait,
+              () =>
                 new Internal({
                   message: `boat still has ${machine.id}'s sandbox ${id.value} ${Duration.format(deleteWait)} after its delete`,
                 }),
-              ),
+            ),
           );
         }).pipe(scrubbing),
       ),
@@ -858,13 +858,14 @@ export const make = (
               Option.filter(found, (snapshot) => snapshot.status !== "saving"),
             ),
             capturePause,
-            captureWait,
-            () =>
-              Effect.fail(
+          ).pipe(
+            timeoutFail(
+              captureWait,
+              () =>
                 new Internal({
                   message: `boat didn't save snapshot ${name} of ${machine.id} within ${Duration.format(captureWait)}`,
                 }),
-              ),
+            ),
           );
 
           if (settled.status !== "ready") {

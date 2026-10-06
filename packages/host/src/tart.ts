@@ -28,6 +28,7 @@ import {
   Refusal,
   Runtime,
   stateReadWait,
+  timeoutFail,
 } from "./runtime.ts";
 
 /**
@@ -339,15 +340,13 @@ export const make = (
           until: (answered) => answered,
           schedule: Schedule.spaced(probePause),
         }),
-        Effect.timeoutOrElse({
-          duration: bootWait,
-          orElse: () =>
-            Effect.fail(
-              new Internal({
-                message: `${machine.id}'s guest agent didn't answer tart exec within ${Duration.format(bootWait)} of its start`,
-              }),
-            ),
-        }),
+        timeoutFail(
+          bootWait,
+          () =>
+            new Internal({
+              message: `${machine.id}'s guest agent didn't answer tart exec within ${Duration.format(bootWait)} of its start`,
+            }),
+        ),
         Effect.asVoid,
       );
     };
