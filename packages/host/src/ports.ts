@@ -13,9 +13,19 @@ export interface PortRange {
 }
 
 /**
- * The machines' ports unless the host config names others: below smolvm's fork range
- * (20000–32000) and the Linux ephemeral range (32768 and up).
+ * The ranges the machines' ports stay out of, which the host config refuses a range reaching
+ * into: smolvm's own fork ports (`CLONE_PORT_FLOOR` up to `CLONE_PORT_CEILING`, excluded,
+ * S@1.22.2:src/agent/fork.rs), and the ephemeral ports of Linux (`ip_local_port_range`'s
+ * default) and macOS (`net.inet.ip.portrange.first` to `.last`), from which the kernel can hand a
+ * machine's port to an outgoing connection.
  */
+export const reservedPorts: ReadonlyArray<PortRange & { readonly owner: string }> = [
+  { first: 20_000, last: 31_999, owner: "smolvm's fork ports" },
+  { first: 32_768, last: 60_999, owner: "Linux's ephemeral ports" },
+  { first: 49_152, last: 65_535, owner: "macOS's ephemeral ports" },
+];
+
+/** The machines' ports unless the host config names others: below every reserved range. */
 export const defaultMachinePorts: PortRange = { first: 10_000, last: 19_999 };
 
 /** Whether `address:port` can be bound now. Something else listening there makes it false. */

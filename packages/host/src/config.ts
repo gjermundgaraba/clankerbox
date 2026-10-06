@@ -6,7 +6,7 @@ import { BlockList, isIP } from "node:net";
 import { totalmem } from "node:os";
 import { HostId, Invalid } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path, Schema } from "effect";
-import { defaultMachinePorts, type PortRange } from "./ports.ts";
+import { defaultMachinePorts, type PortRange, reservedPorts } from "./ports.ts";
 
 /**
  * Where a host may listen and publish: its tailnet address, or loopback for a local host. The
@@ -41,9 +41,20 @@ const Address = Schema.String.check(
 
 const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }));
 
-/** The machines' ports, both ends included. */
+/** The machines' ports, both ends included, clear of every reserved range. */
 const MachinePorts = Schema.Struct({ first: Port, last: Port }).check(
-  Schema.makeFilter(({ first, last }) => first <= last || "first at most last"),
+  Schema.makeFilter(({ first, last }) => {
+    if (first > last) {
+      return "first at most last";
+    }
+
+    const reserved = reservedPorts.find((range) => first <= range.last && last >= range.first);
+
+    return (
+      reserved === undefined ||
+      `must stay out of ${reserved.first}-${reserved.last}, ${reserved.owner}`
+    );
+  }),
 );
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));

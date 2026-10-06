@@ -378,7 +378,7 @@ def check_binary():
 
 
 def cmd_setup(bundle):
-    # Outside 10000-19999 (machine ports), smolvm's 20000-32000 and the ephemeral range.
+    # Outside 10000-19999 (machine ports), smolvm's 20000-31999 and the ephemeral range.
     port = next(p for p in range(9460, 9500) if port_free(p))
     install_bundle(bundle)
     check_binary()

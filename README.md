@@ -94,9 +94,10 @@ processes, each with its own ID, state dir and port.
   fd7a:115c:a1e0::/48) or loopback; a wildcard or public address is refused.
   `listen.port` must lie outside the machines' range.
 - `machinePorts: {first, last}`, optional, is the machines' range: the host
-  ports smolvm and Tart machines get, 10000–19999 by default. Another range
-  should stay below smolvm's fork range (20000–32000) and the ephemeral ports
-  (32768 and up on Linux).
+  ports smolvm and Tart machines get, 10000–19999 by default. The host refuses
+  a range that reaches into smolvm's own fork ports (20000–31999) or the
+  ephemeral ports of Linux (32768–60999) or macOS (49152–65535), from which
+  the kernel can give a machine's port to an outgoing connection.
 - `stateDir` is relative to the config file. It holds the database and the
   runtime's own state; one host process owns it at a time. The database
   records the host ID and runtime it was created for, and the host refuses to
@@ -587,9 +588,9 @@ Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
   relay. `clankerbox ssh` pins the reported host key.
 - **Ports** (`ports.ts`), for smolvm and Tart: one per machine, the lowest
   free port in the machines' range (`machinePorts`, 10000–19999 by default,
-  below smolvm's fork range and the Linux ephemeral range), confirmed with a
-  bind probe on the publish address and recorded with the claim; a unique
-  index backs it up. Forks and restores get their own. The host refuses an API
+  clear of smolvm's fork ports and the Linux and macOS ephemeral ports),
+  confirmed with a bind probe on the publish address and recorded with the
+  claim; a unique index backs it up. Forks and restores get their own. The host refuses an API
   port inside the range, so a tailnet policy can open the range (10000–19999
   by default) to the clients that run `clankerbox ssh`.
 - **Security:** a published port is reachable by whatever the tailnet policy

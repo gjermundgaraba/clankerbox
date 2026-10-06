@@ -226,25 +226,53 @@ test("a host's API port lies outside the machines' range, 10000-19999", async ()
 });
 
 test("machinePorts moves the machines' range, which the API's port must still lie outside", async () => {
-  const machinePorts = { first: 20_000, last: 20_099 };
+  const machinePorts = { first: 5000, last: 5099 };
   const moved = await load({ ...config, listen: { ...config.listen, port: 15_000 }, machinePorts });
 
   const inside = await load({
     ...config,
-    listen: { ...config.listen, port: 20_050 },
+    listen: { ...config.listen, port: 5050 },
     machinePorts,
   });
 
-  const backwards = await load({ ...config, machinePorts: { first: 20_099, last: 20_000 } });
+  const backwards = await load({ ...config, machinePorts: { first: 5099, last: 5000 } });
 
   expect(await Effect.runPromise(moved.loaded)).toMatchObject({
     listen: { port: 15_000 },
     machinePorts,
   });
   expect((await Effect.runPromise(Effect.flip(inside.loaded))).message).toContain(
-    "outside 20000-20099",
+    "outside 5000-5099",
   );
   expect((await Effect.runPromise(Effect.flip(backwards.loaded)))._tag).toBe("Invalid");
+});
+
+test("machinePorts stays out of smolvm's fork ports and the Linux and macOS ephemeral ports", async () => {
+  for (const [first, last] of [
+    [9000, 19_999],
+    [32_000, 32_767],
+  ] as const) {
+    const { loaded } = await load({ ...config, machinePorts: { first, last } });
+
+    await expect(Effect.runPromise(loaded), `${first}-${last}`).resolves.toMatchObject({
+      machinePorts: { first, last },
+    });
+  }
+
+  for (const [first, last, reserved] of [
+    [19_999, 20_000, "20000-31999, smolvm's fork ports"],
+    [31_999, 32_000, "20000-31999, smolvm's fork ports"],
+    [32_767, 32_768, "32768-60999, Linux's ephemeral ports"],
+    [61_000, 61_000, "49152-65535, macOS's ephemeral ports"],
+    [65_535, 65_535, "49152-65535, macOS's ephemeral ports"],
+    [1, 65_535, "20000-31999, smolvm's fork ports"],
+  ] as const) {
+    const { loaded } = await load({ ...config, machinePorts: { first, last } });
+    const error = await Effect.runPromise(Effect.flip(loaded));
+
+    expect(error._tag, `${first}-${last}`).toBe("Invalid");
+    expect(error.message, `${first}-${last}`).toContain(`must stay out of ${reserved}`);
+  }
 });
 
 test("an unknown key, another runtime or a bad host ID is Invalid", async () => {

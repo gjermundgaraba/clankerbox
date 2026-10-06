@@ -253,9 +253,12 @@ citation moved to the new tag.
   `run_from_smolmachine`, S@1.22.2:src/cli/machine.rs). Ours: after `create
   --from`, the port moves with `machine update --remove-port … -p …` before the
   first start.
-- smolvm's own fork ports come from 20000–32000 (`CLONE_PORT_FLOOR`,
-  `CLONE_PORT_CEILING`, S@1.22.2:src/agent/fork.rs). Ours: machine ports come from
-  the host config's `machinePorts`, 10000–19999 by default, below it.
+- smolvm's own fork ports come from 20000–31999: `CLONE_PORT_FLOOR` (20000) up
+  to `CLONE_PORT_CEILING` (32000), which is excluded (`alloc_free_host_port`,
+  S@1.22.2:src/agent/fork.rs). Ours: `reservedPorts` (`ports.ts`) holds that
+  range beside the Linux and macOS ephemeral ranges, and the host config
+  refuses a `machinePorts` that reaches into any of them (10000–19999 by
+  default; `config.test.ts`).
 
 **Checkpoints, forks and identity**
 
