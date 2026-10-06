@@ -802,11 +802,11 @@ These are known, not guarded, and accepted:
   covers the request; none is `Precondition`, and a type the plan lacks is
   boat's 403, a `Precondition` refusal.
 - **Retries:** create, fork and restore carry an `Idempotency-Key`
-  (`clankerbox-<host>-<instance>`). They and every `GET` are repeated while
-  their outcome is unclear, or boat rate-limits a read, for 5 minutes with
-  backoff from 1 s to 30 s, or until the wait they serve ends. A refusal that
-  answers a repeat isn't trusted as a refusal: the row stays `failed`. Resume
-  takes no key, and it and the other calls are never repeated.
+  (`clankerbox-<host>-<instance>`). They and every `GET` and `DELETE` are
+  repeated while their outcome is unclear, or boat rate-limits a read, for 5
+  minutes with backoff from 1 s to 30 s, or until the wait they serve ends. A
+  refusal that answers a repeat isn't trusted as a refusal: the row stays
+  `failed`. Resume takes no key, and it and the other calls are never repeated.
 - **Refusals** that leave nothing on boat remove the row: to a create, fork,
   resume, restore or a named snapshot's save, 429
   `limit_reached`/`rate_limited`/`daily_limit_reached` and 503

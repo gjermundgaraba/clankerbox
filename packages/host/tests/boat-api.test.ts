@@ -564,13 +564,12 @@ test("boat's refusals that leave nothing behind are Capacity, or Precondition fo
     const errors = await run(boat, (api) =>
       Effect.all([
         Effect.flip(api.stop("bx_made0001")),
-        Effect.flip(api.delete("bx_made0001")),
         Effect.flip(api.authorize("bx_made0001", "ssh-ed25519 AAAAC3Nza host")),
       ]),
     );
 
-    expect(boat.sent).toHaveLength(3);
-    expect(errors.map((error) => error._tag)).toEqual(["Internal", "Internal", "Internal"]);
+    expect(boat.sent).toHaveLength(2);
+    expect(errors.map((error) => error._tag)).toEqual(["Internal", "Internal"]);
   }
 
   // Other refusals are boat's to explain, and not the host's room.
@@ -585,6 +584,37 @@ test("boat's refusals that leave nothing behind are Capacity, or Precondition fo
     expect(boat.sent).toHaveLength(1);
     expect(error._tag).toBe("Internal");
   }
+});
+
+test("a DELETE is repeated while its outcome is unclear, and a 404 to a repeat is done", async () => {
+  for (const [path, remove] of [
+    ["/sandboxes/bx_made0001", (api: Api) => api.delete("bx_made0001")],
+    ["/named-snapshots/cbx-boat-01234567", (api: Api) => api.deleteSnapshot("cbx-boat-01234567")],
+  ] as const) {
+    const boat = fakeBoat(
+      (_sent, index) =>
+        ["drop" as const, refusal(503, "out_of_capacity"), refusal(429, "rate_limited")][index] ??
+        refusal(404, "not_found"),
+    );
+
+    const { exit } = await runTimed(boat, remove);
+
+    expect(exit).toEqual(Exit.succeed(undefined));
+    expect(boat.sent.map((sent) => [sent.method, sent.path])).toEqual(
+      Array.from({ length: 4 }, () => ["DELETE", path]),
+    );
+  }
+
+  // One that stays unclear fails at the bound, as a GET does.
+  const down = fakeBoat(() => refusal(500, "internal_error"));
+  const { exit } = await runTimed(down, (api) => Effect.flip(api.delete("bx_made0001")));
+  const error = Exit.isSuccess(exit) ? exit.value : undefined;
+
+  expect(down.sent).toHaveLength(15);
+  expect([error?._tag, error?.message]).toEqual([
+    "Internal",
+    "boat DELETE /sandboxes/bx_made0001 answered 500 internal_error: boat says internal_error (req_0123), and repeats for 5m got no clearer answer",
+  ]);
 });
 
 test("a sandbox or snapshot boat answers 404 for is none, and deleting one is done", async () => {

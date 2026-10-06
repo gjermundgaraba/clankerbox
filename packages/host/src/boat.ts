@@ -235,13 +235,31 @@ const hostKeysTimeoutSeconds = 30;
  */
 class HostKeysUnread extends Data.TaggedError("HostKeysUnread")<{ readonly message: string }> {}
 
-/** Waits until `read` answers `Some`, polling every `pause`; its caller bounds the wait. */
-const poll = <A, E, R>(read: Effect.Effect<Option.Option<A>, E, R>, pause: Duration.Duration) =>
-  read.pipe(
-    Effect.repeat({ until: Option.isSome, schedule: Schedule.spaced(pause) }),
-    // The repeat ends only on `Some`.
-    Effect.map(Option.getOrThrow),
-  );
+/**
+ * Reads every `pause` until `settled` finds what it waits for in an answer, for at most `wait`;
+ * then fails with `late`'s error, given the last answer read, if any.
+ */
+const poll = <A, B, E, R, L>(
+  read: Effect.Effect<A, E, R>,
+  settled: (answer: A) => Option.Option<B>,
+  timing: { readonly pause: Duration.Duration; readonly wait: Duration.Duration },
+  late: (last: Option.Option<A>) => L,
+): Effect.Effect<B, E | L, R> =>
+  Effect.gen(function* () {
+    const last = yield* Ref.make(Option.none<A>());
+
+    return yield* read.pipe(
+      Effect.tap((answer) => Ref.set(last, Option.some(answer))),
+      Effect.map(settled),
+      Effect.repeat({ until: Option.isSome, schedule: Schedule.spaced(timing.pause) }),
+      // The repeat ends only on `Some`.
+      Effect.map(Option.getOrThrow),
+      Effect.timeoutOrElse({
+        duration: timing.wait,
+        orElse: () => Effect.flatMap(Ref.get(last), (seen) => Effect.fail(late(seen))),
+      }),
+    );
+  });
 
 /** The contract's errors, to rebuild one with its message scrubbed. */
 const HostErrors = Schema.Union(hostErrors);
@@ -388,14 +406,14 @@ export const make = (
       );
 
       return Effect.asVoid(
-        poll(read, upPause).pipe(
-          timeoutFail(
-            upWait,
-            () =>
-              new Internal({
-                message: `boat's sandbox ${id} of ${machine.id} didn't run within ${Duration.format(upWait)}`,
-              }),
-          ),
+        poll(
+          read,
+          (found) => found,
+          { pause: upPause, wait: upWait },
+          () =>
+            new Internal({
+              message: `boat's sandbox ${id} of ${machine.id} didn't run within ${Duration.format(upWait)}`,
+            }),
         ),
       );
     };
@@ -536,31 +554,19 @@ export const make = (
      * the probe runs.
      */
     const reachable = (machine: MachineRef, id: string, argv: ReadonlyArray<string> = ["true"]) =>
-      Effect.gen(function* () {
-        const last = yield* Ref.make("");
-
-        yield* Effect.scoped(Effect.flatMap(session(machine, id, { argv }), finished)).pipe(
+      poll(
+        Effect.scoped(Effect.flatMap(session(machine, id, { argv }), finished)).pipe(
           Effect.catchTag("HostKeysUnread", (error) =>
             Effect.succeed({ exitCode: -1, output: error.message }),
           ),
-          Effect.tap(({ output }) => Ref.set(last, output)),
-          Effect.repeat({
-            until: ({ exitCode }) => exitCode === 0,
-            schedule: Schedule.spaced(sshPause),
+        ),
+        Option.liftPredicate(({ exitCode }) => exitCode === 0),
+        { pause: sshPause, wait: sshWait },
+        (last) =>
+          new Internal({
+            message: `${machine.id} didn't answer SSH within ${Duration.format(sshWait)}: ${Option.match(last, { onNone: () => "", onSome: ({ output }) => output })}`,
           }),
-          Effect.timeoutOrElse({
-            duration: sshWait,
-            orElse: () =>
-              Effect.flatMap(Ref.get(last), (output) =>
-                Effect.fail(
-                  new Internal({
-                    message: `${machine.id} didn't answer SSH within ${Duration.format(sshWait)}: ${output}`,
-                  }),
-                ),
-              ),
-          }),
-        );
-      });
+      );
 
     /**
      * Waits, in one SSH session, for boat's marker that `/var/lib` and `/var/opt` are restored,
@@ -658,54 +664,36 @@ export const make = (
 
         const noted = synced.value.lastSnapshotAttemptAt;
 
-        const read = Effect.map(api.sandbox(id), (found) =>
-          Option.filter(
-            found,
-            ({ lastSnapshotAttemptAt: attempt, lastSnapshotStatus: status }) =>
-              attempt !== undefined &&
-              attempt !== null &&
-              attempt !== noted &&
-              status === "completed",
-          ),
-        );
-
-        yield* poll(read, snapshotPause).pipe(
-          timeoutFail(
-            snapshotWait,
-            () =>
-              new Internal({
-                message: `boat completed no snapshot of ${source.id} within ${Duration.format(snapshotWait)} of its sync, so the fork wouldn't hold its latest writes`,
-              }),
-          ),
+        yield* poll(
+          api.sandbox(id),
+          (found) =>
+            Option.filter(
+              found,
+              ({ lastSnapshotAttemptAt: attempt, lastSnapshotStatus: status }) =>
+                attempt !== undefined &&
+                attempt !== null &&
+                attempt !== noted &&
+                status === "completed",
+            ),
+          { pause: snapshotPause, wait: snapshotWait },
+          () =>
+            new Internal({
+              message: `boat completed no snapshot of ${source.id} within ${Duration.format(snapshotWait)} of its sync, so the fork wouldn't hold its latest writes`,
+            }),
         );
       });
 
     /** Waits until boat reads the stopped sandbox `archived`. */
     const archived = (machine: MachineRef, id: string) =>
-      Effect.gen(function* () {
-        const last = yield* Ref.make<Option.Option<Sandbox>>(Option.none());
-
-        const read = Effect.flatMap(api.sandbox(id), (found) =>
-          Effect.as(
-            Ref.set(last, found),
-            Option.filter(found, (sandbox) => sandbox.state === "archived"),
-          ),
-        );
-
-        yield* poll(read, stopPause).pipe(
-          Effect.timeoutOrElse({
-            duration: stopWait,
-            orElse: () =>
-              Effect.flatMap(Ref.get(last), (seen) =>
-                Effect.fail(
-                  new Internal({
-                    message: `boat didn't archive ${machine.id}'s sandbox ${id} within ${Duration.format(stopWait)} of its stop: ${Option.match(seen, { onNone: () => "it is gone", onSome: (sandbox) => `it reads ${sandbox.state}${why(sandbox)}` })}`,
-                  }),
-                ),
-              ),
+      poll(
+        api.sandbox(id),
+        (found) => Option.filter(found, (sandbox) => sandbox.state === "archived"),
+        { pause: stopPause, wait: stopWait },
+        (last) =>
+          new Internal({
+            message: `boat didn't archive ${machine.id}'s sandbox ${id} within ${Duration.format(stopWait)} of its stop: ${Option.match(Option.flatten(last), { onNone: () => "it is gone", onSome: (sandbox) => `it reads ${sandbox.state}${why(sandbox)}` })}`,
           }),
-        );
-      });
+      );
 
     return {
       name: "boat",
@@ -828,18 +816,13 @@ export const make = (
           yield* api.delete(id.value);
 
           yield* poll(
-            Effect.map(api.sandbox(id.value), (found) =>
-              Option.isNone(found) ? Option.some(true) : Option.none(),
-            ),
-            deletePause,
-          ).pipe(
-            timeoutFail(
-              deleteWait,
-              () =>
-                new Internal({
-                  message: `boat still has ${machine.id}'s sandbox ${id.value} ${Duration.format(deleteWait)} after its delete`,
-                }),
-            ),
+            api.sandbox(id.value),
+            Option.liftPredicate(Option.isNone),
+            { pause: deletePause, wait: deleteWait },
+            () =>
+              new Internal({
+                message: `boat still has ${machine.id}'s sandbox ${id.value} ${Duration.format(deleteWait)} after its delete`,
+              }),
           );
         }).pipe(scrubbing),
       ),
@@ -859,18 +842,13 @@ export const make = (
           yield* refusing(api.saveSnapshot(source.id, name));
 
           const settled = yield* poll(
-            Effect.map(api.snapshot(name), (found) =>
-              Option.filter(found, (snapshot) => snapshot.status !== "saving"),
-            ),
-            capturePause,
-          ).pipe(
-            timeoutFail(
-              captureWait,
-              () =>
-                new Internal({
-                  message: `boat didn't save snapshot ${name} of ${machine.id} within ${Duration.format(captureWait)}`,
-                }),
-            ),
+            api.snapshot(name),
+            (found) => Option.filter(found, (snapshot) => snapshot.status !== "saving"),
+            { pause: capturePause, wait: captureWait },
+            () =>
+              new Internal({
+                message: `boat didn't save snapshot ${name} of ${machine.id} within ${Duration.format(captureWait)}`,
+              }),
           );
 
           if (settled.status !== "ready") {

@@ -119,12 +119,12 @@ Each: what boat does, and what of ours depends on it.
   `idempotency_in_progress`. Keys last 24 h, and a create that failed before
   its sandbox existed releases its key within about 2 minutes. Ours:
   `idempotencyKey` (`clankerbox-<host>-<instance>`), the unclear-outcome retry
-  of every call safe to repeat, every `GET` and every keyed call (`retryWindow`
-  5 minutes, `firstPause` to `longestPause`, `attemptTimeout`), cut short by a
-  caller's own wait, and a state read by `machineReadWait` (7 s, under the
-  core's `stateReadWait`); `inProgress` repeated as
-  unclear; any refusal answering a repeat, a 429 or 503 `Capacity` or a 403
-  plan `Precondition`, failing `Internal`.
+  of every call safe to repeat, every `GET`, `DELETE` and keyed call
+  (`retryWindow` 5 minutes, `firstPause` to `longestPause`, `attemptTimeout`),
+  cut short by a caller's own wait, and a state read by `machineReadWait` (7 s,
+  under the core's `stateReadWait`); `inProgress` repeated as unclear; any
+  refusal answering a repeat, a 429 or 503 `Capacity` or a 403 plan
+  `Precondition`, failing `Internal`.
 
 **Access and exec** (D, O)
 
@@ -200,8 +200,9 @@ Each: what boat does, and what of ours depends on it.
 - `DELETE` needs `X-Ascii-Confirm-Delete: <id>`, returns 202 with an operation,
   and the sandbox answers 404 within a second; the operation then purges data
   for hours; a repeated DELETE returns the same operation. Named snapshots
-  survive their sandbox's deletion. Ours: delete polls for 404 (`deleteWait`)
-  and never waits for the purge.
+  survive their sandbox's deletion. Ours: an unclear DELETE is repeated, and a
+  404 to it is done; delete polls for 404 (`deleteWait`) and never waits for
+  the purge.
 
 **The guest image** (O; boat's, not pinned)
 

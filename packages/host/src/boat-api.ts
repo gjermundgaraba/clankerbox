@@ -1,7 +1,7 @@
 /**
  * boat's HTTP API v1, as the boat runtime calls it: Schemas for exactly the endpoints it uses,
  * boat's refusals mapped to the contract's errors, and the bounded retry of the calls that are safe
- * to repeat: every `GET`, and every call that carries an `Idempotency-Key`. Shapes follow
+ * to repeat: every `GET` and `DELETE`, and every call that carries an `Idempotency-Key`. Shapes follow
  * `docs.boat.dev/openapi/boat-v1.yaml` (sha256
  * `79aa87e21849194635cf057293d6934638bab1aeee1c1d4857aa1920e34cf210`, fetched 2026-10-05) and what
  * the trial account showed; the bump-boat-api skill lists the claims they rest on.
@@ -20,12 +20,12 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Array as Arr,
+  Clock,
   Data,
   Duration,
   Effect,
   Option,
   Redacted,
-  Ref,
   Schedule,
   Schema,
 } from "effect";
@@ -360,46 +360,37 @@ export const make = (settings: Settings) =>
       );
 
     /**
-     * A call, answered. One safe to repeat, a `GET` or one with an `Idempotency-Key`, is repeated
-     * while its outcome is unclear, with the same request and backoff, for `retryWindow` from its
-     * first unclear answer, far inside boat's 24-hour key window; then it fails. Any other call is
-     * made once, and an unclear outcome fails it. After an unclear attempt no refusal is trusted
-     * as one: that attempt may have made a sandbox, which the refusal may be counting.
+     * A call, answered. One safe to repeat, a `GET`, a `DELETE` (a 404 counts as done) or one
+     * with an `Idempotency-Key`, is repeated while its outcome is unclear, with the same request
+     * and backoff, for `retryWindow` from its first unclear answer, far inside boat's 24-hour key
+     * window; then it fails. Any other call is made once, and an unclear outcome fails it. After
+     * an unclear attempt no refusal is trusted as one: that attempt may have made a sandbox,
+     * which the refusal may be counting.
      */
-    const send = <A>(call: Call, schema: Schema.Decoder<A>): Effect.Effect<A, HostError> =>
-      Effect.gen(function* () {
-        const built = request(call);
+    const send = <A>(call: Call, schema: Schema.Decoder<A>): Effect.Effect<A, HostError> => {
+      const once = attempt(call, request(call), schema);
 
-        if (call.method !== "GET" && call.key === undefined) {
-          return yield* Effect.catchTag(attempt(call, built, schema), "Unclear", (unclear) =>
-            Effect.fail(new Internal({ message: unclear.message })),
-          );
-        }
-
-        const unclear = yield* Ref.make(false);
-
-        const distrusted = (refused: Capacity | Precondition) =>
-          Effect.flatMap(Ref.get(unclear), (repeated) =>
-            Effect.fail(
-              repeated
-                ? new Internal({
-                    message: `${refused.message}, after an attempt whose outcome is unknown, so a sandbox may exist`,
-                  })
-                : refused,
-            ),
-          );
-
-        return yield* attempt(call, built, schema).pipe(
-          Effect.tapError((error) =>
-            error instanceof Unclear ? Ref.set(unclear, true) : Effect.void,
-          ),
-          Effect.retry({
-            while: (error) => error instanceof Unclear,
-            schedule: Schedule.min([
-              Schedule.exponential(firstPause),
-              Schedule.spaced(longestPause),
-            ]).pipe(Schedule.upTo({ duration: retryWindow })),
+      const distrusted = (refused: Capacity | Precondition) =>
+        Effect.fail(
+          new Internal({
+            message: `${refused.message}, after an attempt whose outcome is unknown, so a sandbox may exist`,
           }),
+        );
+
+      /**
+       * The repeats after an unclear answer at `since`: the first `firstPause` later, then with
+       * the pause doubling, while `retryWindow` hasn't passed since. Their refusals aren't
+       * trusted.
+       */
+      const repeats = (since: number) =>
+        Effect.retry(once, {
+          while: (error) => error instanceof Unclear,
+          schedule: Schedule.min([
+            Schedule.exponential(Duration.times(firstPause, 2)),
+            Schedule.spaced(longestPause),
+          ]).pipe(Schedule.while(({ now }) => now - since < Duration.toMillis(retryWindow))),
+        }).pipe(
+          Effect.delay(firstPause),
           Effect.catchTags({
             Unclear: (last) =>
               Effect.fail(
@@ -411,7 +402,16 @@ export const make = (settings: Settings) =>
             Precondition: distrusted,
           }),
         );
-      });
+
+      const repeatable =
+        call.method === "GET" || call.method === "DELETE" || call.key !== undefined;
+
+      return Effect.catchTag(once, "Unclear", (first) =>
+        repeatable
+          ? Effect.flatMap(Clock.currentTimeMillis, repeats)
+          : Effect.fail(new Internal({ message: first.message })),
+      );
+    };
 
     /** A sandbox, or none once boat answers 404. */
     const sandbox = (id: string) =>
