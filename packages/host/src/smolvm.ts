@@ -19,13 +19,14 @@ import { checkRamBudget } from "./ram-budget.ts";
 import {
   type CheckpointRef,
   type Interface,
+  machineReadWait,
   type MachineRef,
   type MachineState,
   missing,
   type Observed,
   Refusal,
   Runtime,
-  stateReadWait,
+  timeoutFail,
 } from "./runtime.ts";
 
 /**
@@ -67,7 +68,7 @@ export const nativeName = (resource: Pick<MachineRef, "name" | "instance">): str
 /**
  * How many `machine status` processes an `observe` runs at once, so a list or a RAM budget check
  * on a host with many machines doesn't start them all together. A machine's wait for its turn
- * counts toward its `stateReadWait`, so a list answers in time however many machines wait.
+ * counts toward its `machineReadWait`, so a list answers in time however many machines wait.
  */
 const observeConcurrency = 8;
 
@@ -240,7 +241,8 @@ export const make = (
 
     /**
      * Each machine's state, read `observeConcurrency` at a time; `unknown` when smolvm can't
-     * read it, or doesn't answer within `stateReadWait` of the observe's start.
+     * read it, or doesn't answer within `machineReadWait` of the observe's start, so one hung
+     * status makes only its own machine `unknown`, within the core's `stateReadWait`.
      */
     const observe = (machines: ReadonlyArray<MachineRef>) =>
       Effect.flatMap(Semaphore.make(observeConcurrency), (turns) =>
@@ -250,15 +252,13 @@ export const make = (
             turns
               .withPermits(1)(state(nativeName(machine)))
               .pipe(
-                Effect.timeoutOrElse({
-                  duration: stateReadWait,
-                  orElse: () =>
-                    Effect.fail(
-                      new Internal({
-                        message: `smolvm machine status ${nativeName(machine)} didn't answer within ${Duration.format(stateReadWait)}`,
-                      }),
-                    ),
-                }),
+                timeoutFail(
+                  machineReadWait,
+                  () =>
+                    new Internal({
+                      message: `smolvm machine status ${nativeName(machine)} didn't answer within ${Duration.format(machineReadWait)}`,
+                    }),
+                ),
                 Effect.map((observed): Observed => ({ state: observed })),
                 Effect.catch((error) =>
                   Effect.as(

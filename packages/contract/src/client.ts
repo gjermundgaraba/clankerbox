@@ -9,7 +9,7 @@ import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
 import { Context, Duration, Effect, Fiber, Match, Predicate, Result, Schema } from "effect";
 import type { HttpClient, HttpClientError } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
-import { CheckpointGroup, HostGroup, Http, MachineGroup } from "./api.ts";
+import { CheckpointGroup, HostGroup, Http, MachineGroup, readTimeout } from "./api.ts";
 import {
   type ClankerboxError,
   type HostError,
@@ -57,13 +57,12 @@ export interface Options {
    */
   readonly timeout?: Duration.Duration | undefined;
   /**
-   * How long to wait for a read's reply, 10 s by default. A fan-out bounds each host's request
-   * on its own, so a host that doesn't answer in time is named among the unreachable.
+   * How long to wait for a read's reply, `readTimeout` (10 s) by default. A fan-out bounds each
+   * host's request on its own, so a host that doesn't answer in time is named among the
+   * unreachable.
    */
   readonly readTimeout?: Duration.Duration | undefined;
 }
-
-const defaultReadTimeout = Duration.seconds(10);
 
 export interface CreateOptions {
   /** The host to create on, normally a profile's `host`. A full ID in `target` wins over it. */
@@ -273,7 +272,7 @@ export const make = (
 
     /** How long a call waits for its reply, by its action's access. */
     const bounds = {
-      read: options?.readTimeout ?? defaultReadTimeout,
+      read: options?.readTimeout ?? readTimeout,
       write: options?.timeout,
     } satisfies Record<Action.Access, Duration.Duration | undefined>;
 

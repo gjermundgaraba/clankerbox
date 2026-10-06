@@ -5,7 +5,7 @@
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { Schema } from "effect";
+import { Duration, Schema } from "effect";
 import type { HttpApiError } from "effect/http-api";
 import { hostErrors, Internal, Invalid } from "./errors.ts";
 import { Id, Name } from "./ids.ts";
@@ -28,6 +28,12 @@ const schemaError: ActionGroup.SchemaErrorPolicy<typeof Invalid, typeof Internal
     make: () => new Internal({ message: "the host's reply did not encode" }),
   },
 };
+
+/**
+ * How long a client waits for a read's reply from one host, unless it sets its own. A host
+ * bounds its own reads of runtime state under it, so a list answers in time.
+ */
+export const readTimeout = Duration.seconds(10);
 
 const ById = Schema.Struct({ id: Id });
 

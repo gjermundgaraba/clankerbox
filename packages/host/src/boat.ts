@@ -57,6 +57,7 @@ import {
   type Command,
   type Execution,
   type Interface,
+  machineReadWait,
   type MachineRef,
   type MachineState,
   missing,
@@ -64,7 +65,6 @@ import {
   type RecordNative,
   Refusal,
   Runtime,
-  stateReadWait,
   timeoutFail,
 } from "./runtime.ts";
 
@@ -718,8 +718,9 @@ export const make = (
        * A `GET` of each recorded sandbox, all at once: a host holds few machines, and boat limits
        * starts, not reads; a list would also hold the operator's own sandboxes, a page at a time.
        * A machine whose sandbox boat answers 404 for, or has none recorded, is missing, and one
-       * whose read fails, its repeats included, or takes over `stateReadWait`, is unknown: a
-       * few quick repeats ride out a blip, and a list still answers within the client's bound.
+       * whose read fails, its repeats included, or takes over `machineReadWait`, is unknown: a
+       * few quick repeats ride out a blip, and one hung read makes only its own machine unknown,
+       * within the core's `stateReadWait`.
        */
       observe: Effect.fn("Boat.observe")((machines) =>
         Effect.forEach(
@@ -729,15 +730,13 @@ export const make = (
               onNone: () => Effect.succeed({ state: "missing" }),
               onSome: (id) =>
                 api.sandbox(id).pipe(
-                  Effect.timeoutOrElse({
-                    duration: stateReadWait,
-                    orElse: () =>
-                      Effect.fail(
-                        new Internal({
-                          message: `boat answered no read of sandbox ${id} within ${Duration.format(stateReadWait)}`,
-                        }),
-                      ),
-                  }),
+                  timeoutFail(
+                    machineReadWait,
+                    () =>
+                      new Internal({
+                        message: `boat answered no read of sandbox ${id} within ${Duration.format(machineReadWait)}`,
+                      }),
+                  ),
                   Effect.map((found) =>
                     Option.match(found, {
                       onNone: (): Observed => ({ state: "missing" }),

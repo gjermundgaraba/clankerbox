@@ -1,12 +1,16 @@
 import { readFile, rm, stat } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Capacity, Conflict, type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Fiber, Option, Result } from "effect";
+import { Duration, Effect, Fiber, Option, Result } from "effect";
+import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
+import * as Machines from "../src/machines.ts";
 import { Refusal } from "../src/runtime.ts";
+import * as Store from "../src/store.ts";
 import { scratch } from "./scratch.ts";
-import { cleanup, request, startHost, type TestHost } from "./support.ts";
+import { cleanup, hostConfig, request, startHost, type TestHost } from "./support.ts";
 
 const owned: Array<string> = [];
 
@@ -187,6 +191,72 @@ test("a read of every machine that fails reads them all unknown, and never fails
     ["linux_b", "unknown"],
   ]);
   expect(await linux.run(linux.machines.get("linux_b"))).toMatchObject({ state: "running" });
+});
+
+/**
+ * Runs `use` on the host's actions, built again over its store and fake on a test clock, and
+ * moves the clock a second at a time until `use` ends: its result, and how long it waited.
+ */
+const onTestClock = <A>(
+  linux: TestHost,
+  use: (machines: Machines.Interface) => Effect.Effect<A, HostError>,
+) =>
+  linux.run(
+    Effect.gen(function* () {
+      const machines = yield* Machines.make(hostConfig(linux.stateDir, ports)).pipe(
+        Effect.provideService(Store.Store, linux.store),
+        Effect.provide(linux.fake.layer),
+      );
+
+      const fiber = yield* Effect.forkChild(Effect.result(use(machines)));
+      let waited = Duration.zero;
+
+      while (fiber.pollUnsafe() === undefined) {
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
+        yield* TestClock.adjust(Duration.seconds(1));
+        waited = Duration.sum(waited, Duration.seconds(1));
+      }
+
+      return { result: yield* Fiber.join(fiber), waited: Duration.format(waited) };
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.provide(NodeServices.layer)),
+  );
+
+test("a read of runtime state that doesn't answer within 8 s reads every machine unknown", async () => {
+  const linux = await host();
+
+  await linux.run(linux.machines.create(request("dev")));
+  linux.fake.hangNextObserve();
+
+  const { result, waited } = await onTestClock(linux, (machines) => machines.get("linux_dev"));
+
+  expect(waited).toBe("8s");
+  expect(Result.getOrThrow(result)).toMatchObject({
+    state: "unknown",
+    action: { name: "create", status: "done" },
+  });
+});
+
+test("an admit whose reads don't answer within 8 s fails the check with Internal, writing nothing", async () => {
+  const linux = await host();
+
+  await linux.run(linux.machines.create(request("dev")));
+  await linux.run(linux.machines.stop("linux_dev"));
+  linux.fake.calls.length = 0;
+
+  const { release } = linux.fake.holdNext("admit");
+  const { result, waited } = await onTestClock(linux, (machines) => machines.start("linux_dev"));
+
+  release();
+
+  const [row] = await rows(linux);
+
+  expect(waited).toBe("8s");
+  expect(Result.isFailure(result) && [result.failure._tag, result.failure.message]).toEqual([
+    "Internal",
+    "start linux_dev: the smolvm runtime's admission check didn't answer within 8s",
+  ]);
+  expect(row?.action).toEqual({ name: "stop", status: "done" });
+  expect(linux.fake.calls).toEqual(["admit linux_dev"]);
 });
 
 test("one machine the runtime can't read is unknown, and the list still reads the rest", async () => {

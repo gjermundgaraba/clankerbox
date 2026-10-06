@@ -101,8 +101,9 @@ Each: what Tart does, where, and what of ours depends on it.
   `stopped` (`VMDirectory.State`, VMDirectory.swift), from the VM's lock,
   which `tart run` holds. It sees one Tart home only. Ours: `VmState`,
   `decodeList`, `stateOf` (suspended reads stopped), the two-VM count, and
-  `observe`'s `tart list` bounded by `stateReadWait` (8 s, under the client's
-  10 s read bound), past which every machine reads `unknown`.
+  `observe`'s `tart list`, bounded by the core's `stateReadWait` (8 s), past
+  which every machine reads `unknown`; the two-VM count's `tart list` is
+  bounded by the same, past which the boot fails, writing nothing.
 - `tart stop` sends SIGINT to `tart run`, waits up to `--timeout` (default 30 s)
   for the lock to clear, then SIGKILLs it; a stopped VM exits 2 (`stopRunning`,
   T@2.40.1:Commands/Stop.swift). Its return doesn't mean the VM is gone: once

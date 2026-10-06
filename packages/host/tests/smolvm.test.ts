@@ -294,7 +294,7 @@ const timed = <A, E>(effect: Effect.Effect<A, E>) =>
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-test("observe reads a status that doesn't answer unknown within 8 s, its wait for a turn included", async () => {
+test("observe reads a status that doesn't answer unknown within 7 s, its wait for a turn included, and only its own machine", async () => {
   const spawner = scripted((call) =>
     call.args[0] === "machine"
       ? call.args[3] === "two-01234567"
@@ -317,7 +317,7 @@ test("observe reads a status that doesn't answer unknown within 8 s, its wait fo
       .pipe(Effect.provide(Logger.layer([]))),
   );
 
-  expect(Duration.format(waited)).toBe("8s");
+  expect(Duration.format(waited)).toBe("7s");
   expect(value).toEqual([{ state: "stopped" }, ...hanging.map(() => ({ state: "unknown" }))]);
 });
 

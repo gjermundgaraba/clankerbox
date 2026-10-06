@@ -8,17 +8,34 @@ import {
   type CreateRequest,
   formatId,
   type HostError,
+  Internal,
   type Machine,
   Precondition,
   type Setup,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Array as Arr, Context, DateTime, Effect, Layer, type Scope, Semaphore } from "effect";
+import {
+  Array as Arr,
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  Layer,
+  type Scope,
+  Semaphore,
+} from "effect";
 import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./actions.ts";
 import type { HostConfig } from "./config.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
 import { pickPort } from "./ports.ts";
-import { type MachineRef, type Observed, type Refusal, Runtime } from "./runtime.ts";
+import {
+  type MachineRef,
+  type Observed,
+  type Refusal,
+  Runtime,
+  stateReadWait,
+  timeoutFail,
+} from "./runtime.ts";
 import { type MachineRecord, type NewMachine, type NewRow, Store } from "./store.ts";
 
 export interface Interface {
@@ -137,10 +154,18 @@ export const make = (
 
     /**
      * The machines' states, read from the runtime. A read that fails as a whole, as Tart's one
-     * `tart list` can, reads every machine `unknown`: a state read never fails an action.
+     * `tart list` can, or takes over `stateReadWait`, reads every machine `unknown`: a state read
+     * never fails an action.
      */
     const observeAll = (records: ReadonlyArray<MachineRecord>) =>
       runtime.observe(records.map(ref)).pipe(
+        timeoutFail(
+          stateReadWait,
+          () =>
+            new Internal({
+              message: `the ${runtime.name} runtime didn't answer within ${Duration.format(stateReadWait)}`,
+            }),
+        ),
         Effect.catch((error) =>
           Effect.as(
             Effect.logWarning(`couldn't read the machines' states: ${error.message}`),
@@ -207,14 +232,28 @@ export const make = (
         action.name === "start" ||
         (action.name === "fork" && !made));
 
-    /** Step 3 for an action that boots a machine: the runtime's own checks, over every row. */
+    /**
+     * Step 3 for an action that boots a machine: the runtime's own checks, over every row. Their
+     * reads of runtime state are bounded like any: a check past `stateReadWait` fails, so it
+     * never holds the admission permit longer, and writes nothing.
+     */
     const admit = (action: ActionName, machine: NewMachine) =>
       Effect.flatMap(store.list, (records) =>
-        runtime.admit({
-          action,
-          machine: ref(machine),
-          machines: records.map((held) => ({ machine: ref(held), booting: boots(held) })),
-        }),
+        runtime
+          .admit({
+            action,
+            machine: ref(machine),
+            machines: records.map((held) => ({ machine: ref(held), booting: boots(held) })),
+          })
+          .pipe(
+            timeoutFail(
+              stateReadWait,
+              () =>
+                new Internal({
+                  message: `${action} ${idOf(machine.name)}: the ${runtime.name} runtime's admission check didn't answer within ${Duration.format(stateReadWait)}`,
+                }),
+            ),
+          ),
       );
 
     /**

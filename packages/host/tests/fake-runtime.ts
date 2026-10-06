@@ -108,7 +108,8 @@ export const fakeRuntime = (options: FakeOptions) => {
   const observed: Array<ReadonlyArray<string>> = [];
   const injections = new Map<Operation, Array<Injection>>();
   const refusals = new Map<Refusable, Array<Refusal>>();
-  const observeFailures: Array<HostError> = [];
+  /** What the next `observe` calls do instead of reading: fail as a whole, or never answer. */
+  const observeFailures: Array<HostError | "hang"> = [];
   const publishAddress = "publishAddress" in options ? options.publishAddress : "127.0.0.1";
   let stubs: string | undefined;
 
@@ -155,12 +156,19 @@ export const fakeRuntime = (options: FakeOptions) => {
       return refs.map((machine) => ({ state: machines.get(machine.name)?.state ?? "missing" }));
     });
 
-  /** `states`, or the read of every machine failing as a whole, as Tart's `tart list` can. */
+  /**
+   * `states`, or the read of every machine failing as a whole, or never answering, as Tart's
+   * `tart list` can.
+   */
   const observe = (refs: ReadonlyArray<MachineRef>) =>
     Effect.suspend(() => {
-      const error = observeFailures.shift();
+      const failure = observeFailures.shift();
 
-      return error === undefined ? states(refs) : Effect.fail(error);
+      if (failure === undefined) {
+        return states(refs);
+      }
+
+      return failure === "hang" ? Effect.never : Effect.fail(failure);
     });
 
   /** Where a checkpoint's copy of its machine's root is kept. */
@@ -373,6 +381,10 @@ export const fakeRuntime = (options: FakeOptions) => {
     /** Fails the next `observe` as a whole, without reading any machine. */
     failNextObserve: (error: HostError) => {
       observeFailures.push(error);
+    },
+    /** Makes the next `observe` never answer, without reading any machine. */
+    hangNextObserve: () => {
+      observeFailures.push("hang");
     },
     refuseNext: (operation: Refusable, refusal: Refusal) => {
       refusals.set(operation, [...(refusals.get(operation) ?? []), refusal]);

@@ -13,6 +13,7 @@ import {
   type Internal,
   type Machine,
   Precondition,
+  readTimeout,
   type Runtime as RuntimeName,
   type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -66,11 +67,19 @@ export interface CheckpointRef {
 }
 
 /**
- * How long a runtime's read of one machine's state may take, its repeats and its wait for a turn
- * included, before the machine reads `unknown`: under the client's 10 s bound on a read
- * (`readTimeout`), so a list answers in time however slow the runtime is.
+ * How long the core's read of runtime state may take: each `observe`, and each `admit`, whose
+ * reads decide it. An `observe` past it reads every machine `unknown`, and an `admit` past it
+ * fails the check, so a list answers within the client's `readTimeout` however slow the
+ * runtime is.
  */
-export const stateReadWait = Duration.seconds(8);
+export const stateReadWait = Duration.subtract(readTimeout, Duration.seconds(2));
+
+/**
+ * How long a runtime that reads each machine on its own lets one read take, its repeats and its
+ * wait for a turn included, before that machine reads `unknown`: under `stateReadWait`, so one
+ * hung read makes only its own machine `unknown`.
+ */
+export const machineReadWait = Duration.subtract(stateReadWait, Duration.seconds(1));
 
 /**
  * Fails with `error` once `self` runs past `duration`, interrupting it: Effect's `timeoutOrElse`
@@ -169,17 +178,18 @@ export interface Interface {
    * Reads the machines' states in as few native calls as the runtime allows: one `tart list` on
    * Tart; smolvm reads each machine on its own, and boat each recorded sandbox, all at once. A
    * machine the runtime doesn't know is `missing`, not an error, and one whose read fails, or takes
-   * over `stateReadWait`, is `unknown`. Only a read of every machine at once may fail, and the core
-   * reads every machine `unknown` then. Its contract is one state per machine, in their order: a
-   * runtime builds its answer by mapping over `machines`, and callers rely on that without
-   * checking.
+   * over `machineReadWait`, is `unknown`. Only a read of every machine at once may fail, and the
+   * core reads every machine `unknown` then, as it does when the whole read takes over
+   * `stateReadWait`. Its contract is one state per machine, in their order: a runtime builds its
+   * answer by mapping over `machines`, and callers rely on that without checking.
    */
   readonly observe: (
     machines: ReadonlyArray<MachineRef>,
   ) => Effect.Effect<ReadonlyArray<Observed>, HostError>;
   /**
    * Step 3 of an action that boots a machine: the runtime's capacity checks, such as the smolvm
-   * host's RAM budget or Tart's two-VM count. A failure here writes nothing. Called for every
+   * host's RAM budget or Tart's two-VM count. A failure here writes nothing, and so does one
+   * that takes over `stateReadWait`, which the core fails as `Internal`. Called for every
    * `start`, whatever the machine's state: a running target counts once, as it already runs.
    */
   readonly admit: (activation: Activation) => Effect.Effect<void, HostError>;

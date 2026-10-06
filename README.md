@@ -334,8 +334,9 @@ program.pipe(
   never loads `@effect/platform-node`: `Client.make` takes the app's own
   `HttpClient` instead; one over `fetch` gives up on a reply after 300 s, and
   `NodeHttpClient.layerUndici` after an hour.
-- A read gives up on a host after 10 s (`readTimeout`); a mutation waits for
-  as long as it runs, unless `timeout` is set.
+- A read gives up on a host after 10 s (the exported `readTimeout`, which the
+  host's own read bounds derive from); a mutation waits for as long as it
+  runs, unless `timeout` is set.
 - `readSetup` sends a file as its text and packs a directory into one
   self-extracting script (`packRecipe`). `loadProfile` reads a profile file.
 - Every call but the lists fails with one of seven tagged errors
@@ -375,10 +376,13 @@ every bump of it:
   machine and checkpoint rows, and their ports. Machine state (`running`,
   `stopped`, `missing`) is always read from the runtime, never stored; a
   machine whose state couldn't be read is `unknown`, so a failed read never
-  fails a list or the action it follows. Each runtime gives up on a machine's
-  state after 8 s (`stateReadWait`), under the client's 10 s bound on a read,
-  so a list answers however slow the runtime is. A machine and its
-  checkpoints stay on the host that made them.
+  fails a list or the action it follows. The host gives up on a read of
+  runtime state after 8 s (`stateReadWait`, 2 s under the SDK's 10 s
+  `readTimeout`), so a list answers however slow the runtime is: every machine
+  it read reads `unknown`, and a step-3 check (`admit`) fails with `Internal`,
+  writing nothing. A runtime that reads each machine on its own gives up on
+  one after 7 s (`machineReadWait`), so one hung read leaves only its machine
+  `unknown`. A machine and its checkpoints stay on the host that made them.
 - **One runtime per host process**, behind the `Runtime` interface
   (`runtime.ts`), picked by the config's `runtime` from the registry in
   `runtimes.ts`. State, claims, setup and preparation are shared; fork,
@@ -700,7 +704,7 @@ These are known, not guarded, and accepted:
   builds its host-side image seed only at the default 20 GiB; other sizes pull
   the image in the guest on first start.
 - **State** comes from `machine status --name X --json`, at most 8 at once;
-  a machine whose status hasn't answered 8 s after the read began, its wait
+  a machine whose status hasn't answered 7 s after the read began, its wait
   for a turn included, reads `unknown`. smolvm's exit codes are trusted: no
   polling around calls.
 - **RAM budget** (`ram-budget.ts`): every start and every new machine checks
@@ -754,7 +758,8 @@ These are known, not guarded, and accepted:
   of a stopped disk is consistent, while one of a running VM's disk is
   crash-consistent at best. Checkpoints are `disk` clones.
 - **State** is one `tart list` for every machine; one that doesn't answer
-  within 8 s reads them all `unknown`.
+  within the host's 8 s reads them all `unknown`, and fails a boot's two-VM
+  count.
 - **Capacity:** Apple runs two macOS VMs per Mac, the operator's included. Each
   boot counts the VMs `tart list` reads running plus machines being booted, the
   target included, each VM once, and refuses with `Capacity` past two; a start
@@ -804,7 +809,7 @@ These are known, not guarded, and accepted:
   `out_of_capacity`/`no_ready_machine` are `Capacity`, as is 409
   `named_snapshot_limit`, boat's cap on an account's named snapshots.
 - **State** is a `GET` of each recorded sandbox, never a list; a read that
-  still fails after its repeats, or takes over 8 s, reads `unknown`,
+  still fails after its repeats, or takes over 7 s, reads `unknown`,
   never `missing`. The SSH endpoint changes at every start and is only
   reported for a running machine.
 - **Ready:** after a fork, a restore or any start the host waits for boat's

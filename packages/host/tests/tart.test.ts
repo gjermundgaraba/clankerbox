@@ -1153,33 +1153,6 @@ test("delete works for a machine whose port startup couldn't listen on", async (
   }
 });
 
-test("observe fails when tart list doesn't answer within 8 s, so the core reads every machine unknown", async () => {
-  const { mac, runtime } = await runtimeOn();
-  const machine = await machineOn("dev");
-
-  mac.hooks.list = () => ({ hangs: true });
-
-  const observing = Effect.gen(function* () {
-    const fiber = yield* Effect.forkChild(Effect.flip(runtime.observe([machine])));
-    let waited = Duration.zero;
-
-    while (fiber.pollUnsafe() === undefined) {
-      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
-      yield* TestClock.adjust(Duration.seconds(1));
-      waited = Duration.sum(waited, Duration.seconds(1));
-    }
-
-    return [yield* Fiber.join(fiber), waited] as const;
-  });
-
-  const [error, waited] = await Effect.runPromise(
-    observing.pipe(Effect.provide(TestClock.layer())),
-  );
-
-  expect(error.message).toBe("tart list didn't answer within 8s");
-  expect(Duration.format(waited)).toBe("8s");
-});
-
 test("observe reads every machine's state with one tart list", async () => {
   const { mac, runtime } = await runtimeOn();
 
