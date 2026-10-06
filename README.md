@@ -749,6 +749,8 @@ These are known, not guarded, and accepted:
   gateway DNS, so setup sets public resolvers. Install Softnet SUID root
   before the host starts (the bump-tart skill says why):
   `sudo install -o root -g wheel -m 4755 softnet /usr/local/bin/softnet`.
+  Tart looks for it on a fixed `PATH` without `/opt/homebrew/bin`, so
+  Homebrew's Softnet, which isn't SUID root, is never used.
 - **Jobs** run `tart run --no-graphics --net-softnet-block=@host <vm>` with a
   fixed environment, the same as every tart call's (`environment` in
   `tart.ts`; the bump-tart skill). Each boot waits up to three minutes for

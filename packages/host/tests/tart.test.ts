@@ -356,14 +356,14 @@ test("every tart call runs the configured binary in the environment the VM jobs 
   for (const call of mac.spawner.calls) {
     expect(call.file).toBe(binary);
     expect(call.env).toEqual({
-      PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
       HOME: homedir(),
       TART_HOME: "/Users/operator/.tart-test",
     });
   }
 
   expect(environment({ tartHome: undefined })).toEqual({
-    PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     HOME: homedir(),
     TART_HOME: undefined,
   });

@@ -168,8 +168,8 @@ Each: what Tart does, where, and what of ours depends on it.
   gets the user's `HOME`.
 - Ours: every tart call and every VM job runs with one environment
   (`environment` in `tart.ts`, which README's Tart notes point to): a fixed
-  `PATH` (`searchPath`, holding `/usr/local/bin` for Softnet and
-  `/opt/homebrew/bin`), the user's `HOME`, and the host's `TART_HOME` if set,
+  `PATH` (`searchPath`, holding `/usr/local/bin` for Softnet but not
+  `/opt/homebrew/bin`, whose Softnet isn't SUID root), the user's `HOME`, and the host's `TART_HOME` if set,
   so a job's `tart run` finds the VM the host made, in the host's Tart home.
 
 **The Cirrus base** (re-check when the base's digest changes)
