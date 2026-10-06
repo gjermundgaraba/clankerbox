@@ -207,7 +207,15 @@ Each: what boat does, and what of ours depends on it.
   marker still appears; and that a start of a running machine never stopped
   since its create returns in seconds. Gap: a guest reboot clears the mark, and
   a start of the create's machine then waits `markerWait` and fails. Ask
-  whether boat now documents a signal a host can poll.
+  whether boat now documents a signal a host can poll. Preparation's
+  `/var/lib/clankerbox/instance` can't stand in for the mark: a start keeps the
+  row's instance, so a resume restores a file that already holds it, and
+  `/var/lib` is readable while its restore runs (the marker is written there);
+  nothing says a file in it shows only once all of it is restored. A mark under
+  `/var/tmp` or `/var/cache`, which a reboot keeps and no snapshot carries (O),
+  would close the gap, but rests on that observed drop list where `/run` rests
+  on a tmpfs; so would the marker's absence on a create's machine, if a live
+  run finds `/var/lib/ascii-lazy` never there.
 
 **Delete** (D, O)
 

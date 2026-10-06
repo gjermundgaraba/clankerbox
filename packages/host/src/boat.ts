@@ -167,7 +167,9 @@ export const restoredMarker = "/var/lib/ascii-lazy/sys-done";
  * The host's own mark that the guest runs on the machine its create made, which boat restored
  * nothing into, so no restore marker comes. A create's SSH wait leaves it. `/run` is a tmpfs
  * that no snapshot carries, and boat runs every fork, resume and restore on a fresh machine, so
- * the mark never outlives the create's machine.
+ * the mark never outlives the create's machine. Preparation's instance file can't take its
+ * place: a resume restores this machine's own, which holds the row's instance, while the rest
+ * of `/var/lib` may still be on its way.
  */
 export const createdMark = "/run/clankerbox-created";
 
