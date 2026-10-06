@@ -7,9 +7,16 @@
 import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
 import { Context, Duration, Effect, Fiber, Match, Predicate, Result, Schema } from "effect";
-import type { HttpClient, HttpClientError } from "effect/http";
+import { HttpClient, type HttpClientError, HttpClientRequest } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
-import { CheckpointGroup, HostGroup, Http, MachineGroup, readTimeout } from "./api.ts";
+import {
+  CheckpointGroup,
+  HostGroup,
+  Http,
+  MachineGroup,
+  readTimeout,
+  versionHeader,
+} from "./api.ts";
 import {
   type ClankerboxError,
   type HostError,
@@ -101,13 +108,15 @@ export class Client extends Context.Service<Client, Interface>()(
 ) {}
 
 /**
- * A client for one host. Its reply decoding is the only step `transformResponse` wraps, so a
- * reply that doesn't decode is `Internal` here, and a `SchemaError` that reaches `settle` came
- * from encoding the request.
+ * A client for one host. Every request carries the SDK's version, which the host checks
+ * against its own. Its reply decoding is the only step `transformResponse` wraps, so a reply
+ * that doesn't decode is `Internal` here, and a `SchemaError` that reaches `settle` came from
+ * encoding the request.
  */
 const makeHostApi = (entry: HostEntry) =>
   HttpApiClient.make(Http.api, {
     baseUrl: entry.url,
+    transformClient: HttpClient.mapRequest(HttpClientRequest.setHeader(versionHeader, version)),
     transformResponse: (reply) =>
       Effect.mapError(reply, (error) =>
         Schema.isSchemaError(error)
@@ -212,29 +221,15 @@ const settle = <A>(
     ),
   );
 
-/** A version's major.minor: releases that share it speak the same API. */
-const release = (of: string) => of.split(".").slice(0, 2).join(".");
-
-/** A host this client can use: it calls itself by its entry's ID and runs this release. */
-const checkHost = (entry: HostEntry, host: Host): Effect.Effect<Host, Invalid> => {
-  if (host.id !== entry.id) {
-    return Effect.fail(
-      new Invalid({
-        message: `host ${entry.id} (${entry.url}) calls itself ${host.id}; its entry in the host list must use that ID`,
-      }),
-    );
-  }
-
-  if (release(host.version) !== release(version)) {
-    return Effect.fail(
-      new Invalid({
-        message: `host ${entry.id} runs clankerbox ${host.version} and this client is ${version}; their major.minor must match`,
-      }),
-    );
-  }
-
-  return Effect.succeed(host);
-};
+/** A host this client can use: it calls itself by its entry's ID. */
+const checkHost = (entry: HostEntry, host: Host): Effect.Effect<Host, Invalid> =>
+  host.id === entry.id
+    ? Effect.succeed(host)
+    : Effect.fail(
+        new Invalid({
+          message: `host ${entry.id} (${entry.url}) calls itself ${host.id}; its entry in the host list must use that ID`,
+        }),
+      );
 
 /** Every entry is checked here, so a call never meets a malformed URL. */
 const decodeHosts = Schema.decodeUnknownEffect(Schema.Array(HostEntry));
@@ -348,7 +343,7 @@ export const make = (
 
     /**
      * Reads a host. IDs route by its entry's ID, so a host that calls itself something else
-     * fails rather than being placed on, and so does a host of another release.
+     * fails rather than being placed on.
      */
     const readHost = (route: Route) =>
       ask(route, actions["host.get"], "get host", (api) =>

@@ -334,39 +334,32 @@ test("a host that calls itself by another ID is unreachable, and placement never
   expect(other.creates).toHaveLength(0);
 });
 
-/** `version` with its minor, or its patch, moved on by one. */
-const bump = (part: 1 | 2) =>
-  version
-    .split(".")
-    .map((value, index) => (index === part ? String(Number(value) + 1) : value))
-    .join(".");
+test("every call kind sends the SDK's version", async () => {
+  const linux = host({ id: "linux", bases: ["ubuntu"] });
 
-test("a host of another major.minor is Invalid naming both versions, and placement skips it", async () => {
-  const older = host({ id: "linux", bases: ["ubuntu"], version: bump(1) });
-  const patched = host({ id: "hetzner", bases: ["ubuntu"], version: bump(2) });
-
-  const endpoints = [
-    ["linux", older],
-    ["hetzner", patched],
-  ] as const;
-
-  const listed = await withClient(endpoints, (client) => client.hosts);
-  const made = await withClient(endpoints, (client) => client.create("dev", spec));
-
-  const refused = await withClient([["linux", older]], (client) =>
-    Effect.flip(client.create("dev", spec)),
+  await withClient([["linux", linux]], (client) =>
+    Effect.gen(function* () {
+      yield* client.hosts;
+      yield* client.machines;
+      yield* client.checkpoints;
+      yield* client.create("dev", spec);
+      yield* client.create("linux_full", spec);
+      yield* client.create("named", spec, { host: "linux" });
+      yield* client.machine("linux_dev");
+      yield* client.start("linux_dev");
+      yield* client.stop("linux_dev");
+      yield* client.fork("linux_dev", "copy");
+      yield* client.capture("linux_dev", "snap");
+      yield* client.checkpoint("linux_snap");
+      yield* client.restore("linux_snap", "again");
+      yield* client.deleteCheckpoint("linux_snap");
+      yield* client.delete("linux_dev");
+    }),
   );
 
-  expect(listed.answers.map(({ id }) => id)).toEqual(["hetzner"]);
-  expect(listed.unreachable.map(({ host: id, error: { _tag } }) => [id, _tag])).toEqual([
-    ["linux", "Invalid"],
-  ]);
-  expect(listed.unreachable[0]?.error.message).toContain(`runs clankerbox ${bump(1)}`);
-  expect(listed.unreachable[0]?.error.message).toContain(`this client is ${version}`);
-  expect(made.id).toBe("hetzner_dev");
-  expect(refused._tag).toBe("Precondition");
-  expect(refused.message).toContain(bump(1));
-  expect(older.creates).toHaveLength(0);
+  // Placement reads the host before the create by name.
+  expect(linux.calls).toHaveLength(16);
+  expect(linux.versions).toEqual(linux.calls.map(() => version));
 });
 
 test("Capacity from the chosen host is the reply; placement never moves on", async () => {

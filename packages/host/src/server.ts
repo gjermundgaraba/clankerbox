@@ -3,10 +3,14 @@ import {
   CheckpointGroup,
   HostGroup,
   Http,
+  Invalid,
   MachineGroup,
+  release,
   version,
+  versionHeader,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
+import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { Checkpoints } from "./checkpoints.ts";
 import type { HostConfig } from "./config.ts";
 import { Machines } from "./machines.ts";
@@ -60,6 +64,44 @@ const hostApp = (config: Pick<HostConfig, "id" | "bases">) =>
     }),
   );
 
+/** Why a request whose version header is `sent` can't be served, if it can't. */
+const refusal = (sent: Option.Option<string>): Option.Option<Invalid> =>
+  Option.match(sent, {
+    // A client before this header existed is of an older release anyway.
+    onNone: () =>
+      Option.some(
+        new Invalid({
+          message: `the request carries no ${versionHeader} header; this host runs clankerbox ${version} and serves only clients of release ${release(version)}`,
+        }),
+      ),
+    onSome: (client) =>
+      release(client) === release(version)
+        ? Option.none()
+        : Option.some(
+            new Invalid({
+              message: `this host runs clankerbox ${version} and the client is ${client}; their major.minor must match`,
+            }),
+          ),
+  });
+
+const encodeInvalid = Schema.encodeSync(Invalid);
+
+/**
+ * Answers a request of another release, or of none, with `Invalid` before its input is even
+ * decoded: a client of another release may send another shape, and no handler runs, so nothing
+ * is claimed or written. Every action declares `Invalid`, so the client decodes the reply.
+ */
+const versionCheck = HttpRouter.middleware((handle) =>
+  Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+    Option.match(refusal(Headers.get(request.headers, versionHeader)), {
+      onNone: () => handle,
+      // 400 is Invalid's `httpApiStatus` (errors.ts), as the routes would answer it.
+      onSome: (error) =>
+        Effect.succeed(HttpServerResponse.jsonUnsafe(encodeInvalid(error), { status: 400 })),
+    }),
+  ),
+);
+
 /** The API's routes, for any HTTP server. */
 export const routes = (config: Pick<HostConfig, "id" | "bases">) =>
-  Http.layer([machineApp, checkpointApp, hostApp(config)]);
+  Http.layer([machineApp, checkpointApp, hostApp(config)]).pipe(Layer.provide(versionCheck.layer));

@@ -86,6 +86,9 @@ export type Checkpoint = typeof Checkpoint.Type;
 /** The SDK's version, which is also the version of the clankerbox binaries it ships with. */
 export const version: string = packageJson.version;
 
+/** A version's major.minor: releases that share it speak the same API. */
+export const release = (of: string): string => of.split(".").slice(0, 2).join(".");
+
 export const Host = Schema.Struct({
   id: HostId,
   runtime: Runtime,

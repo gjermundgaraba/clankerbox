@@ -1,7 +1,14 @@
 /** The host API over a real loopback server, called through the SDK's client and raw HTTP. */
-import { Client, type MachineSpec, version } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Client,
+  Invalid,
+  type MachineSpec,
+  version,
+  versionHeader,
+} from "@gjermundgaraba/clankerbox-sdk";
 import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
-import { Effect } from "effect";
+import { Effect, Layer, Schema } from "effect";
+import { FetchHttpClient } from "effect/http";
 import { afterEach, expect, test } from "vite-plus/test";
 import { removeScratch, scratch } from "./scratch.ts";
 import { startHost, type TestHost } from "./support.ts";
@@ -95,16 +102,30 @@ test("the SDK's client forks, captures, restores and deletes checkpoints on a se
   expect(await run(store.checkpoints)).toEqual([]);
 });
 
-/** Posts a create for `id` straight to the host, as a caller without the SDK would. */
-const createRaw = async (url: string, id: string) => {
-  const response = await fetch(`${url}/api/machine/create`, {
+/** The headers that send `sent` as the client's version. */
+const versioned = (sent: string) => ({ [versionHeader]: sent });
+
+/**
+ * Posts `body` to the action at `path` straight to the host, as a caller without the SDK
+ * would, with `headers`: by default, this SDK's version.
+ */
+const post = async (
+  url: string,
+  path: string,
+  body: Schema.Json,
+  headers: Record<string, string> = versioned(version),
+) => {
+  const response = await fetch(`${url}/api/${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id, ...spec }),
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
   });
 
   return { status: response.status, body: await response.text() };
 };
+
+const createRaw = (url: string, id: string, headers?: Record<string, string>) =>
+  post(url, "machine/create", { id, ...spec }, headers);
 
 test("a raw create whose ID is too long, or names another host, is Invalid and makes nothing", async () => {
   const { url, fake, run, store } = await serve();
@@ -116,6 +137,92 @@ test("a raw create whose ID is too long, or names another host, is Invalid and m
   expect(elsewhere.status).toBe(400);
   expect(elsewhere.body).toContain('"_tag":"Invalid"');
   expect(elsewhere.body).toContain("this is host linux");
+  expect(await run(store.list)).toEqual([]);
+  expect(fake.calls).toEqual(["startup"]);
+});
+
+const decodeInvalid = Schema.decodeUnknownSync(Schema.fromJsonString(Invalid));
+
+/** `version` with its minor, or its patch, moved on by one. */
+const bump = (part: 1 | 2) =>
+  version
+    .split(".")
+    .map((value, index) => (index === part ? String(Number(value) + 1) : value))
+    .join(".");
+
+test("a request of another release, or with no version, is Invalid and runs nothing", async () => {
+  const { url, fake, run, store } = await serve();
+  const older = versioned(bump(1));
+  const created = await createRaw(url, "linux_dev", older);
+  const read = await post(url, "host/get", {}, older);
+  const unversioned = await createRaw(url, "linux_dev", {});
+  // A client of another release may send another shape: the version is checked first.
+  const malformed = await post(url, "machine/create", { id: "linux_dev", labels: [] }, older);
+
+  for (const answer of [created, read, unversioned, malformed]) {
+    expect(answer.status).toBe(400);
+  }
+
+  for (const answer of [created, read, malformed]) {
+    expect(decodeInvalid(answer.body).message).toBe(
+      `this host runs clankerbox ${version} and the client is ${bump(1)}; their major.minor must match`,
+    );
+  }
+
+  expect(decodeInvalid(unversioned.body).message).toContain(`no ${versionHeader} header`);
+  expect(decodeInvalid(unversioned.body).message).toContain(`clankerbox ${version}`);
+  expect(await run(store.list)).toEqual([]);
+  expect(fake.calls).toEqual(["startup"]);
+});
+
+test("a request of the host's release at another patch is served", async () => {
+  const { url, run, store } = await serve();
+  const created = await createRaw(url, "linux_dev", versioned(bump(2)));
+
+  expect(created.status).toBe(200);
+  expect((await run(store.list)).map(({ name }) => name)).toEqual(["dev"]);
+});
+
+test("the SDK's client of another release reads the host's Invalid on every call kind", async () => {
+  const { url, fake, run, store } = await serve();
+
+  /** The SDK's client over `fetch`, whose requests leave carrying another release's version. */
+  const older = FetchHttpClient.layer.pipe(
+    Layer.provide(
+      Layer.succeed(FetchHttpClient.Fetch, (input, init) => {
+        const request = new Request(input, init);
+
+        request.headers.set(versionHeader, bump(1));
+
+        return fetch(request);
+      }),
+    ),
+  );
+
+  const [hosts, listed, got, placed, created] = await Effect.flatMap(
+    Client.make([{ id: "linux", url }]),
+    (client) =>
+      Effect.all([
+        client.hosts,
+        client.machines,
+        Effect.flip(client.machine("linux_dev")),
+        Effect.flip(client.create("dev", spec)),
+        Effect.flip(client.create("linux_dev", spec)),
+      ]),
+  ).pipe(Effect.provide(older), Effect.runPromise);
+
+  const refused = `the client is ${bump(1)}`;
+
+  expect(hosts.answers).toEqual([]);
+  expect(hosts.unreachable.map(({ host, error }) => [host, error._tag])).toEqual([
+    ["linux", "Invalid"],
+  ]);
+  expect(hosts.unreachable[0]?.error.message).toContain(refused);
+  expect(listed.unreachable[0]?.error.message).toContain(refused);
+  expect([got._tag, got.message]).toEqual(["Invalid", expect.stringContaining(refused)]);
+  expect(placed._tag).toBe("Precondition");
+  expect(placed.message).toContain(`linux failed: Invalid: this host runs clankerbox ${version}`);
+  expect([created._tag, created.message]).toEqual(["Invalid", expect.stringContaining(refused)]);
   expect(await run(store.list)).toEqual([]);
   expect(fake.calls).toEqual(["startup"]);
 });
@@ -143,7 +250,7 @@ test("a create whose client disconnects still finishes and records its outcome",
 
   const sent = fetch(`${url}/api/machine/create`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...versioned(version) },
     body: JSON.stringify({ id: "linux_dev", ...spec }),
     signal: abort.signal,
   }).catch((cause: Error) => cause.name);

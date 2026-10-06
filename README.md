@@ -291,8 +291,10 @@ every stock base by digest.
 `@gjermundgaraba/clankerbox-sdk` (`packages/contract`) holds the Schemas, the
 action groups, the errors, the profile file schema and the client library. It
 is versioned with the binaries: SDK 1.2.3 talks to hosts of release 1.2.x.
-Where it reads a host (`hosts` and placement), a host of another major.minor
-is `Invalid`, naming both versions.
+Every request carries the client's version in a `clankerbox-version` header,
+and a host refuses one of another major.minor with `Invalid`, naming both
+versions, before it runs anything. A request without the header is refused
+too: a client that predates it is of another release anyway.
 `effect` `^4.0.0` is a peer dependency, so an app has one copy of Effect and
 Schema identity holds; so is `@effect/platform-node` `^4.0.0`, needed only by
 the `/node` entry.
@@ -393,7 +395,9 @@ every bump of it:
 - **The API** (`packages/contract/src/api.ts`) is unary HTTP through
   effect-actions: machine, checkpoint and host action groups under `/api`.
   Input is closed: undeclared fields are refused, and a Schema error in input
-  is `Invalid`.
+  is `Invalid`. A request of another release, by its `clankerbox-version`
+  header, is `Invalid` before its input is decoded
+  (`packages/host/src/server.ts`).
 
 ### IDs and names
 

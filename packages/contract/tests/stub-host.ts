@@ -16,14 +16,13 @@ import {
   NotFound,
   type Runtime,
   version,
+  versionHeader,
 } from "../src/index.ts";
 
 export interface StubHostOptions {
   readonly id: string;
   readonly bases: ReadonlyArray<string>;
   readonly runtime?: Runtime;
-  /** The clankerbox version the host reports, the SDK's by default. */
-  readonly version?: string;
   /** Replaces the create handler, for example to refuse with `Capacity` or to run long. */
   readonly create?: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
   /** Machines the host already holds. */
@@ -49,6 +48,7 @@ export const stubHost = (options: StubHostOptions) => {
   const checkpoints = new Map<string, Checkpoint>();
   const creates: Array<CreateRequest> = [];
   const calls: Array<string> = [];
+  const versions: Array<string | null> = [];
 
   for (const held of options.machines ?? []) {
     machines.set(held.id, held);
@@ -178,7 +178,7 @@ export const stubHost = (options: StubHostOptions) => {
       Effect.as(record("host.get"), {
         id: options.id,
         runtime,
-        version: options.version ?? version,
+        version,
         runtimeVersion: "1.22.2",
         bases: options.bases,
       }),
@@ -196,9 +196,15 @@ export const stubHost = (options: StubHostOptions) => {
     creates,
     /** Every action the host ran, as `<group>.<action>`. */
     calls,
+    /** The version header of every request the host received, in order. */
+    versions,
     /** The host's routes, to serve on a real HTTP server. */
     routes,
-    handler: (request: Request) => web.handler(request),
+    handler: (request: Request) => {
+      versions.push(request.headers.get(versionHeader));
+
+      return web.handler(request);
+    },
     dispose: () => web.dispose(),
   };
 };
