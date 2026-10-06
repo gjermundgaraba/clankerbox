@@ -431,7 +431,7 @@ export const make = (settings: Settings) =>
        * The repeats after an unclear answer at `since`: the first `firstPause` later, then with
        * the pause doubling, or `throttledPause` after a 429, while `retryWindow` hasn't passed
        * since. Each 429 counts as a start, so the `throttledRepeats`th ends them: with the
-       * unclear attempt, at most three starts, as for `paced`.
+       * unclear attempt, at most three starts here, as in `paced`, which may come first.
        */
       const repeats = (since: number) =>
         Effect.flatMap(Ref.make(0), (throttles) =>
