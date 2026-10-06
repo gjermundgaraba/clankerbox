@@ -1,7 +1,10 @@
 /** The host API over a real loopback server, called through the SDK's client and raw HTTP. */
 import {
+  CheckpointGroup,
   Client,
+  HostGroup,
   Invalid,
+  MachineGroup,
   type MachineSpec,
   version,
   versionHeader,
@@ -173,6 +176,34 @@ test("a request of another release, or with no version, is Invalid and runs noth
   expect(decodeInvalid(unversioned.body).message).toContain(`clankerbox ${version}`);
   expect(await run(store.list)).toEqual([]);
   expect(fake.calls).toEqual(["startup"]);
+});
+
+test("every action of every group refuses a request with no version, or another release's, and runs nothing", async () => {
+  const { url, fake, run, store } = await serve();
+
+  expect((await createRaw(url, "linux_dev")).status).toBe(200);
+
+  const calls = [...fake.calls];
+  const rows = await run(store.list);
+  const paths = [MachineGroup, CheckpointGroup, HostGroup].flatMap((group) =>
+    group.actions.map((action) => `${group.name}/${action.name}`),
+  );
+
+  expect(paths).toHaveLength(13);
+
+  for (const path of paths) {
+    for (const headers of [{}, versioned(bump(1))]) {
+      const answer = await post(url, path, { id: "linux_dev" }, headers);
+
+      expect(answer.status, path).toBe(400);
+      expect(decodeInvalid(answer.body).message, path).toMatch(
+        /no clankerbox-version header|their major\.minor must match/,
+      );
+    }
+  }
+
+  expect(await run(store.list)).toEqual(rows);
+  expect(fake.calls).toEqual(calls);
 });
 
 test("a request of the host's release at another patch is served", async () => {
