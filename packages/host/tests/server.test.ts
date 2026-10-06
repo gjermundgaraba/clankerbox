@@ -185,6 +185,7 @@ test("every action of every group refuses a request with no version, or another 
 
   const calls = [...fake.calls];
   const rows = await run(store.list);
+
   const paths = [MachineGroup, CheckpointGroup, HostGroup].flatMap((group) =>
     group.actions.map((action) => `${group.name}/${action.name}`),
   );
