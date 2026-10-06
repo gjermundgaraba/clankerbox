@@ -1,6 +1,6 @@
-# Disposable build outputs, local work trees and the default dev environment.
+node_modules/
+dist/
 /.work/
-/bin/
-/.clankerbox/
+/tools/release/cache/
+*.sqlite*
 __pycache__/
-*.pyc

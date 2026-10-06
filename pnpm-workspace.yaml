@@ -1,0 +1,39 @@
+packages:
+  - apps/*
+  - packages/*
+  - tools/*
+  - tests/*
+
+catalogMode: prefer
+catalog:
+  "@effect/platform-node": 4.0.0
+  "@gjermundgaraba/effect-actions": 0.9.0
+  # Pinned to the oxlint that vite-plus 1.0.0 pins (=1.85.0); move them together.
+  "@oxlint/plugins": 1.85.0
+  "@types/node": 26.6.4
+  effect: 4.0.0
+  typescript: 7.0.2
+  vite: npm:@voidzero-dev/vite-plus-core@1.0.0
+  vite-plus: 1.0.0
+
+overrides:
+  vite@*: "catalog:"
+peerDependencyRules:
+  allowedVersions:
+    vite: "*"
+  allowAny:
+    - vite
+# Registry releases wait one day unless explicitly approved below.
+minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - vite-plus
+  - "@gjermundgaraba/effect-actions"
+  - "@voidzero-dev/*"
+  - oxlint
+  - "@oxlint/*"
+  - oxlint-tsgolint
+  - "@oxlint-tsgolint/*"
+  - oxfmt
+  - "@oxfmt/*"
+  - vitest
+  - "@vitest/*"

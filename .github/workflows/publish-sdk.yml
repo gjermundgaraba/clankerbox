@@ -1,58 +1,88 @@
-name: Publish SDK
-
+name: Release
+# Release tags only, vX.Y.Z, naming the SDK's version, which the binaries share. It runs Quality
+# first, whose sea job builds, bundles and smokes both targets; then it uploads those bundles and
+# their .sha256 files to the tag's GitHub release and publishes the SDK to npm. The npm trusted
+# publisher is bound to this file's name.
 on:
   push:
-    tags: ["sdk-v*"]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+permissions: {}
 concurrency:
   group: publish-sdk-${{ github.ref }}
   cancel-in-progress: false
-
 jobs:
-  publish:
-    runs-on: ubuntu-latest
-    environment: npm
+  tag:
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
-      id-token: write
-    defaults:
-      run:
-        working-directory: protocol
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - name: Check that the tag names the SDK's version
+        run: test "$GITHUB_REF_NAME" = "v$(jq -r .version packages/sdk/package.json)"
+  quality:
+    needs: tag
+    uses: ./.github/workflows/quality.yml
+    permissions:
+      contents: read
+  release:
+    needs: quality
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          package_json_file: protocol/package.json
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 26.8.2
-          registry-url: https://registry.npmjs.org
-          package-manager-cache: false
-      - name: Verify stable SDK release tag
+          pattern: bundle-*
+          path: bundles
+          merge-multiple: true
+      - name: Upload the bundles to the tag's GitHub release
+        working-directory: bundles
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { readFileSync } from 'node:fs';
-          const { name, version } = JSON.parse(readFileSync('package.json', 'utf8'));
-          assert.equal(name, '@gjermundgaraba/clankerbox-sdk');
-          assert.match(version, /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
-          assert.equal(process.env.GITHUB_REF, `refs/tags/sdk-v${version}`);
-          NODE
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm check
-      - run: pnpm build
-      - run: pnpm test
-      - name: Pack and test the release artifact
+          for target in darwin-arm64 linux-x64; do
+            test -s "clankerbox-$target.tar.gz"
+            test -s "clankerbox-$target.tar.gz.sha256"
+          done
+          sha256sum -c ./*.sha256
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
+              --notes "One bundle per target, each beside its .sha256. The SDK is @gjermundgaraba/clankerbox-sdk@${TAG#v} on npm."
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber ./*.tar.gz ./*.sha256
+  publish:
+    needs: release
+    runs-on: ubuntu-24.04
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+        with:
+          registry-url: https://registry.npmjs.org
+      - run: pnpm --filter @gjermundgaraba/clankerbox-sdk build
+      - name: Pack and check the package
         run: |
           mkdir -p "$RUNNER_TEMP/sdk"
-          pnpm pack --pack-destination "$RUNNER_TEMP/sdk"
-          pnpm test:package "$RUNNER_TEMP/sdk/"*.tgz
+          pnpm --filter @gjermundgaraba/clankerbox-sdk pack --pack-destination "$RUNNER_TEMP/sdk"
+          tar -tzf "$RUNNER_TEMP/sdk/"*.tgz > "$RUNNER_TEMP/sdk/files"
+          grep -qx package/LICENSE "$RUNNER_TEMP/sdk/files"
+          grep -qx package/dist/node.mjs "$RUNNER_TEMP/sdk/files"
+          tar -xzOf "$RUNNER_TEMP/sdk/"*.tgz package/package.json | node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import { readFileSync } from "node:fs";
+            const text = readFileSync(0, "utf8");
+            assert.doesNotMatch(text, /"(catalog|workspace):/);
+            const { exports } = JSON.parse(text);
+            assert.equal(exports["."].import, "./dist/index.mjs");
+            assert.equal(exports["./node"].import, "./dist/node.mjs");
+          '
           git diff --exit-code
       - name: Publish with npm trusted publishing
         run: npm publish "$RUNNER_TEMP/sdk/"*.tgz --access public --provenance --ignore-scripts

@@ -16,24 +16,25 @@ curated inputs to their intended destination before leaving the run.
 ## Foreground build commands
 
 ```sh
-python3 scripts/work_runs.py run --label build-check -- sh -c '
-  python3 some-build-driver.py --output "$WORK_RUN_SCRATCH/output" \
-    >"$WORK_RUN_EVIDENCE/build.log" 2>&1
+python3 scripts/work_runs.py run --label sea-check -- sh -c '
+  { pnpm build &&
+    pnpm sea:build --out "$WORK_RUN_SCRATCH/bundles" &&
+    pnpm sea:smoke "$WORK_RUN_SCRATCH/bundles/clankerbox-darwin-arm64.tar.gz"
+  } >"$WORK_RUN_EVIDENCE/sea.log" 2>&1
 '
-make work-list
-make work-clean
+python3 scripts/work_runs.py list
 ```
 
-Replace `some-build-driver.py` with the actual build command. The wrapper supplies
-`TMPDIR`, `WORK_RUN_SCRATCH` and `WORK_RUN_EVIDENCE`; it does not redirect arbitrary
-output paths or compiler caches automatically. For example, set `CARGO_TARGET_DIR`
-to a scratch subdirectory for disposable Rust compilation. The Mac host signing
-script respects `TMPDIR`.
+The wrapper supplies `TMPDIR`, `WORK_RUN_SCRATCH` and `WORK_RUN_EVIDENCE`; it does
+not redirect arbitrary output paths or caches automatically. `sea:build` writes
+where `--out` says, and `sea:smoke` extracts into `TMPDIR`; `sea:build`'s Node
+archives stay in `tools/release/cache/`, a reusable input outside the run.
 
 Success, command failure and ordinary interruption stop the command's process
-group and remove scratch. `--keep` retains scratch for an explicit debugging need;
-record that reason in evidence. Logs are only retained if the driver writes them
-there, as above.
+group and remove scratch. A group whose members have all exited counts as gone
+once its leader is reaped (macOS refuses a signal to it before then). `--keep`
+retains scratch for an explicit debugging need; record that reason in evidence.
+Logs are only retained if the driver writes them there, as above.
 
 **Do not use the command wrapper alone for drivers that create VMs, launchd jobs,
 remote services or detached processes.** Those require resource-specific teardown.
@@ -61,9 +62,75 @@ VMs/processes, unregister native jobs, and verify their absence. Register callba
 in acquisition order; they run in reverse order, even if qualification raises.
 All callbacks are attempted. If one fails, scratch remains with state
 `needs_teardown`; cleanup must not erase the evidence needed to recover.
+From teardown's start to its end, `WorkRun` ignores SIGINT, SIGTERM and SIGHUP,
+and the commands teardown starts inherit that, so a second Ctrl-C can't cut a
+step short, such as a host's stop before its VMs are deleted; the driver's own
+handlers return once teardown ends. A callback that finds the run failed
+without failing teardown, such as a host that ended other than as its contract
+says, calls `run.fail(reason)`: the manifest records the reason under
+`failures` and the outcome `failed`, teardown goes on, scratch is removed, and
+`RunFailed`, a `SystemExit`, ends the driver with status 1 unless the run had
+already ended with an exception of its own.
 
 Use the same layout on remote hosts, and collect their evidence before deleting
 remote scratch. The local helper does not automatically manage remote resources.
+
+## The live suites
+
+`tests/live/README.md` says how to run each runtime's suite, what each needs and
+what each covers.
+
+`tests/live/smolvm/driver.py` is the provisioning driver for `tests/live` against
+a smolvm host on a Linux test machine: it runs the host there as root, from a run
+directory with this layout under the machine's owned root, and gives the suite
+its host-control program (`tests/live/tests/live.ts`). Its teardown removes the
+run's VMs and scopes natively, by the run's own smolvm data dir, so a test that
+leaves the host down leaves nothing behind. The driver's docstring shows its
+invocation.
+
+`tests/live/tart/driver.py` is its counterpart on this Mac: it runs a Tart host,
+with the `tart` binary named by `--tart`, from a private Tart home in the run's
+scratch, whose base is an APFS clone of the Cirrus seed named by `--seed` (the
+main checkout's `.work/inputs/tart-cirrus-tahoe-base`), on the tailnet address
+named by `--address`, and gives the suite the same host-control program. It also
+runs a second Tart host, `<host ID>-b`, on the same home and address, which only
+the suite's placement test uses. Its teardown stops both hosts, then deletes the
+home's VMs and boots out the launchd jobs carrying the run's host ID, which the
+second host's ID starts with, natively, before scratch is deleted. Its docstring
+shows its invocation.
+
+`tests/live/boat/driver.py` runs a boat host on this Mac, unprivileged, against
+the operator's boat account on its trial, on loopback or the tailnet address
+named by `--address`. The host's config, in scratch with mode 0600, holds the
+API key, read from the file `--key-file` names, which holds the key alone.
+Nothing else writes the key down: the driver logs its own calls as method, path,
+status and boat's code, and its last teardown step redacts the key from every evidence file and
+fails the run if it was there. A read-only pre-flight records the account's
+counts (never the operator's names or IDs) and stops the run before it makes
+anything unless two active sandboxes are free and its starts and named snapshots
+have room for the run. When the account's active limit isn't the trial's two,
+the suite skips its test of boat's 429 for a third sandbox, and when its tier
+isn't the trial, its large create. The run's host ID carries its run ID, so its
+sandboxes' display names start `<host ID>_` and its named snapshots
+`cbx-<host ID>-`. Its teardown stops the host, deletes by ID every sandbox the
+host's database records or the suite's host-control program saw, sweeps those
+two prefixes, and checks that nothing of the run's remains; it touches nothing
+else on the account. The evidence keeps the suite's starts and the account's start
+count before and after. Its docstring shows its invocation.
+
+The drivers share `tests/live/driver_common.py`, which holds their evidence
+(`driver.log`, `resources.json` and each command's log) and runs the suite with
+its temporary directory in the run's scratch. For the Tart and boat hosts on
+this Mac it also holds the host's address, keeper, start and stop, the
+host-control program's host ops and `probe`, its stub, and the driver's entry,
+which dispatches the keeper, the control program and the run. It runs each command in a process
+group of its own, which it stops through `stop_group` once the command ends, so
+no descendant outlives it, and runs a teardown's steps one after another: a
+failed step is logged and the next still runs, and the teardown fails with them
+all at the end. They refuse a tree with uncommitted changes
+(`git status --porcelain`, which leaves out ignored files), so the commit each
+records in its evidence (`resources.json` `commit`) names the code the run built
+and tested.
 
 ## Abandoned runs
 
@@ -100,11 +167,10 @@ into each run (APFS clones on macOS), then delete only the run's clones during
 teardown. Validate host/controller startup before expensive image work. A failed
 qualification must not force another download of its unchanged input.
 
-Tart's per-VM control socket, `<host root>/tart/vms/clankerbox-<32 hex>/control.sock`,
-also has a macOS path-length limit: the canonical host root may be at most 37
-bytes. A run's `scratch/` is too deep for that, so give a Tart host a private
-root such as `tempfile.mkdtemp(prefix='clankerbox-', dir='/private/tmp')`, record
-its full path in the run's evidence, and register its removal with
-`run.on_cleanup` before registering the callback that stops its VMs (callbacks
-run in reverse order). The reusable seed stays in `.work/inputs/`. Validate the
-full native socket path before creating VMs.
+A Tart home can be a run's own `scratch/`: Tart 2.40.1 changes into the VM's
+directory and binds and dials its control socket by the relative name
+`control.sock`, so macOS's socket-path limit doesn't apply to the home
+(T:ControlSocket.swift:30-46 at Tart 2.40.1; live runs used homes of up to 106
+bytes). Record the home's path in the run's evidence, and register its
+VMs' teardown with `run.on_cleanup` before creating them, so they are stopped
+and deleted before scratch is.

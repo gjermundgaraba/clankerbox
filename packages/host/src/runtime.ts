@@ -1,0 +1,252 @@
+/**
+ * The one runtime a host process runs, behind the interface the host core needs. State,
+ * claims, setup and preparation are the core's; each runtime is a module that implements this
+ * service. The core allocates a machine's host port when it claims the row, for a runtime that
+ * has a `publishAddress`; the RAM budget is a helper a runtime's `admit` calls when it needs one.
+ * The interface froze once the Tart runtime passed its live tests, and boat was written against
+ * it: a change to it touches every runtime, so it needs a reason that holds for all three.
+ */
+import {
+  type ActionName,
+  type Checkpoint,
+  type HostError,
+  type Internal,
+  type Machine,
+  Precondition,
+  readTimeout,
+  type Runtime as RuntimeName,
+  type SshEndpoint,
+} from "@gjermundgaraba/clankerbox-sdk";
+import { Context, Data, Duration, Effect, type Scope, type Stream } from "effect";
+
+/** A machine as the runtime sees it: what its native names and native calls need. */
+export interface MachineRef {
+  /** `<host>_<name>`. */
+  readonly id: string;
+  readonly name: string;
+  /** The row's random hex value. Native names carry its first 8 characters. */
+  readonly instance: string;
+  /** The runtime's own column on the row, such as boat's sandbox ID. smolvm leaves it empty. */
+  readonly native: string | undefined;
+  readonly cpu: number;
+  readonly ramMib: number;
+  readonly diskGib: number;
+  /**
+   * The host port that publishes guest port 22, when the runtime has a `publishAddress`. The
+   * core picks it when the row is inserted, and it never changes.
+   */
+  readonly port: number | undefined;
+}
+
+export type MachineState = Machine["state"];
+
+export type CheckpointKind = Checkpoint["kind"];
+
+/**
+ * Records a runtime-assigned ID in the `native` column of the machine row `name` of
+ * `instance`: the one write to the host's state a runtime makes, as boat does its sandbox ID as
+ * soon as boat answers. The core provides it when it builds the runtime's layer.
+ */
+export type RecordNative = (
+  name: string,
+  instance: string,
+  native: string,
+) => Effect.Effect<void, Internal>;
+
+/** A checkpoint as the runtime sees it. */
+export interface CheckpointRef {
+  /** `<host>_<name>`. */
+  readonly id: string;
+  readonly name: string;
+  /** The row's random hex value. Native names carry its first 8 characters. */
+  readonly instance: string;
+  readonly native: string | undefined;
+  readonly kind: CheckpointKind;
+  /** The source's host port at capture. A `ram` restore comes up on it. */
+  readonly port: number | undefined;
+}
+
+/**
+ * How long the core's read of runtime state may take: each `observe`, and each `admit`, whose
+ * reads decide it. An `observe` past it reads every machine `unknown`, and an `admit` past it
+ * fails the check, so a list answers within the client's `readTimeout` however slow the
+ * runtime is: a second under it, for the request's way to the host and back.
+ */
+export const stateReadWait = Duration.subtract(readTimeout, Duration.seconds(1));
+
+/**
+ * How long a runtime that reads each machine on its own lets one read take, its repeats and its
+ * wait for a turn included, before that machine reads `unknown`: a second under `stateReadWait`,
+ * so one hung read makes only its own machine `unknown`, and 2 s over the 6 s smolvm's status of
+ * an unreachable machine can take (the bump-smolvm skill).
+ */
+export const machineReadWait = Duration.subtract(stateReadWait, Duration.seconds(1));
+
+/**
+ * Fails with `error` once `self` runs past `duration`, interrupting it: Effect's `timeoutOrElse`
+ * for the waits whose timeout is one error.
+ */
+export const timeoutFail =
+  <E2>(duration: Duration.Input, error: () => E2) =>
+  <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E | E2, R> =>
+    Effect.timeoutOrElse(self, { duration, orElse: () => Effect.fail(error()) });
+
+/** What the runtime reports about a machine. Nothing here is stored. */
+export interface Observed {
+  readonly state: MachineState;
+  /**
+   * Where guest port 22 is reached, from a runtime without a `publishAddress`; with one, the
+   * core reports the machine's port on it. The core reports either only for a running machine.
+   */
+  readonly ssh?: SshEndpoint | undefined;
+}
+
+/** One machine on the host, and whether an action is booting it. */
+export interface Held {
+  readonly machine: MachineRef;
+  /**
+   * Whether a running create, start or restore holds it, or a running fork that hasn't made it
+   * yet, the target included: its VM may not run yet, so step 3 counts it as running. A fork's
+   * source is held by the fork but isn't booted by it, and its copy runs once made.
+   */
+  readonly booting: boolean;
+}
+
+/** What step 3 checks before an action boots a machine. */
+export interface Activation {
+  readonly action: ActionName;
+  /** The machine to boot, already claimed by the action. */
+  readonly machine: MachineRef;
+  /** Every machine on the host, the target included, and whether an action is booting each. */
+  readonly machines: ReadonlyArray<Held>;
+}
+
+/** A command run as root in the guest. */
+export interface Command {
+  readonly argv: ReadonlyArray<string>;
+  /**
+   * Written whole, then closed, while the output is read: a script that reads stdin to its
+   * end would otherwise wait forever, and a large input would fill the pipe.
+   */
+  readonly stdin?: Uint8Array | undefined;
+}
+
+/** A command running in the guest. Closing its scope ends it. */
+export interface Execution {
+  /** stdout and stderr together, as they arrive. */
+  readonly output: Stream.Stream<Uint8Array, HostError>;
+  readonly exitCode: Effect.Effect<number, HostError>;
+}
+
+/**
+ * A runtime error that the runtime knows created nothing native (the refusal rule). The core
+ * handles it like a failure before the runtime call: it releases the claim, removes a new
+ * row, and replies with `error`. Each runtime lists the errors it classifies this way.
+ */
+export class Refusal extends Data.TaggedError("Refusal")<{ readonly error: HostError }> {}
+
+/** The refusal of an action on a machine the runtime `runtime` no longer has. */
+export const missing = (runtime: RuntimeName, machine: Pick<MachineRef, "id">): Refusal =>
+  new Refusal({
+    error: new Precondition({
+      message: `machine ${machine.id} is missing from the ${runtime} runtime; delete it`,
+    }),
+  });
+
+export interface Interface {
+  readonly name: RuntimeName;
+  /** The runtime's version, read when the runtime starts; for boat, its API version. */
+  readonly version: string;
+  /**
+   * Where guest port 22 is published, for a runtime that needs one host port per machine. The
+   * core probes and allocates ports on this address; without one, machines get no port.
+   */
+  readonly publishAddress: string | undefined;
+  /**
+   * What a `ram` checkpoint records at capture, and must be restored under: RAM state restores
+   * only into the build that saved it. `undefined` on a runtime with no `ram` checkpoints.
+   */
+  readonly pin: string | undefined;
+  /** The kind of every checkpoint the runtime captures: `ram` on smolvm, `disk` on Tart and boat. */
+  readonly checkpointKind: CheckpointKind;
+  /**
+   * The runtime's own work at host startup, over every machine the host has, run after every
+   * interrupted action has been marked failed and before the host serves: smolvm's cleanup, or
+   * the Tart forwarder's listeners for every machine.
+   */
+  readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, HostError>;
+  /**
+   * Reads the machines' states in as few native calls as the runtime allows: one `tart list` on
+   * Tart; smolvm reads each machine on its own, and boat each recorded sandbox, all at once. A
+   * machine the runtime doesn't know is `missing`, not an error, and one whose read fails, or takes
+   * over `machineReadWait`, is `unknown`. Only a read of every machine at once may fail, and the
+   * core reads every machine `unknown` then, as it does when the whole read takes over
+   * `stateReadWait`. Its contract is one state per machine, in their order: a runtime builds its
+   * answer by mapping over `machines`, and callers rely on that without checking.
+   */
+  readonly observe: (
+    machines: ReadonlyArray<MachineRef>,
+  ) => Effect.Effect<ReadonlyArray<Observed>, HostError>;
+  /**
+   * Step 3 of an action that boots a machine: the runtime's capacity checks, such as the smolvm
+   * host's RAM budget or Tart's two-VM count. A failure here writes nothing, and so does one
+   * that takes over `stateReadWait`, which the core fails as `Internal`. Called for every
+   * `start`, whatever the machine's state: a running target counts once, as it already runs.
+   */
+  readonly admit: (activation: Activation) => Effect.Effect<void, HostError>;
+  /** Makes the machine from `image` and boots it; it returns once exec works. */
+  readonly create: (machine: MachineRef, image: string) => Effect.Effect<void, HostError | Refusal>;
+  /**
+   * Boots a stopped machine, and leaves a running one as it is; it returns once exec works. The
+   * core calls it on every start, before preparation, and reads no state of its own, so the
+   * runtime reads the machine's state itself and refuses one it no longer has (`missing`)
+   * before anything native.
+   */
+  readonly start: (machine: MachineRef) => Effect.Effect<void, HostError | Refusal>;
+  /**
+   * Stops a running machine. The core calls it on every stop, and reads no state of its own, so
+   * the runtime reads the machine's state itself and does nothing on one that doesn't run or
+   * that it no longer has.
+   */
+  readonly stop: (machine: MachineRef) => Effect.Effect<void, HostError>;
+  /**
+   * Removes everything native the machine's row could have made, coping with whatever an
+   * earlier failure left: a running VM, a VM whose stop failed, or nothing at all, as after a
+   * crash between inserting the row and the first runtime call.
+   */
+  readonly delete: (machine: MachineRef) => Effect.Effect<void, HostError>;
+  /**
+   * Captures the machine into the checkpoint, of the runtime's `checkpointKind`. A machine in a
+   * state the runtime doesn't capture is a `Refusal` with `Precondition`, read before anything
+   * native: smolvm captures only a running machine, and Tart only a stopped one.
+   */
+  readonly capture: (
+    machine: MachineRef,
+    checkpoint: CheckpointRef,
+  ) => Effect.Effect<void, HostError | Refusal>;
+  /**
+   * Makes the machine from a ready checkpoint and boots it; it returns once exec works. A
+   * checkpoint deleted under it fails it like any runtime failure.
+   */
+  readonly restore: (
+    checkpoint: CheckpointRef,
+    machine: MachineRef,
+  ) => Effect.Effect<void, HostError | Refusal>;
+  /**
+   * Makes `machine` a copy of `source` and boots it; it returns once exec works. A source in a
+   * state the runtime doesn't copy is a `Refusal` with `Precondition`, as for `capture`.
+   */
+  readonly fork: (
+    source: MachineRef,
+    machine: MachineRef,
+  ) => Effect.Effect<void, HostError | Refusal>;
+  /** Removes everything native the checkpoint's row could have made. */
+  readonly deleteCheckpoint: (checkpoint: CheckpointRef) => Effect.Effect<void, HostError>;
+  /** Runs a command as root in a running guest. */
+  readonly exec: (
+    machine: MachineRef,
+    command: Command,
+  ) => Effect.Effect<Execution, HostError, Scope.Scope>;
+}
+
+export class Runtime extends Context.Service<Runtime, Interface>()("@clankerbox/host/Runtime") {}

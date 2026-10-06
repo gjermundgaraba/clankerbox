@@ -21,6 +21,7 @@ import uuid
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1] / '.work' / 'runs'
 OWNER = 'clankerbox-work-run-v1'
+TEARDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 
 def safe_path(path):
@@ -66,6 +67,11 @@ def remove_scratch(path):
         shutil.rmtree(scratch)
 
 
+class RunFailed(SystemExit):
+    """A run whose teardown completed but failed its verdict (WorkRun.fail): raised once scratch
+    is gone, it exits with the reasons and status 1."""
+
+
 class WorkRun:
     def __init__(self, label, *, root=DEFAULT_ROOT, keep=False):
         self.root = safe_path(root)
@@ -87,6 +93,12 @@ class WorkRun:
         """Register a synchronous teardown callback; callbacks run in reverse order."""
         self.callbacks.append(callback)
 
+    def fail(self, reason):
+        """Fails the run's outcome but not its teardown, as a check a teardown callback makes:
+        recorded in the manifest, and raised as RunFailed once teardown ends, unless the run
+        ended with an exception of its own."""
+        self.data.setdefault('failures', []).append(reason)
+
     def __enter__(self):
         self._lock = locked(self.path)
         self._lock.__enter__()
@@ -101,6 +113,9 @@ class WorkRun:
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        # A second Ctrl-C or SIGTERM must not cut a teardown step short, such as a host's stop
+        # before its VMs are deleted: teardown ignores them, and its children inherit that.
+        handlers = {sig: signal.signal(sig, signal.SIG_IGN) for sig in TEARDOWN_SIGNALS}
         errors = []
         try:
             for callback in reversed(self.callbacks):
@@ -108,7 +123,7 @@ class WorkRun:
                     callback()
                 except BaseException as error:
                     errors.append(str(error))
-            self.data['outcome'] = 'failed' if exc_type else 'succeeded'
+            self.data['outcome'] = 'failed' if exc_type or 'failures' in self.data else 'succeeded'
             if errors:
                 self.data.update(state='needs_teardown', cleanup_errors=errors)
             elif self.keep:
@@ -119,8 +134,12 @@ class WorkRun:
             save(self.path, self.data)
             if errors:
                 raise RuntimeError('teardown failed; scratch retained: ' + '; '.join(errors))
+            if exc_type is None and 'failures' in self.data:
+                raise RunFailed('the run failed: ' + '; '.join(self.data['failures']))
         finally:
             self._lock.__exit__(None, None, None)
+            for sig, handler in handlers.items():
+                signal.signal(sig, handler)
 
 
 def clean(root, run_id, *, resources_stopped=False):
@@ -139,35 +158,40 @@ def clean(root, run_id, *, resources_stopped=False):
         save(path, data)
 
 
-def stop_group(process):
-    """Reap the direct child and stop any children left in its process group."""
+def group_left(process, sig=0):
+    """Sends `sig` to the process group `process` leads, and says whether any member is left.
+
+    The leader, our child, is reaped first once it has exited: macOS refuses a signal to a
+    group whose members have all exited but aren't reaped yet (EPERM). A refusal still counts
+    as a member left, so a member we may not signal keeps the group until the caller's deadline.
+    """
+    process.poll()
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        os.killpg(process.pid, sig)
     except ProcessLookupError:
-        process.wait()
-        return
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        process.poll()
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            process.wait()
-            return
-        time.sleep(.05)
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
+        return False
+    except PermissionError:
         pass
-    process.wait()
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            return
+    return True
+
+
+def group_ends(process, seconds):
+    deadline = time.monotonic() + seconds
+    while group_left(process):
+        if time.monotonic() > deadline:
+            return False
         time.sleep(.05)
-    raise RuntimeError('subprocess group still exists after shutdown; inspect before cleaning')
+    return True
+
+
+def stop_group(process):
+    """Stops the process group `process` leads, with SIGTERM and then SIGKILL, and reaps its
+    leader: no descendant left in the group outlives it, even after the leader exited."""
+    if group_left(process, signal.SIGTERM) and not group_ends(process, 5):
+        group_left(process, signal.SIGKILL)
+        if not group_ends(process, 5):
+            raise RuntimeError('subprocess group still exists after shutdown; inspect before cleaning')
+    process.wait()
 
 
 def main(argv=None):

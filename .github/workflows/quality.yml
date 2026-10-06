@@ -1,0 +1,58 @@
+name: Quality
+# A pull request's branch runs once, as the pull request; pushes run on main. The release calls
+# it first and publishes the bundles its sea job uploads.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  ready:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      # ready checks the Python of scripts/ and tests/live/ with uvx's ruff.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.23"
+          enable-cache: false
+      - run: pnpm ready
+  sea:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15 # arm64
+            target: darwin-arm64
+          - runner: ubuntu-24.04
+            target: linux-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup
+      - run: pnpm build
+      # No cache: every run downloads and verifies its Node archives afresh, as the release's must.
+      - name: Bundle and smoke
+        id: bundle
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          pnpm sea:build --out "$RUNNER_TEMP/dist" "$TARGET" | tee "$RUNNER_TEMP/sea-build.log"
+          bundle=$(sed -n 's/^bundled //p' "$RUNNER_TEMP/sea-build.log")
+          test -s "$bundle"
+          pnpm sea:smoke "$bundle"
+          echo "path=$bundle" >>"$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bundle-${{ matrix.target }}
+          path: |
+            ${{ steps.bundle.outputs.path }}
+            ${{ steps.bundle.outputs.path }}.sha256
+          if-no-files-found: error
