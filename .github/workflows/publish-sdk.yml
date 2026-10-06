@@ -2,7 +2,7 @@ name: Release
 # Release tags only, vX.Y.Z, naming the SDK's version, which the binaries share. It runs Quality
 # first, whose sea job builds, bundles and smokes both targets; then it uploads those bundles and
 # their .sha256 files to the tag's GitHub release and publishes the SDK to npm. The npm trusted
-# publisher is bound to this file's name.
+# publisher is bound to this file's name; only the tag trigger gates publishing.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -55,7 +55,6 @@ jobs:
   publish:
     needs: release
     runs-on: ubuntu-24.04
-    environment: npm
     permissions:
       contents: read
       id-token: write
