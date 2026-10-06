@@ -134,7 +134,7 @@ Each: what boat does, and what of ours depends on it.
   `idempotencyKey` (`clankerbox-<host>-<instance>`), the unclear-outcome retry
   of every call safe to repeat, every `GET`, `DELETE` and keyed call
   (`retryWindow` 5 minutes, `firstPause` to `longestPause`, `attemptTimeout`),
-  cut short by a caller's own wait, and a state read by `machineReadWait` (7 s,
+  cut short by a caller's own wait, and a state read by `machineReadWait` (8 s,
   under the core's `stateReadWait`); `inProgress` repeated as unclear, and a
   429 too, at least `throttledPause` on, until the `throttledRepeats`th 429,
   so at most three starts; any refusal answering a repeat after

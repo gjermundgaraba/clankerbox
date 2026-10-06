@@ -70,14 +70,15 @@ export interface CheckpointRef {
  * How long the core's read of runtime state may take: each `observe`, and each `admit`, whose
  * reads decide it. An `observe` past it reads every machine `unknown`, and an `admit` past it
  * fails the check, so a list answers within the client's `readTimeout` however slow the
- * runtime is.
+ * runtime is: a second under it, for the request's way to the host and back.
  */
-export const stateReadWait = Duration.subtract(readTimeout, Duration.seconds(2));
+export const stateReadWait = Duration.subtract(readTimeout, Duration.seconds(1));
 
 /**
  * How long a runtime that reads each machine on its own lets one read take, its repeats and its
- * wait for a turn included, before that machine reads `unknown`: under `stateReadWait`, so one
- * hung read makes only its own machine `unknown`.
+ * wait for a turn included, before that machine reads `unknown`: a second under `stateReadWait`,
+ * so one hung read makes only its own machine `unknown`, and 2 s over the 6 s smolvm's status of
+ * an unreachable machine can take (the bump-smolvm skill).
  */
 export const machineReadWait = Duration.subtract(stateReadWait, Duration.seconds(1));
 

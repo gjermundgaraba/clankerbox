@@ -143,7 +143,7 @@ citation moved to the new tag.
   the RAM budget counts `unreachable` as running. The ping's socket waits 3 s
   to read and 3 s to write (`connect_for_state_probe`,
   S@1.22.2:src/agent/client.rs), so `machine status` reads an unreachable
-  machine within the host's 7 s `machineReadWait`, which the live stall test
+  machine within the host's 8 s `machineReadWait`, which the live stall test
   relies on.
 - `stop` returns after the process is dead. It needs the guest's shutdown ack;
   it hard-kills an unreachable VM or an orphaned VMM
@@ -181,7 +181,7 @@ citation moved to the new tag.
   (S@1.22.2:src/cli/vm_common.rs). Only a prefix's first
   use races (the templates above). Ours: `observeConcurrency` 8, no host-side
   lock around smolvm, and each machine's status bounded by `machineReadWait`
-  (7 s from the read's start, its turn included, under the core's 8 s
+  (8 s from the read's start, its turn included, under the core's 9 s
   `stateReadWait`), so a status held by the busy timeout reads `unknown`.
 - When a `machine exec` client is signalled, smolvm SIGKILLs the guest command
   and every descendant; a `setsid -f` child whose parent exits at once

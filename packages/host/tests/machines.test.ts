@@ -221,7 +221,7 @@ const onTestClock = <A>(
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.provide(NodeServices.layer)),
   );
 
-test("a read of runtime state that doesn't answer within 8 s reads every machine unknown", async () => {
+test("a read of runtime state that doesn't answer within 9 s reads every machine unknown", async () => {
   const linux = await host();
 
   await linux.run(linux.machines.create(request("dev")));
@@ -229,14 +229,14 @@ test("a read of runtime state that doesn't answer within 8 s reads every machine
 
   const { result, waited } = await onTestClock(linux, (machines) => machines.get("linux_dev"));
 
-  expect(waited).toBe("8s");
+  expect(waited).toBe("9s");
   expect(Result.getOrThrow(result)).toMatchObject({
     state: "unknown",
     action: { name: "create", status: "done" },
   });
 });
 
-test("an admit whose reads don't answer within 8 s fails the check with Internal, writing nothing", async () => {
+test("an admit whose reads don't answer within 9 s fails the check with Internal, writing nothing", async () => {
   const linux = await host();
 
   await linux.run(linux.machines.create(request("dev")));
@@ -250,10 +250,10 @@ test("an admit whose reads don't answer within 8 s fails the check with Internal
 
   const [row] = await rows(linux);
 
-  expect(waited).toBe("8s");
+  expect(waited).toBe("9s");
   expect(Result.isFailure(result) && [result.failure._tag, result.failure.message]).toEqual([
     "Internal",
-    "start linux_dev: the smolvm runtime's admission check didn't answer within 8s",
+    "start linux_dev: the smolvm runtime's admission check didn't answer within 9s",
   ]);
   expect(row?.action).toEqual({ name: "stop", status: "done" });
   expect(linux.fake.calls).toEqual(["admit linux_dev"]);
