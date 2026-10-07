@@ -239,7 +239,7 @@ test("the SDK's client of another release reads the host's Invalid on every call
         client.machines,
         Effect.flip(client.machine("linux_dev")),
         Effect.flip(client.create("dev", spec)),
-        Effect.flip(client.create("linux_dev", spec)),
+        Effect.flip(client.create("dev", spec, { host: "linux" })),
       ]),
   ).pipe(Effect.provide(older), Effect.runPromise);
 

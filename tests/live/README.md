@@ -102,8 +102,8 @@ setup and preparation, each delete closing the machine's one forwarder port, a
 stopped or never-made machine's too; scp and rsync through the forwarder,
 pinned to the host key, and a re-mint on start of a running VM, which keeps its
 boot; Softnet's block of the host's API port and every host address; placement
-over two hosts, in both list orders: the first host offering the base, a full
-ID, a profile's `host`, and `Precondition` when no host offers it; `disk`
+over two hosts, in both list orders: the first host offering the base,
+`--host`, a profile's `host`, and `Precondition` when no host offers it; `disk`
 checkpoints, forks and restores of a stopped machine, and `Precondition` for a
 capture or fork of a running one; Apple's two-VM limit, refused with `Capacity`
 before any clone; a disk below the base's; a host restart that brings the

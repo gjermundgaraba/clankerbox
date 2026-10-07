@@ -110,7 +110,7 @@ test("a duplicate name is Conflict, and the hosts listing names the host's bases
 
   await run(["create", "dev", ...sizes]);
 
-  const duplicate = await run(["create", "linux_dev", ...sizes]);
+  const duplicate = await run(["create", "dev", ...sizes, "--host", "linux"]);
   const hosts = await run(["hosts"]);
 
   expect(duplicate.code).toBe(1);
@@ -124,7 +124,7 @@ test("a create sent to a host under another host's ID is Invalid at the host, an
 
   await writeFile(config, JSON.stringify({ hosts: [{ id: "mis", url: host.url }] }));
 
-  const created = await cli(["create", "mis_dev", ...sizes, "--config", config], {
+  const created = await cli(["create", "dev", ...sizes, "--host", "mis", "--config", config], {
     http: NodeHttpClient.layerNodeHttp,
   });
 
@@ -212,11 +212,13 @@ test("--json errors from the host carry their tags", async () => {
   const { run } = await setUp(["mac"]);
 
   const notFound = await run(["start", "linux_nope", "--json"]);
-  const invalid = await run(["create", "linux_bad--name", ...sizes, "--json"]);
+  const invalid = await run(["create", "bad--name", ...sizes, "--json"]);
 
   const precondition = await run([
     "create",
-    "linux_nobase",
+    "nobase",
+    "--host",
+    "linux",
     ...sizes.slice(2),
     "--base",
     "nope",

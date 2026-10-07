@@ -25,7 +25,7 @@ import {
   Precondition,
   Unavailable,
 } from "./errors.ts";
-import { formatId, HostId, isId, parseId, parseName } from "./ids.ts";
+import { formatId, HostId, parseId, parseName } from "./ids.ts";
 import {
   type Checkpoint,
   type Host,
@@ -72,7 +72,7 @@ export interface Options {
 }
 
 export interface CreateOptions {
-  /** The host to create on, normally a profile's `host`. A full ID in `target` wins over it. */
+  /** The host to create on instead of placing by base: a `--host` flag or a profile's `host`. */
   readonly host?: string | undefined;
 }
 
@@ -84,11 +84,11 @@ export interface Interface {
   readonly machine: (id: string) => Effect.Effect<Machine, ClankerboxError>;
   readonly checkpoint: (id: string) => Effect.Effect<Checkpoint, ClankerboxError>;
   /**
-   * Creates a machine. `target` is a full ID, which names its host, or a name: then the
-   * options' host, or else the first host in the list that offers the spec's base.
+   * Creates a machine named `name` on the options' host, or else on the first host in the
+   * list that offers the spec's base.
    */
   readonly create: (
-    target: string,
+    name: string,
     spec: MachineSpec,
     options?: CreateOptions,
   ) => Effect.Effect<Machine, ClankerboxError>;
@@ -404,15 +404,9 @@ export const make = (
           : new Precondition({ message });
       }).pipe(Effect.scoped);
 
-    const create = (target: string, spec: MachineSpec, options?: CreateOptions) =>
+    const create = (name: string, spec: MachineSpec, options?: CreateOptions) =>
       Effect.gen(function* () {
-        if (isId(target)) {
-          const { host, name } = yield* parseId(target);
-
-          return yield* createOn(host, name, spec);
-        }
-
-        const name = yield* parseName(target);
+        yield* parseName(name);
 
         if (options?.host !== undefined) {
           return yield* createOn(options.host, name, spec);

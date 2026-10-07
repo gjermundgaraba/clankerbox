@@ -194,10 +194,14 @@ const printResource = <A, Encoded extends object, R>(
 const newId = ({ id }: { readonly id: string }) => id;
 
 const createArguments = {
-  target: Argument.String("target").pipe(
-    Argument.withDescription(
-      "A name, placed on the profile's host or the first host that offers the base, or a full ID <host>_<name>.",
+  name: Argument.String("name").pipe(
+    Argument.withDescription("The new machine's name. Its ID is <host>_<name>."),
+  ),
+  host: Flag.String("host").pipe(
+    Flag.withDescription(
+      "The host to create on. Without it, the profile's host, or else the first host that offers the base.",
     ),
+    Flag.optional,
   ),
   profile: Flag.String("profile").pipe(
     Flag.withDescription(
@@ -242,8 +246,8 @@ const flagSetup = (flags: CreateFlags) =>
 const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
 
 /**
- * The spec and host a create asks for: the profile's fields, each overridden by its flag, and
- * the profile's setup, replaced as a unit by `--setup` with `--setup-timeout`.
+ * The spec and host a create asks for: the profile's fields and host, each overridden by its
+ * flag, and the profile's setup, replaced as a unit by `--setup` with `--setup-timeout`.
  */
 const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
   Effect.gen(function* () {
@@ -282,14 +286,14 @@ const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
       ),
     );
 
-    return { spec, host: profile?.host };
+    return { spec, host: Option.getOrElse(flags.host, () => profile?.host) };
   });
 
 const create = Command.make("create", { ...mutationFlags, ...createArguments }, (flags) =>
   printResource(flags, {
     call: (client, config) =>
       Effect.flatMap(createRequest(flags, config), ({ spec, host }) =>
-        client.create(flags.target, spec, { host }),
+        client.create(flags.name, spec, { host }),
       ),
     encode: encodeMachine,
     text: newId,

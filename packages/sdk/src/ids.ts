@@ -67,9 +67,6 @@ const describeId = (id: string): string | undefined => {
 /** A full `<host>_<name>` ID. */
 export const Id = Schema.String.check(Schema.makeFilter((id: string) => describeId(id) ?? true));
 
-/** Whether `create`'s target is a full ID rather than a bare name: a name has no `_`. */
-export const isId = (target: string): boolean => target.includes(separator);
-
 /** Splits an ID at its `_` into host and name. */
 export const parseId = (id: string): Effect.Effect<IdParts, Invalid> => {
   const problem = describeId(id);

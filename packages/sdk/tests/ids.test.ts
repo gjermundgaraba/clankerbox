@@ -1,6 +1,6 @@
 import { Effect, Exit, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
-import { formatId, HostId, Id, isId, Name, parseId, parseName } from "../src/index.ts";
+import { formatId, HostId, Id, Name, parseId, parseName } from "../src/index.ts";
 
 const parse = (id: string) => Effect.runSyncExit(parseId(id));
 
@@ -141,10 +141,4 @@ test("smolvm accepts <name>-<inst> for valid names, and would refuse the names N
     expect(isName(name), name).toBe(false);
     expect(smolvmAccepts(`${name}-${instance}`), name).toBe(false);
   }
-});
-
-test("a create target with '_' is a full ID, and one without is a name", () => {
-  expect(isId("linux_dev")).toBe(true);
-  expect(isId("dev")).toBe(false);
-  expect(Exit.isFailure(Effect.runSyncExit(parseName("my_box")))).toBe(true);
 });

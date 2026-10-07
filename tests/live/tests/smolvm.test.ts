@@ -115,6 +115,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
     launchCli,
     named,
     id,
+    target,
     control,
     controlled,
     machines,
@@ -217,7 +218,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
       const ran = await cli(
         ["create"],
-        id("main"),
+        ...target("main"),
         ...smolvm.sizes(1024, 20),
         "--setup",
         suite.mainSetup,

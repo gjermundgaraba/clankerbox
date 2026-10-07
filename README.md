@@ -159,13 +159,14 @@ ending in `.json` is a path. A profile file:
 `setup.sh` and the files it needs). Either runs through its `#!` line, and
 `/bin/sh` runs one without; `setup.sh` needn't be executable, and the other
 files keep their modes. Its timeout is required. An optional `host` sends every
-create from the profile to that host instead of placing it. The file's name,
-without `.json`, becomes the machine's `profile` label.
+create from the profile to that host instead of placing it, unless `--host`
+names another. The file's name, without `.json`, becomes the machine's
+`profile` label.
 
 ```sh
 clankerbox hosts                           # every host, its runtime, versions and bases
 clankerbox create dev --profile dev        # placed; prints the new ID, linux_dev
-clankerbox create mac_review --base macos --cpu 4 --ram-mib 8192 --disk-gib 60
+clankerbox create review --host mac --base macos --cpu 4 --ram-mib 8192 --disk-gib 60
 clankerbox create scratch --profile dev --setup ./other.sh --setup-timeout 300
 clankerbox machines                        # every host's machines, with their age
 clankerbox ssh linux_dev -- -l root
@@ -180,7 +181,8 @@ clankerbox checkpoint delete linux_base
 ```
 
 - Every command takes IDs, `<host>_<name>`, except `create`, which takes a
-  name (placed) or a full ID (sent to that host).
+  name. `--host` sends it to that host; without it, it goes to the profile's
+  `host`, or is placed.
 - `create` flags override the profile's fields one by one; `--setup` with
   `--setup-timeout` replaces its setup as a unit, and one without the other is
   refused.
@@ -309,7 +311,7 @@ import { Console, Effect } from "effect";
 const program = Effect.gen(function* () {
   const client = yield* Client.Client;
 
-  // A name is placed on the first host that offers the base; "linux_dev" would name the host.
+  // Placed on the first host that offers the base; `{ host: "linux" }` would name the host.
   const machine = yield* client.create("dev", {
     base: "ubuntu",
     cpu: 2,
@@ -406,7 +408,7 @@ every bump of it:
   A host ID matches `^[a-z][a-z0-9-]{0,31}$`; a name matches
   `^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$` (no `--`, no trailing `-`, which
   smolvm refuses in native names). Neither has `_`, so an ID splits at its one
-  `_`, and a `create` target with `_` is a full ID.
+  `_`.
 - The whole ID matches `^[A-Za-z0-9_-]{1,62}$` because it is written to
   `/var/lib/clankerbox/machine-id`, and clankercreds accepts only that
   pattern. clankercreds is a separate tool that profiles install in guests to
@@ -426,8 +428,8 @@ every bump of it:
 
 ### Placement
 
-Only `create` is placed (`client.ts`, `place`). A full ID, or else the
-profile's `host`, sends it to that host. Otherwise the client reads every
+Only `create` is placed (`client.ts`, `place`). A host in its options (the
+CLI's `--host`, or else the profile's `host`) sends it to that host. Otherwise the client reads every
 host's bases in parallel and goes through the answers in list order: the
 first host that answers and offers the base wins, and the reads still out are
 interrupted, so a silent host after it delays nothing. A host that fails its

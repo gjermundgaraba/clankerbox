@@ -202,21 +202,18 @@ test("a retryable error says so in --json", async () => {
   const dir = await scratch(owned);
   const config = await writeConfig(dir, ["linux"]);
 
-  const { code, stdout } = await cli(
-    ["create", "linux_dev", ...sizes, "--json", "--config", config],
-    {
-      endpoints: [
-        [
-          "linux",
-          host({
-            id: "linux",
-            bases: ["ubuntu"],
-            create: () => Effect.fail(new Capacity({ message: "RAM budget is full" })),
-          }),
-        ],
+  const { code, stdout } = await cli(["create", "dev", ...sizes, "--json", "--config", config], {
+    endpoints: [
+      [
+        "linux",
+        host({
+          id: "linux",
+          bases: ["ubuntu"],
+          create: () => Effect.fail(new Capacity({ message: "RAM budget is full" })),
+        }),
       ],
-    },
-  );
+    ],
+  });
 
   expect(code).toBe(1);
   expect(decodeJsonError(stdout).error).toEqual({
@@ -245,12 +242,12 @@ test("--timeout stops waiting, says the action may have run, and exits 1", async
   const linux = host({ id: "linux", bases: ["ubuntu"], create: () => Effect.never });
   const endpoints = [["linux", linux]] as const;
 
-  const text = await cli(["create", "linux_dev", ...sizes, "--timeout", "1", "--config", config], {
+  const text = await cli(["create", "dev", ...sizes, "--timeout", "1", "--config", config], {
     endpoints,
   });
 
   const json = await cli(
-    ["create", "linux_slow", ...sizes, "--timeout", "1", "--json", "--config", config],
+    ["create", "slow", ...sizes, "--timeout", "1", "--json", "--config", config],
     { endpoints },
   );
 
@@ -331,6 +328,52 @@ test("create --profile NAME reads NAME.json from the profiles directory, with it
   expect(request?.profile).toBe("dev");
   expect(request?.setup?.timeoutSeconds).toBe(900);
   expect(request?.setup?.script.startsWith("#!/bin/sh\n")).toBe(true);
+});
+
+test("create --host sends the create to that host, over placement and the profile's host", async () => {
+  const dir = await scratch(owned);
+  const file = join(dir, "dev.json");
+
+  await writeFile(
+    file,
+    JSON.stringify({ base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10, host: "linux" }),
+  );
+
+  const config = await writeConfig(dir, ["linux", "hetzner"]);
+  const linux = host({ id: "linux", bases: ["ubuntu"] });
+  const hetzner = host({ id: "hetzner", bases: ["ubuntu"] });
+
+  const endpoints = [
+    ["linux", linux],
+    ["hetzner", hetzner],
+  ] as const;
+
+  const bySizes = await cli(["create", "a", ...sizes, "--host", "hetzner", "--config", config], {
+    endpoints,
+  });
+
+  const byProfile = await cli(
+    ["create", "b", "--profile", file, "--host", "hetzner", "--config", config],
+    { endpoints },
+  );
+
+  expect([bySizes.stdout, byProfile.stdout]).toEqual(["hetzner_a", "hetzner_b"]);
+  expect(linux.calls).toEqual([]);
+});
+
+test("create takes a name, not an ID, and refuses one with '_' before sending anything", async () => {
+  const dir = await scratch(owned);
+  const config = await writeConfig(dir, ["linux"]);
+  const linux = host({ id: "linux", bases: ["ubuntu"] });
+
+  const { code, stdout } = await cli(
+    ["create", "linux_dev", ...sizes, "--json", "--config", config],
+    { endpoints: [["linux", linux]] },
+  );
+
+  expect(code).toBe(1);
+  expect(decodeJsonError(stdout).error).toMatchObject({ tag: "Invalid", retryable: false });
+  expect(linux.calls).toEqual([]);
 });
 
 test("create --profile takes a path to a profile file", async () => {
