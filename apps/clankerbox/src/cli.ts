@@ -14,16 +14,18 @@ import { Console, DateTime, Duration, Effect, FileSystem, Option, Path, Schema }
 import { Argument, Command, Flag } from "effect/cli";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
-import { type LoadedConfig, loadConfig, profileFile } from "./config.ts";
+import { type LoadedConfig, loadConfig, profileFile, profileFiles } from "./config.ts";
 import {
   checkpointRows,
   encodeCheckpoint,
   encodeHost,
   encodeMachine,
+  encodeProfile,
   Exited,
   fail,
   hostRows,
   machineRows,
+  profileRows,
   table,
   unreachableDocument,
   warnUnreachable,
@@ -161,6 +163,29 @@ const machines = listCommand({
   encode: encodeMachine,
   rows: machineRows,
 });
+
+/**
+ * The profiles in the config's profiles directory, read on the client: no host is asked. A
+ * profile file that doesn't decode fails the command, naming the file.
+ */
+const profiles = Command.make("profiles", clientFlags, (flags) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const config = yield* loadConfig(flags.config);
+    const { directory, files } = yield* profileFiles(config);
+    const loaded = yield* Effect.forEach(files, loadProfile);
+
+    yield* print(
+      flags.json,
+      () => ({ profiles: loaded.map(encodeProfile) }),
+      () => table(profileRows(loaded, (setup) => path.relative(directory, setup))),
+    );
+  }).pipe(Effect.catch(fail(flags.json))),
+).pipe(
+  Command.withDescription(
+    "List the profiles in the config's profiles directory, with each one's base, sizes, setup and host.",
+  ),
+);
 
 /**
  * The body of a command that makes one client call and prints the resource it replies with:
@@ -438,6 +463,7 @@ const checkpoint = Command.make("checkpoint").pipe(
 export const clientCommands = [
   hosts,
   machines,
+  profiles,
   create,
   start,
   stop,

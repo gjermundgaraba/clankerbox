@@ -4,7 +4,9 @@ import {
   type ClankerboxError,
   type Client,
   Host,
+  type LoadedProfile,
   Machine,
+  Profile,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Console, Data, DateTime, Duration, Effect, Runtime, Schema } from "effect";
 
@@ -116,11 +118,37 @@ export const hostRows = (hosts: ReadonlyArray<Host>) => [
   ]),
 ];
 
+/** Each profile's fields, with its setup path as `setupPath` shows it. */
+export const profileRows = (
+  profiles: ReadonlyArray<LoadedProfile>,
+  setupPath: (path: string) => string,
+) => [
+  ["NAME", "BASE", "CPU", "RAM_MIB", "DISK_GIB", "SETUP", "TIMEOUT_S", "HOST"],
+  ...profiles.map((profile) => [
+    profile.label,
+    profile.base,
+    String(profile.cpu),
+    String(profile.ramMib),
+    String(profile.diskGib),
+    profile.setup === undefined ? "-" : setupPath(profile.setup.path),
+    profile.setup === undefined ? "-" : String(profile.setup.timeoutSeconds),
+    profile.host ?? "-",
+  ]),
+];
+
 export const encodeMachine = Schema.encodeSync(Machine);
 
 export const encodeCheckpoint = Schema.encodeSync(Checkpoint);
 
 export const encodeHost = Schema.encodeSync(Host);
+
+const encodeProfileFields = Schema.encodeSync(Profile);
+
+/** A loaded profile as JSON: its name, then its fields, with `setup.path` resolved. */
+export const encodeProfile = (profile: LoadedProfile) => ({
+  name: profile.label,
+  ...encodeProfileFields(profile),
+});
 
 /** The hosts a fan-out couldn't read, as JSON fields. */
 export const unreachableDocument = (unreachable: ReadonlyArray<Client.Unreachable>) =>

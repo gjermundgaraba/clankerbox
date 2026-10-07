@@ -95,3 +95,40 @@ export const profileFile = (
 
     return path.join(config.profiles, `${profile}.json`);
   });
+
+/**
+ * The config's profiles directory and the profile files in it, `NAME.json` each, in name
+ * order.
+ */
+export const profileFiles = (
+  config: LoadedConfig,
+): Effect.Effect<
+  { readonly directory: string; readonly files: Array<string> },
+  Invalid,
+  FileSystem.FileSystem | Path.Path
+> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = config.profiles;
+
+    if (directory === undefined) {
+      return yield* new Invalid({ message: "the client config has no profiles directory" });
+    }
+
+    const entries = yield* fs.readDirectory(directory).pipe(
+      Effect.mapError(
+        (error) =>
+          new Invalid({
+            message: `couldn't read profiles directory ${directory}: ${error.message}`,
+          }),
+      ),
+    );
+
+    const files = entries
+      .filter((entry) => entry.endsWith(".json"))
+      .sort()
+      .map((entry) => path.join(directory, entry));
+
+    return { directory, files };
+  });

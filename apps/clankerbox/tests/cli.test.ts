@@ -290,6 +290,110 @@ test("--timeout must be a positive number of seconds", async () => {
   expect(linux.calls).toEqual([]);
 });
 
+/** A profiles directory holding `dev.json`, with a setup and host, `small.json` and a non-profile. */
+const writeProfiles = async (dir: string) => {
+  const profiles = join(dir, "profiles");
+
+  await mkdir(join(profiles, "dev-recipe"), { recursive: true });
+  await writeFile(join(profiles, "dev-recipe", "setup.sh"), "#!/bin/sh\ntrue\n");
+  await writeFile(
+    join(profiles, "small.json"),
+    JSON.stringify({ base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 }),
+  );
+  await writeFile(
+    join(profiles, "dev.json"),
+    JSON.stringify({
+      base: "ubuntu-dev",
+      cpu: 2,
+      ramMib: 4096,
+      diskGib: 20,
+      setup: { path: "dev-recipe", timeoutSeconds: 900 },
+      host: "hetzner",
+    }),
+  );
+  await writeFile(join(profiles, "notes.txt"), "not a profile\n");
+
+  return profiles;
+};
+
+test("profiles lists the profiles directory's profiles by name, without asking a host", async () => {
+  const dir = await scratch(owned);
+
+  await writeProfiles(dir);
+
+  const config = await writeConfig(dir, ["linux"], "profiles");
+  const { code, stdout } = await cli(["profiles", "--config", config]);
+  const rows = stdout.split("\n").map((line) => line.split(/\s+/u));
+
+  expect(code).toBe(0);
+  expect(rows).toEqual([
+    ["NAME", "BASE", "CPU", "RAM_MIB", "DISK_GIB", "SETUP", "TIMEOUT_S", "HOST"],
+    ["dev", "ubuntu-dev", "2", "4096", "20", "dev-recipe", "900", "hetzner"],
+    ["small", "ubuntu", "1", "1024", "10", "-", "-", "-"],
+  ]);
+});
+
+test("profiles --json carries each profile's name and fields, with its setup path resolved", async () => {
+  const dir = await scratch(owned);
+  const profiles = await writeProfiles(dir);
+  const config = await writeConfig(dir, ["linux"], "profiles");
+
+  const { code, stdout } = await cli(["profiles", "--json", "--config", config]);
+
+  expect(code).toBe(0);
+  expect(JSON.parse(stdout)).toEqual({
+    profiles: [
+      {
+        name: "dev",
+        base: "ubuntu-dev",
+        cpu: 2,
+        ramMib: 4096,
+        diskGib: 20,
+        setup: { path: join(profiles, "dev-recipe"), timeoutSeconds: 900 },
+        host: "hetzner",
+      },
+      { name: "small", base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 },
+    ],
+  });
+});
+
+test("profiles fails without a profiles directory, or on a profile that doesn't decode", async () => {
+  const dir = await scratch(owned);
+  const bare = await writeConfig(dir, ["linux"]);
+
+  const unset = await cli(["profiles", "--json", "--config", bare]);
+
+  expect(unset.code).toBe(1);
+  expect(decodeJsonError(unset.stdout).error).toMatchObject({
+    tag: "Invalid",
+    message: expect.stringContaining("no profiles directory"),
+  });
+
+  const missing = await cli([
+    "profiles",
+    "--json",
+    "--config",
+    await writeConfig(dir, ["linux"], "absent"),
+  ]);
+
+  expect(missing.code).toBe(1);
+  expect(decodeJsonError(missing.stdout).error.tag).toBe("Invalid");
+
+  const profiles = await writeProfiles(dir);
+
+  await writeFile(join(profiles, "broken.json"), JSON.stringify({ base: "ubuntu" }));
+
+  const broken = await cli([
+    "profiles",
+    "--json",
+    "--config",
+    await writeConfig(dir, ["linux"], "profiles"),
+  ]);
+
+  expect(broken.code).toBe(1);
+  expect(decodeJsonError(broken.stdout).error.message).toContain("broken.json");
+});
+
 test("create --profile NAME reads NAME.json from the profiles directory, with its label, setup and host", async () => {
   const dir = await scratch(owned);
   const profiles = join(dir, "profiles");

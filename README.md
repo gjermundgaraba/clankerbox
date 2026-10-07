@@ -161,10 +161,12 @@ ending in `.json` is a path. A profile file:
 files keep their modes. Its timeout is required. An optional `host` sends every
 create from the profile to that host instead of placing it, unless `--host`
 names another. The file's name, without `.json`, becomes the machine's
-`profile` label.
+`profile` label. `clankerbox profiles` lists the profiles directory's profiles,
+reading only local files.
 
 ```sh
 clankerbox hosts                           # every host, its runtime, versions and bases
+clankerbox profiles                        # the profiles directory's profiles
 clankerbox create dev --profile dev        # placed; prints the new ID, linux_dev
 clankerbox create review --host mac --base macos --cpu 4 --ram-mib 8192 --disk-gib 60
 clankerbox create scratch --profile dev --setup ./other.sh --setup-timeout 300
