@@ -122,6 +122,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
     cliWith,
     named,
     id,
+    target,
     control,
     controlled,
     machines,
@@ -176,7 +177,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
 
       const ran = await cli(
         ["create"],
-        id("main"),
+        ...target("main"),
         ...tart.sizes(),
         "--setup",
         suite.mainSetup,
@@ -337,7 +338,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
   );
 
   test(
-    "placement: a create by name lands on the first host in list order that offers its base, a full ID and a profile's host send it to that host, and a base no host offers is Precondition naming each host's bases",
+    "placement: a create lands on the first host in list order that offers its base, --host and a profile's host send it to that host, and a base no host offers is Precondition naming each host's bases",
     async () => {
       const { host, second } = suite.env;
 
@@ -374,17 +375,17 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
         [secondFirst, named("pl-first"), small, second.id],
         // Only the second host offers macos-b, and it is listed last.
         [hostFirst, named("pl-skip"), rebased(small, "macos-b"), second.id],
-        // A full ID names the host, whatever placement by base would pick.
-        [secondFirst, id("pl-full"), small, host.id],
+        // --host names the host, whatever placement by base would pick.
+        [secondFirst, named("pl-flag"), [...small, "--host", host.id], host.id],
         // So does the profile's host.
         [secondFirst, named("pl-prof"), ["--profile", profile], host.id],
       ] as const;
 
-      for (const [config, target, args] of placed) {
-        const error = failure(await cliWith(config, ["create"], target, ...args, "--json"));
+      for (const [config, name, args] of placed) {
+        const error = failure(await cliWith(config, ["create"], name, ...args, "--json"));
 
-        expect(error.tag, target).toBe("Precondition");
-        expect(error.message, target).toContain("should be larger than the current disk size");
+        expect(error.tag, name).toBe("Precondition");
+        expect(error.message, name).toContain("should be larger than the current disk size");
       }
 
       const nowhere = failure(
@@ -418,14 +419,12 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
           expect.objectContaining({ status: "failed" }),
           undefined,
         ],
-        [id("pl-full")]: [expect.objectContaining({ status: "failed" }), undefined],
+        [id("pl-flag")]: [expect.objectContaining({ status: "failed" }), undefined],
         [id("pl-prof")]: [expect.objectContaining({ status: "failed" }), "placed"],
       });
 
-      for (const [, target, , landed] of placed) {
-        const name = target.slice(target.indexOf("_") + 1);
-        const full = target.includes("_") ? target : `${landed}_${target}`;
-        const deleted = await cliWith(secondFirst, ["delete"], full, "--json");
+      for (const [, name, , landed] of placed) {
+        const deleted = await cliWith(secondFirst, ["delete"], `${landed}_${name}`, "--json");
 
         expect(deleted.code, deleted.stdout).toBe(0);
         expect(await controlled(TartNatives, "natives", name, landed)).toEqual(tart.nothing);

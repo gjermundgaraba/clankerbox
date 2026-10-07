@@ -140,6 +140,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
     cli,
     named,
     id,
+    target,
     control,
     controlled,
     machines,
@@ -245,7 +246,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       const ran = await counted("create", "main", () =>
         cli(
           ["create"],
-          id("main"),
+          ...target("main"),
           ...boat.sizes(),
           "--setup",
           suite.mainSetup,

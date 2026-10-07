@@ -222,7 +222,7 @@ test("placement goes through the answers in list order, not in the order they ar
   expect(second.creates).toHaveLength(0);
 });
 
-test("a full ID sends the create to that host, whatever placement would pick", async () => {
+test("a host in the options sends the create there, whatever placement would pick", async () => {
   const first = host({ id: "linux", bases: ["ubuntu"] });
   const second = host({ id: "hetzner", bases: ["ubuntu"] });
 
@@ -231,33 +231,35 @@ test("a full ID sends the create to that host, whatever placement would pick", a
       ["linux", first],
       ["hetzner", second],
     ],
-    (client) => client.create("hetzner_dev", spec),
+    (client) => client.create("dev", spec, { host: "hetzner" }),
   );
 
   expect(made.id).toBe("hetzner_dev");
   expect(first.calls).toEqual([]);
 });
 
-test("a profile's host overrides placement by base, and a full ID overrides the profile", async () => {
-  const first = host({ id: "linux", bases: ["ubuntu"] });
-  const second = host({ id: "hetzner", bases: ["ubuntu"] });
+test("a host that isn't in the host list is Invalid and sends nothing", async () => {
+  const linux = host({ id: "linux", bases: ["ubuntu"] });
 
-  const endpoints = [
-    ["linux", first],
-    ["hetzner", second],
-  ] as const;
-
-  const byProfile = await withClient(endpoints, (client) =>
-    client.create("dev", spec, { host: "hetzner" }),
+  const error = await withClient([["linux", linux]], (client) =>
+    Effect.flip(client.create("dev", spec, { host: "mac" })),
   );
 
-  const byId = await withClient(endpoints, (client) =>
-    client.create("linux_box", spec, { host: "hetzner" }),
+  expect(error._tag).toBe("Invalid");
+  expect(error.message).toContain("host mac isn't in the host list");
+  expect(linux.calls).toEqual([]);
+});
+
+test("a create name is never a full ID: one with '_' is Invalid and sends nothing", async () => {
+  const linux = host({ id: "linux", bases: ["ubuntu"] });
+
+  const error = await withClient([["linux", linux]], (client) =>
+    Effect.flip(client.create("linux_dev", spec)),
   );
 
-  expect(byProfile.id).toBe("hetzner_dev");
-  expect(byId.id).toBe("linux_box");
-  expect(first.calls).toEqual(["machine.create"]);
+  expect(error._tag).toBe("Invalid");
+  expect(error.message).toContain('name "linux_dev"');
+  expect(linux.calls).toEqual([]);
 });
 
 test("with no host offering the base and every host answering, create is Precondition listing the bases", async () => {
@@ -343,7 +345,6 @@ test("every call kind sends the SDK's version", async () => {
       yield* client.machines;
       yield* client.checkpoints;
       yield* client.create("dev", spec);
-      yield* client.create("linux_full", spec);
       yield* client.create("named", spec, { host: "linux" });
       yield* client.machine("linux_dev");
       yield* client.start("linux_dev");
@@ -358,7 +359,7 @@ test("every call kind sends the SDK's version", async () => {
   );
 
   // Placement reads the host before the create by name.
-  expect(linux.calls).toHaveLength(16);
+  expect(linux.calls).toHaveLength(15);
   expect(linux.versions).toEqual(linux.calls.map(() => version));
 });
 
@@ -388,7 +389,7 @@ test("a mutation whose reply is lost is Unavailable, names the ID, and is not re
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 
   const error = await withClient([["linux", { lost: linux }]], (client) =>
-    Effect.flip(client.create("linux_dev", spec)),
+    Effect.flip(client.create("dev", spec, { host: "linux" })),
   );
 
   expect(error._tag).toBe("Unavailable");
@@ -528,7 +529,7 @@ test("the read timeout doesn't bound a mutation", async () => {
 
   const made = await withClient(
     [["linux", linux]],
-    (client) => client.create("linux_dev", spec),
+    (client) => client.create("dev", spec, { host: "linux" }),
     readBriefly,
   );
 
@@ -561,11 +562,15 @@ test("a spec that doesn't encode is Invalid, sends nothing, and never carries it
 
   const error = await withClient([["linux", linux]], (client) =>
     Effect.flip(
-      client.create("linux_dev", {
-        ...spec,
-        cpu: 0,
-        setup: { script: `#!/bin/sh\necho ${marker}\n`, timeoutSeconds: 60 },
-      }),
+      client.create(
+        "dev",
+        {
+          ...spec,
+          cpu: 0,
+          setup: { script: `#!/bin/sh\necho ${marker}\n`, timeoutSeconds: 60 },
+        },
+        { host: "linux" },
+      ),
     ),
   );
 

@@ -345,6 +345,9 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
 
   const id = (name: string) => `${env.host.id}_${named(name)}`;
 
+  /** A create's name and `--host`, which send it to the run's host. */
+  const target = (name: string) => [named(name), "--host", env.host.id];
+
   const control = (...args: ReadonlyArray<string>) => run(env.control, args);
 
   const controlled: Controlled = async (schema, ...args) => {
@@ -362,11 +365,11 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
 
   /** Creates `name` with no setup, at `sizes(...sizeArgs)`. */
   const createBare = (name: string, ...sizeArgs: ReadonlyArray<number>) =>
-    cli(["create"], id(name), ...runtime.sizes(...sizeArgs), "--json");
+    cli(["create"], ...target(name), ...runtime.sizes(...sizeArgs), "--json");
 
   /** The arguments of a create of `name` with `script` as its setup file. */
   const createArgs = async (name: string, script: string, timeoutSeconds: number) => [
-    id(name),
+    ...target(name),
     ...runtime.sizes(),
     "--setup",
     await writeFileIn(dir, `${name}-setup.sh`, script, 0o755),
@@ -503,6 +506,7 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     launchCli,
     named,
     id,
+    target,
     control,
     controlled,
     machines,
