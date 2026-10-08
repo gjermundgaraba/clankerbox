@@ -26,9 +26,8 @@ minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - vite-plus
   - "@gjermundgaraba/effect-actions"
-  - effect@4.0.2
-  - "@effect/platform-node@4.0.2"
-  - "@effect/platform-node-shared@4.0.2"
+  - effect
+  - "@effect/*"
   - "@voidzero-dev/*"
   - oxlint
   - "@oxlint/*"
