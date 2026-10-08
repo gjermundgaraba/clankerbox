@@ -65,15 +65,15 @@ export class Capacity extends Schema.TaggedError<Capacity>()(
 
 /**
  * The client couldn't reach the host, or lost its reply. Only the client library produces
- * it. `access` is the access of the action that met it: a mutation's request may have
- * reached the host and run, so it is never retryable.
+ * it. `readOnly` is that of the action that met it: a mutation's request may have reached
+ * the host and run, so it is never retryable.
  */
 export class Unavailable extends Schema.TaggedError<Unavailable>()("Unavailable", {
   message: Schema.String,
-  access: Schema.Literals(["read", "write"]),
+  readOnly: Schema.Boolean,
 }) {
   get retryable(): boolean {
-    return this.access === "read";
+    return this.readOnly;
   }
 }
 

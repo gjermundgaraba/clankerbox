@@ -27,8 +27,8 @@ test("a busy conflict is retryable and a name that exists is not", () => {
 });
 
 test("Unavailable is retryable for a read and not for a mutation", () => {
-  expect(new Unavailable({ message: "m", access: "read" }).retryable).toBe(true);
-  expect(new Unavailable({ message: "m", access: "write" }).retryable).toBe(false);
+  expect(new Unavailable({ message: "m", readOnly: true }).retryable).toBe(true);
+  expect(new Unavailable({ message: "m", readOnly: false }).retryable).toBe(false);
 });
 
 test("a recorded action's error is a host error, never Unavailable", () => {

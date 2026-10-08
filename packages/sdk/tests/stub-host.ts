@@ -8,12 +8,10 @@ import { DateTime, Effect, Layer } from "effect";
 import { FetchHttpClient, type HttpClient, HttpRouter, HttpServer } from "effect/http";
 import {
   type Checkpoint,
-  CheckpointHttp,
   type CreateRequest,
   type HostError,
-  HostHttp,
+  Http,
   type Machine,
-  MachineHttp,
   NotFound,
   type Runtime,
   version,
@@ -93,21 +91,21 @@ export const stubHost = (options: StubHostOptions) => {
         )
       : options.create(request);
 
-  const machineApp = Action.implement(MachineHttp.actions, {
-    list: () => Effect.as(record("machine.list"), [...machines.values()]),
-    get: ({ id }) => Effect.andThen(record("machine.get"), find(id)),
-    create: (request) =>
+  const app = Action.implement(Http.actions, {
+    listMachines: () => Effect.as(record("machine.list"), [...machines.values()]),
+    getMachine: ({ id }) => Effect.andThen(record("machine.get"), find(id)),
+    createMachine: (request) =>
       Effect.andThen(
         Effect.sync(() => creates.push(request)),
         Effect.andThen(record("machine.create"), create(request)),
       ),
-    start: ({ id }) => Effect.andThen(record("machine.start"), find(id)),
-    stop: ({ id }) =>
+    startMachine: ({ id }) => Effect.andThen(record("machine.start"), find(id)),
+    stopMachine: ({ id }) =>
       Effect.andThen(
         record("machine.stop"),
         Effect.map(find(id), (found): Machine => ({ ...found, state: "stopped" })),
       ),
-    delete: ({ id }) =>
+    deleteMachine: ({ id }) =>
       Effect.andThen(
         record("machine.delete"),
         Effect.andThen(
@@ -115,12 +113,12 @@ export const stubHost = (options: StubHostOptions) => {
           Effect.sync(() => machines.delete(id)),
         ),
       ),
-    fork: ({ machine: source, name }) =>
+    forkMachine: ({ machine: source, name }) =>
       Effect.andThen(
         record("machine.fork"),
         Effect.flatMap(find(source), (found) => add({ ...found, id: `${options.id}_${name}` })),
       ),
-    restore: ({ checkpoint, name }) =>
+    restoreMachine: ({ checkpoint, name }) =>
       Effect.andThen(
         record("machine.restore"),
         Effect.flatMap(findCheckpoint(checkpoint), (found) =>
@@ -136,12 +134,9 @@ export const stubHost = (options: StubHostOptions) => {
           ),
         ),
       ),
-  });
-
-  const checkpointApp = Action.implement(CheckpointHttp.actions, {
-    list: () => Effect.as(record("checkpoint.list"), [...checkpoints.values()]),
-    get: ({ id }) => Effect.andThen(record("checkpoint.get"), findCheckpoint(id)),
-    capture: ({ machine: source, name }) =>
+    listCheckpoints: () => Effect.as(record("checkpoint.list"), [...checkpoints.values()]),
+    getCheckpoint: ({ id }) => Effect.andThen(record("checkpoint.get"), findCheckpoint(id)),
+    captureCheckpoint: ({ machine: source, name }) =>
       Effect.andThen(
         record("checkpoint.capture"),
         Effect.flatMap(find(source), (found) =>
@@ -164,7 +159,7 @@ export const stubHost = (options: StubHostOptions) => {
           }),
         ),
       ),
-    delete: ({ id }) =>
+    deleteCheckpoint: ({ id }) =>
       Effect.andThen(
         record("checkpoint.delete"),
         Effect.andThen(
@@ -172,10 +167,7 @@ export const stubHost = (options: StubHostOptions) => {
           Effect.sync(() => checkpoints.delete(id)),
         ),
       ),
-  });
-
-  const hostApp = Action.implement(HostHttp.actions, {
-    get: () =>
+    getHost: () =>
       Effect.as(record("host.get"), {
         id: options.id,
         runtime,
@@ -185,11 +177,7 @@ export const stubHost = (options: StubHostOptions) => {
       }),
   });
 
-  const routes = Layer.mergeAll(
-    ActionHttp.layer(MachineHttp, [machineApp]),
-    ActionHttp.layer(CheckpointHttp, [checkpointApp]),
-    ActionHttp.layer(HostHttp, [hostApp]),
-  );
+  const routes = ActionHttp.layer(Http, [app]);
 
   const web = HttpRouter.toWebHandler(routes.pipe(Layer.provide(HttpServer.layerServices)), {
     disableLogger: true,
@@ -199,7 +187,7 @@ export const stubHost = (options: StubHostOptions) => {
     id: options.id,
     /** Every create request the host received, in order. */
     creates,
-    /** Every action the host ran, as `<area>.<action>`. */
+    /** Every action the host ran, labelled such as `machine.start`. */
     calls,
     /** The version header of every request the host received, in order. */
     versions,

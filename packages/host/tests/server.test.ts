@@ -1,10 +1,8 @@
 /** The host API over a real loopback server, called through the SDK's client and raw HTTP. */
 import {
-  CheckpointHttp,
   Client,
-  HostHttp,
+  Http,
   Invalid,
-  MachineHttp,
   type MachineSpec,
   version,
   versionHeader,
@@ -128,7 +126,7 @@ const post = async (
 };
 
 const createRaw = (url: string, id: string, headers?: Record<string, string>) =>
-  post(url, "machine/create", { id, ...spec }, headers);
+  post(url, "createMachine", { id, ...spec }, headers);
 
 test("a raw create whose ID is too long is InvalidInput, one naming another host Invalid, and neither makes anything", async () => {
   const { url, fake, run, store } = await serve();
@@ -157,10 +155,10 @@ test("a request of another release, or with no version, is Invalid and runs noth
   const { url, fake, run, store } = await serve();
   const older = versioned(bump(1));
   const created = await createRaw(url, "linux_dev", older);
-  const read = await post(url, "host/get", {}, older);
+  const read = await post(url, "getHost", {}, older);
   const unversioned = await createRaw(url, "linux_dev", {});
   // A client of another release may send another shape: the version is checked first.
-  const malformed = await post(url, "machine/create", { id: "linux_dev", labels: [] }, older);
+  const malformed = await post(url, "createMachine", { id: "linux_dev", labels: [] }, older);
 
   for (const answer of [created, read, unversioned, malformed]) {
     expect(answer.status).toBe(400);
@@ -178,7 +176,7 @@ test("a request of another release, or with no version, is Invalid and runs noth
   expect(fake.calls).toEqual(["startup"]);
 });
 
-test("every action of every area refuses a request with no version, or another release's, and runs nothing", async () => {
+test("every action refuses a request with no version, or another release's, and runs nothing", async () => {
   const { url, fake, run, store } = await serve();
 
   expect((await createRaw(url, "linux_dev")).status).toBe(200);
@@ -186,25 +184,7 @@ test("every action of every area refuses a request with no version, or another r
   const calls = [...fake.calls];
   const rows = await run(store.list);
 
-  const paths = [MachineHttp, CheckpointHttp, HostHttp].flatMap((binding) =>
-    binding.actions.map((action) => `${binding.prefix}/${action.name}`.replace(/^\/api\//u, "")),
-  );
-
-  expect(paths).toEqual([
-    "machine/list",
-    "machine/get",
-    "machine/create",
-    "machine/start",
-    "machine/stop",
-    "machine/delete",
-    "machine/fork",
-    "machine/restore",
-    "checkpoint/list",
-    "checkpoint/get",
-    "checkpoint/capture",
-    "checkpoint/delete",
-    "host/get",
-  ]);
+  const paths = Http.actions.map((action) => action.name);
 
   for (const path of paths) {
     for (const headers of [{}, versioned(bump(1))]) {
@@ -294,7 +274,7 @@ test("a create whose client disconnects still finishes and records its outcome",
   const { release, entered } = fake.holdNext("create");
   const abort = new AbortController();
 
-  const sent = fetch(`${url}/api/machine/create`, {
+  const sent = fetch(`${url}/api/createMachine`, {
     method: "POST",
     headers: { "content-type": "application/json", ...versioned(version) },
     body: JSON.stringify({ id: "linux_dev", ...spec }),

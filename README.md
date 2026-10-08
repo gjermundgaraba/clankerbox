@@ -294,12 +294,15 @@ every stock base by digest.
 ## SDK
 
 `@gjermundgaraba/clankerbox-sdk` (`packages/sdk`) holds the Schemas, the
-API bindings, the errors, the profile file schema and the client library. It
+API binding, the errors, the profile file schema and the client library. It
 is versioned with the binaries: SDK 1.2.3 talks to hosts of release 1.2.x.
 Every request carries the client's version in a `clankerbox-version` header,
 and a host refuses one of another major.minor with `Invalid`, naming both
 versions, before it runs anything. A request without the header is refused
-too: a client that predates it is of another release anyway.
+too: a client that predates it is of another release anyway. So any change
+to the wire (a route, an input, a reply or an error) takes a new minor
+release, and the check refuses a mismatched pair rather than letting it
+misread a reply.
 `effect` `~4.0.2` is a peer dependency, so an app has one copy of Effect and
 Schema identity holds; so is `@effect/platform-node` `~4.0.2`, needed only by
 the `/node` entry. The range is Effect's 4.0.x patches, as effect-actions
@@ -400,8 +403,8 @@ every bump of it:
 - **No clankerbox code runs in a guest.** Setup and preparation are host-side
   scripts over the runtime's exec.
 - **The API** (`packages/sdk/src/api.ts`) is unary HTTP through
-  effect-actions: machine, checkpoint and host bindings, each action at
-  `POST /api/<area>/<action>`. Input is closed: undeclared fields are refused,
+  effect-actions: one binding, each action at `POST /api/<action>`, such as
+  `/api/createMachine`. Input is closed: undeclared fields are refused,
   and input that doesn't decode is effect-actions' 400 `InvalidInput`, which
   the client reports as `Invalid`. A request of another release, by its
   `clankerbox-version` header, is `Invalid` before its input is decoded
@@ -864,15 +867,15 @@ These are known, not guarded, and accepted:
 
 ## Repository layout
 
-| Path                   | Contents                                                                                       |
-| ---------------------- | ---------------------------------------------------------------------------------------------- |
-| `apps/clankerbox/`     | The binary: the CLI commands, `ssh`, and the `host` role                                       |
-| `packages/sdk/`        | The SDK: Schemas, API bindings, errors, IDs, the profile schema, recipe packing and the client |
-| `packages/host/`       | The host: state, claims, actions, setup and preparation, ports, and the three runtimes         |
-| `tools/release/`       | The SEA build, bundles with their notices, and the smoke test                                  |
-| `tools/oxlint/`        | The anti-slop lint plugin, vendored from upstream                                              |
-| `tests/live/`          | Live acceptance suites per runtime, with their drivers                                         |
-| `scripts/work_runs.py` | Disposable build and test runs ([WORK_RUNS.md](scripts/WORK_RUNS.md))                          |
+| Path                   | Contents                                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------------- |
+| `apps/clankerbox/`     | The binary: the CLI commands, `ssh`, and the `host` role                                      |
+| `packages/sdk/`        | The SDK: Schemas, API binding, errors, IDs, the profile schema, recipe packing and the client |
+| `packages/host/`       | The host: state, claims, actions, setup and preparation, ports, and the three runtimes        |
+| `tools/release/`       | The SEA build, bundles with their notices, and the smoke test                                 |
+| `tools/oxlint/`        | The anti-slop lint plugin, vendored from upstream                                             |
+| `tests/live/`          | Live acceptance suites per runtime, with their drivers                                        |
+| `scripts/work_runs.py` | Disposable build and test runs ([WORK_RUNS.md](scripts/WORK_RUNS.md))                         |
 
 ## Development
 

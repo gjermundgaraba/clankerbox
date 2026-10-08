@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerbox-sdk",
-  "version": "0.12.2",
+  "version": "0.13.0",
   "description": "clankerbox's API contract and client library, for Effect",
   "license": "MIT",
   "repository": {

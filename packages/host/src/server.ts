@@ -1,15 +1,7 @@
-/** The host API: the contract's bindings over the host's actions. */
+/** The host API: the contract's binding over the host's actions. */
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import {
-  CheckpointHttp,
-  HostHttp,
-  Invalid,
-  MachineHttp,
-  release,
-  version,
-  versionHeader,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { Http, Invalid, release, version, versionHeader } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer, Option, Schema } from "effect";
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { Checkpoints } from "./checkpoints.ts";
@@ -17,46 +9,29 @@ import type { HostConfig } from "./config.ts";
 import { Machines } from "./machines.ts";
 import { Runtime } from "./runtime.ts";
 
-const machineApp = Action.implement(
-  MachineHttp.actions,
-  Effect.gen(function* () {
-    const machines = yield* Machines;
-
-    return {
-      list: () => machines.list,
-      get: ({ id }) => machines.get(id),
-      create: machines.create,
-      start: ({ id }) => machines.start(id),
-      stop: ({ id }) => machines.stop(id),
-      delete: ({ id }) => machines.delete(id),
-      fork: ({ machine, name }) => machines.fork(machine, name),
-      restore: ({ checkpoint, name }) => machines.restore(checkpoint, name),
-    };
-  }),
-);
-
-const checkpointApp = Action.implement(
-  CheckpointHttp.actions,
-  Effect.gen(function* () {
-    const checkpoints = yield* Checkpoints;
-
-    return {
-      list: () => checkpoints.list,
-      get: ({ id }) => checkpoints.get(id),
-      capture: ({ machine, name }) => checkpoints.capture(machine, name),
-      delete: ({ id }) => checkpoints.delete(id),
-    };
-  }),
-);
-
-const hostApp = (config: Pick<HostConfig, "id" | "bases">) =>
+/** Every action of the contract, over the host's machines, checkpoints and runtime. */
+const app = (config: Pick<HostConfig, "id" | "bases">) =>
   Action.implement(
-    HostHttp.actions,
+    Http.actions,
     Effect.gen(function* () {
+      const machines = yield* Machines;
+      const checkpoints = yield* Checkpoints;
       const runtime = yield* Runtime;
 
       return {
-        get: () =>
+        listMachines: () => machines.list,
+        getMachine: ({ id }) => machines.get(id),
+        createMachine: machines.create,
+        startMachine: ({ id }) => machines.start(id),
+        stopMachine: ({ id }) => machines.stop(id),
+        deleteMachine: ({ id }) => machines.delete(id),
+        forkMachine: ({ machine, name }) => machines.fork(machine, name),
+        restoreMachine: ({ checkpoint, name }) => machines.restore(checkpoint, name),
+        listCheckpoints: () => checkpoints.list,
+        getCheckpoint: ({ id }) => checkpoints.get(id),
+        captureCheckpoint: ({ machine, name }) => checkpoints.capture(machine, name),
+        deleteCheckpoint: ({ id }) => checkpoints.delete(id),
+        getHost: () =>
           Effect.succeed({
             id: config.id,
             runtime: runtime.name,
@@ -93,7 +68,8 @@ const encodeInvalid = Schema.encodeSync(Invalid);
 /**
  * Answers a request of another release, or of none, with `Invalid` before its input is even
  * decoded: a client of another release may send another shape, and no handler runs, so nothing
- * is claimed or written. Every action declares `Invalid`, so the client decodes the reply.
+ * is claimed or written. Every action declares `Invalid` (`read` and `write` in the SDK's
+ * api.ts), so the client decodes the reply.
  */
 const versionCheck = HttpRouter.middleware((handle) =>
   Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
@@ -108,8 +84,4 @@ const versionCheck = HttpRouter.middleware((handle) =>
 
 /** The API's routes, for any HTTP server. */
 export const routes = (config: Pick<HostConfig, "id" | "bases">) =>
-  Layer.mergeAll(
-    ActionHttp.layer(MachineHttp, [machineApp]),
-    ActionHttp.layer(CheckpointHttp, [checkpointApp]),
-    ActionHttp.layer(HostHttp, [hostApp(config)]),
-  ).pipe(Layer.provide(versionCheck.layer));
+  ActionHttp.layer(Http, [app(config)]).pipe(Layer.provide(versionCheck.layer));

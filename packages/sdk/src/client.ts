@@ -8,15 +8,8 @@ import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Context, Duration, Effect, Fiber, Match, Predicate, Result, Schema } from "effect";
 import { HttpClient, type HttpClientError, HttpClientRequest } from "effect/http";
-import { CheckpointHttp, HostHttp, MachineHttp, readTimeout, versionHeader } from "./api.ts";
-import {
-  type ClankerboxError,
-  type HostError,
-  Internal,
-  Invalid,
-  Precondition,
-  Unavailable,
-} from "./errors.ts";
+import { Http, readTimeout, versionHeader } from "./api.ts";
+import { type ClankerboxError, Internal, Invalid, Precondition, Unavailable } from "./errors.ts";
 import { formatId, HostId, parseId, parseName } from "./ids.ts";
 import {
   type Checkpoint,
@@ -100,22 +93,15 @@ export class Client extends Context.Service<Client, Interface>()(
 ) {}
 
 /**
- * A client for one host, one per area. Every request carries the SDK's version, which the
- * host checks against its own. Input that doesn't encode fails as `InvalidInput` before
- * anything is sent, so a `SchemaError` that reaches `settle` is a reply that didn't decode.
+ * A client for one host. Every request carries the SDK's version, which the host checks
+ * against its own. Input that doesn't encode fails as `InvalidInput` before anything is
+ * sent, so a `SchemaError` that reaches `settle` is a reply that didn't decode.
  */
-const makeHostApi = (entry: HostEntry) => {
-  const options = {
+const makeHostApi = (entry: HostEntry) =>
+  ActionHttp.client(Http, {
     baseUrl: entry.url,
     transformClient: HttpClient.mapRequest(HttpClientRequest.setHeader(versionHeader, version)),
-  };
-
-  return Effect.all({
-    machine: ActionHttp.client(MachineHttp, options),
-    checkpoint: ActionHttp.client(CheckpointHttp, options),
-    host: ActionHttp.client(HostHttp, options),
   });
-};
 
 type HostApi = Effect.Success<ReturnType<typeof makeHostApi>>;
 
@@ -125,35 +111,19 @@ interface Route {
   readonly api: HostApi;
 }
 
-type CallError =
-  | HostError
-  | Action.InvalidInput
-  | Action.Unauthenticated
-  | Action.Forbidden
-  | HttpClientError.HttpClientError
-  | Schema.SchemaError;
+type CallError = ActionHttp.MethodError<(typeof Http.actions)[number]>;
 
-/** Every action's contract, by area and name: a call reads its access from its action. */
-const actions = {
-  machine: Action.byName(MachineHttp.actions),
-  checkpoint: Action.byName(CheckpointHttp.actions),
-  host: Action.byName(HostHttp.actions),
-};
+/** Every action's contract, by name: a call's timeout and retry follow its `readOnly`. */
+const actions = Action.byName(Http.actions);
 
-type Access = Unavailable["access"];
-
-/** What an action's contract states about access. */
-interface Contract {
-  readonly readOnly: boolean;
-}
-
-const accessOf = (contract: Contract): Access => (contract.readOnly ? "read" : "write");
+/** What a call reads of its action's contract. */
+type Contract = Pick<Action.Any, "readOnly">;
 
 /** Which call met an error, for its message and for whether it is retryable. */
 interface CallContext {
   readonly host: HostEntry;
   readonly timeout: Duration.Duration | undefined;
-  readonly access: Access;
+  readonly readOnly: boolean;
   /** What the call does, such as `start linux_dev` or `list machines`. */
   readonly action: string;
   /** The ID to read when a mutation's reply is lost. */
@@ -168,14 +138,14 @@ const causeDetail = (error: HttpClientError.HttpClientError): string =>
  * request may or may not have reached its host, so it may have run.
  */
 const unanswered = (context: CallContext, detail: string): Unavailable =>
-  context.access === "read"
+  context.readOnly
     ? new Unavailable({
         message: `host ${context.host.id} (${context.host.url}) didn't answer ${context.action}: ${detail}`,
-        access: "read",
+        readOnly: context.readOnly,
       })
     : new Unavailable({
         message: `no reply from host ${context.host.id} to ${context.action} (${detail}); the action may have run: read ${context.target ?? "the resource"} to see`,
-        access: "write",
+        readOnly: context.readOnly,
       });
 
 /** Bounds the wait for the reply; the clock starts when the request is sent. */
@@ -205,41 +175,38 @@ const settle = <A>(
   context: CallContext,
 ): Effect.Effect<A, ClankerboxError> =>
   bounded(call, context).pipe(
-    Effect.catchTag("HttpClientError", (error) =>
-      Effect.fail(
-        Match.value(error.reason).pipe(
-          Match.tag("TransportError", () => unanswered(context, causeDetail(error))),
-          // The connection closed while the body was read. A body that arrived and doesn't
-          // parse fails as a SyntaxError or a SchemaError, and a wrong status or content
-          // type carries no cause.
-          Match.when(
-            {
-              _tag: "DecodeError",
-              cause: (cause: unknown) => cause !== undefined && !(cause instanceof SyntaxError),
-            },
-            () => unanswered(context, causeDetail(error)),
-          ),
-          Match.orElse(() => unexpected(context, error)),
-        ),
-      ),
-    ),
-    // Schema issues never carry the rejected values, so a setup script never reaches the message.
-    Effect.catchTag("InvalidInput", (error) =>
-      Effect.fail(
-        new Invalid({
-          message: `${context.action}: the request doesn't match the action's input: ${error.message}`,
-        }),
-      ),
-    ),
-    Effect.catchTag("SchemaError", (error) =>
-      Effect.fail(
-        new Internal({
-          message: `host ${context.host.id}'s reply didn't decode: ${error.message}`,
-        }),
-      ),
-    ),
-    // Every action is public, so a host never refuses a caller.
     Effect.catchTags({
+      HttpClientError: (error) =>
+        Effect.fail(
+          Match.value(error.reason).pipe(
+            Match.tag("TransportError", () => unanswered(context, causeDetail(error))),
+            // The connection closed while the body was read. A body that arrived and doesn't
+            // parse fails as a SyntaxError or a SchemaError, and a wrong status or content
+            // type carries no cause.
+            Match.when(
+              {
+                _tag: "DecodeError",
+                cause: (cause: unknown) => cause !== undefined && !(cause instanceof SyntaxError),
+              },
+              () => unanswered(context, causeDetail(error)),
+            ),
+            Match.orElse(() => unexpected(context, error)),
+          ),
+        ),
+      // Schema issues never carry the rejected values, so a setup script never reaches the message.
+      InvalidInput: (error) =>
+        Effect.fail(
+          new Invalid({
+            message: `${context.action}: the request doesn't match the action's input: ${error.message}`,
+          }),
+        ),
+      SchemaError: (error) =>
+        Effect.fail(
+          new Internal({
+            message: `host ${context.host.id}'s reply didn't decode: ${error.message}`,
+          }),
+        ),
+      // Every action is public, so a host never refuses a caller.
       Unauthenticated: (error) => Effect.fail(unexpected(context, error)),
       Forbidden: (error) => Effect.fail(unexpected(context, error)),
     }),
@@ -289,12 +256,6 @@ export const make = (
 
     const routes = new Map(routed.map((route) => [route.entry.id, route]));
 
-    /** How long a call waits for its reply, by its action's access. */
-    const bounds = {
-      read: options?.readTimeout ?? readTimeout,
-      write: options?.timeout,
-    } satisfies Record<Access, Duration.Duration | undefined>;
-
     const route = (host: string) => {
       const found = routes.get(host);
 
@@ -304,20 +265,20 @@ export const make = (
     };
 
     /**
-     * Sends one call to one host, bounded by its action's access. `target` is the ID to read
-     * when a mutation's reply is lost.
+     * Sends one call to one host, bounded by the read or the mutation timeout. `target` is the
+     * ID to read when a mutation's reply is lost.
      */
     const ask = <A>(
       { entry, api }: Route,
-      contract: Contract,
+      { readOnly }: Contract,
       action: string,
       call: (api: HostApi) => Effect.Effect<A, CallError>,
       target?: string,
     ) =>
       settle(call(api), {
         host: entry,
-        timeout: bounds[accessOf(contract)],
-        access: accessOf(contract),
+        timeout: readOnly ? (options?.readTimeout ?? readTimeout) : options?.timeout,
+        readOnly,
         action,
         target,
       });
@@ -370,8 +331,8 @@ export const make = (
      * fails rather than being placed on.
      */
     const readHost = (route: Route) =>
-      ask(route, actions.host.get, "get host", (api) =>
-        Effect.flatMap(api.host.get(), (host) => checkHost(route.entry, host)),
+      ask(route, actions.getHost, "get host", (api) =>
+        Effect.flatMap(api.getHost(), (host) => checkHost(route.entry, host)),
       );
 
     const createOn = (host: string, name: string, spec: MachineSpec) =>
@@ -380,9 +341,9 @@ export const make = (
 
         return yield* ask(
           yield* route(host),
-          actions.machine.create,
+          actions.createMachine,
           `create ${id}`,
-          (api) => api.machine.create({ ...spec, id }),
+          (api) => api.createMachine({ ...spec, id }),
           id,
         );
       });
@@ -424,7 +385,7 @@ export const make = (
         const message = `no host offers base ${base}: ${misses.join("; ")}`;
 
         return yield* noReply
-          ? new Unavailable({ message, access: "read" })
+          ? new Unavailable({ message, readOnly: true })
           : new Precondition({ message });
       }).pipe(Effect.scoped);
 
@@ -446,27 +407,27 @@ export const make = (
     return {
       hosts: gather((route) => Effect.map(readHost(route), (host) => [host])),
       machines: gather((route) =>
-        ask(route, actions.machine.list, "list machines", (api) => api.machine.list()),
+        ask(route, actions.listMachines, "list machines", (api) => api.listMachines()),
       ),
       checkpoints: gather((route) =>
-        ask(route, actions.checkpoint.list, "list checkpoints", (api) => api.checkpoint.list()),
+        ask(route, actions.listCheckpoints, "list checkpoints", (api) => api.listCheckpoints()),
       ),
-      machine: (id) => byId(id, actions.machine.get, `get ${id}`, (api) => api.machine.get({ id })),
+      machine: (id) => byId(id, actions.getMachine, `get ${id}`, (api) => api.getMachine({ id })),
       checkpoint: (id) =>
-        byId(id, actions.checkpoint.get, `get ${id}`, (api) => api.checkpoint.get({ id })),
+        byId(id, actions.getCheckpoint, `get ${id}`, (api) => api.getCheckpoint({ id })),
       create,
       start: (id) =>
-        byId(id, actions.machine.start, `start ${id}`, (api) => api.machine.start({ id })),
-      stop: (id) => byId(id, actions.machine.stop, `stop ${id}`, (api) => api.machine.stop({ id })),
+        byId(id, actions.startMachine, `start ${id}`, (api) => api.startMachine({ id })),
+      stop: (id) => byId(id, actions.stopMachine, `stop ${id}`, (api) => api.stopMachine({ id })),
       delete: (id) =>
-        byId(id, actions.machine.delete, `delete ${id}`, (api) => api.machine.delete({ id })),
+        byId(id, actions.deleteMachine, `delete ${id}`, (api) => api.deleteMachine({ id })),
       fork: (machine, name) =>
         Effect.flatMap(sibling(machine, name), (made) =>
           byId(
             machine,
-            actions.machine.fork,
+            actions.forkMachine,
             `fork ${machine} to ${made}`,
-            (api) => api.machine.fork({ machine, name }),
+            (api) => api.forkMachine({ machine, name }),
             made,
           ),
         ),
@@ -474,9 +435,9 @@ export const make = (
         Effect.flatMap(sibling(checkpoint, name), (made) =>
           byId(
             checkpoint,
-            actions.machine.restore,
+            actions.restoreMachine,
             `restore ${checkpoint} to ${made}`,
-            (api) => api.machine.restore({ checkpoint, name }),
+            (api) => api.restoreMachine({ checkpoint, name }),
             made,
           ),
         ),
@@ -484,13 +445,13 @@ export const make = (
         Effect.flatMap(sibling(machine, name), (made) =>
           byId(
             machine,
-            actions.checkpoint.capture,
+            actions.captureCheckpoint,
             `capture ${machine} to ${made}`,
-            (api) => api.checkpoint.capture({ machine, name }),
+            (api) => api.captureCheckpoint({ machine, name }),
             made,
           ),
         ),
       deleteCheckpoint: (id) =>
-        byId(id, actions.checkpoint.delete, `delete ${id}`, (api) => api.checkpoint.delete({ id })),
+        byId(id, actions.deleteCheckpoint, `delete ${id}`, (api) => api.deleteCheckpoint({ id })),
     } satisfies Interface;
   });
