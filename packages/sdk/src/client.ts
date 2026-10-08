@@ -4,19 +4,11 @@
  * the client's mutation timeout, is `Unavailable`, and the caller reads the resource to see
  * what happened.
  */
-import type * as Action from "@gjermundgaraba/effect-actions/Action";
-import * as ActionGroup from "@gjermundgaraba/effect-actions/ActionGroup";
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Context, Duration, Effect, Fiber, Match, Predicate, Result, Schema } from "effect";
 import { HttpClient, type HttpClientError, HttpClientRequest } from "effect/http";
-import { HttpApiClient } from "effect/http-api";
-import {
-  CheckpointGroup,
-  HostGroup,
-  Http,
-  MachineGroup,
-  readTimeout,
-  versionHeader,
-} from "./api.ts";
+import { CheckpointHttp, HostHttp, MachineHttp, readTimeout, versionHeader } from "./api.ts";
 import {
   type ClankerboxError,
   type HostError,
@@ -108,22 +100,22 @@ export class Client extends Context.Service<Client, Interface>()(
 ) {}
 
 /**
- * A client for one host. Every request carries the SDK's version, which the host checks
- * against its own. Its reply decoding is the only step `transformResponse` wraps, so a reply
- * that doesn't decode is `Internal` here, and a `SchemaError` that reaches `settle` came from
- * encoding the request.
+ * A client for one host, one per area. Every request carries the SDK's version, which the
+ * host checks against its own. Input that doesn't encode fails as `InvalidInput` before
+ * anything is sent, so a `SchemaError` that reaches `settle` is a reply that didn't decode.
  */
-const makeHostApi = (entry: HostEntry) =>
-  HttpApiClient.make(Http.api, {
+const makeHostApi = (entry: HostEntry) => {
+  const options = {
     baseUrl: entry.url,
     transformClient: HttpClient.mapRequest(HttpClientRequest.setHeader(versionHeader, version)),
-    transformResponse: (reply) =>
-      Effect.mapError(reply, (error) =>
-        Schema.isSchemaError(error)
-          ? new Internal({ message: `host ${entry.id}'s reply didn't decode: ${error.message}` })
-          : error,
-      ),
+  };
+
+  return Effect.all({
+    machine: ActionHttp.client(MachineHttp, options),
+    checkpoint: ActionHttp.client(CheckpointHttp, options),
+    host: ActionHttp.client(HostHttp, options),
   });
+};
 
 type HostApi = Effect.Success<ReturnType<typeof makeHostApi>>;
 
@@ -133,16 +125,35 @@ interface Route {
   readonly api: HostApi;
 }
 
-type CallError = HostError | HttpClientError.HttpClientError | Schema.SchemaError;
+type CallError =
+  | HostError
+  | Action.InvalidInput
+  | Action.Unauthenticated
+  | Action.Forbidden
+  | HttpClientError.HttpClientError
+  | Schema.SchemaError;
 
-/** Every action's contract, keyed `<group>.<action>`: a call reads its access from its action. */
-const actions = ActionGroup.contracts(MachineGroup, CheckpointGroup, HostGroup);
+/** Every action's contract, by area and name: a call reads its access from its action. */
+const actions = {
+  machine: Action.byName(MachineHttp.actions),
+  checkpoint: Action.byName(CheckpointHttp.actions),
+  host: Action.byName(HostHttp.actions),
+};
+
+type Access = Unavailable["access"];
+
+/** What an action's contract states about access. */
+interface Contract {
+  readonly readOnly: boolean;
+}
+
+const accessOf = (contract: Contract): Access => (contract.readOnly ? "read" : "write");
 
 /** Which call met an error, for its message and for whether it is retryable. */
 interface CallContext {
   readonly host: HostEntry;
   readonly timeout: Duration.Duration | undefined;
-  readonly access: Action.Access;
+  readonly access: Access;
   /** What the call does, such as `start linux_dev` or `list machines`. */
   readonly action: string;
   /** The ID to read when a mutation's reply is lost. */
@@ -183,6 +194,12 @@ const bounded = <A>(
       });
 };
 
+/** The host answered with something the call doesn't expect. */
+const unexpected = (context: CallContext, error: { readonly message: string }): Internal =>
+  new Internal({
+    message: `host ${context.host.id} answered ${context.action} unexpectedly: ${error.message}`,
+  });
+
 const settle = <A>(
   call: Effect.Effect<A, CallError>,
   context: CallContext,
@@ -202,23 +219,30 @@ const settle = <A>(
             },
             () => unanswered(context, causeDetail(error)),
           ),
-          Match.orElse(
-            () =>
-              new Internal({
-                message: `host ${context.host.id} answered ${context.action} unexpectedly: ${error.message}`,
-              }),
-          ),
+          Match.orElse(() => unexpected(context, error)),
         ),
       ),
     ),
     // Schema issues never carry the rejected values, so a setup script never reaches the message.
-    Effect.catchTag("SchemaError", (error) =>
+    Effect.catchTag("InvalidInput", (error) =>
       Effect.fail(
         new Invalid({
           message: `${context.action}: the request doesn't match the action's input: ${error.message}`,
         }),
       ),
     ),
+    Effect.catchTag("SchemaError", (error) =>
+      Effect.fail(
+        new Internal({
+          message: `host ${context.host.id}'s reply didn't decode: ${error.message}`,
+        }),
+      ),
+    ),
+    // Every action is public, so a host never refuses a caller.
+    Effect.catchTags({
+      Unauthenticated: (error) => Effect.fail(unexpected(context, error)),
+      Forbidden: (error) => Effect.fail(unexpected(context, error)),
+    }),
   );
 
 /** A host this client can use: it calls itself by its entry's ID. */
@@ -269,7 +293,7 @@ export const make = (
     const bounds = {
       read: options?.readTimeout ?? readTimeout,
       write: options?.timeout,
-    } satisfies Record<Action.Access, Duration.Duration | undefined>;
+    } satisfies Record<Access, Duration.Duration | undefined>;
 
     const route = (host: string) => {
       const found = routes.get(host);
@@ -285,15 +309,15 @@ export const make = (
      */
     const ask = <A>(
       { entry, api }: Route,
-      contract: { readonly access: Action.Access },
+      contract: Contract,
       action: string,
       call: (api: HostApi) => Effect.Effect<A, CallError>,
       target?: string,
     ) =>
       settle(call(api), {
         host: entry,
-        timeout: bounds[contract.access],
-        access: contract.access,
+        timeout: bounds[accessOf(contract)],
+        access: accessOf(contract),
         action,
         target,
       });
@@ -304,7 +328,7 @@ export const make = (
      */
     const byId = <A>(
       id: string,
-      contract: { readonly access: Action.Access },
+      contract: Contract,
       action: string,
       call: (api: HostApi) => Effect.Effect<A, CallError>,
       made?: string,
@@ -346,8 +370,8 @@ export const make = (
      * fails rather than being placed on.
      */
     const readHost = (route: Route) =>
-      ask(route, actions["host.get"], "get host", (api) =>
-        Effect.flatMap(api.host.get({ payload: {} }), (host) => checkHost(route.entry, host)),
+      ask(route, actions.host.get, "get host", (api) =>
+        Effect.flatMap(api.host.get(), (host) => checkHost(route.entry, host)),
       );
 
     const createOn = (host: string, name: string, spec: MachineSpec) =>
@@ -356,9 +380,9 @@ export const make = (
 
         return yield* ask(
           yield* route(host),
-          actions["machine.create"],
+          actions.machine.create,
           `create ${id}`,
-          (api) => api.machine.create({ payload: { ...spec, id } }),
+          (api) => api.machine.create({ ...spec, id }),
           id,
         );
       });
@@ -422,43 +446,27 @@ export const make = (
     return {
       hosts: gather((route) => Effect.map(readHost(route), (host) => [host])),
       machines: gather((route) =>
-        ask(route, actions["machine.list"], "list machines", (api) =>
-          api.machine.list({ payload: {} }),
-        ),
+        ask(route, actions.machine.list, "list machines", (api) => api.machine.list()),
       ),
       checkpoints: gather((route) =>
-        ask(route, actions["checkpoint.list"], "list checkpoints", (api) =>
-          api.checkpoint.list({ payload: {} }),
-        ),
+        ask(route, actions.checkpoint.list, "list checkpoints", (api) => api.checkpoint.list()),
       ),
-      machine: (id) =>
-        byId(id, actions["machine.get"], `get ${id}`, (api) =>
-          api.machine.get({ payload: { id } }),
-        ),
+      machine: (id) => byId(id, actions.machine.get, `get ${id}`, (api) => api.machine.get({ id })),
       checkpoint: (id) =>
-        byId(id, actions["checkpoint.get"], `get ${id}`, (api) =>
-          api.checkpoint.get({ payload: { id } }),
-        ),
+        byId(id, actions.checkpoint.get, `get ${id}`, (api) => api.checkpoint.get({ id })),
       create,
       start: (id) =>
-        byId(id, actions["machine.start"], `start ${id}`, (api) =>
-          api.machine.start({ payload: { id } }),
-        ),
-      stop: (id) =>
-        byId(id, actions["machine.stop"], `stop ${id}`, (api) =>
-          api.machine.stop({ payload: { id } }),
-        ),
+        byId(id, actions.machine.start, `start ${id}`, (api) => api.machine.start({ id })),
+      stop: (id) => byId(id, actions.machine.stop, `stop ${id}`, (api) => api.machine.stop({ id })),
       delete: (id) =>
-        byId(id, actions["machine.delete"], `delete ${id}`, (api) =>
-          api.machine.delete({ payload: { id } }),
-        ),
+        byId(id, actions.machine.delete, `delete ${id}`, (api) => api.machine.delete({ id })),
       fork: (machine, name) =>
         Effect.flatMap(sibling(machine, name), (made) =>
           byId(
             machine,
-            actions["machine.fork"],
+            actions.machine.fork,
             `fork ${machine} to ${made}`,
-            (api) => api.machine.fork({ payload: { machine, name } }),
+            (api) => api.machine.fork({ machine, name }),
             made,
           ),
         ),
@@ -466,9 +474,9 @@ export const make = (
         Effect.flatMap(sibling(checkpoint, name), (made) =>
           byId(
             checkpoint,
-            actions["machine.restore"],
+            actions.machine.restore,
             `restore ${checkpoint} to ${made}`,
-            (api) => api.machine.restore({ payload: { checkpoint, name } }),
+            (api) => api.machine.restore({ checkpoint, name }),
             made,
           ),
         ),
@@ -476,15 +484,13 @@ export const make = (
         Effect.flatMap(sibling(machine, name), (made) =>
           byId(
             machine,
-            actions["checkpoint.capture"],
+            actions.checkpoint.capture,
             `capture ${machine} to ${made}`,
-            (api) => api.checkpoint.capture({ payload: { machine, name } }),
+            (api) => api.checkpoint.capture({ machine, name }),
             made,
           ),
         ),
       deleteCheckpoint: (id) =>
-        byId(id, actions["checkpoint.delete"], `delete ${id}`, (api) =>
-          api.checkpoint.delete({ payload: { id } }),
-        ),
+        byId(id, actions.checkpoint.delete, `delete ${id}`, (api) => api.checkpoint.delete({ id })),
     } satisfies Interface;
   });

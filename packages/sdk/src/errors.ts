@@ -2,7 +2,6 @@
  * The seven errors every clankerbox call can fail with. `retryable` is derived from the
  * tag, so callers never keep their own table of which failures to repeat.
  */
-import type * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Schema } from "effect";
 
 /** The request is malformed: a bad ID or name, an undeclared field, a value out of range. */
@@ -71,7 +70,7 @@ export class Capacity extends Schema.TaggedError<Capacity>()(
  */
 export class Unavailable extends Schema.TaggedError<Unavailable>()("Unavailable", {
   message: Schema.String,
-  access: Schema.Literals(["read", "write"] satisfies ReadonlyArray<Action.Access>),
+  access: Schema.Literals(["read", "write"]),
 }) {
   get retryable(): boolean {
     return this.access === "read";
@@ -88,7 +87,7 @@ export class Internal extends Schema.TaggedError<Internal>()(
   }
 }
 
-/** What a host answers with; every action group declares these. */
+/** What a host answers with; every action declares these. */
 export const hostErrors = [Invalid, NotFound, Conflict, Precondition, Capacity, Internal] as const;
 
 export type HostError = InstanceType<(typeof hostErrors)[number]>;

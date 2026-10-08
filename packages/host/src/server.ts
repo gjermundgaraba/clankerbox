@@ -1,10 +1,11 @@
-/** The host API: the contract's action groups over the host's actions. */
+/** The host API: the contract's bindings over the host's actions. */
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import {
-  CheckpointGroup,
-  HostGroup,
-  Http,
+  CheckpointHttp,
+  HostHttp,
   Invalid,
-  MachineGroup,
+  MachineHttp,
   release,
   version,
   versionHeader,
@@ -16,7 +17,8 @@ import type { HostConfig } from "./config.ts";
 import { Machines } from "./machines.ts";
 import { Runtime } from "./runtime.ts";
 
-const machineApp = MachineGroup.implement(
+const machineApp = Action.implement(
+  MachineHttp.actions,
   Effect.gen(function* () {
     const machines = yield* Machines;
 
@@ -33,7 +35,8 @@ const machineApp = MachineGroup.implement(
   }),
 );
 
-const checkpointApp = CheckpointGroup.implement(
+const checkpointApp = Action.implement(
+  CheckpointHttp.actions,
   Effect.gen(function* () {
     const checkpoints = yield* Checkpoints;
 
@@ -47,7 +50,8 @@ const checkpointApp = CheckpointGroup.implement(
 );
 
 const hostApp = (config: Pick<HostConfig, "id" | "bases">) =>
-  HostGroup.implement(
+  Action.implement(
+    HostHttp.actions,
     Effect.gen(function* () {
       const runtime = yield* Runtime;
 
@@ -104,4 +108,8 @@ const versionCheck = HttpRouter.middleware((handle) =>
 
 /** The API's routes, for any HTTP server. */
 export const routes = (config: Pick<HostConfig, "id" | "bases">) =>
-  Http.layer([machineApp, checkpointApp, hostApp(config)]).pipe(Layer.provide(versionCheck.layer));
+  Layer.mergeAll(
+    ActionHttp.layer(MachineHttp, [machineApp]),
+    ActionHttp.layer(CheckpointHttp, [checkpointApp]),
+    ActionHttp.layer(HostHttp, [hostApp(config)]),
+  ).pipe(Layer.provide(versionCheck.layer));

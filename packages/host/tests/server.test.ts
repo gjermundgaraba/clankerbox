@@ -1,10 +1,10 @@
 /** The host API over a real loopback server, called through the SDK's client and raw HTTP. */
 import {
-  CheckpointGroup,
+  CheckpointHttp,
   Client,
-  HostGroup,
+  HostHttp,
   Invalid,
-  MachineGroup,
+  MachineHttp,
   type MachineSpec,
   version,
   versionHeader,
@@ -130,13 +130,13 @@ const post = async (
 const createRaw = (url: string, id: string, headers?: Record<string, string>) =>
   post(url, "machine/create", { id, ...spec }, headers);
 
-test("a raw create whose ID is too long, or names another host, is Invalid and makes nothing", async () => {
+test("a raw create whose ID is too long is InvalidInput, one naming another host Invalid, and neither makes anything", async () => {
   const { url, fake, run, store } = await serve();
   const tooLong = await createRaw(url, `linux_${"a".repeat(57)}`);
   const elsewhere = await createRaw(url, "mac_dev");
 
   expect(tooLong.status).toBe(400);
-  expect(tooLong.body).toContain('"_tag":"Invalid"');
+  expect(tooLong.body).toContain('"_tag":"InvalidInput"');
   expect(elsewhere.status).toBe(400);
   expect(elsewhere.body).toContain('"_tag":"Invalid"');
   expect(elsewhere.body).toContain("this is host linux");
@@ -178,7 +178,7 @@ test("a request of another release, or with no version, is Invalid and runs noth
   expect(fake.calls).toEqual(["startup"]);
 });
 
-test("every action of every group refuses a request with no version, or another release's, and runs nothing", async () => {
+test("every action of every area refuses a request with no version, or another release's, and runs nothing", async () => {
   const { url, fake, run, store } = await serve();
 
   expect((await createRaw(url, "linux_dev")).status).toBe(200);
@@ -186,11 +186,25 @@ test("every action of every group refuses a request with no version, or another 
   const calls = [...fake.calls];
   const rows = await run(store.list);
 
-  const paths = [MachineGroup, CheckpointGroup, HostGroup].flatMap((group) =>
-    group.actions.map((action) => `${group.name}/${action.name}`),
+  const paths = [MachineHttp, CheckpointHttp, HostHttp].flatMap((binding) =>
+    binding.actions.map((action) => `${binding.prefix}/${action.name}`.replace(/^\/api\//u, "")),
   );
 
-  expect(paths).toHaveLength(13);
+  expect(paths).toEqual([
+    "machine/list",
+    "machine/get",
+    "machine/create",
+    "machine/start",
+    "machine/stop",
+    "machine/delete",
+    "machine/fork",
+    "machine/restore",
+    "checkpoint/list",
+    "checkpoint/get",
+    "checkpoint/capture",
+    "checkpoint/delete",
+    "host/get",
+  ]);
 
   for (const path of paths) {
     for (const headers of [{}, versioned(bump(1))]) {

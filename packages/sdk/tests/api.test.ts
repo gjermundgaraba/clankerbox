@@ -1,6 +1,6 @@
+import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { Invalid } from "../src/index.ts";
 import { type StubHost, stubHost } from "./stub-host.ts";
 
 let host: StubHost | undefined;
@@ -10,7 +10,8 @@ afterEach(async () => {
   host = undefined;
 });
 
-const decodeInvalid = Schema.decodeUnknownSync(Schema.fromJsonString(Invalid));
+/** Input that doesn't decode is effect-actions' own `InvalidInput`; the client maps it to `Invalid`. */
+const decodeInvalidInput = Schema.decodeUnknownSync(Schema.fromJsonString(Action.InvalidInput));
 
 const post = async (path: string, body: Schema.Json) => {
   host = stubHost({ id: "linux", bases: ["ubuntu"] });
@@ -34,15 +35,15 @@ test("a valid call is answered", async () => {
   expect(status).toBe(200);
 });
 
-test("an undeclared field is refused with Invalid, before the handler runs", async () => {
+test("an undeclared field is refused with InvalidInput, before the handler runs", async () => {
   const { status, body } = await post("machine/create", { ...create, labels: ["x"] });
 
   expect(status).toBe(400);
-  expect(decodeInvalid(body)).toBeInstanceOf(Invalid);
+  expect(decodeInvalidInput(body)).toBeInstanceOf(Action.InvalidInput);
   expect(host?.calls).toEqual([]);
 });
 
-test("every group refuses undeclared fields with Invalid", async () => {
+test("every area refuses undeclared fields with InvalidInput", async () => {
   for (const [path, body] of [
     ["machine/get", { id: "linux_dev", extra: 1 }],
     ["checkpoint/get", { id: "linux_dev", extra: 1 }],
@@ -51,12 +52,12 @@ test("every group refuses undeclared fields with Invalid", async () => {
     const answer = await post(path, body);
 
     expect(answer.status, path).toBe(400);
-    expect(decodeInvalid(answer.body), path).toBeInstanceOf(Invalid);
+    expect(decodeInvalidInput(answer.body), path).toBeInstanceOf(Action.InvalidInput);
     await host?.dispose();
   }
 });
 
-test("malformed IDs, names and sizes are refused with Invalid", async () => {
+test("malformed IDs, names and sizes are refused with InvalidInput", async () => {
   for (const [path, body] of [
     ["machine/get", { id: "nohost" }],
     ["machine/create", { ...create, id: "linux_2dev" }],
@@ -68,7 +69,7 @@ test("malformed IDs, names and sizes are refused with Invalid", async () => {
     const answer = await post(path, body);
 
     expect(answer.status, path).toBe(400);
-    expect(decodeInvalid(answer.body), path).toBeInstanceOf(Invalid);
+    expect(decodeInvalidInput(answer.body), path).toBeInstanceOf(Action.InvalidInput);
     await host?.dispose();
   }
 });
@@ -84,7 +85,7 @@ test("setup goes with its timeout", async () => {
     const answer = await post("machine/create", body);
 
     expect(answer.status).toBe(400);
-    expect(decodeInvalid(answer.body)).toBeInstanceOf(Invalid);
+    expect(decodeInvalidInput(answer.body)).toBeInstanceOf(Action.InvalidInput);
     await host?.dispose();
   }
 });

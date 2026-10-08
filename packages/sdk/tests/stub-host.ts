@@ -2,17 +2,18 @@
  * A stub host served in memory through the real effect-actions routes, and a transport that
  * sends each request to the stub named by its URL's origin.
  */
+import * as Action from "@gjermundgaraba/effect-actions/Action";
+import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { DateTime, Effect, Layer } from "effect";
 import { FetchHttpClient, type HttpClient, HttpRouter, HttpServer } from "effect/http";
 import {
   type Checkpoint,
-  CheckpointGroup,
+  CheckpointHttp,
   type CreateRequest,
   type HostError,
-  HostGroup,
-  Http,
+  HostHttp,
   type Machine,
-  MachineGroup,
+  MachineHttp,
   NotFound,
   type Runtime,
   version,
@@ -92,7 +93,7 @@ export const stubHost = (options: StubHostOptions) => {
         )
       : options.create(request);
 
-  const machineApp = MachineGroup.implement({
+  const machineApp = Action.implement(MachineHttp.actions, {
     list: () => Effect.as(record("machine.list"), [...machines.values()]),
     get: ({ id }) => Effect.andThen(record("machine.get"), find(id)),
     create: (request) =>
@@ -137,7 +138,7 @@ export const stubHost = (options: StubHostOptions) => {
       ),
   });
 
-  const checkpointApp = CheckpointGroup.implement({
+  const checkpointApp = Action.implement(CheckpointHttp.actions, {
     list: () => Effect.as(record("checkpoint.list"), [...checkpoints.values()]),
     get: ({ id }) => Effect.andThen(record("checkpoint.get"), findCheckpoint(id)),
     capture: ({ machine: source, name }) =>
@@ -173,7 +174,7 @@ export const stubHost = (options: StubHostOptions) => {
       ),
   });
 
-  const hostApp = HostGroup.implement({
+  const hostApp = Action.implement(HostHttp.actions, {
     get: () =>
       Effect.as(record("host.get"), {
         id: options.id,
@@ -184,7 +185,11 @@ export const stubHost = (options: StubHostOptions) => {
       }),
   });
 
-  const routes = Http.layer([machineApp, checkpointApp, hostApp]);
+  const routes = Layer.mergeAll(
+    ActionHttp.layer(MachineHttp, [machineApp]),
+    ActionHttp.layer(CheckpointHttp, [checkpointApp]),
+    ActionHttp.layer(HostHttp, [hostApp]),
+  );
 
   const web = HttpRouter.toWebHandler(routes.pipe(Layer.provide(HttpServer.layerServices)), {
     disableLogger: true,
@@ -194,7 +199,7 @@ export const stubHost = (options: StubHostOptions) => {
     id: options.id,
     /** Every create request the host received, in order. */
     creates,
-    /** Every action the host ran, as `<group>.<action>`. */
+    /** Every action the host ran, as `<area>.<action>`. */
     calls,
     /** The version header of every request the host received, in order. */
     versions,

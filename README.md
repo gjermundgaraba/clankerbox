@@ -294,15 +294,17 @@ every stock base by digest.
 ## SDK
 
 `@gjermundgaraba/clankerbox-sdk` (`packages/sdk`) holds the Schemas, the
-action groups, the errors, the profile file schema and the client library. It
+API bindings, the errors, the profile file schema and the client library. It
 is versioned with the binaries: SDK 1.2.3 talks to hosts of release 1.2.x.
 Every request carries the client's version in a `clankerbox-version` header,
 and a host refuses one of another major.minor with `Invalid`, naming both
 versions, before it runs anything. A request without the header is refused
 too: a client that predates it is of another release anyway.
-`effect` `^4.0.0` is a peer dependency, so an app has one copy of Effect and
-Schema identity holds; so is `@effect/platform-node` `^4.0.0`, needed only by
-the `/node` entry.
+`effect` `~4.0.2` is a peer dependency, so an app has one copy of Effect and
+Schema identity holds; so is `@effect/platform-node` `~4.0.2`, needed only by
+the `/node` entry. The range is Effect's 4.0.x patches, as effect-actions
+requires: the HTTP and process modules the SDK uses are unstable in Effect, so
+a minor release may change them.
 
 ```ts
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -398,10 +400,11 @@ every bump of it:
 - **No clankerbox code runs in a guest.** Setup and preparation are host-side
   scripts over the runtime's exec.
 - **The API** (`packages/sdk/src/api.ts`) is unary HTTP through
-  effect-actions: machine, checkpoint and host action groups under `/api`.
-  Input is closed: undeclared fields are refused, and a Schema error in input
-  is `Invalid`. A request of another release, by its `clankerbox-version`
-  header, is `Invalid` before its input is decoded
+  effect-actions: machine, checkpoint and host bindings, each action at
+  `POST /api/<area>/<action>`. Input is closed: undeclared fields are refused,
+  and input that doesn't decode is effect-actions' 400 `InvalidInput`, which
+  the client reports as `Invalid`. A request of another release, by its
+  `clankerbox-version` header, is `Invalid` before its input is decoded
   (`packages/host/src/server.ts`).
 
 ### IDs and names
@@ -500,8 +503,8 @@ VMs, smolvm's RAM budget, boat's account limits), `Unavailable` (the client
 couldn't reach a host) and `Internal`. `retryable` follows the tag: `busy` and
 `Capacity` retry; `Unavailable` retries for reads only, since a mutation's
 request may have reached the host. In the client, a request that fails to
-encode is `Invalid` and sends nothing; a reply that fails to decode is
-`Internal`.
+encode is `Invalid` and sends nothing, and a host's `InvalidInput` is `Invalid`
+too; a reply that fails to decode is `Internal`.
 
 ### State and claims
 
@@ -861,15 +864,15 @@ These are known, not guarded, and accepted:
 
 ## Repository layout
 
-| Path                   | Contents                                                                                        |
-| ---------------------- | ----------------------------------------------------------------------------------------------- |
-| `apps/clankerbox/`     | The binary: the CLI commands, `ssh`, and the `host` role                                        |
-| `packages/sdk/`        | The SDK: Schemas, action groups, errors, IDs, the profile schema, recipe packing and the client |
-| `packages/host/`       | The host: state, claims, actions, setup and preparation, ports, and the three runtimes          |
-| `tools/release/`       | The SEA build, bundles with their notices, and the smoke test                                   |
-| `tools/oxlint/`        | The anti-slop lint plugin, vendored from upstream                                               |
-| `tests/live/`          | Live acceptance suites per runtime, with their drivers                                          |
-| `scripts/work_runs.py` | Disposable build and test runs ([WORK_RUNS.md](scripts/WORK_RUNS.md))                           |
+| Path                   | Contents                                                                                       |
+| ---------------------- | ---------------------------------------------------------------------------------------------- |
+| `apps/clankerbox/`     | The binary: the CLI commands, `ssh`, and the `host` role                                       |
+| `packages/sdk/`        | The SDK: Schemas, API bindings, errors, IDs, the profile schema, recipe packing and the client |
+| `packages/host/`       | The host: state, claims, actions, setup and preparation, ports, and the three runtimes         |
+| `tools/release/`       | The SEA build, bundles with their notices, and the smoke test                                  |
+| `tools/oxlint/`        | The anti-slop lint plugin, vendored from upstream                                              |
+| `tests/live/`          | Live acceptance suites per runtime, with their drivers                                         |
+| `scripts/work_runs.py` | Disposable build and test runs ([WORK_RUNS.md](scripts/WORK_RUNS.md))                          |
 
 ## Development
 
