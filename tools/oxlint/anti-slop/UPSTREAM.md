@@ -4,8 +4,7 @@ Source: [dmmulroy/anti-slop](https://github.com/dmmulroy/anti-slop), commit `c44
 
 Installed on 2026-10-04 with the `install-anti-slop` skill (`scripts/install.mjs`), which
 copies its bundled `assets/anti-slop/`, a copy of `skills/install-anti-slop/` at that
-upstream commit. The installed files are identical to the bundle, less the two rules removed
-below.
+upstream commit. The installed files are identical to the bundle, less the deviations below.
 
 ## Installed paths
 
@@ -22,11 +21,16 @@ workspace depends on `effect` directly.
 
 ## Dependencies
 
-- `oxlint` comes from `vite-plus` 1.0.0, which pins it to `1.85.0`.
-- Root `devDependency`: `@oxlint/plugins@1.85.0` (catalog), pinned to match oxlint.
+- `oxlint` and the plugin API both come from `vite-plus`. The API is imported from
+  `vite-plus/lint/plugins`, which re-exports the `@oxlint/plugins` that `vite-plus` pins; that
+  pin can lag its oxlint.
+- These files are neither linted nor type-checked here. `vp check` loads both plugins and
+  fails on an import or export they can't resolve.
 
 ## Intentional deviations
 
+- Plugin API imports: they come from `vite-plus/lint/plugins`, not upstream's
+  `@oxlint/plugins`, which the workspace doesn't install. `vp migrate` makes this rewrite.
 - Plugin assets: `rules/no-module-mocking.ts` and `rules/no-shape-in-symbol-names.ts` are
   removed, with their registrations in `index.ts`.
   - `no-module-mocking`: Oxlint's built-in `vitest/no-restricted-vi-methods` does its job,

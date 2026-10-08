@@ -15,7 +15,6 @@
     "live:boat": "python3 tests/live/boat/driver.py"
   },
   "devDependencies": {
-    "@oxlint/plugins": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",

@@ -13,6 +13,7 @@ The rule is MIT-licensed. Keep `LICENSE` with every redistributed copy, includin
 ## Local adaptations
 
 - Replace upstream type aliases with Oxlint's ESTree, context, token/comment, and rule types. Upstream's token type includes comments; Oxlint exposes those separately.
+- Import Oxlint's types from `vite-plus/lint/plugins`, not the anti-slop bundle's `@oxlint/plugins` (see `../../UPSTREAM.md`).
 - Replace `AST_NODE_TYPES` enum members with identical string literals.
 - Guard indexed reads for consuming repositories with `noUncheckedIndexedAccess`. Impossible missing AST/configuration entries raise explicit invariant errors rather than introducing new non-null assertions.
 - Replace the repository-specific `createRule` factory with `createPaddingLineRule(options)`. The anti-slop wrapper supplies typed options directly; it exposes no user configuration options.
