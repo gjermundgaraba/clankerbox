@@ -6,10 +6,10 @@ packages:
 
 catalogMode: prefer
 catalog:
-  "@effect/platform-node": 4.0.0
+  "@effect/platform-node": 4.0.2
   "@gjermundgaraba/effect-actions": 0.9.0
   "@types/node": 26.6.4
-  effect: 4.0.0
+  effect: 4.0.2
   typescript: 7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.1.0
   vite-plus: 1.1.0
@@ -26,6 +26,9 @@ minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - vite-plus
   - "@gjermundgaraba/effect-actions"
+  - effect@4.0.2
+  - "@effect/platform-node@4.0.2"
+  - "@effect/platform-node-shared@4.0.2"
   - "@voidzero-dev/*"
   - oxlint
   - "@oxlint/*"
