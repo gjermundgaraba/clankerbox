@@ -19,11 +19,13 @@ import {
   checkpointRows,
   encodeCheckpoint,
   encodeHost,
+  encodeLimit,
   encodeMachine,
   encodeProfile,
   Exited,
   fail,
   hostRows,
+  limitRows,
   machineRows,
   profileRows,
   table,
@@ -153,6 +155,16 @@ const hosts = listCommand({
   read: (client) => client.hosts,
   encode: encodeHost,
   rows: (answers) => hostRows(answers),
+});
+
+const capacity = listCommand({
+  name: "capacity",
+  description:
+    "List every host's limits and how much of each is in use, counted as the host's Capacity refusals count it.",
+  key: "capacity",
+  read: (client) => client.capacity,
+  encode: encodeLimit,
+  rows: (answers) => limitRows(answers),
 });
 
 const machines = listCommand({
@@ -462,6 +474,7 @@ const checkpoint = Command.make("checkpoint").pipe(
 
 export const clientCommands = [
   hosts,
+  capacity,
   machines,
   profiles,
   create,

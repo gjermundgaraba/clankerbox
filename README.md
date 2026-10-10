@@ -166,6 +166,7 @@ reading only local files.
 
 ```sh
 clankerbox hosts                           # every host, its runtime, versions and bases
+clankerbox capacity                        # every host's limits, and how much of each is in use
 clankerbox profiles                        # the profiles directory's profiles
 clankerbox create dev --profile dev        # placed; prints the new ID, linux_dev
 clankerbox create review --host mac --base macos --cpu 4 --ram-mib 8192 --disk-gib 60
@@ -449,6 +450,16 @@ or whose reply doesn't decode, won't answer differently when asked again.
 Fork, restore, start, stop and delete go to the host of the resource they
 name: nothing migrates.
 
+### Capacity
+
+`getCapacity` (`clankerbox capacity`, `client.capacity`) lists a host's limits,
+the ones its `Capacity` refusals come from, as `{host, resource, limit, used}`.
+The host counts `used` as the refusal counts it, so it needn't match the host's
+own machines; the [runtime notes](#runtime-notes) say what each runtime
+counts. It is read from the runtime at each call and is all the reply holds,
+so a runtime that fails the read, or takes over the host's 9 s, fails it with
+`Internal`, and a list names that host among the unreachable.
+
 ### Actions
 
 Every mutation replies when its action has finished, with the resource as it
@@ -727,7 +738,9 @@ These are known, not guarded, and accepted:
   that running and booting machines' `ramMib` fit `ramBudgetMib`, each once,
   else `Capacity`; a running target counts once, and a machine whose state
   couldn't be read counts as running. Set it above physical RAM to
-  overcommit on purpose.
+  overcommit on purpose. The host's capacity is the budget and that sum
+  (`ramMib`); with a machine whose state couldn't be read it fails, naming
+  the machine, since the sum would be a guess.
 - **Fork** is a checkpoint of the running source into a store of its own,
   `create --from` it, a port swap (`machine update --remove-port … -p …`),
   start, then the store is removed whole, whatever happened. The child
@@ -781,7 +794,8 @@ These are known, not guarded, and accepted:
 - **Capacity:** Apple runs two macOS VMs per Mac, the operator's included. Each
   boot counts the VMs `tart list` reads running plus machines being booted, the
   target included, each VM once, and refuses with `Capacity` past two; a start
-  of a running machine adds nothing.
+  of a running machine adds nothing. The host's capacity is that count of two
+  (`runningVms`), so it includes the operator's VMs, Linux ones too.
 - **Start** reads `tart list` first and refuses a VM Tart no longer has before
   it writes a job or listens; it boots only a stopped VM.
 - **Stop** reads `tart list` first and does nothing to a VM that doesn't run.
@@ -816,11 +830,12 @@ These are known, not guarded, and accepted:
   covers the request; none is `Precondition`, and a type the plan lacks is
   boat's 403, a `Precondition` refusal.
 - **Retries:** create, fork and restore carry an `Idempotency-Key`
-  (`clankerbox-<host>-<instance>`). They and every `GET` and `DELETE` are
-  repeated while their outcome is unclear, or boat rate-limits a read, for 5
-  minutes with backoff from 1 s to 30 s, or until the wait they serve ends. A
-  refusal that answers a repeat isn't trusted as a refusal: the row stays
-  `failed`. Resume takes no key, and it and the other calls are never repeated.
+  (`clankerbox-<host>-<instance>`). They and every `GET` and `DELETE`, but
+  the `GET` of the limits, are repeated while their outcome is unclear, or
+  boat rate-limits a read, for 5 minutes with backoff from 1 s to 30 s, or
+  until the wait they serve ends. A refusal that answers a repeat isn't
+  trusted as a refusal: the row stays `failed`. Resume takes no key, and it
+  and the other calls are never repeated.
   A 429 to a create, fork or restore that isn't a limit below (boat's
   `rate_limited` start window, or a code the host doesn't know) made nothing,
   but counts as a start: it is repeated twice, 65 s apart, so the minute window
@@ -835,6 +850,12 @@ These are known, not guarded, and accepted:
   `named_snapshot_limit`, boat's cap on an account's named snapshots. So is a
   create, fork or restore boat cancels for want of a machine; one boat answers
   404 for after accepting it fails and keeps its row, with its sandbox ID.
+- **Capacity** is boat's to count, so the host's is what `GET /limits` answers
+  for the account: its active sandboxes, the operator's own included
+  (`activeSandboxes`), and the starts used of each rolling window that has a
+  limit (`startsPerMinute`, `startsPerHour`, `startsPerDay`). It asks once,
+  so a refusal is boat's own answer. The host checks none of it before a
+  call; boat's refusal is the check.
 - **State** is a `GET` of each recorded sandbox, never a list; a read that
   still fails after its repeats, or takes over 8 s, reads `unknown`,
   never `missing`. The SSH endpoint changes at every start and is only

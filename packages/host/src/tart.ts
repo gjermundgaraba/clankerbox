@@ -21,6 +21,7 @@ import * as Forwarder from "./forwarder.ts";
 import { lastLines } from "./guest.ts";
 import {
   type CheckpointRef,
+  type Held,
   type Interface,
   type MachineRef,
   type MachineState,
@@ -253,6 +254,32 @@ export const make = (
     );
 
     const state = (vm: string) => Effect.map(list, (vms) => vms.get(vm) ?? "missing");
+
+    /**
+     * The VMs that count toward Apple's limit, by name: every running VM in the Tart home, the
+     * operator's included, and every machine an action is booting, since its VM runs only once
+     * its job has started. A set, so a running machine an action holds counts once. Not
+     * `observe`, which answers only for the host's machines; the core bounds the read by
+     * `stateReadWait`.
+     */
+    const countedVms = (machines: ReadonlyArray<Held>) =>
+      Effect.map(list, (vms) => {
+        const counted = new Set<string>();
+
+        for (const [vm, observed] of vms) {
+          if (observed === "running") {
+            counted.add(vm);
+          }
+        }
+
+        for (const { machine, booting } of machines) {
+          if (booting) {
+            counted.add(vmOf(machine));
+          }
+        }
+
+        return counted;
+      });
 
     const job = (vm: string) => ({
       target: `${domain}/${vm}`,
@@ -552,31 +579,14 @@ export const make = (
         ),
       ),
       /**
-       * The Mac must have room: every running VM in the Tart home counts, the operator's
-       * included, and so does every machine an action is booting, the target too, since its VM
-       * runs only once its job has started. The count is a set of VM names, so a running target,
-       * as a start of a running machine has, counts once and adds nothing. The operator's Linux
-       * VMs count too, which Apple doesn't limit, so the count is conservative; Apple's own
-       * refusal is the real guard.
+       * The Mac must have room for `countedVms`, the target among them: it is booting, and
+       * when it runs already, as a start of a running machine has it, it counts once and adds
+       * nothing. The operator's Linux VMs count too, which Apple doesn't limit, so the count is
+       * conservative; Apple's own refusal is the real guard.
        */
       admit: Effect.fn("Tart.admit")(({ action, machine, machines }) =>
         Effect.gen(function* () {
-          // Not `observe`, which answers only for the host's machines: every VM here counts. The
-          // core bounds the read by `stateReadWait`, as it holds the admission permit.
-          const vms = yield* list;
-          const counted = new Set<string>();
-
-          for (const [vm, observed] of vms) {
-            if (observed === "running") {
-              counted.add(vm);
-            }
-          }
-
-          for (const { machine: held, booting } of machines) {
-            if (booting) {
-              counted.add(vmOf(held));
-            }
-          }
+          const counted = yield* countedVms(machines);
 
           if (counted.size > vmLimit) {
             return yield* new Capacity({
@@ -584,6 +594,11 @@ export const make = (
             });
           }
         }),
+      ),
+      capacity: Effect.fn("Tart.capacity")((machines) =>
+        Effect.map(countedVms(machines), (counted) => [
+          { resource: "runningVms" as const, limit: vmLimit, used: counted.size },
+        ]),
       ),
       create: Effect.fn("Tart.create")((machine, image) =>
         cloneInto(image, machine, [

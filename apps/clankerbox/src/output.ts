@@ -4,6 +4,7 @@ import {
   type ClankerboxError,
   type Client,
   Host,
+  Limit,
   type LoadedProfile,
   Machine,
   Profile,
@@ -118,6 +119,11 @@ export const hostRows = (hosts: ReadonlyArray<Host>) => [
   ]),
 ];
 
+export const limitRows = (limits: ReadonlyArray<Limit>) => [
+  ["HOST", "RESOURCE", "USED", "LIMIT"],
+  ...limits.map(({ host, resource, used, limit }) => [host, resource, String(used), String(limit)]),
+];
+
 /** Each profile's fields, with its setup path as `setupPath` shows it. */
 export const profileRows = (
   profiles: ReadonlyArray<LoadedProfile>,
@@ -141,6 +147,8 @@ export const encodeMachine = Schema.encodeSync(Machine);
 export const encodeCheckpoint = Schema.encodeSync(Checkpoint);
 
 export const encodeHost = Schema.encodeSync(Host);
+
+export const encodeLimit = Schema.encodeSync(Limit);
 
 const encodeProfileFields = Schema.encodeSync(Profile);
 

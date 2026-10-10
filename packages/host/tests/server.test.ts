@@ -2,6 +2,7 @@
 import {
   Client,
   Http,
+  Internal,
   Invalid,
   type MachineSpec,
   version,
@@ -23,8 +24,8 @@ afterEach(async () => {
   await removeScratch(owned);
 });
 
-const serve = async () => {
-  const host = await startHost(await scratch(owned));
+const serve = async (options?: Parameters<typeof startHost>[1]) => {
+  const host = await startHost(await scratch(owned), options);
 
   served.push(host);
 
@@ -64,6 +65,31 @@ test("the SDK's client drives a machine's lifecycle on a served host", async () 
   expect(started.state).toBe("running");
   expect(listed.answers.map(({ id }) => id)).toEqual(["linux_dev"]);
   expect(gone._tag).toBe("NotFound");
+});
+
+test("a host reports its capacity; one whose runtime can't be read is unreachable for it, and still read and placed on", async () => {
+  const { url, fake } = await serve({ runtime: { ramBudgetMib: 4096 } });
+
+  const [before, , after] = await withClient(url, (client) =>
+    Effect.all([client.capacity, client.create("dev", spec, { host: "linux" }), client.capacity]),
+  );
+
+  fake.failNext("capacity", new Internal({ message: "smolvm machine status didn't answer" }));
+
+  const [unread, hosts, placed] = await withClient(url, (client) =>
+    Effect.all([client.capacity, client.hosts, client.create("other", spec)]),
+  );
+
+  expect(before.answers).toEqual([{ host: "linux", resource: "ramMib", limit: 4096, used: 0 }]);
+  expect(after.answers).toEqual([{ host: "linux", resource: "ramMib", limit: 4096, used: 1024 }]);
+  expect(unread.answers).toEqual([]);
+  expect(unread.unreachable.map(({ host, error }) => [host, error._tag, error.message])).toEqual([
+    ["linux", "Internal", "smolvm machine status didn't answer"],
+  ]);
+  expect(hosts.answers.map(({ id }) => id)).toEqual(["linux"]);
+  expect(placed.id).toBe("linux_other");
+  // Neither the read of the host nor the placement asked the runtime for its capacity.
+  expect(fake.calls.filter((call) => call.startsWith("capacity"))).toHaveLength(3);
 });
 
 test("the SDK's client forks, captures, restores and deletes checkpoints on a served host", async () => {

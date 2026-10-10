@@ -12,11 +12,12 @@ import { join } from "node:path";
 import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { checkRamBudget } from "../src/ram-budget.ts";
+import { checkRamBudget, ramInUse } from "../src/ram-budget.ts";
 import {
   type Activation,
   type CheckpointKind,
   type CheckpointRef,
+  type Held,
   type MachineRef,
   type MachineState,
   missing,
@@ -28,6 +29,7 @@ import {
 /** The runtime calls a test can fail, refuse or hold. */
 export type Operation =
   | "admit"
+  | "capacity"
   | "create"
   | "start"
   | "stop"
@@ -43,7 +45,7 @@ export interface FakeOptions {
   readonly dir: string;
   /** `undefined` gives machines no host port. Default: 127.0.0.1. */
   readonly publishAddress?: string | undefined;
-  /** When set, `admit` checks the RAM budget like smolvm. */
+  /** When set, `admit` checks the RAM budget like smolvm, and `capacity` reports it. */
   readonly ramBudgetMib?: number | undefined;
   /** What `ram` checkpoints record. Default: `fake 1`. */
   readonly pin?: string | undefined;
@@ -171,6 +173,20 @@ export const fakeRuntime = (options: FakeOptions) => {
       return failure === "hang" ? Effect.never : Effect.fail(failure);
     });
 
+  /** The RAM budget and what `admit` counts toward it, or no limits for a fake without one. */
+  const capacity = (held: ReadonlyArray<Held>) => {
+    const limit = options.ramBudgetMib;
+
+    return Effect.andThen(
+      enter("capacity", { id: "host" }),
+      limit === undefined
+        ? Effect.succeed([])
+        : Effect.map(ramInUse(held, states), ({ used }) => [
+            { resource: "ramMib" as const, limit, used },
+          ]),
+    );
+  };
+
   /** Where a checkpoint's copy of its machine's root is kept. */
   const checkpointRoot = (checkpoint: CheckpointRef) =>
     join(options.dir, "checkpoints", checkpoint.instance);
@@ -251,6 +267,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               ? Effect.void
               : checkRamBudget(options.ramBudgetMib, activation, states),
           ),
+        capacity,
         create: (machine) =>
           Effect.andThen(
             enterRefusable("create", machine),
@@ -364,7 +381,7 @@ export const fakeRuntime = (options: FakeOptions) => {
 
   return {
     layer,
-    /** Every runtime call, as `<operation> <machine ID>`, and `startup`. */
+    /** Every runtime call, as `<operation> <machine ID>`, `capacity host` and `startup`. */
     calls,
     /** What each `admit` was asked. */
     activations,

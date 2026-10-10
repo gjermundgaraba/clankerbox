@@ -4,7 +4,7 @@ import { Capacity, ErrorTag } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import { machine, type StubHost, stubHost } from "../../../packages/sdk/tests/stub-host.ts";
-import { cleanup, cli, scratch, writeConfig } from "./support.ts";
+import { cleanup, cli, type CliOptions, scratch, writeConfig } from "./support.ts";
 
 const owned: Array<string> = [];
 
@@ -45,6 +45,60 @@ test("hosts lists every host with its bases", async () => {
   expect(code).toBe(0);
   expect(stdout).toContain("ubuntu,ubuntu-dev");
   expect(stdout).toContain("tahoe");
+});
+
+test("capacity lists every host's limits, one a row, and names a host that didn't answer", async () => {
+  const dir = await scratch(owned);
+  const config = await writeConfig(dir, ["linux", "mac", "boat"]);
+
+  const endpoints: CliOptions["endpoints"] = [
+    [
+      "linux",
+      host({
+        id: "linux",
+        bases: ["ubuntu"],
+        capacity: [{ resource: "ramMib", limit: 14_336, used: 3072 }],
+      }),
+    ],
+    ["mac", "down"],
+    [
+      "boat",
+      host({
+        id: "boat",
+        bases: ["boat"],
+        runtime: "boat",
+        capacity: [
+          { resource: "activeSandboxes", limit: 2, used: 1 },
+          { resource: "startsPerDay", limit: 75, used: 12 },
+        ],
+      }),
+    ],
+  ];
+
+  const { code, stdout, stderr } = await cli(["capacity", "--config", config], { endpoints });
+  const json = await cli(["capacity", "--json", "--config", config], { endpoints });
+
+  expect(code).toBe(0);
+  expect(
+    stdout
+      .trim()
+      .split("\n")
+      .map((row) => row.split(/\s+/u)),
+  ).toEqual([
+    ["HOST", "RESOURCE", "USED", "LIMIT"],
+    ["linux", "ramMib", "3072", "14336"],
+    ["boat", "activeSandboxes", "1", "2"],
+    ["boat", "startsPerDay", "12", "75"],
+  ]);
+  expect(stderr).toContain("mac");
+  expect(JSON.parse(json.stdout)).toMatchObject({
+    capacity: [
+      { host: "linux", resource: "ramMib", limit: 14_336, used: 3072 },
+      { host: "boat", resource: "activeSandboxes", limit: 2, used: 1 },
+      { host: "boat", resource: "startsPerDay", limit: 75, used: 12 },
+    ],
+    unreachable: [{ host: "mac" }],
+  });
 });
 
 test("machines shows each machine's age, and names a host that didn't answer", async () => {

@@ -120,6 +120,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
     controlled,
     machines,
     machine,
+    capacity,
     createBare,
     createArgs,
     createWith,
@@ -170,7 +171,8 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
   /**
    * The RAM budget left over the running machines, read from a create too large for any
-   * budget, which is refused with Capacity and writes nothing.
+   * budget, which is refused with Capacity and writes nothing. The host's capacity reports
+   * that budget and those machines.
    */
   const remainingBudget = async () => {
     const huge = failure(await createBare("huge", 1_048_576));
@@ -183,6 +185,10 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
     const running = (await machines()).machines
       .filter(({ state }) => state === "running")
       .reduce((sum, { ramMib }) => sum + ramMib, 0);
+
+    expect(await capacity()).toEqual([
+      { host: suite.env.host.id, resource: "ramMib", limit: budget, used: running },
+    ]);
 
     return budget - running;
   };

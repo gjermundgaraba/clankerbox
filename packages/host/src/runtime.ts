@@ -11,6 +11,7 @@ import {
   type Checkpoint,
   type HostError,
   type Internal,
+  type Limit,
   type Machine,
   Precondition,
   readTimeout,
@@ -112,6 +113,9 @@ export interface Held {
   readonly booting: boolean;
 }
 
+/** A limit as its runtime reports it; the core names the host. */
+export type Usage = Omit<Limit, "host">;
+
 /** What step 3 checks before an action boots a machine. */
 export interface Activation {
   readonly action: ActionName;
@@ -194,6 +198,16 @@ export interface Interface {
    * `start`, whatever the machine's state: a running target counts once, as it already runs.
    */
   readonly admit: (activation: Activation) => Effect.Effect<void, HostError>;
+  /**
+   * The limits `admit` and the runtime's own `Capacity` refusals come from, and how much of
+   * each is in use, counted as they count it, over every machine on the host: every runtime
+   * has such limits, and only it can read them. The host reports them (`getCapacity`), so this
+   * reads state as `observe` does and writes nothing. A read that fails, or takes over
+   * `stateReadWait`, fails the report.
+   */
+  readonly capacity: (
+    machines: ReadonlyArray<Held>,
+  ) => Effect.Effect<ReadonlyArray<Usage>, HostError>;
   /** Makes the machine from `image` and boots it; it returns once exec works. */
   readonly create: (machine: MachineRef, image: string) => Effect.Effect<void, HostError | Refusal>;
   /**

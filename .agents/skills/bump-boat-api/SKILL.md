@@ -56,15 +56,21 @@ Each: what boat does, and what of ours depends on it.
   snapshot for a restore), `GET /sandboxes/{id}`, `POST /sandboxes/{id}/fork`,
   `/resume`, `/stop`, `/sshkey`, `/commands`, `PATCH /sandboxes/{id}` (`name`),
   `DELETE /sandboxes/{id}`, `POST /named-snapshots` (`sandboxId`, `name`),
-  `GET` and `DELETE /named-snapshots/{name}`; the live driver also reads
-  `GET /limits`, `GET /sandboxes` and `GET /named-snapshots`. Ours: one method
+  `GET` and `DELETE /named-snapshots/{name}`, `GET /limits`; the live driver
+  also reads `GET /sandboxes` and `GET /named-snapshots`. Ours: one method
   each in `boat-api.ts`'s `make`.
 - The fields read: a sandbox's `id`, `state`, `error`, `ip`, `sshEndpoint`,
   `lastSnapshotAttemptAt` and `lastSnapshotStatus` (`Sandbox`, all but `id` and
   `state` optional, since a `cancelled` sandbox is reported once with only
   `id`, `state` and `error`); a command's `exitCode`, `stdout`, `stderr` and
   `timedOut` (`Finished`); a named snapshot's `name`, `status` and `error`
-  (`NamedSnapshot`); a refusal's `code`, `message` and `requestId` (`Refused`).
+  (`NamedSnapshot`); a refusal's `code`, `message` and `requestId` (`Refused`);
+  the limits' `activeSandboxes`, `maxActiveSandboxes` and each of
+  `starts.minute`, `.hour` and `.day`'s `limit` and `used` (`Limits`;
+  `maxActiveSandboxes`, and the windows null or absent on an account boat
+  doesn't limit, are read from the spec of sha256 `b2d13d0a…a037`, fetched
+  2026-10-10, and not seen live; the live suite's capacity read, with two
+  sandboxes active, is the first sighting of `maxActiveSandboxes`).
   A sandbox's `desktopUrl` holds a token, so errors never carry a body.
 - Create's body has no name, tag or metadata field (it lists `type`,
   `ttlSeconds`, `env`, `environment`, `noEnv`, `snapshots`, `failFast`,
@@ -87,7 +93,9 @@ Each: what boat does, and what of ours depends on it.
   7-day trial keeps the trial's limits until its first payment. Ours:
   `activeStates` and `stateOf` in `boat.ts` (active reads `running`, `cancelled`
   and 404 read `missing`, anything else `stopped`); the live driver's pre-flight
-  and start count.
+  and start count, which reads `maxActiveSandboxes` as the host does; the
+  host's reported capacity (`Boat.capacity`), read with no `org`, as every
+  create is sent.
 - The trial refuses `ttlSeconds: null` and anything over 7200 with 400
   `trial_auto_stop_required`; create and resume default to a 1 h TTL, and a fork
   always does unless the call passes `ttlSeconds`. Ours: `ttlSeconds` 7200 and

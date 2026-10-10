@@ -15,7 +15,7 @@ import { Duration, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { cliIn, expect, failure, files, portOf } from "./cli.ts";
 import type { Smolvm, SmolvmHost } from "./config.ts";
-import { checkRamBudget } from "./ram-budget.ts";
+import { checkRamBudget, ramInUse } from "./ram-budget.ts";
 import {
   type CheckpointRef,
   type Interface,
@@ -444,6 +444,24 @@ export const make = (
       checkpointKind: "ram",
       admit: Effect.fn("Smolvm.admit")((activation) =>
         checkRamBudget(settings.ramBudgetMib, activation, observe),
+      ),
+      /**
+       * The budget and what `admit` counts toward it. `admit` counts a machine it couldn't read
+       * as running, to stay on the safe side of the budget; a report that did would pass a
+       * guess off as a reading, so it fails instead.
+       */
+      capacity: Effect.fn("Smolvm.capacity")((machines) =>
+        Effect.gen(function* () {
+          const { used, unread } = yield* ramInUse(machines, observe);
+
+          if (unread.length > 0) {
+            return yield* new Internal({
+              message: `smolvm couldn't read the state of ${unread.map(({ id }) => id).join(", ")}`,
+            });
+          }
+
+          return [{ resource: "ramMib" as const, limit: settings.ramBudgetMib, used }];
+        }),
       ),
       capture: Effect.fn("Smolvm.capture")((machine, checkpoint) =>
         Effect.andThen(

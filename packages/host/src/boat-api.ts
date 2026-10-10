@@ -182,6 +182,26 @@ const NamedSnapshot = Schema.Struct({
 
 const NamedSnapshotInfo = Schema.Struct({ snapshot: NamedSnapshot });
 
+/** One of boat's rolling start windows: create, fork and resume each count as a start. */
+const StartWindow = Schema.Struct({ limit: Schema.Int, used: Schema.Int });
+
+/**
+ * `GET /limits`, with only the fields the runtime reports, for the wallet a create bills: the
+ * host passes no `org` to either. An account boat doesn't limit has no `starts`, or null
+ * windows (the bump-boat-api skill).
+ */
+const Limits = Schema.Struct({
+  activeSandboxes: Schema.Int,
+  maxActiveSandboxes: Schema.Int,
+  starts: Nullable(
+    Schema.Struct({
+      minute: Nullable(StartWindow),
+      hour: Nullable(StartWindow),
+      day: Nullable(StartWindow),
+    }),
+  ),
+});
+
 /** A body the host ignores beyond its status: it reads none of its fields. */
 const Accepted = Schema.Struct({});
 
@@ -262,6 +282,11 @@ interface Call {
    * and a snapshot's save. Only then is a 429 or 503 refusal in `capacityRefusals` `Capacity`.
    */
   readonly takesRoom?: true | undefined;
+  /**
+   * Makes a `GET` once instead of repeating it: for a read someone waits on, where boat's own
+   * answer says more than the wait for a clearer one.
+   */
+  readonly unrepeated?: true | undefined;
 }
 
 export const make = (settings: Settings) =>
@@ -395,7 +420,8 @@ export const make = (settings: Settings) =>
      * A call, answered. One safe to repeat, a `GET`, a `DELETE` (a 404 counts as done) or one
      * with an `Idempotency-Key`, is repeated while its outcome is unclear, with the same request
      * and backoff, for `retryWindow` from its first unclear answer, far inside boat's 24-hour key
-     * window; then it fails. Any other call is made once, and an unclear outcome fails it. A keyed
+     * window; then it fails. Any other call, and an `unrepeated` one, is made once, and an
+     * unclear outcome fails it. A keyed
      * call boat throttled is repeated too, `throttledPause` apart, `throttledRepeats` times at
      * most. After an unclear attempt no refusal is trusted as one: that attempt may have made a
      * sandbox, which the refusal may be counting.
@@ -468,7 +494,8 @@ export const make = (settings: Settings) =>
         );
 
       const repeatable =
-        call.method === "GET" || call.method === "DELETE" || call.key !== undefined;
+        call.unrepeated !== true &&
+        (call.method === "GET" || call.method === "DELETE" || call.key !== undefined);
 
       return once.pipe(
         Effect.catchTag("Throttled", () => paced),
@@ -489,6 +516,8 @@ export const make = (settings: Settings) =>
 
     return {
       sandbox,
+      /** The account's limits and what is in use of them, the operator's own sandboxes included. */
+      limits: send({ method: "GET", path: "/limits", unrepeated: true }, Limits),
       /** Creates a sandbox of `type`, or from the named snapshot `from`; its ID. */
       create: (key: string, type: TypeName, from?: string) =>
         Effect.map(
