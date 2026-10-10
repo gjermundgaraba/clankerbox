@@ -551,6 +551,7 @@ export const make = (
       publishAddress: settings.publishAddress,
       pin: undefined,
       checkpointKind: "disk",
+      loginUser: "admin",
       startup: Effect.fn("Tart.startup")((machines) =>
         Effect.gen(function* () {
           yield* files(

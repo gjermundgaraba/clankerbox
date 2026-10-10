@@ -77,7 +77,6 @@ const payload = randomBytes(64 * 1024);
 
 /** What the harness drives a smolvm host with. */
 const smolvm: Runtime<typeof Natives.Type> = {
-  user: "root",
   /**
    * `main` is 20 GiB, which smolvm boots from its image seed; the other creates' 10 GiB pull the
    * base in the guest (README, Runtime notes). Both fetch from the base's registry.
@@ -999,7 +998,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "after the host is killed during a create's setup, the row reads failed; stop stops the machine, never made, start, fork and capture refuse it, writing nothing, and delete removes its VM",
+    "after the host is killed during a create's setup, the row reads failed and unmade; stop stops the machine, start, fork and capture refuse it, writing nothing, and delete removes its VM",
     async () => {
       let ended: Ran | undefined;
 
@@ -1042,6 +1041,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
       expect(row).toMatchObject({
         state: "running",
+        made: false,
         action: {
           name: "create",
           status: "failed",
@@ -1059,6 +1059,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(stopped.code, stopped.stdout).toBe(0);
       expect(decode(OneMachine, stopped)).toMatchObject({
         state: "stopped",
+        made: false,
         action: { name: "stop", status: "done" },
       });
 
@@ -1075,6 +1076,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
       expect(await machine("crash")).toMatchObject({
         state: "stopped",
+        made: false,
         action: { name: "stop", status: "done" },
       });
       expect(await machine("crash-fork")).toBeUndefined();

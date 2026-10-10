@@ -103,8 +103,6 @@ const onTrial = (process.env["CLANKERBOX_LIVE_BOAT_TIER"] ?? "trial") === "trial
 
 /** What the harness drives a boat host with. */
 const boat: Runtime<typeof BoatNatives.Type> = {
-  /** boat's sshd accepts root with a key, which `main`'s setup authorizes. */
-  user: "root",
   /** boat's `small`, the trial's smallest type, exactly. */
   sizes: (cpu = 2, ramMib = 4096, diskGib = 12) => [
     "--base",
@@ -735,7 +733,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   );
 
   test(
-    "after the host is killed during a create's setup, the row reads failed; stop stops the sandbox, start, fork and capture refuse it as never made, writing nothing, and delete removes it",
+    "after the host is killed during a create's setup, the row reads failed and unmade; stop stops the sandbox, start, fork and capture refuse it as never made, writing nothing, and delete removes it",
     async () => {
       let ended: Ran | undefined;
 
@@ -780,6 +778,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       expect((await control("host-start")).code).toBe(0);
       expect(await machine("crash")).toMatchObject({
         state: "running",
+        made: false,
         action: {
           name: "create",
           status: "failed",
@@ -792,6 +791,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       expect(stopped.code, stopped.stdout).toBe(0);
       expect(decode(OneMachine, stopped)).toMatchObject({
         state: "stopped",
+        made: false,
         action: { name: "stop", status: "done" },
       });
       expect(await natives("crash")).toEqual({

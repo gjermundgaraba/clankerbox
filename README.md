@@ -158,11 +158,11 @@ ending in `.json` is a path. A profile file:
 `setup.path`, relative to the profile, is a script or a recipe directory (a
 `setup.sh` and the files it needs). Either runs through its `#!` line, and
 `/bin/sh` runs one without; `setup.sh` needn't be executable, and the other
-files keep their modes. Its timeout is required. An optional `host` sends every
-create from the profile to that host instead of placing it, unless `--host`
-names another. The file's name, without `.json`, becomes the machine's
-`profile` label. `clankerbox profiles` lists the profiles directory's profiles,
-reading only local files.
+files keep their modes. Without a `timeoutSeconds` the host gives it 600 s.
+An optional `host` sends every create from the profile to that host instead of
+placing it, unless `--host` names another. The file's name, without `.json`,
+becomes the machine's `profile` label. `clankerbox profiles` lists the profiles
+directory's profiles, reading only local files.
 
 ```sh
 clankerbox hosts                           # every host, its runtime, versions and bases
@@ -172,7 +172,10 @@ clankerbox create dev --profile dev        # placed; prints the new ID, linux_de
 clankerbox create review --host mac --base macos --cpu 4 --ram-mib 8192 --disk-gib 60
 clankerbox create scratch --profile dev --setup ./other.sh --setup-timeout 300
 clankerbox machines                        # every host's machines, with their age
-clankerbox ssh linux_dev -- -l root
+clankerbox get linux_dev                   # one machine: its state, last action and error, SSH login
+clankerbox ssh linux_dev                   # as the runtime's user: root, or admin on Tart
+clankerbox ssh linux_dev -- uptime         # ssh's own arguments go after --
+clankerbox ssh dev@linux_dev               # as another user
 clankerbox stop linux_dev
 clankerbox start linux_dev
 clankerbox fork linux_dev dev2             # linux_dev2
@@ -186,17 +189,30 @@ clankerbox checkpoint delete linux_base
 - Every command takes IDs, `<host>_<name>`, except `create`, which takes a
   name. `--host` sends it to that host; without it, it goes to the profile's
   `host`, or is placed.
-- `create` flags override the profile's fields one by one; `--setup` with
-  `--setup-timeout` replaces its setup as a unit, and one without the other is
-  refused.
-- `ssh` writes a one-line known-hosts file pinning the machine's host key and
-  runs the system `ssh` with strict checking. The destination is the machine's
-  ID, so `-l USER` or a `Host` block in `~/.ssh/config` picks the user; other
-  ports go through `-L`. For scp or rsync, take `ssh` and `hostKey` from
-  `clankerbox machines --json`.
+- `create` flags override the profile's fields one by one, `--setup` and
+  `--setup-timeout` included; a setup that neither the flag nor the profile
+  times gets the host's default. A create that fails can leave its machine
+  behind, unmade: `get` shows why, and `delete` removes it.
+- A running machine's `ssh` is its login, `{user, host, port}`, and its
+  `hostKey` is the guest's SSH host key, once preparation has recorded one.
+  The user follows the runtime: `root` on smolvm and boat, `admin` on Tart. A
+  base alone authorizes no key: a setup installs sshd where the base has
+  none, and puts your public key in that user's `authorized_keys`.
+- `ssh` needs both. It writes a one-line known-hosts file pinning the
+  machine's host key and runs the system `ssh` with strict checking, as the
+  login's user; `USER@ID` names another. A `-l` after `--` doesn't apply, nor
+  does a `User` in your `~/.ssh/config`: OpenSSH keeps the first user it is
+  given. The destination is the machine's ID, so a `Host` block there can
+  pick keys and options per machine; other ports go through `-L`. For scp or
+  rsync, take `ssh` and `hostKey` from `clankerbox get ID --json`.
+- `fork` copies what the runtime can: smolvm a running machine, RAM and
+  processes included; Tart a stopped machine's disk; boat the disk of either.
+  A `stop` is a power-off: after a `start`, what runs is what the guest
+  starts at boot plus what its `/etc/clankerbox/start` launches.
 - A mutation returns when its action has finished, however long that takes.
   Its `--timeout SECONDS` only stops waiting: the action runs on, and the CLI
-  says it may have run. A read gives up on a host after 10 s.
+  says it may have run; `get`, or `checkpoint get`, shows how it ended. A read
+  gives up on a host after 10 s.
 - `--json` prints the resource, or `{"error": {"message", "tag", "retryable"}}`.
   Lists print what reachable hosts answered and name the unreachable ones; a
   list exits 1 when every host failed.
@@ -479,7 +495,7 @@ is afterwards or a tagged error. Each runs in this order (`actions.ts`):
   native (a `Refusal` in `runtime.ts`) is handled the same way. Each runtime
   documents its list: a start of a machine the runtime no longer has, a fork
   or capture source in a state it doesn't copy, Tart's forwarder failing to
-  listen on a new port, and boat's limit, capacity and plan refusals.
+  listen on a new port, and boat's limit, capacity, plan and API-key refusals.
 - **Any other runtime error** leaves the row with `action.status = failed` and
   the same error as the reply. Nothing native is released without an explicit
   `delete`, so no failure needs a proof that it left nothing behind. `delete`
@@ -490,10 +506,12 @@ is afterwards or a tagged error. Each runs in this order (`actions.ts`):
   connection never interrupts native work, and the outcome is recorded either
   way.
 - **`made`:** a machine row is made once its create (with setup), fork or
-  restore has done its native work, before preparation. Until then `start`,
-  `fork` and `capture` refuse it with `Precondition`, so a half-made machine
-  never boots; it can be read, stopped and deleted. A failure only in
-  preparation leaves the machine made, and `start` repairs it.
+  restore has done its native work, before preparation, and `Machine.made`
+  says so. Until then the machine has no `hostKey`, and `start`, `fork` and
+  `capture` refuse it with `Precondition`, so a half-made machine never boots;
+  it can be read, stopped and deleted, and its `state` is still the runtime's.
+  A failure only in preparation leaves the machine made, and `start` repairs
+  it.
 - **`action: {name, status, error?}`** is a resource's one record of work: its
   last action, `running` while held, `failed` with the error, or `done`. A
   checkpoint is ready once its action is `done`.
@@ -828,7 +846,10 @@ These are known, not guarded, and accepted:
   it apart from stock images unless every profile on that name handles both.
 - **Sizes:** the smallest of `small`, `default`, `large` and `xlarge` that
   covers the request; none is `Precondition`, and a type the plan lacks is
-  boat's 403, a `Precondition` refusal.
+  boat's 403, a `Precondition` refusal. So is any 403 that carries boat's
+  code, such as an API key that may not perform an action
+  (`api_key_action_forbidden`): the key needs `ssh` and `sandbox.delete`
+  besides create, stop and resume.
 - **Retries:** create, fork and restore carry an `Idempotency-Key`
   (`clankerbox-<host>-<instance>`). They and every `GET` and `DELETE`, but
   the `GET` of the limits, are repeated while their outcome is unclear, or

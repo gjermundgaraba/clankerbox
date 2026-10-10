@@ -292,8 +292,6 @@ export type Controlled = <A>(
 
 /** What one runtime's suite tells the harness. */
 export interface Runtime<Native> {
-  /** The user the run's key logs in as over ssh. */
-  readonly user: string;
   /** A create's `--base` and sizes; with no arguments, those of a create with setup. */
   readonly sizes: (...args: ReadonlyArray<number>) => ReadonlyArray<string>;
   /** The native resources of the machine or checkpoint whose name on the host is `name`. */
@@ -408,8 +406,6 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
       "BatchMode=yes",
       "-o",
       "ConnectTimeout=30",
-      "-l",
-      runtime.user,
       command,
     );
 

@@ -23,8 +23,8 @@ test("a profile decodes with or without setup", () => {
   ).toBe("Success");
 });
 
-test("a profile's setup comes with its timeout", () => {
-  expect(decode({ ...sizes, setup: { path: "recipe" } })._tag).toBe("Failure");
+test("a profile's setup needs its path, and may leave its timeout to the host", () => {
+  expect(decode({ ...sizes, setup: { path: "recipe" } })._tag).toBe("Success");
   expect(decode({ ...sizes, setup: { timeoutSeconds: 600 } })._tag).toBe("Failure");
 });
 
@@ -76,11 +76,14 @@ test("a profile without setup has no setup", async () => {
   expect(await load(join(dir, "bare.json"))).toEqual({ ...sizes, label: "bare" });
 });
 
-test("a profile with an unknown key, or setup without its timeout, is Invalid", async () => {
+test("a profile with an unknown key, or setup without its path, is Invalid", async () => {
   const dir = await profileDir();
 
   await writeFile(join(dir, "typo.json"), JSON.stringify({ ...sizes, ram: 4096 }));
-  await writeFile(join(dir, "half.json"), JSON.stringify({ ...sizes, setup: { path: "x.sh" } }));
+  await writeFile(
+    join(dir, "half.json"),
+    JSON.stringify({ ...sizes, setup: { timeoutSeconds: 60 } }),
+  );
 
   expect((await loadError(join(dir, "typo.json")))._tag).toBe("Invalid");
   expect((await loadError(join(dir, "half.json")))._tag).toBe("Invalid");

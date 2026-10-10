@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { Effect, Layer, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
+import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { machine, type StubHost, stubHost } from "../../../packages/sdk/tests/stub-host.ts";
 import { cleanup, cli, scratch, writeConfig } from "./support.ts";
 
@@ -64,7 +65,7 @@ const fakeSsh = (code: number) => {
 };
 
 const reachable = machine("linux_dev", {
-  ssh: { host: "100.64.0.7", port: 10_022 },
+  ssh: { user: "root", host: "100.64.0.7", port: 10_022 },
   hostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@linux_dev",
 });
 
@@ -78,23 +79,12 @@ const setup = async (held = reachable) => {
   return { config, endpoints: [["linux", linux]] as const };
 };
 
-test("ssh pins the machine's host key in a one-line known-hosts file and passes the caller's args", async () => {
+test("ssh logs in as the machine's user, pins its host key in a one-line known-hosts file and passes the caller's args", async () => {
   const { config, endpoints } = await setup();
   const ssh = fakeSsh(0);
 
   const { code } = await cli(
-    [
-      "ssh",
-      "linux_dev",
-      "--config",
-      config,
-      "--",
-      "-l",
-      "root",
-      "-L",
-      "8080:localhost:80",
-      "uptime",
-    ],
+    ["ssh", "linux_dev", "--config", config, "--", "-L", "8080:localhost:80", "uptime"],
     { endpoints, spawner: ssh.layer },
   );
 
@@ -104,6 +94,8 @@ test("ssh pins the machine's host key in a one-line known-hosts file and passes 
   expect(spawned?.command).toBe("ssh");
   expect(spawned?.knownHosts).toBe("linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n");
   expect(spawned?.args).toEqual([
+    "-l",
+    "root",
     "-o",
     "HostName=100.64.0.7",
     "-o",
@@ -117,13 +109,25 @@ test("ssh pins the machine's host key in a one-line known-hosts file and passes 
     "-o",
     "StrictHostKeyChecking=yes",
     "linux_dev",
-    "-l",
-    "root",
     "-L",
     "8080:localhost:80",
     "uptime",
   ]);
   expect(existsSync(spawned?.knownHostsFile ?? "")).toBe(false);
+});
+
+test("ssh USER@ID logs in to the machine as that user", async () => {
+  const { config, endpoints } = await setup();
+  const ssh = fakeSsh(0);
+
+  const { code } = await cli(["ssh", "dev@linux_dev", "--config", config], {
+    endpoints,
+    spawner: ssh.layer,
+  });
+
+  expect(code).toBe(0);
+  expect(ssh.spawned[0]?.args.slice(0, 2)).toEqual(["-l", "dev"]);
+  expect(ssh.spawned[0]?.args.at(-1)).toBe("linux_dev");
 });
 
 test("ssh exits with ssh's exit code, through Exited's errorExitCode and the default teardown", async () => {
@@ -137,16 +141,32 @@ test("ssh exits with ssh's exit code, through Exited's errorExitCode and the def
   expect(code).toBe(255);
 });
 
-test("ssh into a machine without an endpoint is Precondition and runs no ssh", async () => {
-  const { config, endpoints } = await setup(machine("linux_dev", { state: "stopped" }));
-  const ssh = fakeSsh(0);
+test("ssh into a machine that lacks an endpoint or a host key is Precondition, says which, and runs no ssh", async () => {
+  const login = { user: "root", host: "100.64.0.7", port: 10_022 };
+  const failed = { name: "create", status: "failed" } as const;
 
-  const { code, stderr } = await cli(["ssh", "linux_dev", "--config", config], {
-    endpoints,
-    spawner: ssh.layer,
-  });
+  const said: ReadonlyArray<readonly [Machine, string]> = [
+    [
+      machine("linux_dev", { state: "stopped", hostKey: "ssh-ed25519 AAAAexample" }),
+      "linux_dev has no SSH endpoint (stopped, create done): see clankerbox get linux_dev",
+    ],
+    [
+      machine("linux_dev", { made: false, action: failed, ssh: login }),
+      "linux_dev has no SSH host key on record (running (unmade), create failed): see clankerbox get linux_dev",
+    ],
+  ];
 
-  expect(code).toBe(1);
-  expect(stderr).toContain("Precondition");
-  expect(ssh.spawned).toEqual([]);
+  for (const [held, message] of said) {
+    const { config, endpoints } = await setup(held);
+    const ssh = fakeSsh(0);
+
+    const { code, stderr } = await cli(["ssh", "linux_dev", "--config", config], {
+      endpoints,
+      spawner: ssh.layer,
+    });
+
+    expect(code).toBe(1);
+    expect(stderr).toContain(`clankerbox: Precondition: ${message}`);
+    expect(ssh.spawned).toEqual([]);
+  }
 });

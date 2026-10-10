@@ -75,9 +75,8 @@ test("malformed IDs, names and sizes are refused with InvalidInput", async () =>
   }
 });
 
-test("setup goes with its timeout", async () => {
+test("setup needs its script, and its timeout goes inside it", async () => {
   const halves: ReadonlyArray<Schema.Json> = [
-    { ...create, setup: { script: "#!/bin/sh\ntrue\n" } },
     { ...create, setup: { timeoutSeconds: 60 } },
     { ...create, setupTimeoutSeconds: 60 },
   ];

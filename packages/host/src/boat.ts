@@ -11,9 +11,9 @@
  *
  * The refusal rule covers boat's answers that leave nothing on boat (the bump-boat-api skill):
  * its `Capacity` refusals of a create, fork, resume, restore or capture (the account's limits,
- * no machine, an 11th named snapshot), its `Precondition` refusal of a type the account's plan
- * lacks, a create, fork or restore that ends `cancelled` because boat found no machine, and a
- * machine to start, or a fork's or capture's source, that boat doesn't have.
+ * no machine, an 11th named snapshot), its `Precondition` refusals of them (a 403 with boat's
+ * code, `boat-api.ts`), a create, fork or restore that ends `cancelled` because boat found no
+ * machine, and a machine to start, or a fork's or capture's source, that boat doesn't have.
  *
  * Errors and warnings are scrubbed of the API key where they leave the runtime, so nothing boat
  * or the guest echoes carries it out.
@@ -356,10 +356,10 @@ export const make = (
       Effect.mapError(machineType(machine), (error) => new Refusal({ error }));
 
     /**
-     * Calls that make or resume a sandbox, or save a snapshot: boat's `Capacity` refusals, and
-     * its `Precondition` refusal of a type the plan lacks, leave nothing on boat, so they fall
-     * under the refusal rule. A 404 from them is boat's own (a restore's snapshot deleted under
-     * it), not a resource of the host's, so it is `Internal`.
+     * Calls that make or resume a sandbox, or save a snapshot: boat's `Capacity` and
+     * `Precondition` refusals of them leave nothing on boat, so they fall under the refusal rule.
+     * A 404 from them is boat's own (a restore's snapshot deleted under it), not a resource of the
+     * host's, so it is `Internal`.
      */
     const refusing = <A>(
       call: Effect.Effect<A, HostError>,
@@ -711,6 +711,7 @@ export const make = (
       publishAddress: undefined,
       pin: undefined,
       checkpointKind: "disk",
+      loginUser: "root",
       startup: Effect.fn("Boat.startup")(() => Effect.void),
       /**
        * A `GET` of each recorded sandbox, all at once: a host holds few machines, and boat limits

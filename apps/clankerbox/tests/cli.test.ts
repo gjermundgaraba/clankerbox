@@ -124,6 +124,79 @@ test("machines shows each machine's age, and names a host that didn't answer", a
   expect(stderr).toContain("mac");
 });
 
+const held = machine("linux_dev", {
+  ssh: { user: "root", host: "100.64.0.7", port: 10_022 },
+  hostKey: "ssh-ed25519 AAAAexample",
+});
+
+const unmade = machine("linux_other", {
+  made: false,
+  action: {
+    name: "create",
+    status: "failed",
+    error: { tag: "Precondition", message: "setup exited 3" },
+  },
+});
+
+test("machines shows a machine's SSH login as user@host:port, and marks an unmade one", async () => {
+  const dir = await scratch(owned);
+  const config = await writeConfig(dir, ["linux"]);
+
+  const { stdout } = await cli(["machines", "--config", config], {
+    endpoints: [["linux", host({ id: "linux", bases: ["ubuntu"], machines: [held, unmade] })]],
+  });
+
+  const rows = stdout.split("\n");
+
+  expect(rows).toHaveLength(3);
+  expect(rows[0]?.split(/\s+/u).at(-1)).toBe("SSH");
+  expect(rows[1]?.split(/\s+/u).at(-1)).toBe("root@100.64.0.7:10022");
+  expect(rows[2]).toContain("running (unmade)");
+});
+
+test("get reads one machine a field a line, with its action's error and its host key", async () => {
+  const dir = await scratch(owned);
+  const config = await writeConfig(dir, ["linux"]);
+
+  const endpoints = [
+    ["linux", host({ id: "linux", bases: ["ubuntu"], machines: [held, unmade] })],
+  ] as const;
+
+  const fields = async (id: string) => {
+    const { stdout } = await cli(["get", id, "--config", config], { endpoints });
+
+    return stdout.split("\n").map((line) => line.split(/\s{2,}/u));
+  };
+
+  const json = await cli(["get", "linux_dev", "--json", "--config", config], { endpoints });
+  const gone = await cli(["get", "linux_gone", "--json", "--config", config], { endpoints });
+
+  expect(await fields("linux_dev")).toEqual(
+    expect.arrayContaining([
+      ["ID", "linux_dev"],
+      ["STATE", "running"],
+      ["SSH", "root@100.64.0.7:10022"],
+      ["ERROR", "-"],
+      ["HOST_KEY", "ssh-ed25519 AAAAexample"],
+    ]),
+  );
+  expect(await fields("linux_other")).toEqual(
+    expect.arrayContaining([
+      ["STATE", "running (unmade)"],
+      ["ACTION", "create failed: Precondition"],
+      ["SSH", "-"],
+      ["ERROR", "setup exited 3"],
+      ["HOST_KEY", "-"],
+    ]),
+  );
+  expect(JSON.parse(json.stdout)).toMatchObject({
+    id: "linux_dev",
+    ssh: held.ssh,
+    hostKey: held.hostKey,
+  });
+  expect([gone.code, decodeJsonError(gone.stdout).error.tag]).toEqual([1, "NotFound"]);
+});
+
 test("machines --json carries the machines and the unreachable hosts", async () => {
   const dir = await scratch(owned);
   const config = await writeConfig(dir, ["linux", "mac"]);
@@ -551,7 +624,7 @@ test("create --profile takes a path to a profile file", async () => {
   expect(linux.creates[0]?.profile).toBe("small");
 });
 
-test("create's flags override the profile's fields, and --setup with --setup-timeout replaces its setup", async () => {
+test("create's flags override the profile's fields, its setup and timeout included", async () => {
   const dir = await scratch(owned);
   const file = join(dir, "dev.json");
   const script = join(dir, "other.sh");
@@ -606,13 +679,52 @@ test("create's flags override the profile's fields, and --setup with --setup-tim
   expect(request?.setup?.script === "#!/bin/sh\necho other\n").toBe(true);
 });
 
-test("create refuses --setup or --setup-timeout alone, and a spec missing its base or sizes", async () => {
+test("--setup and --setup-timeout each override the profile's, and a setup with no timeout leaves it to the host", async () => {
   const dir = await scratch(owned);
   const config = await writeConfig(dir, ["linux"]);
   const script = join(dir, "setup.sh");
+  const other = join(dir, "other.sh");
   const profile = join(dir, "small.json");
 
   await writeFile(script, "#!/bin/sh\ntrue\n");
+  await writeFile(other, "#!/bin/sh\necho other\n");
+  await writeFile(
+    profile,
+    JSON.stringify({
+      base: "ubuntu",
+      cpu: 1,
+      ramMib: 1024,
+      diskGib: 10,
+      setup: { path: "setup.sh", timeoutSeconds: 900 },
+    }),
+  );
+
+  const linux = host({ id: "linux", bases: ["ubuntu"] });
+
+  for (const [name, args] of [
+    ["bare", [...sizes, "--setup", script]],
+    ["timed", ["--profile", profile, "--setup-timeout", "60"]],
+    ["scripted", ["--profile", profile, "--setup", other]],
+  ] as const) {
+    const { code } = await cli(["create", name, ...args, "--config", config], {
+      endpoints: [["linux", linux]],
+    });
+
+    expect(code).toBe(0);
+  }
+
+  expect(linux.creates.map(({ setup }) => [setup?.script, setup?.timeoutSeconds])).toEqual([
+    ["#!/bin/sh\ntrue\n", undefined],
+    ["#!/bin/sh\ntrue\n", 60],
+    ["#!/bin/sh\necho other\n", 900],
+  ]);
+});
+
+test("create refuses --setup-timeout with no setup to time, and a spec missing its base or sizes", async () => {
+  const dir = await scratch(owned);
+  const config = await writeConfig(dir, ["linux"]);
+  const profile = join(dir, "small.json");
+
   await writeFile(profile, JSON.stringify({ base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 }));
 
   const linux = host({ id: "linux", bases: ["ubuntu"] });
@@ -623,8 +735,6 @@ test("create refuses --setup or --setup-timeout alone, and a spec missing its ba
     });
 
   const runs = [
-    await run([...sizes, "--setup", script]),
-    await run(["--profile", profile, "--setup", script]),
     await run(["--profile", profile, "--setup-timeout", "60"]),
     await run(["--base", "ubuntu"]),
   ];
@@ -634,7 +744,8 @@ test("create refuses --setup or --setup-timeout alone, and a spec missing its ba
     expect(decodeJsonError(stdout).error.tag).toBe("Invalid");
   }
 
-  expect(decodeJsonError(runs[3]?.stdout ?? "").error.message).toContain("cpu");
+  expect(decodeJsonError(runs[0]?.stdout ?? "").error.message).toContain("--setup-timeout");
+  expect(decodeJsonError(runs[1]?.stdout ?? "").error.message).toContain("cpu");
   expect(linux.calls).toEqual([]);
 });
 

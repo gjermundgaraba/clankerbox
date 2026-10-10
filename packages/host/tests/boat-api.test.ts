@@ -628,7 +628,7 @@ test("a 4xx is a definite answer whatever its body, and is never repeated", asyn
   expect(gone).toEqual([Option.none(), Option.none(), undefined, undefined]);
 });
 
-test("boat's refusals that leave nothing behind are Capacity, or Precondition for a type, answered at once", async () => {
+test("boat's refusals that leave nothing behind are Capacity, or Precondition for a 403 with boat's code, answered at once", async () => {
   const refusals: ReadonlyArray<readonly [number, string]> = [
     [429, "limit_reached"],
     [429, "member_limit_reached"],
@@ -648,20 +648,18 @@ test("boat's refusals that leave nothing behind are Capacity, or Precondition fo
     ]);
   }
 
-  // A type the account's plan doesn't include won't come with waiting: Precondition.
-  for (const [code, type] of [
-    ["trial_machine_class_not_allowed", "large"],
-    ["machine_class_plan_required", "xlarge"],
-  ] as const) {
-    const boat = fakeBoat(() => refusal(403, code, `no ${type} on this plan`));
-    const error = await run(boat, (api) => Effect.flip(api.create("key-1", type)));
+  // A 403 with boat's code, whichever it is, won't come with waiting: Precondition.
+  const keyBoat = fakeBoat(() =>
+    refusal(403, "api_key_action_forbidden", "this API key may not create sandboxes"),
+  );
 
-    expect(boat.sent.map(json)).toEqual([{ type, noEnv: true, ttlSeconds: 7200 }]);
-    expect([error._tag, error.message]).toEqual([
-      "Precondition",
-      `boat POST /sandboxes answered 403 ${code}: no ${type} on this plan (req_0123)`,
-    ]);
-  }
+  const keyError = await run(keyBoat, (api) => Effect.flip(api.create("key-1", "small")));
+
+  expect(keyBoat.sent.map(json)).toEqual([{ type: "small", noEnv: true, ttlSeconds: 7200 }]);
+  expect([keyError._tag, keyError.message]).toEqual([
+    "Precondition",
+    "boat POST /sandboxes answered 403 api_key_action_forbidden: this API key may not create sandboxes (req_0123)",
+  ]);
 
   const forkBoat = fakeBoat(() => refusal(429, "limit_reached"));
 

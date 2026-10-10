@@ -416,7 +416,7 @@ test("a restore makes a machine with the checkpoint's spec, prepared with a new 
     action: { name: "restore", status: "done" },
     ssh: { host: "127.0.0.1", port: ports.first },
   });
-  expect(source.ssh).toEqual({ host: "127.0.0.1", port: ports.first });
+  expect(source.ssh).toEqual({ user: "root", host: "127.0.0.1", port: ports.first });
   expect(restored.hostKey).not.toBe(source.hostKey);
   expect(await machineId(linux, "dev")).toBe("linux_dev\n");
   expect(linux.fake.calls).toEqual(["admit linux_dev", "restore linux_dev", "exec linux_dev"]);

@@ -287,9 +287,10 @@ test("stop on a machine the runtime can't read calls the runtime's stop", async 
   expect(linux.fake.calls).toEqual(["stop linux_dev"]);
 });
 
-test("a machine has an SSH endpoint, on its port of the publish address, only while it runs", async () => {
+test("a machine has an SSH endpoint, as the runtime's user on its port of the publish address, only while it runs", async () => {
   const linux = await host();
 
+  // With no setup, nothing installs sshd, so preparation records no host key.
   const made = await linux.run(linux.machines.create(request("dev")));
   const stopped = await linux.run(linux.machines.stop("linux_dev"));
 
@@ -298,7 +299,8 @@ test("a machine has an SSH endpoint, on its port of the publish address, only wh
   const missing = await linux.run(linux.machines.get("linux_dev"));
   const [row] = await rows(linux);
 
-  expect(made.ssh).toEqual({ host: "127.0.0.1", port: row?.port });
+  expect(made.ssh).toEqual({ user: "root", host: "127.0.0.1", port: row?.port });
+  expect(made.hostKey).toBeUndefined();
   expect([stopped, missing].map(({ state, ssh }) => [state, ssh])).toEqual([
     ["stopped", undefined],
     ["missing", undefined],
@@ -590,8 +592,16 @@ test("a machine whose create failed is only read, stopped or deleted: start, for
   expect([...refused, ...refusedStopped].map(({ _tag, message }) => [_tag, message])).toEqual(
     Array.from({ length: 6 }, () => neverMade),
   );
-  expect(got).toMatchObject({ state: "running", action: { name: "create", status: "failed" } });
-  expect(stopped).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
+  expect(got).toMatchObject({
+    state: "running",
+    made: false,
+    action: { name: "create", status: "failed" },
+  });
+  expect(stopped).toMatchObject({
+    state: "stopped",
+    made: false,
+    action: { name: "stop", status: "done" },
+  });
   expect(linux.fake.calls).toEqual(["stop linux_dev", "delete linux_dev"]);
   expect(await rows(linux)).toEqual([]);
   expect(await linux.run(linux.store.checkpoints)).toEqual([]);
@@ -727,6 +737,16 @@ test("a setup that exits removes its file", async () => {
 
   expect(file).toMatch(/^\/var\/tmp\/clankerbox-setup\./u);
   await expect(stat(file)).rejects.toThrow("ENOENT");
+});
+
+test("create accepts a setup that names no timeout", async () => {
+  const linux = await host();
+
+  const made = await linux.run(
+    linux.machines.create(request("dev", { setup: { script: installsStart.script } })),
+  );
+
+  expect(made.action).toEqual({ name: "create", status: "done" });
 });
 
 test("a setup that runs past its timeout fails the create with the output so far", async () => {

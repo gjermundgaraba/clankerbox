@@ -113,18 +113,21 @@ export const make = (
       Effect.provideService(work, Runtime, runtime);
 
     /**
-     * Where a running machine's guest port 22 is reached: on its host port of the publish
-     * address, for a runtime that has one, or where the runtime reports. A machine that doesn't
-     * run has none.
+     * Where a running machine's guest port 22 is reached, and the user its logins are for: on its
+     * host port of the publish address, for a runtime that has one, or where the runtime reports.
+     * A machine that doesn't run has none.
      */
     const sshOf = (record: MachineRecord, observed: Observed) => {
       if (observed.state !== "running") {
         return undefined;
       }
 
-      return runtime.publishAddress === undefined || record.port === undefined
-        ? observed.ssh
-        : { host: runtime.publishAddress, port: record.port };
+      const endpoint =
+        runtime.publishAddress === undefined || record.port === undefined
+          ? observed.ssh
+          : { host: runtime.publishAddress, port: record.port };
+
+      return endpoint === undefined ? undefined : { user: runtime.loginUser, ...endpoint };
     };
 
     /** The machine as the API reports it, with the state the runtime read. */
@@ -140,6 +143,7 @@ export const make = (
         ramMib: record.ramMib,
         diskGib: record.diskGib,
         state: observed.state,
+        made: record.made,
         action: record.action,
       };
 

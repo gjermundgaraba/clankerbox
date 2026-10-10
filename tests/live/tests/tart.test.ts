@@ -95,8 +95,6 @@ const answer = (endpoint: SshEndpoint) =>
 
 /** What the harness drives a Tart host with. */
 const tart: Runtime<typeof TartNatives.Type> = {
-  /** The Cirrus image's user. */
-  user: "admin",
   /** The base's disk is 50 GB, and Tart only grows a disk (README, Runtime notes). */
   sizes: (diskGib = 50) => [
     "--base",
@@ -698,7 +696,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
   );
 
   test(
-    "after the host is killed during a create's setup, the row reads failed; stop stops the machine, never made, start, fork and capture refuse it, writing nothing, and delete removes its VM, job and listener",
+    "after the host is killed during a create's setup, the row reads failed and unmade; stop stops the machine, start, fork and capture refuse it, writing nothing, and delete removes its VM, job and listener",
     async () => {
       let ended: Ran | undefined;
 
@@ -744,6 +742,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
 
       expect(crashed).toMatchObject({
         state: "running",
+        made: false,
         action: {
           name: "create",
           status: "failed",
@@ -762,6 +761,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       expect(stopped.code, stopped.stdout).toBe(0);
       expect(decode(OneMachine, stopped)).toMatchObject({
         state: "stopped",
+        made: false,
         action: { name: "stop", status: "done" },
       });
 
@@ -802,6 +802,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       expect(error.message).toContain("should be larger than the current disk size");
       expect(await machine("small")).toMatchObject({
         state: "stopped",
+        made: false,
         action: { name: "create", status: "failed" },
       });
 

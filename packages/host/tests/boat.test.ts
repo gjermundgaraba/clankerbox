@@ -966,8 +966,7 @@ test("boat's refusals of a create leave nothing: a Refusal, and no sandbox recor
     [429, "daily_limit_reached", "Capacity"],
     [503, "out_of_capacity", "Capacity"],
     [503, "no_ready_machine", "Capacity"],
-    [403, "trial_machine_class_not_allowed", "Precondition"],
-    [403, "machine_class_plan_required", "Precondition"],
+    [403, "api_key_action_forbidden", "Precondition"],
   ] as const) {
     const machine = machineOn(`m${code.length}${status}`);
 
@@ -2013,7 +2012,7 @@ test("through the host: a create records the sandbox and reads running at boat's
 
   expect([machine.state, machine.ssh, machine.hostKey, machine.action]).toEqual([
     "running",
-    { host: "203.0.113.10", port: 19_001 },
+    { user: "root", host: "203.0.113.10", port: 19_001 },
     guestKey,
     { name: "create", status: "done" },
   ]);
@@ -2108,7 +2107,7 @@ test("through the host: stop and delete after a crash before the sandbox was rec
 
   const stopped = await Effect.runPromise(machines.stop("boat_dev"));
 
-  expect(stopped.state).toBe("missing");
+  expect([stopped.state, stopped.made]).toEqual(["missing", false]);
 
   await Effect.runPromise(machines.delete("boat_dev"));
 

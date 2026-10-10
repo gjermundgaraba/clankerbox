@@ -99,12 +99,15 @@ const setupRunner = [
   `"$script" </dev/null`,
 ].join("\n");
 
+/** How long a setup may run when its create doesn't say. */
+const defaultSetupTimeoutSeconds = 600;
+
 /** Runs the create request's setup once, after the first boot and before preparation. */
 export const runSetup = (
   machine: MachineRef,
   setup: Setup,
 ): Effect.Effect<void, HostError, Runtime> => {
-  const timeout = Duration.seconds(setup.timeoutSeconds);
+  const timeout = Duration.seconds(setup.timeoutSeconds ?? defaultSetupTimeoutSeconds);
 
   return Effect.asVoid(
     runInGuest(

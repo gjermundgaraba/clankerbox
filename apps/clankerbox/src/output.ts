@@ -75,25 +75,43 @@ export const table = (rows: ReadonlyArray<ReadonlyArray<string>>): string => {
     .join("\n");
 };
 
-const actionLabel = ({ action }: Machine | Checkpoint) =>
+export const actionLabel = ({ action }: Machine | Checkpoint) =>
   action.error === undefined
     ? `${action.name} ${action.status}`
     : `${action.name} ${action.status}: ${action.error.tag}`;
 
+/** The runtime's state, marked on a machine its create, fork or restore hasn't made. */
+export const stateLabel = ({ state, made }: Machine) => (made ? state : `${state} (unmade)`);
+
+/** A machine's columns: each one's label, and its cell. */
+const machineColumns: ReadonlyArray<
+  readonly [label: string, cell: (machine: Machine, now: DateTime.Utc) => string]
+> = [
+  ["ID", (machine) => machine.id],
+  ["STATE", stateLabel],
+  ["BASE", (machine) => machine.base],
+  ["PROFILE", (machine) => machine.profile ?? "-"],
+  ["CPU", (machine) => String(machine.cpu)],
+  ["RAM_MIB", (machine) => String(machine.ramMib)],
+  ["DISK_GIB", (machine) => String(machine.diskGib)],
+  ["AGE", (machine, now) => age(machine.createdAt, now)],
+  ["ACTION", actionLabel],
+  ["SSH", ({ ssh }) => (ssh === undefined ? "-" : `${ssh.user}@${ssh.host}:${ssh.port}`)],
+];
+
 export const machineRows = (machines: ReadonlyArray<Machine>, now: DateTime.Utc) => [
-  ["ID", "STATE", "BASE", "PROFILE", "CPU", "RAM_MIB", "DISK_GIB", "AGE", "ACTION", "SSH"],
-  ...machines.map((machine) => [
-    machine.id,
-    machine.state,
-    machine.base,
-    machine.profile ?? "-",
-    String(machine.cpu),
-    String(machine.ramMib),
-    String(machine.diskGib),
-    age(machine.createdAt, now),
-    actionLabel(machine),
-    machine.ssh === undefined ? "-" : `${machine.ssh.host}:${machine.ssh.port}`,
-  ]),
+  machineColumns.map(([label]) => label),
+  ...machines.map((machine) => machineColumns.map(([, cell]) => cell(machine, now))),
+];
+
+/**
+ * One machine, a field a line: its columns, and what a row has no room for, its action's error
+ * in full and its host key.
+ */
+export const machineFields = (machine: Machine, now: DateTime.Utc) => [
+  ...machineColumns.map(([label, cell]) => [label, cell(machine, now)]),
+  ["ERROR", machine.action.error?.message ?? "-"],
+  ["HOST_KEY", machine.hostKey ?? "-"],
 ];
 
 export const checkpointRows = (checkpoints: ReadonlyArray<Checkpoint>, now: DateTime.Utc) => [
@@ -137,7 +155,7 @@ export const profileRows = (
     String(profile.ramMib),
     String(profile.diskGib),
     profile.setup === undefined ? "-" : setupPath(profile.setup.path),
-    profile.setup === undefined ? "-" : String(profile.setup.timeoutSeconds),
+    String(profile.setup?.timeoutSeconds ?? "-"),
     profile.host ?? "-",
   ]),
 ];

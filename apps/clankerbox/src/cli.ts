@@ -6,6 +6,7 @@ import {
   type ClankerboxError,
   Client,
   Invalid,
+  type LoadedProfile,
   loadProfile,
   MachineSpec,
   readSetup,
@@ -26,6 +27,7 @@ import {
   fail,
   hostRows,
   limitRows,
+  machineFields,
   machineRows,
   profileRows,
   table,
@@ -93,7 +95,7 @@ export const withClient = <A, R>(
 const print = (json: boolean, document: () => object, text: () => string) =>
   json ? Console.log(JSON.stringify(document())) : Console.log(text());
 
-export const machineArgument = Argument.String("machine").pipe(
+const machineArgument = Argument.String("machine").pipe(
   Argument.withDescription("The machine's ID, <host>_<name>."),
 );
 
@@ -227,6 +229,18 @@ const printResource = <A, Encoded extends object, R>(
     }),
   );
 
+const getMachine = Command.make("get", { ...clientFlags, machine: machineArgument }, (flags) =>
+  printResource(flags, {
+    call: (client) => client.machine(flags.machine),
+    encode: encodeMachine,
+    text: (machine, now) => table(machineFields(machine, now)),
+  }),
+).pipe(
+  Command.withDescription(
+    "Read one machine: its state, its last action and the error it failed with, its SSH login and its host key.",
+  ),
+);
+
 /** What a command that makes a resource prints without `--json`: the new ID. */
 const newId = ({ id }: { readonly id: string }) => id;
 
@@ -252,49 +266,63 @@ const createArguments = {
   diskGib: Flag.Int("disk-gib").pipe(Flag.withDescription("Disk in GiB."), Flag.optional),
   setup: Flag.String("setup").pipe(
     Flag.withDescription(
-      "A setup script, or a recipe directory holding setup.sh. With --setup-timeout, it replaces the profile's setup.",
+      "A setup script, or a recipe directory holding setup.sh. A base alone authorizes no SSH key: a setup does.",
     ),
     Flag.optional,
   ),
   setupTimeout: Flag.Int("setup-timeout").pipe(
-    Flag.withDescription("How long setup may run, in seconds. Goes with --setup."),
+    Flag.withDescription(
+      "How long setup may run, in seconds. Default: the profile's, or else the host's.",
+    ),
     Flag.optional,
   ),
 };
 
 type CreateFlags = Command.Command.Config.Infer<typeof mutationFlags & typeof createArguments>;
 
-/** `--setup` and `--setup-timeout`, which go together, with the path resolved against the cwd. */
-const flagSetup = (flags: CreateFlags) =>
+/**
+ * The setup a create runs, if any: the profile's, with its path and its timeout each overridden
+ * by its flag, and no timeout when neither says, which leaves it to the host. `--setup` is
+ * resolved against the cwd.
+ */
+const setupSource = (flags: CreateFlags, profile: LoadedProfile | undefined) =>
   Effect.gen(function* () {
-    if (Option.isNone(flags.setup) && Option.isNone(flags.setupTimeout)) {
-      return undefined;
-    }
-
-    if (Option.isNone(flags.setup) || Option.isNone(flags.setupTimeout)) {
-      return yield* new Invalid({ message: "--setup and --setup-timeout go together" });
-    }
-
     const path = yield* Path.Path;
 
-    return { path: path.resolve(flags.setup.value), timeoutSeconds: flags.setupTimeout.value };
+    const file = Option.match(flags.setup, {
+      onNone: () => profile?.setup?.path,
+      onSome: (given) => path.resolve(given),
+    });
+
+    if (file === undefined) {
+      return Option.isNone(flags.setupTimeout)
+        ? undefined
+        : yield* new Invalid({
+            message: "--setup-timeout needs a setup: pass --setup, or a profile that has one",
+          });
+    }
+
+    const timeoutSeconds = Option.getOrElse(
+      flags.setupTimeout,
+      () => profile?.setup?.timeoutSeconds,
+    );
+
+    return { path: file, timeout: timeoutSeconds === undefined ? {} : { timeoutSeconds } };
   });
 
 const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
 
 /**
- * The spec and host a create asks for: the profile's fields and host, each overridden by its
- * flag, and the profile's setup, replaced as a unit by `--setup` with `--setup-timeout`.
+ * The spec and host a create asks for: the profile's fields, setup and host, each overridden by
+ * its flag.
  */
 const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
   Effect.gen(function* () {
-    const replacement = yield* flagSetup(flags);
-
     const profile = Option.isSome(flags.profile)
       ? yield* loadProfile(yield* profileFile(config, flags.profile.value))
       : undefined;
 
-    const source = replacement ?? profile?.setup;
+    const source = yield* setupSource(flags, profile);
 
     const fields = {
       base: Option.getOrElse(flags.base, () => profile?.base),
@@ -308,7 +336,7 @@ const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
         ? fields
         : {
             ...fields,
-            setup: { script: yield* readSetup(source.path), timeoutSeconds: source.timeoutSeconds },
+            setup: { script: yield* readSetup(source.path), ...source.timeout },
           };
 
     const spec = yield* decodeSpec(
@@ -337,7 +365,7 @@ const create = Command.make("create", { ...mutationFlags, ...createArguments }, 
   }),
 ).pipe(
   Command.withDescription(
-    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. Prints the new ID.",
+    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. A create that fails can leave its machine behind, unmade: get shows why, and delete removes it. Prints the new ID.",
   ),
 );
 
@@ -361,7 +389,7 @@ const stop = Command.make("stop", { ...mutationFlags, machine: machineArgument }
   }),
 ).pipe(
   Command.withDescription(
-    "Stop a machine. A stopped machine stays stopped, and the stop is still its last action.",
+    "Stop a machine: a power-off that keeps its disk and ends its processes. A stopped machine stays stopped, and the stop is still its last action.",
   ),
 );
 
@@ -476,6 +504,7 @@ export const clientCommands = [
   hosts,
   capacity,
   machines,
+  getMachine,
   profiles,
   create,
   start,

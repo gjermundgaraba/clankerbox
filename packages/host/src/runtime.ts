@@ -174,6 +174,12 @@ export interface Interface {
   /** The kind of every checkpoint the runtime captures: `ram` on smolvm, `disk` on Tart and boat. */
   readonly checkpointKind: CheckpointKind;
   /**
+   * The guest user a machine's SSH login is for: the one a setup authorizes the operator's key
+   * for. Setup runs as root, so on Linux that is root; on boat too, whose own `user` holds the
+   * host's key. Tart's bases ship `admin`, and macOS has no root login.
+   */
+  readonly loginUser: string;
+  /**
    * The runtime's own work at host startup, over every machine the host has, run after every
    * interrupted action has been marked failed and before the host serves: smolvm's cleanup, or
    * the Tart forwarder's listeners for every machine.

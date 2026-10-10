@@ -43,6 +43,14 @@ export const SshEndpoint = Schema.Struct({
 
 export type SshEndpoint = typeof SshEndpoint.Type;
 
+/** Where a running machine's SSH is reached, and the guest user its runtime's logins are for. */
+export const SshLogin = Schema.Struct({
+  user: Schema.String,
+  ...SshEndpoint.fields,
+});
+
+export type SshLogin = typeof SshLogin.Type;
+
 export const Machine = Schema.Struct({
   id: Id,
   runtime: Runtime,
@@ -58,9 +66,15 @@ export const Machine = Schema.Struct({
    * `unknown` when it couldn't be read.
    */
   state: Schema.Literals(["running", "stopped", "missing", "unknown"]),
+  /**
+   * Whether its create, fork or restore has made it. One that isn't made, because that action
+   * still runs or failed, can only be read, stopped or deleted.
+   */
+  made: Schema.Boolean,
   action: ActionRecord,
-  ssh: Schema.optionalKey(SshEndpoint),
-  /** The guest's SSH host public key, as `<type> <base64>`. */
+  /** Only on a running machine whose runtime gives it an endpoint. */
+  ssh: Schema.optionalKey(SshLogin),
+  /** The guest's SSH host public key, as `<type> <base64>`, once preparation has recorded it. */
   hostKey: Schema.optionalKey(Schema.String),
 }).annotate({ identifier: "Machine" });
 
@@ -126,8 +140,14 @@ export const Limit = Schema.Struct({
 
 export type Limit = typeof Limit.Type;
 
-/** A setup script and how long it may run. Nothing logs the script: it can carry secrets. */
-export const Setup = Schema.Struct({ script: Schema.String, timeoutSeconds: Size });
+/**
+ * A setup script and how long it may run, the host's default when it doesn't say. Nothing logs
+ * the script: it can carry secrets.
+ */
+export const Setup = Schema.Struct({
+  script: Schema.String,
+  timeoutSeconds: Schema.optionalKey(Size),
+});
 
 export type Setup = typeof Setup.Type;
 
@@ -159,16 +179,17 @@ export type CreateRequest = typeof CreateRequest.Type;
 
 /**
  * A profile file: a client-side file that fills in a create request. `setup.path` is a script
- * file or a recipe directory, relative to the profile file, and comes with its timeout: the
- * profile's author sets it, and there is no default. `host` places the create on that host
- * instead of by base.
+ * file or a recipe directory, relative to the profile file; without a `timeoutSeconds` the host's
+ * default applies. `host` places the create on that host instead of by base.
  */
 export const Profile = Schema.Struct({
   base: specFields.base,
   cpu: specFields.cpu,
   ramMib: specFields.ramMib,
   diskGib: specFields.diskGib,
-  setup: Schema.optionalKey(Schema.Struct({ path: Schema.String, timeoutSeconds: Size })),
+  setup: Schema.optionalKey(
+    Schema.Struct({ path: Schema.String, timeoutSeconds: Schema.optionalKey(Size) }),
+  ),
   host: Schema.optionalKey(HostId),
 });
 

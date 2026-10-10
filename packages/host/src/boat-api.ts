@@ -229,15 +229,6 @@ const capacityRefusals: ReadonlyArray<readonly [number, string]> = [
   [409, "named_snapshot_limit"],
 ];
 
-/**
- * boat's answers for a type the account's plan doesn't include. They leave nothing on boat
- * either, but waiting won't help: the plan doesn't allow it.
- */
-const planRefusals: ReadonlyArray<string> = [
-  "trial_machine_class_not_allowed",
-  "machine_class_plan_required",
-];
-
 /** A repeat that arrives while the first call is still making the sandbox: repeat it again. */
 const inProgress = "idempotency_in_progress";
 
@@ -305,8 +296,10 @@ export const make = (settings: Settings) =>
 
     /**
      * boat's answer to a call that isn't a 2xx, decided by its status; boat's code, when the body
-     * holds one, refines it. A 4xx is definite whatever its body: a proxy's HTML 403 is
-     * `Internal`, and a 404 without a body is `NotFound`. A 429 to a call that takes no room is
+     * holds one, refines it. A 4xx is definite whatever its body: a 404 without a body is
+     * `NotFound`. A 403 with boat's code is boat's own no, to a type the account's plan lacks or
+     * an action the API key may not perform: it made nothing and waiting won't help, so it is
+     * `Precondition`; a proxy's HTML 403 is `Internal`. A 429 to a call that takes no room is
      * boat's rate limit on reads and the like, which passes; one to a call that takes room, but
      * isn't one of `capacityRefusals`, is a start limit that may pass (`Throttled`).
      */
@@ -334,7 +327,7 @@ export const make = (settings: Settings) =>
           return yield* new Capacity({ message: said });
         }
 
-        if (status === 403 && planRefusals.some(coded)) {
+        if (status === 403 && Option.isSome(code)) {
           return yield* new Precondition({ message: said });
         }
 

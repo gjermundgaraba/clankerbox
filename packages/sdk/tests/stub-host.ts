@@ -40,6 +40,7 @@ export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   ramMib: 1024,
   diskGib: 10,
   state: "running",
+  made: true,
   action: { name: "create", status: "done" },
   ...fields,
 });
