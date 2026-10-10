@@ -11,6 +11,7 @@ import {
   type CreateRequest,
   type HostError,
   Http,
+  type Limit,
   type Machine,
   NotFound,
   type Runtime,
@@ -26,6 +27,8 @@ export interface StubHostOptions {
   readonly create?: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
   /** Machines the host already holds. */
   readonly machines?: ReadonlyArray<Machine>;
+  /** The limits the host reports, each under its own ID. Default: none. */
+  readonly capacity?: ReadonlyArray<Omit<Limit, "host">>;
 }
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
@@ -175,6 +178,11 @@ export const stubHost = (options: StubHostOptions) => {
         runtimeVersion: "1.22.2",
         bases: options.bases,
       }),
+    getCapacity: () =>
+      Effect.as(
+        record("host.capacity"),
+        (options.capacity ?? []).map((limit) => ({ host: options.id, ...limit })),
+      ),
   });
 
   const routes = ActionHttp.layer(Http, [app]);

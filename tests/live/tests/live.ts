@@ -8,7 +8,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Checkpoint, ErrorTag, Machine } from "@gjermundgaraba/clankerbox-sdk";
+import { Checkpoint, ErrorTag, Limit, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
@@ -90,6 +90,10 @@ export const Checkpoints = Schema.fromJsonString(
 );
 
 export const OneCheckpoint = Schema.fromJsonString(Checkpoint);
+
+export const Limits = Schema.fromJsonString(
+  Schema.Struct({ capacity: Schema.Array(Limit), unreachable: Unreachable }),
+);
 
 export const Names = Schema.fromJsonString(Schema.Array(Schema.String));
 
@@ -363,6 +367,15 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
   const machine = async (name: string): Promise<Machine | undefined> =>
     (await machines()).machines.find((listed) => listed.id === id(name));
 
+  /** The host's limits, which it answered for. */
+  const capacity = async () => {
+    const { capacity: limits, unreachable } = decode(Limits, await cli(["capacity"], "--json"));
+
+    expect(unreachable).toEqual([]);
+
+    return limits;
+  };
+
   /** Creates `name` with no setup, at `sizes(...sizeArgs)`. */
   const createBare = (name: string, ...sizeArgs: ReadonlyArray<number>) =>
     cli(["create"], ...target(name), ...runtime.sizes(...sizeArgs), "--json");
@@ -511,6 +524,7 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     controlled,
     machines,
     machine,
+    capacity,
     createBare,
     createArgs,
     createWith,

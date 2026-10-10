@@ -8,7 +8,7 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Duration, Schema } from "effect";
 import { hostErrors } from "./errors.ts";
 import { Id, Name } from "./ids.ts";
-import { Checkpoint, CreateRequest, Host, Machine } from "./resources.ts";
+import { Checkpoint, CreateRequest, Host, Limit, Machine } from "./resources.ts";
 
 /**
  * How long a client waits for a read's reply from one host, unless it sets its own. A host
@@ -112,6 +112,12 @@ export const Http = ActionHttp.make(
       ...read,
       description: "Read the host: its runtime, versions and bases.",
       success: Host,
+    }),
+    Action.make("getCapacity", {
+      ...read,
+      description:
+        "Read the host's limits and how much of each is in use. It fails when the runtime can't be read.",
+      success: Schema.Array(Limit),
     }),
   ],
   { prefix: "/api" },

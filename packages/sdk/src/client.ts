@@ -14,6 +14,7 @@ import { formatId, HostId, parseId, parseName } from "./ids.ts";
 import {
   type Checkpoint,
   type Host,
+  type Limit,
   type Machine,
   type MachineSpec,
   version,
@@ -66,6 +67,8 @@ export interface Interface {
   readonly hosts: Effect.Effect<Gathered<Host>>;
   readonly machines: Effect.Effect<Gathered<Machine>>;
   readonly checkpoints: Effect.Effect<Gathered<Checkpoint>>;
+  /** Every host's limits; a host whose runtime couldn't be read is among the unreachable. */
+  readonly capacity: Effect.Effect<Gathered<Limit>>;
   readonly machine: (id: string) => Effect.Effect<Machine, ClankerboxError>;
   readonly checkpoint: (id: string) => Effect.Effect<Checkpoint, ClankerboxError>;
   /**
@@ -411,6 +414,9 @@ export const make = (
       ),
       checkpoints: gather((route) =>
         ask(route, actions.listCheckpoints, "list checkpoints", (api) => api.listCheckpoints()),
+      ),
+      capacity: gather((route) =>
+        ask(route, actions.getCapacity, "get capacity", (api) => api.getCapacity()),
       ),
       machine: (id) => byId(id, actions.getMachine, `get ${id}`, (api) => api.getMachine({ id })),
       checkpoint: (id) =>

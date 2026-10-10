@@ -757,6 +757,31 @@ export const make = (
        * refusal, under the refusal rule, is the count.
        */
       admit: Effect.fn("Boat.admit")(({ machine }) => Effect.asVoid(machineType(machine))),
+      /**
+       * The account's limits as boat counts them, whatever the host's own machines are: its
+       * active sandboxes, and the starts of each rolling window that has a limit. One request,
+       * so a refusal is boat's own answer; the core bounds it by `stateReadWait`.
+       */
+      capacity: Effect.fn("Boat.capacity")(() =>
+        Effect.map(scrubbing(api.limits), ({ activeSandboxes, maxActiveSandboxes, starts }) => {
+          const windows = [
+            ["startsPerMinute", starts?.minute],
+            ["startsPerHour", starts?.hour],
+            ["startsPerDay", starts?.day],
+          ] as const;
+
+          return [
+            {
+              resource: "activeSandboxes" as const,
+              limit: maxActiveSandboxes,
+              used: activeSandboxes,
+            },
+            ...windows.flatMap(([resource, window]) =>
+              window == null ? [] : [{ resource, limit: window.limit, used: window.used }],
+            ),
+          ];
+        }),
+      ),
       /** boat has one image, so `image` names it only in the host's bases. */
       create: Effect.fn("Boat.create")((machine) =>
         Effect.gen(function* () {

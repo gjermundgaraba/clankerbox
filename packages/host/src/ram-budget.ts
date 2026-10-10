@@ -4,31 +4,48 @@
  */
 import { Capacity, type HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Array as Arr, Effect } from "effect";
-import type { Activation, MachineRef, Observed } from "./runtime.ts";
+import type { Activation, Held, MachineRef, Observed } from "./runtime.ts";
+
+type Observe = (machines: ReadonlyArray<MachineRef>) => Effect.Effect<ReadonlyArray<Observed>>;
 
 /**
- * Sums the `ramMib` of every machine that is running or that an action is booting, each once,
- * and refuses when the sum passes `budgetMib`. The target is booting, so it is in the sum.
+ * What the budget counts: `used`, the sum of the `ramMib` of every machine that is running or
+ * that an action is booting, each once, and `unread`, the machines among them whose state
+ * couldn't be read, which count as running. The others' states come from one `observe`.
+ */
+export const ramInUse = (
+  machines: ReadonlyArray<Held>,
+  observe: Observe,
+): Effect.Effect<{ readonly used: number; readonly unread: ReadonlyArray<MachineRef> }> =>
+  Effect.gen(function* () {
+    const booting = machines.filter((held) => held.booting);
+    const others = machines.filter((held) => !held.booting);
+
+    const observed = yield* observe(others.map(({ machine }) => machine));
+    const read = Arr.zip(others, observed);
+
+    const running = read
+      .filter(([, { state }]) => state === "running" || state === "unknown")
+      .map(([held]) => held);
+
+    return {
+      used: [...booting, ...running].reduce((sum, { machine }) => sum + machine.ramMib, 0),
+      unread: read.filter(([, { state }]) => state === "unknown").map(([{ machine }]) => machine),
+    };
+  });
+
+/**
+ * Refuses when `ramInUse`'s sum passes `budgetMib`. The target is booting, so it is in the sum.
  * Counting the booting ones keeps an action that is past its check from being missed; the host
- * checks booting actions one at a time, so two never count each other. The others' states come
- * from one `observe`, and one whose state couldn't be read counts as running.
+ * checks booting actions one at a time, so two never count each other.
  */
 export const checkRamBudget = (
   budgetMib: number,
   activation: Activation,
-  observe: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<ReadonlyArray<Observed>>,
+  observe: Observe,
 ): Effect.Effect<void, HostError> =>
   Effect.gen(function* () {
-    const booting = activation.machines.filter((held) => held.booting);
-    const others = activation.machines.filter((held) => !held.booting);
-
-    const observed = yield* observe(others.map(({ machine }) => machine));
-
-    const running = Arr.zip(others, observed)
-      .filter(([, { state }]) => state === "running" || state === "unknown")
-      .map(([held]) => held);
-
-    const total = [...booting, ...running].reduce((sum, { machine }) => sum + machine.ramMib, 0);
+    const { used: total } = yield* ramInUse(activation.machines, observe);
 
     if (total > budgetMib) {
       return yield* new Capacity({

@@ -1747,6 +1747,71 @@ test("an 11th named snapshot is a Capacity refusal; a failed save and a deleted 
   ]);
 });
 
+test("capacity is the account's limits as boat reports them: its active sandboxes, and each start window that has a limit; a refusal is boat's own answer, asked once", async () => {
+  const rig = await rigOn();
+
+  const limits = (maxActiveSandboxes: number, starts: Schema.Json): Answer => ({
+    status: 200,
+    body: {
+      ok: true,
+      type: "limits.info",
+      canStart: true,
+      activeSandboxes: 1,
+      activeStates: ["provisioned", "cloning", "ready", "idle", "running"],
+      maxActiveSandboxes,
+      billingStatus: "active",
+      starts,
+    },
+  });
+
+  let answer: Answer = limits(2, {
+    unlimited: false,
+    minute: { limit: 5, used: 0, remaining: 5 },
+    hour: { limit: 25, used: 3, remaining: 22 },
+    day: { limit: 75, used: 12, remaining: 63 },
+  });
+
+  rig.boat.hooks.answer = (sent) => (sent.path === "/limits" ? answer : undefined);
+
+  const trial = await succeeds(rig.runtime.capacity([]));
+
+  answer = limits(100, { unlimited: true, minute: null, hour: null, day: null });
+
+  const unlimited = await succeeds(rig.runtime.capacity([]));
+
+  answer = refusal(401, "unauthorized", `no account has the key ${apiKey}`);
+
+  const error = await fails(rig.runtime.capacity([]));
+
+  answer = refusal(503, "unavailable", "boat is down for maintenance");
+
+  const down = await fails(rig.runtime.capacity([]));
+
+  expect(trial).toEqual([
+    { resource: "activeSandboxes", limit: 2, used: 1 },
+    { resource: "startsPerMinute", limit: 5, used: 0 },
+    { resource: "startsPerHour", limit: 25, used: 3 },
+    { resource: "startsPerDay", limit: 75, used: 12 },
+  ]);
+  expect(unlimited).toEqual([{ resource: "activeSandboxes", limit: 100, used: 1 }]);
+  expect(refused(error)).toEqual([
+    "not refused",
+    "Internal",
+    "boat GET /limits answered 401 unauthorized: no account has the key <redacted> (req_0123)",
+  ]);
+  expect(refused(down)).toEqual([
+    "not refused",
+    "Internal",
+    "boat GET /limits answered 503 unavailable: boat is down for maintenance (req_0123)",
+  ]);
+  expect(rig.boat.sent.map(({ method, path }) => `${method} ${path}`)).toEqual([
+    "GET /limits",
+    "GET /limits",
+    "GET /limits",
+    "GET /limits",
+  ]);
+});
+
 test("the API key reaches neither ssh's command line nor its environment, nor an error", async () => {
   const rig = await rigOn(fakeBoat({ instant: true }));
   const machine = machineOn("dev");

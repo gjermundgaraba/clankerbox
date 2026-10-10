@@ -48,6 +48,7 @@ test("the reads of a machine, a checkpoint and the host refuse undeclared fields
     ["getMachine", { id: "linux_dev", extra: 1 }],
     ["getCheckpoint", { id: "linux_dev", extra: 1 }],
     ["getHost", { extra: 1 }],
+    ["getCapacity", { extra: 1 }],
   ] as const) {
     const answer = await post(path, body);
 

@@ -145,6 +145,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
     controlled,
     machines,
     machine,
+    capacity,
     createBare,
     createWith,
     inGuest,
@@ -568,13 +569,20 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   );
 
   test.skipIf(activeLimit !== trialActive)(
-    "with two sandboxes active, boat refuses a third create with 429: Capacity, leaving no row and nothing on boat",
+    "with two sandboxes active, the host's capacity is full, and boat refuses a third create with 429: Capacity, leaving no row and nothing on boat",
     async () => {
       const states = Object.fromEntries(
         (await machines()).machines.map(({ id: listedId, state }) => [listedId, state]),
       );
 
       expect(states).toEqual({ [id("main")]: "running", [id("fork-a")]: "running" });
+      // Read from boat's `/limits`: the first the host reports of the account's own limit.
+      expect(await capacity()).toContainEqual({
+        host: suite.env.host.id,
+        resource: "activeSandboxes",
+        limit: activeLimit,
+        used: activeLimit,
+      });
 
       const before = await account();
       const third = failure(await counted("create", "third", () => createBare("third")));

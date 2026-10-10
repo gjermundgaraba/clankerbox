@@ -772,6 +772,52 @@ test("the RAM budget counts running machines and refuses with Capacity, writing 
   expect((await rows(linux)).map(({ name }) => name).sort()).toEqual(["a", "b", "c"]);
 });
 
+test("the host's capacity is what step 3 counts: running machines, and one an action is booting", async () => {
+  const linux = await host({ runtime: { ramBudgetMib: 4096 } });
+
+  await linux.run(linux.machines.create(request("a")));
+  await linux.run(linux.machines.create(request("b")));
+  await linux.run(linux.machines.stop("linux_a"));
+
+  const idle = await linux.run(linux.machines.capacity);
+
+  // A create held in the runtime is past its check, and its machine doesn't run yet.
+  const { entered, release } = linux.fake.holdNext("create");
+  const creating = linux.run(linux.machines.create(request("c", { ramMib: 2048 })));
+
+  await entered;
+
+  const booting = await linux.run(linux.machines.capacity);
+  const full = await failure(linux, linux.machines.create(request("d", { ramMib: 2048 })));
+
+  release();
+  await creating;
+
+  expect(idle).toEqual([{ host: "linux", resource: "ramMib", limit: 4096, used: 1024 }]);
+  expect(booting).toEqual([{ host: "linux", resource: "ramMib", limit: 4096, used: 3072 }]);
+  expect(full._tag).toBe("Capacity");
+  expect(full.message).toContain("5120 MiB");
+});
+
+test("a capacity read that fails, or doesn't answer within 9 s, fails with Internal", async () => {
+  const linux = await host({ runtime: { ramBudgetMib: 4096 } });
+
+  linux.fake.failNext("capacity", new Internal({ message: "tart list exited 1" }));
+
+  const failed = await failure(linux, linux.machines.capacity);
+  const { release } = linux.fake.holdNext("capacity");
+  const { result, waited } = await onTestClock(linux, (machines) => machines.capacity);
+
+  release();
+
+  expect([failed._tag, failed.message]).toEqual(["Internal", "tart list exited 1"]);
+  expect(waited).toBe("9s");
+  expect(Result.isFailure(result) && [result.failure._tag, result.failure.message]).toEqual([
+    "Internal",
+    "the smolvm runtime didn't answer within 9s",
+  ]);
+});
+
 test("the RAM budget counts a machine the runtime can't read as running", async () => {
   const linux = await host({ runtime: { ramBudgetMib: 2048 } });
 

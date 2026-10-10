@@ -791,6 +791,35 @@ test("the two-VM count takes every running VM, the operator's too, and machines 
   );
 });
 
+test("capacity is Apple's two VMs and the VMs admit counts: every running one, the operator's too, and machines being booted, each once", async () => {
+  const { mac, runtime } = await runtimeOn();
+  const [a, b, c] = await Promise.all([machineOn("a"), machineOn("b"), machineOn("c")]);
+
+  mac.vms.set("operators-own", "running");
+  mac.vms.set("operators-stopped", "stopped");
+  mac.vms.set(vmOf(a), "running");
+  mac.vms.set(vmOf(b), "stopped");
+
+  const idle = await Effect.runPromise(
+    runtime.capacity([
+      { machine: a, booting: false },
+      { machine: b, booting: false },
+    ]),
+  );
+
+  // A start of the running `a` holds it as booting, and counts it once; `c` has no VM yet.
+  const booting = await Effect.runPromise(
+    runtime.capacity([
+      { machine: a, booting: true },
+      { machine: b, booting: false },
+      { machine: c, booting: true },
+    ]),
+  );
+
+  expect(idle).toEqual([{ resource: "runningVms", limit: 2, used: 2 }]);
+  expect(booting).toEqual([{ resource: "runningVms", limit: 2, used: 3 }]);
+});
+
 test("the two-VM count takes a running target once: a start of a running machine adds nothing", async () => {
   const { mac, runtime } = await runtimeOn();
   const target = await machineOn("dev");

@@ -9,6 +9,7 @@ import {
   formatId,
   type HostError,
   Internal,
+  type Limit,
   type Machine,
   Precondition,
   type Setup,
@@ -58,6 +59,11 @@ export interface Interface {
   readonly fork: (id: string, name: string) => Effect.Effect<Machine, HostError>;
   /** Makes a machine named `name` from the checkpoint `checkpoint`, and prepares it. */
   readonly restore: (checkpoint: string, name: string) => Effect.Effect<Machine, HostError>;
+  /**
+   * The runtime's limits and what is in use of each, as step 3 counts it. Unlike a machine's
+   * state, it is all the reply holds, so a runtime that can't be read fails it.
+   */
+  readonly capacity: Effect.Effect<ReadonlyArray<Limit>, HostError>;
 }
 
 export class Machines extends Context.Service<Machines, Interface>()("@clankerbox/host/Machines") {}
@@ -152,6 +158,16 @@ export const make = (
       return machine;
     };
 
+    /** Fails a read of runtime state that takes over `stateReadWait`, naming it as `what`. */
+    const inTime = (what: string) =>
+      timeoutFail(
+        stateReadWait,
+        () =>
+          new Internal({
+            message: `${what} didn't answer within ${Duration.format(stateReadWait)}`,
+          }),
+      );
+
     /**
      * The machines' states, read from the runtime. A read that fails as a whole, as Tart's one
      * `tart list` can, or takes over `stateReadWait`, reads every machine `unknown`: a state read
@@ -159,13 +175,7 @@ export const make = (
      */
     const observeAll = (records: ReadonlyArray<MachineRecord>) =>
       runtime.observe(records.map(ref)).pipe(
-        timeoutFail(
-          stateReadWait,
-          () =>
-            new Internal({
-              message: `the ${runtime.name} runtime didn't answer within ${Duration.format(stateReadWait)}`,
-            }),
-        ),
+        inTime(`the ${runtime.name} runtime`),
         Effect.catch((error) =>
           Effect.as(
             Effect.logWarning(`couldn't read the machines' states: ${error.message}`),
@@ -232,26 +242,31 @@ export const make = (
         action.name === "start" ||
         (action.name === "fork" && !made));
 
+    /** Every row as step 3 counts it. */
+    const heldRows = Effect.map(store.list, (records) =>
+      records.map((record) => ({ machine: ref(record), booting: boots(record) })),
+    );
+
+    /** The runtime's limits, over every row, bounded like any read of runtime state. */
+    const capacity = Effect.flatMap(heldRows, (machines) =>
+      runtime.capacity(machines).pipe(
+        inTime(`the ${runtime.name} runtime`),
+        Effect.map((limits) => limits.map((limit): Limit => ({ host: config.id, ...limit }))),
+      ),
+    );
+
     /**
      * Step 3 for an action that boots a machine: the runtime's own checks, over every row. Their
      * reads of runtime state are bounded like any: a check past `stateReadWait` fails, so it
      * never holds the admission permit longer, and writes nothing.
      */
     const admit = (action: ActionName, machine: NewMachine) =>
-      Effect.flatMap(store.list, (records) =>
+      Effect.flatMap(heldRows, (machines) =>
         runtime
-          .admit({
-            action,
-            machine: ref(machine),
-            machines: records.map((held) => ({ machine: ref(held), booting: boots(held) })),
-          })
+          .admit({ action, machine: ref(machine), machines })
           .pipe(
-            timeoutFail(
-              stateReadWait,
-              () =>
-                new Internal({
-                  message: `${action} ${idOf(machine.name)}: the ${runtime.name} runtime's admission check didn't answer within ${Duration.format(stateReadWait)}`,
-                }),
+            inTime(
+              `${action} ${idOf(machine.name)}: the ${runtime.name} runtime's admission check`,
             ),
           ),
       );
@@ -452,6 +467,7 @@ export const make = (
       restore: Effect.fn("Machines.restore")((checkpoint, name) =>
         detached(`restore ${checkpoint} to ${name}`, restore(checkpoint, name)),
       ),
+      capacity: capacity.pipe(Effect.withSpan("Machines.capacity")),
     } satisfies Interface;
   });
 

@@ -101,6 +101,31 @@ export const Host = Schema.Struct({
 
 export type Host = typeof Host.Type;
 
+/**
+ * One limit a host's `Capacity` refusals come from, and how much of it is in use, counted as
+ * the refusal counts it, so `used` needn't match the host's own machines. Read from the runtime,
+ * never stored.
+ */
+export const Limit = Schema.Struct({
+  host: HostId,
+  /**
+   * `ramMib`: smolvm's RAM budget. `runningVms`: Tart's, Apple's two VMs per Mac.
+   * `activeSandboxes` and the `starts` of each rolling window: the boat account's.
+   */
+  resource: Schema.Literals([
+    "ramMib",
+    "runningVms",
+    "activeSandboxes",
+    "startsPerMinute",
+    "startsPerHour",
+    "startsPerDay",
+  ]),
+  limit: Schema.Int,
+  used: Schema.Int,
+}).annotate({ identifier: "Limit" });
+
+export type Limit = typeof Limit.Type;
+
 /** A setup script and how long it may run. Nothing logs the script: it can carry secrets. */
 export const Setup = Schema.Struct({ script: Schema.String, timeoutSeconds: Size });
 

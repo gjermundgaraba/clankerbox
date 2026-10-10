@@ -687,6 +687,53 @@ test("admit refuses with Capacity when running machines would pass the RAM budge
   expect(error._tag).toBe("Capacity");
 });
 
+test("capacity is the RAM budget and what admit counts toward it: every running or booting machine's RAM, each once; it fails when a machine's state can't be read", async () => {
+  const replies = new Map<string, Reply>([
+    ["dev-01234567", status("running")],
+    ["two-01234567", status("created")],
+  ]);
+
+  const spawner = scripted((call) =>
+    call.args[0] === "machine" ? replies.get(call.args[3] ?? "") : undefined,
+  );
+
+  const runtime = await runtimeOf(await prepared(), spawner);
+
+  const held = [
+    { machine, booting: false },
+    { machine: { ...machine, id: "linux_two", name: "two", ramMib: 1024 }, booting: false },
+    { machine: { ...machine, id: "linux_boot", name: "boot", ramMib: 512 }, booting: true },
+  ];
+
+  const next = (ramMib: number) => {
+    const target = { ...machine, id: "linux_next", name: "next", ramMib };
+
+    return runtime.admit({
+      action: "create",
+      machine: target,
+      machines: [...held, { machine: target, booting: true }],
+    });
+  };
+
+  const capacity = await Effect.runPromise(runtime.capacity(held));
+
+  // What is left of the budget is exactly what one more machine may take.
+  await Effect.runPromise(next(4096 - 2560));
+
+  const refused = await Effect.runPromise(Effect.flip(next(4096 - 2560 + 1)));
+
+  replies.set("two-01234567", { exitCode: 1, stderr: "Error: database is locked\n" });
+
+  const unread = await Effect.runPromise(Effect.flip(runtime.capacity(held)));
+
+  expect(capacity).toEqual([{ resource: "ramMib", limit: 4096, used: 2560 }]);
+  expect(refused.message).toContain("to 4097 MiB of RAM, past its budget of 4096 MiB");
+  expect([unread._tag, unread.message]).toEqual([
+    "Internal",
+    "smolvm couldn't read the state of linux_two",
+  ]);
+});
+
 const ramCheckpoint: CheckpointRef = {
   id: "linux_snap",
   name: "snap",

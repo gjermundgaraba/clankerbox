@@ -374,7 +374,8 @@ def preflight(boat, record, log):
     sandboxes = boat.sandboxes()
     snapshots = boat.snapshots()
     starts = starts_of(limits)
-    active, max_active = limits['activeSandboxes'], limits['currentLimits']['activeSandboxes']
+    # `maxActiveSandboxes` is the field the host reports as its capacity's limit.
+    active, max_active = limits['activeSandboxes'], limits['maxActiveSandboxes']
     counts = {'access_tier': limits.get('accessTier'), 'sandboxes': len(sandboxes), 'active_sandboxes': active,
               'max_active_sandboxes': max_active, 'named_snapshots': len(snapshots), 'starts': starts,
               'needs': {'starts': STARTS, 'active': ACTIVE, 'snapshots': SNAPSHOTS}}
