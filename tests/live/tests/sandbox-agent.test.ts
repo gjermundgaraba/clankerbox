@@ -185,24 +185,27 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
   test(
     "ensureServer brings back an agent that ended, through the machine's start hook",
     async () => {
-      const server = () => inSandbox(sdk, "pgrep", "-x", "sandbox-agent");
-      const before = await server();
+      // Over ssh, as the machine's login user, as the kill is: on macOS a pgrep through the
+      // agent's own process API printed nothing, for a reason not looked into.
+      const guest = async (...command: ReadonlyArray<string>) => {
+        const ran = await cli("ssh", id, "--", ...(options.sshArguments ?? []), ...command);
 
-      const killed = await cli(
-        "ssh",
-        id,
-        "--",
-        ...(options.sshArguments ?? []),
-        "pkill",
-        "-x",
-        "sandbox-agent",
-      );
+        expect(ran.code, ran.stderr).toBe(0);
 
-      expect(killed.code, killed.stderr).toBe(0);
+        return ran.stdout.trim();
+      };
+
+      const before = await guest("pgrep", "-x", "sandbox-agent");
+
+      expect(before).toMatch(/^\d+$/u);
+      await guest("pkill", "-x", "sandbox-agent");
 
       await sandbox.ensureServer?.(id);
 
-      expect(await server()).not.toBe(before);
+      const after = await guest("pgrep", "-x", "sandbox-agent");
+
+      expect(after).toMatch(/^\d+$/u);
+      expect(after).not.toBe(before);
       expect(await sdk.getHealth()).toEqual({ status: "ok" });
     },
     minutes(5),
