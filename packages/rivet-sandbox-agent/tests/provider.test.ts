@@ -15,6 +15,7 @@ import {
   Internal,
   type Machine,
   NotFound,
+  Prebuild,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Layer } from "effect";
@@ -236,6 +237,43 @@ test("a sandbox is a fork of a machine or a restore of a checkpoint when the pro
     new NotFound({ message: "no checkpoint linux_gone" }),
   );
   expect(missing.stub.calls).toEqual(["machine.restore"]);
+});
+
+test("a create from a profile with a setup restores its host's prebuild of it, unless fresh, and runs the setup without one", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "clankerbox-profile-"));
+
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+
+  const sizes = { base: "ubuntu", cpu: 2, ramMib: 2048, diskGib: 20 };
+  const profile = join(dir, "agent.json");
+
+  await writeFile(join(dir, "setup.sh"), "echo set up\n");
+  await writeFile(profile, JSON.stringify({ ...sizes, setup: { path: "setup.sh" } }));
+
+  // The stub host's runtime version, which a prebuild's name is of.
+  const name = await Effect.runPromise(
+    Prebuild.nameOf(
+      { ...sizes, profile: "agent", setup: { script: "echo set up\n" } },
+      { runtimeVersion: "1.22.2" },
+    ),
+  );
+
+  const prebuilt = { checkpoints: [checkpoint(`linux_${name}`)] };
+
+  const restored = await setup(prebuilt, { from: { profile } });
+
+  expect(await restored.sandbox.create()).toMatch(/^linux_sandbox-[0-9a-f]{8}$/u);
+  expect(restored.stub.calls).toEqual(["host.get", "checkpoint.get", "machine.restore"]);
+
+  const fresh = await setup(prebuilt, { from: { profile }, fresh: true });
+
+  await fresh.sandbox.create();
+  expect(fresh.stub.calls).toEqual(["host.get", "machine.create"]);
+
+  const unbuilt = await setup({}, { from: { profile } });
+
+  await unbuilt.sandbox.create();
+  expect(unbuilt.stub.calls).toEqual(["host.get", "checkpoint.get", "machine.create"]);
 });
 
 test("a create that fails deletes the machine it left, and fails with the host's error", async () => {
