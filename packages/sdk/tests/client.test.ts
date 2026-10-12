@@ -238,6 +238,27 @@ test("a host in the options sends the create there, whatever placement would pic
   expect(first.calls).toEqual([]);
 });
 
+test("place reads the host a create goes to: the options' host, or else the first that offers the base", async () => {
+  const first = host({ id: "linux", bases: ["ubuntu"] });
+  const second = host({ id: "mac", bases: ["tahoe"], runtime: "tart" });
+
+  const { placed, named } = await withClient(
+    [
+      ["linux", first],
+      ["mac", second],
+    ],
+    (client) =>
+      Effect.all({
+        placed: client.place("tahoe"),
+        named: client.place("tahoe", { host: "linux" }),
+      }),
+  );
+
+  expect(placed).toMatchObject({ id: "mac", runtime: "tart" });
+  expect(named).toMatchObject({ id: "linux", runtime: "smolvm" });
+  expect(first.calls).toEqual(["host.get", "host.get"]);
+});
+
 test("a host that isn't in the host list is Invalid and sends nothing", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 

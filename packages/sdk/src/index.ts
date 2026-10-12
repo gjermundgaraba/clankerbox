@@ -8,6 +8,8 @@ export * from "./resources.ts";
 
 export * as Client from "./client.ts";
 
+export * as Prebuild from "./prebuild.ts";
+
 export * from "./profile.ts";
 
 export * from "./setup.ts";

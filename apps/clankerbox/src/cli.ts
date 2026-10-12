@@ -10,6 +10,7 @@ import {
   type LoadedProfile,
   loadProfile,
   MachineSpec,
+  Prebuild,
   readSetup,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -29,6 +30,7 @@ import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { type LoadedConfig, loadConfig, profileFile, profileFiles } from "./config.ts";
 import {
+  age,
   checkpointFields,
   checkpointRows,
   encodeCheckpoint,
@@ -275,10 +277,8 @@ const getMachine = Command.make("get", { ...clientFlags, machine: machineArgumen
 /** What a command that makes a resource prints without `--json`: the new ID. */
 const newId = ({ id }: { readonly id: string }) => id;
 
-const createArguments = {
-  name: Argument.String("name").pipe(
-    Argument.withDescription("The new machine's name. Its ID is <host>_<name>."),
-  ),
+/** What a create and a prebuild are of: a profile, and the flags that override its fields. */
+const specArguments = {
   host: Flag.String("host").pipe(
     Flag.withDescription(
       "The host to create on. Without it, the profile's host, or else the first host that offers the base.",
@@ -318,14 +318,14 @@ const createArguments = {
   ),
 };
 
-type CreateFlags = Command.Command.Config.Infer<typeof mutationFlags & typeof createArguments>;
+type SpecFlags = Command.Command.Config.Infer<typeof specArguments>;
 
 /**
  * The setup a create runs, if any: the profile's, with its path and its timeout each overridden
  * by its flag, and no timeout when neither says, which leaves it to the host. `--setup` is
  * resolved against the cwd.
  */
-const setupSource = (flags: CreateFlags, profile: LoadedProfile | undefined) =>
+const setupSource = (flags: SpecFlags, profile: LoadedProfile | undefined) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
 
@@ -360,10 +360,11 @@ const specFlags = new Map<PropertyKey, string>([
 ]);
 
 /**
- * The spec and host a create asks for: the profile's fields, setup and host, each overridden by
- * its flag. The decode refuses a field that neither sets, as it does one out of range.
+ * The spec and host a create or a prebuild asks for: the profile's fields, setup and host, each
+ * overridden by its flag. The decode refuses a field that neither sets, as it does one out of
+ * range, naming `command`.
  */
-const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
+const specRequest = (command: string, flags: SpecFlags, config: LoadedConfig) =>
   Effect.gen(function* () {
     const profile = Option.isSome(flags.profile)
       ? yield* loadProfile(yield* profileFile(config, flags.profile.value))
@@ -392,25 +393,92 @@ const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
       errors: "all",
     }).pipe(
       Effect.mapError(
-        (error) => new Invalid({ message: `create: ${describeIssues(error, specFlags)}` }),
+        (error) => new Invalid({ message: `${command}: ${describeIssues(error, specFlags)}` }),
       ),
     );
 
     return { spec, host: Option.getOrElse(flags.host, () => profile?.host) };
   });
 
+const createArguments = {
+  name: Argument.String("name").pipe(
+    Argument.withDescription("The new machine's name. Its ID is <host>_<name>."),
+  ),
+  ...specArguments,
+  fresh: Flag.Boolean("fresh").pipe(
+    Flag.withDescription("Run the setup even when its host has a prebuild of it."),
+    Flag.withDefault(false),
+  ),
+};
+
+/**
+ * A create with a setup restores its prebuild when its host has one, and says so on stderr:
+ * what a prebuild's setup installed is as old as the prebuild.
+ */
 const create = Command.make("create", { ...mutationFlags, ...createArguments }, (flags) =>
   printResource(flags, {
     call: (client, config) =>
-      Effect.flatMap(createRequest(flags, config), ({ spec, host }) =>
-        client.create(flags.name, spec, { host }),
-      ),
+      Effect.gen(function* () {
+        const { spec, host } = yield* specRequest("create", flags, config);
+
+        if (flags.fresh) {
+          return yield* client.create(flags.name, spec, { host });
+        }
+
+        const { machine, prebuild } = yield* Prebuild.create(client, flags.name, spec, { host });
+
+        if (prebuild !== undefined && !flags.json) {
+          yield* Console.error(
+            `clankerbox: restored from the prebuild ${prebuild.id}, made ${age(prebuild.createdAt, yield* DateTime.now)} ago`,
+          );
+        }
+
+        return machine;
+      }),
     encode: encodeMachine,
     text: newId,
   }),
 ).pipe(
   Command.withDescription(
-    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. A create that fails can leave its machine behind, unmade: get shows why, and delete removes it. Prints the new ID.",
+    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. With a setup, the machine is restored from the setup's prebuild when its host has one (see prebuild). A create that fails can leave its machine behind, unmade: get shows why, and delete removes it. Prints the new ID.",
+  ),
+);
+
+/** Without `--json`, a prebuild that was already there is said on stderr, with its age. */
+const prebuild = Command.make("prebuild", { ...mutationFlags, ...specArguments }, (flags) =>
+  printResource(flags, {
+    call: (client, config) =>
+      Effect.gen(function* () {
+        const { spec, host } = yield* specRequest("prebuild", flags, config);
+
+        if (spec.setup === undefined) {
+          return yield* new Invalid({
+            message: "prebuild needs a setup: pass --setup, or a profile that has one",
+          });
+        }
+
+        const { checkpoint, built, leftover } = yield* Prebuild.build(client, spec, { host });
+
+        if (leftover !== undefined) {
+          yield* Console.error(
+            `clankerbox: ${checkpoint.id} is prebuilt, but its builder ${leftover} couldn't be deleted, and may still run: delete it`,
+          );
+        }
+
+        if (!built && !flags.json) {
+          yield* Console.error(
+            `clankerbox: ${checkpoint.id} was already prebuilt, ${age(checkpoint.createdAt, yield* DateTime.now)} ago; delete it to prebuild again`,
+          );
+        }
+
+        return checkpoint;
+      }),
+    encode: encodeCheckpoint,
+    text: newId,
+  }),
+).pipe(
+  Command.withDescription(
+    "Prebuild a setup, so that creates of the same spec on that host skip it: create a machine as create does, capture it into a checkpoint named prebuilt-<digest>, and delete the machine. A create restores the prebuild only when its profile label, base, sizes and setup are the same, so a profile created at other sizes needs a prebuild at those sizes, and an edited setup a new one. A prebuild that is already there is left as it is: delete it with checkpoint delete to build it anew. It is a checkpoint like any other: it holds whatever the machine did, credentials its start synced included. --timeout bounds each step on its own: the create, the capture and the delete. Prints its ID.",
   ),
 );
 
@@ -556,6 +624,7 @@ export const clientCommands = [
   getMachine,
   profiles,
   create,
+  prebuild,
   start,
   stop,
   deleteMachine,

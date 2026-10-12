@@ -3,14 +3,13 @@
  * recipe directory (a `setup.sh` and the files it needs) is packed into one self-extracting
  * script. Nothing here logs a script or a packed recipe: a recipe can carry secrets.
  */
-import { Effect, FileSystem, Predicate, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { Effect, FileSystem, Option, type PlatformError, Predicate } from "effect";
 import { Invalid } from "./errors.ts";
 import { describeFileError } from "./text.ts";
 
 const lineLength = 76;
 
-/** base64 has no `_`, so no line of the payload can end the here-document early. */
+/** base64 has no `_`, so no line of a file's payload can end its here-document early. */
 const terminator = "CLANKERBOX_RECIPE";
 
 const wrap = (base64: string): string => {
@@ -23,43 +22,51 @@ const wrap = (base64: string): string => {
   return lines.join("\n");
 };
 
+/** A string as one single-quoted shell word, whatever it holds. */
+const quote = (text: string): string => `'${text.replaceAll("'", `'\\''`)}'`;
+
 /**
- * Pipes the archive into `tar -x` in a fresh directory, so no file of the recipe's can
- * collide with the archive, then runs `./setup.sh` from there: its `#!` line picks the
- * interpreter, as for a single-file setup, and the unpacker marks it executable whatever mode
- * it was packed with. The directory is under `/var/tmp`, as a single-file setup is, which
- * nothing mounts `noexec`, and is removed however setup ends. Setup runs as a child
- * rather than through `exec`, so the cleanup trap still runs after it. `--no-same-owner`
- * keeps the packer's uid off the files when root unpacks them in the guest.
+ * An entry's path as a command's argument: under `./`, so a name that starts with `-` is never
+ * read as an option.
  */
-const selfExtracting = (archive: string): string =>
+const argument = (entry: string): string => quote(`./${entry}`);
+
+/** Any execute bit, which is the one bit of a mode a recipe carries, as git does. */
+const executable = 0o111;
+
+/**
+ * Makes the recipe's files in a fresh directory, then runs `./setup.sh` from there: its `#!`
+ * line picks the interpreter, as for a single-file setup, and the unpacker marks it executable
+ * whatever mode it was packed with. The directory is under `/var/tmp`, as a single-file setup
+ * is, which nothing mounts `noexec`, and is removed however setup ends. Setup runs as a child
+ * rather than through `exec`, so the cleanup trap still runs after it.
+ */
+const selfExtracting = (steps: ReadonlyArray<string>): string =>
   [
     "#!/bin/sh",
     "set -eu",
     "recipe=$(mktemp -d /var/tmp/clankerbox-recipe.XXXXXX)",
     `trap 'rm -rf "$recipe"' EXIT`,
     "trap 'exit 1' HUP INT TERM",
-    `base64 -d <<'${terminator}' | tar -x -f - --no-same-owner -C "$recipe"`,
-    wrap(archive),
-    terminator,
     'cd "$recipe"',
+    ...steps,
     "chmod +x setup.sh",
     "./setup.sh",
     "",
   ].join("\n");
 
 /**
- * Packs a recipe directory into one self-extracting script: a base64 tar that unpacks into a
- * temporary directory, then runs `setup.sh` from there. `COPYFILE_DISABLE=1` and
- * `--no-xattrs` keep macOS `tar` from adding `._*` files and provenance headers.
+ * Packs a recipe directory into one self-extracting script, which makes each of its entries
+ * with plain shell: a directory with `mkdir`, a symlink with `ln -s` as it is, and a file from
+ * base64, made executable when any of its execute bits is set. A symlink is never walked into,
+ * so nothing outside the recipe is packed, and in the guest nothing is written through one.
+ * Of a mode only the execute bit is kept, as git keeps it, so a checkout's umask changes
+ * nothing. Entries go in sorted order and nothing records a time or an owner, so the same
+ * files pack into the same script: a prebuild is named after it.
  */
 export const packRecipe = (
   directory: string,
-): Effect.Effect<
-  string,
-  Invalid,
-  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
-> =>
+): Effect.Effect<string, Invalid, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
 
@@ -77,36 +84,50 @@ export const packRecipe = (
       return yield* noSetup;
     }
 
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const steps: Array<string> = [];
 
-    const tar = yield* spawner.spawn(
-      ChildProcess.make("tar", ["--no-xattrs", "-c", "-f", "-", "-C", directory, "."], {
-        env: { COPYFILE_DISABLE: "1" },
-        extendEnv: true,
-        stdin: "ignore",
-      }),
-    );
+    /** Packs the entries of the recipe's directory `under`, `""` being the recipe itself. */
+    const walk = (under: string): Effect.Effect<void, Invalid | PlatformError.PlatformError> =>
+      Effect.gen(function* () {
+        const names = yield* fs.readDirectory(under === "" ? directory : `${directory}/${under}`);
 
-    const [archive, errors, code] = yield* Effect.all(
-      [
-        Stream.mkUint8Array(tar.stdout),
-        Stream.mkString(Stream.decodeText(tar.stderr)),
-        tar.exitCode,
-      ],
-      { concurrency: "unbounded" },
-    );
+        for (const name of names.toSorted()) {
+          const entry = under === "" ? name : `${under}/${name}`;
+          const path = `${directory}/${entry}`;
+          const link = yield* Effect.option(fs.readLink(path));
 
-    if (code !== 0) {
-      return yield* new Invalid({
-        message: `tar couldn't pack recipe ${directory} (exit ${code}): ${errors.trim()}`,
+          if (Option.isSome(link)) {
+            steps.push(`ln -s -- ${quote(link.value)} ${argument(entry)}`);
+            continue;
+          }
+
+          const info = yield* fs.stat(path);
+
+          if (info.type === "Directory") {
+            steps.push(`mkdir ${argument(entry)}`);
+            yield* walk(entry);
+          } else if (info.type === "File") {
+            steps.push(
+              `base64 -d >${argument(entry)} <<'${terminator}'`,
+              wrap(Buffer.from(yield* fs.readFile(path)).toString("base64")),
+              terminator,
+            );
+
+            if ((info.mode & executable) !== 0) {
+              steps.push(`chmod +x ${argument(entry)}`);
+            }
+          } else {
+            return yield* new Invalid({
+              message: `recipe ${directory} holds ${entry}, a ${info.type}: a recipe packs only files, directories and symlinks`,
+            });
+          }
+        }
       });
-    }
 
-    return selfExtracting(
-      Buffer.from(archive.buffer, archive.byteOffset, archive.byteLength).toString("base64"),
-    );
+    yield* walk("");
+
+    return selfExtracting(steps);
   }).pipe(
-    Effect.scoped,
     Effect.catchTag("PlatformError", (error) =>
       Effect.fail(
         new Invalid({
@@ -117,13 +138,7 @@ export const packRecipe = (
   );
 
 /** Reads a setup: a script file's text, or a recipe directory packed into one script. */
-export const readSetup = (
-  path: string,
-): Effect.Effect<
-  string,
-  Invalid,
-  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
-> =>
+export const readSetup = (path: string): Effect.Effect<string, Invalid, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const info = yield* fs.stat(path);

@@ -73,6 +73,11 @@ export interface Interface {
   readonly machine: (id: string) => Effect.Effect<Machine, ClankerboxError>;
   readonly checkpoint: (id: string) => Effect.Effect<Checkpoint, ClankerboxError>;
   /**
+   * The host a create of `base` goes to: the options' host, or else the first host in the list
+   * that offers the base. It is read either way, so a caller knows its runtime before it creates.
+   */
+  readonly place: (base: string, options?: CreateOptions) => Effect.Effect<Host, ClankerboxError>;
+  /**
    * Creates a machine named `name` on the options' host, or else on the first host in the
    * list that offers the spec's base.
    */
@@ -358,7 +363,7 @@ export const make = (
      * silent host after it delays nothing. With no winner the create is `Unavailable` only if
      * a host gave no reply; otherwise asking again changes nothing, and it is `Precondition`.
      */
-    const place = (base: string) =>
+    const offering = (base: string) =>
       Effect.gen(function* () {
         const asked = yield* Effect.forEach(routed, (route) =>
           Effect.map(Effect.forkScoped(Effect.result(readHost(route))), (fiber) => ({
@@ -378,7 +383,7 @@ export const make = (
             noReply ||= Predicate.isTagged(result.failure, "Unavailable");
             misses.push(`${host} failed: ${result.failure.message}`);
           } else if (result.success.bases.includes(base)) {
-            return host;
+            return result.success;
           } else {
             const { bases } = result.success;
 
@@ -401,8 +406,11 @@ export const make = (
           return yield* createOn(options.host, name, spec);
         }
 
-        return yield* createOn(yield* place(spec.base), name, spec);
+        return yield* createOn((yield* offering(spec.base)).id, name, spec);
       });
+
+    const place = (base: string, options?: CreateOptions) =>
+      options?.host === undefined ? offering(base) : Effect.flatMap(route(options.host), readHost);
 
     /** The ID a call that makes a resource on `source`'s host gives it. */
     const sibling = (source: string, name: string) =>
@@ -422,6 +430,7 @@ export const make = (
       machine: (id) => byId(id, actions.getMachine, `get ${id}`, (api) => api.getMachine({ id })),
       checkpoint: (id) =>
         byId(id, actions.getCheckpoint, `get ${id}`, (api) => api.getCheckpoint({ id })),
+      place,
       create,
       start: (id) =>
         byId(id, actions.startMachine, `start ${id}`, (api) => api.startMachine({ id })),

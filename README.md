@@ -12,6 +12,8 @@ reachable over SSH.
   base, unless the request names a host.
 - A profile is a client-side file: a base, sizes, a setup script and,
   optionally, a host. Hosts store no profiles.
+- A prebuild is a checkpoint of a machine whose setup has run. A create of the
+  same profile at the same sizes restores it instead of running the setup.
 - Each machine exposes only guest port 22, reported as a `host:port` with the
   guest's SSH host key. Anything done inside a guest goes through the sshd its
   setup installs.
@@ -171,6 +173,7 @@ clankerbox profiles                        # the profiles directory's profiles
 clankerbox create dev --profile dev        # placed; prints the new ID, linux_dev
 clankerbox create review --host mac --base macos --cpu 4 --ram 8G --disk 60G
 clankerbox create scratch --profile dev --setup ./other.sh --setup-timeout 5m
+clankerbox prebuild --profile dev          # run dev's setup once; later creates of dev restore it
 clankerbox machines                        # every host's machines, with their age
 clankerbox get linux_dev                   # one machine: its state, last action and error, SSH login
 clankerbox ssh linux_dev                   # as the runtime's user: root, or admin on Tart
@@ -193,6 +196,27 @@ clankerbox checkpoint delete linux_base
   `--setup-timeout` included; a setup that neither the flag nor the profile
   times gets the host's default. A create that fails can leave its machine
   behind, unmade: `get` shows why, and `delete` removes it.
+- `prebuild` takes `create`'s flags and no name. It creates a machine, which
+  runs the setup, captures it into a checkpoint named `prebuilt-<digest>`, and
+  deletes the machine. A `create` with a setup then restores that checkpoint
+  when its host has it, and says so on stderr with the prebuild's age;
+  `--fresh` runs the setup anyway. The digest is of the profile's label, base
+  and sizes, its setup as sent and the host's runtime release, so:
+  - a create at other sizes (`--ram 32G`) runs the setup, unless those sizes
+    were prebuilt too (`prebuild --profile dev --ram 32G`);
+  - after an edited setup or a runtime bump, every create runs the setup,
+    saying nothing, until a new `prebuild`;
+  - a prebuild serves its own host only, so give the profile a `host`, or
+    prebuild on each host it is placed on (`--host`).
+
+  A prebuild never changes, and nothing deletes one for you. One that is
+  already there is left as it is: `prebuild` prints its ID and says so. What a
+  setup installed is as old as its prebuild, so to build it anew, delete it
+  with `checkpoint delete` first. `checkpoint list` shows each prebuild with
+  its profile and age, which is how to find those an edit or a bump left
+  behind. `prebuild`'s `--timeout` bounds each of its steps (the create, the
+  capture, the delete) on its own, not the build.
+
 - Sizes and durations are written with their unit: `--ram 512M` or
   `--ram 8G`, `--disk 60G` (whole GiB), `--setup-timeout 15m`, `--timeout 90s`.
   A bare number is refused. `machines`, `get` and `profiles` print each one
@@ -374,6 +398,10 @@ program.pipe(
   runs, unless `timeout` is set.
 - `readSetup` sends a file as its text and packs a directory into one
   self-extracting script (`packRecipe`). `loadProfile` reads a profile file.
+- `Prebuild.build(client, spec)` prebuilds a spec, and
+  `Prebuild.create(client, name, spec)` creates from its prebuild when the
+  host has one. `Prebuild.nameOf` is a prebuild's name, and
+  `client.place(base, options)` reads the host a create goes to.
 - Every call but the lists fails with one of seven tagged errors
   (`errors.ts`), each with `retryable`; see [Errors](#errors). A list returns
   what reachable hosts answered and names the unreachable ones with their
@@ -588,10 +616,23 @@ Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
   4000 characters). Nothing runs setup again; forks and restores carry its
   results.
 - **Recipes** are packed by the client (`packages/sdk/src/setup.ts`) into
-  one script: a base64 tar piped into `tar -x` in a fresh directory under
-  `/var/tmp`, which marks `setup.sh` executable and runs `./setup.sh` there,
-  so its `#!` line counts as a single file's does. The packer leaves out
-  macOS `._*` files and xattrs.
+  one shell script that, in a fresh directory under `/var/tmp`, makes each
+  entry in sorted order (a directory with `mkdir`, a symlink with `ln -s` as
+  it is, a file from base64), marks `setup.sh` executable and runs
+  `./setup.sh` there, so its `#!` line counts as a single file's does. It
+  needs only `sh`, `base64`, `mkdir`, `chmod` and `ln` in the guest.
+  - A symlink is never walked into, wherever it points: nothing outside the
+    recipe is packed, and nothing is written through a link in the guest.
+  - Of a mode only the execute bit is carried, as git carries it: a file is
+    made executable when any of its execute bits is set, and every other mode
+    is the guest's default. A setup sets the modes it relies on itself, as with
+    `install -m`.
+  - Every path is written under `./`, so a name that starts with `-` is no
+    option.
+  - Nothing records a time, an owner or an xattr, so the same files, with the
+    same execute bits, pack into the same script under any umask: a prebuild
+    is named after it. A recipe that holds anything else, such as a FIFO, is
+    refused.
 - **Nothing logs a setup script, a packed recipe or the preparation seed:** not
   the client, the host, nor any test. Recipes can carry secrets. Errors carry a
   script's output, never its text.
@@ -629,6 +670,36 @@ Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
   - `start` and `new-identity` run under exec, not a login, so they read the
     environment file themselves. On Linux `/etc/environment` reaches ssh
     sessions through `pam_env`; on macOS ssh sessions read `/etc/zshenv`.
+
+### Prebuilds
+
+A prebuild is the client's alone (`packages/sdk/src/prebuild.ts`): an ordinary
+checkpoint under a name derived from what it is of, so hosts store nothing new
+and the wire has no action for it.
+
+- **The name** is `prebuilt-` and 12 hex characters of a SHA-256 (WebCrypto)
+  over the spec's `profile` label, base and sizes, the setup script exactly as
+  it is sent, and the host's runtime version. The key and what runs are one
+  value, so a setup edited while a build reads it can't land under another
+  setup's name.
+- **The runtime's version is in the name** because a `ram` checkpoint
+  restores only under the release that saved it: after a smolvm bump a create
+  misses the old prebuild rather than failing to restore it. Tart's and
+  boat's `disk` checkpoints would still restore, so a bump of either costs a
+  rebuild it didn't need; that is cheaper than a field on the wire for it.
+- **A create** reads its host (`client.place`), then the checkpoint by its ID.
+  One whose capture is `done` is restored, and a failed restore is the reply;
+  none, or one that failed or is still being captured, means a create with
+  the setup.
+- **A build** reads the checkpoint first: one that is done is the answer, and
+  one that isn't is refused with `Precondition`. Otherwise a machine of its
+  own, `prebuilding-<16 random hex>`, runs the setup, is stopped on Tart
+  (whose capture needs a stopped machine; smolvm's and boat's take a running
+  one), is captured under the prebuild's name, and is deleted however the
+  build ends. Builders never share a name, and a host takes a checkpoint name
+  once, before any native work: of two builds of one spec, both run the setup
+  and the second's capture is `Conflict`, and neither touches the other's
+  machine or prebuild. Nothing deletes a prebuild.
 
 ### Guest access
 
@@ -672,9 +743,9 @@ proposed, and has no real consumer: a controller and its queues and
 reservations; idempotency keys, operations and `--async`; host-side profile
 builds and stored profiles; machine and host labels; a guest daemon, sessions
 and `shell`; TLS, PKI and bearer tokens; the `dev` command; shipping smolvm or
-a Linux image pipeline; rewind to an earlier generation; a setup cache
-(capture a checkpoint of a set-up machine instead); name lookup. A feature
-used only by tests or docs doesn't count as a consumer.
+a Linux image pipeline; rewind to an earlier generation; a host-side setup
+cache (a [prebuild](#prebuilds) is a checkpoint the client names); name
+lookup. A feature used only by tests or docs doesn't count as a consumer.
 
 ## Accepted cases
 
@@ -693,7 +764,24 @@ These are known, not guarded, and accepted:
   failure.
 - A checkpoint holds everything the machine had, credentials its `start`
   synced included. Capture one meant for other machines from a machine that
-  holds none.
+  holds none. A prebuild is such a checkpoint: its machine ran `start` once.
+- A prebuild doesn't follow a base's image: a host only names its bases, so
+  one made before a host's config changed a base's image still matches.
+  Delete it and prebuild again after such a change.
+- An edited setup or a runtime bump leaves the old prebuild behind, and a
+  Tart or boat bump one that would still restore; `checkpoint list` shows
+  them, and `checkpoint delete` removes them.
+- A build that is interrupted, or whose machine's delete fails, as when its
+  `--timeout` passed while the create ran on, leaves its machine,
+  `<host>_prebuilding-<16 random hex>`, behind, possibly running and holding
+  its RAM; `delete` removes it. When the build had failed already, that
+  failure is the reply. When its capture was done, the prebuild is made,
+  `prebuild` exits 0, and it names the machine on stderr.
+- A capture that fails leaves a failed `prebuilt-` checkpoint. Creates run
+  the setup past it, and `prebuild` refuses until `checkpoint delete` removes
+  it.
+- Two builds of one spec at once both run the setup, and the second fails at
+  its capture with `Conflict`.
 - The reseed fixes the kernel RNG only. User-space generators seeded before a
   fork stay duplicated until the profile's `new-identity` resets them.
 - A lost reply isn't resolved: the caller reads the resource.

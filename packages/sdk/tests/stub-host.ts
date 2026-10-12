@@ -8,6 +8,7 @@ import { DateTime, Effect, Layer } from "effect";
 import { FetchHttpClient, type HttpClient, HttpRouter, HttpServer } from "effect/http";
 import {
   type Checkpoint,
+  Conflict,
   type CreateRequest,
   type HostError,
   Http,
@@ -23,10 +24,18 @@ export interface StubHostOptions {
   readonly id: string;
   readonly bases: ReadonlyArray<string>;
   readonly runtime?: Runtime;
+  /** The runtime's version the host reports. Default: 1.22.2. */
+  readonly runtimeVersion?: string;
   /** Replaces the create handler, for example to refuse with `Capacity` or to run long. */
   readonly create?: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
+  /** Replaces the machine delete handler, for example to fail it. */
+  readonly deleteMachine?: (id: string) => Effect.Effect<void, HostError>;
+  /** Runs before each create's default handler, for example to hold two creates at once. */
+  readonly beforeCreate?: (request: CreateRequest) => Effect.Effect<void>;
   /** Machines the host already holds. */
   readonly machines?: ReadonlyArray<Machine>;
+  /** Checkpoints the host already holds. */
+  readonly checkpoints?: ReadonlyArray<Checkpoint>;
   /** The limits the host reports, each under its own ID. Default: none. */
   readonly capacity?: ReadonlyArray<Omit<Limit, "host">>;
 }
@@ -57,6 +66,10 @@ export const stubHost = (options: StubHostOptions) => {
     machines.set(held.id, held);
   }
 
+  for (const held of options.checkpoints ?? []) {
+    checkpoints.set(held.id, held);
+  }
+
   const record = (call: string) => Effect.sync(() => calls.push(call));
 
   const find = (id: string) => {
@@ -75,25 +88,61 @@ export const stubHost = (options: StubHostOptions) => {
       : Effect.succeed(found);
   };
 
-  const add = (made: Machine) =>
-    Effect.sync(() => {
-      machines.set(made.id, made);
+  /** The host takes a name once per resource type, as a real host's claim does. */
+  const taken = (held: ReadonlyMap<string, unknown>, id: string) =>
+    held.has(id)
+      ? Effect.fail(new Conflict({ message: `${id} exists`, kind: "exists" }))
+      : Effect.void;
 
-      return made;
-    });
+  const add = (made: Machine) =>
+    Effect.andThen(
+      taken(machines, made.id),
+      Effect.sync(() => {
+        machines.set(made.id, made);
+
+        return made;
+      }),
+    );
+
+  /** A machine or checkpoint with the label its source carries, if it carries one. */
+  const labelled = <A extends Machine | Checkpoint>(made: A, profile: string | undefined): A =>
+    profile === undefined ? made : { ...made, profile };
 
   const create = (request: CreateRequest) =>
     options.create === undefined
-      ? add(
-          machine(request.id, {
-            runtime,
-            base: request.base,
-            cpu: request.cpu,
-            ramMib: request.ramMib,
-            diskGib: request.diskGib,
-          }),
+      ? Effect.andThen(
+          options.beforeCreate?.(request) ?? Effect.void,
+          add(
+            labelled(
+              machine(request.id, {
+                runtime,
+                base: request.base,
+                cpu: request.cpu,
+                ramMib: request.ramMib,
+                diskGib: request.diskGib,
+              }),
+              request.profile,
+            ),
+          ),
         )
       : options.create(request);
+
+  const restore = (checkpoint: string, name: string) =>
+    Effect.flatMap(findCheckpoint(checkpoint), (found) =>
+      add(
+        labelled(
+          machine(`${options.id}_${name}`, {
+            runtime,
+            base: found.base,
+            cpu: found.cpu,
+            ramMib: found.ramMib,
+            diskGib: found.diskGib,
+            action: { name: "restore", status: "done" },
+          }),
+          found.profile,
+        ),
+      ),
+    );
 
   const app = Action.implement(Http.actions, {
     listMachines: () => Effect.as(record("machine.list"), [...machines.values()]),
@@ -112,10 +161,12 @@ export const stubHost = (options: StubHostOptions) => {
     deleteMachine: ({ id }) =>
       Effect.andThen(
         record("machine.delete"),
-        Effect.andThen(
-          find(id),
-          Effect.sync(() => machines.delete(id)),
-        ),
+        options.deleteMachine === undefined
+          ? Effect.andThen(
+              find(id),
+              Effect.sync(() => machines.delete(id)),
+            )
+          : options.deleteMachine(id),
       ),
     forkMachine: ({ machine: source, name }) =>
       Effect.andThen(
@@ -123,44 +174,36 @@ export const stubHost = (options: StubHostOptions) => {
         Effect.flatMap(find(source), (found) => add({ ...found, id: `${options.id}_${name}` })),
       ),
     restoreMachine: ({ checkpoint, name }) =>
-      Effect.andThen(
-        record("machine.restore"),
-        Effect.flatMap(findCheckpoint(checkpoint), (found) =>
-          add(
-            machine(`${options.id}_${name}`, {
-              runtime,
-              base: found.base,
-              cpu: found.cpu,
-              ramMib: found.ramMib,
-              diskGib: found.diskGib,
-              action: { name: "restore", status: "done" },
-            }),
-          ),
-        ),
-      ),
+      Effect.andThen(record("machine.restore"), restore(checkpoint, name)),
     listCheckpoints: () => Effect.as(record("checkpoint.list"), [...checkpoints.values()]),
     getCheckpoint: ({ id }) => Effect.andThen(record("checkpoint.get"), findCheckpoint(id)),
     captureCheckpoint: ({ machine: source, name }) =>
       Effect.andThen(
         record("checkpoint.capture"),
         Effect.flatMap(find(source), (found) =>
-          Effect.sync(() => {
-            const made: Checkpoint = {
-              id: `${options.id}_${name}`,
-              createdAt: found.createdAt,
-              machine: found.id,
-              kind: "disk",
-              base: found.base,
-              cpu: found.cpu,
-              ramMib: found.ramMib,
-              diskGib: found.diskGib,
-              action: { name: "capture", status: "done" },
-            };
+          Effect.andThen(
+            taken(checkpoints, `${options.id}_${name}`),
+            Effect.sync(() => {
+              const made = labelled<Checkpoint>(
+                {
+                  id: `${options.id}_${name}`,
+                  createdAt: found.createdAt,
+                  machine: found.id,
+                  kind: "disk",
+                  base: found.base,
+                  cpu: found.cpu,
+                  ramMib: found.ramMib,
+                  diskGib: found.diskGib,
+                  action: { name: "capture", status: "done" },
+                },
+                found.profile,
+              );
 
-            checkpoints.set(made.id, made);
+              checkpoints.set(made.id, made);
 
-            return made;
-          }),
+              return made;
+            }),
+          ),
         ),
       ),
     deleteCheckpoint: ({ id }) =>
@@ -176,7 +219,7 @@ export const stubHost = (options: StubHostOptions) => {
         id: options.id,
         runtime,
         version,
-        runtimeVersion: "1.22.2",
+        runtimeVersion: options.runtimeVersion ?? "1.22.2",
         bases: options.bases,
       }),
     getCapacity: () =>
