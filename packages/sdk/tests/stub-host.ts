@@ -243,6 +243,10 @@ export const stubHost = (options: StubHostOptions) => {
     calls,
     /** The version header of every request the host received, in order. */
     versions,
+    /** Holds `machine`, as a create that failed after its row was inserted leaves one. */
+    hold: (held: Machine) => {
+      machines.set(held.id, held);
+    },
     /** The host's routes, to serve on a real HTTP server. */
     routes,
     handler: (request: Request) => {

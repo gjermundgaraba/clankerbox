@@ -1,0 +1,52 @@
+{
+  "name": "@gjermundgaraba/clankerbox-rivet-sandbox-agent",
+  "version": "0.15.2",
+  "description": "clankerbox machines as sandboxes for Rivet's Sandbox Agent",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjermundgaraba/clankerbox.git",
+    "directory": "packages/rivet-sandbox-agent"
+  },
+  "files": [
+    "dist",
+    "recipes"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.mts",
+        "import": "./dist/index.mjs"
+      },
+      "./package.json": "./package.json"
+    },
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "test": "vp test"
+  },
+  "dependencies": {
+    "@gjermundgaraba/clankerbox-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "sandbox-agent": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@effect/platform-node": "~4.0.2",
+    "effect": "~4.0.2",
+    "sandbox-agent": "~0.5.2"
+  }
+}
