@@ -98,9 +98,13 @@ the live run below is an **unqualified candidate**.
   the user's `~/.local/share/sandbox-agent` (Linux) or
   `~/Library/Application Support/sandbox-agent` (macOS).
 - The server finds an agent's credential in its own environment
-  (`ANTHROPIC_API_KEY` or `CLAUDE_API_KEY`; `OPENAI_API_KEY` or
+  (`ANTHROPIC_API_KEY` or `CLAUDE_API_KEY`, then the OAuth tokens
+  `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_AUTH_TOKEN`; `OPENAI_API_KEY` or
   `CODEX_API_KEY`) or in the user's `~/.claude.json` and
-  `~/.claude/.credentials.json`. Ours: the recipes' `agent.env`, sourced into
+  `~/.claude/.credentials.json` (`extract_all_credentials`,
+  A@0.5.2:server/packages/agent-credentials/src/lib.rs, whose
+  `include_oauth` is on by default). The live suite runs on a
+  `CLAUDE_CODE_OAUTH_TOKEN`. Ours: the recipes' `agent.env`, sourced into
   the server's environment at every launch.
 - `@sandbox-agent/cli`, the SDK's optional dependency, carries a server binary
   for the machine the SDK runs on. Ours: `ignoredOptionalDependencies` in
