@@ -440,7 +440,7 @@ await sdk.destroySandbox();
   restore of a checkpoint (`{ checkpoint }`) or a fork of a machine
   (`{ machine }`). A fork of a running machine on smolvm, and a `ram`
   restore, carry its memory: the server, its sessions and its processes, so
-  take them from an idle machine. A fork is ready in about 14 s on smolvm,
+  take them from an idle machine. A fork is ready in about 6 s on smolvm,
   where a create from the Ubuntu recipe takes about 50 s.
 - **IDs:** a sandbox's ID is `clankerbox/<machine ID>`, so
   `SandboxAgent.start({ sandbox, sandboxId })` reconnects to a machine,
