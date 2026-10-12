@@ -8,7 +8,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Checkpoint, ErrorTag, Limit, Machine } from "@gjermundgaraba/clankerbox-sdk";
+import { Checkpoint, ErrorTag, Host, Limit, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
@@ -84,6 +84,10 @@ export const Machines = Schema.fromJsonString(
 );
 
 export const OneMachine = Schema.fromJsonString(Machine);
+
+export const Hosts = Schema.fromJsonString(
+  Schema.Struct({ hosts: Schema.Array(Host), unreachable: Unreachable }),
+);
 
 export const Checkpoints = Schema.fromJsonString(
   Schema.Struct({ checkpoints: Schema.Array(Checkpoint), unreachable: Unreachable }),
