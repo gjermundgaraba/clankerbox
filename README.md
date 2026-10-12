@@ -1113,22 +1113,25 @@ covers. Every disposable build or live run goes through
 
 ## Releasing
 
-The binaries and the SDK share one version, the SDK's, in
-`packages/sdk/package.json`.
+The binaries, the SDK and the Sandbox Agent provider share one version, the
+SDK's, in `packages/sdk/package.json`.
 
-1. Set that `version` to `X.Y.Z` and merge to `main`.
+1. Set that `version`, and the provider's in
+   `packages/rivet-sandbox-agent/package.json`, to `X.Y.Z` and merge to `main`.
 2. Tag the merge commit `vX.Y.Z` and push the tag:
    `git tag vX.Y.Z <commit> && git push origin vX.Y.Z`.
 
 The tag runs `.github/workflows/publish-sdk.yml`, which refuses a tag that
 doesn't name the version, runs CI on the tagged commit, uploads the two bundles
 CI smoked and their `.sha256` files to the `vX.Y.Z` GitHub release, then
-publishes `@gjermundgaraba/clankerbox-sdk@X.Y.Z` through npm's trusted
-publishing, with provenance. A failing CI stops it before anything is uploaded.
+publishes `@gjermundgaraba/clankerbox-sdk@X.Y.Z` and
+`@gjermundgaraba/clankerbox-rivet-sandbox-agent@X.Y.Z` through npm's trusted
+publishing, with provenance; the provider depends on the SDK of its own
+version. A failing CI stops it before anything is uploaded.
 A failed run can be re-run: the upload replaces the release's files.
 
-npm's trusted publisher for `@gjermundgaraba/clankerbox-sdk` names this
-repository and the workflow `publish-sdk.yml`, with no environment. Only the
+npm's trusted publisher for each of the two packages names this repository and
+the workflow `publish-sdk.yml`, with no environment. Only the
 workflow's `vX.Y.Z` tag trigger gates publishing.
 
 ## License

@@ -1,8 +1,9 @@
 name: Release
 # Release tags only, vX.Y.Z, naming the SDK's version, which the binaries share. It runs Quality
 # first, whose sea job builds, bundles and smokes both targets; then it uploads those bundles and
-# their .sha256 files to the tag's GitHub release and publishes the SDK to npm. The npm trusted
-# publisher is bound to this file's name; only the tag trigger gates publishing.
+# their .sha256 files to the tag's GitHub release and publishes the SDK and the Sandbox Agent
+# provider, which shares its version, to npm. Each package's npm trusted publisher is bound to
+# this file's name; only the tag trigger gates publishing.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -19,8 +20,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check that the tag names the SDK's version
-        run: test "$GITHUB_REF_NAME" = "v$(jq -r .version packages/sdk/package.json)"
+      - name: Check that the tag names the SDK's version, which the provider shares
+        run: |
+          test "$GITHUB_REF_NAME" = "v$(jq -r .version packages/sdk/package.json)"
+          test "$GITHUB_REF_NAME" = "v$(jq -r .version packages/rivet-sandbox-agent/package.json)"
   quality:
     needs: tag
     uses: ./.github/workflows/quality.yml
@@ -65,7 +68,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           registry-url: https://registry.npmjs.org
-      - run: pnpm --filter @gjermundgaraba/clankerbox-sdk build
+      - run: pnpm --filter @gjermundgaraba/clankerbox-sdk --filter @gjermundgaraba/clankerbox-rivet-sandbox-agent build
       - name: Pack and check the package
         run: |
           mkdir -p "$RUNNER_TEMP/sdk"
@@ -83,5 +86,27 @@ jobs:
             assert.equal(exports["./node"].import, "./dist/node.mjs");
           '
           git diff --exit-code
+      - name: Pack and check the provider
+        run: |
+          mkdir -p "$RUNNER_TEMP/provider"
+          pnpm --filter @gjermundgaraba/clankerbox-rivet-sandbox-agent pack --pack-destination "$RUNNER_TEMP/provider"
+          tar -tzf "$RUNNER_TEMP/provider/"*.tgz > "$RUNNER_TEMP/provider/files"
+          grep -qx package/LICENSE "$RUNNER_TEMP/provider/files"
+          grep -qx package/dist/index.mjs "$RUNNER_TEMP/provider/files"
+          grep -qx package/recipes/ubuntu/setup.sh "$RUNNER_TEMP/provider/files"
+          grep -qx package/recipes/macos/setup.sh "$RUNNER_TEMP/provider/files"
+          tar -xzOf "$RUNNER_TEMP/provider/"*.tgz package/package.json | VERSION="${GITHUB_REF_NAME#v}" node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import { readFileSync } from "node:fs";
+            const text = readFileSync(0, "utf8");
+            assert.doesNotMatch(text, /"(catalog|workspace):/);
+            const { exports, dependencies } = JSON.parse(text);
+            assert.equal(exports["."].import, "./dist/index.mjs");
+            assert.equal(dependencies["@gjermundgaraba/clankerbox-sdk"], process.env.VERSION);
+          '
+          git diff --exit-code
+      # The SDK first: the provider depends on it at the same version.
       - name: Publish with npm trusted publishing
-        run: npm publish "$RUNNER_TEMP/sdk/"*.tgz --access public --provenance --ignore-scripts
+        run: |
+          npm publish "$RUNNER_TEMP/sdk/"*.tgz --access public --provenance --ignore-scripts
+          npm publish "$RUNNER_TEMP/provider/"*.tgz --access public --provenance --ignore-scripts
