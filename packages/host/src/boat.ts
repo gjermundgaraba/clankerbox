@@ -839,13 +839,21 @@ export const make = (
       ),
       /**
        * Deletes the sandbox and waits until boat answers 404, never for its purge. A row without
-       * a recorded sandbox has nothing on boat the host can find, so only the row goes.
+       * a recorded sandbox has nothing on boat the host can find, so only the row goes. So does
+       * one whose sandbox boat reports cancelled or gone, without a `DELETE`: boat answers that
+       * with a 403, not a 404, for a sandbox another API key made, even once it is gone.
        */
       delete: Effect.fn("Boat.delete")((machine) =>
         Effect.gen(function* () {
           const id = sandboxOf(machine);
 
           if (Option.isNone(id)) {
+            return;
+          }
+
+          const found = yield* api.sandbox(id.value);
+
+          if (Option.isNone(found) || stateOf(found.value.state) === "missing") {
             return;
           }
 

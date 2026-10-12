@@ -1408,13 +1408,37 @@ test("delete sends boat's confirm header and waits for 404, never for the purge"
   await succeeds(rig.runtime.delete({ ...machine, native: "bx_made0001" }));
 
   expect(rig.boat.sent.map((sent) => `${sent.method} ${sent.path}`)).toEqual([
+    "GET /sandboxes/bx_made0001",
     "DELETE /sandboxes/bx_made0001",
     "GET /sandboxes/bx_made0001",
   ]);
-  expect(rig.boat.sent[0]?.headers["x-ascii-confirm-delete"]).toBe("bx_made0001");
+  expect(rig.boat.sent[1]?.headers["x-ascii-confirm-delete"]).toBe("bx_made0001");
 
   // A repeat after the sandbox is gone is done too.
   await succeeds(rig.runtime.delete({ ...machine, native: "bx_made0001" }));
+});
+
+test("delete of a machine whose sandbox is cancelled or gone removes only the row: boat refuses a DELETE of another key's sandbox", async () => {
+  const rig = await rigOn();
+
+  rig.boat.sandboxes.set("bx_cancelled", {
+    id: "bx_cancelled",
+    state: "cancelled",
+    ip: null,
+    sshEndpoint: null,
+  });
+  rig.boat.hooks.answer = (sent) =>
+    sent.method === "DELETE" ? refusal(403, "api_key_action_forbidden") : undefined;
+
+  for (const native of ["bx_cancelled", "bx_gone"]) {
+    rig.boat.sent.length = 0;
+
+    await succeeds(rig.runtime.delete(machineOn("dev", { native })));
+
+    expect(rig.boat.sent.map((sent) => `${sent.method} ${sent.path}`)).toEqual([
+      `GET /sandboxes/${native}`,
+    ]);
+  }
 });
 
 test("after a crash before boat answered, stop finds the machine missing and delete removes only the row", async () => {
