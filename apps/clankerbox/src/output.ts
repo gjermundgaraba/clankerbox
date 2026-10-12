@@ -38,7 +38,7 @@ export const fail = (json: boolean) => (error: ClankerboxError) =>
   );
 
 /** How long ago `createdAt` was, in its largest whole unit: `45s`, `12m`, `5h`, `3d`. */
-const age = (createdAt: DateTime.Utc, now: DateTime.Utc): string => {
+export const age = (createdAt: DateTime.Utc, now: DateTime.Utc): string => {
   const seconds = Math.max(0, Math.floor(Duration.toSeconds(DateTime.distance(createdAt, now))));
   const [unit, size] = spans.find(([, span]) => seconds >= span) ?? ["s", 1];
 
@@ -117,6 +117,7 @@ const checkpointColumns: ReadonlyArray<
   ["KIND", (checkpoint) => checkpoint.kind],
   ["MACHINE", (checkpoint) => checkpoint.machine],
   ["BASE", (checkpoint) => checkpoint.base],
+  ["PROFILE", (checkpoint) => checkpoint.profile ?? "-"],
   ["AGE", (checkpoint, now) => age(checkpoint.createdAt, now)],
   ["ACTION", actionLabel],
 ];
@@ -127,12 +128,11 @@ export const checkpointRows = (checkpoints: ReadonlyArray<Checkpoint>, now: Date
 ];
 
 /**
- * One checkpoint, a field a line: its columns, and what a row has no room for, the profile and
- * sizes a restore gives its machine, and its action's error in full.
+ * One checkpoint, a field a line: its columns, and what a row has no room for, the sizes a
+ * restore gives its machine, and its action's error in full.
  */
 export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
   ...checkpointColumns.map(([label, cell]) => [label, cell(checkpoint, now)]),
-  ["PROFILE", checkpoint.profile ?? "-"],
   ["CPU", String(checkpoint.cpu)],
   ["RAM", formatMib(checkpoint.ramMib)],
   ["DISK", `${checkpoint.diskGib}G`],

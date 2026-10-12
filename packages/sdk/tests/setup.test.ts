@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -93,31 +93,156 @@ test("a recipe directory packs into one script that recreates its files and runs
   expect(existsSync(ranIn)).toBe(false);
 });
 
-/** The tar archive inside a packed script, decoded from its here-document. */
-const archiveOf = (script: string): Buffer => {
-  const lines = script.split("\n");
-  const start = lines.findIndex((line) => line.includes("<<'CLANKERBOX_RECIPE'"));
-  const end = lines.indexOf("CLANKERBOX_RECIPE", start + 1);
+test("the packed script carries no AppleDouble files and no extended attributes", async () => {
+  const script = await pack(await recipe(copyingSetup));
 
-  return Buffer.from(lines.slice(start + 1, end).join(""), "base64");
-};
+  expect(script).toContain("'./files/greeting'");
+  expect(script).not.toContain("._");
+  expect(script).not.toContain("xattr");
+});
 
-test("the packed archive carries no AppleDouble files and no extended attributes", async () => {
-  const archive = archiveOf(await pack(await recipe(copyingSetup)));
+test("the same files pack into the same script, whatever their times and modes but the execute bit", async () => {
+  const dir = await recipe(copyingSetup);
+  const first = await pack(dir);
 
-  const listing = await new Promise<string>((resolve, reject) => {
-    const tar = execFile("tar", ["-t", "-f", "-"], (error, stdout) =>
-      error === null ? resolve(stdout) : reject(error),
-    );
+  await utimes(join(dir, "files", "greeting"), new Date(0), new Date(0));
+  await utimes(join(dir, "files"), new Date(0), new Date(0));
+  await chmod(join(dir, "files", "greeting"), 0o600);
+  await chmod(join(dir, "files", "nested"), 0o700);
 
-    tar.stdin?.end(archive);
-  });
+  expect((await pack(dir)) === first).toBe(true);
 
-  const entries = listing.split("\n").filter((entry) => entry !== "");
+  await chmod(join(dir, "files", "greeting"), 0o700);
 
-  expect(entries).toContain("./files/greeting");
-  expect(entries.filter((entry) => entry.includes("._"))).toEqual([]);
-  expect(archive.includes("xattr")).toBe(false);
+  expect((await pack(dir)) === first).toBe(false);
+});
+
+test("a file keeps its execute bit, and no other mode", async () => {
+  const dir = await recipe(
+    [
+      "#!/bin/sh",
+      "set -eu",
+      'test -x "files/run me.sh" && echo run >>"$OUT/executable"',
+      'test -x files/secret && echo secret >>"$OUT/executable"',
+      'test -w files/closed && echo closed >>"$OUT/writable"',
+      "",
+    ].join("\n"),
+  );
+
+  await writeFile(join(dir, "files", "secret"), "s\n");
+  await chmod(join(dir, "files", "secret"), 0o600);
+  await mkdir(join(dir, "files", "closed"));
+  await chmod(join(dir, "files", "closed"), 0o500);
+
+  try {
+    const { out, exitCode } = await runPacked(await pack(dir));
+
+    expect(exitCode).toBe(0);
+    expect(await readFile(join(out, "executable"), "utf8")).toBe("run\n");
+    expect(await readFile(join(out, "writable"), "utf8")).toBe("closed\n");
+  } finally {
+    await chmod(join(dir, "files", "closed"), 0o700);
+  }
+});
+
+test("symlinks are recreated as they are and never walked into, wherever they point", async () => {
+  const outside = await scratch();
+
+  await writeFile(join(outside, "secret"), "outside the recipe\n");
+
+  const dir = await recipe(
+    [
+      "#!/bin/sh",
+      "set -eu",
+      'cat alias/inside >"$OUT/alias"',
+      'cat files/link >"$OUT/link"',
+      'readlink out >"$OUT/out"',
+      'readlink loop >"$OUT/loop"',
+      "",
+    ].join("\n"),
+  );
+
+  // `alias` sorts before the directory it points at, and `loop` at the recipe itself.
+  await mkdir(join(dir, "real"));
+  await writeFile(join(dir, "real", "inside"), "inside\n");
+  await symlink("real", join(dir, "alias"));
+  await symlink("greeting", join(dir, "files", "link"));
+  await symlink(outside, join(dir, "out"));
+  await symlink(".", join(dir, "loop"));
+
+  const script = await pack(dir);
+
+  expect(script).not.toContain(Buffer.from("outside the recipe\n").toString("base64"));
+  expect(script).not.toContain("./out/");
+  expect(script).not.toContain("./loop/");
+  expect(script).not.toContain("./alias/");
+
+  const { out, exitCode } = await runPacked(script);
+
+  expect(exitCode).toBe(0);
+  expect(await readFile(join(out, "alias"), "utf8")).toBe("inside\n");
+  expect(await readFile(join(out, "link"), "utf8")).toBe("hello from files/\n");
+  expect(await readFile(join(out, "out"), "utf8")).toBe(`${outside}\n`);
+  expect(await readFile(join(out, "loop"), "utf8")).toBe(".\n");
+});
+
+test("names and link targets that start with - are no options", async () => {
+  const dir = await recipe(
+    [
+      "#!/bin/sh",
+      "set -eu",
+      'cat ./-p/-f >"$OUT/file"',
+      'test -x ./-p/-f && echo yes >"$OUT/executable"',
+      'readlink ./-link >"$OUT/link"',
+      "",
+    ].join("\n"),
+  );
+
+  await mkdir(join(dir, "-p"));
+  await writeFile(join(dir, "-p", "-f"), "dash\n");
+  await chmod(join(dir, "-p", "-f"), 0o755);
+  await symlink("-target", join(dir, "-link"));
+
+  const { out, exitCode } = await runPacked(await pack(dir));
+
+  expect(exitCode).toBe(0);
+  expect(await readFile(join(out, "file"), "utf8")).toBe("dash\n");
+  expect(await readFile(join(out, "executable"), "utf8")).toBe("yes\n");
+  expect(await readFile(join(out, "link"), "utf8")).toBe("-target\n");
+});
+
+test("paths with quotes, spaces and newlines are recreated as they are", async () => {
+  const dir = await recipe('#!/bin/sh\ncat odd/* >"$OUT/all"\n');
+  const awkward = ["it's", 'a "quoted" name', "two\nlines", "$(touch pwned)"];
+
+  await mkdir(join(dir, "odd"));
+
+  for (const [index, name] of awkward.entries()) {
+    await writeFile(join(dir, "odd", name), `${index}\n`);
+  }
+
+  const { out, exitCode } = await runPacked(await pack(dir));
+
+  expect(exitCode).toBe(0);
+  expect(existsSync(join(out, "..", "pwned"))).toBe(false);
+  expect((await readFile(join(out, "all"), "utf8")).split("\n").toSorted()).toEqual(
+    expect.arrayContaining(["0", "1", "2", "3"]),
+  );
+});
+
+test("a recipe that holds anything but files, directories and symlinks is refused", async () => {
+  const dir = await recipe("#!/bin/sh\ntrue\n");
+
+  await run("mkfifo", [join(dir, "files", "pipe")]);
+
+  const error = await packRecipe(dir).pipe(
+    Effect.flip,
+    Effect.provide(NodeServices.layer),
+    Effect.runPromise,
+  );
+
+  expect(error._tag).toBe("Invalid");
+  expect(error.message).toContain("files/pipe");
 });
 
 test("a failing setup.sh fails the script with its exit code, and the unpacked files are removed", async () => {
