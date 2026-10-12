@@ -10,7 +10,11 @@ import { randomBytes } from "node:crypto";
 import { copyFile, cp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { clankerbox } from "@gjermundgaraba/clankerbox-rivet-sandbox-agent";
+import {
+  type ClankerboxProvider,
+  clankerbox,
+  type Options,
+} from "@gjermundgaraba/clankerbox-rivet-sandbox-agent";
 import { SandboxAgent } from "sandbox-agent";
 import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 import {
@@ -73,8 +77,8 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
   let env: Environment;
   let dir: string;
   let key: string;
-  let options: Parameters<typeof clankerbox>[0];
-  let sandbox: ReturnType<typeof clankerbox>;
+  let options: Options;
+  let sandbox: ClankerboxProvider;
   let sdk: SandboxAgent;
   let id: string;
 
@@ -187,7 +191,7 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
     async () => {
       // Over ssh, as the machine's login user, as the kill is: on macOS a pgrep through the
       // agent's own process API printed nothing, for a reason not looked into.
-      const guest = async (...command: ReadonlyArray<string>) => {
+      const overSsh = async (...command: ReadonlyArray<string>) => {
         const ran = await cli("ssh", id, "--", ...(options.sshArguments ?? []), ...command);
 
         expect(ran.code, ran.stderr).toBe(0);
@@ -195,14 +199,14 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
         return ran.stdout.trim();
       };
 
-      const before = await guest("pgrep", "-x", "sandbox-agent");
+      const before = await overSsh("pgrep", "-x", "sandbox-agent");
 
       expect(before).toMatch(/^\d+$/u);
-      await guest("pkill", "-x", "sandbox-agent");
+      await overSsh("pkill", "-x", "sandbox-agent");
 
-      await sandbox.ensureServer?.(id);
+      await sandbox.ensureServer(id);
 
-      const after = await guest("pgrep", "-x", "sandbox-agent");
+      const after = await overSsh("pgrep", "-x", "sandbox-agent");
 
       expect(after).toMatch(/^\d+$/u);
       expect(after).not.toBe(before);

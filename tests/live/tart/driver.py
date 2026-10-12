@@ -330,7 +330,7 @@ def main():
             if not matches:
                 raise RuntimeError(f'seed checksums {when} differ from PROVENANCE: {found}')
 
-        # Runs last, after the VMs are gone.
+        # Runs after the VMs are gone.
         run.on_cleanup(lambda: seed_check('after'))
 
         address, why = choose_address(options.address)

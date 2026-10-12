@@ -83,36 +83,55 @@ def processes(text):
     return found
 
 
+def redact(evidence, values, log, what):
+    """Replaces each of `values` (bytes) with <redacted> in every evidence file, and returns the
+    files that held one."""
+    leaked = []
+    for path in sorted(evidence.rglob('*')):
+        if not path.is_file():
+            continue
+        text = path.read_bytes()
+        found = [value for value in values if value in text]
+        if found:
+            for value in found:
+                text = text.replace(value, b'<redacted>')
+            path.write_bytes(text)
+            leaked.append(str(path.relative_to(evidence)))
+    if leaked:
+        log(f'{what} was in {leaked}; redacted')
+    return leaked
+
+
 def agent_env(run, option, log):
     """The suite's environment for its Sandbox Agent tests, which run only when a driver's
     --agent-env-file names a file of NAME=value lines holding an LLM credential. The suite copies
-    the file into a recipe in its temporary directory, under the run's scratch. The teardown step
-    registered here redacts every value from the evidence and fails the run if one was there, so
-    a driver calls this before it registers any other teardown: this one then runs last."""
+    the file into a recipe in its temporary directory, under the run's scratch.
+
+    The values are read as the guest reads them, by sourcing the file with sh. The teardown step
+    registered here redacts them from the evidence and fails the run if one was there, leaving
+    teardown itself to finish, so scratch and any copy of the file in it go. A driver calls this
+    before it registers any other teardown: this one then runs last."""
     if option is None:
         return {}
     file = Path(option).resolve()
-    values = [line.split('=', 1)[1].strip().strip('"\'').encode() for line in file.read_text().splitlines()
-              if '=' in line and not line.lstrip().startswith('#')]
+    names = re.findall(r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=', file.read_text(), re.M)
+    sourced = subprocess.run(['env', '-i', '/bin/sh', '-c', 'set -a; . "$1"; env -0', 'sh', str(file)],
+                             capture_output=True, check=True, stdin=subprocess.DEVNULL).stdout
+    env = dict(item.split(b'=', 1) for item in sourced.split(b'\0') if b'=' in item)
     # A value too short to be a credential would also match ordinary text.
-    values = [value for value in values if len(value) >= 12]
+    values = [env[name.encode()] for name in names if len(env.get(name.encode(), b'')) >= 12]
     if not values:
         sys.exit(f'{file} holds no NAME=value line with a credential')
 
-    def redact():
-        leaked = []
-        for path in sorted(run.evidence.rglob('*')):
-            if path.is_file() and any(value in path.read_bytes() for value in values):
-                text = path.read_bytes()
-                for value in values:
-                    text = text.replace(value, b'<redacted>')
-                path.write_bytes(text)
-                leaked.append(str(path.relative_to(run.evidence)))
+    def check():
+        leaked = redact(run.evidence, values, log, 'an agent credential')
         if leaked:
-            log(f'an agent credential was in {leaked}; redacted')
-            raise RuntimeError(f'an agent credential reached evidence: {leaked}')
+            # The smolvm driver's remote/ is a copy of the test host's evidence, which keeps its own.
+            remote = ("; the test host's own copy of the run's evidence holds it too: remove it there"
+                      if any(path.startswith('remote/') for path in leaked) else '')
+            run.fail(f'an agent credential reached evidence: {leaked}{remote}')
 
-    run.on_cleanup(redact)
+    run.on_cleanup(check)
     return {'CLANKERBOX_LIVE_AGENT_ENV': str(file)}
 
 
