@@ -18,7 +18,6 @@ import {
   pinnedSsh,
   Precondition,
   readSetup,
-  type Setup,
   sshTarget,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -35,35 +34,43 @@ import {
 import type { ChildProcessSpawner } from "effect/process";
 import { SandboxDestroyedError } from "sandbox-agent";
 import type { Options } from "./options.ts";
-import { forwarding, freePort, open, type Tunnel } from "./tunnel.ts";
+import { forwarding, freePort, LocalTunnelError, open, type Tunnel } from "./tunnel.ts";
 
 /** The provider's name, which prefixes every sandbox ID the SDK hands out. */
 export const name = "clankerbox";
 
-/** The Sandbox Agent's own default port. */
-const defaultAgentPort = 2468;
-
 export const defaultCwd = "/home/sandbox";
 
-/** How long a health check through the tunnel may take. */
+/**
+ * How long a health check through the tunnel may take: the agent answers on loopback in
+ * milliseconds, so one that takes longer is treated as not answering.
+ */
 const healthWait = Duration.seconds(3);
 
 const Health = Schema.Struct({ status: Schema.Literal("ok") });
 
 const isHealth = Schema.is(Health);
 
-/** A setup script with its timeout, or without one, which leaves the timeout to the host. */
-const timed = (script: string, timeoutSeconds: number | undefined): Setup =>
-  timeoutSeconds === undefined ? { script } : { script, timeoutSeconds };
-
-/** A sandbox's tunnel and the scope that ends it. The port outlasts the tunnel. */
+/** A sandbox's tunnel and the scope that ends it. */
 interface Held {
-  readonly port: number;
   readonly tunnel: Tunnel;
   readonly scope: Scope.Closeable;
 }
 
-type Services =
+/**
+ * What the provider holds for a sandbox: the lock its calls take turns on, so two never open its
+ * tunnel twice; its local port, from its first tunnel until it is destroyed, since an SDK client
+ * asks for a sandbox's URL only once; and its tunnel while one is open. A destroyed sandbox's
+ * record keeps only its lock, since a call may still be waiting on it.
+ */
+interface Sandbox {
+  readonly lock: Semaphore.Semaphore;
+  port: number | undefined;
+  held: Held | undefined;
+}
+
+/** What the sandboxes' effects need: the clankerbox client and the platform. */
+export type Services =
   | Client.Client
   | FileSystem.FileSystem
   | Path.Path
@@ -74,37 +81,79 @@ type Services =
  * machine's ID.
  */
 export const make = (options: Options, ssh = "ssh") => {
-  const agentPort = options.agentPort ?? defaultAgentPort;
-  const held = new Map<string, Held>();
+  const sandboxes = new Map<string, Sandbox>();
 
-  // Opens and closes of tunnels take turns, so two calls never open one sandbox's tunnel twice.
-  const turn = Semaphore.makeUnsafe(1);
+  const sandbox = (id: string): Sandbox => {
+    const known = sandboxes.get(id) ?? {
+      lock: Semaphore.makeUnsafe(1),
+      port: undefined,
+      held: undefined,
+    };
 
-  const close = (id: string) =>
+    sandboxes.set(id, known);
+
+    return known;
+  };
+
+  /**
+   * Runs `use` on the sandbox's record, holding its lock: each of the sandbox's operations runs
+   * whole under it, so two never overlap, as the host would refuse the second's start or stop
+   * while the first's runs.
+   */
+  const locked = <A, E, R>(id: string, use: (known: Sandbox) => Effect.Effect<A, E, R>) =>
     Effect.suspend(() => {
-      const was = held.get(id);
+      const known = sandbox(id);
 
-      held.delete(id);
+      return Semaphore.withPermit(
+        known.lock,
+        Effect.suspend(() => use(known)),
+      );
+    });
+
+  /** The sandbox's port: its own, or a free one no other sandbox of this provider keeps. */
+  const portOf = (known: Sandbox): Effect.Effect<number, Internal> =>
+    Effect.gen(function* () {
+      if (known.port !== undefined) {
+        return known.port;
+      }
+
+      const taken = (port: number) => [...sandboxes.values()].some((other) => other.port === port);
+
+      let port = yield* freePort;
+
+      while (taken(port)) {
+        port = yield* freePort;
+      }
+
+      known.port = port;
+
+      return port;
+    });
+
+  /** Ends the sandbox's tunnel, if it has one. */
+  const closed = (known: Sandbox) =>
+    Effect.suspend(() => {
+      const was = known.held;
+
+      known.held = undefined;
 
       return was === undefined ? Effect.void : Scope.close(was.scope, Exit.void);
     });
 
   /**
    * The sandbox's port, with its tunnel open: the one it has while that runs, and otherwise a
-   * new one on the same port, since the SDK asks for a sandbox's URL only once. The machine is
-   * read for each tunnel, as its endpoint changes: on boat at every start.
+   * new one. The machine is read for each tunnel, as its endpoint changes: on boat at every start.
    */
-  const opened = (id: string): Effect.Effect<number, ClankerboxError, Services> =>
+  const opened = (
+    id: string,
+    known: Sandbox,
+  ): Effect.Effect<number, ClankerboxError | LocalTunnelError, Services> =>
     Effect.gen(function* () {
-      const was = held.get(id);
-
-      if (was?.tunnel.running() === true) {
-        return was.port;
+      if (known.held?.tunnel.running() === true) {
+        return yield* portOf(known);
       }
 
-      if (was !== undefined) {
-        yield* Scope.close(was.scope, Exit.void);
-      }
+      yield* closed(known);
 
       const client = yield* Client.Client;
       const target = sshTarget(yield* client.machine(id));
@@ -115,33 +164,36 @@ export const make = (options: Options, ssh = "ssh") => {
         });
       }
 
-      const port = was?.port ?? (yield* freePort);
+      const port = yield* portOf(known);
       const scope = yield* Scope.make();
 
       const tunnel = yield* Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const directory = yield* fs.makeTempDirectoryScoped({ prefix: "clankerbox-tunnel-" });
 
-        const args = yield* pinnedSsh(target, options.sshUser ?? target.login.user, [
-          ...(options.sshArguments ?? []),
-          ...forwarding(port, agentPort),
-        ]);
+        const args = yield* pinnedSsh(
+          target,
+          options.sshUser ?? target.login.user,
+          forwarding(port, options.sshArguments ?? []),
+        );
 
         return yield* open({ program: ssh, args, directory, port, machine: id });
       }).pipe(
         Effect.catchTag("PlatformError", (error) =>
           Effect.fail(
-            new Internal({ message: `couldn't prepare the tunnel to ${id}: ${error.message}` }),
+            new LocalTunnelError({
+              message: `couldn't prepare the tunnel to ${id}: ${error.message}`,
+            }),
           ),
         ),
         Scope.provide(scope),
         Effect.onError(() => Scope.close(scope, Exit.void)),
       );
 
-      held.set(id, { port, tunnel, scope });
+      known.held = { tunnel, scope };
 
       return port;
-    }).pipe(Semaphore.withPermit(turn));
+    });
 
   /** Whether the Sandbox Agent answers its health check through the tunnel. */
   const healthy = (port: number): Effect.Effect<boolean> =>
@@ -151,6 +203,24 @@ export const make = (options: Options, ssh = "ssh") => {
       Effect.map(isHealth),
       Effect.timeoutOrElse({ duration: healthWait, orElse: () => Effect.succeed(false) }),
       Effect.catch(() => Effect.succeed(false)),
+    );
+
+  /**
+   * Starts the machine, which boots a stopped one and runs a running one's preparation again,
+   * and so its `/etc/clankerbox/start`. Its tunnel ends: the endpoint may have changed. A machine
+   * that no longer exists is the SDK's `SandboxDestroyedError`, for `reconnect` and
+   * `ensureServer` alike.
+   */
+  const started = (id: string, known: Sandbox) =>
+    Effect.gen(function* () {
+      const client = yield* Client.Client;
+
+      yield* client.start(id);
+      yield* closed(known);
+    }).pipe(
+      Effect.catchTag("NotFound", (cause) =>
+        Effect.fail(new SandboxDestroyedError(id, name, { cause })),
+      ),
     );
 
   /** Makes the machine `named`, from the options' source. */
@@ -174,19 +244,20 @@ export const make = (options: Options, ssh = "ssh") => {
         return yield* client.create(named, spec, { host });
       }
 
-      const script = yield* readSetup(setup.path);
+      const { path, ...timeout } = setup;
 
       return yield* client.create(
         named,
-        { ...spec, setup: timed(script, setup.timeoutSeconds) },
+        { ...spec, setup: { script: yield* readSetup(path), ...timeout } },
         { host },
       );
     });
 
   /**
-   * Deletes what a failed create left: a machine whose setup failed stays on its host, unmade,
-   * and the provider is the only one that knows its name. The host is the placement's to pick,
-   * so the machine is found by its name, which is random.
+   * Tries to delete what a failed create may have left: a machine whose setup failed, or whose
+   * fork or restore failed natively, stays on its host, and only the provider knows its name. The
+   * host is the placement's to pick, so the machine is found by its name, which is random. A host
+   * that doesn't answer, or a delete that fails, leaves it to `clankerbox machines`.
    */
   const discard = (named: string) =>
     Effect.gen(function* () {
@@ -201,69 +272,89 @@ export const make = (options: Options, ssh = "ssh") => {
     });
 
   return {
-    /** Makes a sandbox's machine, and returns its ID once its create, fork or restore is done. */
+    /**
+     * Makes a sandbox's machine, and returns its ID once its create, fork or restore is done.
+     * Only the failures that can leave a machine behind discard it: a refusal, such as a name
+     * already taken, leaves nothing of this create's.
+     */
     create: Effect.suspend(() => {
       const named = `${options.namePrefix ?? "sandbox"}-${randomBytes(4).toString("hex")}`;
 
+      const discarding = <E>(error: E) => Effect.andThen(discard(named), Effect.fail(error));
+
       return made(named).pipe(
         Effect.map((machine) => machine.id),
-        Effect.tapError(() => discard(named)),
+        Effect.catchTags({
+          Precondition: discarding,
+          Internal: discarding,
+          Unavailable: discarding,
+        }),
       );
     }),
-    /** Deletes the machine. One that is already gone is destroyed. */
+    /**
+     * Deletes the machine, holding the sandbox's lock throughout. One that is already gone is
+     * destroyed. Its port goes only once it is: a delete that fails leaves the sandbox as it was,
+     * its tunnel aside.
+     */
     destroy: (id: string) =>
-      Effect.gen(function* () {
-        const client = yield* Client.Client;
+      locked(id, (known) =>
+        Effect.gen(function* () {
+          const client = yield* Client.Client;
 
-        yield* close(id).pipe(Semaphore.withPermit(turn));
-        yield* Effect.catchTag(client.delete(id), "NotFound", () => Effect.void);
-      }),
+          yield* closed(known);
+          yield* Effect.catchTag(client.delete(id), "NotFound", () => Effect.void);
+          known.port = undefined;
+        }),
+      ),
     /** Stops the machine: its disk stays, and `reconnect` starts it again. */
     pause: (id: string) =>
-      Effect.gen(function* () {
-        const client = yield* Client.Client;
+      locked(id, (known) =>
+        Effect.gen(function* () {
+          const client = yield* Client.Client;
 
-        yield* close(id).pipe(Semaphore.withPermit(turn));
-        yield* client.stop(id);
-      }),
+          yield* closed(known);
+          yield* client.stop(id);
+        }),
+      ),
     /**
-     * Starts the machine, which boots a stopped one and leaves a running one running, and opens
-     * its tunnel. A machine that no longer exists is the SDK's `SandboxDestroyedError`.
+     * Starts the machine, which boots a stopped one and leaves a running one running. A machine
+     * that no longer exists is the SDK's `SandboxDestroyedError`. The SDK's `ensureServer`,
+     * which follows, opens the tunnel.
      */
-    reconnect: (id: string) =>
-      Effect.gen(function* () {
-        const client = yield* Client.Client;
-
-        yield* Effect.catchTag(client.start(id), "NotFound", (cause) =>
-          Effect.fail(new SandboxDestroyedError(id, name, { cause })),
-        );
-
-        yield* opened(id);
-      }),
+    reconnect: (id: string) => locked(id, (known) => started(id, known)),
     /**
      * Brings back what a failed health check may have lost. A tunnel that ended is opened again;
-     * if the agent still doesn't answer, the machine is started, which runs its preparation and
-     * so its `/etc/clankerbox/start`, the hook that relaunches the agent.
+     * if the agent still doesn't answer, or the tunnel can't open for a reason on the machine's
+     * side, the machine is started, whose start hook relaunches an agent that doesn't answer, and
+     * its tunnel opened anew. A tunnel that fails for a reason of this machine's fails at once,
+     * since no start changes it. The SDK calls this only while it starts: a tunnel that ends
+     * later stays down until a caller calls it again.
      */
     ensureServer: (id: string) =>
-      Effect.gen(function* () {
-        const client = yield* Client.Client;
-        const port = yield* Effect.option(opened(id));
+      locked(id, (known) =>
+        Effect.gen(function* () {
+          const port = yield* opened(id, known).pipe(
+            Effect.asSome,
+            Effect.catchIf(
+              (error) => !(error instanceof LocalTunnelError),
+              () => Effect.succeedNone,
+            ),
+          );
 
-        if (Option.isSome(port) && (yield* healthy(port.value))) {
-          return;
-        }
+          if (Option.isSome(port) && (yield* healthy(port.value))) {
+            return;
+          }
 
-        yield* client.start(id);
-        yield* opened(id);
-      }),
+          yield* started(id, known);
+          yield* opened(id, known);
+        }),
+      ),
     /** The loopback URL that leads to the sandbox's agent. */
-    url: (id: string) => Effect.map(opened(id), (port) => `http://127.0.0.1:${port}`),
+    url: (id: string) =>
+      locked(id, (known) => Effect.map(opened(id, known), (port) => `http://127.0.0.1:${port}`)),
     /** Ends every tunnel. The machines stay as they are. */
-    closeAll: Effect.suspend(() => Effect.forEach([...held.keys()], close, { discard: true })).pipe(
-      Semaphore.withPermit(turn),
+    closeAll: Effect.suspend(() =>
+      Effect.forEach([...sandboxes.keys()], (id) => locked(id, closed), { discard: true }),
     ),
   };
 };
-
-export type Sandboxes = ReturnType<typeof make>;

@@ -14,24 +14,34 @@ import { readFile } from "node:fs/promises";
 import { connect, createServer, Socket } from "node:net";
 import { join } from "node:path";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Predicate, Schedule, type Scope } from "effect";
+import { Data, Duration, Effect, Predicate, Schedule, type Scope } from "effect";
 
 const loopback = "127.0.0.1";
 
-/** How long ssh may take to log in and listen. */
+/**
+ * A tunnel that couldn't open for a reason of this machine's: its port taken, ssh not runnable,
+ * its files not written. No start of the sandbox's machine changes it.
+ */
+export class LocalTunnelError extends Data.TaggedError("LocalTunnelError")<{
+  readonly message: string;
+}> {}
+
+/**
+ * How long ssh may take to log in and listen: ssh's own default ConnectTimeout is the system's
+ * TCP timeout, minutes, and a tunnel the SDK waits on should fail sooner than that.
+ */
 const openWait = Duration.seconds(30);
 
+/** How often the port is tried while ssh logs in: a login takes about a second. */
 const openPause = Duration.millis(100);
 
-/** How long ssh may take to end once told to, before it is killed. */
+/** How long ssh may take to end once told to, before it is killed: it ends in milliseconds. */
 const closeWait = Duration.seconds(5);
 
-/** The last of ssh's stderr an error carries. */
+/** The last of ssh's stderr an error carries: enough for its last few lines, such as a refusal. */
 const stderrTail = 600;
 
 export interface Tunnel {
-  /** The loopback port of this machine that leads to the Sandbox Agent. */
-  readonly port: number;
   /** Whether ssh still runs. A tunnel whose machine stopped has ended. */
   readonly running: () => boolean;
 }
@@ -72,17 +82,59 @@ const listening = (port: number): Effect.Effect<boolean> =>
     return Effect.sync(() => socket.destroy());
   });
 
-/** The arguments that forward `port` to the guest's `agentPort`, after the pinned ones. */
-export const forwarding = (port: number, agentPort: number): Array<string> => [
+/** The port the Sandbox Agent listens on in the guest: its default, which the recipes keep. */
+const agentPort = 2468;
+
+/**
+ * The arguments that forward `port` to the guest's Sandbox Agent, after the pinned ones, with the
+ * caller's `extra` among them. The forward is this ssh's own, never a connection master's, which
+ * would outlive it; and keepalives end it when the guest stops answering without closing. These
+ * come before `extra`: OpenSSH keeps an option's first value, so neither `extra` nor the user's
+ * ssh config can change them.
+ */
+export const forwarding = (port: number, extra: ReadonlyArray<string>): Array<string> => [
   "-T",
   "-o",
   "BatchMode=yes",
   "-o",
   "ExitOnForwardFailure=yes",
+  "-o",
+  "ControlMaster=no",
+  "-o",
+  "ControlPath=none",
+  "-o",
+  "ServerAliveInterval=15",
+  "-o",
+  "ServerAliveCountMax=3",
+  ...extra,
   "-L",
   `${loopback}:${port}:${loopback}:${agentPort}`,
   "cat",
 ];
+
+/** Whether the child has ended, or failed to start: Node sets an exit code for either. */
+const over = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
+
+/**
+ * Waits for the child to end. A program that couldn't be run says so in an `error` event, with
+ * no `exit`.
+ */
+const exited = (child: ChildProcess): Effect.Effect<void> =>
+  Effect.callback((resume) => {
+    if (over(child)) {
+      return resume(Effect.void);
+    }
+
+    const done = () => resume(Effect.void);
+
+    child.once("exit", done);
+    child.once("error", done);
+
+    return Effect.sync(() => {
+      child.off("exit", done);
+      child.off("error", done);
+    });
+  });
 
 /** What starting the tunnel's ssh needs. */
 export interface Start {
@@ -100,10 +152,19 @@ export interface Start {
 /**
  * Starts ssh and waits until it listens on the port. Closing the scope ends it, and waits for
  * its exit, so the port is free for the next tunnel. An ssh that exits first fails the open with
- * the last of what it printed.
+ * the last of what it printed, and one that couldn't be run with why. A port another program
+ * holds is refused first: the wait for the port to listen can't tell whose listener it finds.
  */
-export const open = (start: Start): Effect.Effect<Tunnel, Internal, Scope.Scope> =>
+export const open = (
+  start: Start,
+): Effect.Effect<Tunnel, Internal | LocalTunnelError, Scope.Scope> =>
   Effect.gen(function* () {
+    if (yield* listening(start.port)) {
+      return yield* new LocalTunnelError({
+        message: `the tunnel to ${start.machine} can't use port ${start.port}: another program listens on it`,
+      });
+    }
+
     const log = join(start.directory, "ssh.log");
 
     const said = Effect.map(
@@ -111,14 +172,22 @@ export const open = (start: Start): Effect.Effect<Tunnel, Internal, Scope.Scope>
       (text) => text.trim().slice(-stderrTail),
     );
 
+    // Why the program couldn't be run, if it couldn't.
+    let unrun: Error | undefined;
+
     const failed = (why: string) =>
-      Effect.flatMap(said, (text) =>
-        Effect.fail(
-          new Internal({
-            message: `the tunnel to ${start.machine} ${why}${text === "" ? "" : `: ${text}`}`,
-          }),
-        ),
-      );
+      Effect.flatMap(said, (text) => {
+        const reason = (detail: string) =>
+          `the tunnel to ${start.machine} ${why}${detail === "" ? "" : `: ${detail}`}`;
+
+        return Effect.fail(
+          unrun === undefined
+            ? new Internal({ message: reason(text) })
+            : new LocalTunnelError({
+                message: reason(`couldn't run ${start.program}: ${unrun.message}`),
+              }),
+        );
+      });
 
     const child: ChildProcess = yield* Effect.acquireRelease(
       Effect.try({
@@ -131,8 +200,9 @@ export const open = (start: Start): Effect.Effect<Tunnel, Internal, Scope.Scope>
 
           closeSync(stderr);
 
-          // A program that couldn't be run has no pid, and says why here.
-          spawned.on("error", () => {});
+          spawned.on("error", (error) => {
+            unrun = error;
+          });
           spawned.unref();
 
           if (spawned.stdin instanceof Socket) {
@@ -145,30 +215,23 @@ export const open = (start: Start): Effect.Effect<Tunnel, Internal, Scope.Scope>
           return spawned;
         },
         catch: (error) =>
-          new Internal({
+          new LocalTunnelError({
             message: `couldn't run ${start.program}: ${error instanceof Error ? error.message : String(error)}`,
           }),
       }),
       (spawned) =>
-        ended(spawned).pipe(
+        Effect.sync(() => spawned.kill("SIGTERM")).pipe(
+          Effect.andThen(exited(spawned)),
           Effect.timeoutOrElse({
             duration: closeWait,
-            orElse: () => Effect.sync(() => spawned.kill("SIGKILL")),
+            orElse: () =>
+              Effect.andThen(
+                Effect.sync(() => spawned.kill("SIGKILL")),
+                exited(spawned),
+              ),
           }),
         ),
     );
-
-    const exited = Effect.callback<void>((resume) => {
-      if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
-        return resume(Effect.void);
-      }
-
-      const done = () => resume(Effect.void);
-
-      child.once("exit", done);
-
-      return Effect.sync(() => child.off("exit", done));
-    });
 
     const listens = listening(start.port).pipe(
       Effect.repeat({ until: (open) => open, schedule: Schedule.spaced(openPause) }),
@@ -176,7 +239,7 @@ export const open = (start: Start): Effect.Effect<Tunnel, Internal, Scope.Scope>
 
     yield* Effect.raceFirst(
       listens,
-      Effect.andThen(exited, failed("ended before it listened")),
+      Effect.andThen(exited(child), failed("ended before it listened")),
     ).pipe(
       Effect.timeoutOrElse({
         duration: openWait,
@@ -184,19 +247,5 @@ export const open = (start: Start): Effect.Effect<Tunnel, Internal, Scope.Scope>
       }),
     );
 
-    return {
-      port: start.port,
-      running: () => child.exitCode === null && child.signalCode === null,
-    };
-  });
-
-/** Ends ssh and waits for its exit. */
-const ended = (child: ChildProcess): Effect.Effect<void> =>
-  Effect.callback((resume) => {
-    if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
-      return resume(Effect.void);
-    }
-
-    child.once("exit", () => resume(Effect.void));
-    child.kill("SIGTERM");
+    return { running: () => !over(child) };
   });

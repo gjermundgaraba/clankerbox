@@ -2,12 +2,9 @@
  * The `SandboxProvider` the Sandbox Agent SDK takes: the sandboxes' effects, run as promises
  * over the layer that gives them the clankerbox client and the platform.
  */
-import type { Client } from "@gjermundgaraba/clankerbox-sdk";
-import { type FileSystem, type Layer, ManagedRuntime, type Path } from "effect";
-import type { ChildProcessSpawner } from "effect/process";
-import type { SandboxProvider } from "sandbox-agent";
-import type { Options } from "./options.ts";
-import { defaultCwd, make, name } from "./sandboxes.ts";
+import { type Layer, ManagedRuntime } from "effect";
+import type { ClankerboxProvider, Options } from "./options.ts";
+import { defaultCwd, make, name, type Services } from "./sandboxes.ts";
 
 /**
  * The provider over `layer`, whose tunnels run `ssh`. Nothing is built until the first call.
@@ -15,12 +12,9 @@ import { defaultCwd, make, name } from "./sandboxes.ts";
  */
 export const provider = <E>(
   options: Options,
-  layer: Layer.Layer<
-    Client.Client | FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner,
-    E
-  >,
+  layer: Layer.Layer<Services, E>,
   ssh?: string,
-): SandboxProvider & { readonly dispose: () => Promise<void> } => {
+): ClankerboxProvider => {
   const runtime = ManagedRuntime.make(layer);
   const sandboxes = make(options, ssh);
 

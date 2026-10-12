@@ -5,16 +5,15 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
 import { Layer } from "effect";
-import type { SandboxProvider } from "sandbox-agent";
 import { provider } from "./provider.ts";
-import type { Options } from "./options.ts";
+import type { ClankerboxProvider, Options } from "./options.ts";
 
-export type { Options, Source } from "./options.ts";
+export type { ClankerboxProvider, Options, Source } from "./options.ts";
 
 /**
  * A Sandbox Agent provider whose sandboxes are clankerbox machines on `options.hosts`. Each
  * sandbox's ID is `clankerbox/<machine ID>`, so `SandboxAgent.start({ sandbox, sandboxId })`
- * reconnects to a machine by its ID.
+ * reconnects to a machine by its ID. Its tunnels end with the process; `dispose` ends them sooner.
  */
-export const clankerbox = (options: Options): SandboxProvider =>
+export const clankerbox = (options: Options): ClankerboxProvider =>
   provider(options, Layer.mergeAll(NodeClient.layer(options.hosts), NodeServices.layer));

@@ -5,17 +5,19 @@ import { forwarding, freePort, open } from "../src/tunnel.ts";
 
 const [program = "", directory = ""] = process.argv.slice(2);
 
-const tunnel = await Effect.runPromise(
+const port = await Effect.runPromise(
   Effect.gen(function* () {
-    const port = yield* freePort;
+    const free = yield* freePort;
     const scope = yield* Scope.make();
 
-    return yield* Scope.provide(
-      open({ program, args: forwarding(port, 2468), directory, port, machine: "linux_left" }),
+    yield* Scope.provide(
+      open({ program, args: forwarding(free, []), directory, port: free, machine: "linux_left" }),
       scope,
     );
+
+    return free;
   }),
 );
 
 // A string, which no FORCE_COLOR colours as it does a number.
-console.log(String(tunnel.port));
+console.log(String(port));
