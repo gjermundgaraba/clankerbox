@@ -25,6 +25,18 @@ usage. Every driver takes `--suite-args`, passed to `vp test`, to run a subset
 (`--suite-args "-t 'placement'"`). The tests within a suite run in order and
 share machines, so a subset can fail where the whole suite passes.
 
+`tests/sandbox-agent.test.ts` is one more suite, of the Sandbox Agent provider
+(`packages/rivet-sandbox-agent`), on smolvm and Tart: a sandbox made from the
+package's own recipe and driven through Rivet's SDK, with a real prompt to
+Claude. It runs only when the driver is given `--agent-env-file FILE`, a file
+of `NAME=value` lines holding an LLM credential, such as
+`ANTHROPIC_API_KEY=…`; without it the suite is skipped. The credential goes
+into the sandbox, as the recipe's `agent.env`, and the prompt spends from it.
+The driver's last teardown step redacts its values from the evidence and
+fails the run if it found one there. Suites run one after another, never side
+by side, since they share the host's capacity; to run this one alone, pass
+`--suite-args tests/sandbox-agent.test.ts`.
+
 ## What every run needs
 
 - This Mac (Apple Silicon), with the workspace installed (`pnpm install`),

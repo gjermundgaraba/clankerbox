@@ -83,6 +83,39 @@ def processes(text):
     return found
 
 
+def agent_env(run, option, log):
+    """The suite's environment for its Sandbox Agent tests, which run only when a driver's
+    --agent-env-file names a file of NAME=value lines holding an LLM credential. The suite copies
+    the file into a recipe in its temporary directory, under the run's scratch. The teardown step
+    registered here redacts every value from the evidence and fails the run if one was there, so
+    a driver calls this before it registers any other teardown: this one then runs last."""
+    if option is None:
+        return {}
+    file = Path(option).resolve()
+    values = [line.split('=', 1)[1].strip().strip('"\'').encode() for line in file.read_text().splitlines()
+              if '=' in line and not line.lstrip().startswith('#')]
+    # A value too short to be a credential would also match ordinary text.
+    values = [value for value in values if len(value) >= 12]
+    if not values:
+        sys.exit(f'{file} holds no NAME=value line with a credential')
+
+    def redact():
+        leaked = []
+        for path in sorted(run.evidence.rglob('*')):
+            if path.is_file() and any(value in path.read_bytes() for value in values):
+                text = path.read_bytes()
+                for value in values:
+                    text = text.replace(value, b'<redacted>')
+                path.write_bytes(text)
+                leaked.append(str(path.relative_to(run.evidence)))
+        if leaked:
+            log(f'an agent credential was in {leaked}; redacted')
+            raise RuntimeError(f'an agent credential reached evidence: {leaked}')
+
+    run.on_cleanup(redact)
+    return {'CLANKERBOX_LIVE_AGENT_ENV': str(file)}
+
+
 def write_client_config(path, hosts):
     """A client config listing `hosts`, each (ID, address, API port), in order."""
     path.write_text(json.dumps({'hosts': [{'id': host_id, 'url': f'http://{address}:{port}'}
