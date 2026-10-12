@@ -1,63 +1,19 @@
 /**
  * `clankerbox ssh [USER@]MACHINE [-- ssh args…]`: looks up the machine's SSH login and host key,
- * writes a one-line known-hosts file, and runs the system `ssh` against it with strict host key
- * checking. Ports change on fork and restore, and on boat at every start.
+ * and runs the system `ssh` pinned to that key, through the SDK's `pinnedSsh`.
  */
-import { type Machine, Precondition, type SshLogin } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, FileSystem, Path } from "effect";
+import {
+  type Machine,
+  pinnedSsh,
+  Precondition,
+  type SshTarget,
+  sshTarget,
+} from "@gjermundgaraba/clankerbox-sdk";
+import { Effect } from "effect";
 import { Argument, Command } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { clientFlags, withClient } from "./cli.ts";
 import { Exited, fail, stateLabel } from "./output.ts";
-
-/**
- * The known-hosts line pinning the machine's host key under its ID: ssh looks the key up by
- * `HostKeyAlias`, so the line doesn't depend on the endpoint, which changes.
- */
-const knownHostsLine = (id: string, hostKey: string): string => {
-  const [type = "", key = ""] = hostKey.trim().split(/\s+/u);
-
-  return `${id} ${type} ${key}\n`;
-};
-
-/** What ssh needs of a machine: where it is reached, as whom, and the host key to pin. */
-interface Target {
-  readonly id: string;
-  readonly login: SshLogin;
-  readonly hostKey: string;
-}
-
-/**
- * ssh's arguments. OpenSSH keeps the first user it is given, so the leading `-l` decides it:
- * one in the caller's arguments or in an ssh config doesn't apply. The destination is the
- * machine's ID, so a `Host <pattern>` block in the user's ssh config can set keys and options
- * per machine; the endpoint and the pinned host key come from command-line options, which no
- * config overrides. The caller's arguments go after the destination, where OpenSSH still reads
- * options (`-L …`) before a remote command.
- */
-const sshArguments = (
-  target: Target,
-  user: string,
-  knownHosts: string,
-  extra: ReadonlyArray<string>,
-): Array<string> => [
-  "-l",
-  user,
-  "-o",
-  `HostName=${target.login.host}`,
-  "-o",
-  `Port=${target.login.port}`,
-  "-o",
-  `HostKeyAlias=${target.id}`,
-  "-o",
-  `UserKnownHostsFile=${knownHosts}`,
-  "-o",
-  "GlobalKnownHostsFile=/dev/null",
-  "-o",
-  "StrictHostKeyChecking=yes",
-  target.id,
-  ...extra,
-];
 
 /** `[USER@]ID`, as ssh writes a destination: the ID, and the user when one is named. */
 const destination = (machine: string): { readonly id: string; readonly user?: string } => {
@@ -67,38 +23,26 @@ const destination = (machine: string): { readonly id: string; readonly user?: st
 };
 
 /** ssh needs an endpoint and a host key: a machine lacking one is refused, saying which. */
-const targetOf = (machine: Machine): Effect.Effect<Target, Precondition> => {
-  const { id, ssh: login, hostKey, action } = machine;
+const targetOf = (machine: Machine): Effect.Effect<SshTarget, Precondition> => {
+  const target = sshTarget(machine);
 
-  if (login !== undefined && hostKey !== undefined) {
-    return Effect.succeed({ id, login, hostKey });
-  }
-
-  const lacks = login === undefined ? "SSH endpoint" : "SSH host key on record";
-
-  return Effect.fail(
-    new Precondition({
-      message: `${id} has no ${lacks} (${stateLabel(machine)}, ${action.name} ${action.status}): see clankerbox get ${id}`,
-    }),
-  );
+  return "lacks" in target
+    ? Effect.fail(
+        new Precondition({
+          message: `${machine.id} has no ${target.lacks} (${stateLabel(machine)}, ${machine.action.name} ${machine.action.status}): see clankerbox get ${machine.id}`,
+        }),
+      )
+    : Effect.succeed(target);
 };
 
 /** Runs ssh with the caller's terminal and returns its exit code. */
-const runSsh = (target: Target, user: string, extra: ReadonlyArray<string>) =>
+const runSsh = (target: SshTarget, user: string, extra: ReadonlyArray<string>) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "clankerbox-ssh-" });
-
-    const knownHosts = path.join(directory, "known_hosts");
-
-    yield* fs.writeFileString(knownHosts, knownHostsLine(target.id, target.hostKey));
-
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
     // ssh runs in the CLI's process group, so it stays in the terminal's foreground.
     const ssh = yield* spawner.spawn(
-      ChildProcess.make("ssh", sshArguments(target, user, knownHosts, extra), {
+      ChildProcess.make("ssh", yield* pinnedSsh(target, user, extra), {
         stdin: "inherit",
         stdout: "inherit",
         stderr: "inherit",

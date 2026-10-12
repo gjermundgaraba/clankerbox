@@ -14,4 +14,6 @@ export * from "./profile.ts";
 
 export * from "./setup.ts";
 
+export * from "./ssh.ts";
+
 export * from "./text.ts";
