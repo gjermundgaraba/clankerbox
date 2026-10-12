@@ -409,6 +409,63 @@ program.pipe(
 - A mutation whose reply is lost fails `Unavailable`, not retryable, naming
   the resource: it may have run, so read it to see. Nothing retries for you.
 
+## Sandbox Agent provider
+
+`@gjermundgaraba/clankerbox-rivet-sandbox-agent` (`packages/rivet-sandbox-agent`)
+is a provider for Rivet's [Sandbox Agent](https://github.com/rivet-dev/agents/tree/main/sandbox-agent) SDK whose
+sandboxes are clankerbox machines. The guest runs the Sandbox Agent's server on
+its loopback, with no token, and the provider reaches it through an `ssh -L`
+tunnel over guest port 22, pinned to the machine's host key as `clankerbox ssh`
+is. Nothing changes on the host or the wire: the machine's setup installs the
+server, and its `/etc/clankerbox/start` keeps it running.
+
+```ts
+import { clankerbox } from "@gjermundgaraba/clankerbox-rivet-sandbox-agent";
+import { SandboxAgent } from "sandbox-agent";
+
+const sandbox = clankerbox({
+  hosts: [{ id: "linux", url: "http://100.64.0.10:8484" }],
+  from: { profile: "profiles/agent.json" },
+  sshArguments: ["-i", "/path/to/key"],
+});
+
+const sdk = await SandboxAgent.start({ sandbox });
+const session = await sdk.createSession({ agent: "claude" });
+
+await session.prompt([{ type: "text", text: "Summarize README.md" }]);
+await sdk.destroySandbox();
+```
+
+- **Sources:** a sandbox is made from a profile file (`{ profile }`), a
+  restore of a checkpoint (`{ checkpoint }`) or a fork of a machine
+  (`{ machine }`). A fork of a running machine on smolvm, and a `ram`
+  restore, carry its memory: the server, its sessions and its processes, so
+  take them from an idle machine. A fork is ready in about 14 s on smolvm,
+  where a create from the Ubuntu recipe takes about 50 s.
+- **IDs:** a sandbox's ID is `clankerbox/<machine ID>`, so
+  `SandboxAgent.start({ sandbox, sandboxId })` reconnects to a machine,
+  starting it if it is stopped. `pauseSandbox` stops the machine and
+  `destroySandbox` deletes it. A create that fails deletes the machine it
+  left.
+- **Recipes:** `recipes/ubuntu/` (x86_64, smolvm) and `recipes/macos/` (Tart)
+  install the server and Claude Code, both pinned by sha256, with Node 22,
+  and run the server as a user of its own (`sandbox`; `admin` on macOS), since
+  Claude Code offers root no bypass-permissions mode. Each takes an
+  `authorized_keys` beside its `setup.sh`, and an optional `agent.env` of
+  `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, that becomes the server's
+  environment, so it holds a credential: keep that recipe private. The
+  server runs with `--no-telemetry`. Codex installs the same way, but
+  `install-agent codex` hangs at 0.5.2; the recipes say how to bound it.
+- **Tunnels:** each runs the system `ssh`, ends with the process that opened
+  it, and doesn't keep that process alive. A tunnel keeps its local port
+  while the provider lives, so the URL the SDK holds survives a stop and a
+  start. `sshUser` and `sshArguments` choose the login and its key.
+- **Not verified:** boat. Its guests are reached the same way, but no live run
+  has covered the recipes or the provider there.
+- `effect`, `@effect/platform-node` and `sandbox-agent` are peer
+  dependencies. The bump-sandbox-agent skill records what the provider relies
+  on of the SDK and the server.
+
 ## Design
 
 The code is the reference; each part below names where it lives. The design
@@ -425,7 +482,7 @@ every bump of it:
    source or docs at the pinned version.
 5. A bump re-checks that dependency's claims, not just the tests. The bump
    skills in `.agents/skills/` (`bump-smolvm`, `bump-tart`, `bump-boat-api`,
-   `bump-node`) carry each one's claims with their sources, and so the
+   `bump-node`, `bump-sandbox-agent`) carry each one's claims with their sources, and so the
    reasons behind the runtime notes below, which point to them.
 
 ### Architecture
@@ -1006,15 +1063,16 @@ These are known, not guarded, and accepted:
 
 ## Repository layout
 
-| Path                   | Contents                                                                                      |
-| ---------------------- | --------------------------------------------------------------------------------------------- |
-| `apps/clankerbox/`     | The binary: the CLI commands, `ssh`, and the `host` role                                      |
-| `packages/sdk/`        | The SDK: Schemas, API binding, errors, IDs, the profile schema, recipe packing and the client |
-| `packages/host/`       | The host: state, claims, actions, setup and preparation, ports, and the three runtimes        |
-| `tools/release/`       | The SEA build, bundles with their notices, and the smoke test                                 |
-| `tools/oxlint/`        | The anti-slop lint plugin, vendored from upstream                                             |
-| `tests/live/`          | Live acceptance suites per runtime, with their drivers                                        |
-| `scripts/work_runs.py` | Disposable build and test runs ([WORK_RUNS.md](scripts/WORK_RUNS.md))                         |
+| Path                            | Contents                                                                                      |
+| ------------------------------- | --------------------------------------------------------------------------------------------- |
+| `apps/clankerbox/`              | The binary: the CLI commands, `ssh`, and the `host` role                                      |
+| `packages/sdk/`                 | The SDK: Schemas, API binding, errors, IDs, the profile schema, recipe packing and the client |
+| `packages/host/`                | The host: state, claims, actions, setup and preparation, ports, and the three runtimes        |
+| `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                                                    |
+| `tools/release/`                | The SEA build, bundles with their notices, and the smoke test                                 |
+| `tools/oxlint/`                 | The anti-slop lint plugin, vendored from upstream                                             |
+| `tests/live/`                   | Live acceptance suites per runtime, with their drivers                                        |
+| `scripts/work_runs.py`          | Disposable build and test runs ([WORK_RUNS.md](scripts/WORK_RUNS.md))                         |
 
 ## Development
 
