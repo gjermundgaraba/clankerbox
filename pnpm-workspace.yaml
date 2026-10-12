@@ -10,9 +10,14 @@ catalog:
   "@gjermundgaraba/effect-actions": 0.11.0
   "@types/node": 26.6.4
   effect: 4.0.2
+  sandbox-agent: 0.5.2
   typescript: 7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.1.0
   vite-plus: 1.1.0
+
+# The provider talks to a Sandbox Agent in a guest, so the SDK's own server binary stays out.
+ignoredOptionalDependencies:
+  - "@sandbox-agent/cli"
 
 overrides:
   vite@*: "catalog:"

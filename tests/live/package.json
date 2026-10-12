@@ -3,8 +3,10 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@gjermundgaraba/clankerbox-rivet-sandbox-agent": "workspace:*",
     "@gjermundgaraba/clankerbox-sdk": "workspace:*",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "sandbox-agent": "catalog:"
   },
   "devDependencies": {
     "@types/node": "catalog:",

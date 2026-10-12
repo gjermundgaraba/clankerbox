@@ -64,7 +64,7 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from driver_common import (Evidence, Steps, WorkRun, choose_address, clean_commit, free_port,  # noqa: E402
+from driver_common import (Evidence, Steps, WorkRun, choose_address, clean_commit, free_port, redact,  # noqa: E402
                            host_start, processes, run_driver, stop_host, stop_on_signals, write_client_config,
                            write_control_stub)
 
@@ -356,13 +356,8 @@ def redact_evidence(evidence, config, token, log):
     """The last step: removes the scratch copy of the key, then redacts the key from every
     evidence file, failing the run if any held it."""
     config.unlink(missing_ok=True)
-    leaked = []
-    for path in sorted(evidence.rglob('*')):
-        if path.is_file() and token.encode() in path.read_bytes():
-            path.write_bytes(path.read_bytes().replace(token.encode(), b'<redacted>'))
-            leaked.append(str(path.relative_to(evidence)))
+    leaked = redact(evidence, [token.encode()], log, 'the API key')
     if leaked:
-        log(f'the API key was in {leaked}; redacted')
         raise RuntimeError(f'the API key reached evidence: {leaked}')
 
 

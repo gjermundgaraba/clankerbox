@@ -409,6 +409,76 @@ program.pipe(
 - A mutation whose reply is lost fails `Unavailable`, not retryable, naming
   the resource: it may have run, so read it to see. Nothing retries for you.
 
+## Sandbox Agent provider
+
+`@gjermundgaraba/clankerbox-rivet-sandbox-agent` (`packages/rivet-sandbox-agent`)
+is a provider for Rivet's [Sandbox Agent](https://github.com/rivet-dev/agents/tree/main/sandbox-agent) SDK whose
+sandboxes are clankerbox machines. The guest runs the Sandbox Agent's server on
+its loopback, with no token, and the provider reaches it through an `ssh -L`
+tunnel over guest port 22, pinned to the machine's host key as `clankerbox ssh`
+is. Nothing changes on the host or the wire: the machine's setup installs the
+server, and its `/etc/clankerbox/start` keeps it running.
+
+```ts
+import { clankerbox } from "@gjermundgaraba/clankerbox-rivet-sandbox-agent";
+import { SandboxAgent } from "sandbox-agent";
+
+const sandbox = clankerbox({
+  hosts: [{ id: "linux", url: "http://100.64.0.10:8484" }],
+  from: { profile: "profiles/agent.json" },
+  sshArguments: ["-i", "/path/to/key"],
+});
+
+const sdk = await SandboxAgent.start({ sandbox });
+const session = await sdk.createSession({ agent: "claude" });
+
+await session.prompt([{ type: "text", text: "Summarize README.md" }]);
+await sdk.destroySandbox();
+```
+
+- **Sources:** a sandbox is made from a profile file (`{ profile }`), a
+  restore of a checkpoint (`{ checkpoint }`) or a fork of a machine
+  (`{ machine }`). A fork of a running machine on smolvm, and a `ram`
+  restore, carry its memory: the server, its sessions and its processes, so
+  take them from an idle machine. A fork is ready in about 6 s on smolvm,
+  where a create from the Ubuntu recipe takes about 50 s.
+- **IDs:** a sandbox's ID is `clankerbox/<machine ID>`, so
+  `SandboxAgent.start({ sandbox, sandboxId })` reconnects to a machine,
+  starting it if it is stopped. `pauseSandbox` stops the machine and
+  `destroySandbox` deletes it. A create that fails tries to delete the
+  machine it left; one it couldn't delete shows in `clankerbox machines`.
+- **Recipes:** `recipes/ubuntu/` (x86_64, smolvm) and `recipes/macos/` (Tart)
+  install the server and Node 22, both pinned by sha256, and Claude Code at
+  its latest release, and run the server as a user of its own (`sandbox`;
+  `admin` on macOS), since Claude Code offers root no bypass-permissions mode. Each takes an
+  `authorized_keys` beside its `setup.sh`, and an optional `agent.env` of
+  `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, that becomes the server's
+  environment, so it holds a credential: keep that recipe private. The
+  server runs with `--no-telemetry`. Codex installs the same way, but
+  `install-agent codex` hangs at 0.5.2; the recipes say how to bound it.
+  Each start hook launches a server that has exited, and ends and relaunches
+  one that doesn't answer its health check within 10 s.
+- **Tunnels:** each runs the system `ssh`, ends with the process that opened
+  it, and doesn't keep that process alive; the provider's `dispose` ends them
+  all sooner, leaving the machines as they are. A sandbox keeps its local port
+  until it is destroyed, so the URL an SDK client holds still leads to it
+  when `ensureServer` opens its tunnel again, a stop and a start between. The
+  SDK calls `ensureServer` only while it starts: a tunnel that ends later, say because
+  its machine stopped, stays down until you call `sandbox.ensureServer(id)`,
+  with the machine's ID (`sdk.sandboxId` without its `clankerbox/`), or start
+  the SDK again. `sshUser` and `sshArguments` choose the login and its
+  key; the tunnel's own options, such as its keepalives and having no
+  connection master, come first, so neither overrides them. Arguments or ssh
+  config that fork the forward or multiplex it (`-f`, `-N`, `-M`, `-S`)
+  would let it outlive the tunnel's ssh, so leave them out.
+- **Not verified:** boat. Its guests are reached the same way, but no live run
+  has covered the recipes or the provider there. A hung server's relaunch ran
+  in an Ubuntu container only; live runs covered launching and relaunching an
+  exited one on both guests.
+- `effect`, `@effect/platform-node` and `sandbox-agent` are peer
+  dependencies. The bump-sandbox-agent skill records what the provider relies
+  on of the SDK and the server.
+
 ## Design
 
 The code is the reference; each part below names where it lives. The design
@@ -425,7 +495,7 @@ every bump of it:
    source or docs at the pinned version.
 5. A bump re-checks that dependency's claims, not just the tests. The bump
    skills in `.agents/skills/` (`bump-smolvm`, `bump-tart`, `bump-boat-api`,
-   `bump-node`) carry each one's claims with their sources, and so the
+   `bump-node`, `bump-sandbox-agent`) carry each one's claims with their sources, and so the
    reasons behind the runtime notes below, which point to them.
 
 ### Architecture
@@ -1006,15 +1076,16 @@ These are known, not guarded, and accepted:
 
 ## Repository layout
 
-| Path                   | Contents                                                                                      |
-| ---------------------- | --------------------------------------------------------------------------------------------- |
-| `apps/clankerbox/`     | The binary: the CLI commands, `ssh`, and the `host` role                                      |
-| `packages/sdk/`        | The SDK: Schemas, API binding, errors, IDs, the profile schema, recipe packing and the client |
-| `packages/host/`       | The host: state, claims, actions, setup and preparation, ports, and the three runtimes        |
-| `tools/release/`       | The SEA build, bundles with their notices, and the smoke test                                 |
-| `tools/oxlint/`        | The anti-slop lint plugin, vendored from upstream                                             |
-| `tests/live/`          | Live acceptance suites per runtime, with their drivers                                        |
-| `scripts/work_runs.py` | Disposable build and test runs ([WORK_RUNS.md](scripts/WORK_RUNS.md))                         |
+| Path                            | Contents                                                                                      |
+| ------------------------------- | --------------------------------------------------------------------------------------------- |
+| `apps/clankerbox/`              | The binary: the CLI commands, `ssh`, and the `host` role                                      |
+| `packages/sdk/`                 | The SDK: Schemas, API binding, errors, IDs, the profile schema, recipe packing and the client |
+| `packages/host/`                | The host: state, claims, actions, setup and preparation, ports, and the three runtimes        |
+| `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                                                    |
+| `tools/release/`                | The SEA build, bundles with their notices, and the smoke test                                 |
+| `tools/oxlint/`                 | The anti-slop lint plugin, vendored from upstream                                             |
+| `tests/live/`                   | Live acceptance suites per runtime, with their drivers                                        |
+| `scripts/work_runs.py`          | Disposable build and test runs ([WORK_RUNS.md](scripts/WORK_RUNS.md))                         |
 
 ## Development
 
@@ -1055,22 +1126,27 @@ covers. Every disposable build or live run goes through
 
 ## Releasing
 
-The binaries and the SDK share one version, the SDK's, in
-`packages/sdk/package.json`.
+The binaries, the SDK and the Sandbox Agent provider share one version, the
+SDK's, in `packages/sdk/package.json`.
 
-1. Set that `version` to `X.Y.Z` and merge to `main`.
+1. Set that `version`, and the provider's in
+   `packages/rivet-sandbox-agent/package.json`, to `X.Y.Z` and merge to `main`.
 2. Tag the merge commit `vX.Y.Z` and push the tag:
    `git tag vX.Y.Z <commit> && git push origin vX.Y.Z`.
 
 The tag runs `.github/workflows/publish-sdk.yml`, which refuses a tag that
 doesn't name the version, runs CI on the tagged commit, uploads the two bundles
 CI smoked and their `.sha256` files to the `vX.Y.Z` GitHub release, then
-publishes `@gjermundgaraba/clankerbox-sdk@X.Y.Z` through npm's trusted
-publishing, with provenance. A failing CI stops it before anything is uploaded.
-A failed run can be re-run: the upload replaces the release's files.
+publishes `@gjermundgaraba/clankerbox-sdk@X.Y.Z` and
+`@gjermundgaraba/clankerbox-rivet-sandbox-agent@X.Y.Z` through npm's trusted
+publishing, with provenance; the provider depends on the SDK of its own
+version. A failing CI stops it before anything is uploaded.
+A failed run can be re-run: the upload replaces the release's files, and a
+package whose version npm already has is skipped, so a run that published the
+SDK but not the provider publishes the provider.
 
-npm's trusted publisher for `@gjermundgaraba/clankerbox-sdk` names this
-repository and the workflow `publish-sdk.yml`, with no environment. Only the
+npm's trusted publisher for each of the two packages names this repository and
+the workflow `publish-sdk.yml`, with no environment. Only the
 workflow's `vX.Y.Z` tag trigger gates publishing.
 
 ## License

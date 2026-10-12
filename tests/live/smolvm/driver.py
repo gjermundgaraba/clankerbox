@@ -38,7 +38,8 @@ import time
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
-from driver_common import Evidence, WorkRun, clean_commit, stop_on_signals, write_client_config  # noqa: E402
+from driver_common import (Evidence, WorkRun, agent_env, clean_commit, stop_on_signals,  # noqa: E402
+                           write_client_config)
 
 
 def main():
@@ -49,6 +50,8 @@ def main():
     parser.add_argument('--root', required=True, help='the owned root on the test host')
     parser.add_argument('--smolvm-prefix', required=True, help='the smolvm 1.22.2 install prefix there')
     parser.add_argument('--suite-args', default='', help='arguments for the suite run, such as -t PATTERN')
+    parser.add_argument('--agent-env-file', help='NAME=value lines holding an LLM credential, for the '
+                        'Sandbox Agent tests; without it they are skipped')
     options = parser.parse_args()
     if not (options.root.startswith('/') and options.smolvm_prefix.startswith('/')):
         parser.error('--root and --smolvm-prefix must be absolute')
@@ -72,6 +75,8 @@ def main():
 
         evidence = Evidence(run)
         log, record, sh = evidence.log, evidence.record, evidence.sh
+        # Its redaction of the evidence is registered first, so it runs last, after the collection.
+        agent = agent_env(run, options.agent_env_file, log)
 
         def remote(cmd, label, timeout=1800):
             return sh(ssh + [f'python3 {q_remote_py} --run {q_rdir} {cmd}'], label, timeout=timeout)
@@ -202,7 +207,7 @@ sys.exit(subprocess.run(ssh + [cmd], stdin=subprocess.DEVNULL).returncode)
         control_bin.chmod(0o755)
 
         evidence.suite('smolvm', darwin_bin, client_config, control_bin, remote_state['machine_prefix'],
-                       options.suite_args)
+                       options.suite_args, agent)
 
 
 if __name__ == '__main__':

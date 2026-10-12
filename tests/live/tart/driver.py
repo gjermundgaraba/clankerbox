@@ -50,7 +50,7 @@ import sys
 import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from driver_common import (Evidence, Steps, WorkRun, choose_address, clean_commit, free_port,  # noqa: E402
+from driver_common import (Evidence, Steps, WorkRun, agent_env, choose_address, clean_commit, free_port,  # noqa: E402
                            host_start, processes, read_int, run_driver, sha256, stop_host, stop_on_signals,
                            write_client_config, write_control_stub)
 
@@ -282,6 +282,8 @@ def main():
     parser.add_argument('--seed', required=True, help='the Cirrus seed, with its PROVENANCE and READY')
     parser.add_argument('--address', required=True, help="this Mac's tailnet address")
     parser.add_argument('--suite-args', default='', help='arguments for the suite run, such as -t PATTERN')
+    parser.add_argument('--agent-env-file', help='NAME=value lines holding an LLM credential, for the '
+                        'Sandbox Agent tests; without it they are skipped')
     options = parser.parse_args()
     if not (options.tart.startswith('/') and options.seed.startswith('/')):
         parser.error('--tart and --seed must be absolute')
@@ -314,6 +316,8 @@ def main():
         evidence = Evidence(run)
         log, record = evidence.log, evidence.record
 
+        # Its redaction of the evidence is registered first, so it runs last.
+        agent = agent_env(run, options.agent_env_file, log)
         sums = provenance_sums(seed)
 
         def seed_check(when):
@@ -326,7 +330,7 @@ def main():
             if not matches:
                 raise RuntimeError(f'seed checksums {when} differ from PROVENANCE: {found}')
 
-        # Runs last, after the VMs are gone.
+        # Runs after the VMs are gone.
         run.on_cleanup(lambda: seed_check('after'))
 
         address, why = choose_address(options.address)
@@ -395,7 +399,7 @@ def main():
         log(f'second host pid {host_start(second, __file__)}')
 
         evidence.suite('tart', binary, client_config, control_bin, f'r{rid[:3]}-', options.suite_args,
-                       {'CLANKERBOX_LIVE_PLACEMENT_CONFIG': str(placement_config)})
+                       {'CLANKERBOX_LIVE_PLACEMENT_CONFIG': str(placement_config), **agent})
 
 
 if __name__ == '__main__':
