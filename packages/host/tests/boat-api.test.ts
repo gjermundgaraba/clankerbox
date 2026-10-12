@@ -208,13 +208,13 @@ test("the host picks the smallest of boat's four types that covers a machine", a
   expect(await pick(2, 1024, 126)).toBe("xlarge");
   expect(await pick(16, 32_768, 251)).toBe("xlarge");
 
-  for (const [cpu, ramMib, diskGib] of [
-    [17, 1024, 10],
-    [2, 32_769, 10],
-    [2, 1024, 252],
+  for (const [cpu, ramMib, diskGib, asked] of [
+    [17, 1024, 10, "17 vCPU, 1G of RAM and 10G of disk"],
+    [2, 32_769, 10, "2 vCPU, 32769M of RAM and 10G of disk"],
+    [2, 1024, 252, "2 vCPU, 1G of RAM and 252G of disk"],
   ] as const) {
     expect(await pick(cpu, ramMib, diskGib)).toBe(
-      `Precondition: no boat machine type has ${cpu} vCPU, ${ramMib} MiB of RAM and ${diskGib} GiB of disk; the largest, xlarge, has 16 vCPU, 32768 MiB and 251 GiB`,
+      `Precondition: no boat machine type has ${asked}; the largest, xlarge, has 16 vCPU, 32G of RAM and 251G of disk`,
     );
   }
 });

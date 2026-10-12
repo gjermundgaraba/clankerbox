@@ -4,7 +4,7 @@
  */
 import { BlockList, isIP } from "node:net";
 import { totalmem } from "node:os";
-import { HostId, Invalid } from "@gjermundgaraba/clankerbox-sdk";
+import { describeFileError, describeIssues, HostId, Invalid } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { defaultMachinePorts, type PortRange, reservedPorts } from "./ports.ts";
 
@@ -228,18 +228,18 @@ export const loadConfig = (
     const path = yield* Path.Path;
     const resolved = path.resolve(file);
 
-    const text = yield* fs
-      .readFileString(resolved)
-      .pipe(
-        Effect.mapError(
-          (error) =>
-            new Invalid({ message: `couldn't read host config ${resolved}: ${error.message}` }),
-        ),
-      );
-
-    const decoded = yield* decodeConfig(text, { onExcessProperty: "error" }).pipe(
+    const text = yield* fs.readFileString(resolved).pipe(
       Effect.mapError(
-        (error) => new Invalid({ message: `host config ${resolved}: ${error.message}` }),
+        (error) =>
+          new Invalid({
+            message: `couldn't read host config ${resolved}: ${describeFileError(error)}`,
+          }),
+      ),
+    );
+
+    const decoded = yield* decodeConfig(text, { onExcessProperty: "error", errors: "all" }).pipe(
+      Effect.mapError(
+        (error) => new Invalid({ message: `host config ${resolved}: ${describeIssues(error)}` }),
       ),
     );
 

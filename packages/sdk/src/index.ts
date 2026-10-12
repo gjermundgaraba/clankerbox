@@ -11,3 +11,5 @@ export * as Client from "./client.ts";
 export * from "./profile.ts";
 
 export * from "./setup.ts";
+
+export * from "./text.ts";

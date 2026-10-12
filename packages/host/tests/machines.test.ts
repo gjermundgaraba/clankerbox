@@ -786,7 +786,7 @@ test("the RAM budget counts running machines and refuses with Capacity, writing 
   const again = await linux.run(linux.machines.start("linux_b"));
 
   expect(full._tag).toBe("Capacity");
-  expect(full.message).toContain("3072 MiB");
+  expect(full.message).toContain("needs 1G of RAM, and none of the host's 2G budget is free");
   expect(restart._tag).toBe("Capacity");
   expect(again.action).toEqual({ name: "start", status: "done" });
   expect((await rows(linux)).map(({ name }) => name).sort()).toEqual(["a", "b", "c"]);
@@ -816,7 +816,7 @@ test("the host's capacity is what step 3 counts: running machines, and one an ac
   expect(idle).toEqual([{ host: "linux", resource: "ramMib", limit: 4096, used: 1024 }]);
   expect(booting).toEqual([{ host: "linux", resource: "ramMib", limit: 4096, used: 3072 }]);
   expect(full._tag).toBe("Capacity");
-  expect(full.message).toContain("5120 MiB");
+  expect(full.message).toContain("needs 2G of RAM, and 1G of the host's 4G budget is free");
 });
 
 test("a capacity read that fails, or doesn't answer within 9 s, fails with Internal", async () => {
@@ -847,7 +847,7 @@ test("the RAM budget counts a machine the runtime can't read as running", async 
   const full = await failure(linux, linux.machines.create(request("c", { ramMib: 2048 })));
 
   expect(full._tag).toBe("Capacity");
-  expect(full.message).toContain("3072 MiB");
+  expect(full.message).toContain("needs 2G of RAM, and 1G of the host's 2G budget is free");
 });
 
 test("the RAM budget counts a running machine's start once: it already runs", async () => {

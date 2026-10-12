@@ -6,6 +6,7 @@
 import { Effect, FileSystem, Predicate, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Invalid } from "./errors.ts";
+import { describeFileError } from "./text.ts";
 
 const lineLength = 76;
 
@@ -107,7 +108,11 @@ export const packRecipe = (
   }).pipe(
     Effect.scoped,
     Effect.catchTag("PlatformError", (error) =>
-      Effect.fail(new Invalid({ message: `couldn't pack recipe ${directory}: ${error.message}` })),
+      Effect.fail(
+        new Invalid({
+          message: `couldn't pack recipe ${directory}: ${describeFileError(error)}`,
+        }),
+      ),
     ),
   );
 
@@ -130,6 +135,8 @@ export const readSetup = (
     return yield* fs.readFileString(path);
   }).pipe(
     Effect.catchTag("PlatformError", (error) =>
-      Effect.fail(new Invalid({ message: `couldn't read setup ${path}: ${error.message}` })),
+      Effect.fail(
+        new Invalid({ message: `couldn't read setup ${path}: ${describeFileError(error)}` }),
+      ),
     ),
   );

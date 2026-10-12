@@ -273,7 +273,7 @@ test("the SDK's client of another release reads the host's Invalid on every call
   expect(listed.unreachable[0]?.error.message).toContain(refused);
   expect([got._tag, got.message]).toEqual(["Invalid", expect.stringContaining(refused)]);
   expect(placed._tag).toBe("Precondition");
-  expect(placed.message).toContain(`linux failed: Invalid: this host runs clankerbox ${version}`);
+  expect(placed.message).toContain(`linux failed: this host runs clankerbox ${version}`);
   expect([created._tag, created.message]).toEqual(["Invalid", expect.stringContaining(refused)]);
   expect(await run(store.list)).toEqual([]);
   expect(fake.calls).toEqual(["startup"]);

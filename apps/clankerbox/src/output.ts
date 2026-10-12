@@ -3,6 +3,7 @@ import {
   Checkpoint,
   type ClankerboxError,
   type Client,
+  formatMib,
   Host,
   Limit,
   type LoadedProfile,
@@ -10,6 +11,7 @@ import {
   Profile,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Console, Data, DateTime, Duration, Effect, Runtime, Schema } from "effect";
+import { formatSeconds, spans } from "./units.ts";
 
 /** A failure the CLI has already printed. The process exits with `code`. */
 export class Exited extends Data.TaggedError("Exited")<{ readonly code: number }> {
@@ -35,23 +37,12 @@ export const fail = (json: boolean) => (error: ClankerboxError) =>
     Effect.fail(new Exited({ code: 1 })),
   );
 
-const units: ReadonlyArray<readonly [string, number]> = [
-  ["d", 86_400],
-  ["h", 3600],
-  ["m", 60],
-];
-
 /** How long ago `createdAt` was, in its largest whole unit: `45s`, `12m`, `5h`, `3d`. */
 const age = (createdAt: DateTime.Utc, now: DateTime.Utc): string => {
   const seconds = Math.max(0, Math.floor(Duration.toSeconds(DateTime.distance(createdAt, now))));
+  const [unit, size] = spans.find(([, span]) => seconds >= span) ?? ["s", 1];
 
-  for (const [unit, size] of units) {
-    if (seconds >= size) {
-      return `${Math.floor(seconds / size)}${unit}`;
-    }
-  }
-
-  return `${seconds}s`;
+  return `${Math.floor(seconds / size)}${unit}`;
 };
 
 /** Left-aligned columns, two spaces apart. */
@@ -75,7 +66,7 @@ export const table = (rows: ReadonlyArray<ReadonlyArray<string>>): string => {
     .join("\n");
 };
 
-export const actionLabel = ({ action }: Machine | Checkpoint) =>
+const actionLabel = ({ action }: Machine | Checkpoint) =>
   action.error === undefined
     ? `${action.name} ${action.status}`
     : `${action.name} ${action.status}: ${action.error.tag}`;
@@ -92,11 +83,10 @@ const machineColumns: ReadonlyArray<
   ["BASE", (machine) => machine.base],
   ["PROFILE", (machine) => machine.profile ?? "-"],
   ["CPU", (machine) => String(machine.cpu)],
-  ["RAM_MIB", (machine) => String(machine.ramMib)],
-  ["DISK_GIB", (machine) => String(machine.diskGib)],
+  ["RAM", (machine) => formatMib(machine.ramMib)],
+  ["DISK", (machine) => `${machine.diskGib}G`],
   ["AGE", (machine, now) => age(machine.createdAt, now)],
   ["ACTION", actionLabel],
-  ["SSH", ({ ssh }) => (ssh === undefined ? "-" : `${ssh.user}@${ssh.host}:${ssh.port}`)],
 ];
 
 export const machineRows = (machines: ReadonlyArray<Machine>, now: DateTime.Utc) => [
@@ -105,25 +95,48 @@ export const machineRows = (machines: ReadonlyArray<Machine>, now: DateTime.Utc)
 ];
 
 /**
- * One machine, a field a line: its columns, and what a row has no room for, its action's error
- * in full and its host key.
+ * One machine, a field a line: its columns, and what a row has no room for, its SSH login, its
+ * action's error in full and its host key.
  */
-export const machineFields = (machine: Machine, now: DateTime.Utc) => [
-  ...machineColumns.map(([label, cell]) => [label, cell(machine, now)]),
-  ["ERROR", machine.action.error?.message ?? "-"],
-  ["HOST_KEY", machine.hostKey ?? "-"],
+export const machineFields = (machine: Machine, now: DateTime.Utc) => {
+  const { ssh } = machine;
+
+  return [
+    ...machineColumns.map(([label, cell]) => [label, cell(machine, now)]),
+    ["SSH", ssh === undefined ? "-" : `${ssh.user}@${ssh.host}:${ssh.port}`],
+    ["ERROR", machine.action.error?.message ?? "-"],
+    ["HOST_KEY", machine.hostKey ?? "-"],
+  ];
+};
+
+/** A checkpoint's columns: each one's label, and its cell. */
+const checkpointColumns: ReadonlyArray<
+  readonly [label: string, cell: (checkpoint: Checkpoint, now: DateTime.Utc) => string]
+> = [
+  ["ID", (checkpoint) => checkpoint.id],
+  ["KIND", (checkpoint) => checkpoint.kind],
+  ["MACHINE", (checkpoint) => checkpoint.machine],
+  ["BASE", (checkpoint) => checkpoint.base],
+  ["AGE", (checkpoint, now) => age(checkpoint.createdAt, now)],
+  ["ACTION", actionLabel],
 ];
 
 export const checkpointRows = (checkpoints: ReadonlyArray<Checkpoint>, now: DateTime.Utc) => [
-  ["ID", "KIND", "MACHINE", "BASE", "AGE", "ACTION"],
-  ...checkpoints.map((checkpoint) => [
-    checkpoint.id,
-    checkpoint.kind,
-    checkpoint.machine,
-    checkpoint.base,
-    age(checkpoint.createdAt, now),
-    actionLabel(checkpoint),
-  ]),
+  checkpointColumns.map(([label]) => label),
+  ...checkpoints.map((checkpoint) => checkpointColumns.map(([, cell]) => cell(checkpoint, now))),
+];
+
+/**
+ * One checkpoint, a field a line: its columns, and what a row has no room for, the profile and
+ * sizes a restore gives its machine, and its action's error in full.
+ */
+export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
+  ...checkpointColumns.map(([label, cell]) => [label, cell(checkpoint, now)]),
+  ["PROFILE", checkpoint.profile ?? "-"],
+  ["CPU", String(checkpoint.cpu)],
+  ["RAM", formatMib(checkpoint.ramMib)],
+  ["DISK", `${checkpoint.diskGib}G`],
+  ["ERROR", checkpoint.action.error?.message ?? "-"],
 ];
 
 export const hostRows = (hosts: ReadonlyArray<Host>) => [
@@ -137,9 +150,29 @@ export const hostRows = (hosts: ReadonlyArray<Host>) => [
   ]),
 ];
 
+/** What the table calls each limit; `--json` keeps the API's names. */
+const limitNames = {
+  ramMib: "ram",
+  runningVms: "running-vms",
+  activeSandboxes: "active-sandboxes",
+  startsPerMinute: "starts/minute",
+  startsPerHour: "starts/hour",
+  startsPerDay: "starts/day",
+} satisfies Record<Limit["resource"], string>;
+
+/**
+ * RAM in a limit, rounded to a tenth of a GiB: a budget is seldom a round size, and the table
+ * is an overview. `--json` has the MiB.
+ */
+const roughGib = (mib: number): string => `${Math.round((mib * 10) / 1024) / 10}G`;
+
 export const limitRows = (limits: ReadonlyArray<Limit>) => [
   ["HOST", "RESOURCE", "USED", "LIMIT"],
-  ...limits.map(({ host, resource, used, limit }) => [host, resource, String(used), String(limit)]),
+  ...limits.map(({ host, resource, used, limit }) => {
+    const amount = resource === "ramMib" ? roughGib : String;
+
+    return [host, limitNames[resource], amount(used), amount(limit)];
+  }),
 ];
 
 /** Each profile's fields, with its setup path as `setupPath` shows it. */
@@ -147,16 +180,16 @@ export const profileRows = (
   profiles: ReadonlyArray<LoadedProfile>,
   setupPath: (path: string) => string,
 ) => [
-  ["NAME", "BASE", "CPU", "RAM_MIB", "DISK_GIB", "SETUP", "TIMEOUT_S", "HOST"],
-  ...profiles.map((profile) => [
-    profile.label,
-    profile.base,
-    String(profile.cpu),
-    String(profile.ramMib),
-    String(profile.diskGib),
-    profile.setup === undefined ? "-" : setupPath(profile.setup.path),
-    String(profile.setup?.timeoutSeconds ?? "-"),
-    profile.host ?? "-",
+  ["NAME", "BASE", "CPU", "RAM", "DISK", "SETUP", "TIMEOUT", "HOST"],
+  ...profiles.map(({ label, base, cpu, ramMib, diskGib, setup, host }) => [
+    label,
+    base,
+    String(cpu),
+    formatMib(ramMib),
+    `${diskGib}G`,
+    setup === undefined ? "-" : setupPath(setup.path),
+    setup?.timeoutSeconds === undefined ? "-" : formatSeconds(setup.timeoutSeconds),
+    host ?? "-",
   ]),
 ];
 

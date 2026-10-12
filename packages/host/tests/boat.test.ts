@@ -1058,7 +1058,7 @@ test("a machine no boat type covers is refused with Precondition, in admit and b
   expect(refused(admitted)).toEqual([
     "not refused",
     "Precondition",
-    "no boat machine type has 16 vCPU, 32768 MiB of RAM and 252 GiB of disk; the largest, xlarge, has 16 vCPU, 32768 MiB and 251 GiB",
+    "no boat machine type has 16 vCPU, 32G of RAM and 252G of disk; the largest, xlarge, has 16 vCPU, 32G of RAM and 251G of disk",
   ]);
 
   const created = await fails(rig.runtime.create(big, "boat"));

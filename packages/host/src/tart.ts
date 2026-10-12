@@ -515,7 +515,7 @@ export const make = (
 
         if (set.exitCode !== 0 && set.stderr.includes(shrinkRefusal)) {
           return yield* new Precondition({
-            message: `machine ${machine.id}'s disk of ${machine.diskGib} GiB is below its base's, and Tart only grows a disk: ${lastLines(set.stderr)}`,
+            message: `machine ${machine.id}'s disk of ${machine.diskGib}G is below its base's, and Tart only grows a disk: ${lastLines(set.stderr)}`,
           });
         }
 

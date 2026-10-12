@@ -5,18 +5,31 @@
 import {
   type ClankerboxError,
   Client,
+  describeIssues,
   Invalid,
   type LoadedProfile,
   loadProfile,
   MachineSpec,
   readSetup,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Console, DateTime, Duration, Effect, FileSystem, Option, Path, Schema } from "effect";
+import {
+  Console,
+  DateTime,
+  Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Predicate,
+  Record,
+  Schema,
+} from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { type LoadedConfig, loadConfig, profileFile, profileFiles } from "./config.ts";
 import {
+  checkpointFields,
   checkpointRows,
   encodeCheckpoint,
   encodeHost,
@@ -34,6 +47,7 @@ import {
   unreachableDocument,
   warnUnreachable,
 } from "./output.ts";
+import { parseGib, parseMib, parseSeconds } from "./units.ts";
 
 export const clientFlags = {
   json: Flag.Boolean("json").pipe(
@@ -51,21 +65,25 @@ export const clientFlags = {
 /** A mutation's flags: a read gives up after 10 s of its own, and takes no `--timeout`. */
 const mutationFlags = {
   ...clientFlags,
-  timeout: Flag.Int("timeout").pipe(
+  timeout: Flag.String("timeout").pipe(
+    Flag.withMetavar("DURATION"),
     Flag.withDescription(
-      "Stop waiting for the mutation's reply after SECONDS; unbounded by default. It cancels nothing on the host.",
-    ),
-    Flag.filter(
-      (seconds) => seconds > 0,
-      () => "a positive number of seconds",
+      "Stop waiting for the mutation's reply after this long, such as 90s or 10m; unbounded by default. It cancels nothing on the host.",
     ),
     Flag.optional,
   ),
 };
 
 type ClientFlags = Command.Command.Config.Infer<typeof clientFlags> & {
-  readonly timeout?: Option.Option<number>;
+  readonly timeout?: Option.Option<string>;
 };
+
+/** A flag's value, parsed when the flag was given. */
+const parsed = <A>(
+  flag: Option.Option<string>,
+  name: string,
+  parse: (name: string, text: string) => Effect.Effect<A, Invalid>,
+) => Effect.transposeOption(Option.map(flag, (text) => parse(name, text)));
 
 type Services =
   | FileSystem.FileSystem
@@ -83,10 +101,11 @@ export const withClient = <A, R>(
   body: (client: Client.Interface, config: LoadedConfig) => Effect.Effect<A, ClankerboxError, R>,
 ): Effect.Effect<A, Exited, R | Services> =>
   Effect.gen(function* () {
+    const timeout = yield* parsed(flags.timeout ?? Option.none(), "--timeout", parseSeconds);
     const config = yield* loadConfig(flags.config);
 
     const client = yield* Client.make(config.hosts, {
-      timeout: Option.getOrUndefined(Option.map(flags.timeout ?? Option.none(), Duration.seconds)),
+      timeout: Option.getOrUndefined(Option.map(timeout, Duration.seconds)),
     });
 
     return yield* body(client, config);
@@ -108,9 +127,10 @@ const nameArgument = Argument.String("name").pipe(
 );
 
 /**
- * A list over every host: a table, or with `--json` the answers under `key`. The hosts that
- * didn't answer go to stderr, or to `unreachable` with `--json`. When every host failed, the
- * command exits 1, as a failed call does; a partial answer exits 0.
+ * A list over every host: a table, or with `--json` the answers under `key`. With nothing to
+ * list, stdout stays empty and stderr says so. The hosts that didn't answer go to stderr,
+ * or to `unreachable` with `--json`. When every host failed, the command exits 1, as a failed
+ * call does; a partial answer exits 0.
  */
 const listCommand = <A, Encoded>(options: {
   readonly name: string;
@@ -126,21 +146,28 @@ const listCommand = <A, Encoded>(options: {
         Effect.gen(function* () {
           const { answers, unreachable } = yield* options.read(client);
           const now = yield* DateTime.now;
+          const failed = unreachable.length === config.hosts.length;
 
-          yield* print(
-            flags.json,
-            () => ({
-              [options.key]: answers.map((answer) => options.encode(answer)),
-              unreachable: unreachableDocument(unreachable),
-            }),
-            () => table(options.rows(answers, now)),
-          );
+          if (flags.json) {
+            yield* Console.log(
+              JSON.stringify({
+                [options.key]: answers.map((answer) => options.encode(answer)),
+                unreachable: unreachableDocument(unreachable),
+              }),
+            );
 
-          if (!flags.json) {
-            yield* warnUnreachable(unreachable);
+            return failed;
           }
 
-          return unreachable.length === config.hosts.length;
+          if (answers.length > 0) {
+            yield* Console.log(table(options.rows(answers, now)));
+          } else if (!failed) {
+            yield* Console.error(`clankerbox: no ${options.key} to list`);
+          }
+
+          yield* warnUnreachable(unreachable);
+
+          return failed;
         }),
       );
 
@@ -162,7 +189,7 @@ const hosts = listCommand({
 const capacity = listCommand({
   name: "capacity",
   description:
-    "List every host's limits and how much of each is in use, counted as the host's Capacity refusals count it.",
+    "List every host's limits and how much of each is in use. A host refuses an action that would pass one.",
   key: "capacity",
   read: (client) => client.capacity,
   encode: encodeLimit,
@@ -188,6 +215,10 @@ const profiles = Command.make("profiles", clientFlags, (flags) =>
     const config = yield* loadConfig(flags.config);
     const { directory, files } = yield* profileFiles(config);
     const loaded = yield* Effect.forEach(files, loadProfile);
+
+    if (loaded.length === 0 && !flags.json) {
+      return yield* Console.error(`clankerbox: no profiles in ${directory}`);
+    }
 
     yield* print(
       flags.json,
@@ -262,17 +293,26 @@ const createArguments = {
   ),
   base: Flag.String("base").pipe(Flag.withDescription("The base to create from."), Flag.optional),
   cpu: Flag.Int("cpu").pipe(Flag.withDescription("vCPUs."), Flag.optional),
-  ramMib: Flag.Int("ram-mib").pipe(Flag.withDescription("RAM in MiB."), Flag.optional),
-  diskGib: Flag.Int("disk-gib").pipe(Flag.withDescription("Disk in GiB."), Flag.optional),
+  ram: Flag.String("ram").pipe(
+    Flag.withMetavar("SIZE"),
+    Flag.withDescription("RAM, such as 512M or 8G."),
+    Flag.optional,
+  ),
+  disk: Flag.String("disk").pipe(
+    Flag.withMetavar("SIZE"),
+    Flag.withDescription("Disk, in whole GiB, such as 60G."),
+    Flag.optional,
+  ),
   setup: Flag.String("setup").pipe(
     Flag.withDescription(
       "A setup script, or a recipe directory holding setup.sh. A base alone authorizes no SSH key: a setup does.",
     ),
     Flag.optional,
   ),
-  setupTimeout: Flag.Int("setup-timeout").pipe(
+  setupTimeout: Flag.String("setup-timeout").pipe(
+    Flag.withMetavar("DURATION"),
     Flag.withDescription(
-      "How long setup may run, in seconds. Default: the profile's, or else the host's.",
+      "How long setup may run, such as 90s or 15m. Default: the profile's, or else the host's.",
     ),
     Flag.optional,
   ),
@@ -294,27 +334,34 @@ const setupSource = (flags: CreateFlags, profile: LoadedProfile | undefined) =>
       onSome: (given) => path.resolve(given),
     });
 
+    const timed = yield* parsed(flags.setupTimeout, "--setup-timeout", parseSeconds);
+
     if (file === undefined) {
-      return Option.isNone(flags.setupTimeout)
+      return Option.isNone(timed)
         ? undefined
         : yield* new Invalid({
             message: "--setup-timeout needs a setup: pass --setup, or a profile that has one",
           });
     }
 
-    const timeoutSeconds = Option.getOrElse(
-      flags.setupTimeout,
-      () => profile?.setup?.timeoutSeconds,
-    );
+    const timeoutSeconds = Option.getOrElse(timed, () => profile?.setup?.timeoutSeconds);
 
     return { path: file, timeout: timeoutSeconds === undefined ? {} : { timeoutSeconds } };
   });
 
 const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
 
+/** The flag that sets each of a spec's fields, which is how a refusal names the field. */
+const specFlags = new Map<PropertyKey, string>([
+  ["base", "--base"],
+  ["cpu", "--cpu"],
+  ["ramMib", "--ram"],
+  ["diskGib", "--disk"],
+]);
+
 /**
  * The spec and host a create asks for: the profile's fields, setup and host, each overridden by
- * its flag.
+ * its flag. The decode refuses a field that neither sets, as it does one out of range.
  */
 const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
   Effect.gen(function* () {
@@ -324,30 +371,28 @@ const createRequest = (flags: CreateFlags, config: LoadedConfig) =>
 
     const source = yield* setupSource(flags, profile);
 
+    const ram = yield* parsed(flags.ram, "--ram", parseMib);
+    const disk = yield* parsed(flags.disk, "--disk", parseGib);
+
     const fields = {
       base: Option.getOrElse(flags.base, () => profile?.base),
       cpu: Option.getOrElse(flags.cpu, () => profile?.cpu),
-      ramMib: Option.getOrElse(flags.ramMib, () => profile?.ramMib),
-      diskGib: Option.getOrElse(flags.diskGib, () => profile?.diskGib),
+      ramMib: Option.getOrElse(ram, () => profile?.ramMib),
+      diskGib: Option.getOrElse(disk, () => profile?.diskGib),
+      setup:
+        source === undefined
+          ? undefined
+          : { script: yield* readSetup(source.path), ...source.timeout },
+      profile: profile?.label,
     };
 
-    const withSetup =
-      source === undefined
-        ? fields
-        : {
-            ...fields,
-            setup: { script: yield* readSetup(source.path), ...source.timeout },
-          };
-
-    const spec = yield* decodeSpec(
-      profile === undefined ? withSetup : { ...withSetup, profile: profile.label },
-      { onExcessProperty: "error", errors: "all" },
-    ).pipe(
+    // A field nobody set is left out, so the decode calls it missing.
+    const spec = yield* decodeSpec(Record.filter(fields, Predicate.isNotUndefined), {
+      onExcessProperty: "error",
+      errors: "all",
+    }).pipe(
       Effect.mapError(
-        (error) =>
-          new Invalid({
-            message: `create's spec, from --profile and --base, --cpu, --ram-mib and --disk-gib, is invalid: ${error.message}`,
-          }),
+        (error) => new Invalid({ message: `create: ${describeIssues(error, specFlags)}` }),
       ),
     );
 
@@ -478,9 +523,13 @@ const getCheckpoint = Command.make(
     printResource(flags, {
       call: (client) => client.checkpoint(flags.checkpoint),
       encode: encodeCheckpoint,
-      text: (checkpoint, now) => table(checkpointRows([checkpoint], now)),
+      text: (checkpoint, now) => table(checkpointFields(checkpoint, now)),
     }),
-).pipe(Command.withDescription("Read one checkpoint."));
+).pipe(
+  Command.withDescription(
+    "Read one checkpoint: its machine, the sizes a restore gives, its last action and the error it failed with.",
+  ),
+);
 
 const deleteCheckpoint = Command.make(
   "delete",

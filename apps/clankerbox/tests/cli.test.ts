@@ -29,7 +29,7 @@ const JsonError = Schema.fromJsonString(
 
 const decodeJsonError = Schema.decodeUnknownSync(JsonError);
 
-const sizes = ["--base", "ubuntu", "--cpu", "2", "--ram-mib", "4096", "--disk-gib", "20"];
+const sizes = ["--base", "ubuntu", "--cpu", "2", "--ram", "4G", "--disk", "20G"];
 
 test("hosts lists every host with its bases", async () => {
   const dir = await scratch(owned);
@@ -86,9 +86,9 @@ test("capacity lists every host's limits, one a row, and names a host that didn'
       .map((row) => row.split(/\s+/u)),
   ).toEqual([
     ["HOST", "RESOURCE", "USED", "LIMIT"],
-    ["linux", "ramMib", "3072", "14336"],
-    ["boat", "activeSandboxes", "1", "2"],
-    ["boat", "startsPerDay", "12", "75"],
+    ["linux", "ram", "3G", "14G"],
+    ["boat", "active-sandboxes", "1", "2"],
+    ["boat", "starts/day", "12", "75"],
   ]);
   expect(stderr).toContain("mac");
   expect(JSON.parse(json.stdout)).toMatchObject({
@@ -138,7 +138,7 @@ const unmade = machine("linux_other", {
   },
 });
 
-test("machines shows a machine's SSH login as user@host:port, and marks an unmade one", async () => {
+test("machines shows sizes with their units, marks an unmade machine, and leaves the SSH login to get", async () => {
   const dir = await scratch(owned);
   const config = await writeConfig(dir, ["linux"]);
 
@@ -149,8 +149,18 @@ test("machines shows a machine's SSH login as user@host:port, and marks an unmad
   const rows = stdout.split("\n");
 
   expect(rows).toHaveLength(3);
-  expect(rows[0]?.split(/\s+/u).at(-1)).toBe("SSH");
-  expect(rows[1]?.split(/\s+/u).at(-1)).toBe("root@100.64.0.7:10022");
+  expect(rows[0]?.split(/\s+/u)).toEqual([
+    "ID",
+    "STATE",
+    "BASE",
+    "PROFILE",
+    "CPU",
+    "RAM",
+    "DISK",
+    "AGE",
+    "ACTION",
+  ]);
+  expect(rows[1]?.split(/\s+/u).slice(4, 7)).toEqual(["1", "1G", "10G"]);
   expect(rows[2]).toContain("running (unmade)");
 });
 
@@ -175,6 +185,8 @@ test("get reads one machine a field a line, with its action's error and its host
     expect.arrayContaining([
       ["ID", "linux_dev"],
       ["STATE", "running"],
+      ["RAM", "1G"],
+      ["DISK", "10G"],
       ["SSH", "root@100.64.0.7:10022"],
       ["ERROR", "-"],
       ["HOST_KEY", "ssh-ed25519 AAAAexample"],
@@ -250,7 +262,8 @@ test("a list exits 1 when every host failed, still naming each one", async () =>
     });
 
     expect(code, command.join(" ")).toBe(1);
-    expect(stdout.split("\n")).toHaveLength(1);
+    expect(stdout).toBe("");
+    expect(stderr).not.toContain("clankerbox: no ");
     expect(stderr).toContain("linux");
     expect(stderr).toContain("mac");
     expect(json.code, command.join(" ")).toBe(1);
@@ -289,10 +302,10 @@ test("with --json an error prints {error: {message, tag, retryable}} and exits 1
       "fedora",
       "--cpu",
       "1",
-      "--ram-mib",
-      "1",
-      "--disk-gib",
-      "1",
+      "--ram",
+      "1M",
+      "--disk",
+      "1G",
       "--json",
       "--config",
       config,
@@ -369,12 +382,12 @@ test("--timeout stops waiting, says the action may have run, and exits 1", async
   const linux = host({ id: "linux", bases: ["ubuntu"], create: () => Effect.never });
   const endpoints = [["linux", linux]] as const;
 
-  const text = await cli(["create", "dev", ...sizes, "--timeout", "1", "--config", config], {
+  const text = await cli(["create", "dev", ...sizes, "--timeout", "1s", "--config", config], {
     endpoints,
   });
 
   const json = await cli(
-    ["create", "slow", ...sizes, "--timeout", "1", "--json", "--config", config],
+    ["create", "slow", ...sizes, "--timeout", "1s", "--json", "--config", config],
     { endpoints },
   );
 
@@ -393,7 +406,7 @@ test("a read takes no --timeout", async () => {
   const config = await writeConfig(dir, ["linux"]);
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 
-  const { code } = await cli(["machines", "--timeout", "1", "--config", config], {
+  const { code } = await cli(["machines", "--timeout", "1s", "--config", config], {
     endpoints: [["linux", linux]],
   });
 
@@ -401,20 +414,88 @@ test("a read takes no --timeout", async () => {
   expect(linux.calls).toEqual([]);
 });
 
-test("--timeout must be a positive number of seconds", async () => {
+test("--timeout takes a duration with its units in order, and refuses a bare number or none of it", async () => {
   const dir = await scratch(owned);
   const config = await writeConfig(dir, ["linux"]);
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 
-  for (const seconds of ["0", "-1"]) {
-    const { code } = await cli(["start", "linux_dev", "--timeout", seconds, "--config", config], {
-      endpoints: [["linux", linux]],
-    });
+  for (const [duration, why] of [
+    ["90", "isn't a duration: write it in d, h, m and s, such as 90s or 1h30m"],
+    ["30m1h", "isn't a duration: write it in d, h, m and s, such as 90s or 1h30m"],
+    ["0s", "is out of range: write at least 1s"],
+    ["99999999999999999999s", "is out of range: write at least 1s"],
+  ] as const) {
+    const { code, stderr } = await cli(
+      ["start", "linux_dev", "--timeout", duration, "--config", config],
+      { endpoints: [["linux", linux]] },
+    );
 
-    expect(code, seconds).toBe(1);
+    expect(code, duration).toBe(1);
+    expect(stderr, duration).toBe(`clankerbox: Invalid: --timeout "${duration}" ${why}`);
   }
 
   expect(linux.calls).toEqual([]);
+});
+
+test("--ram and --disk take a size with its unit, and --disk only whole GiB", async () => {
+  const dir = await scratch(owned);
+  const config = await writeConfig(dir, ["linux"]);
+  const linux = host({ id: "linux", bases: ["ubuntu"] });
+
+  const create = (name: string, ram: string, disk: string) =>
+    cli(
+      [
+        "create",
+        name,
+        "--base",
+        "ubuntu",
+        "--cpu",
+        "1",
+        "--ram",
+        ram,
+        "--disk",
+        disk,
+        "--config",
+        config,
+      ],
+      { endpoints: [["linux", linux]] },
+    );
+
+  const made = [
+    await create("a", "512M", "10G"),
+    await create("b", "1.5G", "2048M"),
+    await create("c", "2GiB", "10gib"),
+    await create("d", "8GB", "10Gi"),
+  ];
+
+  const refused = [
+    await create("e", "4096", "10G"),
+    await create("f", "1T", "10G"),
+    await create("g", "1.1G", "10G"),
+    await create("h", "0G", "10G"),
+    await create("i", "1G", "1500M"),
+  ];
+
+  expect(made.map(({ code }) => code)).toEqual([0, 0, 0, 0]);
+  expect(linux.creates.map(({ ramMib, diskGib }) => [ramMib, diskGib])).toEqual([
+    [512, 10],
+    [1536, 2],
+    [2048, 10],
+    [8192, 10],
+  ]);
+  expect(refused.map(({ code, stderr }) => [code, stderr])).toEqual([
+    [
+      1,
+      `clankerbox: Invalid: --ram "4096" isn't a size: write a number and M or G, such as 512M or 8G`,
+    ],
+    [
+      1,
+      `clankerbox: Invalid: --ram "1T" isn't a size: write a number and M or G, such as 512M or 8G`,
+    ],
+    [1, `clankerbox: Invalid: --ram "1.1G" must come to whole MiB, and at least one`],
+    [1, `clankerbox: Invalid: --ram "0G" must come to whole MiB, and at least one`],
+    [1, `clankerbox: Invalid: --disk "1500M" must come to whole GiB, and at least one`],
+  ]);
 });
 
 /** A profiles directory holding `dev.json`, with a setup and host, `small.json` and a non-profile. */
@@ -454,9 +535,9 @@ test("profiles lists the profiles directory's profiles by name, without asking a
 
   expect(code).toBe(0);
   expect(rows).toEqual([
-    ["NAME", "BASE", "CPU", "RAM_MIB", "DISK_GIB", "SETUP", "TIMEOUT_S", "HOST"],
-    ["dev", "ubuntu-dev", "2", "4096", "20", "dev-recipe", "900", "hetzner"],
-    ["small", "ubuntu", "1", "1024", "10", "-", "-", "-"],
+    ["NAME", "BASE", "CPU", "RAM", "DISK", "SETUP", "TIMEOUT", "HOST"],
+    ["dev", "ubuntu-dev", "2", "4G", "20G", "dev-recipe", "15m", "hetzner"],
+    ["small", "ubuntu", "1", "1G", "10G", "-", "-", "-"],
   ]);
 });
 
@@ -518,7 +599,9 @@ test("profiles fails without a profiles directory, or on a profile that doesn't 
   ]);
 
   expect(broken.code).toBe(1);
-  expect(decodeJsonError(broken.stdout).error.message).toContain("broken.json");
+  expect(decodeJsonError(broken.stdout).error.message).toBe(
+    `profile ${join(profiles, "broken.json")}: cpu: missing; ramMib: missing; diskGib: missing`,
+  );
 });
 
 test("create --profile NAME reads NAME.json from the profiles directory, with its label, setup and host", async () => {
@@ -657,7 +740,7 @@ test("create's flags override the profile's fields, its setup and timeout includ
       "--setup",
       script,
       "--setup-timeout",
-      "60",
+      "1m",
       "--config",
       config,
     ],
@@ -703,7 +786,7 @@ test("--setup and --setup-timeout each override the profile's, and a setup with 
 
   for (const [name, args] of [
     ["bare", [...sizes, "--setup", script]],
-    ["timed", ["--profile", profile, "--setup-timeout", "60"]],
+    ["timed", ["--profile", profile, "--setup-timeout", "60s"]],
     ["scripted", ["--profile", profile, "--setup", other]],
   ] as const) {
     const { code } = await cli(["create", name, ...args, "--config", config], {
@@ -735,8 +818,9 @@ test("create refuses --setup-timeout with no setup to time, and a spec missing i
     });
 
   const runs = [
-    await run(["--profile", profile, "--setup-timeout", "60"]),
+    await run(["--profile", profile, "--setup-timeout", "60s"]),
     await run(["--base", "ubuntu"]),
+    await run(["--profile", profile, "--cpu", "0"]),
   ];
 
   for (const { code, stdout } of runs) {
@@ -745,7 +829,12 @@ test("create refuses --setup-timeout with no setup to time, and a spec missing i
   }
 
   expect(decodeJsonError(runs[0]?.stdout ?? "").error.message).toContain("--setup-timeout");
-  expect(decodeJsonError(runs[1]?.stdout ?? "").error.message).toContain("cpu");
+  expect(decodeJsonError(runs[1]?.stdout ?? "").error.message).toBe(
+    "create: --cpu: missing; --ram: missing; --disk: missing",
+  );
+  expect(decodeJsonError(runs[2]?.stdout ?? "").error.message).toBe(
+    "create: --cpu: Expected a value greater than 0",
+  );
   expect(linux.calls).toEqual([]);
 });
 
@@ -759,7 +848,7 @@ test("create --setup sends a script file as its text", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 
   const { code } = await cli(
-    ["create", "box", ...sizes, "--setup", script, "--setup-timeout", "60", "--config", config],
+    ["create", "box", ...sizes, "--setup", script, "--setup-timeout", "60s", "--config", config],
     { endpoints: [["linux", linux]] },
   );
 
@@ -869,6 +958,53 @@ test("a config with an unknown key or a duplicate host is Invalid", async () => 
     expect(code).toBe(1);
     expect(decodeJsonError(stdout).error.tag).toBe("Invalid");
   }
+});
+
+test("a config's mistakes are all named, each by its JSON path, and an empty host list by what it lacks", async () => {
+  const dir = await scratch(owned);
+  const wrong = join(dir, "wrong.json");
+  const empty = join(dir, "empty.json");
+
+  await writeFile(wrong, JSON.stringify({ hosts: [{ id: "Linux" }], host: [] }));
+  await writeFile(empty, JSON.stringify({ hosts: [] }));
+
+  const run = async (config: string) => (await cli(["hosts", "--config", config])).stderr;
+
+  expect(await run(wrong)).toBe(
+    `clankerbox: Invalid: client config ${wrong}: host: not a known field; hosts[0].id: a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter; hosts[0].url: missing`,
+  );
+  expect(await run(empty)).toBe(
+    "clankerbox: Invalid: the host list is empty: a client needs a host",
+  );
+  expect(await run(join(dir, "absent.json"))).toBe(
+    `clankerbox: Invalid: couldn't read client config ${join(dir, "absent.json")}: no such file or directory`,
+  );
+});
+
+test("a list with nothing in it prints no table and says so on stderr", async () => {
+  const dir = await scratch(owned);
+  const config = await writeConfig(dir, ["linux", "mac"], "profiles");
+
+  await mkdir(join(dir, "profiles"));
+
+  const endpoints: CliOptions["endpoints"] = [
+    ["linux", host({ id: "linux", bases: ["ubuntu"] })],
+    ["mac", "down"],
+  ];
+
+  const machines = await cli(["machines", "--config", config], { endpoints });
+  const json = await cli(["machines", "--json", "--config", config], { endpoints });
+  const profiles = await cli(["profiles", "--config", config]);
+
+  expect(machines).toMatchObject({ code: 0, stdout: "" });
+  expect(machines.stderr.split("\n")[0]).toBe("clankerbox: no machines to list");
+  expect(machines.stderr).toContain("Unavailable: host mac");
+  expect(JSON.parse(json.stdout)).toMatchObject({ machines: [] });
+  expect(profiles).toMatchObject({
+    code: 0,
+    stdout: "",
+    stderr: `clankerbox: no profiles in ${join(dir, "profiles")}`,
+  });
 });
 
 test("a host URL with a trailing slash still reaches its routes", async () => {

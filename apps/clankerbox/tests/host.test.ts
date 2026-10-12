@@ -45,7 +45,7 @@ const setUp = async (down: ReadonlyArray<string> = []) => {
   return { host, run, dir };
 };
 
-const sizes = ["--base", "ubuntu", "--cpu", "1", "--ram-mib", "1024", "--disk-gib", "10"];
+const sizes = ["--base", "ubuntu", "--cpu", "1", "--ram", "1G", "--disk", "10G"];
 
 const ErrorDocument = Schema.Struct({
   message: Schema.String,
@@ -89,7 +89,7 @@ test("a setup that fails replies with its output, and the machine stays failed u
     "--setup",
     script,
     "--setup-timeout",
-    "30",
+    "30s",
     "--json",
   ]);
 
@@ -142,6 +142,7 @@ test("fork, checkpoint capture/list/get/delete and restore run on the host", asy
   const captured = await run(["checkpoint", "capture", "linux_dev", "snap"]);
   const listed = await run(["checkpoint", "list"]);
   const got = await run(["checkpoint", "get", "linux_snap", "--json"]);
+  const fields = await run(["checkpoint", "get", "linux_snap"]);
   const removed = await run(["delete", "linux_dev"]);
   const restored = await run(["restore", "linux_snap", "dev"]);
   const machines = await run(["machines"]);
@@ -160,6 +161,16 @@ test("fork, checkpoint capture/list/get/delete and restore run on the host", asy
       ),
     )(got.stdout, { onExcessProperty: "ignore" }),
   ).toEqual({ id: "linux_snap", machine: "linux_dev", kind: "ram" });
+  expect(fields.stdout.split("\n").map((line) => line.split(/\s{2,}/u))).toEqual(
+    expect.arrayContaining([
+      ["ID", "linux_snap"],
+      ["MACHINE", "linux_dev"],
+      ["RAM", "1G"],
+      ["DISK", "10G"],
+      ["ACTION", "capture done"],
+      ["ERROR", "-"],
+    ]),
+  );
   expect(removed).toMatchObject({ code: 0, stdout: "linux_dev" });
   expect(restored).toMatchObject({ code: 0, stdout: "linux_dev" });
   expect(machines.stdout).toContain("linux_copy");
@@ -169,7 +180,10 @@ test("fork, checkpoint capture/list/get/delete and restore run on the host", asy
     stdout: JSON.stringify({ deleted: "linux_snap" }),
   });
   expect(again.stderr).toContain("already gone");
-  expect(checkpointsAfter.stdout).not.toContain("linux_snap");
+  expect(checkpointsAfter).toMatchObject({
+    stdout: "",
+    stderr: "clankerbox: no checkpoints to list",
+  });
   expect(await host.run(host.store.checkpoints)).toEqual([]);
 });
 

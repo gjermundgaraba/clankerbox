@@ -2,6 +2,7 @@
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { Invalid } from "./errors.ts";
 import { Profile } from "./resources.ts";
+import { describeFileError, describeIssues } from "./text.ts";
 
 /** A profile file as read: its fields, with `setup.path` resolved, and its name as `label`. */
 export interface LoadedProfile extends Profile {
@@ -27,12 +28,15 @@ export const loadProfile = (
       .readFileString(file)
       .pipe(
         Effect.mapError(
-          (error) => new Invalid({ message: `couldn't read profile ${file}: ${error.message}` }),
+          (error) =>
+            new Invalid({ message: `couldn't read profile ${file}: ${describeFileError(error)}` }),
         ),
       );
 
-    const profile = yield* decodeProfile(text, { onExcessProperty: "error" }).pipe(
-      Effect.mapError((error) => new Invalid({ message: `profile ${file}: ${error.message}` })),
+    const profile = yield* decodeProfile(text, { onExcessProperty: "error", errors: "all" }).pipe(
+      Effect.mapError(
+        (error) => new Invalid({ message: `profile ${file}: ${describeIssues(error)}` }),
+      ),
     );
 
     const label = path.basename(file, ".json");

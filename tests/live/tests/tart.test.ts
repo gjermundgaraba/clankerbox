@@ -101,10 +101,10 @@ const tart: Runtime<typeof TartNatives.Type> = {
     "macos",
     "--cpu",
     "2",
-    "--ram-mib",
-    "4096",
-    "--disk-gib",
-    String(diskGib),
+    "--ram",
+    "4G",
+    "--disk",
+    `${diskGib}G`,
   ],
   /** The VMs, launchd jobs and job files of the machine or checkpoint named `name` on the host. */
   natives: (controlled, name) => controlled(TartNatives, "natives", name),
@@ -181,7 +181,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
         "--setup",
         suite.mainSetup,
         "--setup-timeout",
-        "600",
+        "10m",
         "--json",
       );
 

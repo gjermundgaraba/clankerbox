@@ -3,12 +3,15 @@
  * optional profiles directory. It is read from `--config PATH`, or else from
  * `$XDG_CONFIG_HOME/clankerbox/config.json` (`~/.config` when that is unset).
  */
-import { Client, Invalid } from "@gjermundgaraba/clankerbox-sdk";
+import { Client, describeFileError, describeIssues, Invalid } from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 
-/** The client library refuses a host ID that appears twice. */
+/**
+ * An empty host list, or a host ID that appears twice, is the client library's to refuse:
+ * `profiles`, which asks no host, reads its directory either way.
+ */
 const ClientConfig = Schema.Struct({
-  hosts: Schema.NonEmptyArray(Client.HostEntry),
+  hosts: Schema.Array(Client.HostEntry),
   /** Where `--profile NAME` looks for `NAME.json`, relative to the config file. */
   profiles: Schema.optionalKey(Schema.String),
 });
@@ -48,18 +51,18 @@ export const loadConfig = (
     const path = yield* Path.Path;
     const file = path.resolve(Option.isSome(flag) ? flag.value : yield* defaultPath);
 
-    const text = yield* fs
-      .readFileString(file)
-      .pipe(
-        Effect.mapError(
-          (error) =>
-            new Invalid({ message: `couldn't read client config ${file}: ${error.message}` }),
-        ),
-      );
-
-    const config = yield* decodeConfig(text, { onExcessProperty: "error" }).pipe(
+    const text = yield* fs.readFileString(file).pipe(
       Effect.mapError(
-        (error) => new Invalid({ message: `client config ${file}: ${error.message}` }),
+        (error) =>
+          new Invalid({
+            message: `couldn't read client config ${file}: ${describeFileError(error)}`,
+          }),
+      ),
+    );
+
+    const config = yield* decodeConfig(text, { onExcessProperty: "error", errors: "all" }).pipe(
+      Effect.mapError(
+        (error) => new Invalid({ message: `client config ${file}: ${describeIssues(error)}` }),
       ),
     );
 
@@ -120,7 +123,7 @@ export const profileFiles = (
       Effect.mapError(
         (error) =>
           new Invalid({
-            message: `couldn't read profiles directory ${directory}: ${error.message}`,
+            message: `couldn't read profiles directory ${directory}: ${describeFileError(error)}`,
           }),
       ),
     );

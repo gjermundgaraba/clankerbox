@@ -169,8 +169,8 @@ clankerbox hosts                           # every host, its runtime, versions a
 clankerbox capacity                        # every host's limits, and how much of each is in use
 clankerbox profiles                        # the profiles directory's profiles
 clankerbox create dev --profile dev        # placed; prints the new ID, linux_dev
-clankerbox create review --host mac --base macos --cpu 4 --ram-mib 8192 --disk-gib 60
-clankerbox create scratch --profile dev --setup ./other.sh --setup-timeout 300
+clankerbox create review --host mac --base macos --cpu 4 --ram 8G --disk 60G
+clankerbox create scratch --profile dev --setup ./other.sh --setup-timeout 5m
 clankerbox machines                        # every host's machines, with their age
 clankerbox get linux_dev                   # one machine: its state, last action and error, SSH login
 clankerbox ssh linux_dev                   # as the runtime's user: root, or admin on Tart
@@ -193,6 +193,11 @@ clankerbox checkpoint delete linux_base
   `--setup-timeout` included; a setup that neither the flag nor the profile
   times gets the host's default. A create that fails can leave its machine
   behind, unmade: `get` shows why, and `delete` removes it.
+- Sizes and durations are written with their unit: `--ram 512M` or
+  `--ram 8G`, `--disk 60G` (whole GiB), `--setup-timeout 15m`, `--timeout 90s`.
+  A bare number is refused. `machines`, `get` and `profiles` print each one
+  exactly, as its flag takes it. Profile files and `--json` keep the API's
+  integers: `ramMib`, `diskGib`, `timeoutSeconds`.
 - A running machine's `ssh` is its login, `{user, host, port}`, and its
   `hostKey` is the guest's SSH host key, once preparation has recorded one.
   The user follows the runtime: `root` on smolvm and boat, `admin` on Tart. A
@@ -210,12 +215,13 @@ clankerbox checkpoint delete linux_base
   A `stop` is a power-off: after a `start`, what runs is what the guest
   starts at boot plus what its `/etc/clankerbox/start` launches.
 - A mutation returns when its action has finished, however long that takes.
-  Its `--timeout SECONDS` only stops waiting: the action runs on, and the CLI
+  Its `--timeout DURATION` only stops waiting: the action runs on, and the CLI
   says it may have run; `get`, or `checkpoint get`, shows how it ended. A read
   gives up on a host after 10 s.
 - `--json` prints the resource, or `{"error": {"message", "tag", "retryable"}}`.
   Lists print what reachable hosts answered and name the unreachable ones; a
-  list exits 1 when every host failed.
+  list exits 1 when every host failed. A list with nothing in it prints no
+  table and says so on stderr.
 - The CLI exits 0 or 1, 130 on Ctrl-C, and `ssh` with ssh's code. Deleting
   something already gone exits 0.
 
@@ -470,6 +476,9 @@ name: nothing migrates.
 
 `getCapacity` (`clankerbox capacity`, `client.capacity`) lists a host's limits,
 the ones its `Capacity` refusals come from, as `{host, resource, limit, used}`.
+The CLI's table names each resource in its own words (`ram`, `running-vms`,
+`active-sandboxes`, `starts/minute`, `starts/hour`, `starts/day`) and rounds
+RAM to a tenth of a GiB; `--json` has the API's names and whole MiB.
 The host counts `used` as the refusal counts it, so it needn't match the host's
 own machines; the [runtime notes](#runtime-notes) say what each runtime
 counts. It is read from the runtime at each call and is all the reply holds,

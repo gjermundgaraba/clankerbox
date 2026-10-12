@@ -661,7 +661,7 @@ test("a diskGib below the base's disk is Precondition at tart set, after the clo
 
   expect([error._tag, error.message]).toEqual([
     "Precondition",
-    "machine mac_small's disk of 20 GiB is below its base's, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB",
+    "machine mac_small's disk of 20G is below its base's, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB",
   ]);
   expect(calls(mac)).toEqual([
     `tart clone base ${vm}`,

@@ -109,10 +109,10 @@ const boat: Runtime<typeof BoatNatives.Type> = {
     "boat",
     "--cpu",
     String(cpu),
-    "--ram-mib",
-    String(ramMib),
-    "--disk-gib",
-    String(diskGib),
+    "--ram",
+    `${ramMib}M`,
+    "--disk",
+    `${diskGib}G`,
   ],
   /** The sandboxes whose display name is the machine's ID. */
   natives: (controlled, name) => controlled(BoatNatives, "natives", name),
@@ -250,7 +250,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
           "--setup",
           suite.mainSetup,
           "--setup-timeout",
-          "600",
+          "10m",
           "--json",
         ),
       );

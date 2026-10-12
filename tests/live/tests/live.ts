@@ -385,7 +385,7 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     "--setup",
     await writeFileIn(dir, `${name}-setup.sh`, script, 0o755),
     "--setup-timeout",
-    String(timeoutSeconds),
+    `${timeoutSeconds}s`,
     "--json",
   ];
 

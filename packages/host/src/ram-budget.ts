@@ -2,7 +2,7 @@
  * The RAM budget, a step-3 check that a runtime's `admit` calls: the smolvm host's machines
  * must fit its budget, so the host refuses with `Capacity` before it boots one too many.
  */
-import { Capacity, type HostError } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, formatMib, type HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Array as Arr, Effect } from "effect";
 import type { Activation, Held, MachineRef, Observed } from "./runtime.ts";
 
@@ -48,8 +48,11 @@ export const checkRamBudget = (
     const { used: total } = yield* ramInUse(activation.machines, observe);
 
     if (total > budgetMib) {
+      const { id, ramMib } = activation.machine;
+      const free = Math.max(0, budgetMib - (total - ramMib));
+
       return yield* new Capacity({
-        message: `${activation.action} ${activation.machine.id} would bring the host's machines to ${total} MiB of RAM, past its budget of ${budgetMib} MiB`,
+        message: `${activation.action} ${id} needs ${formatMib(ramMib)} of RAM, and ${free === 0 ? "none" : formatMib(free)} of the host's ${formatMib(budgetMib)} budget is free`,
       });
     }
   });

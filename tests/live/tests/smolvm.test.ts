@@ -8,6 +8,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { formatMib } from "@gjermundgaraba/clankerbox-sdk";
 import { beforeAll, describe, expect, test } from "vite-plus/test";
 import {
   Checkpoints,
@@ -86,10 +87,10 @@ const smolvm: Runtime<typeof Natives.Type> = {
     "ubuntu",
     "--cpu",
     "1",
-    "--ram-mib",
-    String(ramMib),
-    "--disk-gib",
-    String(diskGib),
+    "--ram",
+    `${ramMib}M`,
+    "--disk",
+    `${diskGib}G`,
   ],
   /** The runtime's machines and systemd scopes whose names start with `name`'s. */
   natives: (controlled, name) => controlled(Natives, "natives", `${name}-`),
@@ -169,9 +170,9 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
   };
 
   /**
-   * The RAM budget left over the running machines, read from a create too large for any
-   * budget, which is refused with Capacity and writes nothing. The host's capacity reports
-   * that budget and those machines.
+   * The RAM budget left over the running machines, read from the host's capacity, which
+   * reports that budget and those machines. A create too large for any budget is refused
+   * with Capacity, names the budget and writes nothing.
    */
   const remainingBudget = async () => {
     const huge = failure(await createBare("huge", 1_048_576));
@@ -179,15 +180,17 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
     expect(huge.tag).toBe("Capacity");
     expect(await machine("huge")).toBeUndefined();
 
-    const budget = Number(/budget of (\d+) MiB/u.exec(huge.message)?.[1]);
-
     const running = (await machines()).machines
       .filter(({ state }) => state === "running")
       .reduce((sum, { ramMib }) => sum + ramMib, 0);
 
-    expect(await capacity()).toEqual([
+    const limits = await capacity();
+    const budget = limits[0]?.limit ?? 0;
+
+    expect(limits).toEqual([
       { host: suite.env.host.id, resource: "ramMib", limit: budget, used: running },
     ]);
+    expect(huge.message).toContain(`of the host's ${formatMib(budget)} budget is free`);
 
     return budget - running;
   };
@@ -228,7 +231,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         "--setup",
         suite.mainSetup,
         "--setup-timeout",
-        "600",
+        "10m",
         "--json",
       );
 

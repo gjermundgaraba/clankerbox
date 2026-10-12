@@ -727,7 +727,7 @@ test("capacity is the RAM budget and what admit counts toward it: every running 
   const unread = await Effect.runPromise(Effect.flip(runtime.capacity(held)));
 
   expect(capacity).toEqual([{ resource: "ramMib", limit: 4096, used: 2560 }]);
-  expect(refused.message).toContain("to 4097 MiB of RAM, past its budget of 4096 MiB");
+  expect(refused.message).toContain("needs 1537M of RAM, and 1.5G of the host's 4G budget is free");
   expect([unread._tag, unread.message]).toEqual([
     "Internal",
     "smolvm couldn't read the state of linux_two",

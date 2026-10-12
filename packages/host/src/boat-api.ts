@@ -13,6 +13,7 @@
  */
 import {
   Capacity,
+  formatMib,
   type HostError,
   Internal,
   NotFound,
@@ -105,10 +106,14 @@ const machineTypes: ReadonlyArray<MachineType> = [
   largest,
 ];
 
+type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
+
+/** Sizes as a refusal names them. */
+const sized = ({ cpu, ramMib, diskGib }: Sizes): string =>
+  `${cpu} vCPU, ${formatMib(ramMib)} of RAM and ${diskGib}G of disk`;
+
 /** The smallest type that covers the machine's sizes; none is `Precondition`, in step 3. */
-export const machineType = (
-  sizes: Pick<MachineRef, "cpu" | "ramMib" | "diskGib">,
-): Effect.Effect<MachineType, Precondition> =>
+export const machineType = (sizes: Sizes): Effect.Effect<MachineType, Precondition> =>
   Option.match(
     Arr.findFirst(
       machineTypes,
@@ -119,7 +124,7 @@ export const machineType = (
       onNone: () =>
         Effect.fail(
           new Precondition({
-            message: `no boat machine type has ${sizes.cpu} vCPU, ${sizes.ramMib} MiB of RAM and ${sizes.diskGib} GiB of disk; the largest, ${largest.name}, has ${largest.cpu} vCPU, ${largest.ramMib} MiB and ${largest.diskGib} GiB`,
+            message: `no boat machine type has ${sized(sizes)}; the largest, ${largest.name}, has ${sized(largest)}`,
           }),
         ),
       onSome: Effect.succeed,

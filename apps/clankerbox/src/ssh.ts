@@ -8,7 +8,7 @@ import { Effect, FileSystem, Path } from "effect";
 import { Argument, Command } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { clientFlags, withClient } from "./cli.ts";
-import { actionLabel, Exited, fail, stateLabel } from "./output.ts";
+import { Exited, fail, stateLabel } from "./output.ts";
 
 /**
  * The known-hosts line pinning the machine's host key under its ID: ssh looks the key up by
@@ -68,7 +68,7 @@ const destination = (machine: string): { readonly id: string; readonly user?: st
 
 /** ssh needs an endpoint and a host key: a machine lacking one is refused, saying which. */
 const targetOf = (machine: Machine): Effect.Effect<Target, Precondition> => {
-  const { id, ssh: login, hostKey } = machine;
+  const { id, ssh: login, hostKey, action } = machine;
 
   if (login !== undefined && hostKey !== undefined) {
     return Effect.succeed({ id, login, hostKey });
@@ -78,7 +78,7 @@ const targetOf = (machine: Machine): Effect.Effect<Target, Precondition> => {
 
   return Effect.fail(
     new Precondition({
-      message: `${id} has no ${lacks} (${stateLabel(machine)}, ${actionLabel(machine)}): see clankerbox get ${id}`,
+      message: `${id} has no ${lacks} (${stateLabel(machine)}, ${action.name} ${action.status}): see clankerbox get ${id}`,
     }),
   );
 };

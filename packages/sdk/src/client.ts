@@ -19,6 +19,7 @@ import {
   type MachineSpec,
   version,
 } from "./resources.ts";
+import { describeIssues } from "./text.ts";
 
 /** One host a client talks to. `id` is the host part of every ID it holds. */
 export const HostEntry = Schema.Struct({
@@ -241,8 +242,8 @@ export const make = (
       return yield* new Invalid({ message: "the host list is empty: a client needs a host" });
     }
 
-    yield* decodeHosts(hosts).pipe(
-      Effect.mapError((error) => new Invalid({ message: `host list: ${error.message}` })),
+    yield* decodeHosts(hosts, { errors: "all" }).pipe(
+      Effect.mapError((error) => new Invalid({ message: `host list: ${describeIssues(error)}` })),
     );
 
     const twice = hosts.find(
@@ -375,7 +376,7 @@ export const make = (
 
           if (Result.isFailure(result)) {
             noReply ||= Predicate.isTagged(result.failure, "Unavailable");
-            misses.push(`${host} failed: ${result.failure._tag}: ${result.failure.message}`);
+            misses.push(`${host} failed: ${result.failure.message}`);
           } else if (result.success.bases.includes(base)) {
             return host;
           } else {
