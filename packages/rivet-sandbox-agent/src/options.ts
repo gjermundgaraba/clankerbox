@@ -16,6 +16,12 @@ export interface Options {
   /** The hosts to make sandboxes on, in placement order, as in the client config. */
   readonly hosts: ReadonlyArray<Client.HostEntry>;
   readonly from: Source;
+  /**
+   * Whether a profile's setup runs even when the sandbox's host has a prebuild of it. By default
+   * a create from a profile with a setup restores that prebuild when there is one, as
+   * `clankerbox create` does; `clankerbox prebuild --profile <the same file>` makes it.
+   */
+  readonly fresh?: boolean | undefined;
   /** What every sandbox's machine name starts with, `sandbox` by default. */
   readonly namePrefix?: string | undefined;
   /** The guest user the tunnel logs in as; by default the machine's own login user. */

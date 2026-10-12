@@ -5,16 +5,25 @@
  * becomes `CLANKERBOX_LIVE_AGENT_ENV`): `NAME=value` lines holding an LLM credential, such as
  * `ANTHROPIC_API_KEY=…`. The file is copied into the recipe, in the run's scratch; nothing prints
  * it, and the driver's teardown redacts its values from the evidence.
+ *
+ * The prebuild test captures a checkpoint that holds that credential, and deletes it however it
+ * ends. It checks the checkpoint's ID is free first, so it never touches one it didn't make, and
+ * when `CLANKERBOX_LIVE_OWNED_CHECKPOINTS` names a file, writes the ID there before it captures,
+ * for a driver whose host outlives the run to delete it should the test itself not get to. The ID
+ * is the run's alone: it is a digest of the packed recipe, which holds the run's own new key.
  */
 import { randomBytes } from "node:crypto";
-import { copyFile, cp, rm } from "node:fs/promises";
+import { appendFile, copyFile, cp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { loadProfile, Prebuild, readSetup } from "@gjermundgaraba/clankerbox-sdk";
 import {
   type ClankerboxProvider,
   clankerbox,
   type Options,
 } from "@gjermundgaraba/clankerbox-rivet-sandbox-agent";
+import { Effect } from "effect";
 import { SandboxAgent } from "sandbox-agent";
 import { afterAll, beforeAll, describe, expect, test } from "vite-plus/test";
 import {
@@ -22,9 +31,11 @@ import {
   type Environment,
   environment,
   Failure,
+  Hosts,
   liveOn,
   minutes,
   OneMachine,
+  type Ran,
   run,
   scratch,
   timing,
@@ -32,6 +43,8 @@ import {
 } from "./live.ts";
 
 const agentEnv = process.env["CLANKERBOX_LIVE_AGENT_ENV"] ?? "";
+
+const ownedCheckpoints = process.env["CLANKERBOX_LIVE_OWNED_CHECKPOINTS"] ?? "";
 
 /**
  * What differs by guest: the recipe, the create's base and sizes, the user the recipe runs the
@@ -77,6 +90,7 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
   let env: Environment;
   let dir: string;
   let key: string;
+  let profile: string;
   let options: Options;
   let sandbox: ClankerboxProvider;
   let sdk: SandboxAgent;
@@ -100,7 +114,7 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
     await copyFile(`${key}.pub`, join(recipe, "authorized_keys"));
     await copyFile(agentEnv, join(recipe, "agent.env"));
 
-    const profile = await writeFileIn(
+    profile = await writeFileIn(
       dir,
       "agent.json",
       JSON.stringify({
@@ -132,6 +146,9 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
     run(env.binary, [command, "--config", env.config, ...args]);
 
   const machine = async (of: string) => decode(OneMachine, await cli("get", of, "--json"));
+
+  const checkpointCli = (command: string, ...args: ReadonlyArray<string>) =>
+    run(env.binary, ["checkpoint", command, "--config", env.config, ...args]);
 
   /** Runs `command` in the sandbox, through the agent's own process API. */
   const inSandbox = async (agent: SandboxAgent, command: string, ...args: ReadonlyArray<string>) =>
@@ -269,5 +286,129 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
       expect(decode(Failure, await cli("get", id, "--json")).error.tag).toBe("NotFound");
     },
     minutes(5),
+  );
+
+  // Last, after the other sandboxes are gone: Tart runs two VMs at a time.
+  test(
+    "a create restores its host's prebuild of the profile, and Claude answers a real prompt in it",
+    async () => {
+      const [host] = decode(Hosts, await cli("hosts", "--json")).hosts;
+
+      if (host?.id !== env.host.id) {
+        throw new Error(`clankerbox hosts listed ${host?.id}, not ${env.host.id}`);
+      }
+
+      // The prebuild's name, of the spec the provider sends for the profile file.
+      const name = await Effect.runPromise(
+        Effect.gen(function* () {
+          const { label, host: _placement, setup, ...sizes } = yield* loadProfile(profile);
+
+          if (setup === undefined) {
+            return yield* Effect.die(new Error(`${profile} has no setup`));
+          }
+
+          const { path, ...timeout } = setup;
+          const script = yield* readSetup(path);
+
+          return yield* Prebuild.nameOf(
+            { ...sizes, profile: label, setup: { script, ...timeout } },
+            host,
+          );
+        }).pipe(Effect.provide(NodeServices.layer)),
+      );
+
+      const prebuild = `${env.host.id}_${name}`;
+
+      // One already there isn't this run's, so the test stops before it touches anything.
+      expect(decode(Failure, await checkpointCli("get", prebuild, "--json")).error.tag).toBe(
+        "NotFound",
+      );
+
+      if (ownedCheckpoints !== "") {
+        await appendFile(ownedCheckpoints, `${prebuild}\n`);
+      }
+
+      // Built as `clankerbox prebuild` builds one, but by a machine with the run's prefix.
+      const builderName = `${env.prefix}builder-${randomBytes(4).toString("hex")}`;
+      const builder = `${env.host.id}_${builderName}`;
+      let removed: Ran | undefined;
+
+      try {
+        try {
+          const created = await cli(
+            "create",
+            builderName,
+            "--profile",
+            profile,
+            "--fresh",
+            "--json",
+          );
+
+          expect(created.code, created.stderr).toBe(0);
+
+          // Tart captures only a stopped machine.
+          const stopped = runtime === "tart" ? await cli("stop", builder, "--json") : undefined;
+
+          expect(stopped?.code ?? 0, stopped?.stderr).toBe(0);
+
+          const captured = await checkpointCli("capture", builder, name, "--json");
+
+          expect(captured.code, captured.stderr).toBe(0);
+        } finally {
+          removed = await cli("delete", builder, "--json");
+        }
+
+        // It ran the recipe, credential and all.
+        expect(removed.code, removed.stderr).toBe(0);
+
+        const started = performance.now();
+
+        const restored = await SandboxAgent.start({
+          sandbox: clankerbox({ ...options, namePrefix: `${env.prefix}restored` }),
+        });
+
+        timing("SandboxAgent.start from a profile, restored from its prebuild", started);
+
+        const restoredId = (restored.sandboxId ?? "").slice(prefix.length);
+
+        try {
+          expect(await machine(restoredId)).toMatchObject({
+            state: "running",
+            made: true,
+            profile: "agent",
+            action: { name: "restore", status: "done" },
+          });
+
+          const session = await restored.createSession({ agent: "claude" });
+
+          await session.setMode("bypassPermissions");
+
+          const prompted = performance.now();
+          const again = `${word}-restored`;
+
+          const reply = await session.prompt([
+            {
+              type: "text",
+              text: `Write the single word ${again} to the file ${file}, and nothing else. Then stop.`,
+            },
+          ]);
+
+          timing("a Claude prompt in a sandbox restored from a prebuild", prompted);
+          expect(reply.stopReason).toBe("end_turn");
+          expect(await inSandbox(restored, "cat", file)).toBe(again);
+        } finally {
+          await restored.destroySandbox();
+        }
+      } finally {
+        // It holds the agent's credential: gone however the test ends.
+        const deleted = await checkpointCli("delete", prebuild, "--json");
+
+        expect(deleted.code, deleted.stderr).toBe(0);
+        expect(decode(Failure, await checkpointCli("get", prebuild, "--json")).error.tag).toBe(
+          "NotFound",
+        );
+      }
+    },
+    minutes(40),
   );
 });

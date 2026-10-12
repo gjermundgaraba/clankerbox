@@ -442,6 +442,15 @@ await sdk.destroySandbox();
   restore, carry its memory: the server, its sessions and its processes, so
   take them from an idle machine. A fork is ready in about 6 s on smolvm,
   where a create from the Ubuntu recipe takes about 50 s.
+- **Prebuilds:** a create from a profile with a setup restores its host's
+  prebuild of it when there is one, as `clankerbox create` does:
+  `clankerbox prebuild --profile <the same file>` makes it, and
+  `fresh: true` runs the setup anyway. A prebuild is a checkpoint of a
+  machine whose setup ran, so one of a recipe with an `agent.env` holds that
+  credential until `clankerbox checkpoint delete` removes it, and its Claude
+  Code is as old as it is. In the live suite a sandbox restored from the
+  Ubuntu recipe's prebuild started in about 6 s on smolvm, and from the macOS
+  recipe's in about 35 s on Tart.
 - **IDs:** a sandbox's ID is `clankerbox/<machine ID>`, so
   `SandboxAgent.start({ sandbox, sandboxId })` reconnects to a machine,
   starting it if it is stopped. `pauseSandbox` stops the machine and

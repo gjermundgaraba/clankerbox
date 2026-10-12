@@ -15,6 +15,7 @@ import {
   Internal,
   type Machine,
   NotFound,
+  Prebuild,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Layer } from "effect";
@@ -30,6 +31,9 @@ const fakeSsh = fileURLToPath(new URL("fake-ssh.mjs", import.meta.url));
 const url = "http://linux.test";
 
 const login = { user: "root", host: "100.64.0.7", port: 10_022 };
+
+/** The stub host's runtime version, which a prebuild's name is of. */
+const runtimeVersion = "0.0.0-test";
 
 const hostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@linux";
 
@@ -88,6 +92,7 @@ const setup = async (
     bases: ["ubuntu"],
     machines: host.machines ?? [],
     checkpoints: host.checkpoints ?? [],
+    runtimeVersion,
     create: ({ id }) => {
       if (host.createRefused !== undefined) {
         return Effect.fail(host.createRefused);
@@ -236,6 +241,46 @@ test("a sandbox is a fork of a machine or a restore of a checkpoint when the pro
     new NotFound({ message: "no checkpoint linux_gone" }),
   );
   expect(missing.stub.calls).toEqual(["machine.restore"]);
+});
+
+test("a create from a profile with a setup restores its host's prebuild of it, unless fresh, and runs the setup without one", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "clankerbox-profile-"));
+
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+
+  const sizes = { base: "ubuntu", cpu: 2, ramMib: 2048, diskGib: 20 };
+  const profile = join(dir, "agent.json");
+
+  await writeFile(join(dir, "setup.sh"), "echo set up\n");
+  await writeFile(
+    profile,
+    JSON.stringify({ ...sizes, setup: { path: "setup.sh", timeoutSeconds: 300 } }),
+  );
+
+  const sent = { script: "echo set up\n", timeoutSeconds: 300 };
+
+  const name = await Effect.runPromise(
+    Prebuild.nameOf({ ...sizes, profile: "agent", setup: sent }, { runtimeVersion }),
+  );
+
+  const prebuilt = { checkpoints: [checkpoint(`linux_${name}`)] };
+
+  const restored = await setup(prebuilt, { from: { profile } });
+
+  expect(await restored.sandbox.create()).toMatch(/^linux_sandbox-[0-9a-f]{8}$/u);
+  expect(restored.stub.calls).toEqual(["host.get", "checkpoint.get", "machine.restore"]);
+
+  const fresh = await setup(prebuilt, { from: { profile }, fresh: true });
+
+  await fresh.sandbox.create();
+  expect(fresh.stub.calls).toEqual(["host.get", "machine.create"]);
+  expect(fresh.stub.creates.map((request) => request.setup)).toEqual([sent]);
+
+  const unbuilt = await setup({}, { from: { profile } });
+
+  await unbuilt.sandbox.create();
+  expect(unbuilt.stub.calls).toEqual(["host.get", "checkpoint.get", "machine.create"]);
+  expect(unbuilt.stub.creates.map((request) => request.setup)).toEqual([sent]);
 });
 
 test("a create that fails deletes the machine it left, and fails with the host's error", async () => {

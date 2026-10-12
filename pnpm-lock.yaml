@@ -320,6 +320,9 @@ importers:
 
   tests/live:
     dependencies:
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.2(effect@4.0.2)(redis@6.3.0)
       '@gjermundgaraba/clankerbox-rivet-sandbox-agent':
         specifier: workspace:*
         version: link:../../packages/rivet-sandbox-agent

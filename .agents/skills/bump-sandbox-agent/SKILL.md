@@ -116,7 +116,8 @@ the live run below is an **unqualified candidate**.
   50 s (packages 14, binary 2, Node 6, Claude 26), Claude's install 553 MB of
   disk, the idle server 13 MB of RAM and a Claude session about 470 MB. On
   Tart the same took about 70 s in the live suite; a host's first clone of its
-  base adds minutes.
+  base adds minutes. A start restored from the recipe's prebuild took about 6 s
+  on smolvm and 35 s on Tart.
 
 ## Verify
 

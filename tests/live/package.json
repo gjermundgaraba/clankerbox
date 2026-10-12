@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@effect/platform-node": "catalog:",
     "@gjermundgaraba/clankerbox-rivet-sandbox-agent": "workspace:*",
     "@gjermundgaraba/clankerbox-sdk": "workspace:*",
     "effect": "catalog:",

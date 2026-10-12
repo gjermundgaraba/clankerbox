@@ -15,7 +15,9 @@ import {
   Client,
   Internal,
   loadProfile,
+  type MachineSpec,
   pinnedSsh,
+  Prebuild,
   Precondition,
   readSetup,
   sshTarget,
@@ -223,7 +225,10 @@ export const make = (options: Options, ssh = "ssh") => {
       ),
     );
 
-  /** Makes the machine `named`, from the options' source. */
+  /**
+   * Makes the machine `named`, from the options' source. A profile with a setup is restored from
+   * its host's prebuild of it when there is one, as `clankerbox create` does, unless `fresh`.
+   */
   const made = (named: string) =>
     Effect.gen(function* () {
       const client = yield* Client.Client;
@@ -238,19 +243,21 @@ export const make = (options: Options, ssh = "ssh") => {
       }
 
       const { label, host, setup, ...sizes } = yield* loadProfile(from.profile);
-      const spec = { ...sizes, profile: label };
+      let spec: MachineSpec = { ...sizes, profile: label };
 
-      if (setup === undefined) {
+      if (setup !== undefined) {
+        const { path, ...timeout } = setup;
+
+        spec = { ...spec, setup: { script: yield* readSetup(path), ...timeout } };
+      }
+
+      if (options.fresh === true) {
         return yield* client.create(named, spec, { host });
       }
 
-      const { path, ...timeout } = setup;
+      const { machine } = yield* Prebuild.create(client, named, spec, { host });
 
-      return yield* client.create(
-        named,
-        { ...spec, setup: { script: yield* readSetup(path), ...timeout } },
-        { host },
-      );
+      return machine;
     });
 
   /**
