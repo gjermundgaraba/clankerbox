@@ -43,7 +43,8 @@ the live run below is an **unqualified candidate**.
   and the optional `reconnect`, `pause`, `kill`, `getUrl`, `getFetch`,
   `getInspectorUrl`, `ensureServer` and `defaultCwd`. Ours implements
   `create`, `destroy`, `pause`, `reconnect`, `ensureServer`, `getUrl` and
-  `defaultCwd`: no `kill` (the SDK falls back to `destroy`), no token (the
+  `defaultCwd`, and adds `dispose`, which the SDK never calls: no `kill` (the
+  SDK falls back to `destroy`), no token (the
   server runs with `--no-token`; the SDK also reads an undeclared `getToken`,
   `maybeGetToken`). A member the target adds or makes required needs a
   decision here.
@@ -51,16 +52,19 @@ the live run below is an **unqualified candidate**.
   sandbox's ID `${provider.name}/${rawId}`, and refuses an ID of another
   provider's name. For a new sandbox it calls `create`; for an existing ID,
   `reconnect` then `ensureServer`. Then it calls `getUrl` once and keeps the
-  URL. Ours: a tunnel keeps its local port for as long as the provider lives,
-  so the URL the SDK kept still leads to the sandbox after a tunnel is opened
-  again.
+  URL. Ours: `reconnect` only starts the machine and `ensureServer` opens the
+  tunnel; a sandbox keeps its local port until it is destroyed, so the URL a
+  client kept still leads to it after a tunnel is opened again.
 - The SDK's health wait polls `/v1/health` from 500 ms, doubling to 15 s, with
   no deadline unless the caller gives one, and calls `ensureServer` after
   every 3 failures in a row, swallowing its error
   (`HEALTH_WAIT_ENSURE_SERVER_AFTER_FAILURES`). Ours: `ensureServer` opens a
-  tunnel that ended, and starts the machine when its agent doesn't answer; a
+  tunnel that ended, and starts the machine when its agent doesn't answer,
+  then opens its tunnel anew, to the endpoint it has now; a
   machine that is gone leaves the SDK waiting, so the caller's timeout or
-  signal bounds it.
+  signal bounds it. The health wait runs once, from the client's constructor,
+  and `start` is the SDK's only other call to `ensureServer`: a tunnel that
+  ends later is the caller's to bring back (README).
 - `SandboxDestroyedError(sandboxId, provider, { cause })` is a runtime export,
   and what `start` expects of a `reconnect` to a sandbox that no longer
   exists. Ours: `reconnect` maps the host's `NotFound` to it.
@@ -75,15 +79,11 @@ the live run below is an **unqualified candidate**.
   second server on the port exits 1 and leaves the first running.
 - The binaries are at
   `https://releases.rivet.dev/sandbox-agent/<version>/binaries/sandbox-agent-<target>`,
-  with targets `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl` and
+  with the recipes' targets `x86_64-unknown-linux-musl` and
   `aarch64-apple-darwin`. Rivet publishes no checksum file, so the recipes pin
-  a sha256 taken from the download itself. Cross-check the Linux one against
-  the npm package of the same version, `@sandbox-agent/cli-linux-x64`, whose
-  binary is identical. At 0.5.2: linux x64
-  `5ebefccb130cccb0aa7972eacc8ff7c55550b959b2dd682a232a21a5712d955e`, linux
-  arm64 `6c3362a9d2d59220757d6b8ca9a3032464b7ce589d9d43c2b728e44ad6a09382`,
-  darwin arm64
-  `58417cf5fa1e2dc417fc4a92d11840cc245ad599b87dd4c9a41686b05c36d877`.
+  a sha256 taken from the download itself (`agent_sha256` in each recipe).
+  Cross-check the Linux one against the npm package of the same version,
+  `@sandbox-agent/cli-linux-x64`, whose binary is identical.
 - `install-agent claude` installs Claude Code at its latest release and its
   ACP adapter from npm, which needs Node 22 or newer and npm on the path:
   Ubuntu 24.04's Node 18 fails the adapter's check. The recipes install a

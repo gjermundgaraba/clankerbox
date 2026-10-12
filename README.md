@@ -445,23 +445,36 @@ await sdk.destroySandbox();
 - **IDs:** a sandbox's ID is `clankerbox/<machine ID>`, so
   `SandboxAgent.start({ sandbox, sandboxId })` reconnects to a machine,
   starting it if it is stopped. `pauseSandbox` stops the machine and
-  `destroySandbox` deletes it. A create that fails deletes the machine it
-  left.
+  `destroySandbox` deletes it. A create that fails tries to delete the
+  machine it left; one it couldn't delete shows in `clankerbox machines`.
 - **Recipes:** `recipes/ubuntu/` (x86_64, smolvm) and `recipes/macos/` (Tart)
-  install the server and Claude Code, both pinned by sha256, with Node 22,
-  and run the server as a user of its own (`sandbox`; `admin` on macOS), since
-  Claude Code offers root no bypass-permissions mode. Each takes an
+  install the server and Node 22, both pinned by sha256, and Claude Code at
+  its latest release, and run the server as a user of its own (`sandbox`;
+  `admin` on macOS), since Claude Code offers root no bypass-permissions mode. Each takes an
   `authorized_keys` beside its `setup.sh`, and an optional `agent.env` of
   `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, that becomes the server's
   environment, so it holds a credential: keep that recipe private. The
   server runs with `--no-telemetry`. Codex installs the same way, but
   `install-agent codex` hangs at 0.5.2; the recipes say how to bound it.
+  Each start hook launches a server that has exited, and ends and relaunches
+  one that doesn't answer its health check within 10 s.
 - **Tunnels:** each runs the system `ssh`, ends with the process that opened
-  it, and doesn't keep that process alive. A tunnel keeps its local port
-  while the provider lives, so the URL the SDK holds survives a stop and a
-  start. `sshUser` and `sshArguments` choose the login and its key.
+  it, and doesn't keep that process alive; the provider's `dispose` ends them
+  all sooner, leaving the machines as they are. A sandbox keeps its local port
+  until it is destroyed, so the URL an SDK client holds still leads to it
+  when `ensureServer` opens its tunnel again, a stop and a start between. The
+  SDK calls `ensureServer` only while it starts: a tunnel that ends later, say because
+  its machine stopped, stays down until you call `sandbox.ensureServer(id)`,
+  with the machine's ID (`sdk.sandboxId` without its `clankerbox/`), or start
+  the SDK again. `sshUser` and `sshArguments` choose the login and its
+  key; the tunnel's own options, such as its keepalives and having no
+  connection master, come first, so neither overrides them. Arguments or ssh
+  config that fork the forward or multiplex it (`-f`, `-N`, `-M`, `-S`)
+  would let it outlive the tunnel's ssh, so leave them out.
 - **Not verified:** boat. Its guests are reached the same way, but no live run
-  has covered the recipes or the provider there.
+  has covered the recipes or the provider there. A hung server's relaunch ran
+  in an Ubuntu container only; live runs covered launching and relaunching an
+  exited one on both guests.
 - `effect`, `@effect/platform-node` and `sandbox-agent` are peer
   dependencies. The bump-sandbox-agent skill records what the provider relies
   on of the SDK and the server.
@@ -1128,7 +1141,9 @@ publishes `@gjermundgaraba/clankerbox-sdk@X.Y.Z` and
 `@gjermundgaraba/clankerbox-rivet-sandbox-agent@X.Y.Z` through npm's trusted
 publishing, with provenance; the provider depends on the SDK of its own
 version. A failing CI stops it before anything is uploaded.
-A failed run can be re-run: the upload replaces the release's files.
+A failed run can be re-run: the upload replaces the release's files, and a
+package whose version npm already has is skipped, so a run that published the
+SDK but not the provider publishes the provider.
 
 npm's trusted publisher for each of the two packages names this repository and
 the workflow `publish-sdk.yml`, with no environment. Only the
