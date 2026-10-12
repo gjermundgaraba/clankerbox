@@ -450,8 +450,7 @@ await sdk.destroySandbox();
   credential until `clankerbox checkpoint delete` removes it, and its Claude
   Code is as old as it is. In the live suite a sandbox restored from the
   Ubuntu recipe's prebuild started in about 6 s on smolvm, and from the macOS
-  recipe's in about 35 s on Tart, where a create that ran the setup took about
-  47 s and 69 s.
+  recipe's in about 35 s on Tart.
 - **IDs:** a sandbox's ID is `clankerbox/<machine ID>`, so
   `SandboxAgent.start({ sandbox, sandboxId })` reconnects to a machine,
   starting it if it is stopped. `pauseSandbox` stops the machine and

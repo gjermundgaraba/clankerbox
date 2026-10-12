@@ -32,6 +32,9 @@ const url = "http://linux.test";
 
 const login = { user: "root", host: "100.64.0.7", port: 10_022 };
 
+/** The stub host's runtime version, which a prebuild's name is of. */
+const runtimeVersion = "0.0.0-test";
+
 const hostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@linux";
 
 const checkpoint = (id: string): Checkpoint => ({
@@ -89,6 +92,7 @@ const setup = async (
     bases: ["ubuntu"],
     machines: host.machines ?? [],
     checkpoints: host.checkpoints ?? [],
+    runtimeVersion,
     create: ({ id }) => {
       if (host.createRefused !== undefined) {
         return Effect.fail(host.createRefused);
@@ -248,14 +252,15 @@ test("a create from a profile with a setup restores its host's prebuild of it, u
   const profile = join(dir, "agent.json");
 
   await writeFile(join(dir, "setup.sh"), "echo set up\n");
-  await writeFile(profile, JSON.stringify({ ...sizes, setup: { path: "setup.sh" } }));
+  await writeFile(
+    profile,
+    JSON.stringify({ ...sizes, setup: { path: "setup.sh", timeoutSeconds: 300 } }),
+  );
 
-  // The stub host's runtime version, which a prebuild's name is of.
+  const sent = { script: "echo set up\n", timeoutSeconds: 300 };
+
   const name = await Effect.runPromise(
-    Prebuild.nameOf(
-      { ...sizes, profile: "agent", setup: { script: "echo set up\n" } },
-      { runtimeVersion: "1.22.2" },
-    ),
+    Prebuild.nameOf({ ...sizes, profile: "agent", setup: sent }, { runtimeVersion }),
   );
 
   const prebuilt = { checkpoints: [checkpoint(`linux_${name}`)] };
@@ -269,11 +274,13 @@ test("a create from a profile with a setup restores its host's prebuild of it, u
 
   await fresh.sandbox.create();
   expect(fresh.stub.calls).toEqual(["host.get", "machine.create"]);
+  expect(fresh.stub.creates.map((request) => request.setup)).toEqual([sent]);
 
   const unbuilt = await setup({}, { from: { profile } });
 
   await unbuilt.sandbox.create();
   expect(unbuilt.stub.calls).toEqual(["host.get", "checkpoint.get", "machine.create"]);
+  expect(unbuilt.stub.creates.map((request) => request.setup)).toEqual([sent]);
 });
 
 test("a create that fails deletes the machine it left, and fails with the host's error", async () => {

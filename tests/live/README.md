@@ -32,10 +32,15 @@ Claude. It runs only when the driver is given `--agent-env-file FILE`, a file
 of `NAME=value` lines holding an LLM credential, such as
 `ANTHROPIC_API_KEY=…`; without it the suite is skipped. The credential goes
 into the sandbox, as the recipe's `agent.env`, and the prompt spends from it.
-The driver's last teardown step redacts its values from the evidence and
-fails the run if it found one there. Suites run one after another, never side
-by side, since they share the host's capacity; to run this one alone, pass
-`--suite-args tests/sandbox-agent.test.ts`.
+The driver's last teardown step redacts its values from the evidence and fails
+the run if it found one there. Its last test builds a prebuild of the recipe,
+a checkpoint that holds the credential too, restores a sandbox from it and
+deletes it however the test ends; the drivers' hosts are the run's own, so
+their teardown takes it if the test can't. A runner on a host that outlives
+the run can name a file in `CLANKERBOX_LIVE_OWNED_CHECKPOINTS`: the test
+writes the checkpoint's exact ID there before it captures. Suites run one
+after another, never side by side, since they share the host's capacity; to
+run this one alone, pass `--suite-args tests/sandbox-agent.test.ts`.
 
 ## What every run needs
 

@@ -9,14 +9,15 @@
  * The prebuild test captures a checkpoint that holds that credential, and deletes it however it
  * ends. It checks the checkpoint's ID is free first, so it never touches one it didn't make, and
  * when `CLANKERBOX_LIVE_OWNED_CHECKPOINTS` names a file, writes the ID there before it captures,
- * for a driver whose host outlives the run to delete it should the test itself not get to.
+ * for a driver whose host outlives the run to delete it should the test itself not get to. The ID
+ * is the run's alone: it is a digest of the packed recipe, which holds the run's own new key.
  */
 import { randomBytes } from "node:crypto";
 import { appendFile, copyFile, cp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Prebuild, readSetup } from "@gjermundgaraba/clankerbox-sdk";
+import { loadProfile, Prebuild, readSetup } from "@gjermundgaraba/clankerbox-sdk";
 import {
   type ClankerboxProvider,
   clankerbox,
@@ -34,6 +35,7 @@ import {
   liveOn,
   minutes,
   OneMachine,
+  type Ran,
   run,
   scratch,
   timing,
@@ -292,26 +294,27 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
     async () => {
       const [host] = decode(Hosts, await cli("hosts", "--json")).hosts;
 
-      expect(host?.id).toBe(env.host.id);
+      if (host?.id !== env.host.id) {
+        throw new Error(`clankerbox hosts listed ${host?.id}, not ${env.host.id}`);
+      }
 
-      // The prebuild's name, from the spec as the provider and `clankerbox create` send it.
+      // The prebuild's name, of the spec the provider sends for the profile file.
       const name = await Effect.runPromise(
-        readSetup(join(dir, "recipe")).pipe(
-          Effect.flatMap((script) =>
-            Prebuild.nameOf(
-              {
-                base: guest.base,
-                cpu: guest.cpu,
-                ramMib: guest.ramMib,
-                diskGib: guest.diskGib,
-                profile: "agent",
-                setup: { script },
-              },
-              { runtimeVersion: host?.runtimeVersion ?? "" },
-            ),
-          ),
-          Effect.provide(NodeServices.layer),
-        ),
+        Effect.gen(function* () {
+          const { label, host: _placement, setup, ...sizes } = yield* loadProfile(profile);
+
+          if (setup === undefined) {
+            return yield* Effect.die(new Error(`${profile} has no setup`));
+          }
+
+          const { path, ...timeout } = setup;
+          const script = yield* readSetup(path);
+
+          return yield* Prebuild.nameOf(
+            { ...sizes, profile: label, setup: { script, ...timeout } },
+            host,
+          );
+        }).pipe(Effect.provide(NodeServices.layer)),
       );
 
       const prebuild = `${env.host.id}_${name}`;
@@ -326,13 +329,15 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
       }
 
       // Built as `clankerbox prebuild` builds one, but by a machine with the run's prefix.
-      const builder = `${env.host.id}_${env.prefix}builder-${randomBytes(4).toString("hex")}`;
+      const builderName = `${env.prefix}builder-${randomBytes(4).toString("hex")}`;
+      const builder = `${env.host.id}_${builderName}`;
+      let removed: Ran | undefined;
 
       try {
         try {
           const created = await cli(
             "create",
-            builder.slice(env.host.id.length + 1),
+            builderName,
             "--profile",
             profile,
             "--fresh",
@@ -350,8 +355,11 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
 
           expect(captured.code, captured.stderr).toBe(0);
         } finally {
-          await cli("delete", builder, "--json");
+          removed = await cli("delete", builder, "--json");
         }
+
+        // It ran the recipe, credential and all.
+        expect(removed.code, removed.stderr).toBe(0);
 
         const started = performance.now();
 

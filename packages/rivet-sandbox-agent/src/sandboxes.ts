@@ -14,8 +14,8 @@ import {
   type ClankerboxError,
   Client,
   Internal,
-  type LoadedProfile,
   loadProfile,
+  type MachineSpec,
   pinnedSsh,
   Prebuild,
   Precondition,
@@ -77,10 +77,6 @@ export type Services =
   | FileSystem.FileSystem
   | Path.Path
   | ChildProcessSpawner.ChildProcessSpawner;
-
-/** A profile's setup as a create sends it: its file read, or its recipe directory packed. */
-const sent = ({ path, ...timeout }: NonNullable<LoadedProfile["setup"]>) =>
-  Effect.map(readSetup(path), (script) => ({ script, ...timeout }));
 
 /**
  * The sandboxes of one provider. `ssh` is the program its tunnels run. A sandbox's ID is its
@@ -247,11 +243,13 @@ export const make = (options: Options, ssh = "ssh") => {
       }
 
       const { label, host, setup, ...sizes } = yield* loadProfile(from.profile);
+      let spec: MachineSpec = { ...sizes, profile: label };
 
-      const spec =
-        setup === undefined
-          ? { ...sizes, profile: label }
-          : { ...sizes, profile: label, setup: yield* sent(setup) };
+      if (setup !== undefined) {
+        const { path, ...timeout } = setup;
+
+        spec = { ...spec, setup: { script: yield* readSetup(path), ...timeout } };
+      }
 
       if (options.fresh === true) {
         return yield* client.create(named, spec, { host });
