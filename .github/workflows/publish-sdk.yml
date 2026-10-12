@@ -105,8 +105,16 @@ jobs:
             assert.equal(dependencies["@gjermundgaraba/clankerbox-sdk"], process.env.VERSION);
           '
           git diff --exit-code
-      # The SDK first: the provider depends on it at the same version.
+      # The SDK first: the provider depends on it at the same version. A package whose version npm
+      # already has is skipped, so a re-run of a run that published only the SDK finishes it.
       - name: Publish with npm trusted publishing
         run: |
-          npm publish "$RUNNER_TEMP/sdk/"*.tgz --access public --provenance --ignore-scripts
-          npm publish "$RUNNER_TEMP/provider/"*.tgz --access public --provenance --ignore-scripts
+          publish() {
+            if npm view "$1@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1; then
+              echo "$1@${GITHUB_REF_NAME#v} is already published"
+            else
+              npm publish "$2"/*.tgz --access public --provenance --ignore-scripts
+            fi
+          }
+          publish @gjermundgaraba/clankerbox-sdk "$RUNNER_TEMP/sdk"
+          publish @gjermundgaraba/clankerbox-rivet-sandbox-agent "$RUNNER_TEMP/provider"
