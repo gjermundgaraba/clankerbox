@@ -56,7 +56,8 @@ fi
 
 # Claude Code at its latest release, and its adapter at the version the server pins. Other
 # agents install the same way; `install-agent codex` hangs in its own check at this version, so
-# give it a timeout too, and end what it leaves running.
+# give it a timeout too, and end what it leaves running. Claude's install takes about 30 s; 300 s
+# leaves room for a slow mirror.
 timeout 300 su - sandbox -c 'sandbox-agent install-agent claude' >/var/tmp/install-agent.log 2>&1 || {
   tail -n 15 /var/tmp/install-agent.log
   exit 1
@@ -76,23 +77,53 @@ if [ -z "$pid" ] || [ "$(cat "/proc/$pid/comm" 2>/dev/null || true)" != sshd ]; 
   /usr/sbin/sshd
 fi
 
+# The health check, bounded: on loopback a server answers in milliseconds, so one that takes 2 s
+# is hung or busy beyond use.
+answers() {
+  curl -fs -m 2 -o /dev/null http://127.0.0.1:2468/v1/health
+}
+
+# Whether the server answers within $1 seconds.
+answers_within() {
+  until=$(($(date +%s) + $1))
+  while [ "$(date +%s)" -lt "$until" ]; do
+    answers && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+running() {
+  pgrep -u sandbox -f 'sandbox-agent server' >/dev/null
+}
+
+# A running server gets 10 s to answer, since this runs at every start, a running machine's too,
+# before it is ended as hung: TERM, then KILL after 5 s, as a hung one may ignore TERM.
+if running && ! answers_within 10; then
+  pkill -u sandbox -f 'sandbox-agent server' || true
+  for tries in $(seq 40); do
+    running || break
+    if [ "$tries" -eq 20 ]; then
+      pkill -KILL -u sandbox -f 'sandbox-agent server' || true
+    fi
+    sleep 0.25
+  done
+fi
+
 # The server listens on loopback alone, with no token: guest port 22 is the only way to it.
-if ! pgrep -u sandbox -x sandbox-agent >/dev/null; then
+if ! running; then
   su - sandbox -c '
     if [ -r /etc/sandbox-agent.env ]; then set -a; . /etc/sandbox-agent.env; set +a; fi
     setsid -f sandbox-agent server --no-token --no-telemetry >/dev/null 2>&1
   '
 fi
 
-tries=0
-until curl -fs -o /dev/null http://127.0.0.1:2468/v1/health; do
-  tries=$((tries + 1))
-  if [ "$tries" -ge 80 ]; then
-    echo "the Sandbox Agent's server didn't answer its health check within 20 s"
-    exit 1
-  fi
-  sleep 0.25
-done
+# 20 s for a server to start, within preparation's 60 s, the grace and the stop above included;
+# it starts in under a second.
+if ! answers_within 20; then
+  echo "the Sandbox Agent's server didn't answer its health check within 20 s"
+  exit 1
+fi
 START
 chmod 755 /etc/clankerbox/start
 

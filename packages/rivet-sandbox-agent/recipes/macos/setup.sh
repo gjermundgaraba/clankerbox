@@ -55,8 +55,9 @@ fi
 # Claude Code at its latest release, and its adapter at the version the server pins. Other
 # agents install the same way; `install-agent codex` hangs in its own check at this version, so
 # give it a time limit too, and end what it leaves running. macOS has no timeout(1): perl's alarm
-# is the limit. It runs in admin's home: sudo keeps the working directory, and the recipe's own,
-# root's alone, is one npm can't read.
+# is the limit. Claude's install takes about 20 s; 300 s leaves room for a slow mirror. It runs in
+# admin's home: sudo keeps the working directory, and the recipe's own, root's alone, is one npm
+# can't read.
 (cd /Users/admin && sudo -n -u admin -H env PATH="$PATH" perl -e 'alarm 300; exec @ARGV' \
   sandbox-agent install-agent claude) >/var/tmp/install-agent.log 2>&1 || {
   tail -n 15 /var/tmp/install-agent.log
@@ -100,7 +101,8 @@ mkdir -p /etc/clankerbox
 cat >/etc/clankerbox/start <<'START'
 #!/bin/sh
 # Runs at every activation: after a create, a start, a fork and a restore. launchd starts the
-# server at boot; this loads its job the first time, and starts it again when it has ended.
+# server at boot; this loads its job the first time, starts a server that has ended, and
+# restarts one that hangs: `kickstart -k` ends it first.
 set -eu
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
@@ -108,18 +110,39 @@ if ! launchctl print system/dev.clankerbox.sandbox-agent >/dev/null 2>&1; then
   launchctl bootstrap system /Library/LaunchDaemons/dev.clankerbox.sandbox-agent.plist
 fi
 
-if ! pgrep -u admin -x sandbox-agent >/dev/null; then
+# The health check, bounded: on loopback a server answers in milliseconds, so one that takes 2 s
+# is hung or busy beyond use.
+answers() {
+  curl -fs -m 2 -o /dev/null http://127.0.0.1:2468/v1/health
+}
+
+# Whether the server answers within $1 seconds.
+answers_within() {
+  until=$(($(date +%s) + $1))
+  while [ "$(date +%s)" -lt "$until" ]; do
+    answers && return 0
+    sleep 0.25
+  done
+  return 1
+}
+
+running() {
+  pgrep -u admin -f 'sandbox-agent server' >/dev/null
+}
+
+# A running server gets 10 s to answer, since this runs at every start, a running machine's too,
+# and one launchd just started may still be starting, before it is restarted as hung.
+if running; then
+  answers_within 10 || launchctl kickstart -k system/dev.clankerbox.sandbox-agent
+else
   launchctl kickstart system/dev.clankerbox.sandbox-agent
 fi
 
-tries=0
-until curl -fs -o /dev/null http://127.0.0.1:2468/v1/health; do
-  tries=$((tries + 1))
-  if [ "$tries" -ge 80 ]; then
-    echo "the Sandbox Agent's server didn't answer its health check within 20 s"
-    exit 1
-  fi
-  sleep 0.25
-done
+# 20 s for a server to start, within preparation's 60 s, the grace and the stop above included;
+# it starts in under a second.
+if ! answers_within 20; then
+  echo "the Sandbox Agent's server didn't answer its health check within 20 s"
+  exit 1
+fi
 START
 chmod 755 /etc/clankerbox/start
