@@ -90,9 +90,8 @@ export default defineConfig({
         rules: { "fence/no-manual-run": "off" },
       },
       {
-        files: [
-          "packages/host/src/{checkpoints,claims,guest,ids,machine-ports,machines,ram-budget,runtime,settings,store}.ts",
-        ],
+        files: ["packages/host/src/*.ts"],
+        excludeFiles: ["packages/host/src/{config,host,routes,runtimes,startup}.ts"],
         rules: {
           "fence/allowed-imports": [
             "error",

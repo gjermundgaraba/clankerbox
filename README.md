@@ -507,8 +507,8 @@ every bump of it:
    - why a value is what it is: a limit, timeout, size, range or pin, with its
      source, an upstream file or doc or a bump skill;
    - a hazard or invariant the code depends on but can't express;
-   - a port's contract: what every implementation of `Runtime.Interface` or
-     `Store.Interface` must do, and only that;
+   - a port's contract: what every implementation of a port, such as
+     `Runtime`, `Store` or `PortProbe`, must do, and only that;
    - one line on each thing the SDK and the provider export, as these ship to
      consumers, saying what the name and type don't;
    - a safety comment the linter asks for, and a tool directive with its
@@ -1203,8 +1203,9 @@ These practices are in force with the layout, and each is checked where it can b
   domain files import only other domain files, `effect`, `effect/encoding`
   and the SDK; the SDK's `.` entry imports no Node and uses no `Buffer` or
   `process`; and `fence/no-manual-run` keeps hand-run Effect to the places
-  above. A domain file or an entry added later goes on its allow-list in
-  `vite.config.ts`.
+  above. Every file in `packages/host/src/` is fenced but the composition
+  files `vite.config.ts` lists, and another file imports a new domain file once
+  it is on the allow-list there.
 - **A runtime is removable.** Removing boat is its `platform/` folder, its arm
   in `runtimes.ts`, its config section, the SDK's `Runtime` literal and its
   tests; `vp check` and every package's tests pass after it. What stays is
