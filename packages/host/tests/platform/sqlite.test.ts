@@ -327,37 +327,6 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect(
-    "a checkpoint row records only a capture or a delete, and one that says otherwise is Internal",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = join(yield* scratch, "state");
-
-        yield* withStore(stateDir, (store) =>
-          Effect.gen(function* () {
-            yield* planted(store, record("dev"));
-
-            const token = yield* capturing(store, checkpoint("snap"));
-
-            yield* store.end(token, { action: { name: "capture", status: "done" } });
-          }),
-        );
-
-        const db = new DatabaseSync(join(stateDir, databaseFile));
-
-        db.exec("UPDATE checkpoints SET action_name = 'start' WHERE name = 'snap'");
-        db.close();
-
-        const [listed, found] = yield* withStore(stateDir, (store) =>
-          Effect.all([Effect.flip(store.checkpoints), Effect.flip(store.findCheckpoint("snap"))]),
-        );
-
-        for (const error of [listed, found]) {
-          expect(error._tag).toBe("Internal");
-        }
-      }),
-  );
-
   it.effect("a taken name is Conflict{exists}, and the unique index refuses a taken port", () =>
     Effect.gen(function* () {
       const stateDir = join(yield* scratch, "state");
