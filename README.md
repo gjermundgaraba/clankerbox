@@ -502,8 +502,22 @@ every bump of it:
 1. Does the dependency already track this? Don't duplicate its bookkeeping.
 2. Are we deleting its files or managing its processes, and so owning proofs
    it doesn't need?
-3. Every layout choice, limit and timeout carries a recorded reason, in a
-   comment beside it.
+3. A comment stays only where deleting it would lose something a reader needs
+   and the code can't show:
+   - why a value is what it is: a limit, timeout, size, range or pin, with its
+     source, an upstream file or doc or a bump skill;
+   - a hazard or invariant the code depends on but can't express;
+   - a port's contract: what every implementation of `Runtime.Interface` or
+     `Store.Interface` must do, and only that;
+   - one line on each thing the SDK and the provider export, as these ship to
+     consumers, saying what the name and type don't;
+   - a safety comment the linter asks for, and a tool directive with its
+     reason.
+
+   Module headers that restate this document, docs that restate a name or a
+   type, narration of steps, internal field docs, and test comments outside
+   the list above go. A reason a type or a test name can carry goes there.
+
 4. Our comments are not evidence: check each claim against the dependency's
    source or docs at the pinned version.
 5. A bump re-checks that dependency's claims, not just the tests. The bump
