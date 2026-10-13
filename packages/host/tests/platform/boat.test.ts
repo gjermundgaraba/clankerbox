@@ -505,7 +505,7 @@ const rigOn = async (boat = fakeBoat()): Promise<Rig> => {
 
   const insert = (machine: MachineRef) =>
     Effect.runPromise(
-      Effect.asVoid(store.insert("create", { table: "machines", record: row(machine) })),
+      Effect.asVoid(store.insert("create", { kind: "machine", record: row(machine) })),
     );
 
   return { boat, guest, store, runtime, stateDir, insert };
@@ -2115,7 +2115,7 @@ test("through the host: stop and delete after a crash before the sandbox was rec
 
   await Effect.runPromise(
     store.insert("create", {
-      table: "machines",
+      kind: "machine",
       record: row(machineOn("dev")),
     }),
   );
@@ -2143,7 +2143,7 @@ test("through the host: after a crash mid-create, a stop stops the sandbox boat 
   });
   await Effect.runPromise(
     store.insert("create", {
-      table: "machines",
+      kind: "machine",
       record: row(machineOn("dev", { native: "bx_booting" })),
     }),
   );

@@ -29,7 +29,7 @@ const row: NewMachine = {
 
 /** A create's claim of `row`, as `claimAndCheck` takes it. */
 const inserting = (store: Interface) =>
-  Effect.map(store.insert("create", { table: "machines", record: row }), (token) => ({
+  Effect.map(store.insert("create", { kind: "machine", record: row }), (token) => ({
     token,
     held: row,
   }));

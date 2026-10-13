@@ -2,7 +2,13 @@
  * The host config: one JSON file, read from `clankerbox host --config PATH`. A host process
  * runs exactly one runtime, so the config names it, with that runtime's own settings.
  */
-import { describeFileError, describeIssues, HostId, Invalid } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  describeFileError,
+  describeIssues,
+  HostId,
+  Invalid,
+  type Runtime,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { defaultMachinePorts, reservedPorts } from "./machine-ports.ts";
 import { Address } from "./platform/address.ts";
@@ -41,10 +47,20 @@ const common = {
   machinePorts: Schema.optionalKey(MachinePorts),
 };
 
+/**
+ * Each runtime's section of the file, under the SDK's name for the runtime, so a runtime the SDK
+ * names and the host config lacks fails to type-check.
+ */
+const sections = {
+  smolvm: Smolvm.SmolvmSettings,
+  tart: Tart.TartSettings,
+  boat: BoatSettings,
+} satisfies Record<Runtime, Schema.Struct<Schema.Struct.Fields>>;
+
 const HostConfigFile = Schema.Union([
-  Schema.Struct({ ...common, runtime: Schema.Literal("smolvm"), smolvm: Smolvm.SmolvmSettings }),
-  Schema.Struct({ ...common, runtime: Schema.Literal("tart"), tart: Tart.TartSettings }),
-  Schema.Struct({ ...common, runtime: Schema.Literal("boat"), boat: BoatSettings }),
+  Schema.Struct({ ...common, runtime: Schema.Literal("smolvm"), smolvm: sections.smolvm }),
+  Schema.Struct({ ...common, runtime: Schema.Literal("tart"), tart: sections.tart }),
+  Schema.Struct({ ...common, runtime: Schema.Literal("boat"), boat: sections.boat }),
 ]);
 
 type HostConfigFile = typeof HostConfigFile.Type;

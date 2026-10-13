@@ -219,10 +219,10 @@ export const make = (
         return row;
       });
 
-    const inserting = (row: NewMachine): NewRow => ({ table: "machines", record: row });
+    const inserting = (row: NewMachine): NewRow => ({ kind: "machine", record: row });
 
     const holding = (action: ActionName, name: string) =>
-      store.hold(action, { table: "machines", name });
+      store.hold(action, { kind: "machine", name });
 
     /**
      * Steps 2 and 3 for an action that boots a machine or allocates a port, one at a time. The
@@ -403,7 +403,7 @@ export const make = (
         const [token, record] = yield* claimAndCheck(holding("delete", name), Effect.succeed);
 
         yield* native(token, `delete ${id}`, runtime.delete(ref(record)));
-        yield* store.remove({ table: "machines", name });
+        yield* store.remove({ kind: "machine", name });
       });
 
     const fork = (sourceId: string, name: string) =>

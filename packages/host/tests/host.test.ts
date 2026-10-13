@@ -58,7 +58,7 @@ test("the host fails the actions its last process left running before it serves"
 
   await Effect.flatMap(open(host), (store) =>
     store.insert("create", {
-      table: "machines",
+      kind: "machine",
       record: {
         name: "dev",
         instance: "0123456789abcdef0123456789abcdef",
