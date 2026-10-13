@@ -10,7 +10,7 @@ import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Layer, Stream } from "effect";
+import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { checkRamBudget, ramInUse } from "../src/ram-budget.ts";
 import {
@@ -98,7 +98,11 @@ interface FakeMachine {
 /** What a test injects into the next call of an operation. */
 type Injection =
   | { readonly kind: "fail"; readonly error: HostError }
-  | { readonly kind: "hold"; readonly entered: () => void; readonly until: Promise<void> };
+  | {
+      readonly kind: "hold";
+      readonly entered: Deferred.Deferred<void>;
+      readonly until: Deferred.Deferred<void>;
+    };
 
 /** The calls a runtime can refuse. */
 type Refusable = "create" | "start" | "capture" | "restore" | "fork";
@@ -131,9 +135,9 @@ export const fakeRuntime = (options: FakeOptions) => {
       }
 
       if (injection.kind === "hold") {
-        injection.entered();
+        yield* Deferred.succeed(injection.entered, undefined);
 
-        return yield* Effect.promise(() => injection.until);
+        return yield* Deferred.await(injection.until);
       }
 
       return yield* Effect.fail(injection.error);
@@ -409,16 +413,16 @@ export const fakeRuntime = (options: FakeOptions) => {
       refusals.set(operation, [...(refusals.get(operation) ?? []), refusal]);
     },
     /**
-     * Holds the next call of `operation` until `release` is called. `entered` resolves once
-     * that call has started, so the action holding it is past its claim.
+     * Holds the next call of `operation` until `release` runs. `entered` ends once that call has
+     * started, so the action holding it is past its claim.
      */
     holdNext: (operation: Operation) => {
-      const until = Promise.withResolvers<void>();
-      const entered = Promise.withResolvers<void>();
+      const until = Deferred.makeUnsafe<void>();
+      const entered = Deferred.makeUnsafe<void>();
 
-      inject(operation, { kind: "hold", entered: entered.resolve, until: until.promise });
+      inject(operation, { kind: "hold", entered, until });
 
-      return { release: until.resolve, entered: entered.promise };
+      return { release: Deferred.succeed(until, undefined), entered: Deferred.await(entered) };
     },
   };
 };

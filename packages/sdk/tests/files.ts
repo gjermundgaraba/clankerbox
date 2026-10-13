@@ -49,3 +49,11 @@ export const exitOf = (
 
     return yield* handle.exitCode;
   });
+
+export const stat = (path: string) => Effect.flatMap(FileSystem.FileSystem, (fs) => fs.stat(path));
+
+export const remove = (path: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(path, { recursive: true, force: true }));
+
+export const readDirectory = (path: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readDirectory(path));

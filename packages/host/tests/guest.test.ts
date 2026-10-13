@@ -4,12 +4,12 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vite-plus/test";
 import { hostKeyIn, preparationScript } from "../src/guest.ts";
 import { writeStubs } from "./fake-runtime.ts";
-import { removeScratch, scratch } from "./scratch.ts";
 
 const owned: Array<string> = [];
 
@@ -20,12 +20,20 @@ afterEach(async () => {
     kill();
   }
 
-  await removeScratch(owned);
+  await Promise.all(owned.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
+
+const scratch = async () => {
+  const dir = await mkdtemp(join(tmpdir(), "clankerbox-guest-"));
+
+  owned.push(dir);
+
+  return dir;
+};
 
 /** A guest root with its `dev` and the stubs, under a fresh scratch directory. */
 const guest = async (uname = "Linux") => {
-  const dir = await scratch(owned);
+  const dir = await scratch();
   const root = join(dir, "root");
 
   await mkdir(join(root, "dev"), { recursive: true });

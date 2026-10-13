@@ -1,16 +1,16 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { existsSync, readFileSync } from "node:fs";
 import { Effect, Layer, PlatformError, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { afterEach, expect, test } from "vite-plus/test";
+import { layer } from "@effect/vitest";
+import { afterEach, expect } from "vite-plus/test";
 import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
-import { machine, type StubHost, stubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { cleanup, cli, decodeJsonError, scratch, writeConfig } from "./support.ts";
-
-const owned: Array<string> = [];
+import { machine, scratch, stubHost, type StubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { cleanup, cli, decodeJsonError, writeConfig } from "./support.ts";
 
 const stubs: Array<StubHost> = [];
 
-afterEach(() => cleanup(owned, stubs));
+afterEach(() => cleanup(stubs));
 
 interface Spawned {
   readonly command: string;
@@ -69,138 +69,159 @@ const reachable = machine("linux_dev", {
   hostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@linux_dev",
 });
 
-const setup = async (held = reachable) => {
-  const dir = await scratch(owned);
-  const config = await writeConfig(dir, ["linux"]);
-  const linux = stubHost({ id: "linux", bases: ["ubuntu"], machines: [held] });
+const setup = (held = reachable) =>
+  Effect.gen(function* () {
+    const dir = yield* scratch;
+    const config = yield* writeConfig(dir, ["linux"]);
+    const linux = stubHost({ id: "linux", bases: ["ubuntu"], machines: [held] });
 
-  stubs.push(linux);
+    stubs.push(linux);
 
-  return { config, endpoints: [["linux", linux]] as const };
-};
+    return { config, endpoints: [["linux", linux]] as const };
+  });
 
-test("ssh logs in as the machine's user, pins its host key in a one-line known-hosts file and passes the caller's args", async () => {
-  const { config, endpoints } = await setup();
-  const ssh = fakeSsh(0);
+layer(NodeServices.layer)((it) => {
+  it.effect(
+    "ssh logs in as the machine's user, pins its host key in a one-line known-hosts file and passes the caller's args",
+    () =>
+      Effect.gen(function* () {
+        const { config, endpoints } = yield* setup();
+        const ssh = fakeSsh(0);
 
-  const { code } = await cli(
-    ["ssh", "linux_dev", "--config", config, "--", "-L", "8080:localhost:80", "uptime"],
-    { endpoints, spawner: ssh.layer },
+        const { code } = yield* cli(
+          ["ssh", "linux_dev", "--config", config, "--", "-L", "8080:localhost:80", "uptime"],
+          { endpoints, spawner: ssh.layer },
+        );
+
+        const [spawned] = ssh.spawned;
+
+        expect(code).toBe(0);
+        expect(spawned?.command).toBe("ssh");
+        expect(spawned?.knownHosts).toBe(
+          "linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n",
+        );
+        expect(spawned?.args).toEqual([
+          "-l",
+          "root",
+          "-o",
+          "HostName=100.64.0.7",
+          "-o",
+          "Port=10022",
+          "-o",
+          "HostKeyAlias=linux_dev",
+          "-o",
+          `UserKnownHostsFile=${spawned?.knownHostsFile}`,
+          "-o",
+          "GlobalKnownHostsFile=/dev/null",
+          "-o",
+          "StrictHostKeyChecking=yes",
+          "linux_dev",
+          "-L",
+          "8080:localhost:80",
+          "uptime",
+        ]);
+        expect(existsSync(spawned?.knownHostsFile ?? "")).toBe(false);
+      }),
   );
 
-  const [spawned] = ssh.spawned;
+  it.effect("ssh USER@ID logs in to the machine as that user", () =>
+    Effect.gen(function* () {
+      const { config, endpoints } = yield* setup();
+      const ssh = fakeSsh(0);
 
-  expect(code).toBe(0);
-  expect(spawned?.command).toBe("ssh");
-  expect(spawned?.knownHosts).toBe("linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n");
-  expect(spawned?.args).toEqual([
-    "-l",
-    "root",
-    "-o",
-    "HostName=100.64.0.7",
-    "-o",
-    "Port=10022",
-    "-o",
-    "HostKeyAlias=linux_dev",
-    "-o",
-    `UserKnownHostsFile=${spawned?.knownHostsFile}`,
-    "-o",
-    "GlobalKnownHostsFile=/dev/null",
-    "-o",
-    "StrictHostKeyChecking=yes",
-    "linux_dev",
-    "-L",
-    "8080:localhost:80",
-    "uptime",
-  ]);
-  expect(existsSync(spawned?.knownHostsFile ?? "")).toBe(false);
-});
+      const { code } = yield* cli(["ssh", "dev@linux_dev", "--config", config], {
+        endpoints,
+        spawner: ssh.layer,
+      });
 
-test("ssh USER@ID logs in to the machine as that user", async () => {
-  const { config, endpoints } = await setup();
-  const ssh = fakeSsh(0);
-
-  const { code } = await cli(["ssh", "dev@linux_dev", "--config", config], {
-    endpoints,
-    spawner: ssh.layer,
-  });
-
-  expect(code).toBe(0);
-  expect(ssh.spawned[0]?.args.slice(0, 2)).toEqual(["-l", "dev"]);
-  expect(ssh.spawned[0]?.args.at(-1)).toBe("linux_dev");
-});
-
-test("ssh exits with ssh's exit code, through Exited's errorExitCode and the default teardown", async () => {
-  const { config, endpoints } = await setup();
-
-  const { code } = await cli(["ssh", "linux_dev", "--config", config], {
-    endpoints,
-    spawner: fakeSsh(255).layer,
-  });
-
-  expect(code).toBe(255);
-});
-
-test("ssh into a machine that lacks an endpoint or a host key is Precondition, says which, and runs no ssh", async () => {
-  const login = { user: "root", host: "100.64.0.7", port: 10_022 };
-
-  const failed = {
-    name: "create",
-    status: "failed",
-    error: { tag: "Precondition", message: "setup exited 1" },
-  } as const;
-
-  const said: ReadonlyArray<readonly [Machine, string]> = [
-    [
-      machine("linux_dev", { state: "stopped", hostKey: "ssh-ed25519 AAAAexample" }),
-      "linux_dev has no SSH endpoint (stopped, create done): see clankerbox get linux_dev",
-    ],
-    [
-      machine("linux_dev", { made: false, action: failed, ssh: login }),
-      "linux_dev has no SSH host key on record (running (unmade), create failed): see clankerbox get linux_dev",
-    ],
-  ];
-
-  for (const [held, message] of said) {
-    const { config, endpoints } = await setup(held);
-    const ssh = fakeSsh(0);
-
-    const { code, stderr } = await cli(["ssh", "linux_dev", "--config", config], {
-      endpoints,
-      spawner: ssh.layer,
-    });
-
-    expect(code).toBe(1);
-    expect(stderr).toContain(`clankerbox: Precondition: ${message}`);
-    expect(ssh.spawned).toEqual([]);
-  }
-});
-
-test("ssh that can't be started is SpawnFailed, naming ssh", async () => {
-  const { config, endpoints } = await setup();
-
-  const missing = Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make(() =>
-      Effect.fail(
-        PlatformError.badArgument({
-          module: "ChildProcess",
-          method: "spawn",
-          description: "ssh: not found",
-        }),
-      ),
-    ),
+      expect(code).toBe(0);
+      expect(ssh.spawned[0]?.args.slice(0, 2)).toEqual(["-l", "dev"]);
+      expect(ssh.spawned[0]?.args.at(-1)).toBe("linux_dev");
+    }),
   );
 
-  const { code, stdout } = await cli(["ssh", "linux_dev", "--json", "--config", config], {
-    endpoints,
-    spawner: missing,
-  });
+  it.effect(
+    "ssh exits with ssh's exit code, through Exited's errorExitCode and the default teardown",
+    () =>
+      Effect.gen(function* () {
+        const { config, endpoints } = yield* setup();
 
-  expect(code).toBe(1);
-  expect(decodeJsonError(stdout).error).toMatchObject({
-    tag: "SpawnFailed",
-    message: expect.stringContaining("couldn't run ssh"),
-    retryable: false,
-  });
+        const { code } = yield* cli(["ssh", "linux_dev", "--config", config], {
+          endpoints,
+          spawner: fakeSsh(255).layer,
+        });
+
+        expect(code).toBe(255);
+      }),
+  );
+
+  it.effect(
+    "ssh into a machine that lacks an endpoint or a host key is Precondition, says which, and runs no ssh",
+    () =>
+      Effect.gen(function* () {
+        const login = { user: "root", host: "100.64.0.7", port: 10_022 };
+
+        const failed = {
+          name: "create",
+          status: "failed",
+          error: { tag: "Precondition", message: "setup exited 1" },
+        } as const;
+
+        const said: ReadonlyArray<readonly [Machine, string]> = [
+          [
+            machine("linux_dev", { state: "stopped", hostKey: "ssh-ed25519 AAAAexample" }),
+            "linux_dev has no SSH endpoint (stopped, create done): see clankerbox get linux_dev",
+          ],
+          [
+            machine("linux_dev", { made: false, action: failed, ssh: login }),
+            "linux_dev has no SSH host key on record (running (unmade), create failed): see clankerbox get linux_dev",
+          ],
+        ];
+
+        for (const [held, message] of said) {
+          const { config, endpoints } = yield* setup(held);
+          const ssh = fakeSsh(0);
+
+          const { code, stderr } = yield* cli(["ssh", "linux_dev", "--config", config], {
+            endpoints,
+            spawner: ssh.layer,
+          });
+
+          expect(code).toBe(1);
+          expect(stderr).toContain(`clankerbox: Precondition: ${message}`);
+          expect(ssh.spawned).toEqual([]);
+        }
+      }),
+  );
+
+  it.effect("ssh that can't be started is SpawnFailed, naming ssh", () =>
+    Effect.gen(function* () {
+      const { config, endpoints } = yield* setup();
+
+      const missing = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.fail(
+            PlatformError.badArgument({
+              module: "ChildProcess",
+              method: "spawn",
+              description: "ssh: not found",
+            }),
+          ),
+        ),
+      );
+
+      const { code, stdout } = yield* cli(["ssh", "linux_dev", "--json", "--config", config], {
+        endpoints,
+        spawner: missing,
+      });
+
+      expect(code).toBe(1);
+      expect(decodeJsonError(stdout).error).toMatchObject({
+        tag: "SpawnFailed",
+        message: expect.stringContaining("couldn't run ssh"),
+        retryable: false,
+      });
+    }),
+  );
 });

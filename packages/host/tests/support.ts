@@ -4,7 +4,7 @@ import { join } from "node:path";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { CreateRequest } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Layer, Logger, ManagedRuntime } from "effect";
+import { Context, Effect, Exit, Layer, Logger, Scope } from "effect";
 import { HttpServer } from "effect/http";
 import * as Checkpoints from "../src/checkpoints.ts";
 import { hostLayer } from "../src/host.ts";
@@ -13,7 +13,6 @@ import type { PortRange } from "../src/machine-ports.ts";
 import type { HostSettings } from "../src/settings.ts";
 import * as Store from "../src/store.ts";
 import { type FakeOptions, type FakeRuntime, fakeRuntime } from "./fake-runtime.ts";
-import { removeScratch } from "./scratch.ts";
 
 export const image =
   "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
@@ -44,12 +43,6 @@ export const request = (name: string, fields?: Partial<CreateRequest>): CreateRe
   ...fields,
 });
 
-/** Ends the hosts, then removes the scratch directories they ran in. */
-export const cleanup = async (owned: Array<string>, hosts: Array<TestHost>) => {
-  await Promise.all(hosts.splice(0).map((host) => host.dispose()));
-  await removeScratch(owned);
-};
-
 /** An HTTP server on a port of loopback the OS picks, unless `port` names one. */
 export const loopbackServer = (port = 0) =>
   NodeHttpServer.layer(createServer, { host: "127.0.0.1", port });
@@ -63,52 +56,56 @@ export interface TestHost {
   readonly url: string;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, Machines.Machines | Checkpoints.Checkpoints | Store.Store>,
-  ) => Promise<A>;
+  ) => Effect.Effect<A, E>;
   readonly machines: Machines.Interface;
   readonly checkpoints: Checkpoints.Interface;
   readonly store: Store.Interface;
-  /** Ends the host: its fibers are interrupted and the state dir's lock released. */
-  readonly dispose: () => Promise<void>;
+  /**
+   * Ends the host before its test does: its fibers are interrupted and the state dir's lock
+   * released. The test's end does it otherwise.
+   */
+  readonly dispose: Effect.Effect<void>;
 }
 
 /**
  * Runs host `linux` as `clankerbox host` does, over `fake`, or a new fake in `dir`, with its
- * state dir in `dir`, served on a loopback port, giving machines `ports`. Failed actions log no
- * warnings here: the tests read their errors.
+ * state dir in `dir`, served on a loopback port, giving machines `ports`, until the test ends.
+ * Failed actions log no warnings here: the tests read their errors.
  */
-export const startHost = async (
+export const startHost = (
   dir: string,
   options?: {
     readonly fake?: FakeRuntime;
     readonly runtime?: Omit<FakeOptions, "dir">;
     readonly ports?: PortRange;
   },
-): Promise<TestHost> => {
-  const fake = options?.fake ?? fakeRuntime({ dir, ...options?.runtime });
-  const stateDir = join(dir, "state");
+) =>
+  Effect.gen(function* () {
+    const fake = options?.fake ?? fakeRuntime({ dir, ...options?.runtime });
+    const stateDir = join(dir, "state");
+    const scope = yield* Scope.make();
 
-  const runtime = ManagedRuntime.make(
-    hostLayer(hostConfig(stateDir, options?.ports), () => fake.layer, loopbackServer()).pipe(
-      Layer.provideMerge(Logger.layer([])),
-      Layer.provide(NodeServices.layer),
-    ),
-  );
+    yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 
-  const run = <A, E>(
-    effect: Effect.Effect<A, E, Machines.Machines | Checkpoints.Checkpoints | Store.Store>,
-  ) => runtime.runPromise(effect);
+    const context = yield* Layer.buildWithScope(
+      hostLayer(hostConfig(stateDir, options?.ports), () => fake.layer, loopbackServer()).pipe(
+        Layer.provideMerge(Logger.layer([])),
+        Layer.provide(NodeServices.layer),
+      ),
+      scope,
+    );
 
-  return {
-    dir,
-    fake,
-    stateDir,
-    url: HttpServer.formatAddress(
-      (await runtime.runPromise(Effect.service(HttpServer.HttpServer))).address,
-    ),
-    run,
-    machines: await run(Effect.service(Machines.Machines)),
-    checkpoints: await run(Effect.service(Checkpoints.Checkpoints)),
-    store: await run(Effect.service(Store.Store)),
-    dispose: () => runtime.dispose(),
-  };
-};
+    const host: TestHost = {
+      dir,
+      fake,
+      stateDir,
+      url: HttpServer.formatAddress(Context.get(context, HttpServer.HttpServer).address),
+      run: (effect) => Effect.provide(effect, context),
+      machines: Context.get(context, Machines.Machines),
+      checkpoints: Context.get(context, Checkpoints.Checkpoints),
+      store: Context.get(context, Store.Store),
+      dispose: Scope.close(scope, Exit.void),
+    };
+
+    return host;
+  });

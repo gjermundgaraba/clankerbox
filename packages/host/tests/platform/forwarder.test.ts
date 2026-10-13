@@ -8,33 +8,15 @@ import { readFile } from "node:fs/promises";
 import { connect, createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Exit, Fiber, Scope, type Stream } from "effect";
+import { layer } from "@effect/vitest";
+import { Effect, Fiber, type Stream } from "effect";
 import { ChildProcess } from "effect/process";
-import { afterEach, expect, test } from "vite-plus/test";
-import { type Forwarder, make } from "../../src/platform/tart/forwarder.ts";
-import { removeScratch, scratch } from "../scratch.ts";
-
-const owned: Array<string> = [];
-
-const scopes: Array<Scope.Closeable> = [];
-
-afterEach(async () => {
-  await Promise.all(
-    scopes.splice(0).map((scope) => Effect.runPromise(Scope.close(scope, Exit.void))),
-  );
-  await removeScratch(owned);
-});
+import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { expect } from "vite-plus/test";
+import { make } from "../../src/platform/tart/forwarder.ts";
 
 /** A forwarder on loopback that ends with the test. */
-const forwarder = async (): Promise<Forwarder> => {
-  const scope = await Effect.runPromise(Scope.make());
-
-  scopes.push(scope);
-
-  return Effect.runPromise(
-    make("127.0.0.1").pipe(Scope.provide(scope), Effect.provide(NodeServices.layer)),
-  );
-};
+const forwarder = make("127.0.0.1");
 
 /**
  * Echoes its stdin, then appends a line to `marker` once stdin has closed. Node rather than
@@ -89,140 +71,170 @@ const roundTrip = async (port: number, payload: Uint8Array) => {
 };
 
 /** Waits until `marker` holds `count` lines. */
-const closedLines = async (marker: string, count: number) => {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const lines = await readFile(marker, "utf8").then(
-      (text) => text.split("\n").filter((line) => line === "closed").length,
-      () => 0,
-    );
+const closedLines = (marker: string, count: number) =>
+  Effect.promise(async () => {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const lines = await readFile(marker, "utf8").then(
+        (text) => text.split("\n").filter((line) => line === "closed").length,
+        () => 0,
+      );
 
-    if (lines >= count) {
-      return lines;
+      if (lines >= count) {
+        return lines;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
+    return 0;
+  });
 
-  return 0;
-};
+/** The code a connection to `port` is refused with, or `connected`. */
+const refusal = (port: number) =>
+  Effect.promise(() =>
+    connected(port).then(
+      (socket) => {
+        socket.destroy();
 
-test("bytes go both ways, and a half-closed client still gets the rest of the output", async () => {
-  const marker = join(await scratch(owned), "marker");
-  const port = ownPort();
-  const payload = randomBytes(4 * 1024 * 1024);
-
-  await Effect.runPromise((await forwarder()).listen(port, echo(marker)));
-
-  expect((await roundTrip(port, payload)).equals(payload)).toBe(true);
-  expect(await closedLines(marker, 1)).toBe(1);
-});
-
-test("a client that resets its connection ends the command by closing its stdin", async () => {
-  const marker = join(await scratch(owned), "marker");
-  const port = ownPort();
-
-  await Effect.runPromise((await forwarder()).listen(port, echo(marker)));
-
-  const socket = await connected(port);
-
-  socket.write("partial");
-  socket.resetAndDestroy();
-
-  expect(await closedLines(marker, 1)).toBe(1);
-});
-
-test("many connections at once each get their own command and their own bytes", async () => {
-  const marker = join(await scratch(owned), "marker");
-  const port = ownPort();
-  const payloads = Array.from({ length: 24 }, () => randomBytes(64 * 1024));
-
-  await Effect.runPromise((await forwarder()).listen(port, echo(marker)));
-
-  const echoed = await Promise.all(payloads.map((payload) => roundTrip(port, payload)));
-
-  expect(echoed.map((bytes, index) => bytes.equals(payloads[index] ?? Buffer.alloc(0)))).toEqual(
-    payloads.map(() => true),
+        return "connected";
+      },
+      (error: NodeJS.ErrnoException) => error.code,
+    ),
   );
-  expect(await closedLines(marker, payloads.length)).toBe(payloads.length);
-});
 
-test("listening twice keeps one listener, and closing it leaves open connections running", async () => {
-  const marker = join(await scratch(owned), "marker");
-  const port = ownPort();
-  const forwarding = await forwarder();
-
-  await Effect.runPromise(forwarding.listen(port, echo(marker)));
-  await Effect.runPromise(forwarding.listen(port, echo(marker)));
-
-  const open = await connected(port);
-  const chunks: Array<Buffer> = [];
-
-  open.on("data", (chunk: Buffer) => {
-    chunks.push(chunk);
-  });
-
-  const ended = new Promise((resolve) => {
-    open.once("end", resolve);
-  });
-
-  // The first echo shows the forwarder has accepted the connection before it stops listening.
-  const echoed = new Promise((resolve) => {
-    open.once("data", resolve);
-  });
-
-  open.write("first, ");
-  await echoed;
-  await Effect.runPromise(forwarding.close(port));
-  await expect(connected(port)).rejects.toMatchObject({ code: "ECONNREFUSED" });
-
-  open.end("still here");
-  await ended;
-  open.destroy();
-
-  expect(Buffer.concat(chunks).toString()).toBe("first, still here");
-});
-
-test("a port something else holds is Internal, naming the address", async () => {
-  const marker = join(await scratch(owned), "marker");
-  const port = ownPort();
-  const holder = createServer();
-
-  await new Promise<void>((resolve) => {
-    holder.listen({ host: "127.0.0.1", port }, resolve);
-  });
-
-  try {
-    const error = await Effect.runPromise(
-      Effect.flip((await forwarder()).listen(port, echo(marker))),
-    );
-
-    expect(error._tag).toBe("Internal");
-    expect(error.message).toContain(`127.0.0.1:${port}`);
-  } finally {
-    await new Promise((resolve) => {
-      holder.close(resolve);
-    });
-  }
-});
-
-test("a listen interrupted before it listens leaves the port free, and a later listen takes it", async () => {
-  const marker = join(await scratch(owned), "marker");
-  const port = ownPort();
-  const forwarding = await forwarder();
-
-  await Effect.runPromise(
+layer(NodeServices.layer)((it) => {
+  it.effect("bytes go both ways, and a half-closed client still gets the rest of the output", () =>
     Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(forwarding.listen(port, echo(marker)), {
-        startImmediately: true,
-      });
+      const marker = join(yield* scratch, "marker");
+      const port = ownPort();
+      const payload = randomBytes(4 * 1024 * 1024);
 
-      yield* Fiber.interrupt(fiber);
+      yield* (yield* forwarder).listen(port, echo(marker));
+
+      expect((yield* Effect.promise(() => roundTrip(port, payload))).equals(payload)).toBe(true);
+      expect(yield* closedLines(marker, 1)).toBe(1);
     }),
   );
 
-  await expect(connected(port)).rejects.toMatchObject({ code: "ECONNREFUSED" });
+  it.effect("a client that resets its connection ends the command by closing its stdin", () =>
+    Effect.gen(function* () {
+      const marker = join(yield* scratch, "marker");
+      const port = ownPort();
 
-  await Effect.runPromise(forwarding.listen(port, echo(marker)));
+      yield* (yield* forwarder).listen(port, echo(marker));
 
-  expect((await roundTrip(port, Buffer.from("again"))).toString()).toBe("again");
+      const socket = yield* Effect.promise(() => connected(port));
+
+      socket.write("partial");
+      socket.resetAndDestroy();
+
+      expect(yield* closedLines(marker, 1)).toBe(1);
+    }),
+  );
+
+  it.effect("many connections at once each get their own command and their own bytes", () =>
+    Effect.gen(function* () {
+      const marker = join(yield* scratch, "marker");
+      const port = ownPort();
+      const payloads = Array.from({ length: 24 }, () => randomBytes(64 * 1024));
+
+      yield* (yield* forwarder).listen(port, echo(marker));
+
+      const echoed = yield* Effect.promise(() =>
+        Promise.all(payloads.map((payload) => roundTrip(port, payload))),
+      );
+
+      expect(
+        echoed.map((bytes, index) => bytes.equals(payloads[index] ?? Buffer.alloc(0))),
+      ).toEqual(payloads.map(() => true));
+      expect(yield* closedLines(marker, payloads.length)).toBe(payloads.length);
+    }),
+  );
+
+  it.effect(
+    "listening twice keeps one listener, and closing it leaves open connections running",
+    () =>
+      Effect.gen(function* () {
+        const marker = join(yield* scratch, "marker");
+        const port = ownPort();
+        const forwarding = yield* forwarder;
+
+        yield* forwarding.listen(port, echo(marker));
+        yield* forwarding.listen(port, echo(marker));
+
+        const open = yield* Effect.promise(() => connected(port));
+        const chunks: Array<Buffer> = [];
+
+        open.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+        });
+
+        const ended = new Promise((resolve) => {
+          open.once("end", resolve);
+        });
+
+        // The first echo shows the forwarder has accepted the connection before it stops listening.
+        const echoed = new Promise((resolve) => {
+          open.once("data", resolve);
+        });
+
+        open.write("first, ");
+        yield* Effect.promise(() => echoed);
+        yield* forwarding.close(port);
+        expect(yield* refusal(port)).toBe("ECONNREFUSED");
+
+        open.end("still here");
+        yield* Effect.promise(() => ended);
+        open.destroy();
+
+        expect(Buffer.concat(chunks).toString()).toBe("first, still here");
+      }),
+  );
+
+  it.effect("a port something else holds is Internal, naming the address", () =>
+    Effect.gen(function* () {
+      const marker = join(yield* scratch, "marker");
+      const port = ownPort();
+      const holder = createServer();
+
+      yield* Effect.acquireRelease(
+        Effect.callback<void>((resume) => {
+          holder.listen({ host: "127.0.0.1", port }, () => resume(Effect.void));
+        }),
+        () =>
+          Effect.callback<void>((resume) => {
+            holder.close(() => resume(Effect.void));
+          }),
+      );
+
+      const error = yield* Effect.flip((yield* forwarder).listen(port, echo(marker)));
+
+      expect(error._tag).toBe("Internal");
+      expect(error.message).toContain(`127.0.0.1:${port}`);
+    }),
+  );
+
+  it.effect(
+    "a listen interrupted before it listens leaves the port free, and a later listen takes it",
+    () =>
+      Effect.gen(function* () {
+        const marker = join(yield* scratch, "marker");
+        const port = ownPort();
+        const forwarding = yield* forwarder;
+
+        const fiber = yield* Effect.forkChild(forwarding.listen(port, echo(marker)), {
+          startImmediately: true,
+        });
+
+        yield* Fiber.interrupt(fiber);
+
+        expect(yield* refusal(port)).toBe("ECONNREFUSED");
+
+        yield* forwarding.listen(port, echo(marker));
+
+        expect(
+          (yield* Effect.promise(() => roundTrip(port, Buffer.from("again")))).toString(),
+        ).toBe("again");
+      }),
+  );
 });

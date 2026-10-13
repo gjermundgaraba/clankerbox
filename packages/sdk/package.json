@@ -16,7 +16,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./node": "./src/node.ts",
-    "./testing": "./tests/stub-host.ts",
+    "./testing": "./tests/testing.ts",
     "./package.json": "./package.json"
   },
   "publishConfig": {

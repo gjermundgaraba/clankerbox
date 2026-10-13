@@ -1,93 +1,112 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { join } from "node:path";
-import { afterEach, expect, test } from "vite-plus/test";
-import { type StubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { cleanup, cli, decodeJsonError, hostIn, scratch, writeConfig } from "./support.ts";
-
-const owned: Array<string> = [];
+import { layer } from "@effect/vitest";
+import { Effect } from "effect";
+import { afterEach, expect } from "vite-plus/test";
+import { mkdir, type StubHost, write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { cleanup, cli, decodeJsonError, hostIn, writeConfig } from "./support.ts";
 
 const stubs: Array<StubHost> = [];
 
-afterEach(() => cleanup(owned, stubs));
+afterEach(() => cleanup(stubs));
 
 const host = hostIn(stubs);
 
-test("the config is read from $XDG_CONFIG_HOME/clankerbox/config.json without --config", async () => {
-  const dir = await scratch(owned);
+layer(NodeServices.layer)((it) => {
+  it.effect(
+    "the config is read from $XDG_CONFIG_HOME/clankerbox/config.json without --config",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
 
-  await mkdir(join(dir, "clankerbox"));
-  await writeConfig(join(dir, "clankerbox"), ["linux"]);
+        yield* mkdir(join(dir, "clankerbox"));
+        yield* writeConfig(join(dir, "clankerbox"), ["linux"]);
 
-  const { code, stdout } = await cli(["hosts"], {
-    endpoints: [["linux", host({ id: "linux", bases: ["ubuntu"] })]],
-    env: { XDG_CONFIG_HOME: dir },
-  });
+        const { code, stdout } = yield* cli(["hosts"], {
+          endpoints: [["linux", host({ id: "linux", bases: ["ubuntu"] })]],
+          env: { XDG_CONFIG_HOME: dir },
+        });
 
-  expect(code).toBe(0);
-  expect(stdout).toContain("ubuntu");
-});
-
-test("without XDG_CONFIG_HOME the config is read from ~/.config/clankerbox/config.json", async () => {
-  const dir = await scratch(owned);
-
-  await mkdir(join(dir, ".config", "clankerbox"), { recursive: true });
-  await writeConfig(join(dir, ".config", "clankerbox"), ["linux"]);
-
-  const { code } = await cli(["hosts"], {
-    endpoints: [["linux", host({ id: "linux", bases: ["ubuntu"] })]],
-    env: { HOME: dir },
-  });
-
-  expect(code).toBe(0);
-});
-
-test("a config with an unknown key is InvalidFile, and one with a duplicate host Invalid", async () => {
-  const dir = await scratch(owned);
-  const typo = join(dir, "typo.json");
-  const twice = join(dir, "twice.json");
-
-  await writeFile(
-    typo,
-    JSON.stringify({ hosts: [{ id: "linux", url: "http://linux.test" }], host: [] }),
-  );
-  await writeFile(
-    twice,
-    JSON.stringify({
-      hosts: [
-        { id: "linux", url: "http://linux.test" },
-        { id: "linux", url: "http://other.test" },
-      ],
-    }),
+        expect(code).toBe(0);
+        expect(stdout).toContain("ubuntu");
+      }),
   );
 
-  for (const [config, tag] of [
-    [typo, "InvalidFile"],
-    [twice, "Invalid"],
-  ] as const) {
-    const { code, stdout } = await cli(["hosts", "--json", "--config", config]);
+  it.effect(
+    "without XDG_CONFIG_HOME the config is read from ~/.config/clankerbox/config.json",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
 
-    expect(code).toBe(1);
-    expect(decodeJsonError(stdout).error.tag).toBe(tag);
-  }
-});
+        yield* mkdir(join(dir, ".config", "clankerbox"));
+        yield* writeConfig(join(dir, ".config", "clankerbox"), ["linux"]);
 
-test("a config's mistakes are all named, each by its JSON path, and an empty host list by what it lacks", async () => {
-  const dir = await scratch(owned);
-  const wrong = join(dir, "wrong.json");
-  const empty = join(dir, "empty.json");
+        const { code } = yield* cli(["hosts"], {
+          endpoints: [["linux", host({ id: "linux", bases: ["ubuntu"] })]],
+          env: { HOME: dir },
+        });
 
-  await writeFile(wrong, JSON.stringify({ hosts: [{ id: "Linux" }], host: [] }));
-  await writeFile(empty, JSON.stringify({ hosts: [] }));
-
-  const run = async (config: string) => (await cli(["hosts", "--config", config])).stderr;
-
-  expect(await run(wrong)).toBe(
-    `clankerbox: InvalidFile: client config ${wrong}: host: not a known field; hosts[0].id: a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter; hosts[0].url: missing`,
+        expect(code).toBe(0);
+      }),
   );
-  expect(await run(empty)).toBe(
-    "clankerbox: Invalid: the host list is empty: a client needs a host",
+
+  it.effect(
+    "a config with an unknown key is InvalidFile, and one with a duplicate host Invalid",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const typo = join(dir, "typo.json");
+        const twice = join(dir, "twice.json");
+
+        yield* write(
+          typo,
+          JSON.stringify({ hosts: [{ id: "linux", url: "http://linux.test" }], host: [] }),
+        );
+        yield* write(
+          twice,
+          JSON.stringify({
+            hosts: [
+              { id: "linux", url: "http://linux.test" },
+              { id: "linux", url: "http://other.test" },
+            ],
+          }),
+        );
+
+        for (const [config, tag] of [
+          [typo, "InvalidFile"],
+          [twice, "Invalid"],
+        ] as const) {
+          const { code, stdout } = yield* cli(["hosts", "--json", "--config", config]);
+
+          expect(code).toBe(1);
+          expect(decodeJsonError(stdout).error.tag).toBe(tag);
+        }
+      }),
   );
-  expect(await run(join(dir, "absent.json"))).toBe(
-    `clankerbox: InvalidFile: couldn't read client config ${join(dir, "absent.json")}: no such file or directory`,
+
+  it.effect(
+    "a config's mistakes are all named, each by its JSON path, and an empty host list by what it lacks",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const wrong = join(dir, "wrong.json");
+        const empty = join(dir, "empty.json");
+
+        yield* write(wrong, JSON.stringify({ hosts: [{ id: "Linux" }], host: [] }));
+        yield* write(empty, JSON.stringify({ hosts: [] }));
+
+        const run = (config: string) =>
+          Effect.map(cli(["hosts", "--config", config]), ({ stderr }) => stderr);
+
+        expect(yield* run(wrong)).toBe(
+          `clankerbox: InvalidFile: client config ${wrong}: host: not a known field; hosts[0].id: a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter; hosts[0].url: missing`,
+        );
+        expect(yield* run(empty)).toBe(
+          "clankerbox: Invalid: the host list is empty: a client needs a host",
+        );
+        expect(yield* run(join(dir, "absent.json"))).toBe(
+          `clankerbox: InvalidFile: couldn't read client config ${join(dir, "absent.json")}: no such file or directory`,
+        );
+      }),
   );
 });

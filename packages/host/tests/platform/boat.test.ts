@@ -5,7 +5,6 @@
  */
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { inspect } from "node:util";
@@ -15,11 +14,12 @@ import {
   DateTime,
   Duration,
   Effect,
+  Context,
   Exit,
   Fiber,
+  FileSystem,
   Layer,
   Logger,
-  ManagedRuntime,
   Option,
   Redacted,
   Schema,
@@ -33,7 +33,8 @@ import {
   type HttpClientRequest,
 } from "effect/http";
 import { TestClock } from "effect/testing";
-import { afterEach, expect, test } from "vite-plus/test";
+import { layer } from "@effect/vitest";
+import { expect } from "vite-plus/test";
 import {
   createdMark,
   endpointOf,
@@ -60,22 +61,8 @@ import { servicesLayer } from "../../src/host.ts";
 import type { HostSettings } from "../../src/settings.ts";
 import * as Sqlite from "../../src/platform/sqlite.ts";
 import * as Store from "../../src/store.ts";
-import { removeScratch, scratch } from "../scratch.ts";
+import { remove, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { type Call, type Reply, scripted } from "../scripted.ts";
-
-const owned: Array<string> = [];
-
-const scopes: Array<Scope.Closeable> = [];
-
-const hosts: Array<{ readonly dispose: () => Promise<void> }> = [];
-
-afterEach(async () => {
-  await Promise.all(hosts.splice(0).map((host) => host.dispose()));
-  await Promise.all(
-    scopes.splice(0).map((scope) => Effect.runPromise(Scope.close(scope, Exit.void))),
-  );
-  await removeScratch(owned);
-});
 
 const apiKey = "boat_fake-key-that-must-never-print";
 
@@ -455,15 +442,19 @@ const row = (machine: MachineRef): Store.NewMachine => ({
 });
 
 /** A state dir whose host key is already there, so no `ssh-keygen` runs. */
-const stateDirIn = async (dir: string) => {
-  const stateDir = join(dir, "state");
+const stateDirIn = (dir: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const stateDir = join(dir, "state");
 
-  await mkdir(join(stateDir, "boat-ssh"), { recursive: true, mode: 0o700 });
-  await writeFile(join(stateDir, "boat-ssh", "id_ed25519"), "private\n", { mode: 0o600 });
-  await writeFile(join(stateDir, "boat-ssh", "id_ed25519.pub"), `${publicKey}\n`);
+    yield* fs.makeDirectory(join(stateDir, "boat-ssh"), { recursive: true, mode: 0o700 });
+    yield* fs.writeFileString(join(stateDir, "boat-ssh", "id_ed25519"), "private\n", {
+      mode: 0o600,
+    });
+    yield* fs.writeFileString(join(stateDir, "boat-ssh", "id_ed25519.pub"), `${publicKey}\n`);
 
-  return stateDir;
-};
+    return stateDir;
+  });
 
 const settingsOf = (stateDir: string): Omit<Settings, "recordNative"> => ({
   apiKey: Redacted.make(apiKey),
@@ -479,37 +470,27 @@ interface Rig {
   readonly runtime: Interface;
   readonly stateDir: string;
   /** Inserts the machine's row, held by a create, as a create's claim does. */
-  readonly insert: (machine: MachineRef) => Promise<void>;
+  readonly insert: (machine: MachineRef) => Effect.Effect<void, HostError>;
 }
 
 /** The runtime over a fake boat and guest, with its store, living until the test ends. */
-const rigOn = async (boat = fakeBoat()): Promise<Rig> => {
-  const stateDir = await stateDirIn(await scratch(owned));
-  const guest = fakeGuest();
-  const scope = await Effect.runPromise(Scope.make());
+const rigOn = (boat = fakeBoat()) =>
+  Effect.gen(function* () {
+    const stateDir = yield* stateDirIn(yield* scratch);
+    const guest = fakeGuest();
+    const store = yield* Sqlite.open({ stateDir, id: "boat", runtime: "boat" });
 
-  scopes.push(scope);
-
-  const store = await Effect.runPromise(
-    Sqlite.open({ stateDir, id: "boat", runtime: "boat" }).pipe(
-      Scope.provide(scope),
-      Effect.provide(NodeServices.layer),
-    ),
-  );
-
-  const runtime = await Effect.runPromise(
-    make({ ...settingsOf(stateDir), recordNative: store.recordNative }).pipe(
-      Effect.provide(Layer.mergeAll(NodeServices.layer, guest.spawner.layer, boat.layer)),
-    ),
-  );
-
-  const insert = (machine: MachineRef) =>
-    Effect.runPromise(
-      Effect.asVoid(store.insert("create", { kind: "machine", record: row(machine) })),
+    const runtime = yield* make({ ...settingsOf(stateDir), recordNative: store.recordNative }).pipe(
+      Effect.provide(Layer.merge(guest.spawner.layer, boat.layer)),
     );
 
-  return { boat, guest, store, runtime, stateDir, insert };
-};
+    const insert = (machine: MachineRef) =>
+      Effect.asVoid(store.insert("create", { kind: "machine", record: row(machine) }));
+
+    const rig: Rig = { boat, guest, store, runtime, stateDir, insert };
+
+    return rig;
+  });
 
 /**
  * Runs `effect` under the test clock, moving it a second at a time until it ends; how long it
@@ -519,1638 +500,1842 @@ const rigOn = async (boat = fakeBoat()): Promise<Rig> => {
  * moments on a loaded machine.
  */
 const timed = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>, waiting?: Promise<void>) =>
-  Effect.runPromise(
-    Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(Effect.exit(Effect.scoped(effect)));
-      let clockOnly = false;
-      let waited = Duration.zero;
+  Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(Effect.exit(Effect.scoped(effect)));
+    let clockOnly = false;
+    let waited = Duration.zero;
 
-      void waiting?.then(() => {
-        clockOnly = true;
-      });
+    void waiting?.then(() => {
+      clockOnly = true;
+    });
 
-      while (fiber.pollUnsafe() === undefined) {
-        if (!clockOnly) {
-          yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
-        }
-
-        yield* TestClock.adjust(Duration.seconds(1));
-        waited = Duration.sum(waited, Duration.seconds(1));
+    while (fiber.pollUnsafe() === undefined) {
+      if (!clockOnly) {
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
       }
 
-      return { exit: yield* Fiber.join(fiber), waited };
-    }).pipe(Effect.provide(TestClock.layer())),
-  );
+      yield* TestClock.adjust(Duration.seconds(1));
+      waited = Duration.sum(waited, Duration.seconds(1));
+    }
 
-const succeeds = async <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) => {
-  const { exit } = await timed(effect);
+    return { exit: yield* Fiber.join(fiber), waited };
+  }).pipe(Effect.provide(TestClock.layer()));
 
-  if (Exit.isFailure(exit)) {
-    throw new Error(`failed: ${inspect(exit.cause, { depth: 6 })}`);
-  }
+const succeeds = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>) =>
+  Effect.gen(function* () {
+    const { exit } = yield* timed(effect);
 
-  return exit.value;
-};
+    if (Exit.isFailure(exit)) {
+      throw new Error(`failed: ${inspect(exit.cause, { depth: 6 })}`);
+    }
 
-const fails = async <A, E>(effect: Effect.Effect<A, E, Scope.Scope>, waiting?: Promise<void>) => {
-  const { exit } = await timed(effect, waiting);
+    return exit.value;
+  });
 
-  if (Exit.isSuccess(exit)) {
-    throw new Error("succeeded");
-  }
+const fails = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>, waiting?: Promise<void>) =>
+  Effect.gen(function* () {
+    const { exit } = yield* timed(effect, waiting);
 
-  return Option.getOrThrow(Exit.findErrorOption(exit));
-};
+    if (Exit.isSuccess(exit)) {
+      throw new Error("succeeded");
+    }
 
-const nativeOf = async (rig: Rig, name: string) =>
-  Option.getOrUndefined(
-    Option.map(await Effect.runPromise(rig.store.find(name)), (found) => found.native),
+    return Option.getOrThrow(Exit.findErrorOption(exit));
+  });
+
+const nativeOf = (rig: Rig, name: string) =>
+  Effect.map(rig.store.find(name), (found) =>
+    Option.getOrUndefined(Option.map(found, ({ native }) => native)),
   );
 
 const remotes = (guest: FakeGuest) => guest.calls.map((call) => call.remote);
 
 const activations = ["/sandboxes", "/fork", "/resume"];
 
-test("states read from boat's: the active ones run, cancelled is gone, anything else is stopped", () => {
-  expect(["provisioned", "cloning", "ready", "idle", "running"].map(stateOf)).toEqual([
-    "running",
-    "running",
-    "running",
-    "running",
-    "running",
-  ]);
-  expect(stateOf("cancelled")).toBe("missing");
-  expect(["archived", "archiving", "error", "unheard-of"].map(stateOf)).toEqual([
-    "stopped",
-    "stopped",
-    "stopped",
-    "stopped",
-  ]);
-});
-
-test("the endpoint is boat's relay when there is one, else the sandbox's own address on 22", () => {
-  const base = { id: "bx_1", state: "ready" };
-
-  expect(endpointOf({ ...base, sshEndpoint: "203.0.113.10:19044", ip: "2001:db8::2c" })).toEqual({
-    host: "203.0.113.10",
-    port: 19_044,
-  });
-  expect(endpointOf({ ...base, sshEndpoint: null, ip: "2001:db8::2c" })).toEqual({
-    host: "2001:db8::2c",
-    port: 22,
-  });
-  expect(endpointOf({ ...base, sshEndpoint: "203.0.113.10:nope" })).toBeUndefined();
-  expect(endpointOf(base)).toBeUndefined();
-});
-
-test("argv survives ssh's joining: a POSIX shell reads every quoted argument back whole", () => {
-  const argv = [
-    "/bin/sh",
-    "-c",
-    preparationScript,
-    "it's",
-    'a "quoted" $HOME `id` \\ and\nnewline',
-    "",
-    "*",
-  ];
-
-  const printed = execFileSync("/bin/sh", ["-c", `printf '%s\\0' ${argv.map(quote).join(" ")}`], {
-    encoding: "utf8",
+// The runtime and the guest wait as they would on a host, so the tests run on the real clock;
+// `timed` moves a test clock of its own.
+layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it("states read from boat's: the active ones run, cancelled is gone, anything else is stopped", () => {
+    expect(["provisioned", "cloning", "ready", "idle", "running"].map(stateOf)).toEqual([
+      "running",
+      "running",
+      "running",
+      "running",
+      "running",
+    ]);
+    expect(stateOf("cancelled")).toBe("missing");
+    expect(["archived", "archiving", "error", "unheard-of"].map(stateOf)).toEqual([
+      "stopped",
+      "stopped",
+      "stopped",
+      "stopped",
+    ]);
   });
 
-  expect(printed.split("\0").slice(0, -1)).toEqual(argv);
-  expect(remoteCommand(["true"])).toBe("'sudo' '-n' '--' 'true'");
-});
+  it("the endpoint is boat's relay when there is one, else the sandbox's own address on 22", () => {
+    const base = { id: "bx_1", state: "ready" };
 
-test("the guest's restore wait: none on its create's own machine, else until boat's marker appears", async () => {
-  const dir = await scratch(owned);
-  const mark = join(dir, "created");
-  const marker = join(dir, "sys-done");
-  const local = restoredWait.replaceAll(createdMark, mark).replaceAll(restoredMarker, marker);
+    expect(endpointOf({ ...base, sshEndpoint: "203.0.113.10:19044", ip: "2001:db8::2c" })).toEqual({
+      host: "203.0.113.10",
+      port: 19_044,
+    });
+    expect(endpointOf({ ...base, sshEndpoint: null, ip: "2001:db8::2c" })).toEqual({
+      host: "2001:db8::2c",
+      port: 22,
+    });
+    expect(endpointOf({ ...base, sshEndpoint: "203.0.113.10:nope" })).toBeUndefined();
+    expect(endpointOf(base)).toBeUndefined();
+  });
 
-  expect(createdMark).toMatch(/^\/run\//u);
+  it("argv survives ssh's joining: a POSIX shell reads every quoted argument back whole", () => {
+    const argv = [
+      "/bin/sh",
+      "-c",
+      preparationScript,
+      "it's",
+      'a "quoted" $HOME `id` \\ and\nnewline',
+      "",
+      "*",
+    ];
 
-  const waiting = () => {
-    const child = spawn("/bin/sh", ["-c", local], { stdio: "ignore" });
-
-    const exited = new Promise<number | null>((resolve) => {
-      child.once("exit", resolve);
+    const printed = execFileSync("/bin/sh", ["-c", `printf '%s\\0' ${argv.map(quote).join(" ")}`], {
+      encoding: "utf8",
     });
 
-    return { child, exited };
-  };
-
-  // Off the create's machine, nothing ends the wait but the marker.
-  const restoring = waiting();
-
-  expect(await Promise.race([restoring.exited, sleep(600, "waiting")])).toBe("waiting");
-  await writeFile(marker, "");
-  expect(await restoring.exited).toBe(0);
-
-  // On the create's own machine it doesn't wait, though no marker ever comes.
-  await rm(marker);
-  await writeFile(mark, "");
-  expect(await Promise.race([waiting().exited, sleep(5000, "waiting")])).toBe(0);
-});
-
-test("known hosts pin every host key boat's command API printed, under the sandbox's alias", () => {
-  expect(knownHosts("bx_1", `${guestKey} root@guest\n\nnot a key line\n`)).toEqual([
-    `bx_1 ${guestKey}`,
-  ]);
-});
-
-test("create sends noEnv and the trial's TTL under the row's key, records the sandbox, names it, authorizes the host's key and waits for SSH", async () => {
-  const rig = await rigOn();
-  const machine = machineOn("dev");
-
-  await rig.insert(machine);
-  await succeeds(rig.runtime.create(machine, "boat"));
-
-  const create = rig.boat.sent.find((sent) => sent.method === "POST");
-
-  expect(create?.body).toEqual({ type: "small", noEnv: true, ttlSeconds: 7200 });
-  expect(create?.headers["idempotency-key"]).toBe(`clankerbox-boat-${machine.instance}`);
-  expect(await nativeOf(rig, "dev")).toBe("bx_made0001");
-  expect(rig.boat.calls()).toEqual([
-    "POST /sandboxes",
-    "PATCH /sandboxes/bx_made0001",
-    "POST /sandboxes/bx_made0001/sshkey",
-  ]);
-  expect(rig.boat.sent.find((sent) => sent.method === "PATCH")?.body).toEqual({ name: "boat_dev" });
-  expect(rig.boat.sent.find((sent) => sent.path.endsWith("/sshkey"))?.body).toEqual({
-    key: publicKey,
+    expect(printed.split("\0").slice(0, -1)).toEqual(argv);
+    expect(remoteCommand(["true"])).toBe("'sudo' '-n' '--' 'true'");
   });
-  expect(rig.boat.sandboxes.get("bx_made0001")?.state).toBe("ready");
 
-  // A fresh create isn't a restore: it waits for SSH, which marks the guest's machine as the
-  // create's own, and not for boat's marker.
-  expect(remotes(rig.guest)).toEqual([remoteCommand(["touch", createdMark])]);
-});
+  it.effect(
+    "the guest's restore wait: none on its create's own machine, else until boat's marker appears",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const mark = join(dir, "created");
+        const marker = join(dir, "sys-done");
+        const local = restoredWait.replaceAll(createdMark, mark).replaceAll(restoredMarker, marker);
 
-test("a rename boat refuses is only a warning: the create goes on and the sandbox stays recorded", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-  const machine = machineOn("dev");
-  const logged: Array<unknown> = [];
+        expect(createdMark).toMatch(/^\/run\//u);
 
-  await rig.insert(machine);
-  rig.boat.hooks.answer = (sent) =>
-    sent.method === "PATCH" ? refusal(500, "rename_failed", "try later") : undefined;
+        const waiting = () => {
+          const child = spawn("/bin/sh", ["-c", local], { stdio: "ignore" });
 
-  await succeeds(
-    rig.runtime
-      .create(machine, "boat")
-      .pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))]))),
+          const exited = new Promise<number | null>((resolve) => {
+            child.once("exit", resolve);
+          });
+
+          return { child, exited };
+        };
+
+        // Off the create's machine, nothing ends the wait but the marker.
+        const restoring = waiting();
+
+        expect(
+          yield* Effect.promise(() => Promise.race([restoring.exited, sleep(600, "waiting")])),
+        ).toBe("waiting");
+        yield* write(marker, "");
+        expect(yield* Effect.promise(() => restoring.exited)).toBe(0);
+
+        // On the create's own machine it doesn't wait, though no marker ever comes.
+        yield* remove(marker);
+        yield* write(mark, "");
+        expect(
+          yield* Effect.promise(() => Promise.race([waiting().exited, sleep(5000, "waiting")])),
+        ).toBe(0);
+      }),
   );
 
-  expect(rig.boat.calls()).toEqual([
-    "POST /sandboxes",
-    "PATCH /sandboxes/bx_made0001",
-    "POST /sandboxes/bx_made0001/sshkey",
-  ]);
-  expect(logged).toEqual([
-    [
-      "couldn't name boat_dev's boat sandbox bx_made0001 on boat's dashboard: boat PATCH /sandboxes/bx_made0001 answered 500 rename_failed: try later (req_0123)",
-    ],
-  ]);
-  expect(await nativeOf(rig, "dev")).toBe("bx_made0001");
-  expect(remotes(rig.guest)).toEqual([remoteCommand(["touch", createdMark])]);
-});
-
-test("every create, fork, start and restore sends noEnv: true and ttlSeconds: 7200", async () => {
-  const rig = await rigOn();
-  const dev = machineOn("dev");
-  const copy = machineOn("copy");
-  const back = machineOn("back");
-  const checkpoint = checkpointOn("cp");
-
-  for (const machine of [dev, copy, back]) {
-    await rig.insert(machine);
-  }
-
-  await succeeds(rig.runtime.create(dev, "boat"));
-
-  const recorded = { ...dev, native: "bx_made0001" };
-
-  await succeeds(rig.runtime.stop(recorded));
-  await succeeds(rig.runtime.fork(recorded, copy));
-  await succeeds(rig.runtime.start(recorded));
-  await succeeds(rig.runtime.capture(recorded, checkpoint));
-  await succeeds(rig.runtime.restore(checkpoint, back));
-
-  const bodies = rig.boat.sent
-    .filter(
-      (sent) => sent.method === "POST" && activations.some((path) => sent.path.endsWith(path)),
-    )
-    .map((sent) => [sent.path, sent.body]);
-
-  expect(bodies).toEqual([
-    ["/sandboxes", { type: "small", noEnv: true, ttlSeconds: 7200 }],
-    ["/sandboxes/bx_made0001/fork", { type: "small", noEnv: true, ttlSeconds: 7200 }],
-    ["/sandboxes/bx_made0001/resume", { noEnv: true, ttlSeconds: 7200 }],
-    ["/sandboxes", { type: "small", from: "cbx-boat-cafe0001", noEnv: true, ttlSeconds: 7200 }],
-  ]);
-});
-
-test("exec runs as user through sudo -n, quoted, with the host's key and the guest's keys pinned from boat's command API", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-  const machine = machineOn("dev");
-
-  await rig.insert(machine);
-  await succeeds(rig.runtime.create(machine, "boat"));
-
-  rig.guest.calls.length = 0;
-  rig.guest.hooks.answer = () => ({ exitCode: 3, stdout: "out\n" });
-
-  const ran = await succeeds(
-    Effect.flatMap(
-      rig.runtime.exec(
-        { ...machine, native: "bx_made0001" },
-        {
-          argv: ["/bin/sh", "-c", "cat; exit 3"],
-          stdin: new TextEncoder().encode("from stdin"),
-        },
-      ),
-      (execution) =>
-        Effect.all([Stream.mkString(Stream.decodeText(execution.output)), execution.exitCode]),
-    ),
-  );
-
-  expect(ran).toEqual(["out\n", 3]);
-
-  const [call] = rig.guest.calls;
-  const pinnedFile = call?.args.find((arg) => arg.startsWith("UserKnownHostsFile="));
-
-  expect(call?.args).toEqual([
-    "-F",
-    "/dev/null",
-    "-T",
-    "-i",
-    join(rig.stateDir, "boat-ssh", "id_ed25519"),
-    "-o",
-    "IdentitiesOnly=yes",
-    "-o",
-    "IdentityAgent=none",
-    "-o",
-    pinnedFile,
-    "-o",
-    "GlobalKnownHostsFile=/dev/null",
-    "-o",
-    "StrictHostKeyChecking=yes",
-    "-o",
-    "UpdateHostKeys=no",
-    "-o",
-    "HostKeyAlias=bx_made0001",
-    "-o",
-    "BatchMode=yes",
-    "-o",
-    "ConnectTimeout=15",
-    "-o",
-    "ServerAliveInterval=30",
-    "-o",
-    "LogLevel=ERROR",
-    "-p",
-    "19001",
-    "-l",
-    "user",
-    "--",
-    "203.0.113.10",
-    "'sudo' '-n' '--' '/bin/sh' '-c' 'cat; exit 3'",
-  ]);
-  expect(call?.stdin).toBe("from stdin");
-  expect(call?.pinned).toBe(
-    `bx_made0001 ${guestKey}\nbx_made0001 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQGuestRsa\n`,
-  );
-
-  // The pin lives only as long as its connection.
-  expect(existsSync(pinnedFile?.slice("UserKnownHostsFile=".length) ?? "")).toBe(false);
-
-  const command = rig.boat.sent.findLast((sent) => sent.path.endsWith("/commands"));
-
-  expect(command?.body).toEqual({
-    command: "cat /etc/ssh/ssh_host_*_key.pub",
-    timeoutSeconds: 30,
+  it("known hosts pin every host key boat's command API printed, under the sandbox's alias", () => {
+    expect(knownHosts("bx_1", `${guestKey} root@guest\n\nnot a key line\n`)).toEqual([
+      `bx_1 ${guestKey}`,
+    ]);
   });
-});
 
-test("exec on a sandbox that doesn't run, or without one recorded, fails before any SSH", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-  const machine = machineOn("dev");
+  it.effect(
+    "create sends noEnv and the trial's TTL under the row's key, records the sandbox, names it, authorizes the host's key and waits for SSH",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn();
+        const machine = machineOn("dev");
 
-  await rig.insert(machine);
-  await succeeds(rig.runtime.create(machine, "boat"));
+        yield* rig.insert(machine);
+        yield* succeeds(rig.runtime.create(machine, "boat"));
 
-  const recorded = { ...machine, native: "bx_made0001" };
+        const create = rig.boat.sent.find((sent) => sent.method === "POST");
 
-  await succeeds(rig.runtime.stop(recorded));
-  rig.guest.calls.length = 0;
+        expect(create?.body).toEqual({ type: "small", noEnv: true, ttlSeconds: 7200 });
+        expect(create?.headers["idempotency-key"]).toBe(`clankerbox-boat-${machine.instance}`);
+        expect(yield* nativeOf(rig, "dev")).toBe("bx_made0001");
+        expect(rig.boat.calls()).toEqual([
+          "POST /sandboxes",
+          "PATCH /sandboxes/bx_made0001",
+          "POST /sandboxes/bx_made0001/sshkey",
+        ]);
+        expect(rig.boat.sent.find((sent) => sent.method === "PATCH")?.body).toEqual({
+          name: "boat_dev",
+        });
+        expect(rig.boat.sent.find((sent) => sent.path.endsWith("/sshkey"))?.body).toEqual({
+          key: publicKey,
+        });
+        expect(rig.boat.sandboxes.get("bx_made0001")?.state).toBe("ready");
 
-  const stopped = await fails(rig.runtime.exec(recorded, { argv: ["true"] }));
-  const none = await fails(rig.runtime.exec(machineOn("other"), { argv: ["true"] }));
+        // A fresh create isn't a restore: it waits for SSH, which marks the guest's machine as the
+        // create's own, and not for boat's marker.
+        expect(remotes(rig.guest)).toEqual([remoteCommand(["touch", createdMark])]);
+      }),
+  );
 
-  expect(refused(stopped)).toEqual([
-    "not refused",
-    "Internal",
-    "machine boat_dev doesn't run: boat reads its sandbox bx_made0001 archived",
-  ]);
-  expect(refused(none)).toEqual([
-    "not refused",
-    "Internal",
-    "machine boat_other has no boat sandbox recorded",
-  ]);
-  expect(rig.guest.calls).toEqual([]);
-});
+  it.effect(
+    "a rename boat refuses is only a warning: the create goes on and the sandbox stays recorded",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const machine = machineOn("dev");
+        const logged: Array<unknown> = [];
 
-test("a create waits while SSH or boat's command API doesn't answer yet, and fails with ssh's output after three minutes", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-  const machine = machineOn("dev");
-  let refusals = 2;
+        yield* rig.insert(machine);
+        rig.boat.hooks.answer = (sent) =>
+          sent.method === "PATCH" ? refusal(500, "rename_failed", "try later") : undefined;
 
-  await rig.insert(machine);
+        yield* succeeds(
+          rig.runtime
+            .create(machine, "boat")
+            .pipe(
+              Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))])),
+            ),
+        );
 
-  rig.guest.hooks.answer = () => {
-    refusals -= 1;
+        expect(rig.boat.calls()).toEqual([
+          "POST /sandboxes",
+          "PATCH /sandboxes/bx_made0001",
+          "POST /sandboxes/bx_made0001/sshkey",
+        ]);
+        expect(logged).toEqual([
+          [
+            "couldn't name boat_dev's boat sandbox bx_made0001 on boat's dashboard: boat PATCH /sandboxes/bx_made0001 answered 500 rename_failed: try later (req_0123)",
+          ],
+        ]);
+        expect(yield* nativeOf(rig, "dev")).toBe("bx_made0001");
+        expect(remotes(rig.guest)).toEqual([remoteCommand(["touch", createdMark])]);
+      }),
+  );
 
-    return refusals >= 0 ? { exitCode: 255, stderr: "Connection refused\n" } : undefined;
-  };
+  it.effect("every create, fork, start and restore sends noEnv: true and ttlSeconds: 7200", () =>
+    Effect.gen(function* () {
+      const rig = yield* rigOn();
+      const dev = machineOn("dev");
+      const copy = machineOn("copy");
+      const back = machineOn("back");
+      const checkpoint = checkpointOn("cp");
 
-  // boat's command API isn't up yet either, at first.
-  let unready = 1;
-
-  rig.boat.hooks.answer = (sent) => {
-    if (!sent.path.endsWith("/commands") || unready === 0) {
-      return undefined;
-    }
-
-    unready -= 1;
-
-    return refusal(503, "agent_unavailable");
-  };
-
-  await succeeds(rig.runtime.create(machine, "boat"));
-  expect(remotes(rig.guest)).toHaveLength(3);
-  expect(rig.boat.sent.filter((sent) => sent.path.endsWith("/commands"))).toHaveLength(4);
-  rig.boat.hooks.answer = undefined;
-
-  const other = machineOn("other");
-
-  await rig.insert(other);
-
-  // Each probe pins host keys in a file of its own; by the second, the first's output is noted.
-  const probedTwice = Promise.withResolvers<void>();
-  let probes = 0;
-
-  rig.guest.hooks.answer = () => {
-    probes += 1;
-
-    if (probes === 2) {
-      probedTwice.resolve();
-    }
-
-    return { exitCode: 255, stderr: "Connection refused\n" };
-  };
-
-  const { exit, waited } = await timed(rig.runtime.create(other, "boat"), probedTwice.promise);
-  const error = Exit.isFailure(exit) ? Option.getOrThrow(Exit.findErrorOption(exit)) : undefined;
-
-  expect(error === undefined ? undefined : refused(error)).toEqual([
-    "not refused",
-    "Internal",
-    "boat_other didn't answer SSH within 3m: Connection refused",
-  ]);
-  expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(180);
-
-  // The sandbox stays recorded for delete.
-  expect(await nativeOf(rig, "other")).toBe("bx_made0002");
-});
-
-test("a sandbox that boat cancels or loses during the SSH wait fails it at once", async () => {
-  for (const ending of ["cancelled", "gone"]) {
-    const rig = await rigOn(fakeBoat({ instant: true }));
-    const machine = machineOn("dev");
-
-    await rig.insert(machine);
-
-    // The first probe finds SSH not up yet; then boat gives the sandbox up.
-    rig.guest.hooks.answer = () => {
-      const sandbox = rig.boat.sandboxes.get("bx_made0001");
-
-      if (sandbox !== undefined && ending === "cancelled") {
-        sandbox.state = ending;
-      } else {
-        rig.boat.sandboxes.delete("bx_made0001");
+      for (const machine of [dev, copy, back]) {
+        yield* rig.insert(machine);
       }
 
-      return { exitCode: 255, stderr: "Connection refused\n" };
-    };
+      yield* succeeds(rig.runtime.create(dev, "boat"));
 
-    const { exit, waited } = await timed(rig.runtime.create(machine, "boat"));
-    const error = Exit.isFailure(exit) ? Option.getOrThrow(Exit.findErrorOption(exit)) : undefined;
+      const recorded = { ...dev, native: "bx_made0001" };
 
-    expect(error === undefined ? undefined : refused(error)).toEqual([
-      "not refused",
-      "Internal",
-      `machine boat_dev doesn't run: boat reads its sandbox bx_made0001 ${ending}`,
-    ]);
-    // Short of the SSH wait's 3 minutes, which a retried read of the gone sandbox would use up.
-    expect(Duration.toSeconds(waited)).toBeLessThan(180);
-    expect(remotes(rig.guest)).toHaveLength(1);
-  }
-});
+      yield* succeeds(rig.runtime.stop(recorded));
+      yield* succeeds(rig.runtime.fork(recorded, copy));
+      yield* succeeds(rig.runtime.start(recorded));
+      yield* succeeds(rig.runtime.capture(recorded, checkpoint));
+      yield* succeeds(rig.runtime.restore(checkpoint, back));
 
-test("boat's refusals of a create leave nothing: a Refusal, and no sandbox recorded", async () => {
-  const rig = await rigOn();
+      const bodies = rig.boat.sent
+        .filter(
+          (sent) => sent.method === "POST" && activations.some((path) => sent.path.endsWith(path)),
+        )
+        .map((sent) => [sent.path, sent.body]);
 
-  for (const [status, code, tag] of [
-    [429, "limit_reached", "Capacity"],
-    [429, "member_limit_reached", "Capacity"],
-    [429, "daily_limit_reached", "Capacity"],
-    [503, "out_of_capacity", "Capacity"],
-    [503, "no_ready_machine", "Capacity"],
-    [403, "api_key_action_forbidden", "Precondition"],
-  ] as const) {
-    const machine = machineOn(`m${code.length}${status}`);
-
-    await rig.insert(machine);
-    rig.boat.sent.length = 0;
-    rig.boat.hooks.answer = (sent) =>
-      sent.method === "POST" ? refusal(status, code, "no room") : undefined;
-
-    const error = await fails(rig.runtime.create(machine, "boat"));
-
-    expect(refused(error)).toEqual([
-      tag,
-      `boat POST /sandboxes answered ${status} ${code}: no room (req_0123)`,
-    ]);
-    expect(rig.boat.calls()).toEqual(["POST /sandboxes"]);
-    expect(await nativeOf(rig, machine.name)).toBeUndefined();
-  }
-
-  expect(rig.guest.calls).toEqual([]);
-});
-
-test("a create boat keeps throttling past its repeats is a Capacity refusal, and no sandbox is recorded", async () => {
-  const rig = await rigOn();
-  const machine = machineOn("dev");
-
-  await rig.insert(machine);
-  rig.boat.hooks.answer = (sent) =>
-    sent.method === "POST" ? refusal(429, "rate_limited", "5 starts per minute") : undefined;
-
-  const { exit, waited } = await timed(rig.runtime.create(machine, "boat"));
-  const error = Exit.isFailure(exit) ? Option.getOrThrow(Exit.findErrorOption(exit)) : undefined;
-
-  expect(error === undefined ? undefined : refused(error)).toEqual([
-    "Capacity",
-    "boat POST /sandboxes answered 429 rate_limited: 5 starts per minute (req_0123), and 2 repeats 1m 5s apart met the same",
-  ]);
-  expect(Duration.format(waited)).toBe("2m 10s");
-  expect(rig.boat.calls()).toEqual(["POST /sandboxes", "POST /sandboxes", "POST /sandboxes"]);
-  expect(await nativeOf(rig, machine.name)).toBeUndefined();
-  expect(rig.guest.calls).toEqual([]);
-});
-
-test("a create, fork or restore that boat cancels found no machine: a Capacity refusal; one gone after boat accepted it is a failure that keeps its sandbox ID", async () => {
-  const boat = fakeBoat();
-  const rig = await rigOn(boat);
-  const machine = machineOn("dev");
-
-  await rig.insert(machine);
-
-  boat.hooks.made = (sandbox) => {
-    sandbox.next = "cancelled";
-    sandbox.error = "no machine available";
-  };
-
-  const cancelled = await fails(rig.runtime.create(machine, "boat"));
-
-  expect(refused(cancelled)).toEqual([
-    "Capacity",
-    "boat cancelled sandbox bx_made0001 of boat_dev: no machine available; it found no machine",
-  ]);
-
-  const other = machineOn("other");
-
-  await rig.insert(other);
-
-  boat.hooks.made = (sandbox) => {
-    sandbox.next = "gone";
-  };
-
-  const gone = await fails(rig.runtime.create(other, "boat"));
-
-  // boat accepted the create, so a 404 doesn't say it made nothing: the row stays, failed, with
-  // the sandbox ID to find it by.
-  expect(refused(gone)).toEqual([
-    "not refused",
-    "Internal",
-    "boat no longer has sandbox bx_made0002 of boat_other",
-  ]);
-  expect(await nativeOf(rig, other.name)).toBe("bx_made0002");
-  expect(rig.guest.calls).toEqual([]);
-});
-
-test("a machine no boat type covers is refused with Precondition, in admit and before any call", async () => {
-  const rig = await rigOn();
-  const big = machineOn("big", { cpu: 16, ramMib: 32_768, diskGib: 252 });
-
-  const admitted = await fails(rig.runtime.admit({ action: "create", machine: big, machines: [] }));
-
-  expect(refused(admitted)).toEqual([
-    "not refused",
-    "Precondition",
-    "no boat machine type has 16 vCPU, 32G of RAM and 252G of disk; the largest, xlarge, has 16 vCPU, 32G of RAM and 251G of disk",
-  ]);
-
-  const created = await fails(rig.runtime.create(big, "boat"));
-  const restored = await fails(rig.runtime.restore(checkpointOn("cp"), big));
-
-  expect(refused(created)[0]).toBe("Precondition");
-  expect(refused(restored)[0]).toBe("Precondition");
-  expect(rig.boat.sent).toEqual([]);
-
-  // A running source would sync and wait for a snapshot: the type is refused before either.
-  rig.boat.sandboxes.set("bx_source", {
-    id: "bx_source",
-    state: "idle",
-    ip: null,
-    sshEndpoint: "203.0.113.10:19044",
-  });
-
-  const forked = await fails(rig.runtime.fork(machineOn("dev", { native: "bx_source" }), big));
-
-  expect(refused(forked)[0]).toBe("Precondition");
-  expect(rig.boat.sent).toEqual([]);
-  expect(rig.guest.calls).toEqual([]);
-
-  await succeeds(
-    rig.runtime.admit({
-      action: "create",
-      machine: machineOn("fits", { cpu: 16, ramMib: 32_768, diskGib: 251 }),
-      machines: [],
+      expect(bodies).toEqual([
+        ["/sandboxes", { type: "small", noEnv: true, ttlSeconds: 7200 }],
+        ["/sandboxes/bx_made0001/fork", { type: "small", noEnv: true, ttlSeconds: 7200 }],
+        ["/sandboxes/bx_made0001/resume", { noEnv: true, ttlSeconds: 7200 }],
+        ["/sandboxes", { type: "small", from: "cbx-boat-cafe0001", noEnv: true, ttlSeconds: 7200 }],
+      ]);
     }),
   );
-});
 
-test("observe reads each recorded sandbox with its own GET, none when no sandbox is recorded, and a read that fails past its repeats unknown", async () => {
-  const boat = fakeBoat({ instant: true });
-  const rig = await rigOn(boat);
-
-  boat.sandboxes.set("bx_up", {
-    id: "bx_up",
-    state: "idle",
-    ip: "2001:db8::2c",
-    sshEndpoint: "203.0.113.10:19044",
-  });
-  boat.sandboxes.set("bx_own", {
-    id: "bx_own",
-    state: "ready",
-    ip: "198.51.100.7",
-    sshEndpoint: null,
-  });
-  boat.sandboxes.set("bx_down", {
-    id: "bx_down",
-    state: "archived",
-    ip: null,
-    sshEndpoint: "203.0.113.10:19045",
-  });
-  boat.sandboxes.set("bx_booting", {
-    id: "bx_booting",
-    state: "cloning",
-    ip: null,
-    sshEndpoint: "203.0.113.10:19046",
-  });
-  boat.sandboxes.set("bx_cancelled", {
-    id: "bx_cancelled",
-    state: "cancelled",
-    ip: null,
-    sshEndpoint: null,
-  });
-  boat.sandboxes.set("bx_operator", {
-    id: "bx_operator",
-    state: "ready",
-    ip: null,
-    sshEndpoint: null,
-  });
-  let blips = 0;
-
-  boat.hooks.answer = (sent) => {
-    if (sent.path.endsWith("/bx_broken")) {
-      return refusal(500, "internal_error");
-    }
-
-    blips += sent.path.endsWith("/bx_up") ? 1 : 0;
-
-    return blips === 1 ? refusal(429, "rate_limited") : undefined;
-  };
-
-  const { exit, waited } = await timed(
-    rig.runtime.observe([
-      machineOn("up", { native: "bx_up" }),
-      machineOn("own", { native: "bx_own" }),
-      machineOn("down", { native: "bx_down" }),
-      machineOn("booting", { native: "bx_booting" }),
-      machineOn("cancelled", { native: "bx_cancelled" }),
-      machineOn("deleted", { native: "bx_deleted" }),
-      machineOn("unrecorded"),
-      machineOn("broken", { native: "bx_broken" }),
-    ]),
-  );
-
-  // A blip is ridden out; a read boat keeps failing ends at its 8 s, and only its own machine
-  // reads unknown.
-  expect(Duration.format(waited)).toBe("8s");
-  expect(Exit.isSuccess(exit) ? exit.value : exit).toEqual([
-    { state: "running", ssh: { host: "203.0.113.10", port: 19_044 } },
-    { state: "running", ssh: { host: "198.51.100.7", port: 22 } },
-    { state: "stopped" },
-    // Active but not up yet: it runs, with no endpoint until it answers.
-    { state: "running" },
-    { state: "missing" },
-    { state: "missing" },
-    { state: "missing" },
-    // A read that fails is no answer: the sandbox may still be there.
-    { state: "unknown" },
-  ]);
-  // Never the operator's own sandbox: only the recorded ones are read.
-  expect(new Set(boat.sent.map((sent) => `${sent.method} ${sent.path}`))).toEqual(
-    new Set([
-      "GET /sandboxes/bx_booting",
-      "GET /sandboxes/bx_broken",
-      "GET /sandboxes/bx_cancelled",
-      "GET /sandboxes/bx_deleted",
-      "GET /sandboxes/bx_down",
-      "GET /sandboxes/bx_own",
-      "GET /sandboxes/bx_up",
-    ]),
-  );
-  expect(boat.sent.filter((sent) => sent.path.endsWith("/bx_up"))).toHaveLength(2);
-  expect(boat.sent.filter((sent) => sent.path.endsWith("/bx_broken")).length).toBeGreaterThan(2);
-
-  boat.sent.length = 0;
-
-  expect(await succeeds(rig.runtime.observe([machineOn("unrecorded")]))).toEqual([
-    { state: "missing" },
-  ]);
-  expect(await succeeds(rig.runtime.observe([]))).toEqual([]);
-  expect(boat.sent).toEqual([]);
-});
-
-test("start resumes, waits for SSH, then for boat's marker that /var/lib is restored", async () => {
-  const rig = await rigOn();
-  const machine = machineOn("dev");
-
-  await rig.insert(machine);
-  await succeeds(rig.runtime.create(machine, "boat"));
-
-  const recorded = { ...machine, native: "bx_made0001" };
-
-  await succeeds(rig.runtime.stop(recorded));
-  rig.boat.sent.length = 0;
-  rig.guest.calls.length = 0;
-
-  await succeeds(rig.runtime.start(recorded));
-
-  expect(rig.boat.calls()).toEqual(["POST /sandboxes/bx_made0001/resume"]);
-  expect(rig.boat.sent.some((sent) => sent.headers["idempotency-key"] !== undefined)).toBe(false);
-  expect(remotes(rig.guest)).toEqual([
-    remoteCommand(["true"]),
-    remoteCommand(["/bin/sh", "-c", restoredWait]),
-  ]);
-
-  // The relay moved on resume; the exec reads it with the state.
-  expect(rig.guest.calls.map((call) => call.args.at(-2))).toEqual(["203.0.113.11", "203.0.113.11"]);
-});
-
-test("start of a sandbox boat reads ready, never stopped since its create, skips the resume and waits for SSH, then for the marker only off the create's machine", async () => {
-  const rig = await rigOn();
-  const machine = machineOn("dev");
-
-  await rig.insert(machine);
-  await succeeds(rig.runtime.create(machine, "boat"));
-  rig.boat.sent.length = 0;
-  rig.guest.calls.length = 0;
-
-  await succeeds(rig.runtime.start({ ...machine, native: "bx_made0001" }));
-
-  expect(rig.boat.calls()).toEqual([]);
-  expect(remotes(rig.guest)).toEqual([
-    remoteCommand(["true"]),
-    remoteCommand(["/bin/sh", "-c", restoredWait]),
-  ]);
-});
-
-test("start of a sandbox boat still resumes waits for it to run, and doesn't resume it again", async () => {
-  const rig = await rigOn();
-
-  rig.boat.sandboxes.set("bx_resuming", {
-    id: "bx_resuming",
-    state: "provisioned",
-    next: "ready",
-    ip: null,
-    sshEndpoint: "203.0.113.11:19500",
-  });
-
-  await succeeds(rig.runtime.start(machineOn("dev", { native: "bx_resuming" })));
-
-  expect(rig.boat.calls()).toEqual([]);
-  expect(rig.boat.sent.filter((sent) => sent.method === "GET").length).toBeGreaterThan(1);
-  expect(remotes(rig.guest)).toEqual([
-    remoteCommand(["true"]),
-    remoteCommand(["/bin/sh", "-c", restoredWait]),
-  ]);
-});
-
-test("a resume boat refuses for the account's limit is a Capacity refusal", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-
-  rig.boat.hooks.answer = (sent) =>
-    sent.path.endsWith("/resume") ? refusal(429, "limit_reached", "2 active") : undefined;
-
-  rig.boat.sandboxes.set("bx_made0009", {
-    id: "bx_made0009",
-    state: "archived",
-    ip: null,
-    sshEndpoint: null,
-  });
-
-  const error = await fails(rig.runtime.start(machineOn("dev", { native: "bx_made0009" })));
-
-  expect(refused(error)).toEqual([
-    "Capacity",
-    "boat POST /sandboxes/bx_made0009/resume answered 429 limit_reached: 2 active (req_0123)",
-  ]);
-});
-
-test("start of a machine boat doesn't have is refused before anything native, and stop of one, or of a sandbox boat doesn't read active, does nothing", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-
-  rig.boat.sandboxes.set("bx_cancelled", {
-    id: "bx_cancelled",
-    state: "cancelled",
-    ip: null,
-    sshEndpoint: null,
-  });
-  rig.boat.sandboxes.set("bx_archived", {
-    id: "bx_archived",
-    state: "archived",
-    ip: null,
-    sshEndpoint: null,
-  });
-
-  const gone = [undefined, "bx_gone", "bx_cancelled"].map((native) => machineOn("dev", { native }));
-
-  const errors: Array<ReadonlyArray<string>> = [];
-
-  for (const machine of gone) {
-    errors.push(refused(await fails(rig.runtime.start(machine))));
-    await succeeds(rig.runtime.stop(machine));
-  }
-
-  await succeeds(rig.runtime.stop(machineOn("dev", { native: "bx_archived" })));
-
-  expect(errors).toEqual(
-    Array.from({ length: 3 }, () => [
-      "Precondition",
-      "machine boat_dev is missing from the boat runtime; delete it",
-    ]),
-  );
-  expect(rig.boat.calls()).toEqual([]);
-});
-
-test("stop asks boat to stop, never with force, and waits for archived; a stop boat refuses is the error", async () => {
-  const rig = await rigOn();
-  const machine = machineOn("dev");
-
-  await rig.insert(machine);
-  await succeeds(rig.runtime.create(machine, "boat"));
-  rig.boat.sent.length = 0;
-
-  const recorded = { ...machine, native: "bx_made0001" };
-
-  await succeeds(rig.runtime.stop(recorded));
-
-  const stop = rig.boat.sent.find((sent) => sent.method === "POST");
-
-  expect([stop?.path, stop?.body]).toEqual(["/sandboxes/bx_made0001/stop", {}]);
-  expect(rig.boat.sandboxes.get("bx_made0001")?.state).toBe("archived");
-
-  rig.boat.sandboxes.set("bx_made0001", {
-    id: "bx_made0001",
-    state: "running",
-    ip: null,
-    sshEndpoint: null,
-  });
-  rig.boat.hooks.answer = (sent) =>
-    sent.path.endsWith("/stop")
-      ? refusal(409, "snapshot_failed", "the final snapshot failed; the sandbox keeps running")
-      : undefined;
-
-  const error = await fails(rig.runtime.stop(recorded));
-
-  expect(refused(error)).toEqual([
-    "not refused",
-    "Internal",
-    "boat POST /sandboxes/bx_made0001/stop answered 409 snapshot_failed: the final snapshot failed; the sandbox keeps running (req_0123)",
-  ]);
-});
-
-test("a stop that boat never archives fails after five minutes with what boat reads", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-
-  rig.boat.sandboxes.set("bx_stuck", {
-    id: "bx_stuck",
-    state: "ready",
-    ip: null,
-    sshEndpoint: "203.0.113.10:19044",
-  });
-
-  // After the stop, the wait only reads boat; by the second read the first one is noted.
-  const readTwice = Promise.withResolvers<void>();
-  let reads = 0;
-
-  rig.boat.hooks.answer = (sent) => {
-    if (sent.path.endsWith("/stop")) {
-      return { status: 202, body: { ok: true } };
-    }
-
-    if (rig.boat.calls().length > 0 && sent.method === "GET") {
-      reads += 1;
-    }
-
-    if (reads === 2) {
-      readTwice.resolve();
-    }
-
-    return undefined;
-  };
-
-  const { exit, waited } = await timed(
-    rig.runtime.stop(machineOn("dev", { native: "bx_stuck" })),
-    readTwice.promise,
-  );
-
-  const error = Exit.isFailure(exit) ? Option.getOrThrow(Exit.findErrorOption(exit)) : undefined;
-
-  expect(error?.message).toBe(
-    "boat didn't archive boat_dev's sandbox bx_stuck within 5m of its stop: it reads ready",
-  );
-  expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(300);
-});
-
-test("delete sends boat's confirm header and waits for 404, never for the purge", async () => {
-  const rig = await rigOn();
-  const machine = machineOn("dev");
-
-  await rig.insert(machine);
-  await succeeds(rig.runtime.create(machine, "boat"));
-  rig.boat.sent.length = 0;
-
-  await succeeds(rig.runtime.delete({ ...machine, native: "bx_made0001" }));
-
-  expect(rig.boat.sent.map((sent) => `${sent.method} ${sent.path}`)).toEqual([
-    "GET /sandboxes/bx_made0001",
-    "DELETE /sandboxes/bx_made0001",
-    "GET /sandboxes/bx_made0001",
-  ]);
-  expect(rig.boat.sent[1]?.headers["x-ascii-confirm-delete"]).toBe("bx_made0001");
-
-  // A repeat after the sandbox is gone is done too.
-  await succeeds(rig.runtime.delete({ ...machine, native: "bx_made0001" }));
-});
-
-test("delete of a machine whose sandbox is cancelled or gone removes only the row: boat refuses a DELETE of another key's sandbox", async () => {
-  const rig = await rigOn();
-
-  rig.boat.sandboxes.set("bx_cancelled", {
-    id: "bx_cancelled",
-    state: "cancelled",
-    ip: null,
-    sshEndpoint: null,
-  });
-  rig.boat.hooks.answer = (sent) =>
-    sent.method === "DELETE" ? refusal(403, "api_key_action_forbidden") : undefined;
-
-  for (const native of ["bx_cancelled", "bx_gone"]) {
-    rig.boat.sent.length = 0;
-
-    await succeeds(rig.runtime.delete(machineOn("dev", { native })));
-
-    expect(rig.boat.sent.map((sent) => `${sent.method} ${sent.path}`)).toEqual([
-      `GET /sandboxes/${native}`,
-    ]);
-  }
-});
-
-test("after a crash before boat answered, stop finds the machine missing and delete removes only the row", async () => {
-  const rig = await rigOn();
-  const machine = machineOn("dev");
-
-  await rig.insert(machine);
-
-  expect(await succeeds(rig.runtime.observe([machine]))).toEqual([{ state: "missing" }]);
-
-  await succeeds(rig.runtime.delete(machine));
-
-  expect(rig.boat.sent).toEqual([]);
-});
-
-test("after a crash once the sandbox was recorded, stop stops it and delete deletes it", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-  const machine = machineOn("dev");
-
-  await rig.insert(machine);
-
-  // The create's call answered and the sandbox was recorded, then the host died.
-  rig.guest.hooks.answer = () => ({ exitCode: 255 });
-  rig.boat.hooks.answer = (sent) =>
-    sent.path.endsWith("/sshkey") ? refusal(400, "host_died_here") : undefined;
-  await fails(rig.runtime.create(machine, "boat"));
-  rig.boat.hooks.answer = undefined;
-
-  const recorded = { ...machine, native: await nativeOf(rig, "dev") };
-
-  expect(await succeeds(rig.runtime.observe([recorded]))).toEqual([
-    { state: "running", ssh: { host: "203.0.113.10", port: 19_001 } },
-  ]);
-
-  rig.boat.sent.length = 0;
-  await succeeds(rig.runtime.stop(recorded));
-  await succeeds(rig.runtime.delete(recorded));
-
-  expect(rig.boat.calls()).toEqual([
-    "POST /sandboxes/bx_made0001/stop",
-    "DELETE /sandboxes/bx_made0001",
-  ]);
-  expect(rig.boat.sandboxes.size).toBe(0);
-});
-
-test("a stopped source forks at once; the copy waits for SSH and boat's marker, and carries the row's key", async () => {
-  const rig = await rigOn();
-  const source = machineOn("dev");
-  const copy = machineOn("copy");
-
-  await rig.insert(source);
-  await rig.insert(copy);
-  await succeeds(rig.runtime.create(source, "boat"));
-
-  const recorded = { ...source, native: "bx_made0001" };
-
-  await succeeds(rig.runtime.stop(recorded));
-  rig.boat.sent.length = 0;
-  rig.guest.calls.length = 0;
-
-  await succeeds(rig.runtime.fork(recorded, copy));
-
-  const fork = rig.boat.sent.find((sent) => sent.path.endsWith("/fork"));
-
-  expect(fork?.headers["idempotency-key"]).toBe(`clankerbox-boat-${copy.instance}`);
-  expect(rig.boat.calls()).toEqual([
-    "POST /sandboxes/bx_made0001/fork",
-    "PATCH /sandboxes/bx_made0002",
-  ]);
-  expect(await nativeOf(rig, "copy")).toBe("bx_made0002");
-  expect(rig.boat.sandboxes.get("bx_made0002")?.name).toBe("boat_copy");
-  expect(remotes(rig.guest)).toEqual([
-    remoteCommand(["true"]),
-    remoteCommand(["/bin/sh", "-c", restoredWait]),
-  ]);
-});
-
-test("a running source syncs, then forks once a snapshot attempt begun after the sync has completed", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-  const copy = machineOn("copy");
-
-  await rig.insert(copy);
-  rig.boat.sandboxes.set("bx_source", {
-    id: "bx_source",
-    state: "idle",
-    ip: null,
-    sshEndpoint: "203.0.113.10:19044",
-    snapshots: true,
-  });
-
-  const { exit, waited } = await timed(
-    rig.runtime.fork(machineOn("dev", { native: "bx_source" }), copy),
-  );
-
-  expect(Exit.isSuccess(exit)).toBe(true);
-
-  // The sync ran at the clock's start; boat's next attempt began a minute later and completed
-  // two seconds after that.
-  expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(62);
-  expect(rig.guest.calls[0]?.remote).toBe(remoteCommand(["sync"]));
-  expect(rig.boat.calls()).toEqual([
-    "POST /sandboxes/bx_source/fork",
-    "PATCH /sandboxes/bx_made0001",
-  ]);
-  expect(rig.boat.sandboxes.get("bx_source")?.state).toBe("idle");
-});
-
-test("the fork's wait reads only boat's stamps: an attempt begun before the sync isn't taken, whatever boat's clock says", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-  const copy = machineOn("copy");
-
-  await rig.insert(copy);
-
-  // boat's clock runs an hour behind the host's, and an attempt began a second before the sync.
-  rig.boat.sandboxes.set("bx_source", {
-    id: "bx_source",
-    state: "idle",
-    ip: null,
-    sshEndpoint: "203.0.113.10:19044",
-    snapshots: true,
-    behind: 3_600_000 - 1000,
-  });
-
-  const { exit, waited } = await timed(
-    rig.runtime.fork(machineOn("dev", { native: "bx_source" }), copy),
-  );
-
-  expect(Exit.isSuccess(exit)).toBe(true);
-
-  // The attempt under way at the sync completed a second later and wasn't taken; the next began
-  // at 59 s and completed at 61 s. The test clock runs on while the host works, so a busy machine
-  // may note that next attempt and wait for the one after: only the lower bound is boat's.
-  expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(61);
-  expect(rig.boat.calls()).toEqual([
-    "POST /sandboxes/bx_source/fork",
-    "PATCH /sandboxes/bx_made0001",
-  ]);
-});
-
-test("a fork whose source boat completes no fresh snapshot fails before the fork call", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-
-  rig.boat.sandboxes.set("bx_source", {
-    id: "bx_source",
-    state: "running",
-    ip: null,
-    sshEndpoint: "203.0.113.10:19044",
-  });
-
-  // Once the sync has run, the wait only reads boat.
-  const synced = Promise.withResolvers<void>();
-
-  rig.boat.hooks.answer = () => {
-    if (rig.guest.calls.length > 0) {
-      synced.resolve();
-    }
-
-    return undefined;
-  };
-
-  const error = await fails(
-    rig.runtime.fork(machineOn("dev", { native: "bx_source" }), machineOn("copy")),
-    synced.promise,
-  );
-
-  expect(refused(error)).toEqual([
-    "not refused",
-    "Internal",
-    "boat completed no snapshot of boat_dev within 10m of its sync, so the fork wouldn't hold its latest writes",
-  ]);
-  expect(rig.boat.calls()).toEqual([]);
-});
-
-test("a fork's or capture's source boat doesn't have is refused before anything native; a fork boat refuses is Capacity", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-  const copy = machineOn("copy");
-
-  for (const source of [machineOn("dev"), machineOn("dev", { native: "bx_gone" })]) {
-    expect(refused(await fails(rig.runtime.fork(source, copy)))).toEqual([
-      "Precondition",
-      "machine boat_dev is missing from the boat runtime; delete it",
-    ]);
-    expect(refused(await fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
-      "Precondition",
-      "machine boat_dev is missing from the boat runtime; delete it",
-    ]);
-  }
-
-  rig.boat.sandboxes.set("bx_source", {
-    id: "bx_source",
-    state: "archived",
-    ip: null,
-    sshEndpoint: null,
-  });
-  rig.boat.hooks.answer = (sent) =>
-    sent.path.endsWith("/fork") ? refusal(429, "limit_reached", "2 active") : undefined;
-
-  expect(
-    refused(await fails(rig.runtime.fork(machineOn("dev", { native: "bx_source" }), copy))),
-  ).toEqual([
-    "Capacity",
-    "boat POST /sandboxes/bx_source/fork answered 429 limit_reached: 2 active (req_0123)",
-  ]);
-  expect(rig.boat.calls()).toEqual(["POST /sandboxes/bx_source/fork"]);
-});
-
-test("a checkpoint is a named snapshot cbx-<host>-<inst>: captured from a running or stopped machine, restored by a create from it, deleted by name", async () => {
-  const rig = await rigOn();
-  const machine = machineOn("dev");
-  const back = machineOn("back");
-  const checkpoint = checkpointOn("cp");
-
-  await rig.insert(machine);
-  await rig.insert(back);
-  await succeeds(rig.runtime.create(machine, "boat"));
-
-  const recorded = { ...machine, native: "bx_made0001" };
-
-  rig.boat.sent.length = 0;
-  rig.guest.calls.length = 0;
-  await succeeds(rig.runtime.capture(recorded, checkpoint));
-
-  // A running machine syncs over SSH before boat saves its disk.
-  expect(rig.boat.sent.map((sent) => `${sent.method} ${sent.path}`)).toEqual([
-    "GET /sandboxes/bx_made0001",
-    "GET /sandboxes/bx_made0001",
-    "POST /sandboxes/bx_made0001/commands",
-    "POST /named-snapshots",
-    "GET /named-snapshots/cbx-boat-cafe0001",
-    "GET /named-snapshots/cbx-boat-cafe0001",
-  ]);
-  expect(rig.boat.sent[3]?.body).toEqual({ sandboxId: "bx_made0001", name: "cbx-boat-cafe0001" });
-  expect(remotes(rig.guest)).toEqual([remoteCommand(["sync"])]);
-
-  // A stopped one doesn't.
-  await succeeds(rig.runtime.stop(recorded));
-  rig.guest.calls.length = 0;
-  await succeeds(rig.runtime.capture(recorded, checkpointOn("cq", 2)));
-  expect(rig.guest.calls).toEqual([]);
-
-  rig.boat.sent.length = 0;
-  rig.guest.calls.length = 0;
-  await succeeds(rig.runtime.restore(checkpoint, back));
-
-  const restore = rig.boat.sent.find((sent) => sent.method === "POST");
-
-  expect(restore?.headers["idempotency-key"]).toBe(`clankerbox-boat-${back.instance}`);
-  expect(await nativeOf(rig, "back")).toBe("bx_made0002");
-  expect(remotes(rig.guest)).toHaveLength(2);
-
-  rig.boat.sent.length = 0;
-  await succeeds(rig.runtime.deleteCheckpoint(checkpoint));
-  await succeeds(rig.runtime.deleteCheckpoint(checkpoint));
-
-  expect(rig.boat.calls()).toEqual([
-    "DELETE /named-snapshots/cbx-boat-cafe0001",
-    "DELETE /named-snapshots/cbx-boat-cafe0001",
-  ]);
-  expect([...rig.boat.snapshots.keys()]).toEqual(["cbx-boat-cafe0002"]);
-});
-
-test("a running machine whose sync fails isn't captured", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-
-  rig.boat.sandboxes.set("bx_source", {
-    id: "bx_source",
-    state: "idle",
-    ip: null,
-    sshEndpoint: "203.0.113.10:19044",
-  });
-  rig.guest.hooks.answer = () => ({ exitCode: 1, stderr: "sync: I/O error\n" });
-
-  const error = await fails(
-    rig.runtime.capture(machineOn("dev", { native: "bx_source" }), checkpointOn("cp")),
-  );
-
-  expect(refused(error)).toEqual([
-    "not refused",
-    "Internal",
-    "sync in boat_dev before its capture exited 1: sync: I/O error",
-  ]);
-  expect(rig.boat.calls()).toEqual([]);
-});
-
-test("an 11th named snapshot is a Capacity refusal; a failed save and a deleted snapshot's restore are failures", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-  const source = machineOn("dev", { native: "bx_source" });
-
-  rig.boat.sandboxes.set("bx_source", {
-    id: "bx_source",
-    state: "archived",
-    ip: null,
-    sshEndpoint: null,
-  });
-  rig.boat.hooks.answer = (sent) =>
-    sent.method === "POST" && sent.path === "/named-snapshots"
-      ? refusal(409, "named_snapshot_limit", "10 named snapshots")
-      : undefined;
-
-  expect(refused(await fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
-    "Capacity",
-    "boat POST /named-snapshots answered 409 named_snapshot_limit: 10 named snapshots (req_0123)",
-  ]);
-
-  rig.boat.hooks.answer = (sent) =>
-    sent.method === "GET" && sent.path.startsWith("/named-snapshots/")
-      ? {
-          status: 200,
-          body: { snapshot: { name: "cbx-boat-cafe0001", status: "failed", error: "disk" } },
-        }
-      : undefined;
-
-  expect(refused(await fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
-    "not refused",
-    "Internal",
-    "boat's snapshot cbx-boat-cafe0001 of boat_dev is failed: disk",
-  ]);
-
-  rig.boat.hooks.answer = undefined;
-
-  const back = machineOn("back");
-
-  await rig.insert(back);
-
-  expect(refused(await fails(rig.runtime.restore(checkpointOn("gone", 9), back)))).toEqual([
-    "not refused",
-    "Internal",
-    "boat POST /sandboxes answered 404 named_snapshot_not_found: boat says named_snapshot_not_found (req_0123)",
-  ]);
-});
-
-test("capacity is the account's limits as boat reports them: its active sandboxes, and each start window that has a limit; a refusal is boat's own answer, asked once", async () => {
-  const rig = await rigOn();
-
-  const limits = (maxActiveSandboxes: number, starts: Schema.Json): Answer => ({
-    status: 200,
-    body: {
-      ok: true,
-      type: "limits.info",
-      canStart: true,
-      activeSandboxes: 1,
-      activeStates: ["provisioned", "cloning", "ready", "idle", "running"],
-      maxActiveSandboxes,
-      billingStatus: "active",
-      starts,
-    },
-  });
-
-  let answer: Answer = limits(2, {
-    unlimited: false,
-    minute: { limit: 5, used: 0, remaining: 5 },
-    hour: { limit: 25, used: 3, remaining: 22 },
-    day: { limit: 75, used: 12, remaining: 63 },
-  });
-
-  rig.boat.hooks.answer = (sent) => (sent.path === "/limits" ? answer : undefined);
-
-  const trial = await succeeds(rig.runtime.capacity([]));
-
-  answer = limits(100, { unlimited: true, minute: null, hour: null, day: null });
-
-  const unlimited = await succeeds(rig.runtime.capacity([]));
-
-  answer = refusal(401, "unauthorized", `no account has the key ${apiKey}`);
-
-  const error = await fails(rig.runtime.capacity([]));
-
-  answer = refusal(503, "unavailable", "boat is down for maintenance");
-
-  const down = await fails(rig.runtime.capacity([]));
-
-  expect(trial).toEqual([
-    { resource: "activeSandboxes", limit: 2, used: 1 },
-    { resource: "startsPerMinute", limit: 5, used: 0 },
-    { resource: "startsPerHour", limit: 25, used: 3 },
-    { resource: "startsPerDay", limit: 75, used: 12 },
-  ]);
-  expect(unlimited).toEqual([{ resource: "activeSandboxes", limit: 100, used: 1 }]);
-  expect(refused(error)).toEqual([
-    "not refused",
-    "Internal",
-    "boat GET /limits answered 401 unauthorized: no account has the key <redacted> (req_0123)",
-  ]);
-  expect(refused(down)).toEqual([
-    "not refused",
-    "Internal",
-    "boat GET /limits answered 503 unavailable: boat is down for maintenance (req_0123)",
-  ]);
-  expect(rig.boat.sent.map(({ method, path }) => `${method} ${path}`)).toEqual([
-    "GET /limits",
-    "GET /limits",
-    "GET /limits",
-    "GET /limits",
-  ]);
-});
-
-test("the API key reaches neither ssh's command line nor its environment, nor an error", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-  const machine = machineOn("dev");
-
-  await rig.insert(machine);
-  rig.guest.hooks.answer = () => ({ exitCode: 255, stderr: `Bearer ${apiKey}?\n` });
-  rig.boat.hooks.answer = (sent) =>
-    sent.method === "PATCH" || sent.path.endsWith("/sshkey")
-      ? refusal(400, "bad", `you sent ${apiKey}`)
-      : undefined;
-
-  const logged: Array<unknown> = [];
-
-  const error = await fails(
-    rig.runtime
-      .create(machine, "boat")
-      .pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))]))),
-  );
-
-  // The rename's refusal is a warning, the authorization's the error.
-  expect(logged).toHaveLength(1);
-
-  for (const text of [
-    error.message,
-    String(error),
-    inspect(error, { depth: 10 }),
-    inspect(logged),
-  ]) {
-    expect(text).not.toContain(apiKey);
-  }
-
-  rig.boat.hooks.answer = undefined;
-  await succeeds(rig.runtime.exec({ ...machine, native: "bx_made0001" }, { argv: ["true"] }));
-
-  for (const call of rig.guest.calls) {
-    expect(JSON.stringify(call)).not.toContain(apiKey);
-  }
-});
-
-test("whatever boat or the transport echoes leaves the runtime without the API key: refusals, boat's errors, states and warnings", async () => {
-  const rig = await rigOn(fakeBoat({ instant: true }));
-  const echo = `Bearer ${apiKey}`;
-  const logged: Array<unknown> = [];
-
-  const logging = Effect.provide(
-    Logger.layer([Logger.make(({ message }) => logged.push(message))]),
-  );
-
-  const errors: Array<Refusal | HostError> = [];
-
-  rig.boat.sandboxes.set("bx_stopped", {
-    id: "bx_stopped",
-    state: "archived",
-    ip: null,
-    sshEndpoint: null,
-  });
-  rig.boat.sandboxes.set("bx_failing", {
-    id: "bx_failing",
-    state: "ready",
-    ip: null,
-    sshEndpoint: null,
-  });
-  rig.boat.snapshots.set("cbx-boat-cafe0001", { name: "cbx-boat-cafe0001", status: "saving" });
-
-  // A refusal: boat's 429 to a resume.
-  rig.boat.hooks.answer = (sent) =>
-    sent.path.endsWith("/resume") ? refusal(429, "limit_reached", echo) : undefined;
-  errors.push(await fails(rig.runtime.start(machineOn("refused", { native: "bx_stopped" }))));
-
-  // A dropped connection, whose description echoes the request.
-  rig.boat.hooks.answer = (sent) => (sent.path.endsWith("/resume") ? "drop" : undefined);
-  errors.push(await fails(rig.runtime.start(machineOn("dropped", { native: "bx_stopped" }))));
-
-  // boat's own error, and a state, on a sandbox it fails.
-  rig.boat.hooks.answer = (sent) =>
-    sent.path.endsWith("/resume") ? { status: 202, body: { ok: true } } : undefined;
-  rig.boat.sandboxes.set("bx_stopped", {
-    id: "bx_stopped",
-    state: "archived",
-    next: "error",
-    error: echo,
-    ip: null,
-    sshEndpoint: null,
-  });
-  errors.push(await fails(rig.runtime.start(machineOn("failed", { native: "bx_stopped" }))));
-  // The stop reads the sandbox running; every read after it, a state that echoes the key.
-  let failingReads = 0;
-
-  rig.boat.hooks.answer = (sent): Answer | undefined =>
-    sent.path.endsWith("/stop")
-      ? { status: 202, body: { ok: true } }
-      : sent.path.endsWith("/bx_failing")
-        ? {
-            status: 200,
-            body: {
-              ok: true,
-              sandbox: {
-                id: "bx_failing",
-                state: failingReads++ === 0 ? "running" : apiKey,
-                error: echo,
-                ip: null,
+  it.effect(
+    "exec runs as user through sudo -n, quoted, with the host's key and the guest's keys pinned from boat's command API",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const machine = machineOn("dev");
+
+        yield* rig.insert(machine);
+        yield* succeeds(rig.runtime.create(machine, "boat"));
+
+        rig.guest.calls.length = 0;
+        rig.guest.hooks.answer = () => ({ exitCode: 3, stdout: "out\n" });
+
+        const ran = yield* succeeds(
+          Effect.flatMap(
+            rig.runtime.exec(
+              { ...machine, native: "bx_made0001" },
+              {
+                argv: ["/bin/sh", "-c", "cat; exit 3"],
+                stdin: new TextEncoder().encode("from stdin"),
               },
-            },
-          }
-        : undefined;
-  errors.push(
-    await fails(rig.runtime.stop(machineOn("stuck", { native: "bx_failing" })).pipe(logging)),
+            ),
+            (execution) =>
+              Effect.all([
+                Stream.mkString(Stream.decodeText(execution.output)),
+                execution.exitCode,
+              ]),
+          ),
+        );
+
+        expect(ran).toEqual(["out\n", 3]);
+
+        const [call] = rig.guest.calls;
+        const pinnedFile = call?.args.find((arg) => arg.startsWith("UserKnownHostsFile="));
+
+        expect(call?.args).toEqual([
+          "-F",
+          "/dev/null",
+          "-T",
+          "-i",
+          join(rig.stateDir, "boat-ssh", "id_ed25519"),
+          "-o",
+          "IdentitiesOnly=yes",
+          "-o",
+          "IdentityAgent=none",
+          "-o",
+          pinnedFile,
+          "-o",
+          "GlobalKnownHostsFile=/dev/null",
+          "-o",
+          "StrictHostKeyChecking=yes",
+          "-o",
+          "UpdateHostKeys=no",
+          "-o",
+          "HostKeyAlias=bx_made0001",
+          "-o",
+          "BatchMode=yes",
+          "-o",
+          "ConnectTimeout=15",
+          "-o",
+          "ServerAliveInterval=30",
+          "-o",
+          "LogLevel=ERROR",
+          "-p",
+          "19001",
+          "-l",
+          "user",
+          "--",
+          "203.0.113.10",
+          "'sudo' '-n' '--' '/bin/sh' '-c' 'cat; exit 3'",
+        ]);
+        expect(call?.stdin).toBe("from stdin");
+        expect(call?.pinned).toBe(
+          `bx_made0001 ${guestKey}\nbx_made0001 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQGuestRsa\n`,
+        );
+
+        // The pin lives only as long as its connection.
+        expect(existsSync(pinnedFile?.slice("UserKnownHostsFile=".length) ?? "")).toBe(false);
+
+        const command = rig.boat.sent.findLast((sent) => sent.path.endsWith("/commands"));
+
+        expect(command?.body).toEqual({
+          command: "cat /etc/ssh/ssh_host_*_key.pub",
+          timeoutSeconds: 30,
+        });
+      }),
   );
 
-  // A snapshot boat fails.
-  rig.boat.hooks.answer = (sent) =>
-    sent.path.endsWith("/cbx-boat-cafe0001") && sent.method === "GET"
-      ? {
+  it.effect(
+    "exec on a sandbox that doesn't run, or without one recorded, fails before any SSH",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const machine = machineOn("dev");
+
+        yield* rig.insert(machine);
+        yield* succeeds(rig.runtime.create(machine, "boat"));
+
+        const recorded = { ...machine, native: "bx_made0001" };
+
+        yield* succeeds(rig.runtime.stop(recorded));
+        rig.guest.calls.length = 0;
+
+        const stopped = yield* fails(rig.runtime.exec(recorded, { argv: ["true"] }));
+        const none = yield* fails(rig.runtime.exec(machineOn("other"), { argv: ["true"] }));
+
+        expect(refused(stopped)).toEqual([
+          "not refused",
+          "Internal",
+          "machine boat_dev doesn't run: boat reads its sandbox bx_made0001 archived",
+        ]);
+        expect(refused(none)).toEqual([
+          "not refused",
+          "Internal",
+          "machine boat_other has no boat sandbox recorded",
+        ]);
+        expect(rig.guest.calls).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "a create waits while SSH or boat's command API doesn't answer yet, and fails with ssh's output after three minutes",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const machine = machineOn("dev");
+        let refusals = 2;
+
+        yield* rig.insert(machine);
+
+        rig.guest.hooks.answer = () => {
+          refusals -= 1;
+
+          return refusals >= 0 ? { exitCode: 255, stderr: "Connection refused\n" } : undefined;
+        };
+
+        // boat's command API isn't up yet either, at first.
+        let unready = 1;
+
+        rig.boat.hooks.answer = (sent) => {
+          if (!sent.path.endsWith("/commands") || unready === 0) {
+            return undefined;
+          }
+
+          unready -= 1;
+
+          return refusal(503, "agent_unavailable");
+        };
+
+        yield* succeeds(rig.runtime.create(machine, "boat"));
+        expect(remotes(rig.guest)).toHaveLength(3);
+        expect(rig.boat.sent.filter((sent) => sent.path.endsWith("/commands"))).toHaveLength(4);
+        rig.boat.hooks.answer = undefined;
+
+        const other = machineOn("other");
+
+        yield* rig.insert(other);
+
+        // Each probe pins host keys in a file of its own; by the second, the first's output is noted.
+        const probedTwice = Promise.withResolvers<void>();
+        let probes = 0;
+
+        rig.guest.hooks.answer = () => {
+          probes += 1;
+
+          if (probes === 2) {
+            probedTwice.resolve();
+          }
+
+          return { exitCode: 255, stderr: "Connection refused\n" };
+        };
+
+        const { exit, waited } = yield* timed(
+          rig.runtime.create(other, "boat"),
+          probedTwice.promise,
+        );
+
+        const error = Exit.isFailure(exit)
+          ? Option.getOrThrow(Exit.findErrorOption(exit))
+          : undefined;
+
+        expect(error === undefined ? undefined : refused(error)).toEqual([
+          "not refused",
+          "Internal",
+          "boat_other didn't answer SSH within 3m: Connection refused",
+        ]);
+        expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(180);
+
+        // The sandbox stays recorded for delete.
+        expect(yield* nativeOf(rig, "other")).toBe("bx_made0002");
+      }),
+  );
+
+  it.effect("a sandbox that boat cancels or loses during the SSH wait fails it at once", () =>
+    Effect.gen(function* () {
+      for (const ending of ["cancelled", "gone"]) {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const machine = machineOn("dev");
+
+        yield* rig.insert(machine);
+
+        // The first probe finds SSH not up yet; then boat gives the sandbox up.
+        rig.guest.hooks.answer = () => {
+          const sandbox = rig.boat.sandboxes.get("bx_made0001");
+
+          if (sandbox !== undefined && ending === "cancelled") {
+            sandbox.state = ending;
+          } else {
+            rig.boat.sandboxes.delete("bx_made0001");
+          }
+
+          return { exitCode: 255, stderr: "Connection refused\n" };
+        };
+
+        const { exit, waited } = yield* timed(rig.runtime.create(machine, "boat"));
+
+        const error = Exit.isFailure(exit)
+          ? Option.getOrThrow(Exit.findErrorOption(exit))
+          : undefined;
+
+        expect(error === undefined ? undefined : refused(error)).toEqual([
+          "not refused",
+          "Internal",
+          `machine boat_dev doesn't run: boat reads its sandbox bx_made0001 ${ending}`,
+        ]);
+        // Short of the SSH wait's 3 minutes, which a retried read of the gone sandbox would use up.
+        expect(Duration.toSeconds(waited)).toBeLessThan(180);
+        expect(remotes(rig.guest)).toHaveLength(1);
+      }
+    }),
+  );
+
+  it.effect("boat's refusals of a create leave nothing: a Refusal, and no sandbox recorded", () =>
+    Effect.gen(function* () {
+      const rig = yield* rigOn();
+
+      for (const [status, code, tag] of [
+        [429, "limit_reached", "Capacity"],
+        [429, "member_limit_reached", "Capacity"],
+        [429, "daily_limit_reached", "Capacity"],
+        [503, "out_of_capacity", "Capacity"],
+        [503, "no_ready_machine", "Capacity"],
+        [403, "api_key_action_forbidden", "Precondition"],
+      ] as const) {
+        const machine = machineOn(`m${code.length}${status}`);
+
+        yield* rig.insert(machine);
+        rig.boat.sent.length = 0;
+        rig.boat.hooks.answer = (sent) =>
+          sent.method === "POST" ? refusal(status, code, "no room") : undefined;
+
+        const error = yield* fails(rig.runtime.create(machine, "boat"));
+
+        expect(refused(error)).toEqual([
+          tag,
+          `boat POST /sandboxes answered ${status} ${code}: no room (req_0123)`,
+        ]);
+        expect(rig.boat.calls()).toEqual(["POST /sandboxes"]);
+        expect(yield* nativeOf(rig, machine.name)).toBeUndefined();
+      }
+
+      expect(rig.guest.calls).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "a create boat keeps throttling past its repeats is a Capacity refusal, and no sandbox is recorded",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn();
+        const machine = machineOn("dev");
+
+        yield* rig.insert(machine);
+        rig.boat.hooks.answer = (sent) =>
+          sent.method === "POST" ? refusal(429, "rate_limited", "5 starts per minute") : undefined;
+
+        const { exit, waited } = yield* timed(rig.runtime.create(machine, "boat"));
+
+        const error = Exit.isFailure(exit)
+          ? Option.getOrThrow(Exit.findErrorOption(exit))
+          : undefined;
+
+        expect(error === undefined ? undefined : refused(error)).toEqual([
+          "Capacity",
+          "boat POST /sandboxes answered 429 rate_limited: 5 starts per minute (req_0123), and 2 repeats 1m 5s apart met the same",
+        ]);
+        expect(Duration.format(waited)).toBe("2m 10s");
+        expect(rig.boat.calls()).toEqual(["POST /sandboxes", "POST /sandboxes", "POST /sandboxes"]);
+        expect(yield* nativeOf(rig, machine.name)).toBeUndefined();
+        expect(rig.guest.calls).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "a create, fork or restore that boat cancels found no machine: a Capacity refusal; one gone after boat accepted it is a failure that keeps its sandbox ID",
+    () =>
+      Effect.gen(function* () {
+        const boat = fakeBoat();
+        const rig = yield* rigOn(boat);
+        const machine = machineOn("dev");
+
+        yield* rig.insert(machine);
+
+        boat.hooks.made = (sandbox) => {
+          sandbox.next = "cancelled";
+          sandbox.error = "no machine available";
+        };
+
+        const cancelled = yield* fails(rig.runtime.create(machine, "boat"));
+
+        expect(refused(cancelled)).toEqual([
+          "Capacity",
+          "boat cancelled sandbox bx_made0001 of boat_dev: no machine available; it found no machine",
+        ]);
+
+        const other = machineOn("other");
+
+        yield* rig.insert(other);
+
+        boat.hooks.made = (sandbox) => {
+          sandbox.next = "gone";
+        };
+
+        const gone = yield* fails(rig.runtime.create(other, "boat"));
+
+        // boat accepted the create, so a 404 doesn't say it made nothing: the row stays, failed, with
+        // the sandbox ID to find it by.
+        expect(refused(gone)).toEqual([
+          "not refused",
+          "Internal",
+          "boat no longer has sandbox bx_made0002 of boat_other",
+        ]);
+        expect(yield* nativeOf(rig, other.name)).toBe("bx_made0002");
+        expect(rig.guest.calls).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "a machine no boat type covers is refused with Precondition, in admit and before any call",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn();
+        const big = machineOn("big", { cpu: 16, ramMib: 32_768, diskGib: 252 });
+
+        const admitted = yield* fails(
+          rig.runtime.admit({ action: "create", machine: big, machines: [] }),
+        );
+
+        expect(refused(admitted)).toEqual([
+          "not refused",
+          "Precondition",
+          "no boat machine type has 16 vCPU, 32G of RAM and 252G of disk; the largest, xlarge, has 16 vCPU, 32G of RAM and 251G of disk",
+        ]);
+
+        const created = yield* fails(rig.runtime.create(big, "boat"));
+        const restored = yield* fails(rig.runtime.restore(checkpointOn("cp"), big));
+
+        expect(refused(created)[0]).toBe("Precondition");
+        expect(refused(restored)[0]).toBe("Precondition");
+        expect(rig.boat.sent).toEqual([]);
+
+        // A running source would sync and wait for a snapshot: the type is refused before either.
+        rig.boat.sandboxes.set("bx_source", {
+          id: "bx_source",
+          state: "idle",
+          ip: null,
+          sshEndpoint: "203.0.113.10:19044",
+        });
+
+        const forked = yield* fails(
+          rig.runtime.fork(machineOn("dev", { native: "bx_source" }), big),
+        );
+
+        expect(refused(forked)[0]).toBe("Precondition");
+        expect(rig.boat.sent).toEqual([]);
+        expect(rig.guest.calls).toEqual([]);
+
+        yield* succeeds(
+          rig.runtime.admit({
+            action: "create",
+            machine: machineOn("fits", { cpu: 16, ramMib: 32_768, diskGib: 251 }),
+            machines: [],
+          }),
+        );
+      }),
+  );
+
+  it.effect(
+    "observe reads each recorded sandbox with its own GET, none when no sandbox is recorded, and a read that fails past its repeats unknown",
+    () =>
+      Effect.gen(function* () {
+        const boat = fakeBoat({ instant: true });
+        const rig = yield* rigOn(boat);
+
+        boat.sandboxes.set("bx_up", {
+          id: "bx_up",
+          state: "idle",
+          ip: "2001:db8::2c",
+          sshEndpoint: "203.0.113.10:19044",
+        });
+        boat.sandboxes.set("bx_own", {
+          id: "bx_own",
+          state: "ready",
+          ip: "198.51.100.7",
+          sshEndpoint: null,
+        });
+        boat.sandboxes.set("bx_down", {
+          id: "bx_down",
+          state: "archived",
+          ip: null,
+          sshEndpoint: "203.0.113.10:19045",
+        });
+        boat.sandboxes.set("bx_booting", {
+          id: "bx_booting",
+          state: "cloning",
+          ip: null,
+          sshEndpoint: "203.0.113.10:19046",
+        });
+        boat.sandboxes.set("bx_cancelled", {
+          id: "bx_cancelled",
+          state: "cancelled",
+          ip: null,
+          sshEndpoint: null,
+        });
+        boat.sandboxes.set("bx_operator", {
+          id: "bx_operator",
+          state: "ready",
+          ip: null,
+          sshEndpoint: null,
+        });
+        let blips = 0;
+
+        boat.hooks.answer = (sent) => {
+          if (sent.path.endsWith("/bx_broken")) {
+            return refusal(500, "internal_error");
+          }
+
+          blips += sent.path.endsWith("/bx_up") ? 1 : 0;
+
+          return blips === 1 ? refusal(429, "rate_limited") : undefined;
+        };
+
+        const { exit, waited } = yield* timed(
+          rig.runtime.observe([
+            machineOn("up", { native: "bx_up" }),
+            machineOn("own", { native: "bx_own" }),
+            machineOn("down", { native: "bx_down" }),
+            machineOn("booting", { native: "bx_booting" }),
+            machineOn("cancelled", { native: "bx_cancelled" }),
+            machineOn("deleted", { native: "bx_deleted" }),
+            machineOn("unrecorded"),
+            machineOn("broken", { native: "bx_broken" }),
+          ]),
+        );
+
+        // A blip is ridden out; a read boat keeps failing ends at its 8 s, and only its own machine
+        // reads unknown.
+        expect(Duration.format(waited)).toBe("8s");
+        expect(Exit.isSuccess(exit) ? exit.value : exit).toEqual([
+          { state: "running", ssh: { host: "203.0.113.10", port: 19_044 } },
+          { state: "running", ssh: { host: "198.51.100.7", port: 22 } },
+          { state: "stopped" },
+          // Active but not up yet: it runs, with no endpoint until it answers.
+          { state: "running" },
+          { state: "missing" },
+          { state: "missing" },
+          { state: "missing" },
+          // A read that fails is no answer: the sandbox may still be there.
+          { state: "unknown" },
+        ]);
+        // Never the operator's own sandbox: only the recorded ones are read.
+        expect(new Set(boat.sent.map((sent) => `${sent.method} ${sent.path}`))).toEqual(
+          new Set([
+            "GET /sandboxes/bx_booting",
+            "GET /sandboxes/bx_broken",
+            "GET /sandboxes/bx_cancelled",
+            "GET /sandboxes/bx_deleted",
+            "GET /sandboxes/bx_down",
+            "GET /sandboxes/bx_own",
+            "GET /sandboxes/bx_up",
+          ]),
+        );
+        expect(boat.sent.filter((sent) => sent.path.endsWith("/bx_up"))).toHaveLength(2);
+        expect(boat.sent.filter((sent) => sent.path.endsWith("/bx_broken")).length).toBeGreaterThan(
+          2,
+        );
+
+        boat.sent.length = 0;
+
+        expect(yield* succeeds(rig.runtime.observe([machineOn("unrecorded")]))).toEqual([
+          { state: "missing" },
+        ]);
+        expect(yield* succeeds(rig.runtime.observe([]))).toEqual([]);
+        expect(boat.sent).toEqual([]);
+      }),
+  );
+
+  it.effect("start resumes, waits for SSH, then for boat's marker that /var/lib is restored", () =>
+    Effect.gen(function* () {
+      const rig = yield* rigOn();
+      const machine = machineOn("dev");
+
+      yield* rig.insert(machine);
+      yield* succeeds(rig.runtime.create(machine, "boat"));
+
+      const recorded = { ...machine, native: "bx_made0001" };
+
+      yield* succeeds(rig.runtime.stop(recorded));
+      rig.boat.sent.length = 0;
+      rig.guest.calls.length = 0;
+
+      yield* succeeds(rig.runtime.start(recorded));
+
+      expect(rig.boat.calls()).toEqual(["POST /sandboxes/bx_made0001/resume"]);
+      expect(rig.boat.sent.some((sent) => sent.headers["idempotency-key"] !== undefined)).toBe(
+        false,
+      );
+      expect(remotes(rig.guest)).toEqual([
+        remoteCommand(["true"]),
+        remoteCommand(["/bin/sh", "-c", restoredWait]),
+      ]);
+
+      // The relay moved on resume; the exec reads it with the state.
+      expect(rig.guest.calls.map((call) => call.args.at(-2))).toEqual([
+        "203.0.113.11",
+        "203.0.113.11",
+      ]);
+    }),
+  );
+
+  it.effect(
+    "start of a sandbox boat reads ready, never stopped since its create, skips the resume and waits for SSH, then for the marker only off the create's machine",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn();
+        const machine = machineOn("dev");
+
+        yield* rig.insert(machine);
+        yield* succeeds(rig.runtime.create(machine, "boat"));
+        rig.boat.sent.length = 0;
+        rig.guest.calls.length = 0;
+
+        yield* succeeds(rig.runtime.start({ ...machine, native: "bx_made0001" }));
+
+        expect(rig.boat.calls()).toEqual([]);
+        expect(remotes(rig.guest)).toEqual([
+          remoteCommand(["true"]),
+          remoteCommand(["/bin/sh", "-c", restoredWait]),
+        ]);
+      }),
+  );
+
+  it.effect(
+    "start of a sandbox boat still resumes waits for it to run, and doesn't resume it again",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn();
+
+        rig.boat.sandboxes.set("bx_resuming", {
+          id: "bx_resuming",
+          state: "provisioned",
+          next: "ready",
+          ip: null,
+          sshEndpoint: "203.0.113.11:19500",
+        });
+
+        yield* succeeds(rig.runtime.start(machineOn("dev", { native: "bx_resuming" })));
+
+        expect(rig.boat.calls()).toEqual([]);
+        expect(rig.boat.sent.filter((sent) => sent.method === "GET").length).toBeGreaterThan(1);
+        expect(remotes(rig.guest)).toEqual([
+          remoteCommand(["true"]),
+          remoteCommand(["/bin/sh", "-c", restoredWait]),
+        ]);
+      }),
+  );
+
+  it.effect("a resume boat refuses for the account's limit is a Capacity refusal", () =>
+    Effect.gen(function* () {
+      const rig = yield* rigOn(fakeBoat({ instant: true }));
+
+      rig.boat.hooks.answer = (sent) =>
+        sent.path.endsWith("/resume") ? refusal(429, "limit_reached", "2 active") : undefined;
+
+      rig.boat.sandboxes.set("bx_made0009", {
+        id: "bx_made0009",
+        state: "archived",
+        ip: null,
+        sshEndpoint: null,
+      });
+
+      const error = yield* fails(rig.runtime.start(machineOn("dev", { native: "bx_made0009" })));
+
+      expect(refused(error)).toEqual([
+        "Capacity",
+        "boat POST /sandboxes/bx_made0009/resume answered 429 limit_reached: 2 active (req_0123)",
+      ]);
+    }),
+  );
+
+  it.effect(
+    "start of a machine boat doesn't have is refused before anything native, and stop of one, or of a sandbox boat doesn't read active, does nothing",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+
+        rig.boat.sandboxes.set("bx_cancelled", {
+          id: "bx_cancelled",
+          state: "cancelled",
+          ip: null,
+          sshEndpoint: null,
+        });
+        rig.boat.sandboxes.set("bx_archived", {
+          id: "bx_archived",
+          state: "archived",
+          ip: null,
+          sshEndpoint: null,
+        });
+
+        const gone = [undefined, "bx_gone", "bx_cancelled"].map((native) =>
+          machineOn("dev", { native }),
+        );
+
+        const errors: Array<ReadonlyArray<string>> = [];
+
+        for (const machine of gone) {
+          errors.push(refused(yield* fails(rig.runtime.start(machine))));
+          yield* succeeds(rig.runtime.stop(machine));
+        }
+
+        yield* succeeds(rig.runtime.stop(machineOn("dev", { native: "bx_archived" })));
+
+        expect(errors).toEqual(
+          Array.from({ length: 3 }, () => [
+            "Precondition",
+            "machine boat_dev is missing from the boat runtime; delete it",
+          ]),
+        );
+        expect(rig.boat.calls()).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "stop asks boat to stop, never with force, and waits for archived; a stop boat refuses is the error",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn();
+        const machine = machineOn("dev");
+
+        yield* rig.insert(machine);
+        yield* succeeds(rig.runtime.create(machine, "boat"));
+        rig.boat.sent.length = 0;
+
+        const recorded = { ...machine, native: "bx_made0001" };
+
+        yield* succeeds(rig.runtime.stop(recorded));
+
+        const stop = rig.boat.sent.find((sent) => sent.method === "POST");
+
+        expect([stop?.path, stop?.body]).toEqual(["/sandboxes/bx_made0001/stop", {}]);
+        expect(rig.boat.sandboxes.get("bx_made0001")?.state).toBe("archived");
+
+        rig.boat.sandboxes.set("bx_made0001", {
+          id: "bx_made0001",
+          state: "running",
+          ip: null,
+          sshEndpoint: null,
+        });
+        rig.boat.hooks.answer = (sent) =>
+          sent.path.endsWith("/stop")
+            ? refusal(
+                409,
+                "snapshot_failed",
+                "the final snapshot failed; the sandbox keeps running",
+              )
+            : undefined;
+
+        const error = yield* fails(rig.runtime.stop(recorded));
+
+        expect(refused(error)).toEqual([
+          "not refused",
+          "Internal",
+          "boat POST /sandboxes/bx_made0001/stop answered 409 snapshot_failed: the final snapshot failed; the sandbox keeps running (req_0123)",
+        ]);
+      }),
+  );
+
+  it.effect("a stop that boat never archives fails after five minutes with what boat reads", () =>
+    Effect.gen(function* () {
+      const rig = yield* rigOn(fakeBoat({ instant: true }));
+
+      rig.boat.sandboxes.set("bx_stuck", {
+        id: "bx_stuck",
+        state: "ready",
+        ip: null,
+        sshEndpoint: "203.0.113.10:19044",
+      });
+
+      // After the stop, the wait only reads boat; by the second read the first one is noted.
+      const readTwice = Promise.withResolvers<void>();
+      let reads = 0;
+
+      rig.boat.hooks.answer = (sent) => {
+        if (sent.path.endsWith("/stop")) {
+          return { status: 202, body: { ok: true } };
+        }
+
+        if (rig.boat.calls().length > 0 && sent.method === "GET") {
+          reads += 1;
+        }
+
+        if (reads === 2) {
+          readTwice.resolve();
+        }
+
+        return undefined;
+      };
+
+      const { exit, waited } = yield* timed(
+        rig.runtime.stop(machineOn("dev", { native: "bx_stuck" })),
+        readTwice.promise,
+      );
+
+      const error = Exit.isFailure(exit)
+        ? Option.getOrThrow(Exit.findErrorOption(exit))
+        : undefined;
+
+      expect(error?.message).toBe(
+        "boat didn't archive boat_dev's sandbox bx_stuck within 5m of its stop: it reads ready",
+      );
+      expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(300);
+    }),
+  );
+
+  it.effect("delete sends boat's confirm header and waits for 404, never for the purge", () =>
+    Effect.gen(function* () {
+      const rig = yield* rigOn();
+      const machine = machineOn("dev");
+
+      yield* rig.insert(machine);
+      yield* succeeds(rig.runtime.create(machine, "boat"));
+      rig.boat.sent.length = 0;
+
+      yield* succeeds(rig.runtime.delete({ ...machine, native: "bx_made0001" }));
+
+      expect(rig.boat.sent.map((sent) => `${sent.method} ${sent.path}`)).toEqual([
+        "GET /sandboxes/bx_made0001",
+        "DELETE /sandboxes/bx_made0001",
+        "GET /sandboxes/bx_made0001",
+      ]);
+      expect(rig.boat.sent[1]?.headers["x-ascii-confirm-delete"]).toBe("bx_made0001");
+
+      // A repeat after the sandbox is gone is done too.
+      yield* succeeds(rig.runtime.delete({ ...machine, native: "bx_made0001" }));
+    }),
+  );
+
+  it.effect(
+    "delete of a machine whose sandbox is cancelled or gone removes only the row: boat refuses a DELETE of another key's sandbox",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn();
+
+        rig.boat.sandboxes.set("bx_cancelled", {
+          id: "bx_cancelled",
+          state: "cancelled",
+          ip: null,
+          sshEndpoint: null,
+        });
+        rig.boat.hooks.answer = (sent) =>
+          sent.method === "DELETE" ? refusal(403, "api_key_action_forbidden") : undefined;
+
+        for (const native of ["bx_cancelled", "bx_gone"]) {
+          rig.boat.sent.length = 0;
+
+          yield* succeeds(rig.runtime.delete(machineOn("dev", { native })));
+
+          expect(rig.boat.sent.map((sent) => `${sent.method} ${sent.path}`)).toEqual([
+            `GET /sandboxes/${native}`,
+          ]);
+        }
+      }),
+  );
+
+  it.effect(
+    "after a crash before boat answered, stop finds the machine missing and delete removes only the row",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn();
+        const machine = machineOn("dev");
+
+        yield* rig.insert(machine);
+
+        expect(yield* succeeds(rig.runtime.observe([machine]))).toEqual([{ state: "missing" }]);
+
+        yield* succeeds(rig.runtime.delete(machine));
+
+        expect(rig.boat.sent).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "after a crash once the sandbox was recorded, stop stops it and delete deletes it",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const machine = machineOn("dev");
+
+        yield* rig.insert(machine);
+
+        // The create's call answered and the sandbox was recorded, then the host died.
+        rig.guest.hooks.answer = () => ({ exitCode: 255 });
+        rig.boat.hooks.answer = (sent) =>
+          sent.path.endsWith("/sshkey") ? refusal(400, "host_died_here") : undefined;
+        yield* fails(rig.runtime.create(machine, "boat"));
+        rig.boat.hooks.answer = undefined;
+
+        const recorded = { ...machine, native: yield* nativeOf(rig, "dev") };
+
+        expect(yield* succeeds(rig.runtime.observe([recorded]))).toEqual([
+          { state: "running", ssh: { host: "203.0.113.10", port: 19_001 } },
+        ]);
+
+        rig.boat.sent.length = 0;
+        yield* succeeds(rig.runtime.stop(recorded));
+        yield* succeeds(rig.runtime.delete(recorded));
+
+        expect(rig.boat.calls()).toEqual([
+          "POST /sandboxes/bx_made0001/stop",
+          "DELETE /sandboxes/bx_made0001",
+        ]);
+        expect(rig.boat.sandboxes.size).toBe(0);
+      }),
+  );
+
+  it.effect(
+    "a stopped source forks at once; the copy waits for SSH and boat's marker, and carries the row's key",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn();
+        const source = machineOn("dev");
+        const copy = machineOn("copy");
+
+        yield* rig.insert(source);
+        yield* rig.insert(copy);
+        yield* succeeds(rig.runtime.create(source, "boat"));
+
+        const recorded = { ...source, native: "bx_made0001" };
+
+        yield* succeeds(rig.runtime.stop(recorded));
+        rig.boat.sent.length = 0;
+        rig.guest.calls.length = 0;
+
+        yield* succeeds(rig.runtime.fork(recorded, copy));
+
+        const fork = rig.boat.sent.find((sent) => sent.path.endsWith("/fork"));
+
+        expect(fork?.headers["idempotency-key"]).toBe(`clankerbox-boat-${copy.instance}`);
+        expect(rig.boat.calls()).toEqual([
+          "POST /sandboxes/bx_made0001/fork",
+          "PATCH /sandboxes/bx_made0002",
+        ]);
+        expect(yield* nativeOf(rig, "copy")).toBe("bx_made0002");
+        expect(rig.boat.sandboxes.get("bx_made0002")?.name).toBe("boat_copy");
+        expect(remotes(rig.guest)).toEqual([
+          remoteCommand(["true"]),
+          remoteCommand(["/bin/sh", "-c", restoredWait]),
+        ]);
+      }),
+  );
+
+  it.effect(
+    "a running source syncs, then forks once a snapshot attempt begun after the sync has completed",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const copy = machineOn("copy");
+
+        yield* rig.insert(copy);
+        rig.boat.sandboxes.set("bx_source", {
+          id: "bx_source",
+          state: "idle",
+          ip: null,
+          sshEndpoint: "203.0.113.10:19044",
+          snapshots: true,
+        });
+
+        const { exit, waited } = yield* timed(
+          rig.runtime.fork(machineOn("dev", { native: "bx_source" }), copy),
+        );
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+
+        // The sync ran at the clock's start; boat's next attempt began a minute later and completed
+        // two seconds after that.
+        expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(62);
+        expect(rig.guest.calls[0]?.remote).toBe(remoteCommand(["sync"]));
+        expect(rig.boat.calls()).toEqual([
+          "POST /sandboxes/bx_source/fork",
+          "PATCH /sandboxes/bx_made0001",
+        ]);
+        expect(rig.boat.sandboxes.get("bx_source")?.state).toBe("idle");
+      }),
+  );
+
+  it.effect(
+    "the fork's wait reads only boat's stamps: an attempt begun before the sync isn't taken, whatever boat's clock says",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const copy = machineOn("copy");
+
+        yield* rig.insert(copy);
+
+        // boat's clock runs an hour behind the host's, and an attempt began a second before the sync.
+        rig.boat.sandboxes.set("bx_source", {
+          id: "bx_source",
+          state: "idle",
+          ip: null,
+          sshEndpoint: "203.0.113.10:19044",
+          snapshots: true,
+          behind: 3_600_000 - 1000,
+        });
+
+        const { exit, waited } = yield* timed(
+          rig.runtime.fork(machineOn("dev", { native: "bx_source" }), copy),
+        );
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+
+        // The attempt under way at the sync completed a second later and wasn't taken; the next began
+        // at 59 s and completed at 61 s. The test clock runs on while the host works, so a busy machine
+        // may note that next attempt and wait for the one after: only the lower bound is boat's.
+        expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(61);
+        expect(rig.boat.calls()).toEqual([
+          "POST /sandboxes/bx_source/fork",
+          "PATCH /sandboxes/bx_made0001",
+        ]);
+      }),
+  );
+
+  it.effect("a fork whose source boat completes no fresh snapshot fails before the fork call", () =>
+    Effect.gen(function* () {
+      const rig = yield* rigOn(fakeBoat({ instant: true }));
+
+      rig.boat.sandboxes.set("bx_source", {
+        id: "bx_source",
+        state: "running",
+        ip: null,
+        sshEndpoint: "203.0.113.10:19044",
+      });
+
+      // Once the sync has run, the wait only reads boat.
+      const synced = Promise.withResolvers<void>();
+
+      rig.boat.hooks.answer = () => {
+        if (rig.guest.calls.length > 0) {
+          synced.resolve();
+        }
+
+        return undefined;
+      };
+
+      const error = yield* fails(
+        rig.runtime.fork(machineOn("dev", { native: "bx_source" }), machineOn("copy")),
+        synced.promise,
+      );
+
+      expect(refused(error)).toEqual([
+        "not refused",
+        "Internal",
+        "boat completed no snapshot of boat_dev within 10m of its sync, so the fork wouldn't hold its latest writes",
+      ]);
+      expect(rig.boat.calls()).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "a fork's or capture's source boat doesn't have is refused before anything native; a fork boat refuses is Capacity",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const copy = machineOn("copy");
+
+        for (const source of [machineOn("dev"), machineOn("dev", { native: "bx_gone" })]) {
+          expect(refused(yield* fails(rig.runtime.fork(source, copy)))).toEqual([
+            "Precondition",
+            "machine boat_dev is missing from the boat runtime; delete it",
+          ]);
+          expect(refused(yield* fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
+            "Precondition",
+            "machine boat_dev is missing from the boat runtime; delete it",
+          ]);
+        }
+
+        rig.boat.sandboxes.set("bx_source", {
+          id: "bx_source",
+          state: "archived",
+          ip: null,
+          sshEndpoint: null,
+        });
+        rig.boat.hooks.answer = (sent) =>
+          sent.path.endsWith("/fork") ? refusal(429, "limit_reached", "2 active") : undefined;
+
+        expect(
+          refused(yield* fails(rig.runtime.fork(machineOn("dev", { native: "bx_source" }), copy))),
+        ).toEqual([
+          "Capacity",
+          "boat POST /sandboxes/bx_source/fork answered 429 limit_reached: 2 active (req_0123)",
+        ]);
+        expect(rig.boat.calls()).toEqual(["POST /sandboxes/bx_source/fork"]);
+      }),
+  );
+
+  it.effect(
+    "a checkpoint is a named snapshot cbx-<host>-<inst>: captured from a running or stopped machine, restored by a create from it, deleted by name",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn();
+        const machine = machineOn("dev");
+        const back = machineOn("back");
+        const checkpoint = checkpointOn("cp");
+
+        yield* rig.insert(machine);
+        yield* rig.insert(back);
+        yield* succeeds(rig.runtime.create(machine, "boat"));
+
+        const recorded = { ...machine, native: "bx_made0001" };
+
+        rig.boat.sent.length = 0;
+        rig.guest.calls.length = 0;
+        yield* succeeds(rig.runtime.capture(recorded, checkpoint));
+
+        // A running machine syncs over SSH before boat saves its disk.
+        expect(rig.boat.sent.map((sent) => `${sent.method} ${sent.path}`)).toEqual([
+          "GET /sandboxes/bx_made0001",
+          "GET /sandboxes/bx_made0001",
+          "POST /sandboxes/bx_made0001/commands",
+          "POST /named-snapshots",
+          "GET /named-snapshots/cbx-boat-cafe0001",
+          "GET /named-snapshots/cbx-boat-cafe0001",
+        ]);
+        expect(rig.boat.sent[3]?.body).toEqual({
+          sandboxId: "bx_made0001",
+          name: "cbx-boat-cafe0001",
+        });
+        expect(remotes(rig.guest)).toEqual([remoteCommand(["sync"])]);
+
+        // A stopped one doesn't.
+        yield* succeeds(rig.runtime.stop(recorded));
+        rig.guest.calls.length = 0;
+        yield* succeeds(rig.runtime.capture(recorded, checkpointOn("cq", 2)));
+        expect(rig.guest.calls).toEqual([]);
+
+        rig.boat.sent.length = 0;
+        rig.guest.calls.length = 0;
+        yield* succeeds(rig.runtime.restore(checkpoint, back));
+
+        const restore = rig.boat.sent.find((sent) => sent.method === "POST");
+
+        expect(restore?.headers["idempotency-key"]).toBe(`clankerbox-boat-${back.instance}`);
+        expect(yield* nativeOf(rig, "back")).toBe("bx_made0002");
+        expect(remotes(rig.guest)).toHaveLength(2);
+
+        rig.boat.sent.length = 0;
+        yield* succeeds(rig.runtime.deleteCheckpoint(checkpoint));
+        yield* succeeds(rig.runtime.deleteCheckpoint(checkpoint));
+
+        expect(rig.boat.calls()).toEqual([
+          "DELETE /named-snapshots/cbx-boat-cafe0001",
+          "DELETE /named-snapshots/cbx-boat-cafe0001",
+        ]);
+        expect([...rig.boat.snapshots.keys()]).toEqual(["cbx-boat-cafe0002"]);
+      }),
+  );
+
+  it.effect("a running machine whose sync fails isn't captured", () =>
+    Effect.gen(function* () {
+      const rig = yield* rigOn(fakeBoat({ instant: true }));
+
+      rig.boat.sandboxes.set("bx_source", {
+        id: "bx_source",
+        state: "idle",
+        ip: null,
+        sshEndpoint: "203.0.113.10:19044",
+      });
+      rig.guest.hooks.answer = () => ({ exitCode: 1, stderr: "sync: I/O error\n" });
+
+      const error = yield* fails(
+        rig.runtime.capture(machineOn("dev", { native: "bx_source" }), checkpointOn("cp")),
+      );
+
+      expect(refused(error)).toEqual([
+        "not refused",
+        "Internal",
+        "sync in boat_dev before its capture exited 1: sync: I/O error",
+      ]);
+      expect(rig.boat.calls()).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "an 11th named snapshot is a Capacity refusal; a failed save and a deleted snapshot's restore are failures",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const source = machineOn("dev", { native: "bx_source" });
+
+        rig.boat.sandboxes.set("bx_source", {
+          id: "bx_source",
+          state: "archived",
+          ip: null,
+          sshEndpoint: null,
+        });
+        rig.boat.hooks.answer = (sent) =>
+          sent.method === "POST" && sent.path === "/named-snapshots"
+            ? refusal(409, "named_snapshot_limit", "10 named snapshots")
+            : undefined;
+
+        expect(refused(yield* fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
+          "Capacity",
+          "boat POST /named-snapshots answered 409 named_snapshot_limit: 10 named snapshots (req_0123)",
+        ]);
+
+        rig.boat.hooks.answer = (sent) =>
+          sent.method === "GET" && sent.path.startsWith("/named-snapshots/")
+            ? {
+                status: 200,
+                body: { snapshot: { name: "cbx-boat-cafe0001", status: "failed", error: "disk" } },
+              }
+            : undefined;
+
+        expect(refused(yield* fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
+          "not refused",
+          "Internal",
+          "boat's snapshot cbx-boat-cafe0001 of boat_dev is failed: disk",
+        ]);
+
+        rig.boat.hooks.answer = undefined;
+
+        const back = machineOn("back");
+
+        yield* rig.insert(back);
+
+        expect(refused(yield* fails(rig.runtime.restore(checkpointOn("gone", 9), back)))).toEqual([
+          "not refused",
+          "Internal",
+          "boat POST /sandboxes answered 404 named_snapshot_not_found: boat says named_snapshot_not_found (req_0123)",
+        ]);
+      }),
+  );
+
+  it.effect(
+    "capacity is the account's limits as boat reports them: its active sandboxes, and each start window that has a limit; a refusal is boat's own answer, asked once",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn();
+
+        const limits = (maxActiveSandboxes: number, starts: Schema.Json): Answer => ({
           status: 200,
           body: {
             ok: true,
-            snapshot: { name: "cbx-boat-cafe0001", status: "failed", error: echo },
+            type: "limits.info",
+            canStart: true,
+            activeSandboxes: 1,
+            activeStates: ["provisioned", "cloning", "ready", "idle", "running"],
+            maxActiveSandboxes,
+            billingStatus: "active",
+            starts,
           },
+        });
+
+        let answer: Answer = limits(2, {
+          unlimited: false,
+          minute: { limit: 5, used: 0, remaining: 5 },
+          hour: { limit: 25, used: 3, remaining: 22 },
+          day: { limit: 75, used: 12, remaining: 63 },
+        });
+
+        rig.boat.hooks.answer = (sent) => (sent.path === "/limits" ? answer : undefined);
+
+        const trial = yield* succeeds(rig.runtime.capacity([]));
+
+        answer = limits(100, { unlimited: true, minute: null, hour: null, day: null });
+
+        const unlimited = yield* succeeds(rig.runtime.capacity([]));
+
+        answer = refusal(401, "unauthorized", `no account has the key ${apiKey}`);
+
+        const error = yield* fails(rig.runtime.capacity([]));
+
+        answer = refusal(503, "unavailable", "boat is down for maintenance");
+
+        const down = yield* fails(rig.runtime.capacity([]));
+
+        expect(trial).toEqual([
+          { resource: "activeSandboxes", limit: 2, used: 1 },
+          { resource: "startsPerMinute", limit: 5, used: 0 },
+          { resource: "startsPerHour", limit: 25, used: 3 },
+          { resource: "startsPerDay", limit: 75, used: 12 },
+        ]);
+        expect(unlimited).toEqual([{ resource: "activeSandboxes", limit: 100, used: 1 }]);
+        expect(refused(error)).toEqual([
+          "not refused",
+          "Internal",
+          "boat GET /limits answered 401 unauthorized: no account has the key <redacted> (req_0123)",
+        ]);
+        expect(refused(down)).toEqual([
+          "not refused",
+          "Internal",
+          "boat GET /limits answered 503 unavailable: boat is down for maintenance (req_0123)",
+        ]);
+        expect(rig.boat.sent.map(({ method, path }) => `${method} ${path}`)).toEqual([
+          "GET /limits",
+          "GET /limits",
+          "GET /limits",
+          "GET /limits",
+        ]);
+      }),
+  );
+
+  it.effect(
+    "the API key reaches neither ssh's command line nor its environment, nor an error",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const machine = machineOn("dev");
+
+        yield* rig.insert(machine);
+        rig.guest.hooks.answer = () => ({ exitCode: 255, stderr: `Bearer ${apiKey}?\n` });
+        rig.boat.hooks.answer = (sent) =>
+          sent.method === "PATCH" || sent.path.endsWith("/sshkey")
+            ? refusal(400, "bad", `you sent ${apiKey}`)
+            : undefined;
+
+        const logged: Array<unknown> = [];
+
+        const error = yield* fails(
+          rig.runtime
+            .create(machine, "boat")
+            .pipe(
+              Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))])),
+            ),
+        );
+
+        // The rename's refusal is a warning, the authorization's the error.
+        expect(logged).toHaveLength(1);
+
+        for (const text of [
+          error.message,
+          String(error),
+          inspect(error, { depth: 10 }),
+          inspect(logged),
+        ]) {
+          expect(text).not.toContain(apiKey);
         }
-      : undefined;
-  errors.push(
-    await fails(
-      rig.runtime.capture(machineOn("source", { native: "bx_stopped" }), checkpointOn("source")),
-    ),
+
+        rig.boat.hooks.answer = undefined;
+        yield* succeeds(
+          rig.runtime.exec({ ...machine, native: "bx_made0001" }, { argv: ["true"] }),
+        );
+
+        for (const call of rig.guest.calls) {
+          expect(JSON.stringify(call)).not.toContain(apiKey);
+        }
+      }),
   );
 
-  // A warning: a state read boat refuses.
-  rig.boat.hooks.answer = () => refusal(400, "bad", echo);
-  await succeeds(
-    rig.runtime.observe([machineOn("unread", { native: "bx_failing" })]).pipe(logging),
+  it.effect(
+    "whatever boat or the transport echoes leaves the runtime without the API key: refusals, boat's errors, states and warnings",
+    () =>
+      Effect.gen(function* () {
+        const rig = yield* rigOn(fakeBoat({ instant: true }));
+        const echo = `Bearer ${apiKey}`;
+        const logged: Array<unknown> = [];
+
+        const logging = Effect.provide(
+          Logger.layer([Logger.make(({ message }) => logged.push(message))]),
+        );
+
+        const errors: Array<Refusal | HostError> = [];
+
+        rig.boat.sandboxes.set("bx_stopped", {
+          id: "bx_stopped",
+          state: "archived",
+          ip: null,
+          sshEndpoint: null,
+        });
+        rig.boat.sandboxes.set("bx_failing", {
+          id: "bx_failing",
+          state: "ready",
+          ip: null,
+          sshEndpoint: null,
+        });
+        rig.boat.snapshots.set("cbx-boat-cafe0001", {
+          name: "cbx-boat-cafe0001",
+          status: "saving",
+        });
+
+        // A refusal: boat's 429 to a resume.
+        rig.boat.hooks.answer = (sent) =>
+          sent.path.endsWith("/resume") ? refusal(429, "limit_reached", echo) : undefined;
+        errors.push(
+          yield* fails(rig.runtime.start(machineOn("refused", { native: "bx_stopped" }))),
+        );
+
+        // A dropped connection, whose description echoes the request.
+        rig.boat.hooks.answer = (sent) => (sent.path.endsWith("/resume") ? "drop" : undefined);
+        errors.push(
+          yield* fails(rig.runtime.start(machineOn("dropped", { native: "bx_stopped" }))),
+        );
+
+        // boat's own error, and a state, on a sandbox it fails.
+        rig.boat.hooks.answer = (sent) =>
+          sent.path.endsWith("/resume") ? { status: 202, body: { ok: true } } : undefined;
+        rig.boat.sandboxes.set("bx_stopped", {
+          id: "bx_stopped",
+          state: "archived",
+          next: "error",
+          error: echo,
+          ip: null,
+          sshEndpoint: null,
+        });
+        errors.push(yield* fails(rig.runtime.start(machineOn("failed", { native: "bx_stopped" }))));
+        // The stop reads the sandbox running; every read after it, a state that echoes the key.
+        let failingReads = 0;
+
+        rig.boat.hooks.answer = (sent): Answer | undefined =>
+          sent.path.endsWith("/stop")
+            ? { status: 202, body: { ok: true } }
+            : sent.path.endsWith("/bx_failing")
+              ? {
+                  status: 200,
+                  body: {
+                    ok: true,
+                    sandbox: {
+                      id: "bx_failing",
+                      state: failingReads++ === 0 ? "running" : apiKey,
+                      error: echo,
+                      ip: null,
+                    },
+                  },
+                }
+              : undefined;
+        errors.push(
+          yield* fails(
+            rig.runtime.stop(machineOn("stuck", { native: "bx_failing" })).pipe(logging),
+          ),
+        );
+
+        // A snapshot boat fails.
+        rig.boat.hooks.answer = (sent) =>
+          sent.path.endsWith("/cbx-boat-cafe0001") && sent.method === "GET"
+            ? {
+                status: 200,
+                body: {
+                  ok: true,
+                  snapshot: { name: "cbx-boat-cafe0001", status: "failed", error: echo },
+                },
+              }
+            : undefined;
+        errors.push(
+          yield* fails(
+            rig.runtime.capture(
+              machineOn("source", { native: "bx_stopped" }),
+              checkpointOn("source"),
+            ),
+          ),
+        );
+
+        // A warning: a state read boat refuses.
+        rig.boat.hooks.answer = () => refusal(400, "bad", echo);
+        yield* succeeds(
+          rig.runtime.observe([machineOn("unread", { native: "bx_failing" })]).pipe(logging),
+        );
+
+        expect(
+          errors.map((error) => (error instanceof Refusal ? error.error : error).message),
+        ).toEqual([
+          "boat POST /sandboxes/bx_stopped/resume answered 429 limit_reached: Bearer <redacted> (req_0123)",
+          "boat POST /sandboxes/bx_stopped/resume: TransportError: socket hang up after Authorization: Bearer <redacted>",
+          "boat's sandbox bx_stopped of boat_failed failed: Bearer <redacted>",
+          "boat didn't archive boat_stuck's sandbox bx_failing within 5m of its stop: it reads <redacted>: Bearer <redacted>",
+          "boat's snapshot cbx-boat-cafe0001 of boat_source is failed: Bearer <redacted>",
+        ]);
+        expect(logged).toHaveLength(1);
+
+        for (const text of [
+          ...errors.map((error) => inspect(error, { depth: 10 })),
+          inspect(logged),
+        ]) {
+          expect(text).not.toContain(apiKey);
+        }
+      }),
   );
 
-  expect(errors.map((error) => (error instanceof Refusal ? error.error : error).message)).toEqual([
-    "boat POST /sandboxes/bx_stopped/resume answered 429 limit_reached: Bearer <redacted> (req_0123)",
-    "boat POST /sandboxes/bx_stopped/resume: TransportError: socket hang up after Authorization: Bearer <redacted>",
-    "boat's sandbox bx_stopped of boat_failed failed: Bearer <redacted>",
-    "boat didn't archive boat_stuck's sandbox bx_failing within 5m of its stop: it reads <redacted>: Bearer <redacted>",
-    "boat's snapshot cbx-boat-cafe0001 of boat_source is failed: Bearer <redacted>",
-  ]);
-  expect(logged).toHaveLength(1);
+  /** The host's machine and checkpoint actions over the boat runtime, a fake boat and guest. */
+  const hostOn = (boat: FakeBoat) =>
+    Effect.gen(function* () {
+      const stateDir = yield* stateDirIn(yield* scratch);
+      const guest = fakeGuest();
 
-  for (const text of [...errors.map((error) => inspect(error, { depth: 10 })), inspect(logged)]) {
-    expect(text).not.toContain(apiKey);
-  }
-});
+      const config: HostSettings = {
+        id: "boat",
+        runtime: "boat",
+        listen: { address: "127.0.0.1", port: 0 },
+        bases: new Map([["boat", "boat"]]),
+        stateDir,
+        machinePorts: defaultMachinePorts,
+      };
 
-/** The host's machine and checkpoint actions over the boat runtime, a fake boat and guest. */
-const hostOn = async (boat: FakeBoat) => {
-  const stateDir = await stateDirIn(await scratch(owned));
-  const guest = fakeGuest();
+      const context = yield* Layer.build(
+        servicesLayer(config, (recordNative) =>
+          Layer.effect(Runtime, make({ ...settingsOf(stateDir), recordNative })),
+        ).pipe(
+          Layer.provideMerge(Logger.layer([])),
+          Layer.provide(Layer.merge(guest.spawner.layer, boat.layer)),
+        ),
+      );
 
-  const config: HostSettings = {
-    id: "boat",
-    runtime: "boat",
-    listen: { address: "127.0.0.1", port: 0 },
-    bases: new Map([["boat", "boat"]]),
-    stateDir,
-    machinePorts: defaultMachinePorts,
-  };
+      guest.hooks.answer = (remote) =>
+        remote.includes("clankerbox-prepare")
+          ? { stdout: `clankerbox-host-key: ${guestKey}\n` }
+          : undefined;
 
-  const host = ManagedRuntime.make(
-    servicesLayer(config, (recordNative) =>
-      Layer.effect(Runtime, make({ ...settingsOf(stateDir), recordNative })),
-    ).pipe(
-      Layer.provideMerge(Logger.layer([])),
-      Layer.provide(Layer.mergeAll(NodeServices.layer, guest.spawner.layer, boat.layer)),
-    ),
+      return {
+        guest,
+        machines: Context.get(context, Machines.Machines),
+        store: Context.get(context, Store.Store),
+      };
+    });
+
+  it.effect(
+    "through the host: a create records the sandbox and reads running at boat's relay, with the key preparation printed",
+    () =>
+      Effect.gen(function* () {
+        const boat = fakeBoat({ instant: true });
+        const { machines, store } = yield* hostOn(boat);
+
+        const machine = yield* machines.create({
+          id: "boat_dev",
+          base: "boat",
+          cpu: 2,
+          ramMib: 4096,
+          diskGib: 12,
+        });
+
+        expect([machine.state, machine.ssh, machine.hostKey, machine.action]).toEqual([
+          "running",
+          { user: "root", host: "203.0.113.10", port: 19_001 },
+          guestKey,
+          { name: "create", status: "done" },
+        ]);
+        expect((yield* store.list).map((found) => found.native)).toEqual(["bx_made0001"]);
+      }),
   );
 
-  hosts.push(host);
+  it.effect(
+    "through the host: setup and preparation run in the sandbox the create recorded, read from the row again",
+    () =>
+      Effect.gen(function* () {
+        const boat = fakeBoat({ instant: true });
+        const { guest, machines } = yield* hostOn(boat);
 
-  guest.hooks.answer = (remote) =>
-    remote.includes("clankerbox-prepare")
-      ? { stdout: `clankerbox-host-key: ${guestKey}\n` }
-      : undefined;
+        yield* machines.create({
+          id: "boat_dev",
+          base: "boat",
+          cpu: 2,
+          ramMib: 4096,
+          diskGib: 12,
+          setup: { script: "#!/bin/sh\ntrue\n", timeoutSeconds: 30 },
+        });
 
-  return {
-    guest,
-    machines: await host.runPromise(Effect.service(Machines.Machines)),
-    store: await host.runPromise(Effect.service(Store.Store)),
-  };
-};
+        // The probe, the setup and preparation each pinned the sandbox's keys under its ID.
+        expect(guest.calls).toHaveLength(3);
 
-test("through the host: a create records the sandbox and reads running at boat's relay, with the key preparation printed", async () => {
-  const boat = fakeBoat({ instant: true });
-  const { machines, store } = await hostOn(boat);
-
-  const machine = await Effect.runPromise(
-    machines.create({ id: "boat_dev", base: "boat", cpu: 2, ramMib: 4096, diskGib: 12 }),
+        for (const call of guest.calls) {
+          expect(call.args).toContain("HostKeyAlias=bx_made0001");
+          expect(call.pinned).toContain(`bx_made0001 ${guestKey}`);
+        }
+      }),
   );
 
-  expect([machine.state, machine.ssh, machine.hostKey, machine.action]).toEqual([
-    "running",
-    { user: "root", host: "203.0.113.10", port: 19_001 },
-    guestKey,
-    { name: "create", status: "done" },
-  ]);
-  expect((await Effect.runPromise(store.list)).map((found) => found.native)).toEqual([
-    "bx_made0001",
-  ]);
-});
+  it.effect(
+    "through the host: boat's refusals leave no row, and a refused start keeps the machine as it was",
+    () =>
+      Effect.gen(function* () {
+        const boat = fakeBoat({ instant: true });
+        const { machines, store } = yield* hostOn(boat);
 
-test("through the host: setup and preparation run in the sandbox the create recorded, read from the row again", async () => {
-  const boat = fakeBoat({ instant: true });
-  const { guest, machines } = await hostOn(boat);
+        boat.hooks.answer = (sent) =>
+          sent.method === "POST" && sent.path === "/sandboxes"
+            ? refusal(429, "limit_reached")
+            : undefined;
 
-  await Effect.runPromise(
-    machines.create({
-      id: "boat_dev",
-      base: "boat",
-      cpu: 2,
-      ramMib: 4096,
-      diskGib: 12,
-      setup: { script: "#!/bin/sh\ntrue\n", timeoutSeconds: 30 },
-    }),
+        const refusedCreate = yield* Effect.flip(
+          machines.create({ id: "boat_dev", base: "boat", cpu: 2, ramMib: 4096, diskGib: 12 }),
+        );
+
+        expect(refusedCreate._tag).toBe("Capacity");
+        expect(yield* store.list).toEqual([]);
+
+        boat.hooks.answer = undefined;
+        boat.hooks.made = (sandbox) => {
+          sandbox.state = "cancelled";
+        };
+
+        const cancelled = yield* Effect.flip(
+          machines.create({ id: "boat_dev", base: "boat", cpu: 2, ramMib: 4096, diskGib: 12 }),
+        );
+
+        expect(cancelled._tag).toBe("Capacity");
+        expect(yield* store.list).toEqual([]);
+
+        boat.hooks.made = undefined;
+        yield* machines.create({ id: "boat_dev", base: "boat", cpu: 2, ramMib: 4096, diskGib: 12 });
+        yield* machines.stop("boat_dev");
+
+        boat.hooks.answer = (sent) =>
+          sent.path.endsWith("/resume") ? refusal(429, "limit_reached") : undefined;
+
+        const refusedStart = yield* Effect.flip(machines.start("boat_dev"));
+        const after = yield* machines.get("boat_dev");
+
+        expect(refusedStart._tag).toBe("Capacity");
+        expect([after.state, after.action]).toEqual(["stopped", { name: "stop", status: "done" }]);
+      }),
   );
 
-  // The probe, the setup and preparation each pinned the sandbox's keys under its ID.
-  expect(guest.calls).toHaveLength(3);
+  it.effect(
+    "through the host: stop and delete after a crash before the sandbox was recorded write nothing on boat",
+    () =>
+      Effect.gen(function* () {
+        const boat = fakeBoat({ instant: true });
+        const { machines, store } = yield* hostOn(boat);
 
-  for (const call of guest.calls) {
-    expect(call.args).toContain("HostKeyAlias=bx_made0001");
-    expect(call.pinned).toContain(`bx_made0001 ${guestKey}`);
-  }
-});
+        yield* store.insert("create", {
+          kind: "machine",
+          record: row(machineOn("dev")),
+        });
+        yield* store.failInterrupted;
 
-test("through the host: boat's refusals leave no row, and a refused start keeps the machine as it was", async () => {
-  const boat = fakeBoat({ instant: true });
-  const { machines, store } = await hostOn(boat);
+        const stopped = yield* machines.stop("boat_dev");
 
-  boat.hooks.answer = (sent) =>
-    sent.method === "POST" && sent.path === "/sandboxes"
-      ? refusal(429, "limit_reached")
-      : undefined;
+        expect([stopped.state, stopped.made]).toEqual(["missing", false]);
 
-  const refusedCreate = await Effect.runPromise(
-    Effect.flip(
-      machines.create({ id: "boat_dev", base: "boat", cpu: 2, ramMib: 4096, diskGib: 12 }),
-    ),
+        yield* machines.delete("boat_dev");
+
+        expect(yield* store.list).toEqual([]);
+        expect(boat.sent.filter((sent) => sent.method !== "GET")).toEqual([]);
+      }),
   );
 
-  expect(refusedCreate._tag).toBe("Capacity");
-  expect(await Effect.runPromise(store.list)).toEqual([]);
+  it.effect(
+    "through the host: after a crash mid-create, a stop stops the sandbox boat is still making",
+    () =>
+      Effect.gen(function* () {
+        const boat = fakeBoat({ instant: true });
+        const { machines, store } = yield* hostOn(boat);
 
-  boat.hooks.answer = undefined;
-  boat.hooks.made = (sandbox) => {
-    sandbox.state = "cancelled";
-  };
+        boat.sandboxes.set("bx_booting", {
+          id: "bx_booting",
+          state: "provisioned",
+          ip: null,
+          sshEndpoint: null,
+        });
+        yield* store.insert("create", {
+          kind: "machine",
+          record: row(machineOn("dev", { native: "bx_booting" })),
+        });
+        yield* store.failInterrupted;
 
-  const cancelled = await Effect.runPromise(
-    Effect.flip(
-      machines.create({ id: "boat_dev", base: "boat", cpu: 2, ramMib: 4096, diskGib: 12 }),
-    ),
+        const stopped = yield* machines.stop("boat_dev");
+
+        expect([stopped.state, stopped.action]).toEqual([
+          "stopped",
+          { name: "stop", status: "done" },
+        ]);
+        expect(boat.calls()).toEqual(["POST /sandboxes/bx_booting/stop"]);
+      }),
   );
-
-  expect(cancelled._tag).toBe("Capacity");
-  expect(await Effect.runPromise(store.list)).toEqual([]);
-
-  boat.hooks.made = undefined;
-  await Effect.runPromise(
-    machines.create({ id: "boat_dev", base: "boat", cpu: 2, ramMib: 4096, diskGib: 12 }),
-  );
-  await Effect.runPromise(machines.stop("boat_dev"));
-
-  boat.hooks.answer = (sent) =>
-    sent.path.endsWith("/resume") ? refusal(429, "limit_reached") : undefined;
-
-  const refusedStart = await Effect.runPromise(Effect.flip(machines.start("boat_dev")));
-  const after = await Effect.runPromise(machines.get("boat_dev"));
-
-  expect(refusedStart._tag).toBe("Capacity");
-  expect([after.state, after.action]).toEqual(["stopped", { name: "stop", status: "done" }]);
-});
-
-test("through the host: stop and delete after a crash before the sandbox was recorded write nothing on boat", async () => {
-  const boat = fakeBoat({ instant: true });
-  const { machines, store } = await hostOn(boat);
-
-  await Effect.runPromise(
-    store.insert("create", {
-      kind: "machine",
-      record: row(machineOn("dev")),
-    }),
-  );
-  await Effect.runPromise(store.failInterrupted);
-
-  const stopped = await Effect.runPromise(machines.stop("boat_dev"));
-
-  expect([stopped.state, stopped.made]).toEqual(["missing", false]);
-
-  await Effect.runPromise(machines.delete("boat_dev"));
-
-  expect(await Effect.runPromise(store.list)).toEqual([]);
-  expect(boat.sent.filter((sent) => sent.method !== "GET")).toEqual([]);
-});
-
-test("through the host: after a crash mid-create, a stop stops the sandbox boat is still making", async () => {
-  const boat = fakeBoat({ instant: true });
-  const { machines, store } = await hostOn(boat);
-
-  boat.sandboxes.set("bx_booting", {
-    id: "bx_booting",
-    state: "provisioned",
-    ip: null,
-    sshEndpoint: null,
-  });
-  await Effect.runPromise(
-    store.insert("create", {
-      kind: "machine",
-      record: row(machineOn("dev", { native: "bx_booting" })),
-    }),
-  );
-  await Effect.runPromise(store.failInterrupted);
-
-  const stopped = await Effect.runPromise(machines.stop("boat_dev"));
-
-  expect([stopped.state, stopped.action]).toEqual(["stopped", { name: "stop", status: "done" }]);
-  expect(boat.calls()).toEqual(["POST /sandboxes/bx_booting/stop"]);
 });
