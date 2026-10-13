@@ -1,19 +1,8 @@
 /**
- * The boat runtime: Linux sandboxes in boat.dev's cloud, through its HTTP API v1 (`api.ts`),
- * designed for boat's trial. boat runs its own machines, so the host supervises nothing and needs
- * no root, and machines get no host port: guest port 22 is reached at boat's SSH relay, or at
- * the sandbox's own address.
- *
- * boat assigns sandbox IDs, so the runtime records each one on its row (`native`) as soon as
- * boat answers, through the core's `recordNative`, and reads it from the machine the core
- * passes; a row without one has nothing on boat the host can find. A named snapshot's name
- * derives from the host ID and the row's instance, so a checkpoint row needs none.
- *
  * The refusal rule covers boat's answers that leave nothing on boat (the bump-boat-api skill):
- * its `Capacity` refusals of a create, fork, resume, restore or capture (the account's limits,
- * no machine, an 11th named snapshot), its `Precondition` refusals of them (a 403 with boat's
- * code, `api.ts`), a create, fork or restore that ends `cancelled` because boat found no
- * machine, and a machine to start, or a fork's or capture's source, that boat doesn't have.
+ * its `Capacity` and `Precondition` refusals of a create, fork, resume, restore or capture, a
+ * create, fork or restore that ends `cancelled` because boat found no machine, and a machine to
+ * start, or a fork's or capture's source, that boat doesn't have.
  *
  * Errors and warnings are scrubbed of the API key where they leave the runtime, so nothing boat
  * or the guest echoes carries it out.
@@ -69,59 +58,43 @@ import type { HostSettings } from "../../settings.ts";
 import { cliIn, describe, files } from "../process.ts";
 
 /**
- * The boat runtime's settings. The API key is a secret: it stays `Redacted` from the moment it is
- * decoded, so nothing that prints the config prints it.
+ * The API key stays `Redacted` from the moment it is decoded, so nothing that prints the config
+ * prints it.
  */
 export const BoatSettings = Schema.Struct({
-  /** A boat API key, `boat_…`, sent only as the bearer token of boat's API. */
   apiKey: Schema.RedactedFromValue(Schema.String.check(Schema.isNonEmpty())),
 });
 
-/** The boat settings. */
 export type Boat = typeof BoatSettings.Type;
 
-/** A boat host's config. */
 export interface BoatHost extends HostSettings {
   readonly runtime: "boat";
   readonly boat: Boat;
 }
 
-/**
- * What the runtime needs: the API key and where boat is, the host it runs for, and the core's
- * record of a sandbox ID on its machine's row.
- */
 export interface Settings {
   readonly apiKey: Redacted.Redacted<string>;
-  /** `baseUrl` in production; tests point it at a fake. */
   readonly url: string;
   readonly hostId: string;
   readonly stateDir: string;
   readonly recordNative: RecordNative;
 }
 
-/** The API version the host is built for, which the host reports as its runtime's version. */
 const apiVersion = "v1";
 
-/** The states of a sandbox that runs; boat reports `ready` before its lazy restore is done. */
+/** boat reports `ready` before its lazy restore is done. */
 const upStates: ReadonlySet<string> = new Set(["ready", "idle", "running"]);
 
 /**
- * The states boat counts as active (`GET /limits`): those that run, and a sandbox still being
- * made or resumed, which `stop` must not skip and `start` doesn't resume again.
+ * boat counts these as active (`GET /limits`): a sandbox still being made or resumed, which
+ * `stop` must not skip and `start` doesn't resume again.
  */
 const activeStates: ReadonlySet<string> = new Set([...upStates, "provisioned", "cloning"]);
 
-/**
- * A machine's state from its sandbox's: an active sandbox runs, a cancelled one is gone, and
- * anything else, `error` included, is stopped.
- */
 export const stateOf = (state: string): MachineState =>
   activeStates.has(state) ? "running" : state === "cancelled" ? "missing" : "stopped";
 
-/**
- * Where guest port 22 is: boat's public IPv4 relay `host:port` when the sandbox has one, else
- * its own address. Both change on every start, so they are read with the state, never stored.
- */
+/** Both change on every start, so they are read with the state, never stored. */
 export const endpointOf = (sandbox: Sandbox): SshEndpoint | undefined => {
   const relay = sandbox.sshEndpoint;
 
@@ -139,7 +112,6 @@ export const endpointOf = (sandbox: Sandbox): SshEndpoint | undefined => {
     : { host: sandbox.ip, port: 22 };
 };
 
-/** A sandbox boat has, as the core sees it: its endpoint only once it is up. */
 const observed = (sandbox: Sandbox): Observed => {
   const state = stateOf(sandbox.state);
   const ssh = upStates.has(sandbox.state) ? endpointOf(sandbox) : undefined;
@@ -147,27 +119,22 @@ const observed = (sandbox: Sandbox): Observed => {
   return ssh === undefined ? { state } : { state, ssh };
 };
 
-/** What boat says went wrong with a sandbox, as an error's tail. */
 const why = (sandbox: Pick<Sandbox, "error">): string =>
   sandbox.error === undefined || sandbox.error === null ? "" : `: ${sandbox.error}`;
 
-/** One argument as a POSIX shell reads it back: single-quoted, with `'` written `'\''`. */
 export const quote = (argument: string): string => `'${argument.replaceAll("'", `'\\''`)}'`;
 
 /**
- * The command line an exec sends: ssh joins its arguments into one string that the guest's
- * shell parses, so every argument is quoted. `user` runs it as root through `sudo -n`.
+ * ssh joins its arguments into one string that the guest's shell parses, so every argument is
+ * quoted.
  */
 export const remoteCommand = (argv: ReadonlyArray<string>): string =>
   ["sudo", "-n", "--", ...argv].map(quote).join(" ");
 
-/** The guest's SSH host keys, which the runtime reads over boat's API before every SSH. */
 const hostKeysCommand = "cat /etc/ssh/ssh_host_*_key.pub";
 
-/** A public key line: its type, then its base64 blob, which always begins with `AAAA`. */
 const hostKeyLine = /^((?:ssh|ecdsa|sk)-[a-z0-9@.-]+) (AAAA[A-Za-z0-9+/]+={0,3})(?:\s|$)/u;
 
-/** The known-hosts lines that pin the keys `printed` under `alias`. */
 export const knownHosts = (alias: string, printed: string): ReadonlyArray<string> =>
   printed.split("\n").flatMap((line) => {
     const match = hostKeyLine.exec(line.trim());
@@ -176,89 +143,70 @@ export const knownHosts = (alias: string, printed: string): ReadonlyArray<string
   });
 
 /**
- * boat's marker that `/var/lib` and `/var/opt` are restored in full after a fork, resume or
- * restore. It is undocumented: re-check it at every change of boat's API or image.
+ * boat's marker that `/var/lib` and `/var/opt` are restored in full. Undocumented: re-check it at
+ * every change of boat's API or image.
  */
 export const restoredMarker = "/var/lib/ascii-lazy/sys-done";
 
 /**
- * The host's own mark that the guest runs on the machine its create made, which boat restored
- * nothing into, so no restore marker comes. A create's SSH wait leaves it. `/run` is a tmpfs
- * that no snapshot carries, and boat runs every fork, resume and restore on a fresh machine, so
- * the mark never outlives the create's machine. Preparation's instance file can't take its
- * place: a resume restores this machine's own, which holds the row's instance, while the rest
- * of `/var/lib` may still be on its way.
+ * The create's machine has nothing restored into it, so no restore marker comes. `/run` is a
+ * tmpfs that no snapshot carries, and boat runs every fork, resume and restore on a fresh
+ * machine, so the mark never outlives the create's machine. Preparation's instance file can't
+ * take its place: a resume restores this machine's own, while the rest of `/var/lib` may still
+ * be on its way.
  */
 export const createdMark = "/run/clankerbox-created";
 
-/**
- * What waits in the guest for boat's restore: nothing on the create's own machine, and the
- * marker on any other.
- */
 export const restoredWait = `[ -e ${createdMark} ] || until [ -e ${restoredMarker} ]; do sleep 0.25; done`;
 
-/** Where `ssh` is, on macOS and on Ubuntu. */
 const searchPath = "/usr/bin:/bin";
 
 /**
- * How long a sandbox may take to run after a create, fork, resume or restore: boat answered
- * ready 0.1–4.4 s after one, and without `failFast` a call waits for a machine.
+ * boat answered ready 0.1–4.4 s after a create, fork, resume or restore, and without `failFast` a
+ * call waits for a machine.
  */
 const upWait = Duration.minutes(10);
 
 const upPause = Duration.seconds(1);
 
-/** How long until SSH answers once boat reads the sandbox ready. */
 const sshWait = Duration.minutes(3);
 
 const sshPause = Duration.seconds(2);
 
-/**
- * How long `/var/lib` may take to be restored: 10–14 s with 1 GiB there, and Docker keeps its
- * images and volumes there too.
- */
+/** 10–14 s with 1 GiB in `/var/lib`, and Docker keeps its images and volumes there too. */
 const markerWait = Duration.minutes(10);
 
-/** How long until boat reads a stopped sandbox `archived`; it took 2.3–18.9 s. */
+/** It took 2.3–18.9 s. */
 const stopWait = Duration.minutes(5);
 
 const stopPause = Duration.seconds(1);
 
-/** How long a deleted sandbox may take to answer 404; it took under a second. */
+/** It took under a second. */
 const deleteWait = Duration.minutes(1);
 
 const deletePause = Duration.millis(500);
 
 /**
- * How long a running fork source may take to complete a snapshot attempt begun after its sync:
- * 41 s with little new data, 102 s after writing 3 GiB. boat starts one every 60 s, and one
- * attempt took 3.8–24.4 s in the timing spike (the bump-boat-api skill).
+ * For a running fork source's snapshot attempt begun after its sync: 41 s with little new data,
+ * 102 s after writing 3 GiB. boat starts one every 60 s, and one attempt took 3.8–24.4 s in the
+ * timing spike (the bump-boat-api skill).
  */
 const snapshotWait = Duration.minutes(10);
 
 const snapshotPause = Duration.seconds(5);
 
-/** How long a named snapshot may take to save: about two minutes from a running sandbox. */
+/** About two minutes from a running sandbox. */
 const captureWait = Duration.minutes(15);
 
 const capturePause = Duration.seconds(3);
 
-/** How long `sync` may take in a fork's source. */
 const syncWait = Duration.minutes(5);
 
-/** How long reading the host keys over boat's command API may take, in the guest. */
 const hostKeysTimeoutSeconds = 30;
 
-/**
- * A failed read of the guest's host keys through boat's command API, which a fresh activation
- * may answer with for a moment: the SSH wait tries again, and anything else reports `Internal`.
- */
+/** A fresh activation may answer with this for a moment, so the SSH wait tries again. */
 class HostKeysUnread extends Data.TaggedError("HostKeysUnread")<{ readonly message: string }> {}
 
-/**
- * Reads every `pause` until `settled` finds what it waits for in an answer, for at most `wait`;
- * then fails with `late`'s error, given the last answer read, if any.
- */
 const poll = <A, B, E, R, L>(
   read: Effect.Effect<A, E, R>,
   settled: (answer: A) => Option.Option<B>,
@@ -281,7 +229,6 @@ const poll = <A, B, E, R, L>(
     );
   });
 
-/** The contract's errors, to rebuild one with its message scrubbed. */
 const HostErrors = Schema.Union(hostErrors);
 
 const encodeError = Schema.encodeSync(HostErrors);
@@ -299,7 +246,6 @@ export const make = (
     const fs = yield* FileSystem.FileSystem;
     const secret = Redacted.value(settings.apiKey);
 
-    /** Text that may hold what boat or the guest echoed, without the API key. */
     const scrub = (text: string) => (secret === "" ? text : text.replaceAll(secret, "<redacted>"));
 
     const scrubbed = (error: HostError): HostError => {
@@ -308,7 +254,6 @@ export const make = (
       return decodeError({ ...encoded, message: scrub(encoded.message) });
     };
 
-    /** An action's errors as they leave the runtime. */
     const scrubbing = <A, R>(action: Effect.Effect<A, HostError, R>) =>
       Effect.mapError(action, scrubbed);
 
@@ -322,7 +267,7 @@ export const make = (
     const api = yield* makeApi({ apiKey: settings.apiKey, url: settings.url });
     const { exec: spawn } = yield* cliIn({ PATH: searchPath });
 
-    // Generated the first time the runtime starts in the state dir; the store holds its lock.
+    // The store holds the state dir's lock before the runtime is built.
     const key = yield* sshKey(settings.stateDir);
     const keyDir = join(settings.stateDir, "boat-ssh");
 
@@ -330,8 +275,8 @@ export const make = (
     const snapshotOf = (instance: string) => snapshotName(settings.hostId, instance);
 
     /**
-     * The machine's sandbox ID, from its row. The core reads the row again after a create, fork
-     * or restore, and the runtime's own steps pass on the ID they made.
+     * The core reads the row again after a create, fork or restore, and the runtime's own steps
+     * pass on the ID they made.
      */
     const sandboxOf = (machine: MachineRef): Option.Option<string> =>
       Option.fromNullishOr(machine.native);
@@ -346,8 +291,8 @@ export const make = (
       });
 
     /**
-     * The sandbox boat has for a machine to start, fork or capture: one without a recorded
-     * sandbox, or one boat reports cancelled or gone, is refused before anything native.
+     * One without a recorded sandbox, or one boat reports cancelled or gone, is refused before
+     * anything native.
      */
     const presentSandbox = (machine: MachineRef) =>
       Effect.gen(function* () {
@@ -366,18 +311,12 @@ export const make = (
         return found.value;
       });
 
-    /**
-     * The boat type that covers a new machine; none is a `Precondition`, refused before
-     * anything native.
-     */
     const typeOf = (machine: MachineRef) =>
       Effect.mapError(machineType(machine), (error) => new Refusal({ error }));
 
     /**
-     * Calls that make or resume a sandbox, or save a snapshot: boat's `Capacity` and
-     * `Precondition` refusals of them leave nothing on boat, so they fall under the refusal rule.
-     * A 404 from them is boat's own (a restore's snapshot deleted under it), not a resource of the
-     * host's, so it is `Internal`.
+     * A 404 from these is boat's own (a restore's snapshot deleted under it), not a resource of
+     * the host's, so it is `Internal`.
      */
     const refusing = <A>(
       call: Effect.Effect<A, HostError>,
@@ -393,11 +332,10 @@ export const make = (
       );
 
     /**
-     * Waits until boat reads the sandbox running. A create, fork or restore that ends cancelled
-     * found no machine and left nothing: a refusal. One boat answers 404 for after accepting it
-     * is unclear, as boat reports a cancelled sandbox once before its 404 and nothing else says
-     * what became of it: a failure, so its row and sandbox ID stay. At a start, either is a
-     * failure. An `error` state is boat's failure.
+     * A create, fork or restore that ends cancelled found no machine and left nothing: a refusal.
+     * One boat answers 404 for after accepting it is unclear, as boat reports a cancelled sandbox
+     * once before its 404: a failure, so its row and sandbox ID stay. At a start, either is a
+     * failure.
      */
     const running = (machine: MachineRef, id: string, fresh: boolean) => {
       const read = Effect.flatMap(
@@ -447,9 +385,8 @@ export const make = (
     };
 
     /**
-     * Pins the guest's current host keys for one SSH connection: read through boat's command
-     * API, over HTTPS, into a known-hosts file of the connection's own. Every activation has new
-     * keys, and preparation re-mints them, so a pin is never reused.
+     * Read over boat's command API, over HTTPS. Every activation has new keys, and preparation
+     * re-mints them, so a pin is never reused.
      */
     const pin = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
@@ -485,10 +422,8 @@ export const make = (
       });
 
     /**
-     * Runs a command as root over SSH: as `user`, through `sudo -n`, with the host's own key and
-     * the guest's host keys pinned, at the endpoint boat reports now. Each exec opens its own
-     * connection. Errors name the machine, never the command. A sandbox that doesn't run, or
-     * has no address, fails before the host keys are read.
+     * Each exec opens its own connection. Errors name the machine, never the command. A sandbox
+     * that doesn't run, or has no address, fails before the host keys are read.
      */
     const session = (machine: MachineRef, id: string, { argv, stdin }: Command) =>
       Effect.gen(function* () {
@@ -561,7 +496,6 @@ export const make = (
     const exec: Interface["exec"] = (machine, command) =>
       Effect.flatMap(recordedSandbox(machine), (id) => execIn(machine, id, command));
 
-    /** A command run to its end: its exit code, and the last lines of its output. */
     const finished = (execution: Execution) =>
       Effect.all(
         {
@@ -575,11 +509,8 @@ export const make = (
       Effect.scoped(Effect.flatMap(execIn(machine, id, { argv }), finished));
 
     /**
-     * Waits until SSH answers, which it may not for a moment after boat reads the sandbox ready.
-     * Only an SSH that fails and a failed read of the host keys through boat's command API,
-     * which may fail that early too, are tried again; the last one's output or error is the
-     * timeout's. A sandbox that no longer runs, or anything else, fails at once. `argv` is what
-     * the probe runs.
+     * SSH may not answer for a moment after boat reads the sandbox ready. Only a failed SSH and a
+     * failed read of the host keys, which may fail that early too, are tried again.
      */
     const reachable = (machine: MachineRef, id: string, argv: ReadonlyArray<string> = ["true"]) =>
       poll(
@@ -597,9 +528,8 @@ export const make = (
       );
 
     /**
-     * Waits, in one SSH session, for boat's marker that `/var/lib` and `/var/opt` are restored,
-     * where preparation keeps its state and enabled units start from, unless the guest runs on
-     * its create's own machine (`createdMark`): a create restores nothing, so no marker comes.
+     * `/var/lib` and `/var/opt` hold preparation's state and what enabled units start from;
+     * a create restores nothing, so no marker comes on its own machine (`createdMark`).
      */
     const restored = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
@@ -621,10 +551,8 @@ export const make = (
       });
 
     /**
-     * After a create, fork or restore answers: records the sandbox on the row before anything
-     * else, waits for it to run, and names it after the machine on boat's dashboard. The name
-     * is only the operator's label, and delete goes by the recorded ID, so a rename boat refuses
-     * is a warning.
+     * The sandbox is recorded on the row before anything else. The name is only the operator's
+     * label, and delete goes by the recorded ID, so a rename boat refuses is a warning.
      */
     const made = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
@@ -641,7 +569,6 @@ export const make = (
           );
       });
 
-    /** A fork's or restore's sandbox, once made: SSH answers and `/var/lib` is restored. */
     const restoredSandbox = (machine: MachineRef, id: string) =>
       Effect.andThen(
         made(machine, id),
@@ -649,8 +576,8 @@ export const make = (
       );
 
     /**
-     * Writes the running guest's filesystems out with `sync`, before boat snapshots its disk for
-     * a fork or a capture, so the snapshot holds everything written before the call.
+     * So the snapshot boat takes for a fork or a capture holds everything written before the
+     * call.
      */
     const sync = (machine: MachineRef, id: string, before: "fork" | "capture") =>
       Effect.gen(function* () {
@@ -672,11 +599,9 @@ export const make = (
       });
 
     /**
-     * Waits until a snapshot attempt that began after the source's sync has completed, so the
-     * fork holds everything written before it. boat stamps `lastSnapshotAttemptAt` when an
-     * attempt starts (the bump-boat-api skill), so the value read after the sync names the last
-     * attempt begun before it; once it changes, a later attempt has begun, and `completed` says
-     * that one is done. Only boat's own values are compared, never against the host's clock.
+     * boat stamps `lastSnapshotAttemptAt` when an attempt starts (the bump-boat-api skill), so the
+     * value read after the sync names the last attempt begun before it; once it changes, a later
+     * attempt has begun. Only boat's own values are compared, never against the host's clock.
      */
     const freshSnapshot = (source: MachineRef, id: string) =>
       Effect.gen(function* () {
@@ -711,7 +636,6 @@ export const make = (
         );
       });
 
-    /** Waits until boat reads the stopped sandbox `archived`. */
     const archived = (machine: MachineRef, id: string) =>
       poll(
         api.sandbox(id),
@@ -735,10 +659,7 @@ export const make = (
       /**
        * A `GET` of each recorded sandbox, all at once: a host holds few machines, and boat limits
        * starts, not reads; a list would also hold the operator's own sandboxes, a page at a time.
-       * A machine whose sandbox boat answers 404 for, or has none recorded, is missing, and one
-       * whose read fails, its repeats included, or takes over `machineReadWait`, is unknown: a
-       * few quick repeats ride out a blip, and one hung read makes only its own machine unknown,
-       * within the core's `stateReadWait`.
+       * A few quick repeats ride out a blip, and one hung read makes only its own machine unknown.
        */
       observe: Effect.fn("Boat.observe")((machines) =>
         Effect.forEach(
@@ -772,16 +693,11 @@ export const make = (
         ),
       ),
       /**
-       * One of boat's types must cover the machine; whether the account's plan includes it is
-       * boat's to say. boat's own count of active sandboxes includes the operator's, so its 429
-       * refusal, under the refusal rule, is the count.
+       * Whether the account's plan includes the type is boat's to say. boat's own count of active
+       * sandboxes includes the operator's, so its 429 refusal is the count.
        */
       admit: Effect.fn("Boat.admit")(({ machine }) => Effect.asVoid(machineType(machine))),
-      /**
-       * The account's limits as boat counts them, whatever the host's own machines are: its
-       * active sandboxes, and the starts of each rolling window that has a limit. One request,
-       * so a refusal is boat's own answer; the core bounds it by `stateReadWait`.
-       */
+      /** One request, so a refusal is boat's own answer. */
       capacity: Effect.fn("Boat.capacity")(() =>
         Effect.map(scrubbing(api.limits), ({ activeSandboxes, maxActiveSandboxes, starts }) => {
           const windows = [
@@ -815,11 +731,9 @@ export const make = (
         }).pipe(scrubbingRefusal),
       ),
       /**
-       * Refuses a machine boat doesn't have, and resumes the sandbox unless boat reads it active:
-       * one boat still makes or resumes, or that runs, isn't resumed again. Either way the start
-       * waits for it to run, for SSH and for the marker, so preparation never meets a
-       * half-restored `/var/lib`, as boat reads a sandbox ready before its marker exists; on the
-       * create's own machine, which boat restored nothing into, it doesn't wait for the marker.
+       * A sandbox boat still makes or resumes, or that runs, isn't resumed again. The start waits
+       * for the marker too, as boat reads a sandbox ready before it exists, so preparation never
+       * meets a half-restored `/var/lib`.
        */
       start: Effect.fn("Boat.start")((machine) =>
         Effect.gen(function* () {
@@ -835,8 +749,7 @@ export const make = (
         }).pipe(scrubbingRefusal),
       ),
       /**
-       * Does nothing when no sandbox is recorded, or boat doesn't read it active. Never with
-       * `force`: a stop boat refuses, as when its final snapshot fails, is the error.
+       * Never with `force`: a stop boat refuses, as when its final snapshot fails, is the error.
        */
       stop: Effect.fn("Boat.stop")((machine) =>
         Effect.gen(function* () {
@@ -857,10 +770,8 @@ export const make = (
         }).pipe(scrubbing),
       ),
       /**
-       * Deletes the sandbox and waits until boat answers 404, never for its purge. A row without
-       * a recorded sandbox has nothing on boat the host can find, so only the row goes. So does
-       * one whose sandbox boat reports cancelled or gone, without a `DELETE`: boat answers that
-       * with a 403, not a 404, for a sandbox another API key made, even once it is gone.
+       * Never waits for the purge. A sandbox boat reports cancelled or gone gets no `DELETE`: boat
+       * answers that with a 403, not a 404, for a sandbox another API key made, even once gone.
        */
       delete: Effect.fn("Boat.delete")((machine) =>
         Effect.gen(function* () {
@@ -889,10 +800,7 @@ export const make = (
           );
         }).pipe(scrubbing),
       ),
-      /**
-       * A named snapshot of a running or a stopped sandbox, always of its disk. A running one
-       * syncs first, as a fork's source does.
-       */
+      /** Always of the disk. A running sandbox syncs first, as a fork's source does. */
       capture: Effect.fn("Boat.capture")((machine, checkpoint) =>
         Effect.gen(function* () {
           const source = yield* presentSandbox(machine);
@@ -933,9 +841,8 @@ export const make = (
         }).pipe(scrubbingRefusal),
       ),
       /**
-       * A stopped source forks at once, holding everything up to its stop. A running one keeps
-       * running, and forks once a snapshot begun after its sync has completed. Forks carry the
-       * disk only.
+       * A stopped source forks at once. A running one keeps running, and forks once a snapshot
+       * begun after its sync has completed. Forks carry the disk only.
        */
       fork: Effect.fn("Boat.fork")((source, machine) =>
         Effect.gen(function* () {

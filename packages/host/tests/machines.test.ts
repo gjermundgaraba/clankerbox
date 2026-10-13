@@ -13,10 +13,9 @@ import * as Store from "../src/store.ts";
 import { exists, read, remove, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { hostConfig, request, startHost, type TestHost } from "./support.ts";
 
-/** This file's machine ports, which no other test file's host gives out. */
+/** No other test file's host gives out these ports. */
 const ports = { first: 21_100, last: 21_109 };
 
-/** A host in a fresh scratch directory, or, after a restart, in its predecessor's. */
 const host = (options?: Parameters<typeof startHost>[1] & { readonly dir?: string }) =>
   Effect.gen(function* () {
     return yield* startHost(options?.dir ?? (yield* scratch), { ports, ...options });
@@ -27,10 +26,8 @@ const failure = <A, E>(host: TestHost, effect: Effect.Effect<A, E>) =>
 
 const rows = (host: TestHost) => host.run(host.store.list);
 
-/** Between polls of a row. */
 const pause = Effect.sleep(Duration.millis(50));
 
-/** A setup that installs a `start` hook into the guest root, as a profile's setup would. */
 const installsStart = {
   script: [
     "#!/bin/sh",
@@ -206,10 +203,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
-  /**
-   * Runs `use` on the host's actions, built again over its store and fake on a test clock, and
-   * moves the clock a second at a time until `use` ends: its result, and how long it waited.
-   */
+  /** Rebuilds the actions on a test clock and moves it a second at a time until `use` ends. */
   const onTestClock = <A>(
     linux: TestHost,
     use: (machines: Machines.Interface) => Effect.Effect<A, HostError>,
@@ -1042,7 +1036,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  /** Runs `actions` at once, each to its result. */
   const together = <A>(actions: ReadonlyArray<Effect.Effect<A, HostError>>) =>
     Effect.forEach(actions, (action) => Effect.forkChild(Effect.result(action)));
 

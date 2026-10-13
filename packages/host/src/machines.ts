@@ -1,8 +1,3 @@
-/**
- * The machine actions: create, start, stop and delete, and fork and restore, which make a
- * machine from another machine or from a checkpoint. They run in the order `claims.ts`
- * describes.
- */
 import {
   type ActionName,
   type CreateRequest,
@@ -43,43 +38,30 @@ export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Machine>, HostError>;
   readonly get: (id: string) => Effect.Effect<Machine, HostError>;
   readonly create: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
-  /**
-   * Boots a stopped machine and prepares it; on a running machine, prepares it again. Every
-   * start is admitted and calls the runtime's start, which refuses a missing machine.
-   */
   readonly start: (id: string) => Effect.Effect<Machine, HostError>;
   /**
-   * Stops the machine through the runtime's stop, made or not: a stop boots nothing, so it may
-   * stop the VM a failed create, fork or restore left running. The runtime's stop does nothing
-   * on a machine that doesn't run.
+   * Made or not: a stop boots nothing, so it may stop the VM a failed create, fork or restore
+   * left running.
    */
   readonly stop: (id: string) => Effect.Effect<Machine, HostError>;
   readonly delete: (id: string) => Effect.Effect<void, HostError>;
-  /** Copies the machine `id` to a new machine named `name`, and prepares the copy. */
   readonly fork: (id: string, name: string) => Effect.Effect<Machine, HostError>;
-  /** Makes a machine named `name` from the checkpoint `checkpoint`, and prepares it. */
   readonly restore: (checkpoint: string, name: string) => Effect.Effect<Machine, HostError>;
   /**
-   * The runtime's limits and what is in use of each, as step 3 counts it. Unlike a machine's
-   * state, it is all the reply holds, so a runtime that can't be read fails it.
+   * Unlike a machine's state, this is all the reply holds, so a runtime that can't be read fails
+   * it.
    */
   readonly capacity: Effect.Effect<ReadonlyArray<Limit>, HostError>;
 }
 
 export class Machines extends Context.Service<Machines, Interface>()("@clankerbox/host/Machines") {}
 
-/** What a new machine is made with: its base, label and sizes. */
 interface Spec extends Pick<MachineRecord, "base" | "cpu" | "ramMib" | "diskGib"> {
   readonly profile?: string | undefined;
 }
 
-/** The native work that makes a new machine, before its preparation. */
 type Work = Effect.Effect<void, HostError | Refusal, Runtime>;
 
-/**
- * What a new machine is made from: a spec, or for a fork, the machine it copies, which the fork
- * holds and whose spec it takes. `work` makes it; a create's `setup` then runs in it.
- */
 type Making =
   | {
       readonly spec: Spec;
@@ -91,7 +73,6 @@ type Making =
       readonly work: (machine: MachineRef, source: MachineRef) => Work;
     };
 
-/** Builds the actions, once the host's startup step has run (`host.ts`). */
 export const make = (
   config: Pick<HostSettings, "id" | "bases" | "machinePorts">,
 ): Effect.Effect<Interface, HostError, Store | Runtime | PortProbe | Scope.Scope> =>
@@ -109,15 +90,9 @@ export const make = (
     const { claimAndCheck, native, done } = claimsOn(store);
     const ref = (record: NewMachine) => machineRef(config.id, record);
 
-    /** Runs native work that may need the runtime, such as preparation. */
     const withRuntime = <A>(work: Effect.Effect<A, HostError | Refusal, Runtime>) =>
       Effect.provideService(work, Runtime, runtime);
 
-    /**
-     * Where a running machine's guest port 22 is reached, and the user its logins are for: on its
-     * host port of the publish address, for a runtime that has one, or where the runtime reports.
-     * A machine that doesn't run has none.
-     */
     const sshOf = (record: MachineRecord, observed: Observed) => {
       if (observed.state !== "running") {
         return undefined;
@@ -131,7 +106,6 @@ export const make = (
       return endpoint === undefined ? undefined : { user: runtime.loginUser, ...endpoint };
     };
 
-    /** The machine as the API reports it, with the state the runtime read. */
     const resource = (record: MachineRecord, observed: Observed) => {
       const ssh = sshOf(record, observed);
 
@@ -163,7 +137,6 @@ export const make = (
       return machine;
     };
 
-    /** Fails a read of runtime state that takes over `stateReadWait`, naming it as `what`. */
     const inTime = (what: string) =>
       timeoutFail(
         stateReadWait,
@@ -174,9 +147,8 @@ export const make = (
       );
 
     /**
-     * The machines' states, read from the runtime. A read that fails as a whole, as Tart's one
-     * `tart list` can, or takes over `stateReadWait`, reads every machine `unknown`: a state read
-     * never fails an action.
+     * A read that fails as a whole, or runs past `stateReadWait`, reads every machine `unknown`:
+     * a state read never fails an action.
      */
     const observeAll = (records: ReadonlyArray<MachineRecord>) =>
       runtime.observe(records.map(ref)).pipe(
@@ -194,7 +166,6 @@ export const make = (
         Effect.map(observeAll([record]), ([observed]) => resource(record, observed)),
       );
 
-    /** A new row, with the lowest port that no row holds and nothing listens on. */
     const newRow = (name: string, spec: Spec) =>
       Effect.gen(function* () {
         const address = runtime.publishAddress;
@@ -225,20 +196,17 @@ export const make = (
       store.hold(action, { kind: "machine", name });
 
     /**
-     * Steps 2 and 3 for an action that boots a machine or allocates a port, one at a time. The
-     * RAM budget counts every machine a booting action holds, so two such actions checked at
-     * once would each count the other, and both could be refused although one fits. One at a
+     * The RAM budget counts every machine a booting action holds, so two such actions checked
+     * at once would each count the other, and both could be refused although one fits. One at a
      * time, exactly one of two that fit only alone passes, and no two pick the same port.
      */
     const admitted = admission.withPermits(1);
 
     /**
-     * Whether an action is booting the machine: a running create, restore or start, or a running
-     * fork on the copy it hasn't made yet, not on its made source. A copy is made once its VM
-     * runs, so in preparation it counts as running instead. Booting actions claim under the
-     * admission permit, so any other such row is past its check, and the target's row is already
-     * claimed. A start on a running machine boots nothing yet reads booting, which counts no
-     * machine twice; a row whose release or end failed reads booting until the next host start.
+     * Over-approximates on purpose. Booting actions claim under the admission permit, so any
+     * other such row is past its check. A start on a running machine boots nothing yet reads
+     * booting, which counts no machine twice; a row whose release or end failed reads booting
+     * until the next host start.
      */
     const boots = ({ action, made }: MachineRecord) =>
       action.status === "running" &&
@@ -247,12 +215,10 @@ export const make = (
         action.name === "start" ||
         (action.name === "fork" && !made));
 
-    /** Every row as step 3 counts it. */
     const heldRows = Effect.map(store.list, (records) =>
       records.map((record) => ({ machine: ref(record), booting: boots(record) })),
     );
 
-    /** The runtime's limits, over every row, bounded like any read of runtime state. */
     const capacity = Effect.flatMap(heldRows, (machines) =>
       runtime.capacity(machines).pipe(
         inTime(`the ${runtime.name} runtime`),
@@ -260,11 +226,7 @@ export const make = (
       ),
     );
 
-    /**
-     * Step 3 for an action that boots a machine: the runtime's own checks, over every row. Their
-     * reads of runtime state are bounded like any: a check past `stateReadWait` fails, so it
-     * never holds the admission permit longer, and writes nothing.
-     */
+    /** Bounded by `stateReadWait`, so it never holds the admission permit longer. */
     const admit = (action: ActionName, machine: NewMachine) =>
       Effect.flatMap(heldRows, (machines) =>
         runtime
@@ -277,13 +239,9 @@ export const make = (
       );
 
     /**
-     * Create, fork and restore: under the admission permit, a create or restore claims its new
-     * row, with the lowest free port; a fork claims its source, then joins the new row, with the
-     * source's spec. The new row is admitted, the work makes the machine, a create's setup runs,
-     * the machine is marked made, preparation runs, and the action ends done. The work may have
-     * recorded the runtime's own ID on the row, so setup and preparation read the row again. A
-     * failure in preparation leaves the machine made, so `start` prepares it again; one before,
-     * or in the marking, leaves it unmade.
+     * The work may have recorded the runtime's own ID on the row, so setup and preparation read
+     * the row again. A failure in preparation leaves the machine made, so `start` prepares it
+     * again; one before, or in the marking, leaves it unmade.
      */
     const makeMachine = (action: "create" | "fork" | "restore", name: string, making: Making) =>
       Effect.gen(function* () {
@@ -419,9 +377,7 @@ export const make = (
       });
 
     /**
-     * A restore reads its checkpoint without claiming it: a ready checkpoint never changes, so
-     * restores of one checkpoint run in parallel. One deleted under the restore fails it like
-     * any runtime failure.
+     * A ready checkpoint never changes, so restores read it without a claim and run in parallel.
      */
     const ready = (id: string) =>
       Effect.gen(function* () {

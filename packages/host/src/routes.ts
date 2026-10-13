@@ -1,4 +1,3 @@
-/** The host API: the contract's binding over the host's actions. */
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Http, Invalid, release, version, versionHeader } from "@gjermundgaraba/clankerbox-sdk";
@@ -9,7 +8,6 @@ import type { HostSettings } from "./settings.ts";
 import { Machines } from "./machines.ts";
 import { Runtime } from "./runtime.ts";
 
-/** Every action of the contract, over the host's machines, checkpoints and runtime. */
 const app = (config: Pick<HostSettings, "id" | "bases">) =>
   Action.implement(
     Http.actions,
@@ -45,7 +43,6 @@ const app = (config: Pick<HostSettings, "id" | "bases">) =>
     }),
   );
 
-/** Why a request whose version header is `sent` can't be served, if it can't. */
 const refusal = (sent: Option.Option<string>): Option.Option<Invalid> =>
   Option.match(sent, {
     // A client before this header existed is of an older release anyway.
@@ -68,10 +65,8 @@ const refusal = (sent: Option.Option<string>): Option.Option<Invalid> =>
 const encodeInvalid = Schema.encodeSync(Invalid);
 
 /**
- * Answers a request of another release, or of none, with `Invalid` before its input is even
- * decoded: a client of another release may send another shape, and no handler runs, so nothing
- * is claimed or written. Every action declares `Invalid` (`read` and `write` in the SDK's
- * api.ts), so the client decodes the reply.
+ * Refuses another release, or none, before decoding: its input may have another shape, and no
+ * handler runs. Every action declares `Invalid` (the SDK's api.ts), so the client decodes it.
  */
 const versionCheck = HttpRouter.middleware((handle) =>
   Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
@@ -84,6 +79,5 @@ const versionCheck = HttpRouter.middleware((handle) =>
   ),
 );
 
-/** The API's routes, for any HTTP server. */
 export const routes = (config: Pick<HostSettings, "id" | "bases">) =>
   ActionHttp.layer(Http, [app(config)]).pipe(Layer.provide(versionCheck.layer));

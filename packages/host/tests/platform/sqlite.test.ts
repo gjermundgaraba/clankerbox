@@ -29,7 +29,6 @@ import type {
 } from "../../src/store.ts";
 import { mkdir, readDirectory, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 
-/** Runs `use` against the store on `stateDir`, opened for the call only. */
 const withStore = <A, E>(
   stateDir: string,
   use: (store: Effect.Success<ReturnType<typeof open>>) => Effect.Effect<A, E>,
@@ -81,13 +80,11 @@ const machine = (name: string): RowRef<"machine"> => ({ kind: "machine", name })
 
 const inserting = (made: NewMachine): NewRow => ({ kind: "machine", record: made });
 
-/** A fork's claims: its source, then its copy joined to it. */
 const forking = (store: Interface, source: string, made: NewMachine) =>
   Effect.flatMap(store.hold("fork", machine(source)), ({ token }) =>
     store.insert("fork", inserting(made), token),
   );
 
-/** A capture's claims: its source, then its checkpoint joined to it. */
 const capturing = (store: Interface, made: NewCheckpoint) =>
   Effect.flatMap(store.hold("capture", machine(made.machine)), ({ token }) =>
     store.insert("capture", { kind: "checkpoint", record: made }, token),
@@ -106,7 +103,7 @@ const RowName = Schema.Literals(["a", "b", "c"]);
 
 const Slot = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 3 }));
 
-/** What an action does to the store's claims; `slot` picks one of the claims not yet given back. */
+/** `slot` picks one of the claims not yet given back. */
 const Step = Schema.Union([
   Schema.Struct({ op: Schema.Literal("create"), name: RowName }),
   Schema.Struct({ op: Schema.Literal("start"), name: RowName }),
@@ -115,7 +112,6 @@ const Step = Schema.Union([
   Schema.Struct({ op: Schema.Literal("end"), slot: Slot, failed: Schema.Boolean }),
 ]);
 
-/** A claim as the model sees it: the rows it inserted, and the rows it holds with their `before`. */
 interface Held {
   readonly token: Token;
   readonly action: ActionRecord["name"];

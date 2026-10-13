@@ -1,8 +1,4 @@
-/**
- * The Tart runtime over a scripted Mac: Tart's VMs and launchd's jobs are kept in memory, and
- * each `tart` and `launchctl` call answers as Tart 2.40.1 and launchd do. No VM runs here; the
- * forwarder listens for real on loopback.
- */
+/** The scripted Mac's `tart` and `launchctl` calls answer as Tart 2.40.1 and launchd do. */
 import { existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
@@ -29,7 +25,6 @@ import {
 import { read, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { type Call, type Reply, scripted } from "../scripted.ts";
 
-/** A refusal's error, or the failure that wasn't one. */
 const refused = (error: Refusal | HostError) =>
   error instanceof Refusal
     ? [error.error._tag, error.error.message]
@@ -40,14 +35,13 @@ const binary = "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart";
 const launchctl = "/bin/launchctl";
 
 /**
- * Each test's own loopback port, from this file's range, which no other test file uses: below
- * the ephemeral ports, so no outgoing connection takes one between tests.
+ * No other test file uses this range, and it is below the ephemeral ports, so no outgoing
+ * connection takes one.
  */
 let nextPort = 21_200;
 
 const ownPort = () => nextPort++;
 
-/** Holds loopback `port`, as something else would, until the scope closes. */
 const holding = (port: number | undefined) =>
   Effect.acquireRelease(
     Effect.callback<Server>((resume) => {
@@ -61,7 +55,6 @@ const holding = (port: number | undefined) =>
       }),
   );
 
-/** Whether something accepts connections on loopback `port`. */
 const accepts = (port: number) =>
   Effect.promise(
     () =>
@@ -88,10 +81,6 @@ const machineOn = (name: string): MachineRef => ({
   port: ownPort(),
 });
 
-/**
- * What a test changes: the job's `tart run`, the agent's answer, a guest's shutdown, a delete,
- * a `tart list`.
- */
 interface Hooks {
   list?: () => Reply | undefined;
   kickstart?: (vm: string) => void;
@@ -100,11 +89,7 @@ interface Hooks {
   delete?: (vm: string) => Reply | undefined;
 }
 
-/**
- * A scripted Mac. `vms` holds Tart's VMs and their states, `jobs` the labels launchd holds, and
- * `programs` the tart each was bootstrapped with, if not the configured one. `kickstart` runs the
- * job's `tart run`; by default the VM then runs and its agent answers.
- */
+/** `kickstart` runs the job's `tart run`; by default the VM then runs and its agent answers. */
 const scriptedMac = (stateDir: string) => {
   const vms = new Map<string, "running" | "stopped" | "suspended">();
   const jobs = new Set<string>();
@@ -266,7 +251,6 @@ const scriptedMac = (stateDir: string) => {
 
 type ScriptedMac = ReturnType<typeof scriptedMac>;
 
-/** A scripted Mac with its state dir, and the runtime over it, started and living until the test ends. */
 const runtimeOn = (options?: { readonly settings?: Partial<Settings> }) =>
   Effect.gen(function* () {
     const mac = scriptedMac(join(yield* scratch, "state"));
@@ -280,10 +264,7 @@ const runtimeOn = (options?: { readonly settings?: Partial<Settings> }) =>
     return { mac, runtime };
   });
 
-/**
- * The calls after the version check, as `<program> <args…>`, without the `tart list` reads.
- * Startup makes none.
- */
+/** Without the version check and the `tart list` reads. */
 const calls = (mac: ScriptedMac) =>
   mac.spawner.calls
     .slice(1)

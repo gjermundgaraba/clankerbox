@@ -1,8 +1,3 @@
-/**
- * The checkpoint actions: capture, list, get and delete. They run in the order `claims.ts`
- * describes. A capture claims its source machine and inserts the checkpoint's row; restores,
- * which only read a ready checkpoint, are machine actions.
- */
 import { type Checkpoint, formatId, type HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Layer, type Scope } from "effect";
 import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./claims.ts";
@@ -14,7 +9,6 @@ import { type CheckpointRecord, type NewCheckpoint, Store } from "./store.ts";
 export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Checkpoint>, HostError>;
   readonly get: (id: string) => Effect.Effect<Checkpoint, HostError>;
-  /** Captures the machine `machine` into a new checkpoint named `name`. */
   readonly capture: (machine: string, name: string) => Effect.Effect<Checkpoint, HostError>;
   readonly delete: (id: string) => Effect.Effect<void, HostError>;
 }
@@ -53,11 +47,6 @@ export const make = (
       return record.profile === undefined ? checkpoint : { ...checkpoint, profile: record.profile };
     };
 
-    /**
-     * Claims the source, then inserts the checkpoint's row, of the runtime's kind, into the same
-     * claim. A host crash between the two leaves the source's capture failed and no checkpoint
-     * row. The runtime refuses a source in a state it doesn't capture.
-     */
     const capture = (machineId: string, name: string) =>
       Effect.gen(function* () {
         const sourceName = yield* nameOf(machineId);

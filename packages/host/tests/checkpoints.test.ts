@@ -1,8 +1,4 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-/**
- * Fork, checkpoints and restore in the host core, over the fake runtime: their claims, the
- * admission permit, the pin, and what each failure leaves.
- */
 import { join } from "node:path";
 import { Capacity, Conflict, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber } from "effect";
@@ -12,7 +8,7 @@ import { fakeRuntime } from "./fake-runtime.ts";
 import { read, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { request, startHost, type TestHost } from "./support.ts";
 
-/** This file's machine ports, which no other test file's host gives out. */
+/** No other test file's host gives out these ports. */
 const ports = { first: 21_110, last: 21_119 };
 
 const host = (options?: Parameters<typeof startHost>[1] & { readonly dir?: string }) =>
@@ -36,7 +32,6 @@ const checkpointActions = (host: TestHost) =>
 const machineId = (host: TestHost, name: string) =>
   read(join(host.fake.root(name) ?? "", "var/lib/clankerbox/machine-id"));
 
-/** A host with a running machine `dev` that has an SSH host key. */
 const withSource = (options?: Parameters<typeof host>[0]) =>
   Effect.gen(function* () {
     const linux = yield* host(options);
@@ -482,7 +477,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a restore makes a machine with the checkpoint's spec, prepared with a new identity",
+    "a restore makes a machine with the checkpoint's spec, prepared with a new identity, and may take its deleted source's name",
     () =>
       Effect.gen(function* () {
         const linux = yield* withSource();
@@ -492,7 +487,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* linux.run(linux.machines.delete("linux_dev"));
         linux.fake.calls.length = 0;
 
-        // The deleted source's name and port are free again.
         const restored = yield* linux.run(linux.machines.restore("linux_snap", "dev"));
 
         expect(restored).toMatchObject({

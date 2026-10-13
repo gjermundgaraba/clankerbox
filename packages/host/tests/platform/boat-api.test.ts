@@ -1,8 +1,3 @@
-/**
- * boat's API client over a fake boat: an `HttpClient` that records every request and answers as
- * boat's API v1 does (the bump-boat-api skill), and a loopback server for real dropped
- * connections. Nothing here reaches boat.
- */
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { Duration, Effect, Exit, Fiber, Layer, Option, Redacted, Schema } from "effect";
 import {
@@ -29,25 +24,18 @@ const apiKey = "boat_fake-key-that-must-never-print";
 
 const url = "https://boat.test/api/v1";
 
-/** A request as the fake boat saw it. */
 interface Sent {
   readonly method: string;
   readonly path: string;
   readonly headers: Readonly<Record<string, string>>;
-  /** The body's text, byte for byte. */
   readonly text: string | undefined;
 }
 
-/** A status and a JSON body. */
 interface Answered {
   readonly status: number;
   readonly body: Schema.Json;
 }
 
-/**
- * How the fake answers a request: a status and JSON body, a status and some other text (a
- * proxy's page), a status and a body cut off after `cut`, a dropped connection, or no answer.
- */
 type Reply =
   | Answered
   | { readonly status: number; readonly text: string }
@@ -55,7 +43,6 @@ type Reply =
   | "drop"
   | "hang";
 
-/** A response body that breaks off after `text`, as a dropped connection leaves it. */
 const cutOff = (text: string) =>
   new ReadableStream<Uint8Array>({
     start: (controller) => {
@@ -76,10 +63,8 @@ const bodyText = (request: HttpClientRequest.HttpClientRequest) =>
 
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 
-/** The JSON body of a recorded request. */
 const json = (sent: Sent) => (sent.text === undefined ? undefined : decodeJson(sent.text));
 
-/** boat's error envelope. */
 const refusal = (status: number, code: string, message = `boat says ${code}`): Reply => ({
   status,
   body: {
@@ -109,10 +94,7 @@ const created = (id: string): Answered => ({
   body: { ok: true, type: "sandbox.created", status: "provisioning", sandbox: sandbox(id) },
 });
 
-/**
- * A fake boat that answers with `reply`, `delay` after each request arrives, and records every
- * request in `sent`.
- */
+/** Answers as boat's API v1 does (the bump-boat-api skill). */
 const fakeBoat = (reply: (sent: Sent, index: number) => Reply, delay = Duration.zero) => {
   const sent: Array<Sent> = [];
 
@@ -160,13 +142,12 @@ const fakeBoat = (reply: (sent: Sent, index: number) => Reply, delay = Duration.
   return { sent, layer: Layer.succeed(HttpClient.HttpClient, client) };
 };
 
-/** Runs `use` over the client against `boat`, with the real clock. */
 const run = <A, E>(boat: ReturnType<typeof fakeBoat>, use: (api: Api) => Effect.Effect<A, E>) =>
   Effect.flatMap(make({ apiKey: Redacted.make(apiKey), url }), use).pipe(
     Effect.provide(boat.layer),
   );
 
-/** Runs `use` under the test clock, moving it a second at a time until `use` ends. */
+/** Moves the test clock a second at a time until `use` ends. */
 const runTimed = <A, E>(
   boat: ReturnType<typeof fakeBoat>,
   use: (api: Api) => Effect.Effect<A, E>,
@@ -875,7 +856,7 @@ it.live("a cancelled sandbox, reported with only its ID, state and error, still 
   }),
 );
 
-/** A loopback server that answers each request with `respond`, recording what it was sent. */
+/** A real server, for connections that really drop. */
 const loopback = (
   respond: (request: IncomingMessage, body: string, index: number) => Answered | "drop",
 ) =>

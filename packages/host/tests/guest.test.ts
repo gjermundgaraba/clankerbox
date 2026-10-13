@@ -1,7 +1,3 @@
-/**
- * The preparation script itself, run with the host's `/bin/sh` against a temporary guest root,
- * with `perl`, `ssh-keygen` and `uname` stubbed. Nothing here prints the script.
- */
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
@@ -31,7 +27,6 @@ const scratch = async () => {
   return dir;
 };
 
-/** A guest root with its `dev` and the stubs, under a fresh scratch directory. */
 const guest = async (uname = "Linux") => {
   const dir = await scratch();
   const root = join(dir, "root");
@@ -61,7 +56,6 @@ const read = (root: string, file: string) => readFile(join(root, file), "utf8");
 const calls = async (root: string) =>
   (await read(root, "calls").catch(() => "")).split("\n").filter((line) => line !== "");
 
-/** Installs an executable hook under the guest's `/etc/clankerbox`. */
 const hook = async (root: string, name: string, body: string) => {
   const file = join(root, "etc", "clankerbox", name);
 
@@ -197,7 +191,6 @@ test("a failing start fails preparation with its output", async () => {
   expect(output).toContain("sshd wouldn't start");
 });
 
-/** Waits until `file` holds `text`; the test's timeout bounds the wait. */
 const waitFor = async (file: string, text: string) => {
   while (!(await readFile(file, "utf8").catch(() => "")).includes(text)) {
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -205,10 +198,8 @@ const waitFor = async (file: string, text: string) => {
 };
 
 /**
- * A process standing in for sshd's listener, which records the SIGHUP that makes it re-exec.
- * It writes `ready` once its traps are in, and `usr1` on SIGUSR1, which `settled` sends: the
- * shell runs pending traps in signal-number order, HUP before USR1, so a SIGHUP sent before it
- * is recorded first.
+ * Stands in for sshd's listener. The shell runs pending traps in signal-number order, HUP before
+ * USR1, so a SIGHUP sent before `settled`'s SIGUSR1 is recorded first.
  */
 const listener = async (root: string, comm: string) => {
   const marker = join(root, "listener");
@@ -239,7 +230,6 @@ const listener = async (root: string, comm: string) => {
 
   return {
     hup: () => waitFor(marker, "hup"),
-    /** What the listener recorded by the time it handled a SIGUSR1 sent now. */
     settled: async () => {
       child.kill("SIGUSR1");
       await waitFor(marker, "usr1");

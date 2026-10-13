@@ -1,13 +1,8 @@
 /**
- * The forwarder, used only by Tart, which has no port publishing: for each machine it listens on
- * the publish address and the machine's host port, and each connection it accepts
- * runs one command that carries the bytes to the guest's port 22, `tart exec -i <vm> nc
- * 127.0.0.1 22`. That needs no guest IP, no Softnet exception and no Local Network permission.
- *
- * A connection ends by closing the command's stdin, never by killing it: a killed `tart exec`
- * leaves the guest's `nc` and `sshd-session` running until the session next writes (the
- * bump-tart skill). Only the host's own shutdown kills them, and a host restart drops open
- * connections.
+ * `tart exec -i <vm> nc 127.0.0.1 22` needs no guest IP, no Softnet exception and no Local
+ * Network permission. A connection ends by closing the command's stdin, never by killing it: a
+ * killed `tart exec` leaves the guest's `nc` and `sshd-session` running until the session next
+ * writes (the bump-tart skill).
  */
 import { createServer, type Server, type Socket } from "node:net";
 import * as NodeStream from "@effect/platform-node/NodeStream";
@@ -16,20 +11,17 @@ import { Effect, FiberSet, type Scope, Stream } from "effect";
 import { type ChildProcess, ChildProcessSpawner } from "effect/process";
 import { lastLines } from "../../guest.ts";
 
-/** The command one connection runs, reading the client's bytes from `input`. */
 export type Dial = (input: Stream.Stream<Uint8Array>) => ChildProcess.Command;
 
 export interface Forwarder {
-  /** Listens on `port` of the publish address, unless it already does; each connection runs `dial`. */
   readonly listen: (port: number, dial: Dial) => Effect.Effect<void, Internal>;
-  /** Stops accepting on `port`. Connections already open run until their command ends. */
+  /** Connections already open run until their command ends. */
   readonly close: (port: number) => Effect.Effect<void>;
 }
 
 /**
- * Writes a chunk to the client, waiting while its buffer is full. Once the client has gone the
- * chunk is dropped, so the command's output is still read to its end and the command can exit
- * on its closed stdin.
+ * Once the client has gone the chunk is dropped, so the command's output is still read to its
+ * end and the command can exit on its closed stdin.
  */
 const write = (socket: Socket, chunk: Uint8Array) =>
   Effect.callback<void>((resume) => {
@@ -55,7 +47,6 @@ const write = (socket: Socket, chunk: Uint8Array) =>
     socket.on("close", done);
   });
 
-/** A forwarder on `address`, whose listeners and connections end with the scope. */
 export const make = (
   address: string,
 ): Effect.Effect<Forwarder, never, Scope.Scope | ChildProcessSpawner.ChildProcessSpawner> =>
@@ -64,10 +55,6 @@ export const make = (
     const run = yield* FiberSet.makeRuntime<never, void, never>();
     const listeners = new Map<number, Server>();
 
-    /**
-     * One connection: the client's bytes are the command's stdin, which ends when the client
-     * closes or resets its side, and the command's output goes back until it ends.
-     */
     const connection = (socket: Socket, port: number, dial: Dial) =>
       Effect.scoped(
         Effect.gen(function* () {

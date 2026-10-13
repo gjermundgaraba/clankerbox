@@ -1,14 +1,8 @@
 /**
- * The Tart runtime: macOS guests through the `tart` CLI of a versioned install, on a macOS host
- * that runs as the operator's user. Each VM runs as `tart run` under its own launchd job in the
- * user's GUI domain, so a host restart leaves VMs running, and the job references only tart. The
- * host's forwarder carries each machine's SSH connections into the guest, on a listener that
- * lives as long as the machine's row.
- *
- * Tart has one VM namespace per Tart home, shared with the operator's own VMs and with any other
- * host process on the Mac, so native names carry the host ID, the kind and the row's instance.
- * A checkpoint is always `disk`: a clone of a stopped machine. A fork clones a stopped machine,
- * and a restore clones a checkpoint.
+ * Each VM runs as `tart run` under its own launchd job in the user's GUI domain, so a host
+ * restart leaves VMs running. Tart has one VM namespace per Tart home, shared with the operator's
+ * own VMs and with any other host process on the Mac, so native names carry the host ID, the
+ * kind and the row's instance.
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -39,47 +33,39 @@ import { Address } from "../address.ts";
 import { cliIn, expect, files, portOf } from "../process.ts";
 import * as Forwarder from "./forwarder.ts";
 
-/** The Tart runtime's settings. */
 export const TartSettings = Schema.Struct({
   /**
-   * The `tart` executable of a versioned install, such as
-   * `/opt/tart/2.40.1/tart.app/Contents/MacOS/tart`. VM jobs run it from there, so an upgrade goes
-   * into a new directory.
+   * Of a versioned install: VM jobs run it from there, so an upgrade goes into a new
+   * directory.
    */
   binary: Schema.String,
-  /** Where the forwarder listens for machines' guest port 22. Default: `listen.address`. */
   publishAddress: Schema.optionalKey(Address),
 });
 
-/** The Tart settings with their defaults applied. */
 export type Tart = Required<typeof TartSettings.Type>;
 
-/** A Tart host's config. */
 export interface TartHost extends HostSettings {
   readonly runtime: "tart";
   readonly tart: Tart;
 }
 
-/** The Tart settings with their default: the forwarder listens on the host's listen address. */
 export const resolveSettings = (
   settings: typeof TartSettings.Type,
   listen: HostSettings["listen"],
 ): Tart => ({ ...settings, publishAddress: settings.publishAddress ?? listen.address });
 
 /**
- * The oldest Tart this host runs on: from 2.40.1 clone refuses an existing destination, delete's
- * exit codes are reliable, one accept error no longer disables `tart exec`, and `tart list` no
- * longer fails on running VMs. The bump-tart skill re-checks these at a new release.
+ * From 2.40.1 clone refuses an existing destination, delete's exit codes are reliable, one accept
+ * error no longer disables `tart exec`, and `tart list` no longer fails on running VMs. The
+ * bump-tart skill re-checks these at a new release.
  */
 export const minimumVersion = "2.40.1";
 
-/** What the runtime needs: the host config's Tart settings and the host it runs for. */
 export interface Settings extends Tart {
   readonly hostId: string;
   readonly stateDir: string;
-  /** The user whose GUI domain (`gui/<uid>`) runs the VM jobs; Node has none off POSIX. */
+  /** Node has none off POSIX. */
   readonly uid: number | undefined;
-  /** The host's own `TART_HOME`, if it has one. Without one Tart uses `~/.tart`. */
   readonly tartHome: string | undefined;
 }
 
@@ -110,7 +96,6 @@ const shrinkRefusal = "should be larger than the current disk size";
  */
 const bootWait = Duration.minutes(3);
 
-/** The pause between `tart exec` probes while a VM boots. */
 const probePause = Duration.seconds(1);
 
 /**
@@ -127,7 +112,6 @@ const shutdownWait = Duration.minutes(1);
  */
 const forcedStopWait = Duration.seconds(10);
 
-/** The pause between `tart list` reads while a VM stops. */
 const stopPause = Duration.millis(500);
 
 /**
@@ -148,19 +132,18 @@ export const environment = (settings: Pick<Settings, "tartHome">) => ({
   TART_HOME: settings.tartHome,
 });
 
-/** A machine's VM name, which is also its launchd label. */
+/** Also its launchd label. */
 export const machineName = (host: string, machine: Pick<MachineRef, "name" | "instance">): string =>
   `cbx-${host}-m-${machine.name}-${machine.instance.slice(0, 8)}`;
 
-/** A checkpoint's VM name. */
 export const checkpointName = (
   host: string,
   checkpoint: Pick<CheckpointRef, "name" | "instance">,
 ): string => `cbx-${host}-c-${checkpoint.name}-${checkpoint.instance.slice(0, 8)}`;
 
 /**
- * Where the VM jobs' plists and logs live: in the host's state dir, so nothing loads them at
- * login, and a test host's jobs stay apart from production's.
+ * In the host's state dir, so nothing loads them at login, and a test host's jobs stay apart
+ * from production's.
  */
 export const jobsDir = (stateDir: string): string => join(stateDir, "launchd");
 
@@ -170,14 +153,10 @@ export const diskGb = (diskGib: number): number => Math.ceil((diskGib * 1024 ** 
 const xml = (text: string): string =>
   text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
-/**
- * A VM job's plist: `tart run` for the VM, started only by `kickstart` and never restarted by
- * launchd, with its output in `log`.
- */
+/** Started only by `kickstart` and never restarted by launchd. */
 export const plist = (job: {
   readonly label: string;
   readonly program: ReadonlyArray<string>;
-  /** Variables whose value is `undefined` are left out. */
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly log: string;
 }): string =>
@@ -224,12 +203,11 @@ const decodeList = Schema.decodeUnknownEffect(
 export const stateOf = (state: typeof VmState.Type): MachineState =>
   state === "running" ? "running" : "stopped";
 
-/** Whether `reported` is a `major.minor.patch` release at least `minimumVersion`. */
 export const supported = (reported: string): boolean =>
   /^\d+\.\d+\.\d+$/u.test(reported) &&
   reported.localeCompare(minimumVersion, "en", { numeric: true }) >= 0;
 
-/** A top-level `key = value` line of `launchctl print`; nested lines are indented further. */
+/** Nested lines of `launchctl print` are indented further. */
 const printed = (output: string, key: string): string | undefined =>
   new RegExp(`^\\t${key} = (.+)$`, "mu").exec(output)?.[1];
 
@@ -272,7 +250,6 @@ export const make = (
       });
     }
 
-    /** Every VM in the Tart home, by name, with its state. */
     const list = Effect.flatMap(
       call(["list", "--source", "local", "--format", "json"], "list"),
       (ran) =>
@@ -290,11 +267,9 @@ export const make = (
     const state = (vm: string) => Effect.map(list, (vms) => vms.get(vm) ?? "missing");
 
     /**
-     * The VMs that count toward Apple's limit, by name: every running VM in the Tart home, the
-     * operator's included, and every machine an action is booting, since its VM runs only once
-     * its job has started. A set, so a running machine an action holds counts once. Not
-     * `observe`, which answers only for the host's machines; the core bounds the read by
-     * `stateReadWait`.
+     * Every running VM in the Tart home, the operator's included, and every machine an action is
+     * booting, since its VM runs only once its job has started. A set, so a running machine an
+     * action holds counts once.
      */
     const countedVms = (machines: ReadonlyArray<Held>) =>
       Effect.map(list, (vms) => {
@@ -322,8 +297,8 @@ export const make = (
     });
 
     /**
-     * Writes the machine's VM job, at every boot, so its plist names the configured tart; `boot`
-     * reloads a job launchd holds that names another.
+     * At every boot, so its plist names the configured tart; `boot` reloads a job launchd holds
+     * that names another.
      */
     const writeJob = (vm: string) => {
       const { plist: file, log } = job(vm);
@@ -344,9 +319,8 @@ export const make = (
     };
 
     /**
-     * Listens for the machine's SSH connections, from its create, or the host's startup, until
-     * its delete, whatever its state; each connection runs `nc` in the guest, and on a stopped
-     * machine closes at once. A start listens again if startup couldn't.
+     * From create, or the host's startup, until delete, whatever the machine's state; on a stopped
+     * machine a connection closes at once. A start listens again if startup couldn't.
      */
     const listen = (machine: MachineRef) =>
       Effect.flatMap(portOf(machine), (port) =>
@@ -359,17 +333,14 @@ export const make = (
       machine.port === undefined ? Effect.void : forwarder.close(machine.port);
 
     /**
-     * Waits until the VM's guest agent answers `tart exec`. Before `tart run` holds the VM, an
-     * exec fails at once; while the guest boots, it blocks, and fails after about 30 s if the
-     * agent isn't up yet (the bump-tart skill), so it is tried again until `bootWait` passes. A
-     * job that exits instead failed the boot: its log says why, and Apple's refusal of a third VM
-     * is `Capacity`.
+     * Before `tart run` holds the VM, an exec fails at once; while the guest boots, it blocks, and
+     * fails after about 30 s if the agent isn't up yet (the bump-tart skill), so it is tried again
+     * until `bootWait` passes.
      */
     const ready = (machine: MachineRef) => {
       const vm = vmOf(machine);
       const { target, log } = job(vm);
 
-      /** Whether the agent answered; false while the guest boots. */
       const probe = Effect.gen(function* () {
         if ((yield* tart(["exec", vm, "true"], `exec ${vm}`)).exitCode === 0) {
           return true;
@@ -413,7 +384,6 @@ export const make = (
       );
     };
 
-    /** Waits until the VM no longer runs; false when `wait` passes first. */
     const halted = (vm: string, wait: Duration.Duration) =>
       state(vm).pipe(
         Effect.repeat({
@@ -424,10 +394,7 @@ export const make = (
         Effect.map(Option.isSome),
       );
 
-    /**
-     * Tart's forced stop: SIGINT, then SIGKILL of `tart run` at once. Exit 2 is a VM that
-     * doesn't run.
-     */
+    /** SIGINT, then SIGKILL of `tart run` at once. Exit 2 is a VM that doesn't run. */
     const forceStop = (vm: string) =>
       Effect.gen(function* () {
         yield* call(["stop", "--timeout", "0", vm], `stop ${vm}`, [0, 2]);
@@ -440,12 +407,9 @@ export const make = (
       });
 
     /**
-     * Boots the machine's VM through its job, written again first: bootstrapped if launchd
-     * doesn't hold it (as after a reboot), or booted out and bootstrapped again if it holds a
-     * job that doesn't run and names another tart, then kickstarted without `-k`, which never
-     * touches a running VM. `kickstart` returns before Tart has started the VM, so `ready` waits
-     * for the guest agent. A boot that fails from there leaves the VM as it is, reachable
-     * through its listener; a `start` of a made machine that runs prepares it again.
+     * Kickstarted without `-k`, which never touches a running VM. `kickstart` returns before Tart
+     * has started the VM, so `ready` waits for the guest agent. A boot that fails from there
+     * leaves the VM as it is, reachable through its listener.
      */
     const boot = (machine: MachineRef) =>
       Effect.gen(function* () {
@@ -487,8 +451,7 @@ export const make = (
       });
 
     /**
-     * Reads the VM's state first, and does nothing to one that doesn't run. A running one gets
-     * the guest's own `shutdown -h now`, which flushes its disks, then Tart's forced stop if the
+     * The guest's own `shutdown -h now` flushes its disks; Tart's forced stop follows if the
      * guest hasn't stopped within `shutdownWait`. The exec may die with the guest, so only the
      * VM's state counts.
      */
@@ -518,8 +481,8 @@ export const make = (
       });
 
     /**
-     * Deletes a VM. Exit 2 is a VM that doesn't exist; a running VM exits 1 (from Tart 2.40.0),
-     * and is forced off, then deleted.
+     * Exit 2 is a VM that doesn't exist; a running VM exits 1 (from Tart 2.40.0), and is forced
+     * off, then deleted.
      */
     const deleteVm = (vm: string) =>
       Effect.gen(function* () {
@@ -534,9 +497,9 @@ export const make = (
       });
 
     /**
-     * Clones `from` into the machine's VM with a new serial, and boots it. The machine's listener
-     * opens first, so a port it can't listen on is refused before anything native. A `diskGib`
-     * below the base's disk is the caller's to fix, so Tart's refusal of it is `Precondition`.
+     * The machine's listener opens first, so a port it can't listen on is refused before anything
+     * native. A `diskGib` below the base's disk is the caller's to fix, so Tart's refusal of it is
+     * `Precondition`.
      */
     const cloneInto = (from: string, machine: MachineRef, sizes: ReadonlyArray<string>) => {
       const vm = vmOf(machine);
@@ -559,8 +522,8 @@ export const make = (
     };
 
     /**
-     * A fork and a capture copy a stopped machine's disk: Tart's clone doesn't require one. Any
-     * other state is refused before anything native.
+     * A fork and a capture copy a stopped machine's disk, though Tart's clone doesn't require
+     * one.
      */
     const copyable = (what: string, machine: MachineRef) =>
       Effect.flatMap(state(vmOf(machine)), (observed) => {
@@ -605,20 +568,15 @@ export const make = (
           }
         }),
       ),
-      /**
-       * One `tart list` for every machine, bounded by the core's `stateReadWait`: one that
-       * doesn't answer in time reads every machine `unknown`.
-       */
       observe: Effect.fn("Tart.observe")((machines) =>
         Effect.map(list, (vms) =>
           machines.map((machine): Observed => ({ state: vms.get(vmOf(machine)) ?? "missing" })),
         ),
       ),
       /**
-       * The Mac must have room for `countedVms`, the target among them: it is booting, and
-       * when it runs already, as a start of a running machine has it, it counts once and adds
-       * nothing. The operator's Linux VMs count too, which Apple doesn't limit, so the count is
-       * conservative; Apple's own refusal is the real guard.
+       * The target counts once even when it runs already. The operator's Linux VMs count too,
+       * which Apple doesn't limit, so the count is conservative; Apple's own refusal is the real
+       * guard.
        */
       admit: Effect.fn("Tart.admit")(({ action, machine, machines }) =>
         Effect.gen(function* () {
@@ -646,10 +604,7 @@ export const make = (
           String(diskGb(machine.diskGib)),
         ]),
       ),
-      /**
-       * Reads the VM's state first, so a VM Tart no longer has is refused before anything is
-       * written, then listens again, and boots the VM unless it runs already.
-       */
+      /** A VM Tart no longer has is refused before anything is written. */
       start: Effect.fn("Tart.start")((machine) =>
         Effect.gen(function* () {
           const observed = yield* state(vmOf(machine));

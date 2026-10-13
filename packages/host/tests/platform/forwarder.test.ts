@@ -1,7 +1,6 @@
 /**
- * The forwarder over a local command in place of `tart exec … nc 127.0.0.1 22`: it echoes the
- * client's bytes, and the command records in a marker file when its stdin closed, which a
- * killed command never gets to do.
+ * A local command stands in for `tart exec … nc 127.0.0.1 22`. It records when its stdin closed,
+ * which a killed command never gets to do.
  */
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -15,12 +14,11 @@ import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { expect } from "vite-plus/test";
 import { make } from "../../src/platform/tart/forwarder.ts";
 
-/** A forwarder on loopback that ends with the test. */
 const forwarder = make("127.0.0.1");
 
 /**
- * Echoes its stdin, then appends a line to `marker` once stdin has closed. Node rather than
- * `cat`: under `vp run`'s file tracking, `/bin/cat` held its output until its stdin closed.
+ * Node rather than `cat`: under `vp run`'s file tracking, `/bin/cat` held its output until its
+ * stdin closed.
  */
 const echo = (marker: string) => (input: Stream.Stream<Uint8Array>) =>
   ChildProcess.make(
@@ -34,8 +32,8 @@ const echo = (marker: string) => (input: Stream.Stream<Uint8Array>) =>
   );
 
 /**
- * Each test's own loopback port, from this file's range, which no other test file uses: below
- * the ephemeral ports, so no outgoing connection takes one between tests.
+ * No other test file uses this range, and it is below the ephemeral ports, so no outgoing
+ * connection takes one.
  */
 let nextPort = 21_300;
 
@@ -50,7 +48,6 @@ const connected = (port: number) =>
     socket.once("error", reject);
   });
 
-/** Sends `payload`, half-closes, and reads what comes back until the forwarder ends its side. */
 const roundTrip = async (port: number, payload: Uint8Array) => {
   const socket = await connected(port);
   const chunks: Array<Buffer> = [];
@@ -70,7 +67,6 @@ const roundTrip = async (port: number, payload: Uint8Array) => {
   return Buffer.concat(chunks);
 };
 
-/** Waits until `marker` holds `count` lines. */
 const closedLines = (marker: string, count: number) =>
   Effect.promise(async () => {
     for (let attempt = 0; attempt < 200; attempt++) {
@@ -89,7 +85,6 @@ const closedLines = (marker: string, count: number) =>
     return 0;
   });
 
-/** The code a connection to `port` is refused with, or `connected`. */
 const refusal = (port: number) =>
   Effect.promise(() =>
     connected(port).then(

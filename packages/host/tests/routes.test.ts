@@ -1,5 +1,4 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-/** The host API over a real loopback server, called through the SDK's client and raw HTTP. */
 import {
   Client,
   Http,
@@ -145,13 +144,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
-  /** The headers that send `sent` as the client's version. */
   const versioned = (sent: string) => ({ [versionHeader]: sent });
 
-  /**
-   * Posts `body` to the action at `path` straight to the host, as a caller without the SDK
-   * would, with `headers`: by default, this SDK's version.
-   */
   const post = (
     url: string,
     path: string,
@@ -191,7 +185,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   const decodeInvalid = Schema.decodeUnknownSync(Schema.fromJsonString(Invalid));
 
-  /** `version` with its minor, or its patch, moved on by one. */
+  /** `version` with its minor (1) or its patch (2) moved on by one. */
   const bump = (part: 1 | 2) =>
     version
       .split(".")
@@ -268,7 +262,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const { url, fake, run, store } = yield* serve();
 
-      /** The SDK's client over `fetch`, whose requests leave carrying another release's version. */
       const older = FetchHttpClient.layer.pipe(
         Layer.provide(
           Layer.succeed(FetchHttpClient.Fetch, (input, init) => {
@@ -313,7 +306,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  /** Waits until the one machine's last action has ended, as recorded on its row. */
   const settled = ({ run, store }: TestHost) =>
     Effect.gen(function* () {
       for (let tries = 0; tries < 100; tries++) {
