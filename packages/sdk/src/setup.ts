@@ -4,6 +4,7 @@
  * script. Nothing here logs a script or a packed recipe: a recipe can carry secrets.
  */
 import { Effect, FileSystem, Option, type PlatformError, Predicate } from "effect";
+import { Base64 } from "effect/encoding";
 import { Invalid } from "./errors.ts";
 import { describeFileError } from "./text.ts";
 
@@ -109,7 +110,7 @@ export const packRecipe = (
           } else if (info.type === "File") {
             steps.push(
               `base64 -d >${argument(entry)} <<'${terminator}'`,
-              wrap(Buffer.from(yield* fs.readFile(path)).toString("base64")),
+              wrap(Base64.encode(yield* fs.readFile(path))),
               terminator,
             );
 
