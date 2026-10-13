@@ -1,10 +1,10 @@
 import { existsSync, readFileSync } from "node:fs";
-import { Effect, Layer, Sink, Stream } from "effect";
+import { Effect, Layer, PlatformError, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
 import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { machine, type StubHost, stubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { cleanup, cli, scratch, writeConfig } from "./support.ts";
+import { cleanup, cli, decodeJsonError, scratch, writeConfig } from "./support.ts";
 
 const owned: Array<string> = [];
 
@@ -174,4 +174,33 @@ test("ssh into a machine that lacks an endpoint or a host key is Precondition, s
     expect(stderr).toContain(`clankerbox: Precondition: ${message}`);
     expect(ssh.spawned).toEqual([]);
   }
+});
+
+test("ssh that can't be started is SpawnFailed, naming ssh", async () => {
+  const { config, endpoints } = await setup();
+
+  const missing = Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make(() =>
+      Effect.fail(
+        PlatformError.badArgument({
+          module: "ChildProcess",
+          method: "spawn",
+          description: "ssh: not found",
+        }),
+      ),
+    ),
+  );
+
+  const { code, stdout } = await cli(["ssh", "linux_dev", "--json", "--config", config], {
+    endpoints,
+    spawner: missing,
+  });
+
+  expect(code).toBe(1);
+  expect(decodeJsonError(stdout).error).toMatchObject({
+    tag: "SpawnFailed",
+    message: expect.stringContaining("couldn't run ssh"),
+    retryable: false,
+  });
 });

@@ -241,7 +241,7 @@ test("a recipe that holds anything but files, directories and symlinks is refuse
     Effect.runPromise,
   );
 
-  expect(error._tag).toBe("Invalid");
+  expect(error._tag).toBe("InvalidFile");
   expect(error.message).toContain("files/pipe");
 });
 
@@ -289,7 +289,7 @@ test("a setup.sh without a #! line runs under /bin/sh", async () => {
   expect(await readFile(join(out, "interpreter"), "utf8")).toBe("sh ran\n");
 });
 
-test("a directory without setup.sh is refused with Invalid", async () => {
+test("a directory without setup.sh is refused with InvalidFile", async () => {
   const dir = await scratch();
 
   const error = await packRecipe(dir).pipe(
@@ -298,7 +298,8 @@ test("a directory without setup.sh is refused with Invalid", async () => {
     Effect.runPromise,
   );
 
-  expect(error._tag).toBe("Invalid");
+  expect(error._tag).toBe("InvalidFile");
+  expect(error.file).toBe(dir);
   expect(error.message).toContain("setup.sh");
 });
 
@@ -314,7 +315,7 @@ test("a recipe path that can't be read for another reason says why, not that set
     Effect.runPromise,
   );
 
-  expect(error._tag).toBe("Invalid");
+  expect(error._tag).toBe("InvalidFile");
   expect(error.message).toContain(`couldn't pack recipe ${file}`);
   expect(error.message).not.toContain("has no setup.sh");
 });
@@ -349,14 +350,17 @@ test("a single file is sent as its text", async () => {
   expect(text === "#!/bin/sh\ntrue\n").toBe(true);
 });
 
-test("a missing setup path is Invalid", async () => {
+test("a missing setup path is InvalidFile", async () => {
   const dir = await scratch();
 
-  const error = await readSetup(join(dir, "missing")).pipe(
+  const missing = join(dir, "missing");
+
+  const error = await readSetup(missing).pipe(
     Effect.flip,
     Effect.provide(NodeServices.layer),
     Effect.runPromise,
   );
 
-  expect(error._tag).toBe("Invalid");
+  expect(error._tag).toBe("InvalidFile");
+  expect(error.file).toBe(missing);
 });

@@ -4,7 +4,13 @@
  * takes a name or a full ID. A mutation returns when its action has finished; its `--timeout`
  * only stops waiting.
  */
-import { type ClankerboxError, Client, ErrorTag, Invalid } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  type ClankerboxError,
+  Client,
+  ErrorTag,
+  Invalid,
+  InvalidFile,
+} from "@gjermundgaraba/clankerbox-sdk";
 import {
   Console,
   Data,
@@ -32,24 +38,41 @@ export class Exited extends Data.TaggedError("Exited")<{ readonly code: number }
   }
 }
 
+/** A program the CLI hands over to, such as ssh, couldn't be started. */
+export class SpawnFailed extends Schema.TaggedError<SpawnFailed>()("SpawnFailed", {
+  message: Schema.String,
+  program: Schema.String,
+}) {
+  get retryable(): boolean {
+    return false;
+  }
+}
+
+/** Every failure the CLI prints. */
+export type Failure = ClankerboxError | InvalidFile | SpawnFailed;
+
 /** A failure as `--json` prints it. */
 export const ErrorDocument = Schema.Struct({
   message: Schema.String,
-  tag: ErrorTag,
+  tag: Schema.Literals([
+    ...ErrorTag.literals,
+    InvalidFile.fields._tag.schema.literal,
+    SpawnFailed.fields._tag.schema.literal,
+  ]),
   retryable: Schema.Boolean,
 });
 
 /** A host a fan-out couldn't read, as `--json` lists it under `unreachable`. */
 export const UnreachableDocument = Schema.Struct({ host: Schema.String, error: ErrorDocument });
 
-const errorDocument = (error: ClankerboxError): typeof ErrorDocument.Type => ({
+const errorDocument = (error: Failure): typeof ErrorDocument.Type => ({
   message: error.message,
   tag: error._tag,
   retryable: error.retryable,
 });
 
 /** Prints `error` (as `{error: {message, tag, retryable}}` with `--json`) and exits 1. */
-export const fail = (json: boolean) => (error: ClankerboxError) =>
+export const fail = (json: boolean) => (error: Failure) =>
   Effect.andThen(
     json
       ? Console.log(JSON.stringify({ error: errorDocument(error) }))
@@ -141,7 +164,10 @@ type Services =
  */
 export const withClient = <A, R>(
   flags: ClientFlags,
-  body: (client: Client.Interface, config: LoadedConfig) => Effect.Effect<A, ClankerboxError, R>,
+  body: (
+    client: Client.Interface,
+    config: LoadedConfig,
+  ) => Effect.Effect<A, ClankerboxError | InvalidFile, R>,
 ): Effect.Effect<A, Exited, R | Services> =>
   Effect.gen(function* () {
     const timeout = yield* parsed(flags.timeout ?? Option.none(), "--timeout", parseSeconds);
@@ -230,7 +256,7 @@ export const printResource = <A, Encoded extends object, R>(
     readonly call: (
       client: Client.Interface,
       config: LoadedConfig,
-    ) => Effect.Effect<A, ClankerboxError, R>;
+    ) => Effect.Effect<A, ClankerboxError | InvalidFile, R>;
     readonly encode: (resource: A) => Encoded;
     readonly text: (resource: A, now: DateTime.Utc) => string;
   },

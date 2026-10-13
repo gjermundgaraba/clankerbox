@@ -4,7 +4,10 @@
  */
 import { Schema } from "effect";
 
-/** The request is malformed: a bad ID or name, an undeclared field, a value out of range. */
+/**
+ * The request is malformed: a bad ID or name, an undeclared field, a value out of range, or a
+ * host list a client can't route by.
+ */
 export class Invalid extends Schema.TaggedError<Invalid>()(
   "Invalid",
   { message: Schema.String },
@@ -82,6 +85,21 @@ export class Internal extends Schema.TaggedError<Internal>()(
   { message: Schema.String },
   { httpApiStatus: 500 },
 ) {
+  get retryable(): boolean {
+    return false;
+  }
+}
+
+/**
+ * A file the client reads, such as a config, a profile or a setup, couldn't be read, or what it
+ * holds isn't what it should be. No host saw anything, and no call fails with it: only what
+ * reads the file does.
+ */
+export class InvalidFile extends Schema.TaggedError<InvalidFile>()("InvalidFile", {
+  message: Schema.String,
+  /** The file or directory, as the reader was given it. */
+  file: Schema.String,
+}) {
   get retryable(): boolean {
     return false;
   }

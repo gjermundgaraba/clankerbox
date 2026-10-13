@@ -119,7 +119,7 @@ test("a Tart host config takes only Tart's settings, on a tailnet or loopback ad
   ]) {
     const { loaded } = await load(contents);
 
-    expect((await Effect.runPromise(Effect.flip(loaded)))._tag).toBe("Invalid");
+    expect((await Effect.runPromise(Effect.flip(loaded)))._tag).toBe("InvalidFile");
   }
 });
 
@@ -165,7 +165,7 @@ test("a boat host config takes only boat's settings, and a refused one doesn't p
     const { loaded } = await load(contents);
     const error = await Effect.runPromise(Effect.flip(loaded));
 
-    expect(error._tag).toBe("Invalid");
+    expect(error._tag).toBe("InvalidFile");
     expect(error.message).not.toContain(apiKey);
   }
 });
@@ -197,7 +197,7 @@ test("a host listens and publishes only on a tailnet or loopback address", async
     for (const { loaded } of [listening, publishing]) {
       const error = await Effect.runPromise(Effect.flip(loaded));
 
-      expect(error._tag, address).toBe("Invalid");
+      expect(error._tag, address).toBe("InvalidFile");
       expect(error.message, address).toContain("tailnet address");
     }
   }
@@ -219,7 +219,7 @@ test("a host's API port lies outside the machines' range, 10000-19999", async ()
     for (const { loaded } of [smolvm, onBoat]) {
       const error = await Effect.runPromise(Effect.flip(loaded));
 
-      expect(error._tag, String(port)).toBe("Invalid");
+      expect(error._tag, String(port)).toBe("InvalidFile");
       expect(error.message, String(port)).toContain("outside 10000-19999");
     }
   }
@@ -244,7 +244,7 @@ test("machinePorts moves the machines' range, which the API's port must still li
   expect((await Effect.runPromise(Effect.flip(inside.loaded))).message).toContain(
     "outside 5000-5099",
   );
-  expect((await Effect.runPromise(Effect.flip(backwards.loaded)))._tag).toBe("Invalid");
+  expect((await Effect.runPromise(Effect.flip(backwards.loaded)))._tag).toBe("InvalidFile");
 });
 
 test("machinePorts stays out of smolvm's fork ports and the Linux and macOS ephemeral ports", async () => {
@@ -270,12 +270,12 @@ test("machinePorts stays out of smolvm's fork ports and the Linux and macOS ephe
     const { loaded } = await load({ ...config, machinePorts: { first, last } });
     const error = await Effect.runPromise(Effect.flip(loaded));
 
-    expect(error._tag, `${first}-${last}`).toBe("Invalid");
+    expect(error._tag, `${first}-${last}`).toBe("InvalidFile");
     expect(error.message, `${first}-${last}`).toContain(`must stay out of ${reserved}`);
   }
 });
 
-test("an unknown key, another runtime or a bad host ID is Invalid", async () => {
+test("an unknown key, another runtime or a bad host ID is InvalidFile", async () => {
   for (const contents of [
     { ...config, labels: [] },
     { ...config, runtime: "tart" },
@@ -284,17 +284,18 @@ test("an unknown key, another runtime or a bad host ID is Invalid", async () => 
   ]) {
     const { loaded } = await load(contents);
 
-    expect((await Effect.runPromise(Effect.flip(loaded)))._tag).toBe("Invalid");
+    expect((await Effect.runPromise(Effect.flip(loaded)))._tag).toBe("InvalidFile");
   }
 });
 
-test("a missing config file is Invalid, naming it", async () => {
+test("a missing config file is InvalidFile, naming it", async () => {
   const missing = join(await scratch(owned), "nope.json");
 
   const error = await Effect.runPromise(
     Effect.flip(loadConfig(missing)).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  expect(error._tag).toBe("Invalid");
+  expect(error._tag).toBe("InvalidFile");
+  expect(error.file).toBe(missing);
   expect(error.message).toContain(missing);
 });
