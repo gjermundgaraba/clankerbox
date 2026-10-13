@@ -554,53 +554,40 @@ const briefly = { timeout: Duration.millis(50) };
 
 const readBriefly = { readTimeout: Duration.millis(50) };
 
-it.effect(
-  "with a read timeout, a fan-out names the host that didn't answer in time and keeps the rest",
-  () =>
-    Effect.gen(function* () {
-      const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_dev")] });
-      const mac = new Silent();
-
-      const { answers, unreachable } = yield* elapsing(
-        "50 millis",
-        withClient(
-          [
-            ["mac", mac],
-            ["linux", linux],
-          ],
-          (client) => client.machines,
-          readBriefly,
-        ),
-        mac.reached,
-      );
-
-      expect(answers.map(({ id }) => id)).toEqual(["linux_dev"]);
-      expect(unreachable.map(({ host, error }) => [host, error._tag, error.retryable])).toEqual([
-        ["mac", "Unavailable", true],
-      ]);
-    }),
-);
-
-it.effect("placement skips a host that didn't answer in time, and the create is still sent", () =>
+// Each clock test has one host whose timer runs, so moving the clock can't time out another;
+// keeping the other hosts' answers and skipping a failed host are the tests with a down host.
+it.effect("the read timeout bounds a fan-out: a host that never answers is named, retryable", () =>
   Effect.gen(function* () {
-    const linux = host({ id: "linux", bases: ["ubuntu"] });
     const mac = new Silent();
 
-    const made = yield* elapsing(
+    const { answers, unreachable } = yield* elapsing(
       "50 millis",
-      withClient(
-        [
-          ["mac", mac],
-          ["linux", linux],
-        ],
-        (client) => client.create("dev", spec),
-        { ...readBriefly, ...briefly },
-      ),
+      withClient([["mac", mac]], (client) => client.machines, readBriefly),
       mac.reached,
     );
 
-    expect(made.id).toBe("linux_dev");
-    expect(linux.creates).toHaveLength(1);
+    expect(answers).toEqual([]);
+    expect(unreachable.map(({ host, error }) => [host, error._tag, error.retryable])).toEqual([
+      ["mac", "Unavailable", true],
+    ]);
+  }),
+);
+
+it.effect("placement over a host that never answers is Unavailable, retryable, naming it", () =>
+  Effect.gen(function* () {
+    const mac = new Silent();
+
+    const error = yield* elapsing(
+      "50 millis",
+      withClient([["mac", mac]], (client) => Effect.flip(client.create("dev", spec)), {
+        ...readBriefly,
+        ...briefly,
+      }),
+      mac.reached,
+    );
+
+    expect([error._tag, error.retryable]).toEqual(["Unavailable", true]);
+    expect(error.message).toContain("mac failed");
   }),
 );
 
