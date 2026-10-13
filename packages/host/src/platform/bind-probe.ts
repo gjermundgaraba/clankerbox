@@ -1,10 +1,8 @@
-/** The port probe over Node's `net`: a bind on the address, closed at once. */
 import { createServer } from "node:net";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer } from "effect";
 import { PortProbe } from "../machine-ports.ts";
 
-/** Whether `address:port` can be bound now. Something else listening there makes it false. */
 const free = (address: string, port: number): Effect.Effect<boolean, Internal> =>
   Effect.callback((resume) => {
     const server = createServer();

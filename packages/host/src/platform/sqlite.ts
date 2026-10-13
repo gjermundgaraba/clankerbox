@@ -1,10 +1,4 @@
-/**
- * The host's state: one SQLite database in its state dir, through `node:sqlite`. It holds the
- * host ID and runtime it was created for, one row per machine with its spec, `instance`,
- * `native`, `createdAt`, host `port`, `hostKey`, whether it was made, and its last `action`, and
- * one row per checkpoint, and nothing else: machine state is always read from the runtime, and
- * no setup script is kept.
- */
+// No setup script is kept: setup can carry secrets.
 import { DatabaseSync } from "node:sqlite";
 import {
   ActionName,
@@ -33,15 +27,14 @@ import {
   type Token,
 } from "../store.ts";
 
-/** The database's file in the state dir. */
 export const databaseFile = "host.db";
 
 /** `PRAGMA application_id`, "cbxh": tells our database from any other SQLite file. */
 export const applicationId = 0x63_62_78_68;
 
 /**
- * The schema, one entry per version: entry `i` takes `user_version` from `i` to `i + 1`.
- * Append only; a released entry never changes.
+ * Entry `i` takes `user_version` from `i` to `i + 1`. Append only; a released entry never
+ * changes.
  */
 export const migrations: ReadonlyArray<string> = [
   `CREATE TABLE machines (
@@ -88,7 +81,6 @@ export const migrations: ReadonlyArray<string> = [
   ) STRICT`,
 ];
 
-/** The columns every row keeps its last action in. */
 const ActionColumns = Schema.Struct({
   action_name: ActionName,
   action_status: ActionStatus,
@@ -96,7 +88,6 @@ const ActionColumns = Schema.Struct({
   action_error_message: Schema.NullOr(Schema.String),
 });
 
-/** The columns both tables have. */
 const columns = {
   name: Schema.String,
   instance: Schema.String,
@@ -172,7 +163,6 @@ const fromCheckpointRow = (row: typeof CheckpointRow.Type): CheckpointRecord => 
   port: row.port ?? undefined,
 });
 
-/** The named parameters of the columns both tables have, for a new row held by `action`. */
 const columnParameters = (record: Omit<Resource, "action">, action: ActionName) => ({
   name: record.name,
   instance: record.instance,
@@ -186,13 +176,12 @@ const columnParameters = (record: Omit<Resource, "action">, action: ActionName) 
   action_name: action,
 });
 
-/** Reads a row of each table by name, inside a transaction. */
 type Finders = { readonly [K in Kind]: (name: string) => Records[K] | undefined };
 
-/** node:sqlite's errors carry SQLite's result code. */
 const isSqliteError = (cause: unknown): cause is Error & { readonly errcode: number } =>
   cause instanceof Error && "errcode" in cause && typeof cause.errcode === "number";
 
+/** SQLITE_BUSY (sqlite3.h): the database file is locked. */
 const sqliteBusy = 5;
 
 /** SQLITE_CONSTRAINT_PRIMARYKEY: node:sqlite reports SQLite's extended result codes. */
@@ -201,7 +190,6 @@ const sqlitePrimaryKey = 1555;
 const describe = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
 
-/** Runs SQL; SQLite's own failures, such as a full disk, are the host's. */
 const sql = <A>(what: string, run: () => A): Effect.Effect<A, Internal> =>
   Effect.try({
     try: run,
@@ -209,10 +197,8 @@ const sql = <A>(what: string, run: () => A): Effect.Effect<A, Internal> =>
   });
 
 /**
- * Runs `body` in one transaction. Its success commits; its typed failure, or a throw, rolls
- * back. The failure comes out as the effect's own, and SQLite's as `Internal`. Some of SQLite's
- * errors, such as a full disk, roll the transaction back themselves, so a throw rolls back only
- * a transaction still open, and the error is SQLite's.
+ * Some of SQLite's errors, such as a full disk, roll the transaction back themselves, so a throw
+ * rolls back only a transaction still open, and the error is SQLite's.
  */
 export const transaction = <A, E>(
   db: DatabaseSync,
@@ -247,10 +233,9 @@ const pragma = (db: DatabaseSync, name: string): number => {
 };
 
 /**
- * Takes the owner lock for the connection's life. With `locking_mode = EXCLUSIVE`, SQLite keeps
- * its exclusive file lock after the first write transaction, so another host process on the
- * same state dir can't even read the database. The OS drops the lock when the process ends,
- * so a crash leaves no stale lock to clean up.
+ * With `locking_mode = EXCLUSIVE`, SQLite keeps its exclusive file lock after the first write
+ * transaction, so another host process can't even read the database. The OS drops the lock when
+ * the process ends, so a crash leaves no stale lock.
  */
 const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, Precondition | Internal> =>
   Effect.try({
@@ -266,8 +251,8 @@ const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, Precondit
   });
 
 /**
- * Brings the schema to the binary's version in one transaction. A fresh database, including
- * one left empty by a crash during init, is initialized; a newer or foreign one is refused.
+ * A database left empty by a crash during init is initialized; a newer or foreign one is
+ * refused.
  */
 const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, Precondition | Internal> =>
   Effect.gen(function* () {
@@ -310,10 +295,9 @@ const decodeOwner = Schema.decodeUnknownSync(
 );
 
 /**
- * Records the host ID and runtime the database is created for, or refuses a config that names
- * others. Tart names its VMs and launchd jobs after the host ID, and each runtime knows only its
- * own machines, so under another ID or runtime the rows' machines would read `missing`, and
- * deleting the rows would orphan what the runtime made for them.
+ * Tart names its VMs and launchd jobs after the host ID, and each runtime knows only its own
+ * machines, so under another ID or runtime the rows' machines would read `missing`, and deleting
+ * the rows would orphan what the runtime made for them.
  */
 const own = (
   db: DatabaseSync,
@@ -340,14 +324,11 @@ const own = (
         );
   });
 
-/** Whose state the database holds: the host config's ID and runtime, in its state dir. */
 export type Owner = Pick<HostSettings, "id" | "runtime" | "stateDir">;
 
 /**
- * Opens the state dir's database for the scope: creates the directory if needed, takes the
- * owner lock, migrates, and records or checks the host ID and runtime. Other files in the
- * directory, such as a mount point's `lost+found`, are left alone: `application_id` refuses a
- * foreign database, and the lock a second host.
+ * Other files in the directory, such as a mount point's `lost+found`, are left alone:
+ * `application_id` refuses a foreign database, and the lock a second host.
  */
 export const open = (
   owner: Owner,
@@ -406,7 +387,6 @@ export const open = (
       "UPDATE machines SET native = $native WHERE name = $name AND instance = $instance",
     );
 
-    /** The statements that record a row's action and remove the row, per table. */
     const statementsOf = (table: "machines" | "checkpoints") => ({
       record: db.prepare(
         `UPDATE ${table} SET action_name = $action_name, action_status = $action_status,
@@ -448,10 +428,6 @@ export const open = (
       });
     };
 
-    /**
-     * Holds a row inside a transaction, unless it is missing or another action holds it, and
-     * returns its record as the hold leaves it.
-     */
     const holdSync = <K extends Kind>(
       action: ActionName,
       row: RowRef<K>,
@@ -487,10 +463,7 @@ export const open = (
       });
     };
 
-    /**
-     * Inserts a row inside a transaction. The primary key refuses a taken name, which is
-     * `Conflict{exists}`; the port's unique index is only a backstop, so its refusal is SQLite's.
-     */
+    /** The port's unique index is only a backstop, so its refusal is SQLite's. */
     const insertSync = (action: ActionName, row: NewRow): Result.Result<RowRef, Conflict> => {
       const columns = columnParameters(row.record, action);
 
@@ -526,7 +499,6 @@ export const open = (
       return Result.succeed({ kind: row.kind, name: row.record.name });
     };
 
-    /** The rows a token names, for errors. */
     const named = (token: Token) =>
       [...token.inserted, ...token.held].map((row) => id(row.name)).join(", ");
 
@@ -644,7 +616,6 @@ export const open = (
     return store;
   });
 
-/** The Store over the state dir's database, open for the layer's life. */
 export const layer = (
   owner: Owner,
 ): Layer.Layer<Store, Precondition | Internal, FileSystem.FileSystem> =>

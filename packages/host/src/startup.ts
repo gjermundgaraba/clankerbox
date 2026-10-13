@@ -1,7 +1,3 @@
-/**
- * The host's one startup step, before the actions are built: every action the last host process
- * left running is marked failed, then the runtime runs its own startup over the host's machines.
- */
 import { Effect, Layer } from "effect";
 import { machineRef } from "./claims.ts";
 import type { HostSettings } from "./settings.ts";

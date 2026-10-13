@@ -1,7 +1,3 @@
-/**
- * The smolvm runtime over a scripted process spawner: the calls it makes, their environment,
- * and how it reads smolvm's answers. No VM runs here.
- */
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -27,7 +23,6 @@ import {
 import { mkdir, readDirectory, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { type Call, type Reply, scripted as scriptedSpawner } from "../scripted.ts";
 
-/** A refusal's error, or the failure that wasn't one. */
 const refused = (error: Refusal | HostError) =>
   error instanceof Refusal
     ? [error.error._tag, error.error.message]
@@ -35,7 +30,7 @@ const refused = (error: Refusal | HostError) =>
 
 const encoder = new TextEncoder();
 
-/** A scripted spawner whose `--version` answers the tested version unless `reply` says otherwise. */
+/** `--version` answers the tested version unless `reply` says otherwise. */
 const scripted = (reply: (call: Call) => Reply | undefined) =>
   scriptedSpawner(
     (call) =>
@@ -44,8 +39,8 @@ const scripted = (reply: (call: Call) => Reply | undefined) =>
   );
 
 /**
- * A prefix with its templates expanded, and a state dir short enough for smolvm's sockets: under
- * `/tmp`, as the system's temporary directory can be too deep on macOS.
+ * The state dir is under `/tmp`: macOS's temporary directory can be too deep for smolvm's
+ * sockets.
  */
 const prepared = (expanded: ReadonlyArray<string> = templates) =>
   Effect.gen(function* () {
@@ -90,7 +85,7 @@ const machine: MachineRef = {
   port: 10_000,
 };
 
-/** The arguments of each smolvm call after the startup version check. */
+/** Skips the startup version check. */
 const smolvmArgs = (calls: ReadonlyArray<Call>) =>
   calls
     .slice(1)
@@ -301,7 +296,6 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
-  /** Runs `effect` on the test clock, a second at a time until it ends, and how long it took. */
   const timed = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(effect);
@@ -843,7 +837,6 @@ layer(NodeServices.layer)((it) => {
     stderr: "Error: config operation failed: machine status: machine 'copy-abcdefab' not found\n",
   };
 
-  /** A machine made from a checkpoint, on its own port. */
   const copy: MachineRef = {
     ...machine,
     id: "linux_copy",

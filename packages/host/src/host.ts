@@ -1,4 +1,3 @@
-/** The host role: one runtime, its machines' state, and the API on the host's own address. */
 import { type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, type FileSystem, Layer, type Path } from "effect";
 import {
@@ -18,7 +17,6 @@ import type { HostSettings } from "./settings.ts";
 import { startup } from "./startup.ts";
 import * as Store from "./store.ts";
 
-/** What the API needs of its HTTP server, all of which `NodeHttpServer.layer` provides. */
 export type ServerLayer = Layer.Layer<
   | HttpServer.HttpServer
   | HttpPlatform.HttpPlatform
@@ -28,11 +26,6 @@ export type ServerLayer = Layer.Layer<
   HttpServerError.ServeError
 >;
 
-/**
- * The host's services over the runtime `runtime` builds: the state dir's database with its owner
- * lock, the runtime, startup recovery, then the actions. `runtime` gets the store's
- * `recordNative`, for a runtime that assigns its own IDs, and nothing else of it.
- */
 export const servicesLayer = <E, R>(
   config: HostSettings,
   runtime: (recordNative: RecordNative) => Layer.Layer<Runtime, E, R>,
@@ -55,11 +48,7 @@ export const servicesLayer = <E, R>(
     ),
   );
 
-/**
- * The whole host: its services, served by `server`, which listens on `config.listen`. The server
- * binds only after recovery. It provides the server, the store and the actions, for a caller
- * that reads them, such as a test.
- */
+/** The server binds only after startup recovery. */
 export const hostLayer = <E, R>(
   config: HostSettings,
   runtime: (recordNative: RecordNative) => Layer.Layer<Runtime, E, R>,

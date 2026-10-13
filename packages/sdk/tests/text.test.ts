@@ -61,7 +61,6 @@ it.effect("a file failure says why, without the platform call that met it", () =
     expect(yield* failed(join(tmpdir(), "clankerbox-no-such-file"))).toBe(
       "no such file or directory",
     );
-    // Node describes a failure only in its cause, which is what a failure with no wording reads as.
     expect(yield* failed(tmpdir())).toContain("EISDIR: illegal operation on a directory");
   }).pipe(Effect.provide(NodeServices.layer)),
 );

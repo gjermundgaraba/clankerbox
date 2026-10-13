@@ -1,7 +1,3 @@
-/**
- * What a create and a prebuild are of: a profile, and the flags that override its fields, decoded
- * into the spec and host a create asks for.
- */
 import { loadProfile, specRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option, Path } from "effect";
 import { Command, Flag } from "effect/cli";
@@ -10,7 +6,6 @@ import type { LoadedConfig } from "../config.ts";
 import { profileFile } from "../profiles.ts";
 import { parseGib, parseMib, parseSeconds } from "../units.ts";
 
-/** What a create and a prebuild are of: a profile, and the flags that override its fields. */
 export const specArguments = {
   host: Flag.String("host").pipe(
     Flag.withDescription(
@@ -53,7 +48,6 @@ export const specArguments = {
 
 export type SpecFlags = Command.Command.Config.Infer<typeof specArguments>;
 
-/** The flag that sets each of a spec's fields, which is how a refusal names the field. */
 const specFlags = new Map<PropertyKey, string>([
   ["base", "--base"],
   ["cpu", "--cpu"],
@@ -62,10 +56,6 @@ const specFlags = new Map<PropertyKey, string>([
   ["setupTimeoutSeconds", "--setup-timeout"],
 ]);
 
-/**
- * The spec and host a create or a prebuild asks for: the profile's, with each flag given
- * overriding its field. `--setup` is resolved against the cwd.
- */
 export const flagsRequest = (command: string, flags: SpecFlags, config: LoadedConfig) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;

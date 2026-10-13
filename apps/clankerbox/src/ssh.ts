@@ -1,7 +1,3 @@
-/**
- * `clankerbox ssh [USER@]MACHINE [-- ssh args…]`: looks up the machine's SSH login and host key,
- * and runs the system `ssh` pinned to that key, through the SDK's `pinnedSsh`.
- */
 import {
   type Machine,
   pinnedSsh,
@@ -15,14 +11,12 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { clientFlags, Exited, fail, SpawnFailed, withClient } from "./command.ts";
 import { stateLabel } from "./machines/view.ts";
 
-/** `[USER@]ID`, as ssh writes a destination: the ID, and the user when one is named. */
 const destination = (machine: string): { readonly id: string; readonly user?: string } => {
   const at = machine.lastIndexOf("@");
 
   return at < 1 ? { id: machine } : { id: machine.slice(at + 1), user: machine.slice(0, at) };
 };
 
-/** ssh needs an endpoint and a host key: a machine lacking one is refused, saying which. */
 const targetOf = (machine: Machine): Effect.Effect<SshTarget, Precondition> => {
   const target = sshTarget(machine);
 
@@ -35,7 +29,6 @@ const targetOf = (machine: Machine): Effect.Effect<SshTarget, Precondition> => {
     : Effect.succeed(target);
 };
 
-/** Runs ssh with the caller's terminal and returns its exit code. */
 const runSsh = (target: SshTarget, user: string, extra: ReadonlyArray<string>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;

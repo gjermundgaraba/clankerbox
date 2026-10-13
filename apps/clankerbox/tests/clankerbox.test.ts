@@ -7,7 +7,6 @@ import { expect } from "vite-plus/test";
 import { actionCommands, clankerbox } from "../src/clankerbox.ts";
 import { cli } from "./support.ts";
 
-/** Every command under `command`, at any depth. */
 const commandsUnder = (command: Command.Command.Any): ReadonlyArray<Command.Command.Any> =>
   command.subcommands.flatMap(({ commands }) =>
     commands.flatMap((sub) => [sub, ...commandsUnder(sub)]),

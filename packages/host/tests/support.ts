@@ -1,4 +1,3 @@
-/** A host in process: the host layer `clankerbox host` runs, over the fake runtime. */
 import { createServer } from "node:http";
 import { join } from "node:path";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
@@ -17,13 +16,9 @@ import { type FakeOptions, type FakeRuntime, fakeRuntime } from "./fake-runtime.
 export const image =
   "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
 
-/**
- * The machines' ports of a test host whose file names none. A file that asserts ports passes a
- * range of its own, so files running at once never probe each other's ports.
- */
+/** A file that asserts ports passes its own range, so files running at once never share one. */
 const sharedPorts: PortRange = { first: 21_000, last: 21_099 };
 
-/** Host `linux` on the smolvm runtime, which the fake runtime stands in for. */
 export const hostConfig = (stateDir: string, machinePorts = sharedPorts): HostSettings => ({
   id: "linux",
   runtime: "smolvm",
@@ -33,7 +28,6 @@ export const hostConfig = (stateDir: string, machinePorts = sharedPorts): HostSe
   machinePorts,
 });
 
-/** A create request for the machine named `name` on host `linux`. */
 export const request = (name: string, fields?: Partial<CreateRequest>): CreateRequest => ({
   id: `linux_${name}`,
   base: "ubuntu",
@@ -43,16 +37,13 @@ export const request = (name: string, fields?: Partial<CreateRequest>): CreateRe
   ...fields,
 });
 
-/** An HTTP server on a port of loopback the OS picks, unless `port` names one. */
 export const loopbackServer = (port = 0) =>
   NodeHttpServer.layer(createServer, { host: "127.0.0.1", port });
 
 export interface TestHost {
-  /** The scratch directory the host's state dir and the fake's guest roots are in. */
   readonly dir: string;
   readonly fake: FakeRuntime;
   readonly stateDir: string;
-  /** Where the host's API answers, on loopback. */
   readonly url: string;
   readonly run: <A, E>(
     effect: Effect.Effect<A, E, Machines.Machines | Checkpoints.Checkpoints | Store.Store>,
@@ -60,18 +51,10 @@ export interface TestHost {
   readonly machines: Machines.Interface;
   readonly checkpoints: Checkpoints.Interface;
   readonly store: Store.Interface;
-  /**
-   * Ends the host before its test does: its fibers are interrupted and the state dir's lock
-   * released. The test's end does it otherwise.
-   */
+  /** Ends the host early; the test's scope ends it otherwise. */
   readonly dispose: Effect.Effect<void>;
 }
 
-/**
- * Runs host `linux` as `clankerbox host` does, over `fake`, or a new fake in `dir`, with its
- * state dir in `dir`, served on a loopback port, giving machines `ports`, until the test ends.
- * Failed actions log no warnings here: the tests read their errors.
- */
 export const startHost = (
   dir: string,
   options?: {
@@ -89,6 +72,7 @@ export const startHost = (
 
     const context = yield* Layer.buildWithScope(
       hostLayer(hostConfig(stateDir, options?.ports), () => fake.layer, loopbackServer()).pipe(
+        // Failed actions log no warnings here: the tests read their errors.
         Layer.provideMerge(Logger.layer([])),
         Layer.provide(NodeServices.layer),
       ),

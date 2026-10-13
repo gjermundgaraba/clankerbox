@@ -1,4 +1,3 @@
-/** The whole host layer, as `clankerbox host` runs it, over the fake runtime. */
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Client } from "@gjermundgaraba/clankerbox-sdk";
@@ -19,11 +18,9 @@ const config = (dir: string, fields?: Partial<HostSettings>): HostSettings => ({
   ...fields,
 });
 
-/** The host on `host`, over `fake`, served on `host.listen.port` of loopback. */
 const hostOn = (host: HostSettings, fake: FakeRuntime) =>
   hostLayer(host, () => fake.layer, loopbackServer(host.listen.port));
 
-/** Runs `use` with the URL the host on `host` answers on, then stops the host. */
 const whileServing = <A, E>(
   host: HostSettings,
   dir: string,
@@ -37,7 +34,6 @@ const whileServing = <A, E>(
     Effect.provide(NodeServices.layer),
   );
 
-/** The failure of the host on `host`, over `fake`, to start. */
 const refused = (host: HostSettings, fake: FakeRuntime) =>
   Effect.flip(Layer.build(hostOn(host, fake))).pipe(
     Effect.scoped,

@@ -1,8 +1,6 @@
-/** A process spawner for unit tests that runs nothing: each process answers as a test scripts it. */
 import { Effect, Layer, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-/** One process the runtime started. */
 export interface Call {
   readonly file: string;
   readonly args: ReadonlyArray<string>;
@@ -10,10 +8,8 @@ export interface Call {
   readonly stdin: string | undefined;
 }
 
-/** What a scripted process prints and how it exits. */
 export interface Reply {
   readonly exitCode?: number;
-  /** Whether the process never exits. */
   readonly hangs?: boolean;
   readonly stdout?: string;
   readonly stderr?: string;
@@ -21,10 +17,6 @@ export interface Reply {
 
 const encoder = new TextEncoder();
 
-/**
- * A spawner that runs nothing: each process answers with `reply(call)`, and exits 0 with no
- * output when that is `undefined`. A process's stdin is read whole before it answers.
- */
 export const scripted = (reply: (call: Call) => Reply | undefined) => {
   const calls: Array<Call> = [];
 

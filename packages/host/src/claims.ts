@@ -1,16 +1,3 @@
-/**
- * What every action shares. Every mutation runs in this order:
- *
- * 1. Validate the input.
- * 2. Claim the rows, inserting the new row.
- * 3. Check runtime state, including the runtime's own `admit`.
- * 4. Only then call the runtime.
- *
- * A failure in steps 1–3, or a runtime `Refusal`, releases the claims and writes nothing; any
- * later failure leaves the claimed rows' action `failed` with the error the call replies with.
- * Each mutation runs in a fiber of the host's own, so a dropped connection never interrupts it
- * and its outcome is recorded either way.
- */
 import {
   type HostError,
   Internal,
@@ -31,7 +18,6 @@ import type {
   Token,
 } from "./store.ts";
 
-/** The rows of host `host`'s store by name; a missing one is NotFound. */
 export const rowsOn = (store: StoreInterface, host: string) => {
   const notFound = notFoundOn(host);
 
@@ -61,11 +47,6 @@ export const machineRef = (host: string, record: NewMachine): MachineRef => ({
   port: record.port,
 });
 
-/**
- * Step 3's check that a machine was made: one whose create, fork or restore failed can only be
- * read, stopped or deleted, so start, fork and capture refuse it, a half-made VM never boots, and
- * delete cleans it up.
- */
 export const madeOn =
   (host: string) =>
   (record: MachineRecord): Effect.Effect<void, Precondition> =>
@@ -89,9 +70,7 @@ export const checkpointRef = (
   port: record.port,
 });
 
-/** How the actions claim, check, call the runtime and end, over the store `store`. */
 export const claimsOn = (store: StoreInterface) => {
-  /** A release that fails leaves its rows held until the next host start marks them failed. */
   const release = (token: Token) =>
     store
       .release(token)
@@ -101,10 +80,7 @@ export const claimsOn = (store: StoreInterface) => {
         ),
       );
 
-  /**
-   * Ends the action failed with `error`. An end that fails is logged, so the action's error
-   * stays the reply, and leaves its rows running until the next host start marks them failed.
-   */
+  /** Logged, not failed, so the action's own error stays the reply. */
   const endFailed = (token: Token, error: HostError) =>
     store
       .end(token, {
@@ -120,12 +96,6 @@ export const claimsOn = (store: StoreInterface) => {
         ),
       );
 
-  /**
-   * Steps 2 and 3: runs `claim`, then `check` with the record of the row it claimed. The
-   * check can insert a row through `join`, which joins the claim, so one token covers them all.
-   * A check that fails, or is interrupted, releases every row claimed so far, so nothing is
-   * written.
-   */
   const claimAndCheck = <H, B, R>(
     claim: Effect.Effect<Claim<H>, HostError>,
     check: (
@@ -156,10 +126,8 @@ export const claimsOn = (store: StoreInterface) => {
     );
 
   /**
-   * Step 4 on; `what` names the action in a defect's error. A runtime `Refusal` releases the
-   * claim like a failed check; any other failure ends the action failed with the error the call
-   * replies with. A defect is logged with its cause, then recorded as `Internal`, so the rows
-   * stay deletable; the reply carries only its message.
+   * A runtime `Refusal` releases the claim like a failed check. A defect is recorded as
+   * `Internal`, so its rows stay deletable; only the log carries its cause.
    */
   const native = <A>(
     token: Token,
@@ -180,7 +148,6 @@ export const claimsOn = (store: StoreInterface) => {
       ),
     );
 
-  /** Ends the action done on every row it holds, with what else it recorded. */
   const done = (token: Token, recorded?: Omit<Outcome, "action">) =>
     store.end(token, { ...recorded, action: { name: token.action, status: "done" } });
 
@@ -188,8 +155,8 @@ export const claimsOn = (store: StoreInterface) => {
 };
 
 /**
- * Runs mutations in fibers of the host's own scope, which only the host's end interrupts; the
- * caller only waits for each.
+ * Runs mutations in the host's own scope, so a dropped connection never interrupts one and its
+ * outcome is recorded either way.
  */
 export const detacher = Effect.map(
   Effect.scope,

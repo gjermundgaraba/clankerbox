@@ -28,7 +28,6 @@ const host = (options: Parameters<typeof stubHost>[0]) => {
 
 const url = (id: string) => `http://${id}.test`;
 
-/** `use` against a client whose host list is `endpoints`, in order. */
 const withClient = <A, E>(
   endpoints: ReadonlyArray<readonly [string, Endpoint]>,
   use: (client: Client.Interface) => Effect.Effect<A, E>,
@@ -548,7 +547,6 @@ const briefly = { timeout: Duration.millis(50) };
 
 const readBriefly = { readTimeout: Duration.millis(50) };
 
-/** `effect`, while the test clock moves on by `duration`. */
 const elapsing = <A, E>(duration: Duration.Input, effect: Effect.Effect<A, E>) =>
   Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(effect);

@@ -19,10 +19,7 @@ interface Spawned {
   readonly knownHostsFile: string;
 }
 
-/**
- * A spawner standing in for the system ssh: it records the command, reads the known-hosts
- * file while ssh would be running, and exits with `code`.
- */
+/** Reads the known-hosts file while ssh would run: `pinnedSsh`'s scope removes it after. */
 const fakeSsh = (code: number) => {
   const spawned: Array<Spawned> = [];
 

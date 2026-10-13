@@ -1,4 +1,3 @@
-/** The CLI against a real host, served on loopback over the fake runtime. */
 import { join } from "node:path";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -10,7 +9,6 @@ import { startHost } from "@clankerbox/host/testing";
 import { ErrorDocument, UnreachableDocument } from "../src/command.ts";
 import { cli } from "./support.ts";
 
-/** A loopback URL that refuses connections: a host's, once it has ended. */
 const refusedUrl = Effect.gen(function* () {
   const gone = yield* startHost(yield* scratch);
 
@@ -19,10 +17,6 @@ const refusedUrl = Effect.gen(function* () {
   return gone.url;
 });
 
-/**
- * A host `linux` and a client config that lists it, by its real loopback URL, then any hosts in
- * `down`, which refuse connections.
- */
 const setUp = (down: ReadonlyArray<string> = []) =>
   Effect.gen(function* () {
     const dir = yield* scratch;

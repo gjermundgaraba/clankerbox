@@ -1,8 +1,4 @@
-/**
- * The boat runtime over a fake boat: an `HttpClient` that keeps sandboxes and named snapshots in
- * memory and answers as boat's API v1 does (the bump-boat-api skill), and a scripted `ssh` that
- * stands for the guest. Nothing here reaches boat, and nothing runs ssh.
- */
+/** The fake boat answers as boat's API v1 does (the bump-boat-api skill). */
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -70,13 +66,11 @@ const publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostOwnKeyForTests clank
 
 const guestKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGuestHostKeyForTests";
 
-/** A refusal's error, or the failure that wasn't one. */
 const refused = (error: Refusal | HostError) =>
   error instanceof Refusal
     ? [error.error._tag, error.error.message]
     : ["not refused", error._tag, error.message];
 
-/** A request as the fake boat saw it. */
 interface Sent {
   readonly method: string;
   readonly path: string;
@@ -86,18 +80,15 @@ interface Sent {
 
 type Answer = { readonly status: number; readonly body: Schema.Json };
 
-/** What a test changes: any answer, a dropped connection, or a sandbox as boat makes it. */
 interface BoatHooks {
   answer?: (sent: Sent) => Answer | "drop" | undefined;
   made?: (sandbox: FakeSandbox) => void;
 }
 
-/** What a test changes: the guest's answer to a command line. */
 interface GuestHooks {
   answer?: (remote: string) => Reply | undefined;
 }
 
-/** The fields of a request body the fake reads. */
 const decodeBody = Schema.decodeUnknownSync(
   Schema.Struct({
     name: Schema.optionalKey(Schema.String),
@@ -105,7 +96,7 @@ const decodeBody = Schema.decodeUnknownSync(
   }),
 );
 
-/** A sandbox as boat shows it, with a token in `desktopUrl` as boat's has. */
+/** `desktopUrl` carries a token, as boat's does. */
 type ShownSandbox = {
   readonly id: string;
   readonly name: string;
@@ -118,7 +109,6 @@ type ShownSandbox = {
   lastSnapshotStatus?: string;
 };
 
-/** A sandbox as the fake keeps it. */
 interface FakeSandbox {
   readonly id: string;
   state: string;
@@ -126,11 +116,9 @@ interface FakeSandbox {
   name?: string;
   ip: string | null;
   sshEndpoint: string | null;
-  /** The state a read after this one reports, as boat's transitions go on. */
   next?: string | undefined;
-  /** Whether boat attempts a snapshot every minute, by the clock, as for a running fork source. */
   snapshots?: boolean;
-  /** How far boat's clock, which stamps its snapshot attempts, runs behind the host's, in ms. */
+  /** How far boat's clock runs behind the host's, in ms. */
   behind?: number;
 }
 
@@ -353,7 +341,6 @@ const fakeBoat = (options?: { readonly instant?: boolean }) => {
     sent,
     hooks,
     layer: Layer.succeed(HttpClient.HttpClient, client),
-    /** The calls other than reads, as `METHOD path`. */
     calls: () =>
       sent.flatMap((request) =>
         request.method === "GET" || request.path.endsWith("/commands")
@@ -365,7 +352,7 @@ const fakeBoat = (options?: { readonly instant?: boolean }) => {
 
 type FakeBoat = ReturnType<typeof fakeBoat>;
 
-/** The command line an ssh call sends, and the known hosts it pins, read while it runs. */
+/** `pinned` is read while the call runs: the file is gone after it. */
 interface SshCall {
   readonly args: ReadonlyArray<string>;
   readonly remote: string;
@@ -373,7 +360,7 @@ interface SshCall {
   readonly pinned: string;
 }
 
-/** A scripted guest: every ssh call exits 0 unless `answer` says otherwise. */
+/** Every ssh call exits 0 unless `answer` says otherwise. */
 const fakeGuest = () => {
   const calls: Array<SshCall> = [];
   const hooks: GuestHooks = {};
@@ -417,7 +404,7 @@ const machineOn = (name: string, fields?: Partial<MachineRef>): MachineRef => ({
   ...fields,
 });
 
-/** A checkpoint whose snapshot is `cbx-boat-cafe000<n>`. */
+/** Its snapshot is `cbx-boat-cafe000<n>`. */
 const checkpointOn = (name: string, n = 1): CheckpointRef => ({
   id: `boat_${name}`,
   name,
@@ -441,7 +428,7 @@ const row = (machine: MachineRef): Store.NewMachine => ({
   hostKey: undefined,
 });
 
-/** A state dir whose host key is already there, so no `ssh-keygen` runs. */
+/** The host key is already there, so no `ssh-keygen` runs. */
 const stateDirIn = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -469,11 +456,9 @@ interface Rig {
   readonly store: Store.Interface;
   readonly runtime: Interface;
   readonly stateDir: string;
-  /** Inserts the machine's row, held by a create, as a create's claim does. */
   readonly insert: (machine: MachineRef) => Effect.Effect<void, HostError>;
 }
 
-/** The runtime over a fake boat and guest, with its store, living until the test ends. */
 const rigOn = (boat = fakeBoat()) =>
   Effect.gen(function* () {
     const stateDir = yield* stateDirIn(yield* scratch);
@@ -493,11 +478,9 @@ const rigOn = (boat = fakeBoat()) =>
   });
 
 /**
- * Runs `effect` under the test clock, moving it a second at a time until it ends; how long it
- * waited on the clock. Until `waiting` resolves, each step leaves a moment of real time for the
- * host's files and processes. From then on everything the test checks is settled, bar the clock,
- * and the steps follow one another, so a wait of minutes doesn't take minutes' worth of real
- * moments on a loaded machine.
+ * Until `waiting` resolves, each step of the test clock leaves a moment of real time for the
+ * host's files and processes. After it, steps follow one another, so a wait of minutes doesn't
+ * take minutes' worth of real moments on a loaded machine.
  */
 const timed = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>, waiting?: Promise<void>) =>
   Effect.gen(function* () {
@@ -2056,7 +2039,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           status: "saving",
         });
 
-        // A refusal: boat's 429 to a resume.
         rig.boat.hooks.answer = (sent) =>
           sent.path.endsWith("/resume") ? refusal(429, "limit_reached", echo) : undefined;
         errors.push(
@@ -2107,7 +2089,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ),
         );
 
-        // A snapshot boat fails.
         rig.boat.hooks.answer = (sent) =>
           sent.path.endsWith("/cbx-boat-cafe0001") && sent.method === "GET"
             ? {
@@ -2153,7 +2134,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
-  /** The host's machine and checkpoint actions over the boat runtime, a fake boat and guest. */
   const hostOn = (boat: FakeBoat) =>
     Effect.gen(function* () {
       const stateDir = yield* stateDirIn(yield* scratch);

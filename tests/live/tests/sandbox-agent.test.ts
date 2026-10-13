@@ -1,10 +1,6 @@
 /**
- * The Sandbox Agent provider, live on the host under test: a sandbox made from the package's own
- * recipe, driven through Rivet's SDK, with a real prompt to a real agent. It runs on smolvm and
- * Tart, and only when the driver names an agent environment file (`--agent-env-file`, which
- * becomes `CLANKERBOX_LIVE_AGENT_ENV`): `NAME=value` lines holding an LLM credential, such as
- * `ANTHROPIC_API_KEY=…`. The file is copied into the recipe, in the run's scratch; nothing prints
- * it, and the driver's teardown redacts its values from the evidence.
+ * `CLANKERBOX_LIVE_AGENT_ENV` holds an LLM credential. It is copied into the recipe, in the run's
+ * scratch; nothing prints it, and the driver's teardown redacts its values from the evidence.
  *
  * The prebuild test captures a checkpoint that holds that credential, and deletes it however it
  * ends. It checks the checkpoint's ID is free first, so it never touches one it didn't make, and
@@ -46,10 +42,7 @@ const agentEnv = process.env["CLANKERBOX_LIVE_AGENT_ENV"] ?? "";
 
 const ownedCheckpoints = process.env["CLANKERBOX_LIVE_OWNED_CHECKPOINTS"] ?? "";
 
-/**
- * What differs by guest: the recipe, the create's base and sizes, the user the recipe runs the
- * agent as, and that user's home, where sessions start. A Claude session takes about 470 MiB.
- */
+/** A Claude session takes about 470 MiB. */
 const guests = {
   smolvm: {
     recipe: "ubuntu",
@@ -83,7 +76,7 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
   const guest = guests[runtime];
   const prefix = "clankerbox/";
 
-  /** What the prompt has Claude write, new at every run, so no earlier run's file passes. */
+  /** New at every run, so no earlier run's file passes. */
   const word = `clankerbox-${randomBytes(4).toString("hex")}`;
   const file = `${guest.home}/prompted.txt`;
 
@@ -107,7 +100,6 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
       throw new Error(`ssh-keygen exited ${keygen.code}: ${keygen.stderr}`);
     }
 
-    // The package's recipe, with what it asks for beside it: the key and the agent's environment.
     const recipe = join(dir, "recipe");
 
     await cp(join(recipes, guest.recipe), recipe, { recursive: true });
@@ -150,7 +142,6 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
   const checkpointCli = (command: string, ...args: ReadonlyArray<string>) =>
     run(env.binary, ["checkpoint", command, "--config", env.config, ...args]);
 
-  /** Runs `command` in the sandbox, through the agent's own process API. */
   const inSandbox = async (agent: SandboxAgent, command: string, ...args: ReadonlyArray<string>) =>
     (await agent.runProcess({ command, args: [...args] })).stdout.trim();
 
@@ -358,7 +349,6 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
           removed = await cli("delete", builder, "--json");
         }
 
-        // It ran the recipe, credential and all.
         expect(removed.code, removed.stderr).toBe(0);
 
         const started = performance.now();

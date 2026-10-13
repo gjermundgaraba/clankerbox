@@ -61,7 +61,6 @@ DOMAIN = f'gui/{os.getuid()}'
 
 
 def seed_vm(seed):
-    """The seed's one VM, under home/vms, whatever its name."""
     vms = [entry for entry in (seed / 'home' / 'vms').iterdir() if entry.is_dir()]
     if len(vms) != 1:
         sys.exit(f'the seed at {seed} holds {len(vms)} VMs under home/vms, not one')
@@ -69,7 +68,6 @@ def seed_vm(seed):
 
 
 def provenance_sums(seed):
-    """The seed files' checksums as its PROVENANCE records them."""
     text = (seed / 'PROVENANCE').read_text()
     sums = dict(re.findall(r'^\s+(config\.json|disk\.img|nvram\.bin)\s+([0-9a-f]{64})\s*$', text, re.M))
     if sorted(sums) != sorted(SEED_FILES):
@@ -108,15 +106,11 @@ def labels(prefix):
 
 
 def native_pattern(host_id, name):
-    """A machine's or checkpoint's VM name, launchd label and job files, by its name on host
-    `host_id`."""
     return re.compile(rf'^cbx-{re.escape(host_id)}-[mc]-{re.escape(name)}-[0-9a-f]{{8}}(\.plist|\.log)?$')
 
 
-# The suite's host-control program's own ops on Tart (tests/live/tests/live.ts).
 
 def natives(state, args):
-    # The second host's, when its ID follows the name.
     name, host_id = args if len(args) == 2 else (*args, state['host_id'])
     if host_id not in (state['host_id'], f'{state["host_id"]}-b'):
         print(f'{host_id} is no host of the run', file=sys.stderr)
@@ -164,7 +158,6 @@ def addresses(state, args):
 
 
 def listener(state, args):
-    # A TCP port some process of the Mac listens on at every IPv4 address.
     out = subprocess.run(['lsof', '-nP', '-i4TCP', '-sTCP:LISTEN'], capture_output=True, text=True).stdout
     listening = sorted({(int(port), command) for command, port in
                         re.findall(r'^(\S+)\s.*\s\*:(\d+) \(LISTEN\)', out, re.M)})
@@ -178,8 +171,6 @@ def listener(state, args):
 
 
 def host_ports(state, args):
-    """The TCP ports the host under test listens on: its API's, and its forwarder's, one for each
-    of its machines, whatever the machine's state."""
     scratch = Path(state['scratch'])
     pid = read_int(scratch / 'host.pid')
     if pid is None or (scratch / 'host.exit').exists():
@@ -193,7 +184,6 @@ def host_ports(state, args):
 OPS = {'natives': natives, 'guest': guest, 'addresses': addresses, 'listener': listener, 'host-ports': host_ports}
 
 
-# Teardown, natively, by the run's own names.
 
 def keep_job_logs(state):
     """The jobs' logs hold tart run's and Softnet's output, the only record of a failed boot."""

@@ -1,11 +1,6 @@
-/**
- * Host ports for guest port 22. The core picks one when it inserts a machine's row, for a
- * runtime with a `publishAddress` (smolvm and Tart), from the host config's `machinePorts`.
- */
 import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect } from "effect";
 
-/** A range of ports, both ends included. */
 export interface PortRange {
   readonly first: number;
   readonly last: number;
@@ -24,10 +19,9 @@ export const reservedPorts: ReadonlyArray<PortRange & { readonly owner: string }
   { first: 49_152, last: 65_535, owner: "macOS's ephemeral ports" },
 ];
 
-/** The machines' ports unless the host config names others: below every reserved range. */
+/** Below every reserved range. */
 export const defaultMachinePorts: PortRange = { first: 10_000, last: 19_999 };
 
-/** Whether a port can be bound now: something else listening there makes it false. */
 export interface Probe {
   readonly free: (address: string, port: number) => Effect.Effect<boolean, Internal>;
 }
@@ -35,8 +29,8 @@ export interface Probe {
 export class PortProbe extends Context.Service<PortProbe, Probe>()("@clankerbox/host/PortProbe") {}
 
 /**
- * The lowest port in `range` that no machine row holds and that binds on `address`. Actions
- * that allocate a port pick and record it one at a time, so no other action takes it between.
+ * Actions that allocate a port pick and record it one at a time, so no other action takes it
+ * between.
  */
 export const pickPort = (
   probe: Probe,

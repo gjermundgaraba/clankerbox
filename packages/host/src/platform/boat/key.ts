@@ -1,8 +1,3 @@
-/**
- * The boat host's own SSH key: one ed25519 key in the state dir, generated the first time the
- * boat runtime starts there, once the store holds the dir's owner lock. `POST /sshkey` authorizes
- * it for `user` after a create, and forks, resumes and restores carry it.
- */
 import { join } from "node:path";
 import { Effect, FileSystem } from "effect";
 import { cliIn, expect, files } from "../process.ts";
@@ -11,18 +6,15 @@ import { cliIn, expect, files } from "../process.ts";
 const searchPath = "/usr/bin:/bin";
 
 export interface SshKey {
-  /** The private key, which `ssh -i` reads. */
   readonly file: string;
-  /** The OpenSSH public key, `ssh-ed25519 …`. */
   readonly publicKey: string;
 }
 
-/** The key's file in the state dir. */
 export const keyFile = (stateDir: string): string => join(stateDir, "boat-ssh", "id_ed25519");
 
 /**
- * The host's key, generated if the state dir has none. It is generated beside its place and
- * renamed there public half first, so the private key's presence means a whole key.
+ * Generated beside its place and renamed there public half first, so the private key's presence
+ * means a whole key.
  */
 export const sshKey = (stateDir: string) =>
   Effect.gen(function* () {

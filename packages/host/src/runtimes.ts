@@ -1,8 +1,3 @@
-/**
- * The runtime a host process runs, by its config's `runtime`. A new runtime is a module that
- * provides `Runtime`, and an entry here. `recordNative` is the core's, for a runtime that
- * assigns its own IDs.
- */
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { type FileSystem, type Layer, Match } from "effect";
 import type { HttpClient } from "effect/http";

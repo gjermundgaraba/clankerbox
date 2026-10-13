@@ -1,4 +1,3 @@
-/** The boat host's SSH key, generated in a scratch state dir with the real `ssh-keygen`. */
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect } from "effect";
 import { layer } from "@effect/vitest";

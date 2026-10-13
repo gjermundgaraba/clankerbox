@@ -1,23 +1,13 @@
-/**
- * The seven errors every clankerbox call can fail with. `retryable` is derived from the
- * tag, so callers never keep their own table of which failures to repeat.
- */
 import { Schema } from "effect";
 
-/**
- * Where a call through the client library met the error: the host, the contract's action, and
- * the ID it acted on or was making. A host sends none of them; the client sets them.
- */
+/** A host sends none of these; the client library sets them. */
 const located = {
   host: Schema.optionalKey(Schema.String),
   action: Schema.optionalKey(Schema.String),
   id: Schema.optionalKey(Schema.String),
 };
 
-/**
- * The request is malformed: a bad ID or name, an undeclared field, a value out of range, or a
- * host list a client can't route by.
- */
+/** The request is malformed, or the host list is one a client can't route by. */
 export class Invalid extends Schema.TaggedError<Invalid>()(
   "Invalid",
   { message: Schema.String, ...located },
@@ -77,9 +67,8 @@ export class Capacity extends Schema.TaggedError<Capacity>()(
 }
 
 /**
- * The client couldn't reach the host, or lost its reply. Only the client library produces
- * it. `readOnly` is that of the action that met it: a mutation's request may have reached
- * the host and run, so it is never retryable.
+ * No reply: only the client library makes it. A mutation's request may have reached the host
+ * and run, so it is retryable only when `readOnly`.
  */
 export class Unavailable extends Schema.TaggedError<Unavailable>()("Unavailable", {
   message: Schema.String,
@@ -102,13 +91,11 @@ export class Internal extends Schema.TaggedError<Internal>()(
 }
 
 /**
- * A file the client reads, such as a config, a profile or a setup, couldn't be read, or what it
- * holds isn't what it should be. No host saw anything, and no call fails with it: only what
- * reads the file does.
+ * A config, profile or setup file couldn't be read or doesn't hold what it should. No host saw
+ * it.
  */
 export class InvalidFile extends Schema.TaggedError<InvalidFile>()("InvalidFile", {
   message: Schema.String,
-  /** The file or directory, as the reader was given it. */
   file: Schema.String,
 }) {
   get retryable(): boolean {
@@ -116,22 +103,19 @@ export class InvalidFile extends Schema.TaggedError<InvalidFile>()("InvalidFile"
   }
 }
 
-/** What a host answers with; every action declares these. */
+/** Every action declares these. */
 export const hostErrors = [Invalid, NotFound, Conflict, Precondition, Capacity, Internal] as const;
 
 export type HostError = InstanceType<(typeof hostErrors)[number]>;
 
-/** What a call through the client library fails with. */
 export type ClankerboxError = HostError | Unavailable;
 
-/** The tag a host records on a failed action: always one of the errors it answers with. */
 export const HostErrorTag = Schema.Literals(
   hostErrors.map((error) => error.fields._tag.schema.literal),
 );
 
 export type HostErrorTag = typeof HostErrorTag.Type;
 
-/** The tag of any error a call through the client library can fail with. */
 export const ErrorTag = Schema.Literals([
   ...HostErrorTag.literals,
   Unavailable.fields._tag.schema.literal,

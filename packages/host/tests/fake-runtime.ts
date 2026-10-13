@@ -1,10 +1,7 @@
 /**
- * A fake runtime for unit tests. Its machines live in memory, and each has a guest root: a
- * temporary directory that its commands see as `/` through `CLANKERBOX_ROOT`. Commands run with
- * the host's own `/bin/sh`, so setup and preparation run for real, with `perl`, `ssh-keygen` and
- * `uname` stubbed. A checkpoint is a copy of its machine's root, and a fork or restore copies a
- * root into the new machine's, so the copy carries the source's identity files as a RAM copy
- * does. Tests can fail, refuse or hold any runtime call.
+ * Each machine's guest root is a directory its commands see as `/` through `CLANKERBOX_ROOT`, and
+ * commands run under the host's `/bin/sh`. A fork or restore copies the source's root, identity
+ * files included, as a RAM copy does.
  */
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
@@ -26,7 +23,6 @@ import {
   Runtime,
 } from "../src/runtime.ts";
 
-/** The runtime calls a test can fail, refuse or hold. */
 export type Operation =
   | "admit"
   | "capacity"
@@ -41,25 +37,15 @@ export type Operation =
   | "deleteCheckpoint";
 
 export interface FakeOptions {
-  /** Where machines' guest roots and the command stubs go. */
   readonly dir: string;
-  /** `undefined` gives machines no host port. Default: 127.0.0.1. */
+  /** Set to `undefined`, not left out, for machines with no host port. Default: 127.0.0.1. */
   readonly publishAddress?: string | undefined;
-  /** When set, `admit` checks the RAM budget like smolvm, and `capacity` reports it. */
   readonly ramBudgetMib?: number | undefined;
-  /** What `ram` checkpoints record. Default: `fake 1`. */
   readonly pin?: string | undefined;
-  /**
-   * The kind of every checkpoint. `ram`, the default, captures and forks only a running
-   * machine, as smolvm does; `disk` captures and forks one in any state, as boat does.
-   */
+  /** `ram`, the default, captures and forks only a running machine, as smolvm does. */
   readonly checkpointKind?: CheckpointKind | undefined;
 }
 
-/**
- * Stubs for the guest commands preparation calls. Each appends its call to `$root/calls`.
- * `ssh-keygen -A` writes an ed25519 key pair with a fresh public key.
- */
 export const writeStubs = (dir: string, uname = "Linux"): string => {
   const bin = join(dir, "bin");
 
@@ -95,7 +81,6 @@ interface FakeMachine {
   readonly root: string;
 }
 
-/** What a test injects into the next call of an operation. */
 type Injection =
   | { readonly kind: "fail"; readonly error: HostError }
   | {
@@ -104,7 +89,6 @@ type Injection =
       readonly until: Deferred.Deferred<void>;
     };
 
-/** The calls a runtime can refuse. */
 type Refusable = "create" | "start" | "capture" | "restore" | "fork";
 
 export const fakeRuntime = (options: FakeOptions) => {
@@ -114,7 +98,6 @@ export const fakeRuntime = (options: FakeOptions) => {
   const observed: Array<ReadonlyArray<string>> = [];
   const injections = new Map<Operation, Array<Injection>>();
   const refusals = new Map<Refusable, Array<Refusal>>();
-  /** What the next `observe` calls do instead of reading: fail as a whole, or never answer. */
   const observeFailures: Array<HostError | "hang"> = [];
   const publishAddress = "publishAddress" in options ? options.publishAddress : "127.0.0.1";
   let stubs: string | undefined;
@@ -123,7 +106,6 @@ export const fakeRuntime = (options: FakeOptions) => {
     injections.set(operation, [...(injections.get(operation) ?? []), injection]);
   };
 
-  /** Records the call, then applies what the test injected for it, if anything. */
   const enter = (operation: Operation, resource: { readonly id: string }) =>
     Effect.gen(function* () {
       calls.push(`${operation} ${resource.id}`);
@@ -143,7 +125,6 @@ export const fakeRuntime = (options: FakeOptions) => {
       return yield* Effect.fail(injection.error);
     });
 
-  /** Like `enter`, and then refuses if the test asked for a refusal. */
   const enterRefusable = (operation: Refusable, resource: { readonly id: string }) =>
     Effect.andThen(
       enter(operation, resource),
@@ -154,7 +135,6 @@ export const fakeRuntime = (options: FakeOptions) => {
       }),
     );
 
-  /** The machines' states, as smolvm reads them: one at a time, so none fails the others. */
   const states = (refs: ReadonlyArray<MachineRef>): Effect.Effect<ReadonlyArray<Observed>> =>
     Effect.sync(() => {
       observed.push(refs.map(({ id }) => id));
@@ -162,10 +142,6 @@ export const fakeRuntime = (options: FakeOptions) => {
       return refs.map((machine) => ({ state: machines.get(machine.name)?.state ?? "missing" }));
     });
 
-  /**
-   * `states`, or the read of every machine failing as a whole, or never answering, as Tart's
-   * `tart list` can.
-   */
   const observe = (refs: ReadonlyArray<MachineRef>) =>
     Effect.suspend(() => {
       const failure = observeFailures.shift();
@@ -177,7 +153,6 @@ export const fakeRuntime = (options: FakeOptions) => {
       return failure === "hang" ? Effect.never : Effect.fail(failure);
     });
 
-  /** The RAM budget and what `admit` counts toward it, or no limits for a fake without one. */
   const capacity = (held: ReadonlyArray<Held>) => {
     const limit = options.ramBudgetMib;
 
@@ -191,11 +166,9 @@ export const fakeRuntime = (options: FakeOptions) => {
     );
   };
 
-  /** Where a checkpoint's copy of its machine's root is kept. */
   const checkpointRoot = (checkpoint: CheckpointRef) =>
     join(options.dir, "checkpoints", checkpoint.instance);
 
-  /** Makes `machine` running, on a copy of the root at `from`. */
   const copyInto = (from: string, machine: MachineRef) =>
     Effect.tryPromise({
       try: async () => {
@@ -208,10 +181,6 @@ export const fakeRuntime = (options: FakeOptions) => {
       catch: (cause) => new Internal({ message: `copy into ${machine.id}: ${String(cause)}` }),
     });
 
-  /**
-   * A fork or capture of a machine the fake doesn't have, or on a `ram` runtime of one that
-   * isn't running, is refused, as smolvm refuses it.
-   */
   const copyable = (machine: MachineRef) => {
     const state = machines.get(machine.name)?.state ?? "missing";
 
@@ -228,7 +197,6 @@ export const fakeRuntime = (options: FakeOptions) => {
     );
   };
 
-  /** The machine's guest root, whichever its state. */
   const rootOf = (machine: MachineRef) => {
     const found = machines.get(machine.name);
 
@@ -285,8 +253,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               machines.set(machine.name, { state: "running", root });
             }),
           ),
-        // Like smolvm's: a start refuses a machine the fake doesn't have, and a stop does
-        // nothing to one.
+        // As smolvm: a start refuses a machine it doesn't have, and a stop ignores one.
         start: (machine) =>
           Effect.andThen(
             enterRefusable("start", machine),
@@ -387,35 +354,25 @@ export const fakeRuntime = (options: FakeOptions) => {
 
   return {
     layer,
-    /** Every runtime call, as `<operation> <machine ID>`, `capacity host` and `startup`. */
     calls,
-    /** What each `admit` was asked. */
     activations,
-    /** The machine IDs each `observe` read. */
     observed,
-    /** The guest root of the machine named `name`, while the fake holds it. */
     root: (name: string) => machines.get(name)?.root,
-    /** The fake's machines by name, with their state. */
     machines,
     stubs: () => stubs,
     failNext: (operation: Operation, error: HostError) => {
       inject(operation, { kind: "fail", error });
     },
-    /** Fails the next `observe` as a whole, without reading any machine. */
     failNextObserve: (error: HostError) => {
       observeFailures.push(error);
     },
-    /** Makes the next `observe` never answer, without reading any machine. */
     hangNextObserve: () => {
       observeFailures.push("hang");
     },
     refuseNext: (operation: Refusable, refusal: Refusal) => {
       refusals.set(operation, [...(refusals.get(operation) ?? []), refusal]);
     },
-    /**
-     * Holds the next call of `operation` until `release` runs. `entered` ends once that call has
-     * started, so the action holding it is past its claim.
-     */
+    /** `entered` ends once the held call has started, so its action is past its claim. */
     holdNext: (operation: Operation) => {
       const until = Deferred.makeUnsafe<void>();
       const entered = Deferred.makeUnsafe<void>();

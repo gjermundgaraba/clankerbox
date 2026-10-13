@@ -1,7 +1,3 @@
-/**
- * A stub host served in memory through the real effect-actions routes, and a transport that
- * sends each request to the stub named by its URL's origin.
- */
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { DateTime, Effect, Layer } from "effect";
@@ -25,21 +21,17 @@ export interface StubHostOptions {
   readonly id: string;
   readonly bases: ReadonlyArray<string>;
   readonly runtime?: Runtime;
-  /** The runtime's version the host reports. Default: 1.27.3. */
+  /** Default: 1.27.3. */
   readonly runtimeVersion?: string;
-  /** The state the host's runtime captures a machine in. Default: running. */
+  /** Default: running. */
   readonly captureFrom?: Host["captureFrom"];
-  /** Replaces the create handler, for example to refuse with `Capacity` or to run long. */
   readonly create?: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
-  /** Replaces the machine delete handler, for example to fail it. */
   readonly deleteMachine?: (id: string) => Effect.Effect<void, HostError>;
-  /** Runs before each create's default handler, for example to hold two creates at once. */
+  /** Runs before each create's default handler, such as to hold two creates at once. */
   readonly beforeCreate?: (request: CreateRequest) => Effect.Effect<void>;
-  /** Machines the host already holds. */
   readonly machines?: ReadonlyArray<Machine>;
-  /** Checkpoints the host already holds. */
   readonly checkpoints?: ReadonlyArray<Checkpoint>;
-  /** The limits the host reports, each under its own ID. Default: none. */
+  /** Default: none. */
   readonly capacity?: ReadonlyArray<Omit<Limit, "host">>;
 }
 
@@ -91,7 +83,6 @@ export const stubHost = (options: StubHostOptions) => {
       : Effect.succeed(found);
   };
 
-  /** The host takes a name once per resource type, as a real host's claim does. */
   const taken = (held: ReadonlyMap<string, unknown>, id: string) =>
     held.has(id)
       ? Effect.fail(new Conflict({ message: `${id} exists`, kind: "exists" }))
@@ -107,7 +98,6 @@ export const stubHost = (options: StubHostOptions) => {
       }),
     );
 
-  /** A machine or checkpoint with the label its source carries, if it carries one. */
   const labelled = <A extends Machine | Checkpoint>(made: A, profile: string | undefined): A =>
     profile === undefined ? made : { ...made, profile };
 
@@ -241,22 +231,16 @@ export const stubHost = (options: StubHostOptions) => {
 
   return {
     id: options.id,
-    /** Every create request the host received, in order. */
     creates,
-    /** Every action the host ran, labelled such as `machine.start`. */
+    /** Labelled such as `machine.start`. */
     calls,
-    /** The version header of every request the host received, in order. */
     versions,
-    /**
-     * Holds `machine`, replacing one of its ID: as a create that failed after its row was inserted
-     * leaves one, or as a start that moved its endpoint does.
-     */
+    /** Replaces the machine of its ID, as a failed create or a moved endpoint does. */
     hold: (held: Machine) => {
       machines.set(held.id, held);
     },
-    /** The IDs of the machines the host holds now. */
     held: () => [...machines.keys()],
-    /** The host's routes, to serve on a real HTTP server. */
+    /** To serve on a real HTTP server. */
     routes,
     handler: (request: Request) => {
       versions.push(request.headers.get(versionHeader));
@@ -269,15 +253,12 @@ export const stubHost = (options: StubHostOptions) => {
 
 export type StubHost = ReturnType<typeof stubHost>;
 
-/** A host that never answers; `aborted` counts the requests the client gave up on. */
+/** Never answers; `aborted` counts the requests the client gave up on. */
 export class Silent {
   aborted = 0;
 }
 
-/**
- * How a host behaves on the network: served, down, never answering, answering 100 ms late,
- * or losing every reply after running it.
- */
+/** `slow` answers 100 ms late, and `lost` loses every reply after running it. */
 export type Endpoint =
   | StubHost
   | "down"
@@ -288,7 +269,6 @@ export type Endpoint =
 const requestUrl = (input: string | URL | Request): URL =>
   new URL(input instanceof Request ? input.url : input);
 
-/** A request that never gets an answer, until the client gives up on it. */
 const unanswered = (silent: Silent, signal: AbortSignal | null | undefined) =>
   new Promise<Response>((_resolve, reject) => {
     signal?.addEventListener("abort", () => {
@@ -298,8 +278,8 @@ const unanswered = (silent: Silent, signal: AbortSignal | null | undefined) =>
   });
 
 /**
- * An HTTP client whose requests go to the stub named by their URL's origin, through the
- * stub's real router. A `down` origin, or one no stub serves, fails like a refused connection.
+ * Sends each request to the stub named by its URL's origin, through the real router. A `down`
+ * origin, or one no stub serves, fails like a refused connection.
  */
 export const transport = (
   endpoints: ReadonlyMap<string, Endpoint>,

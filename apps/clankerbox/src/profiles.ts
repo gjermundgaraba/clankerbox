@@ -1,4 +1,3 @@
-/** Profile files: where `--profile` finds them, and `clankerbox profiles`, which lists them. */
 import {
   describeFileError,
   formatGib,
@@ -15,10 +14,6 @@ import { clientFlags, fail, print, table } from "./command.ts";
 import { type LoadedConfig, loadConfig } from "./config.ts";
 import { formatSeconds } from "./units.ts";
 
-/**
- * The profile file `--profile` names: a path when it has a `/` or ends in `.json`, or else a
- * name looked up as `NAME.json` in the config's profiles directory.
- */
 export const profileFile = (
   config: LoadedConfig,
   profile: string,
@@ -39,10 +34,6 @@ export const profileFile = (
     return path.join(config.profiles, `${profile}.json`);
   });
 
-/**
- * The config's profiles directory and the profile files in it, `NAME.json` each, in name
- * order.
- */
 export const profileFiles = (
   config: LoadedConfig,
 ): Effect.Effect<
@@ -80,7 +71,6 @@ export const profileFiles = (
     return { directory, files };
   });
 
-/** Each profile's fields, with its setup path as `setupPath` shows it. */
 export const profileRows = (
   profiles: ReadonlyArray<LoadedProfile>,
   setupPath: (path: string) => string,
@@ -100,16 +90,11 @@ export const profileRows = (
 
 const encodeProfileFields = Schema.encodeSync(Profile);
 
-/** A loaded profile as JSON: its name, then its fields, with `setup.path` resolved. */
 export const encodeProfile = (profile: LoadedProfile) => ({
   name: profile.label,
   ...encodeProfileFields(profile),
 });
 
-/**
- * The profiles in the config's profiles directory, read on the client: no host is asked. A
- * profile file that doesn't decode fails the command, naming the file.
- */
 export const profiles = Command.make("profiles", clientFlags, (flags) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;

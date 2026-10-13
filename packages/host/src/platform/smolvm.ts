@@ -1,13 +1,7 @@
 /**
- * The smolvm runtime: Linux guests through the smolvm CLI of a versioned install prefix, on a
- * host that runs as root. smolvm's exit codes are trusted: `machine start` returns once the
- * agent answers, `stop` once the VM is dead, and nothing polls around them. Every call runs
- * with the same environment, `environment()`; the bump-smolvm skill holds the claims behind it.
- *
- * A checkpoint is always `ram`: a running machine's RAM and disks, as a store checkpoint in the
- * host's one store. A fork is such a checkpoint into a store of its own, restored, then the
- * store is removed whole. `machine branch` is never called: a source with a live branch reads
- * frozen, and smolvm refuses to stop or delete it while the branch runs.
+ * smolvm's exit codes are trusted: `machine start` returns once the agent answers, `stop` once
+ * the VM is dead, and nothing polls around them. `machine branch` is never called: a source with
+ * a live branch reads frozen, and smolvm refuses to stop or delete it while the branch runs.
  */
 import { totalmem } from "node:os";
 import { join } from "node:path";
@@ -33,20 +27,14 @@ import { cliIn, expect, failure, files, portOf } from "./process.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
-/** The smolvm runtime's settings. */
 export const SmolvmSettings = Schema.Struct({
-  /** The versioned install prefix, such as `/opt/smolvm/1.27.3`. */
   prefix: Schema.String,
-  /** Where machines' guest port 22 is published (`SMOLVM_PUBLISH_ADDR`). Default: `listen.address`. */
   publishAddress: Schema.optionalKey(Address),
-  /** The RAM the host's machines may use together. Default: physical RAM minus 2 GiB. */
   ramBudgetMib: Schema.optionalKey(Size),
 });
 
-/** The smolvm settings with their defaults applied. */
 export type Smolvm = Required<typeof SmolvmSettings.Type>;
 
-/** A smolvm host's config. */
 export interface SmolvmHost extends HostSettings {
   readonly runtime: "smolvm";
   readonly smolvm: Smolvm;
@@ -57,7 +45,6 @@ const mib = 1024 * 1024;
 /** Room for the OS and the host processes. */
 const reservedMib = 2048;
 
-/** The smolvm settings with their defaults: the host's listen address, and physical RAM less `reservedMib`. */
 export const resolveSettings = (
   settings: typeof SmolvmSettings.Type,
   listen: HostSettings["listen"],
@@ -78,21 +65,16 @@ export const resolveSettings = (
 };
 
 /**
- * The smolvm release this host was tested on. Another release is refused at startup: a bump
- * re-checks smolvm's claims (the bump-smolvm skill) before this changes.
+ * Another release is refused at startup: a bump re-checks smolvm's claims (the bump-smolvm
+ * skill).
  */
 export const testedVersion = "1.27.3";
 
-/** What the runtime needs: the host config's smolvm settings, and the host's state dir. */
 export interface Settings extends Smolvm {
   readonly stateDir: string;
 }
 
-/**
- * Where the runtime keeps its files, all in the host's state dir, so they are the host's alone:
- * the one inventory (`SMOLVM_DATA_DIR`), the one checkpoint store, and each fork's own store
- * while the fork runs.
- */
+/** All in the host's state dir, so they are the host's alone. */
 export const pathsIn = (stateDir: string) => ({
   dataDir: join(stateDir, "smolvm"),
   store: join(stateDir, "checkpoints"),
@@ -100,30 +82,24 @@ export const pathsIn = (stateDir: string) => ({
 });
 
 /**
- * The pin a `ram` checkpoint records: the smolvm release and the platform. smolvm checks sizes,
- * platform, CPU contract and network at restore, but not the engine build or the agent, so a
- * RAM state is restored only under the release that saved it.
+ * smolvm checks sizes, platform, CPU contract and network at restore, but not the engine build or
+ * the agent, so a RAM state is restored only under the release that saved it.
  */
 export const pin = `smolvm ${testedVersion} ${process.platform}-${process.arch}`;
 
-/**
- * A machine's or checkpoint's smolvm name: its name and the first 8 characters of its row's
- * instance.
- */
 export const nativeName = (resource: Pick<MachineRef, "name" | "instance">): string =>
   `${resource.name}-${resource.instance.slice(0, 8)}`;
 
 /**
- * How many `machine status` processes an `observe` runs at once, so a list or a RAM budget check
- * on a host with many machines doesn't start them all together. A machine's wait for its turn
- * counts toward its `machineReadWait`, so a list answers in time however many machines wait.
+ * So a list or a RAM budget check on a host with many machines doesn't start every `machine
+ * status` at once. A machine's wait for its turn counts toward its `machineReadWait`.
  */
 const observeConcurrency = 8;
 
-/** The systemd scope `SMOLVM_VM_USE_SCOPE=1` puts a VM in (S@1.27.3:src/systemd_scope.rs:151-164). */
+/** The scope `SMOLVM_VM_USE_SCOPE=1` puts a VM in (S@1.27.3:src/systemd_scope.rs:151-164). */
 const scopeName = (native: string): string => `smolvm-vm-${native}.scope`;
 
-/** The disk templates smolvm would otherwise expand into the prefix on first use, racing itself. */
+/** smolvm would otherwise expand them into the prefix on first use, racing itself. */
 export const templates = ["storage-template.ext4", "overlay-template.ext4"] as const;
 
 /**
@@ -258,7 +234,6 @@ export const make = (
       });
     }
 
-    /** A machine's state as smolvm records it, or `missing` for a name smolvm doesn't know. */
     const status = (native: string): Effect.Effect<RecordState | "missing", Internal> =>
       Effect.flatMap(
         smolvm(["machine", "status", "--name", native, "--json"], `machine status ${native}`),
@@ -281,16 +256,14 @@ export const make = (
         },
       );
 
-    /** A machine's state, or `missing` for a name smolvm doesn't know. */
     const state = (native: string): Effect.Effect<MachineState, Internal> =>
       Effect.map(status(native), (recorded) =>
         recorded === "missing" ? recorded : stateOf(recorded),
       );
 
     /**
-     * Each machine's state, read `observeConcurrency` at a time; `unknown` when smolvm can't
-     * read it, or doesn't answer within `machineReadWait` of the observe's start, so one hung
-     * status makes only its own machine `unknown`, within the core's `stateReadWait`.
+     * `unknown` when smolvm doesn't answer within `machineReadWait` of the observe's start, so
+     * one hung status makes only its own machine `unknown`.
      */
     const observe = (machines: ReadonlyArray<MachineRef>) =>
       Effect.flatMap(Semaphore.make(observeConcurrency), (turns) =>
@@ -328,8 +301,7 @@ export const make = (
 
     /**
      * A fork and a capture copy RAM, which only a running machine has, and read it through its
-     * agent, so an unreachable one is no source. Any other state is refused before anything
-     * native.
+     * agent, so an unreachable one is no source.
      */
     const copyable = (machine: MachineRef, stopped: string) =>
       Effect.flatMap(status(nativeName(machine)), (recorded) => {
@@ -351,13 +323,12 @@ export const make = (
         return Effect.fail(new Refusal({ error: new Precondition({ message }) }));
       });
 
-    /** A checkpoint's directory in the host's store. */
     const checkpointDir = (checkpoint: CheckpointRef) =>
       join(paths.store, `${nativeName(checkpoint)}.checkpoint`);
 
     /**
-     * Captures a running machine's RAM and disks into `store`, with no history: smolvm would
-     * otherwise keep 32 generations, and deleting an older checkpoint would free nothing.
+     * With no history: smolvm would otherwise keep 32 generations, and deleting an older
+     * checkpoint would free nothing.
      */
     const captureRam = (machine: MachineRef, store: string, output: string) => {
       const native = nativeName(machine);
@@ -380,14 +351,12 @@ export const make = (
     };
 
     /**
-     * Removes the machine's VM, coping with whatever an earlier failure left, the one delete path
-     * for every machine. It reads status first and touches nothing for a name smolvm doesn't
-     * know: a stop of an unknown name leaks an empty `vms/<hash>/`. A running VM is stopped
-     * gracefully. A scope still loaded then holds a VMM that `machine delete` would leave
-     * running, on the machine's port and outside the RAM budget: one whose stop failed, or one
-     * whose boot was cut short, as by a host killed mid-boot, before smolvm recorded its pid, so
-     * that smolvm reads it as stopped (seen live; the bump-smolvm skill). It is killed with the
-     * signal smolvm's own `kill_scope` uses, and reset once the machine is deleted.
+     * Touches nothing for a name smolvm doesn't know: a stop of an unknown name leaks an empty
+     * `vms/<hash>/`. A scope still loaded after the stop holds a VMM that `machine delete` would
+     * leave running, on the machine's port and outside the RAM budget: one whose stop failed, or
+     * whose boot was cut short before smolvm recorded its pid, so that smolvm reads it as stopped
+     * (seen live; the bump-smolvm skill). It is killed with the signal smolvm's own `kill_scope`
+     * uses.
      */
     const removeVm = (machine: MachineRef) =>
       Effect.gen(function* () {
@@ -431,13 +400,11 @@ export const make = (
       });
 
     /**
-     * Makes `machine` from a checkpoint, moves the source's port to its own, and boots it.
-     * smolvm refuses topology flags at a create from a live checkpoint and keeps its port, so
-     * the port is swapped before the first start. A VM made but not moved sits on the source's
-     * port, and `machine start` never moves it; whatever fails here leaves the machine unmade,
-     * which the core never starts again, so it never publishes there, and delete removes it.
-     * The restore cache is off: it survives every smolvm command, and a fork restores each
-     * checkpoint once.
+     * smolvm refuses topology flags at a create from a live checkpoint and keeps its port, so the
+     * port is swapped before the first start. A VM made but not moved sits on the source's port,
+     * and `machine start` never moves it; a failure here leaves the machine unmade, which the
+     * core never starts again. The restore cache is off: it survives every smolvm command, and a
+     * fork restores each checkpoint once.
      */
     const restoreRam = (from: string, sourcePort: number | undefined, machine: MachineRef) =>
       Effect.gen(function* () {
@@ -499,9 +466,8 @@ export const make = (
         checkRamBudget(settings.ramBudgetMib, activation, observe),
       ),
       /**
-       * The budget and what `admit` counts toward it. `admit` counts a machine it couldn't read
-       * as running, to stay on the safe side of the budget; a report that did would pass a
-       * guess off as a reading, so it fails instead.
+       * `admit` counts a machine it couldn't read as running, to stay on the safe side; a report
+       * that did would pass a guess off as a reading, so it fails instead.
        */
       capacity: Effect.fn("Smolvm.capacity")((machines) =>
         Effect.gen(function* () {
@@ -601,9 +567,8 @@ export const make = (
         }),
       ),
       /**
-       * Reads the status first, so a running machine is left as it is. An unreachable one, whose
-       * VM runs but whose agent doesn't answer, is booted again: `machine start` kills its VMM
-       * first (the bump-smolvm skill).
+       * An unreachable machine, whose VM runs but whose agent doesn't answer, is booted again:
+       * `machine start` kills its VMM first (the bump-smolvm skill).
        */
       start: Effect.fn("Smolvm.start")((machine) =>
         Effect.gen(function* () {
@@ -630,8 +595,8 @@ export const make = (
         }),
       ),
       /**
-       * Reads the state first, and stops only a running machine: a `machine stop` of a name smolvm
-       * doesn't know leaks an empty `vms/<hash>/`, as for delete.
+       * Stops only a running machine: a `machine stop` of a name smolvm doesn't know leaks an
+       * empty `vms/<hash>/`.
        */
       stop: Effect.fn("Smolvm.stop")((machine) =>
         Effect.gen(function* () {

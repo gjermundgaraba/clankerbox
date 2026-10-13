@@ -24,7 +24,6 @@ const row: NewMachine = {
   hostKey: undefined,
 };
 
-/** A create's claim of `row`, as `claimAndCheck` takes it. */
 const inserting = (store: Interface) =>
   Effect.map(store.insert("create", { kind: "machine", record: row }), (token) => ({
     token,
@@ -33,7 +32,6 @@ const inserting = (store: Interface) =>
 
 const diskFull = () => Effect.fail(new Internal({ message: "disk full" }));
 
-/** Runs `use` with the claims over a store whose `failing` write fails, and what it logged. */
 const withFailing = <A>(
   failing: "release" | "end",
   use: (claims: ReturnType<typeof claimsOn>, store: Interface) => Effect.Effect<A, HostError>,

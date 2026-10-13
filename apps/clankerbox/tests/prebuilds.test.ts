@@ -23,7 +23,7 @@ const host = hostIn(stubs);
 
 layer(NodeServices.layer)((it) => {
   it.effect(
-    "prebuild captures a profile's setup, and a create of the profile then restores it",
+    "prebuild captures a profile's setup, a create of the profile restores it, and other sizes or --fresh run the setup",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -86,7 +86,6 @@ layer(NodeServices.layer)((it) => {
         );
         expect(linux.creates).toHaveLength(1);
 
-        // Other sizes are another spec, and --fresh runs the setup whatever the host has.
         for (const flags of [["--ram", "8G"], ["--fresh"]]) {
           const before = linux.creates.length;
 

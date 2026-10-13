@@ -1,4 +1,3 @@
-/** What the host core reads of its config, whatever its runtime: paths resolved, defaults applied. */
 import type { Runtime } from "@gjermundgaraba/clankerbox-sdk";
 import type { PortRange } from "./machine-ports.ts";
 

@@ -1,21 +1,13 @@
-/**
- * The system `ssh`'s arguments for a machine, pinned to its host key: what `clankerbox ssh` runs,
- * and what anything else that reaches a guest through port 22 does, such as a port forward.
- */
 import { Effect, FileSystem, Path, type PlatformError, type Scope } from "effect";
 import type { Machine, SshLogin } from "./resources.ts";
 
-/** What ssh needs of a machine: where it is reached, as whom, and the host key to pin. */
 export interface SshTarget {
   readonly id: string;
   readonly login: SshLogin;
   readonly hostKey: string;
 }
 
-/**
- * The machine's SSH target, or what it lacks: an endpoint, which only a running machine has, or
- * a host key, which preparation records.
- */
+/** Only a running machine has an endpoint, and only a prepared one a host key. */
 export const sshTarget = (
   machine: Machine,
 ): SshTarget | { readonly lacks: "SSH endpoint" | "SSH host key on record" } => {
@@ -29,8 +21,8 @@ export const sshTarget = (
 };
 
 /**
- * The known-hosts line pinning the machine's host key under its ID: ssh looks the key up by
- * `HostKeyAlias`, so the line doesn't depend on the endpoint, which changes.
+ * ssh looks the key up by `HostKeyAlias`, so the line doesn't depend on the endpoint, which
+ * changes.
  */
 const knownHostsLine = (id: string, hostKey: string): string => {
   const [type = "", key = ""] = hostKey.trim().split(/\s+/u);
@@ -39,12 +31,10 @@ const knownHostsLine = (id: string, hostKey: string): string => {
 };
 
 /**
- * ssh's arguments. OpenSSH keeps the first user it is given, so the leading `-l` decides it:
- * one in the caller's arguments or in an ssh config doesn't apply. The destination is the
- * machine's ID, so a `Host <pattern>` block in the user's ssh config can set keys and options
- * per machine; the endpoint and the pinned host key come from command-line options, which no
- * config overrides. The caller's arguments go after the destination, where OpenSSH still reads
- * options (`-L …`) before a remote command.
+ * OpenSSH keeps the first user it is given, so the leading `-l` decides it. The destination is
+ * the machine's ID, so a `Host <pattern>` block in the user's ssh config can match it, while the
+ * endpoint and the pinned key come from options no config overrides. The caller's arguments go
+ * after the destination, where OpenSSH still reads options (`-L …`) before a remote command.
  */
 const sshArguments = (
   target: SshTarget,
@@ -71,10 +61,9 @@ const sshArguments = (
 ];
 
 /**
- * Writes a one-line known-hosts file pinning the target's host key, and returns the arguments
- * that run ssh against it with strict host key checking, as `user`. The file lasts as long as
- * the scope, which must outlast the ssh it is for. Ports change on fork and restore, and on
- * boat at every start, so a target is read anew for each ssh.
+ * ssh's arguments, pinned to the target's host key through a known-hosts file that lasts as long
+ * as the scope, which must outlast the ssh. Ports change on fork, restore, and every boat start,
+ * so read the target anew for each ssh.
  */
 export const pinnedSsh = (
   target: SshTarget,

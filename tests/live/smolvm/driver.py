@@ -152,8 +152,6 @@ def main():
         run.on_cleanup(remote_teardown)
 
         def upload(bundle):
-            """Uploads the bundle and its .sha256 into the remote run's scratch, where setup checks
-            and extracts it."""
             t0 = time.monotonic()
             subprocess.run(scp + [str(bundle), f'{bundle}.sha256', f'{options.ssh}:{rdir}/scratch/'], check=True,
                            timeout=1800)

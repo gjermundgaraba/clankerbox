@@ -1,4 +1,3 @@
-/** The machine commands: list, get, create, start, stop, delete, fork and restore. */
 import { actionsByName, Prebuild } from "@gjermundgaraba/clankerbox-sdk";
 import { Console, DateTime, Effect } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
@@ -54,10 +53,7 @@ const createArguments = {
   ),
 };
 
-/**
- * A create with a setup restores its prebuild when its host has one, and says so on stderr:
- * what a prebuild's setup installed is as old as the prebuild.
- */
+/** A restored prebuild is named on stderr: what its setup installed is as old as it is. */
 export const create = Command.make("create", { ...mutationFlags, ...createArguments }, (flags) =>
   printResource(flags, {
     call: (client, config) =>
@@ -86,7 +82,6 @@ export const create = Command.make("create", { ...mutationFlags, ...createArgume
   ),
 );
 
-/** What start and stop print without `--json`: the machine's ID and state. */
 const machineState = (machine: { readonly id: string; readonly state: string }) =>
   `${machine.id} ${machine.state}`;
 

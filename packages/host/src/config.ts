@@ -1,7 +1,3 @@
-/**
- * The host config: one JSON file, read from `clankerbox host --config PATH`. A host process
- * runs exactly one runtime, so the config names it, with that runtime's own settings.
- */
 import {
   describeFileError,
   describeIssues,
@@ -20,7 +16,6 @@ import type { HostSettings } from "./settings.ts";
 
 const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }));
 
-/** The machines' ports, both ends included, clear of every reserved range. */
 const MachinePorts = Schema.Struct({ first: Port, last: Port }).check(
   Schema.makeFilter(({ first, last }) => {
     if (first > last) {
@@ -36,22 +31,15 @@ const MachinePorts = Schema.Struct({ first: Port, last: Port }).check(
   }),
 );
 
-/** What every host config holds, whatever its runtime. */
 const common = {
   id: HostId,
   listen: Schema.Struct({ address: Address, port: Port }),
-  /** Relative to the config file. */
   stateDir: Schema.String,
-  /** Base name to image. Hosts that offer the same image use the same name. */
   bases: Schema.Record(Schema.String, Schema.String),
-  /** Where machines' host ports come from. Default: 10000–19999. */
   machinePorts: Schema.optionalKey(MachinePorts),
 };
 
-/**
- * Each runtime's section of the file, under the SDK's name for the runtime, so a runtime the SDK
- * names and the host config lacks fails to type-check.
- */
+// Keyed by the SDK's runtime names, so one the SDK names and the config lacks is a type error.
 const sections = {
   smolvm: Smolvm.SmolvmSettings,
   tart: Tart.TartSettings,
@@ -66,12 +54,10 @@ const HostConfigFile = Schema.Union([
 
 type HostConfigFile = typeof HostConfigFile.Type;
 
-/** The host config as the host uses it: paths resolved and defaults applied. */
 export type HostConfig = Smolvm.SmolvmHost | Tart.TartHost | BoatHost;
 
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(HostConfigFile));
 
-/** Applies defaults and resolves `stateDir` against the config file's directory. */
 const resolveConfig = (
   decoded: HostConfigFile,
   directory: string,
@@ -81,11 +67,9 @@ const resolveConfig = (
     const machinePorts = decoded.machinePorts ?? defaultMachinePorts;
     const { port } = decoded.listen;
 
-    // On every runtime: the tailnet is the API's only gate, so a policy that opens the machines'
-    // range to the clients that run `clankerbox ssh` would open an API port inside it to them
-    // too. That holds for a boat host, which publishes no machine ports: in production it shares
-    // the Linux host's tailnet address with the smolvm host, whose range such a policy opens.
-    // The API never takes a port a machine would be given, either.
+    // The tailnet is the API's only gate, so a policy that opens the machines' range to the
+    // clients would open an API port inside it too. That holds for boat, which publishes no
+    // machine ports: in production it shares the smolvm host's tailnet address and range.
     if (port >= machinePorts.first && port <= machinePorts.last) {
       return yield* new Invalid({
         message: `listen.port ${port}: must lie outside ${machinePorts.first}-${machinePorts.last}, the machines' range`,
@@ -119,7 +103,6 @@ const resolveConfig = (
     };
   });
 
-/** Reads and decodes the config file at `file`. Unknown keys are refused, as in every input. */
 export const loadConfig = (
   file: string,
 ): Effect.Effect<HostConfig, InvalidFile, FileSystem.FileSystem | Path.Path> =>

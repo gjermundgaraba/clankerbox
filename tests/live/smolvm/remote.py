@@ -69,7 +69,6 @@ HOST_ID = f'{RUNS_PREFIX}{RID}'
 # This run's machines carry its ID, so its teardown stops only its own scopes.
 NAME_PREFIX = f'{HOST_ID}-'
 SCOPE_PATTERN = f'smolvm-vm-{NAME_PREFIX}*'
-# The run's host unit, and any other unit carrying its ID.
 UNIT_PATTERN = f'{HOST_ID}*'
 LEDGER = OWNED / 'CLEANUP.md'
 SCRATCH = RUN / 'scratch'
@@ -78,7 +77,6 @@ STATE = RUN / 'state.json'
 STATE_DIR = SCRATCH / 's'
 DATA = STATE_DIR / 'smolvm'
 BINARY = SCRATCH / 'clankerbox'
-# What driver.py uploads into scratch, beside its .sha256: build.sh's linux-x64 bundle.
 BUNDLE_NAME = 'clankerbox-linux-x64.tar.gz'
 CONFIG = SCRATCH / 'host.json'
 ROOTLOG = EVIDENCE / 'root-runs.log'
@@ -144,7 +142,6 @@ def must(result, what):
     return so
 
 
-# ---------------------------------------------------------------- smolvm, in the host's environment
 
 def smol_env():
     """The host's own environment for smolvm (packages/host/src/platform/smolvm.ts `environment`)."""
@@ -197,7 +194,6 @@ def helper_units():
 
 
 def new_helper_units():
-    """Helper scopes that weren't there when the run started; none without that record."""
     before = load_state().get('helper_units_before')
     return [] if before is None else [u for u in helper_units() if u not in set(before)]
 
@@ -218,7 +214,6 @@ def vm_uid_processes():
 
 
 def run_processes():
-    """Processes whose command line names the run, other than this program and its ps."""
     so = must(run(['ps', '-eo', 'pid=,uid=,args=']), 'ps')
     return [line.strip()[:300] for line in so.splitlines()
             if str(RUN) in line and 'remote.py' not in line and 'ps -eo' not in line]
@@ -234,7 +229,6 @@ def tailnet_listeners():
     return sorted({line.split()[3] for line in so.splitlines() if address() in line})
 
 
-# ---------------------------------------------------------------- snapshot and ledger
 
 def mode_dirs():
     """Every ancestor of the run dir and of the agent rootfs: smolvm as root adds o+x to those of
@@ -285,7 +279,6 @@ def ledger_mark(key, status):
     note(f'ledger {key}: {status} ({n} line)')
 
 
-# ---------------------------------------------------------------- init and setup
 
 def cmd_init(tailnet, smolvm_prefix):
     RUN.mkdir(mode=0o700, exist_ok=True)
@@ -353,8 +346,6 @@ def answers(port):
 
 
 def install_bundle(name):
-    """Checks the bundle `name` in scratch against its .sha256, which must name it, extracts its
-    binary to BINARY and records the binary's checksum, which every host start checks."""
     if name != BUNDLE_NAME:
         raise RuntimeError(f'not a linux-x64 bundle: {name}')
     bundle = SCRATCH / name
@@ -450,10 +441,8 @@ def wait_unit_gone(timeout=60):
     raise RuntimeError(f'{UNIT} still active after {timeout}s')
 
 
-# ---------------------------------------------------------------- control ops
 
 def native_for(name):
-    """The one native machine whose name is <name>-<8 hex>."""
     pattern = re.compile(rf'{re.escape(name)}-[0-9a-f]{{8}}')
     hits = [m['name'] for m in machines() if pattern.fullmatch(str(m.get('name', '')))]
     if len(hits) != 1:
@@ -553,7 +542,6 @@ def control(op, rest):
 
 
 def machine_status(native):
-    """smolvm's own reading of the machine, `unreachable` included, and its VMM's pid."""
     found = json.loads(must(smol('machine', 'status', '--name', native, '--json', touched='read-only'),
                             'machine status'))
     return {'state': found['state'], 'pid': found.get('pid')}
@@ -584,7 +572,6 @@ def stall(native):
 
 
 def call_pattern(name, verb):
-    """The command line of the host's own `smolvm machine VERB` call for the machine NAME-<8 hex>."""
     if not re.fullmatch(r'[a-z0-9-]+', name):
         raise RuntimeError(f'unexpected machine name {name}')
     return f'machine {verb} --name {name}-[0-9a-f]{{8}}( |$)'
@@ -603,7 +590,6 @@ def host_calls(name, verb):
 
 
 def stopped(pid):
-    """Whether process PID is in the stopped state, not ended and not a zombie."""
     try:
         stat = Path(f'/proc/{pid}/stat').read_text()
     except OSError:
@@ -636,7 +622,6 @@ def hold_host_call(name, limit):
 
 
 def host_exit():
-    """How the host's last process ended, as its unit's ExecStopPost wrote it, if it did."""
     try:
         return HOST_EXIT.read_text().strip()
     except FileNotFoundError:
@@ -657,7 +642,6 @@ def host_stop():
         raise RuntimeError(f'the host\'s exit after SIGTERM reads {ended!r}, not exited 130')
 
 
-# ---------------------------------------------------------------- teardown and finish
 
 def attempt(report, what, action):
     """Runs one teardown item, best effort: a failure is recorded and the next item still runs."""
@@ -686,10 +670,7 @@ def stop_scope(report, unit):
 
 
 def remove_natives(report):
-    """Stops the host, then deletes every VM of the run's inventory and stops the run's scopes,
-    natively, each item best effort; what is left, and every failure, goes into `report`."""
     def stop_unit():
-        """Records how the host ended, which driver.py checks against its contract, exited 130."""
         if unit_active():
             HOST_EXIT.unlink(missing_ok=True)
             sudo(['systemctl', 'stop', UNIT], touched=f'stops {UNIT}')
