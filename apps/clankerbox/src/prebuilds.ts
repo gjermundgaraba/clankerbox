@@ -1,4 +1,3 @@
-/** `clankerbox prebuild`: a setup's prebuild, the checkpoint creates of the same spec restore. */
 import { Invalid, Prebuild } from "@gjermundgaraba/clankerbox-sdk";
 import { Console, DateTime, Effect } from "effect";
 import { Command } from "effect/cli";
@@ -7,7 +6,6 @@ import { encodeCheckpoint } from "./checkpoints.ts";
 import { flagsRequest, specArguments } from "./machines/spec.ts";
 import { age } from "./units.ts";
 
-/** Without `--json`, a prebuild that was already there is said on stderr, with its age. */
 export const prebuild = Command.make("prebuild", { ...mutationFlags, ...specArguments }, (flags) =>
   printResource(flags, {
     call: (client, config) =>

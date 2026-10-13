@@ -1,9 +1,4 @@
 /**
- * Live acceptance on a boat host, through the CLI, on boat's trial: lifecycle, setup and
- * preparation, ssh, scp and rsync through boat's endpoint, stop and resume, disk forks of a
- * running and a stopped machine, named-snapshot checkpoints, boat's refusals, a host restart and
- * a crash.
- *
  * The trial runs 2 sandboxes at once and allows 5 starts a minute, 25 an hour and 75 a day; a
  * create, fork, resume and restore each count, and so does a 429 refusal, but not a 403 for a
  * type the plan lacks (the bump-boat-api skill). So at most two of the run's sandboxes are
@@ -13,14 +8,10 @@
  * The driver passes the account's limit of active sandboxes in
  * `CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT`, and its tier in `CLANKERBOX_LIVE_BOAT_TIER`. Unless the
  * limit is the trial's 2, the test of that 429 is skipped, since it would make a third sandbox;
- * unless the tier is `trial`, so is the large create, which a plan with `large` would make. The
- * rest run. The account may hold the operator's own sandboxes and snapshots, which the
- * host-control program's `account` counts but never names.
+ * unless the tier is `trial`, so is the large create, which a plan with `large` would make.
  *
- * The tests run in order and share `main`, whose setup authorizes the run's key for root, and
- * writes a `start` and a `new-identity` hook; the test that made any other machine deletes it,
- * the copies only once `main` is gone, since a checkpoint must restore after its source is
- * deleted. Timings print as `[timing]` lines.
+ * The tests run in order and share `main`; the copies are deleted only once `main` is gone,
+ * since a checkpoint must restore after its source is deleted.
  */
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -50,10 +41,9 @@ import {
 } from "./live.ts";
 
 /**
- * The setup of `main`. boat's sshd accepts root with a key, so the run's key goes to root, and
- * `user`'s `authorized_keys`, which boat's own access needs, is left alone. Setup runs before
+ * boat's sshd accepts root with a key, so the run's key goes to root, and `user`'s
+ * `authorized_keys`, which boat's own access needs, is left alone. Setup runs before
  * preparation, so it records the host key the sandbox came with, which preparation replaces.
- * rsync goes in if the image lacks it; an install that fails fails only the transfer test.
  */
 const mainScript = (publicKey: string) => `#!/bin/sh
 set -eu
@@ -86,22 +76,17 @@ const createdMark = "/run/clankerbox-created";
 
 const restoredMarker = "/var/lib/ascii-lazy/sys-done";
 
-/** The states of a sandbox that runs. */
 const upStates = ["ready", "idle", "running"];
 
 /** boat's trial allows 5 starts a minute; the suite keeps to one fewer. */
 const startsPerMinute = 4;
 
-/** The trial's limit of active sandboxes, which the 429 test fills. */
 const trialActive = 2;
 
-/** The account's limit of active sandboxes, as the driver read it; the trial's when unset. */
 const activeLimit = Number(process.env["CLANKERBOX_LIVE_BOAT_ACTIVE_LIMIT"] ?? trialActive);
 
-/** Whether the account is on boat's trial, as the driver read its tier; the trial when unset. */
 const onTrial = (process.env["CLANKERBOX_LIVE_BOAT_TIER"] ?? "trial") === "trial";
 
-/** What the harness drives a boat host with. */
 const boat: Runtime<typeof BoatNatives.Type> = {
   /** boat's `small`, the trial's smallest type, exactly. */
   sizes: (cpu = 2, ramMib = 4096, diskGib = 12) => [
@@ -114,13 +99,11 @@ const boat: Runtime<typeof BoatNatives.Type> = {
     "--disk",
     `${diskGib}G`,
   ],
-  /** The sandboxes whose display name is the machine's ID. */
   natives: (controlled, name) => controlled(BoatNatives, "natives", name),
   nothing: { sandboxes: [] },
   mainSetup: (dir, publicKey) => writeFileIn(dir, "main-setup.sh", mainScript(publicKey), 0o755),
 };
 
-/** How boat answered a start the CLI reports failed: `429` when boat refused it for a limit. */
 const refusedWith = (ran: Ran) => {
   try {
     const { error } = decode(Failure, ran);
@@ -158,10 +141,8 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   const outcomes: Array<string> = [];
 
   /**
-   * Runs `call`, which makes boat start a sandbox, once fewer than `startsPerMinute` of the
-   * run's starts fall in the last minute, and prints a `[start]` line, which the driver counts.
-   * A start is timed when its call returns, since boat may start late in it (a running source's
-   * fork, after its snapshot wait). Nothing repeats a start.
+   * The driver counts the `[start]` lines. A start is timed when its call returns, since boat
+   * may start late in it (a running source's fork, after its snapshot wait).
    */
   const counted = async (kind: string, name: string, call: () => Promise<Ran>) => {
     const recent = () => ended.filter((at) => performance.now() - at < 61_000);
@@ -189,23 +170,19 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
     );
   });
 
-  /** How many sandboxes and named snapshots the whole account holds. */
   const account = () => controlled(BoatAccount, "account");
 
-  /** The names of the run's named snapshots. */
   const snapshots = () => controlled(Names, "snapshots");
 
-  /** Which of the create's mark and boat's restore marker the guest holds, one per line. */
   const marks = (name: string) =>
     inGuest(
       name,
       `for mark in ${createdMark} ${restoredMarker}; do test -e $mark && echo $mark; done; true`,
     );
 
-  /** The guest kernel's boot ID; a sandbox that kept running keeps it. */
+  /** A sandbox that kept running keeps its boot ID. */
   const bootId = (name: string) => inGuest(name, "cat /proc/sys/kernel/random/boot_id");
 
-  /** Checks that ssh pinned to `before`'s host key is refused at `name`'s endpoint now. */
   const refusesPin = async (name: string, before: Machine) => {
     const now = await machine(name);
 
@@ -225,16 +202,12 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
     expect(stale.stderr).toMatch(/host key|HOST IDENTIFICATION/iu);
   };
 
-  /** The marker `main`'s disk holds from the stop test on, which its running capture carries. */
+  /** On `main`'s disk from the stop test on, so its running capture carries it. */
   const kept = randomBytes(8).toString("hex");
 
-  /** What `main` showed when its running capture began. */
   let atCapture: Awaited<ReturnType<typeof facts>>;
 
-  /**
-   * The marker `main` writes just before its running capture, with no sync of its own: the
-   * capture's sync puts it in the snapshot, which the restore reads.
-   */
+  /** Written with no sync of its own: the capture's sync puts it in the snapshot. */
   const captured = randomBytes(8).toString("hex");
 
   test(

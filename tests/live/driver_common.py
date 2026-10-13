@@ -1,10 +1,3 @@
-"""What the live drivers (smolvm/driver.py, tart/driver.py, boat/driver.py) share: the commit a
-run names, its signals, its evidence and the suite's run, the release bundles it builds in its
-scratch and the binary it takes from one, a teardown's steps, the client config, the processes
-naming some text, and for a host on this Mac, its address, API port, keeper, start and end, its
-stop at teardown, the host-control program's host ops and its stub, the driver's entry and a
-file's checksum. A driver puts tests/live on its import path and imports this module by name.
-"""
 import hashlib
 import json
 import os
@@ -40,7 +33,6 @@ def stop_on_signals():
 
 
 def clean_commit():
-    """HEAD, which names the code the run builds, provided the tree holds no change on it."""
     status = subprocess.run(['git', 'status', '--porcelain'], cwd=REPO, capture_output=True, text=True,
                             check=True).stdout
     if status:
@@ -73,7 +65,6 @@ def read_int(path):
 
 
 def processes(text):
-    """(PID, command line) of every other process whose command line holds `text`."""
     out = subprocess.run(['ps', '-axo', 'pid=,command='], capture_output=True, text=True, check=True).stdout
     found = []
     for line in out.splitlines():
@@ -84,8 +75,6 @@ def processes(text):
 
 
 def redact(evidence, values, log, what):
-    """Replaces each of `values` (bytes) with <redacted> in every evidence file, and returns the
-    files that held one."""
     leaked = []
     for path in sorted(evidence.rglob('*')):
         if not path.is_file():
@@ -136,14 +125,11 @@ def agent_env(run, option, log):
 
 
 def write_client_config(path, hosts):
-    """A client config listing `hosts`, each (ID, address, API port), in order."""
     path.write_text(json.dumps({'hosts': [{'id': host_id, 'url': f'http://{address}:{port}'}
                                           for host_id, address, port in hosts]}, indent=2) + '\n')
 
 
 def choose_address(wanted):
-    """Where a host on this Mac listens, and why: `wanted`, this Mac's tailnet address, when it is
-    assigned here, and loopback otherwise or when it is None."""
     if wanted is None:
         return '127.0.0.1', 'no address given'
     if not re.search(rf'^\tinet {re.escape(wanted)} ',
@@ -164,9 +150,6 @@ def free_port(address):
     raise RuntimeError(f'no free port in 47000-47999 on {address}')
 
 
-# A host on this Mac and its keeper. The run's state file names its scratch, evidence, binary,
-# config, address and API port.
-
 def keep(state, env=None):
     """Runs the host to its end with environment `env` (None: the keeper's own), recording its pid
     and exit status (negative: the signal)."""
@@ -185,8 +168,6 @@ def keep(state, env=None):
 
 
 def host_start(state, driver):
-    """Starts the host under a keeper, `driver keep STATE_FILE`, and returns its pid once it
-    listens."""
     scratch = Path(state['scratch'])
     pid = read_int(scratch / 'host.pid')
     if pid is not None and alive(pid) and not (scratch / 'host.exit').exists():
@@ -209,7 +190,6 @@ def host_start(state, driver):
 
 
 def host_end(state, sig, expected, wait=60):
-    """Signals the host and waits for its keeper to record how it ended."""
     scratch = Path(state['scratch'])
     pid = read_int(scratch / 'host.pid')
     if pid is None or (scratch / 'host.exit').exists():
@@ -254,18 +234,13 @@ def stop_host(scratch, log, fail):
     return pid
 
 
-# The suite's host-control program (tests/live/tests/live.ts) and the driver's entry.
-
 def write_control_stub(path, driver, state_file):
-    """The program the suite runs as its host control: `driver control STATE_FILE OP ARGS`."""
     path.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} {shlex.quote(str(driver))} control '
                     f'{shlex.quote(str(state_file))} "$@"\n')
     path.chmod(0o755)
 
 
 def control(driver, state_file, op, args, ops):
-    """Runs the host ops and `probe` here, and the runtime's own `op` as `ops[op](state, args)`,
-    whose result is the exit code (None: 0)."""
     state = json.loads(Path(state_file).read_text())
     with open(Path(state['evidence']) / 'control.log', 'a') as log:
         log.write(f'{time.strftime("%H:%M:%S")} {shlex.join([op, *args])}\n')
@@ -291,9 +266,6 @@ def control(driver, state_file, op, args, ops):
 
 
 def run_driver(driver, main, ops, keep_env=None):
-    """A driver's entry: `driver keep STATE_FILE` runs the host under its keeper, with environment
-    `keep_env(state)` (None: the keeper's own), `driver control STATE_FILE OP ARGS` is the
-    host-control program, and anything else runs `main`."""
     if sys.argv[1:2] == ['keep']:
         state = json.loads(Path(sys.argv[2]).read_text())
         keep(state, keep_env and keep_env(state))
@@ -316,7 +288,6 @@ class Steps:
         self.errors = []
 
     def __call__(self, what, action, *args):
-        """`action(*args)`, or None once its failure is noted."""
         try:
             return action(*args)
         except Exception as error:
@@ -333,7 +304,6 @@ class Steps:
 
 
 class Evidence:
-    """A run's evidence: the driver's log, resources.json and each command's own log."""
 
     def __init__(self, run):
         self.run = run
@@ -366,10 +336,6 @@ class Evidence:
         return rc
 
     def build_binary(self, binary, also=()):
-        """Builds the code, then tools/release/build.sh's darwin-arm64 bundle and one for each
-        target in `also`, into the run's scratch/bundles; smokes the darwin-arm64 bundle with
-        tools/release/smoke.sh, writes its binary to `binary`, executable, and records every
-        bundle. Returns each target's bundle, beside its .sha256."""
         out = self.run.scratch / 'bundles'
         targets = ('darwin-arm64', *also)
         self.sh(['vp', 'run', '-r', 'build'], 'build', cwd=REPO)

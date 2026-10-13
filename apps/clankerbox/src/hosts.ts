@@ -1,4 +1,3 @@
-/** The host commands: `hosts`, and `capacity`, each host's limits. */
 import { Host, Limit, mibPerGib } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { listCommand } from "./command.ts";
@@ -14,7 +13,6 @@ export const hostRows = (hosts: ReadonlyArray<Host>) => [
   ]),
 ];
 
-/** What the table calls each limit; `--json` keeps the API's names. */
 const limitNames = {
   ramMib: "ram",
   runningVms: "running-vms",
@@ -24,10 +22,7 @@ const limitNames = {
   startsPerDay: "starts/day",
 } satisfies Record<Limit["resource"], string>;
 
-/**
- * RAM in a limit, rounded to a tenth of a GiB: a budget is seldom a round size, and the table
- * is an overview. `--json` has the MiB.
- */
+/** A tenth of a GiB: a budget is seldom a round size, and `--json` has the exact MiB. */
 const roughGib = (mib: number): string => `${Math.round((mib * 10) / mibPerGib) / 10}G`;
 
 export const limitRows = (limits: ReadonlyArray<Limit>) => [

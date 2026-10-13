@@ -1,4 +1,3 @@
-/** The checkpoint commands, and how the CLI shows a checkpoint. */
 import { actionsByName, Checkpoint, formatGib, formatMib } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Schema } from "effect";
 import { Command } from "effect/cli";
@@ -18,7 +17,6 @@ import {
 import { actionError, actionLabel } from "./machines/view.ts";
 import { age } from "./units.ts";
 
-/** A checkpoint's columns: each one's label, and its cell. */
 const checkpointColumns: ReadonlyArray<
   readonly [label: string, cell: (checkpoint: Checkpoint, now: DateTime.Utc) => string]
 > = [
@@ -36,10 +34,6 @@ export const checkpointRows = (checkpoints: ReadonlyArray<Checkpoint>, now: Date
   ...checkpoints.map((checkpoint) => checkpointColumns.map(([, cell]) => cell(checkpoint, now))),
 ];
 
-/**
- * One checkpoint, a field a line: its columns, and what a row has no room for, the sizes a
- * restore gives its machine, and its action's error in full.
- */
 export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
   ...checkpointColumns.map(([label, cell]) => [label, cell(checkpoint, now)]),
   ["CPU", String(checkpoint.cpu)],

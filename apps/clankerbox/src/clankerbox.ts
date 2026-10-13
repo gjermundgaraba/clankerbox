@@ -23,10 +23,7 @@ import { prebuild } from "./prebuilds.ts";
 import { profiles } from "./profiles.ts";
 import { ssh } from "./ssh.ts";
 
-/**
- * The command that calls each of the contract's actions, so that an action the CLI has no
- * command for fails to type-check here. Lists and `hosts` ask every host; the rest route by ID.
- */
+/** Each action's command, so that an action the CLI has no command for fails to type-check. */
 export const actionCommands = {
   listMachines: machines,
   getMachine,
@@ -45,8 +42,8 @@ export const actionCommands = {
 } satisfies Record<keyof typeof actionsByName, Command.Command.Any>;
 
 /**
- * The CLI and the host role. Either exits 130 when SIGINT or SIGTERM interrupts it, the default
- * teardown's code, so a unit that stops the host lists 130 as a success.
+ * SIGINT or SIGTERM exits 130, the default teardown's code, so a unit that stops the host lists
+ * 130 as a success.
  */
 export const clankerbox = Command.make("clankerbox").pipe(
   Command.withDescription("Run machines on clankerbox hosts. `clankerbox host` runs a host."),
@@ -69,8 +66,6 @@ export const clankerbox = Command.make("clankerbox").pipe(
   ]),
 );
 
-/** Runs the command `args` names. */
 export const dispatch = Command.runWith(clankerbox, { version });
 
-/** Runs the command the process's arguments name. */
 export const main = Command.run(clankerbox, { version });

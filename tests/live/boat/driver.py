@@ -150,7 +150,6 @@ class Boat:
         return self.ok('GET', '/limits')
 
     def gone(self, sandbox_id, wait=60):
-        """Whether boat answers 404 for the sandbox within `wait` seconds."""
         deadline = time.monotonic() + wait
         while True:
             status, _ = self.call('GET', f'/sandboxes/{sandbox_id}')
@@ -179,32 +178,27 @@ class Boat:
 
 
 def boat_of(state):
-    """boat, with the key the host's config holds."""
     token = json.loads(Path(state['config']).read_text())['boat']['apiKey']
     return Boat(token, Path(state['evidence']) / 'api.log')
 
 
 def starts_of(limits):
-    """The start limits and counts boat reports, by window."""
     return {window: {key: limits['starts'][window][key] for key in ('limit', 'used', 'remaining')}
             for window in ('minute', 'hour', 'day')}
 
 
 def note_sandboxes(state, ids):
-    """Adds sandbox IDs of the run's to the ledger teardown deletes by."""
     if ids:
         with open(Path(state['evidence']) / 'sandbox-ids.txt', 'a') as ledger:
             ledger.write(''.join(f'{sandbox_id}\n' for sandbox_id in ids))
 
 
 def machine_sandboxes(state, boat, name):
-    """The sandboxes whose display name is machine `name`'s ID, noted in the ledger."""
     found = [sandbox for sandbox in boat.sandboxes() if sandbox.get('name') == f'{state["host_id"]}_{name}']
     note_sandboxes(state, [sandbox['id'] for sandbox in found])
     return found
 
 
-# The suite's host-control program's own ops on boat (tests/live/tests/live.ts).
 
 def natives(state, args):
     [name] = args
@@ -240,7 +234,6 @@ def guest(state, args):
 OPS = {'natives': natives, 'snapshots': snapshots, 'account': account, 'guest': guest}
 
 
-# Teardown, by the run's recorded IDs and its own names.
 
 def database_sandboxes(state, log):
     """The sandbox IDs the host's database records. The host holds its database exclusively, so
@@ -256,7 +249,6 @@ def database_sandboxes(state, log):
 
 
 def ledger_sandboxes(state):
-    """The sandbox IDs the control program saw."""
     ledger = Path(state['evidence']) / 'sandbox-ids.txt'
     return {line.strip() for line in ledger.read_text().splitlines() if line.strip()} if ledger.exists() else set()
 

@@ -1,9 +1,3 @@
-/**
- * The CLI's own kit, which every command uses: the client flags, the run against the configured
- * hosts, and how results and failures print. Every command takes IDs, except `create`, which
- * takes a name or a full ID. A mutation returns when its action has finished; its `--timeout`
- * only stops waiting.
- */
 import {
   type ClankerboxError,
   Client,
@@ -32,7 +26,7 @@ import type { ChildProcessSpawner } from "effect/process";
 import { type LoadedConfig, loadConfig } from "./config.ts";
 import { parseSeconds } from "./units.ts";
 
-/** A failure the CLI has already printed. The process exits with `code`. */
+/** A failure the CLI has already printed, so the runtime only exits with `code`. */
 export class Exited extends Data.TaggedError("Exited")<{ readonly code: number }> {
   readonly [Runtime.errorReported] = false;
 
@@ -41,7 +35,6 @@ export class Exited extends Data.TaggedError("Exited")<{ readonly code: number }
   }
 }
 
-/** A program the CLI hands over to, such as ssh, couldn't be started. */
 export class SpawnFailed extends Schema.TaggedError<SpawnFailed>()("SpawnFailed", {
   message: Schema.String,
   program: Schema.String,
@@ -51,10 +44,8 @@ export class SpawnFailed extends Schema.TaggedError<SpawnFailed>()("SpawnFailed"
   }
 }
 
-/** Every failure the CLI prints. */
 export type Failure = ClankerboxError | InvalidFile | SpawnFailed;
 
-/** A failure as `--json` prints it. */
 export const ErrorDocument = Schema.Struct({
   message: Schema.String,
   tag: Schema.Literals([
@@ -72,7 +63,6 @@ export const ErrorDocument = Schema.Struct({
   program: Schema.optionalKey(Schema.String),
 });
 
-/** A host a fan-out couldn't read, as `--json` lists it under `unreachable`. */
 export const UnreachableDocument = Schema.Struct({ host: Schema.String, error: ErrorDocument });
 
 const encodeFailure = Schema.encodeSync(
@@ -85,7 +75,6 @@ const errorDocument = (error: Failure): typeof ErrorDocument.Type => {
   return { ...fields, tag: _tag, retryable: error.retryable };
 };
 
-/** Prints `error` (as `{error: {message, tag, retryable}}` with `--json`) and exits 1. */
 export const fail = (json: boolean) => (error: Failure) =>
   Effect.andThen(
     json
@@ -94,7 +83,6 @@ export const fail = (json: boolean) => (error: Failure) =>
     Effect.fail(new Exited({ code: 1 })),
   );
 
-/** Left-aligned columns, two spaces apart. */
 export const table = (rows: ReadonlyArray<ReadonlyArray<string>>): string => {
   const widths: Array<number> = [];
 
@@ -115,13 +103,11 @@ export const table = (rows: ReadonlyArray<ReadonlyArray<string>>): string => {
     .join("\n");
 };
 
-/** The hosts a fan-out couldn't read, as JSON fields. */
 export const unreachableDocument = (
   unreachable: ReadonlyArray<Client.Unreachable>,
 ): ReadonlyArray<typeof UnreachableDocument.Type> =>
   unreachable.map(({ host, error }) => ({ host, error: errorDocument(error) }));
 
-/** Names the hosts a fan-out couldn't read, on stderr, under the table. */
 export const warnUnreachable = (unreachable: ReadonlyArray<Client.Unreachable>) =>
   Effect.forEach(
     unreachable,
@@ -142,7 +128,7 @@ export const clientFlags = {
   ),
 };
 
-/** A mutation's flags: a read gives up after 10 s of its own, and takes no `--timeout`. */
+/** Only mutations take `--timeout`: the client gives each read its own 10 s `readTimeout`. */
 export const mutationFlags = {
   ...clientFlags,
   timeout: Flag.String("timeout").pipe(
@@ -158,7 +144,6 @@ export type ClientFlags = Command.Command.Config.Infer<typeof clientFlags> & {
   readonly timeout?: Option.Option<string>;
 };
 
-/** A flag's value, parsed when the flag was given. */
 export const parsed = <A>(
   flag: Option.Option<string>,
   name: string,
@@ -171,11 +156,6 @@ type Services =
   | ChildProcessSpawner.ChildProcessSpawner
   | HttpClient.HttpClient;
 
-/**
- * Runs a command against the configured hosts. Its failure is printed, and the process exits
- * 1. A mutation's `--timeout` bounds the wait for its reply, and ends only the wait: the
- * host's action runs on.
- */
 export const withClient = <A, R>(
   flags: ClientFlags,
   body: (
@@ -209,12 +189,6 @@ export const nameArgument = Argument.String("name").pipe(
   Argument.withDescription("The new resource's name, on the same host."),
 );
 
-/**
- * A list over every host: a table, or with `--json` the answers under `key`. With nothing to
- * list, stdout stays empty and stderr says so. The hosts that didn't answer go to stderr,
- * or to `unreachable` with `--json`. When every host failed, the command exits 1, as a failed
- * call does; a partial answer exits 0.
- */
 export const listCommand = <A, Encoded>(options: {
   readonly name: string;
   readonly description: string;
@@ -260,10 +234,6 @@ export const listCommand = <A, Encoded>(options: {
     }),
   ).pipe(Command.withDescription(options.description));
 
-/**
- * The body of a command that makes one client call and prints the resource it replies with:
- * its JSON document with `--json`, or else `text`.
- */
 export const printResource = <A, Encoded extends object, R>(
   flags: ClientFlags,
   resource: {
@@ -288,13 +258,8 @@ export const printResource = <A, Encoded extends object, R>(
     }),
   );
 
-/** What a command that makes a resource prints without `--json`: the new ID. */
 export const newId = ({ id }: { readonly id: string }) => id;
 
-/**
- * Deleting what is already gone is done: the host answers NotFound, the CLI says so on stderr,
- * and exits 0. Either way `--json` prints `{deleted: id}`.
- */
 export const deleted = (json: boolean, id: string, removal: Effect.Effect<void, ClankerboxError>) =>
   removal.pipe(
     Effect.as(false),

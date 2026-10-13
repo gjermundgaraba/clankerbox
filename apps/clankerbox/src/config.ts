@@ -1,8 +1,3 @@
-/**
- * The client config: one JSON file holding the host list, in placement order, and an
- * optional profiles directory. It is read from `--config PATH`, or else from
- * `$XDG_CONFIG_HOME/clankerbox/config.json` (`~/.config` when that is unset).
- */
 import {
   Client,
   describeFileError,
@@ -12,12 +7,11 @@ import {
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 
 /**
- * An empty host list, or a host ID that appears twice, is the client library's to refuse:
- * `profiles`, which asks no host, reads its directory either way.
+ * An empty or repeated host is `Client.make`'s to refuse, so `profiles`, which asks no host,
+ * still runs.
  */
 const ClientConfig = Schema.Struct({
   hosts: Schema.Array(Client.HostEntry),
-  /** Where `--profile NAME` looks for `NAME.json`, relative to the config file. */
   profiles: Schema.optionalKey(Schema.String),
 });
 
@@ -26,7 +20,6 @@ const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(ClientConf
 export interface LoadedConfig {
   readonly file: string;
   readonly hosts: ReadonlyArray<Client.HostEntry>;
-  /** The profiles directory, resolved against the config file's directory. */
   readonly profiles: string | undefined;
 }
 

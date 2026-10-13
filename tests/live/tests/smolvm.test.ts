@@ -1,10 +1,4 @@
-/**
- * Live acceptance on a smolvm host, through the CLI: lifecycle, setup and preparation, guest
- * access, claims, a client that goes away, a call past 300 s, the RAM budget, fork and
- * checkpoints, crashes and restarts. The tests run in order and share one machine, `main`, whose
- * setup installs sshd and the run's own key, and some of its copies; the test that made any other
- * machine deletes it. Timings print as `[timing]` lines.
- */
+/** The tests run in order and share `main` and some of its copies. */
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -32,7 +26,6 @@ import {
   writeFileIn,
 } from "./live.ts";
 
-/** The setup of `main`: sshd, rsync and the run's key, a `start` and a `new-identity` hook. */
 const mainScript = (publicKey: string) => `#!/bin/sh
 set -eu
 export DEBIAN_FRONTEND=noninteractive
@@ -71,14 +64,11 @@ for _ in $(seq 100); do [ -s /run/sshd.pid ] && break; sleep 0.1; done
 cp /run/sshd.pid /var/lib/clankerbox-live/setup-sshd-pid
 `;
 
-/** A guest command that prints whether a TCP connection to `address:port` opens. */
 const guestProbe = (address: string, port: string) =>
   `timeout 5 bash -c 'echo >/dev/tcp/${address}/${port}' 2>/dev/null && echo reached || echo refused`;
 
-/** The payload `main`'s recipe carries in `files/`. */
 const payload = randomBytes(64 * 1024);
 
-/** What the harness drives a smolvm host with. */
 const smolvm: Runtime<typeof Natives.Type> = {
   /**
    * `main` is 20 GiB, which smolvm boots from its image seed; the other creates' 10 GiB pull the
@@ -94,10 +84,8 @@ const smolvm: Runtime<typeof Natives.Type> = {
     "--disk",
     `${diskGib}G`,
   ],
-  /** The runtime's machines and systemd scopes whose names start with `name`'s. */
   natives: (controlled, name) => controlled(Natives, "natives", `${name}-`),
   nothing: { machines: [], scopes: [] },
-  /** A recipe directory, whose `files/` carry the payload. */
   mainSetup: async (dir, publicKey) => {
     const recipe = join(dir, "recipe");
 
@@ -137,16 +125,14 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
   let routeBefore: string;
 
-  /** The guest kernel's boot ID; a VM that kept running keeps it. */
+  /** A VM that kept running keeps its boot ID. */
   const bootId = (name: string) => inGuest(name, "cat /proc/sys/kernel/random/boot_id");
 
-  /** smolvm's own reading of the machine, `unreachable` included, and its VMM's pid. */
   const smolvmStatus = (name: string) => controlled(SmolvmStatus, "status", named(name));
 
   const count = async (name: string, file: string) =>
     (await inGuest(name, `cat /var/lib/clankerbox-live/${file}`)).split("\n").length;
 
-  /** What a machine shows of its identity, and of what a copy carried over. */
   const facts = async (name: string) => {
     const [machineId, instance, ram, disk, identities, starts] = (
       await inGuest(
@@ -171,11 +157,6 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
     };
   };
 
-  /**
-   * The RAM budget left over the running machines, read from the host's capacity, which
-   * reports that budget and those machines. A create too large for any budget is refused
-   * with Capacity, names the budget and writes nothing.
-   */
   const remainingBudget = async () => {
     const huge = failure(await createBare("huge", 1_048_576));
 
@@ -201,13 +182,12 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
   const store = () => controlled(Store, "store");
 
-  /** Whether the host's store holds checkpoint `name`'s directory. */
   const stored = async (name: string) =>
     (await store()).checkpoints.some((entry) =>
       new RegExp(`^${named(name)}-[0-9a-f]{8}\\.checkpoint$`, "u").test(entry),
     );
 
-  /** The host's route to the tailnet's own address, which its route to every peer shares. */
+  /** The route to the tailnet's own address, which the route to every peer shares. */
   const route = async () => {
     const ran = await control("route", "100.100.100.100");
 
@@ -985,7 +965,6 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       const before = await machine("main");
       const uptime = Number((await inGuest("main", "cut -d ' ' -f 1 /proc/uptime")).trim());
 
-      // As a host that crashed during a fork would leave it.
       expect((await control("plant-fork", named("leftover"))).code).toBe(0);
       expect(await forks()).toEqual([named("leftover")]);
       expect((await control("host-stop")).code).toBe(0);

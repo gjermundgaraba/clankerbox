@@ -1,10 +1,6 @@
 /**
- * Live acceptance on a Tart host, through the CLI: lifecycle, setup and preparation on macOS
- * guests, the forwarder, Softnet, placement over two hosts, disk checkpoints and forks, Apple's
- * two-VM limit, a host restart and a crash. Apple runs at most two macOS VMs per Mac, so at most
- * two of the run's VMs run at once. The tests run in order and share `main`, whose setup sets
- * public resolvers, installs the run's key for `admin`, and writes a `start` and a `new-identity`
- * hook; the test that made any other machine deletes it. Timings print as `[timing]` lines.
+ * Apple runs at most two macOS VMs per Mac, so at most two of the run's VMs run at once. The
+ * tests run in order and share `main`.
  */
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -36,9 +32,9 @@ import {
 } from "./live.ts";
 
 /**
- * The setup of `main`. Softnet's block of the host also blocks the gateway's DNS, so public
- * resolvers come first (README, Runtime notes). `admin` is the Cirrus image's user. Setup
- * runs before preparation, so it records the image's host key, which preparation replaces.
+ * Softnet's block of the host also blocks the gateway's DNS, so public resolvers come first
+ * (README, Runtime notes). `admin` is the Cirrus image's user. Setup runs before preparation, so
+ * it records the image's host key, which preparation replaces.
  */
 const mainScript = (publicKey: string) => `#!/bin/sh
 set -eu
@@ -63,11 +59,9 @@ cut -d ' ' -f 1,2 /etc/ssh/ssh_host_ed25519_key.pub >/var/lib/clankerbox-live/se
 echo setup >>/var/lib/clankerbox-live/setups
 `;
 
-/** A guest command that prints whether a TCP connection to `address:port` opens. */
 const guestProbe = (address: string, port: string) =>
   `nc -z -G 5 -w 5 ${address} ${port} >/dev/null 2>&1 && echo reached || echo refused`;
 
-/** What a client meets at an endpoint: sshd's banner, a connection closed at once, or a refusal. */
 type Answer = "banner" | "closed" | "refused" | "silent";
 
 const answer = (endpoint: SshEndpoint) =>
@@ -93,7 +87,6 @@ const answer = (endpoint: SshEndpoint) =>
     });
   });
 
-/** What the harness drives a Tart host with. */
 const tart: Runtime<typeof TartNatives.Type> = {
   /** The base's disk is 50 GB, and Tart only grows a disk (README, Runtime notes). */
   sizes: (diskGib = 50) => [
@@ -106,7 +99,6 @@ const tart: Runtime<typeof TartNatives.Type> = {
     "--disk",
     `${diskGib}G`,
   ],
-  /** The VMs, launchd jobs and job files of the machine or checkpoint named `name` on the host. */
   natives: (controlled, name) => controlled(TartNatives, "natives", name),
   nothing: { machines: [], jobs: [], files: [] },
   mainSetup: (dir, publicKey) => writeFileIn(dir, "main-setup.sh", mainScript(publicKey), 0o755),
@@ -136,16 +128,11 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
     probe,
   } = suite;
 
-  /**
-   * Each machine's endpoint, as the host reported it while the machine ran. A machine keeps its
-   * port, but the host reports it only while the machine runs.
-   */
+  /** A machine keeps its port, but the host reports it only while the machine runs. */
   const endpoints = new Map<string, SshEndpoint>();
 
   /**
-   * Deletes the machine as the harness does, then checks that its listener is gone: exactly one
-   * of the host's ports closes, the one the machine had while it ran, and it refuses a connection.
-   * A machine that never ran, its create failed, has its port only in its row, which the host
+   * A machine whose create failed never ran and has its port only in its row, which the host
    * holds exclusively, so its port is the one that closes.
    */
   const removeMachine = async (name: string) => {
@@ -166,7 +153,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
     expect(await answer({ host: new URL(suite.env.host.url).hostname, port })).toBe("refused");
   };
 
-  /** When the guest booted; a VM that kept running keeps it. */
+  /** A VM that kept running keeps its boot time. */
   const bootTime = (name: string) => inGuest(name, "sysctl -n kern.boottime");
 
   test(

@@ -1,4 +1,3 @@
-/** How the CLI shows a machine: its table row, its fields one a line, and its JSON. */
 import { Checkpoint, formatGib, formatMib, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Schema } from "effect";
 import { age } from "../units.ts";
@@ -8,14 +7,11 @@ export const actionLabel = ({ action }: Machine | Checkpoint) =>
     ? `${action.name} ${action.status}: ${action.error.tag}`
     : `${action.name} ${action.status}`;
 
-/** The error a resource's last action failed with, in full. */
 export const actionError = ({ action }: Machine | Checkpoint) =>
   action.status === "failed" ? action.error.message : "-";
 
-/** The runtime's state, marked on a machine its create, fork or restore hasn't made. */
 export const stateLabel = ({ state, made }: Machine) => (made ? state : `${state} (unmade)`);
 
-/** A machine's columns: each one's label, and its cell. */
 const machineColumns: ReadonlyArray<
   readonly [label: string, cell: (machine: Machine, now: DateTime.Utc) => string]
 > = [
@@ -35,10 +31,6 @@ export const machineRows = (machines: ReadonlyArray<Machine>, now: DateTime.Utc)
   ...machines.map((machine) => machineColumns.map(([, cell]) => cell(machine, now))),
 ];
 
-/**
- * One machine, a field a line: its columns, and what a row has no room for, its SSH login, its
- * action's error in full and its host key.
- */
 export const machineFields = (machine: Machine, now: DateTime.Utc) => {
   const { ssh } = machine;
 

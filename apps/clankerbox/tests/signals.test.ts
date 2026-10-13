@@ -1,7 +1,3 @@
-/**
- * The exit code when SIGINT or SIGTERM stops the process mid-call: 130, runMain's default
- * teardown, which the host role shares. The live drivers check the host's own.
- */
 import { type ChildProcess, spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -44,7 +40,6 @@ const scratch = async () => {
   return dir;
 };
 
-/** Runs `file` under this Node, with `args`, and resolves with its exit code. */
 const run = (file: string, args: ReadonlyArray<string>) => {
   const child = spawn(process.execPath, [file, ...args], { stdio: "ignore" });
 
@@ -57,7 +52,6 @@ const run = (file: string, args: ReadonlyArray<string>) => {
   return { child, exited };
 };
 
-/** A loopback server that accepts connections and never answers. */
 const silent = async () => {
   const accepted = Promise.withResolvers<void>();
   const sockets: Array<Socket> = [];

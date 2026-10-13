@@ -1,4 +1,3 @@
-/** Runs the CLI in process against stub hosts served through the real routes. */
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ConfigProvider, Duration, Effect, Fiber, Layer, Runtime, Schema } from "effect";
@@ -18,12 +17,10 @@ import { ErrorDocument } from "../src/command.ts";
 
 export const url = (id: string) => `http://${id}.test`;
 
-/** Ends the stub hosts. */
 export const cleanup = async (stubs: Array<StubHost>) => {
   await Promise.all(stubs.splice(0).map((stub) => stub.dispose()));
 };
 
-/** Writes a client config naming `hosts` in order, and returns its path. */
 export const writeConfig = (dir: string, hosts: ReadonlyArray<string>, profiles?: string) =>
   Effect.gen(function* () {
     const file = join(dir, "config.json");
@@ -36,10 +33,7 @@ export const writeConfig = (dir: string, hosts: ReadonlyArray<string>, profiles?
     return file;
   });
 
-/**
- * `effect`, while the test clock moves on by `duration` once `waiting` is done. The CLI reads
- * files before it starts a timer, so a clock moved before then moves past nothing.
- */
+/** The CLI reads files before it starts a timer, so the clock moves only once `waiting` is done. */
 export const elapsing = <A, E>(
   duration: Duration.Input,
   effect: Effect.Effect<A, E>,
@@ -55,20 +49,15 @@ export const elapsing = <A, E>(
   });
 
 export interface CliRun {
-  /** The exit code the default `runMain` teardown gives the run. */
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;
 }
 
 export interface CliOptions {
-  /** Every host's network behaviour, by host ID. */
   readonly endpoints?: ReadonlyArray<readonly [string, Endpoint]>;
-  /** Replaces the process spawner, as the ssh tests do. */
   readonly spawner?: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>;
-  /** The environment the CLI reads its default config path from. */
   readonly env?: Readonly<Record<string, string>>;
-  /** Replaces the in-memory transport, as the tests against a real host do. */
   readonly http?: Layer.Layer<HttpClient.HttpClient>;
 }
 
@@ -105,7 +94,6 @@ export const cli = (args: ReadonlyArray<string>, options?: CliOptions): Effect.E
   );
 };
 
-/** A stub host, disposed of by `cleanup` with the others in `stubs`. */
 export const hostIn = (stubs: Array<StubHost>) => (options: Parameters<typeof stubHost>[0]) => {
   const stub = stubHost(options);
 
@@ -114,14 +102,12 @@ export const hostIn = (stubs: Array<StubHost>) => (options: Parameters<typeof st
   return stub;
 };
 
-/** `--json`'s failure. */
 const JsonError = Schema.fromJsonString(Schema.Struct({ error: ErrorDocument }));
 
 export const decodeJsonError = Schema.decodeUnknownSync(JsonError);
 
 export const sizes = ["--base", "ubuntu", "--cpu", "2", "--ram", "4G", "--disk", "20G"];
 
-/** A profiles directory holding `dev.json`, with a setup and host, `small.json` and a non-profile. */
 export const writeProfiles = (dir: string) =>
   Effect.gen(function* () {
     const profiles = join(dir, "profiles");

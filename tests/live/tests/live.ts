@@ -1,8 +1,4 @@
-/**
- * What the live tests drive: the clankerbox binary under test, against the hosts in a client
- * config, and a host-control program for what no client can do, such as killing the host.
- * Nothing here prints a setup script: tests write them to files the CLI reads.
- */
+/** Nothing here prints a setup script: tests write them to files the CLI reads. */
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -13,21 +9,18 @@ import { Schema } from "effect";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
 export interface Ran {
-  /** The exit code, or -1 when a signal ended the program. */
+  /** -1 when a signal ended the program. */
   readonly code: number;
-  /** The signal that ended the program, if one did. */
   readonly signal: NodeJS.Signals | null;
   readonly stdout: string;
   readonly stderr: string;
 }
 
-/** A program started with `launch`: its outcome, and a way to SIGKILL it before then. */
 export interface Launched {
   readonly ran: Promise<Ran>;
   readonly kill: () => void;
 }
 
-/** Starts `file` with stdin closed. Its outcome never throws on a non-zero exit or a signal. */
 export const launch = (file: string, args: ReadonlyArray<string>): Launched => {
   const child = spawn(file, args, { stdio: ["ignore", "pipe", "pipe"] });
   const stdout: Array<Buffer> = [];
@@ -51,7 +44,6 @@ export const launch = (file: string, args: ReadonlyArray<string>): Launched => {
   return { ran, kill: () => child.kill("SIGKILL") };
 };
 
-/** Runs `file` to its end, with stdin closed, and never throws on a non-zero exit. */
 export const run = (file: string, args: ReadonlyArray<string>): Promise<Ran> =>
   launch(file, args).ran;
 
@@ -137,14 +129,11 @@ export const BoatAccount = Schema.fromJsonString(
 );
 
 /**
- * The live environment: `CLANKERBOX_BIN`, the binary under test; `CLANKERBOX_LIVE_CONFIG`, a
- * client config whose one host is the host under test; `CLANKERBOX_LIVE_HOST_CONTROL`, a
- * program run as `CONTROL OP ARGS…` on this machine that acts on the host under test; and
- * `CLANKERBOX_LIVE_PREFIX`, which every machine name of the run starts with. It carries the
- * run's ID, so the run's teardown finds, and only finds, what the run made.
- * `CLANKERBOX_LIVE_RUNTIME` names the host's runtime, and only that runtime's tests run.
- * `smolvm/driver.py`, `tart/driver.py` and `boat/driver.py` provide all five, and their teardown
- * removes what the run left on the host.
+ * What every driver (`smolvm/driver.py`, `tart/driver.py`, `boat/driver.py`) provides:
+ * `CLANKERBOX_BIN`; `CLANKERBOX_LIVE_CONFIG`, whose one host is the host under test;
+ * `CLANKERBOX_LIVE_HOST_CONTROL`, run as `CONTROL OP ARGS…`; `CLANKERBOX_LIVE_RUNTIME`; and
+ * `CLANKERBOX_LIVE_PREFIX`, which carries the run's ID so the driver's teardown finds, and only
+ * finds, what the run made.
  *
  * A driver that runs a second host of the run, which only placement uses, names it in
  * `CLANKERBOX_LIVE_PLACEMENT_CONFIG`: a client config listing that host, beside the host under
@@ -209,7 +198,6 @@ export const environment = async () => {
   return { binary, config, control, prefix, host, second: await secondHost(host) };
 };
 
-/** The second host `CLANKERBOX_LIVE_PLACEMENT_CONFIG` names, if the driver runs one. */
 const secondHost = async (host: typeof HostEntry.Type) => {
   const file = process.env["CLANKERBOX_LIVE_PLACEMENT_CONFIG"];
 
@@ -229,10 +217,8 @@ const secondHost = async (host: typeof HostEntry.Type) => {
 
 export type Environment = Awaited<ReturnType<typeof environment>>;
 
-/** A private scratch directory for keys, scripts and transfers. */
 export const scratch = () => mkdtemp(join(tmpdir(), "clankerbox-live-"));
 
-/** Writes `text` to `dir/name` with the given mode, and returns its path. */
 export const writeFileIn = async (
   dir: string,
   name: string,
@@ -255,7 +241,6 @@ export const timing = (label: string, started: number) => {
   console.log(`[timing] ${label} ${((performance.now() - started) / 1000).toFixed(2)}s`);
 };
 
-/** Decodes a command's stdout, failing with its whole output. */
 export const decode = <A>(schema: Schema.Codec<A, string>, ran: Ran): A => {
   try {
     return Schema.decodeUnknownSync(schema)(ran.stdout);
@@ -266,11 +251,9 @@ export const decode = <A>(schema: Schema.Codec<A, string>, ran: Ran): A => {
   }
 };
 
-/** Whether this run is live on `runtime`, which `describe.skipIf` reads. */
 export const liveOn = (runtime: "smolvm" | "tart" | "boat") =>
   process.env["CLANKERBOX_LIVE"] === "1" && process.env["CLANKERBOX_LIVE_RUNTIME"] === runtime;
 
-/** Waits until `check` holds, checking every `everyMs`, and fails after `seconds`. */
 export const waitFor = async (
   what: string,
   check: () => Promise<boolean>,
@@ -288,29 +271,19 @@ export const waitFor = async (
   }
 };
 
-/** Runs the host-control program and decodes what it prints, failing the test on a non-zero exit. */
 export type Controlled = <A>(
   schema: Schema.Codec<A, string>,
   ...args: ReadonlyArray<string>
 ) => Promise<A>;
 
-/** What one runtime's suite tells the harness. */
 export interface Runtime<Native> {
   /** A create's `--base` and sizes; with no arguments, those of a create with setup. */
   readonly sizes: (...args: ReadonlyArray<number>) => ReadonlyArray<string>;
-  /** The native resources of the machine or checkpoint whose name on the host is `name`. */
   readonly natives: (controlled: Controlled, name: string) => Promise<Native>;
-  /** What `natives` reads once a delete removed everything. */
   readonly nothing: Native;
-  /** Writes the setup of `main`, for the run's public key, into `dir`, and returns its path. */
   readonly mainSetup: (dir: string, publicKey: string) => Promise<string>;
 }
 
-/**
- * Drives one runtime's host through the CLI. Before the suite's tests it reads the environment,
- * makes the run's scratch directory and key, and writes the setup of `main` there; after them it
- * removes that directory. `env`, `dir` and `mainSetup` are read once that has run.
- */
 export const harness = <Native>(runtime: Runtime<Native>) => {
   let env: Environment;
   let dir: string;
@@ -328,11 +301,10 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     mainSetup = await runtime.mainSetup(dir, (await readFile(`${key}.pub`, "utf8")).trim());
   });
 
-  // The driver's teardown removes what the run left on the host natively, so a test that leaves
-  // the host down can't keep it there. This holds the run's private key and its setup scripts.
+  // Only local files: the driver's teardown removes what the run left on the host, even with
+  // the host down.
   afterAll(() => rm(dir, { recursive: true, force: true }));
 
-  /** Runs the CLI with the client config `config`. */
   const cliWith = (
     config: string,
     command: ReadonlyArray<string>,
@@ -342,16 +314,14 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
   const cli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
     cliWith(env.config, command, ...args);
 
-  /** Starts the CLI, to SIGKILL it partway through its call. */
   const launchCli = (command: ReadonlyArray<string>, ...args: ReadonlyArray<string>) =>
     launch(env.binary, [...command, "--config", env.config, ...args]);
 
-  /** A new resource's name, which carries the run's prefix like every other. */
+  /** Every name carries the run's prefix, which the driver's teardown finds by. */
   const named = (name: string) => `${env.prefix}${name}`;
 
   const id = (name: string) => `${env.host.id}_${named(name)}`;
 
-  /** A create's name and `--host`, which send it to the run's host. */
   const target = (name: string) => [named(name), "--host", env.host.id];
 
   const control = (...args: ReadonlyArray<string>) => run(env.control, args);
@@ -369,7 +339,6 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
   const machine = async (name: string): Promise<Machine | undefined> =>
     (await machines()).machines.find((listed) => listed.id === id(name));
 
-  /** The host's limits, which it answered for. */
   const capacity = async () => {
     const { capacity: limits, unreachable } = decode(Limits, await cli(["capacity"], "--json"));
 
@@ -378,11 +347,9 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     return limits;
   };
 
-  /** Creates `name` with no setup, at `sizes(...sizeArgs)`. */
   const createBare = (name: string, ...sizeArgs: ReadonlyArray<number>) =>
     cli(["create"], ...target(name), ...runtime.sizes(...sizeArgs), "--json");
 
-  /** The arguments of a create of `name` with `script` as its setup file. */
   const createArgs = async (name: string, script: string, timeoutSeconds: number) => [
     ...target(name),
     ...runtime.sizes(),
@@ -393,7 +360,6 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     "--json",
   ];
 
-  /** Creates `name` with `script` as its setup file. */
   const createWith = async (name: string, script: string, timeoutSeconds: number) =>
     cli(["create"], ...(await createArgs(name, script, timeoutSeconds)));
 
@@ -413,7 +379,6 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
       command,
     );
 
-  /** Runs `command` over ssh and returns its output, failing the test on a non-zero exit. */
   const inGuest = async (name: string, command: string) => {
     const ran = await ssh(name, command);
 
@@ -422,11 +387,6 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     return ran.stdout;
   };
 
-  /**
-   * What a machine shows of its identity, and of what a copy carried over: its machine ID and
-   * instance, `~/live-disk`, and the lines `main`'s setup and hooks wrote to
-   * `/var/lib/clankerbox-live/identities`, `starts` and `setups`.
-   */
   const facts = async (name: string) => {
     const [machineId, instance, disk, identities, starts, setups] = (
       await inGuest(
@@ -451,7 +411,6 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     };
   };
 
-  /** ssh options pinning `hostKey` under the machine's ID, as `clankerbox ssh` does. */
   const pinned = async (target: Machine, hostKey = target.hostKey ?? "") => {
     const knownHosts = await writeFileIn(
       dir,
@@ -487,7 +446,6 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
 
   const natives = (name: string) => runtime.natives(controlled, named(name));
 
-  /** Whether the host itself reaches `address:port`. */
   const probe = async (address: string, port: string) => {
     const ran = await control("probe", address, port);
 
@@ -496,7 +454,6 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
     return ran.stdout;
   };
 
-  /** Deletes the machine, then checks that its native resources are gone. */
   const removeMachine = async (name: string) => {
     const ran = await cli(["delete"], id(name), "--json");
 
@@ -541,16 +498,10 @@ export const harness = <Native>(runtime: Runtime<Native>) => {
 
 export type Harness<Native> = ReturnType<typeof harness<Native>>;
 
-/** `args` with the value of its `--base` replaced by `base`. */
 export const rebased = (args: ReadonlyArray<string>, base: string) =>
   args.map((arg, index) => (args[index - 1] === "--base" ? base : arg));
 
-/**
- * Registers the test of what is refused before any runtime call, so it costs nothing native,
- * and on boat no start: a create under a taken name, which the host refuses, and a create by name
- * of a base no host offers, which placement refuses once it has read every host's bases. `taken`
- * names a machine the suite holds when the test runs.
- */
+/** Refused before any runtime call, so it costs nothing native, and on boat no start. */
 export const refusedBeforeTheRuntime = <Native>(
   suite: Harness<Native>,
   runtime: Runtime<Native>,
