@@ -6,10 +6,10 @@ packages:
 
 catalogMode: prefer
 catalog:
-  "@effect/platform-node": 4.0.3
-  "@gjermundgaraba/effect-actions": 0.13.0
+  "@effect/platform-node": 4.0.4
+  "@gjermundgaraba/effect-actions": 0.14.0
   "@types/node": 26.6.4
-  effect: 4.0.3
+  effect: 4.0.4
   sandbox-agent: 0.5.2
   typescript: 7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.1.0
