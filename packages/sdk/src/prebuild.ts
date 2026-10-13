@@ -6,7 +6,7 @@
  * changes and nothing here deletes one: building anew is a `checkpoint delete` first.
  */
 import { Effect, Option } from "effect";
-import type { CreateOptions, Interface } from "./client.ts";
+import type { CreateOptions, Interface } from "./client/client.ts";
 import { type ClankerboxError, Invalid, Precondition } from "./errors.ts";
 import { formatId } from "./ids.ts";
 import type { Checkpoint, Host, Machine, MachineSpec } from "./resources.ts";

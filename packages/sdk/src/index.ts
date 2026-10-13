@@ -6,9 +6,11 @@ export * from "./ids.ts";
 
 export * from "./resources.ts";
 
-export * as Client from "./client.ts";
+export * as Client from "./client/client.ts";
 
 export * as Prebuild from "./prebuild.ts";
+
+export * from "./release.ts";
 
 export * from "./profile.ts";
 

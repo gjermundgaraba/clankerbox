@@ -1,8 +1,15 @@
 import { Duration, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
-import { Capacity, Client, type MachineSpec, version } from "../src/index.ts";
-import { type Endpoint, machine, Silent, type StubHost, stubHost, transport } from "./stub-host.ts";
+import { Capacity, Client, type MachineSpec, version } from "../../src/index.ts";
+import {
+  type Endpoint,
+  machine,
+  Silent,
+  type StubHost,
+  stubHost,
+  transport,
+} from "../stub-host.ts";
 
 const stubs: Array<StubHost> = [];
 

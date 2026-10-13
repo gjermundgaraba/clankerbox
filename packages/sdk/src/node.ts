@@ -4,7 +4,7 @@
  */
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { Layer } from "effect";
-import { Client, type HostEntry, make, type Options } from "./client.ts";
+import { Client, type HostEntry, make, type Options } from "./client/client.ts";
 import type { Invalid } from "./errors.ts";
 
 /** Node's `http` module sets no timeout of its own: a mutation can run for hours. */

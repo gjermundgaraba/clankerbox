@@ -1,8 +1,27 @@
 /** Reads a profile file for `create`. Hosts never see a profile. */
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { Invalid } from "./errors.ts";
-import { Profile } from "./resources.ts";
+import { HostId } from "./ids.ts";
+import { MachineSpec, Setup } from "./resources.ts";
 import { describeFileError, describeIssues } from "./text.ts";
+
+/**
+ * A profile file: a client-side file that fills in a create request. `setup.path` is a script
+ * file or a recipe directory, relative to the profile file; without a `timeoutSeconds` the host's
+ * default applies. `host` places the create on that host instead of by base.
+ */
+export const Profile = Schema.Struct({
+  base: MachineSpec.fields.base,
+  cpu: MachineSpec.fields.cpu,
+  ramMib: MachineSpec.fields.ramMib,
+  diskGib: MachineSpec.fields.diskGib,
+  setup: Schema.optionalKey(
+    Schema.Struct({ path: Schema.String, timeoutSeconds: Setup.fields.timeoutSeconds }),
+  ),
+  host: Schema.optionalKey(HostId),
+});
+
+export type Profile = typeof Profile.Type;
 
 /** A profile file as read: its fields, with `setup.path` resolved, and its name as `label`. */
 export interface LoadedProfile extends Profile {

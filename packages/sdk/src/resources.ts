@@ -1,6 +1,5 @@
 /** The resources a host reports: machines, checkpoints and the host itself. */
 import { Schema } from "effect";
-import packageJson from "../package.json" with { type: "json" };
 import { HostErrorTag } from "./errors.ts";
 import { HostId, Id } from "./ids.ts";
 
@@ -97,12 +96,6 @@ export const Checkpoint = Schema.Struct({
 
 export type Checkpoint = typeof Checkpoint.Type;
 
-/** The SDK's version, which is also the version of the clankerbox binaries it ships with. */
-export const version: string = packageJson.version;
-
-/** A version's major.minor: releases that share it speak the same API. */
-export const release = (of: string): string => of.split(".").slice(0, 2).join(".");
-
 export const Host = Schema.Struct({
   id: HostId,
   runtime: Runtime,
@@ -176,21 +169,3 @@ export type MachineSpec = typeof MachineSpec.Type;
 export const CreateRequest = Schema.Struct({ id: Id, ...specFields });
 
 export type CreateRequest = typeof CreateRequest.Type;
-
-/**
- * A profile file: a client-side file that fills in a create request. `setup.path` is a script
- * file or a recipe directory, relative to the profile file; without a `timeoutSeconds` the host's
- * default applies. `host` places the create on that host instead of by base.
- */
-export const Profile = Schema.Struct({
-  base: specFields.base,
-  cpu: specFields.cpu,
-  ramMib: specFields.ramMib,
-  diskGib: specFields.diskGib,
-  setup: Schema.optionalKey(
-    Schema.Struct({ path: Schema.String, timeoutSeconds: Schema.optionalKey(Size) }),
-  ),
-  host: Schema.optionalKey(HostId),
-});
-
-export type Profile = typeof Profile.Type;
