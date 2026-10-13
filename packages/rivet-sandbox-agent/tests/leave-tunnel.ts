@@ -1,5 +1,3 @@
-// Opens a tunnel with the program and directory it is given, prints the tunnel's port, and
-// returns without closing it: what a program that leaves its sandbox running does.
 import { Effect, Scope } from "effect";
 import { forwarding, freePort, open } from "../src/tunnel.ts";
 

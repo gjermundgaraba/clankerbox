@@ -38,7 +38,6 @@ const url = "http://linux.test";
 
 const login = { user: "root", host: "100.64.0.7", port: 10_022 };
 
-/** The stub host's runtime version, which a prebuild's name is of. */
 const runtimeVersion = "0.0.0-test";
 
 const hostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@linux";
@@ -55,7 +54,6 @@ const checkpoint = (id: string): Checkpoint => ({
   action: { name: "capture", status: "done" },
 });
 
-/** A machine the tunnel can reach: running, with an endpoint and a host key. */
 const reachable = (id: string, fields?: Partial<Machine>) =>
   machine(id, { ssh: login, hostKey, ...fields });
 
@@ -73,22 +71,15 @@ interface Call {
   readonly args: ReadonlyArray<string>;
 }
 
-/**
- * A provider over one stub host, `linux`, whose tunnels run the stand-in ssh. `dir` holds the
- * files that steer the stand-in, and `calls` reads what it was run with.
- */
 const setup = async (
   host: {
     readonly machines?: ReadonlyArray<Machine>;
     readonly checkpoints?: ReadonlyArray<Checkpoint>;
-    /** What a create fails with, after it has left its machine on the host, unmade. */
     readonly createFails?: HostError;
-    /** What a create is refused with, leaving nothing. */
     readonly createRefused?: HostError;
   },
   options: Omit<Options, "hosts" | "from"> & { readonly from?: Options["from"] } = {},
   ssh = fakeSsh,
-  /** Wraps the client the provider uses, to watch or slow its calls. */
   wrap: (client: Client.Interface) => Client.Interface = (client) => client,
 ) => {
   const dir = await mkdtemp(join(tmpdir(), "clankerbox-provider-"));
@@ -145,7 +136,6 @@ const setup = async (
   return { dir, stub, sandbox, calls };
 };
 
-/** Whether something accepts a connection on the loopback port. */
 const listening = (port: number) =>
   new Promise<boolean>((resolve) => {
     const socket = connect({ host: "127.0.0.1", port });
@@ -158,10 +148,7 @@ const listening = (port: number) =>
     socket.once("error", () => resolve(false));
   });
 
-/**
- * Whether the process `pid` is gone. Node reaps a child and records its exit in one step, so a
- * tunnel whose ssh is gone is one the provider knows has ended; a closed port alone may come first.
- */
+/** Node reaps a child and records its exit in one step; a closed port alone may come first. */
 const gone = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -205,9 +192,6 @@ test("the SDK starts a sandbox from a profile and reaches its agent through a tu
   const [call, ...more] = await calls();
   const args = call?.args ?? [];
 
-  // The SDK's pinnedSsh makes everything up to the destination, the machine's ID; the provider
-  // adds the login user, the tunnel's options, then the caller's (OpenSSH keeps an option's first
-  // value, so the caller's can't override the tunnel's), and the forward.
   expect(more).toEqual([]);
   expect(args.slice(0, 2)).toEqual(["-l", "root"]);
   expect(args.slice(args.indexOf(id))).toEqual([
@@ -326,7 +310,6 @@ test("a create that fails deletes the machine it left, and fails with the host's
     id: expect.stringMatching(/^linux_sandbox-[0-9a-f]{8}$/u),
   });
 
-  // The machine the create left is gone, and nothing else is.
   expect(stub.calls).toEqual(["host.get", "machine.create", "machine.delete"]);
   expect(stub.held()).toEqual(["linux_other"]);
 });
@@ -448,8 +431,6 @@ test("ensureServer opens a tunnel that ended on the same port, and starts the ma
   expect(await sandbox.getUrl("linux_kept")).toBe(opened);
   expect(stub.calls).toEqual(["machine.get"]);
 
-  // A running tunnel whose agent fails its health check: the machine's start relaunches it, and
-  // the tunnel is opened anew, to the endpoint the machine has now.
   await writeFile(join(dir, "unhealthy"), "");
   stub.hold(reachable("linux_kept", { ssh: { ...login, port: 20_022 } }));
   stub.calls.length = 0;
@@ -553,7 +534,6 @@ test("a tunnel left open doesn't keep its program running, and ends when the pro
   cleanups.push(() => rm(dir, { recursive: true, force: true }));
   process.env["FAKE_SSH_DIR"] = dir;
 
-  // The program returns with its tunnel open, and exits on its own.
   const { stdout } = await promisify(execFile)(
     process.execPath,
     [fileURLToPath(new URL("leave-tunnel.ts", import.meta.url)), fakeSsh, dir],
