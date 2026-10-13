@@ -355,9 +355,9 @@ citation moved to the new tag.
   to 120 s (since 1.23.5). `create --from …
   --keep-identity` skips it. The re-mint only stirs the RNG pool (its
   `/dev/urandom` write; `rejuvenate_clone`'s doc: no `RNDADDENTROPY` or
-  VMGENID), and the guest has no vmgenid or
-  hwrng, so restores of one RAM state got duplicate host keys (4 distinct of
-  20). A running sshd is not touched, and the kernel `boot_id` is not re-minted.
+  VMGENID), and the guest has no vmgenid (it does list a `virtio_rng.0`
+  hwrng at 1.27.3), so restores of one RAM state got duplicate host keys (4
+  distinct of 20). A running sshd is not touched, and the kernel `boot_id` is not re-minted.
   Ours: preparation reseeds the RNG (`/dev/random` plus `RNDRESEEDCRNG`),
   re-mints the keys and SIGHUPs sshd on every runtime, whatever smolvm did.
 
