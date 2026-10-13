@@ -1,5 +1,5 @@
 /**
- * The checkpoint actions: capture, list, get and delete. They run in the order `actions.ts`
+ * The checkpoint actions: capture, list, get and delete. They run in the order `claims.ts`
  * describes. A capture claims its source machine and inserts the checkpoint's row; restores,
  * which only read a ready checkpoint, are machine actions.
  */

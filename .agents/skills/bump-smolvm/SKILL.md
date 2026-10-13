@@ -16,7 +16,7 @@ qualified release.
 
 ## Source and scope
 
-- **Pinned in this repo:** `testedVersion` in `packages/host/src/smolvm.ts` is
+- **Pinned in this repo:** `testedVersion` in `packages/host/src/platform/smolvm.ts` is
   exact: startup refuses any other `smolvm --version`. `pin` derives from it
   (`smolvm <version> <platform>-<arch>`) and is recorded on every `ram`
   checkpoint. The version also appears in tests, docs and examples:
@@ -298,7 +298,7 @@ citation moved to the new tag.
 - smolvm's own fork ports come from 20000–31999: `CLONE_PORT_FLOOR` (20000) up
   to `CLONE_PORT_CEILING` (32000), which is excluded (`alloc_free_host_port`,
   S@1.27.3:src/agent/fork.rs). The CLI allocates no other host port range.
-  Ours: `reservedPorts` (`ports.ts`) holds that
+  Ours: `reservedPorts` (`machine-ports.ts`) holds that
   range beside the Linux and macOS ephemeral ranges, and the host config
   refuses a `machinePorts` that reaches into any of them (10000–19999 by
   default; `config.test.ts`).
@@ -403,8 +403,8 @@ citation moved to the new tag.
 
 ## Verify
 
-- Unit: `vp test` in `packages/host` (`smolvm.test.ts` fakes each smolvm call
-  as the tested release answers it; `store.test.ts`) and `packages/sdk`
+- Unit: `vp test` in `packages/host` (`platform/smolvm.test.ts` fakes each smolvm call
+  as the tested release answers it; `platform/sqlite.test.ts`) and `packages/sdk`
   (`ids.test.ts`), then `vp run --no-cache ready`. Update a fake only to match
   smolvm's real behaviour at the target.
 - Live: `pnpm live:smolvm --ssh USER@HOST --address TAILNET_ADDRESS --root OWNED_ROOT --smolvm-prefix PREFIX`,

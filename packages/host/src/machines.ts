@@ -1,6 +1,6 @@
 /**
  * The machine actions: create, start, stop and delete, and fork and restore, which make a
- * machine from another machine or from a checkpoint. They run in the order `actions.ts`
+ * machine from another machine or from a checkpoint. They run in the order `claims.ts`
  * describes.
  */
 import {
@@ -91,7 +91,7 @@ type Making =
       readonly work: (machine: MachineRef, source: MachineRef) => Work;
     };
 
-/** Builds the actions, once the host's startup step has run (`index.ts`). */
+/** Builds the actions, once the host's startup step has run (`host.ts`). */
 export const make = (
   config: Pick<HostSettings, "id" | "bases" | "machinePorts">,
 ): Effect.Effect<Interface, HostError, Store | Runtime | PortProbe | Scope.Scope> =>

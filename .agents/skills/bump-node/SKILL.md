@@ -81,7 +81,7 @@ Each: what Node does, where, and what of ours depends on it.
 - `node:sqlite` (`DatabaseSync`) works with no experimental warning (SQLite
   3.53.4 at 26.10.0), and its errors carry SQLite's extended result codes in
   `errcode` (`SQLITE_BUSY` 5, `SQLITE_CONSTRAINT_PRIMARYKEY` 1555). Ours:
-  `packages/host/src/store.ts` (the owner lock through `locking_mode =
+  `packages/host/src/platform/sqlite.ts` (the owner lock through `locking_mode =
   EXCLUSIVE`, the claim's primary-key conflict). Check the module's stability
   and the bundled SQLite's version.
 - `process.platform`-`process.arch` names the targets `darwin-arm64` and
@@ -101,7 +101,7 @@ minutes)
   receiving the request, `headersTimeout` 60 000, `keepAliveTimeout` 5 000 and
   `timeout` 0 (`storeHTTPOptions` and `Server`, N@v26.10.0:lib/_http_server.js);
   330 s handlers replied under them. Ours: `runHost` in
-  `packages/host/src/index.ts` creates the server with Node's defaults. A
+  `apps/clankerbox/src/host.ts` creates the server with Node's defaults. A
   default that starts bounding a response would cut long mutations off.
 
 **Sizes and startup** (sanity checks, not contracts)

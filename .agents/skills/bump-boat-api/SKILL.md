@@ -24,11 +24,11 @@ back.
 ## Source and scope
 
 - **Pinned in this repo:** `baseUrl` (`https://boat.dev/api/v1`) in
-  `packages/host/src/boat-api.ts`, with the spec's sha256 in its header comment;
-  `apiVersion` in `packages/host/src/boat.ts`, which the host reports as its
+  `packages/host/src/platform/boat/api.ts`, with the spec's sha256 in its header comment;
+  `apiVersion` in `packages/host/src/platform/boat/boat.ts`, which the host reports as its
   runtime's version; `API` in `tests/live/boat/driver.py`. The Schemas, refusal
-  tables and constants in `boat-api.ts` and `boat.ts` (named below) follow the
-  spec, and so do the fakes in `packages/host/tests/boat-api.test.ts` and
+  tables and constants in `platform/boat/api.ts` and `platform/boat/boat.ts` (named below) follow the
+  spec, and so do the fakes in `packages/host/tests/platform/boat-api.test.ts` and
   `boat.test.ts`. `packages/sdk/tests/ids.test.ts` holds the named-snapshot
   name rule.
 - **Sources:** the spec at `https://docs.boat.dev/openapi/boat-v1.yaml`, and
@@ -58,7 +58,7 @@ Each: what boat does, and what of ours depends on it.
   `DELETE /sandboxes/{id}`, `POST /named-snapshots` (`sandboxId`, `name`),
   `GET` and `DELETE /named-snapshots/{name}`, `GET /limits`; the live driver
   also reads `GET /sandboxes` and `GET /named-snapshots`. Ours: one method
-  each in `boat-api.ts`'s `make`.
+  each in `api.ts`'s `make`.
 - The fields read: a sandbox's `id`, `state`, `error`, `ip`, `sshEndpoint`,
   `lastSnapshotAttemptAt` and `lastSnapshotStatus` (`Sandbox`, all but `id` and
   `state` optional, since a `cancelled` sandbox is reported once with only
@@ -248,7 +248,7 @@ Each: what boat does, and what of ours depends on it.
 
 ## Verify
 
-- Unit: `vp test` in `packages/host` (`boat-api.test.ts`, `boat.test.ts`, whose
+- Unit: `vp test` in `packages/host` (`platform/boat-api.test.ts`, `platform/boat.test.ts`, whose
   fake answers as boat's API does) and `packages/sdk` (`ids.test.ts`),
   then `vp run --no-cache ready`. Change a fake only to match boat's real answers.
 - Live: `pnpm live:boat [--address TAILNET_ADDRESS]` on a trial account with
@@ -262,7 +262,7 @@ Each: what boat does, and what of ours depends on it.
 
 ## After
 
-- Update the spec hash and its date in `boat-api.ts`'s header, the Schemas,
+- Update the spec hash and its date in `api.ts`'s header, the Schemas,
   tables and constants that changed, the fakes, and README's boat notes. For a
   new API version, also `baseUrl`, `apiVersion` and the driver's `API`.
 - Update this skill's claims with what changed, and record the spec copy's full

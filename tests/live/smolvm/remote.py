@@ -147,7 +147,7 @@ def must(result, what):
 # ---------------------------------------------------------------- smolvm, in the host's environment
 
 def smol_env():
-    """The host's own environment for smolvm (packages/host/src/smolvm.ts `environment`)."""
+    """The host's own environment for smolvm (packages/host/src/platform/smolvm.ts `environment`)."""
     return {
         'PATH': PATH_ENV,
         'HOME': str(DATA),
