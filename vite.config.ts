@@ -30,6 +30,7 @@ export default defineConfig({
         name: "anti-slop-effect",
         specifier: "./tools/oxlint/anti-slop/effect/index.ts",
       },
+      { name: "fence", specifier: "./tools/lint-fence/src/index.ts" },
     ],
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
@@ -73,7 +74,65 @@ export default defineConfig({
       "anti-slop-effect/no-manual-tagged-construction": "error",
       "anti-slop-effect/no-service-constructor-imports": "error",
       "anti-slop-effect/prefer-effect-match": "error",
+      "fence/no-manual-run": "error",
     },
+    overrides: [
+      {
+        // The entry files, and the tests that drive a Promise API or a child program.
+        files: [
+          "apps/clankerbox/src/main.ts",
+          "packages/rivet-sandbox-agent/src/provider.ts",
+          "packages/rivet-sandbox-agent/tests/leave-tunnel.ts",
+          "packages/rivet-sandbox-agent/tests/provider.test.ts",
+          "tests/live/tests/sandbox-agent.test.ts",
+          "tools/lint-fence/tests/**",
+        ],
+        rules: { "fence/no-manual-run": "off" },
+      },
+      {
+        files: [
+          "packages/host/src/{checkpoints,claims,guest,ids,machine-ports,machines,ram-budget,runtime,settings,store}.ts",
+        ],
+        rules: {
+          "fence/allowed-imports": [
+            "error",
+            {
+              allow: [
+                "^\\./(checkpoints|claims|guest|ids|machine-ports|machines|ram-budget|runtime|settings|store)\\.ts$",
+                "^effect$",
+                "^effect/encoding$",
+                "^@gjermundgaraba/clankerbox-sdk$",
+              ],
+              because:
+                "a host domain file imports only other domain files, effect and the SDK; platform/, Node and effect/process are for the composition files",
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/sdk/src/**/*.ts"],
+        excludeFiles: ["packages/sdk/src/node.ts"],
+        rules: {
+          "fence/allowed-imports": [
+            "error",
+            {
+              allow: [
+                "^\\.\\.?/",
+                "^effect$",
+                "^effect/(encoding|http)$",
+                "^@gjermundgaraba/effect-actions/",
+              ],
+              because: "the SDK's . entry runs anywhere; what needs Node goes in node.ts",
+            },
+          ],
+          "no-restricted-globals": [
+            "error",
+            { name: "Buffer", message: "The SDK's . entry runs anywhere: use Uint8Array." },
+            { name: "process", message: "The SDK's . entry runs anywhere: take it as input." },
+          ],
+        },
+      },
+    ],
   },
   run: { cache: true },
 });

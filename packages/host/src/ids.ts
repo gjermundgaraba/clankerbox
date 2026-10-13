@@ -1,10 +1,11 @@
-import { randomBytes } from "node:crypto";
 import { Invalid, NotFound, parseId } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
+import { Hex } from "effect/encoding";
 
 const instanceBytes = 16;
 
-export const newInstance = (): string => randomBytes(instanceBytes).toString("hex");
+export const newInstance = (): string =>
+  Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(instanceBytes)));
 
 /** A new machine's ID goes through here too, so every row's ID fits clankercreds' pattern. */
 export const nameOn =
