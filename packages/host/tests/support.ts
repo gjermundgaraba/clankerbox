@@ -6,7 +6,7 @@ import type { CreateRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect, Exit, Layer, Logger, Scope } from "effect";
 import { HttpServer } from "effect/http";
 import * as Checkpoints from "../src/checkpoints.ts";
-import { hostLayer } from "../src/host.ts";
+import { hostLayer } from "../src/composition/host.ts";
 import * as Machines from "../src/machines.ts";
 import type { PortRange } from "../src/machine-ports.ts";
 import type { HostSettings } from "../src/settings.ts";

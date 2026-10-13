@@ -6,12 +6,12 @@ import {
   type Runtime,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path, Schema } from "effect";
-import { defaultMachinePorts, reservedPorts } from "./machine-ports.ts";
-import { Address } from "./platform/address.ts";
-import { type BoatHost, BoatSettings } from "./platform/boat/boat.ts";
-import * as Smolvm from "./platform/smolvm.ts";
-import * as Tart from "./platform/tart/tart.ts";
-import type { HostSettings } from "./settings.ts";
+import { defaultMachinePorts, reservedPorts } from "../machine-ports.ts";
+import { Address } from "../platform/address.ts";
+import { type BoatHost, BoatSettings } from "../platform/boat/boat.ts";
+import * as Smolvm from "../platform/smolvm.ts";
+import * as Tart from "../platform/tart/tart.ts";
+import type { HostSettings } from "../settings.ts";
 
 const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }));
 

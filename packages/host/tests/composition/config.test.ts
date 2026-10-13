@@ -5,7 +5,7 @@ import { inspect } from "node:util";
 import { Effect, Redacted, type Schema } from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { loadConfig } from "../src/config.ts";
+import { loadConfig } from "../../src/composition/config.ts";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 
 const image =

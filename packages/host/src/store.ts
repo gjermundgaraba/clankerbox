@@ -34,7 +34,9 @@ export interface MachineRecord extends Resource {
 }
 
 /**
- * Ready checkpoints never change, so restores read them without a claim. Only a capture or a delete claims a checkpoint row, so its action is one of them. */
+ * Ready checkpoints never change, so restores read them without a claim. Only a capture or a
+ * delete claims a checkpoint row, so its action is one of them.
+ */
 export interface CheckpointRecord extends Resource {
   readonly action: ActionRecord;
   readonly machine: string;

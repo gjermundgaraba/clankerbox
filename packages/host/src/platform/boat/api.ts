@@ -9,7 +9,6 @@
  */
 import {
   Capacity,
-  formatGib,
   formatMib,
   Internal,
   NotFound,
@@ -96,7 +95,7 @@ const machineTypes: ReadonlyArray<MachineType> = [
 type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 
 const sized = ({ cpu, ramMib, diskGib }: Sizes): string =>
-  `${cpu} vCPU, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
+  `${cpu} vCPU, ${formatMib(ramMib)} of RAM and ${diskGib}G of disk`;
 
 export const machineType = (sizes: Sizes): Effect.Effect<MachineType, Precondition> =>
   Option.match(

@@ -6,13 +6,7 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-  Capacity,
-  formatGib,
-  type HostError,
-  Internal,
-  Precondition,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Layer, Option, Schedule, Schema, type Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { lastLines } from "../../guest.ts";
@@ -512,7 +506,7 @@ export const make = (
 
         if (set.exitCode !== 0 && set.stderr.includes(shrinkRefusal)) {
           return yield* new Precondition({
-            message: `machine ${machine.id}'s disk of ${formatGib(machine.diskGib)} is below its base's, and Tart only grows a disk: ${lastLines(set.stderr)}`,
+            message: `machine ${machine.id}'s disk of ${machine.diskGib}G is below its base's, and Tart only grows a disk: ${lastLines(set.stderr)}`,
           });
         }
 
@@ -523,11 +517,13 @@ export const make = (
 
     /**
      * A fork and a capture copy a stopped machine's disk, though Tart's clone doesn't require
-     * one.
+     * one. `captureFrom` tells clients so.
      */
+    const copiedFrom = "stopped";
+
     const copyable = (what: string, machine: MachineRef) =>
       Effect.flatMap(state(vmOf(machine)), (observed) => {
-        if (observed === "stopped") {
+        if (observed === copiedFrom) {
           return Effect.void;
         }
 
@@ -548,7 +544,7 @@ export const make = (
       publishAddress: settings.publishAddress,
       pin: undefined,
       checkpointKind: "disk",
-      captureFrom: "stopped",
+      captureFrom: copiedFrom,
       loginUser: "admin",
       startup: Effect.fn("Tart.startup")((machines) =>
         Effect.gen(function* () {

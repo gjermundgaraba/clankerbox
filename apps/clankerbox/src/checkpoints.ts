@@ -1,4 +1,4 @@
-import { actionsByName, Checkpoint, formatGib, formatMib } from "@gjermundgaraba/clankerbox-sdk";
+import { actionsByName, Checkpoint, formatMib } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Schema } from "effect";
 import { Command } from "effect/cli";
 import {
@@ -38,7 +38,7 @@ export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
   ...checkpointColumns.map(([label, cell]) => [label, cell(checkpoint, now)]),
   ["CPU", String(checkpoint.cpu)],
   ["RAM", formatMib(checkpoint.ramMib)],
-  ["DISK", formatGib(checkpoint.diskGib)],
+  ["DISK", `${checkpoint.diskGib}G`],
   ["ERROR", actionError(checkpoint)],
 ];
 

@@ -51,7 +51,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a config with an unknown key is Invalid naming the file, and one listing a host twice Invalid",
+    "a config with an unknown key, or listing a host twice, is Invalid naming the file",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -77,7 +77,10 @@ layer(NodeServices.layer)((it) => {
 
         expect([typoed.code, listedTwice.code]).toEqual([1, 1]);
         expect(decodeJsonError(typoed.stdout).error).toMatchObject({ tag: "Invalid", file: typo });
-        expect(decodeJsonError(listedTwice.stdout).error.tag).toBe("Invalid");
+        expect(decodeJsonError(listedTwice.stdout).error).toMatchObject({
+          tag: "Invalid",
+          file: twice,
+        });
       }),
   );
 

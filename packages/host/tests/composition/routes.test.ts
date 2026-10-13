@@ -14,7 +14,7 @@ import { FetchHttpClient } from "effect/http";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { startHost, type TestHost } from "./support.ts";
+import { startHost, type TestHost } from "../support.ts";
 
 const serve = (options?: Parameters<typeof startHost>[1]) =>
   Effect.flatMap(scratch, (dir) => startHost(dir, options));

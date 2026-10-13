@@ -7,15 +7,15 @@ import {
   type HttpServer,
   type HttpServerError,
 } from "effect/http";
-import * as Checkpoints from "./checkpoints.ts";
-import * as Machines from "./machines.ts";
-import type { RecordNative, Runtime } from "./runtime.ts";
-import * as BindProbe from "./platform/bind-probe.ts";
-import * as Sqlite from "./platform/sqlite.ts";
+import * as Checkpoints from "../checkpoints.ts";
+import * as Machines from "../machines.ts";
+import type { RecordNative, Runtime } from "../runtime.ts";
+import * as BindProbe from "../platform/bind-probe.ts";
+import * as Sqlite from "../platform/sqlite.ts";
 import { routes } from "./routes.ts";
-import type { HostSettings } from "./settings.ts";
-import { startup } from "./startup.ts";
-import * as Store from "./store.ts";
+import type { HostSettings } from "../settings.ts";
+import { startup } from "../startup.ts";
+import * as Store from "../store.ts";
 
 export type ServerLayer = Layer.Layer<
   | HttpServer.HttpServer

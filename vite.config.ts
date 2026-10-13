@@ -85,25 +85,23 @@ export default defineConfig({
           "packages/rivet-sandbox-agent/tests/leave-tunnel.ts",
           "packages/rivet-sandbox-agent/tests/provider.test.ts",
           "tests/live/tests/sandbox-agent.test.ts",
-          "tools/lint-fence/tests/**",
         ],
         rules: { "fence/no-manual-run": "off" },
       },
       {
         files: ["packages/host/src/*.ts"],
-        excludeFiles: ["packages/host/src/{config,host,routes,runtimes,startup}.ts"],
         rules: {
           "fence/allowed-imports": [
             "error",
             {
               allow: [
-                "^\\./(checkpoints|claims|guest|ids|machine-ports|machines|ram-budget|runtime|settings|store)\\.ts$",
+                "^\\./[a-z-]+\\.ts$",
                 "^effect$",
                 "^effect/encoding$",
                 "^@gjermundgaraba/clankerbox-sdk$",
               ],
               because:
-                "a host domain file imports only other domain files, effect and the SDK; platform/, Node and effect/process are for the composition files",
+                "a host domain file imports only other domain files, effect and the SDK; platform/, Node and effect/process are for composition/",
             },
           ],
         },
@@ -116,7 +114,8 @@ export default defineConfig({
             "error",
             {
               allow: [
-                "^\\.\\.?/",
+                "^\\./(?!node\\.ts$)[a-z-]+\\.ts$",
+                "^\\.\\./package\\.json$",
                 "^effect$",
                 "^effect/(encoding|http)$",
                 "^@gjermundgaraba/effect-actions/",

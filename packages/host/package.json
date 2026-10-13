@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/host.ts",
-    "./config": "./src/config.ts",
-    "./runtimes": "./src/runtimes.ts",
+    ".": "./src/composition/host.ts",
+    "./config": "./src/composition/config.ts",
+    "./runtimes": "./src/composition/runtimes.ts",
     "./testing": "./tests/support.ts"
   },
   "scripts": {

@@ -4,12 +4,11 @@ import { Capacity, Conflict } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Queue } from "effect";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
-import { mkdir, write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { elapsing, mkdir, write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
 import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
 import {
   cleanup,
   cli,
-  elapsing,
   type CliOptions,
   decodeJsonError,
   hostIn,

@@ -254,9 +254,18 @@ export const stubHost = (options: StubHostOptions) => {
 
 export type StubHost = ReturnType<typeof stubHost>;
 
-/** Never answers; `aborted` counts the requests the client gave up on. */
+/**
+ * Never answers; `aborted` counts the requests the client gave up on, and `reached` settles once
+ * a request has arrived, after the client started its timer.
+ */
 export class Silent {
   aborted = 0;
+  readonly #reached = Promise.withResolvers<void>();
+  readonly reached = Effect.promise(() => this.#reached.promise);
+
+  arrive() {
+    this.#reached.resolve();
+  }
 }
 
 /** `slow` answers 100 ms late, and `lost` loses every reply after running it. */
@@ -293,6 +302,8 @@ export const transport = (
     }
 
     if (endpoint instanceof Silent) {
+      endpoint.arrive();
+
       return unanswered(endpoint, init?.signal);
     }
 

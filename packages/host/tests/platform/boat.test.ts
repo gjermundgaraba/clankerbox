@@ -53,7 +53,7 @@ import {
   Refusal,
   Runtime,
 } from "../../src/runtime.ts";
-import { servicesLayer } from "../../src/host.ts";
+import { servicesLayer } from "../../src/composition/host.ts";
 import type { HostSettings } from "../../src/settings.ts";
 import * as Sqlite from "../../src/platform/sqlite.ts";
 import * as Store from "../../src/store.ts";
