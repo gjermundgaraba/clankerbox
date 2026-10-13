@@ -1,4 +1,4 @@
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 /** Removed when the test's scope closes. */
@@ -48,6 +48,37 @@ export const exitOf = (
 
     return yield* handle.exitCode;
   });
+
+/** Runs `command` to its end with `input` on its stdin, and returns its exit code and output. */
+export const outputOf = (
+  command: string,
+  args: ReadonlyArray<string>,
+  options?: Omit<ChildProcess.CommandOptions, "stdin" | "stdout" | "stderr"> & {
+    readonly input?: Uint8Array;
+  },
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const { input, ...rest } = options ?? {};
+
+      const handle = yield* spawner.spawn(
+        ChildProcess.make(command, args, {
+          ...rest,
+          stdin: input === undefined ? "ignore" : Stream.make(input),
+        }),
+      );
+
+      return yield* Effect.all(
+        {
+          code: handle.exitCode,
+          stdout: Stream.mkString(Stream.decodeText(handle.stdout)),
+          stderr: Stream.mkString(Stream.decodeText(handle.stderr)),
+        },
+        { concurrency: "unbounded" },
+      );
+    }),
+  );
 
 export const stat = (path: string) => Effect.flatMap(FileSystem.FileSystem, (fs) => fs.stat(path));
 
