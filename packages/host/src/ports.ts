@@ -15,7 +15,7 @@ export interface PortRange {
 /**
  * The ranges the machines' ports stay out of, which the host config refuses a range reaching
  * into: smolvm's own fork ports (`CLONE_PORT_FLOOR` up to `CLONE_PORT_CEILING`, excluded,
- * S@1.22.2:src/agent/fork.rs), and the ephemeral ports of Linux (`ip_local_port_range`'s
+ * S@1.27.3:src/agent/fork.rs:3978-3980), and the ephemeral ports of Linux (`ip_local_port_range`'s
  * default) and macOS (`net.inet.ip.portrange.first` to `.last`), from which the kernel can hand a
  * machine's port to an outgoing connection.
  */

@@ -8,7 +8,7 @@ and runs the suite with the darwin-arm64 one, smoked here, as the CLI.
     --root OWNED_ROOT --smolvm-prefix PREFIX [--suite-args 'VP TEST ARGS']
 
 OWNED_ROOT is the test host's directory for this work (runs/ and CLEANUP.md live there), and
-PREFIX the smolvm 1.22.2 install the host uses; both absolute. The driver runs the suite once,
+PREFIX the smolvm 1.27.3 install the host uses; both absolute. The driver runs the suite once,
 tears down, and exits with the suite's code. It refuses a tree with uncommitted changes, so the
 commit it records (resources.json `commit`) names the code it ran.
 
@@ -48,7 +48,7 @@ def main():
     parser.add_argument('--ssh', required=True, help='USER@HOST of the Linux test host')
     parser.add_argument('--address', required=True, help="the test host's tailnet address")
     parser.add_argument('--root', required=True, help='the owned root on the test host')
-    parser.add_argument('--smolvm-prefix', required=True, help='the smolvm 1.22.2 install prefix there')
+    parser.add_argument('--smolvm-prefix', required=True, help='the smolvm 1.27.3 install prefix there')
     parser.add_argument('--suite-args', default='', help='arguments for the suite run, such as -t PATTERN')
     parser.add_argument('--agent-env-file', help='NAME=value lines holding an LLM credential, for the '
                         'Sandbox Agent tests; without it they are skipped')

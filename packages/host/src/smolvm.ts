@@ -6,8 +6,8 @@
  *
  * A checkpoint is always `ram`: a running machine's RAM and disks, as a store checkpoint in the
  * host's one store. A fork is such a checkpoint into a store of its own, restored, then the
- * store is removed whole. `machine branch` is never called: each branch adds a backing layer to
- * its source, and smolvm refuses the 33rd.
+ * store is removed whole. `machine branch` is never called: a source with a live branch reads
+ * frozen, and smolvm refuses to stop or delete it while the branch runs.
  */
 import { join } from "node:path";
 import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
@@ -33,7 +33,7 @@ import {
  * The smolvm release this host was tested on. Another release is refused at startup: a bump
  * re-checks smolvm's claims (the bump-smolvm skill) before this changes.
  */
-export const testedVersion = "1.22.2";
+export const testedVersion = "1.27.3";
 
 /** What the runtime needs: the host config's smolvm settings, and the host's state dir. */
 export interface Settings extends Smolvm {
@@ -72,7 +72,7 @@ export const nativeName = (resource: Pick<MachineRef, "name" | "instance">): str
  */
 const observeConcurrency = 8;
 
-/** The systemd scope `SMOLVM_VM_USE_SCOPE=1` puts a VM in (S@1.22.2:src/systemd_scope.rs:151-163). */
+/** The systemd scope `SMOLVM_VM_USE_SCOPE=1` puts a VM in (S@1.27.3:src/systemd_scope.rs:151-164). */
 const scopeName = (native: string): string => `smolvm-vm-${native}.scope`;
 
 /** The disk templates smolvm would otherwise expand into the prefix on first use, racing itself. */
@@ -81,8 +81,8 @@ export const templates = ["storage-template.ext4", "overlay-template.ext4"] as c
 /**
  * Linux's `sun_path` holds 108 bytes, one of them the terminating NUL. smolvm keeps a
  * machine's sockets in a directory named by a 16-hex-digit hash of its name, so the longest
- * path, the control socket, depends only on the data root (S@1.22.2:src/agent/manager.rs:286-306,
- * src/agent/fork.rs:289).
+ * path, the control socket, depends only on the data root (S@1.27.3:src/agent/manager.rs:286-306,
+ * src/agent/fork.rs:301).
  */
 const socketPathMax = 107;
 
@@ -94,7 +94,7 @@ const searchPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 /**
  * The environment of every smolvm call, and so of every VM job. With `SMOLVM_DATA_DIR` set,
- * smolvm moves `HOME` to the data root anyway (S@1.22.2:src/main.rs:132-136); passing it there
+ * smolvm moves `HOME` to the data root anyway (S@1.27.3:src/main.rs:139-143); passing it there
  * keeps the original from being read at all. `SMOLVM_AGENT_ROOTFS` is needed for the same
  * reason. `SMOLVM_RESTORE_TMPFS=0` keeps every root restore from leaving
  * `/dev/shm/smolvm-restore` behind, at no cost (the bump-smolvm skill). `NO_COLOR` keeps
@@ -115,7 +115,7 @@ export const environment = (settings: Settings) => ({
   NO_COLOR: "1",
 });
 
-/** Every state `machine status --json` reports (S@1.22.2:src/config.rs:36-80). */
+/** Every state `machine status --json` reports (S@1.27.3:src/config.rs:36-85). */
 const RecordState = Schema.Literals([
   "created",
   "running",
@@ -141,7 +141,7 @@ const alive: ReadonlySet<RecordState> = new Set(["running", "pausing", "unreacha
 
 /**
  * The states `machine start` refuses: a frozen fork base, and a machine with saved execution,
- * which only smolvm's resume continues (`start_vm_named_with_db`, S@1.22.2:src/cli/vm_common.rs).
+ * which only smolvm's resume continues (`start_vm_named_with_db`, S@1.27.3:src/cli/vm_common.rs).
  */
 const unstartable: ReadonlySet<RecordState> = new Set(["frozen", "pausing", "paused"]);
 
@@ -271,7 +271,10 @@ export const make = (
         ),
       );
 
-    /** Every machine starts branchable: store capture needs it. */
+    /**
+     * Every machine starts branchable, so a capture defers its RAM save and pauses the machine
+     * only briefly; without it smolvm saves synchronously, pausing it for the whole RAM write.
+     */
     const boot = (native: string) =>
       call(["machine", "start", "--name", native, "--branchable"], `machine start ${native}`);
 
@@ -505,7 +508,7 @@ export const make = (
         // Removing the directory drops the checkpoint's references; the prune frees what no
         // other checkpoint shares, and staging that an interrupted capture left. A store that no
         // capture has written yet has nothing to prune, and smolvm's prune fails on it: it reads
-        // `objects/` (S@1.22.2:crates/smolvm-checkpoint/src/store.rs:1317-1319).
+        // `objects/` (S@1.27.3:crates/smolvm-checkpoint/src/store.rs:1550-1552).
         return Effect.gen(function* () {
           yield* removeAll(checkpointDir(checkpoint));
 

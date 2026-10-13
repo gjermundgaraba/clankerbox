@@ -61,7 +61,7 @@ const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
 /** The smolvm runtime's settings. */
 const SmolvmSettings = Schema.Struct({
-  /** The versioned install prefix, such as `/opt/smolvm/1.22.2`. */
+  /** The versioned install prefix, such as `/opt/smolvm/1.27.3`. */
   prefix: Schema.String,
   /** Where machines' guest port 22 is published (`SMOLVM_PUBLISH_ADDR`). Default: `listen.address`. */
   publishAddress: Schema.optionalKey(Address),

@@ -48,7 +48,7 @@ const spec: MachineSpec = {
 };
 
 /** The stub hosts' runtime version, which every prebuild name on them carries. */
-const smolvm = { runtimeVersion: "1.22.2" };
+const smolvm = { runtimeVersion: "1.27.3" };
 
 const nameOf = (of: MachineSpec, on = smolvm) => Effect.runPromise(Prebuild.nameOf(of, on));
 

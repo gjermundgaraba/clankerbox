@@ -96,8 +96,17 @@ const smolvmArgs = (calls: ReadonlyArray<Call>) =>
     .slice(1)
     .map((call) => (call.file.endsWith("/smolvm") ? call.args : [call.file, ...call.args]));
 
+/** As smolvm 1.27.3 answers: a running machine's status also probes its published ports. */
 const status = (state: string): Reply => ({
-  stdout: JSON.stringify({ name: "dev-01234567", state, cpus: 2 }),
+  stdout: JSON.stringify({
+    name: "dev-01234567",
+    state,
+    cpus: 2,
+    ports: 1,
+    ...(state === "running" && {
+      published_ports: [{ host: 10_000, guest: 22, guest_listening: "listening" }],
+    }),
+  }),
 });
 
 const unknown: Reply = {
@@ -115,7 +124,7 @@ test("every smolvm call runs the prefix's wrapper in one fixed environment, and 
 
   const runtime = await runtimeOf(settings, spawner);
 
-  expect(runtime.version).toBe("1.22.2");
+  expect(runtime.version).toBe("1.27.3");
   expect(spawner.calls).toEqual([
     {
       file: join(settings.prefix, "smolvm"),
@@ -179,12 +188,12 @@ test("a smolvm host refuses a smolvm release it wasn't tested on", async () => {
 
   const error = await startupError(
     settings,
-    scripted(() => ({ stdout: "smolvm 1.22.3\n" })),
+    scripted(() => ({ stdout: "smolvm 1.27.4\n" })),
   );
 
   expect(error._tag).toBe("Precondition");
   expect(error.message).toBe(
-    `${join(settings.prefix, "smolvm")} reports "smolvm 1.22.3", and this host was tested on smolvm 1.22.2`,
+    `${join(settings.prefix, "smolvm")} reports "smolvm 1.27.4", and this host was tested on smolvm 1.27.3`,
   );
 });
 

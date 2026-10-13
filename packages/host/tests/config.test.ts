@@ -21,7 +21,7 @@ const config = {
   listen: { address: "100.95.240.37", port: 8484 },
   stateDir: "state",
   bases: { ubuntu: image },
-  smolvm: { prefix: "/opt/smolvm/1.22.2", publishAddress: "100.95.240.37" },
+  smolvm: { prefix: "/opt/smolvm/1.27.3", publishAddress: "100.95.240.37" },
 };
 
 const load = async (contents: Schema.Json) => {
@@ -44,7 +44,7 @@ test("a host config resolves its state dir against its own directory and default
     bases: new Map([["ubuntu", image]]),
     machinePorts: { first: 10_000, last: 19_999 },
     smolvm: {
-      prefix: "/opt/smolvm/1.22.2",
+      prefix: "/opt/smolvm/1.27.3",
       publishAddress: "100.95.240.37",
       ramBudgetMib: Math.floor(totalmem() / 1024 / 1024) - 2048,
     },

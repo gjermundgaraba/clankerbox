@@ -62,7 +62,7 @@ operator (see [Runtime notes](#runtime-notes)):
 
 | Runtime | Host                    | Prerequisite                                                         |
 | ------- | ----------------------- | -------------------------------------------------------------------- |
-| smolvm  | Linux/amd64 with KVM    | smolvm exactly 1.22.2, upstream, in a versioned prefix; runs as root |
+| smolvm  | Linux/amd64 with KVM    | smolvm exactly 1.27.3, upstream, in a versioned prefix; runs as root |
 | Tart    | Apple Silicon, macOS 26 | Tart 2.40.1 or later, Softnet 0.24.0 installed SUID root             |
 | boat    | either, unprivileged    | a boat.dev API key                                                   |
 
@@ -86,7 +86,7 @@ processes, each with its own ID, state dir and port.
   "bases": {
     "ubuntu": "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7"
   },
-  "smolvm": { "prefix": "/opt/smolvm/1.22.2" }
+  "smolvm": { "prefix": "/opt/smolvm/1.27.3" }
 }
 ```
 
@@ -261,7 +261,7 @@ release replaces it while machines run.
 
 **smolvm host** (Linux/amd64 with KVM), as root:
 
-1. Install smolvm 1.22.2 under `/opt/smolvm/1.22.2` and expand its two disk
+1. Install smolvm 1.27.3 under `/opt/smolvm/1.27.3` and expand its two disk
    templates (the commands are in [smolvm](#smolvm)).
 2. Put the state dir outside every home directory, such as
    `/srv/clankerbox/smolvm`: as root, smolvm adds others-execute to every
@@ -899,9 +899,9 @@ These are known, not guarded, and accepted:
   a prefix without them (the bump-smolvm skill says why).
 
   ```sh
-  HOME=/opt/smolvm/1.22.2 install.sh --version 1.22.2 --prefix /opt/smolvm/1.22.2 --no-modify-path
+  HOME=/opt/smolvm/1.27.3 install.sh --version 1.27.3 --prefix /opt/smolvm/1.27.3 --no-modify-path
   for t in storage-template.ext4 overlay-template.ext4; do
-    zstd -d --sparse /opt/smolvm/1.22.2/$t.zst -o /opt/smolvm/1.22.2/$t
+    zstd -d --sparse /opt/smolvm/1.27.3/$t.zst -o /opt/smolvm/1.27.3/$t
   done
   ```
 
@@ -917,13 +917,12 @@ These are known, not guarded, and accepted:
   108-byte limit; startup checks it.
 - **Machines** run a digest-pinned OCI image with
   `--net --net-backend virtio-net -p <port>:22` and `--branchable`, each as its
-  own uid. Reference the base by digest only, with no tag, from
-  `mirror.gcr.io`, as the config example does (the bump-smolvm skill says
-  why). The stock image has no sshd; setup installs it. Install packages with
+  own uid. Reference the base by digest, from `mirror.gcr.io`, as the config
+  example does (the bump-smolvm skill says why). The stock image has no sshd; setup installs it. Install packages with
   `--no-install-recommends`.
 - **Disks:** `diskGib` is `--storage`, where workload writes land. smolvm
-  builds its host-side image seed only at the default 20 GiB; other sizes pull
-  the image in the guest on first start.
+  builds its host-side image seed for 20 GiB and more, a larger disk being
+  the seed grown; smaller sizes pull the image in the guest on first start.
 - **State** comes from `machine status --name X --json`, at most 8 at once;
   a machine whose status hasn't answered 8 s after the read began, its wait
   for a turn included, reads `unknown`. smolvm's exit codes are trusted: no

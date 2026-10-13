@@ -44,12 +44,15 @@ TEMPLATES = ('storage-template.ext4', 'overlay-template.ext4')
 # Every live run's host unit and machines carry it; init refuses to start while any run's unit or
 # scope is there.
 RUNS_PREFIX = 'clankerbox-live-'
-# The scopes of smolvm's image-seed builder VMs, whose names smolvm fixes (S@1.22.2:src/image_seed.rs:381).
+# The scopes of smolvm's image-seed builder VMs, whose names smolvm fixes (S@1.27.3:src/image_seed.rs:219,787).
 HELPER_PATTERNS = ('smolvm-vm-image-seed-*',)
 RAM_BUDGET_MIB = 8192
 PATH_ENV = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 LEDGER_TAG = 'live suite'
 SNAP_DIRS = ['/root', '/etc/systemd/system', '/run/systemd/transient', '/dev/shm', '/tmp', '/var/tmp']
+# Root smolvm's tmpfs directories: a restore's, which SMOLVM_RESTORE_TMPFS=0 keeps away, and a store
+# capture's, which every one makes and leaves, empty (S@1.27.3:src/portable_checkpoint.rs:1548-1572).
+SHM_DIRS = ('/dev/shm/smolvm-restore', '/dev/shm/smolvm-capture')
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--run', required=True)
@@ -235,8 +238,8 @@ def tailnet_listeners():
 
 def mode_dirs():
     """Every ancestor of the run dir and of the agent rootfs: smolvm as root adds o+x to those of
-    its data root and agent rootfs (S@1.22.2:src/agent/manager.rs:2398-2413,
-    src/process.rs:1634-1648)."""
+    its data root and agent rootfs (S@1.27.3:src/agent/manager.rs:2677-2692,
+    src/process.rs:1746-1761)."""
     found = set()
     for leaf in (STATE_DIR, prefix() / '.local/share/smolvm/agent-rootfs'):
         for parent in [leaf, *leaf.parents]:
@@ -305,9 +308,9 @@ def cmd_init(tailnet, smolvm_prefix):
     snap = snapshot('before')
     save_state(modes_before={d: v for d, v in snap['modes'].items()}, prefix_tree_before=snap['prefix_tree'],
                tailnet_listeners_before=snap['tailnet_listeners'],
-               shm_restore_before=os.path.exists('/dev/shm/smolvm-restore'))
+               shm_before=[d for d in SHM_DIRS if os.path.exists(d)])
     ledger_add('dirmodes', 'smolvm running as root adds others-execute to every ancestor of its data root and of '
-               'its agent rootfs (S@1.22.2:src/agent/manager.rs:2398-2413, src/process.rs:1634-1648): the home '
+               'its agent rootfs (S@1.27.3:src/agent/manager.rs:2677-2692, src/process.rs:1746-1761): the home '
                f'directory and, inside the owned root, the directories down to runs/{RID}/scratch and the prefix. '
                'Revert: chmod back to the recorded modes; verify stat and getfacl identical.')
     ledger_add('units', f'transient system unit {UNIT} (sudo systemd-run --collect) running the clankerbox host as '
@@ -317,7 +320,8 @@ def cmd_init(tailnet, smolvm_prefix):
                'inventory natively, stop/reset-failed the run\'s scopes and helper scopes that were not there '
                'before; verify none listed by systemctl list-units --all.')
     ledger_add('shm', '/dev/shm/smolvm-restore: not expected (the host sets SMOLVM_RESTORE_TMPFS=0 on every smolvm '
-               'call). Revert: remove it if this run created it.')
+               'call); /dev/shm/smolvm-capture: made by every store capture, which may stage its RAM image there '
+               'and removes it again. Revert: remove each if this run created it, empty.')
     ledger_add('procs', 'the root host process, root smolvm processes and VMM processes under per-VM uids 2000000+. '
                'Revert: stop every VM and the host; verify no process names the run and no uid>=2000000 process.')
     ledger_add('published', f'the host API listener on {tailnet}:<api port> (state.json) and smolvm published '
@@ -557,7 +561,7 @@ def machine_status(native):
 
 def stall(native):
     """SIGSTOPs the VMM of the run's machine `native`, which smolvm then reads unreachable: its
-    pid lives, but its agent doesn't answer (resolve_state, S@1.22.2:src/agent/state_probe.rs).
+    pid lives, but its agent doesn't answer (resolve_state, S@1.27.3:src/agent/state_probe.rs).
     The agent is the guest's PID 1, which no signal from inside the guest stops. smolvm's start
     and stop end such a VMM with SIGKILL, which ends a stopped process too, so teardown needs
     nothing more. Prints the pid."""
@@ -762,12 +766,13 @@ def cmd_finish():
                            else f'NOT REVERTED: before {st.get("tailnet_listeners_before")}, now {listeners}')
     # Something of the run may still use scratch or the prefix: delete nothing.
     stop_unless_reverted(data, result)
-    shm = os.path.exists('/dev/shm/smolvm-restore')
-    if shm and not st.get('shm_restore_before'):
-        sudo(['rmdir', '/dev/shm/smolvm-restore'], touched='removes /dev/shm/smolvm-restore, made during the run')
-    result['shm'] = (f'REVERTED {now()} (never made; verified absent)' if not shm
-                     else f'REVERTED {now()} (made during the run; removed)'
-                     if not os.path.exists('/dev/shm/smolvm-restore') else 'NOT REVERTED: present')
+    made = [d for d in SHM_DIRS if os.path.exists(d) and d not in st.get('shm_before', [])]
+    for d in made:
+        sudo(['rmdir', d], touched=f'removes {d}, made during the run')
+    left = [d for d in made if os.path.exists(d)]
+    result['shm'] = (f'NOT REVERTED: present {left}' if left
+                     else f'REVERTED {now()} (made during the run and removed: {made})' if made
+                     else f'REVERTED {now()} (none made; verified absent)')
     stop_unless_reverted(data, result)
     # What the run added inside the prefix: the expanded templates, and anything root smolvm wrote.
     before = {line.split(' ', 4)[4] for line in st.get('prefix_tree_before', []) if len(line.split(' ', 4)) == 5}
