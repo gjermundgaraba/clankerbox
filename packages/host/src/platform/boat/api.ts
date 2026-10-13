@@ -250,7 +250,44 @@ interface Call {
   readonly unrepeated?: true | undefined;
 }
 
-export const make = (settings: Settings) =>
+/** Not found is no sandbox or snapshot, and a delete of what is gone is done. */
+export interface Api {
+  readonly sandbox: (
+    id: string,
+  ) => Effect.Effect<Option.Option<Sandbox>, Exclude<HostError, NotFound>>;
+  /** The operator's own sandboxes included. */
+  readonly limits: Effect.Effect<typeof Limits.Type, HostError>;
+  /** Create, fork and resume each count as a start, and repeat under their `key`. */
+  readonly create: (key: string, type: TypeName, from?: string) => Effect.Effect<string, HostError>;
+  readonly fork: (key: string, source: string, type: TypeName) => Effect.Effect<string, HostError>;
+  /** boat takes no `Idempotency-Key` here. */
+  readonly resume: (id: string) => Effect.Effect<void, HostError>;
+  /** Never with `force`, which drops everything written since the last snapshot. */
+  readonly stop: (id: string) => Effect.Effect<void, HostError>;
+  readonly delete: (id: string) => Effect.Effect<void, Exclude<HostError, NotFound>>;
+  readonly rename: (id: string, name: string) => Effect.Effect<void, HostError>;
+  /**
+   * The answer's address and host key go unread: the state gives the endpoint, and the command
+   * API the host keys.
+   */
+  readonly authorize: (id: string, publicKey: string) => Effect.Effect<void, HostError>;
+  /** boat's command API takes no stdin and caps a call at 600 s. */
+  readonly command: (
+    id: string,
+    command: string,
+    timeoutSeconds: number,
+  ) => Effect.Effect<typeof Finished.Type, HostError>;
+  readonly saveSnapshot: (
+    sandboxId: string,
+    name: string,
+  ) => Effect.Effect<typeof NamedSnapshot.Type, HostError>;
+  readonly snapshot: (
+    name: string,
+  ) => Effect.Effect<Option.Option<typeof NamedSnapshot.Type>, Exclude<HostError, NotFound>>;
+  readonly deleteSnapshot: (name: string) => Effect.Effect<void, Exclude<HostError, NotFound>>;
+}
+
+export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;
     const named = ({ method, path }: Call) => `boat ${method} ${path}`;
@@ -465,7 +502,6 @@ export const make = (settings: Settings) =>
 
     return {
       sandbox,
-      /** The operator's own sandboxes included. */
       limits: send({ method: "GET", path: "/limits", unrepeated: true }, Limits),
       create: (key: string, type: TypeName, from?: string) =>
         Effect.map(
@@ -495,7 +531,6 @@ export const make = (settings: Settings) =>
           ),
           (forked) => forked.id,
         ),
-      /** boat takes no `Idempotency-Key` here. */
       resume: (id: string) =>
         Effect.asVoid(
           send(
@@ -503,7 +538,6 @@ export const make = (settings: Settings) =>
             Accepted,
           ),
         ),
-      /** Never with `force`, which drops everything written since the last snapshot. */
       stop: (id: string) =>
         Effect.asVoid(send({ method: "POST", path: `/sandboxes/${id}/stop`, body: {} }, Accepted)),
       delete: (id: string) =>
@@ -522,10 +556,6 @@ export const make = (settings: Settings) =>
         Effect.asVoid(
           send({ method: "PATCH", path: `/sandboxes/${id}`, body: { name } }, Accepted),
         ),
-      /**
-       * The answer's address and host key go unread: the state gives the endpoint, and the
-       * command API the host keys.
-       */
       authorize: (id: string, publicKey: string) =>
         Effect.asVoid(
           send(
@@ -533,7 +563,6 @@ export const make = (settings: Settings) =>
             Accepted,
           ),
         ),
-      /** boat's command API takes no stdin and caps a call at 600 s. */
       command: (id: string, command: string, timeoutSeconds: number) =>
         send(
           {
@@ -569,5 +598,3 @@ export const make = (settings: Settings) =>
         ),
     };
   });
-
-export type Api = Effect.Success<ReturnType<typeof make>>;
