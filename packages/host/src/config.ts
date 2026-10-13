@@ -38,7 +38,8 @@ const common = {
   machinePorts: Schema.optionalKey(MachinePorts),
 };
 
-// Keyed by the SDK's runtime names, so one the SDK names and the config lacks is a type error.
+// Keyed by the SDK's runtime names, so one the SDK names and this table lacks is a type error.
+// `HostConfigFile`, `HostConfig`, `resolveConfig` and `runtimes.ts` follow it by hand.
 const sections = {
   smolvm: Smolvm.SmolvmSettings,
   tart: Tart.TartSettings,
