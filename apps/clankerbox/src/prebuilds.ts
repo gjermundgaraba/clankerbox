@@ -4,7 +4,7 @@ import { Console, DateTime, Effect } from "effect";
 import { Command } from "effect/cli";
 import { mutationFlags, newId, printResource } from "./command.ts";
 import { encodeCheckpoint } from "./checkpoints.ts";
-import { specArguments, specRequest } from "./machines/spec.ts";
+import { flagsRequest, specArguments } from "./machines/spec.ts";
 import { age } from "./units.ts";
 
 /** Without `--json`, a prebuild that was already there is said on stderr, with its age. */
@@ -12,7 +12,7 @@ export const prebuild = Command.make("prebuild", { ...mutationFlags, ...specArgu
   printResource(flags, {
     call: (client, config) =>
       Effect.gen(function* () {
-        const { spec, host } = yield* specRequest("prebuild", flags, config);
+        const { spec, host } = yield* flagsRequest("prebuild", flags, config);
 
         if (spec.setup === undefined) {
           return yield* new Invalid({

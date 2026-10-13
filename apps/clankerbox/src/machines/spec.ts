@@ -2,15 +2,8 @@
  * What a create and a prebuild are of: a profile, and the flags that override its fields, decoded
  * into the spec and host a create asks for.
  */
-import {
-  describeIssues,
-  Invalid,
-  type LoadedProfile,
-  loadProfile,
-  MachineSpec,
-  readSetup,
-} from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Option, Path, Predicate, Record, Schema } from "effect";
+import { loadProfile, specRequest } from "@gjermundgaraba/clankerbox-sdk";
+import { Effect, Option, Path } from "effect";
 import { Command, Flag } from "effect/cli";
 import { parsed } from "../command.ts";
 import type { LoadedConfig } from "../config.ts";
@@ -60,82 +53,43 @@ export const specArguments = {
 
 export type SpecFlags = Command.Command.Config.Infer<typeof specArguments>;
 
-/**
- * The setup a create runs, if any: the profile's, with its path and its timeout each overridden
- * by its flag, and no timeout when neither says, which leaves it to the host. `--setup` is
- * resolved against the cwd.
- */
-const setupSource = (flags: SpecFlags, profile: LoadedProfile | undefined) =>
-  Effect.gen(function* () {
-    const path = yield* Path.Path;
-
-    const file = Option.match(flags.setup, {
-      onNone: () => profile?.setup?.path,
-      onSome: (given) => path.resolve(given),
-    });
-
-    const timed = yield* parsed(flags.setupTimeout, "--setup-timeout", parseSeconds);
-
-    if (file === undefined) {
-      return Option.isNone(timed)
-        ? undefined
-        : yield* new Invalid({
-            message: "--setup-timeout needs a setup: pass --setup, or a profile that has one",
-          });
-    }
-
-    const timeoutSeconds = Option.getOrElse(timed, () => profile?.setup?.timeoutSeconds);
-
-    return { path: file, timeout: timeoutSeconds === undefined ? {} : { timeoutSeconds } };
-  });
-
-const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
-
 /** The flag that sets each of a spec's fields, which is how a refusal names the field. */
 const specFlags = new Map<PropertyKey, string>([
   ["base", "--base"],
   ["cpu", "--cpu"],
   ["ramMib", "--ram"],
   ["diskGib", "--disk"],
+  ["setupTimeoutSeconds", "--setup-timeout"],
 ]);
 
 /**
- * The spec and host a create or a prebuild asks for: the profile's fields, setup and host, each
- * overridden by its flag. The decode refuses a field that neither sets, as it does one out of
- * range, naming `command`.
+ * The spec and host a create or a prebuild asks for: the profile's, with each flag given
+ * overriding its field. `--setup` is resolved against the cwd.
  */
-export const specRequest = (command: string, flags: SpecFlags, config: LoadedConfig) =>
+export const flagsRequest = (command: string, flags: SpecFlags, config: LoadedConfig) =>
   Effect.gen(function* () {
+    const path = yield* Path.Path;
+
     const profile = Option.isSome(flags.profile)
       ? yield* loadProfile(yield* profileFile(config, flags.profile.value))
       : undefined;
 
-    const source = yield* setupSource(flags, profile);
-
     const ram = yield* parsed(flags.ram, "--ram", parseMib);
     const disk = yield* parsed(flags.disk, "--disk", parseGib);
+    const timeout = yield* parsed(flags.setupTimeout, "--setup-timeout", parseSeconds);
 
-    const fields = {
-      base: Option.getOrElse(flags.base, () => profile?.base),
-      cpu: Option.getOrElse(flags.cpu, () => profile?.cpu),
-      ramMib: Option.getOrElse(ram, () => profile?.ramMib),
-      diskGib: Option.getOrElse(disk, () => profile?.diskGib),
-      setup:
-        source === undefined
-          ? undefined
-          : { script: yield* readSetup(source.path), ...source.timeout },
-      profile: profile?.label,
-    };
-
-    // A field nobody set is left out, so the decode calls it missing.
-    const spec = yield* decodeSpec(Record.filter(fields, Predicate.isNotUndefined), {
-      onExcessProperty: "error",
-      errors: "all",
-    }).pipe(
-      Effect.mapError(
-        (error) => new Invalid({ message: `${command}: ${describeIssues(error, specFlags)}` }),
-      ),
+    return yield* specRequest(
+      command,
+      profile,
+      {
+        base: Option.getOrUndefined(flags.base),
+        cpu: Option.getOrUndefined(flags.cpu),
+        ramMib: Option.getOrUndefined(ram),
+        diskGib: Option.getOrUndefined(disk),
+        setup: Option.getOrUndefined(Option.map(flags.setup, (given) => path.resolve(given))),
+        setupTimeoutSeconds: Option.getOrUndefined(timeout),
+        host: Option.getOrUndefined(flags.host),
+      },
+      specFlags,
     );
-
-    return { spec, host: Option.getOrElse(flags.host, () => profile?.host) };
   });

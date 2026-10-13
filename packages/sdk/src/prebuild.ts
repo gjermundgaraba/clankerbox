@@ -6,7 +6,7 @@
  * changes and nothing here deletes one: building anew is a `checkpoint delete` first.
  */
 import { Effect, Option } from "effect";
-import type { CreateOptions, Interface } from "./client/client.ts";
+import type * as Client from "./client/client.ts";
 import { type ClankerboxError, Invalid, Precondition } from "./errors.ts";
 import { formatId } from "./ids.ts";
 import type { Checkpoint, Host, Machine, MachineSpec } from "./resources.ts";
@@ -56,11 +56,16 @@ export const nameOf = (
   ).pipe(Effect.map((digest) => `${prefix}${hex(digest).slice(0, digestDigits)}`));
 
 /** The checkpoint `id`, if the host has it. */
-const lookup = (client: Interface, id: string) =>
+const lookup = (client: Client.Interface, id: string) =>
   client.checkpoint(id).pipe(
     Effect.map(Option.some),
     Effect.catchTag("NotFound", () => Effect.succeedNone),
   );
+
+/** Where a create goes, and whether it runs its setup even when its host has a prebuild of it. */
+export interface CreateOptions extends Client.CreateOptions {
+  readonly fresh?: boolean | undefined;
+}
 
 export interface Created {
   readonly machine: Machine;
@@ -70,19 +75,19 @@ export interface Created {
 
 /**
  * Creates a machine named `name` as `client.create` does, but restores it from the spec's
- * prebuild when the host it lands on has one whose capture is done. A spec without a setup has
- * none. Placement is the create's own, and a prebuild stays on the host that made it, so a spec
+ * prebuild when the host it lands on has one whose capture is done, unless `fresh`. A spec
+ * without a setup has none. Placement is the create's own, and a prebuild stays on the host that made it, so a spec
  * placed on another host runs its setup. A failed restore is the reply.
  */
 export const create = (
-  client: Interface,
+  client: Client.Interface,
   name: string,
   spec: MachineSpec,
   options?: CreateOptions,
 ): Effect.Effect<Created, ClankerboxError> =>
   Effect.gen(function* () {
-    if (spec.setup === undefined) {
-      return { machine: yield* client.create(name, spec, options) };
+    if (spec.setup === undefined || options?.fresh === true) {
+      return { machine: yield* client.create(name, spec, { host: options?.host }) };
     }
 
     const host = yield* client.place(spec.base, options);
@@ -121,9 +126,9 @@ export interface Built {
  * capture, the prebuild is made, and the machine is the reply's `leftover`.
  */
 export const build = (
-  client: Interface,
+  client: Client.Interface,
   spec: MachineSpec,
-  options?: CreateOptions,
+  options?: Client.CreateOptions,
 ): Effect.Effect<Built, ClankerboxError> =>
   Effect.gen(function* () {
     if (spec.setup === undefined) {

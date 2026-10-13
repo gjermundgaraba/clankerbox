@@ -16,7 +16,7 @@ import {
   withClient,
 } from "../command.ts";
 import { age } from "../units.ts";
-import { specArguments, specRequest } from "./spec.ts";
+import { flagsRequest, specArguments } from "./spec.ts";
 import { encodeMachine, machineFields, machineRows } from "./view.ts";
 
 export const machines = listCommand({
@@ -62,13 +62,12 @@ export const create = Command.make("create", { ...mutationFlags, ...createArgume
   printResource(flags, {
     call: (client, config) =>
       Effect.gen(function* () {
-        const { spec, host } = yield* specRequest("create", flags, config);
+        const { spec, host } = yield* flagsRequest("create", flags, config);
 
-        if (flags.fresh) {
-          return yield* client.create(flags.name, spec, { host });
-        }
-
-        const { machine, prebuild } = yield* Prebuild.create(client, flags.name, spec, { host });
+        const { machine, prebuild } = yield* Prebuild.create(client, flags.name, spec, {
+          host,
+          fresh: flags.fresh,
+        });
 
         if (prebuild !== undefined && !flags.json) {
           yield* Console.error(

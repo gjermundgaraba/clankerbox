@@ -14,11 +14,10 @@ import {
   type ClankerboxError,
   Client,
   loadProfile,
-  type MachineSpec,
   pinnedSsh,
   Prebuild,
   Precondition,
-  readSetup,
+  specRequest,
   sshTarget,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -241,20 +240,12 @@ export const make = (options: Options, ssh = "ssh") => {
         return yield* client.fork(from.machine, named);
       }
 
-      const { label, host, setup, ...sizes } = yield* loadProfile(from.profile);
-      let spec: MachineSpec = { ...sizes, profile: label };
+      const { spec, host } = yield* specRequest("create", yield* loadProfile(from.profile), {});
 
-      if (setup !== undefined) {
-        const { path, ...timeout } = setup;
-
-        spec = { ...spec, setup: { script: yield* readSetup(path), ...timeout } };
-      }
-
-      if (options.fresh === true) {
-        return yield* client.create(named, spec, { host });
-      }
-
-      const { machine } = yield* Prebuild.create(client, named, spec, { host });
+      const { machine } = yield* Prebuild.create(client, named, spec, {
+        host,
+        fresh: options.fresh,
+      });
 
       return machine;
     });
