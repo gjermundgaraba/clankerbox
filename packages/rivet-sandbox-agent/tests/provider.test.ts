@@ -17,6 +17,7 @@ import {
   NotFound,
   Prebuild,
   Precondition,
+  Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Layer } from "effect";
 import { SandboxAgent, SandboxDestroyedError } from "sandbox-agent";
@@ -350,6 +351,43 @@ test("a create that fails before any host makes a machine, as a placement no hos
   await expect(creating).rejects.not.toHaveProperty("id");
   expect(stub.calls).toEqual(["host.get"]);
   expect(stub.held()).toEqual(["linux_other"]);
+});
+
+test("a create whose prebuild read fails deletes nothing, though the error names the prebuild", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "clankerbox-profile-"));
+
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+
+  const profile = join(dir, "agent.json");
+
+  await writeFile(join(dir, "setup.sh"), "echo set up\n");
+  await writeFile(
+    profile,
+    JSON.stringify({
+      base: "ubuntu",
+      cpu: 2,
+      ramMib: 2048,
+      diskGib: 20,
+      setup: { path: "setup.sh" },
+    }),
+  );
+
+  const lost = new Unavailable({
+    message: "no reply",
+    readOnly: true,
+    host: "linux",
+    action: "getCheckpoint",
+    id: "linux_prebuilt-000000000000",
+  });
+
+  const { stub, sandbox } = await setup({}, { from: { profile } }, undefined, (client) => ({
+    ...client,
+    checkpoint: () => Effect.fail(lost),
+  }));
+
+  await expect(sandbox.create()).rejects.toBeInstanceOf(Unavailable);
+  expect(stub.calls).toEqual(["host.get"]);
+  expect(stub.held()).toEqual([]);
 });
 
 test("a create refused with Conflict, as a name already taken is, deletes nothing", async () => {

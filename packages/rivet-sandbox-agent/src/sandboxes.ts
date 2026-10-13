@@ -11,6 +11,7 @@
  */
 import { randomBytes } from "node:crypto";
 import {
+  actionsByName,
   type ClankerboxError,
   Client,
   type Internal,
@@ -38,6 +39,13 @@ import { SandboxDestroyedError } from "sandbox-agent";
 import { healthPath } from "./agent.ts";
 import type { Options } from "./options.ts";
 import { forwarding, freePort, LocalTunnelError, open, type Tunnel } from "./tunnel.ts";
+
+/** The calls that make a machine, whose failure may leave it on its host. */
+const makers = [
+  actionsByName.createMachine,
+  actionsByName.forkMachine,
+  actionsByName.restoreMachine,
+];
 
 /** The provider's name, which prefixes every sandbox ID the SDK hands out. */
 export const name = "clankerbox";
@@ -256,14 +264,14 @@ export const make = (options: Options, ssh = "ssh") => {
   /**
    * Tries to delete what a failed create may have left: a machine whose setup failed, or whose
    * fork or restore failed natively, stays on its host. The error names it when the call that
-   * failed was the one making it; one that names none, such as a placement no host could take,
-   * left nothing. A delete that fails leaves it to `clankerbox machines`.
+   * failed was the one making it; any other, such as a placement no host could take or a read of
+   * a prebuild, left nothing. A delete that fails leaves it to `clankerbox machines`.
    */
   const discard = (error: Precondition | Internal | Unavailable) =>
     Effect.gen(function* () {
       const client = yield* Client.Client;
 
-      if (error.id !== undefined) {
+      if (error.id !== undefined && makers.some(({ name }) => name === error.action)) {
         yield* Effect.ignore(client.delete(error.id));
       }
 
