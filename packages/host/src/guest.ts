@@ -2,7 +2,6 @@
  * Nothing here logs a script: setup can carry secrets, and preparation's seed is fresh
  * randomness. Errors carry a script's output, never its text.
  */
-import { randomBytes } from "node:crypto";
 import { type HostError, Precondition, type Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Stream } from "effect";
 import { type Command, type MachineRef, Runtime, timeoutFail } from "./runtime.ts";
@@ -194,7 +193,7 @@ export const prepare = (
         machine.instance,
         machine.id,
       ],
-      stdin: randomBytes(seedBytes),
+      stdin: globalThis.crypto.getRandomValues(new Uint8Array(seedBytes)),
     },
     preparationTimeout,
   ).pipe(Effect.map(hostKeyIn));
