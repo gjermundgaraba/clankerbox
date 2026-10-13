@@ -7,9 +7,12 @@
 import {
   type ClankerboxError,
   Client,
+  ConflictKind,
   ErrorTag,
+  hostErrors,
   Invalid,
   InvalidFile,
+  Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Console,
@@ -60,16 +63,27 @@ export const ErrorDocument = Schema.Struct({
     SpawnFailed.fields._tag.schema.literal,
   ]),
   retryable: Schema.Boolean,
+  kind: Schema.optionalKey(ConflictKind),
+  readOnly: Schema.optionalKey(Schema.Boolean),
+  host: Schema.optionalKey(Schema.String),
+  action: Schema.optionalKey(Schema.String),
+  id: Schema.optionalKey(Schema.String),
+  file: Schema.optionalKey(Schema.String),
+  program: Schema.optionalKey(Schema.String),
 });
 
 /** A host a fan-out couldn't read, as `--json` lists it under `unreachable`. */
 export const UnreachableDocument = Schema.Struct({ host: Schema.String, error: ErrorDocument });
 
-const errorDocument = (error: Failure): typeof ErrorDocument.Type => ({
-  message: error.message,
-  tag: error._tag,
-  retryable: error.retryable,
-});
+const encodeFailure = Schema.encodeSync(
+  Schema.Union([...hostErrors, Unavailable, InvalidFile, SpawnFailed]),
+);
+
+const errorDocument = (error: Failure): typeof ErrorDocument.Type => {
+  const { _tag, ...fields } = encodeFailure(error);
+
+  return { ...fields, tag: _tag, retryable: error.retryable };
+};
 
 /** Prints `error` (as `{error: {message, tag, retryable}}` with `--json`) and exits 1. */
 export const fail = (json: boolean) => (error: Failure) =>

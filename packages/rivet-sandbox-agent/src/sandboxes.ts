@@ -13,12 +13,14 @@ import { randomBytes } from "node:crypto";
 import {
   type ClankerboxError,
   Client,
+  type Internal,
   loadProfile,
   pinnedSsh,
   Prebuild,
   Precondition,
   specRequest,
   sshTarget,
+  type Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Duration,
@@ -253,20 +255,19 @@ export const make = (options: Options, ssh = "ssh") => {
 
   /**
    * Tries to delete what a failed create may have left: a machine whose setup failed, or whose
-   * fork or restore failed natively, stays on its host, and only the provider knows its name. The
-   * host is the placement's to pick, so the machine is found by its name, which is random. A host
-   * that doesn't answer, or a delete that fails, leaves it to `clankerbox machines`.
+   * fork or restore failed natively, stays on its host. The error names it when the call that
+   * failed was the one making it; one that names none, such as a placement no host could take,
+   * left nothing. A delete that fails leaves it to `clankerbox machines`.
    */
-  const discard = (named: string) =>
+  const discard = (error: Precondition | Internal | Unavailable) =>
     Effect.gen(function* () {
       const client = yield* Client.Client;
-      const { answers } = yield* client.machines;
 
-      yield* Effect.forEach(
-        answers.filter((machine) => machine.id.endsWith(`_${named}`)),
-        (machine) => Effect.ignore(client.delete(machine.id)),
-        { discard: true },
-      );
+      if (error.id !== undefined) {
+        yield* Effect.ignore(client.delete(error.id));
+      }
+
+      return yield* error;
     });
 
   return {
@@ -278,15 +279,9 @@ export const make = (options: Options, ssh = "ssh") => {
     create: Effect.suspend(() => {
       const named = `${options.namePrefix ?? "sandbox"}-${randomBytes(4).toString("hex")}`;
 
-      const discarding = <E>(error: E) => Effect.andThen(discard(named), Effect.fail(error));
-
       return made(named).pipe(
         Effect.map((machine) => machine.id),
-        Effect.catchTags({
-          Precondition: discarding,
-          Internal: discarding,
-          Unavailable: discarding,
-        }),
+        Effect.catchTags({ Precondition: discard, Internal: discard, Unavailable: discard }),
       );
     }),
     /**

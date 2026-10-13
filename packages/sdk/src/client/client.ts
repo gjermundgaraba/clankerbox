@@ -154,16 +154,16 @@ export const make = (
      */
     const ask = <A>(
       { entry, api }: Route,
-      { readOnly }: Contract,
-      action: string,
+      contract: Contract,
+      what: string,
       call: (api: HostApi) => Effect.Effect<A, CallError>,
       target?: string,
     ) =>
       settle(call(api), {
         host: entry,
-        timeout: readOnly ? (options?.readTimeout ?? readTimeout) : options?.timeout,
-        readOnly,
-        action,
+        timeout: contract.readOnly ? (options?.readTimeout ?? readTimeout) : options?.timeout,
+        contract,
+        what,
         target,
       });
 
@@ -174,14 +174,14 @@ export const make = (
     const byId = <A>(
       id: string,
       contract: Contract,
-      action: string,
+      what: string,
       call: (api: HostApi) => Effect.Effect<A, CallError>,
       made?: string,
     ) =>
       Effect.gen(function* () {
         const { host } = yield* parseId(id);
 
-        return yield* ask(yield* route(host), contract, action, call, made ?? id);
+        return yield* ask(yield* route(host), contract, what, call, made ?? id);
       });
 
     /** Asks every host at once; a host that fails is named rather than failing the whole. */
