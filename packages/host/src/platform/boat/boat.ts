@@ -12,7 +12,6 @@ import {
   Capacity,
   type HostError,
   Internal,
-  NotFound,
   Precondition,
   type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -245,18 +244,13 @@ export const make = (
 
     const scrub = (text: string) => (secret === "" ? text : text.replaceAll(secret, "<redacted>"));
 
-    /** A 404 that reaches here is boat's own, not a row of the host's, so it is `Internal`. */
     const scrubber = <E extends RoomError, I extends { readonly message: string }>(
       errors: Schema.Codec<E, I>,
     ) => {
       const encode = Schema.encodeSync(errors);
       const decode = Schema.decodeSync(errors);
 
-      return (error: E | NotFound): E | Internal => {
-        if (error instanceof NotFound) {
-          return new Internal({ message: scrub(error.message) });
-        }
-
+      return (error: E): E => {
         const encoded = encode(error);
 
         return decode({ ...encoded, message: scrub(encoded.message) });
@@ -267,10 +261,10 @@ export const make = (
 
     const scrubbedRoom = scrubber(Schema.Union([Precondition, Internal, Capacity]));
 
-    const scrubbing = <A, R>(action: Effect.Effect<A, RuntimeError | NotFound, R>) =>
+    const scrubbing = <A, R>(action: Effect.Effect<A, RuntimeError, R>) =>
       Effect.mapError(action, scrubbed);
 
-    const scrubbingRefusal = <A, R>(action: Effect.Effect<A, RoomError | NotFound | Refusal, R>) =>
+    const scrubbingRefusal = <A, R>(action: Effect.Effect<A, RoomError | Refusal, R>) =>
       Effect.mapError(action, (error) =>
         error instanceof Refusal
           ? new Refusal({ error: scrubbedRoom(error.error) })
@@ -329,21 +323,12 @@ export const make = (
     const typeOf = (machine: MachineRef) =>
       Effect.mapError(machineType(machine), (error) => new Refusal({ error }));
 
-    /**
-     * A 404 from these is boat's own (a restore's snapshot deleted under it), not a resource of
-     * the host's, so it is `Internal`.
-     */
-    const refusing = <A>(
-      call: Effect.Effect<A, RoomError | NotFound>,
-    ): Effect.Effect<A, Internal | Refusal> =>
+    const refusing = <A>(call: Effect.Effect<A, RoomError>): Effect.Effect<A, Internal | Refusal> =>
       call.pipe(
         Effect.catchTags({
           Capacity: (error) => Effect.fail(new Refusal({ error })),
           Precondition: (error) => Effect.fail(new Refusal({ error })),
         }),
-        Effect.catchTag("NotFound", (error) =>
-          Effect.fail(new Internal({ message: error.message })),
-        ),
       );
 
     /**
