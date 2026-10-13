@@ -163,9 +163,9 @@ const runTimed = <A, E>(
     }
 
     return { exit: yield* Fiber.join(fiber), waited };
-  }).pipe(Effect.provide(Layer.merge(boat.layer, TestClock.layer())));
+  }).pipe(Effect.provide(boat.layer));
 
-it.live("the host picks the smallest of boat's four types that covers a machine", () =>
+it.effect("the host picks the smallest of boat's four types that covers a machine", () =>
   Effect.gen(function* () {
     const pick = (cpu: number, ramMib: number, diskGib: number) =>
       Effect.match(machineType({ cpu, ramMib, diskGib }), {
@@ -206,7 +206,7 @@ it("names and keys: snapshots fit boat's pattern, and a row's key is its instanc
   expect(idempotencyKey("boat", instance)).toBe(`clankerbox-boat-${instance}`);
 });
 
-it.live("every create, fork, resume and restore sends noEnv and the trial's TTL", () =>
+it.effect("every create, fork, resume and restore sends noEnv and the trial's TTL", () =>
   Effect.gen(function* () {
     const boat = fakeBoat((sent) =>
       sent.path.endsWith("/fork")
@@ -256,59 +256,63 @@ it.live("every create, fork, resume and restore sends noEnv and the trial's TTL"
   }),
 );
 
-it.live("an unclear create is repeated with the same key and body until boat answers clearly", () =>
-  Effect.gen(function* () {
-    const boat = fakeBoat(
-      (_sent, index) =>
-        [
-          "drop" as const,
-          refusal(500, "internal_error"),
-          { status: 502, text: "<html><body>Bad Gateway</body></html>" },
-          refusal(409, "idempotency_in_progress"),
-          { status: 202, cut: '{"ok":true,"type":"sandbox.created","sandbox":{"id":"bx_ma' },
-        ][index] ?? created("bx_made0001"),
-    );
+it.effect(
+  "an unclear create is repeated with the same key and body until boat answers clearly",
+  () =>
+    Effect.gen(function* () {
+      const boat = fakeBoat(
+        (_sent, index) =>
+          [
+            "drop" as const,
+            refusal(500, "internal_error"),
+            { status: 502, text: "<html><body>Bad Gateway</body></html>" },
+            refusal(409, "idempotency_in_progress"),
+            { status: 202, cut: '{"ok":true,"type":"sandbox.created","sandbox":{"id":"bx_ma' },
+          ][index] ?? created("bx_made0001"),
+      );
 
-    const { exit } = yield* runTimed(boat, (api) => api.create("key-1", "small"));
+      const { exit } = yield* runTimed(boat, (api) => api.create("key-1", "small"));
 
-    expect(exit).toEqual(Exit.succeed("bx_made0001"));
-    expect(boat.sent).toHaveLength(6);
+      expect(exit).toEqual(Exit.succeed("bx_made0001"));
+      expect(boat.sent).toHaveLength(6);
 
-    for (const sent of boat.sent) {
-      expect(sent).toEqual(boat.sent[0]);
-    }
+      for (const sent of boat.sent) {
+        expect(sent).toEqual(boat.sent[0]);
+      }
 
-    expect(boat.sent[0]?.headers["idempotency-key"]).toBe("key-1");
-  }),
+      expect(boat.sent[0]?.headers["idempotency-key"]).toBe("key-1");
+    }),
 );
 
-it.live("the repeats stop at their bound, and the create fails without a second key or body", () =>
-  Effect.gen(function* () {
-    const boat = fakeBoat(() => ({ status: 503, text: "<html>Service Unavailable</html>" }));
+it.effect(
+  "the repeats stop at their bound, and the create fails without a second key or body",
+  () =>
+    Effect.gen(function* () {
+      const boat = fakeBoat(() => ({ status: 503, text: "<html>Service Unavailable</html>" }));
 
-    const { exit, waited } = yield* runTimed(boat, (api) =>
-      Effect.flip(api.create("key-1", "small", "cbx-boat-01234567")),
-    );
+      const { exit, waited } = yield* runTimed(boat, (api) =>
+        Effect.flip(api.create("key-1", "small", "cbx-boat-01234567")),
+      );
 
-    const error = Exit.isSuccess(exit) ? exit.value : undefined;
+      const error = Exit.isSuccess(exit) ? exit.value : undefined;
 
-    expect([error?._tag, error?.message]).toEqual([
-      "Internal",
-      "boat POST /sandboxes answered 503 without boat's error, and repeats for 5m got no clearer answer",
-    ]);
+      expect([error?._tag, error?.message]).toEqual([
+        "Internal",
+        "boat POST /sandboxes answered 503 without boat's error, and repeats for 5m got no clearer answer",
+      ]);
 
-    // Pauses of 1, 2, 4, 8 and 16 s, then 30 s each, until 5 minutes have passed: 15 attempts.
-    expect(boat.sent).toHaveLength(15);
-    expect(Duration.format(waited)).toBe("5m 1s");
-    expect(Duration.isGreaterThanOrEqualTo(waited, retryWindow)).toBe(true);
+      // Pauses of 1, 2, 4, 8 and 16 s, then 30 s each, until 5 minutes have passed: 15 attempts.
+      expect(boat.sent).toHaveLength(15);
+      expect(Duration.format(waited)).toBe("5m 1s");
+      expect(Duration.isGreaterThanOrEqualTo(waited, retryWindow)).toBe(true);
 
-    for (const sent of boat.sent) {
-      expect(sent).toEqual(boat.sent[0]);
-    }
-  }),
+      for (const sent of boat.sent) {
+        expect(sent).toEqual(boat.sent[0]);
+      }
+    }),
 );
 
-it.live(
+it.effect(
   "the bound counts from the first unclear answer, so a call can outlast it by an attempt each side",
   () =>
     Effect.gen(function* () {
@@ -331,7 +335,7 @@ it.live(
     }),
 );
 
-it.live(
+it.effect(
   "no refusal after an unclear attempt is one, Capacity or a plan's Precondition: that attempt may have made a sandbox",
   () =>
     Effect.gen(function* () {
@@ -367,7 +371,7 @@ it.live(
     }),
 );
 
-it.live(
+it.effect(
   "every GET is repeated while its outcome is unclear, a 429 included, until boat answers clearly",
   () =>
     Effect.gen(function* () {
@@ -424,7 +428,7 @@ it.live(
     }),
 );
 
-it.live("other calls without a key aren't repeated: an unclear outcome fails them", () =>
+it.effect("other calls without a key aren't repeated: an unclear outcome fails them", () =>
   Effect.gen(function* () {
     const boat = fakeBoat(() => refusal(500, "internal_error"));
 
@@ -448,7 +452,7 @@ it.live("other calls without a key aren't repeated: an unclear outcome fails the
   }),
 );
 
-it.live(
+it.effect(
   "a keyed call boat throttles is repeated twice, 65 s apart; what boat answers then is trusted",
   () =>
     Effect.gen(function* () {
@@ -499,7 +503,7 @@ it.live(
     }),
 );
 
-it.live(
+it.effect(
   "a throttle that outlasts the repeats is Capacity when boat said rate_limited, else Internal",
   () =>
     Effect.gen(function* () {
@@ -534,7 +538,7 @@ it.live(
     }),
 );
 
-it.live("after an unclear attempt a 429 is repeated 65 s on, once, and never trusted", () =>
+it.effect("after an unclear attempt a 429 is repeated 65 s on, once, and never trusted", () =>
   Effect.gen(function* () {
     const recovers = fakeBoat(
       (_sent, index) =>
@@ -571,7 +575,7 @@ it.live("after an unclear attempt a 429 is repeated 65 s on, once, and never tru
   }),
 );
 
-it.live(
+it.effect(
   "a call that takes room without a key isn't repeated after a 429: rate_limited is Capacity, any other Internal",
   () =>
     Effect.gen(function* () {
@@ -594,7 +598,7 @@ it.live(
     }),
 );
 
-it.live(
+it.effect(
   "a 2xx whose body arrived whole but isn't boat's answer is Internal at once, even for a keyed call",
   () =>
     Effect.gen(function* () {
@@ -615,7 +619,7 @@ it.live(
     }),
 );
 
-it.live("a 4xx is a definite answer whatever its body, and is never repeated", () =>
+it.effect("a 4xx is a definite answer whatever its body, and is never repeated", () =>
   Effect.gen(function* () {
     const bare = "without boat's error";
 
@@ -657,7 +661,7 @@ it.live("a 4xx is a definite answer whatever its body, and is never repeated", (
   }),
 );
 
-it.live(
+it.effect(
   "boat's refusals that leave nothing behind are Capacity, or Precondition for a 403 with boat's code, answered at once",
   () =>
     Effect.gen(function* () {
@@ -744,7 +748,7 @@ it.live(
     }),
 );
 
-it.live("a DELETE is repeated while its outcome is unclear, and a 404 to a repeat is done", () =>
+it.effect("a DELETE is repeated while its outcome is unclear, and a 404 to a repeat is done", () =>
   Effect.gen(function* () {
     for (const [path, remove] of [
       ["/sandboxes/bx_made0001", (api: Api) => api.delete("bx_made0001")],
@@ -777,7 +781,7 @@ it.live("a DELETE is repeated while its outcome is unclear, and a 404 to a repea
   }),
 );
 
-it.live("a sandbox or snapshot boat answers 404 for is none, and deleting one is done", () =>
+it.effect("a sandbox or snapshot boat answers 404 for is none, and deleting one is done", () =>
   Effect.gen(function* () {
     const boat = fakeBoat(() => refusal(404, "not_found"));
 
@@ -802,7 +806,7 @@ it.live("a sandbox or snapshot boat answers 404 for is none, and deleting one is
   }),
 );
 
-it.live(
+it.effect(
   "rename and authorize read only the status: an answer without the fields they used to decode is done",
   () =>
     Effect.gen(function* () {
@@ -823,7 +827,7 @@ it.live(
     }),
 );
 
-it.live("a stop never forces, and its refusal is the error", () =>
+it.effect("a stop never forces, and its refusal is the error", () =>
   Effect.gen(function* () {
     const boat = fakeBoat(() => refusal(409, "snapshot_failed", "the final snapshot failed"));
 
@@ -838,7 +842,7 @@ it.live("a stop never forces, and its refusal is the error", () =>
   }),
 );
 
-it.live("a cancelled sandbox, reported with only its ID, state and error, still reads", () =>
+it.effect("a cancelled sandbox, reported with only its ID, state and error, still reads", () =>
   Effect.gen(function* () {
     const boat = fakeBoat(() => ({
       status: 200,
@@ -910,6 +914,7 @@ const overFetch = <A, E>(serverUrl: string, use: (api: Api) => Effect.Effect<A, 
     Effect.provide(FetchHttpClient.layer),
   );
 
+// A real socket answers on the real clock, and the create's repeat waits on it.
 it.live("over a real connection: a drop fails a call made once, and a create rides it out", () =>
   Effect.gen(function* () {
     const dropping = yield* loopback(() => "drop");

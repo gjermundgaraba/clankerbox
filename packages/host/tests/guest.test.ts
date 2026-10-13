@@ -128,6 +128,7 @@ const listener = (root: string, comm: string) =>
     };
   });
 
+// The scripts run as real processes, which sleep and take signals on the real clock.
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a new instance reseeds, writes the machine ID and the instance, and runs start", () =>
     Effect.gen(function* () {
