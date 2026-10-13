@@ -11,7 +11,6 @@ import {
   Capacity,
   formatGib,
   formatMib,
-  type HostError,
   Internal,
   NotFound,
   Precondition,
@@ -29,7 +28,7 @@ import {
   Schema,
 } from "effect";
 import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http";
-import type { MachineRef } from "../../runtime.ts";
+import type { MachineRef, RuntimeError } from "../../runtime.ts";
 
 export const baseUrl = "https://boat.dev/api/v1";
 
@@ -199,7 +198,7 @@ const decodeRefused = Schema.decodeUnknownEffect(Refused);
 
 /**
  * boat's answers that leave nothing on boat and mean "no room now". They count only for a call
- * that takes room (`Call.takesRoom`).
+ * that takes room (`sendTakingRoom`).
  */
 const capacityRefusals: ReadonlyArray<readonly [number, string]> = [
   [429, "limit_reached"],
@@ -234,6 +233,14 @@ export interface Settings {
   readonly url: string;
 }
 
+/** A 404 is boat's: its sandbox or snapshot is gone. */
+type Failure = RuntimeError | NotFound;
+
+const capacity = (message: string) => new Capacity({ message });
+
+/** How a call that takes room is refused for it; one that takes none has no such refusal. */
+type Room<E> = ((message: string) => E) | undefined;
+
 interface Call {
   readonly method: "GET" | "POST" | "PATCH" | "DELETE";
   readonly path: string;
@@ -241,8 +248,6 @@ interface Call {
   readonly headers?: Readonly<Record<string, string>> | undefined;
   readonly timeout?: Duration.Duration | undefined;
   readonly key?: string | undefined;
-  /** Only then is a 429 or 503 refusal in `capacityRefusals` `Capacity`. */
-  readonly takesRoom?: true | undefined;
   /**
    * For a read someone waits on, where boat's own answer says more than the wait for a clearer
    * one.
@@ -252,39 +257,45 @@ interface Call {
 
 /** Not found is no sandbox or snapshot, and a delete of what is gone is done. */
 export interface Api {
-  readonly sandbox: (
-    id: string,
-  ) => Effect.Effect<Option.Option<Sandbox>, Exclude<HostError, NotFound>>;
+  readonly sandbox: (id: string) => Effect.Effect<Option.Option<Sandbox>, RuntimeError>;
   /** The operator's own sandboxes included. */
-  readonly limits: Effect.Effect<typeof Limits.Type, HostError>;
+  readonly limits: Effect.Effect<typeof Limits.Type, Failure>;
   /** Create, fork and resume each count as a start, and repeat under their `key`. */
-  readonly create: (key: string, type: TypeName, from?: string) => Effect.Effect<string, HostError>;
-  readonly fork: (key: string, source: string, type: TypeName) => Effect.Effect<string, HostError>;
+  readonly create: (
+    key: string,
+    type: TypeName,
+    from?: string,
+  ) => Effect.Effect<string, Failure | Capacity>;
+  readonly fork: (
+    key: string,
+    source: string,
+    type: TypeName,
+  ) => Effect.Effect<string, Failure | Capacity>;
   /** boat takes no `Idempotency-Key` here. */
-  readonly resume: (id: string) => Effect.Effect<void, HostError>;
+  readonly resume: (id: string) => Effect.Effect<void, Failure | Capacity>;
   /** Never with `force`, which drops everything written since the last snapshot. */
-  readonly stop: (id: string) => Effect.Effect<void, HostError>;
-  readonly delete: (id: string) => Effect.Effect<void, Exclude<HostError, NotFound>>;
-  readonly rename: (id: string, name: string) => Effect.Effect<void, HostError>;
+  readonly stop: (id: string) => Effect.Effect<void, Failure>;
+  readonly delete: (id: string) => Effect.Effect<void, RuntimeError>;
+  readonly rename: (id: string, name: string) => Effect.Effect<void, Failure>;
   /**
    * The answer's address and host key go unread: the state gives the endpoint, and the command
    * API the host keys.
    */
-  readonly authorize: (id: string, publicKey: string) => Effect.Effect<void, HostError>;
+  readonly authorize: (id: string, publicKey: string) => Effect.Effect<void, Failure>;
   /** boat's command API takes no stdin and caps a call at 600 s. */
   readonly command: (
     id: string,
     command: string,
     timeoutSeconds: number,
-  ) => Effect.Effect<typeof Finished.Type, HostError>;
+  ) => Effect.Effect<typeof Finished.Type, Failure>;
   readonly saveSnapshot: (
     sandboxId: string,
     name: string,
-  ) => Effect.Effect<typeof NamedSnapshot.Type, HostError>;
+  ) => Effect.Effect<typeof NamedSnapshot.Type, Failure | Capacity>;
   readonly snapshot: (
     name: string,
-  ) => Effect.Effect<Option.Option<typeof NamedSnapshot.Type>, Exclude<HostError, NotFound>>;
-  readonly deleteSnapshot: (name: string) => Effect.Effect<void, Exclude<HostError, NotFound>>;
+  ) => Effect.Effect<Option.Option<typeof NamedSnapshot.Type>, RuntimeError>;
+  readonly deleteSnapshot: (name: string) => Effect.Effect<void, RuntimeError>;
 }
 
 export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.HttpClient> =>
@@ -306,10 +317,11 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
      * help, so it is `Precondition`; a proxy's HTML 403 is `Internal`. A 429 to a call that takes
      * no room is boat's rate limit on reads and the like, which passes.
      */
-    const refusal = (
+    const refusal = <E>(
       call: Call,
+      room: Room<E>,
       response: HttpClientResponse.HttpClientResponse,
-    ): Effect.Effect<never, HostError | Unclear | Throttled> =>
+    ): Effect.Effect<never, Failure | E | Unclear | Throttled> =>
       Effect.gen(function* () {
         const { status } = response;
         const decoded = yield* Effect.option(Effect.flatMap(response.json, decodeRefused));
@@ -324,24 +336,26 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         const coded = (known: string) => Option.contains(code, known);
 
         if (
-          call.takesRoom === true &&
+          room !== undefined &&
           capacityRefusals.some(([refused, known]) => refused === status && coded(known))
         ) {
-          return yield* new Capacity({ message: said });
+          return yield* Effect.fail(room(said));
         }
 
         if (status === 403 && Option.isSome(code)) {
           return yield* new Precondition({ message: said });
         }
 
-        if (status === 429 && call.takesRoom === true) {
+        if (status === 429 && room !== undefined) {
           if (call.key !== undefined) {
             return yield* new Throttled({ message: said, rateLimited: coded(rateLimited) });
           }
 
-          return yield* coded(rateLimited)
-            ? new Capacity({ message: said })
-            : new Internal({ message: said });
+          if (coded(rateLimited)) {
+            return yield* Effect.fail(room(said));
+          }
+
+          return yield* new Internal({ message: said });
         }
 
         if (status >= 500 || status === 429 || (status === 409 && coded(inProgress))) {
@@ -353,16 +367,17 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
           : new Internal({ message: said });
       });
 
-    const answer = <A>(
+    const answer = <A, E>(
       call: Call,
+      room: Room<E>,
       schema: Schema.Decoder<A>,
       response: HttpClientResponse.HttpClientResponse,
-    ): Effect.Effect<A, HostError | Unclear | Throttled> =>
+    ): Effect.Effect<A, Failure | E | Unclear | Throttled> =>
       Effect.gen(function* () {
         const { status } = response;
 
         if (status < 200 || status >= 300) {
-          return yield* refusal(call, response);
+          return yield* refusal(call, room, response);
         }
 
         // A body cut off midway leaves the outcome unknown, as a dropped connection does; one that
@@ -385,11 +400,12 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
       });
 
     /** The request is built once by the caller, so a repeat sends the same bytes. */
-    const attempt = <A>(
+    const attempt = <A, E>(
       call: Call,
+      room: Room<E>,
       built: HttpClientRequest.HttpClientRequest,
       schema: Schema.Decoder<A>,
-    ): Effect.Effect<A, HostError | Unclear | Throttled> =>
+    ): Effect.Effect<A, Failure | E | Unclear | Throttled> =>
       http.execute(built).pipe(
         // No span and no trace headers: boat is a third party, and a span would record the call.
         Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
@@ -399,7 +415,7 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
               message: `${named(call)}: ${error.reason._tag}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`,
             }),
         ),
-        Effect.flatMap((response) => answer(call, schema, response)),
+        Effect.flatMap((response) => answer(call, room, schema, response)),
         Effect.timeoutOrElse({
           duration: call.timeout ?? attemptTimeout,
           orElse: () =>
@@ -416,83 +432,99 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
      * After an unclear attempt no refusal is trusted as one: that attempt may have made a
      * sandbox, which the refusal may be counting.
      */
-    const send = <A>(call: Call, schema: Schema.Decoder<A>): Effect.Effect<A, HostError> => {
-      const once = attempt(call, request(call), schema);
+    const sendWith =
+      <E extends Capacity>(room: Room<E>) =>
+      <A>(call: Call, schema: Schema.Decoder<A>): Effect.Effect<A, Failure | E> => {
+        const once = attempt(call, room, request(call), schema);
 
-      const distrusted = (refused: Capacity | Precondition | Throttled) =>
-        Effect.fail(
-          new Internal({
-            message: `${refused.message}, after an attempt whose outcome is unknown, so a sandbox may exist`,
-          }),
-        );
-
-      const paced = Effect.retry(once, {
-        while: (error) => error instanceof Throttled,
-        schedule: Schedule.spaced(throttledPause).pipe(
-          Schedule.upTo({ times: throttledRepeats - 1 }),
-        ),
-      }).pipe(
-        Effect.delay(throttledPause),
-        Effect.catchTag("Throttled", (last) => {
-          const message = `${last.message}, and ${throttledRepeats} repeats ${Duration.format(throttledPause)} apart met the same`;
-
-          return Effect.fail(
-            last.rateLimited ? new Capacity({ message }) : new Internal({ message }),
+        const distrusted = (refused: E | Precondition | Throttled) =>
+          Effect.fail(
+            new Internal({
+              message: `${refused.message}, after an attempt whose outcome is unknown, so a sandbox may exist`,
+            }),
           );
-        }),
-      );
 
-      /**
-       * Each 429 counts as a start, so the `throttledRepeats`th ends them: with the unclear
-       * attempt, at most three starts here, as in `paced`, which may come first.
-       */
-      const repeats = (since: number) =>
-        Effect.flatMap(Ref.make(0), (throttles) =>
-          Effect.retry(once, {
-            while: (error) =>
-              error instanceof Throttled
-                ? Ref.modify(throttles, (seen) => [seen + 1 < throttledRepeats, seen + 1])
-                : error instanceof Unclear,
-            schedule: Schedule.min([
-              Schedule.exponential(Duration.times(firstPause, 2)),
-              Schedule.spaced(longestPause),
-            ]).pipe(
-              Schedule.modifyDelay(({ input, duration }) =>
-                Effect.succeed(
-                  input instanceof Throttled ? Duration.max(duration, throttledPause) : duration,
-                ),
-              ),
-              Schedule.while(({ now }) => now - since < Duration.toMillis(retryWindow)),
-            ),
-          }),
-        ).pipe(
-          Effect.delay(firstPause),
-          Effect.catchTags({
-            Unclear: (last) =>
-              Effect.fail(
-                new Internal({
-                  message: `${last.message}, and repeats for ${Duration.format(retryWindow)} got no clearer answer`,
-                }),
-              ),
-            Throttled: distrusted,
-            Capacity: distrusted,
-            Precondition: distrusted,
+        const paced = Effect.retry(once, {
+          while: (error) => error instanceof Throttled,
+          schedule: Schedule.spaced(throttledPause).pipe(
+            Schedule.upTo({ times: throttledRepeats - 1 }),
+          ),
+        }).pipe(
+          Effect.delay(throttledPause),
+          Effect.catch((last) => {
+            if (!(last instanceof Throttled)) {
+              return Effect.fail(last);
+            }
+
+            const message = `${last.message}, and ${throttledRepeats} repeats ${Duration.format(throttledPause)} apart met the same`;
+
+            return last.rateLimited && room !== undefined
+              ? Effect.fail(room(message))
+              : Effect.fail(new Internal({ message }));
           }),
         );
 
-      const repeatable =
-        call.unrepeated !== true &&
-        (call.method === "GET" || call.method === "DELETE" || call.key !== undefined);
+        /**
+         * Each 429 counts as a start, so the `throttledRepeats`th ends them: with the unclear
+         * attempt, at most three starts here, as in `paced`, which may come first.
+         */
+        const repeats = (since: number) =>
+          Effect.flatMap(Ref.make(0), (throttles) =>
+            Effect.retry(once, {
+              while: (error) =>
+                error instanceof Throttled
+                  ? Ref.modify(throttles, (seen) => [seen + 1 < throttledRepeats, seen + 1])
+                  : error instanceof Unclear,
+              schedule: Schedule.min([
+                Schedule.exponential(Duration.times(firstPause, 2)),
+                Schedule.spaced(longestPause),
+              ]).pipe(
+                Schedule.modifyDelay(({ input, duration }) =>
+                  Effect.succeed(
+                    input instanceof Throttled ? Duration.max(duration, throttledPause) : duration,
+                  ),
+                ),
+                Schedule.while(({ now }) => now - since < Duration.toMillis(retryWindow)),
+              ),
+            }),
+          ).pipe(
+            Effect.delay(firstPause),
+            Effect.catch((last) => {
+              if (last instanceof Unclear) {
+                return Effect.fail(
+                  new Internal({
+                    message: `${last.message}, and repeats for ${Duration.format(retryWindow)} got no clearer answer`,
+                  }),
+                );
+              }
 
-      return once.pipe(
-        Effect.catchTag("Throttled", () => paced),
-        Effect.catchTag("Unclear", (first) =>
-          repeatable
-            ? Effect.flatMap(Clock.currentTimeMillis, repeats)
-            : Effect.fail(new Internal({ message: first.message })),
-        ),
-      );
-    };
+              return last instanceof NotFound || last instanceof Internal
+                ? Effect.fail(last)
+                : distrusted(last);
+            }),
+          );
+
+        const repeatable =
+          call.unrepeated !== true &&
+          (call.method === "GET" || call.method === "DELETE" || call.key !== undefined);
+
+        return once.pipe(
+          Effect.catch((error) => (error instanceof Throttled ? paced : Effect.fail(error))),
+          Effect.catch((error) => {
+            if (!(error instanceof Unclear)) {
+              return Effect.fail(error);
+            }
+
+            return repeatable
+              ? Effect.flatMap(Clock.currentTimeMillis, repeats)
+              : Effect.fail(new Internal({ message: error.message }));
+          }),
+        );
+      };
+
+    const send = sendWith<never>(undefined);
+
+    const sendTakingRoom = sendWith(capacity);
 
     const sandbox = (id: string) =>
       send({ method: "GET", path: `/sandboxes/${id}` }, SandboxInfo).pipe(
@@ -505,13 +537,12 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
       limits: send({ method: "GET", path: "/limits", unrepeated: true }, Limits),
       create: (key: string, type: TypeName, from?: string) =>
         Effect.map(
-          send(
+          sendTakingRoom(
             {
               method: "POST",
               path: "/sandboxes",
               body: from === undefined ? { type, ...activation } : { type, from, ...activation },
               key,
-              takesRoom: true,
             },
             SandboxInfo,
           ),
@@ -519,13 +550,12 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         ),
       fork: (key: string, source: string, type: TypeName) =>
         Effect.map(
-          send(
+          sendTakingRoom(
             {
               method: "POST",
               path: `/sandboxes/${source}/fork`,
               body: { type, ...activation },
               key,
-              takesRoom: true,
             },
             Forked,
           ),
@@ -533,8 +563,8 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         ),
       resume: (id: string) =>
         Effect.asVoid(
-          send(
-            { method: "POST", path: `/sandboxes/${id}/resume`, body: activation, takesRoom: true },
+          sendTakingRoom(
+            { method: "POST", path: `/sandboxes/${id}/resume`, body: activation },
             Accepted,
           ),
         ),
@@ -575,12 +605,11 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         ),
       saveSnapshot: (sandboxId: string, name: string) =>
         Effect.map(
-          send(
+          sendTakingRoom(
             {
               method: "POST",
               path: "/named-snapshots",
               body: { sandboxId, name },
-              takesRoom: true,
             },
             NamedSnapshotInfo,
           ),

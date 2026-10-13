@@ -672,6 +672,13 @@ request may have reached the host. In the client, a request that fails to
 encode is `Invalid` and sends nothing, and a host's `InvalidInput` is `Invalid`
 too; a reply that fails to decode is `Internal`.
 
+`NotFound`, `Conflict` and `Invalid` are the host core's: no such row, a row
+another action holds or a name taken, a malformed request. A runtime fails only
+with `Precondition` or `Internal`, and with `Capacity` on the calls that take
+room (`admit`, `create`, `start`, `fork`, `restore`, `capture`); the `Runtime`
+port's types say so (`runtime.ts`). A 404 from boat is boat's own, so it is
+`Internal`.
+
 The client sets where a call met its error, and a host sends none of it:
 `host`, `action` (the contract's name, such as `createMachine`) and `id` (the
 resource the call reads, changes or makes: for a fork, restore, capture or

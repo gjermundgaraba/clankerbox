@@ -4,9 +4,9 @@
  */
 import {
   type ActionName,
+  type Capacity,
   type Checkpoint,
   type Host,
-  type HostError,
   type Internal,
   type Limit,
   type Machine,
@@ -16,6 +16,15 @@ import {
   type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Data, Duration, Effect, type Scope, type Stream } from "effect";
+
+/**
+ * What a runtime fails with: what it can't do, or what broke. `NotFound`, `Conflict` and
+ * `Invalid` are the core's, about its rows and the request; only the calls that take room add
+ * `Capacity`.
+ */
+export type RuntimeError = Precondition | Internal;
+
+export type RoomError = RuntimeError | Capacity;
 
 export interface MachineRef {
   readonly id: string;
@@ -106,15 +115,15 @@ export interface Command {
 /** Closing its scope ends the command. */
 export interface Execution {
   /** stdout and stderr together, as they arrive. */
-  readonly output: Stream.Stream<Uint8Array, HostError>;
-  readonly exitCode: Effect.Effect<number, HostError>;
+  readonly output: Stream.Stream<Uint8Array, RuntimeError>;
+  readonly exitCode: Effect.Effect<number, RuntimeError>;
 }
 
 /**
  * A runtime error that the runtime knows created nothing native. The core releases the claim,
  * removes a new row, and replies with `error`.
  */
-export class Refusal extends Data.TaggedError("Refusal")<{ readonly error: HostError }> {}
+export class Refusal extends Data.TaggedError("Refusal")<{ readonly error: RoomError }> {}
 
 export const missing = (runtime: RuntimeName, machine: Pick<MachineRef, "id">): Refusal =>
   new Refusal({
@@ -143,7 +152,7 @@ export interface Interface {
    */
   readonly loginUser: string;
   /** Runs after every interrupted action is marked failed and before the host serves. */
-  readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, HostError>;
+  readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, RuntimeError>;
   /**
    * One state per machine, in their order: callers rely on it without checking. A machine the
    * runtime doesn't know is `missing`, and one whose read fails or takes over `machineReadWait`
@@ -151,36 +160,36 @@ export interface Interface {
    */
   readonly observe: (
     machines: ReadonlyArray<MachineRef>,
-  ) => Effect.Effect<ReadonlyArray<Observed>, HostError>;
+  ) => Effect.Effect<ReadonlyArray<Observed>, RuntimeError>;
   /**
    * Step 3's capacity checks. A failure writes nothing. Called for every `start`, whatever the
    * machine's state: a running target counts once, as it already runs.
    */
-  readonly admit: (activation: Activation) => Effect.Effect<void, HostError>;
+  readonly admit: (activation: Activation) => Effect.Effect<void, RoomError>;
   /**
    * The limits `admit` and the runtime's `Capacity` refusals come from, and their use, counted
    * as they count it. Reads state as `observe` does and writes nothing.
    */
   readonly capacity: (
     machines: ReadonlyArray<Held>,
-  ) => Effect.Effect<ReadonlyArray<Usage>, HostError>;
+  ) => Effect.Effect<ReadonlyArray<Usage>, RuntimeError>;
   /** Returns once exec works. */
-  readonly create: (machine: MachineRef, image: string) => Effect.Effect<void, HostError | Refusal>;
+  readonly create: (machine: MachineRef, image: string) => Effect.Effect<void, RoomError | Refusal>;
   /**
    * Leaves a running machine as it is; returns once exec works. The core reads no state first,
    * so the runtime refuses a machine it no longer has (`missing`) before anything native.
    */
-  readonly start: (machine: MachineRef) => Effect.Effect<void, HostError | Refusal>;
+  readonly start: (machine: MachineRef) => Effect.Effect<void, RoomError | Refusal>;
   /**
    * The core reads no state first, so the runtime does nothing on a machine that doesn't run or
    * that it no longer has.
    */
-  readonly stop: (machine: MachineRef) => Effect.Effect<void, HostError>;
+  readonly stop: (machine: MachineRef) => Effect.Effect<void, RuntimeError>;
   /**
    * Removes everything native the row could have made, whatever an earlier failure left: a
    * running VM, a VM whose stop failed, or nothing, as after a crash before the first call.
    */
-  readonly delete: (machine: MachineRef) => Effect.Effect<void, HostError>;
+  readonly delete: (machine: MachineRef) => Effect.Effect<void, RuntimeError>;
   /**
    * Of the runtime's `checkpointKind`. A machine in a state the runtime doesn't capture is a
    * `Refusal` with `Precondition`, read before anything native.
@@ -188,12 +197,12 @@ export interface Interface {
   readonly capture: (
     machine: MachineRef,
     checkpoint: CheckpointRef,
-  ) => Effect.Effect<void, HostError | Refusal>;
+  ) => Effect.Effect<void, RoomError | Refusal>;
   /** Returns once exec works. A checkpoint deleted under it fails it like any runtime failure. */
   readonly restore: (
     checkpoint: CheckpointRef,
     machine: MachineRef,
-  ) => Effect.Effect<void, HostError | Refusal>;
+  ) => Effect.Effect<void, RoomError | Refusal>;
   /**
    * Returns once exec works. A source in a state the runtime doesn't copy is a `Refusal` with
    * `Precondition`.
@@ -201,14 +210,14 @@ export interface Interface {
   readonly fork: (
     source: MachineRef,
     machine: MachineRef,
-  ) => Effect.Effect<void, HostError | Refusal>;
+  ) => Effect.Effect<void, RoomError | Refusal>;
   /** Removes everything native the checkpoint's row could have made. */
-  readonly deleteCheckpoint: (checkpoint: CheckpointRef) => Effect.Effect<void, HostError>;
+  readonly deleteCheckpoint: (checkpoint: CheckpointRef) => Effect.Effect<void, RuntimeError>;
   /** As root, in a running guest. */
   readonly exec: (
     machine: MachineRef,
     command: Command,
-  ) => Effect.Effect<Execution, HostError, Scope.Scope>;
+  ) => Effect.Effect<Execution, RuntimeError, Scope.Scope>;
 }
 
 export class Runtime extends Context.Service<Runtime, Interface>()("@clankerbox/host/Runtime") {}

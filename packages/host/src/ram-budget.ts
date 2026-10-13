@@ -1,4 +1,4 @@
-import { Capacity, formatMib, type HostError } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, formatMib } from "@gjermundgaraba/clankerbox-sdk";
 import { Array as Arr, Effect } from "effect";
 import type { Activation, Held, MachineRef, Observed } from "./runtime.ts";
 
@@ -34,7 +34,7 @@ export const checkRamBudget = (
   budgetMib: number,
   activation: Activation,
   observe: Observe,
-): Effect.Effect<void, HostError> =>
+): Effect.Effect<void, Capacity> =>
   Effect.gen(function* () {
     const { used: total } = yield* ramInUse(activation.machines, observe);
 

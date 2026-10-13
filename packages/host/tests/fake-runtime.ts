@@ -6,7 +6,7 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import { type Capacity, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { checkRamBudget, ramInUse } from "../src/ram-budget.ts";
@@ -21,6 +21,7 @@ import {
   type Observed,
   Refusal,
   Runtime,
+  type RuntimeError,
 } from "../src/runtime.ts";
 
 export type Operation =
@@ -82,7 +83,7 @@ interface FakeMachine {
 }
 
 type Injection =
-  | { readonly kind: "fail"; readonly error: HostError }
+  | { readonly kind: "fail"; readonly error: RuntimeError }
   | {
       readonly kind: "hold";
       readonly entered: Deferred.Deferred<void>;
@@ -91,6 +92,9 @@ type Injection =
 
 type Refusable = "create" | "start" | "capture" | "restore" | "fork";
 
+/** The operations that take room, and so may fail with `Capacity`. */
+type RoomOperation = Refusable | "admit";
+
 export const fakeRuntime = (options: FakeOptions) => {
   const machines = new Map<string, FakeMachine>();
   const calls: Array<string> = [];
@@ -98,7 +102,8 @@ export const fakeRuntime = (options: FakeOptions) => {
   const observed: Array<ReadonlyArray<string>> = [];
   const injections = new Map<Operation, Array<Injection>>();
   const refusals = new Map<Refusable, Array<Refusal>>();
-  const observeFailures: Array<HostError | "hang"> = [];
+  const capacityFailures = new Map<RoomOperation, Array<Capacity>>();
+  const observeFailures: Array<RuntimeError | "hang"> = [];
   const publishAddress = "publishAddress" in options ? options.publishAddress : "127.0.0.1";
   let stubs: string | undefined;
 
@@ -125,9 +130,19 @@ export const fakeRuntime = (options: FakeOptions) => {
       return yield* Effect.fail(injection.error);
     });
 
-  const enterRefusable = (operation: Refusable, resource: { readonly id: string }) =>
+  const enterRoom = (operation: RoomOperation, resource: { readonly id: string }) =>
     Effect.andThen(
       enter(operation, resource),
+      Effect.suspend(() => {
+        const capacity = capacityFailures.get(operation)?.shift();
+
+        return capacity === undefined ? Effect.void : Effect.fail(capacity);
+      }),
+    );
+
+  const enterRefusable = (operation: Refusable, resource: { readonly id: string }) =>
+    Effect.andThen(
+      enterRoom(operation, resource),
       Effect.suspend(() => {
         const refusal = refusals.get(operation)?.shift();
 
@@ -235,7 +250,7 @@ export const fakeRuntime = (options: FakeOptions) => {
           Effect.andThen(
             Effect.andThen(
               Effect.sync(() => activations.push(activation)),
-              enter("admit", activation.machine),
+              enterRoom("admit", activation.machine),
             ),
             options.ramBudgetMib === undefined
               ? Effect.void
@@ -360,10 +375,13 @@ export const fakeRuntime = (options: FakeOptions) => {
     root: (name: string) => machines.get(name)?.root,
     machines,
     stubs: () => stubs,
-    failNext: (operation: Operation, error: HostError) => {
+    failNext: (operation: Operation, error: RuntimeError) => {
       inject(operation, { kind: "fail", error });
     },
-    failNextObserve: (error: HostError) => {
+    failNextForRoom: (operation: RoomOperation, error: Capacity) => {
+      capacityFailures.set(operation, [...(capacityFailures.get(operation) ?? []), error]);
+    },
+    failNextObserve: (error: RuntimeError) => {
       observeFailures.push(error);
     },
     hangNextObserve: () => {
