@@ -167,6 +167,9 @@ catalogs:
     '@effect/platform-node':
       specifier: 4.0.4
       version: 4.0.4
+    '@effect/vitest':
+      specifier: 4.0.4
+      version: 4.0.4
     '@gjermundgaraba/effect-actions':
       specifier: 0.14.0
       version: 0.14.0
@@ -302,6 +305,9 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.4(effect@4.0.4)(redis@6.3.0)
+      '@effect/vitest':
+        specifier: 'catalog:'
+        version: 4.0.4(effect@4.0.4)(vitest@5.0.3)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.4
@@ -383,6 +389,12 @@ packages:
     peerDependencies:
       effect: ^4.0.4
       redis: '>=5.0.0 <7.0.0'
+
+  '@effect/vitest@4.0.4':
+    resolution: {integrity: sha512-l5KN46RbDVpqZxWzwXZtX6FVQiyzd+/hTYqL543uSDRo7hC0m19IeICh6O9U/nqCtfersqsNZnBjgHFfkuHsBw==}
+    peerDependencies:
+      effect: ^4.0.4
+      vitest: '>=5.0.0 <6.0.0'
 
   '@gjermundgaraba/effect-actions@0.14.0':
     resolution: {integrity: sha512-iZg8UwZvYFLmorKNWzytBBFgBDpMOP4O38dMT6+dUooHY7EprTzVh6yI7qcC4fHsvY/v8b2km4BLH1Y1cHagVg==}
@@ -1622,6 +1634,11 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
+
+  '@effect/vitest@4.0.4(effect@4.0.4)(vitest@5.0.3)':
+    dependencies:
+      effect: 4.0.4
+      vitest: 5.0.3(@types/node@26.6.4)(@vitest/browser-preview@5.0.3)(@vitest/ui@5.0.3)(@voidzero-dev/vite-plus-core@1.1.0(@types/node@26.6.4)(typescript@7.0.2))
 
   '@gjermundgaraba/effect-actions@0.14.0(effect@4.0.4)':
     dependencies:

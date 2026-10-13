@@ -38,6 +38,11 @@ export default defineConfig({
       "vitest/valid-expect": ["error", { maxArgs: 2 }],
       "vitest/require-to-throw-message": "error",
       "vitest/no-conditional-expect": "error",
+      // @effect/vitest's testers are test blocks too.
+      "vitest/no-standalone-expect": [
+        "error",
+        { additionalTestBlockFunctions: ["it.effect", "it.live", "it.prop", "it.effect.prop"] },
+      ],
       "vitest/no-restricted-vi-methods": [
         "error",
         {

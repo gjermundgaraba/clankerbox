@@ -1,50 +1,46 @@
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type ServerResponse } from "node:http";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Layer, Schema } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
-import { afterEach, expect, test } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import { afterEach, expect } from "vite-plus/test";
 import { Client, type MachineSpec } from "../src/index.ts";
 import * as NodeClient from "../src/node.ts";
 import { type StubHost, stubHost } from "./stub-host.ts";
 
 const stubs: Array<StubHost> = [];
 
-const servers: Array<Server> = [];
-
 afterEach(async () => {
   await Promise.all(stubs.splice(0).map((stub) => stub.dispose()));
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise((resolve) => {
-          server.close(resolve);
-        }),
-    ),
-  );
 });
 
-/** A loopback server that answers every request with `reply`, and returns its URL. */
-const answering = async (reply: (response: ServerResponse) => void): Promise<string> => {
-  const server = createServer((request, response) => {
-    request.resume();
-    request.on("end", () => {
-      reply(response);
+/** A loopback server, for the scope, that answers every request with `reply`; its URL. */
+const answering = (reply: (response: ServerResponse) => void) =>
+  Effect.gen(function* () {
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on("end", () => {
+        reply(response);
+      });
     });
+
+    yield* Effect.acquireRelease(
+      Effect.callback<void>((resume) => {
+        server.listen(0, "127.0.0.1", () => resume(Effect.void));
+      }),
+      () =>
+        Effect.callback<void>((resume) => {
+          server.close(() => resume(Effect.void));
+        }),
+    );
+
+    const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
+      server.address(),
+      { onExcessProperty: "ignore" },
+    );
+
+    return `http://127.0.0.1:${port}`;
   });
-
-  servers.push(server);
-
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-
-  const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
-    server.address(),
-    { onExcessProperty: "ignore" },
-  );
-
-  return `http://127.0.0.1:${port}`;
-};
 
 /** Sends the reply's status and the start of its body, then drops the connection. */
 const cutOff = (response: ServerResponse) => {
@@ -54,10 +50,7 @@ const cutOff = (response: ServerResponse) => {
 };
 
 const onLinux = <A, E>(url: string, use: (client: Client.Interface) => Effect.Effect<A, E>) =>
-  Effect.flatMap(Client.Client, use).pipe(
-    Effect.provide(NodeClient.layer([{ id: "linux", url }])),
-    Effect.runPromise,
-  );
+  Effect.flatMap(Client.Client, use).pipe(Effect.provide(NodeClient.layer([{ id: "linux", url }])));
 
 const spec: MachineSpec = { base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
 
@@ -75,76 +68,87 @@ const serve = (stub: StubHost) =>
     return HttpServer.formatAddress(server.address);
   });
 
-test("the client's Node transport calls a real loopback host", async () => {
-  const linux = stubHost({ id: "linux", bases: ["ubuntu"] });
+it.effect("the client's Node transport calls a real loopback host", () =>
+  Effect.gen(function* () {
+    const linux = stubHost({ id: "linux", bases: ["ubuntu"] });
 
-  stubs.push(linux);
+    stubs.push(linux);
 
-  const made = await Effect.gen(function* () {
-    const url = yield* serve(linux);
+    const made = yield* Effect.gen(function* () {
+      const url = yield* serve(linux);
 
-    return yield* Effect.provide(
-      Effect.flatMap(Client.Client, (client) => client.create("dev", spec)),
-      NodeClient.layer([
-        { id: "mac", url: "http://127.0.0.1:1" },
-        { id: "linux", url },
-      ]),
-    );
-  }).pipe(Effect.scoped, Effect.runPromise);
+      return yield* Effect.provide(
+        Effect.flatMap(Client.Client, (client) => client.create("dev", spec)),
+        NodeClient.layer([
+          { id: "mac", url: "http://127.0.0.1:1" },
+          { id: "linux", url },
+        ]),
+      );
+    }).pipe(Effect.scoped);
 
-  expect(made.id).toBe("linux_dev");
-  expect(linux.creates).toHaveLength(1);
-});
+    expect(made.id).toBe("linux_dev");
+    expect(linux.creates).toHaveLength(1);
+  }),
+);
 
-test("a refused connection is Unavailable through the Node transport", async () => {
-  const error = await Effect.flatMap(Client.Client, (client) =>
-    Effect.flip(client.start("linux_dev")),
-  ).pipe(
-    Effect.provide(NodeClient.layer([{ id: "linux", url: "http://127.0.0.1:1" }])),
-    Effect.runPromise,
-  );
+it.effect("a refused connection is Unavailable through the Node transport", () =>
+  Effect.gen(function* () {
+    const error = yield* Effect.flatMap(Client.Client, (client) =>
+      Effect.flip(client.start("linux_dev")),
+    ).pipe(Effect.provide(NodeClient.layer([{ id: "linux", url: "http://127.0.0.1:1" }])));
 
-  expect(error._tag).toBe("Unavailable");
-  expect(error.retryable).toBe(false);
-  expect(error.message).toContain("ECONNREFUSED");
-});
+    expect(error._tag).toBe("Unavailable");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toContain("ECONNREFUSED");
+  }),
+);
 
-test("a mutation whose connection drops partway through the reply is a lost reply", async () => {
-  const url = await answering(cutOff);
-  const error = await onLinux(url, (client) => Effect.flip(client.start("linux_dev")));
+it.effect("a mutation whose connection drops partway through the reply is a lost reply", () =>
+  Effect.gen(function* () {
+    const url = yield* answering(cutOff);
+    const error = yield* onLinux(url, (client) => Effect.flip(client.start("linux_dev")));
 
-  expect(error._tag).toBe("Unavailable");
-  expect(error.retryable).toBe(false);
-  expect(error.message).toContain("may have run: read linux_dev");
-});
+    expect(error._tag).toBe("Unavailable");
+    expect(error.retryable).toBe(false);
+    expect(error.message).toContain("may have run: read linux_dev");
+  }),
+);
 
-test("a read whose connection drops partway through the reply is Unavailable and retryable", async () => {
-  const url = await answering(cutOff);
-  const error = await onLinux(url, (client) => Effect.flip(client.machine("linux_dev")));
+it.effect(
+  "a read whose connection drops partway through the reply is Unavailable and retryable",
+  () =>
+    Effect.gen(function* () {
+      const url = yield* answering(cutOff);
+      const error = yield* onLinux(url, (client) => Effect.flip(client.machine("linux_dev")));
 
-  expect(error._tag).toBe("Unavailable");
-  expect(error.retryable).toBe(true);
-});
+      expect(error._tag).toBe("Unavailable");
+      expect(error.retryable).toBe(true);
+    }),
+);
 
-test("a reply that parses but isn't the action's success is Internal", async () => {
-  const url = await answering((response) => {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end('{"id":"linux_dev"}');
-  });
+it.effect("a reply that parses but isn't the action's success is Internal", () =>
+  Effect.gen(function* () {
+    const url = yield* answering((response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"id":"linux_dev"}');
+    });
 
-  const error = await onLinux(url, (client) => Effect.flip(client.start("linux_dev")));
+    const error = yield* onLinux(url, (client) => Effect.flip(client.start("linux_dev")));
 
-  expect(error._tag).toBe("Internal");
-  expect(error.message).toContain("host linux's reply didn't decode");
-});
+    expect(error._tag).toBe("Internal");
+    expect(error.message).toContain("host linux's reply didn't decode");
+  }),
+);
 
-test("a reply that arrives whole and doesn't parse is Internal", async () => {
-  const url = await answering((response) => {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end('{"id":"linux_dev",');
-  });
+it.effect("a reply that arrives whole and doesn't parse is Internal", () =>
+  Effect.gen(function* () {
+    const url = yield* answering((response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end('{"id":"linux_dev",');
+    });
 
-  const error = await onLinux(url, (client) => Effect.flip(client.start("linux_dev")));
+    const error = yield* onLinux(url, (client) => Effect.flip(client.start("linux_dev")));
 
-  expect(error._tag).toBe("Internal");
-});
+    expect(error._tag).toBe("Internal");
+  }),
+);
