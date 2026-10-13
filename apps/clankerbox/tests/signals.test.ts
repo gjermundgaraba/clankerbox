@@ -3,12 +3,12 @@
  * teardown, which the host role shares. The live drivers check the host's own.
  */
 import { type ChildProcess, spawn } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { cleanup, scratch } from "./support.ts";
 
 const owned: Array<string> = [];
 
@@ -33,8 +33,16 @@ afterEach(async () => {
         }),
     ),
   );
-  await cleanup(owned, []);
+  await Promise.all(owned.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
+
+const scratch = async () => {
+  const dir = await mkdtemp(join(tmpdir(), "clankerbox-signals-"));
+
+  owned.push(dir);
+
+  return dir;
+};
 
 /** Runs `file` under this Node, with `args`, and resolves with its exit code. */
 const run = (file: string, args: ReadonlyArray<string>) => {
@@ -76,7 +84,7 @@ const silent = async () => {
 test.each(["SIGINT", "SIGTERM"] as const)(
   "the CLI exits 130 when %s stops it mid-call",
   async (signal) => {
-    const dir = await scratch(owned);
+    const dir = await scratch();
     const { port, accepted } = await silent();
     const config = join(dir, "config.json");
 

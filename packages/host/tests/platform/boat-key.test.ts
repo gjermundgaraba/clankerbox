@@ -1,28 +1,25 @@
 /** The boat host's SSH key, generated in a scratch state dir with the real `ssh-keygen`. */
-import { stat } from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect } from "effect";
-import { afterEach, expect, test } from "vite-plus/test";
+import { layer } from "@effect/vitest";
+import { expect } from "vite-plus/test";
 import { keyFile, sshKey } from "../../src/platform/boat/key.ts";
-import { removeScratch, scratch } from "../scratch.ts";
+import { scratch, stat } from "@gjermundgaraba/clankerbox-sdk/testing";
 
-const owned: Array<string> = [];
+layer(NodeServices.layer)((it) => {
+  it.effect("the host generates its ed25519 key once, private to it, and keeps it", () =>
+    Effect.gen(function* () {
+      const stateDir = yield* scratch;
 
-afterEach(() => removeScratch(owned));
+      const first = yield* sshKey(stateDir);
 
-const load = (stateDir: string) =>
-  Effect.runPromise(sshKey(stateDir).pipe(Effect.provide(NodeServices.layer)));
+      expect(first.file).toBe(keyFile(stateDir));
+      expect(first.publicKey).toMatch(/^ssh-ed25519 [A-Za-z0-9+/=]+ clankerbox-boat$/u);
+      expect((yield* stat(first.file)).mode & 0o777).toBe(0o600);
 
-test("the host generates its ed25519 key once, private to it, and keeps it", async () => {
-  const stateDir = await scratch(owned);
+      const again = yield* sshKey(stateDir);
 
-  const first = await load(stateDir);
-
-  expect(first.file).toBe(keyFile(stateDir));
-  expect(first.publicKey).toMatch(/^ssh-ed25519 [A-Za-z0-9+/=]+ clankerbox-boat$/u);
-  expect((await stat(first.file)).mode & 0o777).toBe(0o600);
-
-  const again = await load(stateDir);
-
-  expect(again).toEqual(first);
+      expect(again).toEqual(first);
+    }),
+  );
 });

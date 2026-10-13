@@ -1,76 +1,117 @@
-import { Effect, Exit, Schema } from "effect";
-import { expect, test } from "vite-plus/test";
+import { Arbitrary, Effect, Exit, Schema } from "effect";
+import { it } from "@effect/vitest";
+import { expect } from "vite-plus/test";
 import { formatId, HostId, Id, Name, parseId, parseName } from "../src/index.ts";
 
-const parse = (id: string) => Effect.runSyncExit(parseId(id));
+const parse = (id: string) => Effect.exit(parseId(id));
 
-test("an ID splits at its '_'", () => {
-  expect(Effect.runSync(parseId("linux_dev"))).toEqual({ host: "linux", name: "dev" });
-  expect(Effect.runSync(parseId("boat-1_a-b"))).toEqual({ host: "boat-1", name: "a-b" });
-  expect(Effect.runSync(parseId("mac_Dev2"))).toEqual({ host: "mac", name: "Dev2" });
-});
+it.effect("an ID splits at its '_'", () =>
+  Effect.gen(function* () {
+    expect(yield* parseId("linux_dev")).toEqual({ host: "linux", name: "dev" });
+    expect(yield* parseId("boat-1_a-b")).toEqual({ host: "boat-1", name: "a-b" });
+    expect(yield* parseId("mac_Dev2")).toEqual({ host: "mac", name: "Dev2" });
+  }),
+);
 
-test("an ID is refused without a host, a name, or a valid name", () => {
-  for (const id of [
-    "",
-    "linux",
-    "_dev",
-    "linux_",
-    "linux_2dev",
-    "linux__dev",
-    "linux_-dev",
-    "linux_a--b",
-    "linux_box-",
-    "linux_dev_2",
-    "Linux_dev",
-    "1linux_dev",
-    `${"h".repeat(33)}_dev`,
-  ]) {
-    expect(Exit.isFailure(parse(id)), id).toBe(true);
-  }
-});
+it.effect("an ID is refused without a host, a name, or a valid name", () =>
+  Effect.gen(function* () {
+    for (const id of [
+      "",
+      "linux",
+      "_dev",
+      "linux_",
+      "linux_2dev",
+      "linux__dev",
+      "linux_-dev",
+      "linux_a--b",
+      "linux_box-",
+      "linux_dev_2",
+      "Linux_dev",
+      "1linux_dev",
+      `${"h".repeat(33)}_dev`,
+    ]) {
+      expect(Exit.isFailure(yield* parse(id)), id).toBe(true);
+    }
+  }),
+);
 
-test("an ID is at most 62 characters of [A-Za-z0-9_-]", () => {
-  const longest = `h_${"a".repeat(60)}`;
+it.effect("an ID is at most 62 characters of [A-Za-z0-9_-]", () =>
+  Effect.gen(function* () {
+    const longest = `h_${"a".repeat(60)}`;
 
-  expect(longest).toHaveLength(62);
-  expect(Exit.isSuccess(parse(longest))).toBe(true);
-  expect(Exit.isFailure(parse(`${longest}a`))).toBe(true);
-  expect(Exit.isFailure(parse("linux_dév"))).toBe(true);
-  expect(Exit.isFailure(parse("linux_d.v"))).toBe(true);
-  expect(Exit.isFailure(parse("linux_d v"))).toBe(true);
-});
+    expect(longest).toHaveLength(62);
+    expect(Exit.isSuccess(yield* parse(longest))).toBe(true);
+    expect(Exit.isFailure(yield* parse(`${longest}a`))).toBe(true);
+    expect(Exit.isFailure(yield* parse("linux_dév"))).toBe(true);
+    expect(Exit.isFailure(yield* parse("linux_d.v"))).toBe(true);
+    expect(Exit.isFailure(yield* parse("linux_d v"))).toBe(true);
+  }),
+);
 
-test("a refused ID fails with Invalid", () => {
-  const error = Effect.runSync(Effect.flip(parseId("linux")));
+it.effect("a refused ID fails with Invalid", () =>
+  Effect.gen(function* () {
+    const error = yield* Effect.flip(parseId("linux"));
 
-  expect(error._tag).toBe("Invalid");
-  expect(error.message).toContain("<host>_<name>");
-});
+    expect(error._tag).toBe("Invalid");
+    expect(error.message).toContain("<host>_<name>");
+  }),
+);
 
-test("formatting checks the host, the name and the whole ID", () => {
-  expect(Effect.runSync(formatId("mac", "xcode"))).toBe("mac_xcode");
+it.effect("formatting checks the host, the name and the whole ID", () =>
+  Effect.gen(function* () {
+    expect(yield* formatId("mac", "xcode")).toBe("mac_xcode");
 
-  for (const [host, name] of [
-    ["li_nux", "dev"],
-    ["Linux", "dev"],
-    ["", "dev"],
-    ["linux", "dev_box"],
-    ["linux", "2dev"],
-    ["linux", ""],
-    ["linux", "a".repeat(57)],
-  ] as const) {
-    expect(Exit.isFailure(Effect.runSyncExit(formatId(host, name))), `${host} ${name}`).toBe(true);
-  }
-});
+    for (const [host, name] of [
+      ["li_nux", "dev"],
+      ["Linux", "dev"],
+      ["", "dev"],
+      ["linux", "dev_box"],
+      ["linux", "2dev"],
+      ["linux", ""],
+      ["linux", "a".repeat(57)],
+    ] as const) {
+      expect(Exit.isFailure(yield* Effect.exit(formatId(host, name))), `${host} ${name}`).toBe(
+        true,
+      );
+    }
+  }),
+);
 
-test("formatting and parsing round-trip", () => {
-  const id = Effect.runSync(formatId("linux", "dev-box"));
+it.effect("formatting and parsing round-trip", () =>
+  Effect.gen(function* () {
+    const id = yield* formatId("linux", "dev-box");
 
-  expect(Effect.runSync(parseId(id))).toEqual({ host: "linux", name: "dev-box" });
-});
+    expect(yield* parseId(id)).toEqual({ host: "linux", name: "dev-box" });
+  }),
+);
 
-test("a host ID is a lowercase letter, then up to 31 lowercase letters, digits and '-'", () => {
+/** A valid name of any length up to past the ID's limit: one generated, then padded with `a`. */
+const longName = Arbitrary.map(
+  Arbitrary.all([
+    Arbitrary.schema(Name),
+    Arbitrary.schema(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 64 }))),
+  ]),
+  ([name, padding]) => `${name}${"a".repeat(padding)}`,
+);
+
+it.effect.prop(
+  "a valid host and name format into <host>_<name> exactly when it is at most 62 characters, and parse back",
+  { host: HostId, name: longName },
+  ({ host, name }) =>
+    Effect.gen(function* () {
+      const id = `${host}_${name}`;
+      const formatted = yield* Effect.exit(formatId(host, name));
+
+      if (id.length > 62) {
+        expect(Exit.isFailure(formatted)).toBe(true);
+      } else {
+        expect(formatted).toEqual(Exit.succeed(id));
+        expect(yield* parseId(id)).toEqual({ host, name });
+      }
+    }),
+);
+
+it("a host ID is a lowercase letter, then up to 31 lowercase letters, digits and '-'", () => {
   const isHostId = Schema.is(HostId);
 
   for (const host of ["linux", "boat-1", "h", "h".repeat(32)]) {
@@ -85,13 +126,13 @@ test("a host ID is a lowercase letter, then up to 31 lowercase letters, digits a
 /** boat's named-snapshot names (`boat-v1.yaml`; the bump-boat-api skill). */
 const boatAccepts = (name: string): boolean => /^[a-z0-9][a-z0-9-]{0,62}$/u.test(name);
 
-test("boat accepts cbx-<host>-<inst> for every host ID, the longest included", () => {
+it("boat accepts cbx-<host>-<inst> for every host ID, the longest included", () => {
   for (const host of ["linux", "boat-1", "h".repeat(32)]) {
     expect(boatAccepts(`cbx-${host}-0f3a9c1e`), host).toBe(true);
   }
 });
 
-test("the Id schema accepts full IDs and refuses the rest", () => {
+it("the Id schema accepts full IDs and refuses the rest", () => {
   const isValid = Schema.is(Id);
 
   for (const id of ["linux_dev", "a_b", "mac_Dev-2", `h_${"a".repeat(60)}`]) {
@@ -103,19 +144,21 @@ test("the Id schema accepts full IDs and refuses the rest", () => {
   }
 });
 
-test("a name has no '_', no '--' and doesn't end in '-'", () => {
-  const isName = Schema.is(Name);
+it.effect("a name has no '_', no '--' and doesn't end in '-'", () =>
+  Effect.gen(function* () {
+    const isName = Schema.is(Name);
 
-  for (const name of ["dev", "a-b", "Dev2", "A1-b2-c3"]) {
-    expect(isName(name), name).toBe(true);
-    expect(Exit.isSuccess(Effect.runSyncExit(parseName(name))), name).toBe(true);
-  }
+    for (const name of ["dev", "a-b", "Dev2", "A1-b2-c3"]) {
+      expect(isName(name), name).toBe(true);
+      expect(Exit.isSuccess(yield* Effect.exit(parseName(name))), name).toBe(true);
+    }
 
-  for (const name of ["a--b", "box-", "2dev", "-dev", "_dev", "a_b", "dev_", "", "d.v"]) {
-    expect(isName(name), name).toBe(false);
-    expect(Exit.isFailure(Effect.runSyncExit(parseName(name))), name).toBe(true);
-  }
-});
+    for (const name of ["a--b", "box-", "2dev", "-dev", "_dev", "a_b", "dev_", "", "d.v"]) {
+      expect(isName(name), name).toBe(false);
+      expect(Exit.isFailure(yield* Effect.exit(parseName(name))), name).toBe(true);
+    }
+  }),
+);
 
 /**
  * smolvm 1.27.3's `validate_vm_name` (src/data/mod.rs:58-103): at most 128 characters,
@@ -128,7 +171,7 @@ const smolvmAccepts = (name: string): boolean =>
   !name.includes("--") &&
   !name.endsWith("-");
 
-test("smolvm accepts <name>-<inst> for valid names, and would refuse the names Name rules out", () => {
+it("smolvm accepts <name>-<inst> for valid names, and would refuse the names Name rules out", () => {
   const instance = "0f3a9c1e";
   const isName = Schema.is(Name);
 

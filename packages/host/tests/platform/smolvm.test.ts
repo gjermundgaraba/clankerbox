@@ -3,14 +3,14 @@
  * and how it reads smolvm's answers. No VM runs here.
  */
 import { mkdirSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Fiber, Layer, Logger, Stream } from "effect";
+import { Duration, Effect, Fiber, FileSystem, Layer, Logger, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { afterEach, expect, test } from "vite-plus/test";
+import { layer } from "@effect/vitest";
+import { expect } from "vite-plus/test";
 import { type CheckpointRef, type MachineRef, Refusal } from "../../src/runtime.ts";
 import {
   controlSocket,
@@ -24,18 +24,14 @@ import {
   templates,
   testedVersion,
 } from "../../src/platform/smolvm.ts";
-import { removeScratch, scratch } from "../scratch.ts";
+import { mkdir, readDirectory, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { type Call, type Reply, scripted as scriptedSpawner } from "../scripted.ts";
-
-const owned: Array<string> = [];
 
 /** A refusal's error, or the failure that wasn't one. */
 const refused = (error: Refusal | HostError) =>
   error instanceof Refusal
     ? [error.error._tag, error.error.message]
     : ["not refused", error.message];
-
-afterEach(() => removeScratch(owned));
 
 const encoder = new TextEncoder();
 
@@ -51,32 +47,36 @@ const scripted = (reply: (call: Call) => Reply | undefined) =>
  * A prefix with its templates expanded, and a state dir short enough for smolvm's sockets: under
  * `/tmp`, as the system's temporary directory can be too deep on macOS.
  */
-const prepared = async (expanded: ReadonlyArray<string> = templates): Promise<Settings> => {
-  const dir = await scratch(owned);
-  const prefix = join(dir, "smolvm", testedVersion);
-  const stateDir = await mkdtemp("/tmp/cbx-");
+const prepared = (expanded: ReadonlyArray<string> = templates) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* scratch;
+    const prefix = join(dir, "smolvm", testedVersion);
+    const stateDir = yield* fs.makeTempDirectoryScoped({ directory: "/tmp", prefix: "cbx-" });
 
-  owned.push(stateDir);
-  await mkdir(prefix, { recursive: true });
+    yield* mkdir(prefix);
 
-  for (const template of expanded) {
-    await writeFile(join(prefix, template), "");
-  }
+    for (const template of expanded) {
+      yield* write(join(prefix, template), "");
+    }
 
-  return { prefix, publishAddress: "100.95.240.37", ramBudgetMib: 4096, stateDir };
-};
+    const settings: Settings = {
+      prefix,
+      publishAddress: "100.95.240.37",
+      ramBudgetMib: 4096,
+      stateDir,
+    };
+
+    return settings;
+  });
 
 const runtimeOf = (settings: Settings, spawner: ReturnType<typeof scripted>, uid = 0) =>
-  make(settings, uid).pipe(
-    Effect.provide(Layer.merge(NodeServices.layer, spawner.layer)),
-    Effect.runPromise,
-  );
+  make(settings, uid).pipe(Effect.provide(Layer.merge(NodeServices.layer, spawner.layer)));
 
 const startupError = (settings: Settings, spawner: ReturnType<typeof scripted>, uid = 0) =>
   make(settings, uid).pipe(
     Effect.flip,
     Effect.provide(Layer.merge(NodeServices.layer, spawner.layer)),
-    Effect.runPromise,
   );
 
 const machine: MachineRef = {
@@ -114,902 +114,1055 @@ const unknown: Reply = {
   stderr: "Error: config operation failed: machine status: machine 'dev-01234567' not found\n",
 };
 
-test("a native name is the machine's name and its instance's first 8 characters", () => {
-  expect(nativeName(machine)).toBe("dev-01234567");
-});
-
-test("every smolvm call runs the prefix's wrapper in one fixed environment, and nothing else", async () => {
-  const settings = await prepared();
-  const spawner = scripted(() => undefined);
-
-  const runtime = await runtimeOf(settings, spawner);
-
-  expect(runtime.version).toBe("1.27.3");
-  expect(spawner.calls).toEqual([
-    {
-      file: join(settings.prefix, "smolvm"),
-      args: ["--version"],
-      env: {
-        PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        HOME: join(settings.stateDir, "smolvm"),
-        SMOLVM_DATA_DIR: join(settings.stateDir, "smolvm"),
-        SMOLVM_AGENT_ROOTFS: join(settings.prefix, ".local/share/smolvm/agent-rootfs"),
-        SMOLVM_RESTORE_TMPFS: "0",
-        SMOLVM_VM_USE_SCOPE: "1",
-        SMOLVM_PUBLISH_ADDR: "100.95.240.37",
-        SMOLVM_EGRESS_FLOOR: "strict",
-        NO_COLOR: "1",
-      },
-      stdin: undefined,
-    },
-  ]);
-  expect(environment(settings)).not.toHaveProperty("SMOLVM_BOOT_BINARY");
-});
-
-test("a smolvm host refuses to start unless it runs as root", async () => {
-  const spawner = scripted(() => undefined);
-  const error = await startupError(await prepared(), spawner, 1000);
-
-  expect(error._tag).toBe("Precondition");
-  expect(error.message).toBe("a smolvm host runs as root, and this one runs as uid 1000");
-  expect(spawner.calls).toEqual([]);
-});
-
-test("a smolvm host refuses a state dir too deep for smolvm's socket paths", async () => {
-  const settings = await prepared();
-  const deep = { ...settings, stateDir: join("/", "d".repeat(60), "state") };
-
-  expect(Buffer.byteLength(controlSocket(pathsIn(deep.stateDir).dataDir))).toBe(122);
-
-  const error = await startupError(
-    deep,
-    scripted(() => undefined),
-  );
-
-  expect(error._tag).toBe("Precondition");
-  expect(error.message).toContain("past Linux's 107: use a shorter state dir");
-});
-
-test("a smolvm host refuses a prefix whose disk templates weren't expanded at install", async () => {
-  const settings = await prepared(["storage-template.ext4"]);
-  const spawner = scripted(() => undefined);
-  const error = await startupError(settings, spawner);
-  const overlay = join(settings.prefix, "overlay-template.ext4");
-
-  expect(error._tag).toBe("Precondition");
-  expect(error.message).toBe(
-    `smolvm prefix ${settings.prefix} has no overlay-template.ext4: expand it at install with zstd -d --sparse ${overlay}.zst -o ${overlay}`,
-  );
-  expect(spawner.calls).toEqual([]);
-});
-
-test("a smolvm host refuses a smolvm release it wasn't tested on", async () => {
-  const settings = await prepared();
-
-  const error = await startupError(
-    settings,
-    scripted(() => ({ stdout: "smolvm 1.27.4\n" })),
-  );
-
-  expect(error._tag).toBe("Precondition");
-  expect(error.message).toBe(
-    `${join(settings.prefix, "smolvm")} reports "smolvm 1.27.4", and this host was tested on smolvm 1.27.3`,
-  );
-});
-
-test("smolvm's states map onto running and stopped by whether the VMM is alive", () => {
-  expect(
-    Object.fromEntries(
-      (
-        [
-          "created",
-          "running",
-          "stopped",
-          "paused",
-          "pausing",
-          "failed",
-          "unreachable",
-          "frozen",
-        ] as const
-      ).map((state) => [state, stateOf(state)]),
-    ),
-  ).toEqual({
-    created: "stopped",
-    running: "running",
-    stopped: "stopped",
-    paused: "stopped",
-    pausing: "running",
-    failed: "stopped",
-    unreachable: "running",
-    frozen: "running",
+layer(NodeServices.layer)((it) => {
+  it("a native name is the machine's name and its instance's first 8 characters", () => {
+    expect(nativeName(machine)).toBe("dev-01234567");
   });
-});
 
-test("observe reads each machine's status", async () => {
-  const replies = new Map([
-    ["dev-01234567", status("running")],
-    ["two-01234567", status("created")],
-    [
-      "gone-01234567",
-      {
-        exitCode: 1,
-        stderr:
-          "Error: config operation failed: machine status: machine 'gone-01234567' not found\n",
-      },
-    ],
-  ]);
+  it.effect(
+    "every smolvm call runs the prefix's wrapper in one fixed environment, and nothing else",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
+        const spawner = scripted(() => undefined);
 
-  const spawner = scripted((call) =>
-    call.args[0] === "machine" ? replies.get(call.args[3] ?? "") : undefined,
+        const runtime = yield* runtimeOf(settings, spawner);
+
+        expect(runtime.version).toBe("1.27.3");
+        expect(spawner.calls).toEqual([
+          {
+            file: join(settings.prefix, "smolvm"),
+            args: ["--version"],
+            env: {
+              PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+              HOME: join(settings.stateDir, "smolvm"),
+              SMOLVM_DATA_DIR: join(settings.stateDir, "smolvm"),
+              SMOLVM_AGENT_ROOTFS: join(settings.prefix, ".local/share/smolvm/agent-rootfs"),
+              SMOLVM_RESTORE_TMPFS: "0",
+              SMOLVM_VM_USE_SCOPE: "1",
+              SMOLVM_PUBLISH_ADDR: "100.95.240.37",
+              SMOLVM_EGRESS_FLOOR: "strict",
+              NO_COLOR: "1",
+            },
+            stdin: undefined,
+          },
+        ]);
+        expect(environment(settings)).not.toHaveProperty("SMOLVM_BOOT_BINARY");
+      }),
   );
 
-  const runtime = await runtimeOf(await prepared(), spawner);
+  it.effect("a smolvm host refuses to start unless it runs as root", () =>
+    Effect.gen(function* () {
+      const spawner = scripted(() => undefined);
+      const error = yield* startupError(yield* prepared(), spawner, 1000);
 
-  const observed = await Effect.runPromise(
-    runtime.observe([
-      machine,
-      { ...machine, id: "linux_two", name: "two", port: 10_001 },
-      { ...machine, id: "linux_gone", name: "gone", port: 10_002 },
-    ]),
+      expect(error._tag).toBe("Precondition");
+      expect(error.message).toBe("a smolvm host runs as root, and this one runs as uid 1000");
+      expect(spawner.calls).toEqual([]);
+    }),
   );
 
-  expect(observed).toEqual([{ state: "running" }, { state: "stopped" }, { state: "missing" }]);
-  expect(smolvmArgs(spawner.calls).map((args) => args[3])).toEqual(
-    expect.arrayContaining(["dev-01234567", "two-01234567", "gone-01234567"]),
-  );
-  expect(spawner.calls).toHaveLength(4);
-});
+  it.effect("a smolvm host refuses a state dir too deep for smolvm's socket paths", () =>
+    Effect.gen(function* () {
+      const settings = yield* prepared();
+      const deep = { ...settings, stateDir: join("/", "d".repeat(60), "state") };
 
-test("observe reads a machine whose status fails for another reason unknown, and logs smolvm's last output", async () => {
-  const spawner = scripted((call) =>
-    call.args[0] === "machine"
-      ? call.args[3] === "dev-01234567"
-        ? { exitCode: 1, stderr: "Error: database is locked\n" }
-        : status("stopped")
-      : undefined,
-  );
+      expect(Buffer.byteLength(controlSocket(pathsIn(deep.stateDir).dataDir))).toBe(122);
 
-  const runtime = await runtimeOf(await prepared(), spawner);
-  const logged: Array<unknown> = [];
+      const error = yield* startupError(
+        deep,
+        scripted(() => undefined),
+      );
 
-  const observed = await Effect.runPromise(
-    runtime
-      .observe([machine, { ...machine, id: "linux_two", name: "two", port: 10_001 }])
-      .pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))]))),
+      expect(error._tag).toBe("Precondition");
+      expect(error.message).toContain("past Linux's 107: use a shorter state dir");
+    }),
   );
 
-  expect(observed).toEqual([{ state: "unknown" }, { state: "stopped" }]);
-  expect(logged).toEqual([
-    [
-      "couldn't read linux_dev's state: smolvm machine status dev-01234567 exited 1: Error: database is locked",
-    ],
-  ]);
-});
+  it.effect("a smolvm host refuses a prefix whose disk templates weren't expanded at install", () =>
+    Effect.gen(function* () {
+      const settings = yield* prepared(["storage-template.ext4"]);
+      const spawner = scripted(() => undefined);
+      const error = yield* startupError(settings, spawner);
+      const overlay = join(settings.prefix, "overlay-template.ext4");
 
-/** Runs `effect` on the test clock, a second at a time until it ends, and how long it took. */
-const timed = <A, E>(effect: Effect.Effect<A, E>) =>
-  Effect.runPromise(
+      expect(error._tag).toBe("Precondition");
+      expect(error.message).toBe(
+        `smolvm prefix ${settings.prefix} has no overlay-template.ext4: expand it at install with zstd -d --sparse ${overlay}.zst -o ${overlay}`,
+      );
+      expect(spawner.calls).toEqual([]);
+    }),
+  );
+
+  it.effect("a smolvm host refuses a smolvm release it wasn't tested on", () =>
+    Effect.gen(function* () {
+      const settings = yield* prepared();
+
+      const error = yield* startupError(
+        settings,
+        scripted(() => ({ stdout: "smolvm 1.27.4\n" })),
+      );
+
+      expect(error._tag).toBe("Precondition");
+      expect(error.message).toBe(
+        `${join(settings.prefix, "smolvm")} reports "smolvm 1.27.4", and this host was tested on smolvm 1.27.3`,
+      );
+    }),
+  );
+
+  it("smolvm's states map onto running and stopped by whether the VMM is alive", () => {
+    expect(
+      Object.fromEntries(
+        (
+          [
+            "created",
+            "running",
+            "stopped",
+            "paused",
+            "pausing",
+            "failed",
+            "unreachable",
+            "frozen",
+          ] as const
+        ).map((state) => [state, stateOf(state)]),
+      ),
+    ).toEqual({
+      created: "stopped",
+      running: "running",
+      stopped: "stopped",
+      paused: "stopped",
+      pausing: "running",
+      failed: "stopped",
+      unreachable: "running",
+      frozen: "running",
+    });
+  });
+
+  it.effect("observe reads each machine's status", () =>
+    Effect.gen(function* () {
+      const replies = new Map([
+        ["dev-01234567", status("running")],
+        ["two-01234567", status("created")],
+        [
+          "gone-01234567",
+          {
+            exitCode: 1,
+            stderr:
+              "Error: config operation failed: machine status: machine 'gone-01234567' not found\n",
+          },
+        ],
+      ]);
+
+      const spawner = scripted((call) =>
+        call.args[0] === "machine" ? replies.get(call.args[3] ?? "") : undefined,
+      );
+
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+      const observed = yield* runtime.observe([
+        machine,
+        { ...machine, id: "linux_two", name: "two", port: 10_001 },
+        { ...machine, id: "linux_gone", name: "gone", port: 10_002 },
+      ]);
+
+      expect(observed).toEqual([{ state: "running" }, { state: "stopped" }, { state: "missing" }]);
+      expect(smolvmArgs(spawner.calls).map((args) => args[3])).toEqual(
+        expect.arrayContaining(["dev-01234567", "two-01234567", "gone-01234567"]),
+      );
+      expect(spawner.calls).toHaveLength(4);
+    }),
+  );
+
+  it.effect(
+    "observe reads a machine whose status fails for another reason unknown, and logs smolvm's last output",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) =>
+          call.args[0] === "machine"
+            ? call.args[3] === "dev-01234567"
+              ? { exitCode: 1, stderr: "Error: database is locked\n" }
+              : status("stopped")
+            : undefined,
+        );
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+        const logged: Array<unknown> = [];
+
+        const observed = yield* runtime
+          .observe([machine, { ...machine, id: "linux_two", name: "two", port: 10_001 }])
+          .pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))])));
+
+        expect(observed).toEqual([{ state: "unknown" }, { state: "stopped" }]);
+        expect(logged).toEqual([
+          [
+            "couldn't read linux_dev's state: smolvm machine status dev-01234567 exited 1: Error: database is locked",
+          ],
+        ]);
+      }),
+  );
+
+  /** Runs `effect` on the test clock, a second at a time until it ends, and how long it took. */
+  const timed = <A, E>(effect: Effect.Effect<A, E>) =>
     Effect.gen(function* () {
       const fiber = yield* Effect.forkChild(effect);
       let waited = Duration.zero;
 
       while (fiber.pollUnsafe() === undefined) {
-        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
+        yield* Effect.yieldNow;
         yield* TestClock.adjust(Duration.seconds(1));
         waited = Duration.sum(waited, Duration.seconds(1));
       }
 
       return { value: yield* Fiber.join(fiber), waited };
-    }).pipe(Effect.provide(TestClock.layer())),
-  );
-
-test("observe reads a status that doesn't answer unknown within 8 s, its wait for a turn included, and only its own machine", async () => {
-  const spawner = scripted((call) =>
-    call.args[0] === "machine"
-      ? call.args[3] === "two-01234567"
-        ? status("stopped")
-        : { hangs: true }
-      : undefined,
-  );
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  const hanging = Array.from({ length: 9 }, (_, index) => ({
-    ...machine,
-    id: `linux_h${index}`,
-    name: `h${index}`,
-  }));
-
-  const { value, waited } = await timed(
-    runtime
-      .observe([{ ...machine, id: "linux_two", name: "two" }, ...hanging])
-      .pipe(Effect.provide(Logger.layer([]))),
-  );
-
-  expect(Duration.format(waited)).toBe("8s");
-  expect(value).toEqual([{ state: "stopped" }, ...hanging.map(() => ({ state: "unknown" }))]);
-});
-
-test("create makes the machine with its sizes and published port, then boots it branchable", async () => {
-  const spawner = scripted(() => undefined);
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  const image =
-    "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
-
-  await Effect.runPromise(runtime.create(machine, image));
-
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    [
-      "machine",
-      "create",
-      "--name",
-      "dev-01234567",
-      "--image",
-      image,
-      "--cpus",
-      "2",
-      "--mem",
-      "2048",
-      "--net",
-      "--net-backend",
-      "virtio-net",
-      "-p",
-      "10000:22",
-      "--storage",
-      "20",
-    ],
-    ["machine", "start", "--name", "dev-01234567", "--branchable"],
-  ]);
-});
-
-test("a failed machine create fails with smolvm's last output and boots nothing", async () => {
-  const spawner = scripted((call) =>
-    call.args[1] === "create" ? { exitCode: 1, stderr: "Error: image not found\n" } : undefined,
-  );
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  const error = await Effect.runPromise(
-    Effect.flip(runtime.create(machine, "mirror.gcr.io/library/ubuntu@sha256:00")),
-  );
-
-  expect(error._tag).toBe("Internal");
-  expect(error.message).toBe("smolvm machine create dev-01234567 exited 1: Error: image not found");
-  expect(smolvmArgs(spawner.calls)).toHaveLength(1);
-});
-
-test("start reads the status, then boots a stopped machine branchable, and stop reads it, then is machine stop, its failure returned as it is", async () => {
-  let booted = false;
-
-  const spawner = scripted((call) => {
-    if (call.args[1] === "status") {
-      return status(booted ? "running" : "stopped");
-    }
-
-    if (call.args[1] === "start") {
-      booted = true;
-    }
-
-    return call.args[1] === "stop"
-      ? {
-          exitCode: 1,
-          stderr: "Error: guest did not confirm the flush; left the VM alive for retry\n",
-        }
-      : undefined;
-  });
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  await Effect.runPromise(runtime.start(machine));
-  const error = await Effect.runPromise(Effect.flip(runtime.stop(machine)));
-
-  expect(error.message).toBe(
-    "smolvm machine stop dev-01234567 exited 1: Error: guest did not confirm the flush; left the VM alive for retry",
-  );
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    ["machine", "status", "--name", "dev-01234567", "--json"],
-    ["machine", "start", "--name", "dev-01234567", "--branchable"],
-    ["machine", "status", "--name", "dev-01234567", "--json"],
-    ["machine", "stop", "--name", "dev-01234567"],
-  ]);
-});
-
-test("stop of a stopped machine, or one smolvm doesn't know, reads its status and stops nothing", async () => {
-  for (const reply of [status("stopped"), unknown]) {
-    const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
-    const runtime = await runtimeOf(await prepared(), spawner);
-
-    await Effect.runPromise(runtime.stop(machine));
-
-    expect(smolvmArgs(spawner.calls)).toEqual([
-      ["machine", "status", "--name", "dev-01234567", "--json"],
-    ]);
-  }
-});
-
-test("start leaves a running machine as it is, boots an unreachable one again, and refuses a frozen, paused, pausing or missing one before anything native", async () => {
-  let reply = status("running");
-
-  const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  await Effect.runPromise(runtime.start(machine));
-
-  reply = status("unreachable");
-  await Effect.runPromise(runtime.start(machine));
-
-  const refusals = [];
-
-  for (const next of [status("frozen"), status("paused"), status("pausing"), unknown]) {
-    reply = next;
-    refusals.push(await Effect.runPromise(Effect.flip(runtime.start(machine))));
-  }
-
-  expect(refusals.map(refused)).toEqual([
-    ["Precondition", "smolvm reads machine linux_dev frozen, and doesn't start it from there"],
-    ["Precondition", "smolvm reads machine linux_dev paused, and doesn't start it from there"],
-    ["Precondition", "smolvm reads machine linux_dev pausing, and doesn't start it from there"],
-    ["Precondition", "machine linux_dev is missing from the smolvm runtime; delete it"],
-  ]);
-  expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual([
-    "status",
-    "status",
-    "start",
-    "status",
-    "status",
-    "status",
-    "status",
-  ]);
-});
-
-test("a start whose status read fails fails with smolvm's output and boots nothing", async () => {
-  const spawner = scripted((call) =>
-    call.args[1] === "status" ? { exitCode: 1, stderr: "Error: database is locked\n" } : undefined,
-  );
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  const error = await Effect.runPromise(Effect.flip(runtime.start(machine)));
-
-  expect(refused(error)).toEqual([
-    "not refused",
-    "smolvm machine status dev-01234567 exited 1: Error: database is locked",
-  ]);
-  expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["status"]);
-});
-
-test("delete of a machine smolvm doesn't know touches nothing native", async () => {
-  const spawner = scripted((call) => (call.args[1] === "status" ? unknown : undefined));
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  await Effect.runPromise(runtime.delete(machine));
-
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    ["machine", "status", "--name", "dev-01234567", "--json"],
-  ]);
-});
-
-test("delete stops a running machine, finds its scope gone, then deletes it", async () => {
-  const spawner = scripted((call) => {
-    if (call.file === "systemctl") {
-      return { stdout: "not-found\n" };
-    }
-
-    return call.args[1] === "status" ? status("running") : undefined;
-  });
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  await Effect.runPromise(runtime.delete(machine));
-
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    ["machine", "status", "--name", "dev-01234567", "--json"],
-    ["machine", "stop", "--name", "dev-01234567"],
-    ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
-    ["machine", "delete", "--name", "dev-01234567", "--force"],
-  ]);
-});
-
-test("delete of a stopped machine deletes it without a stop", async () => {
-  const spawner = scripted((call) => (call.args[1] === "status" ? status("stopped") : undefined));
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  await Effect.runPromise(runtime.delete(machine));
-
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    ["machine", "status", "--name", "dev-01234567", "--json"],
-    ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
-    ["machine", "delete", "--name", "dev-01234567", "--force"],
-  ]);
-});
-
-test("delete of a machine smolvm reads stopped kills the VMM its scope still holds, as a host killed mid-boot leaves it", async () => {
-  const spawner = scripted((call) => {
-    if (call.file === "systemctl" && call.args[0] === "show") {
-      return { stdout: "loaded\n" };
-    }
-
-    // smolvm recorded no pid for the cut-short boot, so it reads the VM as stopped.
-    return call.args[1] === "status" ? status("stopped") : undefined;
-  });
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  await Effect.runPromise(runtime.delete(machine));
-
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    ["machine", "status", "--name", "dev-01234567", "--json"],
-    ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
-    ["systemctl", "kill", "--signal=SIGKILL", "smolvm-vm-dev-01234567.scope"],
-    ["machine", "delete", "--name", "dev-01234567", "--force"],
-    ["systemctl", "reset-failed", "smolvm-vm-dev-01234567.scope"],
-  ]);
-});
-
-test("delete kills the VM's scope when its stop fails, then deletes it and unloads the scope", async () => {
-  const spawner = scripted((call) => {
-    if (call.args[1] === "status") {
-      return status("running");
-    }
-
-    if (call.file === "systemctl" && call.args[0] === "show") {
-      return { stdout: "loaded\n" };
-    }
-
-    return call.args[1] === "stop"
-      ? { exitCode: 1, stderr: "Error: left the VM alive\n" }
-      : undefined;
-  });
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  await Effect.runPromise(runtime.delete(machine));
-
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    ["machine", "status", "--name", "dev-01234567", "--json"],
-    ["machine", "stop", "--name", "dev-01234567"],
-    ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
-    ["systemctl", "kill", "--signal=SIGKILL", "smolvm-vm-dev-01234567.scope"],
-    ["machine", "delete", "--name", "dev-01234567", "--force"],
-    ["systemctl", "reset-failed", "smolvm-vm-dev-01234567.scope"],
-  ]);
-});
-
-test("delete fails when the scope can't be killed after a failed stop, and deletes nothing", async () => {
-  const spawner = scripted((call) => {
-    if (call.args[1] === "status") {
-      return status("unreachable");
-    }
-
-    if (call.file === "systemctl" && call.args[0] === "show") {
-      return { stdout: "loaded\n" };
-    }
-
-    return call.args[1] === "stop" || call.file === "systemctl"
-      ? { exitCode: 1, stderr: "Failed\n" }
-      : undefined;
-  });
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-  const error = await Effect.runPromise(Effect.flip(runtime.delete(machine)));
-
-  expect(error.message).toBe("systemctl kill smolvm-vm-dev-01234567.scope exited 1: Failed");
-  expect(smolvmArgs(spawner.calls).at(-1)).toEqual([
-    "systemctl",
-    "kill",
-    "--signal=SIGKILL",
-    "smolvm-vm-dev-01234567.scope",
-  ]);
-});
-
-test("exec runs the command as given, with its stdin, and passes on its output and exit code", async () => {
-  const spawner = scripted((call) =>
-    call.args[1] === "exec" ? { exitCode: 3, stdout: "out\n", stderr: "err\n" } : undefined,
-  );
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  const [output, exitCode] = await Effect.runPromise(
-    Effect.scoped(
-      Effect.flatMap(
-        runtime.exec(machine, {
-          argv: ["/bin/sh", "-c", "cat >/dev/null"],
-          stdin: encoder.encode("the input"),
-        }),
-        (execution) =>
-          Effect.all([Stream.mkString(Stream.decodeText(execution.output)), execution.exitCode]),
-      ),
-    ),
-  );
-
-  expect([output, exitCode]).toEqual(["out\nerr\n", 3]);
-  expect(spawner.calls.at(-1)).toMatchObject({
-    args: [
-      "machine",
-      "exec",
-      "--name",
-      "dev-01234567",
-      "-i",
-      "--",
-      "/bin/sh",
-      "-c",
-      "cat >/dev/null",
-    ],
-    stdin: "the input",
-  });
-});
-
-test("an exec that can't start fails without its command line, which can carry a script", async () => {
-  const settings = await prepared();
-  const spawner = scripted(() => undefined);
-  const missing = join(settings.prefix, "missing");
-
-  // A real spawn of a missing file, whose own error names the whole command line.
-  const failing = ChildProcessSpawner.make((command) =>
-    ChildProcess.isStandardCommand(command) && command.args[0] === "machine"
-      ? Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (node) =>
-          node.spawn(ChildProcess.make(missing, command.args)),
-        ).pipe(Effect.provide(NodeServices.layer))
-      : Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (inner) =>
-          inner.spawn(command),
-        ).pipe(Effect.provide(spawner.layer)),
-  );
-
-  const runtime = await make(settings, 0).pipe(
-    Effect.provide(
-      Layer.merge(
-        NodeServices.layer,
-        Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, failing),
-      ),
-    ),
-    Effect.runPromise,
-  );
-
-  const error = await Effect.runPromise(
-    Effect.flip(
-      Effect.scoped(runtime.exec(machine, { argv: ["/bin/sh", "-c", "the secret script"] })),
-    ),
-  );
-
-  expect(error.message).toBe("smolvm machine exec dev-01234567: NotFound: spawn");
-});
-
-test("admit refuses with Capacity when running machines would pass the RAM budget", async () => {
-  const spawner = scripted((call) => (call.args[1] === "status" ? status("running") : undefined));
-  const runtime = await runtimeOf(await prepared(), spawner);
-  const other = { ...machine, id: "linux_other", name: "other", ramMib: 3072 };
-
-  const error = await Effect.runPromise(
-    Effect.flip(
-      runtime.admit({
-        action: "start",
-        machine,
-        machines: [
-          { machine, booting: true },
-          { machine: other, booting: false },
-        ],
-      }),
-    ),
-  );
-
-  expect(error._tag).toBe("Capacity");
-});
-
-test("capacity is the RAM budget and what admit counts toward it: every running or booting machine's RAM, each once; it fails when a machine's state can't be read", async () => {
-  const replies = new Map<string, Reply>([
-    ["dev-01234567", status("running")],
-    ["two-01234567", status("created")],
-  ]);
-
-  const spawner = scripted((call) =>
-    call.args[0] === "machine" ? replies.get(call.args[3] ?? "") : undefined,
-  );
-
-  const runtime = await runtimeOf(await prepared(), spawner);
-
-  const held = [
-    { machine, booting: false },
-    { machine: { ...machine, id: "linux_two", name: "two", ramMib: 1024 }, booting: false },
-    { machine: { ...machine, id: "linux_boot", name: "boot", ramMib: 512 }, booting: true },
-  ];
-
-  const next = (ramMib: number) => {
-    const target = { ...machine, id: "linux_next", name: "next", ramMib };
-
-    return runtime.admit({
-      action: "create",
-      machine: target,
-      machines: [...held, { machine: target, booting: true }],
     });
+
+  it.effect(
+    "observe reads a status that doesn't answer unknown within 8 s, its wait for a turn included, and only its own machine",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) =>
+          call.args[0] === "machine"
+            ? call.args[3] === "two-01234567"
+              ? status("stopped")
+              : { hangs: true }
+            : undefined,
+        );
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        const hanging = Array.from({ length: 9 }, (_, index) => ({
+          ...machine,
+          id: `linux_h${index}`,
+          name: `h${index}`,
+        }));
+
+        const { value, waited } = yield* timed(
+          runtime
+            .observe([{ ...machine, id: "linux_two", name: "two" }, ...hanging])
+            .pipe(Effect.provide(Logger.layer([]))),
+        );
+
+        expect(Duration.format(waited)).toBe("8s");
+        expect(value).toEqual([{ state: "stopped" }, ...hanging.map(() => ({ state: "unknown" }))]);
+      }),
+  );
+
+  it.effect(
+    "create makes the machine with its sizes and published port, then boots it branchable",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted(() => undefined);
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        const image =
+          "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
+
+        yield* runtime.create(machine, image);
+
+        expect(smolvmArgs(spawner.calls)).toEqual([
+          [
+            "machine",
+            "create",
+            "--name",
+            "dev-01234567",
+            "--image",
+            image,
+            "--cpus",
+            "2",
+            "--mem",
+            "2048",
+            "--net",
+            "--net-backend",
+            "virtio-net",
+            "-p",
+            "10000:22",
+            "--storage",
+            "20",
+          ],
+          ["machine", "start", "--name", "dev-01234567", "--branchable"],
+        ]);
+      }),
+  );
+
+  it.effect("a failed machine create fails with smolvm's last output and boots nothing", () =>
+    Effect.gen(function* () {
+      const spawner = scripted((call) =>
+        call.args[1] === "create" ? { exitCode: 1, stderr: "Error: image not found\n" } : undefined,
+      );
+
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+      const error = yield* Effect.flip(
+        runtime.create(machine, "mirror.gcr.io/library/ubuntu@sha256:00"),
+      );
+
+      expect(error._tag).toBe("Internal");
+      expect(error.message).toBe(
+        "smolvm machine create dev-01234567 exited 1: Error: image not found",
+      );
+      expect(smolvmArgs(spawner.calls)).toHaveLength(1);
+    }),
+  );
+
+  it.effect(
+    "start reads the status, then boots a stopped machine branchable, and stop reads it, then is machine stop, its failure returned as it is",
+    () =>
+      Effect.gen(function* () {
+        let booted = false;
+
+        const spawner = scripted((call) => {
+          if (call.args[1] === "status") {
+            return status(booted ? "running" : "stopped");
+          }
+
+          if (call.args[1] === "start") {
+            booted = true;
+          }
+
+          return call.args[1] === "stop"
+            ? {
+                exitCode: 1,
+                stderr: "Error: guest did not confirm the flush; left the VM alive for retry\n",
+              }
+            : undefined;
+        });
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        yield* runtime.start(machine);
+        const error = yield* Effect.flip(runtime.stop(machine));
+
+        expect(error.message).toBe(
+          "smolvm machine stop dev-01234567 exited 1: Error: guest did not confirm the flush; left the VM alive for retry",
+        );
+        expect(smolvmArgs(spawner.calls)).toEqual([
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+          ["machine", "start", "--name", "dev-01234567", "--branchable"],
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+          ["machine", "stop", "--name", "dev-01234567"],
+        ]);
+      }),
+  );
+
+  it.effect(
+    "stop of a stopped machine, or one smolvm doesn't know, reads its status and stops nothing",
+    () =>
+      Effect.gen(function* () {
+        for (const reply of [status("stopped"), unknown]) {
+          const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+          const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+          yield* runtime.stop(machine);
+
+          expect(smolvmArgs(spawner.calls)).toEqual([
+            ["machine", "status", "--name", "dev-01234567", "--json"],
+          ]);
+        }
+      }),
+  );
+
+  it.effect(
+    "start leaves a running machine as it is, boots an unreachable one again, and refuses a frozen, paused, pausing or missing one before anything native",
+    () =>
+      Effect.gen(function* () {
+        let reply = status("running");
+
+        const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        yield* runtime.start(machine);
+
+        reply = status("unreachable");
+        yield* runtime.start(machine);
+
+        const refusals = [];
+
+        for (const next of [status("frozen"), status("paused"), status("pausing"), unknown]) {
+          reply = next;
+          refusals.push(yield* Effect.flip(runtime.start(machine)));
+        }
+
+        expect(refusals.map(refused)).toEqual([
+          [
+            "Precondition",
+            "smolvm reads machine linux_dev frozen, and doesn't start it from there",
+          ],
+          [
+            "Precondition",
+            "smolvm reads machine linux_dev paused, and doesn't start it from there",
+          ],
+          [
+            "Precondition",
+            "smolvm reads machine linux_dev pausing, and doesn't start it from there",
+          ],
+          ["Precondition", "machine linux_dev is missing from the smolvm runtime; delete it"],
+        ]);
+        expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual([
+          "status",
+          "status",
+          "start",
+          "status",
+          "status",
+          "status",
+          "status",
+        ]);
+      }),
+  );
+
+  it.effect("a start whose status read fails fails with smolvm's output and boots nothing", () =>
+    Effect.gen(function* () {
+      const spawner = scripted((call) =>
+        call.args[1] === "status"
+          ? { exitCode: 1, stderr: "Error: database is locked\n" }
+          : undefined,
+      );
+
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+      const error = yield* Effect.flip(runtime.start(machine));
+
+      expect(refused(error)).toEqual([
+        "not refused",
+        "smolvm machine status dev-01234567 exited 1: Error: database is locked",
+      ]);
+      expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["status"]);
+    }),
+  );
+
+  it.effect("delete of a machine smolvm doesn't know touches nothing native", () =>
+    Effect.gen(function* () {
+      const spawner = scripted((call) => (call.args[1] === "status" ? unknown : undefined));
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+      yield* runtime.delete(machine);
+
+      expect(smolvmArgs(spawner.calls)).toEqual([
+        ["machine", "status", "--name", "dev-01234567", "--json"],
+      ]);
+    }),
+  );
+
+  it.effect("delete stops a running machine, finds its scope gone, then deletes it", () =>
+    Effect.gen(function* () {
+      const spawner = scripted((call) => {
+        if (call.file === "systemctl") {
+          return { stdout: "not-found\n" };
+        }
+
+        return call.args[1] === "status" ? status("running") : undefined;
+      });
+
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+      yield* runtime.delete(machine);
+
+      expect(smolvmArgs(spawner.calls)).toEqual([
+        ["machine", "status", "--name", "dev-01234567", "--json"],
+        ["machine", "stop", "--name", "dev-01234567"],
+        ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
+        ["machine", "delete", "--name", "dev-01234567", "--force"],
+      ]);
+    }),
+  );
+
+  it.effect("delete of a stopped machine deletes it without a stop", () =>
+    Effect.gen(function* () {
+      const spawner = scripted((call) =>
+        call.args[1] === "status" ? status("stopped") : undefined,
+      );
+
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+      yield* runtime.delete(machine);
+
+      expect(smolvmArgs(spawner.calls)).toEqual([
+        ["machine", "status", "--name", "dev-01234567", "--json"],
+        ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
+        ["machine", "delete", "--name", "dev-01234567", "--force"],
+      ]);
+    }),
+  );
+
+  it.effect(
+    "delete of a machine smolvm reads stopped kills the VMM its scope still holds, as a host killed mid-boot leaves it",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) => {
+          if (call.file === "systemctl" && call.args[0] === "show") {
+            return { stdout: "loaded\n" };
+          }
+
+          // smolvm recorded no pid for the cut-short boot, so it reads the VM as stopped.
+          return call.args[1] === "status" ? status("stopped") : undefined;
+        });
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        yield* runtime.delete(machine);
+
+        expect(smolvmArgs(spawner.calls)).toEqual([
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+          ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
+          ["systemctl", "kill", "--signal=SIGKILL", "smolvm-vm-dev-01234567.scope"],
+          ["machine", "delete", "--name", "dev-01234567", "--force"],
+          ["systemctl", "reset-failed", "smolvm-vm-dev-01234567.scope"],
+        ]);
+      }),
+  );
+
+  it.effect(
+    "delete kills the VM's scope when its stop fails, then deletes it and unloads the scope",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) => {
+          if (call.args[1] === "status") {
+            return status("running");
+          }
+
+          if (call.file === "systemctl" && call.args[0] === "show") {
+            return { stdout: "loaded\n" };
+          }
+
+          return call.args[1] === "stop"
+            ? { exitCode: 1, stderr: "Error: left the VM alive\n" }
+            : undefined;
+        });
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        yield* runtime.delete(machine);
+
+        expect(smolvmArgs(spawner.calls)).toEqual([
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+          ["machine", "stop", "--name", "dev-01234567"],
+          ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
+          ["systemctl", "kill", "--signal=SIGKILL", "smolvm-vm-dev-01234567.scope"],
+          ["machine", "delete", "--name", "dev-01234567", "--force"],
+          ["systemctl", "reset-failed", "smolvm-vm-dev-01234567.scope"],
+        ]);
+      }),
+  );
+
+  it.effect(
+    "delete fails when the scope can't be killed after a failed stop, and deletes nothing",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) => {
+          if (call.args[1] === "status") {
+            return status("unreachable");
+          }
+
+          if (call.file === "systemctl" && call.args[0] === "show") {
+            return { stdout: "loaded\n" };
+          }
+
+          return call.args[1] === "stop" || call.file === "systemctl"
+            ? { exitCode: 1, stderr: "Failed\n" }
+            : undefined;
+        });
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+        const error = yield* Effect.flip(runtime.delete(machine));
+
+        expect(error.message).toBe("systemctl kill smolvm-vm-dev-01234567.scope exited 1: Failed");
+        expect(smolvmArgs(spawner.calls).at(-1)).toEqual([
+          "systemctl",
+          "kill",
+          "--signal=SIGKILL",
+          "smolvm-vm-dev-01234567.scope",
+        ]);
+      }),
+  );
+
+  it.effect(
+    "exec runs the command as given, with its stdin, and passes on its output and exit code",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) =>
+          call.args[1] === "exec" ? { exitCode: 3, stdout: "out\n", stderr: "err\n" } : undefined,
+        );
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        const [output, exitCode] = yield* Effect.scoped(
+          Effect.flatMap(
+            runtime.exec(machine, {
+              argv: ["/bin/sh", "-c", "cat >/dev/null"],
+              stdin: encoder.encode("the input"),
+            }),
+            (execution) =>
+              Effect.all([
+                Stream.mkString(Stream.decodeText(execution.output)),
+                execution.exitCode,
+              ]),
+          ),
+        );
+
+        expect([output, exitCode]).toEqual(["out\nerr\n", 3]);
+        expect(spawner.calls.at(-1)).toMatchObject({
+          args: [
+            "machine",
+            "exec",
+            "--name",
+            "dev-01234567",
+            "-i",
+            "--",
+            "/bin/sh",
+            "-c",
+            "cat >/dev/null",
+          ],
+          stdin: "the input",
+        });
+      }),
+  );
+
+  it.effect(
+    "an exec that can't start fails without its command line, which can carry a script",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
+        const spawner = scripted(() => undefined);
+        const missing = join(settings.prefix, "missing");
+
+        // A real spawn of a missing file, whose own error names the whole command line.
+        const failing = ChildProcessSpawner.make((command) =>
+          ChildProcess.isStandardCommand(command) && command.args[0] === "machine"
+            ? Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (node) =>
+                node.spawn(ChildProcess.make(missing, command.args)),
+              ).pipe(Effect.provide(NodeServices.layer))
+            : Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (inner) =>
+                inner.spawn(command),
+              ).pipe(Effect.provide(spawner.layer)),
+        );
+
+        const runtime = yield* make(settings, 0).pipe(
+          Effect.provide(
+            Layer.merge(
+              NodeServices.layer,
+              Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, failing),
+            ),
+          ),
+        );
+
+        const error = yield* Effect.flip(
+          Effect.scoped(runtime.exec(machine, { argv: ["/bin/sh", "-c", "the secret script"] })),
+        );
+
+        expect(error.message).toBe("smolvm machine exec dev-01234567: NotFound: spawn");
+      }),
+  );
+
+  it.effect("admit refuses with Capacity when running machines would pass the RAM budget", () =>
+    Effect.gen(function* () {
+      const spawner = scripted((call) =>
+        call.args[1] === "status" ? status("running") : undefined,
+      );
+
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+      const other = { ...machine, id: "linux_other", name: "other", ramMib: 3072 };
+
+      const error = yield* Effect.flip(
+        runtime.admit({
+          action: "start",
+          machine,
+          machines: [
+            { machine, booting: true },
+            { machine: other, booting: false },
+          ],
+        }),
+      );
+
+      expect(error._tag).toBe("Capacity");
+    }),
+  );
+
+  it.effect(
+    "capacity is the RAM budget and what admit counts toward it: every running or booting machine's RAM, each once; it fails when a machine's state can't be read",
+    () =>
+      Effect.gen(function* () {
+        const replies = new Map<string, Reply>([
+          ["dev-01234567", status("running")],
+          ["two-01234567", status("created")],
+        ]);
+
+        const spawner = scripted((call) =>
+          call.args[0] === "machine" ? replies.get(call.args[3] ?? "") : undefined,
+        );
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        const held = [
+          { machine, booting: false },
+          { machine: { ...machine, id: "linux_two", name: "two", ramMib: 1024 }, booting: false },
+          { machine: { ...machine, id: "linux_boot", name: "boot", ramMib: 512 }, booting: true },
+        ];
+
+        const next = (ramMib: number) => {
+          const target = { ...machine, id: "linux_next", name: "next", ramMib };
+
+          return runtime.admit({
+            action: "create",
+            machine: target,
+            machines: [...held, { machine: target, booting: true }],
+          });
+        };
+
+        const capacity = yield* runtime.capacity(held);
+
+        // What is left of the budget is exactly what one more machine may take.
+        yield* next(4096 - 2560);
+
+        const refused = yield* Effect.flip(next(4096 - 2560 + 1));
+
+        replies.set("two-01234567", { exitCode: 1, stderr: "Error: database is locked\n" });
+
+        const unread = yield* Effect.flip(runtime.capacity(held));
+
+        expect(capacity).toEqual([{ resource: "ramMib", limit: 4096, used: 2560 }]);
+        expect(refused.message).toContain(
+          "needs 1537M of RAM, and 1.5G of the host's 4G budget is free",
+        );
+        expect([unread._tag, unread.message]).toEqual([
+          "Internal",
+          "smolvm couldn't read the state of linux_two",
+        ]);
+      }),
+  );
+
+  const ramCheckpoint: CheckpointRef = {
+    id: "linux_snap",
+    name: "snap",
+    instance: "fedcba9876543210fedcba9876543210",
+    native: undefined,
+    kind: "ram",
+    port: 10_000,
   };
 
-  const capacity = await Effect.runPromise(runtime.capacity(held));
+  const unknownCopy: Reply = {
+    exitCode: 1,
+    stderr: "Error: config operation failed: machine status: machine 'copy-abcdefab' not found\n",
+  };
 
-  // What is left of the budget is exactly what one more machine may take.
-  await Effect.runPromise(next(4096 - 2560));
+  /** A machine made from a checkpoint, on its own port. */
+  const copy: MachineRef = {
+    ...machine,
+    id: "linux_copy",
+    name: "copy",
+    instance: "abcdefabcdefabcdefabcdefabcdefab",
+    port: 10_001,
+  };
 
-  const refused = await Effect.runPromise(Effect.flip(next(4096 - 2560 + 1)));
+  it.effect("the runtime names its pin", () =>
+    Effect.gen(function* () {
+      const runtime = yield* runtimeOf(
+        yield* prepared(),
+        scripted(() => undefined),
+      );
 
-  replies.set("two-01234567", { exitCode: 1, stderr: "Error: database is locked\n" });
-
-  const unread = await Effect.runPromise(Effect.flip(runtime.capacity(held)));
-
-  expect(capacity).toEqual([{ resource: "ramMib", limit: 4096, used: 2560 }]);
-  expect(refused.message).toContain("needs 1537M of RAM, and 1.5G of the host's 4G budget is free");
-  expect([unread._tag, unread.message]).toEqual([
-    "Internal",
-    "smolvm couldn't read the state of linux_two",
-  ]);
-});
-
-const ramCheckpoint: CheckpointRef = {
-  id: "linux_snap",
-  name: "snap",
-  instance: "fedcba9876543210fedcba9876543210",
-  native: undefined,
-  kind: "ram",
-  port: 10_000,
-};
-
-const unknownCopy: Reply = {
-  exitCode: 1,
-  stderr: "Error: config operation failed: machine status: machine 'copy-abcdefab' not found\n",
-};
-
-/** A machine made from a checkpoint, on its own port. */
-const copy: MachineRef = {
-  ...machine,
-  id: "linux_copy",
-  name: "copy",
-  instance: "abcdefabcdefabcdefabcdefabcdefab",
-  port: 10_001,
-};
-
-test("the runtime names its pin", async () => {
-  const runtime = await runtimeOf(
-    await prepared(),
-    scripted(() => undefined),
+      expect(runtime.pin).toBe(pin);
+    }),
   );
 
-  expect(runtime.pin).toBe(pin);
-});
+  it.effect("startup empties the forks area and makes the runtime's directories", () =>
+    Effect.gen(function* () {
+      const settings = yield* prepared();
+      const paths = pathsIn(settings.stateDir);
 
-test("startup empties the forks area and makes the runtime's directories", async () => {
-  const settings = await prepared();
-  const paths = pathsIn(settings.stateDir);
+      const runtime = yield* runtimeOf(
+        settings,
+        scripted(() => undefined),
+      );
 
-  const runtime = await runtimeOf(
-    settings,
-    scripted(() => undefined),
+      yield* mkdir(join(paths.forks, "old-01234567", "old-01234567.checkpoint"));
+      yield* runtime.startup([machine]);
+
+      expect(yield* readDirectory(paths.forks)).toEqual([]);
+      expect((yield* readDirectory(settings.stateDir)).sort()).toEqual(["checkpoints", "forks"]);
+    }),
   );
 
-  await mkdir(join(paths.forks, "old-01234567", "old-01234567.checkpoint"), { recursive: true });
-  await Effect.runPromise(runtime.startup([machine]));
+  it.effect(
+    "a capture or a fork of a machine smolvm doesn't read running is refused before anything native",
+    () =>
+      Effect.gen(function* () {
+        let reply = status("stopped");
 
-  expect(await readdir(paths.forks)).toEqual([]);
-  expect((await readdir(settings.stateDir)).sort()).toEqual(["checkpoints", "forks"]);
-});
+        const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-test("a capture or a fork of a machine smolvm doesn't read running is refused before anything native", async () => {
-  let reply = status("stopped");
+        const capture = yield* Effect.flip(runtime.capture(machine, ramCheckpoint));
+        const fork = yield* Effect.flip(runtime.fork(machine, copy));
 
-  const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
-  const runtime = await runtimeOf(await prepared(), spawner);
+        reply = unknown;
 
-  const capture = await Effect.runPromise(Effect.flip(runtime.capture(machine, ramCheckpoint)));
-  const fork = await Effect.runPromise(Effect.flip(runtime.fork(machine, copy)));
+        const missing = yield* Effect.flip(runtime.capture(machine, ramCheckpoint));
 
-  reply = unknown;
+        reply = status("unreachable");
 
-  const missing = await Effect.runPromise(Effect.flip(runtime.capture(machine, ramCheckpoint)));
+        const unreachable = yield* Effect.flip(runtime.fork(machine, copy));
 
-  reply = status("unreachable");
+        reply = status("frozen");
 
-  const unreachable = await Effect.runPromise(Effect.flip(runtime.fork(machine, copy)));
+        const frozen = yield* Effect.flip(runtime.capture(machine, ramCheckpoint));
 
-  reply = status("frozen");
+        reply = status("paused");
 
-  const frozen = await Effect.runPromise(Effect.flip(runtime.capture(machine, ramCheckpoint)));
+        const paused = yield* Effect.flip(runtime.fork(machine, copy));
 
-  reply = status("paused");
+        expect([capture, fork, missing, unreachable, frozen, paused].map(refused)).toEqual([
+          [
+            "Precondition",
+            "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",
+          ],
+          [
+            "Precondition",
+            "a fork copies a running machine, RAM included, and linux_dev is stopped: start it first",
+          ],
+          ["Precondition", "machine linux_dev is missing from the smolvm runtime; delete it"],
+          [
+            "Precondition",
+            "smolvm reads machine linux_dev unreachable: its VM runs, but its agent doesn't answer; start it to boot it again",
+          ],
+          [
+            "Precondition",
+            "smolvm reads machine linux_dev frozen, and copies only a running machine",
+          ],
+          [
+            "Precondition",
+            "smolvm reads machine linux_dev paused, and copies only a running machine",
+          ],
+        ]);
+        expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual([
+          "status",
+          "status",
+          "status",
+          "status",
+          "status",
+          "status",
+        ]);
+      }),
+  );
 
-  const paused = await Effect.runPromise(Effect.flip(runtime.fork(machine, copy)));
+  it.effect("a ram capture goes into the host's one store, with no history", () =>
+    Effect.gen(function* () {
+      const settings = yield* prepared();
 
-  expect([capture, fork, missing, unreachable, frozen, paused].map(refused)).toEqual([
-    [
-      "Precondition",
-      "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",
-    ],
-    [
-      "Precondition",
-      "a fork copies a running machine, RAM included, and linux_dev is stopped: start it first",
-    ],
-    ["Precondition", "machine linux_dev is missing from the smolvm runtime; delete it"],
-    [
-      "Precondition",
-      "smolvm reads machine linux_dev unreachable: its VM runs, but its agent doesn't answer; start it to boot it again",
-    ],
-    ["Precondition", "smolvm reads machine linux_dev frozen, and copies only a running machine"],
-    ["Precondition", "smolvm reads machine linux_dev paused, and copies only a running machine"],
-  ]);
-  expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual([
-    "status",
-    "status",
-    "status",
-    "status",
-    "status",
-    "status",
-  ]);
-});
+      const spawner = scripted((call) =>
+        call.args[1] === "status" ? status("running") : undefined,
+      );
 
-test("a ram capture goes into the host's one store, with no history", async () => {
-  const settings = await prepared();
-  const spawner = scripted((call) => (call.args[1] === "status" ? status("running") : undefined));
-  const runtime = await runtimeOf(settings, spawner);
-  const store = join(settings.stateDir, "checkpoints");
+      const runtime = yield* runtimeOf(settings, spawner);
+      const store = join(settings.stateDir, "checkpoints");
 
-  await Effect.runPromise(runtime.capture(machine, ramCheckpoint));
+      yield* runtime.capture(machine, ramCheckpoint);
 
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    ["machine", "status", "--name", "dev-01234567", "--json"],
-    [
-      "machine",
-      "checkpoint",
-      "--name",
-      "dev-01234567",
-      "--store",
-      store,
-      "--output",
-      join(store, "snap-fedcba98.checkpoint"),
-      "--history",
-      "0",
-    ],
-  ]);
-});
+      expect(smolvmArgs(spawner.calls)).toEqual([
+        ["machine", "status", "--name", "dev-01234567", "--json"],
+        [
+          "machine",
+          "checkpoint",
+          "--name",
+          "dev-01234567",
+          "--store",
+          store,
+          "--output",
+          join(store, "snap-fedcba98.checkpoint"),
+          "--history",
+          "0",
+        ],
+      ]);
+    }),
+  );
 
-test("a ram restore creates from the store with no restore cache, moves the port, then boots", async () => {
-  const settings = await prepared();
-  const spawner = scripted(() => undefined);
-  const runtime = await runtimeOf(settings, spawner);
+  it.effect(
+    "a ram restore creates from the store with no restore cache, moves the port, then boots",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
+        const spawner = scripted(() => undefined);
+        const runtime = yield* runtimeOf(settings, spawner);
 
-  await Effect.runPromise(runtime.restore(ramCheckpoint, copy));
+        yield* runtime.restore(ramCheckpoint, copy);
 
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    [
-      "machine",
-      "create",
-      "--name",
-      "copy-abcdefab",
-      "--from",
-      join(settings.stateDir, "checkpoints", "snap-fedcba98.checkpoint"),
-      "--restore-cache-entries",
-      "0",
-    ],
-    ["machine", "update", "--name", "copy-abcdefab", "--remove-port", "10000:22", "-p", "10001:22"],
-    ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
-  ]);
-});
+        expect(smolvmArgs(spawner.calls)).toEqual([
+          [
+            "machine",
+            "create",
+            "--name",
+            "copy-abcdefab",
+            "--from",
+            join(settings.stateDir, "checkpoints", "snap-fedcba98.checkpoint"),
+            "--restore-cache-entries",
+            "0",
+          ],
+          [
+            "machine",
+            "update",
+            "--name",
+            "copy-abcdefab",
+            "--remove-port",
+            "10000:22",
+            "-p",
+            "10001:22",
+          ],
+          ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
+        ]);
+      }),
+  );
 
-test("a ram restore that got its source's old port keeps it", async () => {
-  const spawner = scripted(() => undefined);
-  const runtime = await runtimeOf(await prepared(), spawner);
+  it.effect("a ram restore that got its source's old port keeps it", () =>
+    Effect.gen(function* () {
+      const spawner = scripted(() => undefined);
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-  await Effect.runPromise(runtime.restore(ramCheckpoint, { ...copy, port: 10_000 }));
+      yield* runtime.restore(ramCheckpoint, { ...copy, port: 10_000 });
 
-  expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["create", "start"]);
-});
+      expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["create", "start"]);
+    }),
+  );
 
-test("a restore whose port move or boot fails returns its error, and leaves its VM to delete", async () => {
-  for (const failing of ["update", "start"]) {
-    const spawner = scripted((call) =>
-      call.args[1] === failing ? { exitCode: 1, stderr: "Error: database is locked\n" } : undefined,
-    );
+  it.effect(
+    "a restore whose port move or boot fails returns its error, and leaves its VM to delete",
+    () =>
+      Effect.gen(function* () {
+        for (const failing of ["update", "start"]) {
+          const spawner = scripted((call) =>
+            call.args[1] === failing
+              ? { exitCode: 1, stderr: "Error: database is locked\n" }
+              : undefined,
+          );
 
-    const runtime = await runtimeOf(await prepared(), spawner);
-    const error = await Effect.runPromise(Effect.flip(runtime.restore(ramCheckpoint, copy)));
+          const runtime = yield* runtimeOf(yield* prepared(), spawner);
+          const error = yield* Effect.flip(runtime.restore(ramCheckpoint, copy));
 
-    expect(error.message).toBe(
-      `smolvm machine ${failing} copy-abcdefab exited 1: Error: database is locked`,
-    );
-    expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(
-      failing === "update" ? ["create", "update"] : ["create", "update", "start"],
-    );
-  }
-});
+          expect(error.message).toBe(
+            `smolvm machine ${failing} copy-abcdefab exited 1: Error: database is locked`,
+          );
+          expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(
+            failing === "update" ? ["create", "update"] : ["create", "update", "start"],
+          );
+        }
+      }),
+  );
 
-/**
- * A spawner whose `machine checkpoint` makes its output in its store, as smolvm does, whose
- * `machine create` answers `create`, and whose `machine status` reads the source running and
- * knows no copy.
- */
-const forking = (create: Reply) =>
-  scripted((call) => {
-    if (call.args[1] === "checkpoint") {
-      mkdirSync(call.args[call.args.indexOf("--output") + 1] ?? "", { recursive: true });
+  /**
+   * A spawner whose `machine checkpoint` makes its output in its store, as smolvm does, whose
+   * `machine create` answers `create`, and whose `machine status` reads the source running and
+   * knows no copy.
+   */
+  const forking = (create: Reply) =>
+    scripted((call) => {
+      if (call.args[1] === "checkpoint") {
+        mkdirSync(call.args[call.args.indexOf("--output") + 1] ?? "", { recursive: true });
 
-      return {};
-    }
+        return {};
+      }
 
-    if (call.args[1] === "status") {
-      return call.args[3] === "dev-01234567" ? status("running") : unknownCopy;
-    }
+      if (call.args[1] === "status") {
+        return call.args[3] === "dev-01234567" ? status("running") : unknownCopy;
+      }
 
-    return call.args[1] === "create" ? create : undefined;
-  });
+      return call.args[1] === "create" ? create : undefined;
+    });
 
-test("a fork captures into a store of its own, restores from it, and removes the store", async () => {
-  const settings = await prepared();
-  const spawner = forking({});
-  const runtime = await runtimeOf(settings, spawner);
-  const store = join(settings.stateDir, "forks", "copy-abcdefab");
+  it.effect(
+    "a fork captures into a store of its own, restores from it, and removes the store",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
+        const spawner = forking({});
+        const runtime = yield* runtimeOf(settings, spawner);
+        const store = join(settings.stateDir, "forks", "copy-abcdefab");
 
-  await Effect.runPromise(runtime.startup([machine]));
-  await Effect.runPromise(runtime.fork(machine, copy));
+        yield* runtime.startup([machine]);
+        yield* runtime.fork(machine, copy);
 
-  expect(smolvmArgs(spawner.calls)).toEqual([
-    ["machine", "status", "--name", "dev-01234567", "--json"],
-    [
-      "machine",
-      "checkpoint",
-      "--name",
-      "dev-01234567",
-      "--store",
-      store,
-      "--output",
-      join(store, "copy-abcdefab.checkpoint"),
-      "--history",
-      "0",
-    ],
-    [
-      "machine",
-      "create",
-      "--name",
-      "copy-abcdefab",
-      "--from",
-      join(store, "copy-abcdefab.checkpoint"),
-      "--restore-cache-entries",
-      "0",
-    ],
-    ["machine", "update", "--name", "copy-abcdefab", "--remove-port", "10000:22", "-p", "10001:22"],
-    ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
-  ]);
-  expect(await readdir(join(settings.stateDir, "forks"))).toEqual([]);
-});
+        expect(smolvmArgs(spawner.calls)).toEqual([
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+          [
+            "machine",
+            "checkpoint",
+            "--name",
+            "dev-01234567",
+            "--store",
+            store,
+            "--output",
+            join(store, "copy-abcdefab.checkpoint"),
+            "--history",
+            "0",
+          ],
+          [
+            "machine",
+            "create",
+            "--name",
+            "copy-abcdefab",
+            "--from",
+            join(store, "copy-abcdefab.checkpoint"),
+            "--restore-cache-entries",
+            "0",
+          ],
+          [
+            "machine",
+            "update",
+            "--name",
+            "copy-abcdefab",
+            "--remove-port",
+            "10000:22",
+            "-p",
+            "10001:22",
+          ],
+          ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
+        ]);
+        expect(yield* readDirectory(join(settings.stateDir, "forks"))).toEqual([]);
+      }),
+  );
 
-test("a fork that fails still removes its store", async () => {
-  const settings = await prepared();
-  const runtime = await runtimeOf(settings, forking({ exitCode: 1, stderr: "Error: no space\n" }));
+  it.effect("a fork that fails still removes its store", () =>
+    Effect.gen(function* () {
+      const settings = yield* prepared();
 
-  await Effect.runPromise(runtime.startup([machine]));
+      const runtime = yield* runtimeOf(
+        settings,
+        forking({ exitCode: 1, stderr: "Error: no space\n" }),
+      );
 
-  const error = await Effect.runPromise(Effect.flip(runtime.fork(machine, copy)));
+      yield* runtime.startup([machine]);
 
-  expect(error.message).toBe("smolvm machine create copy-abcdefab exited 1: Error: no space");
-  expect(await readdir(join(settings.stateDir, "forks"))).toEqual([]);
-});
+      const error = yield* Effect.flip(runtime.fork(machine, copy));
 
-test("deleting a ram checkpoint removes its directory, then prunes the store", async () => {
-  const settings = await prepared();
-  const spawner = scripted(() => undefined);
-  const runtime = await runtimeOf(settings, spawner);
-  const store = join(settings.stateDir, "checkpoints");
+      expect(error.message).toBe("smolvm machine create copy-abcdefab exited 1: Error: no space");
+      expect(yield* readDirectory(join(settings.stateDir, "forks"))).toEqual([]);
+    }),
+  );
 
-  await mkdir(join(store, "snap-fedcba98.checkpoint", "objects"), { recursive: true });
-  await mkdir(join(store, "objects"));
-  await Effect.runPromise(runtime.deleteCheckpoint(ramCheckpoint));
+  it.effect("deleting a ram checkpoint removes its directory, then prunes the store", () =>
+    Effect.gen(function* () {
+      const settings = yield* prepared();
+      const spawner = scripted(() => undefined);
+      const runtime = yield* runtimeOf(settings, spawner);
+      const store = join(settings.stateDir, "checkpoints");
 
-  expect(await readdir(store)).toEqual(["objects"]);
-  expect(smolvmArgs(spawner.calls)).toEqual([["machine", "checkpoint-prune", "--store", store]]);
-});
+      yield* mkdir(join(store, "snap-fedcba98.checkpoint", "objects"));
+      yield* mkdir(join(store, "objects"));
+      yield* runtime.deleteCheckpoint(ramCheckpoint);
 
-test("deleting a ram checkpoint from a store no capture has written prunes nothing", async () => {
-  const settings = await prepared();
-  const spawner = scripted(() => undefined);
-  const runtime = await runtimeOf(settings, spawner);
+      expect(yield* readDirectory(store)).toEqual(["objects"]);
+      expect(smolvmArgs(spawner.calls)).toEqual([
+        ["machine", "checkpoint-prune", "--store", store],
+      ]);
+    }),
+  );
 
-  await Effect.runPromise(runtime.startup([machine]));
-  await Effect.runPromise(runtime.deleteCheckpoint(ramCheckpoint));
+  it.effect("deleting a ram checkpoint from a store no capture has written prunes nothing", () =>
+    Effect.gen(function* () {
+      const settings = yield* prepared();
+      const spawner = scripted(() => undefined);
+      const runtime = yield* runtimeOf(settings, spawner);
 
-  expect(smolvmArgs(spawner.calls)).toEqual([]);
+      yield* runtime.startup([machine]);
+      yield* runtime.deleteCheckpoint(ramCheckpoint);
+
+      expect(smolvmArgs(spawner.calls)).toEqual([]);
+    }),
+  );
 });
