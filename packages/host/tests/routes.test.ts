@@ -58,7 +58,14 @@ test("the SDK's client drives a machine's lifecycle on a served host", async () 
   );
 
   expect(hosts.answers).toEqual([
-    { id: "linux", runtime: "smolvm", version, runtimeVersion: "fake", bases: ["ubuntu"] },
+    {
+      id: "linux",
+      runtime: "smolvm",
+      version,
+      runtimeVersion: "fake",
+      captureFrom: "running",
+      bases: ["ubuntu"],
+    },
   ]);
   expect(made).toMatchObject({ id: "linux_dev", state: "running" });
   expect(stopped.state).toBe("stopped");

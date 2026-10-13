@@ -103,6 +103,8 @@ export const Host = Schema.Struct({
   version: Schema.String,
   /** The runtime's version; for boat, its API version. */
   runtimeVersion: Schema.String,
+  /** The state a machine must be in for the runtime to capture it: Tart's, `stopped`. */
+  captureFrom: Schema.Literals(["running", "stopped"]),
   bases: Schema.Array(Schema.String),
 }).annotate({ identifier: "Host" });
 

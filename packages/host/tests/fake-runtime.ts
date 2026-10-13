@@ -255,6 +255,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         publishAddress,
         pin: options.pin ?? "fake 1",
         checkpointKind: options.checkpointKind ?? "ram",
+        captureFrom: "running",
         loginUser: "root",
         startup: () => Effect.sync(() => calls.push("startup")),
         observe,

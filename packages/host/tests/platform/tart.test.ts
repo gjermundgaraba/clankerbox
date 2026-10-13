@@ -874,6 +874,7 @@ test("a fork's source and a capture's machine must be stopped: anything else is 
   const missing = await Effect.runPromise(Effect.flip(runtime.capture(source, checkpoint)));
 
   expect(runtime.checkpointKind).toBe("disk");
+  expect(runtime.captureFrom).toBe("stopped");
   expect([fork, capture, missing].map(refused)).toEqual([
     [
       "Precondition",

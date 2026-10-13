@@ -37,6 +37,7 @@ const app = (config: Pick<HostSettings, "id" | "bases">) =>
             runtime: runtime.name,
             version,
             runtimeVersion: runtime.version,
+            captureFrom: runtime.captureFrom,
             bases: [...config.bases.keys()],
           }),
         getCapacity: () => machines.capacity,

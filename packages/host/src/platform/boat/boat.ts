@@ -729,6 +729,7 @@ export const make = (
       publishAddress: undefined,
       pin: undefined,
       checkpointKind: "disk",
+      captureFrom: "running",
       loginUser: "root",
       startup: Effect.fn("Boat.startup")(() => Effect.void),
       /**
