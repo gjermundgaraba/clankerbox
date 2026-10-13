@@ -6,13 +6,7 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import {
-  Capacity,
-  formatGib,
-  type HostError,
-  Internal,
-  Precondition,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Layer, Option, Schedule, Schema, type Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { lastLines } from "../../guest.ts";
@@ -512,7 +506,7 @@ export const make = (
 
         if (set.exitCode !== 0 && set.stderr.includes(shrinkRefusal)) {
           return yield* new Precondition({
-            message: `machine ${machine.id}'s disk of ${formatGib(machine.diskGib)} is below its base's, and Tart only grows a disk: ${lastLines(set.stderr)}`,
+            message: `machine ${machine.id}'s disk of ${machine.diskGib}G is below its base's, and Tart only grows a disk: ${lastLines(set.stderr)}`,
           });
         }
 

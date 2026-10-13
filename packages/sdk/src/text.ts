@@ -6,8 +6,6 @@ export const mibPerGib = 1024;
 export const formatMib = (mib: number): string =>
   mib >= mibPerGib && mib % (mibPerGib / 2) === 0 ? `${mib / mibPerGib}G` : `${mib}M`;
 
-export const formatGib = (gib: number): string => `${gib}G`;
-
 const jsonPath = (
   path: ReadonlyArray<PropertyKey>,
   names: ReadonlyMap<PropertyKey, string> | undefined,

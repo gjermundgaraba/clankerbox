@@ -1,4 +1,4 @@
-import { Checkpoint, formatGib, formatMib, Machine } from "@gjermundgaraba/clankerbox-sdk";
+import { Checkpoint, formatMib, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Schema } from "effect";
 import { age } from "../units.ts";
 
@@ -21,7 +21,7 @@ const machineColumns: ReadonlyArray<
   ["PROFILE", (machine) => machine.profile ?? "-"],
   ["CPU", (machine) => String(machine.cpu)],
   ["RAM", (machine) => formatMib(machine.ramMib)],
-  ["DISK", (machine) => formatGib(machine.diskGib)],
+  ["DISK", (machine) => `${machine.diskGib}G`],
   ["AGE", (machine, now) => age(machine.createdAt, now)],
   ["ACTION", actionLabel],
 ];
