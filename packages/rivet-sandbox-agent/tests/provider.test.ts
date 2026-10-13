@@ -152,6 +152,20 @@ const listening = (port: number) =>
     socket.once("error", () => resolve(false));
   });
 
+/**
+ * Whether the process `pid` is gone. Node reaps a child and records its exit in one step, so a
+ * tunnel whose ssh is gone is one the provider knows has ended; a closed port alone may come first.
+ */
+const gone = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+
+    return false;
+  } catch {
+    return true;
+  }
+};
+
 const until = async (what: string, check: () => Promise<boolean>) => {
   const deadline = performance.now() + 5000;
 
@@ -336,7 +350,10 @@ test("ensureServer opens a tunnel that ended on the same port, and starts the ma
   const [first] = await calls();
 
   process.kill(first?.pid ?? 0);
-  await until("the tunnel to end", async () => !(await listening(first?.port ?? 0)));
+  await until(
+    "the tunnel to end",
+    async () => gone(first?.pid ?? 0) && !(await listening(first?.port ?? 0)),
+  );
   stub.calls.length = 0;
 
   await sandbox.ensureServer("linux_kept");
@@ -429,7 +446,7 @@ test("a tunnel refuses a port another program took while it was down, and ensure
   const port = first?.port ?? 0;
 
   process.kill(first?.pid ?? 0);
-  await until("the tunnel to end", async () => !(await listening(port)));
+  await until("the tunnel to end", async () => gone(first?.pid ?? 0) && !(await listening(port)));
 
   const squatter = createServer().listen(port, "127.0.0.1");
 
