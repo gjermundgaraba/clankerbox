@@ -14,7 +14,6 @@ afterEach(async () => {
   await Promise.all(stubs.splice(0).map((stub) => stub.dispose()));
 });
 
-/** A loopback server, for the scope, that answers every request with `reply`; its URL. */
 const answering = (reply: (response: ServerResponse) => void) =>
   Effect.gen(function* () {
     const server = createServer((request, response) => {
@@ -42,7 +41,6 @@ const answering = (reply: (response: ServerResponse) => void) =>
     return `http://127.0.0.1:${port}`;
   });
 
-/** Sends the reply's status and the start of its body, then drops the connection. */
 const cutOff = (response: ServerResponse) => {
   response.writeHead(200, { "content-type": "application/json", "content-length": "1000" });
   response.write('{"id":"linux_dev",');
@@ -54,7 +52,6 @@ const onLinux = <A, E>(url: string, use: (client: Client.Interface) => Effect.Ef
 
 const spec: MachineSpec = { base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
 
-/** Serves `stub` on a loopback port for the scope and returns its URL. */
 const serve = (stub: StubHost) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(

@@ -1,7 +1,3 @@
-/**
- * Profile files, and the create a profile asks for. Hosts never see a profile: it is a
- * client-side file that fills in a create's spec.
- */
 import { Effect, FileSystem, Path, Predicate, Record, Schema } from "effect";
 import { Invalid, InvalidFile } from "./errors.ts";
 import { HostId } from "./ids.ts";
@@ -10,9 +6,8 @@ import { readSetup } from "./setup.ts";
 import { describeFileError, describeIssues } from "./text.ts";
 
 /**
- * A profile file: a client-side file that fills in a create request. `setup.path` is a script
- * file or a recipe directory, relative to the profile file; without a `timeoutSeconds` the host's
- * default applies. `host` places the create on that host instead of by base.
+ * A client-side file that fills in a create's spec; hosts never see it. `setup.path` is a script
+ * file or a recipe directory, relative to the profile file.
  */
 export const Profile = Schema.Struct({
   base: MachineSpec.fields.base,
@@ -27,18 +22,16 @@ export const Profile = Schema.Struct({
 
 export type Profile = typeof Profile.Type;
 
-/** A profile file as read: its fields, with `setup.path` resolved, and its name as `label`. */
+/** `setup.path` resolved, and the file's name as `label`. */
 export interface LoadedProfile extends Profile {
   readonly label: string;
 }
 
-/** Profile files are JSON, decoded with closed input like every call: unknown keys are refused. */
 const decodeProfile = Schema.decodeUnknownEffect(Schema.fromJsonString(Profile));
 
 /**
- * Reads the profile file at `file`. Its name, the file name without `.json`, is the machine's
- * `profile` label, and its `setup.path` is resolved against the file's directory. The setup
- * itself is read by whoever sends it, with `readSetup`.
+ * Its file name without `.json` is the machine's `profile` label. Unknown keys are refused. The
+ * setup itself is read by whoever sends it, with `readSetup`.
  */
 export const loadProfile = (
   file: string,
@@ -74,7 +67,7 @@ export const loadProfile = (
         };
   });
 
-/** What replaces a profile's fields in a create: each one given replaces the profile's. */
+/** Each field given replaces the profile's. */
 export interface Overrides {
   readonly base?: string | undefined;
   readonly cpu?: number | undefined;
@@ -82,12 +75,10 @@ export interface Overrides {
   readonly diskGib?: number | undefined;
   /** A setup script or recipe directory, already resolved. */
   readonly setup?: string | undefined;
-  /** How long the setup may run; the host's default when neither this nor the profile says. */
   readonly setupTimeoutSeconds?: number | undefined;
   readonly host?: string | undefined;
 }
 
-/** What a create asks for: the spec, and the host it goes to instead of placement, if any. */
 export interface SpecRequest {
   readonly spec: MachineSpec;
   readonly host: string | undefined;
@@ -96,10 +87,8 @@ export interface SpecRequest {
 const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
 
 /**
- * The spec and host a create of `profile`, if any, asks for, with each field, the setup, its
- * timeout and the host replaced by the override that gives one. The setup is read here. A timeout
- * with no setup to time is refused, and so is a field neither gives, as one out of range is,
- * each refusal naming `what` and each field as `names` calls it.
+ * The spec and host a create of `profile` asks for, with the overrides applied and the setup
+ * read. Each refusal names `what`, and each field as `names` calls it.
  */
 export const specRequest = (
   what: string,

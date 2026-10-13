@@ -10,7 +10,6 @@ afterEach(async () => {
   host = undefined;
 });
 
-/** Input that doesn't decode is effect-actions' own `InvalidInput`; the client maps it to `Invalid`. */
 const decodeInvalidInput = Schema.decodeUnknownSync(Schema.fromJsonString(Action.InvalidInput));
 
 const post = async (path: string, body: Schema.Json) => {

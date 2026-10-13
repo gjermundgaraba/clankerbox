@@ -1,4 +1,3 @@
-/** The resources a host reports: machines, checkpoints and the host itself. */
 import { Schema } from "effect";
 import { HostErrorTag } from "./errors.ts";
 import { HostId, Id } from "./ids.ts";
@@ -26,10 +25,7 @@ export const ActionStatus = Schema.Literals(["running", "failed", "done"]);
 
 export type ActionStatus = typeof ActionStatus.Type;
 
-/**
- * A resource's last action: `running` while it holds the row, `failed` with its error
- * after a native failure, `done` after a success. The next action replaces it.
- */
+/** A resource's last action; the next action replaces it. */
 export const ActionRecord = Schema.Union([
   Schema.Struct({ name: ActionName, status: Schema.Literals(["running", "done"]) }),
   Schema.Struct({
@@ -41,7 +37,6 @@ export const ActionRecord = Schema.Union([
 
 export type ActionRecord = typeof ActionRecord.Type;
 
-/** Where a machine's guest port 22 is reached. */
 export const SshEndpoint = Schema.Struct({
   host: Schema.String,
   port: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
@@ -49,7 +44,6 @@ export const SshEndpoint = Schema.Struct({
 
 export type SshEndpoint = typeof SshEndpoint.Type;
 
-/** Where a running machine's SSH is reached, and the guest user its runtime's logins are for. */
 export const SshLogin = Schema.Struct({
   user: Schema.String,
   ...SshEndpoint.fields,
@@ -62,25 +56,18 @@ export const Machine = Schema.Struct({
   runtime: Runtime,
   createdAt: Schema.DateTimeUtcFromString,
   base: Schema.String,
-  /** The label the client passed at create, normally its profile's name. */
   profile: Schema.optionalKey(Schema.String),
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
-  /**
-   * Read from the runtime, never stored: `missing` when the runtime doesn't have the machine,
-   * `unknown` when it couldn't be read.
-   */
+  /** `missing`: the runtime doesn't have it; `unknown`: it couldn't be read. */
   state: Schema.Literals(["running", "stopped", "missing", "unknown"]),
-  /**
-   * Whether its create, fork or restore has made it. One that isn't made, because that action
-   * still runs or failed, can only be read, stopped or deleted.
-   */
+  /** Until its create, fork or restore has made it, it can only be read, stopped or deleted. */
   made: Schema.Boolean,
   action: ActionRecord,
   /** Only on a running machine whose runtime gives it an endpoint. */
   ssh: Schema.optionalKey(SshLogin),
-  /** The guest's SSH host public key, as `<type> <base64>`, once preparation has recorded it. */
+  /** `<type> <base64>`, once preparation has recorded it. */
   hostKey: Schema.optionalKey(Schema.String),
 }).annotate({ identifier: "Machine" });
 
@@ -89,9 +76,8 @@ export type Machine = typeof Machine.Type;
 export const Checkpoint = Schema.Struct({
   id: Id,
   createdAt: Schema.DateTimeUtcFromString,
-  /** The ID of the machine it was captured from. */
   machine: Id,
-  /** What it holds, by runtime: `ram` (RAM and disks) on smolvm, `disk` on Tart and boat. */
+  /** `ram` (RAM and disks) on smolvm, `disk` on Tart and boat. */
   kind: Schema.Literals(["ram", "disk"]),
   base: Schema.String,
   profile: Schema.optionalKey(Schema.String),
@@ -106,11 +92,10 @@ export type Checkpoint = typeof Checkpoint.Type;
 export const Host = Schema.Struct({
   id: HostId,
   runtime: Runtime,
-  /** The clankerbox version the host runs. */
   version: Schema.String,
-  /** The runtime's version; for boat, its API version. */
+  /** For boat, its API version. */
   runtimeVersion: Schema.String,
-  /** The state a machine must be in for the runtime to capture it: Tart's, `stopped`. */
+  /** The state a machine must be in to be captured: Tart's is `stopped`. */
   captureFrom: Schema.Literals(["running", "stopped"]),
   bases: Schema.Array(Schema.String),
 }).annotate({ identifier: "Host" });
@@ -118,9 +103,8 @@ export const Host = Schema.Struct({
 export type Host = typeof Host.Type;
 
 /**
- * One limit a host's `Capacity` refusals come from, and how much of it is in use, counted as
- * the refusal counts it, so `used` needn't match the host's own machines. Read from the runtime,
- * never stored.
+ * `used` is counted as a `Capacity` refusal counts it, so it needn't match the host's own
+ * machines.
  */
 export const Limit = Schema.Struct({
   host: HostId,
@@ -142,10 +126,7 @@ export const Limit = Schema.Struct({
 
 export type Limit = typeof Limit.Type;
 
-/**
- * A setup script and how long it may run, the host's default when it doesn't say. Nothing logs
- * the script: it can carry secrets.
- */
+/** Nothing logs the script: it can carry secrets. */
 export const Setup = Schema.Struct({
   script: Schema.String,
   timeoutSeconds: Schema.optionalKey(Size),
@@ -162,19 +143,12 @@ const specFields = {
   profile: Schema.optionalKey(Schema.String),
 };
 
-/**
- * What a new machine is made from: a base, its sizes, an optional setup script with its
- * timeout, and an optional `profile` label. A profile file fills these in; the host never
- * sees the profile itself.
- */
+/** A profile file fills these in; the host sees only the `profile` label. */
 export const MachineSpec = Schema.Struct(specFields);
 
 export type MachineSpec = typeof MachineSpec.Type;
 
-/**
- * `machine.create`'s input: the spec and the new machine's full ID. The host checks that the ID
- * names it, so a create never lands under another host's ID.
- */
+/** The host checks that `id` names it, so a create never lands under another host's ID. */
 export const CreateRequest = Schema.Struct({ id: Id, ...specFields });
 
 export type CreateRequest = typeof CreateRequest.Type;

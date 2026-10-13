@@ -1,22 +1,13 @@
-/** How sizes, decode failures and file failures read in a message or a table cell. */
 import { Match, type PlatformError, Predicate, type Schema, SchemaIssue } from "effect";
 
 export const mibPerGib = 1024;
 
-/**
- * A RAM size, exactly, as a size flag takes one: GiB when it is whole or half GiB, `32G` or
- * `1.5G`, and MiB when it isn't, `512M` or `1500M`.
- */
+/** Exactly, as a size flag takes it: `32G`, `1.5G`, `512M`, `1500M`. */
 export const formatMib = (mib: number): string =>
   mib >= mibPerGib && mib % (mibPerGib / 2) === 0 ? `${mib / mibPerGib}G` : `${mib}M`;
 
-/** A disk size, in its whole GiB, as a size flag takes one: `60G`. */
 export const formatGib = (gib: number): string => `${gib}G`;
 
-/**
- * Where a decode failed, as a JSON path: `hosts[0].id`. `names` gives a top-level field the
- * name its caller knows it by.
- */
 const jsonPath = (
   path: ReadonlyArray<PropertyKey>,
   names: ReadonlyMap<PropertyKey, string> | undefined,
@@ -40,10 +31,7 @@ const flatten = SchemaIssue.makeFormatterStandardSchemaV1({
     ),
 });
 
-/**
- * Everything a decode refused, on one line, each under its JSON path: `cpu: missing; ram: not a
- * known field`. `names` renames top-level fields, as when a flag set each: `--cpu: missing`.
- */
+/** On one line: `cpu: missing; ram: not a known field`. `names` renames top-level fields. */
 export const describeIssues = (
   error: Schema.SchemaError,
   names?: ReadonlyMap<PropertyKey, string>,
@@ -59,8 +47,8 @@ export const describeIssues = (
     .join("; ");
 
 /**
- * Why a file couldn't be read, without the platform call that met it. Node describes a failure
- * only in its cause, so what has no wording here reads as the system's own.
+ * Node describes a failure only in its cause, so what has no wording here reads as the system's
+ * own.
  */
 export const describeFileError = ({ reason }: PlatformError.PlatformError): string => {
   if (Predicate.isTagged(reason, "NotFound")) {

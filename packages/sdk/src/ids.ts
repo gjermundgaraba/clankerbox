@@ -1,9 +1,3 @@
-/**
- * Machine and checkpoint IDs, `<host>_<name>`: the one place that parses and formats them.
- * Neither part contains `_`, so an ID has exactly one. The whole ID matches
- * `^[A-Za-z0-9_-]{1,62}$` because it is written to `/var/lib/clankerbox/machine-id`, and
- * clankercreds accepts only that pattern.
- */
 import { Effect, Schema } from "effect";
 import { Invalid } from "./errors.ts";
 
@@ -11,6 +5,7 @@ const separator = "_";
 
 const maxIdLength = 62;
 
+/** The ID is written to `/var/lib/clankerbox/machine-id`, and clankercreds accepts only this. */
 const idPattern = /^[A-Za-z0-9_-]{1,62}$/u;
 
 /**
@@ -30,13 +25,11 @@ const namePattern = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$/u;
 const nameRule =
   "a name starts with a letter, then letters, digits and '-', with no '--' and no '-' at the end";
 
-/** A host's part of every ID it holds. */
 export const HostId = Schema.String.check(Schema.isPattern(hostIdPattern, { message: hostIdRule }));
 
-/** A machine's or checkpoint's name, unique per host and per resource type. */
+/** Unique per host and per resource type. */
 export const Name = Schema.String.check(Schema.isPattern(namePattern, { message: nameRule }));
 
-/** The parts of an ID: the host that holds the resource and the resource's name there. */
 export interface IdParts {
   readonly host: string;
   readonly name: string;
@@ -64,10 +57,9 @@ const describeId = (id: string): string | undefined => {
   return undefined;
 };
 
-/** A full `<host>_<name>` ID. */
+/** `<host>_<name>`: neither part contains `_`, so an ID has exactly one. */
 export const Id = Schema.String.check(Schema.makeFilter((id: string) => describeId(id) ?? true));
 
-/** Splits an ID at its `_` into host and name. */
 export const parseId = (id: string): Effect.Effect<IdParts, Invalid> => {
   const problem = describeId(id);
 
@@ -80,13 +72,12 @@ export const parseId = (id: string): Effect.Effect<IdParts, Invalid> => {
   return Effect.succeed({ host: id.slice(0, at), name: id.slice(at + 1) });
 };
 
-/** Checks a name on its own, before it is joined to a host. */
 export const parseName = (name: string): Effect.Effect<string, Invalid> =>
   namePattern.test(name)
     ? Effect.succeed(name)
     : Effect.fail(new Invalid({ message: `name ${JSON.stringify(name)}: ${nameRule}` }));
 
-/** Joins a host ID and a name into the resource's ID, checking both parts and the whole. */
+/** Checks both parts and the whole. */
 export const formatId = (host: string, name: string): Effect.Effect<string, Invalid> => {
   if (!hostIdPattern.test(host)) {
     return Effect.fail(new Invalid({ message: `host ID ${JSON.stringify(host)}: ${hostIdRule}` }));

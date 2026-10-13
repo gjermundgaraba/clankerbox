@@ -1,10 +1,3 @@
-/**
- * Prebuilds: a checkpoint of a machine whose setup has run, which a create of the same spec
- * restores instead of running the setup again. They are the client's alone. A prebuild is an
- * ordinary checkpoint under a name derived from what it is of, so a host stores no profile and
- * knows nothing of them, and a create finds its prebuild with one read by ID. A prebuild never
- * changes and nothing here deletes one: building anew is a `checkpoint delete` first.
- */
 import { Effect, Option } from "effect";
 import type * as Client from "./client/client.ts";
 import { type ClankerboxError, Invalid, Precondition } from "./errors.ts";
@@ -13,13 +6,11 @@ import type { Checkpoint, Host, Machine, MachineSpec } from "./resources.ts";
 
 const prefix = "prebuilt-";
 
-/** How much of the digest a prebuild's name carries. */
 const digestDigits = 12;
 
 /**
- * How many random bytes a builder's name carries: 64 bits, so no two builds draw one name. With
- * `prebuilding-`, it is 28 characters, inside the 29 a 32-character host ID and its `_` leave of
- * an ID's 62.
+ * 64 bits, so no two builds draw one name. With `prebuilding-` it is 28 characters, inside the 29
+ * a 32-character host ID and its `_` leave of an ID's 62.
  */
 const builderBytes = 8;
 
@@ -27,12 +18,10 @@ const hex = (bytes: ArrayBuffer | Uint8Array): string =>
   Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /**
- * The name of the spec's prebuild on a host: a digest of the spec's label, base and sizes, the
- * setup script as sent, and the host's runtime version. A `ram` checkpoint restores only under
- * the release that saved it, so after a runtime bump a create misses the old prebuild instead
- * of failing to restore it. The setup's timeout is no part of it, and neither is the base's
- * image: a host only names it. The script holds whatever secrets a recipe carries, and the name
- * 12 hex characters of a digest of it.
+ * A digest of the spec's label, base, sizes, setup script as sent, and the host's runtime
+ * version: a `ram` checkpoint restores only under the release that saved it, so after a runtime
+ * bump a create misses the old prebuild instead of failing to restore it. The setup's timeout and
+ * the base's image are no part of it.
  */
 export const nameOf = (
   spec: MachineSpec,
@@ -55,14 +44,13 @@ export const nameOf = (
     ),
   ).pipe(Effect.map((digest) => `${prefix}${hex(digest).slice(0, digestDigits)}`));
 
-/** The checkpoint `id`, if the host has it. */
 const lookup = (client: Client.Interface, id: string) =>
   client.checkpoint(id).pipe(
     Effect.map(Option.some),
     Effect.catchTag("NotFound", () => Effect.succeedNone),
   );
 
-/** Where a create goes, and whether it runs its setup even when its host has a prebuild of it. */
+/** `fresh` runs the setup even when the host has a prebuild of the spec. */
 export interface CreateOptions extends Client.CreateOptions {
   readonly fresh?: boolean | undefined;
 }
@@ -74,10 +62,8 @@ export interface Created {
 }
 
 /**
- * Creates a machine named `name` as `client.create` does, but restores it from the spec's
- * prebuild when the host it lands on has one whose capture is done, unless `fresh`. A spec
- * without a setup has none. Placement is the create's own, and a prebuild stays on the host that made it, so a spec
- * placed on another host runs its setup. A failed restore is the reply.
+ * `client.create`, restoring the spec's prebuild when the host it is placed on has one whose
+ * capture is done, unless `fresh`. A failed restore is the reply.
  */
 export const create = (
   client: Client.Interface,
@@ -103,26 +89,16 @@ export const create = (
 
 export interface Built {
   readonly checkpoint: Checkpoint;
-  /** Whether this call built it; false when it was already there. */
   readonly built: boolean;
-  /**
-   * The ID of the machine that built it, when its delete failed: it may still run, holding its
-   * RAM, until it is deleted.
-   */
+  /** The builder's ID when its delete failed: it may still run, holding its RAM. */
   readonly leftover?: string | undefined;
 }
 
 /**
- * Builds the spec's prebuild on the host a create of it lands on: a machine of its own runs the
- * setup, is captured under the prebuild's name, and is deleted. A host whose runtime captures
- * only a stopped machine, as Tart does, has its machine stopped first. A prebuild whose capture is done is the answer as it is; one that failed or is
- * still captured is refused.
- *
- * Each build's machine has a random name of its own, and the host takes a checkpoint name once,
- * so of two builds of one spec at once both run the setup and the second's capture is
- * `Conflict`: neither touches the other's machine or prebuild. A build deletes its machine
- * however it ends. If that fails after a failure, the first failure is the reply; after a
- * capture, the prebuild is made, and the machine is the reply's `leftover`.
+ * Builds the spec's prebuild on the host a create of it is placed on, with a machine of its own
+ * that it deletes however it ends. A prebuild that is there and done is the answer; one that
+ * failed or is still being captured is refused. Of two builds of one spec at once, the second's
+ * capture is `Conflict`, and neither touches the other's machine or prebuild.
  */
 export const build = (
   client: Client.Interface,

@@ -1,8 +1,7 @@
-/** Files for tests, through `FileSystem`, so a test needs only the platform's Layer. */
 import { Effect, FileSystem } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-/** A directory of the test's own, removed when the test's scope closes. */
+/** Removed when the test's scope closes. */
 export const scratch = Effect.flatMap(FileSystem.FileSystem, (fs) =>
   fs.makeTempDirectoryScoped({ prefix: "clankerbox-test-" }),
 );
@@ -34,7 +33,7 @@ export const utimes = (path: string, time: Date) =>
 export const exists = (path: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(path));
 
-/** Runs `command` to its end, its output discarded, and returns its exit code. */
+/** Output discarded. */
 export const exitOf = (
   command: string,
   args: ReadonlyArray<string>,

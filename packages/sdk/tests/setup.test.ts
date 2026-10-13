@@ -19,10 +19,6 @@ import {
   writeBytes,
 } from "./files.ts";
 
-/**
- * A recipe whose setup.sh records where it ran and copies its files into $OUT. It holds an
- * executable helper whose name has a space.
- */
 const recipe = (setup: string) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
@@ -52,7 +48,6 @@ const copyingSetup = [
   "",
 ].join("\n");
 
-/** Runs a packed script with sh in a fresh directory, as a host would, and returns $OUT. */
 const runPacked = (script: string) =>
   Effect.gen(function* () {
     const work = yield* scratch;
@@ -70,7 +65,6 @@ const runPacked = (script: string) =>
     return { out, exitCode };
   });
 
-/** A recipe's file: where it is, its bytes and whether it is executable. */
 const RecipeFile = Schema.Struct({
   directory: Schema.Literals(["", "lib", "lib/deep"]),
   name: Name,
@@ -78,10 +72,7 @@ const RecipeFile = Schema.Struct({
   executable: Schema.Boolean,
 });
 
-/**
- * Files at distinct paths, whatever the file system's case rules, none of them where a
- * directory is.
- */
+/** Distinct paths even on a case-insensitive file system, none where a directory is. */
 const recipeFiles = Arbitrary.map(Arbitrary.schema(Schema.Array(RecipeFile)), (files) => {
   const paths = new Set(["lib", "lib/deep"]);
 

@@ -1,7 +1,3 @@
-/**
- * One host's calls: the contract's binding over the host's URL, and the translation of what
- * comes back into the SDK's errors.
- */
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Duration, Effect, Match } from "effect";
@@ -22,9 +18,8 @@ import type { Host } from "../resources.ts";
 import type { HostEntry } from "./client.ts";
 
 /**
- * A client for one host. Every request carries the SDK's version, which the host checks
- * against its own. Input that doesn't encode fails as `InvalidInput` before anything is
- * sent, so a `SchemaError` that reaches `settle` is a reply that didn't decode.
+ * Input that doesn't encode fails as `InvalidInput` before anything is sent, so a `SchemaError`
+ * that reaches `settle` is a reply that didn't decode.
  */
 export const hostApi = (entry: HostEntry) =>
   ActionHttp.client(Http, {
@@ -36,27 +31,19 @@ export type HostApi = Effect.Success<ReturnType<typeof hostApi>>;
 
 export type CallError = ActionHttp.MethodError<(typeof Http.actions)[number]>;
 
-/** What a call reads of its action's contract. */
 export type Contract = Pick<Action.Any, "name" | "readOnly">;
 
-/** Which call met an error, for its message and for whether it is retryable. */
 export interface CallContext {
   readonly host: HostEntry;
   readonly timeout: Duration.Duration | undefined;
   readonly contract: Contract;
-  /** What the call does, such as `start linux_dev` or `list machines`. */
   readonly what: string;
-  /** The ID to read when a mutation's reply is lost. */
   readonly target?: string | undefined;
 }
 
 const causeDetail = (error: HttpClientError.HttpClientError): string =>
   error.cause instanceof Error ? error.cause.message : error.message;
 
-/**
- * No reply came: the connection failed or dropped, or the timeout passed. A mutation's
- * request may or may not have reached its host, so it may have run.
- */
 const unanswered = (context: CallContext, detail: string): Unavailable =>
   context.contract.readOnly
     ? new Unavailable({
@@ -68,7 +55,6 @@ const unanswered = (context: CallContext, detail: string): Unavailable =>
         readOnly: context.contract.readOnly,
       });
 
-/** Bounds the wait for the reply; the clock starts when the request is sent. */
 const bounded = <A>(
   call: Effect.Effect<A, CallError>,
   context: CallContext,
@@ -84,13 +70,11 @@ const bounded = <A>(
       });
 };
 
-/** The host answered with something the call doesn't expect. */
 const unexpected = (context: CallContext, error: { readonly message: string }): Internal =>
   new Internal({
     message: `host ${context.host.id} answered ${context.what} unexpectedly: ${error.message}`,
   });
 
-/** The error, with where it was met: the host, the action, and the ID the call is about. */
 const locate = (error: ClankerboxError, context: CallContext): ClankerboxError => {
   const host = context.host.id;
   const action = context.contract.name;
@@ -154,7 +138,6 @@ export const settle = <A>(
     Effect.mapError((error) => locate(error, context)),
   );
 
-/** A host this client can use: it calls itself by its entry's ID. */
 export const checkHost = (entry: HostEntry, host: Host): Effect.Effect<Host, Invalid> =>
   host.id === entry.id
     ? Effect.succeed(host)

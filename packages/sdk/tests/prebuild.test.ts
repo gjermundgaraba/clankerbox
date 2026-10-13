@@ -28,7 +28,6 @@ const host = (options: Parameters<typeof stubHost>[0]) => {
 
 const url = (id: string) => `http://${id}.test`;
 
-/** `use` against a client whose host list is `hosts`, in order. */
 const withClient = <A, E>(
   hosts: ReadonlyArray<StubHost>,
   use: (client: Client.Interface) => Effect.Effect<A, E>,
@@ -46,12 +45,10 @@ const spec: MachineSpec = {
   profile: "dev",
 };
 
-/** The stub hosts' runtime version, which every prebuild name on them carries. */
 const smolvm = { runtimeVersion: "1.27.3" };
 
 const nameOf = (of: MachineSpec, on = smolvm) => Prebuild.nameOf(of, on);
 
-/** What a host holds once a test is done: its machines' and checkpoints' IDs. */
 const holdings = (stub: StubHost) =>
   withClient([stub], (client) =>
     Effect.all({
@@ -193,7 +190,6 @@ it.effect(
       const linux = host({
         id: "linux",
         bases: ["ubuntu"],
-        // Holds each create until both builds have made their machines' rows.
         beforeCreate: () =>
           Effect.promise(() => {
             arrived += 1;

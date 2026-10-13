@@ -1,8 +1,3 @@
-/**
- * The host API: one effect-actions binding, each action a JSON POST route at `/api/<action>`.
- * A mutation replies when its action has finished. Every action is public: a host listens
- * only on the tailnet or loopback.
- */
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Duration, Schema } from "effect";
@@ -10,19 +5,15 @@ import { hostErrors } from "./errors.ts";
 import { Id, Name } from "./ids.ts";
 import { Checkpoint, CreateRequest, Host, Limit, Machine } from "./resources.ts";
 
-/**
- * How long a client waits for a read's reply from one host, unless it sets its own. A host
- * bounds its own reads of runtime state under it, so a list answers in time.
- */
+/** A host bounds its own reads of runtime state under it, so a list answers in time. */
 export const readTimeout = Duration.seconds(10);
 
 const ById = Schema.Struct({ id: Id });
 
-/** Input of the actions that make a new resource from a machine: its ID and the new name. */
 const FromMachine = Schema.Struct({ machine: Id, name: Name });
 
 /**
- * What every action shares, by whether it reads or changes the host. Every action declares
+ * Every action is public, as a host listens only on the tailnet or loopback. Each declares
  * `hostErrors`, so a client decodes the `Invalid` the host's version check answers with.
  */
 const read = { caller: Action.Anyone, error: hostErrors, readOnly: true } as const;
@@ -116,5 +107,4 @@ export const Http = ActionHttp.make(
   { prefix: "/api" },
 );
 
-/** Every action of the contract, by name. */
 export const actionsByName = Action.byName(Http.actions);
