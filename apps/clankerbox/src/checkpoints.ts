@@ -15,7 +15,7 @@ import {
   table,
   withClient,
 } from "./command.ts";
-import { actionLabel } from "./machines/view.ts";
+import { actionError, actionLabel } from "./machines/view.ts";
 import { age } from "./units.ts";
 
 /** A checkpoint's columns: each one's label, and its cell. */
@@ -45,7 +45,7 @@ export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
   ["CPU", String(checkpoint.cpu)],
   ["RAM", formatMib(checkpoint.ramMib)],
   ["DISK", formatGib(checkpoint.diskGib)],
-  ["ERROR", checkpoint.action.error?.message ?? "-"],
+  ["ERROR", actionError(checkpoint)],
 ];
 
 export const encodeCheckpoint = Schema.encodeSync(Checkpoint);

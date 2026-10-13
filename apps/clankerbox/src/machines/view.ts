@@ -4,9 +4,13 @@ import { DateTime, Schema } from "effect";
 import { age } from "../units.ts";
 
 export const actionLabel = ({ action }: Machine | Checkpoint) =>
-  action.error === undefined
-    ? `${action.name} ${action.status}`
-    : `${action.name} ${action.status}: ${action.error.tag}`;
+  action.status === "failed"
+    ? `${action.name} ${action.status}: ${action.error.tag}`
+    : `${action.name} ${action.status}`;
+
+/** The error a resource's last action failed with, in full. */
+export const actionError = ({ action }: Machine | Checkpoint) =>
+  action.status === "failed" ? action.error.message : "-";
 
 /** The runtime's state, marked on a machine its create, fork or restore hasn't made. */
 export const stateLabel = ({ state, made }: Machine) => (made ? state : `${state} (unmade)`);
@@ -41,7 +45,7 @@ export const machineFields = (machine: Machine, now: DateTime.Utc) => {
   return [
     ...machineColumns.map(([label, cell]) => [label, cell(machine, now)]),
     ["SSH", ssh === undefined ? "-" : `${ssh.user}@${ssh.host}:${ssh.port}`],
-    ["ERROR", machine.action.error?.message ?? "-"],
+    ["ERROR", actionError(machine)],
     ["HOST_KEY", machine.hostKey ?? "-"],
   ];
 };

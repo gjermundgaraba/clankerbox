@@ -143,7 +143,12 @@ test("ssh exits with ssh's exit code, through Exited's errorExitCode and the def
 
 test("ssh into a machine that lacks an endpoint or a host key is Precondition, says which, and runs no ssh", async () => {
   const login = { user: "root", host: "100.64.0.7", port: 10_022 };
-  const failed = { name: "create", status: "failed" } as const;
+
+  const failed = {
+    name: "create",
+    status: "failed",
+    error: { tag: "Precondition", message: "setup exited 1" },
+  } as const;
 
   const said: ReadonlyArray<readonly [Machine, string]> = [
     [
