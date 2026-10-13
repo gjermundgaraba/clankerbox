@@ -1,9 +1,9 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { join } from "node:path";
-import { Effect } from "effect";
+import { Arbitrary, Effect, FileSystem, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { packRecipe, readSetup } from "../src/index.ts";
+import { Name, packRecipe, readSetup } from "../src/index.ts";
 import {
   chmod,
   exists,
@@ -12,6 +12,7 @@ import {
   read,
   readBytes,
   scratch,
+  stat,
   symlink,
   utimes,
   write,
@@ -68,6 +69,36 @@ const runPacked = (script: string) =>
 
     return { out, exitCode };
   });
+
+/** A recipe's file: where it is, its bytes and whether it is executable. */
+const RecipeFile = Schema.Struct({
+  directory: Schema.Literals(["", "lib", "lib/deep"]),
+  name: Name,
+  bytes: Schema.Array(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 255 }))),
+  executable: Schema.Boolean,
+});
+
+/**
+ * Files at distinct paths, whatever the file system's case rules, none of them where a
+ * directory is.
+ */
+const recipeFiles = Arbitrary.map(Arbitrary.schema(Schema.Array(RecipeFile)), (files) => {
+  const paths = new Set(["lib", "lib/deep"]);
+
+  return files.flatMap((file) => {
+    const path = join(file.directory, file.name);
+
+    if (paths.has(path.toLowerCase())) {
+      return [];
+    }
+
+    paths.add(path.toLowerCase());
+
+    return [{ path, bytes: file.bytes, executable: file.executable }];
+  });
+});
+
+const copyingAll = '#!/bin/sh\nset -eu\ncp -R . "$OUT/tree"\n';
 
 layer(NodeServices.layer)((it) => {
   it.effect(
@@ -374,5 +405,70 @@ layer(NodeServices.layer)((it) => {
       expect(error._tag).toBe("InvalidFile");
       expect(error.file).toBe(missing);
     }),
+  );
+
+  it.effect.prop(
+    "a recipe packs into the same script whatever order its files were written or listed in, their other mode bits and their times, and the script recreates them",
+    [recipeFiles],
+    ([files]) =>
+      Effect.gen(function* () {
+        const writeRecipe = (
+          order: ReadonlyArray<(typeof files)[number]>,
+          modes: { readonly executable: number; readonly plain: number },
+          time: Date,
+        ) =>
+          Effect.gen(function* () {
+            const dir = yield* scratch;
+
+            yield* write(join(dir, "setup.sh"), copyingAll);
+
+            for (const file of order) {
+              yield* mkdir(join(dir, file.path, ".."));
+              yield* writeBytes(join(dir, file.path), new Uint8Array(file.bytes));
+              yield* chmod(join(dir, file.path), file.executable ? modes.executable : modes.plain);
+              yield* utimes(join(dir, file.path), time);
+            }
+
+            return dir;
+          });
+
+        const first = yield* writeRecipe(
+          files,
+          { executable: 0o755, plain: 0o644 },
+          new Date("2026-01-01T00:00:00Z"),
+        );
+
+        const second = yield* writeRecipe(
+          files.toReversed(),
+          { executable: 0o700, plain: 0o600 },
+          new Date("2001-09-09T01:46:40Z"),
+        );
+
+        const packed = yield* packRecipe(first);
+
+        const fs = yield* FileSystem.FileSystem;
+
+        const reversing = FileSystem.FileSystem.of({
+          ...fs,
+          readDirectory: (path, options) =>
+            Effect.map(fs.readDirectory(path, options), (names) => names.toReversed()),
+        });
+
+        expect(
+          yield* packRecipe(second).pipe(Effect.provideService(FileSystem.FileSystem, reversing)),
+        ).toBe(packed);
+
+        const { out, exitCode } = yield* runPacked(packed);
+
+        expect(exitCode).toBe(0);
+
+        for (const file of files) {
+          const made = join(out, "tree", file.path);
+
+          expect([...(yield* readBytes(made))], file.path).toEqual(file.bytes);
+          expect(((yield* stat(made)).mode & 0o111) !== 0, file.path).toBe(file.executable);
+        }
+      }).pipe(Effect.scoped),
+    { timeout: 30_000, arbitrary: { runs: 25 } },
   );
 });

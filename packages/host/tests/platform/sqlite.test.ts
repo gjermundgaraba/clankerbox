@@ -2,8 +2,13 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Conflict, NotFound, Precondition } from "@gjermundgaraba/clankerbox-sdk";
-import { DateTime, Effect, Option, Result } from "effect";
+import {
+  type ActionRecord,
+  Conflict,
+  NotFound,
+  Precondition,
+} from "@gjermundgaraba/clankerbox-sdk";
+import { Arbitrary, DateTime, Effect, Exit, Option, Result, Schema } from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import {
@@ -14,7 +19,14 @@ import {
   type Owner,
   transaction,
 } from "../../src/platform/sqlite.ts";
-import type { Interface, NewCheckpoint, NewMachine, NewRow, RowRef } from "../../src/store.ts";
+import type {
+  Interface,
+  NewCheckpoint,
+  NewMachine,
+  NewRow,
+  RowRef,
+  Token,
+} from "../../src/store.ts";
 import { mkdir, readDirectory, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 
 /** Runs `use` against the store on `stateDir`, opened for the call only. */
@@ -89,6 +101,35 @@ const planted = (store: Interface, made: NewMachine) =>
       store.end(token, { action: { name: "create", status: "done" } }),
     ),
   );
+
+const RowName = Schema.Literals(["a", "b", "c"]);
+
+const Slot = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 3 }));
+
+/** What an action does to the store's claims; `slot` picks one of the claims not yet given back. */
+const Step = Schema.Union([
+  Schema.Struct({ op: Schema.Literal("create"), name: RowName }),
+  Schema.Struct({ op: Schema.Literal("start"), name: RowName }),
+  Schema.Struct({ op: Schema.Literal("fork"), source: RowName, name: RowName }),
+  Schema.Struct({ op: Schema.Literal("release"), slot: Slot }),
+  Schema.Struct({ op: Schema.Literal("end"), slot: Slot, failed: Schema.Boolean }),
+]);
+
+/** A claim as the model sees it: the rows it inserted, and the rows it holds with their `before`. */
+interface Held {
+  readonly token: Token;
+  readonly action: ActionRecord["name"];
+  readonly inserted: ReadonlyArray<string>;
+  readonly held: ReadonlyArray<readonly [name: string, before: ActionRecord]>;
+}
+
+const outcome = (exit: Exit.Exit<unknown, { readonly _tag: string }>) =>
+  Exit.isSuccess(exit)
+    ? "ok"
+    : Option.match(Exit.findErrorOption(exit), {
+        onNone: () => "a defect",
+        onSome: (error) => (error instanceof Conflict ? `Conflict ${error.kind}` : error._tag),
+      });
 
 layer(NodeServices.layer)((it) => {
   it.effect("init makes the state dir and a database at the binary's schema version", () =>
@@ -737,5 +778,131 @@ layer(NodeServices.layer)((it) => {
           },
         ]);
       }),
+  );
+
+  it.effect.prop(
+    "claims behave as a model of rows and their holders: a held row is busy, a release undoes a claim and an end records it on every row",
+    [Arbitrary.array(Arbitrary.schema(Step), { minLength: 10, maxLength: 40 })],
+    ([steps]) =>
+      Effect.gen(function* () {
+        const store = yield* open({
+          stateDir: join(yield* scratch, "state"),
+          id: "linux",
+          runtime: "smolvm",
+        });
+
+        const done: ActionRecord = { name: "create", status: "done" };
+
+        const rows = new Map<string, ActionRecord>([
+          ["a", done],
+          ["b", done],
+        ]);
+
+        const claims: Array<Held> = [];
+
+        yield* Effect.forEach(["a", "b"], (name) => planted(store, record(name)));
+
+        /** What the model says a claim of `name` for `action` does, and does it to the model. */
+        const claimed = (name: string, action: ActionRecord["name"]) => {
+          const before = rows.get(name);
+
+          if (before === undefined) {
+            return Result.fail("NotFound");
+          }
+
+          if (before.status === "running") {
+            return Result.fail("Conflict busy");
+          }
+
+          rows.set(name, { name: action, status: "running" });
+
+          return Result.succeed(before);
+        };
+
+        for (const step of steps) {
+          if (step.op === "create") {
+            const expected = rows.has(step.name) ? "Conflict exists" : "ok";
+            const exit = yield* Effect.exit(store.insert("create", inserting(record(step.name))));
+
+            expect(outcome(exit), JSON.stringify(step)).toBe(expected);
+
+            if (Exit.isSuccess(exit)) {
+              rows.set(step.name, { name: "create", status: "running" });
+              claims.push({ token: exit.value, action: "create", inserted: [step.name], held: [] });
+            }
+          } else if (step.op === "start" || step.op === "fork") {
+            const source = step.op === "start" ? step.name : step.source;
+            const before = claimed(source, step.op);
+            const exit = yield* Effect.exit(store.hold(step.op, machine(source)));
+
+            expect(outcome(exit), JSON.stringify(step)).toBe(
+              Result.match(before, { onSuccess: () => "ok", onFailure: (refusal) => refusal }),
+            );
+
+            if (Exit.isFailure(exit) || Result.isFailure(before)) {
+              continue;
+            }
+
+            const holding: Held = {
+              token: exit.value.token,
+              action: step.op,
+              inserted: [],
+              held: [[source, before.success]],
+            };
+
+            if (step.op === "start") {
+              claims.push(holding);
+              continue;
+            }
+
+            const copy = rows.has(step.name) ? "Conflict exists" : "ok";
+
+            const joined = yield* Effect.exit(
+              store.insert("fork", inserting(record(step.name)), holding.token),
+            );
+
+            expect(outcome(joined), JSON.stringify(step)).toBe(copy);
+
+            if (Exit.isSuccess(joined)) {
+              rows.set(step.name, { name: "fork", status: "running" });
+              claims.push({ ...holding, token: joined.value, inserted: [step.name] });
+            } else {
+              claims.push(holding);
+            }
+          } else if (claims.length > 0) {
+            const [claim] = claims.splice(step.slot % claims.length, 1);
+
+            if (claim === undefined) {
+              continue;
+            }
+
+            const names = [...claim.inserted, ...claim.held.map(([name]) => name)];
+
+            if (step.op === "release") {
+              yield* store.release(claim.token);
+
+              claim.inserted.forEach((name) => rows.delete(name));
+              claim.held.forEach(([name, before]) => rows.set(name, before));
+            } else {
+              const action: ActionRecord = step.failed
+                ? {
+                    name: claim.action,
+                    status: "failed",
+                    error: { tag: "Internal", message: "disk full" },
+                  }
+                : { name: claim.action, status: "done" };
+
+              yield* store.end(claim.token, { action });
+
+              names.forEach((name) => rows.set(name, action));
+            }
+          }
+
+          const listed = (yield* store.list).map(({ name, action }) => [name, action] as const);
+
+          expect(new Map(listed), JSON.stringify(step)).toEqual(rows);
+        }
+      }).pipe(Effect.scoped),
+    { timeout: 30_000, arbitrary: { runs: 50 } },
   );
 });

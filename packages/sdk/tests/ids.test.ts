@@ -1,4 +1,4 @@
-import { Effect, Exit, Schema } from "effect";
+import { Arbitrary, Effect, Exit, Schema } from "effect";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { formatId, HostId, Id, Name, parseId, parseName } from "../src/index.ts";
@@ -83,6 +83,32 @@ it.effect("formatting and parsing round-trip", () =>
 
     expect(yield* parseId(id)).toEqual({ host: "linux", name: "dev-box" });
   }),
+);
+
+/** A valid name of any length up to past the ID's limit: one generated, then padded with `a`. */
+const longName = Arbitrary.map(
+  Arbitrary.all([
+    Arbitrary.schema(Name),
+    Arbitrary.schema(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 64 }))),
+  ]),
+  ([name, padding]) => `${name}${"a".repeat(padding)}`,
+);
+
+it.effect.prop(
+  "a valid host and name format into <host>_<name> exactly when it is at most 62 characters, and parse back",
+  { host: HostId, name: longName },
+  ({ host, name }) =>
+    Effect.gen(function* () {
+      const id = `${host}_${name}`;
+      const formatted = yield* Effect.exit(formatId(host, name));
+
+      if (id.length > 62) {
+        expect(Exit.isFailure(formatted)).toBe(true);
+      } else {
+        expect(formatted).toEqual(Exit.succeed(id));
+        expect(yield* parseId(id)).toEqual({ host, name });
+      }
+    }),
 );
 
 it("a host ID is a lowercase letter, then up to 31 lowercase letters, digits and '-'", () => {

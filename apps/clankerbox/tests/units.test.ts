@@ -1,8 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { layer } from "@effect/vitest";
-import { Effect } from "effect";
+import { it, layer } from "@effect/vitest";
+import { formatMib } from "@gjermundgaraba/clankerbox-sdk";
+import { Arbitrary, Effect, Schema } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 import { type StubHost, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { formatSeconds, parseGib, parseMib, parseSeconds } from "../src/units.ts";
 import { cleanup, cli, hostIn, writeConfig } from "./support.ts";
 
 const stubs: Array<StubHost> = [];
@@ -102,3 +104,45 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 });
+
+const upTo = (maximum: number) => Schema.Int.check(Schema.isBetween({ minimum: 1, maximum }));
+
+it.effect.prop(
+  "a duration is written largest unit first, each below the next, and parses back to its seconds",
+  [upTo(10_000 * 86_400)],
+  ([seconds]) =>
+    Effect.gen(function* () {
+      const text = formatSeconds(seconds);
+
+      const [, d = "0", h = "0", m = "0", s = "0"] =
+        /^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/u.exec(text) ?? [];
+
+      expect(Number(h)).toBeLessThan(24);
+      expect(Number(m)).toBeLessThan(60);
+      expect(Number(s)).toBeLessThan(60);
+      expect(Number(d) * 86_400 + Number(h) * 3600 + Number(m) * 60 + Number(s)).toBe(seconds);
+      expect(yield* parseSeconds("--timeout", text)).toBe(seconds);
+    }),
+);
+
+/** A size in MiB, quarter, half or whole GiB, so that each way of printing one comes up. */
+const ramSize = Arbitrary.map(
+  Arbitrary.all([
+    Arbitrary.schema(upTo(1 << 16)),
+    Arbitrary.schema(Schema.Literals([1, 256, 512, 1024])),
+  ]),
+  ([count, step]) => count * step,
+);
+
+it.effect.prop(
+  "a RAM size prints in whole or half GiB or else MiB, reads back as printed, and M and G count MiB and GiB",
+  [ramSize],
+  ([mib]) =>
+    Effect.gen(function* () {
+      expect(formatMib(mib)).toMatch(/^(?:\d+M|\d+(?:\.5)?G)$/u);
+      expect(yield* parseMib("--ram", formatMib(mib))).toBe(mib);
+      expect(yield* parseMib("--ram", `${mib}M`)).toBe(mib);
+      expect(yield* parseMib("--ram", `${mib}G`)).toBe(mib * 1024);
+      expect(yield* parseGib("--disk", `${mib}G`)).toBe(mib);
+    }),
+);
