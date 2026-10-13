@@ -1,5 +1,5 @@
 /** The checkpoint commands, and how the CLI shows a checkpoint. */
-import { Checkpoint, formatMib } from "@gjermundgaraba/clankerbox-sdk";
+import { Checkpoint, formatGib, formatMib } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Schema } from "effect";
 import { Command } from "effect/cli";
 import {
@@ -44,7 +44,7 @@ export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
   ...checkpointColumns.map(([label, cell]) => [label, cell(checkpoint, now)]),
   ["CPU", String(checkpoint.cpu)],
   ["RAM", formatMib(checkpoint.ramMib)],
-  ["DISK", `${checkpoint.diskGib}G`],
+  ["DISK", formatGib(checkpoint.diskGib)],
   ["ERROR", checkpoint.action.error?.message ?? "-"],
 ];
 

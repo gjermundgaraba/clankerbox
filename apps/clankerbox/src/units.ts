@@ -2,10 +2,8 @@
  * The sizes and durations a flag takes, written as the tables print them: `512M`, `8G`, `15m`.
  * Each needs its unit: a bare number is refused, not guessed at.
  */
-import { Invalid } from "@gjermundgaraba/clankerbox-sdk";
+import { Invalid, mibPerGib } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Duration, Effect } from "effect";
-
-const mibPerGib = 1024;
 
 /** A number and `M` or `G`, binary whether written `G`, `GB`, `Gi` or `GiB`. */
 const sizePattern = /^(\d+(?:\.\d+)?)([mg])(?:i|b|ib)?$/iu;

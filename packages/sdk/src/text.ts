@@ -1,7 +1,7 @@
 /** How sizes, decode failures and file failures read in a message or a table cell. */
 import { Match, type PlatformError, Predicate, type Schema, SchemaIssue } from "effect";
 
-const mibPerGib = 1024;
+export const mibPerGib = 1024;
 
 /**
  * A RAM size, exactly, as a size flag takes one: GiB when it is whole or half GiB, `32G` or
@@ -9,6 +9,9 @@ const mibPerGib = 1024;
  */
 export const formatMib = (mib: number): string =>
   mib >= mibPerGib && mib % (mibPerGib / 2) === 0 ? `${mib / mibPerGib}G` : `${mib}M`;
+
+/** A disk size, in its whole GiB, as a size flag takes one: `60G`. */
+export const formatGib = (gib: number): string => `${gib}G`;
 
 /**
  * Where a decode failed, as a JSON path: `hosts[0].id`. `names` gives a top-level field the

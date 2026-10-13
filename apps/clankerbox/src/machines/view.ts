@@ -1,5 +1,5 @@
 /** How the CLI shows a machine: its table row, its fields one a line, and its JSON. */
-import { Checkpoint, formatMib, Machine } from "@gjermundgaraba/clankerbox-sdk";
+import { Checkpoint, formatGib, formatMib, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Schema } from "effect";
 import { age } from "../units.ts";
 
@@ -21,7 +21,7 @@ const machineColumns: ReadonlyArray<
   ["PROFILE", (machine) => machine.profile ?? "-"],
   ["CPU", (machine) => String(machine.cpu)],
   ["RAM", (machine) => formatMib(machine.ramMib)],
-  ["DISK", (machine) => `${machine.diskGib}G`],
+  ["DISK", (machine) => formatGib(machine.diskGib)],
   ["AGE", (machine, now) => age(machine.createdAt, now)],
   ["ACTION", actionLabel],
 ];
