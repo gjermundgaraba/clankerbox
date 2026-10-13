@@ -14,11 +14,10 @@ import {
   type ClankerboxError,
   Client,
   loadProfile,
-  type MachineSpec,
   pinnedSsh,
   Prebuild,
   Precondition,
-  readSetup,
+  specRequest,
   sshTarget,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -34,6 +33,7 @@ import {
 } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { SandboxDestroyedError } from "sandbox-agent";
+import { healthPath } from "./agent.ts";
 import type { Options } from "./options.ts";
 import { forwarding, freePort, LocalTunnelError, open, type Tunnel } from "./tunnel.ts";
 
@@ -199,7 +199,7 @@ export const make = (options: Options, ssh = "ssh") => {
   /** Whether the Sandbox Agent answers its health check through the tunnel. */
   const healthy = (port: number): Effect.Effect<boolean> =>
     Effect.tryPromise((signal) =>
-      fetch(`http://127.0.0.1:${port}/v1/health`, { signal }).then((reply) => reply.json()),
+      fetch(`http://127.0.0.1:${port}${healthPath}`, { signal }).then((reply) => reply.json()),
     ).pipe(
       Effect.map(isHealth),
       Effect.timeoutOrElse({ duration: healthWait, orElse: () => Effect.succeed(false) }),
@@ -241,20 +241,12 @@ export const make = (options: Options, ssh = "ssh") => {
         return yield* client.fork(from.machine, named);
       }
 
-      const { label, host, setup, ...sizes } = yield* loadProfile(from.profile);
-      let spec: MachineSpec = { ...sizes, profile: label };
+      const { spec, host } = yield* specRequest("create", yield* loadProfile(from.profile), {});
 
-      if (setup !== undefined) {
-        const { path, ...timeout } = setup;
-
-        spec = { ...spec, setup: { script: yield* readSetup(path), ...timeout } };
-      }
-
-      if (options.fresh === true) {
-        return yield* client.create(named, spec, { host });
-      }
-
-      const { machine } = yield* Prebuild.create(client, named, spec, { host });
+      const { machine } = yield* Prebuild.create(client, named, spec, {
+        host,
+        fresh: options.fresh,
+      });
 
       return machine;
     });

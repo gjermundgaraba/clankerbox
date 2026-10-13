@@ -1,5 +1,5 @@
 /** The host commands: `hosts`, and `capacity`, each host's limits. */
-import { Host, Limit } from "@gjermundgaraba/clankerbox-sdk";
+import { Host, Limit, mibPerGib } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { listCommand } from "./command.ts";
 
@@ -28,7 +28,7 @@ const limitNames = {
  * RAM in a limit, rounded to a tenth of a GiB: a budget is seldom a round size, and the table
  * is an overview. `--json` has the MiB.
  */
-const roughGib = (mib: number): string => `${Math.round((mib * 10) / 1024) / 10}G`;
+const roughGib = (mib: number): string => `${Math.round((mib * 10) / mibPerGib) / 10}G`;
 
 export const limitRows = (limits: ReadonlyArray<Limit>) => [
   ["HOST", "RESOURCE", "USED", "LIMIT"],

@@ -2,10 +2,10 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
-import { ErrorTag } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import { startHost, type TestHost } from "@clankerbox/host/testing";
+import { ErrorDocument, UnreachableDocument } from "../src/command.ts";
 import { cleanup, cli, scratch } from "./support.ts";
 
 const owned: Array<string> = [];
@@ -46,12 +46,6 @@ const setUp = async (down: ReadonlyArray<string> = []) => {
 };
 
 const sizes = ["--base", "ubuntu", "--cpu", "1", "--ram", "1G", "--disk", "10G"];
-
-const ErrorDocument = Schema.Struct({
-  message: Schema.String,
-  tag: ErrorTag,
-  retryable: Schema.Boolean,
-});
 
 const decodeFailure = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ error: ErrorDocument })),
@@ -212,7 +206,7 @@ test("machines shows each machine's age and names the host that is down; hosts -
               bases: Schema.Array(Schema.String),
             }),
           ),
-          unreachable: Schema.Array(Schema.Struct({ host: Schema.String, error: ErrorDocument })),
+          unreachable: Schema.Array(UnreachableDocument),
         }),
       ),
     )(hosts.stdout, { onExcessProperty: "ignore" }),

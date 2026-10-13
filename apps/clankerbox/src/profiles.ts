@@ -1,6 +1,7 @@
 /** Profile files: where `--profile` finds them, and `clankerbox profiles`, which lists them. */
 import {
   describeFileError,
+  formatGib,
   formatMib,
   Invalid,
   type LoadedProfile,
@@ -85,7 +86,7 @@ export const profileRows = (
     base,
     String(cpu),
     formatMib(ramMib),
-    `${diskGib}G`,
+    formatGib(diskGib),
     setup === undefined ? "-" : setupPath(setup.path),
     setup?.timeoutSeconds === undefined ? "-" : formatSeconds(setup.timeoutSeconds),
     host ?? "-",

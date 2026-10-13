@@ -4,7 +4,7 @@ import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { loadProfile, Profile } from "../src/index.ts";
+import { loadProfile, Profile, specRequest } from "../src/index.ts";
 
 const temporary: Array<string> = [];
 
@@ -87,4 +87,63 @@ test("a profile with an unknown key, or setup without its path, is Invalid", asy
 
   expect((await loadError(join(dir, "typo.json")))._tag).toBe("Invalid");
   expect((await loadError(join(dir, "half.json")))._tag).toBe("Invalid");
+});
+
+const request = (...args: Parameters<typeof specRequest>) =>
+  specRequest(...args).pipe(Effect.provide(NodeServices.layer), Effect.runPromise);
+
+const refusal = (...args: Parameters<typeof specRequest>) =>
+  specRequest(...args).pipe(Effect.flip, Effect.provide(NodeServices.layer), Effect.runPromise);
+
+test("a create of a profile asks for its fields, its setup read with its timeout, and its host", async () => {
+  const dir = await profileDir();
+
+  await writeFile(join(dir, "setup.sh"), "#!/bin/sh\necho hi\n");
+
+  const profile = {
+    ...sizes,
+    label: "dev",
+    setup: { path: join(dir, "setup.sh"), timeoutSeconds: 600 },
+    host: "linux",
+  };
+
+  expect(await request("create", profile, {})).toEqual({
+    spec: {
+      ...sizes,
+      profile: "dev",
+      setup: { script: "#!/bin/sh\necho hi\n", timeoutSeconds: 600 },
+    },
+    host: "linux",
+  });
+
+  expect(
+    await request("create", profile, { cpu: 4, setupTimeoutSeconds: 60, host: "mac" }),
+  ).toEqual({
+    spec: {
+      ...sizes,
+      cpu: 4,
+      profile: "dev",
+      setup: { script: "#!/bin/sh\necho hi\n", timeoutSeconds: 60 },
+    },
+    host: "mac",
+  });
+});
+
+test("a create refuses a field nobody gives, and a setup timeout with no setup, naming each as told", async () => {
+  const names = new Map<PropertyKey, string>([
+    ["cpu", "--cpu"],
+    ["setupTimeoutSeconds", "--setup-timeout"],
+  ]);
+
+  const missing = await refusal("create", undefined, { base: "ubuntu" }, names);
+
+  const untimed = await refusal(
+    "create",
+    { ...sizes, label: "dev" },
+    { setupTimeoutSeconds: 60 },
+    names,
+  );
+
+  expect(missing.message).toBe("create: --cpu: missing; ramMib: missing; diskGib: missing");
+  expect(untimed.message).toBe("create: --setup-timeout needs a setup to time");
 });

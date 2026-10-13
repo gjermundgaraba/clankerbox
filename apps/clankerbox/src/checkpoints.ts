@@ -1,5 +1,5 @@
 /** The checkpoint commands, and how the CLI shows a checkpoint. */
-import { Checkpoint, formatMib } from "@gjermundgaraba/clankerbox-sdk";
+import { actionsByName, Checkpoint, formatGib, formatMib } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Schema } from "effect";
 import { Command } from "effect/cli";
 import {
@@ -44,13 +44,13 @@ export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
   ...checkpointColumns.map(([label, cell]) => [label, cell(checkpoint, now)]),
   ["CPU", String(checkpoint.cpu)],
   ["RAM", formatMib(checkpoint.ramMib)],
-  ["DISK", `${checkpoint.diskGib}G`],
+  ["DISK", formatGib(checkpoint.diskGib)],
   ["ERROR", checkpoint.action.error?.message ?? "-"],
 ];
 
 export const encodeCheckpoint = Schema.encodeSync(Checkpoint);
 
-const capture = Command.make(
+export const capture = Command.make(
   "capture",
   { ...mutationFlags, machine: machineArgument, name: nameArgument },
   (flags) =>
@@ -59,13 +59,9 @@ const capture = Command.make(
       encode: encodeCheckpoint,
       text: newId,
     }),
-).pipe(
-  Command.withDescription(
-    "Capture a checkpoint. Its kind follows the runtime: ram on smolvm, which captures only a running machine, and disk on Tart and boat. Prints its ID.",
-  ),
-);
+).pipe(Command.withDescription(`${actionsByName.captureCheckpoint.description} Prints its ID.`));
 
-const listCheckpoints = listCommand({
+export const listCheckpoints = listCommand({
   name: "list",
   description: "List every host's checkpoints.",
   key: "checkpoints",
@@ -74,7 +70,7 @@ const listCheckpoints = listCommand({
   rows: checkpointRows,
 });
 
-const getCheckpoint = Command.make(
+export const getCheckpoint = Command.make(
   "get",
   { ...clientFlags, checkpoint: checkpointArgument },
   (flags) =>
@@ -85,11 +81,11 @@ const getCheckpoint = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "Read one checkpoint: its machine, the sizes a restore gives, its last action and the error it failed with.",
+    `${actionsByName.getCheckpoint.description} Prints its machine, the sizes a restore gives, its last action and the error it failed with.`,
   ),
 );
 
-const deleteCheckpoint = Command.make(
+export const deleteCheckpoint = Command.make(
   "delete",
   { ...mutationFlags, checkpoint: checkpointArgument },
   (flags) =>
@@ -98,7 +94,7 @@ const deleteCheckpoint = Command.make(
     ),
 ).pipe(
   Command.withDescription(
-    "Delete a checkpoint. A checkpoint that is already gone counts as deleted.",
+    `${actionsByName.deleteCheckpoint.description} A checkpoint that is already gone counts as deleted.`,
   ),
 );
 

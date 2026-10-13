@@ -12,6 +12,7 @@ import type {
   NotFound,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, type DateTime, type Effect, type Option } from "effect";
+import type { Kind } from "./ids.ts";
 
 /** What every row holds, machine or checkpoint. */
 export interface Resource {
@@ -60,24 +61,22 @@ export type NewMachine = Omit<MachineRecord, "action" | "made">;
 /** A new checkpoint row. Its claim's action holds it from the start. */
 export type NewCheckpoint = Omit<CheckpointRecord, "action">;
 
-export type Table = "machines" | "checkpoints";
-
-/** Each table's records. */
+/** Each kind of row's records. */
 export interface Records {
-  readonly machines: MachineRecord;
-  readonly checkpoints: CheckpointRecord;
+  readonly machine: MachineRecord;
+  readonly checkpoint: CheckpointRecord;
 }
 
-/** A row, by its table and name. */
-export interface RowRef<T extends Table = Table> {
-  readonly table: T;
+/** A row, by its kind and name. */
+export interface RowRef<K extends Kind = Kind> {
+  readonly kind: K;
   readonly name: string;
 }
 
 /** A row for `insert`. */
 export type NewRow =
-  | { readonly table: "machines"; readonly record: NewMachine }
-  | { readonly table: "checkpoints"; readonly record: NewCheckpoint };
+  | { readonly kind: "machine"; readonly record: NewMachine }
+  | { readonly kind: "checkpoint"; readonly record: NewCheckpoint };
 
 /** A row a claim holds, and the action the claim replaced on it. */
 export interface HeldRow extends RowRef {
@@ -125,11 +124,11 @@ export interface Interface {
    * `joining`'s rows too, so an action can claim in steps, such as a fork's source and then its
    * copy, and still release or end everything at once.
    */
-  readonly hold: <T extends Table>(
+  readonly hold: <K extends Kind>(
     action: ActionName,
-    row: RowRef<T>,
+    row: RowRef<K>,
     joining?: Token,
-  ) => Effect.Effect<Claim<Records[T]>, NotFound | Conflict | Internal>;
+  ) => Effect.Effect<Claim<Records[K]>, NotFound | Conflict | Internal>;
   /**
    * Inserts a new row in one transaction, held by `action` from the start, and joins it to
    * `joining` as `hold` does. A taken name is `Conflict{exists}`, and then nothing is written.

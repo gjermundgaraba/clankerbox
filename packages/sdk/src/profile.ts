@@ -1,8 +1,12 @@
-/** Reads a profile file for `create`. Hosts never see a profile. */
-import { Effect, FileSystem, Path, Schema } from "effect";
+/**
+ * Profile files, and the create a profile asks for. Hosts never see a profile: it is a
+ * client-side file that fills in a create's spec.
+ */
+import { Effect, FileSystem, Path, Predicate, Record, Schema } from "effect";
 import { Invalid } from "./errors.ts";
 import { HostId } from "./ids.ts";
 import { MachineSpec, Setup } from "./resources.ts";
+import { readSetup } from "./setup.ts";
 import { describeFileError, describeIssues } from "./text.ts";
 
 /**
@@ -67,4 +71,73 @@ export const loadProfile = (
           setup: { ...profile.setup, path: path.resolve(path.dirname(file), profile.setup.path) },
           label,
         };
+  });
+
+/** What replaces a profile's fields in a create: each one given replaces the profile's. */
+export interface Overrides {
+  readonly base?: string | undefined;
+  readonly cpu?: number | undefined;
+  readonly ramMib?: number | undefined;
+  readonly diskGib?: number | undefined;
+  /** A setup script or recipe directory, already resolved. */
+  readonly setup?: string | undefined;
+  /** How long the setup may run; the host's default when neither this nor the profile says. */
+  readonly setupTimeoutSeconds?: number | undefined;
+  readonly host?: string | undefined;
+}
+
+/** What a create asks for: the spec, and the host it goes to instead of placement, if any. */
+export interface SpecRequest {
+  readonly spec: MachineSpec;
+  readonly host: string | undefined;
+}
+
+const decodeSpec = Schema.decodeUnknownEffect(MachineSpec);
+
+/**
+ * The spec and host a create of `profile`, if any, asks for, with each field, the setup, its
+ * timeout and the host replaced by the override that gives one. The setup is read here. A timeout
+ * with no setup to time is refused, and so is a field neither gives, as one out of range is,
+ * each refusal naming `what` and each field as `names` calls it.
+ */
+export const specRequest = (
+  what: string,
+  profile: LoadedProfile | undefined,
+  overrides: Overrides,
+  names?: ReadonlyMap<PropertyKey, string>,
+): Effect.Effect<SpecRequest, Invalid, FileSystem.FileSystem | Path.Path> =>
+  Effect.gen(function* () {
+    const file = overrides.setup ?? profile?.setup?.path;
+    const timeoutSeconds = overrides.setupTimeoutSeconds ?? profile?.setup?.timeoutSeconds;
+
+    if (file === undefined && overrides.setupTimeoutSeconds !== undefined) {
+      return yield* new Invalid({
+        message: `${what}: ${names?.get("setupTimeoutSeconds") ?? "the setup timeout"} needs a setup to time`,
+      });
+    }
+
+    const script = file === undefined ? undefined : yield* readSetup(file);
+
+    const fields = {
+      base: overrides.base ?? profile?.base,
+      cpu: overrides.cpu ?? profile?.cpu,
+      ramMib: overrides.ramMib ?? profile?.ramMib,
+      diskGib: overrides.diskGib ?? profile?.diskGib,
+      setup:
+        script === undefined
+          ? undefined
+          : Record.filter({ script, timeoutSeconds }, Predicate.isNotUndefined),
+      profile: profile?.label,
+    };
+
+    const spec = yield* decodeSpec(Record.filter(fields, Predicate.isNotUndefined), {
+      onExcessProperty: "error",
+      errors: "all",
+    }).pipe(
+      Effect.mapError(
+        (error) => new Invalid({ message: `${what}: ${describeIssues(error, names)}` }),
+      ),
+    );
+
+    return { spec, host: overrides.host ?? profile?.host };
   });

@@ -27,9 +27,6 @@ export type HostApi = Effect.Success<ReturnType<typeof hostApi>>;
 
 export type CallError = ActionHttp.MethodError<(typeof Http.actions)[number]>;
 
-/** Every action's contract, by name: a call's timeout and retry follow its `readOnly`. */
-export const actions = Action.byName(Http.actions);
-
 /** What a call reads of its action's contract. */
 export type Contract = Pick<Action.Any, "readOnly">;
 

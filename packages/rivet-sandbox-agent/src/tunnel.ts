@@ -15,6 +15,7 @@ import { connect, createServer, Socket } from "node:net";
 import { join } from "node:path";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Data, Duration, Effect, Predicate, Schedule, type Scope } from "effect";
+import { agentPort } from "./agent.ts";
 
 const loopback = "127.0.0.1";
 
@@ -83,9 +84,6 @@ const listening = (port: number): Effect.Effect<boolean> =>
 
     return Effect.sync(() => socket.destroy());
   });
-
-/** The port the Sandbox Agent listens on in the guest: its default, which the recipes keep. */
-const agentPort = 2468;
 
 /**
  * The arguments that forward `port` to the guest's Sandbox Agent, after the pinned ones, with the

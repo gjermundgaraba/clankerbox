@@ -1,5 +1,5 @@
 /** The machine commands: list, get, create, start, stop, delete, fork and restore. */
-import { Prebuild } from "@gjermundgaraba/clankerbox-sdk";
+import { actionsByName, Prebuild } from "@gjermundgaraba/clankerbox-sdk";
 import { Console, DateTime, Effect } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import {
@@ -16,7 +16,7 @@ import {
   withClient,
 } from "../command.ts";
 import { age } from "../units.ts";
-import { specArguments, specRequest } from "./spec.ts";
+import { flagsRequest, specArguments } from "./spec.ts";
 import { encodeMachine, machineFields, machineRows } from "./view.ts";
 
 export const machines = listCommand({
@@ -39,7 +39,7 @@ export const getMachine = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    "Read one machine: its state, its last action and the error it failed with, its SSH login and its host key.",
+    `${actionsByName.getMachine.description} Prints its state, its last action and the error it failed with, its SSH login and its host key.`,
   ),
 );
 
@@ -62,13 +62,12 @@ export const create = Command.make("create", { ...mutationFlags, ...createArgume
   printResource(flags, {
     call: (client, config) =>
       Effect.gen(function* () {
-        const { spec, host } = yield* specRequest("create", flags, config);
+        const { spec, host } = yield* flagsRequest("create", flags, config);
 
-        if (flags.fresh) {
-          return yield* client.create(flags.name, spec, { host });
-        }
-
-        const { machine, prebuild } = yield* Prebuild.create(client, flags.name, spec, { host });
+        const { machine, prebuild } = yield* Prebuild.create(client, flags.name, spec, {
+          host,
+          fresh: flags.fresh,
+        });
 
         if (prebuild !== undefined && !flags.json) {
           yield* Console.error(
@@ -100,7 +99,7 @@ export const start = Command.make(
       encode: encodeMachine,
       text: machineState,
     }),
-).pipe(Command.withDescription("Start a machine. On a running machine, run preparation again."));
+).pipe(Command.withDescription(actionsByName.startMachine.description));
 
 export const stop = Command.make("stop", { ...mutationFlags, machine: machineArgument }, (flags) =>
   printResource(flags, {
@@ -108,11 +107,7 @@ export const stop = Command.make("stop", { ...mutationFlags, machine: machineArg
     encode: encodeMachine,
     text: machineState,
   }),
-).pipe(
-  Command.withDescription(
-    "Stop a machine: a power-off that keeps its disk and ends its processes. A stopped machine stays stopped, and the stop is still its last action.",
-  ),
-);
+).pipe(Command.withDescription(actionsByName.stopMachine.description));
 
 export const deleteMachine = Command.make(
   "delete",
@@ -120,7 +115,9 @@ export const deleteMachine = Command.make(
   (flags) =>
     withClient(flags, (client) => deleted(flags.json, flags.machine, client.delete(flags.machine))),
 ).pipe(
-  Command.withDescription("Delete a machine. A machine that is already gone counts as deleted."),
+  Command.withDescription(
+    `${actionsByName.deleteMachine.description} A machine that is already gone counts as deleted.`,
+  ),
 );
 
 export const fork = Command.make(
@@ -132,7 +129,7 @@ export const fork = Command.make(
       encode: encodeMachine,
       text: newId,
     }),
-).pipe(Command.withDescription("Copy a machine to a new name on its host. Prints the new ID."));
+).pipe(Command.withDescription(`${actionsByName.forkMachine.description} Prints the new ID.`));
 
 export const restore = Command.make(
   "restore",
@@ -143,8 +140,4 @@ export const restore = Command.make(
       encode: encodeMachine,
       text: newId,
     }),
-).pipe(
-  Command.withDescription(
-    "Create a machine from a checkpoint, on the checkpoint's host. Prints the new ID.",
-  ),
-);
+).pipe(Command.withDescription(`${actionsByName.restoreMachine.description} Prints the new ID.`));

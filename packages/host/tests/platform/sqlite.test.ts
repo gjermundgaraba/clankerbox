@@ -71,9 +71,9 @@ const checkpoint = (name: string, fields?: Partial<NewCheckpoint>): NewCheckpoin
   ...fields,
 });
 
-const machine = (name: string): RowRef<"machines"> => ({ table: "machines", name });
+const machine = (name: string): RowRef<"machine"> => ({ kind: "machine", name });
 
-const inserting = (made: NewMachine): NewRow => ({ table: "machines", record: made });
+const inserting = (made: NewMachine): NewRow => ({ kind: "machine", record: made });
 
 /** A fork's claims: its source, then its copy joined to it. */
 const forking = (store: Interface, source: string, made: NewMachine) =>
@@ -84,7 +84,7 @@ const forking = (store: Interface, source: string, made: NewMachine) =>
 /** A capture's claims: its source, then its checkpoint joined to it. */
 const capturing = (store: Interface, made: NewCheckpoint) =>
   Effect.flatMap(store.hold("capture", machine(made.machine)), ({ token }) =>
-    store.insert("capture", { table: "checkpoints", record: made }, token),
+    store.insert("capture", { kind: "checkpoint", record: made }, token),
   );
 
 /** Inserts a machine row whose create is done, and so made. */
@@ -316,7 +316,7 @@ test("a claimed row is busy until its action ends, and a claim returns its recor
   const stopping = { ...record("dev"), made: false, action: { name: "stop", status: "running" } };
 
   expect(claimed).toEqual([
-    [{ table: "machines", name: "dev", before: { name: "create", status: "done" } }],
+    [{ kind: "machine", name: "dev", before: { name: "create", status: "done" } }],
     stopping,
     stopping,
   ]);
@@ -448,7 +448,7 @@ test("a claim joining another covers both rows, and a joining claim that fails w
 
       const joined = yield* store.insert(
         "capture",
-        { table: "checkpoints", record: checkpoint("snap") },
+        { kind: "checkpoint", record: checkpoint("snap") },
         source,
       );
 
@@ -535,8 +535,8 @@ test("checkpoint rows round-trip, and a capture claims its source in the same tr
 
   expect(token).toEqual({
     action: "capture",
-    inserted: [{ table: "checkpoints", name: "snap" }],
-    held: [{ table: "machines", name: "dev", before: { name: "create", status: "done" } }],
+    inserted: [{ kind: "checkpoint", name: "snap" }],
+    held: [{ kind: "machine", name: "dev", before: { name: "create", status: "done" } }],
   });
   expect(Option.getOrUndefined(source)?.action).toEqual({ name: "capture", status: "running" });
   expect(busy).toEqual(
@@ -573,7 +573,7 @@ test("a join with a taken new name writes nothing; the source stays held until i
       const again = yield* store.hold("capture", machine("dev"));
 
       const capture = yield* Effect.flip(
-        store.insert("capture", { table: "checkpoints", record: checkpoint("snap") }, again.token),
+        store.insert("capture", { kind: "checkpoint", record: checkpoint("snap") }, again.token),
       );
 
       yield* store.release(again.token);
@@ -614,7 +614,7 @@ test("a fork inserts its row and claims its source; a missing source is NotFound
 
 test("a claimed checkpoint is busy; a missing one is NotFound; startup fails its interrupted capture", async () => {
   const stateDir = join(await scratch(owned), "state");
-  const snap = (name: string): RowRef<"checkpoints"> => ({ table: "checkpoints", name });
+  const snap = (name: string): RowRef<"checkpoint"> => ({ kind: "checkpoint", name });
 
   const [busy, missing, actions] = await withStore(stateDir, (store) =>
     Effect.gen(function* () {

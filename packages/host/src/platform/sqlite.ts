@@ -29,7 +29,6 @@ import {
   type Resource,
   type RowRef,
   Store,
-  type Table,
   type Token,
 } from "../store.ts";
 
@@ -187,7 +186,7 @@ const columnParameters = (record: Omit<Resource, "action">, action: ActionName) 
 });
 
 /** Reads a row of each table by name, inside a transaction. */
-type Finders = { readonly [T in Table]: (name: string) => Records[T] | undefined };
+type Finders = { readonly [K in Kind]: (name: string) => Records[K] | undefined };
 
 /** node:sqlite's errors carry SQLite's result code. */
 const isSqliteError = (cause: unknown): cause is Error & { readonly errcode: number } =>
@@ -378,11 +377,6 @@ export const open = (
     const id = idOn(hostId);
     const notFound = notFoundOn(hostId);
 
-    const kinds = {
-      machines: "machine",
-      checkpoints: "checkpoint",
-    } as const satisfies { readonly [T in Table]: Kind };
-
     const selectAll = db.prepare("SELECT * FROM machines ORDER BY created_at, name");
     const selectOne = db.prepare("SELECT * FROM machines WHERE name = ?");
     const selectPorts = db.prepare("SELECT port FROM machines WHERE port IS NOT NULL");
@@ -412,7 +406,7 @@ export const open = (
     );
 
     /** The statements that record a row's action and remove the row, per table. */
-    const statementsOf = (table: Table) => ({
+    const statementsOf = (table: "machines" | "checkpoints") => ({
       record: db.prepare(
         `UPDATE ${table} SET action_name = $action_name, action_status = $action_status,
           action_error_tag = $action_error_tag, action_error_message = $action_error_message
@@ -422,9 +416,9 @@ export const open = (
     });
 
     const statements = {
-      machines: statementsOf("machines"),
-      checkpoints: statementsOf("checkpoints"),
-    };
+      machine: statementsOf("machines"),
+      checkpoint: statementsOf("checkpoints"),
+    } satisfies Record<Kind, ReturnType<typeof statementsOf>>;
 
     const findSync = (name: string) => {
       const row = selectOne.get(name);
@@ -439,12 +433,12 @@ export const open = (
     };
 
     const finders: Finders = {
-      machines: findSync,
-      checkpoints: findCheckpointSync,
+      machine: findSync,
+      checkpoint: findCheckpointSync,
     };
 
     const record = (row: RowRef, action: ActionRecord) => {
-      statements[row.table].record.run({
+      statements[row.kind].record.run({
         name: row.name,
         action_name: action.name,
         action_status: action.status,
@@ -457,15 +451,15 @@ export const open = (
      * Holds a row inside a transaction, unless it is missing or another action holds it, and
      * returns its record as the hold leaves it.
      */
-    const holdSync = <T extends Table>(
+    const holdSync = <K extends Kind>(
       action: ActionName,
-      row: RowRef<T>,
+      row: RowRef<K>,
     ): Result.Result<
-      { readonly row: HeldRow; readonly record: Records[T] },
+      { readonly row: HeldRow; readonly record: Records[K] },
       NotFound | Conflict
     > => {
-      const kind = kinds[row.table];
-      const found = finders[row.table](row.name);
+      const { kind } = row;
+      const found = finders[row.kind](row.name);
 
       if (found === undefined) {
         return Result.fail(notFound(kind, row.name));
@@ -487,7 +481,7 @@ export const open = (
       record(row, running);
 
       return Result.succeed({
-        row: { table: row.table, name: row.name, before },
+        row: { kind: row.kind, name: row.name, before },
         record: { ...found, action: running },
       });
     };
@@ -500,7 +494,7 @@ export const open = (
       const columns = columnParameters(row.record, action);
 
       try {
-        if (row.table === "machines") {
+        if (row.kind === "machine") {
           insertMachine.run({
             ...columns,
             port: row.record.port ?? null,
@@ -519,7 +513,7 @@ export const open = (
         if (isSqliteError(cause) && cause.errcode === sqlitePrimaryKey) {
           return Result.fail(
             new Conflict({
-              message: `${kinds[row.table]} ${id(row.record.name)} exists`,
+              message: `${row.kind} ${id(row.record.name)} exists`,
               kind: "exists",
             }),
           );
@@ -528,7 +522,7 @@ export const open = (
         throw cause;
       }
 
-      return Result.succeed({ table: row.table, name: row.record.name });
+      return Result.succeed({ kind: row.kind, name: row.record.name });
     };
 
     /** The rows a token names, for errors. */
@@ -581,7 +575,7 @@ export const open = (
       release: Effect.fn("Store.release")((token) =>
         transaction(db, `release ${named(token)} from ${token.action}`, () => {
           for (const row of token.inserted) {
-            statements[row.table].remove.run(row.name);
+            statements[row.kind].remove.run(row.name);
           }
 
           for (const row of token.held) {
@@ -594,7 +588,7 @@ export const open = (
       markMade: Effect.fn("Store.markMade")((token) =>
         transaction(db, `mark ${token.inserted.map((row) => id(row.name)).join(", ")} made`, () => {
           for (const row of token.inserted) {
-            if (row.table === "machines") {
+            if (row.kind === "machine") {
               updateMade.run(row.name);
             }
           }
@@ -631,8 +625,8 @@ export const open = (
         ),
       ),
       remove: Effect.fn("Store.remove")((row) =>
-        sql(`remove ${kinds[row.table]} ${id(row.name)}`, () => {
-          statements[row.table].remove.run(row.name);
+        sql(`remove ${row.kind} ${id(row.name)}`, () => {
+          statements[row.kind].remove.run(row.name);
         }),
       ),
       failInterrupted: sql("fail interrupted actions", () => {

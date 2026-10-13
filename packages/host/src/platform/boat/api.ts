@@ -13,6 +13,7 @@
  */
 import {
   Capacity,
+  formatGib,
   formatMib,
   type HostError,
   Internal,
@@ -110,7 +111,7 @@ type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 
 /** Sizes as a refusal names them. */
 const sized = ({ cpu, ramMib, diskGib }: Sizes): string =>
-  `${cpu} vCPU, ${formatMib(ramMib)} of RAM and ${diskGib}G of disk`;
+  `${cpu} vCPU, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
 
 /** The smallest type that covers the machine's sizes; none is `Precondition`, in step 3. */
 export const machineType = (sizes: Sizes): Effect.Effect<MachineType, Precondition> =>

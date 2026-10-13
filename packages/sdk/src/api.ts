@@ -57,7 +57,7 @@ export const Http = ActionHttp.make(
     Action.make("stopMachine", {
       ...write,
       description:
-        "Stop a machine. A stopped machine stays stopped, and the stop is still its last action.",
+        "Stop a machine: a power-off that keeps its disk and ends its processes. A stopped machine stays stopped, and the stop is still its last action.",
       input: ById,
       success: Machine,
     }),
@@ -115,3 +115,6 @@ export const Http = ActionHttp.make(
   ],
   { prefix: "/api" },
 );
+
+/** Every action of the contract, by name. */
+export const actionsByName = Action.byName(Http.actions);
