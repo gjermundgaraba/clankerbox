@@ -13,7 +13,6 @@ import { randomBytes } from "node:crypto";
 import {
   type ClankerboxError,
   Client,
-  Internal,
   loadProfile,
   type MachineSpec,
   pinnedSsh,
@@ -113,7 +112,7 @@ export const make = (options: Options, ssh = "ssh") => {
     });
 
   /** The sandbox's port: its own, or a free one no other sandbox of this provider keeps. */
-  const portOf = (known: Sandbox): Effect.Effect<number, Internal> =>
+  const portOf = (known: Sandbox): Effect.Effect<number, LocalTunnelError> =>
     Effect.gen(function* () {
       if (known.port !== undefined) {
         return known.port;

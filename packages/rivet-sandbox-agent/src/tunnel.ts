@@ -47,11 +47,13 @@ export interface Tunnel {
 }
 
 /** A loopback port nothing listens on now. */
-export const freePort: Effect.Effect<number, Internal> = Effect.callback((resume) => {
+export const freePort: Effect.Effect<number, LocalTunnelError> = Effect.callback((resume) => {
   const server = createServer();
 
   server.once("error", (error) =>
-    resume(Effect.fail(new Internal({ message: `couldn't find a free port: ${error.message}` }))),
+    resume(
+      Effect.fail(new LocalTunnelError({ message: `couldn't find a free port: ${error.message}` })),
+    ),
   );
 
   server.listen(0, loopback, () => {
@@ -60,7 +62,7 @@ export const freePort: Effect.Effect<number, Internal> = Effect.callback((resume
     server.close(() =>
       resume(
         address === null || Predicate.isString(address)
-          ? Effect.fail(new Internal({ message: "couldn't find a free port" }))
+          ? Effect.fail(new LocalTunnelError({ message: "couldn't find a free port" }))
           : Effect.succeed(address.port),
       ),
     );
