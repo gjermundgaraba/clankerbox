@@ -12,8 +12,8 @@ import {
 import { Effect } from "effect";
 import { Argument, Command } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { clientFlags, withClient } from "./cli.ts";
-import { Exited, fail, stateLabel } from "./output.ts";
+import { clientFlags, Exited, fail, withClient } from "./command.ts";
+import { stateLabel } from "./machines/view.ts";
 
 /** `[USER@]ID`, as ssh writes a destination: the ID, and the user when one is named. */
 const destination = (machine: string): { readonly id: string; readonly user?: string } => {

@@ -1,14 +1,20 @@
 /** Runs the CLI in process against stub hosts served through the real routes. */
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ConfigProvider, Effect, Layer, Runtime } from "effect";
+import { ConfigProvider, Effect, Layer, Runtime, Schema } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { TestConsole } from "effect/testing";
-import { type Endpoint, type StubHost, transport } from "../../../packages/sdk/tests/stub-host.ts";
-import { dispatch } from "../src/roles.ts";
+import { ErrorTag } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  type Endpoint,
+  type StubHost,
+  stubHost,
+  transport,
+} from "../../../packages/sdk/tests/stub-host.ts";
+import { dispatch } from "../src/clankerbox.ts";
 
 export const url = (id: string) => `http://${id}.test`;
 
@@ -91,4 +97,50 @@ export const cli = (args: ReadonlyArray<string>, options?: CliOptions): Promise<
     ),
     Effect.runPromise,
   );
+};
+
+/** A stub host, disposed of by `cleanup` with the others in `stubs`. */
+export const hostIn = (stubs: Array<StubHost>) => (options: Parameters<typeof stubHost>[0]) => {
+  const stub = stubHost(options);
+
+  stubs.push(stub);
+
+  return stub;
+};
+
+/** `--json`'s error document. */
+const JsonError = Schema.fromJsonString(
+  Schema.Struct({
+    error: Schema.Struct({ message: Schema.String, tag: ErrorTag, retryable: Schema.Boolean }),
+  }),
+);
+
+export const decodeJsonError = Schema.decodeUnknownSync(JsonError);
+
+export const sizes = ["--base", "ubuntu", "--cpu", "2", "--ram", "4G", "--disk", "20G"];
+
+/** A profiles directory holding `dev.json`, with a setup and host, `small.json` and a non-profile. */
+export const writeProfiles = async (dir: string) => {
+  const profiles = join(dir, "profiles");
+
+  await mkdir(join(profiles, "dev-recipe"), { recursive: true });
+  await writeFile(join(profiles, "dev-recipe", "setup.sh"), "#!/bin/sh\ntrue\n");
+  await writeFile(
+    join(profiles, "small.json"),
+    JSON.stringify({ base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 }),
+  );
+  await writeFile(
+    join(profiles, "dev.json"),
+    JSON.stringify({
+      base: "ubuntu-dev",
+      cpu: 2,
+      ramMib: 4096,
+      diskGib: 20,
+      setup: { path: "dev-recipe", timeoutSeconds: 900 },
+      host: "hetzner",
+    }),
+  );
+  await writeFile(join(profiles, "notes.txt"), "not a profile\n");
+
+  return profiles;
 };
