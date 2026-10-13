@@ -67,17 +67,15 @@ export const loadProfile = (
         };
   });
 
+type Sizes = Omit<Profile, "setup" | "host">;
+
 /** Each field given replaces the profile's. */
-export interface Overrides {
-  readonly base?: string | undefined;
-  readonly cpu?: number | undefined;
-  readonly ramMib?: number | undefined;
-  readonly diskGib?: number | undefined;
+export type Overrides = { readonly [K in keyof Sizes]?: Sizes[K] | undefined } & {
   /** A setup script or recipe directory, already resolved. */
   readonly setup?: string | undefined;
   readonly setupTimeoutSeconds?: number | undefined;
   readonly host?: string | undefined;
-}
+};
 
 export interface SpecRequest {
   readonly spec: MachineSpec;
@@ -118,7 +116,7 @@ export const specRequest = (
           ? undefined
           : Record.filter({ script, timeoutSeconds }, Predicate.isNotUndefined),
       profile: profile?.label,
-    };
+    } satisfies Record<keyof Sizes | "setup" | "profile", unknown>;
 
     const spec = yield* decodeSpec(Record.filter(fields, Predicate.isNotUndefined), {
       onExcessProperty: "error",
