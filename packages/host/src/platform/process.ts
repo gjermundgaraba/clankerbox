@@ -6,8 +6,8 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, type PlatformError, type Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { lastLines } from "./guest.ts";
-import type { Execution, MachineRef } from "./runtime.ts";
+import { lastLines } from "../guest.ts";
+import type { Execution, MachineRef } from "../runtime.ts";
 
 /** A spawn or file system failure, without the command line. */
 export const describe = (error: PlatformError.PlatformError): string =>

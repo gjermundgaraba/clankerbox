@@ -9,13 +9,12 @@
  * store is removed whole. `machine branch` is never called: a source with a live branch reads
  * frozen, and smolvm refuses to stop or delete it while the branch runs.
  */
+import { totalmem } from "node:os";
 import { join } from "node:path";
-import { type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import { type HostError, Internal, Invalid, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import { cliIn, expect, failure, files, portOf } from "./cli.ts";
-import type { Smolvm, SmolvmHost } from "./config.ts";
-import { checkRamBudget, ramInUse } from "./ram-budget.ts";
+import { checkRamBudget, ramInUse } from "../ram-budget.ts";
 import {
   type CheckpointRef,
   type Interface,
@@ -27,7 +26,56 @@ import {
   Refusal,
   Runtime,
   timeoutFail,
-} from "./runtime.ts";
+} from "../runtime.ts";
+import type { HostSettings } from "../settings.ts";
+import { Address } from "./address.ts";
+import { cliIn, expect, failure, files, portOf } from "./process.ts";
+
+const Size = Schema.Int.check(Schema.isGreaterThan(0));
+
+/** The smolvm runtime's settings. */
+export const SmolvmSettings = Schema.Struct({
+  /** The versioned install prefix, such as `/opt/smolvm/1.27.3`. */
+  prefix: Schema.String,
+  /** Where machines' guest port 22 is published (`SMOLVM_PUBLISH_ADDR`). Default: `listen.address`. */
+  publishAddress: Schema.optionalKey(Address),
+  /** The RAM the host's machines may use together. Default: physical RAM minus 2 GiB. */
+  ramBudgetMib: Schema.optionalKey(Size),
+});
+
+/** The smolvm settings with their defaults applied. */
+export type Smolvm = Required<typeof SmolvmSettings.Type>;
+
+/** A smolvm host's config. */
+export interface SmolvmHost extends HostSettings {
+  readonly runtime: "smolvm";
+  readonly smolvm: Smolvm;
+}
+
+const mib = 1024 * 1024;
+
+/** Room for the OS and the host processes. */
+const reservedMib = 2048;
+
+/** The smolvm settings with their defaults: the host's listen address, and physical RAM less `reservedMib`. */
+export const resolveSettings = (
+  settings: typeof SmolvmSettings.Type,
+  listen: HostSettings["listen"],
+): Effect.Effect<Smolvm, Invalid> => {
+  const ramBudgetMib = settings.ramBudgetMib ?? Math.floor(totalmem() / mib) - reservedMib;
+
+  return ramBudgetMib <= 0
+    ? Effect.fail(
+        new Invalid({
+          message: `smolvm.ramBudgetMib: physical RAM leaves no default budget; set one`,
+        }),
+      )
+    : Effect.succeed({
+        ...settings,
+        publishAddress: settings.publishAddress ?? listen.address,
+        ramBudgetMib,
+      });
+};
 
 /**
  * The smolvm release this host was tested on. Another release is refused at startup: a bump

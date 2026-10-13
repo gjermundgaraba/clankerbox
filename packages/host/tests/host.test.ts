@@ -6,8 +6,9 @@ import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
 import { DateTime, Effect, Layer, Logger } from "effect";
 import { HttpServer } from "effect/http";
 import { afterEach, expect, test } from "vite-plus/test";
-import { type HostLayerConfig, hostLayer } from "../src/index.ts";
-import { open } from "../src/store.ts";
+import { hostLayer } from "../src/host.ts";
+import { open } from "../src/platform/sqlite.ts";
+import type { HostSettings } from "../src/settings.ts";
 import { type FakeRuntime, fakeRuntime } from "./fake-runtime.ts";
 import { removeScratch, scratch } from "./scratch.ts";
 import { hostConfig, loopbackServer } from "./support.ts";
@@ -16,18 +17,18 @@ const owned: Array<string> = [];
 
 afterEach(() => removeScratch(owned));
 
-const config = (dir: string, fields?: Partial<HostLayerConfig>): HostLayerConfig => ({
+const config = (dir: string, fields?: Partial<HostSettings>): HostSettings => ({
   ...hostConfig(join(dir, "state")),
   ...fields,
 });
 
 /** The host on `host`, over `fake`, served on `host.listen.port` of loopback. */
-const hostOn = (host: HostLayerConfig, fake: FakeRuntime) =>
+const hostOn = (host: HostSettings, fake: FakeRuntime) =>
   hostLayer(host, () => fake.layer, loopbackServer(host.listen.port));
 
 /** Runs `use` with the URL the host on `host` answers on, then stops the host. */
 const whileServing = <A, E>(
-  host: HostLayerConfig,
+  host: HostSettings,
   dir: string,
   use: (url: string) => Effect.Effect<A, E>,
 ) =>
@@ -41,7 +42,7 @@ const whileServing = <A, E>(
   );
 
 /** The failure of the host on `host`, over `fake`, to start. */
-const refused = (host: HostLayerConfig, fake: FakeRuntime) =>
+const refused = (host: HostSettings, fake: FakeRuntime) =>
   Effect.flip(Layer.build(hostOn(host, fake))).pipe(
     Effect.scoped,
     Effect.provide(Logger.layer([])),

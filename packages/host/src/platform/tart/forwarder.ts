@@ -14,7 +14,7 @@ import * as NodeStream from "@effect/platform-node/NodeStream";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FiberSet, type Scope, Stream } from "effect";
 import { type ChildProcess, ChildProcessSpawner } from "effect/process";
-import { lastLines } from "./guest.ts";
+import { lastLines } from "../../guest.ts";
 
 /** The command one connection runs, reading the client's bytes from `input`. */
 export type Dial = (input: Stream.Stream<Uint8Array>) => ChildProcess.Command;

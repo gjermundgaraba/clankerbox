@@ -9,17 +9,13 @@ import { afterEach, expect, test } from "vite-plus/test";
 import {
   applicationId,
   databaseFile,
-  type Interface,
   migrations,
-  type NewCheckpoint,
-  type NewMachine,
-  type NewRow,
   open,
   type Owner,
-  type RowRef,
   transaction,
-} from "../src/store.ts";
-import { removeScratch, scratch } from "./scratch.ts";
+} from "../../src/platform/sqlite.ts";
+import type { Interface, NewCheckpoint, NewMachine, NewRow, RowRef } from "../../src/store.ts";
+import { removeScratch, scratch } from "../scratch.ts";
 
 const owned: Array<string> = [];
 

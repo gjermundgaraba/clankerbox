@@ -45,22 +45,23 @@ import {
   restoredWait,
   type Settings,
   stateOf,
-} from "../src/boat.ts";
-import * as Checkpoints from "../src/checkpoints.ts";
-import { preparationScript } from "../src/guest.ts";
-import * as Machines from "../src/machines.ts";
-import { defaultMachinePorts } from "../src/ports.ts";
+} from "../../src/platform/boat/boat.ts";
+import * as Checkpoints from "../../src/checkpoints.ts";
+import { preparationScript } from "../../src/guest.ts";
+import * as Machines from "../../src/machines.ts";
+import { defaultMachinePorts } from "../../src/machine-ports.ts";
 import {
   type CheckpointRef,
   type Interface,
   type MachineRef,
   Refusal,
   Runtime,
-} from "../src/runtime.ts";
-import { startup } from "../src/startup.ts";
-import * as Store from "../src/store.ts";
-import { removeScratch, scratch } from "./scratch.ts";
-import { type Call, type Reply, scripted } from "./scripted.ts";
+} from "../../src/runtime.ts";
+import { startup } from "../../src/startup.ts";
+import * as Sqlite from "../../src/platform/sqlite.ts";
+import * as Store from "../../src/store.ts";
+import { removeScratch, scratch } from "../scratch.ts";
+import { type Call, type Reply, scripted } from "../scripted.ts";
 
 const owned: Array<string> = [];
 
@@ -491,7 +492,7 @@ const rigOn = async (boat = fakeBoat()): Promise<Rig> => {
   scopes.push(scope);
 
   const store = await Effect.runPromise(
-    Store.open({ stateDir, id: "boat", runtime: "boat" }).pipe(
+    Sqlite.open({ stateDir, id: "boat", runtime: "boat" }).pipe(
       Scope.provide(scope),
       Effect.provide(NodeServices.layer),
     ),
@@ -2003,7 +2004,7 @@ const hostOn = async (boat: FakeBoat) => {
           ),
         ).pipe(
           Layer.provideMerge(
-            Layer.effect(Store.Store, Store.open({ stateDir, id: "boat", runtime: "boat" })),
+            Layer.effect(Store.Store, Sqlite.open({ stateDir, id: "boat", runtime: "boat" })),
           ),
         ),
       ),

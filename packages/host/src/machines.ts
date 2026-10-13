@@ -24,11 +24,11 @@ import {
   type Scope,
   Semaphore,
 } from "effect";
-import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./actions.ts";
-import type { HostConfig } from "./config.ts";
+import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./claims.ts";
+import type { HostSettings } from "./settings.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
-import { pickPort } from "./ports.ts";
+import { pickPort } from "./machine-ports.ts";
 import {
   type MachineRef,
   type Observed,
@@ -93,7 +93,7 @@ type Making =
 
 /** Builds the actions, once the host's startup step has run (`index.ts`). */
 export const make = (
-  config: Pick<HostConfig, "id" | "bases" | "machinePorts">,
+  config: Pick<HostSettings, "id" | "bases" | "machinePorts">,
 ): Effect.Effect<Interface, HostError, Store | Runtime | Scope.Scope> =>
   Effect.gen(function* () {
     const store = yield* Store;
@@ -476,5 +476,5 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<HostConfig, "id" | "bases" | "machinePorts">,
+  config: Pick<HostSettings, "id" | "bases" | "machinePorts">,
 ): Layer.Layer<Machines, HostError, Store | Runtime> => Layer.effect(Machines, make(config));

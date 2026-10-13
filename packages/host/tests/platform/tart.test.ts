@@ -13,7 +13,7 @@ import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Exit, Fiber, Layer, Logger, Scope, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
-import { type Interface, type MachineRef, Refusal } from "../src/runtime.ts";
+import { type Interface, type MachineRef, Refusal } from "../../src/runtime.ts";
 import {
   checkpointName,
   diskGb,
@@ -25,9 +25,9 @@ import {
   type Settings,
   stateOf,
   supported,
-} from "../src/tart.ts";
-import { removeScratch, scratch } from "./scratch.ts";
-import { type Call, type Reply, scripted } from "./scripted.ts";
+} from "../../src/platform/tart/tart.ts";
+import { removeScratch, scratch } from "../scratch.ts";
+import { type Call, type Reply, scripted } from "../scripted.ts";
 
 const owned: Array<string> = [];
 

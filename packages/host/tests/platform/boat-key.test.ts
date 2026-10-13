@@ -3,8 +3,8 @@ import { stat } from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { keyFile, sshKey } from "../src/boat-key.ts";
-import { removeScratch, scratch } from "./scratch.ts";
+import { keyFile, sshKey } from "../../src/platform/boat/key.ts";
+import { removeScratch, scratch } from "../scratch.ts";
 
 const owned: Array<string> = [];
 

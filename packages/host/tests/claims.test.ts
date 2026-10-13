@@ -3,9 +3,10 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Capacity, type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Logger } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { claimsOn } from "../src/actions.ts";
+import { claimsOn } from "../src/claims.ts";
 import { Refusal } from "../src/runtime.ts";
-import { type Interface, type NewMachine, open } from "../src/store.ts";
+import { open } from "../src/platform/sqlite.ts";
+import type { Interface, NewMachine } from "../src/store.ts";
 import { removeScratch, scratch } from "./scratch.ts";
 
 const owned: Array<string> = [];

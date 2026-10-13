@@ -5,12 +5,12 @@ import { Http, Invalid, release, version, versionHeader } from "@gjermundgaraba/
 import { Effect, Layer, Option, Schema } from "effect";
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { Checkpoints } from "./checkpoints.ts";
-import type { HostConfig } from "./config.ts";
+import type { HostSettings } from "./settings.ts";
 import { Machines } from "./machines.ts";
 import { Runtime } from "./runtime.ts";
 
 /** Every action of the contract, over the host's machines, checkpoints and runtime. */
-const app = (config: Pick<HostConfig, "id" | "bases">) =>
+const app = (config: Pick<HostSettings, "id" | "bases">) =>
   Action.implement(
     Http.actions,
     Effect.gen(function* () {
@@ -84,5 +84,5 @@ const versionCheck = HttpRouter.middleware((handle) =>
 );
 
 /** The API's routes, for any HTTP server. */
-export const routes = (config: Pick<HostConfig, "id" | "bases">) =>
+export const routes = (config: Pick<HostSettings, "id" | "bases">) =>
   ActionHttp.layer(Http, [app(config)]).pipe(Layer.provide(versionCheck.layer));

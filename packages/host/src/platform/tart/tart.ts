@@ -15,10 +15,7 @@ import { join } from "node:path";
 import { Capacity, type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Layer, Option, Schedule, Schema, type Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import { cliIn, expect, files, portOf } from "./cli.ts";
-import type { Tart, TartHost } from "./config.ts";
-import * as Forwarder from "./forwarder.ts";
-import { lastLines } from "./guest.ts";
+import { lastLines } from "../../guest.ts";
 import {
   type CheckpointRef,
   type Held,
@@ -30,7 +27,38 @@ import {
   Refusal,
   Runtime,
   timeoutFail,
-} from "./runtime.ts";
+} from "../../runtime.ts";
+import type { HostSettings } from "../../settings.ts";
+import { Address } from "../address.ts";
+import { cliIn, expect, files, portOf } from "../process.ts";
+import * as Forwarder from "./forwarder.ts";
+
+/** The Tart runtime's settings. */
+export const TartSettings = Schema.Struct({
+  /**
+   * The `tart` executable of a versioned install, such as
+   * `/opt/tart/2.40.1/tart.app/Contents/MacOS/tart`. VM jobs run it from there, so an upgrade goes
+   * into a new directory.
+   */
+  binary: Schema.String,
+  /** Where the forwarder listens for machines' guest port 22. Default: `listen.address`. */
+  publishAddress: Schema.optionalKey(Address),
+});
+
+/** The Tart settings with their defaults applied. */
+export type Tart = Required<typeof TartSettings.Type>;
+
+/** A Tart host's config. */
+export interface TartHost extends HostSettings {
+  readonly runtime: "tart";
+  readonly tart: Tart;
+}
+
+/** The Tart settings with their default: the forwarder listens on the host's listen address. */
+export const resolveSettings = (
+  settings: typeof TartSettings.Type,
+  listen: HostSettings["listen"],
+): Tart => ({ ...settings, publishAddress: settings.publishAddress ?? listen.address });
 
 /**
  * The oldest Tart this host runs on: from 2.40.1 clone refuses an existing destination, delete's

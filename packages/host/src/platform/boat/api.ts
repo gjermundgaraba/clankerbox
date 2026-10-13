@@ -32,7 +32,7 @@ import {
   Schema,
 } from "effect";
 import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http";
-import type { MachineRef } from "./runtime.ts";
+import type { MachineRef } from "../../runtime.ts";
 
 /** The API version the host is built for. */
 export const baseUrl = "https://boat.dev/api/v1";

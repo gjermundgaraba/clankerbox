@@ -11,8 +11,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Exit, Fiber, Scope, type Stream } from "effect";
 import { ChildProcess } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
-import { type Forwarder, make } from "../src/forwarder.ts";
-import { removeScratch, scratch } from "./scratch.ts";
+import { type Forwarder, make } from "../../src/platform/tart/forwarder.ts";
+import { removeScratch, scratch } from "../scratch.ts";
 
 const owned: Array<string> = [];
 

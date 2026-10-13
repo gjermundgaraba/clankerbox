@@ -5,7 +5,7 @@
  */
 import { join } from "node:path";
 import { Effect, FileSystem } from "effect";
-import { cliIn, expect, files } from "./cli.ts";
+import { cliIn, expect, files } from "../process.ts";
 
 /** Where `ssh-keygen` is, on macOS and on Ubuntu. */
 const searchPath = "/usr/bin:/bin";

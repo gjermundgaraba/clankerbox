@@ -48,11 +48,9 @@ import {
   make as makeApi,
   type Sandbox,
   snapshotName,
-} from "./boat-api.ts";
-import { sshKey } from "./boat-key.ts";
-import { cliIn, describe, files } from "./cli.ts";
-import type { BoatHost } from "./config.ts";
-import { lastLines } from "./guest.ts";
+} from "./api.ts";
+import { sshKey } from "./key.ts";
+import { lastLines } from "../../guest.ts";
 import {
   type Command,
   type Execution,
@@ -66,7 +64,27 @@ import {
   Refusal,
   Runtime,
   timeoutFail,
-} from "./runtime.ts";
+} from "../../runtime.ts";
+import type { HostSettings } from "../../settings.ts";
+import { cliIn, describe, files } from "../process.ts";
+
+/**
+ * The boat runtime's settings. The API key is a secret: it stays `Redacted` from the moment it is
+ * decoded, so nothing that prints the config prints it.
+ */
+export const BoatSettings = Schema.Struct({
+  /** A boat API key, `boat_…`, sent only as the bearer token of boat's API. */
+  apiKey: Schema.RedactedFromValue(Schema.String.check(Schema.isNonEmpty())),
+});
+
+/** The boat settings. */
+export type Boat = typeof BoatSettings.Type;
+
+/** A boat host's config. */
+export interface BoatHost extends HostSettings {
+  readonly runtime: "boat";
+  readonly boat: Boat;
+}
 
 /**
  * What the runtime needs: the API key and where boat is, the host it runs for, and the core's

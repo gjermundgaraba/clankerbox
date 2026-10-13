@@ -11,7 +11,7 @@ import { Duration, Effect, Fiber, Layer, Logger, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
-import { type CheckpointRef, type MachineRef, Refusal } from "../src/runtime.ts";
+import { type CheckpointRef, type MachineRef, Refusal } from "../../src/runtime.ts";
 import {
   controlSocket,
   environment,
@@ -23,9 +23,9 @@ import {
   stateOf,
   templates,
   testedVersion,
-} from "../src/smolvm.ts";
-import { removeScratch, scratch } from "./scratch.ts";
-import { type Call, type Reply, scripted as scriptedSpawner } from "./scripted.ts";
+} from "../../src/platform/smolvm.ts";
+import { removeScratch, scratch } from "../scratch.ts";
+import { type Call, type Reply, scripted as scriptedSpawner } from "../scripted.ts";
 
 const owned: Array<string> = [];
 

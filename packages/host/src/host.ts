@@ -11,19 +11,15 @@ import {
   type HttpServerError,
 } from "effect/http";
 import * as Checkpoints from "./checkpoints.ts";
-import { type HostConfig, loadConfig } from "./config.ts";
+import { loadConfig } from "./config.ts";
 import * as Machines from "./machines.ts";
 import type { RecordNative, Runtime } from "./runtime.ts";
 import { runtimeLayer } from "./runtimes.ts";
-import { routes } from "./server.ts";
+import { open } from "./platform/sqlite.ts";
+import { routes } from "./routes.ts";
+import type { HostSettings } from "./settings.ts";
 import { startup } from "./startup.ts";
 import * as Store from "./store.ts";
-
-/** What the host layer reads of its config: the runtime's own settings go to `runtime`. */
-export type HostLayerConfig = Pick<
-  HostConfig,
-  "id" | "runtime" | "listen" | "stateDir" | "bases" | "machinePorts"
->;
 
 /** What the API needs of its HTTP server, all of which `NodeHttpServer.layer` provides. */
 export type ServerLayer = Layer.Layer<
@@ -43,7 +39,7 @@ export type ServerLayer = Layer.Layer<
  * actions, for a caller that reads them, such as a test.
  */
 export const hostLayer = <E, R>(
-  config: HostLayerConfig,
+  config: HostSettings,
   runtime: (recordNative: RecordNative) => Layer.Layer<Runtime, E, R>,
   server: ServerLayer,
 ): Layer.Layer<
@@ -75,7 +71,7 @@ export const hostLayer = <E, R>(
     Layer.provideMerge(
       Layer.unwrap(
         Effect.map(Effect.service(Store.Store), (store) => runtime(store.recordNative)),
-      ).pipe(Layer.provideMerge(Layer.effect(Store.Store, Store.open(config)))),
+      ).pipe(Layer.provideMerge(Layer.effect(Store.Store, open(config)))),
     ),
   );
 
