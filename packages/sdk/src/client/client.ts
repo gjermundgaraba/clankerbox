@@ -6,13 +6,12 @@
  */
 import { Context, type Duration, Effect, Fiber, Layer, Predicate, Result, Schema } from "effect";
 import type { HttpClient } from "effect/http";
-import { readTimeout } from "../api.ts";
+import { actionsByName as actions, readTimeout } from "../api.ts";
 import { type ClankerboxError, Invalid, Precondition, Unavailable } from "../errors.ts";
 import { formatId, HostId, parseId, parseName } from "../ids.ts";
 import type { Checkpoint, Host, Limit, Machine, MachineSpec } from "../resources.ts";
 import { describeIssues } from "../text.ts";
 import {
-  actions,
   type CallError,
   checkHost,
   type Contract,
