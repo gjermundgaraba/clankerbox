@@ -7,9 +7,10 @@ import type { CreateRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer, Logger, ManagedRuntime } from "effect";
 import { HttpServer } from "effect/http";
 import * as Checkpoints from "../src/checkpoints.ts";
-import { type HostLayerConfig, hostLayer } from "../src/index.ts";
+import { hostLayer } from "../src/host.ts";
 import * as Machines from "../src/machines.ts";
-import type { PortRange } from "../src/ports.ts";
+import type { PortRange } from "../src/machine-ports.ts";
+import type { HostSettings } from "../src/settings.ts";
 import * as Store from "../src/store.ts";
 import { type FakeOptions, type FakeRuntime, fakeRuntime } from "./fake-runtime.ts";
 import { removeScratch } from "./scratch.ts";
@@ -24,7 +25,7 @@ export const image =
 const sharedPorts: PortRange = { first: 21_000, last: 21_099 };
 
 /** Host `linux` on the smolvm runtime, which the fake runtime stands in for. */
-export const hostConfig = (stateDir: string, machinePorts = sharedPorts): HostLayerConfig => ({
+export const hostConfig = (stateDir: string, machinePorts = sharedPorts): HostSettings => ({
   id: "linux",
   runtime: "smolvm",
   listen: { address: "127.0.0.1", port: 0 },

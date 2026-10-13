@@ -3,7 +3,7 @@ import { Effect, Layer, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { afterEach, expect, test } from "vite-plus/test";
 import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
-import { machine, type StubHost, stubHost } from "../../../packages/sdk/tests/stub-host.ts";
+import { machine, type StubHost, stubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { cleanup, cli, scratch, writeConfig } from "./support.ts";
 
 const owned: Array<string> = [];

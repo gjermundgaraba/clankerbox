@@ -3,12 +3,12 @@
  * left running is marked failed, then the runtime runs its own startup over the host's machines.
  */
 import { Effect, Layer } from "effect";
-import { machineRef } from "./actions.ts";
-import type { HostConfig } from "./config.ts";
+import { machineRef } from "./claims.ts";
+import type { HostSettings } from "./settings.ts";
 import { Runtime } from "./runtime.ts";
 import { Store } from "./store.ts";
 
-export const startup = (config: Pick<HostConfig, "id">) =>
+export const startup = (config: Pick<HostSettings, "id">) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const store = yield* Store;

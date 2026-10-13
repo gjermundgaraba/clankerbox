@@ -16,13 +16,6 @@ import { Checkpoint, CreateRequest, Host, Limit, Machine } from "./resources.ts"
  */
 export const readTimeout = Duration.seconds(10);
 
-/**
- * The header every client request carries the SDK's `version` in. A host refuses a request
- * whose release (major.minor) differs from its own, or that carries none, before it runs
- * anything.
- */
-export const versionHeader = "clankerbox-version";
-
 const ById = Schema.Struct({ id: Id });
 
 /** Input of the actions that make a new resource from a machine: its ID and the new name. */

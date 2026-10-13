@@ -5,8 +5,8 @@
  */
 import { type Checkpoint, formatId, type HostError } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Layer, type Scope } from "effect";
-import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./actions.ts";
-import type { HostConfig } from "./config.ts";
+import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./claims.ts";
+import type { HostSettings } from "./settings.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { Runtime } from "./runtime.ts";
 import { type CheckpointRecord, type NewCheckpoint, Store } from "./store.ts";
@@ -24,7 +24,7 @@ export class Checkpoints extends Context.Service<Checkpoints, Interface>()(
 ) {}
 
 export const make = (
-  config: Pick<HostConfig, "id">,
+  config: Pick<HostSettings, "id">,
 ): Effect.Effect<Interface, HostError, Store | Runtime | Scope.Scope> =>
   Effect.gen(function* () {
     const store = yield* Store;
@@ -135,5 +135,5 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<HostConfig, "id">,
+  config: Pick<HostSettings, "id">,
 ): Layer.Layer<Checkpoints, HostError, Store | Runtime> => Layer.effect(Checkpoints, make(config));

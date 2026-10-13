@@ -3,7 +3,7 @@
  * Each needs its unit: a bare number is refused, not guessed at.
  */
 import { Invalid } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect } from "effect";
+import { DateTime, Duration, Effect } from "effect";
 
 const mibPerGib = 1024;
 
@@ -100,4 +100,12 @@ export const formatSeconds = (seconds: number): string => {
   }
 
   return text;
+};
+
+/** How long ago `createdAt` was, in its largest whole unit: `45s`, `12m`, `5h`, `3d`. */
+export const age = (createdAt: DateTime.Utc, now: DateTime.Utc): string => {
+  const seconds = Math.max(0, Math.floor(Duration.toSeconds(DateTime.distance(createdAt, now))));
+  const [unit, size] = spans.find(([, span]) => seconds >= span) ?? ["s", 1];
+
+  return `${Math.floor(seconds / size)}${unit}`;
 };
