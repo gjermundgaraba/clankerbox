@@ -46,7 +46,6 @@ import {
   type Settings,
   stateOf,
 } from "../../src/platform/boat/boat.ts";
-import * as Checkpoints from "../../src/checkpoints.ts";
 import { preparationScript } from "../../src/guest.ts";
 import * as Machines from "../../src/machines.ts";
 import { defaultMachinePorts } from "../../src/machine-ports.ts";
@@ -57,7 +56,8 @@ import {
   Refusal,
   Runtime,
 } from "../../src/runtime.ts";
-import { startup } from "../../src/startup.ts";
+import { servicesLayer } from "../../src/host.ts";
+import type { HostSettings } from "../../src/settings.ts";
 import * as Sqlite from "../../src/platform/sqlite.ts";
 import * as Store from "../../src/store.ts";
 import { removeScratch, scratch } from "../scratch.ts";
@@ -465,12 +465,11 @@ const stateDirIn = async (dir: string) => {
   return stateDir;
 };
 
-const settingsOf = (stateDir: string, store: Store.Interface): Settings => ({
+const settingsOf = (stateDir: string): Omit<Settings, "recordNative"> => ({
   apiKey: Redacted.make(apiKey),
   url: "https://boat.test/api/v1",
   hostId: "boat",
   stateDir,
-  recordNative: store.recordNative,
 });
 
 interface Rig {
@@ -499,7 +498,7 @@ const rigOn = async (boat = fakeBoat()): Promise<Rig> => {
   );
 
   const runtime = await Effect.runPromise(
-    make(settingsOf(stateDir, store)).pipe(
+    make({ ...settingsOf(stateDir), recordNative: store.recordNative }).pipe(
       Effect.provide(Layer.mergeAll(NodeServices.layer, guest.spawner.layer, boat.layer)),
     ),
   );
@@ -1987,27 +1986,19 @@ const hostOn = async (boat: FakeBoat) => {
   const stateDir = await stateDirIn(await scratch(owned));
   const guest = fakeGuest();
 
-  const config = {
+  const config: HostSettings = {
     id: "boat",
+    runtime: "boat",
+    listen: { address: "127.0.0.1", port: 0 },
     bases: new Map([["boat", "boat"]]),
     stateDir,
     machinePorts: defaultMachinePorts,
   };
 
   const host = ManagedRuntime.make(
-    Layer.merge(Machines.layer(config), Checkpoints.layer(config)).pipe(
-      Layer.provide(startup(config)),
-      Layer.provideMerge(
-        Layer.unwrap(
-          Effect.map(Effect.service(Store.Store), (store) =>
-            Layer.effect(Runtime, make(settingsOf(stateDir, store))),
-          ),
-        ).pipe(
-          Layer.provideMerge(
-            Layer.effect(Store.Store, Sqlite.open({ stateDir, id: "boat", runtime: "boat" })),
-          ),
-        ),
-      ),
+    servicesLayer(config, (recordNative) =>
+      Layer.effect(Runtime, make({ ...settingsOf(stateDir), recordNative })),
+    ).pipe(
       Layer.provideMerge(Logger.layer([])),
       Layer.provide(Layer.mergeAll(NodeServices.layer, guest.spawner.layer, boat.layer)),
     ),

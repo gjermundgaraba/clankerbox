@@ -7,6 +7,7 @@ import { Duration, Effect, Fiber, Option, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, expect, test } from "vite-plus/test";
 import * as Machines from "../src/machines.ts";
+import * as BindProbe from "../src/platform/bind-probe.ts";
 import { Refusal } from "../src/runtime.ts";
 import * as Store from "../src/store.ts";
 import { scratch } from "./scratch.ts";
@@ -206,6 +207,7 @@ const onTestClock = <A>(
       const machines = yield* Machines.make(hostConfig(linux.stateDir, ports)).pipe(
         Effect.provideService(Store.Store, linux.store),
         Effect.provide(linux.fake.layer),
+        Effect.provide(BindProbe.layer),
       );
 
       const fiber = yield* Effect.forkChild(Effect.result(use(machines)));

@@ -28,7 +28,7 @@ import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from ".
 import type { HostSettings } from "./settings.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
-import { pickPort } from "./machine-ports.ts";
+import { pickPort, PortProbe } from "./machine-ports.ts";
 import {
   type MachineRef,
   type Observed,
@@ -94,10 +94,11 @@ type Making =
 /** Builds the actions, once the host's startup step has run (`index.ts`). */
 export const make = (
   config: Pick<HostSettings, "id" | "bases" | "machinePorts">,
-): Effect.Effect<Interface, HostError, Store | Runtime | Scope.Scope> =>
+): Effect.Effect<Interface, HostError, Store | Runtime | PortProbe | Scope.Scope> =>
   Effect.gen(function* () {
     const store = yield* Store;
     const runtime = yield* Runtime;
+    const probe = yield* PortProbe;
     const detached = yield* detacher;
     const admission = yield* Semaphore.make(1);
 
@@ -211,7 +212,7 @@ export const make = (
           port:
             address === undefined
               ? undefined
-              : yield* pickPort(address, config.machinePorts, yield* store.ports),
+              : yield* pickPort(probe, address, config.machinePorts, yield* store.ports),
           hostKey: undefined,
         };
 
@@ -477,4 +478,5 @@ export const make = (
 
 export const layer = (
   config: Pick<HostSettings, "id" | "bases" | "machinePorts">,
-): Layer.Layer<Machines, HostError, Store | Runtime> => Layer.effect(Machines, make(config));
+): Layer.Layer<Machines, HostError, Store | Runtime | PortProbe> =>
+  Layer.effect(Machines, make(config));

@@ -4,6 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/host.ts",
+    "./config": "./src/config.ts",
+    "./runtimes": "./src/runtimes.ts",
     "./testing": "./tests/support.ts"
   },
   "scripts": {

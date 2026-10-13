@@ -16,7 +16,7 @@ import {
   Precondition,
   Runtime,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { DateTime, Effect, FileSystem, Option, Result, Schema, type Scope } from "effect";
+import { DateTime, Effect, FileSystem, Layer, Option, Result, Schema, type Scope } from "effect";
 import { idOn, type Kind, notFoundOn } from "../ids.ts";
 import type { HostSettings } from "../settings.ts";
 import {
@@ -28,6 +28,7 @@ import {
   type Records,
   type Resource,
   type RowRef,
+  Store,
   type Table,
   type Token,
 } from "../store.ts";
@@ -647,3 +648,9 @@ export const open = (
 
     return store;
   });
+
+/** The Store over the state dir's database, open for the layer's life. */
+export const layer = (
+  owner: Owner,
+): Layer.Layer<Store, Precondition | Internal, FileSystem.FileSystem> =>
+  Layer.effect(Store, open(owner));

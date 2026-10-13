@@ -4,7 +4,7 @@
  * the client's mutation timeout, is `Unavailable`, and the caller reads the resource to see
  * what happened.
  */
-import { Context, type Duration, Effect, Fiber, Predicate, Result, Schema } from "effect";
+import { Context, type Duration, Effect, Fiber, Layer, Predicate, Result, Schema } from "effect";
 import type { HttpClient } from "effect/http";
 import { readTimeout } from "../api.ts";
 import { type ClankerboxError, Invalid, Precondition, Unavailable } from "../errors.ts";
@@ -347,3 +347,10 @@ export const make = (
         byId(id, actions.deleteCheckpoint, `delete ${id}`, (api) => api.deleteCheckpoint({ id })),
     } satisfies Interface;
   });
+
+/** The client over `hosts`, for whatever `HttpClient` the caller provides. */
+export const layer = (
+  hosts: ReadonlyArray<HostEntry>,
+  options?: Options,
+): Layer.Layer<Client, Invalid, HttpClient.HttpClient> =>
+  Layer.effect(Client, make(hosts, options));

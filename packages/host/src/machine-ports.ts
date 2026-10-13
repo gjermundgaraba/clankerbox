@@ -2,9 +2,8 @@
  * Host ports for guest port 22. The core picks one when it inserts a machine's row, for a
  * runtime with a `publishAddress` (smolvm and Tart), from the host config's `machinePorts`.
  */
-import { createServer } from "node:net";
 import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect } from "effect";
+import { Context, Effect } from "effect";
 
 /** A range of ports, both ends included. */
 export interface PortRange {
@@ -28,40 +27,26 @@ export const reservedPorts: ReadonlyArray<PortRange & { readonly owner: string }
 /** The machines' ports unless the host config names others: below every reserved range. */
 export const defaultMachinePorts: PortRange = { first: 10_000, last: 19_999 };
 
-/** Whether `address:port` can be bound now. Something else listening there makes it false. */
-const probe = (address: string, port: number): Effect.Effect<boolean, Internal> =>
-  Effect.callback((resume) => {
-    const server = createServer();
+/** Whether a port can be bound now: something else listening there makes it false. */
+export interface Probe {
+  readonly free: (address: string, port: number) => Effect.Effect<boolean, Internal>;
+}
 
-    server.once("error", (error: NodeJS.ErrnoException) => {
-      resume(
-        error.code === "EADDRINUSE" || error.code === "EACCES"
-          ? Effect.succeed(false)
-          : Effect.fail(
-              new Internal({ message: `couldn't probe port ${address}:${port}: ${error.message}` }),
-            ),
-      );
-    });
-
-    server.listen({ host: address, port, exclusive: true }, () => {
-      server.close(() => {
-        resume(Effect.succeed(true));
-      });
-    });
-  });
+export class PortProbe extends Context.Service<PortProbe, Probe>()("@clankerbox/host/PortProbe") {}
 
 /**
  * The lowest port in `range` that no machine row holds and that binds on `address`. Actions
  * that allocate a port pick and record it one at a time, so no other action takes it between.
  */
 export const pickPort = (
+  probe: Probe,
   address: string,
   range: PortRange,
   taken: ReadonlySet<number>,
 ): Effect.Effect<number, Capacity | Internal> =>
   Effect.gen(function* () {
     for (let port = range.first; port <= range.last; port++) {
-      if (!taken.has(port) && (yield* probe(address, port))) {
+      if (!taken.has(port) && (yield* probe.free(address, port))) {
         return port;
       }
     }
