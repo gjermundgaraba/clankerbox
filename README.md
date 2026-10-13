@@ -242,7 +242,9 @@ clankerbox checkpoint delete linux_base
   Its `--timeout DURATION` only stops waiting: the action runs on, and the CLI
   says it may have run; `get`, or `checkpoint get`, shows how it ended. A read
   gives up on a host after 10 s.
-- `--json` prints the resource, or `{"error": {"message", "tag", "retryable"}}`.
+- `--json` prints the resource, or `{"error": {"message", "tag", "retryable"}}`
+  with the error's own fields when it has them: `kind`, `readOnly`, `host`,
+  `action`, `id`, `file` and `program` (see [Errors](#errors)).
   Lists print what reachable hosts answered and name the unreachable ones; a
   list exits 1 when every host failed. A list with nothing in it prints no
   table and says so on stderr.
@@ -398,12 +400,14 @@ program.pipe(
   runs, unless `timeout` is set.
 - `readSetup` sends a file as its text and packs a directory into one
   self-extracting script (`packRecipe`). `loadProfile` reads a profile file.
+  Each fails with `InvalidFile`, naming the file.
 - `Prebuild.build(client, spec)` prebuilds a spec, and
   `Prebuild.create(client, name, spec)` creates from its prebuild when the
   host has one. `Prebuild.nameOf` is a prebuild's name, and
   `client.place(base, options)` reads the host a create goes to.
 - Every call but the lists fails with one of seven tagged errors
-  (`errors.ts`), each with `retryable`; see [Errors](#errors). A list returns
+  (`errors.ts`), each with `retryable` and with where it was met; see
+  [Errors](#errors). A list returns
   what reachable hosts answered and names the unreachable ones with their
   errors.
 - A mutation whose reply is lost fails `Unavailable`, not retryable, naming
@@ -654,6 +658,19 @@ request may have reached the host. In the client, a request that fails to
 encode is `Invalid` and sends nothing, and a host's `InvalidInput` is `Invalid`
 too; a reply that fails to decode is `Internal`.
 
+The client sets where a call met its error, and a host sends none of it:
+`host`, `action` (the contract's name, such as `createMachine`) and `id` (the
+resource the call reads, changes or makes: for a fork, restore, capture or
+create, the one it makes). An error from no one call, such as a placement no
+host takes, has none. The Rivet provider deletes a failed create's `id`, and
+nothing when there is none.
+
+A file the client reads, a config, profile or setup, that can't be read or
+doesn't decode is `InvalidFile`, naming the `file`; a host's config is too. It
+is not one of the seven: no call fails with it, only what reads the file. The
+CLI's own `SpawnFailed` names a `program`, such as `ssh`, that couldn't be
+started. Neither is retryable.
+
 ### State and claims
 
 - **SQLite through `node:sqlite`**, one database per host,
@@ -772,9 +789,9 @@ and the wire has no action for it.
   the setup.
 - **A build** reads the checkpoint first: one that is done is the answer, and
   one that isn't is refused with `Precondition`. Otherwise a machine of its
-  own, `prebuilding-<16 random hex>`, runs the setup, is stopped on Tart
-  (whose capture needs a stopped machine; smolvm's and boat's take a running
-  one), is captured under the prebuild's name, and is deleted however the
+  own, `prebuilding-<16 random hex>`, runs the setup, is stopped when the
+  host's `captureFrom` is `stopped` (Tart; smolvm and boat capture a running
+  machine), is captured under the prebuild's name, and is deleted however the
   build ends. Builders never share a name, and a host takes a checkpoint name
   once, before any native work: of two builds of one spec, both run the setup
   and the second's capture is `Conflict`, and neither touches the other's
