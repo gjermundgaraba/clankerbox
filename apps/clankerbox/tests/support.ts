@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ConfigProvider, Duration, Effect, Fiber, Layer, Runtime, Schema } from "effect";
+import { ConfigProvider, Effect, Layer, Runtime, Schema } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
-import { TestClock, TestConsole } from "effect/testing";
+import { TestConsole } from "effect/testing";
 import {
   type Endpoint,
   mkdir,
@@ -31,21 +31,6 @@ export const writeConfig = (dir: string, hosts: ReadonlyArray<string>, profiles?
     );
 
     return file;
-  });
-
-/** The CLI reads files before it starts a timer, so the clock moves only once `waiting` is done. */
-export const elapsing = <A, E>(
-  duration: Duration.Input,
-  effect: Effect.Effect<A, E>,
-  waiting: Effect.Effect<unknown>,
-) =>
-  Effect.gen(function* () {
-    const fiber = yield* Effect.forkChild(effect);
-
-    yield* waiting;
-    yield* TestClock.adjust(duration);
-
-    return yield* Fiber.join(fiber);
   });
 
 export interface CliRun {

@@ -1,8 +1,9 @@
-import { Duration, Effect, Fiber } from "effect";
+import { Duration, Effect, Fiber, Queue } from "effect";
 import { TestClock } from "effect/testing";
 import { it } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
 import { Capacity, Client, type MachineSpec, version } from "../src/index.ts";
+import { elapsing } from "./clock.ts";
 import { type Endpoint, machine, Silent, type StubHost, stubHost, transport } from "./stub-host.ts";
 
 const stubs: Array<StubHost> = [];
@@ -553,32 +554,24 @@ const briefly = { timeout: Duration.millis(50) };
 
 const readBriefly = { readTimeout: Duration.millis(50) };
 
-const elapsing = <A, E>(duration: Duration.Input, effect: Effect.Effect<A, E>) =>
-  Effect.gen(function* () {
-    const fiber = yield* Effect.forkChild(effect);
-
-    yield* Effect.yieldNow;
-    yield* TestClock.adjust(duration);
-
-    return yield* Fiber.join(fiber);
-  });
-
 it.effect(
   "with a read timeout, a fan-out names the host that didn't answer in time and keeps the rest",
   () =>
     Effect.gen(function* () {
       const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_dev")] });
+      const mac = new Silent();
 
       const { answers, unreachable } = yield* elapsing(
         "50 millis",
         withClient(
           [
-            ["mac", new Silent()],
+            ["mac", mac],
             ["linux", linux],
           ],
           (client) => client.machines,
           readBriefly,
         ),
+        mac.reached,
       );
 
       expect(answers.map(({ id }) => id)).toEqual(["linux_dev"]);
@@ -591,17 +584,19 @@ it.effect(
 it.effect("placement skips a host that didn't answer in time, and the create is still sent", () =>
   Effect.gen(function* () {
     const linux = host({ id: "linux", bases: ["ubuntu"] });
+    const mac = new Silent();
 
     const made = yield* elapsing(
       "50 millis",
       withClient(
         [
-          ["mac", new Silent()],
+          ["mac", mac],
           ["linux", linux],
         ],
         (client) => client.create("dev", spec),
         { ...readBriefly, ...briefly },
       ),
+      mac.reached,
     );
 
     expect(made.id).toBe("linux_dev");
@@ -613,7 +608,13 @@ it.effect(
   "a mutation that outlasts the timeout is a lost reply: Unavailable, naming the ID to read",
   () =>
     Effect.gen(function* () {
-      const linux = host({ id: "linux", bases: ["ubuntu"], create: () => Effect.never });
+      const arrived = yield* Queue.unbounded<void>();
+
+      const linux = host({
+        id: "linux",
+        bases: ["ubuntu"],
+        create: () => Effect.andThen(Queue.offer(arrived, undefined), Effect.never),
+      });
 
       const error = yield* elapsing(
         "50 millis",
@@ -622,6 +623,7 @@ it.effect(
           (client) => Effect.flip(client.create("dev", spec)),
           briefly,
         ),
+        Queue.take(arrived),
       );
 
       expect(error._tag).toBe("Unavailable");
@@ -634,13 +636,16 @@ it.effect(
 
 it.effect("a read that outlasts the read timeout is Unavailable and retryable", () =>
   Effect.gen(function* () {
+    const silent = new Silent();
+
     const error = yield* elapsing(
       "50 millis",
       withClient(
-        [["linux", new Silent()]],
+        [["linux", silent]],
         (client) => Effect.flip(client.machine("linux_dev")),
         readBriefly,
       ),
+      silent.reached,
     );
 
     expect(error._tag).toBe("Unavailable");
