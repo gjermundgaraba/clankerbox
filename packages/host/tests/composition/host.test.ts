@@ -21,24 +21,19 @@ const config = (dir: string, fields?: Partial<HostSettings>): HostSettings => ({
 const hostOn = (host: HostSettings, fake: FakeRuntime) =>
   hostLayer(host, () => fake.layer, loopbackServer(host.listen.port));
 
-const whileServing = <A, E>(
+const whileServing = <A, E, R>(
   host: HostSettings,
   dir: string,
-  use: (url: string) => Effect.Effect<A, E>,
+  use: (url: string) => Effect.Effect<A, E, R>,
 ) =>
   Effect.flatMap(Effect.service(HttpServer.HttpServer), (server) =>
     use(HttpServer.formatAddress(server.address)),
-  ).pipe(
-    Effect.provide(hostOn(host, fakeRuntime({ dir }))),
-    Effect.provide(Logger.layer([])),
-    Effect.provide(NodeServices.layer),
-  );
+  ).pipe(Effect.provide(hostOn(host, fakeRuntime({ dir }))), Effect.provide(Logger.layer([])));
 
 const refused = (host: HostSettings, fake: FakeRuntime) =>
   Effect.flip(Layer.build(hostOn(host, fake))).pipe(
     Effect.scoped,
     Effect.provide(Logger.layer([])),
-    Effect.provide(NodeServices.layer),
   );
 
 const withClient = <A, E>(url: string, use: (client: Client.Interface) => Effect.Effect<A, E>) =>
@@ -67,7 +62,7 @@ layer(NodeServices.layer)((it) => {
             hostKey: undefined,
           },
         }),
-      ).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+      ).pipe(Effect.scoped);
 
       const machine = yield* whileServing(host, dir, (url) =>
         withClient(url, (client) => client.machine("linux_dev")),

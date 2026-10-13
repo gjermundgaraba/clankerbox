@@ -2,13 +2,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { join } from "node:path";
 import { layer } from "@effect/vitest";
 import { Effect } from "effect";
-import { afterEach, expect } from "vite-plus/test";
-import { type StubHost, write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { cleanup, cli, decodeJsonError, writeConfig, writeProfiles } from "./support.ts";
-
-const stubs: Array<StubHost> = [];
-
-afterEach(() => cleanup(stubs));
+import { expect } from "vite-plus/test";
+import { write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { cli, decodeJsonError, writeConfig, writeProfiles } from "./support.ts";
 
 layer(NodeServices.layer)((it) => {
   it.effect("profiles lists the profiles directory's profiles by name, without asking a host", () =>
