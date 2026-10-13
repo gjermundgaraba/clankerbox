@@ -694,7 +694,8 @@ malformed ID or a placement no host takes, names only the action. The Rivet prov
 nothing when there is none.
 
 A file the client reads, a config, profile or setup, that can't be read or
-doesn't decode is `Invalid`, naming the `file`; a host's config is too. The
+doesn't decode is `Invalid`, naming the `file`; so is a client config whose host
+list the client refuses, and a host's config. The
 CLI's own `SpawnFailed` names a `program`, such as `ssh`, that couldn't be
 started. Neither is retryable.
 
