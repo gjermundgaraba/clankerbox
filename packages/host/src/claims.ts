@@ -1,12 +1,14 @@
 import {
+  type Conflict,
   type HostError,
   Internal,
+  type Invalid,
   type NotFound,
   Precondition,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Cause, Effect, Fiber, Option, Ref } from "effect";
 import { idOn, type Kind, notFoundOn } from "./ids.ts";
-import { type CheckpointRef, type MachineRef, Refusal } from "./runtime.ts";
+import { type CheckpointRef, type MachineRef, Refusal, type RoomError } from "./runtime.ts";
 import type {
   CheckpointRecord,
   Claim,
@@ -17,6 +19,12 @@ import type {
   Interface as StoreInterface,
   Token,
 } from "./store.ts";
+
+/** A read of one row: a malformed or another host's ID, no such row, or the store. */
+export type ReadError = Invalid | NotFound | Internal;
+
+/** An action on rows: a read's errors, a held row or a taken name, and its runtime calls'. */
+export type ActionError<Runtime> = ReadError | Conflict | Runtime;
 
 export const rowsOn = (store: StoreInterface, host: string) => {
   const notFound = notFoundOn(host);
@@ -96,13 +104,13 @@ export const claimsOn = (store: StoreInterface) => {
         ),
       );
 
-  const claimAndCheck = <H, B, R>(
-    claim: Effect.Effect<Claim<H>, HostError>,
+  const claimAndCheck = <H, B, R, EClaim, ECheck>(
+    claim: Effect.Effect<Claim<H>, EClaim>,
     check: (
       held: H,
-      join: (row: NewRow) => Effect.Effect<void, HostError>,
-    ) => Effect.Effect<B, HostError, R>,
-  ): Effect.Effect<readonly [Token, B], HostError, R> =>
+      join: (row: NewRow) => Effect.Effect<void, Conflict | Internal>,
+    ) => Effect.Effect<B, ECheck, R>,
+  ): Effect.Effect<readonly [Token, B], EClaim | ECheck, R> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const { token, held } = yield* claim;
@@ -125,33 +133,38 @@ export const claimsOn = (store: StoreInterface) => {
       }),
     );
 
-  /**
-   * A runtime `Refusal` releases the claim like a failed check. A defect is recorded as
-   * `Internal`, so its rows stay deletable; only the log carries its cause.
-   */
-  const native = <A>(
+  /** A defect is recorded as `Internal`, so its rows stay deletable; only the log has its cause. */
+  const surviving = <A, E>(what: string, work: Effect.Effect<A, E>) =>
+    Effect.catchCauseFilter(work, Cause.findDefect, (defect, cause) =>
+      Effect.andThen(
+        Effect.logError(`${what} died:\n${Cause.pretty(cause)}`),
+        Effect.fail(new Internal({ message: `${what} died: ${String(defect)}` })),
+      ),
+    );
+
+  const native = <A, E extends HostError>(
     token: Token,
     what: string,
-    work: Effect.Effect<A, HostError | Refusal>,
-  ): Effect.Effect<A, HostError> =>
-    work.pipe(
-      Effect.catchCauseFilter(Cause.findDefect, (defect, cause) =>
-        Effect.andThen(
-          Effect.logError(`${what} died:\n${Cause.pretty(cause)}`),
-          Effect.fail(new Internal({ message: `${what} died: ${String(defect)}` })),
-        ),
-      ),
-      Effect.catch((error) =>
-        error instanceof Refusal
-          ? Effect.andThen(release(token), Effect.fail(error.error))
-          : Effect.andThen(endFailed(token, error), Effect.fail(error)),
-      ),
+    work: Effect.Effect<A, E>,
+  ): Effect.Effect<A, E | Internal> =>
+    Effect.tapError(surviving(what, work), (error) => endFailed(token, error));
+
+  /** A runtime `Refusal` releases the claim like a failed check. */
+  const refusable = <A, E extends HostError>(
+    token: Token,
+    what: string,
+    work: Effect.Effect<A, E | Refusal>,
+  ): Effect.Effect<A, E | RoomError> =>
+    Effect.catch(surviving(what, work), (error): Effect.Effect<never, E | RoomError> =>
+      error instanceof Refusal
+        ? Effect.andThen(release(token), Effect.fail(error.error))
+        : Effect.andThen(endFailed(token, error), Effect.fail(error)),
     );
 
   const done = (token: Token, recorded?: Omit<Outcome, "action">) =>
     store.end(token, { ...recorded, action: { name: token.action, status: "done" } });
 
-  return { claimAndCheck, native, done };
+  return { claimAndCheck, native, refusable, done };
 };
 
 /**
@@ -161,7 +174,7 @@ export const claimsOn = (store: StoreInterface) => {
 export const detacher = Effect.map(
   Effect.scope,
   (scope) =>
-    <A>(what: string, action: Effect.Effect<A, HostError>): Effect.Effect<A, HostError> =>
+    <A, E extends HostError>(what: string, action: Effect.Effect<A, E>): Effect.Effect<A, E> =>
       Effect.flatMap(
         Effect.forkIn(
           Effect.tapError(action, (error) =>

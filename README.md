@@ -677,7 +677,12 @@ another action holds or a name taken, a malformed request. A runtime fails only
 with `Precondition` or `Internal`, and with `Capacity` on the calls that take
 room (`admit`, `create`, `start`, `fork`, `restore`, `capture`); the `Runtime`
 port's types say so (`runtime.ts`). A 404 from boat is boat's own, so it is
-`Internal`.
+`Internal`. Each action in the contract (`api.ts`) declares only what it fails
+with, and the host's routes are type-checked against it: lists `Internal`,
+reads `NotFound` too, changes `Conflict` and `Precondition` too, and the
+actions that take room `Capacity` too; every action also declares `Invalid`,
+which a host answers a client of another release with. The client's methods
+still declare every tag, plus `Unavailable`.
 
 The client sets where a call met its error, and a host sends none of it:
 `host`, `action` (the contract's name, such as `createMachine`) and `id` (the
