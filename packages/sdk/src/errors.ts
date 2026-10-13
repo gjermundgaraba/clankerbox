@@ -7,10 +7,13 @@ const located = {
   id: Schema.optionalKey(Schema.String),
 };
 
-/** The request is malformed, or the host list is one a client can't route by. */
+/**
+ * The request is malformed, or the host list is one a client can't route by, or a config,
+ * profile or setup file couldn't be read or doesn't hold what it should: then `file` names it.
+ */
 export class Invalid extends Schema.TaggedError<Invalid>()(
   "Invalid",
-  { message: Schema.String, ...located },
+  { message: Schema.String, ...located, file: Schema.optionalKey(Schema.String) },
   { httpApiStatus: 400 },
 ) {
   get retryable(): boolean {
@@ -90,35 +93,17 @@ export class Internal extends Schema.TaggedError<Internal>()(
   }
 }
 
-/**
- * A config, profile or setup file couldn't be read or doesn't hold what it should. No host saw
- * it.
- */
-export class InvalidFile extends Schema.TaggedError<InvalidFile>()("InvalidFile", {
-  message: Schema.String,
-  file: Schema.String,
-}) {
-  get retryable(): boolean {
-    return false;
-  }
-}
-
-/** Every action declares these. */
+/** What a host may answer with; each action declares its own share. */
 export const hostErrors = [Invalid, NotFound, Conflict, Precondition, Capacity, Internal] as const;
 
 export type HostError = InstanceType<(typeof hostErrors)[number]>;
 
-export type ClankerboxError = HostError | Unavailable;
+export const ClankerboxError = Schema.Union([...hostErrors, Unavailable]);
+
+export type ClankerboxError = typeof ClankerboxError.Type;
 
 export const HostErrorTag = Schema.Literals(
   hostErrors.map((error) => error.fields._tag.schema.literal),
 );
 
 export type HostErrorTag = typeof HostErrorTag.Type;
-
-export const ErrorTag = Schema.Literals([
-  ...HostErrorTag.literals,
-  Unavailable.fields._tag.schema.literal,
-]);
-
-export type ErrorTag = typeof ErrorTag.Type;

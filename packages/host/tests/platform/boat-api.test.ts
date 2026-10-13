@@ -622,8 +622,9 @@ it.live("a 4xx is a definite answer whatever its body, and is never repeated", (
     const answers: ReadonlyArray<readonly [Reply, string, string]> = [
       [{ status: 403, text: "<html>Forbidden</html>" }, "Internal", `403 ${bare}`],
       [{ status: 403, cut: '{"ok":false,"code":"trial_' }, "Internal", `403 ${bare}`],
-      [{ status: 404, text: "" }, "NotFound", `404 ${bare}`],
-      [{ status: 404, cut: '{"ok":false,' }, "NotFound", `404 ${bare}`],
+      // To a create, a 404 is boat's own: only the reads and deletes take it as gone.
+      [{ status: 404, text: "" }, "Internal", `404 ${bare}`],
+      [{ status: 404, cut: '{"ok":false,' }, "Internal", `404 ${bare}`],
       [
         refusal(400, "trial_auto_stop_required", "at most 7200"),
         "Internal",

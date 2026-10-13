@@ -162,7 +162,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const linux = yield* withSource();
 
-        linux.fake.failNextForRoom("admit", new Capacity({ message: "no room" }));
+        linux.fake.failNext("admit", new Capacity({ message: "no room" }));
 
         const error = yield* failure(linux, linux.machines.fork("linux_dev", "copy"));
 

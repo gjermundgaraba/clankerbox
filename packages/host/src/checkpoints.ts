@@ -1,10 +1,11 @@
 import {
   type Checkpoint,
+  CheckpointActionRecord,
   formatId,
   type HostError,
   type Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, DateTime, Effect, Layer, type Scope } from "effect";
+import { Context, DateTime, Effect, Layer, Schema, type Scope } from "effect";
 import {
   type ActionError,
   checkpointRef,
@@ -29,6 +30,9 @@ export interface Interface {
   ) => Effect.Effect<Checkpoint, ActionError<RoomError>>;
   readonly delete: (id: string) => Effect.Effect<void, ActionError<RuntimeError>>;
 }
+
+/** Only a capture or a delete claims a checkpoint row, so any other action is a defect. */
+const checkpointAction = Schema.decodeUnknownSync(CheckpointActionRecord);
 
 export class Checkpoints extends Context.Service<Checkpoints, Interface>()(
   "@clankerbox/host/Checkpoints",
@@ -58,7 +62,7 @@ export const make = (
         cpu: record.cpu,
         ramMib: record.ramMib,
         diskGib: record.diskGib,
-        action: record.action,
+        action: checkpointAction(record.action),
       };
 
       return record.profile === undefined ? checkpoint : { ...checkpoint, profile: record.profile };

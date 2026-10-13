@@ -6,7 +6,7 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { type Capacity, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { checkRamBudget, ramInUse } from "../src/ram-budget.ts";
@@ -20,6 +20,7 @@ import {
   missing,
   type Observed,
   Refusal,
+  type RoomError,
   Runtime,
   type RuntimeError,
 } from "../src/runtime.ts";
@@ -95,20 +96,37 @@ type Refusable = "create" | "start" | "capture" | "restore" | "fork";
 /** The operations that take room, and so may fail with `Capacity`. */
 type RoomOperation = Refusable | "admit";
 
+/** What `operation` may fail with, as the `Runtime` port types it. */
+type FailureOf<O extends Operation> = O extends Refusable
+  ? RoomError | Refusal
+  : O extends RoomOperation
+    ? RoomError
+    : RuntimeError;
+
 export const fakeRuntime = (options: FakeOptions) => {
   const machines = new Map<string, FakeMachine>();
   const calls: Array<string> = [];
   const activations: Array<Activation> = [];
   const observed: Array<ReadonlyArray<string>> = [];
   const injections = new Map<Operation, Array<Injection>>();
-  const refusals = new Map<Refusable, Array<Refusal>>();
-  const capacityFailures = new Map<RoomOperation, Array<Capacity>>();
+  const refusals = new Map<Operation, Array<Refusal>>();
+  const capacityFailures = new Map<Operation, Array<Capacity>>();
   const observeFailures: Array<RuntimeError | "hang"> = [];
   const publishAddress = "publishAddress" in options ? options.publishAddress : "127.0.0.1";
   let stubs: string | undefined;
 
   const inject = (operation: Operation, injection: Injection) => {
     injections.set(operation, [...(injections.get(operation) ?? []), injection]);
+  };
+
+  const queue = (operation: Operation, error: RuntimeError | Capacity | Refusal) => {
+    if (error instanceof Refusal) {
+      refusals.set(operation, [...(refusals.get(operation) ?? []), error]);
+    } else if (error instanceof Capacity) {
+      capacityFailures.set(operation, [...(capacityFailures.get(operation) ?? []), error]);
+    } else {
+      inject(operation, { kind: "fail", error });
+    }
   };
 
   const enter = (operation: Operation, resource: { readonly id: string }) =>
@@ -375,20 +393,14 @@ export const fakeRuntime = (options: FakeOptions) => {
     root: (name: string) => machines.get(name)?.root,
     machines,
     stubs: () => stubs,
-    failNext: (operation: Operation, error: RuntimeError) => {
-      inject(operation, { kind: "fail", error });
-    },
-    failNextForRoom: (operation: RoomOperation, error: Capacity) => {
-      capacityFailures.set(operation, [...(capacityFailures.get(operation) ?? []), error]);
+    failNext: <O extends Operation>(operation: O, error: FailureOf<O>) => {
+      queue(operation, error);
     },
     failNextObserve: (error: RuntimeError) => {
       observeFailures.push(error);
     },
     hangNextObserve: () => {
       observeFailures.push("hang");
-    },
-    refuseNext: (operation: Refusable, refusal: Refusal) => {
-      refusals.set(operation, [...(refusals.get(operation) ?? []), refusal]);
     },
     /** `entered` ends once the held call has started, so its action is past its claim. */
     holdNext: (operation: Operation) => {

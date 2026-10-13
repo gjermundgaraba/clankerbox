@@ -28,7 +28,7 @@ import {
   Schema,
 } from "effect";
 import { HttpClient, HttpClientRequest, type HttpClientResponse } from "effect/http";
-import type { MachineRef, RuntimeError } from "../../runtime.ts";
+import type { MachineRef, RoomError, RuntimeError } from "../../runtime.ts";
 
 export const baseUrl = "https://boat.dev/api/v1";
 
@@ -233,7 +233,7 @@ export interface Settings {
   readonly url: string;
 }
 
-/** A 404 is boat's: its sandbox or snapshot is gone. */
+/** A 404 is boat's: its sandbox or snapshot is gone. Only the reads and deletes see it. */
 type Failure = RuntimeError | NotFound;
 
 const capacity = (message: string) => new Capacity({ message });
@@ -259,39 +259,31 @@ interface Call {
 export interface Api {
   readonly sandbox: (id: string) => Effect.Effect<Option.Option<Sandbox>, RuntimeError>;
   /** The operator's own sandboxes included. */
-  readonly limits: Effect.Effect<typeof Limits.Type, Failure>;
+  readonly limits: Effect.Effect<typeof Limits.Type, RuntimeError>;
   /** Create, fork and resume each count as a start, and repeat under their `key`. */
-  readonly create: (
-    key: string,
-    type: TypeName,
-    from?: string,
-  ) => Effect.Effect<string, Failure | Capacity>;
-  readonly fork: (
-    key: string,
-    source: string,
-    type: TypeName,
-  ) => Effect.Effect<string, Failure | Capacity>;
+  readonly create: (key: string, type: TypeName, from?: string) => Effect.Effect<string, RoomError>;
+  readonly fork: (key: string, source: string, type: TypeName) => Effect.Effect<string, RoomError>;
   /** boat takes no `Idempotency-Key` here. */
-  readonly resume: (id: string) => Effect.Effect<void, Failure | Capacity>;
+  readonly resume: (id: string) => Effect.Effect<void, RoomError>;
   /** Never with `force`, which drops everything written since the last snapshot. */
-  readonly stop: (id: string) => Effect.Effect<void, Failure>;
+  readonly stop: (id: string) => Effect.Effect<void, RuntimeError>;
   readonly delete: (id: string) => Effect.Effect<void, RuntimeError>;
-  readonly rename: (id: string, name: string) => Effect.Effect<void, Failure>;
+  readonly rename: (id: string, name: string) => Effect.Effect<void, RuntimeError>;
   /**
    * The answer's address and host key go unread: the state gives the endpoint, and the command
    * API the host keys.
    */
-  readonly authorize: (id: string, publicKey: string) => Effect.Effect<void, Failure>;
+  readonly authorize: (id: string, publicKey: string) => Effect.Effect<void, RuntimeError>;
   /** boat's command API takes no stdin and caps a call at 600 s. */
   readonly command: (
     id: string,
     command: string,
     timeoutSeconds: number,
-  ) => Effect.Effect<typeof Finished.Type, Failure>;
+  ) => Effect.Effect<typeof Finished.Type, RuntimeError>;
   readonly saveSnapshot: (
     sandboxId: string,
     name: string,
-  ) => Effect.Effect<typeof NamedSnapshot.Type, Failure | Capacity>;
+  ) => Effect.Effect<typeof NamedSnapshot.Type, RoomError>;
   readonly snapshot: (
     name: string,
   ) => Effect.Effect<Option.Option<typeof NamedSnapshot.Type>, RuntimeError>;
@@ -522,12 +514,24 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         );
       };
 
-    const send = sendWith<never>(undefined);
+    /** For the reads and deletes, to which a 404 means the sandbox or snapshot is gone. */
+    const sendOrAbsent = sendWith<never>(undefined);
 
-    const sendTakingRoom = sendWith(capacity);
+    /** To any other call a 404 is boat's own: what it acts on went away under it. */
+    const present = <A, E extends RoomError>(
+      call: Effect.Effect<A, E | NotFound>,
+    ): Effect.Effect<A, E | Internal> =>
+      Effect.mapError(call, (error) =>
+        error instanceof NotFound ? new Internal({ message: error.message }) : error,
+      );
+
+    const send = <A>(call: Call, schema: Schema.Decoder<A>) => present(sendOrAbsent(call, schema));
+
+    const sendTakingRoom = <A>(call: Call, schema: Schema.Decoder<A>) =>
+      present(sendWith(capacity)(call, schema));
 
     const sandbox = (id: string) =>
-      send({ method: "GET", path: `/sandboxes/${id}` }, SandboxInfo).pipe(
+      sendOrAbsent({ method: "GET", path: `/sandboxes/${id}` }, SandboxInfo).pipe(
         Effect.map(({ sandbox: found }) => Option.some(found)),
         Effect.catchTag("NotFound", () => Effect.succeedNone),
       );
@@ -571,7 +575,7 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
       stop: (id: string) =>
         Effect.asVoid(send({ method: "POST", path: `/sandboxes/${id}/stop`, body: {} }, Accepted)),
       delete: (id: string) =>
-        send(
+        sendOrAbsent(
           {
             method: "DELETE",
             path: `/sandboxes/${id}`,
@@ -616,12 +620,12 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
           (saved) => saved.snapshot,
         ),
       snapshot: (name: string) =>
-        send({ method: "GET", path: `/named-snapshots/${name}` }, NamedSnapshotInfo).pipe(
+        sendOrAbsent({ method: "GET", path: `/named-snapshots/${name}` }, NamedSnapshotInfo).pipe(
           Effect.map((info) => Option.some(info.snapshot)),
           Effect.catchTag("NotFound", () => Effect.succeedNone),
         ),
       deleteSnapshot: (name: string) =>
-        send({ method: "DELETE", path: `/named-snapshots/${name}` }, Accepted).pipe(
+        sendOrAbsent({ method: "DELETE", path: `/named-snapshots/${name}` }, Accepted).pipe(
           Effect.asVoid,
           Effect.catchTag("NotFound", () => Effect.void),
         ),

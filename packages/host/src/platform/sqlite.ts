@@ -4,8 +4,6 @@ import {
   ActionName,
   ActionRecord,
   ActionStatus,
-  CheckpointActionName,
-  CheckpointActionRecord,
   Checkpoint,
   Conflict,
   Internal,
@@ -83,12 +81,12 @@ export const migrations: ReadonlyArray<string> = [
   ) STRICT`,
 ];
 
-const actionColumns = <Name extends Schema.Top>(name: Name) => ({
-  action_name: name,
+const actionColumns = {
+  action_name: ActionName,
   action_status: ActionStatus,
   action_error_tag: Schema.NullOr(Schema.String),
   action_error_message: Schema.NullOr(Schema.String),
-});
+};
 
 const columns = {
   name: Schema.String,
@@ -106,7 +104,7 @@ const Columns = Schema.Struct(columns);
 
 const Row = Schema.Struct({
   ...columns,
-  ...actionColumns(ActionName),
+  ...actionColumns,
   port: Schema.NullOr(Schema.Int),
   host_key: Schema.NullOr(Schema.String),
   made: Schema.Literals([0, 1]),
@@ -114,7 +112,7 @@ const Row = Schema.Struct({
 
 const CheckpointRow = Schema.Struct({
   ...columns,
-  ...actionColumns(CheckpointActionName),
+  ...actionColumns,
   machine: Schema.String,
   kind: Checkpoint.fields.kind,
   pin: Schema.NullOr(Schema.String),
@@ -125,35 +123,20 @@ const decodeRow = Schema.decodeUnknownSync(Row);
 
 const decodeCheckpointRow = Schema.decodeUnknownSync(CheckpointRow);
 
-interface ActionFields {
-  readonly action_name: string;
-  readonly action_status: ActionStatus;
-  readonly action_error_tag: string | null;
-  readonly action_error_message: string | null;
-}
+const ActionColumns = Schema.Struct(actionColumns);
 
-interface ActionInput {
-  readonly name: string;
-  readonly status: ActionStatus;
-  readonly error?: { readonly tag: string; readonly message: string };
-}
+const decodeAction = Schema.decodeUnknownSync(ActionRecord);
 
-const actionOf =
-  <A>(decode: (input: ActionInput) => A) =>
-  (row: ActionFields): A =>
-    decode(
-      row.action_error_tag === null || row.action_error_message === null
-        ? { name: row.action_name, status: row.action_status }
-        : {
-            name: row.action_name,
-            status: row.action_status,
-            error: { tag: row.action_error_tag, message: row.action_error_message },
-          },
-    );
-
-const machineActionOf = actionOf(Schema.decodeUnknownSync(ActionRecord));
-
-const checkpointActionOf = actionOf(Schema.decodeUnknownSync(CheckpointActionRecord));
+const actionOf = (row: typeof ActionColumns.Type): ActionRecord =>
+  decodeAction(
+    row.action_error_tag === null || row.action_error_message === null
+      ? { name: row.action_name, status: row.action_status }
+      : {
+          name: row.action_name,
+          status: row.action_status,
+          error: { tag: row.action_error_tag, message: row.action_error_message },
+        },
+  );
 
 const resourceOf = (row: typeof Columns.Type): Resource => ({
   name: row.name,
@@ -169,7 +152,7 @@ const resourceOf = (row: typeof Columns.Type): Resource => ({
 
 const fromRow = (row: typeof Row.Type): MachineRecord => ({
   ...resourceOf(row),
-  action: machineActionOf(row),
+  action: actionOf(row),
   port: row.port ?? undefined,
   hostKey: row.host_key ?? undefined,
   made: row.made === 1,
@@ -177,7 +160,7 @@ const fromRow = (row: typeof Row.Type): MachineRecord => ({
 
 const fromCheckpointRow = (row: typeof CheckpointRow.Type): CheckpointRecord => ({
   ...resourceOf(row),
-  action: checkpointActionOf(row),
+  action: actionOf(row),
   machine: row.machine,
   kind: row.kind,
   pin: row.pin ?? undefined,

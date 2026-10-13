@@ -1,11 +1,8 @@
 import {
   type ClankerboxError,
   Client,
-  ConflictKind,
-  ErrorTag,
   hostErrors,
   Invalid,
-  InvalidFile,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -44,32 +41,25 @@ export class SpawnFailed extends Schema.TaggedError<SpawnFailed>()("SpawnFailed"
   }
 }
 
-export type Failure = ClankerboxError | InvalidFile | SpawnFailed;
+/** Everything the CLI reports: a host's errors, the client's, and its own. */
+const failures = [...hostErrors, Unavailable, SpawnFailed] as const;
 
-export const ErrorDocument = Schema.Struct({
-  message: Schema.String,
-  tag: Schema.Literals([
-    ...ErrorTag.literals,
-    InvalidFile.fields._tag.schema.literal,
-    SpawnFailed.fields._tag.schema.literal,
-  ]),
-  retryable: Schema.Boolean,
-  kind: Schema.optionalKey(ConflictKind),
-  readOnly: Schema.optionalKey(Schema.Boolean),
-  host: Schema.optionalKey(Schema.String),
-  action: Schema.optionalKey(Schema.String),
-  id: Schema.optionalKey(Schema.String),
-  file: Schema.optionalKey(Schema.String),
-  program: Schema.optionalKey(Schema.String),
-});
+const Failure = Schema.Union(failures);
+
+export type Failure = typeof Failure.Type;
+
+const encodeFailure = Schema.encodeSync(Failure);
+
+/** `--json`'s error: the error's own fields, with its tag as `tag`, and `retryable`. */
+export const ErrorDocument = Schema.Union(
+  failures.map(({ fields: { _tag, ...fields } }) =>
+    Schema.Struct({ ...fields, tag: _tag, retryable: Schema.Boolean }),
+  ),
+);
 
 export const UnreachableDocument = Schema.Struct({ host: Schema.String, error: ErrorDocument });
 
-const encodeFailure = Schema.encodeSync(
-  Schema.Union([...hostErrors, Unavailable, InvalidFile, SpawnFailed]),
-);
-
-const errorDocument = (error: Failure): typeof ErrorDocument.Type => {
+const errorDocument = (error: Failure) => {
   const { _tag, ...fields } = encodeFailure(error);
 
   return { ...fields, tag: _tag, retryable: error.retryable };
@@ -103,9 +93,7 @@ export const table = (rows: ReadonlyArray<ReadonlyArray<string>>): string => {
     .join("\n");
 };
 
-export const unreachableDocument = (
-  unreachable: ReadonlyArray<Client.Unreachable>,
-): ReadonlyArray<typeof UnreachableDocument.Type> =>
+export const unreachableDocument = (unreachable: ReadonlyArray<Client.Unreachable>) =>
   unreachable.map(({ host, error }) => ({ host, error: errorDocument(error) }));
 
 export const warnUnreachable = (unreachable: ReadonlyArray<Client.Unreachable>) =>
@@ -117,7 +105,9 @@ export const warnUnreachable = (unreachable: ReadonlyArray<Client.Unreachable>) 
 
 export const clientFlags = {
   json: Flag.Boolean("json").pipe(
-    Flag.withDescription("Print JSON: the result, or {error: {message, tag, retryable}}."),
+    Flag.withDescription(
+      "Print JSON: the result, or {error}: the error's fields, its tag and whether it is retryable.",
+    ),
     Flag.withDefault(false),
   ),
   config: Flag.String("config").pipe(
@@ -161,7 +151,7 @@ export const withClient = <A, R>(
   body: (
     client: Client.Interface,
     config: LoadedConfig,
-  ) => Effect.Effect<A, ClankerboxError | InvalidFile, R>,
+  ) => Effect.Effect<A, ClankerboxError | Invalid, R>,
 ): Effect.Effect<A, Exited, R | Services> =>
   Effect.gen(function* () {
     const timeout = yield* parsed(flags.timeout ?? Option.none(), "--timeout", parseSeconds);
@@ -240,7 +230,7 @@ export const printResource = <A, Encoded extends object, R>(
     readonly call: (
       client: Client.Interface,
       config: LoadedConfig,
-    ) => Effect.Effect<A, ClankerboxError | InvalidFile, R>;
+    ) => Effect.Effect<A, ClankerboxError | Invalid, R>;
     readonly encode: (resource: A) => Encoded;
     readonly text: (resource: A, now: DateTime.Utc) => string;
   },

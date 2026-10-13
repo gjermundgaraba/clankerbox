@@ -69,7 +69,7 @@ layer(NodeServices.layer)((it) => {
 
         expect(unset.code).toBe(1);
         expect(decodeJsonError(unset.stdout).error).toMatchObject({
-          tag: "InvalidFile",
+          tag: "Invalid",
           message: expect.stringContaining("no profiles directory"),
         });
 
@@ -81,7 +81,7 @@ layer(NodeServices.layer)((it) => {
         ]);
 
         expect(missing.code).toBe(1);
-        expect(decodeJsonError(missing.stdout).error.tag).toBe("InvalidFile");
+        expect(decodeJsonError(missing.stdout).error.tag).toBe("Invalid");
 
         const profiles = yield* writeProfiles(dir);
 
@@ -95,7 +95,7 @@ layer(NodeServices.layer)((it) => {
         ]);
 
         expect(broken.code).toBe(1);
-        expect(decodeJsonError(broken.stdout).error.tag).toBe("InvalidFile");
+        expect(decodeJsonError(broken.stdout).error.tag).toBe("Invalid");
         expect(decodeJsonError(broken.stdout).error.message).toBe(
           `profile ${join(profiles, "broken.json")}: cpu: missing; ramMib: missing; diskGib: missing`,
         );

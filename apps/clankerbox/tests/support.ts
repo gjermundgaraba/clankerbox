@@ -104,7 +104,10 @@ export const hostIn = (stubs: Array<StubHost>) => (options: Parameters<typeof st
 
 const JsonError = Schema.fromJsonString(Schema.Struct({ error: ErrorDocument }));
 
-export const decodeJsonError = Schema.decodeUnknownSync(JsonError);
+const decodeJson = Schema.decodeUnknownSync(JsonError);
+
+/** Strict, so a field the CLI prints and `ErrorDocument` lacks fails the test. */
+export const decodeJsonError = (text: string) => decodeJson(text, { onExcessProperty: "error" });
 
 export const sizes = ["--base", "ubuntu", "--cpu", "2", "--ram", "4G", "--disk", "20G"];
 

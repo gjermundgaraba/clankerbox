@@ -2,15 +2,8 @@ import { Duration, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
 import { it } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
-import { Capacity, Client, type MachineSpec, version } from "../../src/index.ts";
-import {
-  type Endpoint,
-  machine,
-  Silent,
-  type StubHost,
-  stubHost,
-  transport,
-} from "../stub-host.ts";
+import { Capacity, Client, type MachineSpec, version } from "../src/index.ts";
+import { type Endpoint, machine, Silent, type StubHost, stubHost, transport } from "./stub-host.ts";
 
 const stubs: Array<StubHost> = [];
 
@@ -139,21 +132,34 @@ it.effect("a host's error comes back as itself, naming the host, the action and 
   }),
 );
 
-it.effect(
-  "an error from no one call, such as a placement no host takes, names no host, action or ID",
-  () =>
-    Effect.gen(function* () {
-      const linux = host({ id: "linux", bases: ["tahoe"] });
+it.effect("a placement no host takes names the action, but no host or ID", () =>
+  Effect.gen(function* () {
+    const linux = host({ id: "linux", bases: ["tahoe"] });
 
-      const error = yield* withClient([["linux", linux]], (client) =>
-        Effect.flip(client.create("dev", spec)),
-      );
+    const error = yield* withClient([["linux", linux]], (client) =>
+      Effect.flip(client.create("dev", spec)),
+    );
 
-      expect(error._tag).toBe("Precondition");
-      expect(error).not.toHaveProperty("host");
-      expect(error).not.toHaveProperty("action");
-      expect(error).not.toHaveProperty("id");
-    }),
+    expect(error._tag).toBe("Precondition");
+    expect(error).toMatchObject({ action: "createMachine" });
+    expect(error).not.toHaveProperty("host");
+    expect(error).not.toHaveProperty("id");
+  }),
+);
+
+it.effect("a malformed ID is Invalid naming the action, sent to no host", () =>
+  Effect.gen(function* () {
+    const linux = host({ id: "linux", bases: ["ubuntu"] });
+
+    const error = yield* withClient([["linux", linux]], (client) =>
+      Effect.flip(client.start("not an id")),
+    );
+
+    expect(error._tag).toBe("Invalid");
+    expect(error).toMatchObject({ action: "startMachine" });
+    expect(error).not.toHaveProperty("host");
+    expect(linux.calls).toEqual([]);
+  }),
 );
 
 it.effect("a list fans out and names the host that didn't answer", () =>
@@ -383,7 +389,7 @@ it.effect(
       expect(error._tag).toBe("Unavailable");
       expect(error.message).toContain("linux offers ubuntu");
       expect(error.message).toContain(
-        "mac failed: host mac (http://mac.test) didn't answer get host",
+        "mac failed: host mac (http://mac.test) didn't answer getHost",
       );
       expect(error.retryable).toBe(true);
     }),
@@ -731,7 +737,7 @@ it.effect(
       );
 
       expect(error._tag).toBe("Invalid");
-      expect(error.message).toContain("create linux_dev");
+      expect(error.message).toContain("createMachine linux_dev");
       expect(error.message.includes(marker)).toBe(false);
       expect(linux.calls).toEqual([]);
     }),

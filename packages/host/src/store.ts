@@ -3,8 +3,6 @@ import type {
   ActionName,
   ActionRecord,
   Checkpoint,
-  CheckpointActionName,
-  CheckpointActionRecord,
   Conflict,
   Internal,
   NotFound,
@@ -35,9 +33,10 @@ export interface MachineRecord extends Resource {
   readonly made: boolean;
 }
 
-/** Ready checkpoints never change, so restores read them without a claim. */
+/**
+ * Ready checkpoints never change, so restores read them without a claim. Only a capture or a delete claims a checkpoint row, so its action is one of them. */
 export interface CheckpointRecord extends Resource {
-  readonly action: CheckpointActionRecord;
+  readonly action: ActionRecord;
   readonly machine: string;
   readonly kind: Checkpoint["kind"];
   /** A `ram` checkpoint restores only under the runtime's pin at capture. */
@@ -56,12 +55,6 @@ export type NewCheckpoint = Omit<CheckpointRecord, "action">;
 export interface Records {
   readonly machine: MachineRecord;
   readonly checkpoint: CheckpointRecord;
-}
-
-/** The actions each kind of row records. */
-export interface Actions {
-  readonly machine: ActionName;
-  readonly checkpoint: CheckpointActionName;
 }
 
 export interface RowRef<K extends Kind = Kind> {
@@ -108,7 +101,7 @@ export interface Interface {
    * in steps and still release or end everything at once.
    */
   readonly hold: <K extends Kind>(
-    action: Actions[K],
+    action: ActionName,
     row: RowRef<K>,
     joining?: Token,
   ) => Effect.Effect<Claim<Records[K]>, NotFound | Conflict | Internal>;
@@ -118,7 +111,7 @@ export interface Interface {
    * time, so the port's unique index is only a backstop.
    */
   readonly insert: <R extends NewRow>(
-    action: Actions[R["kind"]],
+    action: ActionName,
     row: R,
     joining?: Token,
   ) => Effect.Effect<Token, Conflict | Internal>;

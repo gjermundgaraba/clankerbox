@@ -51,7 +51,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a config with an unknown key is InvalidFile, and one with a duplicate host Invalid",
+    "a config with an unknown key is Invalid naming the file, and one listing a host twice Invalid",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -72,15 +72,12 @@ layer(NodeServices.layer)((it) => {
           }),
         );
 
-        for (const [config, tag] of [
-          [typo, "InvalidFile"],
-          [twice, "Invalid"],
-        ] as const) {
-          const { code, stdout } = yield* cli(["hosts", "--json", "--config", config]);
+        const typoed = yield* cli(["hosts", "--json", "--config", typo]);
+        const listedTwice = yield* cli(["hosts", "--json", "--config", twice]);
 
-          expect(code).toBe(1);
-          expect(decodeJsonError(stdout).error.tag).toBe(tag);
-        }
+        expect([typoed.code, listedTwice.code]).toEqual([1, 1]);
+        expect(decodeJsonError(typoed.stdout).error).toMatchObject({ tag: "Invalid", file: typo });
+        expect(decodeJsonError(listedTwice.stdout).error.tag).toBe("Invalid");
       }),
   );
 
@@ -99,13 +96,13 @@ layer(NodeServices.layer)((it) => {
           Effect.map(cli(["hosts", "--config", config]), ({ stderr }) => stderr);
 
         expect(yield* run(wrong)).toBe(
-          `clankerbox: InvalidFile: client config ${wrong}: host: not a known field; hosts[0].id: a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter; hosts[0].url: missing`,
+          `clankerbox: Invalid: client config ${wrong}: host: not a known field; hosts[0].id: a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter; hosts[0].url: missing`,
         );
         expect(yield* run(empty)).toBe(
           "clankerbox: Invalid: the host list is empty: a client needs a host",
         );
         expect(yield* run(join(dir, "absent.json"))).toBe(
-          `clankerbox: InvalidFile: couldn't read client config ${join(dir, "absent.json")}: no such file or directory`,
+          `clankerbox: Invalid: couldn't read client config ${join(dir, "absent.json")}: no such file or directory`,
         );
       }),
   );

@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Checkpoint, ErrorTag, Host, Limit, Machine } from "@gjermundgaraba/clankerbox-sdk";
+import { Checkpoint, Host, Limit, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
@@ -63,7 +63,7 @@ const ClientConfig = Schema.fromJsonString(Schema.Struct({ hosts: Schema.Array(H
 
 const ErrorDocument = Schema.Struct({
   message: Schema.String,
-  tag: Schema.Literals([...ErrorTag.literals, "InvalidFile", "SpawnFailed"]),
+  tag: Schema.String,
   retryable: Schema.Boolean,
 });
 

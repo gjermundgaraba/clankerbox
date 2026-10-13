@@ -37,9 +37,10 @@ const setUp = (down: ReadonlyArray<string> = []) =>
 
 const sizes = ["--base", "ubuntu", "--cpu", "1", "--ram", "1G", "--disk", "10G"];
 
-const decodeFailure = Schema.decodeUnknownSync(
-  Schema.fromJsonString(Schema.Struct({ error: ErrorDocument })),
-);
+const decodeFailure = (text: string) =>
+  Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ error: ErrorDocument })))(text, {
+    onExcessProperty: "error",
+  });
 
 // The host runs on the real clock, as it does in `clankerbox host`.
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {

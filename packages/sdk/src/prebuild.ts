@@ -1,5 +1,5 @@
 import { Effect, Option } from "effect";
-import type * as Client from "./client/client.ts";
+import type * as Client from "./client.ts";
 import { type ClankerboxError, Invalid, Precondition } from "./errors.ts";
 import { formatId } from "./ids.ts";
 import type { Checkpoint, Host, Machine, MachineSpec } from "./resources.ts";

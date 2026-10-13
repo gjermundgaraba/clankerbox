@@ -391,7 +391,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const linux = yield* host();
 
-      linux.fake.failNextForRoom("admit", new Capacity({ message: "no room" }));
+      linux.fake.failNext("admit", new Capacity({ message: "no room" }));
 
       const error = yield* failure(linux, linux.machines.create(request("dev")));
 
@@ -407,7 +407,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* linux.run(linux.machines.create(request("dev")));
       yield* linux.run(linux.machines.stop("linux_dev"));
-      linux.fake.failNextForRoom("admit", new Capacity({ message: "no room" }));
+      linux.fake.failNext("admit", new Capacity({ message: "no room" }));
 
       const error = yield* failure(linux, linux.machines.start("linux_dev"));
       const [row] = yield* rows(linux);
@@ -421,7 +421,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const linux = yield* host();
 
-      linux.fake.refuseNext(
+      linux.fake.failNext(
         "create",
         new Refusal({ error: new Capacity({ message: "account full" }) }),
       );

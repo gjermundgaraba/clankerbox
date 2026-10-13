@@ -1,6 +1,7 @@
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
+import { Http, Invalid } from "../src/index.ts";
 import { type StubHost, stubHost } from "./stub-host.ts";
 
 let host: StubHost | undefined;
@@ -27,6 +28,12 @@ const post = async (path: string, body: Schema.Json) => {
 };
 
 const create = { id: "linux_dev", base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
+
+test("every action declares Invalid, which the host's version check answers before any handler", () => {
+  expect(
+    Http.actions.filter((action) => !action.error.includes(Invalid)).map(({ name }) => name),
+  ).toEqual([]);
+});
 
 test("a valid call is answered", async () => {
   const { status } = await post("createMachine", create);
