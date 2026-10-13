@@ -103,12 +103,14 @@ export class InvalidFile extends Schema.TaggedError<InvalidFile>()("InvalidFile"
   }
 }
 
-/** Every action declares these. */
+/** What a host may answer with; each action declares its own share. */
 export const hostErrors = [Invalid, NotFound, Conflict, Precondition, Capacity, Internal] as const;
 
 export type HostError = InstanceType<(typeof hostErrors)[number]>;
 
-export type ClankerboxError = HostError | Unavailable;
+export const ClankerboxError = Schema.Union([...hostErrors, Unavailable]);
+
+export type ClankerboxError = typeof ClankerboxError.Type;
 
 export const HostErrorTag = Schema.Literals(
   hostErrors.map((error) => error.fields._tag.schema.literal),

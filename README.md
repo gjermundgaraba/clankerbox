@@ -527,7 +527,7 @@ every bump of it:
 
 ### Architecture
 
-- **Clients** (`packages/sdk/src/client/client.ts`) hold the host list.
+- **Clients** (`packages/sdk/src/client.ts`) hold the host list.
   `create` is placed; every other call names an ID and is routed by its host
   part, without the network. Lists fan out to every host and return partial
   results. There is no name lookup and no client-side state beyond config and
@@ -584,7 +584,7 @@ every bump of it:
 
 ### Placement
 
-Only `create` is placed (`client/client.ts`, `place`). A host in its options (the
+Only `create` is placed (`client.ts`, `place`). A host in its options (the
 CLI's `--host`, or else the profile's `host`) sends it to that host. Otherwise the client reads every
 host's bases in parallel and goes through the answers in list order: the
 first host that answers and offers the base wins, and the reads still out are
@@ -681,14 +681,16 @@ port's types say so (`runtime.ts`). A 404 from boat is boat's own, so it is
 with, and the host's routes are type-checked against it: lists `Internal`,
 reads `NotFound` too, changes `Conflict` and `Precondition` too, and the
 actions that take room `Capacity` too; every action also declares `Invalid`,
-which a host answers a client of another release with. The client's methods
-still declare every tag, plus `Unavailable`.
+which a host answers a client of another release with (a test checks it). Each
+client method fails with its action's errors and the two the client makes itself:
+`Unavailable` for a reply that never came, `Internal` for one it couldn't use
+(`ErrorOf` in `client.ts`).
 
 The client sets where a call met its error, and a host sends none of it:
 `host`, `action` (the contract's name, such as `createMachine`) and `id` (the
 resource the call reads, changes or makes: for a fork, restore, capture or
-create, the one it makes). An error from no one call, such as a placement no
-host takes, has none. The Rivet provider deletes a failed create's `id`, and
+create, the one it makes). An error raised before anything is sent, such as a
+malformed ID or a placement no host takes, names only the action. The Rivet provider deletes a failed create's `id`, and
 nothing when there is none.
 
 A file the client reads, a config, profile or setup, that can't be read or
@@ -1152,8 +1154,7 @@ database or a vendor's API, live in `platform/`.
   (`resources.ts`) and errors (`errors.ts`), IDs (`ids.ts`), the release
   (`release.ts`), profiles (`profile.ts`), setups and recipes (`setup.ts`),
   prebuilds (`prebuild.ts`), ssh pinning (`ssh.ts`) and units (`text.ts`).
-  The client is `client/client.ts`, over one host's binding and the
-  translation of its replies (`client/host-api.ts`). The package's `.` entry
+  The client is `client.ts`. The package's `.` entry
   needs no Node; `./node` (`node.ts`) holds what does.
 - **Host** (`packages/host/src`): the domains are the machine and checkpoint
   actions (`machines.ts`, `checkpoints.ts`), the order every action runs in
@@ -1194,7 +1195,7 @@ These practices are in force with the layout, and each is checked where it can b
 
 - **A service's constructor and Layer live in its file:** `machines.ts`,
   `checkpoints.ts`, each runtime, the Store (`platform/sqlite.ts`, `open` and
-  `layer`) and the client (`client/client.ts`, `Client.make` and `layer`).
+  `layer`) and the client (`client.ts`, `Client.make` and `layer`).
   The SDK's Node Layer is in `node.ts` so that `.` loads no Node.
 - **Operations are contracts.** The host API is one effect-actions contract
   (`packages/sdk/src/api.ts`); the host's routes and the client's calls are
