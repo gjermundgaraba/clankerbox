@@ -118,7 +118,7 @@ test("a malformed ID is Invalid and sends nothing", async () => {
   expect(linux.calls).toEqual([]);
 });
 
-test("a host's error comes back as itself", async () => {
+test("a host's error comes back as itself, naming the host, the action and the ID", async () => {
   const linux = host({ id: "linux", bases: ["ubuntu"] });
 
   const error = await withClient([["linux", linux]], (client) =>
@@ -126,6 +126,20 @@ test("a host's error comes back as itself", async () => {
   );
 
   expect(error._tag).toBe("NotFound");
+  expect(error).toMatchObject({ host: "linux", action: "getMachine", id: "linux_gone" });
+});
+
+test("an error from no one call, such as a placement no host takes, names no host, action or ID", async () => {
+  const linux = host({ id: "linux", bases: ["tahoe"] });
+
+  const error = await withClient([["linux", linux]], (client) =>
+    Effect.flip(client.create("dev", spec)),
+  );
+
+  expect(error._tag).toBe("Precondition");
+  expect(error).not.toHaveProperty("host");
+  expect(error).not.toHaveProperty("action");
+  expect(error).not.toHaveProperty("id");
 });
 
 test("a list fans out and names the host that didn't answer", async () => {
@@ -408,6 +422,7 @@ test("Capacity from the chosen host is the reply; placement never moves on", asy
   );
 
   expect(error._tag).toBe("Capacity");
+  expect(error).toMatchObject({ host: "linux", action: "createMachine", id: "linux_dev" });
   expect(full.creates).toHaveLength(1);
   expect(spare.creates).toHaveLength(0);
 });
@@ -436,6 +451,7 @@ test("a fork whose reply is lost names the new machine's ID", async () => {
   expect(error._tag).toBe("Unavailable");
   expect(error.retryable).toBe(false);
   expect(error.message).toContain("read linux_copy");
+  expect(error).toMatchObject({ host: "linux", action: "forkMachine", id: "linux_copy" });
   expect(linux.calls).toEqual(["machine.fork"]);
 });
 

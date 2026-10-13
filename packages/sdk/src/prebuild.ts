@@ -114,9 +114,8 @@ export interface Built {
 
 /**
  * Builds the spec's prebuild on the host a create of it lands on: a machine of its own runs the
- * setup, is captured under the prebuild's name, and is deleted. smolvm captures a running
- * machine, RAM included, and boat a running one too; Tart only a stopped one, so its machine is
- * stopped first. A prebuild whose capture is done is the answer as it is; one that failed or is
+ * setup, is captured under the prebuild's name, and is deleted. A host whose runtime captures
+ * only a stopped machine, as Tart does, has its machine stopped first. A prebuild whose capture is done is the answer as it is; one that failed or is
  * still captured is refused.
  *
  * Each build's machine has a random name of its own, and the host takes a checkpoint name once,
@@ -157,7 +156,7 @@ export const build = (
     const checkpoint = yield* Effect.gen(function* () {
       yield* client.create(builder, spec, { host: host.id });
 
-      if (host.runtime === "tart") {
+      if (host.captureFrom === "stopped") {
         yield* client.stop(builderId);
       }
 

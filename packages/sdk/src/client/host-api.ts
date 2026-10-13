@@ -7,7 +7,16 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Duration, Effect, Match } from "effect";
 import { HttpClient, type HttpClientError, HttpClientRequest } from "effect/http";
 import { Http } from "../api.ts";
-import { type ClankerboxError, Internal, Invalid, Unavailable } from "../errors.ts";
+import {
+  Capacity,
+  type ClankerboxError,
+  Conflict,
+  Internal,
+  Invalid,
+  NotFound,
+  Precondition,
+  Unavailable,
+} from "../errors.ts";
 import { version, versionHeader } from "../release.ts";
 import type { Host } from "../resources.ts";
 import type { HostEntry } from "./client.ts";
@@ -28,15 +37,15 @@ export type HostApi = Effect.Success<ReturnType<typeof hostApi>>;
 export type CallError = ActionHttp.MethodError<(typeof Http.actions)[number]>;
 
 /** What a call reads of its action's contract. */
-export type Contract = Pick<Action.Any, "readOnly">;
+export type Contract = Pick<Action.Any, "name" | "readOnly">;
 
 /** Which call met an error, for its message and for whether it is retryable. */
 export interface CallContext {
   readonly host: HostEntry;
   readonly timeout: Duration.Duration | undefined;
-  readonly readOnly: boolean;
+  readonly contract: Contract;
   /** What the call does, such as `start linux_dev` or `list machines`. */
-  readonly action: string;
+  readonly what: string;
   /** The ID to read when a mutation's reply is lost. */
   readonly target?: string | undefined;
 }
@@ -49,14 +58,14 @@ const causeDetail = (error: HttpClientError.HttpClientError): string =>
  * request may or may not have reached its host, so it may have run.
  */
 const unanswered = (context: CallContext, detail: string): Unavailable =>
-  context.readOnly
+  context.contract.readOnly
     ? new Unavailable({
-        message: `host ${context.host.id} (${context.host.url}) didn't answer ${context.action}: ${detail}`,
-        readOnly: context.readOnly,
+        message: `host ${context.host.id} (${context.host.url}) didn't answer ${context.what}: ${detail}`,
+        readOnly: context.contract.readOnly,
       })
     : new Unavailable({
-        message: `no reply from host ${context.host.id} to ${context.action} (${detail}); the action may have run: read ${context.target ?? "the resource"} to see`,
-        readOnly: context.readOnly,
+        message: `no reply from host ${context.host.id} to ${context.what} (${detail}); the action may have run: read ${context.target ?? "the resource"} to see`,
+        readOnly: context.contract.readOnly,
       });
 
 /** Bounds the wait for the reply; the clock starts when the request is sent. */
@@ -78,8 +87,29 @@ const bounded = <A>(
 /** The host answered with something the call doesn't expect. */
 const unexpected = (context: CallContext, error: { readonly message: string }): Internal =>
   new Internal({
-    message: `host ${context.host.id} answered ${context.action} unexpectedly: ${error.message}`,
+    message: `host ${context.host.id} answered ${context.what} unexpectedly: ${error.message}`,
   });
+
+/** The error, with where it was met: the host, the action, and the ID the call is about. */
+const locate = (error: ClankerboxError, context: CallContext): ClankerboxError => {
+  const host = context.host.id;
+  const action = context.contract.name;
+
+  const where =
+    context.target === undefined ? { host, action } : { host, action, id: context.target };
+
+  return Match.value(error).pipe(
+    Match.tagsExhaustive({
+      Invalid: ({ message }) => new Invalid({ message, ...where }),
+      NotFound: ({ message }) => new NotFound({ message, ...where }),
+      Conflict: ({ message, kind }) => new Conflict({ message, kind, ...where }),
+      Precondition: ({ message }) => new Precondition({ message, ...where }),
+      Capacity: ({ message }) => new Capacity({ message, ...where }),
+      Internal: ({ message }) => new Internal({ message, ...where }),
+      Unavailable: ({ message, readOnly }) => new Unavailable({ message, readOnly, ...where }),
+    }),
+  );
+};
 
 export const settle = <A>(
   call: Effect.Effect<A, CallError>,
@@ -108,7 +138,7 @@ export const settle = <A>(
       InvalidInput: (error) =>
         Effect.fail(
           new Invalid({
-            message: `${context.action}: the request doesn't match the action's input: ${error.message}`,
+            message: `${context.what}: the request doesn't match the action's input: ${error.message}`,
           }),
         ),
       SchemaError: (error) =>
@@ -121,6 +151,7 @@ export const settle = <A>(
       Unauthenticated: (error) => Effect.fail(unexpected(context, error)),
       Forbidden: (error) => Effect.fail(unexpected(context, error)),
     }),
+    Effect.mapError((error) => locate(error, context)),
   );
 
 /** A host this client can use: it calls itself by its entry's ID. */

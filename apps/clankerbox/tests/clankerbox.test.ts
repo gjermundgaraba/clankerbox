@@ -51,7 +51,9 @@ test("host with a config it can't read says so and exits 1", async () => {
   const { code, stderr } = await cli(["host", "--config", "/nonexistent/clankerbox-host.json"]);
 
   expect(code).toBe(1);
-  expect(stderr).toContain("Invalid: couldn't read host config /nonexistent/clankerbox-host.json");
+  expect(stderr).toContain(
+    "InvalidFile: couldn't read host config /nonexistent/clankerbox-host.json",
+  );
 });
 
 test("an unknown flag exits 1", async () => {

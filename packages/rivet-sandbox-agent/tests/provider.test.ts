@@ -17,6 +17,7 @@ import {
   NotFound,
   Prebuild,
   Precondition,
+  Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Layer } from "effect";
 import { SandboxAgent, SandboxDestroyedError } from "sandbox-agent";
@@ -256,9 +257,14 @@ test("a sandbox is a fork of a machine or a restore of a checkpoint when the pro
 
   const missing = await setup({}, { from: { checkpoint: "linux_gone" } });
 
-  await expect(missing.sandbox.create()).rejects.toEqual(
-    new NotFound({ message: "no checkpoint linux_gone" }),
-  );
+  const restoring = missing.sandbox.create();
+
+  await expect(restoring).rejects.toBeInstanceOf(NotFound);
+  await expect(restoring).rejects.toMatchObject({
+    message: "no checkpoint linux_gone",
+    host: "linux",
+    action: "restoreMachine",
+  });
   expect(missing.stub.calls).toEqual(["machine.restore"]);
 });
 
@@ -310,18 +316,91 @@ test("a create that fails deletes the machine it left, and fails with the host's
     machines: [reachable("linux_other")],
   });
 
-  await expect(sandbox.create()).rejects.toEqual(failure);
+  const creating = sandbox.create();
+
+  await expect(creating).rejects.toBeInstanceOf(Precondition);
+  await expect(creating).rejects.toMatchObject({
+    message: failure.message,
+    host: "linux",
+    action: "createMachine",
+    id: expect.stringMatching(/^linux_sandbox-[0-9a-f]{8}$/u),
+  });
 
   // The machine the create left is gone, and nothing else is.
-  expect(stub.calls).toEqual(["host.get", "machine.create", "machine.list", "machine.delete"]);
+  expect(stub.calls).toEqual(["host.get", "machine.create", "machine.delete"]);
   expect(stub.held()).toEqual(["linux_other"]);
+});
+
+test("a create that fails before any host makes a machine, as a placement no host takes, deletes nothing", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "clankerbox-profile-"));
+
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+
+  const profile = join(dir, "elsewhere.json");
+
+  await writeFile(profile, JSON.stringify({ base: "debian", cpu: 2, ramMib: 2048, diskGib: 20 }));
+
+  const { stub, sandbox } = await setup(
+    { machines: [reachable("linux_other")] },
+    { from: { profile } },
+  );
+
+  const creating = sandbox.create();
+
+  await expect(creating).rejects.toBeInstanceOf(Precondition);
+  await expect(creating).rejects.not.toHaveProperty("id");
+  expect(stub.calls).toEqual(["host.get"]);
+  expect(stub.held()).toEqual(["linux_other"]);
+});
+
+test("a create whose prebuild read fails deletes nothing, though the error names the prebuild", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "clankerbox-profile-"));
+
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+
+  const profile = join(dir, "agent.json");
+
+  await writeFile(join(dir, "setup.sh"), "echo set up\n");
+  await writeFile(
+    profile,
+    JSON.stringify({
+      base: "ubuntu",
+      cpu: 2,
+      ramMib: 2048,
+      diskGib: 20,
+      setup: { path: "setup.sh" },
+    }),
+  );
+
+  const lost = new Unavailable({
+    message: "no reply",
+    readOnly: true,
+    host: "linux",
+    action: "getCheckpoint",
+    id: "linux_prebuilt-000000000000",
+  });
+
+  const { stub, sandbox } = await setup({}, { from: { profile } }, undefined, (client) => ({
+    ...client,
+    checkpoint: () => Effect.fail(lost),
+  }));
+
+  await expect(sandbox.create()).rejects.toBeInstanceOf(Unavailable);
+  expect(stub.calls).toEqual(["host.get"]);
+  expect(stub.held()).toEqual([]);
 });
 
 test("a create refused with Conflict, as a name already taken is, deletes nothing", async () => {
   const refusal = new Conflict({ kind: "exists", message: "linux_taken already exists" });
   const { stub, sandbox } = await setup({ createRefused: refusal });
 
-  await expect(sandbox.create()).rejects.toEqual(refusal);
+  const creating = sandbox.create();
+
+  await expect(creating).rejects.toBeInstanceOf(Conflict);
+  await expect(creating).rejects.toMatchObject({
+    kind: "exists",
+    message: refusal.message,
+  });
   expect(stub.calls).toEqual(["host.get", "machine.create"]);
 });
 

@@ -9,6 +9,7 @@
 import {
   type ActionName,
   type Checkpoint,
+  type Host,
   type HostError,
   type Internal,
   type Limit,
@@ -173,6 +174,8 @@ export interface Interface {
   readonly pin: string | undefined;
   /** The kind of every checkpoint the runtime captures: `ram` on smolvm, `disk` on Tart and boat. */
   readonly checkpointKind: CheckpointKind;
+  /** The state `capture` needs its machine in, which the host reports: Tart's `stopped`. */
+  readonly captureFrom: Host["captureFrom"];
   /**
    * The guest user a machine's SSH login is for: the one a setup authorizes the operator's key
    * for. Setup runs as root, so on Linux that is root; on boat too, whose own `user` holds the

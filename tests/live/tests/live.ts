@@ -71,7 +71,7 @@ const ClientConfig = Schema.fromJsonString(Schema.Struct({ hosts: Schema.Array(H
 
 const ErrorDocument = Schema.Struct({
   message: Schema.String,
-  tag: ErrorTag,
+  tag: Schema.Literals([...ErrorTag.literals, "InvalidFile", "SpawnFailed"]),
   retryable: Schema.Boolean,
 });
 

@@ -7,8 +7,9 @@
  */
 import { DatabaseSync } from "node:sqlite";
 import {
-  type ActionName,
+  ActionName,
   ActionRecord,
+  ActionStatus,
   Checkpoint,
   Conflict,
   Internal,
@@ -89,8 +90,8 @@ export const migrations: ReadonlyArray<string> = [
 
 /** The columns every row keeps its last action in. */
 const ActionColumns = Schema.Struct({
-  action_name: ActionRecord.fields.name,
-  action_status: ActionRecord.fields.status,
+  action_name: ActionName,
+  action_status: ActionStatus,
   action_error_tag: Schema.NullOr(Schema.String),
   action_error_message: Schema.NullOr(Schema.String),
 });
@@ -442,8 +443,8 @@ export const open = (
         name: row.name,
         action_name: action.name,
         action_status: action.status,
-        action_error_tag: action.error?.tag ?? null,
-        action_error_message: action.error?.message ?? null,
+        action_error_tag: action.status === "failed" ? action.error.tag : null,
+        action_error_message: action.status === "failed" ? action.error.message : null,
       });
     };
 

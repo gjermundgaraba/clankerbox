@@ -120,13 +120,13 @@ test("a build runs the setup on a machine of its own, captures it under the preb
   expect(await holdings(linux)).toEqual({ machines: [], checkpoints: [made.id] });
 });
 
-test("Tart's builder is stopped before its capture; smolvm's and boat's run", async () => {
-  for (const runtime of ["tart", "smolvm", "boat"] as const) {
-    const stub = host({ id: "box", bases: ["ubuntu"], runtime });
+test("a builder is stopped before its capture only on a host that captures stopped machines", async () => {
+  for (const captureFrom of ["stopped", "running"] as const) {
+    const stub = host({ id: "box", bases: ["ubuntu"], captureFrom });
 
     await withClient([stub], (client) => Prebuild.build(client, spec));
 
-    expect(stub.calls.includes("machine.stop")).toBe(runtime === "tart");
+    expect(stub.calls.includes("machine.stop")).toBe(captureFrom === "stopped");
   }
 });
 

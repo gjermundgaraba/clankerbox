@@ -10,6 +10,7 @@ import {
   type Checkpoint,
   Conflict,
   type CreateRequest,
+  type Host,
   type HostError,
   Http,
   type Limit,
@@ -26,6 +27,8 @@ export interface StubHostOptions {
   readonly runtime?: Runtime;
   /** The runtime's version the host reports. Default: 1.27.3. */
   readonly runtimeVersion?: string;
+  /** The state the host's runtime captures a machine in. Default: running. */
+  readonly captureFrom?: Host["captureFrom"];
   /** Replaces the create handler, for example to refuse with `Capacity` or to run long. */
   readonly create?: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
   /** Replaces the machine delete handler, for example to fail it. */
@@ -220,6 +223,7 @@ export const stubHost = (options: StubHostOptions) => {
         runtime,
         version,
         runtimeVersion: options.runtimeVersion ?? "1.27.3",
+        captureFrom: options.captureFrom ?? "running",
         bases: options.bases,
       }),
     getCapacity: () =>

@@ -5,7 +5,7 @@
  */
 import { Effect, FileSystem, Option, type PlatformError, Predicate } from "effect";
 import { Base64 } from "effect/encoding";
-import { Invalid } from "./errors.ts";
+import { InvalidFile } from "./errors.ts";
 import { describeFileError } from "./text.ts";
 
 const lineLength = 76;
@@ -67,11 +67,14 @@ const selfExtracting = (steps: ReadonlyArray<string>): string =>
  */
 export const packRecipe = (
   directory: string,
-): Effect.Effect<string, Invalid, FileSystem.FileSystem> =>
+): Effect.Effect<string, InvalidFile, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
 
-    const noSetup = new Invalid({ message: `recipe ${directory} has no setup.sh` });
+    const noSetup = new InvalidFile({
+      message: `recipe ${directory} has no setup.sh`,
+      file: directory,
+    });
 
     const setup = yield* fs
       .stat(`${directory}/setup.sh`)
@@ -88,7 +91,7 @@ export const packRecipe = (
     const steps: Array<string> = [];
 
     /** Packs the entries of the recipe's directory `under`, `""` being the recipe itself. */
-    const walk = (under: string): Effect.Effect<void, Invalid | PlatformError.PlatformError> =>
+    const walk = (under: string): Effect.Effect<void, InvalidFile | PlatformError.PlatformError> =>
       Effect.gen(function* () {
         const names = yield* fs.readDirectory(under === "" ? directory : `${directory}/${under}`);
 
@@ -118,8 +121,9 @@ export const packRecipe = (
               steps.push(`chmod +x ${argument(entry)}`);
             }
           } else {
-            return yield* new Invalid({
+            return yield* new InvalidFile({
               message: `recipe ${directory} holds ${entry}, a ${info.type}: a recipe packs only files, directories and symlinks`,
+              file: path,
             });
           }
         }
@@ -131,15 +135,18 @@ export const packRecipe = (
   }).pipe(
     Effect.catchTag("PlatformError", (error) =>
       Effect.fail(
-        new Invalid({
+        new InvalidFile({
           message: `couldn't pack recipe ${directory}: ${describeFileError(error)}`,
+          file: directory,
         }),
       ),
     ),
   );
 
 /** Reads a setup: a script file's text, or a recipe directory packed into one script. */
-export const readSetup = (path: string): Effect.Effect<string, Invalid, FileSystem.FileSystem> =>
+export const readSetup = (
+  path: string,
+): Effect.Effect<string, InvalidFile, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const info = yield* fs.stat(path);
@@ -152,7 +159,10 @@ export const readSetup = (path: string): Effect.Effect<string, Invalid, FileSyst
   }).pipe(
     Effect.catchTag("PlatformError", (error) =>
       Effect.fail(
-        new Invalid({ message: `couldn't read setup ${path}: ${describeFileError(error)}` }),
+        new InvalidFile({
+          message: `couldn't read setup ${path}: ${describeFileError(error)}`,
+          file: path,
+        }),
       ),
     ),
   );

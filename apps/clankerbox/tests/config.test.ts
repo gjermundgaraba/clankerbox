@@ -41,7 +41,7 @@ test("without XDG_CONFIG_HOME the config is read from ~/.config/clankerbox/confi
   expect(code).toBe(0);
 });
 
-test("a config with an unknown key or a duplicate host is Invalid", async () => {
+test("a config with an unknown key is InvalidFile, and one with a duplicate host Invalid", async () => {
   const dir = await scratch(owned);
   const typo = join(dir, "typo.json");
   const twice = join(dir, "twice.json");
@@ -60,11 +60,14 @@ test("a config with an unknown key or a duplicate host is Invalid", async () => 
     }),
   );
 
-  for (const config of [typo, twice]) {
+  for (const [config, tag] of [
+    [typo, "InvalidFile"],
+    [twice, "Invalid"],
+  ] as const) {
     const { code, stdout } = await cli(["hosts", "--json", "--config", config]);
 
     expect(code).toBe(1);
-    expect(decodeJsonError(stdout).error.tag).toBe("Invalid");
+    expect(decodeJsonError(stdout).error.tag).toBe(tag);
   }
 });
 
@@ -79,12 +82,12 @@ test("a config's mistakes are all named, each by its JSON path, and an empty hos
   const run = async (config: string) => (await cli(["hosts", "--config", config])).stderr;
 
   expect(await run(wrong)).toBe(
-    `clankerbox: Invalid: client config ${wrong}: host: not a known field; hosts[0].id: a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter; hosts[0].url: missing`,
+    `clankerbox: InvalidFile: client config ${wrong}: host: not a known field; hosts[0].id: a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter; hosts[0].url: missing`,
   );
   expect(await run(empty)).toBe(
     "clankerbox: Invalid: the host list is empty: a client needs a host",
   );
   expect(await run(join(dir, "absent.json"))).toBe(
-    `clankerbox: Invalid: couldn't read client config ${join(dir, "absent.json")}: no such file or directory`,
+    `clankerbox: InvalidFile: couldn't read client config ${join(dir, "absent.json")}: no such file or directory`,
   );
 });

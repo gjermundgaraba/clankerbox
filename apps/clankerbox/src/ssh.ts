@@ -12,7 +12,7 @@ import {
 import { Effect } from "effect";
 import { Argument, Command } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { clientFlags, Exited, fail, withClient } from "./command.ts";
+import { clientFlags, Exited, fail, SpawnFailed, withClient } from "./command.ts";
 import { stateLabel } from "./machines/view.ts";
 
 /** `[USER@]ID`, as ssh writes a destination: the ID, and the user when one is named. */
@@ -79,7 +79,9 @@ export const ssh = Command.make(
 
       const code = yield* runSsh(target, user ?? target.login.user, flags.args).pipe(
         Effect.catchTag("PlatformError", (error) =>
-          fail(flags.json)(new Precondition({ message: `couldn't run ssh: ${error.message}` })),
+          fail(flags.json)(
+            new SpawnFailed({ message: `couldn't run ssh: ${error.message}`, program: "ssh" }),
+          ),
         ),
       );
 

@@ -242,7 +242,9 @@ clankerbox checkpoint delete linux_base
   Its `--timeout DURATION` only stops waiting: the action runs on, and the CLI
   says it may have run; `get`, or `checkpoint get`, shows how it ended. A read
   gives up on a host after 10 s.
-- `--json` prints the resource, or `{"error": {"message", "tag", "retryable"}}`.
+- `--json` prints the resource, or `{"error": {"message", "tag", "retryable"}}`
+  with the error's own fields when it has them: `kind`, `readOnly`, `host`,
+  `action`, `id`, `file` and `program` (see [Errors](#errors)).
   Lists print what reachable hosts answered and name the unreachable ones; a
   list exits 1 when every host failed. A list with nothing in it prints no
   table and says so on stderr.
@@ -398,12 +400,14 @@ program.pipe(
   runs, unless `timeout` is set.
 - `readSetup` sends a file as its text and packs a directory into one
   self-extracting script (`packRecipe`). `loadProfile` reads a profile file.
+  Each fails with `InvalidFile`, naming the file.
 - `Prebuild.build(client, spec)` prebuilds a spec, and
   `Prebuild.create(client, name, spec)` creates from its prebuild when the
   host has one. `Prebuild.nameOf` is a prebuild's name, and
   `client.place(base, options)` reads the host a create goes to.
 - Every call but the lists fails with one of seven tagged errors
-  (`errors.ts`), each with `retryable`; see [Errors](#errors). A list returns
+  (`errors.ts`), each with `retryable` and with where it was met; see
+  [Errors](#errors). A list returns
   what reachable hosts answered and names the unreachable ones with their
   errors.
 - A mutation whose reply is lost fails `Unavailable`, not retryable, naming
@@ -509,7 +513,7 @@ every bump of it:
 
 ### Architecture
 
-- **Clients** (`packages/sdk/src/client.ts`) hold the host list.
+- **Clients** (`packages/sdk/src/client/client.ts`) hold the host list.
   `create` is placed; every other call names an ID and is routed by its host
   part, without the network. Lists fan out to every host and return partial
   results. There is no name lookup and no client-side state beyond config and
@@ -538,7 +542,7 @@ every bump of it:
   and input that doesn't decode is effect-actions' 400 `InvalidInput`, which
   the client reports as `Invalid`. A request of another release, by its
   `clankerbox-version` header, is `Invalid` before its input is decoded
-  (`packages/host/src/server.ts`).
+  (`packages/host/src/routes.ts`).
 
 ### IDs and names
 
@@ -566,7 +570,7 @@ every bump of it:
 
 ### Placement
 
-Only `create` is placed (`client.ts`, `place`). A host in its options (the
+Only `create` is placed (`client/client.ts`, `place`). A host in its options (the
 CLI's `--host`, or else the profile's `host`) sends it to that host. Otherwise the client reads every
 host's bases in parallel and goes through the answers in list order: the
 first host that answers and offers the base wins, and the reads still out are
@@ -595,7 +599,7 @@ so a runtime that fails the read, or takes over the host's 9 s, fails it with
 ### Actions
 
 Every mutation replies when its action has finished, with the resource as it
-is afterwards or a tagged error. Each runs in this order (`actions.ts`):
+is afterwards or a tagged error. Each runs in this order (`claims.ts`):
 
 1. Validate the input.
 2. Claim the rows, inserting the new row.
@@ -654,10 +658,24 @@ request may have reached the host. In the client, a request that fails to
 encode is `Invalid` and sends nothing, and a host's `InvalidInput` is `Invalid`
 too; a reply that fails to decode is `Internal`.
 
+The client sets where a call met its error, and a host sends none of it:
+`host`, `action` (the contract's name, such as `createMachine`) and `id` (the
+resource the call reads, changes or makes: for a fork, restore, capture or
+create, the one it makes). An error from no one call, such as a placement no
+host takes, has none. The Rivet provider deletes a failed create's `id`, and
+nothing when there is none.
+
+A file the client reads, a config, profile or setup, that can't be read or
+doesn't decode is `InvalidFile`, naming the `file`; a host's config is too. It
+is not one of the seven: no call fails with it, only what reads the file. The
+CLI's own `SpawnFailed` names a `program`, such as `ssh`, that couldn't be
+started. Neither is retryable.
+
 ### State and claims
 
 - **SQLite through `node:sqlite`**, one database per host,
-  `<stateDir>/host.db` (`store.ts`). `PRAGMA application_id` (`cbxh`) refuses
+  `<stateDir>/host.db` (`platform/sqlite.ts`, behind the `Store` port in
+  `store.ts`). `PRAGMA application_id` (`cbxh`) refuses
   a foreign database, and an ordered migration list on `PRAGMA user_version`
   refuses one newer than the binary. A one-row `host` table records the host
   ID and runtime at creation, and a config that names others is refused before
@@ -772,9 +790,9 @@ and the wire has no action for it.
   the setup.
 - **A build** reads the checkpoint first: one that is done is the answer, and
   one that isn't is refused with `Precondition`. Otherwise a machine of its
-  own, `prebuilding-<16 random hex>`, runs the setup, is stopped on Tart
-  (whose capture needs a stopped machine; smolvm's and boat's take a running
-  one), is captured under the prebuild's name, and is deleted however the
+  own, `prebuilding-<16 random hex>`, runs the setup, is stopped when the
+  host's `captureFrom` is `stopped` (Tart; smolvm and boat capture a running
+  machine), is captured under the prebuild's name, and is deleted however the
   build ends. Builders never share a name, and a host takes a checkpoint name
   once, before any native work: of two builds of one spec, both run the setup
   and the second's capture is `Conflict`, and neither touches the other's
@@ -783,9 +801,9 @@ and the wire has no action for it.
 ### Guest access
 
 - **SSH only.** smolvm publishes guest port 22 on a host port, Tart reaches it
-  through the host's forwarder (`forwarder.ts`), and boat through its own
+  through the host's forwarder (`platform/tart/forwarder.ts`), and boat through its own
   relay. `clankerbox ssh` pins the reported host key.
-- **Ports** (`ports.ts`), for smolvm and Tart: one per machine, the lowest
+- **Ports** (`machine-ports.ts`), for smolvm and Tart: one per machine, the lowest
   free port in the machines' range (`machinePorts`, 10000–19999 by default,
   clear of smolvm's fork ports and the Linux and macOS ephemeral ports),
   confirmed with a bind probe on the publish address and recorded with the
@@ -806,7 +824,7 @@ host restart would kill every VM. Each runtime supervises its own:
 
 - smolvm: each VM runs in its own systemd scope, `smolvm-vm-<name>.scope`,
   with no unit files.
-- Tart: one launchd job per VM (`tart.ts`), with its plist and log in the
+- Tart: one launchd job per VM (`platform/tart/tart.ts`), with its plist and log in the
   state dir's `launchd/`, rewritten at every boot.
 - boat runs its own machines.
 
@@ -907,10 +925,10 @@ These are known, not guarded, and accepted:
 
   Machines keep using their prefix, so an old one stays until its last machine
   is deleted. The host refuses to start unless it is root and
-  `smolvm --version` is the tested one (`testedVersion` in `smolvm.ts`).
+  `smolvm --version` is the tested one (`testedVersion` in `platform/smolvm.ts`).
 
 - **Environment:** every smolvm call runs with one fixed environment
-  (`environment` in `smolvm.ts`), with smolvm's state under
+  (`environment` in `platform/smolvm.ts`), with smolvm's state under
   `<stateDir>/smolvm`, one inventory per host. The bump-smolvm skill lists
   each variable and its reason.
 - **State dir:** at most 52 bytes, so the control socket path fits Linux's
@@ -969,7 +987,7 @@ These are known, not guarded, and accepted:
   Homebrew's Softnet, which isn't SUID root, is never used.
 - **Jobs** run `tart run --no-graphics --net-softnet-block=@host <vm>` with a
   fixed environment, the same as every tart call's (`environment` in
-  `tart.ts`; the bump-tart skill). Each boot waits up to three minutes for
+  `platform/tart/tart.ts`; the bump-tart skill). Each boot waits up to three minutes for
   `tart exec` to answer, retrying, since the guest agent starts after
   auto-login.
 - **Bases** are stock Cirrus images (`ghcr.io/cirruslabs/macos-<version>-base`
@@ -1006,7 +1024,7 @@ These are known, not guarded, and accepted:
 
 ### boat
 
-- **API:** boat's HTTP API v1 directly (`boat-api.ts`), no boat SDK or CLI. The
+- **API:** boat's HTTP API v1 directly (`platform/boat/api.ts`), no boat SDK or CLI. The
   API key is held `Redacted` from decoding on and travels only as the bearer
   token; errors carry method, path, status and boat's code and message, never
   a request or body. Every error an action fails with, and every warning, is
@@ -1094,6 +1112,52 @@ These are known, not guarded, and accepted:
 | `tools/oxlint/`                 | The anti-slop lint plugin, vendored from upstream                                             |
 | `tests/live/`                   | Live acceptance suites per runtime, with their drivers                                        |
 | `scripts/work_runs.py`          | Disposable build and test runs ([WORK_RUNS.md](scripts/WORK_RUNS.md))                         |
+
+Code is grouped by domain, not by mechanism. A domain file holds its schemas,
+its errors and its service, with the service's Layer beside it; tests mirror
+`src/` under each package's `tests/`. A port, a service named for a job the
+domain needs done, lives in the domain; its adapters, which reach Node, a
+database or a vendor's API, live in `platform/`.
+
+- **SDK** (`packages/sdk/src`): the contract (`api.ts`), its schemas
+  (`resources.ts`) and errors (`errors.ts`), IDs (`ids.ts`), the release
+  (`release.ts`), profiles (`profile.ts`), setups and recipes (`setup.ts`),
+  prebuilds (`prebuild.ts`), ssh pinning (`ssh.ts`) and units (`text.ts`).
+  The client is `client/client.ts`, over one host's binding and the
+  translation of its replies (`client/host-api.ts`). The package's `.` entry
+  needs no Node; `./node` (`node.ts`) holds what does.
+- **Host** (`packages/host/src`): the domains are the machine and checkpoint
+  actions (`machines.ts`, `checkpoints.ts`), the order every action runs in
+  (`claims.ts`), the guest scripts (`guest.ts`), machine ports
+  (`machine-ports.ts`), the RAM budget (`ram-budget.ts`), IDs (`ids.ts`) and
+  the settings every runtime shares (`settings.ts`). Its ports are `Store`
+  (`store.ts`), `Runtime` (`runtime.ts`) and `PortProbe`
+  (`machine-ports.ts`). The adapters are `platform/sqlite.ts`,
+  `platform/bind-probe.ts`, the three runtimes (`platform/smolvm.ts`,
+  `platform/tart/`, `platform/boat/`, each with its config section and
+  defaults) and what they share (`platform/process.ts`,
+  `platform/address.ts`). Composition: `config.ts` reads the config,
+  `runtimes.ts` picks the runtime's Layer, `startup.ts` reconciles state,
+  `routes.ts` serves the contract, and `host.ts`, the package's entry,
+  builds the host's Layer over a runtime and an HTTP server.
+- **App** (`apps/clankerbox/src`): one file or folder per command group
+  (`machines/`, `checkpoints.ts`, `hosts.ts`, `profiles.ts`, `prebuilds.ts`,
+  `ssh.ts`), over the CLI's kit (`command.ts`), the client config
+  (`config.ts`) and units (`units.ts`); `clankerbox.ts` is the command tree.
+- **Provider** (`packages/rivet-sandbox-agent/src`): sandboxes
+  (`sandboxes.ts`), the ssh tunnel (`tunnel.ts`), the Sandbox Agent's port
+  and health path (`agent.ts`) and the options (`options.ts`).
+
+Layers are chosen and provided at each entrypoint, and nowhere else: the
+CLI's `main.ts` (Node's services and HTTP client), the host role's `host.ts`
+in the app (the config's runtime and Node's HTTP server), and the provider's
+`index.ts` (the client over its hosts), which `provider.ts` runs under one
+`ManagedRuntime`. The app imports the SDK and the host, the host and the
+provider import the SDK, and the SDK imports neither. In the host, a domain
+file never imports `platform/`; only the composition files do. Each package's
+`./testing` export is its test kit (the SDK's stub host, the host's
+in-process host over a fake runtime), which other packages' tests import and
+nothing publishes.
 
 ## Development
 

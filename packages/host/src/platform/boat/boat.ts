@@ -1,5 +1,5 @@
 /**
- * The boat runtime: Linux sandboxes in boat.dev's cloud, through its HTTP API v1 (`boat-api.ts`),
+ * The boat runtime: Linux sandboxes in boat.dev's cloud, through its HTTP API v1 (`api.ts`),
  * designed for boat's trial. boat runs its own machines, so the host supervises nothing and needs
  * no root, and machines get no host port: guest port 22 is reached at boat's SSH relay, or at
  * the sandbox's own address.
@@ -12,7 +12,7 @@
  * The refusal rule covers boat's answers that leave nothing on boat (the bump-boat-api skill):
  * its `Capacity` refusals of a create, fork, resume, restore or capture (the account's limits,
  * no machine, an 11th named snapshot), its `Precondition` refusals of them (a 403 with boat's
- * code, `boat-api.ts`), a create, fork or restore that ends `cancelled` because boat found no
+ * code, `api.ts`), a create, fork or restore that ends `cancelled` because boat found no
  * machine, and a machine to start, or a fork's or capture's source, that boat doesn't have.
  *
  * Errors and warnings are scrubbed of the API key where they leave the runtime, so nothing boat
@@ -729,6 +729,7 @@ export const make = (
       publishAddress: undefined,
       pin: undefined,
       checkpointKind: "disk",
+      captureFrom: "running",
       loginUser: "root",
       startup: Effect.fn("Boat.startup")(() => Effect.void),
       /**

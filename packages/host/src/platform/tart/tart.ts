@@ -585,6 +585,7 @@ export const make = (
       publishAddress: settings.publishAddress,
       pin: undefined,
       checkpointKind: "disk",
+      captureFrom: "stopped",
       loginUser: "admin",
       startup: Effect.fn("Tart.startup")((machines) =>
         Effect.gen(function* () {

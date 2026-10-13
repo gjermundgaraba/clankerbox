@@ -3,7 +3,12 @@
  * optional profiles directory. It is read from `--config PATH`, or else from
  * `$XDG_CONFIG_HOME/clankerbox/config.json` (`~/.config` when that is unset).
  */
-import { Client, describeFileError, describeIssues, Invalid } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Client,
+  describeFileError,
+  describeIssues,
+  InvalidFile,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 
 /**
@@ -19,6 +24,7 @@ const ClientConfig = Schema.Struct({
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(ClientConfig));
 
 export interface LoadedConfig {
+  readonly file: string;
   readonly hosts: ReadonlyArray<Client.HostEntry>;
   /** The profiles directory, resolved against the config file's directory. */
   readonly profiles: string | undefined;
@@ -37,15 +43,16 @@ const defaultPath = Effect.gen(function* () {
 }).pipe(
   Effect.mapError(
     () =>
-      new Invalid({
+      new InvalidFile({
         message: "no client config: pass --config PATH, or set XDG_CONFIG_HOME or HOME",
+        file: "$XDG_CONFIG_HOME/clankerbox/config.json",
       }),
   ),
 );
 
 export const loadConfig = (
   flag: Option.Option<string>,
-): Effect.Effect<LoadedConfig, Invalid, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<LoadedConfig, InvalidFile, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -54,19 +61,22 @@ export const loadConfig = (
     const text = yield* fs.readFileString(file).pipe(
       Effect.mapError(
         (error) =>
-          new Invalid({
+          new InvalidFile({
             message: `couldn't read client config ${file}: ${describeFileError(error)}`,
+            file,
           }),
       ),
     );
 
     const config = yield* decodeConfig(text, { onExcessProperty: "error", errors: "all" }).pipe(
       Effect.mapError(
-        (error) => new Invalid({ message: `client config ${file}: ${describeIssues(error)}` }),
+        (error) =>
+          new InvalidFile({ message: `client config ${file}: ${describeIssues(error)}`, file }),
       ),
     );
 
     return {
+      file,
       hosts: config.hosts,
       profiles:
         config.profiles === undefined

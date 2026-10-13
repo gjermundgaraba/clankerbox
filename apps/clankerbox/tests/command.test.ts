@@ -1,6 +1,6 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { Capacity } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, Conflict } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
@@ -100,7 +100,7 @@ test("with --json, --help still prints the help", async () => {
   expect(stdout).toContain("clankerbox machines");
 });
 
-test("a retryable error says so in --json", async () => {
+test("a retryable error says so in --json, with where it was met", async () => {
   const dir = await scratch(owned);
   const config = await writeConfig(dir, ["linux"]);
 
@@ -122,6 +122,32 @@ test("a retryable error says so in --json", async () => {
     message: "RAM budget is full",
     tag: "Capacity",
     retryable: true,
+    host: "linux",
+    action: "createMachine",
+    id: "linux_dev",
+  });
+});
+
+test("a Conflict's kind is in --json", async () => {
+  const dir = await scratch(owned);
+  const config = await writeConfig(dir, ["linux"]);
+
+  const busy = host({
+    id: "linux",
+    bases: ["ubuntu"],
+    create: () => Effect.fail(new Conflict({ kind: "busy", message: "linux_dev is busy" })),
+  });
+
+  const { code, stdout } = await cli(["create", "dev", ...sizes, "--json", "--config", config], {
+    endpoints: [["linux", busy]],
+  });
+
+  expect(code).toBe(1);
+  expect(decodeJsonError(stdout).error).toMatchObject({
+    tag: "Conflict",
+    kind: "busy",
+    retryable: true,
+    id: "linux_dev",
   });
 });
 
@@ -159,6 +185,8 @@ test("--timeout stops waiting, says the action may have run, and exits 1", async
   expect(decodeJsonError(json.stdout).error).toMatchObject({
     tag: "Unavailable",
     retryable: false,
+    readOnly: false,
+    id: "linux_slow",
   });
   expect(linux.creates).toHaveLength(2);
 });

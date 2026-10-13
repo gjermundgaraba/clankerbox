@@ -22,15 +22,22 @@ export const ActionName = Schema.Literals([
 
 export type ActionName = typeof ActionName.Type;
 
+export const ActionStatus = Schema.Literals(["running", "failed", "done"]);
+
+export type ActionStatus = typeof ActionStatus.Type;
+
 /**
  * A resource's last action: `running` while it holds the row, `failed` with its error
  * after a native failure, `done` after a success. The next action replaces it.
  */
-export const ActionRecord = Schema.Struct({
-  name: ActionName,
-  status: Schema.Literals(["running", "failed", "done"]),
-  error: Schema.optionalKey(Schema.Struct({ tag: HostErrorTag, message: Schema.String })),
-});
+export const ActionRecord = Schema.Union([
+  Schema.Struct({ name: ActionName, status: Schema.Literals(["running", "done"]) }),
+  Schema.Struct({
+    name: ActionName,
+    status: Schema.Literal("failed"),
+    error: Schema.Struct({ tag: HostErrorTag, message: Schema.String }),
+  }),
+]);
 
 export type ActionRecord = typeof ActionRecord.Type;
 
@@ -103,6 +110,8 @@ export const Host = Schema.Struct({
   version: Schema.String,
   /** The runtime's version; for boat, its API version. */
   runtimeVersion: Schema.String,
+  /** The state a machine must be in for the runtime to capture it: Tart's, `stopped`. */
+  captureFrom: Schema.Literals(["running", "stopped"]),
   bases: Schema.Array(Schema.String),
 }).annotate({ identifier: "Host" });
 

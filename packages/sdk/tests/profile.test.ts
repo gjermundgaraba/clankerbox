@@ -76,7 +76,7 @@ test("a profile without setup has no setup", async () => {
   expect(await load(join(dir, "bare.json"))).toEqual({ ...sizes, label: "bare" });
 });
 
-test("a profile with an unknown key, or setup without its path, is Invalid", async () => {
+test("a profile with an unknown key, or setup without its path, is InvalidFile", async () => {
   const dir = await profileDir();
 
   await writeFile(join(dir, "typo.json"), JSON.stringify({ ...sizes, ram: 4096 }));
@@ -85,8 +85,8 @@ test("a profile with an unknown key, or setup without its path, is Invalid", asy
     JSON.stringify({ ...sizes, setup: { timeoutSeconds: 60 } }),
   );
 
-  expect((await loadError(join(dir, "typo.json")))._tag).toBe("Invalid");
-  expect((await loadError(join(dir, "half.json")))._tag).toBe("Invalid");
+  expect((await loadError(join(dir, "typo.json")))._tag).toBe("InvalidFile");
+  expect((await loadError(join(dir, "half.json")))._tag).toBe("InvalidFile");
 });
 
 const request = (...args: Parameters<typeof specRequest>) =>

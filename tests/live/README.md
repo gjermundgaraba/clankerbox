@@ -206,7 +206,7 @@ sandboxes' display names start `<host ID>_` and its named snapshots
   module. On boat each would cost a start.
 - **A failing hook on fork or restore:** live on create only; the unit suite
   covers fork and restore (`packages/host/tests/checkpoints.test.ts`,
-  `prepare.test.ts`), whose preparation is the same code.
+  `guest.test.ts`), whose preparation is the same code.
 - **A native name already taken, on Tart and boat:** Tart's native names carry
   the instance like smolvm's, so the smolvm test covers the naming rule; boat
   assigns sandbox IDs itself and the host deletes by the recorded ID.
@@ -218,13 +218,14 @@ sandboxes' display names start `<host ID>_` and its named snapshots
   which a live run can't cause, or a `rate_limited` 429, which would take more
   starts in a minute than the trial's 5 and cost more on repeat; the unit suite
   covers them, and the refusals it no longer trusts after an unclear one,
-  against a fake boat (`packages/host/tests/boat-api.test.ts`). Live, a 429
+  against a fake boat (`packages/host/tests/platform/boat-api.test.ts`). Live, a 429
   `limit_reached` to a create on the first attempt is still `Capacity`.
 - **A machine whose state can't be read (`unknown`):** it needs the runtime's
   read to fail; the unit suite covers it on smolvm and boat and in the core
   (`packages/host/tests/machines.test.ts`).
 - **List fan-out with a host down, and `--json` error tags:** the unit suite
-  covers them against the real host process over the fake runtime
+  covers them against the host's full Layer, served in process on a loopback
+  port over the fake runtime
   (`apps/clankerbox/tests/host.test.ts`).
 - **The linux-x64 bundle's smoke test:** a driver runs `tools/release/smoke.sh`
   on the darwin-arm64 bundle it built, and the smolvm run checks the linux-x64

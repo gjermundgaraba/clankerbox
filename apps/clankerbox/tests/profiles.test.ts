@@ -59,7 +59,7 @@ test("profiles fails without a profiles directory, or on a profile that doesn't 
 
   expect(unset.code).toBe(1);
   expect(decodeJsonError(unset.stdout).error).toMatchObject({
-    tag: "Invalid",
+    tag: "InvalidFile",
     message: expect.stringContaining("no profiles directory"),
   });
 
@@ -71,7 +71,7 @@ test("profiles fails without a profiles directory, or on a profile that doesn't 
   ]);
 
   expect(missing.code).toBe(1);
-  expect(decodeJsonError(missing.stdout).error.tag).toBe("Invalid");
+  expect(decodeJsonError(missing.stdout).error.tag).toBe("InvalidFile");
 
   const profiles = await writeProfiles(dir);
 
@@ -85,6 +85,7 @@ test("profiles fails without a profiles directory, or on a profile that doesn't 
   ]);
 
   expect(broken.code).toBe(1);
+  expect(decodeJsonError(broken.stdout).error.tag).toBe("InvalidFile");
   expect(decodeJsonError(broken.stdout).error.message).toBe(
     `profile ${join(profiles, "broken.json")}: cpu: missing; ramMib: missing; diskGib: missing`,
   );

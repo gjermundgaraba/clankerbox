@@ -7,6 +7,7 @@ import {
   describeIssues,
   HostId,
   Invalid,
+  InvalidFile,
   type Runtime,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path, Schema } from "effect";
@@ -121,7 +122,7 @@ const resolveConfig = (
 /** Reads and decodes the config file at `file`. Unknown keys are refused, as in every input. */
 export const loadConfig = (
   file: string,
-): Effect.Effect<HostConfig, Invalid, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<HostConfig, InvalidFile, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -130,17 +131,27 @@ export const loadConfig = (
     const text = yield* fs.readFileString(resolved).pipe(
       Effect.mapError(
         (error) =>
-          new Invalid({
+          new InvalidFile({
             message: `couldn't read host config ${resolved}: ${describeFileError(error)}`,
+            file: resolved,
           }),
       ),
     );
 
     const decoded = yield* decodeConfig(text, { onExcessProperty: "error", errors: "all" }).pipe(
       Effect.mapError(
-        (error) => new Invalid({ message: `host config ${resolved}: ${describeIssues(error)}` }),
+        (error) =>
+          new InvalidFile({
+            message: `host config ${resolved}: ${describeIssues(error)}`,
+            file: resolved,
+          }),
       ),
     );
 
-    return yield* resolveConfig(decoded, path.dirname(resolved));
+    return yield* resolveConfig(decoded, path.dirname(resolved)).pipe(
+      Effect.mapError(
+        (error) =>
+          new InvalidFile({ message: `host config ${resolved}: ${error.message}`, file: resolved }),
+      ),
+    );
   });

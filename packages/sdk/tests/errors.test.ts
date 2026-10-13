@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Result, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
 import {
   ActionRecord,
@@ -42,4 +42,18 @@ test("a recorded action's error is a host error, never Unavailable", () => {
 
   expect(isRecord(failed("Capacity"))).toBe(true);
   expect(isRecord(failed("Unavailable"))).toBe(false);
+});
+
+test("a recorded action carries an error exactly when it failed", () => {
+  const decodes = (record: Record<string, string | Record<string, string>>) =>
+    Result.isSuccess(
+      Schema.decodeUnknownResult(ActionRecord)(record, { onExcessProperty: "error" }),
+    );
+
+  const error = { tag: "Internal", message: "m" };
+
+  expect(decodes({ name: "create", status: "done" })).toBe(true);
+  expect(decodes({ name: "create", status: "failed", error })).toBe(true);
+  expect(decodes({ name: "create", status: "failed" })).toBe(false);
+  expect(decodes({ name: "create", status: "done", error })).toBe(false);
 });
