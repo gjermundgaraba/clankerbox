@@ -65,7 +65,7 @@ const checkpoint = (name: string, fields?: Partial<NewCheckpoint>): NewCheckpoin
   createdAt: DateTime.makeUnsafe("2026-10-04T13:00:00Z"),
   machine: "dev",
   kind: "ram",
-  pin: "smolvm 1.22.2 linux-x64",
+  pin: "smolvm 1.27.3 linux-x64",
   port: 10_000,
   base: "ubuntu",
   profile: undefined,

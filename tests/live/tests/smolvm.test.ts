@@ -66,6 +66,8 @@ echo setup >>/var/lib/clankerbox-live/setups
 # sshd runs before preparation, so its re-mint has a running sshd to SIGHUP.
 mkdir -p /run/sshd
 /usr/sbin/sshd
+# Its daemon writes the pid file after the command returns.
+for _ in $(seq 100); do [ -s /run/sshd.pid ] && break; sleep 0.1; done
 cp /run/sshd.pid /var/lib/clankerbox-live/setup-sshd-pid
 `;
 
@@ -403,6 +405,9 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       const before = await machine("main");
       const boot = await bootId("main");
       const source = await facts("main");
+
+      // The stall ends in a SIGKILL, which loses what the guest hasn't written back (30 s).
+      await inGuest("main", "sync");
       const stalled = await control("stall", named("main"));
 
       expect(stalled.code, stalled.stderr).toBe(0);

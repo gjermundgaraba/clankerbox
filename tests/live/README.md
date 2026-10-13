@@ -99,7 +99,7 @@ confirm; and a native machine that already carries a machine's name.
   The run's directory is `runs/l<3 hex>/` there, reserved under a free name
   before the build and removed again if the run stops before it writes there,
   and `CLEANUP.md` there is its ledger of every change outside that root.
-- `--smolvm-prefix`: smolvm 1.22.2 installed from upstream, with `READY` and
+- `--smolvm-prefix`: smolvm 1.27.3 installed from upstream, with `READY` and
   its `.zst` disk templates; the run expands the templates and removes them
   again. The base is `ubuntu:26.04` from `mirror.gcr.io`, pulled by digest
   (`smolvm/remote.py`).

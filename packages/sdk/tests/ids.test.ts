@@ -118,7 +118,7 @@ test("a name has no '_', no '--' and doesn't end in '-'", () => {
 });
 
 /**
- * smolvm 1.22.2's `validate_vm_name` (src/data/mod.rs:58-98): at most 128 characters,
+ * smolvm 1.27.3's `validate_vm_name` (src/data/mod.rs:58-103): at most 128 characters,
  * starting with a letter or digit, of letters, digits, '_' and '-', with no consecutive
  * hyphens and no hyphen at the end.
  */

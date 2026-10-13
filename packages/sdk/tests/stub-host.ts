@@ -24,7 +24,7 @@ export interface StubHostOptions {
   readonly id: string;
   readonly bases: ReadonlyArray<string>;
   readonly runtime?: Runtime;
-  /** The runtime's version the host reports. Default: 1.22.2. */
+  /** The runtime's version the host reports. Default: 1.27.3. */
   readonly runtimeVersion?: string;
   /** Replaces the create handler, for example to refuse with `Capacity` or to run long. */
   readonly create?: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
@@ -219,7 +219,7 @@ export const stubHost = (options: StubHostOptions) => {
         id: options.id,
         runtime,
         version,
-        runtimeVersion: options.runtimeVersion ?? "1.22.2",
+        runtimeVersion: options.runtimeVersion ?? "1.27.3",
         bases: options.bases,
       }),
     getCapacity: () =>
