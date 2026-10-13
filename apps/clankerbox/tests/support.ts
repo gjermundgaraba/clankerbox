@@ -36,12 +36,19 @@ export const writeConfig = (dir: string, hosts: ReadonlyArray<string>, profiles?
     return file;
   });
 
-/** `effect`, while the test clock moves on by `duration`. */
-export const elapsing = <A, E>(duration: Duration.Input, effect: Effect.Effect<A, E>) =>
+/**
+ * `effect`, while the test clock moves on by `duration` once `waiting` is done. The CLI reads
+ * files before it starts a timer, so a clock moved before then moves past nothing.
+ */
+export const elapsing = <A, E>(
+  duration: Duration.Input,
+  effect: Effect.Effect<A, E>,
+  waiting: Effect.Effect<unknown>,
+) =>
   Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(effect);
 
-    yield* Effect.yieldNow;
+    yield* waiting;
     yield* TestClock.adjust(duration);
 
     return yield* Fiber.join(fiber);

@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { join } from "node:path";
 import { Capacity, Conflict } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect } from "effect";
+import { Effect, Queue } from "effect";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
 import { mkdir, write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
@@ -189,12 +189,20 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const dir = yield* scratch;
       const config = yield* writeConfig(dir, ["linux"]);
-      const linux = host({ id: "linux", bases: ["ubuntu"], create: () => Effect.never });
+      const arrived = yield* Queue.unbounded<void>();
+
+      const linux = host({
+        id: "linux",
+        bases: ["ubuntu"],
+        create: () => Effect.andThen(Queue.offer(arrived, undefined), Effect.never),
+      });
+
       const endpoints = [["linux", linux]] as const;
 
       const text = yield* elapsing(
         "1 second",
         cli(["create", "dev", ...sizes, "--timeout", "1s", "--config", config], { endpoints }),
+        Queue.take(arrived),
       );
 
       const json = yield* elapsing(
@@ -202,6 +210,7 @@ layer(NodeServices.layer)((it) => {
         cli(["create", "slow", ...sizes, "--timeout", "1s", "--json", "--config", config], {
           endpoints,
         }),
+        Queue.take(arrived),
       );
 
       expect(text.code).toBe(1);
