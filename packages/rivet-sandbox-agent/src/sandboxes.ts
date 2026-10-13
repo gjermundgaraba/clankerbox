@@ -33,6 +33,7 @@ import {
 } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { SandboxDestroyedError } from "sandbox-agent";
+import { healthPath } from "./agent.ts";
 import type { Options } from "./options.ts";
 import { forwarding, freePort, LocalTunnelError, open, type Tunnel } from "./tunnel.ts";
 
@@ -198,7 +199,7 @@ export const make = (options: Options, ssh = "ssh") => {
   /** Whether the Sandbox Agent answers its health check through the tunnel. */
   const healthy = (port: number): Effect.Effect<boolean> =>
     Effect.tryPromise((signal) =>
-      fetch(`http://127.0.0.1:${port}/v1/health`, { signal }).then((reply) => reply.json()),
+      fetch(`http://127.0.0.1:${port}${healthPath}`, { signal }).then((reply) => reply.json()),
     ).pipe(
       Effect.map(isHealth),
       Effect.timeoutOrElse({ duration: healthWait, orElse: () => Effect.succeed(false) }),
