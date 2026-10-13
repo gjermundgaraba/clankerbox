@@ -3,6 +3,7 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { DateTime, Effect, Layer } from "effect";
 import { FetchHttpClient, type HttpClient, HttpRouter, HttpServer } from "effect/http";
 import {
+  type Capacity,
   type Checkpoint,
   Conflict,
   type CreateRequest,
@@ -26,7 +27,7 @@ export interface StubHostOptions {
   /** Default: running. */
   readonly captureFrom?: Host["captureFrom"];
   readonly create?: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
-  readonly deleteMachine?: (id: string) => Effect.Effect<void, HostError>;
+  readonly deleteMachine?: (id: string) => Effect.Effect<void, Exclude<HostError, Capacity>>;
   /** Runs before each create's default handler, such as to hold two creates at once. */
   readonly beforeCreate?: (request: CreateRequest) => Effect.Effect<void>;
   readonly machines?: ReadonlyArray<Machine>;

@@ -3,6 +3,8 @@ import type {
   ActionName,
   ActionRecord,
   Checkpoint,
+  CheckpointActionName,
+  CheckpointActionRecord,
   Conflict,
   Internal,
   NotFound,
@@ -20,10 +22,10 @@ export interface Resource {
   readonly cpu: number;
   readonly ramMib: number;
   readonly diskGib: number;
-  readonly action: ActionRecord;
 }
 
 export interface MachineRecord extends Resource {
+  readonly action: ActionRecord;
   readonly port: number | undefined;
   readonly hostKey: string | undefined;
   /**
@@ -35,6 +37,7 @@ export interface MachineRecord extends Resource {
 
 /** Ready checkpoints never change, so restores read them without a claim. */
 export interface CheckpointRecord extends Resource {
+  readonly action: CheckpointActionRecord;
   readonly machine: string;
   readonly kind: Checkpoint["kind"];
   /** A `ram` checkpoint restores only under the runtime's pin at capture. */
@@ -53,6 +56,12 @@ export type NewCheckpoint = Omit<CheckpointRecord, "action">;
 export interface Records {
   readonly machine: MachineRecord;
   readonly checkpoint: CheckpointRecord;
+}
+
+/** The actions each kind of row records. */
+export interface Actions {
+  readonly machine: ActionName;
+  readonly checkpoint: CheckpointActionName;
 }
 
 export interface RowRef<K extends Kind = Kind> {
@@ -99,7 +108,7 @@ export interface Interface {
    * in steps and still release or end everything at once.
    */
   readonly hold: <K extends Kind>(
-    action: ActionName,
+    action: Actions[K],
     row: RowRef<K>,
     joining?: Token,
   ) => Effect.Effect<Claim<Records[K]>, NotFound | Conflict | Internal>;
@@ -108,9 +117,9 @@ export interface Interface {
    * taken name is `Conflict{exists}`, and then nothing is written. Actions pick ports one at a
    * time, so the port's unique index is only a backstop.
    */
-  readonly insert: (
-    action: ActionName,
-    row: NewRow,
+  readonly insert: <R extends NewRow>(
+    action: Actions[R["kind"]],
+    row: R,
     joining?: Token,
   ) => Effect.Effect<Token, Conflict | Internal>;
   /** One transaction: its inserted rows go, its held rows get `before`. */

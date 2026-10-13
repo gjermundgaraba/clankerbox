@@ -1,16 +1,33 @@
-import { type Checkpoint, formatId, type HostError } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  type Checkpoint,
+  formatId,
+  type HostError,
+  type Internal,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Layer, type Scope } from "effect";
-import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./claims.ts";
+import {
+  type ActionError,
+  checkpointRef,
+  claimsOn,
+  detacher,
+  machineRef,
+  madeOn,
+  type ReadError,
+  rowsOn,
+} from "./claims.ts";
 import type { HostSettings } from "./settings.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
-import { Runtime } from "./runtime.ts";
+import { type RoomError, Runtime, type RuntimeError } from "./runtime.ts";
 import { type CheckpointRecord, type NewCheckpoint, Store } from "./store.ts";
 
 export interface Interface {
-  readonly list: Effect.Effect<ReadonlyArray<Checkpoint>, HostError>;
-  readonly get: (id: string) => Effect.Effect<Checkpoint, HostError>;
-  readonly capture: (machine: string, name: string) => Effect.Effect<Checkpoint, HostError>;
-  readonly delete: (id: string) => Effect.Effect<void, HostError>;
+  readonly list: Effect.Effect<ReadonlyArray<Checkpoint>, Internal>;
+  readonly get: (id: string) => Effect.Effect<Checkpoint, ReadError>;
+  readonly capture: (
+    machine: string,
+    name: string,
+  ) => Effect.Effect<Checkpoint, ActionError<RoomError>>;
+  readonly delete: (id: string) => Effect.Effect<void, ActionError<RuntimeError>>;
 }
 
 export class Checkpoints extends Context.Service<Checkpoints, Interface>()(
@@ -29,7 +46,7 @@ export const make = (
     const nameOf = nameOn(config.id);
     const rows = rowsOn(store, config.id);
     const made = madeOn(config.id);
-    const { claimAndCheck, native, done } = claimsOn(store);
+    const { claimAndCheck, native, refusable, done } = claimsOn(store);
 
     const resource = (record: CheckpointRecord): Checkpoint => {
       const checkpoint: Checkpoint = {
@@ -82,7 +99,7 @@ export const make = (
             }),
         );
 
-        yield* native(
+        yield* refusable(
           token,
           `capture ${id}`,
           runtime.capture(machineRef(config.id, source), checkpointRef(config.id, row)),

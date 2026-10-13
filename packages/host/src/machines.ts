@@ -19,7 +19,16 @@ import {
   type Scope,
   Semaphore,
 } from "effect";
-import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./claims.ts";
+import {
+  type ActionError,
+  checkpointRef,
+  claimsOn,
+  detacher,
+  machineRef,
+  madeOn,
+  type ReadError,
+  rowsOn,
+} from "./claims.ts";
 import type { HostSettings } from "./settings.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
 import { prepare, runSetup } from "./guest.ts";
@@ -28,30 +37,35 @@ import {
   type MachineRef,
   type Observed,
   type Refusal,
+  type RoomError,
   Runtime,
+  type RuntimeError,
   stateReadWait,
   timeoutFail,
 } from "./runtime.ts";
 import { type MachineRecord, type NewMachine, type NewRow, Store } from "./store.ts";
 
 export interface Interface {
-  readonly list: Effect.Effect<ReadonlyArray<Machine>, HostError>;
-  readonly get: (id: string) => Effect.Effect<Machine, HostError>;
-  readonly create: (request: CreateRequest) => Effect.Effect<Machine, HostError>;
-  readonly start: (id: string) => Effect.Effect<Machine, HostError>;
+  readonly list: Effect.Effect<ReadonlyArray<Machine>, Internal>;
+  readonly get: (id: string) => Effect.Effect<Machine, ReadError>;
+  readonly create: (request: CreateRequest) => Effect.Effect<Machine, ActionError<RoomError>>;
+  readonly start: (id: string) => Effect.Effect<Machine, ActionError<RoomError>>;
   /**
    * Made or not: a stop boots nothing, so it may stop the VM a failed create, fork or restore
    * left running.
    */
-  readonly stop: (id: string) => Effect.Effect<Machine, HostError>;
-  readonly delete: (id: string) => Effect.Effect<void, HostError>;
-  readonly fork: (id: string, name: string) => Effect.Effect<Machine, HostError>;
-  readonly restore: (checkpoint: string, name: string) => Effect.Effect<Machine, HostError>;
+  readonly stop: (id: string) => Effect.Effect<Machine, ActionError<RuntimeError>>;
+  readonly delete: (id: string) => Effect.Effect<void, ActionError<RuntimeError>>;
+  readonly fork: (id: string, name: string) => Effect.Effect<Machine, ActionError<RoomError>>;
+  readonly restore: (
+    checkpoint: string,
+    name: string,
+  ) => Effect.Effect<Machine, ActionError<RoomError>>;
   /**
    * Unlike a machine's state, this is all the reply holds, so a runtime that can't be read fails
    * it.
    */
-  readonly capacity: Effect.Effect<ReadonlyArray<Limit>, HostError>;
+  readonly capacity: Effect.Effect<ReadonlyArray<Limit>, RuntimeError>;
 }
 
 export class Machines extends Context.Service<Machines, Interface>()("@clankerbox/host/Machines") {}
@@ -60,7 +74,7 @@ interface Spec extends Pick<MachineRecord, "base" | "cpu" | "ramMib" | "diskGib"
   readonly profile?: string | undefined;
 }
 
-type Work = Effect.Effect<void, HostError | Refusal, Runtime>;
+type Work = Effect.Effect<void, RoomError | Refusal, Runtime>;
 
 type Making =
   | {
@@ -87,10 +101,10 @@ export const make = (
     const nameOf = nameOn(config.id);
     const rows = rowsOn(store, config.id);
     const made = madeOn(config.id);
-    const { claimAndCheck, native, done } = claimsOn(store);
+    const { claimAndCheck, native, refusable, done } = claimsOn(store);
     const ref = (record: NewMachine) => machineRef(config.id, record);
 
-    const withRuntime = <A>(work: Effect.Effect<A, HostError | Refusal, Runtime>) =>
+    const withRuntime = <A, E>(work: Effect.Effect<A, E, Runtime>) =>
       Effect.provideService(work, Runtime, runtime);
 
     const sshOf = (record: MachineRecord, observed: Observed) => {
@@ -276,7 +290,7 @@ export const make = (
         const machine = ref(row);
         const setup = "setup" in making ? making.setup : undefined;
 
-        const hostKey = yield* native(
+        const hostKey = yield* refusable(
           token,
           `${action} ${machine.id}`,
           withRuntime(
@@ -331,7 +345,7 @@ export const make = (
 
         const machine = ref(record);
 
-        const hostKey = yield* native(
+        const hostKey = yield* refusable(
           token,
           `start ${id}`,
           withRuntime(Effect.andThen(runtime.start(machine), prepare(machine))),

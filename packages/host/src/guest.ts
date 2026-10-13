@@ -2,9 +2,15 @@
  * Nothing here logs a script: setup can carry secrets, and preparation's seed is fresh
  * randomness. Errors carry a script's output, never its text.
  */
-import { type HostError, Precondition, type Setup } from "@gjermundgaraba/clankerbox-sdk";
+import { Precondition, type Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Stream } from "effect";
-import { type Command, type MachineRef, Runtime, timeoutFail } from "./runtime.ts";
+import {
+  type Command,
+  type MachineRef,
+  Runtime,
+  type RuntimeError,
+  timeoutFail,
+} from "./runtime.ts";
 
 const tailLines = 20;
 
@@ -36,7 +42,7 @@ const runInGuest = (
   machine: MachineRef,
   command: Command,
   timeout: Duration.Duration,
-): Effect.Effect<string, HostError, Runtime> =>
+): Effect.Effect<string, RuntimeError, Runtime> =>
   Effect.gen(function* () {
     const runtime = yield* Runtime;
     const tail = outputTail();
@@ -91,7 +97,7 @@ const defaultSetupTimeoutSeconds = 600;
 export const runSetup = (
   machine: MachineRef,
   setup: Setup,
-): Effect.Effect<void, HostError, Runtime> => {
+): Effect.Effect<void, RuntimeError, Runtime> => {
   const timeout = Duration.seconds(setup.timeoutSeconds ?? defaultSetupTimeoutSeconds);
 
   return Effect.asVoid(
@@ -180,7 +186,7 @@ export const hostKeyIn = (output: string): string | undefined => {
 
 export const prepare = (
   machine: MachineRef,
-): Effect.Effect<string | undefined, HostError, Runtime> =>
+): Effect.Effect<string | undefined, RuntimeError, Runtime> =>
   runInGuest(
     "preparation",
     machine,

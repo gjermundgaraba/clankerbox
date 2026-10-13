@@ -11,8 +11,9 @@ import { join } from "node:path";
 import {
   Capacity,
   type HostError,
-  hostErrors,
   Internal,
+  NotFound,
+  Precondition,
   type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -51,7 +52,9 @@ import {
   type Observed,
   type RecordNative,
   Refusal,
+  type RoomError,
   Runtime,
+  type RuntimeError,
   timeoutFail,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
@@ -229,12 +232,6 @@ const poll = <A, B, E, R, L>(
     );
   });
 
-const HostErrors = Schema.Union(hostErrors);
-
-const encodeError = Schema.encodeSync(HostErrors);
-
-const decodeError = Schema.decodeSync(HostErrors);
-
 export const make = (
   settings: Settings,
 ): Effect.Effect<
@@ -248,18 +245,36 @@ export const make = (
 
     const scrub = (text: string) => (secret === "" ? text : text.replaceAll(secret, "<redacted>"));
 
-    const scrubbed = (error: HostError): HostError => {
-      const encoded = encodeError(error);
+    /** A 404 that reaches here is boat's own, not a row of the host's, so it is `Internal`. */
+    const scrubber = <E extends RoomError, I extends { readonly message: string }>(
+      errors: Schema.Codec<E, I>,
+    ) => {
+      const encode = Schema.encodeSync(errors);
+      const decode = Schema.decodeSync(errors);
 
-      return decodeError({ ...encoded, message: scrub(encoded.message) });
+      return (error: E | NotFound): E | Internal => {
+        if (error instanceof NotFound) {
+          return new Internal({ message: scrub(error.message) });
+        }
+
+        const encoded = encode(error);
+
+        return decode({ ...encoded, message: scrub(encoded.message) });
+      };
     };
 
-    const scrubbing = <A, R>(action: Effect.Effect<A, HostError, R>) =>
+    const scrubbed = scrubber(Schema.Union([Precondition, Internal]));
+
+    const scrubbedRoom = scrubber(Schema.Union([Precondition, Internal, Capacity]));
+
+    const scrubbing = <A, R>(action: Effect.Effect<A, RuntimeError | NotFound, R>) =>
       Effect.mapError(action, scrubbed);
 
-    const scrubbingRefusal = <A, R>(action: Effect.Effect<A, HostError | Refusal, R>) =>
+    const scrubbingRefusal = <A, R>(action: Effect.Effect<A, RoomError | NotFound | Refusal, R>) =>
       Effect.mapError(action, (error) =>
-        error instanceof Refusal ? new Refusal({ error: scrubbed(error.error) }) : scrubbed(error),
+        error instanceof Refusal
+          ? new Refusal({ error: scrubbedRoom(error.error) })
+          : scrubbedRoom(error),
       );
 
     const warn = (message: string) => Effect.logWarning(scrub(message));
@@ -319,8 +334,8 @@ export const make = (
      * the host's, so it is `Internal`.
      */
     const refusing = <A>(
-      call: Effect.Effect<A, HostError>,
-    ): Effect.Effect<A, HostError | Refusal> =>
+      call: Effect.Effect<A, RoomError | NotFound>,
+    ): Effect.Effect<A, Internal | Refusal> =>
       call.pipe(
         Effect.catchTags({
           Capacity: (error) => Effect.fail(new Refusal({ error })),
@@ -340,7 +355,7 @@ export const make = (
     const running = (machine: MachineRef, id: string, fresh: boolean) => {
       const read = Effect.flatMap(
         api.sandbox(id),
-        (found): Effect.Effect<Option.Option<Sandbox>, HostError | Refusal> => {
+        (found): Effect.Effect<Option.Option<Sandbox>, RuntimeError | Refusal> => {
           if (Option.isSome(found) && upStates.has(found.value.state)) {
             return Effect.succeed(found);
           }
