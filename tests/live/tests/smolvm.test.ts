@@ -405,6 +405,9 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       const before = await machine("main");
       const boot = await bootId("main");
       const source = await facts("main");
+
+      // The stall ends in a SIGKILL, which loses what the guest hasn't written back (30 s).
+      await inGuest("main", "sync");
       const stalled = await control("stall", named("main"));
 
       expect(stalled.code, stalled.stderr).toBe(0);
