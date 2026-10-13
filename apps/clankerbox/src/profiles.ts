@@ -3,7 +3,6 @@ import {
   formatGib,
   formatMib,
   Invalid,
-  InvalidFile,
   type LoadedProfile,
   loadProfile,
   Profile,
@@ -28,6 +27,7 @@ export const profileFile = (
     if (config.profiles === undefined) {
       return yield* new Invalid({
         message: `profile ${profile} is a name, and the client config has no profiles directory; pass a path`,
+        file: config.file,
       });
     }
 
@@ -38,7 +38,7 @@ export const profileFiles = (
   config: LoadedConfig,
 ): Effect.Effect<
   { readonly directory: string; readonly files: Array<string> },
-  InvalidFile,
+  Invalid,
   FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
@@ -47,7 +47,7 @@ export const profileFiles = (
     const directory = config.profiles;
 
     if (directory === undefined) {
-      return yield* new InvalidFile({
+      return yield* new Invalid({
         message: "the client config has no profiles directory",
         file: config.file,
       });
@@ -56,7 +56,7 @@ export const profileFiles = (
     const entries = yield* fs.readDirectory(directory).pipe(
       Effect.mapError(
         (error) =>
-          new InvalidFile({
+          new Invalid({
             message: `couldn't read profiles directory ${directory}: ${describeFileError(error)}`,
             file: directory,
           }),

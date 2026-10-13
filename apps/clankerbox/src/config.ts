@@ -1,9 +1,4 @@
-import {
-  Client,
-  describeFileError,
-  describeIssues,
-  InvalidFile,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { Client, describeFileError, describeIssues, Invalid } from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 
 /**
@@ -36,16 +31,15 @@ const defaultPath = Effect.gen(function* () {
 }).pipe(
   Effect.mapError(
     () =>
-      new InvalidFile({
+      new Invalid({
         message: "no client config: pass --config PATH, or set XDG_CONFIG_HOME or HOME",
-        file: "$XDG_CONFIG_HOME/clankerbox/config.json",
       }),
   ),
 );
 
 export const loadConfig = (
   flag: Option.Option<string>,
-): Effect.Effect<LoadedConfig, InvalidFile, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<LoadedConfig, Invalid, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -54,7 +48,7 @@ export const loadConfig = (
     const text = yield* fs.readFileString(file).pipe(
       Effect.mapError(
         (error) =>
-          new InvalidFile({
+          new Invalid({
             message: `couldn't read client config ${file}: ${describeFileError(error)}`,
             file,
           }),
@@ -64,7 +58,7 @@ export const loadConfig = (
     const config = yield* decodeConfig(text, { onExcessProperty: "error", errors: "all" }).pipe(
       Effect.mapError(
         (error) =>
-          new InvalidFile({ message: `client config ${file}: ${describeIssues(error)}`, file }),
+          new Invalid({ message: `client config ${file}: ${describeIssues(error)}`, file }),
       ),
     );
 

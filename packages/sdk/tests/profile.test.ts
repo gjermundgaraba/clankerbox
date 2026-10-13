@@ -67,7 +67,7 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect("a profile with an unknown key, or setup without its path, is InvalidFile", () =>
+  it.effect("a profile with an unknown key, or setup without its path, is Invalid", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
 
@@ -77,8 +77,8 @@ layer(NodeServices.layer)((it) => {
         JSON.stringify({ ...sizes, setup: { timeoutSeconds: 60 } }),
       );
 
-      expect((yield* loadError(join(dir, "typo.json")))._tag).toBe("InvalidFile");
-      expect((yield* loadError(join(dir, "half.json")))._tag).toBe("InvalidFile");
+      expect((yield* loadError(join(dir, "typo.json")))._tag).toBe("Invalid");
+      expect((yield* loadError(join(dir, "half.json")))._tag).toBe("Invalid");
     }),
   );
 

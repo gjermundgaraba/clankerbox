@@ -68,7 +68,7 @@ layer(NodeServices.layer)((it) => {
 
       expect(code).toBe(1);
       expect(stderr).toContain(
-        "InvalidFile: couldn't read host config /nonexistent/clankerbox-host.json",
+        "Invalid: couldn't read host config /nonexistent/clankerbox-host.json",
       );
     }),
   );

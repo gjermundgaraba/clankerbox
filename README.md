@@ -242,9 +242,9 @@ clankerbox checkpoint delete linux_base
   Its `--timeout DURATION` only stops waiting: the action runs on, and the CLI
   says it may have run; `get`, or `checkpoint get`, shows how it ended. A read
   gives up on a host after 10 s.
-- `--json` prints the resource, or `{"error": {"message", "tag", "retryable"}}`
-  with the error's own fields when it has them: `kind`, `readOnly`, `host`,
-  `action`, `id`, `file` and `program` (see [Errors](#errors)).
+- `--json` prints the resource, or `{"error": {...}}`: the error's own fields,
+  its tag as `tag`, and `retryable` (`ErrorDocument` in
+  `apps/clankerbox/src/command.ts`; see [Errors](#errors)).
   Lists print what reachable hosts answered and name the unreachable ones; a
   list exits 1 when every host failed. A list with nothing in it prints no
   table and says so on stderr.
@@ -400,12 +400,12 @@ program.pipe(
   runs, unless `timeout` is set.
 - `readSetup` sends a file as its text and packs a directory into one
   self-extracting script (`packRecipe`). `loadProfile` reads a profile file.
-  Each fails with `InvalidFile`, naming the file.
+  Each fails with `Invalid`, naming the `file`.
 - `Prebuild.build(client, spec)` prebuilds a spec, and
   `Prebuild.create(client, name, spec)` creates from its prebuild when the
   host has one. `Prebuild.nameOf` is a prebuild's name, and
   `client.place(base, options)` reads the host a create goes to.
-- Every call but the lists fails with one of seven tagged errors
+- Every call but the lists fails with its action's errors among seven tags
   (`errors.ts`), each with `retryable` and with where it was met; see
   [Errors](#errors). A list returns
   what reachable hosts answered and names the unreachable ones with their
@@ -694,8 +694,7 @@ malformed ID or a placement no host takes, names only the action. The Rivet prov
 nothing when there is none.
 
 A file the client reads, a config, profile or setup, that can't be read or
-doesn't decode is `InvalidFile`, naming the `file`; a host's config is too. It
-is not one of the seven: no call fails with it, only what reads the file. The
+doesn't decode is `Invalid`, naming the `file`; a host's config is too. The
 CLI's own `SpawnFailed` names a `program`, such as `ssh`, that couldn't be
 started. Neither is retryable.
 
@@ -1203,7 +1202,7 @@ These practices are in force with the layout, and each is checked where it can b
   action has no command.
 - **Errors carry context.** An error from the client names the `host`, the
   `action` and the `id` it read, changed or made. A file the client couldn't
-  use is `InvalidFile` with its `file`, and a program the CLI couldn't start is
+  use is `Invalid` with its `file`, and a program the CLI couldn't start is
   `SpawnFailed` with its `program`.
 - **Tests are Effects** under `@effect/vitest` (`it.effect`, `layer`), on the
   test clock unless a suite says why it needs real time. Effect is run by hand

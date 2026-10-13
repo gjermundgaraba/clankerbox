@@ -133,7 +133,7 @@ layer(NodeServices.layer)((it) => {
       ]) {
         const { loaded } = yield* load(contents);
 
-        expect((yield* Effect.flip(loaded))._tag).toBe("InvalidFile");
+        expect((yield* Effect.flip(loaded))._tag).toBe("Invalid");
       }
     }),
   );
@@ -187,7 +187,7 @@ layer(NodeServices.layer)((it) => {
           const { loaded } = yield* load(contents);
           const error = yield* Effect.flip(loaded);
 
-          expect(error._tag).toBe("InvalidFile");
+          expect(error._tag).toBe("Invalid");
           expect(error.message).not.toContain(apiKey);
         }
       }),
@@ -221,7 +221,7 @@ layer(NodeServices.layer)((it) => {
         for (const { loaded } of [listening, publishing]) {
           const error = yield* Effect.flip(loaded);
 
-          expect(error._tag, address).toBe("InvalidFile");
+          expect(error._tag, address).toBe("Invalid");
           expect(error.message, address).toContain("tailnet address");
         }
       }
@@ -245,7 +245,7 @@ layer(NodeServices.layer)((it) => {
         for (const { loaded } of [smolvm, onBoat]) {
           const error = yield* Effect.flip(loaded);
 
-          expect(error._tag, String(port)).toBe("InvalidFile");
+          expect(error._tag, String(port)).toBe("Invalid");
           expect(error.message, String(port)).toContain("outside 10000-19999");
         }
       }
@@ -277,7 +277,7 @@ layer(NodeServices.layer)((it) => {
           machinePorts,
         });
         expect((yield* Effect.flip(inside.loaded)).message).toContain("outside 5000-5099");
-        expect((yield* Effect.flip(backwards.loaded))._tag).toBe("InvalidFile");
+        expect((yield* Effect.flip(backwards.loaded))._tag).toBe("Invalid");
       }),
   );
 
@@ -307,13 +307,13 @@ layer(NodeServices.layer)((it) => {
           const { loaded } = yield* load({ ...config, machinePorts: { first, last } });
           const error = yield* Effect.flip(loaded);
 
-          expect(error._tag, `${first}-${last}`).toBe("InvalidFile");
+          expect(error._tag, `${first}-${last}`).toBe("Invalid");
           expect(error.message, `${first}-${last}`).toContain(`must stay out of ${reserved}`);
         }
       }),
   );
 
-  it.effect("an unknown key, another runtime or a bad host ID is InvalidFile", () =>
+  it.effect("an unknown key, another runtime or a bad host ID is Invalid", () =>
     Effect.gen(function* () {
       for (const contents of [
         { ...config, labels: [] },
@@ -323,12 +323,12 @@ layer(NodeServices.layer)((it) => {
       ]) {
         const { loaded } = yield* load(contents);
 
-        expect((yield* Effect.flip(loaded))._tag).toBe("InvalidFile");
+        expect((yield* Effect.flip(loaded))._tag).toBe("Invalid");
       }
     }),
   );
 
-  it.effect("a missing config file is InvalidFile, naming it", () =>
+  it.effect("a missing config file is Invalid, naming it", () =>
     Effect.gen(function* () {
       const missing = join(yield* scratch, "nope.json");
 
@@ -336,7 +336,7 @@ layer(NodeServices.layer)((it) => {
         Effect.provide(NodeServices.layer),
       );
 
-      expect(error._tag).toBe("InvalidFile");
+      expect(error._tag).toBe("Invalid");
       expect(error.file).toBe(missing);
       expect(error.message).toContain(missing);
     }),

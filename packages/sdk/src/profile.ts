@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Path, Predicate, Record, Schema } from "effect";
-import { Invalid, InvalidFile } from "./errors.ts";
+import { Invalid } from "./errors.ts";
 import { HostId } from "./ids.ts";
 import { MachineSpec, Setup } from "./resources.ts";
 import { readSetup } from "./setup.ts";
@@ -35,7 +35,7 @@ const decodeProfile = Schema.decodeUnknownEffect(Schema.fromJsonString(Profile))
  */
 export const loadProfile = (
   file: string,
-): Effect.Effect<LoadedProfile, InvalidFile, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<LoadedProfile, Invalid, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -43,7 +43,7 @@ export const loadProfile = (
     const text = yield* fs.readFileString(file).pipe(
       Effect.mapError(
         (error) =>
-          new InvalidFile({
+          new Invalid({
             message: `couldn't read profile ${file}: ${describeFileError(error)}`,
             file,
           }),
@@ -52,7 +52,7 @@ export const loadProfile = (
 
     const profile = yield* decodeProfile(text, { onExcessProperty: "error", errors: "all" }).pipe(
       Effect.mapError(
-        (error) => new InvalidFile({ message: `profile ${file}: ${describeIssues(error)}`, file }),
+        (error) => new Invalid({ message: `profile ${file}: ${describeIssues(error)}`, file }),
       ),
     );
 
@@ -95,7 +95,7 @@ export const specRequest = (
   profile: LoadedProfile | undefined,
   overrides: Overrides,
   names?: ReadonlyMap<PropertyKey, string>,
-): Effect.Effect<SpecRequest, Invalid | InvalidFile, FileSystem.FileSystem | Path.Path> =>
+): Effect.Effect<SpecRequest, Invalid, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const file = overrides.setup ?? profile?.setup?.path;
     const timeoutSeconds = overrides.setupTimeoutSeconds ?? profile?.setup?.timeoutSeconds;

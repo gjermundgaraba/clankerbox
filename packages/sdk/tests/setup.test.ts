@@ -267,7 +267,7 @@ layer(NodeServices.layer)((it) => {
 
       const error = yield* packRecipe(dir).pipe(Effect.flip);
 
-      expect(error._tag).toBe("InvalidFile");
+      expect(error._tag).toBe("Invalid");
       expect(error.message).toContain("files/pipe");
     }),
   );
@@ -326,13 +326,13 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect("a directory without setup.sh is refused with InvalidFile", () =>
+  it.effect("a directory without setup.sh is refused with Invalid", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
 
       const error = yield* packRecipe(dir).pipe(Effect.flip);
 
-      expect(error._tag).toBe("InvalidFile");
+      expect(error._tag).toBe("Invalid");
       expect(error.file).toBe(dir);
       expect(error.message).toContain("setup.sh");
     }),
@@ -349,7 +349,7 @@ layer(NodeServices.layer)((it) => {
 
         const error = yield* packRecipe(file).pipe(Effect.flip);
 
-        expect(error._tag).toBe("InvalidFile");
+        expect(error._tag).toBe("Invalid");
         expect(error.message).toContain(`couldn't pack recipe ${file}`);
         expect(error.message).not.toContain("has no setup.sh");
       }),
@@ -385,7 +385,7 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect("a missing setup path is InvalidFile", () =>
+  it.effect("a missing setup path is Invalid", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
 
@@ -393,7 +393,7 @@ layer(NodeServices.layer)((it) => {
 
       const error = yield* readSetup(missing).pipe(Effect.flip);
 
-      expect(error._tag).toBe("InvalidFile");
+      expect(error._tag).toBe("Invalid");
       expect(error.file).toBe(missing);
     }),
   );
