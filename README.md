@@ -74,7 +74,7 @@ Tart host any Tart older than 2.40.1.
 ### Run a host
 
 A host process runs one runtime, from one JSON config file
-(`packages/host/src/config.ts`). Two runtimes on one machine are two host
+(`packages/host/src/composition/config.ts`). Two runtimes on one machine are two host
 processes, each with its own ID, state dir and port.
 
 ```json
@@ -545,7 +545,7 @@ every bump of it:
   `unknown`. A machine and its checkpoints stay on the host that made them.
 - **One runtime per host process**, behind the `Runtime` interface
   (`runtime.ts`), picked by the config's `runtime` from the registry in
-  `runtimes.ts`. State, claims, setup and preparation are shared; fork,
+  `composition/runtimes.ts`. State, claims, setup and preparation are shared; fork,
   checkpoint and access are each runtime's. A new provider is a new runtime
   module behind its own host.
 - **No clankerbox code runs in a guest.** Setup and preparation are host-side
@@ -556,7 +556,7 @@ every bump of it:
   and input that doesn't decode is effect-actions' 400 `InvalidInput`, which
   the client reports as `Invalid`. A request of another release, by its
   `clankerbox-version` header, is `Invalid` before its input is decoded
-  (`packages/host/src/routes.ts`).
+  (`packages/host/src/composition/routes.ts`).
 
 ### IDs and names
 
@@ -1165,10 +1165,11 @@ database or a vendor's API, live in `platform/`.
   `platform/bind-probe.ts`, the three runtimes (`platform/smolvm.ts`,
   `platform/tart/`, `platform/boat/`, each with its config section and
   defaults) and what they share (`platform/process.ts`,
-  `platform/address.ts`). Composition: `config.ts` reads the config,
-  `runtimes.ts` picks the runtime's Layer, `startup.ts` reconciles state,
-  `routes.ts` serves the contract, and `host.ts`, the package's entry,
-  builds the host's Layer over a runtime and an HTTP server.
+  `platform/address.ts`). `startup.ts` reconciles state when the host starts.
+  Composition is `composition/`: `config.ts` reads the config, `runtimes.ts`
+  picks the runtime's Layer, `routes.ts` serves the contract, and `host.ts`,
+  the package's entry, builds the host's Layer over a runtime and an HTTP
+  server.
 - **App** (`apps/clankerbox/src`): one file or folder per command group
   (`machines/`, `checkpoints.ts`, `hosts.ts`, `profiles.ts`, `prebuilds.ts`,
   `ssh.ts`), over the CLI's kit (`command.ts`), the client config
@@ -1183,7 +1184,8 @@ in the app (the config's runtime and Node's HTTP server), and the provider's
 `index.ts` (the client over its hosts), which `provider.ts` runs under one
 `ManagedRuntime`. The app imports the SDK and the host, the host and the
 provider import the SDK, and the SDK imports neither. In the host, a domain
-file never imports `platform/`; only the composition files do. Each package's
+file never imports `platform/` or `composition/`; only `composition/` puts
+them together. Each package's
 `./testing` export is its test kit (the SDK's stub host, the host's
 in-process host over a fake runtime), which other packages' tests import and
 nothing publishes.
@@ -1210,21 +1212,18 @@ These practices are in force with the layout, and each is checked where it can b
   and live tests that drive its Promise API or a child program.
 - **Property and model tests** cover IDs, units, the RAM budget, recipe
   packing and the store's claims, a model checked against the SQLite store.
-  Each states its expectation without the code under test, and each was shown
-  to fail on a planted fault.
+  Each states its expectation without the code under test.
 - **Comments** follow design rule 3.
-- **A lint fence** (`tools/lint-fence`, each rule with its own tests): host
-  domain files import only other domain files, `effect`, `effect/encoding`
-  and the SDK; the SDK's `.` entry imports no Node and uses no `Buffer` or
-  `process`; and `fence/no-manual-run` keeps hand-run Effect to the places
-  above. Every file in `packages/host/src/` is fenced but the composition
-  files `vite.config.ts` lists, and another file imports a new domain file once
-  it is on the allow-list there.
+- **A lint fence** (`tools/lint-fence`, each rule with its own tests; the
+  rules' settings are in `vite.config.ts`): a file directly in
+  `packages/host/src/` imports only its siblings, `effect` and the SDK; the
+  SDK's `.` entry imports no Node and uses no `Buffer` or `process`; and
+  `fence/no-manual-run` keeps hand-run Effect to the places above.
 - **A runtime is removable.** Removing boat is its `platform/` folder, its arm
-  in `runtimes.ts`, its config section, the SDK's `Runtime` literal and its
-  tests; `vp check` and every package's tests pass after it. What stays is
-  the vocabulary it brought: its limits in the SDK's `Limit` and their labels
-  in the CLI, and the core's `recordNative`, which no other runtime uses.
+  in `composition/runtimes.ts`, its config section, the SDK's `Runtime`
+  literal and its tests. What stays is the vocabulary it brought: its limits
+  in the SDK's `Limit` and their labels in the CLI, and the core's
+  `recordNative`, which no other runtime uses.
 
 Lifecycles are not modelled as state machines: an action's claim is a SQLite
 transaction, and its states are the `ActionRecord` a row keeps.

@@ -6,12 +6,12 @@ import { DateTime, Effect, Layer, Logger } from "effect";
 import { HttpServer } from "effect/http";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { hostLayer } from "../src/host.ts";
-import { open } from "../src/platform/sqlite.ts";
-import type { HostSettings } from "../src/settings.ts";
-import { type FakeRuntime, fakeRuntime } from "./fake-runtime.ts";
+import { hostLayer } from "../../src/composition/host.ts";
+import { open } from "../../src/platform/sqlite.ts";
+import type { HostSettings } from "../../src/settings.ts";
+import { type FakeRuntime, fakeRuntime } from "../fake-runtime.ts";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { hostConfig, loopbackServer } from "./support.ts";
+import { hostConfig, loopbackServer } from "../support.ts";
 
 const config = (dir: string, fields?: Partial<HostSettings>): HostSettings => ({
   ...hostConfig(join(dir, "state")),

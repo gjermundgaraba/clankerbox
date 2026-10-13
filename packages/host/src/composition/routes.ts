@@ -3,10 +3,10 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Http, Invalid, release, version, versionHeader } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer, Option, Schema } from "effect";
 import { Headers, HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
-import { Checkpoints } from "./checkpoints.ts";
-import type { HostSettings } from "./settings.ts";
-import { Machines } from "./machines.ts";
-import { Runtime } from "./runtime.ts";
+import { Checkpoints } from "../checkpoints.ts";
+import type { HostSettings } from "../settings.ts";
+import { Machines } from "../machines.ts";
+import { Runtime } from "../runtime.ts";
 
 const app = (config: Pick<HostSettings, "id" | "bases">) =>
   Action.implement(
