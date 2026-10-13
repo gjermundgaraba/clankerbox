@@ -48,8 +48,8 @@
     "vite-plus": "catalog:"
   },
   "peerDependencies": {
-    "@effect/platform-node": "~4.0.2",
-    "effect": "~4.0.2"
+    "@effect/platform-node": "~4.0.3",
+    "effect": "~4.0.3"
   },
   "peerDependenciesMeta": {
     "@effect/platform-node": {

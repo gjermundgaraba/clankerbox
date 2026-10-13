@@ -350,8 +350,8 @@ too: a client that predates it is of another release anyway. So any change
 to the wire (a route, an input, a reply or an error) takes a new minor
 release, and the check refuses a mismatched pair rather than letting it
 misread a reply.
-`effect` `~4.0.2` is a peer dependency, so an app has one copy of Effect and
-Schema identity holds; so is `@effect/platform-node` `~4.0.2`, needed only by
+`effect` `~4.0.3` is a peer dependency, so an app has one copy of Effect and
+Schema identity holds; so is `@effect/platform-node` `~4.0.3`, needed only by
 the `/node` entry. The range is Effect's 4.0.x patches, as effect-actions
 requires: the HTTP and process modules the SDK uses are unstable in Effect, so
 a minor release may change them.
