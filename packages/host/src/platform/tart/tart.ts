@@ -523,11 +523,13 @@ export const make = (
 
     /**
      * A fork and a capture copy a stopped machine's disk, though Tart's clone doesn't require
-     * one.
+     * one. `captureFrom` tells clients so.
      */
+    const copiedFrom = "stopped";
+
     const copyable = (what: string, machine: MachineRef) =>
       Effect.flatMap(state(vmOf(machine)), (observed) => {
-        if (observed === "stopped") {
+        if (observed === copiedFrom) {
           return Effect.void;
         }
 
@@ -548,7 +550,7 @@ export const make = (
       publishAddress: settings.publishAddress,
       pin: undefined,
       checkpointKind: "disk",
-      captureFrom: "stopped",
+      captureFrom: copiedFrom,
       loginUser: "admin",
       startup: Effect.fn("Tart.startup")((machines) =>
         Effect.gen(function* () {
