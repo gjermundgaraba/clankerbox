@@ -4,7 +4,7 @@
  * takes a name or a full ID. A mutation returns when its action has finished; its `--timeout`
  * only stops waiting.
  */
-import { type ClankerboxError, Client, Invalid } from "@gjermundgaraba/clankerbox-sdk";
+import { type ClankerboxError, Client, ErrorTag, Invalid } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Console,
   Data,
@@ -15,6 +15,7 @@ import {
   Option,
   Path,
   Runtime,
+  Schema,
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import type { HttpClient } from "effect/http";
@@ -31,7 +32,17 @@ export class Exited extends Data.TaggedError("Exited")<{ readonly code: number }
   }
 }
 
-const errorDocument = (error: ClankerboxError) => ({
+/** A failure as `--json` prints it. */
+export const ErrorDocument = Schema.Struct({
+  message: Schema.String,
+  tag: ErrorTag,
+  retryable: Schema.Boolean,
+});
+
+/** A host a fan-out couldn't read, as `--json` lists it under `unreachable`. */
+export const UnreachableDocument = Schema.Struct({ host: Schema.String, error: ErrorDocument });
+
+const errorDocument = (error: ClankerboxError): typeof ErrorDocument.Type => ({
   message: error.message,
   tag: error._tag,
   retryable: error.retryable,
@@ -68,7 +79,9 @@ export const table = (rows: ReadonlyArray<ReadonlyArray<string>>): string => {
 };
 
 /** The hosts a fan-out couldn't read, as JSON fields. */
-export const unreachableDocument = (unreachable: ReadonlyArray<Client.Unreachable>) =>
+export const unreachableDocument = (
+  unreachable: ReadonlyArray<Client.Unreachable>,
+): ReadonlyArray<typeof UnreachableDocument.Type> =>
   unreachable.map(({ host, error }) => ({ host, error: errorDocument(error) }));
 
 /** Names the hosts a fan-out couldn't read, on stderr, under the table. */

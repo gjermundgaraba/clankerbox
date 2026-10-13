@@ -7,7 +7,6 @@ import { ConfigProvider, Effect, Layer, Runtime, Schema } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { TestConsole } from "effect/testing";
-import { ErrorTag } from "@gjermundgaraba/clankerbox-sdk";
 import {
   type Endpoint,
   type StubHost,
@@ -15,6 +14,7 @@ import {
   transport,
 } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { dispatch } from "../src/clankerbox.ts";
+import { ErrorDocument } from "../src/command.ts";
 
 export const url = (id: string) => `http://${id}.test`;
 
@@ -108,12 +108,8 @@ export const hostIn = (stubs: Array<StubHost>) => (options: Parameters<typeof st
   return stub;
 };
 
-/** `--json`'s error document. */
-const JsonError = Schema.fromJsonString(
-  Schema.Struct({
-    error: Schema.Struct({ message: Schema.String, tag: ErrorTag, retryable: Schema.Boolean }),
-  }),
-);
+/** `--json`'s failure. */
+const JsonError = Schema.fromJsonString(Schema.Struct({ error: ErrorDocument }));
 
 export const decodeJsonError = Schema.decodeUnknownSync(JsonError);
 

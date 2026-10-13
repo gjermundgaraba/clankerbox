@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { ErrorTag } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
 import { machine, type StubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { UnreachableDocument } from "../src/command.ts";
 import { cleanup, cli, decodeJsonError, hostIn, scratch, sizes, writeConfig } from "./support.ts";
 
 const owned: Array<string> = [];
@@ -137,12 +137,7 @@ test("machines --json carries the machines and the unreachable hosts", async () 
     Schema.fromJsonString(
       Schema.Struct({
         machines: Schema.Array(Schema.Struct({ id: Schema.String, createdAt: Schema.String })),
-        unreachable: Schema.Array(
-          Schema.Struct({
-            host: Schema.String,
-            error: Schema.Struct({ tag: ErrorTag, retryable: Schema.Boolean }),
-          }),
-        ),
+        unreachable: Schema.Array(UnreachableDocument),
       }),
     ),
   )(stdout);
