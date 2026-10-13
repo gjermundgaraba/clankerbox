@@ -1124,6 +1124,7 @@ These are known, not guarded, and accepted:
 | `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                                                    |
 | `tools/release/`                | The SEA build, bundles with their notices, and the smoke test                                 |
 | `tools/oxlint/`                 | The anti-slop lint plugin, vendored from upstream                                             |
+| `tools/lint-fence/`             | The repository's own lint rules: what each folder may import, and where Effect is run         |
 | `tests/live/`                   | Live acceptance suites per runtime, with their drivers                                        |
 | `scripts/work_runs.py`          | Disposable build and test runs ([WORK_RUNS.md](scripts/WORK_RUNS.md))                         |
 
@@ -1172,6 +1173,46 @@ file never imports `platform/`; only the composition files do. Each package's
 `./testing` export is its test kit (the SDK's stub host, the host's
 in-process host over a fake runtime), which other packages' tests import and
 nothing publishes.
+
+### House style
+
+These practices are in force with the layout, and each is checked where it can be:
+
+- **A service's constructor and Layer live in its file:** `machines.ts`,
+  `checkpoints.ts`, each runtime, the Store (`platform/sqlite.ts`, `open` and
+  `layer`) and the client (`client/client.ts`, `Client.make` and `layer`).
+  The SDK's Node Layer is in `node.ts` so that `.` loads no Node.
+- **Operations are contracts.** The host API is one effect-actions contract
+  (`packages/sdk/src/api.ts`); the host's routes and the client's calls are
+  derived from it, and the CLI's `actionCommands` fails to type-check when an
+  action has no command.
+- **Errors carry context.** An error from the client names the `host`, the
+  `action` and the `id` it read, changed or made. A file the client couldn't
+  use is `InvalidFile` with its `file`, and a program the CLI couldn't start is
+  `SpawnFailed` with its `program`.
+- **Tests are Effects** under `@effect/vitest` (`it.effect`, `layer`), on the
+  test clock unless a suite says why it needs real time. Effect is run by hand
+  only in the CLI's `main.ts`, the provider's `provider.ts`, and the provider
+  and live tests that drive its Promise API or a child program.
+- **Property and model tests** cover IDs, units, the RAM budget, recipe
+  packing and the store's claims, a model checked against the SQLite store.
+  Each states its expectation without the code under test, and each was shown
+  to fail on a planted fault.
+- **Comments** follow design rule 3.
+- **A lint fence** (`tools/lint-fence`, each rule with its own tests): host
+  domain files import only other domain files, `effect`, `effect/encoding`
+  and the SDK; the SDK's `.` entry imports no Node and uses no `Buffer` or
+  `process`; and `fence/no-manual-run` keeps hand-run Effect to the places
+  above. A domain file or an entry added later goes on its allow-list in
+  `vite.config.ts`.
+- **A runtime is removable.** Removing boat is its `platform/` folder, its arm
+  in `runtimes.ts`, its config section, the SDK's `Runtime` literal and its
+  tests; `vp check` and every package's tests pass after it. What stays is
+  the vocabulary it brought: its limits in the SDK's `Limit` and their labels
+  in the CLI, and the core's `recordNative`, which no other runtime uses.
+
+Lifecycles are not modelled as state machines: an action's claim is a SQLite
+transaction, and its states are the `ActionRecord` a row keeps.
 
 ## Development
 
