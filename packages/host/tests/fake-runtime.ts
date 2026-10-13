@@ -84,7 +84,7 @@ interface FakeMachine {
 }
 
 type Injection =
-  | { readonly kind: "fail"; readonly error: RuntimeError }
+  | { readonly kind: "fail"; readonly error: RuntimeError | Capacity | Refusal }
   | {
       readonly kind: "hold";
       readonly entered: Deferred.Deferred<void>;
@@ -109,8 +109,6 @@ export const fakeRuntime = (options: FakeOptions) => {
   const activations: Array<Activation> = [];
   const observed: Array<ReadonlyArray<string>> = [];
   const injections = new Map<Operation, Array<Injection>>();
-  const refusals = new Map<Operation, Array<Refusal>>();
-  const capacityFailures = new Map<Operation, Array<Capacity>>();
   const observeFailures: Array<RuntimeError | "hang"> = [];
   const publishAddress = "publishAddress" in options ? options.publishAddress : "127.0.0.1";
   let stubs: string | undefined;
@@ -119,17 +117,11 @@ export const fakeRuntime = (options: FakeOptions) => {
     injections.set(operation, [...(injections.get(operation) ?? []), injection]);
   };
 
-  const queue = (operation: Operation, error: RuntimeError | Capacity | Refusal) => {
-    if (error instanceof Refusal) {
-      refusals.set(operation, [...(refusals.get(operation) ?? []), error]);
-    } else if (error instanceof Capacity) {
-      capacityFailures.set(operation, [...(capacityFailures.get(operation) ?? []), error]);
-    } else {
-      inject(operation, { kind: "fail", error });
-    }
-  };
-
-  const enter = (operation: Operation, resource: { readonly id: string }) =>
+  /** Injections fire in the order they were queued. */
+  const enter = <O extends Operation>(
+    operation: O,
+    resource: { readonly id: string },
+  ): Effect.Effect<void, FailureOf<O>> =>
     Effect.gen(function* () {
       calls.push(`${operation} ${resource.id}`);
 
@@ -145,28 +137,9 @@ export const fakeRuntime = (options: FakeOptions) => {
         return yield* Deferred.await(injection.until);
       }
 
-      return yield* Effect.fail(injection.error);
+      // SAFETY: `failNext` queues only a `FailureOf<O>` for `O`.
+      return yield* Effect.fail(injection.error as FailureOf<O>);
     });
-
-  const enterRoom = (operation: RoomOperation, resource: { readonly id: string }) =>
-    Effect.andThen(
-      enter(operation, resource),
-      Effect.suspend(() => {
-        const capacity = capacityFailures.get(operation)?.shift();
-
-        return capacity === undefined ? Effect.void : Effect.fail(capacity);
-      }),
-    );
-
-  const enterRefusable = (operation: Refusable, resource: { readonly id: string }) =>
-    Effect.andThen(
-      enterRoom(operation, resource),
-      Effect.suspend(() => {
-        const refusal = refusals.get(operation)?.shift();
-
-        return refusal === undefined ? Effect.void : Effect.fail(refusal);
-      }),
-    );
 
   const states = (refs: ReadonlyArray<MachineRef>): Effect.Effect<ReadonlyArray<Observed>> =>
     Effect.sync(() => {
@@ -268,7 +241,7 @@ export const fakeRuntime = (options: FakeOptions) => {
           Effect.andThen(
             Effect.andThen(
               Effect.sync(() => activations.push(activation)),
-              enterRoom("admit", activation.machine),
+              enter("admit", activation.machine),
             ),
             options.ramBudgetMib === undefined
               ? Effect.void
@@ -277,7 +250,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         capacity,
         create: (machine) =>
           Effect.andThen(
-            enterRefusable("create", machine),
+            enter("create", machine),
             Effect.promise(async () => {
               // A machine made again under the same name gets a fresh root.
               const root = join(options.dir, "roots", machine.instance);
@@ -289,7 +262,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         // As smolvm: a start refuses a machine it doesn't have, and a stop ignores one.
         start: (machine) =>
           Effect.andThen(
-            enterRefusable("start", machine),
+            enter("start", machine),
             Effect.suspend(() => {
               const found = machines.get(machine.name);
 
@@ -322,7 +295,7 @@ export const fakeRuntime = (options: FakeOptions) => {
           ),
         capture: (machine, checkpoint) =>
           Effect.andThen(
-            enterRefusable("capture", checkpoint),
+            enter("capture", checkpoint),
             Effect.andThen(
               copyable(machine),
               Effect.flatMap(rootOf(machine), (root) =>
@@ -331,13 +304,10 @@ export const fakeRuntime = (options: FakeOptions) => {
             ),
           ),
         restore: (checkpoint, machine) =>
-          Effect.andThen(
-            enterRefusable("restore", machine),
-            copyInto(checkpointRoot(checkpoint), machine),
-          ),
+          Effect.andThen(enter("restore", machine), copyInto(checkpointRoot(checkpoint), machine)),
         fork: (source, machine) =>
           Effect.andThen(
-            enterRefusable("fork", machine),
+            enter("fork", machine),
             Effect.andThen(
               copyable(source),
               Effect.flatMap(rootOf(source), (root) => copyInto(root, machine)),
@@ -394,7 +364,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     machines,
     stubs: () => stubs,
     failNext: <O extends Operation>(operation: O, error: FailureOf<O>) => {
-      queue(operation, error);
+      inject(operation, { kind: "fail", error });
     },
     failNextObserve: (error: RuntimeError) => {
       observeFailures.push(error);
