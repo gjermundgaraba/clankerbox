@@ -25,17 +25,29 @@ export const ActionStatus = Schema.Literals(["running", "failed", "done"]);
 
 export type ActionStatus = typeof ActionStatus.Type;
 
+const actionRecord = <Name extends Schema.Literals<ReadonlyArray<ActionName>>>(name: Name) =>
+  Schema.Union([
+    Schema.Struct({ name, status: Schema.Literals(["running", "done"]) }),
+    Schema.Struct({
+      name,
+      status: Schema.Literal("failed"),
+      error: Schema.Struct({ tag: HostErrorTag, message: Schema.String }),
+    }),
+  ]);
+
 /** A resource's last action; the next action replaces it. */
-export const ActionRecord = Schema.Union([
-  Schema.Struct({ name: ActionName, status: Schema.Literals(["running", "done"]) }),
-  Schema.Struct({
-    name: ActionName,
-    status: Schema.Literal("failed"),
-    error: Schema.Struct({ tag: HostErrorTag, message: Schema.String }),
-  }),
-]);
+export const ActionRecord = actionRecord(ActionName);
 
 export type ActionRecord = typeof ActionRecord.Type;
+
+/** A checkpoint is only ever captured or deleted. */
+export const CheckpointActionName = Schema.Literals(["capture", "delete"]);
+
+export type CheckpointActionName = typeof CheckpointActionName.Type;
+
+export const CheckpointActionRecord = actionRecord(CheckpointActionName);
+
+export type CheckpointActionRecord = typeof CheckpointActionRecord.Type;
 
 export const SshEndpoint = Schema.Struct({
   host: Schema.String,
@@ -84,7 +96,7 @@ export const Checkpoint = Schema.Struct({
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
-  action: ActionRecord,
+  action: CheckpointActionRecord,
 }).annotate({ identifier: "Checkpoint" });
 
 export type Checkpoint = typeof Checkpoint.Type;
