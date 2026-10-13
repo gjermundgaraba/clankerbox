@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { ErrorTag } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { machine, type StubHost } from "../../../packages/sdk/tests/stub-host.ts";
+import { machine, type StubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { cleanup, cli, decodeJsonError, hostIn, scratch, sizes, writeConfig } from "./support.ts";
 
 const owned: Array<string> = [];

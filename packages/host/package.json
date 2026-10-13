@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/host.ts"
+    ".": "./src/host.ts",
+    "./testing": "./tests/support.ts"
   },
   "scripts": {
     "test": "vp test"

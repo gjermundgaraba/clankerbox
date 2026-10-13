@@ -13,7 +13,7 @@ import {
   type StubHost,
   stubHost,
   transport,
-} from "../../../packages/sdk/tests/stub-host.ts";
+} from "@gjermundgaraba/clankerbox-sdk/testing";
 import { dispatch } from "../src/clankerbox.ts";
 
 export const url = (id: string) => `http://${id}.test`;

@@ -5,7 +5,7 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { ErrorTag } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { startHost, type TestHost } from "../../../packages/host/tests/support.ts";
+import { startHost, type TestHost } from "@clankerbox/host/testing";
 import { cleanup, cli, scratch } from "./support.ts";
 
 const owned: Array<string> = [];

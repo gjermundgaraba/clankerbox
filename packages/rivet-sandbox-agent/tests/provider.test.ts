@@ -21,7 +21,12 @@ import {
 import { DateTime, Effect, Layer } from "effect";
 import { SandboxAgent, SandboxDestroyedError } from "sandbox-agent";
 import { afterEach, expect, test } from "vite-plus/test";
-import { machine, type StubHost, stubHost, transport } from "../../sdk/tests/stub-host.ts";
+import {
+  machine,
+  type StubHost,
+  stubHost,
+  transport,
+} from "@gjermundgaraba/clankerbox-sdk/testing";
 import { provider } from "../src/provider.ts";
 import { LocalTunnelError } from "../src/tunnel.ts";
 import type { Options } from "../src/options.ts";

@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { type StubHost } from "../../../packages/sdk/tests/stub-host.ts";
+import { type StubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
 import {
   cleanup,
   cli,

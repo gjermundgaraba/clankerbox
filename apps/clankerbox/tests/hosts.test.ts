@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "vite-plus/test";
-import { type StubHost } from "../../../packages/sdk/tests/stub-host.ts";
+import { type StubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { cleanup, cli, type CliOptions, hostIn, scratch, writeConfig } from "./support.ts";
 
 const owned: Array<string> = [];

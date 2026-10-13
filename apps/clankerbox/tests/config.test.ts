@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vite-plus/test";
-import { type StubHost } from "../../../packages/sdk/tests/stub-host.ts";
+import { type StubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { cleanup, cli, decodeJsonError, hostIn, scratch, writeConfig } from "./support.ts";
 
 const owned: Array<string> = [];
