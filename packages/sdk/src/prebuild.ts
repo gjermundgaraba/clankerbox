@@ -1,8 +1,16 @@
 import { Effect, Option } from "effect";
+import { Hex } from "effect/encoding";
 import type * as Client from "./client.ts";
 import { type ClankerboxError, Precondition } from "./errors.ts";
 import { formatId } from "./ids.ts";
-import type { Checkpoint, Host, Machine, MachineSpec, Setup } from "./resources.ts";
+import {
+  type Checkpoint,
+  type Host,
+  isReady,
+  type Machine,
+  type MachineSpec,
+  type Setup,
+} from "./resources.ts";
 
 const prefix = "prebuilt-";
 
@@ -13,9 +21,6 @@ const digestDigits = 12;
  * a 32-character host ID and its `_` leave of an ID's 62.
  */
 const builderBytes = 8;
-
-const hex = (bytes: ArrayBuffer | Uint8Array): string =>
-  Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /**
  * A digest of the spec's label, base, sizes, setup script as sent, and the host's runtime
@@ -42,10 +47,12 @@ export const nameOf = (
         ]),
       ),
     ),
-  ).pipe(Effect.map((digest) => `${prefix}${hex(digest).slice(0, digestDigits)}`));
+  ).pipe(
+    Effect.map((digest) => `${prefix}${Hex.encode(new Uint8Array(digest)).slice(0, digestDigits)}`),
+  );
 
 const lookup = (client: Client.Interface, id: string) =>
-  client.checkpoint(id).pipe(
+  client.getCheckpoint({ id }).pipe(
     Effect.map(Option.some),
     Effect.catchTag("NotFound", () => Effect.succeedNone),
   );
@@ -80,8 +87,11 @@ export const create = (
     const id = yield* formatId(host.id, yield* nameOf(spec, host));
     const found = yield* lookup(client, id);
 
-    if (Option.isSome(found) && found.value.action.status === "done") {
-      return { machine: yield* client.restore(id, name), prebuild: found.value };
+    if (Option.isSome(found) && isReady(found.value)) {
+      return {
+        machine: yield* client.restoreMachine({ checkpoint: id, name }),
+        prebuild: found.value,
+      };
     }
 
     return { machine: yield* client.create(name, spec, { host: host.id }) };
@@ -96,9 +106,9 @@ export interface Built {
 
 /**
  * Builds the spec's prebuild on the host a create of it is placed on, with a machine of its own
- * that it deletes however it ends. A prebuild that is there and done is the answer; one that
- * failed or is still being captured is refused. Of two builds of one spec at once, the second's
- * capture is `Conflict`, and neither touches the other's machine or prebuild.
+ * that it deletes however it ends. A prebuild that is there and done is the answer, one that
+ * failed is deleted and built again, and one still running is refused. Of two builds of one spec
+ * at once, the second's capture is `Conflict`, and neither touches the other's machine.
  */
 export const build = (
   client: Client.Interface,
@@ -114,25 +124,31 @@ export const build = (
     if (Option.isSome(found)) {
       const { action } = found.value;
 
-      return action.status === "done"
-        ? { checkpoint: found.value, built: false }
-        : yield* new Precondition({
-            message: `prebuild ${id}'s ${action.name} is ${action.status}; delete it to prebuild again`,
-          });
+      if (isReady(found.value)) {
+        return { checkpoint: found.value, built: false };
+      }
+
+      if (action.status === "running") {
+        return yield* new Precondition({
+          message: `prebuild ${id}'s ${action.name} is running; wait for it`,
+        });
+      }
+
+      yield* client.deleteCheckpoint({ id });
     }
 
-    const builder = `prebuilding-${hex(globalThis.crypto.getRandomValues(new Uint8Array(builderBytes)))}`;
+    const builder = `prebuilding-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(builderBytes)))}`;
     const builderId = yield* formatId(host.id, builder);
-    const removal = client.delete(builderId);
+    const removal = client.deleteMachine({ id: builderId });
 
     const checkpoint = yield* Effect.gen(function* () {
       yield* client.create(builder, spec, { host: host.id });
 
       if (host.captureFrom === "stopped") {
-        yield* client.stop(builderId);
+        yield* client.stopMachine({ id: builderId });
       }
 
-      return yield* client.capture(builderId, name);
+      return yield* client.captureCheckpoint({ machine: builderId, name });
     }).pipe(Effect.onError(() => Effect.ignore(removal)));
 
     const leftover = yield* removal.pipe(

@@ -65,7 +65,7 @@ layer(NodeServices.layer)((it) => {
       ).pipe(Effect.scoped);
 
       const machine = yield* whileServing(host, dir, (url) =>
-        withClient(url, (client) => client.machine("linux_dev")),
+        withClient(url, (client) => client.getMachine({ id: "linux_dev" })),
       );
 
       expect(machine.action).toEqual({

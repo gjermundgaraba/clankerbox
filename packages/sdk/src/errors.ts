@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Match, Schema } from "effect";
 
 /** A host sends none of these; the client library sets them. */
 const located = {
@@ -15,22 +15,14 @@ export class Invalid extends Schema.TaggedError<Invalid>()(
   "Invalid",
   { message: Schema.String, ...located, file: Schema.optionalKey(Schema.String) },
   { httpApiStatus: 400 },
-) {
-  get retryable(): boolean {
-    return false;
-  }
-}
+) {}
 
 /** The machine or checkpoint doesn't exist. A `delete` that meets it is done. */
 export class NotFound extends Schema.TaggedError<NotFound>()(
   "NotFound",
   { message: Schema.String, ...located },
   { httpApiStatus: 404 },
-) {
-  get retryable(): boolean {
-    return false;
-  }
-}
+) {}
 
 export const ConflictKind = Schema.Literals(["exists", "busy"]);
 
@@ -41,33 +33,21 @@ export class Conflict extends Schema.TaggedError<Conflict>()(
   "Conflict",
   { message: Schema.String, kind: ConflictKind, ...located },
   { httpApiStatus: 409 },
-) {
-  get retryable(): boolean {
-    return this.kind === "busy";
-  }
-}
+) {}
 
 /** The resource's state doesn't allow the action, or no host offers the requested base. */
 export class Precondition extends Schema.TaggedError<Precondition>()(
   "Precondition",
   { message: Schema.String, ...located },
   { httpApiStatus: 412 },
-) {
-  get retryable(): boolean {
-    return false;
-  }
-}
+) {}
 
 /** The host has no room now; room can free up, so a later call may succeed. */
 export class Capacity extends Schema.TaggedError<Capacity>()(
   "Capacity",
   { message: Schema.String, ...located },
   { httpApiStatus: 503 },
-) {
-  get retryable(): boolean {
-    return true;
-  }
-}
+) {}
 
 /**
  * No reply: only the client library makes it. A mutation's request may have reached the host
@@ -77,21 +57,13 @@ export class Unavailable extends Schema.TaggedError<Unavailable>()("Unavailable"
   message: Schema.String,
   readOnly: Schema.Boolean,
   ...located,
-}) {
-  get retryable(): boolean {
-    return this.readOnly;
-  }
-}
+}) {}
 
 export class Internal extends Schema.TaggedError<Internal>()(
   "Internal",
   { message: Schema.String, ...located },
   { httpApiStatus: 500 },
-) {
-  get retryable(): boolean {
-    return false;
-  }
-}
+) {}
 
 /** What a host may answer with; each action declares its own share. */
 export const hostErrors = [Invalid, NotFound, Conflict, Precondition, Capacity, Internal] as const;
@@ -107,3 +79,20 @@ export const HostErrorTag = Schema.Literals(
 );
 
 export type HostErrorTag = typeof HostErrorTag.Type;
+
+/**
+ * Whether the same call may succeed later: a busy resource or a full host may free up, and a read
+ * that got no reply may get one.
+ */
+export const retryable = (error: ClankerboxError): boolean =>
+  Match.value(error).pipe(
+    Match.tagsExhaustive({
+      Invalid: () => false,
+      NotFound: () => false,
+      Conflict: ({ kind }) => kind === "busy",
+      Precondition: () => false,
+      Capacity: () => true,
+      Unavailable: ({ readOnly }) => readOnly,
+      Internal: () => false,
+    }),
+  );

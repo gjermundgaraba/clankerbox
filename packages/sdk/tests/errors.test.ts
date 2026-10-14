@@ -8,27 +8,28 @@ import {
   Invalid,
   NotFound,
   Precondition,
+  retryable,
   Unavailable,
 } from "../src/index.ts";
 
 test("retryable follows the tag", () => {
   const message = "m";
 
-  expect(new Invalid({ message }).retryable).toBe(false);
-  expect(new NotFound({ message }).retryable).toBe(false);
-  expect(new Precondition({ message }).retryable).toBe(false);
-  expect(new Capacity({ message }).retryable).toBe(true);
-  expect(new Internal({ message }).retryable).toBe(false);
+  expect(retryable(new Invalid({ message }))).toBe(false);
+  expect(retryable(new NotFound({ message }))).toBe(false);
+  expect(retryable(new Precondition({ message }))).toBe(false);
+  expect(retryable(new Capacity({ message }))).toBe(true);
+  expect(retryable(new Internal({ message }))).toBe(false);
 });
 
 test("a busy conflict is retryable and a name that exists is not", () => {
-  expect(new Conflict({ message: "m", kind: "busy" }).retryable).toBe(true);
-  expect(new Conflict({ message: "m", kind: "exists" }).retryable).toBe(false);
+  expect(retryable(new Conflict({ message: "m", kind: "busy" }))).toBe(true);
+  expect(retryable(new Conflict({ message: "m", kind: "exists" }))).toBe(false);
 });
 
 test("Unavailable is retryable for a read and not for a mutation", () => {
-  expect(new Unavailable({ message: "m", readOnly: true }).retryable).toBe(true);
-  expect(new Unavailable({ message: "m", readOnly: false }).retryable).toBe(false);
+  expect(retryable(new Unavailable({ message: "m", readOnly: true }))).toBe(true);
+  expect(retryable(new Unavailable({ message: "m", readOnly: false }))).toBe(false);
 });
 
 test("a recorded action's error is a host error, never Unavailable", () => {

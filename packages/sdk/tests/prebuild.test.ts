@@ -144,36 +144,52 @@ it.effect(
     }),
 );
 
-it.effect("a prebuild that is there is the answer as it is; one that isn't done is refused", () =>
-  Effect.gen(function* () {
-    const id = `linux_${yield* nameOf(spec)}`;
-    const done = host({ id: "linux", bases: ["ubuntu"], checkpoints: [checkpoint(id)] });
+it.effect(
+  "a prebuild that is done is the answer as it is, a failed one is built again, and a running one is refused",
+  () =>
+    Effect.gen(function* () {
+      const id = `linux_${yield* nameOf(spec)}`;
+      const done = host({ id: "linux", bases: ["ubuntu"], checkpoints: [checkpoint(id)] });
 
-    const failed = host({
-      id: "linux",
-      bases: ["ubuntu"],
-      checkpoints: [
-        checkpoint(id, {
-          action: {
-            name: "capture",
-            status: "failed",
-            error: { tag: "Internal", message: "full" },
-          },
-        }),
-      ],
-    });
+      const failed = host({
+        id: "linux",
+        bases: ["ubuntu"],
+        checkpoints: [
+          checkpoint(id, {
+            action: {
+              name: "capture",
+              status: "failed",
+              error: { tag: "Internal", message: "full" },
+            },
+          }),
+        ],
+      });
 
-    const found = yield* withClient([done], (client) => Prebuild.build(client, spec));
+      const running = host({
+        id: "linux",
+        bases: ["ubuntu"],
+        checkpoints: [checkpoint(id, { action: { name: "capture", status: "running" } })],
+      });
 
-    const error = yield* withClient([failed], (client) =>
-      Effect.flip(Prebuild.build(client, spec)),
-    );
+      const found = yield* withClient([done], (client) => Prebuild.build(client, spec));
+      const rebuilt = yield* withClient([failed], (client) => Prebuild.build(client, spec));
 
-    expect(found).toMatchObject({ built: false, checkpoint: { id } });
-    expect(error._tag).toBe("Precondition");
-    expect(error.message).toBe(`prebuild ${id}'s capture is failed; delete it to prebuild again`);
-    expect([...done.creates, ...failed.creates]).toEqual([]);
-  }),
+      const error = yield* withClient([running], (client) =>
+        Effect.flip(Prebuild.build(client, spec)),
+      );
+
+      expect(found).toMatchObject({ built: false, checkpoint: { id } });
+      expect(done.creates).toEqual([]);
+      expect(rebuilt).toMatchObject({
+        built: true,
+        checkpoint: { id, action: { name: "capture", status: "done" } },
+      });
+      expect(failed.creates).toHaveLength(1);
+      expect(yield* holdings(failed)).toEqual({ machines: [], checkpoints: [id] });
+      expect(error._tag).toBe("Precondition");
+      expect(error.message).toBe(`prebuild ${id}'s capture is running; wait for it`);
+      expect(running.creates).toEqual([]);
+    }),
 );
 
 it.effect(

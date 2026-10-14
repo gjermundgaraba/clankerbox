@@ -49,7 +49,7 @@ export const capture = Command.make(
   { ...mutationFlags, machine: machineArgument, name: nameArgument },
   (flags) =>
     printResource(flags, {
-      call: (client) => client.capture(flags.machine, flags.name),
+      call: (client) => client.captureCheckpoint({ machine: flags.machine, name: flags.name }),
       encode: encodeCheckpoint,
       text: newId,
     }),
@@ -69,7 +69,7 @@ export const getCheckpoint = Command.make(
   { ...clientFlags, checkpoint: checkpointArgument },
   (flags) =>
     printResource(flags, {
-      call: (client) => client.checkpoint(flags.checkpoint),
+      call: (client) => client.getCheckpoint({ id: flags.checkpoint }),
       encode: encodeCheckpoint,
       text: (checkpoint, now) => table(checkpointFields(checkpoint, now)),
     }),
@@ -84,7 +84,7 @@ export const deleteCheckpoint = Command.make(
   { ...mutationFlags, checkpoint: checkpointArgument },
   (flags) =>
     withClient(flags, (client) =>
-      deleted(flags.json, flags.checkpoint, client.deleteCheckpoint(flags.checkpoint)),
+      deleted(flags.json, flags.checkpoint, client.deleteCheckpoint({ id: flags.checkpoint })),
     ),
 ).pipe(
   Command.withDescription(

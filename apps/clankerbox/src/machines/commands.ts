@@ -32,7 +32,7 @@ export const getMachine = Command.make(
   { ...clientFlags, machine: machineArgument },
   (flags) =>
     printResource(flags, {
-      call: (client) => client.machine(flags.machine),
+      call: (client) => client.getMachine({ id: flags.machine }),
       encode: encodeMachine,
       text: (machine, now) => table(machineFields(machine, now)),
     }),
@@ -90,7 +90,7 @@ export const start = Command.make(
   { ...mutationFlags, machine: machineArgument },
   (flags) =>
     printResource(flags, {
-      call: (client) => client.start(flags.machine),
+      call: (client) => client.startMachine({ id: flags.machine }),
       encode: encodeMachine,
       text: machineState,
     }),
@@ -98,7 +98,7 @@ export const start = Command.make(
 
 export const stop = Command.make("stop", { ...mutationFlags, machine: machineArgument }, (flags) =>
   printResource(flags, {
-    call: (client) => client.stop(flags.machine),
+    call: (client) => client.stopMachine({ id: flags.machine }),
     encode: encodeMachine,
     text: machineState,
   }),
@@ -108,7 +108,9 @@ export const deleteMachine = Command.make(
   "delete",
   { ...mutationFlags, machine: machineArgument },
   (flags) =>
-    withClient(flags, (client) => deleted(flags.json, flags.machine, client.delete(flags.machine))),
+    withClient(flags, (client) =>
+      deleted(flags.json, flags.machine, client.deleteMachine({ id: flags.machine })),
+    ),
 ).pipe(
   Command.withDescription(
     `${actionsByName.deleteMachine.description} A machine that is already gone counts as deleted.`,
@@ -120,7 +122,7 @@ export const fork = Command.make(
   { ...mutationFlags, machine: machineArgument, name: nameArgument },
   (flags) =>
     printResource(flags, {
-      call: (client) => client.fork(flags.machine, flags.name),
+      call: (client) => client.forkMachine({ machine: flags.machine, name: flags.name }),
       encode: encodeMachine,
       text: newId,
     }),
@@ -131,7 +133,7 @@ export const restore = Command.make(
   { ...mutationFlags, checkpoint: checkpointArgument, name: nameArgument },
   (flags) =>
     printResource(flags, {
-      call: (client) => client.restore(flags.checkpoint, flags.name),
+      call: (client) => client.restoreMachine({ checkpoint: flags.checkpoint, name: flags.name }),
       encode: encodeMachine,
       text: newId,
     }),
