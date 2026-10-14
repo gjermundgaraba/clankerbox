@@ -37,6 +37,7 @@ import {
   make as makeApi,
   type Sandbox,
   snapshotName,
+  typeFor,
 } from "./api.ts";
 import { sshKey } from "./key.ts";
 import { lastLines } from "../../guest.ts";
@@ -57,6 +58,7 @@ import {
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
 import { NativeIds } from "../../store.ts";
+import { allotted, inUse } from "../../usage.ts";
 import { cliIn, describe, files } from "../process.ts";
 
 /**
@@ -643,6 +645,29 @@ export const make = (
           }),
       );
 
+    /**
+     * A `GET` of each recorded sandbox, all at once: a host holds few machines, and boat limits
+     * starts, not reads; a list would also hold the operator's own sandboxes, a page at a time.
+     * A few quick repeats ride out a blip, and one hung read makes only its own machine unknown.
+     */
+    const observe = Effect.fn("Boat.observe")((machines: ReadonlyArray<MachineRef>) =>
+      observeEach(
+        machines,
+        (machine) =>
+          Option.match(sandboxOf(machine), {
+            onNone: () => Effect.succeed({ state: "missing" }),
+            onSome: (id) =>
+              Effect.map(api.sandbox(id), (found) =>
+                Option.match(found, {
+                  onNone: (): Observed => ({ state: "missing" }),
+                  onSome: observed,
+                }),
+              ),
+          }),
+        { warn },
+      ),
+    );
+
     return {
       name: "boat",
       version: apiVersion,
@@ -652,36 +677,26 @@ export const make = (
       captureFrom: "running",
       loginUser: "root",
       startup: Effect.fn("Boat.startup")(() => Effect.void),
-      /**
-       * A `GET` of each recorded sandbox, all at once: a host holds few machines, and boat limits
-       * starts, not reads; a list would also hold the operator's own sandboxes, a page at a time.
-       * A few quick repeats ride out a blip, and one hung read makes only its own machine unknown.
-       */
-      observe: Effect.fn("Boat.observe")((machines) =>
-        observeEach(
-          machines,
-          (machine) =>
-            Option.match(sandboxOf(machine), {
-              onNone: () => Effect.succeed({ state: "missing" }),
-              onSome: (id) =>
-                Effect.map(api.sandbox(id), (found) =>
-                  Option.match(found, {
-                    onNone: (): Observed => ({ state: "missing" }),
-                    onSome: observed,
-                  }),
-                ),
-            }),
-          { warn },
-        ),
-      ),
+      observe,
       /**
        * Whether the account's plan includes the type is boat's to say. boat's own count of active
        * sandboxes includes the operator's, so its 429 refusal is the count.
        */
       admit: Effect.fn("Boat.admit")(({ machine }) => Effect.asVoid(machineType(machine))),
-      /** One request, so a refusal is boat's own answer. */
-      capacity: Effect.fn("Boat.capacity")(() =>
-        Effect.map(scrubbing(api.limits), ({ activeSandboxes, maxActiveSandboxes, starts }) => {
+      /**
+       * One request for the account's limits, so a refusal is boat's own answer. `cpu` and
+       * `ramMib` are the host's own sandboxes, each the size of the type boat runs it as.
+       */
+      capacity: Effect.fn("Boat.capacity")((machines) =>
+        Effect.gen(function* () {
+          const [{ activeSandboxes, maxActiveSandboxes, starts }, { running, unread }] =
+            yield* Effect.all([scrubbing(api.limits), inUse(machines, observe)], {
+              concurrency: "unbounded",
+            });
+
+          // A machine no type covers is being refused at its admission: it counts as it asked.
+          const sizes = running.map((machine) => Option.getOrElse(typeFor(machine), () => machine));
+
           const windows = [
             ["startsPerMinute", starts?.minute],
             ["startsPerHour", starts?.hour],
@@ -697,6 +712,7 @@ export const make = (
             ...windows.flatMap(([resource, window]) =>
               window == null ? [] : [{ resource, limit: window.limit, used: window.used }],
             ),
+            ...allotted(sizes, unread),
           ];
         }),
       ),

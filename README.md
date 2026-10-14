@@ -169,7 +169,7 @@ directory's profiles, reading only local files.
 
 ```sh
 clankerbox hosts                           # every host, its runtime, versions and bases
-clankerbox capacity                        # every host's limits, and how much of each is in use
+clankerbox capacity                        # every host's resources, their use, and their limits
 clankerbox profiles                        # the profiles directory's profiles
 clankerbox create dev --profile dev        # placed; prints the new ID, linux_dev
 clankerbox create review --host mac --base macos --cpu 4 --ram 8G --disk 60G
@@ -611,16 +611,21 @@ name: nothing migrates.
 
 ### Capacity
 
-`getCapacity` (`clankerbox capacity`, `client.capacity`) lists a host's limits,
-the ones its `Capacity` refusals come from, as `{host, resource, limit, used}`.
-The CLI's table names each resource in its own words (`ram`, `running-vms`,
-`active-sandboxes`, `starts/minute`, `starts/hour`, `starts/day`) and rounds
-RAM to a tenth of a GiB; `--json` has the API's names and whole MiB.
-The host counts `used` as the refusal counts it, so it needn't match the host's
-own machines; the [runtime notes](#runtime-notes) say what each runtime
-counts. It is read from the runtime at each call and is all the reply holds,
-so a runtime that fails the read, or takes over the host's 9 s, fails it with
-`Internal`, and a list names that host among the unreachable.
+`getCapacity` (`clankerbox capacity`, `client.capacity`) lists a host's
+resources as `Usage` rows, `{host, resource, limit?}` with `used` or `unread`:
+the limits its `Capacity` refusals come from (smolvm's RAM budget, Tart's two
+VMs, boat's account limits), and on every runtime the `cpu` and `ramMib` its
+running and booting machines were given. `used` is counted as a refusal counts
+it, so it needn't match the host's own machines; the
+[runtime notes](#runtime-notes) say what each runtime counts. A row that would
+count a machine whose state couldn't be read has `unread`, those machines'
+IDs, instead of a guessed sum. The CLI shows `-` for no limit, `?` for an
+unread sum with the machines named under the table, the resources in its own
+words (`cpu`, `ram`, `running-vms`, `active-sandboxes`, `starts/minute`,
+`starts/hour`, `starts/day`) and RAM to a tenth of a GiB; `--json` has the
+API's names and whole MiB. The rows are read from the runtime at each call, so
+a runtime that fails the read as a whole, or takes over the host's 9 s, fails
+it with `Internal`, and a list names that host among the unreachable.
 
 ### Actions
 
@@ -996,13 +1001,14 @@ These are known, not guarded, and accepted:
   a machine whose status hasn't answered 8 s after the read began, its wait
   for a turn included, reads `unknown`. smolvm's exit codes are trusted: no
   polling around calls.
-- **RAM budget** (`ram-budget.ts`): every start and every new machine checks
+- **RAM budget** (`usage.ts`): every start and every new machine checks
   that running and booting machines' `ramMib` fit `ramBudgetMib`, each once,
   else `Capacity`; a running target counts once, and a machine whose state
   couldn't be read counts as running. Set it above physical RAM to
   overcommit on purpose. The host's capacity is the budget and that sum
-  (`ramMib`); with a machine whose state couldn't be read it fails, naming
-  the machine, since the sum would be a guess.
+  (`ramMib`), and the same machines' `cpu`, unlimited; a machine whose state
+  couldn't be read leaves both `unread`, naming it, since the sum would be a
+  guess.
 - **Fork** is a checkpoint of the running source into a store of its own,
   `create --from` it, a port swap (`machine update --remove-port … -p …`),
   start, then the store is removed whole, whatever happened. The child
@@ -1057,7 +1063,9 @@ These are known, not guarded, and accepted:
   boot counts the VMs `tart list` reads running plus machines being booted, the
   target included, each VM once, and refuses with `Capacity` past two; a start
   of a running machine adds nothing. The host's capacity is that count of two
-  (`runningVms`), so it includes the operator's VMs, Linux ones too.
+  (`runningVms`), so it includes the operator's VMs, Linux ones too, and the
+  `cpu` and `ramMib` of the host's own running and booting machines, from the
+  same `tart list`, unlimited; the operator's VMs aren't in those.
 - **Start** reads `tart list` first and refuses a VM Tart no longer has before
   it writes a job or listens; it boots only a stopped VM.
 - **Stop** reads `tart list` first and does nothing to a VM that doesn't run.
@@ -1120,7 +1128,13 @@ These are known, not guarded, and accepted:
   (`activeSandboxes`), and the starts used of each rolling window that has a
   limit (`startsPerMinute`, `startsPerHour`, `startsPerDay`). It asks once,
   so a refusal is boat's own answer. The host checks none of it before a
-  call; boat's refusal is the check.
+  call; boat's refusal is the check. Alongside, it reads each recorded
+  sandbox's state as a list does, for the `cpu` and `ramMib` of the host's own
+  running and booting machines, each the size of the type boat runs it as, so
+  more than it asked for when no type matches exactly, or as it asked when no
+  type covers it, as while its create is refused; the operator's
+  sandboxes aren't in those. A sandbox whose read fails leaves both `unread`;
+  the account's rows still answer.
 - **State** is a `GET` of each recorded sandbox, never a list; a read that
   still fails after its repeats, or takes over 8 s, reads `unknown`,
   never `missing`. The SSH endpoint changes at every start and is only
@@ -1180,10 +1194,10 @@ database or a vendor's API, live in `platform/`.
 - **Host** (`packages/host/src`): the domains are the machine and checkpoint
   actions (`machines.ts`, `checkpoints.ts`), the order every action runs in
   (`claims.ts`), the guest scripts (`guest.ts`), machine ports
-  (`machine-ports.ts`), the RAM budget (`ram-budget.ts`), IDs (`ids.ts`) and
-  the settings every runtime shares (`settings.ts`). Its ports are `Store`
-  (`store.ts`), `Runtime` (`runtime.ts`) and `PortProbe`
-  (`machine-ports.ts`). The adapters are `platform/sqlite.ts`,
+  (`machine-ports.ts`), the machines in use, for the RAM budget and capacity
+  (`usage.ts`), IDs (`ids.ts`) and the settings every runtime shares
+  (`settings.ts`). Its ports are `Store` (`store.ts`), `Runtime`
+  (`runtime.ts`) and `PortProbe` (`machine-ports.ts`). The adapters are `platform/sqlite.ts`,
   `platform/bind-probe.ts`, the three runtimes (`platform/smolvm.ts`,
   `platform/tart/`, `platform/boat/`, each with its config section and
   defaults) and what they share (`platform/process.ts`,
@@ -1248,7 +1262,7 @@ These practices are in force with the layout, and each is checked where it can b
 - **A runtime is removable.** Removing boat is its `platform/` folder, its arm
   in `composition/runtimes.ts` and its config section in
   `composition/config.ts`, the SDK's `Runtime` literal and its tests. What
-  stays is the vocabulary it brought: its limits in the SDK's `Limit` and
+  stays is the vocabulary it brought: its resources in the SDK's `Usage` and
   their labels in the CLI, and the machine row's `native` with the
   `NativeIds` service, which no other runtime uses.
 

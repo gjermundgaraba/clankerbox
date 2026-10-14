@@ -86,9 +86,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(before.answers).toEqual([
+          { host: "linux", resource: "cpu", used: 0 },
           { host: "linux", resource: "ramMib", limit: 4096, used: 0 },
         ]);
         expect(after.answers).toEqual([
+          { host: "linux", resource: "cpu", used: 1 },
           { host: "linux", resource: "ramMib", limit: 4096, used: 1024 },
         ]);
         expect(unread.answers).toEqual([]);

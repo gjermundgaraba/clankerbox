@@ -192,6 +192,8 @@ export const listCommand = <A, Encoded>(options: {
   readonly read: (client: Client.Interface) => Effect.Effect<Client.Gathered<A>>;
   readonly encode: (answer: A) => Encoded;
   readonly rows: (answers: ReadonlyArray<A>, now: DateTime.Utc) => Array<Array<string>>;
+  /** Printed to stderr under the table. */
+  readonly notes?: (answers: ReadonlyArray<A>) => ReadonlyArray<string>;
 }) =>
   Command.make(options.name, clientFlags, (flags) =>
     Effect.gen(function* () {
@@ -216,6 +218,10 @@ export const listCommand = <A, Encoded>(options: {
             yield* Console.log(table(options.rows(answers, now)));
           } else if (!failed) {
             yield* Console.error(`clankerbox: no ${options.key} to list`);
+          }
+
+          for (const note of options.notes?.(answers) ?? []) {
+            yield* Console.error(`clankerbox: ${note}`);
           }
 
           yield* warnUnreachable(unreachable);

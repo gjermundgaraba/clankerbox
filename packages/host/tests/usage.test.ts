@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest";
 import { Effect, Exit, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { checkRamBudget } from "../src/ram-budget.ts";
+import { checkRamBudget } from "../src/usage.ts";
 import type { Held, MachineRef, Observed } from "../src/runtime.ts";
 
 const Machine = Schema.Struct({

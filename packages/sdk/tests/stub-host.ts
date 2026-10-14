@@ -10,9 +10,9 @@ import {
   type Host,
   type HostError,
   Http,
-  type Limit,
   type Machine,
   NotFound,
+  type Reading,
   type Runtime,
   version,
   versionHeader,
@@ -33,7 +33,7 @@ export interface StubHostOptions {
   readonly machines?: ReadonlyArray<Machine>;
   readonly checkpoints?: ReadonlyArray<Checkpoint>;
   /** Default: none. */
-  readonly capacity?: ReadonlyArray<Omit<Limit, "host">>;
+  readonly capacity?: ReadonlyArray<Reading>;
 }
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({

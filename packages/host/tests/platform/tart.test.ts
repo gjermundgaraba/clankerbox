@@ -817,7 +817,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "capacity is Apple's two VMs and the VMs admit counts: every running one, the operator's too, and machines being booted, each once",
+    "capacity is Apple's two VMs and the VMs admit counts, every running one, the operator's too, and machines being booted, each once; and the cpu and RAM of the host's own",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -828,10 +828,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         mac.vms.set(vmOf(a), "running");
         mac.vms.set(vmOf(b), "stopped");
 
+        const before = mac.spawner.calls.length;
+
         const idle = yield* runtime.capacity([
           { machine: a, booting: false },
           { machine: b, booting: false },
         ]);
+
+        const lists = mac.spawner.calls.slice(before).map(({ args }) => args);
 
         // A start of the running `a` holds it as booting, and counts it once; `c` has no VM yet.
         const booting = yield* runtime.capacity([
@@ -840,8 +844,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           { machine: c, booting: true },
         ]);
 
-        expect(idle).toEqual([{ resource: "runningVms", limit: 2, used: 2 }]);
-        expect(booting).toEqual([{ resource: "runningVms", limit: 2, used: 3 }]);
+        // The operator's VMs count toward Apple's two, and not toward the host's cpu and RAM.
+        expect(lists).toEqual([["list", "--source", "local", "--format", "json"]]);
+        expect(idle).toEqual([
+          { resource: "runningVms", limit: 2, used: 2 },
+          { resource: "cpu", used: 4 },
+          { resource: "ramMib", used: 8192 },
+        ]);
+        expect(booting).toEqual([
+          { resource: "runningVms", limit: 2, used: 3 },
+          { resource: "cpu", used: 8 },
+          { resource: "ramMib", used: 16_384 },
+        ]);
       }),
   );
 

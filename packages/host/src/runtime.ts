@@ -8,9 +8,9 @@ import {
   type Checkpoint,
   type Host,
   Internal,
-  type Limit,
   type Machine,
   Precondition,
+  type Reading,
   readTimeout,
   type Runtime as RuntimeName,
   type SshEndpoint,
@@ -120,8 +120,6 @@ export interface Held {
   readonly booting: boolean;
 }
 
-export type Usage = Omit<Limit, "host">;
-
 export interface Activation {
   readonly action: ActionName;
   /** Already claimed by the action. */
@@ -195,11 +193,12 @@ export interface Interface {
   readonly admit: (activation: Activation) => Effect.Effect<void, RoomError>;
   /**
    * The limits `admit` and the runtime's `Capacity` refusals come from, and their use, counted
-   * as they count it. Reads state as `observe` does and writes nothing.
+   * as they count it; then the `cpu` and `ramMib` its running machines were given, whether or
+   * not they are limits. Reads state as `observe` does and writes nothing.
    */
   readonly capacity: (
     machines: ReadonlyArray<Held>,
-  ) => Effect.Effect<ReadonlyArray<Usage>, RuntimeError>;
+  ) => Effect.Effect<ReadonlyArray<Reading>, RuntimeError>;
   /** Returns once exec works. */
   readonly create: (machine: MachineRef, image: string) => Effect.Effect<void, RoomError | Refusal>;
   /**

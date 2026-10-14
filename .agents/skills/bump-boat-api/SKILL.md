@@ -107,10 +107,11 @@ Each: what boat does, and what of ours depends on it.
   16/32/251 from the $100 plan; the spec lists only the first three. On the
   trial, `large` is 403 `trial_machine_class_not_allowed`; `xlarge` is 403
   `machine_class_plan_required` below the $100 plan. Ours: `machineTypes` and
-  `machineType` (the smallest that covers the request; none is
-  `Precondition`); every 403 that carries boat's code is `Precondition`
-  (`refusal`), so an API key that may not perform an action
-  (`api_key_action_forbidden`, seen on `POST /sshkey` and `DELETE`) is one too.
+  `typeFor`/`machineType` (the smallest that covers the request; none is
+  `Precondition`), which also sizes `Boat.capacity`'s `cpu` and `ramMib`;
+  every 403 that carries boat's code is `Precondition` (`refusal`), so an API
+  key that may not perform an action (`api_key_action_forbidden`, seen on
+  `POST /sshkey` and `DELETE`) is one too.
 
 **Refusals and retries** (D, O)
 

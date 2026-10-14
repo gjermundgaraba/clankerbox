@@ -989,7 +989,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "the host's capacity is what step 3 counts: running machines, and one an action is booting",
+    "the host's capacity is what step 3 counts, for cpu too: running machines, and one an action is booting",
     () =>
       Effect.gen(function* () {
         const linux = yield* host({ runtime: { ramBudgetMib: 4096 } });
@@ -1015,8 +1015,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* release;
         yield* Fiber.join(creating);
 
-        expect(idle).toEqual([{ host: "linux", resource: "ramMib", limit: 4096, used: 1024 }]);
-        expect(booting).toEqual([{ host: "linux", resource: "ramMib", limit: 4096, used: 3072 }]);
+        expect(idle).toEqual([
+          { host: "linux", resource: "cpu", used: 1 },
+          { host: "linux", resource: "ramMib", limit: 4096, used: 1024 },
+        ]);
+        expect(booting).toEqual([
+          { host: "linux", resource: "cpu", used: 2 },
+          { host: "linux", resource: "ramMib", limit: 4096, used: 3072 },
+        ]);
         expect(full._tag).toBe("Capacity");
         expect(full.message).toContain("needs 2G of RAM, and 1G of the host's 4G budget is free");
       }),
