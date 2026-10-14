@@ -4,11 +4,13 @@ import { afterEach, expect } from "vite-plus/test";
 import {
   type Checkpoint,
   Client,
+  Conflict,
   formatId,
   Internal,
   type MachineSpec,
   Prebuild,
   Precondition,
+  retryable,
 } from "../src/index.ts";
 import { checkpoint, type StubHost, stubHost, transport } from "./stub-host.ts";
 
@@ -141,7 +143,7 @@ it.effect(
 );
 
 it.effect(
-  "a prebuild that is done is the answer as it is, a failed one is built again, and a running one is refused",
+  "a prebuild that is done is the answer as it is, a failed one is built again, and a running one is busy where it is held",
   () =>
     Effect.gen(function* () {
       const id = `linux_${yield* nameOf(spec)}`;
@@ -182,8 +184,15 @@ it.effect(
       });
       expect(failed.creates).toHaveLength(1);
       expect(yield* holdings(failed)).toEqual({ machines: [], checkpoints: [id] });
-      expect(error._tag).toBe("Precondition");
-      expect(error.message).toBe(`prebuild ${id}'s capture is running; wait for it`);
+      expect(error).toBeInstanceOf(Conflict);
+      expect(error).toMatchObject({
+        kind: "busy",
+        host: "linux",
+        action: "captureCheckpoint",
+        id,
+        message: `prebuild ${id} is busy: its capture is running`,
+      });
+      expect(retryable(error)).toBe(true);
       expect(running.creates).toEqual([]);
     }),
 );
