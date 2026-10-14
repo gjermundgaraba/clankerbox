@@ -4,6 +4,7 @@ import {
   formatId,
   type HostError,
   Internal,
+  isReady,
   type Limit,
   type Machine,
   Precondition,
@@ -74,7 +75,7 @@ interface Spec extends Pick<MachineRecord, "base" | "cpu" | "ramMib" | "diskGib"
   readonly profile?: string | undefined;
 }
 
-type Work = Effect.Effect<void, RoomError | Refusal, Runtime>;
+type Work = Effect.Effect<void, RoomError | Refusal>;
 
 type Making =
   | {
@@ -103,9 +104,6 @@ export const make = (
     const made = madeOn(config.id);
     const { claimAndCheck, native, refusable, done } = claimsOn(store);
     const ref = (record: NewMachine) => machineRef(config.id, record);
-
-    const withRuntime = <A, E>(work: Effect.Effect<A, E, Runtime>) =>
-      Effect.provideService(work, Runtime, runtime);
 
     const sshOf = (record: MachineRecord, observed: Observed) => {
       if (observed.state !== "running") {
@@ -293,21 +291,19 @@ export const make = (
         const hostKey = yield* refusable(
           token,
           `${action} ${machine.id}`,
-          withRuntime(
-            Effect.gen(function* () {
-              yield* work(machine);
+          Effect.gen(function* () {
+            yield* work(machine);
 
-              const current = ref(yield* rows.machine(name));
+            const current = ref(yield* rows.machine(name));
 
-              if (setup !== undefined) {
-                yield* runSetup(current, setup);
-              }
+            if (setup !== undefined) {
+              yield* runSetup(runtime, current, setup);
+            }
 
-              yield* store.markMade(token);
+            yield* store.markMade(token);
 
-              return yield* prepare(current);
-            }),
-          ),
+            return yield* prepare(runtime, current);
+          }),
         );
 
         yield* done(token, { prepared: { name, hostKey } });
@@ -348,7 +344,7 @@ export const make = (
         const hostKey = yield* refusable(
           token,
           `start ${id}`,
-          withRuntime(Effect.andThen(runtime.start(machine), prepare(machine))),
+          Effect.andThen(runtime.start(machine), prepare(runtime, machine)),
         );
 
         yield* done(token, { prepared: { name, hostKey } });
@@ -397,7 +393,7 @@ export const make = (
       Effect.gen(function* () {
         const checkpoint = yield* rows.checkpoint(yield* nameOf(id));
 
-        if (checkpoint.action.status !== "done") {
+        if (!isReady(checkpoint)) {
           return yield* new Precondition({
             message: `checkpoint ${id} isn't ready: its ${checkpoint.action.name} is ${checkpoint.action.status}`,
           });

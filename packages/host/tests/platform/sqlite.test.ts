@@ -62,7 +62,6 @@ const record = (name: string, fields?: Partial<NewMachine>): NewMachine => ({
 const checkpoint = (name: string, fields?: Partial<NewCheckpoint>): NewCheckpoint => ({
   name,
   instance: "fedcba9876543210fedcba9876543210",
-  native: undefined,
   createdAt: DateTime.makeUnsafe("2026-10-04T13:00:00Z"),
   machine: "dev",
   kind: "ram",
@@ -622,6 +621,33 @@ layer(NodeServices.layer)((it) => {
         expect(machines.map(({ name }) => name)).toEqual(["dev"]);
         expect(checkpoints).toEqual([]);
       }),
+  );
+
+  it.effect("a database at schema version 3 drops the checkpoints' native and keeps them", () =>
+    Effect.gen(function* () {
+      const stateDir = join(yield* scratch, "state");
+
+      yield* mkdir(stateDir);
+
+      const db = new DatabaseSync(join(stateDir, databaseFile));
+
+      for (const migration of migrations.slice(0, 3)) {
+        db.exec(migration);
+      }
+
+      db.exec(
+        `INSERT INTO checkpoints (name, instance, native, created_at, machine, kind, base, cpu,
+        ram_mib, disk_gib, action_name, action_status) VALUES ('snap', 'abc', NULL,
+        '2026-10-04T12:00:00.000Z', 'dev', 'disk', 'ubuntu', 1, 1024, 10, 'capture', 'done')`,
+      );
+      db.exec(`PRAGMA user_version = 3; PRAGMA application_id = ${applicationId}`);
+      db.close();
+
+      const checkpoints = yield* withStore(stateDir, (store) => store.checkpoints);
+
+      expect(checkpoints.map(({ name }) => name)).toEqual(["snap"]);
+      expect(checkpoints[0]).not.toHaveProperty("native");
+    }),
   );
 
   it.effect(

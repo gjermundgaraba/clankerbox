@@ -827,7 +827,6 @@ layer(NodeServices.layer)((it) => {
     id: "linux_snap",
     name: "snap",
     instance: "fedcba9876543210fedcba9876543210",
-    native: undefined,
     kind: "ram",
     port: 10_000,
   };

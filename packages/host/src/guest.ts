@@ -6,8 +6,8 @@ import { Precondition, type Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Stream } from "effect";
 import {
   type Command,
+  type Interface as Runtime,
   type MachineRef,
-  Runtime,
   type RuntimeError,
   timeoutFail,
 } from "./runtime.ts";
@@ -38,13 +38,13 @@ const outputTail = () => {
 };
 
 const runInGuest = (
+  runtime: Runtime,
   what: string,
   machine: MachineRef,
   command: Command,
   timeout: Duration.Duration,
-): Effect.Effect<string, RuntimeError, Runtime> =>
+): Effect.Effect<string, RuntimeError> =>
   Effect.gen(function* () {
-    const runtime = yield* Runtime;
     const tail = outputTail();
 
     const [, code] = yield* Effect.scoped(
@@ -95,13 +95,15 @@ const setupRunner = [
 const defaultSetupTimeoutSeconds = 600;
 
 export const runSetup = (
+  runtime: Runtime,
   machine: MachineRef,
   setup: Setup,
-): Effect.Effect<void, RuntimeError, Runtime> => {
+): Effect.Effect<void, RuntimeError> => {
   const timeout = Duration.seconds(setup.timeoutSeconds ?? defaultSetupTimeoutSeconds);
 
   return Effect.asVoid(
     runInGuest(
+      runtime,
       "setup",
       machine,
       { argv: ["/bin/sh", "-c", setupRunner], stdin: new TextEncoder().encode(setup.script) },
@@ -185,9 +187,11 @@ export const hostKeyIn = (output: string): string | undefined => {
 };
 
 export const prepare = (
+  runtime: Runtime,
   machine: MachineRef,
-): Effect.Effect<string | undefined, RuntimeError, Runtime> =>
+): Effect.Effect<string | undefined, RuntimeError> =>
   runInGuest(
+    runtime,
     "preparation",
     machine,
     {

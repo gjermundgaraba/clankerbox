@@ -14,6 +14,16 @@ const agentTooling = [
   ".windsurf/**",
 ];
 
+const adapterPackages = [
+  "^node:",
+  "^effect(/(encoding|http|process))?$",
+  "^@effect/platform-node/",
+  "^@gjermundgaraba/clankerbox-sdk$",
+];
+
+const adapterBecause =
+  "an adapter imports the domain files, platform's shared process.ts and address.ts, and its own subfolder; never composition/ or another adapter";
+
 export default defineConfig({
   fmt: {
     ignorePatterns: [...agentTooling, ".work/**", "tools/oxlint/anti-slop/**"],
@@ -107,20 +117,30 @@ export default defineConfig({
         },
       },
       {
-        files: ["packages/host/src/platform/**/*.ts"],
+        files: ["packages/host/src/platform/*.ts"],
+        rules: {
+          "fence/allowed-imports": [
+            "error",
+            {
+              allow: ["^\\./(process|address)\\.ts$", "^\\.\\./[a-z-]+\\.ts$", ...adapterPackages],
+              because: adapterBecause,
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/host/src/platform/*/*.ts"],
         rules: {
           "fence/allowed-imports": [
             "error",
             {
               allow: [
-                "^(?:\\./|(?:\\.\\./)+)(?!\\.\\./)(?!composition/)[a-z/-]+\\.ts$",
-                "^node:",
-                "^effect(/(encoding|http|process))?$",
-                "^@effect/platform-node/",
-                "^@gjermundgaraba/clankerbox-sdk$",
+                "^\\./[a-z-]+\\.ts$",
+                "^\\.\\./(process|address)\\.ts$",
+                "^\\.\\./\\.\\./[a-z-]+\\.ts$",
+                ...adapterPackages,
               ],
-              because:
-                "an adapter implements a domain port and reaches Node or a vendor; only composition/ puts adapters together",
+              because: adapterBecause,
             },
           ],
         },

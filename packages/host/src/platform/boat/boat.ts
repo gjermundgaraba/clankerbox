@@ -44,10 +44,10 @@ import {
   type Command,
   type Execution,
   type Interface,
-  machineReadWait,
   type MachineRef,
   type MachineState,
   missing,
+  observeEach,
   type Observed,
   type RecordNative,
   Refusal,
@@ -662,34 +662,20 @@ export const make = (
        * A few quick repeats ride out a blip, and one hung read makes only its own machine unknown.
        */
       observe: Effect.fn("Boat.observe")((machines) =>
-        Effect.forEach(
+        observeEach(
           machines,
-          (machine): Effect.Effect<Observed> =>
+          (machine) =>
             Option.match(sandboxOf(machine), {
               onNone: () => Effect.succeed({ state: "missing" }),
               onSome: (id) =>
-                api.sandbox(id).pipe(
-                  timeoutFail(
-                    machineReadWait,
-                    () =>
-                      new Internal({
-                        message: `boat answered no read of sandbox ${id} within ${Duration.format(machineReadWait)}`,
-                      }),
-                  ),
-                  Effect.map((found) =>
-                    Option.match(found, {
-                      onNone: (): Observed => ({ state: "missing" }),
-                      onSome: observed,
-                    }),
-                  ),
-                  Effect.catch((error) =>
-                    Effect.as(warn(`couldn't read ${machine.id}'s state: ${error.message}`), {
-                      state: "unknown",
-                    } satisfies Observed),
-                  ),
+                Effect.map(api.sandbox(id), (found) =>
+                  Option.match(found, {
+                    onNone: (): Observed => ({ state: "missing" }),
+                    onSome: observed,
+                  }),
                 ),
             }),
-          { concurrency: "unbounded" },
+          { warn },
         ),
       ),
       /**
