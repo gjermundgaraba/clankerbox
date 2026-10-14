@@ -1,11 +1,11 @@
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Capacity, type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Logger, Option } from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { claimsOn } from "../src/claims.ts";
-import { Refusal } from "../src/runtime.ts";
+import { refusal } from "../src/runtime.ts";
 import { open } from "../src/platform/sqlite.ts";
 import type { Interface, NewMachine } from "../src/store.ts";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
@@ -60,12 +60,10 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const { result, logged } = yield* withFailing("release", ({ claimAndCheck }, store) =>
-          claimAndCheck(inserting(store), () =>
-            Effect.fail(new Precondition({ message: "no room" })),
-          ),
+          claimAndCheck(inserting(store), () => Effect.fail(new Capacity({ message: "no room" }))),
         );
 
-        expect(result).toEqual(new Precondition({ message: "no room" }));
+        expect(result).toEqual(new Capacity({ message: "no room" }));
         expect(logged).toEqual([["couldn't release the rows of a createMachine: disk full"]]);
       }),
   );
@@ -83,7 +81,7 @@ layer(NodeServices.layer)((it) => {
                 refusable(
                   token,
                   "create linux_dev",
-                  Effect.fail(new Refusal({ error: new Capacity({ message: "no machine" }) })),
+                  Effect.fail(refusal(new Capacity({ message: "no machine" }))),
                 ),
             ),
         );

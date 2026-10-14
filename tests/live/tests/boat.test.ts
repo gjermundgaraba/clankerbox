@@ -352,12 +352,12 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   );
 
   test(
-    "a size no boat type covers is refused with Precondition before any call to boat, leaving no row and nothing on boat",
+    "a size no boat type covers is refused with Unsizable before any call to boat, leaving no row and nothing on boat",
     async () => {
       const before = await account();
       const refused = failure(await createBare("big", 17));
 
-      expect(refused.tag).toBe("Precondition");
+      expect(refused.tag).toBe("Unsizable");
       expect(refused.message).toContain("no boat machine type");
       expect(await machine("big")).toBeUndefined();
       expect(await natives("big")).toEqual(boat.nothing);
@@ -369,7 +369,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
   refusedBeforeTheRuntime(suite, boat, "main");
 
   test.skipIf(!onTrial)(
-    "a large create, which the trial's plan lacks, is boat's 403 and a Precondition refusal, leaving no row and nothing on boat",
+    "a large create, which the trial's plan lacks, is boat's 403 and a Refused refusal, leaving no row and nothing on boat",
     async () => {
       const before = await account();
 
@@ -378,7 +378,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       // after shows if it ever does.
       const large = failure(await createBare("large", 8));
 
-      expect(large.tag).toBe("Precondition");
+      expect(large.tag).toBe("Refused");
       expect(large.message).toContain("403 trial_machine_class_not_allowed");
       expect(await machine("large")).toBeUndefined();
       expect(await natives("large")).toEqual(boat.nothing);
@@ -787,7 +787,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       ] as const) {
         const refused = failure(await cli(command, id("crash"), ...args, "--json"));
 
-        expect(refused.tag, command.join(" ")).toBe("Precondition");
+        expect(refused.tag, command.join(" ")).toBe("NotMade");
         expect(refused.message, command.join(" ")).toContain("was never made");
       }
 

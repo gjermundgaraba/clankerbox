@@ -9,7 +9,7 @@ import { Duration, Effect, Fiber, Layer, Logger, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { type Interface, type MachineRef, Refusal } from "../../../src/runtime.ts";
+import { type Interface, type MachineRef, isRefusal, type Refusal } from "../../../src/runtime.ts";
 import {
   checkpointName,
   diskGb,
@@ -25,10 +25,8 @@ import {
 import { read, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { type Call, type Reply, scripted } from "../../scripted.ts";
 
-const refused = (error: Refusal | HostError) =>
-  error instanceof Refusal
-    ? [error.error._tag, error.error.message]
-    : ["not refused", error.message];
+const refused = (error: Refusal<HostError> | HostError) =>
+  isRefusal(error) ? [error.error._tag, error.error.message] : ["not refused", error.message];
 
 const binary = "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart";
 
@@ -322,7 +320,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         Effect.provide(Layer.merge(NodeServices.layer, old.layer)),
       );
 
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("CannotStart");
       expect(error.message).toBe(
         `${binary} reports version "2.38.0", and this host needs Tart 2.40.1 or later`,
       );
@@ -495,7 +493,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const error = yield* Effect.flip(runtime.start(machine));
 
         expect(refused(error)).toEqual([
-          "Precondition",
+          "Missing",
           "machine mac_dev is missing from the tart runtime; delete it",
         ]);
         expect(calls(mac)).toEqual([]);
@@ -668,7 +666,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a diskGib below the base's disk is Precondition at tart set, after the clone, and nothing boots",
+    "a diskGib below the base's disk is Unsizable at tart set, after the clone, and nothing boots",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -678,7 +676,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const error = yield* Effect.flip(runtime.create(machine, "base"));
 
         expect([error._tag, error.message]).toEqual([
-          "Precondition",
+          "Unsizable",
           "machine mac_small's disk of 20G is below its base's, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB",
         ]);
         expect(calls(mac)).toEqual([
@@ -919,14 +917,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(runtime.captureFrom).toBe("stopped");
         expect([fork, capture, missing].map(refused)).toEqual([
           [
-            "Precondition",
+            "WrongState",
             "a Tart fork copies a stopped machine's disk, and mac_src is running: stop it first",
           ],
           [
-            "Precondition",
+            "WrongState",
             "a Tart checkpoint copies a stopped machine's disk, and mac_src is running: stop it first",
           ],
-          ["Precondition", "machine mac_src is missing from the tart runtime; delete it"],
+          ["Missing", "machine mac_src is missing from the tart runtime; delete it"],
         ]);
         expect(calls(mac)).toEqual([]);
         expect(existsSync(join(jobsDir(mac.settings.stateDir), `${vmOf(copy)}.plist`))).toBe(false);

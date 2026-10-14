@@ -3,14 +3,11 @@ import {
   actionsByName,
   type ClankerboxError,
   Client,
-  type Internal,
   loadProfile,
   pinnedSsh,
   Prebuild,
-  Precondition,
   specRequest,
   sshTarget,
-  type Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Duration,
@@ -215,9 +212,11 @@ export const make = (options: Options, ssh = "ssh") => {
 
   /**
    * Only a failed create, fork or restore leaves its machine on the host, and then its error names
-   * it. A placement or prebuild read failure left nothing. A failed delete leaves it to the user.
+   * it. A placement or prebuild read failure left nothing, as did `NotFound`, `Invalid` and
+   * `Capacity`; a `Conflict` names a machine another call holds. A failed delete leaves it to the
+   * user.
    */
-  const discard = (error: Precondition | Internal | Unavailable) =>
+  const discard = (error: ClankerboxError) =>
     Effect.gen(function* () {
       const client = yield* Client.Client;
 
@@ -234,7 +233,19 @@ export const make = (options: Options, ssh = "ssh") => {
 
       return made(named).pipe(
         Effect.map((machine) => machine.id),
-        Effect.catchTags({ Precondition: discard, Internal: discard, Unavailable: discard }),
+        Effect.catchTags({
+          NotOffered: discard,
+          NotMade: discard,
+          Missing: discard,
+          NotReady: discard,
+          PinMismatch: discard,
+          WrongState: discard,
+          Unsizable: discard,
+          ScriptFailed: discard,
+          Refused: discard,
+          Internal: discard,
+          Unavailable: discard,
+        }),
       );
     }),
     destroy: (id: string) =>

@@ -5,7 +5,9 @@ import {
   Conflict,
   type HostError,
   Internal,
-  Precondition,
+  NotReady,
+  PinMismatch,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber } from "effect";
 import { layer } from "@effect/vitest";
@@ -189,7 +191,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const error = yield* failure(linux, linux.machines.fork("linux_dev", "copy"));
 
       expect([error._tag, error.message]).toEqual([
-        "Precondition",
+        "WrongState",
         "linux_dev is stopped: start it first",
       ]);
       expect(yield* actions(linux)).toEqual({ dev: refused("forkMachine", error) });
@@ -236,12 +238,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ["restored", "restore", () => linux.machines.restore("linux_snap", "restored")],
         ] as const) {
           linux.fake.failNext(operation, new Internal({ message: "port swap failed" }));
-          yield* failure(linux, make());
+          yield* failure<unknown, HostError>(linux, make());
 
           const error = yield* failure(linux, linux.machines.start(`linux_${name}`));
 
           expect([error._tag, error.message]).toEqual([
-            "Precondition",
+            "NotMade",
             `machine linux_${name} was never made: its create, fork or restore failed; delete it`,
           ]);
           expect((yield* actions(linux))[name]).toEqual(refused("startMachine", error));
@@ -274,7 +276,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ["restored", "restoreMachine", () => linux.machines.restore("linux_snap", "restored")],
         ] as const) {
           linux.fake.failNext("exec", new Internal({ message: "sshd didn't start" }));
-          yield* failure(linux, make());
+          yield* failure<unknown, HostError>(linux, make());
 
           const [row] = (yield* linux.run(linux.store.list)).filter(
             (record) => record.name === name,
@@ -387,7 +389,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture of a stopped machine on a ram runtime is Precondition, and makes no checkpoint",
+    "a capture of a stopped machine on a ram runtime is WrongState, and makes no checkpoint",
     () =>
       Effect.gen(function* () {
         const linux = yield* withSource();
@@ -397,7 +399,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const error = yield* failure(linux, linux.checkpoints.capture("linux_dev", "cold"));
 
         expect(error).toEqual(
-          new Precondition({ message: "linux_dev is stopped: start it first" }),
+          new WrongState({
+            message: "linux_dev is stopped: start it first",
+            machine: "linux_dev",
+            state: "stopped",
+            needs: "running",
+          }),
         );
         expect(yield* checkpointActions(linux)).toEqual({});
         expect((yield* actions(linux))["dev"]).toEqual(refused("captureCheckpoint", error));
@@ -441,7 +448,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a capture of a machine the runtime doesn't have is Precondition, and of no row NotFound",
+    "a capture of a machine the runtime doesn't have is Missing, and of no row NotFound",
     () =>
       Effect.gen(function* () {
         const linux = yield* withSource();
@@ -451,7 +458,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const missing = yield* failure(linux, linux.checkpoints.capture("linux_dev", "snap"));
         const none = yield* failure(linux, linux.checkpoints.capture("linux_gone", "snap"));
 
-        expect(missing._tag).toBe("Precondition");
+        expect(missing._tag).toBe("Missing");
         expect(none._tag).toBe("NotFound");
         expect(yield* checkpointActions(linux)).toEqual({});
         expect((yield* actions(linux))["dev"]).toEqual(refused("captureCheckpoint", missing));
@@ -565,7 +572,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect("a restore of a checkpoint that isn't ready is Precondition; of none, NotFound", () =>
+  it.effect("a restore of a checkpoint that isn't ready is NotReady; of none, NotFound", () =>
     Effect.gen(function* () {
       const linux = yield* withSource();
       const { release, entered } = linux.fake.holdNext("capture");
@@ -581,8 +588,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const none = yield* failure(linux, linux.machines.restore("linux_gone", "copy"));
 
       expect(capturing).toEqual(
-        new Precondition({
+        new NotReady({
           message: "checkpoint linux_snap isn't ready: its captureCheckpoint is running",
+          checkpoint: "linux_snap",
+          status: "running",
         }),
       );
       expect(none._tag).toBe("NotFound");
@@ -605,9 +614,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const refused = yield* failure(upgraded, upgraded.machines.restore("linux_hot", "copy"));
 
       expect(refused).toEqual(
-        new Precondition({
+        new PinMismatch({
           message:
             "checkpoint linux_hot holds RAM state saved under fake 1, and this host runs fake 2; it restores only under the same one",
+          checkpoint: "linux_hot",
+          saved: "fake 1",
+          running: "fake 2",
         }),
       );
       expect(upgraded.fake.calls).toEqual(["startup"]);
@@ -680,10 +692,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* release;
 
-      const ended = yield* Effect.all(
-        [fork, restore].map((fiber) => Fiber.join(fiber)),
-        { concurrency: "unbounded" },
-      );
+      const ended = yield* Effect.all([Fiber.join(fork), Fiber.join(restore)], {
+        concurrency: "unbounded",
+      });
 
       // The budget fits the source and one more: exactly one of the two passes.
       expect(admitsWhileHeld).toBe(1);
@@ -734,7 +745,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const refused = yield* failure(restarted, restarted.machines.restore("linux_snap", "copy"));
 
       expect(refused).toEqual(
-        new Precondition({ message: "checkpoint linux_snap isn't ready: its delete is failed" }),
+        new NotReady({
+          message: "checkpoint linux_snap isn't ready: its deleteCheckpoint is failed",
+          checkpoint: "linux_snap",
+          status: "failed",
+        }),
       );
       expect(Object.keys(yield* actions(restarted))).toEqual(["dev"]);
     }),

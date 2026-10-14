@@ -8,7 +8,7 @@ import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { type CheckpointRef, type MachineRef, Refusal } from "../../src/runtime.ts";
+import { type CheckpointRef, type MachineRef, isRefusal, type Refusal } from "../../src/runtime.ts";
 import {
   controlSocket,
   environment,
@@ -25,10 +25,8 @@ import {
 import { mkdir, readDirectory, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { type Call, type Reply, scripted as scriptedSpawner } from "../scripted.ts";
 
-const refused = (error: Refusal | HostError) =>
-  error instanceof Refusal
-    ? [error.error._tag, error.error.message]
-    : ["not refused", error.message];
+const refused = (error: Refusal<HostError> | HostError) =>
+  isRefusal(error) ? [error.error._tag, error.error.message] : ["not refused", error.message];
 
 const encoder = new TextEncoder();
 
@@ -160,7 +158,7 @@ layer(NodeServices.layer)((it) => {
       const spawner = scripted(() => undefined);
       const error = yield* startupError(yield* prepared(), spawner, 1000);
 
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("CannotStart");
       expect(error.message).toBe("a smolvm host runs as root, and this one runs as uid 1000");
       expect(spawner.calls).toEqual([]);
     }),
@@ -178,7 +176,7 @@ layer(NodeServices.layer)((it) => {
         scripted(() => undefined),
       );
 
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("CannotStart");
       expect(error.message).toContain("past Linux's 107: use a shorter state dir");
     }),
   );
@@ -190,7 +188,7 @@ layer(NodeServices.layer)((it) => {
       const error = yield* startupError(settings, spawner);
       const overlay = join(settings.prefix, "overlay-template.ext4");
 
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("CannotStart");
       expect(error.message).toBe(
         `smolvm prefix ${settings.prefix} has no overlay-template.ext4: expand it at install with zstd -d --sparse ${overlay}.zst -o ${overlay}`,
       );
@@ -207,7 +205,7 @@ layer(NodeServices.layer)((it) => {
         scripted(() => ({ stdout: "smolvm 1.27.4\n" })),
       );
 
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("CannotStart");
       expect(error.message).toBe(
         `${join(settings.prefix, "smolvm")} reports "smolvm 1.27.4", and this host was tested on smolvm 1.27.3`,
       );
@@ -486,19 +484,10 @@ layer(NodeServices.layer)((it) => {
         }
 
         expect(refusals.map(refused)).toEqual([
-          [
-            "Precondition",
-            "smolvm reads machine linux_dev frozen, and doesn't start it from there",
-          ],
-          [
-            "Precondition",
-            "smolvm reads machine linux_dev paused, and doesn't start it from there",
-          ],
-          [
-            "Precondition",
-            "smolvm reads machine linux_dev pausing, and doesn't start it from there",
-          ],
-          ["Precondition", "machine linux_dev is missing from the smolvm runtime; delete it"],
+          ["WrongState", "smolvm reads machine linux_dev frozen, and doesn't start it from there"],
+          ["WrongState", "smolvm reads machine linux_dev paused, and doesn't start it from there"],
+          ["WrongState", "smolvm reads machine linux_dev pausing, and doesn't start it from there"],
+          ["Missing", "machine linux_dev is missing from the smolvm runtime; delete it"],
         ]);
         expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual([
           "status",
@@ -915,24 +904,24 @@ layer(NodeServices.layer)((it) => {
 
         expect([capture, fork, missing, unreachable, frozen, paused].map(refused)).toEqual([
           [
-            "Precondition",
+            "WrongState",
             "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",
           ],
           [
-            "Precondition",
+            "WrongState",
             "a fork copies a running machine, RAM included, and linux_dev is stopped: start it first",
           ],
-          ["Precondition", "machine linux_dev is missing from the smolvm runtime; delete it"],
+          ["Missing", "machine linux_dev is missing from the smolvm runtime; delete it"],
           [
-            "Precondition",
+            "WrongState",
             "smolvm reads machine linux_dev unreachable: its VM runs, but its agent doesn't answer; start it to boot it again",
           ],
           [
-            "Precondition",
+            "WrongState",
             "smolvm reads machine linux_dev frozen, and copies only a running machine",
           ],
           [
-            "Precondition",
+            "WrongState",
             "smolvm reads machine linux_dev paused, and copies only a running machine",
           ],
         ]);

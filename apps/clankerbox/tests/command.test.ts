@@ -81,7 +81,7 @@ layer(NodeServices.layer)((it) => {
       const { error } = decodeJsonError(stdout);
 
       expect(code).toBe(1);
-      expect(error.tag).toBe("Precondition");
+      expect(error.tag).toBe("NotOffered");
       expect(error.retryable).toBe(false);
       expect(error.message).toContain("linux offers ubuntu");
     }),

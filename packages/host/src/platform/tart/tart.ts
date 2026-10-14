@@ -6,7 +6,13 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { Capacity, type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Capacity,
+  type HostError,
+  Internal,
+  Unsizable,
+  WrongState,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Layer, Option, Schedule, Schema, type Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { lastLines } from "../../guest.ts";
@@ -18,11 +24,12 @@ import {
   type MachineState,
   missing,
   type Observed,
-  Refusal,
+  refusal,
   Runtime,
   timeoutFail,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
+import { CannotStart } from "../../startup.ts";
 import { allotted, inUse } from "../../usage.ts";
 import { cliIn, expect, files, portOf } from "../process.ts";
 import * as Forwarder from "./forwarder.ts";
@@ -198,7 +205,7 @@ export const make = (
   settings: Settings,
 ): Effect.Effect<
   Interface,
-  HostError,
+  HostError | CannotStart,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Scope.Scope
 > =>
   Effect.gen(function* () {
@@ -208,7 +215,7 @@ export const make = (
     const jobs = jobsDir(settings.stateDir);
 
     if (settings.uid === undefined) {
-      return yield* new Precondition({ message: "a Tart host runs on macOS, as a user" });
+      return yield* new CannotStart({ message: "a Tart host runs on macOS, as a user" });
     }
 
     const domain = `gui/${settings.uid}`;
@@ -228,7 +235,7 @@ export const make = (
     const reported = (yield* call(["--version"], "--version")).stdout.trim();
 
     if (!supported(reported)) {
-      return yield* new Precondition({
+      return yield* new CannotStart({
         message: `${settings.binary} reports version "${reported}", and this host needs Tart ${minimumVersion} or later`,
       });
     }
@@ -487,20 +494,21 @@ export const make = (
     /**
      * The machine's listener opens first, so a port it can't listen on is refused before anything
      * native. A `diskGib` below the base's disk is the caller's to fix, so Tart's refusal of it is
-     * `Precondition`.
+     * `Unsizable`.
      */
     const cloneInto = (from: string, machine: MachineRef, sizes: ReadonlyArray<string>) => {
       const vm = vmOf(machine);
 
       return Effect.gen(function* () {
-        yield* Effect.mapError(listen(machine), (error) => new Refusal({ error }));
+        yield* Effect.mapError(listen(machine), refusal);
         yield* call(["clone", from, vm], `clone ${from} ${vm}`);
 
         const set = yield* tart(["set", vm, "--random-serial", ...sizes], `set ${vm}`);
 
         if (set.exitCode !== 0 && set.stderr.includes(shrinkRefusal)) {
-          return yield* new Precondition({
+          return yield* new Unsizable({
             message: `machine ${machine.id}'s disk of ${machine.diskGib}G is below its base's, and Tart only grows a disk: ${lastLines(set.stderr)}`,
+            reason: "diskBelowBase",
           });
         }
 
@@ -524,11 +532,14 @@ export const make = (
         return Effect.fail(
           observed === "missing"
             ? missing("tart", machine)
-            : new Refusal({
-                error: new Precondition({
+            : refusal(
+                new WrongState({
                   message: `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is running: stop it first`,
+                  machine: machine.id,
+                  state: observed,
+                  needs: copiedFrom,
                 }),
-              }),
+              ),
         );
       });
 
@@ -682,7 +693,7 @@ export const layer = (
   },
 ): Layer.Layer<
   Runtime,
-  HostError,
+  HostError | CannotStart,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > =>
   Layer.effect(

@@ -1,6 +1,6 @@
 /**
  * The refusal rule covers boat's answers that leave nothing on boat (the bump-boat-api skill):
- * its `Capacity` and `Precondition` refusals of a create, fork, resume, restore or capture, a
+ * its `Capacity` and `Refused` refusals of a create, fork, resume, restore or capture, a
  * create, fork or restore that ends `cancelled` because boat found no machine, and a machine to
  * start, or a fork's or capture's source, that boat doesn't have.
  *
@@ -10,9 +10,9 @@
 import { join } from "node:path";
 import {
   Capacity,
-  type HostError,
+  HostError,
   Internal,
-  Precondition,
+  type Refused,
   type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -50,7 +50,9 @@ import {
   missing,
   observeEach,
   type Observed,
-  Refusal,
+  isRefusal,
+  type Refusal,
+  refusal,
   type RoomError,
   Runtime,
   type RuntimeError,
@@ -242,32 +244,24 @@ export const make = (
 
     const scrub = (text: string) => (secret === "" ? text : text.replaceAll(secret, "<redacted>"));
 
-    const scrubber = <E extends RoomError, I extends { readonly message: string }>(
-      errors: Schema.Codec<E, I>,
-    ) => {
-      const encode = Schema.encodeSync(errors);
-      const decode = Schema.decodeSync(errors);
+    const encodeError = Schema.encodeSync(HostError);
 
-      return (error: E): E => {
-        const encoded = encode(error);
+    const decodeError = Schema.decodeSync(HostError);
 
-        return decode({ ...encoded, message: scrub(encoded.message) });
-      };
-    };
+    const rebuilt = (error: HostError): HostError =>
+      decodeError({ ...encodeError(error), message: scrub(error.message) });
 
-    const scrubbed = scrubber(Schema.Union([Precondition, Internal]));
+    /** Each error, or a refusal's, with its message scrubbed and every other field it had. */
+    const scrubbing = <A, E extends HostError | Refusal<HostError>, R>(
+      action: Effect.Effect<A, E, R>,
+    ) =>
+      Effect.mapError(action, (error): E => {
+        const failed: HostError | Refusal<HostError> = error;
 
-    const scrubbedRoom = scrubber(Schema.Union([Precondition, Internal, Capacity]));
-
-    const scrubbing = <A, R>(action: Effect.Effect<A, RuntimeError, R>) =>
-      Effect.mapError(action, scrubbed);
-
-    const scrubbingRefusal = <A, R>(action: Effect.Effect<A, RoomError | Refusal, R>) =>
-      Effect.mapError(action, (error) =>
-        error instanceof Refusal
-          ? new Refusal({ error: scrubbedRoom(error.error) })
-          : scrubbedRoom(error),
-      );
+        // SAFETY: decoding what the same union encoded rebuilds each error's own class, and a
+        // refusal stays one around it.
+        return (isRefusal(failed) ? refusal(rebuilt(failed.error)) : rebuilt(failed)) as E;
+      });
 
     const warn = (message: string) => Effect.logWarning(scrub(message));
 
@@ -318,14 +312,15 @@ export const make = (
         return found.value;
       });
 
-    const typeOf = (machine: MachineRef) =>
-      Effect.mapError(machineType(machine), (error) => new Refusal({ error }));
+    const typeOf = (machine: MachineRef) => Effect.mapError(machineType(machine), refusal);
 
-    const refusing = <A>(call: Effect.Effect<A, RoomError>): Effect.Effect<A, Internal | Refusal> =>
+    const refusing = <A>(
+      call: Effect.Effect<A, RoomError>,
+    ): Effect.Effect<A, Internal | Refusal<Capacity | Refused>> =>
       call.pipe(
         Effect.catchTags({
-          Capacity: (error) => Effect.fail(new Refusal({ error })),
-          Precondition: (error) => Effect.fail(new Refusal({ error })),
+          Capacity: (error) => Effect.fail(refusal(error)),
+          Refused: (error) => Effect.fail(refusal(error)),
         }),
       );
 
@@ -338,7 +333,7 @@ export const make = (
     const running = (machine: MachineRef, id: string, fresh: boolean) => {
       const read = Effect.flatMap(
         api.sandbox(id),
-        (found): Effect.Effect<Option.Option<Sandbox>, RuntimeError | Refusal> => {
+        (found): Effect.Effect<Option.Option<Sandbox>, RuntimeError | Refusal<Capacity>> => {
           if (Option.isSome(found) && upStates.has(found.value.state)) {
             return Effect.succeed(found);
           }
@@ -354,7 +349,7 @@ export const make = (
 
             return Effect.fail(
               fresh
-                ? new Refusal({ error: new Capacity({ message: `${said}; it found no machine` }) })
+                ? refusal(new Capacity({ message: `${said}; it found no machine` }))
                 : new Internal({ message: said }),
             );
           }
@@ -679,10 +674,11 @@ export const make = (
       startup: Effect.fn("Boat.startup")(() => Effect.void),
       observe,
       /**
-       * Whether the account's plan includes the type is boat's to say. boat's own count of active
+       * A create, fork or restore refuses sizes no type covers before anything native, and whether
+       * the account's plan includes the type is boat's to say. boat's own count of active
        * sandboxes includes the operator's, so its 429 refusal is the count.
        */
-      admit: Effect.fn("Boat.admit")(({ machine }) => Effect.asVoid(machineType(machine))),
+      admit: Effect.fn("Boat.admit")(() => Effect.void),
       /**
        * One request for the account's limits, so a refusal is boat's own answer. `cpu` and
        * `ramMib` are the host's own sandboxes, each the size of the type boat runs it as.
@@ -726,7 +722,7 @@ export const make = (
           yield* made(machine, id);
           yield* api.authorize(id, key.publicKey);
           yield* reachable(machine, id, ["touch", createdMark]);
-        }).pipe(scrubbingRefusal),
+        }).pipe(scrubbing),
       ),
       /**
        * A sandbox boat still makes or resumes, or that runs, isn't resumed again. The start waits
@@ -744,7 +740,7 @@ export const make = (
           yield* running(machine, id, false);
           yield* reachable(machine, id);
           yield* restored(machine, id);
-        }).pipe(scrubbingRefusal),
+        }).pipe(scrubbing),
       ),
       /**
        * Never with `force`: a stop boat refuses, as when its final snapshot fails, is the error.
@@ -825,7 +821,7 @@ export const make = (
               message: `boat's snapshot ${name} of ${machine.id} is ${settled.status}${settled.error === undefined ? "" : `: ${settled.error}`}`,
             });
           }
-        }).pipe(scrubbingRefusal),
+        }).pipe(scrubbing),
       ),
       restore: Effect.fn("Boat.restore")((checkpoint, machine) =>
         Effect.gen(function* () {
@@ -836,7 +832,7 @@ export const make = (
           );
 
           yield* restoredSandbox(machine, id);
-        }).pipe(scrubbingRefusal),
+        }).pipe(scrubbing),
       ),
       /**
        * A stopped source forks at once. A running one keeps running, and forks once a snapshot
@@ -854,7 +850,7 @@ export const make = (
           const id = yield* refusing(api.fork(keyOf(machine), from.id, type.name));
 
           yield* restoredSandbox(machine, id);
-        }).pipe(scrubbingRefusal),
+        }).pipe(scrubbing),
       ),
       deleteCheckpoint: Effect.fn("Boat.deleteCheckpoint")((checkpoint) =>
         scrubbing(api.deleteSnapshot(snapshotOf(checkpoint.instance))),

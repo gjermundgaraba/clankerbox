@@ -1,13 +1,19 @@
 import {
   type ActionName,
+  type Conflict,
   type CreateRequest,
   formatId,
   type HostError,
   Internal,
-  isReady,
+  type Invalid,
   type Machine,
-  Precondition,
+  type NotMade,
+  NotOffered,
+  NotReady,
+  PinMismatch,
+  type ScriptFailed,
   type Setup,
+  type Unsizable,
   type Usage,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -41,27 +47,38 @@ import {
   type RoomError,
   Runtime,
   type RuntimeError,
+  type StateError,
   stateReadWait,
   timeoutFail,
 } from "./runtime.ts";
-import { type MachineRecord, type NewMachine, type NewRow, Store } from "./store.ts";
+import { type MachineRecord, type NewMachine, type NewRow, Store, type Token } from "./store.ts";
+
+/** A create holds no row before it inserts its own, so it meets no `NotFound`. */
+export type CreateError = Invalid | Conflict | NotOffered | Unsizable | ScriptFailed | RoomError;
+
+/** A start boots a made machine from its own state. */
+export type BootError = ActionError<RoomError | NotMade | StateError | ScriptFailed>;
+
+/** A fork boots a copy of a made machine, which a runtime may no longer size. */
+export type ForkError = BootError | Unsizable;
+
+export type RestoreError = ActionError<
+  RoomError | NotReady | PinMismatch | Unsizable | ScriptFailed
+>;
 
 export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Machine>, Internal>;
   readonly get: (id: string) => Effect.Effect<Machine, ReadError>;
-  readonly create: (request: CreateRequest) => Effect.Effect<Machine, ActionError<RoomError>>;
-  readonly start: (id: string) => Effect.Effect<Machine, ActionError<RoomError>>;
+  readonly create: (request: CreateRequest) => Effect.Effect<Machine, CreateError>;
+  readonly start: (id: string) => Effect.Effect<Machine, BootError>;
   /**
    * Made or not: a stop boots nothing, so it may stop the VM a failed create, fork or restore
    * left running.
    */
   readonly stop: (id: string) => Effect.Effect<Machine, ActionError<RuntimeError>>;
   readonly delete: (id: string) => Effect.Effect<void, ActionError<RuntimeError>>;
-  readonly fork: (id: string, name: string) => Effect.Effect<Machine, ActionError<RoomError>>;
-  readonly restore: (
-    checkpoint: string,
-    name: string,
-  ) => Effect.Effect<Machine, ActionError<RoomError>>;
+  readonly fork: (id: string, name: string) => Effect.Effect<Machine, ForkError>;
+  readonly restore: (checkpoint: string, name: string) => Effect.Effect<Machine, RestoreError>;
   /**
    * Unlike a machine's state, this is all the reply holds, so a runtime that can't be read fails
    * it; a machine it can't read makes only the rows that count it `unread`.
@@ -75,18 +92,8 @@ interface Spec extends Pick<MachineRecord, "base" | "cpu" | "ramMib" | "diskGib"
   readonly profile?: string | undefined;
 }
 
-type Work = Effect.Effect<void, RoomError | Refusal>;
-
-type Making =
-  | {
-      readonly spec: Spec;
-      readonly work: (machine: MachineRef) => Work;
-      readonly setup?: Setup | undefined;
-    }
-  | {
-      readonly source: string;
-      readonly work: (machine: MachineRef, source: MachineRef) => Work;
-    };
+/** The runtime's work on the new machine, which fails with `E` or refuses with `R`. */
+type Work<E extends HostError, R extends HostError> = Effect.Effect<void, E | Refusal<R>>;
 
 export const make = (
   config: Pick<HostSettings, "id" | "bases" | "machinePorts">,
@@ -173,10 +180,10 @@ export const make = (
         ),
       );
 
-    const read = (name: string) =>
-      Effect.flatMap(rows.machine(name), (record) =>
-        Effect.map(observeAll([record]), ([observed]) => resource(record, observed)),
-      );
+    const shown = (record: MachineRecord) =>
+      Effect.map(observeAll([record]), ([observed]) => resource(record, observed));
+
+    const read = (name: string) => Effect.flatMap(rows.machine(name), shown);
 
     const newRow = (name: string, spec: Spec) =>
       Effect.gen(function* () {
@@ -252,47 +259,26 @@ export const make = (
           ),
       );
 
+    /** A row this action holds that is gone under it is the host's failure, not the caller's. */
+    const held = (name: string) =>
+      Effect.catchTag(rows.machine(name), "NotFound", (gone) =>
+        Effect.fail(new Internal({ message: `${gone.message}, though an action holds it` })),
+      );
+
     /**
      * The work may have recorded the runtime's own ID on the row, so setup and preparation read
      * the row again. A failure in preparation leaves the machine made, so `start` prepares it
      * again; one before, or in the marking, leaves it unmade.
      */
-    const makeMachine = (
-      action: "createMachine" | "forkMachine" | "restoreMachine",
-      name: string,
-      making: Making,
+    const finish = <E extends HostError, R extends HostError>(
+      action: ActionName,
+      token: Token,
+      row: NewMachine,
+      work: (machine: MachineRef) => Work<E, R>,
+      setup?: Setup,
     ) =>
       Effect.gen(function* () {
-        const [token, { row, work }] = yield* admitted(
-          "source" in making
-            ? claimAndCheck(holding(action, making.source), (source, join) =>
-                Effect.gen(function* () {
-                  yield* made(source);
-
-                  const row = yield* newRow(name, source);
-
-                  yield* join(inserting(row));
-                  yield* admit(action, row);
-
-                  return {
-                    row,
-                    work: (machine: MachineRef) => making.work(machine, ref(source)),
-                  };
-                }),
-              )
-            : Effect.flatMap(newRow(name, making.spec), (row) =>
-                claimAndCheck(
-                  Effect.map(store.insert(action, inserting(row)), (token) => ({
-                    token,
-                    held: row,
-                  })),
-                  () => Effect.as(admit(action, row), { row, work: making.work }),
-                ),
-              ),
-        );
-
         const machine = ref(row);
-        const setup = "setup" in making ? making.setup : undefined;
 
         const hostKey = yield* refusable(
           token,
@@ -300,7 +286,7 @@ export const make = (
           Effect.gen(function* () {
             yield* work(machine);
 
-            const current = ref(yield* rows.machine(name));
+            const current = ref(yield* held(row.name));
 
             if (setup !== undefined) {
               yield* runSetup(runtime, current, setup);
@@ -312,10 +298,51 @@ export const make = (
           }),
         );
 
-        yield* done(token, { prepared: { name, hostKey } });
+        yield* done(token, { prepared: { name: row.name, hostKey } });
 
-        return yield* read(name);
+        return yield* shown(yield* held(row.name));
       });
+
+    /** A create or restore inserts its own row, and holds nothing else. */
+    const makeFresh = <E extends HostError, R extends HostError>(
+      action: "createMachine" | "restoreMachine",
+      name: string,
+      spec: Spec,
+      work: (machine: MachineRef) => Work<E, R>,
+      setup?: Setup,
+    ) =>
+      Effect.flatMap(
+        admitted(
+          Effect.flatMap(newRow(name, spec), (row) =>
+            claimAndCheck(
+              Effect.map(store.insert(action, inserting(row)), (token) => ({ token, held: row })),
+              () => Effect.as(admit(action, row), row),
+            ),
+          ),
+        ),
+        ([token, row]) => finish(action, token, row, work, setup),
+      );
+
+    /** A fork holds its source, which must be made, and joins its new row to the claim. */
+    const makeFork = (source: string, name: string) =>
+      Effect.flatMap(
+        admitted(
+          claimAndCheck(holding("forkMachine", source), (from, join) =>
+            Effect.gen(function* () {
+              yield* made(from);
+
+              const row = yield* newRow(name, from);
+
+              yield* join(inserting(row));
+              yield* admit("forkMachine", row);
+
+              return { row, from: ref(from) };
+            }),
+          ),
+        ),
+        ([token, { row, from }]) =>
+          finish("forkMachine", token, row, (machine) => runtime.fork(from, machine)),
+      );
 
     const create = (request: CreateRequest) =>
       Effect.gen(function* () {
@@ -323,16 +350,19 @@ export const make = (
         const image = config.bases.get(request.base);
 
         if (image === undefined) {
-          return yield* new Precondition({
+          return yield* new NotOffered({
             message: `host ${config.id} doesn't offer base ${request.base}; it offers ${[...config.bases.keys()].join(", ") || "no bases"}`,
+            base: request.base,
           });
         }
 
-        return yield* makeMachine("createMachine", name, {
-          spec: request,
-          work: (machine: MachineRef) => runtime.create(machine, image),
-          setup: request.setup,
-        });
+        return yield* makeFresh(
+          "createMachine",
+          name,
+          request,
+          (machine) => runtime.create(machine, image),
+          request.setup,
+        );
       });
 
     const start = (id: string) =>
@@ -389,10 +419,7 @@ export const make = (
 
         yield* formatId(config.id, name);
 
-        return yield* makeMachine("forkMachine", name, {
-          source,
-          work: (machine, from) => runtime.fork(from, machine),
-        });
+        return yield* makeFork(source, name);
       });
 
     /**
@@ -402,15 +429,22 @@ export const make = (
       Effect.gen(function* () {
         const checkpoint = yield* rows.checkpoint(yield* nameOf(id));
 
-        if (!isReady(checkpoint)) {
-          return yield* new Precondition({
-            message: `checkpoint ${id} isn't ready: its ${checkpoint.action.name} is ${checkpoint.action.status}`,
+        const { action } = checkpoint;
+
+        if (action.status !== "done") {
+          return yield* new NotReady({
+            message: `checkpoint ${id} isn't ready: its ${action.name} is ${action.status}`,
+            checkpoint: id,
+            status: action.status,
           });
         }
 
         if (checkpoint.kind === "ram" && checkpoint.pin !== runtime.pin) {
-          return yield* new Precondition({
+          return yield* new PinMismatch({
             message: `checkpoint ${id} holds RAM state saved under ${checkpoint.pin ?? "no pin"}, and this host runs ${runtime.pin ?? "no pin"}; it restores only under the same one`,
+            checkpoint: id,
+            saved: checkpoint.pin,
+            running: runtime.pin,
           });
         }
 
@@ -423,11 +457,9 @@ export const make = (
 
         const checkpoint = yield* ready(checkpointId);
 
-        return yield* makeMachine("restoreMachine", name, {
-          spec: checkpoint,
-          work: (machine: MachineRef) =>
-            runtime.restore(checkpointRef(config.id, checkpoint), machine),
-        });
+        return yield* makeFresh("restoreMachine", name, checkpoint, (machine) =>
+          runtime.restore(checkpointRef(config.id, checkpoint), machine),
+        );
       });
 
     return {

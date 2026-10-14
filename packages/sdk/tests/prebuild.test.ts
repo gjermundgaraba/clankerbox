@@ -9,8 +9,8 @@ import {
   Internal,
   type MachineSpec,
   Prebuild,
-  Precondition,
   retryable,
+  ScriptFailed,
 } from "../src/index.ts";
 import { checkpoint, type StubHost, stubHost, transport } from "./stub-host.ts";
 
@@ -251,12 +251,21 @@ it.effect("a build whose setup fails deletes its machine and makes no prebuild",
     const linux = host({
       id: "linux",
       bases: ["ubuntu"],
-      create: () => Effect.fail(new Precondition({ message: "setup exited 1" })),
+      create: () =>
+        Effect.fail(
+          new ScriptFailed({
+            message: "setup exited 1",
+            script: "setup",
+            exitCode: 1,
+            timedOut: false,
+            output: "",
+          }),
+        ),
     });
 
     const error = yield* withClient([linux], (client) => Effect.flip(Prebuild.build(client, spec)));
 
-    expect(error._tag).toBe("Precondition");
+    expect(error._tag).toBe("ScriptFailed");
     expect(error.message).toBe("setup exited 1");
     expect(linux.calls.slice(-2)).toEqual(["machine.create", "machine.delete"]);
     expect(yield* holdings(linux)).toEqual({ machines: [], checkpoints: [] });

@@ -1,7 +1,22 @@
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Duration, Schema } from "effect";
-import { Capacity, Conflict, Internal, Invalid, NotFound, Precondition } from "./errors.ts";
+import {
+  Capacity,
+  Conflict,
+  Internal,
+  Invalid,
+  Missing,
+  NotFound,
+  NotMade,
+  NotOffered,
+  NotReady,
+  PinMismatch,
+  Refused,
+  ScriptFailed,
+  Unsizable,
+  WrongState,
+} from "./errors.ts";
 import { Id, Name } from "./ids.ts";
 import { type ActionName, Checkpoint, CreateRequest, Host, Machine, Usage } from "./resources.ts";
 
@@ -22,9 +37,11 @@ const listing = [Invalid, Internal] as const;
 
 const reading = [Invalid, NotFound, Internal] as const;
 
-const changing = [Invalid, NotFound, Conflict, Precondition, Internal] as const;
+/** On a held row, through a runtime, which a provider like boat may refuse. */
+const changing = [Invalid, NotFound, Conflict, Refused, Internal] as const;
 
-const takingRoom = [...changing, Capacity] as const;
+/** Booting a made machine from its own or a source's state. */
+const booting = [...changing, NotMade, Missing, WrongState, Capacity] as const;
 
 export const Http = ActionHttp.make(
   [
@@ -43,14 +60,23 @@ export const Http = ActionHttp.make(
     }),
     Action.make("createMachine", {
       ...write,
-      error: takingRoom,
+      error: [
+        Invalid,
+        Conflict,
+        NotOffered,
+        Unsizable,
+        ScriptFailed,
+        Refused,
+        Capacity,
+        Internal,
+      ] as const,
       description: "Create a machine from a base, run its setup once, and prepare it.",
       input: CreateRequest,
       success: Machine,
     }),
     Action.make("startMachine", {
       ...write,
-      error: takingRoom,
+      error: [...booting, ScriptFailed] as const,
       description: "Start a machine. On a running machine, run preparation again.",
       input: ById,
       success: Machine,
@@ -71,14 +97,14 @@ export const Http = ActionHttp.make(
     }),
     Action.make("forkMachine", {
       ...write,
-      error: takingRoom,
+      error: [...booting, Unsizable, ScriptFailed] as const,
       description: "Copy a machine to a new name on the same host.",
       input: FromMachine,
       success: Machine,
     }),
     Action.make("restoreMachine", {
       ...write,
-      error: takingRoom,
+      error: [...changing, NotReady, PinMismatch, Unsizable, ScriptFailed, Capacity] as const,
       description: "Create a machine on the checkpoint's host from that checkpoint.",
       input: Schema.Struct({ checkpoint: Id, name: Name }),
       success: Machine,
@@ -98,7 +124,7 @@ export const Http = ActionHttp.make(
     }),
     Action.make("captureCheckpoint", {
       ...write,
-      error: takingRoom,
+      error: booting,
       description:
         "Capture a checkpoint of a machine. Its kind follows the runtime: ram on smolvm, which captures only a running machine, and disk on Tart and boat.",
       input: FromMachine,
@@ -118,7 +144,7 @@ export const Http = ActionHttp.make(
     }),
     Action.make("getCapacity", {
       ...read,
-      error: [Invalid, Precondition, Internal] as const,
+      error: [Invalid, Refused, Internal] as const,
       description:
         "Read the host's resources, how much of each is in use, and their limits. A machine whose state can't be read leaves the rows that count it unread; it fails when the runtime can't be read at all.",
       success: Schema.Array(Usage),

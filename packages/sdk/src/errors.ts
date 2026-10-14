@@ -35,11 +35,100 @@ export class Conflict extends Schema.TaggedError<Conflict>()(
   { httpApiStatus: 409 },
 ) {}
 
-/** The resource's state doesn't allow the action, or no host offers the requested base. */
-export class Precondition extends Schema.TaggedError<Precondition>()(
-  "Precondition",
-  { message: Schema.String, ...located },
+/** No host offers `base`: the host a create names, or any in the client's list. */
+export class NotOffered extends Schema.TaggedError<NotOffered>()(
+  "NotOffered",
+  { message: Schema.String, ...located, base: Schema.String },
   { httpApiStatus: 412 },
+) {}
+
+/** `machine`'s create, fork or restore failed before it was made: it can only be deleted. */
+export class NotMade extends Schema.TaggedError<NotMade>()(
+  "NotMade",
+  { message: Schema.String, ...located, machine: Schema.String },
+  { httpApiStatus: 412 },
+) {}
+
+/** The runtime no longer has `machine`: it can only be deleted. */
+export class Missing extends Schema.TaggedError<Missing>()(
+  "Missing",
+  { message: Schema.String, ...located, machine: Schema.String },
+  { httpApiStatus: 412 },
+) {}
+
+/** `checkpoint`'s capture is `status`, not done, so nothing restores from it. */
+export class NotReady extends Schema.TaggedError<NotReady>()(
+  "NotReady",
+  {
+    message: Schema.String,
+    ...located,
+    checkpoint: Schema.String,
+    status: Schema.Literals(["running", "failed"]),
+  },
+  { httpApiStatus: 412 },
+) {}
+
+/** `checkpoint` holds RAM state saved under the runtime pin `saved`, and the host runs `running`. */
+export class PinMismatch extends Schema.TaggedError<PinMismatch>()(
+  "PinMismatch",
+  {
+    message: Schema.String,
+    ...located,
+    checkpoint: Schema.String,
+    saved: Schema.optional(Schema.String),
+    running: Schema.optional(Schema.String),
+  },
+  { httpApiStatus: 412 },
+) {}
+
+/** `machine` is in `state`, which the action doesn't act from; `needs` is the state it does. */
+export class WrongState extends Schema.TaggedError<WrongState>()(
+  "WrongState",
+  {
+    message: Schema.String,
+    ...located,
+    machine: Schema.String,
+    state: Schema.String,
+    needs: Schema.optionalKey(Schema.Literals(["running", "stopped"])),
+  },
+  { httpApiStatus: 412 },
+) {}
+
+/** The runtime can't give the requested sizes: a disk below the base's, or no boat type fits. */
+export class Unsizable extends Schema.TaggedError<Unsizable>()(
+  "Unsizable",
+  {
+    message: Schema.String,
+    ...located,
+    reason: Schema.Literals(["diskBelowBase", "noMachineType"]),
+  },
+  { httpApiStatus: 422 },
+) {}
+
+/** A guest script failed: it exited `exitCode`, or ran past its timeout. `output` is its tail. */
+export class ScriptFailed extends Schema.TaggedError<ScriptFailed>()(
+  "ScriptFailed",
+  {
+    message: Schema.String,
+    ...located,
+    script: Schema.Literals(["setup", "preparation"]),
+    exitCode: Schema.optionalKey(Schema.Int),
+    timedOut: Schema.Boolean,
+    output: Schema.String,
+  },
+  { httpApiStatus: 422 },
+) {}
+
+/** The provider under the runtime refused the call for its own reasons, such as a plan's limits. */
+export class Refused extends Schema.TaggedError<Refused>()(
+  "Refused",
+  {
+    message: Schema.String,
+    ...located,
+    by: Schema.Literal("boat"),
+    code: Schema.optionalKey(Schema.String),
+  },
+  { httpApiStatus: 403 },
 ) {}
 
 /** The host has no room now; room can free up, so a later call may succeed. */
@@ -66,7 +155,22 @@ export class Internal extends Schema.TaggedError<Internal>()(
 ) {}
 
 /** What a host may answer with; each action declares its own share. */
-export const hostErrors = [Invalid, NotFound, Conflict, Precondition, Capacity, Internal] as const;
+export const hostErrors = [
+  Invalid,
+  NotFound,
+  Conflict,
+  NotOffered,
+  NotMade,
+  Missing,
+  NotReady,
+  PinMismatch,
+  WrongState,
+  Unsizable,
+  ScriptFailed,
+  Refused,
+  Capacity,
+  Internal,
+] as const;
 
 export const HostError = Schema.Union(hostErrors);
 
@@ -86,7 +190,15 @@ export const retryable = (error: ClankerboxError): boolean =>
       Invalid: () => false,
       NotFound: () => false,
       Conflict: ({ kind }) => kind === "busy",
-      Precondition: () => false,
+      NotOffered: () => false,
+      NotMade: () => false,
+      Missing: () => false,
+      NotReady: () => false,
+      PinMismatch: () => false,
+      WrongState: () => false,
+      Unsizable: () => false,
+      ScriptFailed: () => false,
+      Refused: () => false,
       Capacity: () => true,
       Unavailable: ({ readOnly }) => readOnly,
       Internal: () => false,

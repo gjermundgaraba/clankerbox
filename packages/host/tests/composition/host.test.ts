@@ -85,7 +85,7 @@ layer(NodeServices.layer)((it) => {
 
         const error = yield* whileServing(config(dir), dir, () => refused(config(dir), secondFake));
 
-        expect(error._tag).toBe("Precondition");
+        expect(error._tag).toBe("CannotStart");
         expect(error.message).toContain("another host process holds state dir");
         expect(secondFake.stubs()).toBeUndefined();
       }),
@@ -104,7 +104,7 @@ layer(NodeServices.layer)((it) => {
         const renamed = yield* refused(config(dir, { id: "mac" }), fake);
         const moved = yield* refused(config(dir, { runtime: "tart" }), fake);
 
-        expect(renamed._tag).toBe("Precondition");
+        expect(renamed._tag).toBe("CannotStart");
         expect(renamed.message).toContain(
           "holds host linux on smolvm, and this config names host mac",
         );

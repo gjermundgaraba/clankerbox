@@ -12,7 +12,8 @@ import {
   formatMib,
   Internal,
   NotFound,
-  Precondition,
+  Refused,
+  Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Array as Arr,
@@ -104,12 +105,13 @@ export const typeFor = (sizes: Sizes): Option.Option<MachineType> =>
     (type) => type.cpu >= sizes.cpu && type.ramMib >= sizes.ramMib && type.diskGib >= sizes.diskGib,
   );
 
-export const machineType = (sizes: Sizes): Effect.Effect<MachineType, Precondition> =>
+export const machineType = (sizes: Sizes): Effect.Effect<MachineType, Unsizable> =>
   Option.match(typeFor(sizes), {
     onNone: () =>
       Effect.fail(
-        new Precondition({
+        new Unsizable({
           message: `no boat machine type has ${sized(sizes)}; the largest, ${largest.name}, has ${sized(largest)}`,
+          reason: "noMachineType",
         }),
       ),
     onSome: Effect.succeed,
@@ -187,13 +189,14 @@ const Limits = Schema.Struct({
 
 const Accepted = Schema.Struct({});
 
-const Refused = Schema.Struct({
+/** boat's own error body. */
+const BoatError = Schema.Struct({
   code: Schema.String,
   message: Schema.String,
   requestId: Schema.optionalKey(Schema.String),
 });
 
-const decodeRefused = Schema.decodeUnknownEffect(Refused);
+const decodeBoatError = Schema.decodeUnknownEffect(BoatError);
 
 /**
  * boat's answers that leave nothing on boat and mean "no room now". They count only for a call
@@ -305,7 +308,7 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
 
     /**
      * A 4xx is definite whatever its body. A 403 with boat's code made nothing and waiting won't
-     * help, so it is `Precondition`; a proxy's HTML 403 is `Internal`. A 429 to a call that takes
+     * help, so it is `Refused`; a proxy's HTML 403 is `Internal`. A 429 to a call that takes
      * no room is boat's rate limit on reads and the like, which passes.
      */
     const refusal = <E>(
@@ -315,7 +318,7 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
     ): Effect.Effect<never, Failure | E | Unclear | Throttled> =>
       Effect.gen(function* () {
         const { status } = response;
-        const decoded = yield* Effect.option(Effect.flatMap(response.json, decodeRefused));
+        const decoded = yield* Effect.option(Effect.flatMap(response.json, decodeBoatError));
 
         const said = Option.match(decoded, {
           onNone: () => `${named(call)} answered ${status} without boat's error`,
@@ -334,7 +337,7 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         }
 
         if (status === 403 && Option.isSome(code)) {
-          return yield* new Precondition({ message: said });
+          return yield* new Refused({ message: said, by: "boat", code: code.value });
         }
 
         if (status === 429 && room !== undefined) {
@@ -428,7 +431,7 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
       <A>(call: Call, schema: Schema.Decoder<A>): Effect.Effect<A, Failure | E> => {
         const once = attempt(call, room, request(call), schema);
 
-        const distrusted = (refused: E | Precondition | Throttled) =>
+        const distrusted = (refused: E | Refused | Throttled) =>
           Effect.fail(
             new Internal({
               message: `${refused.message}, after an attempt whose outcome is unknown, so a sandbox may exist`,

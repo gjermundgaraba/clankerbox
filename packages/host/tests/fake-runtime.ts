@@ -6,7 +6,7 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { Capacity, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import { type HostError, Internal, WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
@@ -18,9 +18,10 @@ import {
   type MachineRef,
   type MachineState,
   missing,
+  type Interface,
   type Observed,
-  Refusal,
-  type RoomError,
+  type Refusal,
+  refusal,
   Runtime,
   type RuntimeError,
 } from "../src/runtime.ts";
@@ -84,7 +85,7 @@ interface FakeMachine {
 }
 
 type Injection =
-  | { readonly kind: "fail"; readonly error: RuntimeError | Capacity | Refusal }
+  | { readonly kind: "fail"; readonly error: HostError | Refusal<HostError> }
   | { readonly kind: "die"; readonly message: string }
   | {
       readonly kind: "hold";
@@ -92,17 +93,12 @@ type Injection =
       readonly until: Deferred.Deferred<void>;
     };
 
-type Refusable = "create" | "start" | "capture" | "restore" | "fork";
-
-/** The operations that take room, and so may fail with `Capacity`. */
-type RoomOperation = Refusable | "admit";
-
 /** What `operation` may fail with, as the `Runtime` port types it. */
-type FailureOf<O extends Operation> = O extends Refusable
-  ? RoomError | Refusal
-  : O extends RoomOperation
-    ? RoomError
-    : RuntimeError;
+type FailureOf<O extends Operation> = Interface[O] extends (
+  ...args: never
+) => Effect.Effect<unknown, infer E, unknown>
+  ? E
+  : never;
 
 export const fakeRuntime = (options: FakeOptions) => {
   const machines = new Map<string, FakeMachine>();
@@ -197,9 +193,14 @@ export const fakeRuntime = (options: FakeOptions) => {
     return Effect.fail(
       state === "missing"
         ? missing("smolvm", machine)
-        : new Refusal({
-            error: new Precondition({ message: `${machine.id} is stopped: start it first` }),
-          }),
+        : refusal(
+            new WrongState({
+              message: `${machine.id} is stopped: start it first`,
+              machine: machine.id,
+              state,
+              needs: "running",
+            }),
+          ),
     );
   };
 
@@ -364,7 +365,8 @@ export const fakeRuntime = (options: FakeOptions) => {
     machines,
     stubs: () => stubs,
     failNext: <O extends Operation>(operation: O, error: FailureOf<O>) => {
-      inject(operation, { kind: "fail", error });
+      // SAFETY: every port method fails with host errors and refusals of them.
+      inject(operation, { kind: "fail", error: error as HostError | Refusal<HostError> });
     },
     dieNext: (operation: Operation, message: string) => {
       inject(operation, { kind: "die", message });

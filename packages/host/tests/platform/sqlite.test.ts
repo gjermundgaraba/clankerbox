@@ -6,21 +6,33 @@ import {
   type ActionRecord,
   Capacity,
   Conflict,
+  type HostError,
   Internal,
+  Missing,
   NotFound,
-  Precondition,
+  NotMade,
+  NotOffered,
+  NotReady,
+  PinMismatch,
+  Refused,
+  ScriptFailed,
+  Unsizable,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Arbitrary, DateTime, Effect, Exit, Option, Result, Schema } from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import {
   applicationId,
+  applyMigration,
   databaseFile,
   migrations,
   open,
   type Owner,
+  splitPrecondition,
   transaction,
 } from "../../src/platform/sqlite.ts";
+import { CannotStart } from "../../src/startup.ts";
 import type {
   Interface,
   NewCheckpoint,
@@ -173,7 +185,7 @@ layer(NodeServices.layer)((it) => {
 
       const second = yield* withStore(stateDir, () => opening(stateDir));
 
-      expect(second._tag).toBe("Precondition");
+      expect(second._tag).toBe("CannotStart");
       expect(second.message).toContain("another host process holds state dir");
       expect(yield* withStore(stateDir, (store) => store.list)).toEqual([]);
     }),
@@ -221,7 +233,7 @@ layer(NodeServices.layer)((it) => {
 
       const error = yield* opening(stateDir);
 
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("CannotStart");
       expect(error.message).toContain("newer than this binary");
     }),
   );
@@ -241,7 +253,7 @@ layer(NodeServices.layer)((it) => {
         const kept = yield* withStore(stateDir, (store) => store.list);
 
         expect(renamed).toEqual(
-          new Precondition({
+          new CannotStart({
             message: `${join(stateDir, databaseFile)} holds host linux on smolvm, and this config names host mac on smolvm: run it as linux on smolvm, or give it a new state dir`,
           }),
         );
@@ -259,7 +271,7 @@ layer(NodeServices.layer)((it) => {
       const db = new DatabaseSync(join(stateDir, databaseFile));
 
       for (const migration of migrations.slice(0, 2)) {
-        db.exec(migration);
+        applyMigration(db, migration);
       }
 
       db.exec(`PRAGMA user_version = 2; PRAGMA application_id = ${applicationId}`);
@@ -267,7 +279,7 @@ layer(NodeServices.layer)((it) => {
 
       yield* withStore(stateDir, (store) => store.list);
 
-      expect((yield* opening(stateDir, { id: "mac" }))._tag).toBe("Precondition");
+      expect((yield* opening(stateDir, { id: "mac" }))._tag).toBe("CannotStart");
     }),
   );
 
@@ -321,7 +333,7 @@ layer(NodeServices.layer)((it) => {
 
       const error = yield* opening(stateDir);
 
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("CannotStart");
       expect(error.message).toContain("isn't a clankerbox host database");
     }),
   );
@@ -622,7 +634,7 @@ layer(NodeServices.layer)((it) => {
 
         const db = new DatabaseSync(join(stateDir, databaseFile));
 
-        db.exec(migrations[0] ?? "");
+        applyMigration(db, migrations[0] ?? "");
         db.exec(
           `INSERT INTO machines (name, instance, created_at, base, cpu, ram_mib, disk_gib, made,
         action_name, action_status) VALUES ('dev', 'abc', '2026-10-04T12:00:00.000Z', 'ubuntu', 1,
@@ -649,7 +661,7 @@ layer(NodeServices.layer)((it) => {
       const db = new DatabaseSync(join(stateDir, databaseFile));
 
       for (const migration of migrations.slice(0, 3)) {
-        db.exec(migration);
+        applyMigration(db, migration);
       }
 
       db.exec(
@@ -676,7 +688,7 @@ layer(NodeServices.layer)((it) => {
       const db = new DatabaseSync(join(stateDir, databaseFile));
 
       for (const migration of migrations.slice(0, 5)) {
-        db.exec(migration);
+        applyMigration(db, migration);
       }
 
       const failed: ReadonlyArray<readonly [string, string | null, string | null]> = [
@@ -727,6 +739,137 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
+  it.effect("a database at schema version 6 splits each stored Precondition by its message", () =>
+    Effect.gen(function* () {
+      const stateDir = join(yield* scratch, "state");
+
+      yield* mkdir(stateDir);
+
+      const db = new DatabaseSync(join(stateDir, databaseFile));
+
+      for (const migration of migrations.slice(0, 6)) {
+        applyMigration(db, migration);
+      }
+
+      // No class is left to encode the old tag, so its JSON is written out.
+      const stored = (message: string) =>
+        `{"_tag":"Precondition","message":${JSON.stringify(message)}}`;
+
+      const exited = "setup exited 3; its last output:\ninstalling\nno network";
+
+      const forbidden =
+        "boat POST /sandboxes answered 403 api_key_action_forbidden: this API key may not create sandboxes (req_0123)";
+
+      const kept = `{"_tag":"Capacity","message":"no room"}`;
+
+      for (const [name, error] of [
+        ["setup", stored(exited)],
+        ["forbidden", stored(forbidden)],
+        ["full", kept],
+      ] as const) {
+        db.prepare(
+          `INSERT INTO machines (name, instance, created_at, base, cpu, ram_mib, disk_gib, made,
+          action_name, action_status, action_error) VALUES (?, 'abc', '2026-10-04T12:00:00.000Z',
+          'ubuntu', 1, 1024, 10, 0, 'createMachine', 'failed', ?)`,
+        ).run(name, error);
+      }
+
+      db.prepare(
+        `INSERT INTO checkpoints (name, instance, created_at, machine, kind, base, cpu, ram_mib,
+        disk_gib, action_name, action_status, action_error) VALUES ('snap', 'abc',
+        '2026-10-04T12:00:00.000Z', 'dev', 'disk', 'ubuntu', 1, 1024, 10, 'captureCheckpoint',
+        'failed', ?)`,
+      ).run(stored("machine linux_dev is missing from the smolvm runtime; delete it"));
+      db.exec(`PRAGMA user_version = 6; PRAGMA application_id = ${applicationId}`);
+      db.close();
+
+      const [machines, checkpoints] = yield* withStore(stateDir, (store) =>
+        Effect.all([store.list, store.checkpoints]),
+      );
+
+      const failed = (
+        rows: ReadonlyArray<{ readonly name: string; readonly action: ActionRecord }>,
+      ) =>
+        Object.fromEntries(
+          rows.map(({ name, action }) => [name, action.status === "failed" ? action.error : null]),
+        );
+
+      expect(failed(machines)).toEqual({
+        setup: new ScriptFailed({
+          message: exited,
+          script: "setup",
+          exitCode: 3,
+          timedOut: false,
+          output: "installing\nno network",
+        }),
+        forbidden: new Refused({
+          message: forbidden,
+          by: "boat",
+          code: "api_key_action_forbidden",
+        }),
+        full: new Capacity({ message: "no room" }),
+      });
+      expect(failed(checkpoints)).toEqual({
+        snap: new Missing({
+          message: "machine linux_dev is missing from the smolvm runtime; delete it",
+          machine: "linux_dev",
+        }),
+      });
+    }),
+  );
+
+  it("a stored Precondition splits by the message v0.16.0 wrote, and boat's own refusal is Refused", () => {
+    const cases: ReadonlyArray<readonly [string, (message: string) => HostError]> = [
+      [
+        "host linux doesn't offer base fedora; it offers ubuntu",
+        (message) => new NotOffered({ message, base: "fedora" }),
+      ],
+      [
+        "machine linux_dev was never made: its create, fork or restore failed; delete it",
+        (message) => new NotMade({ message, machine: "linux_dev" }),
+      ],
+      [
+        "checkpoint linux_snap isn't ready: its captureCheckpoint is running",
+        (message) => new NotReady({ message, checkpoint: "linux_snap", status: "running" }),
+      ],
+      [
+        "checkpoint linux_snap holds RAM state saved under no pin, and this host runs smolvm 1.27.3; it restores only under the same one",
+        (message) =>
+          new PinMismatch({ message, checkpoint: "linux_snap", running: "smolvm 1.27.3" }),
+      ],
+      [
+        "a Tart fork copies a stopped machine's disk, and mac_src is running: stop it first",
+        (message) =>
+          new WrongState({ message, machine: "mac_src", state: "running", needs: "stopped" }),
+      ],
+      [
+        "smolvm reads machine linux_dev paused, and doesn't start it from there",
+        (message) => new WrongState({ message, machine: "linux_dev", state: "paused" }),
+      ],
+      [
+        "machine mac_small's disk of 20G is below its base's, and Tart only grows a disk: no",
+        (message) => new Unsizable({ message, reason: "diskBelowBase" }),
+      ],
+      [
+        "no boat machine type has 17 vCPU; the largest, xlarge, has 16 vCPU",
+        (message) => new Unsizable({ message, reason: "noMachineType" }),
+      ],
+      [
+        "preparation ran past its 1s timeout; its last output:\nwaiting",
+        (message) =>
+          new ScriptFailed({ message, script: "preparation", timedOut: true, output: "waiting" }),
+      ],
+      [
+        "trial accounts can't run large machines",
+        (message) => new Refused({ message, by: "boat" }),
+      ],
+    ];
+
+    for (const [message, expected] of cases) {
+      expect(splitPrecondition(message)).toEqual(expected(message));
+    }
+  });
+
   it.effect("a database at schema version 4 records its actions under the contract's names", () =>
     Effect.gen(function* () {
       const stateDir = join(yield* scratch, "state");
@@ -736,7 +879,7 @@ layer(NodeServices.layer)((it) => {
       const db = new DatabaseSync(join(stateDir, databaseFile));
 
       for (const migration of migrations.slice(0, 4)) {
-        db.exec(migration);
+        applyMigration(db, migration);
       }
 
       const machineActions = ["create", "start", "stop", "delete", "fork", "restore", "capture"];

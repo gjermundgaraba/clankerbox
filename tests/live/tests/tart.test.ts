@@ -296,7 +296,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
   );
 
   test(
-    "a capture or a fork of a running machine is Precondition and writes nothing",
+    "a capture or a fork of a running machine is WrongState and writes nothing",
     async () => {
       const capture = failure(
         await cli(["checkpoint", "capture"], id("main"), named("hot"), "--json"),
@@ -305,7 +305,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       const fork = failure(await cli(["fork"], id("main"), named("hot-fork"), "--json"));
 
       for (const refused of [capture, fork]) {
-        expect(refused.tag).toBe("Precondition");
+        expect(refused.tag).toBe("WrongState");
         expect(refused.message).toContain("stop it first");
       }
 
@@ -324,7 +324,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
   );
 
   test(
-    "placement: a create lands on the first host in list order that offers its base, --host and a profile's host send it to that host, and a base no host offers is Precondition naming each host's bases",
+    "placement: a create lands on the first host in list order that offers its base, --host and a profile's host send it to that host, and a base no host offers is NotOffered naming each host's bases",
     async () => {
       const { host, second } = suite.env;
 
@@ -370,7 +370,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       for (const [config, name, args] of placed) {
         const error = failure(await cliWith(config, ["create"], name, ...args, "--json"));
 
-        expect(error.tag, name).toBe("Precondition");
+        expect(error.tag, name).toBe("Unsizable");
         expect(error.message, name).toContain("should be larger than the current disk size");
       }
 
@@ -384,7 +384,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
         ),
       );
 
-      expect(nowhere.tag).toBe("Precondition");
+      expect(nowhere.tag).toBe("NotOffered");
       expect(nowhere.message).toContain("no host offers base nowhere");
       expect(nowhere.message).toContain(`${host.id} offers macos`);
       expect(nowhere.message).toContain(`${second.id} offers`);
@@ -775,7 +775,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       ] as const) {
         const refused = failure(await cli(command, id("crash"), ...args, "--json"));
 
-        expect(refused.tag, command.join(" ")).toBe("Precondition");
+        expect(refused.tag, command.join(" ")).toBe("NotMade");
         expect(refused.message, command.join(" ")).toContain("was never made");
       }
 
@@ -795,13 +795,13 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
   );
 
   test(
-    "a diskGib below the base's disk fails the create at tart set with Precondition, leaving the machine never made, which delete removes",
+    "a diskGib below the base's disk fails the create at tart set with Unsizable, leaving the machine never made, which delete removes",
     async () => {
       const started = performance.now();
       const error = failure(await createBare("small", 20));
 
       timing("create refused at tart set", started);
-      expect(error.tag).toBe("Precondition");
+      expect(error.tag).toBe("Unsizable");
       expect(error.message).toContain("should be larger than the current disk size");
       expect(await machine("small")).toMatchObject({
         state: "stopped",
@@ -811,7 +811,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
 
       const refused = failure(await cli(["start"], id("small"), "--json"));
 
-      expect(refused.tag).toBe("Precondition");
+      expect(refused.tag).toBe("NotMade");
       expect(refused.message).toContain("was never made");
       await removeMachine("small");
       expect(await machine("small")).toBeUndefined();

@@ -3,6 +3,7 @@ import {
   formatId,
   type HostError,
   type Internal,
+  type NotMade,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Layer, type Scope } from "effect";
 import {
@@ -17,7 +18,7 @@ import {
 } from "./claims.ts";
 import type { HostSettings } from "./settings.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
-import { type RoomError, Runtime, type RuntimeError } from "./runtime.ts";
+import { type RoomError, Runtime, type RuntimeError, type StateError } from "./runtime.ts";
 import { type CheckpointRecord, type NewCheckpoint, Store } from "./store.ts";
 
 export interface Interface {
@@ -26,7 +27,7 @@ export interface Interface {
   readonly capture: (
     machine: string,
     name: string,
-  ) => Effect.Effect<Checkpoint, ActionError<RoomError>>;
+  ) => Effect.Effect<Checkpoint, ActionError<RoomError | NotMade | StateError>>;
   readonly delete: (id: string) => Effect.Effect<void, ActionError<RuntimeError>>;
 }
 

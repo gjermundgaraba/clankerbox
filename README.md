@@ -412,7 +412,7 @@ program.pipe(
   setup, and `Prebuild.create(client, name, spec)` creates from its prebuild
   when the host has one. `Prebuild.nameOf` is a prebuild's name, and
   `client.place(base, options)` reads the host a create goes to.
-- Every call but the lists fails with its action's errors among seven tags
+- Every call but the lists fails with its action's errors among fifteen tags
   (`errors.ts`), each with where it was met, and `retryable(error)` says
   whether to try again; see
   [Errors](#errors). A list returns
@@ -423,7 +423,7 @@ program.pipe(
 - A delete of a resource that is already gone succeeds as `absent`, not
   `NotFound`.
 - `sshTarget(machine)` is the login, endpoint and host key `pinnedSsh` needs,
-  or `Precondition` naming what the machine lacks.
+  or `WrongState` naming what the machine lacks.
 
 ## Sandbox Agent provider
 
@@ -606,7 +606,7 @@ interrupted, so a silent host after it delays nothing. A host that fails its
 read is skipped. Whatever the chosen host replies, `Capacity` included, is the
 reply; placement never moves on. With no host offering the base the reply
 names each host's bases or error, and is `Unavailable` if some host gave no
-reply, and otherwise `Precondition`: a host that calls itself by another ID,
+reply, and otherwise `NotOffered`: a host that calls itself by another ID,
 or whose reply doesn't decode, won't answer differently when asked again.
 Fork, restore, start, stop and delete go to the host of the resource they
 name: nothing migrates.
@@ -637,8 +637,7 @@ is afterwards or a tagged error. Each runs in this order (`claims.ts`):
 1. Validate the input.
 2. Claim the rows, inserting the new row.
 3. Check runtime state: the runtime's `admit` (Tart's two-VM count, smolvm's
-   RAM budget, boat's machine types), a base the host doesn't offer, a
-   machine that was never made.
+   RAM budget), a base the host doesn't offer, a machine that was never made.
 4. Only then call the runtime.
 
 - **A row's `action`** is the last action that claimed it, and how it ended,
@@ -669,17 +668,20 @@ is afterwards or a tagged error. Each runs in this order (`claims.ts`):
 - **`made`:** a machine row is made once its create (with setup), fork or
   restore has done its native work, before preparation, and `Machine.made`
   says so. Until then the machine has no `hostKey`, and `start`, `fork` and
-  `capture` refuse it with `Precondition`, so a half-made machine never boots;
+  `capture` refuse it with `NotMade`, so a half-made machine never boots;
   it can be read, stopped and deleted, and its `state` is still the runtime's.
   A failure only in preparation leaves the machine made, and `start` repairs
   it.
 - **`action: {name, status, error?}`** is a resource's one record of work: its
   last action, `running` while held, `failed` with the error, or `done`. The
   error is the host's reply whole, a `Conflict`'s `kind` included, and the
-  row keeps it as JSON. A checkpoint is ready once its action is `done`.
+  row keeps it as JSON. A row that v0.16.0 wrote kept a `Precondition`, which
+  the host's migration splits by its message into the tags below; one that
+  matches none came from boat, and becomes `Refused`. A checkpoint is ready
+  once its action is `done`.
 - The runtime decides `start` and `stop`; the core reads no state for either.
   Every `start` is admitted and calls the runtime's start, which refuses a
-  machine the runtime no longer has with `Precondition` before anything native,
+  machine the runtime no longer has with `Missing` before anything native,
   and leaves a running machine as it is, so a start on one runs preparation
   again (the repair path). Every `stop` calls the runtime's stop, which reads
   the machine's state itself and does nothing on one that doesn't run; the
@@ -692,25 +694,48 @@ is afterwards or a tagged error. Each runs in this order (`claims.ts`):
 
 ### Errors
 
-Seven tags (`packages/sdk/src/errors.ts`): `Invalid`, `NotFound`,
-`Conflict{kind: exists | busy}`, `Precondition` (the request can't apply as
-things are; also a guest script that failed), `Capacity` (no room: Tart's two
-VMs, smolvm's RAM budget, boat's account limits), `Unavailable` (the client
-couldn't reach a host) and `Internal`. `retryable(error)` follows the tag: `busy` and
+Fifteen tags (`packages/sdk/src/errors.ts`), one per failure, each with the
+fields that say which:
+
+- `Invalid`, `NotFound` and `Conflict{kind: exists | busy}`.
+- `NotOffered{base}`: a base the host doesn't offer, or no host does.
+- `NotMade{machine}`: a machine whose create, fork or restore never finished.
+- `Missing{machine}`: a machine the runtime no longer has.
+- `NotReady{checkpoint, status}`: a checkpoint whose capture is `running` or
+  `failed`.
+- `PinMismatch{checkpoint, saved?, running?}`: a `ram` checkpoint saved under
+  another pin than the one the host runs.
+- `WrongState{machine, state, needs?}`: a machine in a state the action
+  doesn't take, with the state that would do when there is one.
+- `Unsizable{reason: diskBelowBase | noMachineType}`: sizes the runtime can't
+  give.
+- `ScriptFailed{script: setup | preparation, exitCode?, timedOut, output}`: a
+  guest script that exited non-zero or overran, with its output's tail.
+- `Refused{by: boat, code?}`: a provider's refusal that waiting won't change,
+  with boat's code.
+- `Capacity` (no room: Tart's two VMs, smolvm's RAM budget, boat's account
+  limits), `Unavailable` (the client couldn't reach a host) and `Internal`.
+
+`retryable(error)` follows the tag: `busy` and
 `Capacity` retry; `Unavailable` retries for reads only, since a mutation's
 request may have reached the host. In the client, a request that fails to
 encode is `Invalid` and sends nothing, and a host's `InvalidInput` is `Invalid`
 too; a reply that fails to decode is `Internal`.
 
 `NotFound`, `Conflict` and `Invalid` are the host core's: no such row, a row
-another action holds or a name taken, a malformed request. A runtime fails only
-with `Precondition` or `Internal`, and with `Capacity` on the calls that take
-room (`admit`, `create`, `start`, `fork`, `restore`, `capture`); the `Runtime`
-port's types say so (`runtime.ts`). A 404 from boat is boat's own, so it is
-`Internal`. Each action in the contract (`api.ts`) declares only what it fails
-with, and the host's routes are type-checked against it: lists `Internal`,
-reads `NotFound` too, changes `Conflict` and `Precondition` too, and the
-actions that take room `Capacity` too; every action also declares `Invalid`,
+another action holds or a name taken, a malformed request. So are `NotOffered`,
+`NotMade`, `NotReady` and `PinMismatch`, checked before any runtime call. A
+runtime fails with `Refused` or `Internal`, with `Capacity` on the calls that
+take room (`admit`, `create`, `start`, `fork`, `restore`, `capture`), and with
+`Missing`, `WrongState`, `Unsizable` or a guest's `ScriptFailed` where its call
+can meet them; the `Runtime` port's types say which (`runtime.ts`). A 404 from
+boat is boat's own, so it is `Internal`. Each action in the contract
+(`api.ts`) declares only what it fails with, and the host's routes are
+type-checked against it: lists `Internal`, reads `NotFound` too, changes
+`Conflict` and `Refused` too, the actions that boot or copy a machine
+`NotMade`, `Missing`, `WrongState` and `Capacity` too, and each action the
+failures only it meets, such as restore's `NotReady` and `PinMismatch`; every
+action also declares `Invalid`,
 which a host answers a client of another release with (a test checks it). Each
 client method fails with its action's errors and the two the client makes itself:
 `Unavailable` for a reply that never came, `Internal` for one it couldn't use
@@ -727,7 +752,9 @@ A file the client reads, a config, profile or setup, that can't be read or
 doesn't decode is `Invalid`, naming the `file`; so is a client config whose host
 list the client refuses, and a host's config. The
 CLI's own `SpawnFailed` names a `program`, such as `ssh`, that couldn't be
-started. Neither is retryable.
+started. Neither is retryable. A host that can't start, such as on a state dir
+another host process holds or a runtime binary of another version, fails with
+the host's own `CannotStart` (`startup.ts`), which never goes on the wire.
 
 ### State and claims
 
@@ -770,7 +797,7 @@ Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
 - **Setup** runs once, at create, after the first boot. The script arrives on
   stdin, so it never shows in a process list, and runs as its own file under
   `/var/tmp` with its `#!` line and stdin closed. A non-zero exit or overrun
-  fails the create with `Precondition` and the output's last 20 lines (at most
+  fails the create with `ScriptFailed` and the output's last 20 lines (at most
   4000 characters). Nothing runs setup again; forks and restores carry its
   results.
 - **Recipes** are packed by the client (`packages/sdk/src/setup.ts`) into
@@ -949,7 +976,7 @@ These are known, not guarded, and accepted:
 - smolvm: a stale template in `<stateDir>/smolvm/.smolvm` would be used
   silently; nothing of ours writes there.
 - Tart: a `diskGib` below the base's disk fails the create at `tart set`, after
-  the clone, with `Precondition`; the unmade machine can only be deleted.
+  the clone, with `Unsizable`; the unmade machine can only be deleted.
   Nothing checks it before the claim: `tart get` doesn't read OCI references.
 - Tart: the two-VM count sees only the host's Tart home and counts the
   operator's Linux VMs there too. Apple's own refusal is the backstop; when two
@@ -1030,7 +1057,7 @@ These are known, not guarded, and accepted:
 - **Start** reads status first: a running machine is left as it is, and an
   unreachable one (its VMM alive, its agent silent) is booted again, as
   `machine start` kills its VMM first. A frozen, paused or pausing one is
-  refused with `Precondition`, as is a fork or capture of an unreachable
+  refused with `WrongState`, as is a fork or capture of an unreachable
   machine.
 - **Stop** reads status first and runs `machine stop` only on a running
   machine, since a stop of an unknown name leaks a directory; a guest that
@@ -1103,8 +1130,9 @@ These are known, not guarded, and accepted:
   updates, so it isn't pinned and the base's image value is only a label. Name
   it apart from stock images unless every profile on that name handles both.
 - **Sizes:** the smallest of `small`, `default`, `large` and `xlarge` that
-  covers the request; none is `Precondition`, and a type the plan lacks is
-  boat's 403, a `Precondition` refusal. So is any 403 that carries boat's
+  covers the request; none is `Unsizable`, refused before any call to boat,
+  and a type the plan lacks is boat's 403, a `Refused` refusal naming boat's
+  code. So is any 403 that carries boat's
   code, such as an API key that may not perform an action
   (`api_key_action_forbidden`): the key needs `ssh` and `sandbox.delete`
   besides create, stop and resume.

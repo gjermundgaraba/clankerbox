@@ -5,7 +5,7 @@
  */
 import { totalmem } from "node:os";
 import { join } from "node:path";
-import { type HostError, Internal, Invalid, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import { type HostError, Internal, Invalid, WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Layer, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import {
@@ -15,10 +15,13 @@ import {
   type MachineState,
   missing,
   observeEach,
-  Refusal,
+  type Refusal,
+  refusal,
   Runtime,
+  type StateError,
 } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
+import { CannotStart } from "../startup.ts";
 import { allotted, checkRamBudget, inUse } from "../usage.ts";
 import { cliIn, expect, failure, files, portOf } from "./process.ts";
 
@@ -162,7 +165,7 @@ export const make = (
   uid: number | undefined,
 ): Effect.Effect<
   Interface,
-  HostError,
+  HostError | CannotStart,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > =>
   Effect.gen(function* () {
@@ -186,7 +189,7 @@ export const make = (
       files(`couldn't remove ${path}`, fs.remove(path, { recursive: true, force: true }));
 
     if (uid !== 0) {
-      return yield* new Precondition({
+      return yield* new CannotStart({
         message: `a smolvm host runs as root, and this one runs as uid ${uid ?? "unknown"}`,
       });
     }
@@ -194,7 +197,7 @@ export const make = (
     const socket = controlSocket(paths.dataDir);
 
     if (Buffer.byteLength(socket) > socketPathMax) {
-      return yield* new Precondition({
+      return yield* new CannotStart({
         message: `smolvm's sockets under ${paths.dataDir} would need ${Buffer.byteLength(socket)} bytes, past Linux's ${socketPathMax}: use a shorter state dir`,
       });
     }
@@ -205,7 +208,7 @@ export const make = (
       const present = yield* files(`couldn't check ${file}`, fs.exists(file));
 
       if (!present) {
-        return yield* new Precondition({
+        return yield* new CannotStart({
           message: `smolvm prefix ${settings.prefix} has no ${template}: expand it at install with zstd -d --sparse ${file}.zst -o ${file}`,
         });
       }
@@ -214,7 +217,7 @@ export const make = (
     const reported = (yield* call(["--version"], "--version")).stdout.trim();
 
     if (reported !== `smolvm ${testedVersion}`) {
-      return yield* new Precondition({
+      return yield* new CannotStart({
         message: `${binary} reports "${reported}", and this host was tested on smolvm ${testedVersion}`,
       });
     }
@@ -265,24 +268,31 @@ export const make = (
      * agent, so an unreachable one is no source.
      */
     const copyable = (machine: MachineRef, stopped: string) =>
-      Effect.flatMap(status(nativeName(machine)), (recorded) => {
-        if (recorded === "running") {
-          return Effect.void;
-        }
+      Effect.flatMap(
+        status(nativeName(machine)),
+        (recorded): Effect.Effect<void, Refusal<StateError>> => {
+          if (recorded === "running") {
+            return Effect.void;
+          }
 
-        if (recorded === "missing") {
-          return Effect.fail(missing("smolvm", machine));
-        }
+          if (recorded === "missing") {
+            return Effect.fail(missing("smolvm", machine));
+          }
 
-        const message =
-          recorded === "unreachable"
-            ? `smolvm reads machine ${machine.id} unreachable: its VM runs, but its agent doesn't answer; start it to boot it again`
-            : alive.has(recorded) || unstartable.has(recorded)
-              ? `smolvm reads machine ${machine.id} ${recorded}, and copies only a running machine`
-              : stopped;
+          const message =
+            recorded === "unreachable"
+              ? `smolvm reads machine ${machine.id} unreachable: its VM runs, but its agent doesn't answer; start it to boot it again`
+              : alive.has(recorded) || unstartable.has(recorded)
+                ? `smolvm reads machine ${machine.id} ${recorded}, and copies only a running machine`
+                : stopped;
 
-        return Effect.fail(new Refusal({ error: new Precondition({ message }) }));
-      });
+          return Effect.fail(
+            refusal(
+              new WrongState({ message, machine: machine.id, state: recorded, needs: "running" }),
+            ),
+          );
+        },
+      );
 
     const checkpointDir = (checkpoint: CheckpointRef) =>
       join(paths.store, `${nativeName(checkpoint)}.checkpoint`);
@@ -533,11 +543,13 @@ export const make = (
           }
 
           if (unstartable.has(recorded)) {
-            return yield* new Refusal({
-              error: new Precondition({
+            return yield* refusal(
+              new WrongState({
                 message: `smolvm reads machine ${machine.id} ${recorded}, and doesn't start it from there`,
+                machine: machine.id,
+                state: recorded,
               }),
-            });
+            );
           }
 
           yield* boot(native);
@@ -576,7 +588,7 @@ export const layer = (
   },
 ): Layer.Layer<
   Runtime,
-  HostError,
+  HostError | CannotStart,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > =>
   Layer.effect(

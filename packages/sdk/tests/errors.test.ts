@@ -1,14 +1,17 @@
-import { Result, Schema } from "effect";
+import { it } from "@effect/vitest";
+import { Effect, Result, Schema } from "effect";
 import { expect, test } from "vite-plus/test";
 import {
   ActionRecord,
   Capacity,
   type ClankerboxError,
   Conflict,
+  HostError,
   Internal,
   Invalid,
   NotFound,
-  Precondition,
+  NotOffered,
+  Refused,
   retryable,
   Unavailable,
 } from "../src/index.ts";
@@ -18,7 +21,8 @@ test("retryable follows the tag", () => {
 
   expect(retryable(new Invalid({ message }))).toBe(false);
   expect(retryable(new NotFound({ message }))).toBe(false);
-  expect(retryable(new Precondition({ message }))).toBe(false);
+  expect(retryable(new NotOffered({ message, base: "fedora" }))).toBe(false);
+  expect(retryable(new Refused({ message, by: "boat" }))).toBe(false);
   expect(retryable(new Capacity({ message }))).toBe(true);
   expect(retryable(new Internal({ message }))).toBe(false);
 });
@@ -55,3 +59,17 @@ test("a recorded action carries an error exactly when it failed", () => {
   expect(decodes({ name: "createMachine", status: "failed" })).toBe(false);
   expect(decodes({ name: "createMachine", status: "done", error })).toBe(false);
 });
+
+it.effect.prop(
+  "every host error survives the wire and a row's JSON with each of its fields",
+  { error: HostError },
+  ({ error }) =>
+    Effect.sync(() => {
+      const encode = Schema.encodeSync(HostError);
+      const sent = JSON.parse(JSON.stringify(encode(error)));
+      const received = Schema.decodeUnknownSync(HostError)(sent);
+
+      expect(received).toBeInstanceOf(error.constructor);
+      expect(encode(received)).toEqual(encode(error));
+    }),
+);

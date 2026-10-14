@@ -8,8 +8,16 @@ import {
   Conflict,
   HostError,
   Internal,
+  Missing,
   type NotFound,
-  Precondition,
+  NotMade,
+  NotOffered,
+  NotReady,
+  PinMismatch,
+  Refused,
+  ScriptFailed,
+  Unsizable,
+  WrongState,
   Runtime,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -19,12 +27,14 @@ import {
   FileSystem,
   Layer,
   Option,
+  Predicate,
   Result,
   Schema,
   type Scope,
 } from "effect";
 import { idOn, type Kind, notFoundOn } from "../ids.ts";
 import type { HostSettings } from "../settings.ts";
+import { CannotStart } from "../startup.ts";
 import {
   type CheckpointRecord,
   type Interface,
@@ -46,10 +56,162 @@ export const databaseFile = "host.db";
 export const applicationId = 0x63_62_78_68;
 
 /**
+ * What a host recorded as `Precondition` before the split, as the error it is now, by the
+ * message the host wrote. One that matches none came from boat's own refusal.
+ */
+export const splitPrecondition = (message: string): HostError => {
+  const match = (pattern: RegExp) => pattern.exec(message)?.slice(1) ?? [];
+
+  const [base] = match(/^host \S+ doesn't offer base (\S+); it offers /u);
+
+  if (base !== undefined) {
+    return new NotOffered({ message, base });
+  }
+
+  const [unmade] = match(/^machine (\S+) was never made: /u);
+
+  if (unmade !== undefined) {
+    return new NotMade({ message, machine: unmade });
+  }
+
+  const [missing] = match(/^machine (\S+) is missing from the \S+ runtime; delete it$/u);
+
+  if (missing !== undefined) {
+    return new Missing({ message, machine: missing });
+  }
+
+  const [unready, status] = match(/^checkpoint (\S+) isn't ready: its \S+ is (running|failed)$/u);
+
+  if (unready !== undefined && (status === "running" || status === "failed")) {
+    return new NotReady({ message, checkpoint: unready, status });
+  }
+
+  const [pinned, saved, running] = match(
+    /^checkpoint (\S+) holds RAM state saved under (.+), and this host runs (.+); it restores/u,
+  );
+
+  if (pinned !== undefined) {
+    const pin = (key: "saved" | "running", named: string | undefined) =>
+      named === undefined || named === "no pin" ? {} : { [key]: named };
+
+    return new PinMismatch({
+      message,
+      checkpoint: pinned,
+      ...pin("saved", saved),
+      ...pin("running", running),
+    });
+  }
+
+  const states: ReadonlyArray<
+    readonly [RegExp, (found: ReadonlyArray<string>) => WrongState | undefined]
+  > = [
+    [
+      /^a Tart \S+ copies a stopped machine's disk, and (\S+) is running: stop it first$/u,
+      ([machine]) =>
+        machine === undefined
+          ? undefined
+          : new WrongState({ message, machine, state: "running", needs: "stopped" }),
+    ],
+    [
+      /^(?:a smolvm checkpoint holds a running machine's RAM|a fork copies a running machine, RAM included), and (\S+) is stopped: start it first$/u,
+      ([machine]) =>
+        machine === undefined
+          ? undefined
+          : new WrongState({ message, machine, state: "stopped", needs: "running" }),
+    ],
+    [
+      /^smolvm reads machine (\S+) unreachable: its VM runs/u,
+      ([machine]) =>
+        machine === undefined
+          ? undefined
+          : new WrongState({ message, machine, state: "unreachable", needs: "running" }),
+    ],
+    [
+      /^smolvm reads machine (\S+) (\S+), and copies only a running machine$/u,
+      ([machine, state]) =>
+        machine === undefined || state === undefined
+          ? undefined
+          : new WrongState({ message, machine, state, needs: "running" }),
+    ],
+    [
+      /^smolvm reads machine (\S+) (\S+), and doesn't start it from there$/u,
+      ([machine, state]) =>
+        machine === undefined || state === undefined
+          ? undefined
+          : new WrongState({ message, machine, state }),
+    ],
+  ];
+
+  for (const [pattern, wrong] of states) {
+    const found = wrong(match(pattern));
+
+    if (found !== undefined) {
+      return found;
+    }
+  }
+
+  if (/^machine \S+'s disk of \d+G is below its base's/u.test(message)) {
+    return new Unsizable({ message, reason: "diskBelowBase" });
+  }
+
+  if (message.startsWith("no boat machine type has ")) {
+    return new Unsizable({ message, reason: "noMachineType" });
+  }
+
+  const [exited, code, exitOutput] = match(
+    /^(setup|preparation) exited (-?\d+); its last output:\n([\s\S]*)$/u,
+  );
+
+  if ((exited === "setup" || exited === "preparation") && code !== undefined) {
+    return new ScriptFailed({
+      message,
+      script: exited,
+      exitCode: Number(code),
+      timedOut: false,
+      output: exitOutput ?? "",
+    });
+  }
+
+  const [overran, overranOutput] = match(
+    /^(setup|preparation) ran past its .+ timeout; its last output:\n([\s\S]*)$/u,
+  );
+
+  if (overran === "setup" || overran === "preparation") {
+    return new ScriptFailed({
+      message,
+      script: overran,
+      timedOut: true,
+      output: overranOutput ?? "",
+    });
+  }
+
+  const [refusedCode] = match(/^boat \S+ \S+ answered 403 (\S+): /u);
+
+  return refusedCode === undefined
+    ? new Refused({ message, by: "boat" })
+    : new Refused({ message, by: "boat", code: refusedCode });
+};
+
+const PreconditionRow = Schema.Struct({ name: Schema.String, message: Schema.String });
+
+const decodePreconditionRow = Schema.decodeUnknownSync(PreconditionRow);
+
+/** A migration is SQL, or, where SQL can't parse what it reads, a step over the database. */
+type Migration = string | ((db: DatabaseSync) => void);
+
+export const applyMigration = (db: DatabaseSync, migration: Migration): void => {
+  if (Predicate.isString(migration)) {
+    db.exec(migration);
+  } else {
+    migration(db);
+  }
+};
+
+/**
  * Entry `i` takes `user_version` from `i` to `i + 1`. Append only; a released entry never
  * changes.
  */
-export const migrations: ReadonlyArray<string> = [
+export const migrations: ReadonlyArray<Migration> = [
   `CREATE TABLE machines (
     name TEXT PRIMARY KEY,
     instance TEXT NOT NULL,
@@ -119,6 +281,23 @@ export const migrations: ReadonlyArray<string> = [
     ALTER TABLE ${table} DROP COLUMN action_error_message`,
     )
     .join(";\n"),
+  (db) => {
+    for (const table of ["machines", "checkpoints"]) {
+      const update = db.prepare(`UPDATE ${table} SET action_error = ? WHERE name = ?`);
+
+      const rows = db
+        .prepare(
+          `SELECT name, json_extract(action_error, '$.message') AS message FROM ${table}
+           WHERE json_extract(action_error, '$._tag') = 'Precondition'`,
+        )
+        .all()
+        .map((row) => decodePreconditionRow(row));
+
+      for (const { name, message } of rows) {
+        update.run(encodeError(splitPrecondition(message)), name);
+      }
+    }
+  },
 ];
 
 const actionColumns = {
@@ -277,7 +456,7 @@ const pragma = (db: DatabaseSync, name: string): number => {
  * transaction, so another host process can't even read the database. The OS drops the lock when
  * the process ends, so a crash leaves no stale lock.
  */
-const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, Precondition | Internal> =>
+const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, CannotStart | Internal> =>
   Effect.try({
     try: () => {
       db.exec("PRAGMA locking_mode = EXCLUSIVE");
@@ -286,7 +465,7 @@ const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, Precondit
     },
     catch: (cause) =>
       isSqliteError(cause) && cause.errcode === sqliteBusy
-        ? new Precondition({ message: `another host process holds state dir ${stateDir}` })
+        ? new CannotStart({ message: `another host process holds state dir ${stateDir}` })
         : new Internal({ message: `couldn't lock state dir ${stateDir}: ${describe(cause)}` }),
   });
 
@@ -294,7 +473,7 @@ const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, Precondit
  * A database left empty by a crash during init is initialized; a newer or foreign one is
  * refused.
  */
-const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, Precondition | Internal> =>
+const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, CannotStart | Internal> =>
   Effect.gen(function* () {
     const { id, version, tables } = yield* sql("read its header", () => ({
       id: pragma(db, "application_id"),
@@ -305,11 +484,11 @@ const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, Preconditi
     }));
 
     if (id !== applicationId && (id !== 0 || version !== 0 || tables !== 0)) {
-      return yield* new Precondition({ message: `${file} isn't a clankerbox host database` });
+      return yield* new CannotStart({ message: `${file} isn't a clankerbox host database` });
     }
 
     if (version > migrations.length) {
-      return yield* new Precondition({
+      return yield* new CannotStart({
         message: `${file} is at schema version ${version}, newer than this binary's ${migrations.length}: run a newer clankerbox`,
       });
     }
@@ -320,7 +499,7 @@ const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, Preconditi
 
     yield* transaction(db, "migrate", () => {
       for (const migration of migrations.slice(version)) {
-        db.exec(migration);
+        applyMigration(db, migration);
       }
 
       db.exec(`PRAGMA user_version = ${migrations.length}`);
@@ -343,7 +522,7 @@ const own = (
   db: DatabaseSync,
   file: string,
   { id, runtime }: Owner,
-): Effect.Effect<void, Precondition | Internal> =>
+): Effect.Effect<void, CannotStart | Internal> =>
   transaction(db, "record its host", () => {
     const row = db.prepare("SELECT id, runtime FROM host").get();
 
@@ -358,7 +537,7 @@ const own = (
     return owner.id === id && owner.runtime === runtime
       ? Result.void
       : Result.fail(
-          new Precondition({
+          new CannotStart({
             message: `${file} holds host ${owner.id} on ${owner.runtime}, and this config names host ${id} on ${runtime}: run it as ${owner.id} on ${owner.runtime}, or give it a new state dir`,
           }),
         );
@@ -374,7 +553,7 @@ export const open = (
   owner: Owner,
 ): Effect.Effect<
   Interface & NativeIdRecorder,
-  Precondition | Internal,
+  CannotStart | Internal,
   FileSystem.FileSystem | Scope.Scope
 > =>
   Effect.gen(function* () {
@@ -660,7 +839,7 @@ export const open = (
 
 export const layer = (
   owner: Owner,
-): Layer.Layer<Store | NativeIds, Precondition | Internal, FileSystem.FileSystem> =>
+): Layer.Layer<Store | NativeIds, CannotStart | Internal, FileSystem.FileSystem> =>
   Layer.effectContext(
     Effect.map(open(owner), (opened) =>
       Context.make(Store, opened).pipe(Context.add(NativeIds, opened)),

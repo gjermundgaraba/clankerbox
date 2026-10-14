@@ -508,7 +508,7 @@ export const refusedBeforeTheRuntime = <Native>(
   taken: string,
 ) =>
   test(
-    "a taken name is Conflict{exists}, and a base no host offers is Precondition naming the host's bases; neither writes anything",
+    "a taken name is Conflict{exists}, and a base no host offers is NotOffered naming the host's bases; neither writes anything",
     async () => {
       const before = await suite.machines();
       const exists = suite.failure(await suite.createBare(taken));
@@ -526,7 +526,7 @@ export const refusedBeforeTheRuntime = <Native>(
         ),
       );
 
-      expect(nowhere.tag).toBe("Precondition");
+      expect(nowhere.tag).toBe("NotOffered");
       expect(nowhere.message).toContain("no host offers base nowhere");
       expect(nowhere.message).toContain(`${suite.env.host.id} offers`);
       expect(await suite.machines()).toEqual(before);

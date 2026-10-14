@@ -4,17 +4,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  type Checkpoint,
-  Client,
-  type HostError,
-  type Machine,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { type Checkpoint, Client, type Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer } from "effect";
 import {
   machine,
   type StubHost,
   stubHost,
+  type StubHostOptions,
   transport,
 } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { provider } from "../src/provider.ts";
@@ -23,6 +19,9 @@ import type { Options } from "../src/options.ts";
 export const fakeSsh = fileURLToPath(new URL("fake-ssh.mjs", import.meta.url));
 
 const url = "http://linux.test";
+
+/** What the host's create may fail with. */
+type CreateError = Effect.Error<ReturnType<NonNullable<StubHostOptions["create"]>>>;
 
 export const login = { user: "root", host: "100.64.0.7", port: 10_022 };
 
@@ -52,8 +51,8 @@ export const setup = async (
   host: {
     readonly machines?: ReadonlyArray<Machine>;
     readonly checkpoints?: ReadonlyArray<Checkpoint>;
-    readonly createFails?: HostError;
-    readonly createRefused?: HostError;
+    readonly createFails?: CreateError;
+    readonly createRefused?: CreateError;
   },
   options: Omit<Options, "hosts" | "from"> & { readonly from?: Options["from"] } = {},
   ssh = fakeSsh,

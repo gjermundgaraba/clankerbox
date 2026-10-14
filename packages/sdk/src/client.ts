@@ -7,7 +7,7 @@ import {
   Internal,
   Invalid,
   type NotFound,
-  Precondition,
+  NotOffered,
   Unavailable,
 } from "./errors.ts";
 import { formatId, HostId, parseId, parseName } from "./ids.ts";
@@ -104,7 +104,7 @@ export interface Interface extends Calls {
   readonly place: (
     base: string,
     options?: CreateOptions,
-  ) => Effect.Effect<Host, ErrorOf<"getHost"> | Precondition>;
+  ) => Effect.Effect<Host, ErrorOf<"getHost"> | NotOffered>;
   /** `createMachine` on `options.host`, or else on the first host that offers the base. */
   readonly create: (
     name: string,
@@ -402,7 +402,7 @@ export const make = (
     /**
      * The first host in list order that offers `base`; the requests still out are interrupted,
      * so a silent host after it delays nothing. With no winner it is `Unavailable` only if a
-     * host gave no reply: otherwise asking again changes nothing, and it is `Precondition`.
+     * host gave no reply: otherwise asking again changes nothing, and it is `NotOffered`.
      */
     const offering = (base: string) =>
       Effect.gen(function* () {
@@ -435,7 +435,7 @@ export const make = (
 
         return yield* noReply
           ? new Unavailable({ message, readOnly: true })
-          : new Precondition({ message });
+          : new NotOffered({ message, base });
       }).pipe(Effect.scoped);
 
     const create = (name: string, spec: MachineSpec, options?: CreateOptions) =>
@@ -452,7 +452,7 @@ export const make = (
     const place = (
       base: string,
       options?: CreateOptions,
-    ): Effect.Effect<Host, ErrorOf<"getHost"> | Precondition> =>
+    ): Effect.Effect<Host, ErrorOf<"getHost"> | NotOffered> =>
       options?.host === undefined ? offering(base) : Effect.flatMap(route(options.host), readHost);
 
     const deleting = (

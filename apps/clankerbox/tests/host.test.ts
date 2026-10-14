@@ -90,7 +90,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { error } = decodeFailure(created.stdout);
 
         expect(created.code).toBe(1);
-        expect(error.tag).toBe("Precondition");
+        expect(error.tag).toBe("ScriptFailed");
         expect(error.message).toContain("setup exited 7");
         expect(error.message).toContain("installing\nno network");
         expect(listed.stdout).toContain('"status":"failed"');
@@ -237,7 +237,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const notFound = yield* run(["start", "linux_nope", "--json"]);
       const invalid = yield* run(["create", "bad--name", ...sizes, "--json"]);
 
-      const precondition = yield* run([
+      const notOffered = yield* run([
         "create",
         "nobase",
         "--host",
@@ -252,14 +252,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(decodeFailure(notFound.stdout).error.tag).toBe("NotFound");
       expect(decodeFailure(invalid.stdout).error.tag).toBe("Invalid");
-      expect(decodeFailure(precondition.stdout).error).toMatchObject({ tag: "Precondition" });
-      expect(decodeFailure(precondition.stdout).error.message).toContain("ubuntu");
+      expect(decodeFailure(notOffered.stdout).error).toMatchObject({ tag: "NotOffered" });
+      expect(decodeFailure(notOffered.stdout).error.message).toContain("ubuntu");
       expect(decodeFailure(unavailable.stdout).error).toMatchObject({
         tag: "Unavailable",
         retryable: false,
       });
 
-      for (const ran of [notFound, invalid, precondition, unavailable]) {
+      for (const ran of [notFound, invalid, notOffered, unavailable]) {
         expect(ran.code).toBe(1);
       }
     }),

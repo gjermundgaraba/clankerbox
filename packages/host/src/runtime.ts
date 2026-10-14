@@ -3,24 +3,31 @@ import {
   type Capacity,
   type Checkpoint,
   type Host,
+  type HostError,
   Internal,
   type Machine,
-  Precondition,
+  Missing,
   type Reading,
   readTimeout,
+  type Refused,
   type Runtime as RuntimeName,
   type SshEndpoint,
+  type Unsizable,
+  type WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Data, Duration, Effect, type Scope, Semaphore, type Stream } from "effect";
 
 /**
- * What a runtime fails with: what it can't do, or what broke. `NotFound`, `Conflict` and
- * `Invalid` are the core's, about its rows and the request; only the calls that take room add
- * `Capacity`.
+ * What any runtime call fails with: what broke, or the provider's own refusal. `NotFound`,
+ * `Conflict` and `Invalid` are the core's, about its rows and the request; only the calls that
+ * take room add `Capacity`.
  */
-export type RuntimeError = Precondition | Internal;
+export type RuntimeError = Refused | Internal;
 
 export type RoomError = RuntimeError | Capacity;
+
+/** A machine the runtime no longer has, or one in a state the call doesn't act from. */
+export type StateError = Missing | WrongState;
 
 export interface MachineRef {
   readonly id: string;
@@ -140,18 +147,30 @@ export interface Execution {
   readonly exitCode: Effect.Effect<number, RuntimeError>;
 }
 
+class RefusalOf extends Data.TaggedError("Refusal")<{ readonly error: HostError }> {}
+
 /**
  * A runtime error that the runtime knows created nothing native. The core releases the claim,
  * removes a new row, and replies with `error`.
  */
-export class Refusal extends Data.TaggedError("Refusal")<{ readonly error: RoomError }> {}
+export interface Refusal<E extends HostError> extends RefusalOf {
+  readonly error: E;
+}
 
-export const missing = (runtime: RuntimeName, machine: Pick<MachineRef, "id">): Refusal =>
-  new Refusal({
-    error: new Precondition({
+export const refusal = <E extends HostError>(error: E): Refusal<E> =>
+  // SAFETY: a `RefusalOf` built from `error` holds exactly it.
+  new RefusalOf({ error }) as Refusal<E>;
+
+export const isRefusal = <E, R extends HostError>(error: E | Refusal<R>): error is Refusal<R> =>
+  error instanceof RefusalOf;
+
+export const missing = (runtime: RuntimeName, machine: Pick<MachineRef, "id">): Refusal<Missing> =>
+  refusal(
+    new Missing({
       message: `machine ${machine.id} is missing from the ${runtime} runtime; delete it`,
+      machine: machine.id,
     }),
-  });
+  );
 
 export interface Interface {
   readonly name: RuntimeName;
@@ -196,12 +215,17 @@ export interface Interface {
     machines: ReadonlyArray<Held>,
   ) => Effect.Effect<ReadonlyArray<Reading>, RuntimeError>;
   /** Returns once exec works. */
-  readonly create: (machine: MachineRef, image: string) => Effect.Effect<void, RoomError | Refusal>;
+  readonly create: (
+    machine: MachineRef,
+    image: string,
+  ) => Effect.Effect<void, RoomError | Unsizable | Refusal<RoomError | Unsizable>>;
   /**
    * Leaves a running machine as it is; returns once exec works. The core reads no state first,
    * so the runtime refuses a machine it no longer has (`missing`) before anything native.
    */
-  readonly start: (machine: MachineRef) => Effect.Effect<void, RoomError | Refusal>;
+  readonly start: (
+    machine: MachineRef,
+  ) => Effect.Effect<void, RoomError | Refusal<RoomError | StateError>>;
   /**
    * The core reads no state first, so the runtime does nothing on a machine that doesn't run or
    * that it no longer has.
@@ -214,25 +238,25 @@ export interface Interface {
   readonly delete: (machine: MachineRef) => Effect.Effect<void, RuntimeError>;
   /**
    * Of the runtime's `checkpointKind`. A machine in a state the runtime doesn't capture is a
-   * `Refusal` with `Precondition`, read before anything native.
+   * `Refusal` with `WrongState`, read before anything native.
    */
   readonly capture: (
     machine: MachineRef,
     checkpoint: CheckpointRef,
-  ) => Effect.Effect<void, RoomError | Refusal>;
+  ) => Effect.Effect<void, RoomError | Refusal<RoomError | StateError>>;
   /** Returns once exec works. A checkpoint deleted under it fails it like any runtime failure. */
   readonly restore: (
     checkpoint: CheckpointRef,
     machine: MachineRef,
-  ) => Effect.Effect<void, RoomError | Refusal>;
+  ) => Effect.Effect<void, RoomError | Unsizable | Refusal<RoomError | Unsizable>>;
   /**
    * Returns once exec works. A source in a state the runtime doesn't copy is a `Refusal` with
-   * `Precondition`.
+   * `WrongState`.
    */
   readonly fork: (
     source: MachineRef,
     machine: MachineRef,
-  ) => Effect.Effect<void, RoomError | Refusal>;
+  ) => Effect.Effect<void, RoomError | Unsizable | Refusal<RoomError | StateError | Unsizable>>;
   /** Removes everything native the checkpoint's row could have made. */
   readonly deleteCheckpoint: (checkpoint: CheckpointRef) => Effect.Effect<void, RuntimeError>;
   /** As root, in a running guest. */
