@@ -559,7 +559,9 @@ every bump of it:
   (`runtime.ts`), picked by the config's `runtime` from the registry in
   `composition/runtimes.ts`. State, claims, setup and preparation are shared; fork,
   checkpoint and access are each runtime's. A new provider is a new runtime
-  module behind its own host.
+  module behind its own host. Tart passed its live tests against `Runtime` and
+  boat was written to it, so a change to it touches every runtime and needs a
+  reason that holds for all three.
 - **No clankerbox code runs in a guest.** Setup and preparation are host-side
   scripts over the runtime's exec.
 - **The API** (`packages/sdk/src/api.ts`) is unary HTTP through
@@ -1252,10 +1254,10 @@ These practices are in force with the layout, and each is checked where it can b
 - **Comments** follow design rule 3.
 - **A lint fence** (`tools/lint-fence`, each rule with its own tests; the
   rules' settings are in `vite.config.ts`): a file directly in
-  `packages/host/src/` imports only its siblings, `effect` and the SDK; an
-  adapter in `platform/` imports the domain files, its own subfolder and
-  `platform/`'s shared `process.ts` and `address.ts`, never `composition/` or
-  another adapter; the SDK's `.` entry imports no Node and uses no `Buffer` or
+  `packages/host/src/` imports only its siblings, `effect`, `effect/encoding`
+  and the SDK; an adapter in `platform/` imports the domain files, its own
+  subfolder and `platform/`'s shared `process.ts` and `address.ts`, never
+  `composition/` or another adapter; the SDK's `.` entry imports no Node and uses no `Buffer` or
   `process`; and `fence/no-manual-run` keeps hand-run Effect to the places
   above. Which package may import which is each `package.json`'s
   dependencies: pnpm resolves no other.

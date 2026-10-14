@@ -1,4 +1,3 @@
-// Machine state is always read from the runtime, never stored.
 import type {
   ActionName,
   ActionRecord,

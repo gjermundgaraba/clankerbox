@@ -218,7 +218,7 @@ sandboxes' display names start `<host ID>_` and its named snapshots
   which a live run can't cause, or a `rate_limited` 429, which would take more
   starts in a minute than the trial's 5 and cost more on repeat; the unit suite
   covers them, and the refusals it no longer trusts after an unclear one,
-  against a fake boat (`packages/host/tests/platform/boat-api.test.ts`). Live, a 429
+  against a fake boat (`packages/host/tests/platform/boat/api.test.ts`). Live, a 429
   `limit_reached` to a create on the first attempt is still `Capacity`.
 - **A machine whose state can't be read (`unknown`):** it needs the runtime's
   read to fail; the unit suite covers it on smolvm and boat and in the core

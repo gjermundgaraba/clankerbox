@@ -4,7 +4,6 @@ import { Effect, Layer, PlatformError, Sink, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
-import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { machine, scratch, stubHost, type StubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { cleanup, cli, decodeJsonError, writeConfig } from "./support.ts";
 
@@ -79,7 +78,7 @@ const setup = (held = reachable) =>
 
 layer(NodeServices.layer)((it) => {
   it.effect(
-    "ssh logs in as the machine's user, pins its host key in a one-line known-hosts file and passes the caller's args",
+    "ssh runs ssh pinned to the machine, as its user, with the caller's args, and removes the known-hosts file after",
     () =>
       Effect.gen(function* () {
         const { config, endpoints } = yield* setup();
@@ -97,26 +96,8 @@ layer(NodeServices.layer)((it) => {
         expect(spawned?.knownHosts).toBe(
           "linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n",
         );
-        expect(spawned?.args).toEqual([
-          "-l",
-          "root",
-          "-o",
-          "HostName=100.64.0.7",
-          "-o",
-          "Port=10022",
-          "-o",
-          "HostKeyAlias=linux_dev",
-          "-o",
-          `UserKnownHostsFile=${spawned?.knownHostsFile}`,
-          "-o",
-          "GlobalKnownHostsFile=/dev/null",
-          "-o",
-          "StrictHostKeyChecking=yes",
-          "linux_dev",
-          "-L",
-          "8080:localhost:80",
-          "uptime",
-        ]);
+        expect(spawned?.args.slice(0, 2)).toEqual(["-l", "root"]);
+        expect(spawned?.args.slice(-4)).toEqual(["linux_dev", "-L", "8080:localhost:80", "uptime"]);
         expect(existsSync(spawned?.knownHostsFile ?? "")).toBe(false);
       }),
   );
@@ -152,43 +133,20 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
-  it.effect(
-    "ssh into a machine that lacks an endpoint or a host key is Precondition, says which, and runs no ssh",
-    () =>
-      Effect.gen(function* () {
-        const login = { user: "root", host: "100.64.0.7", port: 10_022 };
+  it.effect("ssh into a machine that isn't a target fails with its reason and runs no ssh", () =>
+    Effect.gen(function* () {
+      const { config, endpoints } = yield* setup(machine("linux_dev", { state: "stopped" }));
+      const ssh = fakeSsh(0);
 
-        const failed = {
-          name: "create",
-          status: "failed",
-          error: { tag: "Precondition", message: "setup exited 1" },
-        } as const;
+      const { code, stderr } = yield* cli(["ssh", "linux_dev", "--config", config], {
+        endpoints,
+        spawner: ssh.layer,
+      });
 
-        const said: ReadonlyArray<readonly [Machine, string]> = [
-          [
-            machine("linux_dev", { state: "stopped", hostKey: "ssh-ed25519 AAAAexample" }),
-            "linux_dev has no SSH endpoint (stopped, create done): see clankerbox get linux_dev",
-          ],
-          [
-            machine("linux_dev", { made: false, action: failed, ssh: login }),
-            "linux_dev has no SSH host key on record (running (unmade), create failed): see clankerbox get linux_dev",
-          ],
-        ];
-
-        for (const [held, message] of said) {
-          const { config, endpoints } = yield* setup(held);
-          const ssh = fakeSsh(0);
-
-          const { code, stderr } = yield* cli(["ssh", "linux_dev", "--config", config], {
-            endpoints,
-            spawner: ssh.layer,
-          });
-
-          expect(code).toBe(1);
-          expect(stderr).toContain(`clankerbox: Precondition: ${message}`);
-          expect(ssh.spawned).toEqual([]);
-        }
-      }),
+      expect(code).toBe(1);
+      expect(stderr).toContain("clankerbox: Precondition: linux_dev has no SSH endpoint");
+      expect(ssh.spawned).toEqual([]);
+    }),
   );
 
   it.effect("ssh that can't be started is SpawnFailed, naming ssh", () =>

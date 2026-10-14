@@ -28,7 +28,7 @@ back.
   `apiVersion` in `packages/host/src/platform/boat/boat.ts`, which the host reports as its
   runtime's version; `API` in `tests/live/boat/driver.py`. The Schemas, refusal
   tables and constants in `platform/boat/api.ts` and `platform/boat/boat.ts` (named below) follow the
-  spec, and so do the fakes in `packages/host/tests/platform/boat-api.test.ts` and
+  spec, and so do the fakes in `packages/host/tests/platform/boat/api.test.ts` and
   `boat.test.ts`. `packages/sdk/tests/ids.test.ts` holds the named-snapshot
   name rule.
 - **Sources:** the spec at `https://docs.boat.dev/openapi/boat-v1.yaml`, and
@@ -249,7 +249,7 @@ Each: what boat does, and what of ours depends on it.
 
 ## Verify
 
-- Unit: `vp test` in `packages/host` (`platform/boat-api.test.ts`, `platform/boat.test.ts`, whose
+- Unit: `vp test` in `packages/host` (`platform/boat/api.test.ts`, `platform/boat/boat.test.ts`, whose
   fake answers as boat's API does) and `packages/sdk` (`ids.test.ts`),
   then `vp run --no-cache ready`. Change a fake only to match boat's real answers.
 - Live: `pnpm live:boat [--address TAILNET_ADDRESS]` on a trial account with
