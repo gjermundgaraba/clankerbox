@@ -73,7 +73,6 @@ export const checkpointRef = (
   id: idOn(host)(record.name),
   name: record.name,
   instance: record.instance,
-  native: record.native,
   kind: record.kind,
   port: record.port,
 });

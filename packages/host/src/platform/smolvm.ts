@@ -6,20 +6,18 @@
 import { totalmem } from "node:os";
 import { join } from "node:path";
 import { type HostError, Internal, Invalid, Precondition } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
+import { Effect, FileSystem, Layer, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import { checkRamBudget, ramInUse } from "../ram-budget.ts";
 import {
   type CheckpointRef,
   type Interface,
-  machineReadWait,
   type MachineRef,
   type MachineState,
   missing,
-  type Observed,
+  observeEach,
   Refusal,
   Runtime,
-  timeoutFail,
 } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
 import { Address } from "./address.ts";
@@ -261,35 +259,11 @@ export const make = (
         recorded === "missing" ? recorded : stateOf(recorded),
       );
 
-    /**
-     * `unknown` when smolvm doesn't answer within `machineReadWait` of the observe's start, so
-     * one hung status makes only its own machine `unknown`.
-     */
     const observe = (machines: ReadonlyArray<MachineRef>) =>
-      Effect.flatMap(Semaphore.make(observeConcurrency), (turns) =>
-        Effect.forEach(
-          machines,
-          (machine): Effect.Effect<Observed> =>
-            turns
-              .withPermits(1)(state(nativeName(machine)))
-              .pipe(
-                timeoutFail(
-                  machineReadWait,
-                  () =>
-                    new Internal({
-                      message: `smolvm machine status ${nativeName(machine)} didn't answer within ${Duration.format(machineReadWait)}`,
-                    }),
-                ),
-                Effect.map((observed): Observed => ({ state: observed })),
-                Effect.catch((error) =>
-                  Effect.as(
-                    Effect.logWarning(`couldn't read ${machine.id}'s state: ${error.message}`),
-                    { state: "unknown" } satisfies Observed,
-                  ),
-                ),
-              ),
-          { concurrency: "unbounded" },
-        ),
+      observeEach(
+        machines,
+        (machine) => Effect.map(state(nativeName(machine)), (observed) => ({ state: observed })),
+        { concurrency: observeConcurrency, warn: Effect.logWarning },
       );
 
     /**

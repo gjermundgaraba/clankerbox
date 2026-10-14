@@ -7,7 +7,7 @@ import {
   type Capacity,
   type Checkpoint,
   type Host,
-  type Internal,
+  Internal,
   type Limit,
   type Machine,
   Precondition,
@@ -15,7 +15,7 @@ import {
   type Runtime as RuntimeName,
   type SshEndpoint,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Data, Duration, Effect, type Scope, type Stream } from "effect";
+import { Context, Data, Duration, Effect, type Scope, Semaphore, type Stream } from "effect";
 
 /**
  * What a runtime fails with: what it can't do, or what broke. `NotFound`, `Conflict` and
@@ -55,7 +55,6 @@ export interface CheckpointRef {
   readonly name: string;
   /** Native names carry its first 8 characters. */
   readonly instance: string;
-  readonly native: string | undefined;
   readonly kind: CheckpointKind;
   /** A `ram` restore comes up on the source's port at capture. */
   readonly port: number | undefined;
@@ -83,6 +82,41 @@ export interface Observed {
   /** For a runtime without a `publishAddress`; the core reports it only for a running machine. */
   readonly ssh?: SshEndpoint | undefined;
 }
+
+/**
+ * For a runtime that reads each machine on its own: one that fails, or takes over
+ * `machineReadWait` including its wait for one of `concurrency` turns, reads `unknown`, and
+ * `warn` logs why.
+ */
+export const observeEach = (
+  machines: ReadonlyArray<MachineRef>,
+  read: (machine: MachineRef) => Effect.Effect<Observed, RuntimeError>,
+  options: {
+    readonly concurrency?: number | undefined;
+    readonly warn: (message: string) => Effect.Effect<void>;
+  },
+): Effect.Effect<ReadonlyArray<Observed>> =>
+  Effect.flatMap(Semaphore.make(options.concurrency ?? Math.max(machines.length, 1)), (turns) =>
+    Effect.forEach(
+      machines,
+      (machine) =>
+        turns
+          .withPermits(1)(read(machine))
+          .pipe(
+            timeoutFail(
+              machineReadWait,
+              () =>
+                new Internal({ message: `no answer within ${Duration.format(machineReadWait)}` }),
+            ),
+            Effect.catch((error) =>
+              Effect.as(options.warn(`couldn't read ${machine.id}'s state: ${error.message}`), {
+                state: "unknown",
+              } satisfies Observed),
+            ),
+          ),
+      { concurrency: "unbounded" },
+    ),
+  );
 
 export interface Held {
   readonly machine: MachineRef;

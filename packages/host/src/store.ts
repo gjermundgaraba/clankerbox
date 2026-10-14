@@ -13,7 +13,6 @@ import type { Kind } from "./ids.ts";
 export interface Resource {
   readonly name: string;
   readonly instance: string;
-  readonly native: string | undefined;
   readonly createdAt: DateTime.Utc;
   readonly base: string;
   readonly profile: string | undefined;
@@ -23,6 +22,7 @@ export interface Resource {
 }
 
 export interface MachineRecord extends Resource {
+  readonly native: string | undefined;
   readonly action: ActionRecord;
   readonly port: number | undefined;
   readonly hostKey: string | undefined;
@@ -33,10 +33,7 @@ export interface MachineRecord extends Resource {
   readonly made: boolean;
 }
 
-/**
- * Ready checkpoints never change, so restores read them without a claim. Only a capture or a
- * delete claims a checkpoint row, so its action is one of them.
- */
+/** Ready checkpoints never change, so restores read them without a claim. */
 export interface CheckpointRecord extends Resource {
   readonly action: ActionRecord;
   readonly machine: string;

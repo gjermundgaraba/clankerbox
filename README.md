@@ -710,7 +710,8 @@ started. Neither is retryable.
   `<stateDir>/host.db` (`platform/sqlite.ts`, behind the `Store` port in
   `store.ts`). `PRAGMA application_id` (`cbxh`) refuses
   a foreign database, and an ordered migration list on `PRAGMA user_version`
-  refuses one newer than the binary. A one-row `host` table records the host
+  refuses one newer than the binary, so a state dir a newer host has migrated
+  can't go back to an older one. A one-row `host` table records the host
   ID and runtime at creation, and a config that names others is refused before
   the runtime starts. Other files in the state dir are left alone.
 - **The owner lock is SQLite's own:** the host opens the database with
@@ -718,11 +719,10 @@ started. Neither is retryable.
   the same state dir refuses to start and a crash leaves no stale lock. The
   cost: nothing else, `sqlite3` included, can read the database while the host
   runs.
-- **One row per machine and per checkpoint:** spec, `instance`, `native` (the
-  runtime's own column, such as boat's sandbox ID), `createdAt`, port, host
-  key, `made` and `action`. No operation log, no setup script. A checkpoint's
-  action is only ever `capture` or `delete`, as only those claim its row; the
-  contract's `Checkpoint` says so, and the host treats any other as a defect.
+- **One row per machine and per checkpoint:** spec, `instance`, `createdAt`,
+  port and `action`; a machine's also has its host key, `made`, and `native`,
+  the runtime's own ID for it, such as boat's sandbox ID. No operation log, no
+  setup script.
 - **Claims** are single transactions: `hold` an existing row or `insert` a new
   one; a held row is `running`, so a second action on it is
   `Conflict{kind: busy}`. Fork and capture hold the source, then insert the new
@@ -1222,11 +1222,13 @@ These practices are in force with the layout, and each is checked where it can b
 - **Comments** follow design rule 3.
 - **A lint fence** (`tools/lint-fence`, each rule with its own tests; the
   rules' settings are in `vite.config.ts`): a file directly in
-  `packages/host/src/` imports only its siblings, `effect` and the SDK; a file
-  in `platform/` never imports `composition/`; the SDK's `.` entry imports no
-  Node and uses no `Buffer` or `process`; and `fence/no-manual-run` keeps
-  hand-run Effect to the places above. Which package may import which is
-  each `package.json`'s dependencies: pnpm resolves no other.
+  `packages/host/src/` imports only its siblings, `effect` and the SDK; an
+  adapter in `platform/` imports the domain files, its own subfolder and
+  `platform/`'s shared `process.ts` and `address.ts`, never `composition/` or
+  another adapter; the SDK's `.` entry imports no Node and uses no `Buffer` or
+  `process`; and `fence/no-manual-run` keeps hand-run Effect to the places
+  above. Which package may import which is each `package.json`'s
+  dependencies: pnpm resolves no other.
 - **A runtime is removable.** Removing boat is its `platform/` folder, its arm
   in `composition/runtimes.ts`, its config section, the SDK's `Runtime`
   literal and its tests. What stays is the vocabulary it brought: its limits

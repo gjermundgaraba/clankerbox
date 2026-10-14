@@ -79,6 +79,7 @@ export const migrations: ReadonlyArray<string> = [
     id TEXT NOT NULL,
     runtime TEXT NOT NULL
   ) STRICT`,
+  "ALTER TABLE checkpoints DROP COLUMN native",
 ];
 
 const actionColumns = {
@@ -91,7 +92,6 @@ const actionColumns = {
 const columns = {
   name: Schema.String,
   instance: Schema.String,
-  native: Schema.NullOr(Schema.String),
   created_at: Schema.DateTimeUtcFromString,
   base: Schema.String,
   profile: Schema.NullOr(Schema.String),
@@ -105,6 +105,7 @@ const Columns = Schema.Struct(columns);
 const Row = Schema.Struct({
   ...columns,
   ...actionColumns,
+  native: Schema.NullOr(Schema.String),
   port: Schema.NullOr(Schema.Int),
   host_key: Schema.NullOr(Schema.String),
   made: Schema.Literals([0, 1]),
@@ -141,7 +142,6 @@ const actionOf = (row: typeof ActionColumns.Type): ActionRecord =>
 const resourceOf = (row: typeof Columns.Type): Resource => ({
   name: row.name,
   instance: row.instance,
-  native: row.native ?? undefined,
   createdAt: row.created_at,
   base: row.base,
   profile: row.profile ?? undefined,
@@ -152,6 +152,7 @@ const resourceOf = (row: typeof Columns.Type): Resource => ({
 
 const fromRow = (row: typeof Row.Type): MachineRecord => ({
   ...resourceOf(row),
+  native: row.native ?? undefined,
   action: actionOf(row),
   port: row.port ?? undefined,
   hostKey: row.host_key ?? undefined,
@@ -170,7 +171,6 @@ const fromCheckpointRow = (row: typeof CheckpointRow.Type): CheckpointRecord => 
 const columnParameters = (record: Resource, action: ActionName) => ({
   name: record.name,
   instance: record.instance,
-  native: record.native ?? null,
   created_at: DateTime.formatIso(record.createdAt),
   base: record.base,
   profile: record.profile ?? null,
@@ -377,9 +377,9 @@ export const open = (
     );
 
     const insertCheckpoint = db.prepare(
-      `INSERT INTO checkpoints (name, instance, native, created_at, machine, kind, pin, port, base,
+      `INSERT INTO checkpoints (name, instance, created_at, machine, kind, pin, port, base,
         profile, cpu, ram_mib, disk_gib, action_name, action_status)
-       VALUES ($name, $instance, $native, $created_at, $machine, $kind, $pin, $port, $base,
+       VALUES ($name, $instance, $created_at, $machine, $kind, $pin, $port, $base,
         $profile, $cpu, $ram_mib, $disk_gib, $action_name, 'running')`,
     );
 
@@ -475,6 +475,7 @@ export const open = (
         if (row.kind === "machine") {
           insertMachine.run({
             ...columns,
+            native: row.record.native ?? null,
             port: row.record.port ?? null,
             host_key: row.record.hostKey ?? null,
           });

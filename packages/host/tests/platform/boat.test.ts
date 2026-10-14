@@ -409,7 +409,6 @@ const checkpointOn = (name: string, n = 1): CheckpointRef => ({
   id: `boat_${name}`,
   name,
   instance: `cafe000${n}0123456789abcdef0123456`,
-  native: undefined,
   kind: "disk",
   port: undefined,
 });
