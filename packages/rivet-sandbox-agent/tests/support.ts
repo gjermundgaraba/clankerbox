@@ -7,7 +7,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type Checkpoint,
   Client,
-  type HostError,
+  type Declared,
   type Machine,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer } from "effect";
@@ -52,8 +52,8 @@ export const setup = async (
   host: {
     readonly machines?: ReadonlyArray<Machine>;
     readonly checkpoints?: ReadonlyArray<Checkpoint>;
-    readonly createFails?: HostError;
-    readonly createRefused?: HostError;
+    readonly createFails?: Declared<"createMachine">;
+    readonly createRefused?: Declared<"createMachine">;
   },
   options: Omit<Options, "hosts" | "from"> & { readonly from?: Options["from"] } = {},
   ssh = fakeSsh,

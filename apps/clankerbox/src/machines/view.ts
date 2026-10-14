@@ -4,7 +4,7 @@ import { age } from "../units.ts";
 
 export const actionLabel = ({ action }: Machine | Checkpoint) =>
   action.status === "failed"
-    ? `${action.name} ${action.status}: ${action.error.tag}`
+    ? `${action.name} ${action.status}: ${action.error._tag}`
     : `${action.name} ${action.status}`;
 
 export const actionError = ({ action }: Machine | Checkpoint) =>

@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { formatMib } from "@gjermundgaraba/clankerbox-sdk";
+import { formatMib, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { beforeAll, describe, expect, test } from "vite-plus/test";
 import {
   Checkpoints,
@@ -402,7 +402,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
       const fork = failure(await cli(["fork"], id("main"), named("stalled-fork"), "--json"));
 
-      expect(fork.tag).toBe("Precondition");
+      expect(fork.tag).toBe("WrongState");
       expect(fork.message).toContain("unreachable");
       expect(await machine("stalled-fork")).toBeUndefined();
       expect(await natives("stalled-fork")).toEqual(smolvm.nothing);
@@ -438,7 +438,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       const error = failure(await cli(["start"], id("main"), "--json"));
       const failed = await machine("main");
 
-      expect(error.tag).toBe("Precondition");
+      expect(error.tag).toBe("ScriptFailed");
       expect(error.message).toContain("start refused: /root/fail-start exists");
       expect(failed?.action).toMatchObject({ name: "startMachine", status: "failed" });
 
@@ -572,7 +572,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         await createWith("failing", "#!/bin/sh\necho setup-refused\nexit 7\n", 60),
       );
 
-      expect(error.tag).toBe("Precondition");
+      expect(error.tag).toBe("ScriptFailed");
       expect(error.message).toContain("setup exited 7");
       expect(error.message).toContain("setup-refused");
       expect(await machine("failing")).toMatchObject({
@@ -590,7 +590,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         await createWith("overrun", "#!/bin/sh\necho overrun-started\nsleep 600\n", 5),
       );
 
-      expect(error.tag).toBe("Precondition");
+      expect(error.tag).toBe("ScriptFailed");
       expect(error.message).toContain("setup ran past its 5s timeout");
       expect(error.message).toContain("overrun-started");
 
@@ -620,7 +620,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         ),
       );
 
-      expect(error.tag).toBe("Precondition");
+      expect(error.tag).toBe("ScriptFailed");
       expect(error.message).toContain("preparation exited 3");
       expect(error.message).toContain("hook refused");
       await removeMachine("hook");
@@ -800,7 +800,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
         const refused = failure(await cli(["start"], id(name), "--json"));
 
-        expect(refused.tag).toBe("Precondition");
+        expect(refused.tag).toBe("NotMade");
         expect(refused.message).toContain("was never made");
         await removeMachine(name);
 
@@ -902,7 +902,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
   );
 
   test(
-    "one list reads every machine's own state, and a capture or a fork of a stopped machine is Precondition and writes nothing",
+    "one list reads every machine's own state, and a capture or a fork of a stopped machine is WrongState and writes nothing",
     async () => {
       const stopped = await cli(["stop"], id("restore-b"), "--json");
 
@@ -923,7 +923,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         await cli(["checkpoint", "capture"], id("restore-b"), named("stopped"), "--json"),
       );
 
-      expect(error.tag).toBe("Precondition");
+      expect(error.tag).toBe("WrongState");
       expect(error.message).toContain("start it first");
 
       const listed = decode(Checkpoints, await cli(["checkpoint", "list"], "--json"));
@@ -933,7 +933,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
       const fork = failure(await cli(["fork"], id("restore-b"), named("stopped-fork"), "--json"));
 
-      expect(fork.tag).toBe("Precondition");
+      expect(fork.tag).toBe("WrongState");
       expect(fork.message).toContain("start it first");
       expect(await machine("stopped-fork")).toBeUndefined();
       expect(await natives("stopped-fork")).toEqual(smolvm.nothing);
@@ -1040,7 +1040,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         action: {
           name: "createMachine",
           status: "failed",
-          error: { tag: "Internal", message: "host restarted during createMachine" },
+          error: new Internal({ message: "the host stopped during createMachine" }),
         },
       });
 
@@ -1065,7 +1065,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       ] as const) {
         const refused = failure(await cli(command, id("crash"), ...args, "--json"));
 
-        expect(refused.tag, command.join(" ")).toBe("Precondition");
+        expect(refused.tag, command.join(" ")).toBe("NotMade");
         expect(refused.message, command.join(" ")).toContain("was never made");
       }
 

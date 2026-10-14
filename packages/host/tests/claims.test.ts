@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Capacity, type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect, Logger, Option } from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
@@ -60,12 +60,10 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const { result, logged } = yield* withFailing("release", ({ claimAndCheck }, store) =>
-          claimAndCheck(inserting(store), () =>
-            Effect.fail(new Precondition({ message: "no room" })),
-          ),
+          claimAndCheck(inserting(store), () => Effect.fail(new Capacity({ message: "no room" }))),
         );
 
-        expect(result).toEqual(new Precondition({ message: "no room" }));
+        expect(result).toEqual(new Capacity({ message: "no room" }));
         expect(logged).toEqual([["couldn't release the rows of a createMachine: disk full"]]);
       }),
   );
@@ -144,7 +142,7 @@ layer(NodeServices.layer)((it) => {
           Option.some({
             name: "startMachine",
             status: "failed",
-            error: { tag: "Internal", message: "the host stopped during startMachine" },
+            error: new Internal({ message: "the host stopped during startMachine" }),
           }),
         );
         expect(logged).toEqual([]);

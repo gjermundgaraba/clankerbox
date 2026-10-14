@@ -1,3 +1,4 @@
+import { Capacity } from "@gjermundgaraba/clankerbox-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect } from "effect";
 import { layer } from "@effect/vitest";
@@ -21,7 +22,7 @@ const failed = checkpoint("linux_broken", {
   action: {
     name: "captureCheckpoint",
     status: "failed",
-    error: { tag: "Capacity", message: "no room for the copy" },
+    error: new Capacity({ message: "no room for the copy" }),
   },
 });
 

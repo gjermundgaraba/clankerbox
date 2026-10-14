@@ -14,7 +14,10 @@ import * as BindProbe from "../platform/bind-probe.ts";
 import * as Sqlite from "../platform/sqlite.ts";
 import { routes } from "./routes.ts";
 import type { HostSettings } from "../settings.ts";
-import { startup } from "../startup.ts";
+import { type CannotStart, startup } from "../startup.ts";
+
+export { CannotStart } from "../startup.ts";
+
 import * as Store from "../store.ts";
 
 export type ServerLayer = Layer.Layer<
@@ -31,7 +34,7 @@ export const servicesLayer = <E, R>(
   runtime: Layer.Layer<Runtime, E, R>,
 ): Layer.Layer<
   Machines.Machines | Checkpoints.Checkpoints | Store.Store | Runtime,
-  HostError | E,
+  HostError | CannotStart | E,
   Exclude<R, Store.NativeIds> | FileSystem.FileSystem
 > => {
   const store = Sqlite.layer(config);
@@ -58,7 +61,7 @@ export const hostLayer = <E, R>(
   server: ServerLayer,
 ): Layer.Layer<
   HttpServer.HttpServer | Machines.Machines | Checkpoints.Checkpoints | Store.Store,
-  HostError | E,
+  HostError | CannotStart | E,
   Exclude<R, Store.NativeIds> | FileSystem.FileSystem
 > =>
   HttpRouter.serve(routes(config)).pipe(

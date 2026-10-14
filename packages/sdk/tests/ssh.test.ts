@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Effect, FileSystem } from "effect";
 import { expect } from "vite-plus/test";
-import { type Machine, pinnedSsh, sshTarget } from "../src/index.ts";
+import { type Machine, pinnedSsh, ScriptFailed, sshTarget, WrongState } from "../src/index.ts";
 import { read } from "./files.ts";
 import { machine } from "./stub-host.ts";
 
@@ -28,10 +28,15 @@ layer(NodeServices.layer)((it) => {
     "a machine without an endpoint or a host key is no target, and says which it lacks",
     () =>
       Effect.gen(function* () {
-        const said: ReadonlyArray<readonly [Machine, string]> = [
+        const said: ReadonlyArray<readonly [Machine, WrongState]> = [
           [
             machine("linux_dev", { state: "stopped", hostKey }),
-            "linux_dev has no SSH endpoint (stopped, createMachine done): see clankerbox get linux_dev",
+            new WrongState({
+              message:
+                "linux_dev has no SSH endpoint (stopped, createMachine done): see clankerbox get linux_dev",
+              machine: "linux_dev",
+              state: "stopped",
+            }),
           ],
           [
             machine("linux_dev", {
@@ -40,18 +45,23 @@ layer(NodeServices.layer)((it) => {
               action: {
                 name: "createMachine",
                 status: "failed",
-                error: { tag: "Precondition", message: "setup exited 1" },
+                error: new ScriptFailed({
+                  message: "setup exited 1",
+                  script: "setup",
+                }),
               },
             }),
-            "linux_dev has no SSH host key on record (running (unmade), createMachine failed): see clankerbox get linux_dev",
+            new WrongState({
+              message:
+                "linux_dev has no SSH host key on record (running (unmade), createMachine failed): see clankerbox get linux_dev",
+              machine: "linux_dev",
+              state: "running (unmade)",
+            }),
           ],
         ];
 
-        for (const [held, message] of said) {
-          const error = yield* Effect.flip(sshTarget(held));
-
-          expect(error._tag).toBe("Precondition");
-          expect(error.message).toBe(message);
+        for (const [held, expected] of said) {
+          expect(yield* Effect.flip(sshTarget(held))).toEqual(expected);
         }
       }),
   );

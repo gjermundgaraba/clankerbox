@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { inspect } from "node:util";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { HostError, Reading } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, type HostError, type Reading } from "@gjermundgaraba/clankerbox-sdk";
 import {
   DateTime,
   Duration,
@@ -66,7 +66,7 @@ const publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostOwnKeyForTests clank
 
 const guestKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGuestHostKeyForTests";
 
-const refused = (error: Refusal | HostError) =>
+const refused = (error: Refusal<HostError> | HostError) =>
   error instanceof Refusal
     ? [error.error._tag, error.error.message]
     : ["not refused", error._tag, error.message];
@@ -996,7 +996,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         [429, "daily_limit_reached", "Capacity"],
         [503, "out_of_capacity", "Capacity"],
         [503, "no_ready_machine", "Capacity"],
-        [403, "api_key_action_forbidden", "Precondition"],
+        [403, "api_key_action_forbidden", "Refused"],
       ] as const) {
         const machine = machineOn(`m${code.length}${status}`);
 
@@ -1092,27 +1092,22 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a machine no boat type covers is refused with Precondition, in admit and before any call",
+    "a machine no boat type covers is refused with Unsizable before any call, and admit leaves it to them",
     () =>
       Effect.gen(function* () {
         const rig = yield* rigOn();
         const big = machineOn("big", { cpu: 16, ramMib: 32_768, diskGib: 252 });
 
-        const admitted = yield* fails(
-          rig.runtime.admit({ action: "createMachine", machine: big, machines: [] }),
-        );
-
-        expect(refused(admitted)).toEqual([
-          "not refused",
-          "Precondition",
-          "no boat machine type has 16 vCPU, 32G of RAM and 252G of disk; the largest, xlarge, has 16 vCPU, 32G of RAM and 251G of disk",
-        ]);
+        yield* succeeds(rig.runtime.admit({ action: "createMachine", machine: big, machines: [] }));
 
         const created = yield* fails(rig.runtime.create(big, "boat"));
         const restored = yield* fails(rig.runtime.restore(checkpointOn("cp"), big));
 
-        expect(refused(created)[0]).toBe("Precondition");
-        expect(refused(restored)[0]).toBe("Precondition");
+        expect(refused(created)).toEqual([
+          "Unsizable",
+          "no boat machine type has 16 vCPU, 32G of RAM and 252G of disk; the largest, xlarge, has 16 vCPU, 32G of RAM and 251G of disk",
+        ]);
+        expect(refused(restored)[0]).toBe("Unsizable");
         expect(rig.boat.sent).toEqual([]);
 
         // A running source would sync and wait for a snapshot: the type is refused before either.
@@ -1127,7 +1122,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           rig.runtime.fork(machineOn("dev", { native: "bx_source" }), big),
         );
 
-        expect(refused(forked)[0]).toBe("Precondition");
+        expect(refused(forked)[0]).toBe("Unsizable");
         expect(rig.boat.sent).toEqual([]);
         expect(rig.guest.calls).toEqual([]);
 
@@ -1388,7 +1383,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(errors).toEqual(
           Array.from({ length: 3 }, () => [
-            "Precondition",
+            "Missing",
             "machine boat_dev is missing from the boat runtime; delete it",
           ]),
         );
@@ -1740,11 +1735,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         for (const source of [machineOn("dev"), machineOn("dev", { native: "bx_gone" })]) {
           expect(refused(yield* fails(rig.runtime.fork(source, copy)))).toEqual([
-            "Precondition",
+            "Missing",
             "machine boat_dev is missing from the boat runtime; delete it",
           ]);
           expect(refused(yield* fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
-            "Precondition",
+            "Missing",
             "machine boat_dev is missing from the boat runtime; delete it",
           ]);
         }
@@ -2082,7 +2077,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           Logger.layer([Logger.make(({ message }) => logged.push(message))]),
         );
 
-        const errors: Array<Refusal | HostError> = [];
+        const errors: Array<Refusal<HostError> | HostError> = [];
 
         rig.boat.sandboxes.set("bx_stopped", {
           id: "bx_stopped",
@@ -2327,7 +2322,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           {
             name: "startMachine",
             status: "failed",
-            error: { tag: "Capacity", message: refusedStart.message },
+            error: new Capacity({ message: refusedStart.message }),
           },
         ]);
       }),

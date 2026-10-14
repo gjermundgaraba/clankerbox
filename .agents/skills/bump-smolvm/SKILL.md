@@ -312,7 +312,7 @@ citation moved to the new tag.
   falls back to a synchronous save, pausing it for the whole RAM write
   (`declined_deferred_save`; since 1.24.0, before which it failed `ENOTSUP`).
   A branchable machine gets no idle balloon reclaim. Ours: every start passes
-  `--branchable`; a capture or fork of a stopped machine is `Precondition`
+  `--branchable`; a capture or fork of a stopped machine is `WrongState`
   before anything native.
 - Capture is atomic (temp file, fsync, publish without clobbering,
   `pack_artifact_inner`, S@1.27.3:crates/smolvm-pack/src/packer.rs). A restore
@@ -426,7 +426,7 @@ citation moved to the new tag.
   new prefix, expand its templates, change `smolvm.prefix`, restart); running
   VMs keep their old prefix, which must stay until its last machine is deleted;
   the new prefix builds a new image seed (one pull); and every existing `ram`
-  checkpoint now fails its restore with `Precondition`, since its pin names the
+  checkpoint now fails its restore with `PinMismatch`, since its pin names the
   old release.
 - Report the tag transition, the claims that changed and their fixes, the checks
   actually run, optional opportunities (with touchpoints and the smallest useful

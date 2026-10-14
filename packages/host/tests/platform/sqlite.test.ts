@@ -4,9 +4,13 @@ import { DatabaseSync } from "node:sqlite";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type ActionRecord,
+  Capacity,
   Conflict,
+  Internal,
   NotFound,
-  Precondition,
+  Refused,
+  ScriptFailed,
+  Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Arbitrary, DateTime, Effect, Exit, Option, Result, Schema } from "effect";
 import { layer } from "@effect/vitest";
@@ -19,6 +23,7 @@ import {
   type Owner,
   transaction,
 } from "../../src/platform/sqlite.ts";
+import { CannotStart } from "../../src/startup.ts";
 import type {
   Interface,
   NewCheckpoint,
@@ -81,7 +86,7 @@ const machine = (name: string): RowRef<"machine"> => ({ kind: "machine", name })
 const refused = (name: ActionRecord["name"]): ActionRecord => ({
   name,
   status: "failed",
-  error: { tag: "Capacity", message: "no room" },
+  error: new Capacity({ message: "no room" }),
 });
 
 const inserting = (made: NewMachine): NewRow => ({ kind: "machine", record: made });
@@ -171,7 +176,7 @@ layer(NodeServices.layer)((it) => {
 
       const second = yield* withStore(stateDir, () => opening(stateDir));
 
-      expect(second._tag).toBe("Precondition");
+      expect(second._tag).toBe("CannotStart");
       expect(second.message).toContain("another host process holds state dir");
       expect(yield* withStore(stateDir, (store) => store.list)).toEqual([]);
     }),
@@ -219,7 +224,7 @@ layer(NodeServices.layer)((it) => {
 
       const error = yield* opening(stateDir);
 
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("CannotStart");
       expect(error.message).toContain("newer than this binary");
     }),
   );
@@ -239,7 +244,7 @@ layer(NodeServices.layer)((it) => {
         const kept = yield* withStore(stateDir, (store) => store.list);
 
         expect(renamed).toEqual(
-          new Precondition({
+          new CannotStart({
             message: `${join(stateDir, databaseFile)} holds host linux on smolvm, and this config names host mac on smolvm: run it as linux on smolvm, or give it a new state dir`,
           }),
         );
@@ -265,7 +270,7 @@ layer(NodeServices.layer)((it) => {
 
       yield* withStore(stateDir, (store) => store.list);
 
-      expect((yield* opening(stateDir, { id: "mac" }))._tag).toBe("Precondition");
+      expect((yield* opening(stateDir, { id: "mac" }))._tag).toBe("CannotStart");
     }),
   );
 
@@ -319,7 +324,7 @@ layer(NodeServices.layer)((it) => {
 
       const error = yield* opening(stateDir);
 
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("CannotStart");
       expect(error.message).toContain("isn't a clankerbox host database");
     }),
   );
@@ -448,7 +453,7 @@ layer(NodeServices.layer)((it) => {
               action: {
                 name: "startMachine",
                 status: "failed",
-                error: { tag: "Internal", message: "no" },
+                error: new Internal({ message: "no" }),
               },
             });
 
@@ -460,7 +465,7 @@ layer(NodeServices.layer)((it) => {
           ["copy", { name: "forkMachine", status: "done" }, "copy key"],
           [
             "dev",
-            { name: "startMachine", status: "failed", error: { tag: "Internal", message: "no" } },
+            { name: "startMachine", status: "failed", error: new Internal({ message: "no" }) },
             undefined,
           ],
         ]);
@@ -486,7 +491,7 @@ layer(NodeServices.layer)((it) => {
               action: {
                 name: "forkMachine",
                 status: "failed",
-                error: { tag: "Internal", message: "no" },
+                error: new Internal({ message: "no" }),
               },
             });
 
@@ -602,7 +607,7 @@ layer(NodeServices.layer)((it) => {
           {
             name: "createMachine",
             status: "failed",
-            error: { tag: "Internal", message: "the host stopped during createMachine" },
+            error: new Internal({ message: "the host stopped during createMachine" }),
           },
         ],
         ["b", { name: "createMachine", status: "done" }],
@@ -663,6 +668,111 @@ layer(NodeServices.layer)((it) => {
       expect(checkpoints.map(({ name }) => name)).toEqual(["snap"]);
       expect(checkpoints[0]).not.toHaveProperty("native");
     }),
+  );
+
+  it.effect(
+    "a database at schema version 5 keeps each failed action's whole error, and names a Precondition by the message v0.16.0 wrote",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = join(yield* scratch, "state");
+
+        yield* mkdir(stateDir);
+
+        const db = new DatabaseSync(join(stateDir, databaseFile));
+
+        for (const migration of migrations.slice(0, 5)) {
+          db.exec(migration);
+        }
+
+        const exited = "setup exited 3; its last output:\ninstalling\nno network";
+        const overran = "preparation ran past its 1m timeout; its last output:\nwaiting";
+
+        const shrunk =
+          "machine mac_small's disk of 20G is below its base's, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB";
+
+        const forbidden =
+          "boat POST /sandboxes/bx_1/sshkey answered 403 api_key_action_forbidden: this API key may not add keys (req_0123)";
+
+        // Only a host on an unreleased build recorded a refusal: no v0.16.0 row holds one.
+        const unmade =
+          "machine linux_dev was never made: its create, fork or restore failed; delete it";
+
+        const failed: ReadonlyArray<readonly [string, string | null, string | null]> = [
+          ["done", null, null],
+          ["taken", "Conflict", "machine linux_copy exists"],
+          ["full", "Capacity", "no free port in 10000-10001 on 127.0.0.1"],
+          ["setup", "Precondition", exited],
+          ["preparation", "Precondition", overran],
+          ["small", "Precondition", shrunk],
+          ["forbidden", "Precondition", forbidden],
+          ["unmade", "Precondition", unmade],
+        ];
+
+        for (const [name, tag, message] of failed) {
+          db.prepare(
+            `INSERT INTO machines (name, instance, created_at, base, cpu, ram_mib, disk_gib, made,
+          action_name, action_status, action_error_tag, action_error_message) VALUES (?, 'abc',
+          '2026-10-04T12:00:00.000Z', 'ubuntu', 1, 1024, 10, 1, 'forkMachine', ?, ?, ?)`,
+          ).run(name, tag === null ? "done" : "failed", tag, message);
+        }
+
+        db.prepare(
+          `INSERT INTO checkpoints (name, instance, created_at, machine, kind, base, cpu, ram_mib,
+        disk_gib, action_name, action_status, action_error_tag, action_error_message) VALUES
+        ('snap', 'abc', '2026-10-04T12:00:00.000Z', 'dev', 'disk', 'ubuntu', 1, 1024, 10,
+        'captureCheckpoint', 'failed', 'Internal', 'the host stopped during captureCheckpoint')`,
+        ).run();
+        db.exec(`PRAGMA user_version = 5; PRAGMA application_id = ${applicationId}`);
+        db.close();
+
+        const [machines, checkpoints] = yield* withStore(stateDir, (store) =>
+          Effect.all([store.list, store.checkpoints]),
+        );
+
+        expect(Object.fromEntries(machines.map(({ name, action }) => [name, action]))).toEqual({
+          done: { name: "forkMachine", status: "done" },
+          taken: {
+            name: "forkMachine",
+            status: "failed",
+            error: new Conflict({ message: "machine linux_copy exists", kind: "exists" }),
+          },
+          full: {
+            name: "forkMachine",
+            status: "failed",
+            error: new Capacity({ message: "no free port in 10000-10001 on 127.0.0.1" }),
+          },
+          setup: {
+            name: "forkMachine",
+            status: "failed",
+            error: new ScriptFailed({ message: exited, script: "setup" }),
+          },
+          preparation: {
+            name: "forkMachine",
+            status: "failed",
+            error: new ScriptFailed({ message: overran, script: "preparation" }),
+          },
+          small: {
+            name: "forkMachine",
+            status: "failed",
+            error: new Unsizable({ message: shrunk }),
+          },
+          forbidden: {
+            name: "forkMachine",
+            status: "failed",
+            error: new Refused({ message: forbidden }),
+          },
+          unmade: {
+            name: "forkMachine",
+            status: "failed",
+            error: new Internal({ message: unmade }),
+          },
+        });
+        expect(checkpoints[0]?.action).toEqual({
+          name: "captureCheckpoint",
+          status: "failed",
+          error: new Internal({ message: "the host stopped during captureCheckpoint" }),
+        });
+      }),
   );
 
   it.effect("a database at schema version 4 records its actions under the contract's names", () =>
@@ -871,7 +981,7 @@ layer(NodeServices.layer)((it) => {
           {
             name: "captureCheckpoint",
             status: "failed",
-            error: { tag: "Internal", message: "the host stopped during captureCheckpoint" },
+            error: new Internal({ message: "the host stopped during captureCheckpoint" }),
           },
         ]);
       }),
@@ -993,7 +1103,7 @@ layer(NodeServices.layer)((it) => {
                 ? {
                     name: claim.action,
                     status: "failed",
-                    error: { tag: "Internal", message: "disk full" },
+                    error: new Internal({ message: "disk full" }),
                   }
                 : { name: claim.action, status: "done" };
 

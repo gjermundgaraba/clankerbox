@@ -157,8 +157,8 @@ it.effect("a placement no host takes names the action, but no host or ID", () =>
       Effect.flip(client.create("dev", spec)),
     );
 
-    expect(error._tag).toBe("Precondition");
-    expect(error).toMatchObject({ action: "createMachine" });
+    expect(error._tag).toBe("NotOffered");
+    expect(error).toMatchObject({ action: "createMachine", base: "ubuntu" });
     expect(error).not.toHaveProperty("host");
     expect(error).not.toHaveProperty("id");
   }),
@@ -368,7 +368,7 @@ it.effect("a create name is never a full ID: one with '_' is Invalid and sends n
 );
 
 it.effect(
-  "with no host offering the base and every host answering, create is Precondition listing the bases",
+  "with no host offering the base and every host answering, create is NotOffered listing the bases",
   () =>
     Effect.gen(function* () {
       const linux = host({ id: "linux", bases: ["ubuntu", "ubuntu-dev"] });
@@ -382,7 +382,7 @@ it.effect(
         (client) => Effect.flip(client.create("dev", { ...spec, base: "fedora" })),
       );
 
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("NotOffered");
       expect(error.message).toContain("linux offers ubuntu, ubuntu-dev");
       expect(error.message).toContain("mac offers tahoe");
       expect(linux.creates).toHaveLength(0);
@@ -413,7 +413,7 @@ it.effect(
 );
 
 it.effect(
-  "with no host offering the base, a host that replied wrongly makes create Precondition, naming its error",
+  "with no host offering the base, a host that replied wrongly makes create NotOffered, naming its error",
   () =>
     Effect.gen(function* () {
       const linux = host({ id: "linux", bases: ["ubuntu"] });
@@ -427,7 +427,7 @@ it.effect(
         (client) => Effect.flip(client.create("dev", { ...spec, base: "tahoe" })),
       );
 
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("NotOffered");
       expect(retryable(error)).toBe(false);
       expect(error.message).toContain("linux offers ubuntu");
       expect(error.message).toContain("mis failed: host mis (http://mis.test) calls itself other");
@@ -451,7 +451,7 @@ it.effect(
         ["mis", "Invalid"],
       ]);
       expect(listed.unreachable[0]?.error.message).toContain("calls itself other");
-      expect(error._tag).toBe("Precondition");
+      expect(error._tag).toBe("NotOffered");
       expect(error.message).toContain("mis");
       expect(error.message).toContain("other");
       expect(other.creates).toHaveLength(0);

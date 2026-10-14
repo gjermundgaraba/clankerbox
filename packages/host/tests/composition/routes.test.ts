@@ -300,7 +300,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(hosts.unreachable[0]?.error.message).toContain(refused);
       expect(listed.unreachable[0]?.error.message).toContain(refused);
       expect([got._tag, got.message]).toEqual(["Invalid", expect.stringContaining(refused)]);
-      expect(placed._tag).toBe("Precondition");
+      expect(placed._tag).toBe("NotOffered");
       expect(placed.message).toContain(`linux failed: this host runs clankerbox ${version}`);
       expect([created._tag, created.message]).toEqual([
         "Invalid",

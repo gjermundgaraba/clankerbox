@@ -1,13 +1,13 @@
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Context, Duration, Effect, Fiber, Layer, Match, Predicate, Result, Schema } from "effect";
 import { HttpClient, type HttpClientError, HttpClientRequest } from "effect/http";
-import { actionsByName as actions, Http, readTimeout } from "./api.ts";
+import { actionsByName as actions, type Declared, Http, readTimeout } from "./api.ts";
 import {
   ClankerboxError,
   Internal,
   Invalid,
   type NotFound,
-  Precondition,
+  NotOffered,
   Unavailable,
 } from "./errors.ts";
 import { formatId, HostId, parseId, parseName } from "./ids.ts";
@@ -34,10 +34,7 @@ export type HostAction = keyof Actions;
  * What a call of `N` fails with: an error the action declares, which always includes `Invalid`,
  * or no reply, or a reply the client couldn't use.
  */
-export type ErrorOf<N extends HostAction> =
-  | Actions[N]["error"][number]["Type"]
-  | Unavailable
-  | Internal;
+export type ErrorOf<N extends HostAction> = Declared<N> | Unavailable | Internal;
 
 type Success<N extends HostAction> = Actions[N]["success"]["Type"];
 
@@ -104,7 +101,7 @@ export interface Interface extends Calls {
   readonly place: (
     base: string,
     options?: CreateOptions,
-  ) => Effect.Effect<Host, ErrorOf<"getHost"> | Precondition>;
+  ) => Effect.Effect<Host, ErrorOf<"getHost"> | NotOffered>;
   /** `createMachine` on `options.host`, or else on the first host that offers the base. */
   readonly create: (
     name: string,
@@ -402,7 +399,7 @@ export const make = (
     /**
      * The first host in list order that offers `base`; the requests still out are interrupted,
      * so a silent host after it delays nothing. With no winner it is `Unavailable` only if a
-     * host gave no reply: otherwise asking again changes nothing, and it is `Precondition`.
+     * host gave no reply: otherwise asking again changes nothing, and it is `NotOffered`.
      */
     const offering = (base: string) =>
       Effect.gen(function* () {
@@ -435,7 +432,7 @@ export const make = (
 
         return yield* noReply
           ? new Unavailable({ message, readOnly: true })
-          : new Precondition({ message });
+          : new NotOffered({ message, base });
       }).pipe(Effect.scoped);
 
     const create = (name: string, spec: MachineSpec, options?: CreateOptions) =>
@@ -452,7 +449,7 @@ export const make = (
     const place = (
       base: string,
       options?: CreateOptions,
-    ): Effect.Effect<Host, ErrorOf<"getHost"> | Precondition> =>
+    ): Effect.Effect<Host, ErrorOf<"getHost"> | NotOffered> =>
       options?.host === undefined ? offering(base) : Effect.flatMap(route(options.host), readHost);
 
     const deleting = (

@@ -5,14 +5,16 @@
  *
  * The API key travels only in the `Authorization` header, held `Redacted`. Errors are built from
  * the method, the path, the status and boat's own code and message, never from a request or a
- * whole body (a sandbox's `desktopUrl` carries a token).
+ * whole body (a sandbox's `desktopUrl` carries a token). Every body and transport error is
+ * scrubbed of the key as it arrives, so nothing boat or the transport echoes carries it on.
  */
 import {
   Capacity,
   formatMib,
   Internal,
   NotFound,
-  Precondition,
+  Refused,
+  Unsizable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Array as Arr,
@@ -104,11 +106,11 @@ export const typeFor = (sizes: Sizes): Option.Option<MachineType> =>
     (type) => type.cpu >= sizes.cpu && type.ramMib >= sizes.ramMib && type.diskGib >= sizes.diskGib,
   );
 
-export const machineType = (sizes: Sizes): Effect.Effect<MachineType, Precondition> =>
+export const machineType = (sizes: Sizes): Effect.Effect<MachineType, Unsizable> =>
   Option.match(typeFor(sizes), {
     onNone: () =>
       Effect.fail(
-        new Precondition({
+        new Unsizable({
           message: `no boat machine type has ${sized(sizes)}; the largest, ${largest.name}, has ${sized(largest)}`,
         }),
       ),
@@ -187,13 +189,14 @@ const Limits = Schema.Struct({
 
 const Accepted = Schema.Struct({});
 
-const Refused = Schema.Struct({
+/** boat's own error body. */
+const BoatError = Schema.Struct({
   code: Schema.String,
   message: Schema.String,
   requestId: Schema.optionalKey(Schema.String),
 });
 
-const decodeRefused = Schema.decodeUnknownEffect(Refused);
+const decodeBoatError = Schema.decodeUnknownEffect(Schema.fromJsonString(BoatError));
 
 /**
  * boat's answers that leave nothing on boat and mean "no room now". They count only for a call
@@ -293,6 +296,9 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;
     const named = ({ method, path }: Call) => `boat ${method} ${path}`;
+    const secret = Redacted.value(settings.apiKey);
+
+    const scrub = (text: string) => (secret === "" ? text : text.replaceAll(secret, "<redacted>"));
 
     const request = (call: Call) =>
       HttpClientRequest.make(call.method)(`${settings.url}${call.path}`, {
@@ -305,7 +311,7 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
 
     /**
      * A 4xx is definite whatever its body. A 403 with boat's code made nothing and waiting won't
-     * help, so it is `Precondition`; a proxy's HTML 403 is `Internal`. A 429 to a call that takes
+     * help, so it is `Refused`; a proxy's HTML 403 is `Internal`. A 429 to a call that takes
      * no room is boat's rate limit on reads and the like, which passes.
      */
     const refusal = <E>(
@@ -315,7 +321,10 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
     ): Effect.Effect<never, Failure | E | Unclear | Throttled> =>
       Effect.gen(function* () {
         const { status } = response;
-        const decoded = yield* Effect.option(Effect.flatMap(response.json, decodeRefused));
+
+        const decoded = yield* Effect.option(
+          Effect.flatMap(response.text, (text) => decodeBoatError(scrub(text))),
+        );
 
         const said = Option.match(decoded, {
           onNone: () => `${named(call)} answered ${status} without boat's error`,
@@ -334,7 +343,7 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         }
 
         if (status === 403 && Option.isSome(code)) {
-          return yield* new Precondition({ message: said });
+          return yield* new Refused({ message: said });
         }
 
         if (status === 429 && room !== undefined) {
@@ -382,7 +391,7 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         );
 
         return yield* Effect.mapError(
-          Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(text),
+          Schema.decodeUnknownEffect(Schema.fromJsonString(schema))(scrub(text)),
           (error) =>
             new Internal({
               message: `${named(call)} answered ${status} with a body the host can't read: ${error.message}`,
@@ -403,7 +412,9 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         Effect.mapError(
           (error) =>
             new Unclear({
-              message: `${named(call)}: ${error.reason._tag}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`,
+              message: scrub(
+                `${named(call)}: ${error.reason._tag}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`,
+              ),
             }),
         ),
         Effect.flatMap((response) => answer(call, room, schema, response)),
@@ -428,7 +439,7 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
       <A>(call: Call, schema: Schema.Decoder<A>): Effect.Effect<A, Failure | E> => {
         const once = attempt(call, room, request(call), schema);
 
-        const distrusted = (refused: E | Precondition | Throttled) =>
+        const distrusted = (refused: E | Refused | Throttled) =>
           Effect.fail(
             new Internal({
               message: `${refused.message}, after an attempt whose outcome is unknown, so a sandbox may exist`,
