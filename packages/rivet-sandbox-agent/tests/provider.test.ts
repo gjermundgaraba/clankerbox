@@ -231,7 +231,7 @@ test("a create whose prebuild read fails deletes nothing, though the error names
 
   const { stub, sandbox } = await setup({}, { from: { profile } }, undefined, (client) => ({
     ...client,
-    checkpoint: () => Effect.fail(lost),
+    getCheckpoint: () => Effect.fail(lost),
   }));
 
   await expect(sandbox.create()).rejects.toBeInstanceOf(Unavailable);
@@ -287,13 +287,13 @@ test("one sandbox's calls take turns: two reconnects never start its machine at 
     fakeSsh,
     (client) => ({
       ...client,
-      start: (id) =>
+      startMachine: (input) =>
         Effect.acquireUseRelease(
           Effect.sync(() => {
             running += 1;
             most = Math.max(most, running);
           }),
-          () => Effect.andThen(Effect.sleep("50 millis"), client.start(id)),
+          () => Effect.andThen(Effect.sleep("50 millis"), client.startMachine(input)),
           () => Effect.sync(() => (running -= 1)),
         ),
     }),

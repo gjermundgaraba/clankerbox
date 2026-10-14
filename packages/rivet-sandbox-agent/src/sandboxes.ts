@@ -135,7 +135,7 @@ export const make = (options: Options, ssh = "ssh") => {
       yield* closed(known);
 
       const client = yield* Client.Client;
-      const target = yield* sshTarget(yield* client.machine(id));
+      const target = yield* sshTarget(yield* client.getMachine({ id }));
 
       const port = yield* portOf(known);
       const scope = yield* Scope.make();
@@ -182,7 +182,7 @@ export const make = (options: Options, ssh = "ssh") => {
     Effect.gen(function* () {
       const client = yield* Client.Client;
 
-      yield* client.start(id);
+      yield* client.startMachine({ id });
       yield* closed(known);
     }).pipe(
       Effect.catchTag("NotFound", (cause) =>
@@ -196,11 +196,11 @@ export const make = (options: Options, ssh = "ssh") => {
       const { from } = options;
 
       if ("checkpoint" in from) {
-        return yield* client.restore(from.checkpoint, named);
+        return yield* client.restoreMachine({ checkpoint: from.checkpoint, name: named });
       }
 
       if ("machine" in from) {
-        return yield* client.fork(from.machine, named);
+        return yield* client.forkMachine({ machine: from.machine, name: named });
       }
 
       const { spec, host } = yield* specRequest("create", yield* loadProfile(from.profile), {});
@@ -222,7 +222,7 @@ export const make = (options: Options, ssh = "ssh") => {
       const client = yield* Client.Client;
 
       if (error.id !== undefined && makers.some(({ name }) => name === error.action)) {
-        yield* Effect.ignore(client.delete(error.id));
+        yield* Effect.ignore(client.deleteMachine({ id: error.id }));
       }
 
       return yield* error;
@@ -243,7 +243,7 @@ export const make = (options: Options, ssh = "ssh") => {
           const client = yield* Client.Client;
 
           yield* closed(known);
-          yield* client.delete(id);
+          yield* client.deleteMachine({ id });
           known.port = undefined;
         }),
       ),
@@ -253,7 +253,7 @@ export const make = (options: Options, ssh = "ssh") => {
           const client = yield* Client.Client;
 
           yield* closed(known);
-          yield* client.stop(id);
+          yield* client.stopMachine({ id });
         }),
       ),
     /** The SDK's `ensureServer`, which follows, opens the tunnel. */

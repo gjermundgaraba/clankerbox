@@ -48,7 +48,7 @@ export const ssh = Command.make(
       const { id, user } = destination(flags.machine);
 
       const target = yield* withClient(flags, (client) =>
-        Effect.flatMap(client.machine(id), sshTarget),
+        Effect.flatMap(client.getMachine({ id }), sshTarget),
       );
 
       const code = yield* runSsh(target, user ?? target.login.user, flags.args).pipe(

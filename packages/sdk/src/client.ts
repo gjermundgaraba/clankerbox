@@ -72,42 +72,52 @@ export interface CreateOptions {
   readonly host?: string | undefined;
 }
 
-export interface Interface {
+/** The resource an input names, whose host the call goes to. */
+type Subject =
+  | { readonly id: string }
+  | { readonly machine: string }
+  | { readonly checkpoint: string };
+
+/** The actions on one resource, which the client sends to its host. */
+export type Routed = {
+  readonly [N in HostAction]: Input<N> extends Subject ? N : never;
+}[HostAction];
+
+/**
+ * One method per action on a resource, named and typed as in the contract, but for `create` and
+ * the deletes. A fork, restore or capture's errors name the resource it makes, so a caller can find
+ * what a failure left behind.
+ */
+export type Calls = {
+  readonly [N in Exclude<Routed, "createMachine" | "deleteMachine" | "deleteCheckpoint">]: (
+    input: Input<N>,
+  ) => Effect.Effect<Success<N>, ErrorOf<N>>;
+};
+
+export interface Interface extends Calls {
   readonly hosts: Effect.Effect<Gathered<Host>>;
   readonly machines: Effect.Effect<Gathered<Machine>>;
   readonly checkpoints: Effect.Effect<Gathered<Checkpoint>>;
   /** A host whose runtime couldn't be read is among the unreachable. */
   readonly capacity: Effect.Effect<Gathered<Limit>>;
-  readonly machine: (id: string) => Effect.Effect<Machine, ErrorOf<"getMachine">>;
-  readonly checkpoint: (id: string) => Effect.Effect<Checkpoint, ErrorOf<"getCheckpoint">>;
   /** The host a create of `base` goes to, read even when `options.host` names it. */
   readonly place: (
     base: string,
     options?: CreateOptions,
   ) => Effect.Effect<Host, ErrorOf<"getHost"> | Precondition>;
+  /** `createMachine` on `options.host`, or else on the first host that offers the base. */
   readonly create: (
     name: string,
     spec: MachineSpec,
     options?: CreateOptions,
   ) => Effect.Effect<Machine, ErrorOf<"createMachine">>;
-  readonly start: (id: string) => Effect.Effect<Machine, ErrorOf<"startMachine">>;
-  readonly stop: (id: string) => Effect.Effect<Machine, ErrorOf<"stopMachine">>;
-  readonly delete: (
-    id: string,
+  /** A delete of a resource that is already gone is `absent`: done either way. */
+  readonly deleteMachine: (
+    input: Input<"deleteMachine">,
   ) => Effect.Effect<Deleted, Exclude<ErrorOf<"deleteMachine">, NotFound>>;
-  /** Copies a machine to a new name on its host. */
-  readonly fork: (machine: string, name: string) => Effect.Effect<Machine, ErrorOf<"forkMachine">>;
-  /** Creates a machine named `name` from a checkpoint, on the checkpoint's host. */
-  readonly restore: (
-    checkpoint: string,
-    name: string,
-  ) => Effect.Effect<Machine, ErrorOf<"restoreMachine">>;
-  readonly capture: (
-    machine: string,
-    name: string,
-  ) => Effect.Effect<Checkpoint, ErrorOf<"captureCheckpoint">>;
+  /** A delete of a checkpoint that is already gone is `absent`: done either way. */
   readonly deleteCheckpoint: (
-    id: string,
+    input: Input<"deleteCheckpoint">,
   ) => Effect.Effect<Deleted, Exclude<ErrorOf<"deleteCheckpoint">, NotFound>>;
 }
 
@@ -257,6 +267,9 @@ const checkHost = (entry: HostEntry, host: Host): Effect.Effect<Host, Invalid> =
 
 const decodeHosts = Schema.decodeUnknownEffect(Schema.Array(HostEntry));
 
+const subjectOf = (input: Subject): string =>
+  "id" in input ? input.id : "machine" in input ? input.machine : input.checkpoint;
+
 /**
  * A client over `hosts`, in placement order. It sends nothing until called. An empty list, a
  * malformed entry or a host ID that appears twice is Invalid.
@@ -333,16 +346,6 @@ export const make = (
       return settled as Effect.Effect<Success<N>, ErrorOf<N>>;
     };
 
-    /**
-     * A call of `name` on the host of `id`. A fork, restore or capture names the one it makes as
-     * `made`, which its errors then carry, so a caller can find what a failure left behind.
-     */
-    const byId = <N extends HostAction>(name: N, id: string, input: Input<N>, made?: string) =>
-      Effect.flatMap(
-        Effect.flatMap(parseId(id), ({ host }) => route(host)),
-        (found) => send(found, name, input, id, made ?? id),
-      );
-
     /** An error raised before the call is sent names its action too. */
     const naming =
       <N extends HostAction>(name: N) =>
@@ -381,12 +384,20 @@ export const make = (
         Effect.mapError(locate({ action: "getHost", host: route.entry.id })),
       );
 
-    const createOn = (host: string, name: string, spec: MachineSpec) =>
-      Effect.gen(function* () {
-        const id = yield* formatId(host, name);
+    /** `makes` is the name of the resource the action makes beside its subject. */
+    const onResource = <N extends Routed>(name: N, input: Input<N>, makes?: string) =>
+      naming(name)(
+        Effect.gen(function* () {
+          const subject = subjectOf(input);
+          const { host } = yield* parseId(subject);
+          const made = makes === undefined ? subject : yield* formatId(host, makes);
 
-        return yield* send(yield* route(host), "createMachine", { ...spec, id }, id);
-      });
+          return yield* send(yield* route(host), name, input, subject, made);
+        }),
+      );
+
+    const createOn = (host: string, name: string, spec: MachineSpec) =>
+      Effect.flatMap(formatId(host, name), (id) => onResource("createMachine", { ...spec, id }));
 
     /**
      * The first host in list order that offers `base`; the requests still out are interrupted,
@@ -452,41 +463,22 @@ export const make = (
         Effect.catchTag("NotFound", () => Effect.succeed<Deleted>("absent")),
       );
 
-    const sibling = (source: string, name: string) =>
-      Effect.flatMap(parseId(source), ({ host }) => formatId(host, name));
-
     return {
       hosts: gather((route) => Effect.map(readHost(route), (host) => [host])),
       machines: gather((route) => send(route, "listMachines", {})),
       checkpoints: gather((route) => send(route, "listCheckpoints", {})),
       capacity: gather((route) => send(route, "getCapacity", {})),
-      machine: (id) => naming("getMachine")(byId("getMachine", id, { id })),
-      checkpoint: (id) => naming("getCheckpoint")(byId("getCheckpoint", id, { id })),
       place: (base, options) => naming("getHost")(place(base, options)),
       create: (name, spec, options) => naming("createMachine")(create(name, spec, options)),
-      start: (id) => naming("startMachine")(byId("startMachine", id, { id })),
-      stop: (id) => naming("stopMachine")(byId("stopMachine", id, { id })),
-      delete: (id) => deleting(naming("deleteMachine")(byId("deleteMachine", id, { id }))),
-      fork: (machine, name) =>
-        naming("forkMachine")(
-          Effect.flatMap(sibling(machine, name), (made) =>
-            byId("forkMachine", machine, { machine, name }, made),
-          ),
-        ),
-      restore: (checkpoint, name) =>
-        naming("restoreMachine")(
-          Effect.flatMap(sibling(checkpoint, name), (made) =>
-            byId("restoreMachine", checkpoint, { checkpoint, name }, made),
-          ),
-        ),
-      capture: (machine, name) =>
-        naming("captureCheckpoint")(
-          Effect.flatMap(sibling(machine, name), (made) =>
-            byId("captureCheckpoint", machine, { machine, name }, made),
-          ),
-        ),
-      deleteCheckpoint: (id) =>
-        deleting(naming("deleteCheckpoint")(byId("deleteCheckpoint", id, { id }))),
+      getMachine: (input) => onResource("getMachine", input),
+      startMachine: (input) => onResource("startMachine", input),
+      stopMachine: (input) => onResource("stopMachine", input),
+      deleteMachine: (input) => deleting(onResource("deleteMachine", input)),
+      forkMachine: (input) => onResource("forkMachine", input, input.name),
+      restoreMachine: (input) => onResource("restoreMachine", input, input.name),
+      getCheckpoint: (input) => onResource("getCheckpoint", input),
+      captureCheckpoint: (input) => onResource("captureCheckpoint", input, input.name),
+      deleteCheckpoint: (input) => deleting(onResource("deleteCheckpoint", input)),
     } satisfies Interface;
   });
 

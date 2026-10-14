@@ -400,6 +400,11 @@ program.pipe(
 - A read gives up on a host after 10 s (the exported `readTimeout`, which the
   host's own read bounds derive from); a mutation waits for as long as it
   runs, unless `timeout` is set.
+- Every action on an existing resource is a method named and typed as in
+  the contract (`api.ts`), such as `client.getMachine({ id })` or
+  `client.forkMachine({ machine, name })`, and goes to the host its ID names.
+  The one create is `client.create(name, spec, options)`, which places a
+  `createMachine`.
 - `readSetup` sends a file as its text and packs a directory into one
   self-extracting script (`packRecipe`). `loadProfile` reads a profile file.
   Each fails with `Invalid`, naming the `file`.
@@ -408,7 +413,8 @@ program.pipe(
   when the host has one. `Prebuild.nameOf` is a prebuild's name, and
   `client.place(base, options)` reads the host a create goes to.
 - Every call but the lists fails with its action's errors among seven tags
-  (`errors.ts`), each with `retryable` and with where it was met; see
+  (`errors.ts`), each with where it was met, and `retryable(error)` says
+  whether to try again; see
   [Errors](#errors). A list returns
   what reachable hosts answered and names the unreachable ones with their
   errors.
@@ -669,7 +675,8 @@ is afterwards or a tagged error. Each runs in this order (`claims.ts`):
   the machine's state itself and does nothing on one that doesn't run; the
   stop is still recorded `done`, replacing the last action and its error.
   A host's `delete` of a missing resource is `NotFound`; the client's
-  `delete` and `deleteCheckpoint` answer it as `absent`, done like `deleted`.
+  `deleteMachine` and `deleteCheckpoint` answer it as `absent`, done like
+  `deleted`.
 - Ready checkpoints never change, so restores read them without a claim and
   run in parallel.
 
@@ -679,7 +686,7 @@ Seven tags (`packages/sdk/src/errors.ts`): `Invalid`, `NotFound`,
 `Conflict{kind: exists | busy}`, `Precondition` (the request can't apply as
 things are; also a guest script that failed), `Capacity` (no room: Tart's two
 VMs, smolvm's RAM budget, boat's account limits), `Unavailable` (the client
-couldn't reach a host) and `Internal`. `retryable` follows the tag: `busy` and
+couldn't reach a host) and `Internal`. `retryable(error)` follows the tag: `busy` and
 `Capacity` retry; `Unavailable` retries for reads only, since a mutation's
 request may have reached the host. In the client, a request that fails to
 encode is `Invalid` and sends nothing, and a host's `InvalidInput` is `Invalid`
@@ -832,15 +839,16 @@ and the wire has no action for it.
   One whose capture is `done` is restored, and a failed restore is the reply;
   none, or one that failed or is still being captured, means a create with
   the setup.
-- **A build** reads the checkpoint first: one that is done is the answer, and
-  one that isn't is refused with `Precondition`. Otherwise a machine of its
+- **A build** reads the checkpoint first: one that is done is the answer, one
+  that failed is deleted and built again, and one whose capture is still
+  running is refused with `Precondition`. Otherwise a machine of its
   own, `prebuilding-<16 random hex>`, runs the setup, is stopped when the
   host's `captureFrom` is `stopped` (Tart; smolvm and boat capture a running
   machine), is captured under the prebuild's name, and is deleted however the
   build ends. Builders never share a name, and a host takes a checkpoint name
   once, before any native work: of two builds of one spec, both run the setup
   and the second's capture is `Conflict`, and neither touches the other's
-  machine or prebuild. Nothing deletes a prebuild.
+  machine or prebuild. Nothing deletes a prebuild that is done.
 
 ### Guest access
 
@@ -919,8 +927,7 @@ These are known, not guarded, and accepted:
   failure is the reply. When its capture was done, the prebuild is made,
   `prebuild` exits 0, and it names the machine on stderr.
 - A capture that fails leaves a failed `prebuilt-` checkpoint. Creates run
-  the setup past it, and `prebuild` refuses until `checkpoint delete` removes
-  it.
+  the setup past it, and the next `prebuild` deletes it and builds again.
 - Two builds of one spec at once both run the setup, and the second fails at
   its capture with `Conflict`.
 - The reseed fixes the kernel RNG only. User-space generators seeded before a

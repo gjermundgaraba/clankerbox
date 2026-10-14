@@ -34,14 +34,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         Effect.all([
           client.hosts,
           client.create("dev", spec, {}),
-          client.stop("linux_dev"),
-          client.start("linux_dev"),
+          client.stopMachine({ id: "linux_dev" }),
+          client.startMachine({ id: "linux_dev" }),
           client.machines,
         ]),
       );
 
       const gone = yield* withClient(url, (client) =>
-        Effect.andThen(client.delete("linux_dev"), Effect.flip(client.machine("linux_dev"))),
+        Effect.andThen(
+          client.deleteMachine({ id: "linux_dev" }),
+          Effect.flip(client.getMachine({ id: "linux_dev" })),
+        ),
       );
 
       expect(hosts.answers).toEqual([
@@ -110,19 +113,19 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             yield* client.create("dev", spec, {});
 
             return [
-              yield* client.fork("linux_dev", "copy"),
-              yield* client.capture("linux_dev", "snap"),
+              yield* client.forkMachine({ machine: "linux_dev", name: "copy" }),
+              yield* client.captureCheckpoint({ machine: "linux_dev", name: "snap" }),
               yield* client.checkpoints,
-              yield* client.checkpoint("linux_snap"),
-              yield* client.restore("linux_snap", "again"),
+              yield* client.getCheckpoint({ id: "linux_snap" }),
+              yield* client.restoreMachine({ checkpoint: "linux_snap", name: "again" }),
             ] as const;
           }),
         );
 
         const gone = yield* withClient(url, (client) =>
           Effect.andThen(
-            client.deleteCheckpoint("linux_snap"),
-            Effect.flip(client.checkpoint("linux_snap")),
+            client.deleteCheckpoint({ id: "linux_snap" }),
+            Effect.flip(client.getCheckpoint({ id: "linux_snap" })),
           ),
         );
 
@@ -280,7 +283,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           Effect.all([
             client.hosts,
             client.machines,
-            Effect.flip(client.machine("linux_dev")),
+            Effect.flip(client.getMachine({ id: "linux_dev" })),
             Effect.flip(client.create("dev", spec)),
             Effect.flip(client.create("dev", spec, { host: "linux" })),
           ]),

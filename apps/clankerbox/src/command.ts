@@ -3,6 +3,7 @@ import {
   Client,
   hostErrors,
   Invalid,
+  retryable,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -12,6 +13,7 @@ import {
   Duration,
   Effect,
   FileSystem,
+  Match,
   Option,
   Path,
   Runtime,
@@ -35,11 +37,7 @@ export class Exited extends Data.TaggedError("Exited")<{ readonly code: number }
 export class SpawnFailed extends Schema.TaggedError<SpawnFailed>()("SpawnFailed", {
   message: Schema.String,
   program: Schema.String,
-}) {
-  get retryable(): boolean {
-    return false;
-  }
-}
+}) {}
 
 /** Everything the CLI reports: a host's errors, the client's, and its own. */
 const failures = [...hostErrors, Unavailable, SpawnFailed] as const;
@@ -62,7 +60,14 @@ export const UnreachableDocument = Schema.Struct({ host: Schema.String, error: E
 const errorDocument = (error: Failure) => {
   const { _tag, ...fields } = encodeFailure(error);
 
-  return { ...fields, tag: _tag, retryable: error.retryable };
+  return {
+    ...fields,
+    tag: _tag,
+    retryable: Match.value(error).pipe(
+      Match.tag("SpawnFailed", () => false),
+      Match.orElse(retryable),
+    ),
+  };
 };
 
 export const fail = (json: boolean) => (error: Failure) =>

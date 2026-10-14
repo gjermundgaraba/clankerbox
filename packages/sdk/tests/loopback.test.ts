@@ -4,7 +4,7 @@ import { Effect, Layer, Schema } from "effect";
 import { HttpRouter, HttpServer } from "effect/http";
 import { it } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
-import { Client, type MachineSpec } from "../src/index.ts";
+import { Client, type MachineSpec, retryable } from "../src/index.ts";
 import * as NodeClient from "../src/node.ts";
 import { type StubHost, stubHost } from "./stub-host.ts";
 
@@ -91,11 +91,11 @@ it.effect("the client's Node transport calls a real loopback host", () =>
 it.effect("a refused connection is Unavailable through the Node transport", () =>
   Effect.gen(function* () {
     const error = yield* Effect.flatMap(Client.Client, (client) =>
-      Effect.flip(client.start("linux_dev")),
+      Effect.flip(client.startMachine({ id: "linux_dev" })),
     ).pipe(Effect.provide(NodeClient.layer([{ id: "linux", url: "http://127.0.0.1:1" }])));
 
     expect(error._tag).toBe("Unavailable");
-    expect(error.retryable).toBe(false);
+    expect(retryable(error)).toBe(false);
     expect(error.message).toContain("ECONNREFUSED");
   }),
 );
@@ -103,10 +103,13 @@ it.effect("a refused connection is Unavailable through the Node transport", () =
 it.effect("a mutation whose connection drops partway through the reply is a lost reply", () =>
   Effect.gen(function* () {
     const url = yield* answering(cutOff);
-    const error = yield* onLinux(url, (client) => Effect.flip(client.start("linux_dev")));
+
+    const error = yield* onLinux(url, (client) =>
+      Effect.flip(client.startMachine({ id: "linux_dev" })),
+    );
 
     expect(error._tag).toBe("Unavailable");
-    expect(error.retryable).toBe(false);
+    expect(retryable(error)).toBe(false);
     expect(error.message).toContain("may have run: read linux_dev");
   }),
 );
@@ -116,10 +119,13 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const url = yield* answering(cutOff);
-      const error = yield* onLinux(url, (client) => Effect.flip(client.machine("linux_dev")));
+
+      const error = yield* onLinux(url, (client) =>
+        Effect.flip(client.getMachine({ id: "linux_dev" })),
+      );
 
       expect(error._tag).toBe("Unavailable");
-      expect(error.retryable).toBe(true);
+      expect(retryable(error)).toBe(true);
     }),
 );
 
@@ -130,7 +136,9 @@ it.effect("a reply that parses but isn't the action's success is Internal", () =
       response.end('{"id":"linux_dev"}');
     });
 
-    const error = yield* onLinux(url, (client) => Effect.flip(client.start("linux_dev")));
+    const error = yield* onLinux(url, (client) =>
+      Effect.flip(client.startMachine({ id: "linux_dev" })),
+    );
 
     expect(error._tag).toBe("Internal");
     expect(error.message).toContain("host linux's reply didn't decode");
@@ -144,7 +152,9 @@ it.effect("a reply that arrives whole and doesn't parse is Internal", () =>
       response.end('{"id":"linux_dev",');
     });
 
-    const error = yield* onLinux(url, (client) => Effect.flip(client.start("linux_dev")));
+    const error = yield* onLinux(url, (client) =>
+      Effect.flip(client.startMachine({ id: "linux_dev" })),
+    );
 
     expect(error._tag).toBe("Internal");
   }),
