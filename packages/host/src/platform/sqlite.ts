@@ -92,6 +92,19 @@ export const migrations: ReadonlyArray<string> = [
     runtime TEXT NOT NULL
   ) STRICT`,
   "ALTER TABLE checkpoints DROP COLUMN native",
+  `UPDATE machines SET action_name = CASE action_name
+    WHEN 'create' THEN 'createMachine'
+    WHEN 'start' THEN 'startMachine'
+    WHEN 'stop' THEN 'stopMachine'
+    WHEN 'delete' THEN 'deleteMachine'
+    WHEN 'fork' THEN 'forkMachine'
+    WHEN 'restore' THEN 'restoreMachine'
+    WHEN 'capture' THEN 'captureCheckpoint'
+  END;
+  UPDATE checkpoints SET action_name = CASE action_name
+    WHEN 'capture' THEN 'captureCheckpoint'
+    WHEN 'delete' THEN 'deleteCheckpoint'
+  END`,
 ];
 
 const actionColumns = {

@@ -222,10 +222,10 @@ export const make = (
      */
     const boots = ({ action, made }: MachineRecord) =>
       action.status === "running" &&
-      (action.name === "create" ||
-        action.name === "restore" ||
-        action.name === "start" ||
-        (action.name === "fork" && !made));
+      (action.name === "createMachine" ||
+        action.name === "restoreMachine" ||
+        action.name === "startMachine" ||
+        (action.name === "forkMachine" && !made));
 
     const heldRows = Effect.map(store.list, (records) =>
       records.map((record) => ({ machine: ref(record), booting: boots(record) })),
@@ -257,7 +257,11 @@ export const make = (
      * the row again. A failure in preparation leaves the machine made, so `start` prepares it
      * again; one before, or in the marking, leaves it unmade.
      */
-    const makeMachine = (action: "create" | "fork" | "restore", name: string, making: Making) =>
+    const makeMachine = (
+      action: "createMachine" | "forkMachine" | "restoreMachine",
+      name: string,
+      making: Making,
+    ) =>
       Effect.gen(function* () {
         const [token, { row, work }] = yield* admitted(
           "source" in making
@@ -324,7 +328,7 @@ export const make = (
           });
         }
 
-        return yield* makeMachine("create", name, {
+        return yield* makeMachine("createMachine", name, {
           spec: request,
           work: (machine: MachineRef) => runtime.create(machine, image),
           setup: request.setup,
@@ -336,8 +340,8 @@ export const make = (
         const name = yield* nameOf(id);
 
         const [token, record] = yield* admitted(
-          claimAndCheck(holding("start", name), (record) =>
-            Effect.andThen(made(record), Effect.as(admit("start", record), record)),
+          claimAndCheck(holding("startMachine", name), (record) =>
+            Effect.andThen(made(record), Effect.as(admit("startMachine", record), record)),
           ),
         );
 
@@ -345,7 +349,7 @@ export const make = (
 
         const hostKey = yield* refusable(
           token,
-          `start ${id}`,
+          `startMachine ${id}`,
           Effect.andThen(runtime.start(machine), prepare(runtime, machine)),
         );
 
@@ -358,9 +362,9 @@ export const make = (
       Effect.gen(function* () {
         const name = yield* nameOf(id);
 
-        const [token, record] = yield* claimAndCheck(holding("stop", name), Effect.succeed);
+        const [token, record] = yield* claimAndCheck(holding("stopMachine", name), Effect.succeed);
 
-        yield* native(token, `stop ${id}`, runtime.stop(ref(record)));
+        yield* native(token, `stopMachine ${id}`, runtime.stop(ref(record)));
         yield* done(token);
 
         return yield* read(name);
@@ -370,9 +374,12 @@ export const make = (
       Effect.gen(function* () {
         const name = yield* nameOf(id);
 
-        const [token, record] = yield* claimAndCheck(holding("delete", name), Effect.succeed);
+        const [token, record] = yield* claimAndCheck(
+          holding("deleteMachine", name),
+          Effect.succeed,
+        );
 
-        yield* native(token, `delete ${id}`, runtime.delete(ref(record)));
+        yield* native(token, `deleteMachine ${id}`, runtime.delete(ref(record)));
         yield* store.remove({ kind: "machine", name });
       });
 
@@ -382,7 +389,7 @@ export const make = (
 
         yield* formatId(config.id, name);
 
-        return yield* makeMachine("fork", name, {
+        return yield* makeMachine("forkMachine", name, {
           source,
           work: (machine, from) => runtime.fork(from, machine),
         });
@@ -416,7 +423,7 @@ export const make = (
 
         const checkpoint = yield* ready(checkpointId);
 
-        return yield* makeMachine("restore", name, {
+        return yield* makeMachine("restoreMachine", name, {
           spec: checkpoint,
           work: (machine: MachineRef) =>
             runtime.restore(checkpointRef(config.id, checkpoint), machine),
@@ -429,16 +436,16 @@ export const make = (
       ).pipe(Effect.withSpan("Machines.list")),
       get: Effect.fn("Machines.get")((id) => Effect.flatMap(nameOf(id), read)),
       create: Effect.fn("Machines.create")((request) =>
-        detached(`create ${request.id}`, create(request)),
+        detached(`createMachine ${request.id}`, create(request)),
       ),
-      start: Effect.fn("Machines.start")((id) => detached(`start ${id}`, start(id))),
-      stop: Effect.fn("Machines.stop")((id) => detached(`stop ${id}`, stop(id))),
-      delete: Effect.fn("Machines.delete")((id) => detached(`delete ${id}`, remove(id))),
+      start: Effect.fn("Machines.start")((id) => detached(`startMachine ${id}`, start(id))),
+      stop: Effect.fn("Machines.stop")((id) => detached(`stopMachine ${id}`, stop(id))),
+      delete: Effect.fn("Machines.delete")((id) => detached(`deleteMachine ${id}`, remove(id))),
       fork: Effect.fn("Machines.fork")((id, name) =>
-        detached(`fork ${id} to ${name}`, fork(id, name)),
+        detached(`forkMachine ${id} to ${name}`, fork(id, name)),
       ),
       restore: Effect.fn("Machines.restore")((checkpoint, name) =>
-        detached(`restore ${checkpoint} to ${name}`, restore(checkpoint, name)),
+        detached(`restoreMachine ${checkpoint} to ${name}`, restore(checkpoint, name)),
       ),
       capacity: capacity.pipe(Effect.withSpan("Machines.capacity")),
     } satisfies Interface;

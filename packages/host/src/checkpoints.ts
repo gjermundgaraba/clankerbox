@@ -70,7 +70,7 @@ export const make = (
         const id = yield* formatId(config.id, name);
 
         const [token, { source, row }] = yield* claimAndCheck(
-          store.hold("capture", { kind: "machine", name: sourceName }),
+          store.hold("captureCheckpoint", { kind: "machine", name: sourceName }),
           (source, join) =>
             Effect.gen(function* () {
               yield* made(source);
@@ -100,7 +100,7 @@ export const make = (
 
         yield* refusable(
           token,
-          `capture ${id}`,
+          `captureCheckpoint ${id}`,
           runtime.capture(machineRef(config.id, source), checkpointRef(config.id, row)),
         );
         yield* done(token);
@@ -113,13 +113,13 @@ export const make = (
         const name = yield* nameOf(id);
 
         const [token, record] = yield* claimAndCheck(
-          store.hold("delete", { kind: "checkpoint", name }),
+          store.hold("deleteCheckpoint", { kind: "checkpoint", name }),
           Effect.succeed,
         );
 
         yield* native(
           token,
-          `delete ${id}`,
+          `deleteCheckpoint ${id}`,
           runtime.deleteCheckpoint(checkpointRef(config.id, record)),
         );
         yield* store.remove({ kind: "checkpoint", name });
@@ -133,9 +133,11 @@ export const make = (
         Effect.flatMap(nameOf(id), (name) => Effect.map(rows.checkpoint(name), resource)),
       ),
       capture: Effect.fn("Checkpoints.capture")((machine, name) =>
-        detached(`capture ${machine} to ${name}`, capture(machine, name)),
+        detached(`captureCheckpoint ${machine} to ${name}`, capture(machine, name)),
       ),
-      delete: Effect.fn("Checkpoints.delete")((id) => detached(`delete ${id}`, remove(id))),
+      delete: Effect.fn("Checkpoints.delete")((id) =>
+        detached(`deleteCheckpoint ${id}`, remove(id)),
+      ),
     } satisfies Interface;
   });
 

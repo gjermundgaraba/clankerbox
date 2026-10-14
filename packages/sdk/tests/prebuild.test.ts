@@ -155,7 +155,7 @@ it.effect(
         checkpoints: [
           prebuilt(id, {
             action: {
-              name: "capture",
+              name: "captureCheckpoint",
               status: "failed",
               error: { tag: "Internal", message: "full" },
             },
@@ -166,7 +166,7 @@ it.effect(
       const running = host({
         id: "linux",
         bases: ["ubuntu"],
-        checkpoints: [prebuilt(id, { action: { name: "capture", status: "running" } })],
+        checkpoints: [prebuilt(id, { action: { name: "captureCheckpoint", status: "running" } })],
       });
 
       const found = yield* withClient([done], (client) => Prebuild.build(client, spec));
@@ -180,7 +180,7 @@ it.effect(
       expect(done.creates).toEqual([]);
       expect(rebuilt).toMatchObject({
         built: true,
-        checkpoint: { id, action: { name: "capture", status: "done" } },
+        checkpoint: { id, action: { name: "captureCheckpoint", status: "done" } },
       });
       expect(failed.creates).toHaveLength(1);
       expect(yield* holdings(failed)).toEqual({ machines: [], checkpoints: [id] });
@@ -190,7 +190,7 @@ it.effect(
         host: "linux",
         action: "captureCheckpoint",
         id,
-        message: `prebuild ${id} is busy: its capture is running`,
+        message: `prebuild ${id} is busy: its captureCheckpoint is running`,
       });
       expect(retryable(error)).toBe(true);
       expect(running.creates).toEqual([]);
@@ -295,20 +295,23 @@ it.effect(
       const capturing = host({
         id: "linux",
         bases: ["ubuntu"],
-        checkpoints: [prebuilt(id, { action: { name: "capture", status: "running" } })],
+        checkpoints: [prebuilt(id, { action: { name: "captureCheckpoint", status: "running" } })],
       });
 
       const restored = yield* withClient([ready], (client) => Prebuild.create(client, "box", spec));
 
       expect(restored.prebuild?.id).toBe(id);
-      expect(restored.machine).toMatchObject({ id: "linux_box", action: { name: "restore" } });
+      expect(restored.machine).toMatchObject({
+        id: "linux_box",
+        action: { name: "restoreMachine" },
+      });
       expect(ready.creates).toEqual([]);
 
       for (const stub of [none, capturing]) {
         const fresh = yield* withClient([stub], (client) => Prebuild.create(client, "box", spec));
 
         expect(fresh.prebuild).toBeUndefined();
-        expect(fresh.machine).toMatchObject({ id: "linux_box", action: { name: "create" } });
+        expect(fresh.machine).toMatchObject({ id: "linux_box", action: { name: "createMachine" } });
       }
     }),
 );

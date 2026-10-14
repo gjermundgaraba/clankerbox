@@ -84,7 +84,7 @@ test("a tunnel whose ssh fails says what ssh printed or why it couldn't run, and
   await expect(sandbox.getUrl("linux_stopped")).rejects.toEqual(
     new Precondition({
       message:
-        "linux_stopped has no SSH endpoint (stopped, create done): see clankerbox get linux_stopped",
+        "linux_stopped has no SSH endpoint (stopped, createMachine done): see clankerbox get linux_stopped",
     }),
   );
 });

@@ -470,7 +470,7 @@ const rigOn = (boat = fakeBoat()) =>
     );
 
     const insert = (machine: MachineRef) =>
-      Effect.asVoid(store.insert("create", { kind: "machine", record: row(machine) }));
+      Effect.asVoid(store.insert("createMachine", { kind: "machine", record: row(machine) }));
 
     const rig: Rig = { boat, guest, store, runtime, stateDir, insert };
 
@@ -1099,7 +1099,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const big = machineOn("big", { cpu: 16, ramMib: 32_768, diskGib: 252 });
 
         const admitted = yield* fails(
-          rig.runtime.admit({ action: "create", machine: big, machines: [] }),
+          rig.runtime.admit({ action: "createMachine", machine: big, machines: [] }),
         );
 
         expect(refused(admitted)).toEqual([
@@ -1133,7 +1133,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* succeeds(
           rig.runtime.admit({
-            action: "create",
+            action: "createMachine",
             machine: machineOn("fits", { cpu: 16, ramMib: 32_768, diskGib: 251 }),
             machines: [],
           }),
@@ -2248,7 +2248,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "running",
           { user: "root", host: "203.0.113.10", port: 19_001 },
           guestKey,
-          { name: "create", status: "done" },
+          { name: "createMachine", status: "done" },
         ]);
         expect((yield* store.list).map((found) => found.native)).toEqual(["bx_made0001"]);
       }),
@@ -2325,7 +2325,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect([after.state, after.action]).toEqual([
           "stopped",
           {
-            name: "start",
+            name: "startMachine",
             status: "failed",
             error: { tag: "Capacity", message: refusedStart.message },
           },
@@ -2340,7 +2340,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const boat = fakeBoat({ instant: true });
         const { machines, store } = yield* hostOn(boat);
 
-        yield* store.insert("create", {
+        yield* store.insert("createMachine", {
           kind: "machine",
           record: row(machineOn("dev")),
         });
@@ -2370,7 +2370,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ip: null,
           sshEndpoint: null,
         });
-        yield* store.insert("create", {
+        yield* store.insert("createMachine", {
           kind: "machine",
           record: row(machineOn("dev", { native: "bx_booting" })),
         });
@@ -2380,7 +2380,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([stopped.state, stopped.action]).toEqual([
           "stopped",
-          { name: "stop", status: "done" },
+          { name: "stopMachine", status: "done" },
         ]);
         expect(boat.calls()).toEqual(["POST /sandboxes/bx_booting/stop"]);
       }),
