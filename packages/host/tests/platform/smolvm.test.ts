@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { totalmem } from "node:os";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
@@ -19,6 +20,7 @@ import {
   stateOf,
   templates,
   testedVersion,
+  ramBudget,
 } from "../../src/platform/smolvm.ts";
 import { mkdir, readDirectory, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { type Call, type Reply, scripted as scriptedSpawner } from "../scripted.ts";
@@ -113,6 +115,13 @@ layer(NodeServices.layer)((it) => {
   it("a native name is the machine's name and its instance's first 8 characters", () => {
     expect(nativeName(machine)).toBe("dev-01234567");
   });
+
+  it.effect("the RAM budget defaults to physical RAM less 2 GiB, and a set one is kept", () =>
+    Effect.gen(function* () {
+      expect(yield* ramBudget(undefined)).toBe(Math.floor(totalmem() / 1024 / 1024) - 2048);
+      expect(yield* ramBudget(1_000_000)).toBe(1_000_000);
+    }),
+  );
 
   it.effect(
     "every smolvm call runs the prefix's wrapper in one fixed environment, and nothing else",

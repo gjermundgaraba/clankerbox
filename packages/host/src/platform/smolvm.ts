@@ -20,46 +20,30 @@ import {
   Runtime,
 } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
-import { Address } from "./address.ts";
 import { cliIn, expect, failure, files, portOf } from "./process.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
 export const SmolvmSettings = Schema.Struct({
   prefix: Schema.String,
-  publishAddress: Schema.optionalKey(Address),
   ramBudgetMib: Schema.optionalKey(Size),
 });
-
-export type Smolvm = Required<typeof SmolvmSettings.Type>;
-
-export interface SmolvmHost extends HostSettings {
-  readonly runtime: "smolvm";
-  readonly smolvm: Smolvm;
-}
 
 const mib = 1024 * 1024;
 
 /** Room for the OS and the host processes. */
 const reservedMib = 2048;
 
-export const resolveSettings = (
-  settings: typeof SmolvmSettings.Type,
-  listen: HostSettings["listen"],
-): Effect.Effect<Smolvm, Invalid> => {
-  const ramBudgetMib = settings.ramBudgetMib ?? Math.floor(totalmem() / mib) - reservedMib;
+export const ramBudget = (set: number | undefined): Effect.Effect<number, Invalid> => {
+  const ramBudgetMib = set ?? Math.floor(totalmem() / mib) - reservedMib;
 
   return ramBudgetMib <= 0
     ? Effect.fail(
         new Invalid({
-          message: `smolvm.ramBudgetMib: physical RAM leaves no default budget; set one`,
+          message: "smolvm.ramBudgetMib: physical RAM leaves no default budget; set one",
         }),
       )
-    : Effect.succeed({
-        ...settings,
-        publishAddress: settings.publishAddress ?? listen.address,
-        ramBudgetMib,
-      });
+    : Effect.succeed(ramBudgetMib);
 };
 
 /**
@@ -68,7 +52,10 @@ export const resolveSettings = (
  */
 export const testedVersion = "1.27.3";
 
-export interface Settings extends Smolvm {
+export interface Settings {
+  readonly prefix: string;
+  readonly publishAddress: string;
+  readonly ramBudgetMib: number;
   readonly stateDir: string;
 }
 
@@ -596,10 +583,25 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<SmolvmHost, "stateDir" | "smolvm">,
+  config: Pick<HostSettings, "stateDir" | "listen"> & {
+    readonly smolvm: typeof SmolvmSettings.Type;
+  },
 ): Layer.Layer<
   Runtime,
   HostError,
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem
 > =>
-  Layer.effect(Runtime, make({ ...config.smolvm, stateDir: config.stateDir }, process.getuid?.()));
+  Layer.effect(
+    Runtime,
+    Effect.flatMap(ramBudget(config.smolvm.ramBudgetMib), (ramBudgetMib) =>
+      make(
+        {
+          prefix: config.smolvm.prefix,
+          publishAddress: config.listen.address,
+          ramBudgetMib,
+          stateDir: config.stateDir,
+        },
+        process.getuid?.(),
+      ),
+    ),
+  );

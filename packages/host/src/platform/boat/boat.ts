@@ -49,7 +49,6 @@ import {
   missing,
   observeEach,
   type Observed,
-  type RecordNative,
   Refusal,
   type RoomError,
   Runtime,
@@ -57,6 +56,7 @@ import {
   timeoutFail,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
+import { NativeIds } from "../../store.ts";
 import { cliIn, describe, files } from "../process.ts";
 
 /**
@@ -67,19 +67,11 @@ export const BoatSettings = Schema.Struct({
   apiKey: Schema.RedactedFromValue(Schema.String.check(Schema.isNonEmpty())),
 });
 
-export type Boat = typeof BoatSettings.Type;
-
-export interface BoatHost extends HostSettings {
-  readonly runtime: "boat";
-  readonly boat: Boat;
-}
-
 export interface Settings {
   readonly apiKey: Redacted.Redacted<string>;
   readonly url: string;
   readonly hostId: string;
   readonly stateDir: string;
-  readonly recordNative: RecordNative;
 }
 
 const apiVersion = "v1";
@@ -236,10 +228,14 @@ export const make = (
 ): Effect.Effect<
   Interface,
   HostError,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | HttpClient.HttpClient
+  | ChildProcessSpawner.ChildProcessSpawner
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+  | NativeIds
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const nativeIds = yield* NativeIds;
     const secret = Redacted.value(settings.apiKey);
 
     const scrub = (text: string) => (secret === "" ? text : text.replaceAll(secret, "<redacted>"));
@@ -556,7 +552,7 @@ export const make = (
      */
     const made = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
-        yield* settings.recordNative(machine.name, machine.instance, id);
+        yield* nativeIds.recordNative(machine.name, machine.instance, id);
         yield* running(machine, id, true);
         yield* api
           .rename(id, machine.id)
@@ -852,12 +848,14 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<BoatHost, "id" | "stateDir" | "boat">,
-  recordNative: RecordNative,
+  config: Pick<HostSettings, "id" | "stateDir"> & { readonly boat: typeof BoatSettings.Type },
 ): Layer.Layer<
   Runtime,
   HostError,
-  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | HttpClient.HttpClient
+  | ChildProcessSpawner.ChildProcessSpawner
+  | FileSystem.FileSystem
+  | HttpClient.HttpClient
+  | NativeIds
 > =>
   Layer.effect(
     Runtime,
@@ -866,6 +864,5 @@ export const layer = (
       url: baseUrl,
       hostId: config.id,
       stateDir: config.stateDir,
-      recordNative,
     }),
   );

@@ -110,13 +110,14 @@ processes, each with its own ID, state dir and port.
 - `bases` maps the names clients ask for to images. Hosts that offer the same
   image should use the same name: placement matches on it.
 - Runtime settings, one block named after the runtime:
-  - `smolvm: {prefix, publishAddress?, ramBudgetMib?}`; `ramBudgetMib`
-    defaults to physical RAM minus 2 GiB;
-  - `tart: {binary, publishAddress?}`, `binary` being the `tart` executable of
-    a versioned install, such as `/opt/tart/2.40.1/tart.app/Contents/MacOS/tart`;
+  - `smolvm: {prefix, ramBudgetMib?}`; `ramBudgetMib` defaults to physical
+    RAM minus 2 GiB;
+  - `tart: {binary}`, `binary` being the `tart` executable of a versioned
+    install, such as `/opt/tart/2.40.1/tart.app/Contents/MacOS/tart`;
   - `boat: {apiKey}`.
 
-  `publishAddress` defaults to `listen.address`. Unknown keys are refused.
+  smolvm and Tart publish machines' ports on `listen.address`. Unknown keys
+  are refused.
 
 ```sh
 clankerbox host --config /etc/clankerbox/linux.json
@@ -721,8 +722,9 @@ started. Neither is retryable.
   runs.
 - **One row per machine and per checkpoint:** spec, `instance`, `createdAt`,
   port and `action`; a machine's also has its host key, `made`, and `native`,
-  the runtime's own ID for it, such as boat's sandbox ID. No operation log, no
-  setup script.
+  the runtime's own ID for it, such as boat's sandbox ID, which the runtime
+  records as soon as it has one through the `NativeIds` service, the only part
+  of the store a runtime gets. No operation log, no setup script.
 - **Claims** are single transactions: `hold` an existing row or `insert` a new
   one; a held row is `running`, so a second action on it is
   `Conflict{kind: busy}`. Fork and capture hold the source, then insert the new
@@ -1230,10 +1232,11 @@ These practices are in force with the layout, and each is checked where it can b
   above. Which package may import which is each `package.json`'s
   dependencies: pnpm resolves no other.
 - **A runtime is removable.** Removing boat is its `platform/` folder, its arm
-  in `composition/runtimes.ts`, its config section, the SDK's `Runtime`
-  literal and its tests. What stays is the vocabulary it brought: its limits
-  in the SDK's `Limit` and their labels in the CLI, and the core's
-  `recordNative`, which no other runtime uses.
+  in `composition/runtimes.ts` and its config section in
+  `composition/config.ts`, the SDK's `Runtime` literal and its tests. What
+  stays is the vocabulary it brought: its limits in the SDK's `Limit` and
+  their labels in the CLI, and the machine row's `native` with the
+  `NativeIds` service, which no other runtime uses.
 
 Lifecycles are not modelled as state machines: an action's claim is a SQLite
 transaction, and its states are the `ActionRecord` a row keeps.

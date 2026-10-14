@@ -442,7 +442,7 @@ const stateDirIn = (dir: string) =>
     return stateDir;
   });
 
-const settingsOf = (stateDir: string): Omit<Settings, "recordNative"> => ({
+const settingsOf = (stateDir: string): Settings => ({
   apiKey: Redacted.make(apiKey),
   url: "https://boat.test/api/v1",
   hostId: "boat",
@@ -464,7 +464,8 @@ const rigOn = (boat = fakeBoat()) =>
     const guest = fakeGuest();
     const store = yield* Sqlite.open({ stateDir, id: "boat", runtime: "boat" });
 
-    const runtime = yield* make({ ...settingsOf(stateDir), recordNative: store.recordNative }).pipe(
+    const runtime = yield* make(settingsOf(stateDir)).pipe(
+      Effect.provideService(Store.NativeIds, store),
       Effect.provide(Layer.merge(guest.spawner.layer, boat.layer)),
     );
 
@@ -2148,9 +2149,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       };
 
       const context = yield* Layer.build(
-        servicesLayer(config, (recordNative) =>
-          Layer.effect(Runtime, make({ ...settingsOf(stateDir), recordNative })),
-        ).pipe(
+        servicesLayer(config, Layer.effect(Runtime, make(settingsOf(stateDir)))).pipe(
           Layer.provideMerge(Logger.layer([])),
           Layer.provide(Layer.merge(guest.spawner.layer, boat.layer)),
         ),

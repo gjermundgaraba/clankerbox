@@ -1,4 +1,3 @@
-import { totalmem } from "node:os";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { inspect } from "node:util";
@@ -17,7 +16,7 @@ const config = {
   listen: { address: "100.95.240.37", port: 8484 },
   stateDir: "state",
   bases: { ubuntu: image },
-  smolvm: { prefix: "/opt/smolvm/1.27.3", publishAddress: "100.95.240.37" },
+  smolvm: { prefix: "/opt/smolvm/1.27.3" },
 };
 
 const load = (contents: Schema.Json) =>
@@ -31,7 +30,7 @@ const load = (contents: Schema.Json) =>
 
 layer(NodeServices.layer)((it) => {
   it.effect(
-    "a host config resolves its state dir against its own directory and defaults the RAM budget and machine ports",
+    "a host config resolves its state dir against its own directory and defaults the machine ports",
     () =>
       Effect.gen(function* () {
         const { file, loaded } = yield* load(config);
@@ -44,31 +43,9 @@ layer(NodeServices.layer)((it) => {
           stateDir: join(file, "..", "state"),
           bases: new Map([["ubuntu", image]]),
           machinePorts: { first: 10_000, last: 19_999 },
-          smolvm: {
-            prefix: "/opt/smolvm/1.27.3",
-            publishAddress: "100.95.240.37",
-            ramBudgetMib: Math.floor(totalmem() / 1024 / 1024) - 2048,
-          },
+          smolvm: { prefix: "/opt/smolvm/1.27.3" },
         });
       }),
-  );
-
-  it.effect("the publish address defaults to the listen address, and a set one is kept", () =>
-    Effect.gen(function* () {
-      const defaulted = yield* load({ ...config, smolvm: { prefix: config.smolvm.prefix } });
-
-      const set = yield* load({
-        ...config,
-        smolvm: { ...config.smolvm, publishAddress: "100.100.1.2" },
-      });
-
-      expect(yield* defaulted.loaded).toMatchObject({
-        smolvm: { publishAddress: "100.95.240.37" },
-      });
-      expect(yield* set.loaded).toMatchObject({
-        smolvm: { publishAddress: "100.100.1.2" },
-      });
-    }),
   );
 
   it.effect("a set RAM budget is kept, even above physical RAM", () =>
@@ -93,42 +70,27 @@ layer(NodeServices.layer)((it) => {
     tart: { binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart" },
   };
 
-  it.effect(
-    "a Tart host config names its tart binary, and its publish address defaults to the listen address",
-    () =>
-      Effect.gen(function* () {
-        const { file, loaded } = yield* load(tart);
+  it.effect("a Tart host config names its tart binary", () =>
+    Effect.gen(function* () {
+      const { file, loaded } = yield* load(tart);
 
-        expect(yield* loaded).toEqual({
-          id: "mac",
-          runtime: "tart",
-          listen: { address: "100.122.69.11", port: 8484 },
-          stateDir: join(file, "..", "state"),
-          bases: new Map([["tahoe", "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3"]]),
-          machinePorts: { first: 10_000, last: 19_999 },
-          tart: {
-            binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart",
-            publishAddress: "100.122.69.11",
-          },
-        });
-
-        const published = yield* load({
-          ...tart,
-          tart: { ...tart.tart, publishAddress: "127.0.0.1" },
-        });
-
-        expect(yield* published.loaded).toMatchObject({
-          tart: { publishAddress: "127.0.0.1" },
-        });
-      }),
+      expect(yield* loaded).toEqual({
+        id: "mac",
+        runtime: "tart",
+        listen: { address: "100.122.69.11", port: 8484 },
+        stateDir: join(file, "..", "state"),
+        bases: new Map([["tahoe", "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3"]]),
+        machinePorts: { first: 10_000, last: 19_999 },
+        tart: { binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart" },
+      });
+    }),
   );
 
-  it.effect("a Tart host config takes only Tart's settings, on a tailnet or loopback address", () =>
+  it.effect("a Tart host config takes only Tart's settings", () =>
     Effect.gen(function* () {
       for (const contents of [
         { ...tart, smolvm: config.smolvm },
         { ...tart, tart: { ...tart.tart, ramBudgetMib: 4096 } },
-        { ...tart, tart: { ...tart.tart, publishAddress: "0.0.0.0" } },
         { ...tart, tart: {} },
       ]) {
         const { loaded } = yield* load(contents);
@@ -193,7 +155,7 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
-  it.effect("a host listens and publishes only on a tailnet or loopback address", () =>
+  it.effect("a host listens only on a tailnet or loopback address", () =>
     Effect.gen(function* () {
       for (const address of ["127.0.0.1", "127.0.0.2", "::1", "100.64.0.1", "fd7a:115c:a1e0::5"]) {
         const { loaded } = yield* load({ ...config, listen: { address, port: 8484 } });
@@ -211,19 +173,11 @@ layer(NodeServices.layer)((it) => {
         "linux.tailnet",
         "100.128.0.1",
       ]) {
-        const listening = yield* load({ ...config, listen: { address, port: 8484 } });
+        const { loaded } = yield* load({ ...config, listen: { address, port: 8484 } });
+        const error = yield* Effect.flip(loaded);
 
-        const publishing = yield* load({
-          ...config,
-          smolvm: { ...config.smolvm, publishAddress: address },
-        });
-
-        for (const { loaded } of [listening, publishing]) {
-          const error = yield* Effect.flip(loaded);
-
-          expect(error._tag, address).toBe("Invalid");
-          expect(error.message, address).toContain("tailnet address");
-        }
+        expect(error._tag, address).toBe("Invalid");
+        expect(error.message, address).toContain("tailnet address");
       }
     }),
   );

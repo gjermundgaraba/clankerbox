@@ -71,7 +71,7 @@ export const startHost = (
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 
     const context = yield* Layer.buildWithScope(
-      hostLayer(hostConfig(stateDir, options?.ports), () => fake.layer, loopbackServer()).pipe(
+      hostLayer(hostConfig(stateDir, options?.ports), fake.layer, loopbackServer()).pipe(
         // Failed actions log no warnings here: the tests read their errors.
         Layer.provideMerge(Logger.layer([])),
         Layer.provide(NodeServices.layer),

@@ -43,13 +43,6 @@ export type MachineState = Machine["state"];
 
 export type CheckpointKind = Checkpoint["kind"];
 
-/** The one write to the host's state a runtime makes. */
-export type RecordNative = (
-  name: string,
-  instance: string,
-  native: string,
-) => Effect.Effect<void, Internal>;
-
 export interface CheckpointRef {
   readonly id: string;
   readonly name: string;

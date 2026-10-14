@@ -51,7 +51,7 @@ citation moved to the new tag.
   (`environment` in `smolvm.ts`): a fixed `PATH` (`searchPath`), `HOME` and
   `SMOLVM_DATA_DIR` at `<stateDir>/smolvm` (one inventory per host),
   `SMOLVM_AGENT_ROOTFS` in the prefix, `SMOLVM_PUBLISH_ADDR` at the host's
-  `publishAddress`, `SMOLVM_EGRESS_FLOOR=strict`, `SMOLVM_RESTORE_TMPFS=0`
+  `listen.address`, `SMOLVM_EGRESS_FLOOR=strict`, `SMOLVM_RESTORE_TMPFS=0`
   (otherwise every root restore leaves `/dev/shm/smolvm-restore`),
   `SMOLVM_VM_USE_SCOPE=1` and `NO_COLOR=1`; never `SMOLVM_BOOT_BINARY`. The
   claims below give each variable's reason; re-check the set as a whole, and
@@ -267,7 +267,7 @@ citation moved to the new tag.
 - `-p` binds loopback, or `SMOLVM_PUBLISH_ADDR`, which the VMM reads (`bind`,
   S@1.27.3:crates/smolvm-network/src/tcp_listeners.rs); it listened on
   that address and `[::1]`. Ours: `SMOLVM_PUBLISH_ADDR` is the host's
-  `publishAddress`.
+  `listen.address`.
 - Setting `SMOLVM_PUBLISH_ADDR` makes the egress floor strict by default; the
   values are `strict`, `metadata` and `off` (`floor_mode`,
   S@1.27.3:crates/smolvm-network/src/egress.rs). Strict refuses loopback,
