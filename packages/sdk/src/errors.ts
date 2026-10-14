@@ -35,11 +35,70 @@ export class Conflict extends Schema.TaggedError<Conflict>()(
   { httpApiStatus: 409 },
 ) {}
 
-/** The resource's state doesn't allow the action, or no host offers the requested base. */
-export class Precondition extends Schema.TaggedError<Precondition>()(
-  "Precondition",
-  { message: Schema.String, ...located },
+/** No host offers `base`: the host a create names, or any in the client's list. */
+export class NotOffered extends Schema.TaggedError<NotOffered>()(
+  "NotOffered",
+  { message: Schema.String, ...located, base: Schema.String },
   { httpApiStatus: 412 },
+) {}
+
+/** `machine`'s create, fork or restore failed before it was made: it can only be deleted. */
+export class NotMade extends Schema.TaggedError<NotMade>()(
+  "NotMade",
+  { message: Schema.String, ...located, machine: Schema.String },
+  { httpApiStatus: 412 },
+) {}
+
+/** The runtime no longer has `machine`: it can only be deleted. */
+export class Missing extends Schema.TaggedError<Missing>()(
+  "Missing",
+  { message: Schema.String, ...located, machine: Schema.String },
+  { httpApiStatus: 412 },
+) {}
+
+/** `checkpoint`'s capture failed, so nothing restores from it: it can only be deleted. */
+export class NotReady extends Schema.TaggedError<NotReady>()(
+  "NotReady",
+  { message: Schema.String, ...located, checkpoint: Schema.String },
+  { httpApiStatus: 412 },
+) {}
+
+/** `checkpoint` holds RAM state saved under another runtime pin than the one the host runs. */
+export class PinMismatch extends Schema.TaggedError<PinMismatch>()(
+  "PinMismatch",
+  { message: Schema.String, ...located, checkpoint: Schema.String },
+  { httpApiStatus: 412 },
+) {}
+
+/** `machine` is in `state`, which the action doesn't act from. */
+export class WrongState extends Schema.TaggedError<WrongState>()(
+  "WrongState",
+  { message: Schema.String, ...located, machine: Schema.String, state: Schema.String },
+  { httpApiStatus: 412 },
+) {}
+
+/** The runtime can't give the requested sizes, such as a disk below the base's. */
+export class Unsizable extends Schema.TaggedError<Unsizable>()(
+  "Unsizable",
+  { message: Schema.String, ...located },
+  { httpApiStatus: 422 },
+) {}
+
+/**
+ * A guest script exited non-zero or ran past its timeout; the message says which, with its
+ * output's tail. A failed `setup` leaves the machine unmade, a failed `preparation` made.
+ */
+export class ScriptFailed extends Schema.TaggedError<ScriptFailed>()(
+  "ScriptFailed",
+  { message: Schema.String, ...located, script: Schema.Literals(["setup", "preparation"]) },
+  { httpApiStatus: 422 },
+) {}
+
+/** The provider under the runtime refused the call for good, such as for its plan or API key. */
+export class Refused extends Schema.TaggedError<Refused>()(
+  "Refused",
+  { message: Schema.String, ...located },
+  { httpApiStatus: 403 },
 ) {}
 
 /** The host has no room now; room can free up, so a later call may succeed. */
@@ -66,19 +125,30 @@ export class Internal extends Schema.TaggedError<Internal>()(
 ) {}
 
 /** What a host may answer with; each action declares its own share. */
-export const hostErrors = [Invalid, NotFound, Conflict, Precondition, Capacity, Internal] as const;
+export const hostErrors = [
+  Invalid,
+  NotFound,
+  Conflict,
+  NotOffered,
+  NotMade,
+  Missing,
+  NotReady,
+  PinMismatch,
+  WrongState,
+  Unsizable,
+  ScriptFailed,
+  Refused,
+  Capacity,
+  Internal,
+] as const;
 
-export type HostError = InstanceType<(typeof hostErrors)[number]>;
+export const HostError = Schema.Union(hostErrors);
+
+export type HostError = typeof HostError.Type;
 
 export const ClankerboxError = Schema.Union([...hostErrors, Unavailable]);
 
 export type ClankerboxError = typeof ClankerboxError.Type;
-
-export const HostErrorTag = Schema.Literals(
-  hostErrors.map((error) => error.fields._tag.schema.literal),
-);
-
-export type HostErrorTag = typeof HostErrorTag.Type;
 
 /**
  * Whether the same call may succeed later: a busy resource or a full host may free up, and a read
@@ -90,7 +160,15 @@ export const retryable = (error: ClankerboxError): boolean =>
       Invalid: () => false,
       NotFound: () => false,
       Conflict: ({ kind }) => kind === "busy",
-      Precondition: () => false,
+      NotOffered: () => false,
+      NotMade: () => false,
+      Missing: () => false,
+      NotReady: () => false,
+      PinMismatch: () => false,
+      WrongState: () => false,
+      Unsizable: () => false,
+      ScriptFailed: () => false,
+      Refused: () => false,
       Capacity: () => true,
       Unavailable: ({ readOnly }) => readOnly,
       Internal: () => false,

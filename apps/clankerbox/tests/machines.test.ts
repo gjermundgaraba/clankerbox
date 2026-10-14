@@ -1,3 +1,4 @@
+import { ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { join } from "node:path";
 import { DateTime, Effect, Schema } from "effect";
@@ -59,7 +60,10 @@ layer(NodeServices.layer)((it) => {
     action: {
       name: "createMachine",
       status: "failed",
-      error: { tag: "Precondition", message: "setup exited 3" },
+      error: new ScriptFailed({
+        message: "setup exited 3",
+        script: "setup",
+      }),
     },
   });
 
@@ -126,7 +130,7 @@ layer(NodeServices.layer)((it) => {
       expect(yield* fields("linux_other")).toEqual(
         expect.arrayContaining([
           ["STATE", "running (unmade)"],
-          ["ACTION", "createMachine failed: Precondition"],
+          ["ACTION", "createMachine failed: ScriptFailed"],
           ["SSH", "-"],
           ["ERROR", "setup exited 3"],
           ["HOST_KEY", "-"],

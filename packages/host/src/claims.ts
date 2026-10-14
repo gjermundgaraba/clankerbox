@@ -5,11 +5,11 @@ import {
   Internal,
   type Invalid,
   type NotFound,
-  Precondition,
+  NotMade,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Cause, Effect, Fiber, Option, Ref } from "effect";
 import { idOn, type Kind, notFoundOn } from "./ids.ts";
-import { type CheckpointRef, type MachineRef, Refusal, type RoomError } from "./runtime.ts";
+import { type CheckpointRef, type MachineRef, Refusal } from "./runtime.ts";
 import {
   type CheckpointRecord,
   type Claim,
@@ -59,12 +59,13 @@ export const machineRef = (host: string, record: NewMachine): MachineRef => ({
 
 export const madeOn =
   (host: string) =>
-  (record: MachineRecord): Effect.Effect<void, Precondition> =>
+  (record: MachineRecord): Effect.Effect<void, NotMade> =>
     record.made
       ? Effect.void
       : Effect.fail(
-          new Precondition({
+          new NotMade({
             message: `machine ${idOn(host)(record.name)} was never made: its create, fork or restore failed; delete it`,
+            machine: idOn(host)(record.name),
           }),
         );
 
@@ -82,7 +83,7 @@ export const checkpointRef = (
 const failed = (token: Token, error: HostError): ActionRecord => ({
   name: token.action,
   status: "failed",
-  error: { tag: error._tag, message: error.message },
+  error,
 });
 
 /** A defect is recorded as `Internal`, so its rows stay deletable; only the log has its cause. */
@@ -172,12 +173,12 @@ export const claimsOn = (store: StoreInterface) => {
     Effect.tapError(surviving(what, work), (error) => endFailed(token, error));
 
   /** A runtime `Refusal` releases the claim like a failed check. */
-  const refusable = <A, E extends HostError>(
+  const refusable = <A, E extends HostError, R extends HostError>(
     token: Token,
     what: string,
-    work: Effect.Effect<A, E | Refusal>,
-  ): Effect.Effect<A, E | RoomError> =>
-    Effect.catch(surviving(what, work), (error): Effect.Effect<never, E | RoomError> =>
+    work: Effect.Effect<A, E | Refusal<R>>,
+  ): Effect.Effect<A, E | R | Internal> =>
+    Effect.catch(surviving(what, work), (error): Effect.Effect<never, E | R | Internal> =>
       error instanceof Refusal
         ? Effect.andThen(release(token, error.error), Effect.fail(error.error))
         : Effect.andThen(endFailed(token, error), Effect.fail(error)),

@@ -1,33 +1,25 @@
 import {
   type Checkpoint,
+  type Declared,
   formatId,
   type HostError,
   type Internal,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Layer, type Scope } from "effect";
-import {
-  type ActionError,
-  checkpointRef,
-  claimsOn,
-  detacher,
-  machineRef,
-  madeOn,
-  type ReadError,
-  rowsOn,
-} from "./claims.ts";
+import { checkpointRef, claimsOn, detacher, machineRef, madeOn, rowsOn } from "./claims.ts";
 import type { HostSettings } from "./settings.ts";
 import { idOn, nameOn, newInstance } from "./ids.ts";
-import { type RoomError, Runtime, type RuntimeError } from "./runtime.ts";
+import { Runtime } from "./runtime.ts";
 import { type CheckpointRecord, type NewCheckpoint, Store } from "./store.ts";
 
 export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Checkpoint>, Internal>;
-  readonly get: (id: string) => Effect.Effect<Checkpoint, ReadError>;
+  readonly get: (id: string) => Effect.Effect<Checkpoint, Declared<"getCheckpoint">>;
   readonly capture: (
     machine: string,
     name: string,
-  ) => Effect.Effect<Checkpoint, ActionError<RoomError>>;
-  readonly delete: (id: string) => Effect.Effect<void, ActionError<RuntimeError>>;
+  ) => Effect.Effect<Checkpoint, Declared<"captureCheckpoint">>;
+  readonly delete: (id: string) => Effect.Effect<void, Declared<"deleteCheckpoint">>;
 }
 
 export class Checkpoints extends Context.Service<Checkpoints, Interface>()(

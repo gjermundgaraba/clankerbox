@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
+import { Refused } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Exit, Fiber, Layer, Option, Redacted, Schema } from "effect";
 import {
   FetchHttpClient,
@@ -191,7 +192,7 @@ it.effect("the host picks the smallest of boat's four types that covers a machin
       [2, 1024, 252, "2 vCPU, 1G of RAM and 252G of disk"],
     ] as const) {
       expect(yield* pick(cpu, ramMib, diskGib)).toBe(
-        `Precondition: no boat machine type has ${asked}; the largest, xlarge, has 16 vCPU, 32G of RAM and 251G of disk`,
+        `Unsizable: no boat machine type has ${asked}; the largest, xlarge, has 16 vCPU, 32G of RAM and 251G of disk`,
       );
     }
   }),
@@ -336,7 +337,7 @@ it.effect(
 );
 
 it.effect(
-  "no refusal after an unclear attempt is one, Capacity or a plan's Precondition: that attempt may have made a sandbox",
+  "no refusal after an unclear attempt is one, Capacity or a plan's Refused: that attempt may have made a sandbox",
   () =>
     Effect.gen(function* () {
       const refusals = [
@@ -484,10 +485,10 @@ it.effect(
       }
 
       // Each 429 made nothing, so a refusal after them is boat's word: Capacity, or a plan's
-      // Precondition, as on a first attempt.
+      // Refused, as on a first attempt.
       for (const [refused, tag] of [
         [refusal(429, "limit_reached", "2 active"), "Capacity"],
-        [refusal(403, "trial_machine_class_not_allowed", "no large"), "Precondition"],
+        [refusal(403, "trial_machine_class_not_allowed", "no large"), "Refused"],
       ] as const) {
         const boat = fakeBoat((_sent, index) =>
           index === 0 ? refusal(429, "rate_limited") : refused,
@@ -662,7 +663,7 @@ it.effect("a 4xx is a definite answer whatever its body, and is never repeated",
 );
 
 it.effect(
-  "boat's refusals that leave nothing behind are Capacity, or Precondition for a 403 with boat's code, answered at once",
+  "boat's refusals that leave nothing behind are Capacity, or Refused for a 403 with boat's code, answered at once",
   () =>
     Effect.gen(function* () {
       const refusals: ReadonlyArray<readonly [number, string]> = [
@@ -684,7 +685,7 @@ it.effect(
         ]);
       }
 
-      // A 403 with boat's code, whichever it is, won't come with waiting: Precondition.
+      // A 403 with boat's code, whichever it is, won't come with waiting: Refused, naming the code.
       const keyBoat = fakeBoat(() =>
         refusal(403, "api_key_action_forbidden", "this API key may not create sandboxes"),
       );
@@ -692,10 +693,12 @@ it.effect(
       const keyError = yield* run(keyBoat, (api) => Effect.flip(api.create("key-1", "small")));
 
       expect(keyBoat.sent.map(json)).toEqual([{ type: "small", noEnv: true, ttlSeconds: 7200 }]);
-      expect([keyError._tag, keyError.message]).toEqual([
-        "Precondition",
-        "boat POST /sandboxes answered 403 api_key_action_forbidden: this API key may not create sandboxes (req_0123)",
-      ]);
+      expect(keyError).toEqual(
+        new Refused({
+          message:
+            "boat POST /sandboxes answered 403 api_key_action_forbidden: this API key may not create sandboxes (req_0123)",
+        }),
+      );
 
       const forkBoat = fakeBoat(() => refusal(429, "limit_reached"));
 

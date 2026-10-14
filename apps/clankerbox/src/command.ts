@@ -20,6 +20,7 @@ import {
   Schema,
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
+import { CannotStart } from "@clankerbox/host";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { type LoadedConfig, loadConfig } from "./config.ts";
@@ -39,8 +40,8 @@ export class SpawnFailed extends Schema.TaggedError<SpawnFailed>()("SpawnFailed"
   program: Schema.String,
 }) {}
 
-/** Everything the CLI reports: a host's errors, the client's, and its own. */
-const failures = [...hostErrors, Unavailable, SpawnFailed] as const;
+/** Everything the CLI reports: a host's errors, the client's, its own, and a host that can't start. */
+const failures = [...hostErrors, Unavailable, SpawnFailed, CannotStart] as const;
 
 const Failure = Schema.Union(failures);
 
@@ -64,7 +65,7 @@ const errorDocument = (error: Failure) => {
     ...fields,
     tag: _tag,
     retryable: Match.value(error).pipe(
-      Match.tag("SpawnFailed", () => false),
+      Match.tag("SpawnFailed", "CannotStart", () => false),
       Match.orElse(retryable),
     ),
   };

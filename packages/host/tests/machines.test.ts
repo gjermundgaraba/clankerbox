@@ -1,7 +1,15 @@
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Capacity, Conflict, type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Capacity,
+  Conflict,
+  type HostError,
+  Internal,
+  NotMade,
+  NotOffered,
+  ScriptFailed,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Exit, Fiber, Option, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { layer } from "@effect/vitest";
@@ -284,11 +292,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(row?.action).toEqual({
           name: "startMachine",
           status: "failed",
-          error: {
-            tag: "Internal",
+          error: new Internal({
             message:
               "startMachine linux_dev: the smolvm runtime's admission check didn't answer within 9s",
-          },
+          }),
         });
         expect(linux.fake.calls).toEqual(["admit linux_dev"]);
       }),
@@ -311,10 +318,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(row?.action).toEqual({
           name: "startMachine",
           status: "failed",
-          error: {
-            tag: "Internal",
-            message: "startMachine died; the host log has why",
-          },
+          error: new Internal({ message: "startMachine died; the host log has why" }),
         });
       }),
   );
@@ -414,7 +418,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect("a base the host doesn't offer is Precondition, before anything is written", () =>
+  it.effect("a base the host doesn't offer is NotOffered, before anything is written", () =>
     Effect.gen(function* () {
       const linux = yield* host();
 
@@ -423,7 +427,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         linux.machines.create(request("dev", { base: "fedora" })),
       );
 
-      expect(error._tag).toBe("Precondition");
+      expect(error).toBeInstanceOf(NotOffered);
+      expect(error).toMatchObject({ base: "fedora" });
       expect(error.message).toContain("offers ubuntu");
       expect(yield* rows(linux)).toEqual([]);
     }),
@@ -458,7 +463,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(row?.action).toEqual({
         name: "startMachine",
         status: "failed",
-        error: { tag: "Capacity", message: "no room" },
+        error: new Capacity({ message: "no room" }),
       });
     }),
   );
@@ -496,7 +501,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(got.action).toEqual({
           name: "createMachine",
           status: "failed",
-          error: { tag: "Internal", message: "krun EINVAL" },
+          error: new Internal({ message: "krun EINVAL" }),
         });
         expect(linux.fake.calls).toContain("delete linux_dev");
         expect(yield* rows(linux)).toEqual([]);
@@ -571,28 +576,22 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect(
-    "start of a machine the runtime no longer has is Precondition, which the row records",
-    () =>
-      Effect.gen(function* () {
-        const linux = yield* host();
+  it.effect("start of a machine the runtime no longer has is Missing, which the row records", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
 
-        yield* linux.run(linux.machines.create(request("dev")));
-        linux.fake.machines.clear();
+      yield* linux.run(linux.machines.create(request("dev")));
+      linux.fake.machines.clear();
 
-        const error = yield* failure(linux, linux.machines.start("linux_dev"));
-        const [row] = yield* rows(linux);
+      const error = yield* failure(linux, linux.machines.start("linux_dev"));
+      const [row] = yield* rows(linux);
 
-        expect([error._tag, error.message]).toEqual([
-          "Precondition",
-          "machine linux_dev is missing from the smolvm runtime; delete it",
-        ]);
-        expect(row?.action).toEqual({
-          name: "startMachine",
-          status: "failed",
-          error: { tag: "Precondition", message: error.message },
-        });
-      }),
+      expect([error._tag, error.message]).toEqual([
+        "Missing",
+        "machine linux_dev is missing from the smolvm runtime; delete it",
+      ]);
+      expect(row?.action).toEqual({ name: "startMachine", status: "failed", error });
+    }),
   );
 
   it.effect("a second action on a claimed machine is Conflict{busy}", () =>
@@ -672,7 +671,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(got.action).toEqual({
         name: "createMachine",
         status: "failed",
-        error: { tag: "Internal", message: "the host stopped during createMachine" },
+        error: new Internal({ message: "the host stopped during createMachine" }),
       });
       expect(linux.fake.calls.filter((call) => call === "startup")).toHaveLength(2);
     }),
@@ -699,7 +698,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(got.action).toEqual({
           name: "startMachine",
           status: "failed",
-          error: { tag: "Internal", message: "the host stopped during startMachine" },
+          error: new Internal({ message: "the host stopped during startMachine" }),
         });
       }),
   );
@@ -707,7 +706,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   const stoppedDuringCreate = {
     name: "createMachine",
     status: "failed",
-    error: { tag: "Internal", message: "the host stopped during createMachine" },
+    error: new Internal({ message: "the host stopped during createMachine" }),
   } as const;
 
   it.effect(
@@ -719,7 +718,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const unmade =
           "machine linux_dev was never made: its create, fork or restore failed; delete it";
 
-        const neverMade = ["Precondition", unmade];
+        const neverMade = ["NotMade", unmade];
 
         // A setup that fails after the runtime's create leaves its VM running.
         const error = yield* failure(
@@ -755,14 +754,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* linux.run(linux.machines.delete("linux_dev"));
 
-        expect(error._tag).toBe("Precondition");
+        expect(error._tag).toBe("ScriptFailed");
         expect([...refused, ...refusedStopped].map(({ _tag, message }) => [_tag, message])).toEqual(
           Array.from({ length: 6 }, () => neverMade),
         );
         expect(got).toMatchObject({
           state: "running",
           made: false,
-          action: { status: "failed", error: { tag: "Precondition", message: unmade } },
+          action: {
+            status: "failed",
+            error: new NotMade({ message: unmade, machine: "linux_dev" }),
+          },
         });
         expect(stopped).toMatchObject({
           state: "stopped",
@@ -808,7 +810,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           action: { name: "stopMachine", status: "done" },
         });
         expect([start._tag, start.message]).toEqual([
-          "Precondition",
+          "NotMade",
           "machine linux_dev was never made: its create, fork or restore failed; delete it",
         ]);
         expect(linux.fake.calls).toEqual(["stop linux_dev", "delete linux_dev"]);
@@ -909,7 +911,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const got = yield* linux.run(linux.machines.get("linux_dev"));
 
-      expect(error._tag).toBe("Precondition");
+      expect(error).toBeInstanceOf(ScriptFailed);
+      expect(error).toMatchObject({ script: "setup" });
       expect(error.message).toContain("setup exited 3");
       expect(error.message).toContain("line 29\nbroke");
       expect(error.message).not.toContain("line 10\n");
@@ -917,7 +920,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(got.action).toEqual({
         name: "createMachine",
         status: "failed",
-        error: { tag: "Precondition", message: error.message },
+        error,
       });
     }),
   );
@@ -969,7 +972,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       // /var/tmp.
       yield* remove(file);
 
-      expect(error._tag).toBe("Precondition");
+      expect(error).toBeInstanceOf(ScriptFailed);
+      expect(error).toMatchObject({ script: "setup" });
       expect(error.message).toContain("setup ran past its 1s timeout");
       expect(error.message.includes(marker)).toBe(false);
     }),

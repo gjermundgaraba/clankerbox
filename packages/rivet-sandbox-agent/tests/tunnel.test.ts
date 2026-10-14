@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal, WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { machine } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { afterEach, expect, test } from "vite-plus/test";
 import { LocalTunnelError } from "../src/tunnel.ts";
@@ -58,7 +58,7 @@ test("ensureServer opens a tunnel that ended on the same port, and starts the ma
   expect(third?.args).toContain("Port=20022");
 });
 
-test("a tunnel whose ssh fails says what ssh printed or why it couldn't run, and a machine without an endpoint is Precondition", async () => {
+test("a tunnel whose ssh fails says what ssh printed or why it couldn't run, and a machine without an endpoint is WrongState", async () => {
   const { dir, sandbox } = await setup({
     machines: [reachable("linux_kept"), machine("linux_stopped", { state: "stopped", hostKey })],
   });
@@ -82,9 +82,11 @@ test("a tunnel whose ssh fails says what ssh printed or why it couldn't run, and
   );
 
   await expect(sandbox.getUrl("linux_stopped")).rejects.toEqual(
-    new Precondition({
+    new WrongState({
       message:
         "linux_stopped has no SSH endpoint (stopped, createMachine done): see clankerbox get linux_stopped",
+      machine: "linux_stopped",
+      state: "stopped",
     }),
   );
 });

@@ -144,7 +144,7 @@ layer(NodeServices.layer)((it) => {
       });
 
       expect(code).toBe(1);
-      expect(stderr).toContain("clankerbox: Precondition: linux_dev has no SSH endpoint");
+      expect(stderr).toContain("clankerbox: WrongState: linux_dev has no SSH endpoint");
       expect(ssh.spawned).toEqual([]);
     }),
   );

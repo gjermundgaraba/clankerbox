@@ -2,7 +2,7 @@
  * Nothing here logs a script: setup can carry secrets, and preparation's seed is fresh
  * randomness. Errors carry a script's output, never its text.
  */
-import { Precondition, type Setup } from "@gjermundgaraba/clankerbox-sdk";
+import { ScriptFailed, type Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Stream } from "effect";
 import {
   type Command,
@@ -39,11 +39,11 @@ const outputTail = () => {
 
 const runInGuest = (
   runtime: Runtime,
-  what: string,
+  script: ScriptFailed["script"],
   machine: MachineRef,
   command: Command,
   timeout: Duration.Duration,
-): Effect.Effect<string, RuntimeError> =>
+): Effect.Effect<string, RuntimeError | ScriptFailed> =>
   Effect.gen(function* () {
     const tail = outputTail();
 
@@ -61,8 +61,9 @@ const runInGuest = (
       timeoutFail(
         timeout,
         () =>
-          new Precondition({
-            message: `${what} ran past its ${Duration.format(timeout)} timeout; its last output:\n${tail.text()}`,
+          new ScriptFailed({
+            message: `${script} ran past its ${Duration.format(timeout)} timeout; its last output:\n${tail.text()}`,
+            script,
           }),
       ),
     );
@@ -70,8 +71,9 @@ const runInGuest = (
     const output = tail.text();
 
     if (code !== 0) {
-      return yield* new Precondition({
-        message: `${what} exited ${code}; its last output:\n${output}`,
+      return yield* new ScriptFailed({
+        message: `${script} exited ${code}; its last output:\n${output}`,
+        script,
       });
     }
 
@@ -98,7 +100,7 @@ export const runSetup = (
   runtime: Runtime,
   machine: MachineRef,
   setup: Setup,
-): Effect.Effect<void, RuntimeError> => {
+): Effect.Effect<void, RuntimeError | ScriptFailed> => {
   const timeout = Duration.seconds(setup.timeoutSeconds ?? defaultSetupTimeoutSeconds);
 
   return Effect.asVoid(
@@ -189,7 +191,7 @@ export const hostKeyIn = (output: string): string | undefined => {
 export const prepare = (
   runtime: Runtime,
   machine: MachineRef,
-): Effect.Effect<string | undefined, RuntimeError> =>
+): Effect.Effect<string | undefined, RuntimeError | ScriptFailed> =>
   runInGuest(
     runtime,
     "preparation",

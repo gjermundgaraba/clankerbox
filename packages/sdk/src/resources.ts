@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { HostErrorTag } from "./errors.ts";
+import { HostError } from "./errors.ts";
 import { HostId, Id } from "./ids.ts";
 
 export const Runtime = Schema.Literals(["smolvm", "tart", "boat"]);
@@ -32,7 +32,7 @@ export const ActionRecord = Schema.Union([
   Schema.Struct({
     name: ActionName,
     status: Schema.Literal("failed"),
-    error: Schema.Struct({ tag: HostErrorTag, message: Schema.String }),
+    error: HostError,
   }),
 ]);
 

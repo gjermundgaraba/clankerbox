@@ -86,7 +86,7 @@ Each: what Tart does, where, and what of ours depends on it.
   and ASIF disks (`resizeRawDisk`, `resizeASIFDisk`,
   T@2.40.1:VMDirectory.swift), and a stacked disk grows only its writable
   overlay (`growWritableOverlay`, DiskImageStack.swift). Ours: `diskGb` rounds
-  `diskGib` up, `shrinkRefusal` matches that text and makes it `Precondition`.
+  `diskGib` up, `shrinkRefusal` matches that text and makes it `Unsizable`.
   The pinned Cirrus base has a 50 GB raw disk.
 - `tart get` opens local VMs only (`VMStorageLocal().open`,
   T@2.40.1:Commands/Get.swift), not an OCI reference, and `tart list` reports no

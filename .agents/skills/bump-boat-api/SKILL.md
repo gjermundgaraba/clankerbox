@@ -108,8 +108,8 @@ Each: what boat does, and what of ours depends on it.
   trial, `large` is 403 `trial_machine_class_not_allowed`; `xlarge` is 403
   `machine_class_plan_required` below the $100 plan. Ours: `machineTypes` and
   `typeFor`/`machineType` (the smallest that covers the request; none is
-  `Precondition`), which also sizes `Boat.capacity`'s `cpu` and `ramMib`;
-  every 403 that carries boat's code is `Precondition` (`refusal`), so an API
+  `Unsizable`), which also sizes `Boat.capacity`'s `cpu` and `ramMib`;
+  every 403 that carries boat's code is `Refused`, its message naming the code, so an API
   key that may not perform an action (`api_key_action_forbidden`, seen on
   `POST /sshkey` and `DELETE`) is one too.
 
@@ -149,7 +149,7 @@ Each: what boat does, and what of ours depends on it.
   under the core's `stateReadWait`); `inProgress` repeated as unclear, and a
   429 too, at least `throttledPause` on, until the `throttledRepeats`th 429,
   so at most three starts; any refusal answering a repeat after
-  an unclear one, a 429 or 503 `Capacity` or a 403 plan `Precondition`, failing
+  an unclear one, a 429 or 503 `Capacity` or a 403 plan `Refused`, failing
   `Internal`. A refusal after only 429s is trusted, as they made nothing.
 
 **Access and exec** (D, O)

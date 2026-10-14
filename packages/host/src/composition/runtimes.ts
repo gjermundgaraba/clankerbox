@@ -7,13 +7,14 @@ import * as Boat from "../platform/boat/boat.ts";
 import * as Smolvm from "../platform/smolvm.ts";
 import * as Tart from "../platform/tart/tart.ts";
 import type { Runtime } from "../runtime.ts";
+import type { CannotStart } from "../startup.ts";
 import type { NativeIds } from "../store.ts";
 
 export const runtimeLayer = (
   config: HostConfig,
 ): Layer.Layer<
   Runtime,
-  HostError,
+  HostError | CannotStart,
   | ChildProcessSpawner.ChildProcessSpawner
   | FileSystem.FileSystem
   | HttpClient.HttpClient

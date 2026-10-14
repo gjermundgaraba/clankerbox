@@ -6,9 +6,9 @@ import {
   ActionStatus,
   Checkpoint,
   Conflict,
+  HostError,
   Internal,
   type NotFound,
-  Precondition,
   Runtime,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -24,6 +24,7 @@ import {
 } from "effect";
 import { idOn, type Kind, notFoundOn } from "../ids.ts";
 import type { HostSettings } from "../settings.ts";
+import { CannotStart } from "../startup.ts";
 import {
   type CheckpointRecord,
   type Interface,
@@ -46,7 +47,7 @@ export const applicationId = 0x63_62_78_68;
 
 /**
  * Entry `i` takes `user_version` from `i` to `i + 1`. Append only; a released entry never
- * changes.
+ * changes, and one added since the last release may be folded into another before it ships.
  */
 export const migrations: ReadonlyArray<string> = [
   `CREATE TABLE machines (
@@ -105,13 +106,39 @@ export const migrations: ReadonlyArray<string> = [
     WHEN 'capture' THEN 'captureCheckpoint'
     WHEN 'delete' THEN 'deleteCheckpoint'
   END`,
+  ["machines", "checkpoints"]
+    .map(
+      (table) => `ALTER TABLE ${table} ADD COLUMN action_error TEXT;
+    UPDATE ${table} SET action_error = CASE action_error_tag
+      WHEN 'Conflict' THEN json_object('_tag', 'Conflict', 'message', action_error_message,
+        'kind', CASE WHEN action_error_message LIKE '% is busy: %' THEN 'busy' ELSE 'exists' END)
+      WHEN 'Precondition' THEN CASE
+        WHEN action_error_message GLOB 'setup exited *'
+          OR action_error_message GLOB 'setup ran past *'
+          THEN json_object('_tag', 'ScriptFailed', 'message', action_error_message, 'script', 'setup')
+        WHEN action_error_message GLOB 'preparation exited *'
+          OR action_error_message GLOB 'preparation ran past *'
+          THEN json_object('_tag', 'ScriptFailed', 'message', action_error_message,
+            'script', 'preparation')
+        WHEN action_error_message GLOB 'machine *''s disk of *G is below its base''s*'
+          THEN json_object('_tag', 'Unsizable', 'message', action_error_message)
+        WHEN action_error_message GLOB 'boat * answered 403 *'
+          THEN json_object('_tag', 'Refused', 'message', action_error_message)
+        ELSE json_object('_tag', 'Internal', 'message', action_error_message)
+      END
+      ELSE json_object('_tag', action_error_tag, 'message', action_error_message)
+    END
+    WHERE action_error_tag IS NOT NULL AND action_error_message IS NOT NULL;
+    ALTER TABLE ${table} DROP COLUMN action_error_tag;
+    ALTER TABLE ${table} DROP COLUMN action_error_message`,
+    )
+    .join(";\n"),
 ];
 
 const actionColumns = {
   action_name: ActionName,
   action_status: ActionStatus,
-  action_error_tag: Schema.NullOr(Schema.String),
-  action_error_message: Schema.NullOr(Schema.String),
+  action_error: Schema.NullOr(Schema.fromJsonString(Schema.toEncoded(HostError))),
 };
 
 const columns = {
@@ -155,14 +182,12 @@ const decodeAction = Schema.decodeUnknownSync(ActionRecord);
 
 const actionOf = (row: typeof ActionColumns.Type): ActionRecord =>
   decodeAction(
-    row.action_error_tag === null || row.action_error_message === null
+    row.action_error === null
       ? { name: row.action_name, status: row.action_status }
-      : {
-          name: row.action_name,
-          status: row.action_status,
-          error: { tag: row.action_error_tag, message: row.action_error_message },
-        },
+      : { name: row.action_name, status: row.action_status, error: row.action_error },
   );
+
+const encodeError = Schema.encodeSync(Schema.fromJsonString(HostError));
 
 const resourceOf = (row: typeof Columns.Type): Resource => ({
   name: row.name,
@@ -266,7 +291,7 @@ const pragma = (db: DatabaseSync, name: string): number => {
  * transaction, so another host process can't even read the database. The OS drops the lock when
  * the process ends, so a crash leaves no stale lock.
  */
-const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, Precondition | Internal> =>
+const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, CannotStart | Internal> =>
   Effect.try({
     try: () => {
       db.exec("PRAGMA locking_mode = EXCLUSIVE");
@@ -275,7 +300,7 @@ const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, Precondit
     },
     catch: (cause) =>
       isSqliteError(cause) && cause.errcode === sqliteBusy
-        ? new Precondition({ message: `another host process holds state dir ${stateDir}` })
+        ? new CannotStart({ message: `another host process holds state dir ${stateDir}` })
         : new Internal({ message: `couldn't lock state dir ${stateDir}: ${describe(cause)}` }),
   });
 
@@ -283,7 +308,7 @@ const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, Precondit
  * A database left empty by a crash during init is initialized; a newer or foreign one is
  * refused.
  */
-const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, Precondition | Internal> =>
+const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, CannotStart | Internal> =>
   Effect.gen(function* () {
     const { id, version, tables } = yield* sql("read its header", () => ({
       id: pragma(db, "application_id"),
@@ -294,11 +319,11 @@ const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, Preconditi
     }));
 
     if (id !== applicationId && (id !== 0 || version !== 0 || tables !== 0)) {
-      return yield* new Precondition({ message: `${file} isn't a clankerbox host database` });
+      return yield* new CannotStart({ message: `${file} isn't a clankerbox host database` });
     }
 
     if (version > migrations.length) {
-      return yield* new Precondition({
+      return yield* new CannotStart({
         message: `${file} is at schema version ${version}, newer than this binary's ${migrations.length}: run a newer clankerbox`,
       });
     }
@@ -332,7 +357,7 @@ const own = (
   db: DatabaseSync,
   file: string,
   { id, runtime }: Owner,
-): Effect.Effect<void, Precondition | Internal> =>
+): Effect.Effect<void, CannotStart | Internal> =>
   transaction(db, "record its host", () => {
     const row = db.prepare("SELECT id, runtime FROM host").get();
 
@@ -347,7 +372,7 @@ const own = (
     return owner.id === id && owner.runtime === runtime
       ? Result.void
       : Result.fail(
-          new Precondition({
+          new CannotStart({
             message: `${file} holds host ${owner.id} on ${owner.runtime}, and this config names host ${id} on ${runtime}: run it as ${owner.id} on ${owner.runtime}, or give it a new state dir`,
           }),
         );
@@ -363,7 +388,7 @@ export const open = (
   owner: Owner,
 ): Effect.Effect<
   Interface & NativeIdRecorder,
-  Precondition | Internal,
+  CannotStart | Internal,
   FileSystem.FileSystem | Scope.Scope
 > =>
   Effect.gen(function* () {
@@ -423,7 +448,7 @@ export const open = (
     const statementsOf = (table: "machines" | "checkpoints") => ({
       record: db.prepare(
         `UPDATE ${table} SET action_name = $action_name, action_status = $action_status,
-          action_error_tag = $action_error_tag, action_error_message = $action_error_message
+          action_error = $action_error
          WHERE name = $name`,
       ),
       remove: db.prepare(`DELETE FROM ${table} WHERE name = ?`),
@@ -456,8 +481,7 @@ export const open = (
         name: row.name,
         action_name: action.name,
         action_status: action.status,
-        action_error_tag: action.status === "failed" ? action.error.tag : null,
-        action_error_message: action.status === "failed" ? action.error.message : null,
+        action_error: action.status === "failed" ? encodeError(action.error) : null,
       });
     };
 
@@ -637,8 +661,8 @@ export const open = (
       failInterrupted: sql("fail interrupted actions", () => {
         for (const table of ["machines", "checkpoints"]) {
           db.prepare(
-            `UPDATE ${table} SET action_status = 'failed', action_error_tag = 'Internal',
-              action_error_message = ? || action_name
+            `UPDATE ${table} SET action_status = 'failed',
+              action_error = json_object('_tag', 'Internal', 'message', ? || action_name)
              WHERE action_status = 'running'`,
           ).run(stoppedDuring);
         }
@@ -650,7 +674,7 @@ export const open = (
 
 export const layer = (
   owner: Owner,
-): Layer.Layer<Store | NativeIds, Precondition | Internal, FileSystem.FileSystem> =>
+): Layer.Layer<Store | NativeIds, CannotStart | Internal, FileSystem.FileSystem> =>
   Layer.effectContext(
     Effect.map(open(owner), (opened) =>
       Context.make(Store, opened).pipe(Context.add(NativeIds, opened)),

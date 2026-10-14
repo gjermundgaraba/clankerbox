@@ -5,8 +5,9 @@ import {
   type Checkpoint,
   Conflict,
   NotFound,
+  NotOffered,
   Prebuild,
-  Precondition,
+  ScriptFailed,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect } from "effect";
@@ -115,7 +116,9 @@ test("a sandbox is a fork of a machine or a restore of a checkpoint when the pro
     host: "linux",
     action: "restoreMachine",
   });
-  expect(missing.stub.calls).toEqual(["machine.restore"]);
+  // The cleanup's delete of the machine the restore never wrote finds nothing.
+  expect(missing.stub.calls).toEqual(["machine.restore", "machine.delete"]);
+  expect(missing.stub.held()).toEqual([]);
 });
 
 test("a create from a profile with a setup restores its host's prebuild of it, unless fresh, and runs the setup without one", async () => {
@@ -159,7 +162,10 @@ test("a create from a profile with a setup restores its host's prebuild of it, u
 });
 
 test("a create that fails deletes the machine it left, and fails with the host's error", async () => {
-  const failure = new Precondition({ message: "setup exited 1: no network" });
+  const failure = new ScriptFailed({
+    message: "setup exited 1: no network",
+    script: "setup",
+  });
 
   const { stub, sandbox } = await setup({
     createFails: failure,
@@ -168,7 +174,7 @@ test("a create that fails deletes the machine it left, and fails with the host's
 
   const creating = sandbox.create();
 
-  await expect(creating).rejects.toBeInstanceOf(Precondition);
+  await expect(creating).rejects.toBeInstanceOf(ScriptFailed);
   await expect(creating).rejects.toMatchObject({
     message: failure.message,
     host: "linux",
@@ -196,7 +202,7 @@ test("a create that fails before any host makes a machine, as a placement no hos
 
   const creating = sandbox.create();
 
-  await expect(creating).rejects.toBeInstanceOf(Precondition);
+  await expect(creating).rejects.toBeInstanceOf(NotOffered);
   await expect(creating).rejects.not.toHaveProperty("id");
   expect(stub.calls).toEqual(["host.get"]);
   expect(stub.held()).toEqual(["linux_other"]);
