@@ -848,7 +848,8 @@ and the wire has no action for it.
   the setup.
 - **A build** reads the checkpoint first: one that is done is the answer, one
   that failed is deleted and built again, and one whose capture is still
-  running is refused with `Precondition`. Otherwise a machine of its
+  running is `Conflict{kind: busy}`, naming its host, `captureCheckpoint` and
+  its ID, which a later build may get past. Otherwise a machine of its
   own, `prebuilding-<16 random hex>`, runs the setup, is stopped when the
   host's `captureFrom` is `stopped` (Tart; smolvm and boat capture a running
   machine), is captured under the prebuild's name, and is deleted however the

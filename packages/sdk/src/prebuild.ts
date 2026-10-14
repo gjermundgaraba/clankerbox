@@ -1,7 +1,7 @@
 import { Effect, Option } from "effect";
 import { Hex } from "effect/encoding";
 import type * as Client from "./client.ts";
-import { type ClankerboxError, Precondition } from "./errors.ts";
+import { type ClankerboxError, Conflict } from "./errors.ts";
 import { formatId } from "./ids.ts";
 import {
   type Checkpoint,
@@ -107,8 +107,9 @@ export interface Built {
 /**
  * Builds the spec's prebuild on the host a create of it is placed on, with a machine of its own
  * that it deletes however it ends. A prebuild that is there and done is the answer, one that
- * failed is deleted and built again, and one still running is refused. Of two builds of one spec
- * at once, the second's capture is `Conflict`, and neither touches the other's machine.
+ * failed is deleted and built again, and one still running is `Conflict{busy}`, as its capture
+ * holds it. Of two builds of one spec at once, the second's capture is `Conflict`, and neither
+ * touches the other's machine.
  */
 export const build = (
   client: Client.Interface,
@@ -129,8 +130,12 @@ export const build = (
       }
 
       if (action.status === "running") {
-        return yield* new Precondition({
-          message: `prebuild ${id}'s ${action.name} is running; wait for it`,
+        return yield* new Conflict({
+          message: `prebuild ${id} is busy: its ${action.name} is running`,
+          kind: "busy",
+          host: host.id,
+          action: "captureCheckpoint" satisfies Client.HostAction,
+          id,
         });
       }
 
