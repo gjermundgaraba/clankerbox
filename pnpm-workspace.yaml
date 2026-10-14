@@ -7,13 +7,14 @@ catalogMode: prefer
 catalog:
   "@effect/platform-node": 4.0.4
   "@effect/vitest": 4.0.4
-  "@gjermundgaraba/effect-actions": 0.14.0
+  "@gjermundgaraba/effect-actions": 0.17.0
   "@types/node": 26.6.4
   effect: 4.0.4
   sandbox-agent: 0.5.2
   typescript: 7.0.2
-  vite: npm:@voidzero-dev/vite-plus-core@1.1.0
-  vite-plus: 1.1.0
+  vite: npm:@voidzero-dev/vite-plus-core@1.2.0
+  vite-plus: 1.2.0
+  vitest: 5.0.4
 
 # The provider talks to a Sandbox Agent in a guest, so the SDK's own server binary stays out.
 ignoredOptionalDependencies:
@@ -21,11 +22,14 @@ ignoredOptionalDependencies:
 
 overrides:
   vite@*: "catalog:"
+  vitest@*: "catalog:"
 peerDependencyRules:
   allowedVersions:
     vite: "*"
+    vitest: "*"
   allowAny:
     - vite
+    - vitest
 # Registry releases wait one day unless explicitly approved below.
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
