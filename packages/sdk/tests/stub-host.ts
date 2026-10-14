@@ -50,6 +50,20 @@ export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   ...fields,
 });
 
+/** A ready checkpoint of the machine `machine` makes by default, unless `fields` say otherwise. */
+export const checkpoint = (id: string, fields?: Partial<Checkpoint>): Checkpoint => ({
+  id,
+  createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
+  machine: id,
+  kind: "disk",
+  base: "ubuntu",
+  cpu: 1,
+  ramMib: 1024,
+  diskGib: 10,
+  action: { name: "capture", status: "done" },
+  ...fields,
+});
+
 export const stubHost = (options: StubHostOptions) => {
   const runtime = options.runtime ?? "smolvm";
   const machines = new Map<string, Machine>();

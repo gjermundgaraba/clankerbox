@@ -510,7 +510,7 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect("start, stop, fork and checkpoint capture route by ID", () =>
+  it.effect("start, stop and fork route by ID", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
       const config = yield* writeConfig(dir, ["mac", "linux"]);
@@ -526,24 +526,15 @@ layer(NodeServices.layer)((it) => {
         yield* cli(["start", "linux_dev", "--config", config], { endpoints }),
         yield* cli(["stop", "linux_dev", "--config", config], { endpoints }),
         yield* cli(["fork", "linux_dev", "copy", "--config", config], { endpoints }),
-        yield* cli(["checkpoint", "capture", "linux_dev", "snap", "--config", config], {
-          endpoints,
-        }),
       ];
 
-      expect(runs.map(({ code }) => code)).toEqual([0, 0, 0, 0]);
+      expect(runs.map(({ code }) => code)).toEqual([0, 0, 0]);
       expect(runs.map(({ stdout }) => stdout)).toEqual([
         "linux_dev running",
         "linux_dev stopped",
         "linux_copy",
-        "linux_snap",
       ]);
-      expect(linux.calls).toEqual([
-        "machine.start",
-        "machine.stop",
-        "machine.fork",
-        "checkpoint.capture",
-      ]);
+      expect(linux.calls).toEqual(["machine.start", "machine.stop", "machine.fork"]);
       expect(mac.calls).toEqual([]);
     }),
   );

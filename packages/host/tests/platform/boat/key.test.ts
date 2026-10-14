@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect } from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { keyFile, sshKey } from "../../src/platform/boat/key.ts";
+import { keyFile, sshKey } from "../../../src/platform/boat/key.ts";
 import { scratch, stat } from "@gjermundgaraba/clankerbox-sdk/testing";
 
 layer(NodeServices.layer)((it) => {

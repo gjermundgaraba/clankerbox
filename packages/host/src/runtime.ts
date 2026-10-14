@@ -1,7 +1,3 @@
-/**
- * Tart passed its live tests against this interface and boat was written to it: a change
- * touches every runtime, so it needs a reason that holds for all three.
- */
 import {
   type ActionName,
   type Capacity,

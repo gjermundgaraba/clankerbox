@@ -18,7 +18,7 @@ import {
   retryWindow,
   snapshotName,
   ttlSeconds,
-} from "../../src/platform/boat/api.ts";
+} from "../../../src/platform/boat/api.ts";
 
 const apiKey = "boat_fake-key-that-must-never-print";
 

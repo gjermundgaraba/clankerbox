@@ -42,23 +42,23 @@ import {
   restoredWait,
   type Settings,
   stateOf,
-} from "../../src/platform/boat/boat.ts";
-import { preparationScript } from "../../src/guest.ts";
-import * as Machines from "../../src/machines.ts";
-import { defaultMachinePorts } from "../../src/machine-ports.ts";
+} from "../../../src/platform/boat/boat.ts";
+import { preparationScript } from "../../../src/guest.ts";
+import * as Machines from "../../../src/machines.ts";
+import { defaultMachinePorts } from "../../../src/machine-ports.ts";
 import {
   type CheckpointRef,
   type Interface,
   type MachineRef,
   Refusal,
   Runtime,
-} from "../../src/runtime.ts";
-import { servicesLayer } from "../../src/composition/host.ts";
-import type { HostSettings } from "../../src/settings.ts";
-import * as Sqlite from "../../src/platform/sqlite.ts";
-import * as Store from "../../src/store.ts";
+} from "../../../src/runtime.ts";
+import { servicesLayer } from "../../../src/composition/host.ts";
+import type { HostSettings } from "../../../src/settings.ts";
+import * as Sqlite from "../../../src/platform/sqlite.ts";
+import * as Store from "../../../src/store.ts";
 import { remove, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { type Call, type Reply, scripted } from "../scripted.ts";
+import { type Call, type Reply, scripted } from "../../scripted.ts";
 
 const apiKey = "boat_fake-key-that-must-never-print";
 

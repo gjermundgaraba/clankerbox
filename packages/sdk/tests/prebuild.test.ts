@@ -1,4 +1,4 @@
-import { DateTime, Effect } from "effect";
+import { Effect } from "effect";
 import { it } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
 import {
@@ -10,7 +10,7 @@ import {
   Prebuild,
   Precondition,
 } from "../src/index.ts";
-import { type StubHost, stubHost, transport } from "./stub-host.ts";
+import { checkpoint, type StubHost, stubHost, transport } from "./stub-host.ts";
 
 const stubs: Array<StubHost> = [];
 
@@ -57,19 +57,15 @@ const holdings = (stub: StubHost) =>
     }),
   );
 
-const checkpoint = (id: string, fields?: Partial<Checkpoint>): Checkpoint => ({
-  id,
-  createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
-  machine: id,
-  kind: "ram",
-  base: "ubuntu",
-  profile: "dev",
-  cpu: 2,
-  ramMib: 4096,
-  diskGib: 20,
-  action: { name: "capture", status: "done" },
-  ...fields,
-});
+const prebuilt = (id: string, fields?: Partial<Checkpoint>): Checkpoint =>
+  checkpoint(id, {
+    kind: "ram",
+    profile: spec.profile,
+    cpu: spec.cpu,
+    ramMib: spec.ramMib,
+    diskGib: spec.diskGib,
+    ...fields,
+  });
 
 it.effect(
   "a prebuild is named after its label, base, sizes, script and runtime release, and nothing else",
@@ -149,13 +145,13 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const id = `linux_${yield* nameOf(spec)}`;
-      const done = host({ id: "linux", bases: ["ubuntu"], checkpoints: [checkpoint(id)] });
+      const done = host({ id: "linux", bases: ["ubuntu"], checkpoints: [prebuilt(id)] });
 
       const failed = host({
         id: "linux",
         bases: ["ubuntu"],
         checkpoints: [
-          checkpoint(id, {
+          prebuilt(id, {
             action: {
               name: "capture",
               status: "failed",
@@ -168,7 +164,7 @@ it.effect(
       const running = host({
         id: "linux",
         bases: ["ubuntu"],
-        checkpoints: [checkpoint(id, { action: { name: "capture", status: "running" } })],
+        checkpoints: [prebuilt(id, { action: { name: "capture", status: "running" } })],
       });
 
       const found = yield* withClient([done], (client) => Prebuild.build(client, spec));
@@ -284,13 +280,13 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const id = `linux_${yield* nameOf(spec)}`;
-      const ready = host({ id: "linux", bases: ["ubuntu"], checkpoints: [checkpoint(id)] });
+      const ready = host({ id: "linux", bases: ["ubuntu"], checkpoints: [prebuilt(id)] });
       const none = host({ id: "linux", bases: ["ubuntu"] });
 
       const capturing = host({
         id: "linux",
         bases: ["ubuntu"],
-        checkpoints: [checkpoint(id, { action: { name: "capture", status: "running" } })],
+        checkpoints: [prebuilt(id, { action: { name: "capture", status: "running" } })],
       });
 
       const restored = yield* withClient([ready], (client) => Prebuild.create(client, "box", spec));

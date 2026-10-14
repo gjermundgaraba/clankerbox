@@ -9,7 +9,7 @@ import { Duration, Effect, Fiber, Layer, Logger, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { type Interface, type MachineRef, Refusal } from "../../src/runtime.ts";
+import { type Interface, type MachineRef, Refusal } from "../../../src/runtime.ts";
 import {
   checkpointName,
   diskGb,
@@ -21,9 +21,9 @@ import {
   type Settings,
   stateOf,
   supported,
-} from "../../src/platform/tart/tart.ts";
+} from "../../../src/platform/tart/tart.ts";
 import { read, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { type Call, type Reply, scripted } from "../scripted.ts";
+import { type Call, type Reply, scripted } from "../../scripted.ts";
 
 const refused = (error: Refusal | HostError) =>
   error instanceof Refusal

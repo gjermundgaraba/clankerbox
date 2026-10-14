@@ -22,7 +22,7 @@ without the live run below is an **unqualified candidate**.
   `tests/live/README.md` and `tests/live/tart/driver.py`'s usage (its `--tart`,
   a release staged at `.work/inputs/tart-<version>/tart.app`),
   `scripts/WORK_RUNS.md` and the tests
-  (`packages/host/tests/platform/tart.test.ts`, whose fake `tart` answers as the tested
+  (`packages/host/tests/platform/tart/tart.test.ts`, whose fake `tart` answers as the tested
   release; `config.test.ts`): `git grep -n '2\.40'`.
 - **Companions** pinned beside it, re-checked only when they change: Softnet
   0.24.0 (README, `tests/live/README.md`, the driver's SUID check),
@@ -187,7 +187,7 @@ Each: what Tart does, where, and what of ours depends on it.
 
 ## Verify
 
-- Unit: `vp test` in `packages/host` (`platform/tart.test.ts`, `platform/forwarder.test.ts`,
+- Unit: `vp test` in `packages/host` (`platform/tart/tart.test.ts`, `platform/tart/forwarder.test.ts`,
   `config.test.ts`), then `vp run --no-cache ready`. Change the fake's answers
   only to match Tart's real output at the target.
 - Live: stage the target's release tarball, checksum verified, with its

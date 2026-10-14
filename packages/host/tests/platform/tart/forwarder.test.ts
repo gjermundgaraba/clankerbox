@@ -12,7 +12,7 @@ import { Effect, Fiber, type Stream } from "effect";
 import { ChildProcess } from "effect/process";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { expect } from "vite-plus/test";
-import { make } from "../../src/platform/tart/forwarder.ts";
+import { make } from "../../../src/platform/tart/forwarder.ts";
 
 const forwarder = make("127.0.0.1");
 
