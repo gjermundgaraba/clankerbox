@@ -1217,9 +1217,11 @@ These practices are in force with the layout, and each is checked where it can b
 - **Comments** follow design rule 3.
 - **A lint fence** (`tools/lint-fence`, each rule with its own tests; the
   rules' settings are in `vite.config.ts`): a file directly in
-  `packages/host/src/` imports only its siblings, `effect` and the SDK; the
-  SDK's `.` entry imports no Node and uses no `Buffer` or `process`; and
-  `fence/no-manual-run` keeps hand-run Effect to the places above.
+  `packages/host/src/` imports only its siblings, `effect` and the SDK; a file
+  in `platform/` never imports `composition/`; the SDK's `.` entry imports no
+  Node and uses no `Buffer` or `process`; and `fence/no-manual-run` keeps
+  hand-run Effect to the places above. Which package may import which is
+  each `package.json`'s dependencies: pnpm resolves no other.
 - **A runtime is removable.** Removing boat is its `platform/` folder, its arm
   in `composition/runtimes.ts`, its config section, the SDK's `Runtime`
   literal and its tests. What stays is the vocabulary it brought: its limits

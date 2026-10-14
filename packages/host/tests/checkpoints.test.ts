@@ -706,4 +706,26 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(yield* checkpointActions(restarted)).toEqual({});
     }),
   );
+
+  it.effect("a checkpoint whose delete a host restart cut off isn't ready to restore", () =>
+    Effect.gen(function* () {
+      const linux = yield* withSource();
+
+      yield* linux.run(linux.checkpoints.capture("linux_dev", "snap"));
+
+      const { entered } = linux.fake.holdNext("deleteCheckpoint");
+
+      yield* Effect.forkChild(linux.checkpoints.delete("linux_snap"));
+      yield* entered;
+      yield* linux.dispose;
+
+      const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
+      const refused = yield* failure(restarted, restarted.machines.restore("linux_snap", "copy"));
+
+      expect(refused).toEqual(
+        new Precondition({ message: "checkpoint linux_snap isn't ready: its delete is failed" }),
+      );
+      expect(Object.keys(yield* actions(restarted))).toEqual(["dev"]);
+    }),
+  );
 });
