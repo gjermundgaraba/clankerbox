@@ -52,6 +52,7 @@ import {
   type MachineRef,
   Refusal,
   Runtime,
+  type Usage,
 } from "../../src/runtime.ts";
 import { servicesLayer } from "../../src/composition/host.ts";
 import type { HostSettings } from "../../src/settings.ts";
@@ -482,6 +483,20 @@ const rigOn = (boat = fakeBoat()) =>
  * host's files and processes. After it, steps follow one another, so a wait of minutes doesn't
  * take minutes' worth of real moments on a loaded machine.
  */
+const limits = (maxActiveSandboxes: number, starts: Schema.Json): Answer => ({
+  status: 200,
+  body: {
+    ok: true,
+    type: "limits.info",
+    canStart: true,
+    activeSandboxes: 1,
+    activeStates: ["provisioned", "cloning", "ready", "idle", "running"],
+    maxActiveSandboxes,
+    billingStatus: "active",
+    starts,
+  },
+});
+
 const timed = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>, waiting?: Promise<void>) =>
   Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(Effect.exit(Effect.scoped(effect)));
@@ -1898,20 +1913,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const rig = yield* rigOn();
 
-        const limits = (maxActiveSandboxes: number, starts: Schema.Json): Answer => ({
-          status: 200,
-          body: {
-            ok: true,
-            type: "limits.info",
-            canStart: true,
-            activeSandboxes: 1,
-            activeStates: ["provisioned", "cloning", "ready", "idle", "running"],
-            maxActiveSandboxes,
-            billingStatus: "active",
-            starts,
-          },
-        });
-
         let answer: Answer = limits(2, {
           unlimited: false,
           minute: { limit: 5, used: 0, remaining: 5 },
@@ -1940,8 +1941,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           { resource: "startsPerMinute", limit: 5, used: 0 },
           { resource: "startsPerHour", limit: 25, used: 3 },
           { resource: "startsPerDay", limit: 75, used: 12 },
+          { resource: "cpu", used: 0 },
+          { resource: "ramMib", used: 0 },
         ]);
-        expect(unlimited).toEqual([{ resource: "activeSandboxes", limit: 100, used: 1 }]);
+        expect(unlimited).toEqual([
+          { resource: "activeSandboxes", limit: 100, used: 1 },
+          { resource: "cpu", used: 0 },
+          { resource: "ramMib", used: 0 },
+        ]);
         expect(refused(error)).toEqual([
           "not refused",
           "Internal",
@@ -1957,6 +1964,60 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "GET /limits",
           "GET /limits",
           "GET /limits",
+        ]);
+      }),
+  );
+
+  it.effect(
+    "capacity's cpu and RAM are the host's running sandboxes, each the size of its type, and none when a sandbox can't be read: the unread are named instead",
+    () =>
+      Effect.gen(function* () {
+        const boat = fakeBoat({ instant: true });
+        const rig = yield* rigOn(boat);
+
+        boat.sandboxes.set("bx_up", { id: "bx_up", state: "idle", ip: null, sshEndpoint: null });
+        boat.sandboxes.set("bx_down", {
+          id: "bx_down",
+          state: "archived",
+          ip: null,
+          sshEndpoint: null,
+        });
+
+        let broken = false;
+
+        boat.hooks.answer = (sent) => {
+          if (sent.path === "/limits") {
+            return limits(2, { unlimited: true, minute: null, hour: null, day: null });
+          }
+
+          return broken && sent.path.endsWith("/bx_up")
+            ? refusal(500, "internal_error")
+            : undefined;
+        };
+
+        // `up` asks for 3 vCPU and runs as `default`; `new` has no sandbox yet and boots as `small`.
+        const machines = [
+          { machine: machineOn("up", { native: "bx_up", cpu: 3, ramMib: 6144 }), booting: false },
+          { machine: machineOn("down", { native: "bx_down" }), booting: false },
+          { machine: machineOn("new"), booting: true },
+        ];
+
+        const rows = (limits: ReadonlyArray<Usage>) =>
+          limits.filter(({ resource }) => resource === "cpu" || resource === "ramMib");
+
+        const read = rows(yield* succeeds(rig.runtime.capacity(machines)));
+
+        broken = true;
+
+        const unread = rows(yield* succeeds(rig.runtime.capacity(machines)));
+
+        expect(read).toEqual([
+          { resource: "cpu", used: 6 },
+          { resource: "ramMib", used: 12_288 },
+        ]);
+        expect(unread).toEqual([
+          { resource: "cpu", unread: ["boat_up"] },
+          { resource: "ramMib", unread: ["boat_up"] },
         ]);
       }),
   );

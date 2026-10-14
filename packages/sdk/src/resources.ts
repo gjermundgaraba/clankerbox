@@ -111,16 +111,20 @@ export const Host = Schema.Struct({
 export type Host = typeof Host.Type;
 
 /**
- * `used` is counted as a `Capacity` refusal counts it, so it needn't match the host's own
- * machines.
+ * A resource of a host and how much of it is in use. `limit` is there only when the host refuses
+ * an action that would pass it, and then `used` is counted as that refusal counts it, so it
+ * needn't match the host's own machines. A row has `used` or, when a machine's state couldn't be
+ * read and so the sum would be a guess, `unread`: those machines' IDs.
  */
 export const Limit = Schema.Struct({
   host: HostId,
   /**
-   * `ramMib`: smolvm's RAM budget. `runningVms`: Tart's, Apple's two VMs per Mac.
-   * `activeSandboxes` and the `starts` of each rolling window: the boat account's.
+   * `cpu` and `ramMib`: what the host's running machines were given; smolvm's RAM budget is the
+   * one limit of the two. `runningVms`: Tart's, Apple's two VMs per Mac. `activeSandboxes` and
+   * the `starts` of each rolling window: the boat account's.
    */
   resource: Schema.Literals([
+    "cpu",
     "ramMib",
     "runningVms",
     "activeSandboxes",
@@ -128,8 +132,9 @@ export const Limit = Schema.Struct({
     "startsPerHour",
     "startsPerDay",
   ]),
-  limit: Schema.Int,
-  used: Schema.Int,
+  limit: Schema.optionalKey(Schema.Int),
+  used: Schema.optionalKey(Schema.Int),
+  unread: Schema.optionalKey(Schema.Array(Id)),
 }).annotate({ identifier: "Limit" });
 
 export type Limit = typeof Limit.Type;

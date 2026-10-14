@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { Capacity, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { checkRamBudget, ramInUse } from "../src/ram-budget.ts";
+import { checkRamBudget } from "../src/ram-budget.ts";
+import { allotted, inUse } from "../src/usage.ts";
 import {
   type Activation,
   type CheckpointKind,
@@ -164,18 +165,13 @@ export const fakeRuntime = (options: FakeOptions) => {
       return failure === "hang" ? Effect.never : Effect.fail(failure);
     });
 
-  const capacity = (held: ReadonlyArray<Held>) => {
-    const limit = options.ramBudgetMib;
-
-    return Effect.andThen(
+  const capacity = (held: ReadonlyArray<Held>) =>
+    Effect.andThen(
       enter("capacity", { id: "host" }),
-      limit === undefined
-        ? Effect.succeed([])
-        : Effect.map(ramInUse(held, states), ({ used }) => [
-            { resource: "ramMib" as const, limit, used },
-          ]),
+      Effect.map(inUse(held, states), ({ running, unread }) =>
+        allotted(running, unread, options.ramBudgetMib),
+      ),
     );
-  };
 
   const checkpointRoot = (checkpoint: CheckpointRef) =>
     join(options.dir, "checkpoints", checkpoint.instance);

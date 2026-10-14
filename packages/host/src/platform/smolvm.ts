@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { type HostError, Internal, Invalid, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Layer, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import { checkRamBudget, ramInUse } from "../ram-budget.ts";
+import { checkRamBudget } from "../ram-budget.ts";
 import {
   type CheckpointRef,
   type Interface,
@@ -20,6 +20,7 @@ import {
   Runtime,
 } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
+import { allotted, inUse } from "../usage.ts";
 import { cliIn, expect, failure, files, portOf } from "./process.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
@@ -426,22 +427,10 @@ export const make = (
       admit: Effect.fn("Smolvm.admit")((activation) =>
         checkRamBudget(settings.ramBudgetMib, activation, observe),
       ),
-      /**
-       * `admit` counts a machine it couldn't read as running, to stay on the safe side; a report
-       * that did would pass a guess off as a reading, so it fails instead.
-       */
       capacity: Effect.fn("Smolvm.capacity")((machines) =>
-        Effect.gen(function* () {
-          const { used, unread } = yield* ramInUse(machines, observe);
-
-          if (unread.length > 0) {
-            return yield* new Internal({
-              message: `smolvm couldn't read the state of ${unread.map(({ id }) => id).join(", ")}`,
-            });
-          }
-
-          return [{ resource: "ramMib" as const, limit: settings.ramBudgetMib, used }];
-        }),
+        Effect.map(inUse(machines, observe), ({ running, unread }) =>
+          allotted(running, unread, settings.ramBudgetMib),
+        ),
       ),
       capture: Effect.fn("Smolvm.capture")((machine, checkpoint) =>
         Effect.andThen(

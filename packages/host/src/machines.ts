@@ -64,7 +64,7 @@ export interface Interface {
   ) => Effect.Effect<Machine, ActionError<RoomError>>;
   /**
    * Unlike a machine's state, this is all the reply holds, so a runtime that can't be read fails
-   * it.
+   * it; a machine it can't read makes only the rows that count it `unread`.
    */
   readonly capacity: Effect.Effect<ReadonlyArray<Limit>, RuntimeError>;
 }

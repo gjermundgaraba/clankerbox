@@ -120,7 +120,7 @@ export const Http = ActionHttp.make(
       ...read,
       error: [Invalid, Precondition, Internal] as const,
       description:
-        "Read the host's limits and how much of each is in use. It fails when the runtime can't be read.",
+        "Read the host's resources, how much of each is in use, and their limits. A machine whose state can't be read leaves the rows that count it unread; it fails when the runtime can't be read at all.",
       success: Schema.Array(Limit),
     }),
   ],

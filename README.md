@@ -169,7 +169,7 @@ directory's profiles, reading only local files.
 
 ```sh
 clankerbox hosts                           # every host, its runtime, versions and bases
-clankerbox capacity                        # every host's limits, and how much of each is in use
+clankerbox capacity                        # every host's resources, their use, and their limits
 clankerbox profiles                        # the profiles directory's profiles
 clankerbox create dev --profile dev        # placed; prints the new ID, linux_dev
 clankerbox create review --host mac --base macos --cpu 4 --ram 8G --disk 60G
@@ -611,16 +611,24 @@ name: nothing migrates.
 
 ### Capacity
 
-`getCapacity` (`clankerbox capacity`, `client.capacity`) lists a host's limits,
-the ones its `Capacity` refusals come from, as `{host, resource, limit, used}`.
-The CLI's table names each resource in its own words (`ram`, `running-vms`,
-`active-sandboxes`, `starts/minute`, `starts/hour`, `starts/day`) and rounds
-RAM to a tenth of a GiB; `--json` has the API's names and whole MiB.
-The host counts `used` as the refusal counts it, so it needn't match the host's
-own machines; the [runtime notes](#runtime-notes) say what each runtime
-counts. It is read from the runtime at each call and is all the reply holds,
-so a runtime that fails the read, or takes over the host's 9 s, fails it with
-`Internal`, and a list names that host among the unreachable.
+`getCapacity` (`clankerbox capacity`, `client.capacity`) lists a host's
+resources as `{host, resource, limit?, used?, unread?}`: the limits its
+`Capacity` refusals come from, and on every runtime the `cpu` and `ramMib` its
+running and booting machines were given. `limit` is there only when the host
+refuses an action that would pass it: smolvm's RAM budget, Tart's two VMs and
+boat's account limits; nothing limits `cpu`, nor RAM on Tart or boat. The CLI's
+table names each resource in its own words (`cpu`, `ram`, `running-vms`,
+`active-sandboxes`, `starts/minute`, `starts/hour`, `starts/day`), shows `-` for
+no limit and rounds RAM to a tenth of a GiB; `--json` has the API's names and
+whole MiB.
+The host counts a limit's `used` as the refusal counts it, so it needn't match
+the host's own machines; the [runtime notes](#runtime-notes) say what each
+runtime counts. A row whose machines include one whose state couldn't be read
+has no `used`, since the sum would be a guess, but `unread`, those machines'
+IDs; the CLI shows `?` and names them under the table. It is read from the
+runtime at each call and is all the reply holds, so a runtime that fails the
+read as a whole, or takes over the host's 9 s, fails it with `Internal`, and a
+list names that host among the unreachable.
 
 ### Actions
 
@@ -1001,8 +1009,9 @@ These are known, not guarded, and accepted:
   else `Capacity`; a running target counts once, and a machine whose state
   couldn't be read counts as running. Set it above physical RAM to
   overcommit on purpose. The host's capacity is the budget and that sum
-  (`ramMib`); with a machine whose state couldn't be read it fails, naming
-  the machine, since the sum would be a guess.
+  (`ramMib`), and the same machines' `cpu`, unlimited; a machine whose state
+  couldn't be read leaves both `unread`, naming it, since the sum would be a
+  guess.
 - **Fork** is a checkpoint of the running source into a store of its own,
   `create --from` it, a port swap (`machine update --remove-port … -p …`),
   start, then the store is removed whole, whatever happened. The child
@@ -1057,7 +1066,9 @@ These are known, not guarded, and accepted:
   boot counts the VMs `tart list` reads running plus machines being booted, the
   target included, each VM once, and refuses with `Capacity` past two; a start
   of a running machine adds nothing. The host's capacity is that count of two
-  (`runningVms`), so it includes the operator's VMs, Linux ones too.
+  (`runningVms`), so it includes the operator's VMs, Linux ones too, and the
+  `cpu` and `ramMib` of the host's own running and booting machines, from the
+  same `tart list`, unlimited; the operator's VMs aren't in those.
 - **Start** reads `tart list` first and refuses a VM Tart no longer has before
   it writes a job or listens; it boots only a stopped VM.
 - **Stop** reads `tart list` first and does nothing to a VM that doesn't run.
@@ -1120,7 +1131,12 @@ These are known, not guarded, and accepted:
   (`activeSandboxes`), and the starts used of each rolling window that has a
   limit (`startsPerMinute`, `startsPerHour`, `startsPerDay`). It asks once,
   so a refusal is boat's own answer. The host checks none of it before a
-  call; boat's refusal is the check.
+  call; boat's refusal is the check. Alongside, it reads each recorded
+  sandbox's state as a list does, for the `cpu` and `ramMib` of the host's own
+  running and booting machines, each the size of the type boat runs it as, so
+  more than it asked for when no type matches exactly; the operator's
+  sandboxes aren't in those. A sandbox whose read fails leaves both `unread`;
+  the account's rows still answer.
 - **State** is a `GET` of each recorded sandbox, never a list; a read that
   still fails after its repeats, or takes over 8 s, reads `unknown`,
   never `missing`. The SSH endpoint changes at every start and is only

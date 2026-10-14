@@ -195,7 +195,8 @@ export interface Interface {
   readonly admit: (activation: Activation) => Effect.Effect<void, RoomError>;
   /**
    * The limits `admit` and the runtime's `Capacity` refusals come from, and their use, counted
-   * as they count it. Reads state as `observe` does and writes nothing.
+   * as they count it; then the `cpu` and `ramMib` its running machines were given, whether or
+   * not they are limits. Reads state as `observe` does and writes nothing.
    */
   readonly capacity: (
     machines: ReadonlyArray<Held>,

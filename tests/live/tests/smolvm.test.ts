@@ -163,14 +163,14 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
     expect(huge.tag).toBe("Capacity");
     expect(await machine("huge")).toBeUndefined();
 
-    const running = (await machines()).machines
-      .filter(({ state }) => state === "running")
-      .reduce((sum, { ramMib }) => sum + ramMib, 0);
+    const up = (await machines()).machines.filter(({ state }) => state === "running");
+    const running = up.reduce((sum, { ramMib }) => sum + ramMib, 0);
 
     const limits = await capacity();
-    const budget = limits[0]?.limit ?? 0;
+    const budget = limits.find(({ resource }) => resource === "ramMib")?.limit ?? 0;
 
     expect(limits).toEqual([
+      { host: suite.env.host.id, resource: "cpu", used: up.reduce((sum, { cpu }) => sum + cpu, 0) },
       { host: suite.env.host.id, resource: "ramMib", limit: budget, used: running },
     ]);
     expect(huge.message).toContain(`of the host's ${formatMib(budget)} budget is free`);

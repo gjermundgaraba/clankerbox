@@ -780,7 +780,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "capacity is the RAM budget and what admit counts toward it: every running or booting machine's RAM, each once; it fails when a machine's state can't be read",
+    "capacity is the RAM budget and what admit counts toward it, every running or booting machine's RAM, each once, and their cpu; a machine whose state can't be read leaves both unread",
     () =>
       Effect.gen(function* () {
         const replies = new Map<string, Reply>([
@@ -819,15 +819,18 @@ layer(NodeServices.layer)((it) => {
 
         replies.set("two-01234567", { exitCode: 1, stderr: "Error: database is locked\n" });
 
-        const unread = yield* Effect.flip(runtime.capacity(held));
+        const unread = yield* runtime.capacity(held);
 
-        expect(capacity).toEqual([{ resource: "ramMib", limit: 4096, used: 2560 }]);
+        expect(capacity).toEqual([
+          { resource: "cpu", used: 4 },
+          { resource: "ramMib", limit: 4096, used: 2560 },
+        ]);
         expect(refused.message).toContain(
           "needs 1537M of RAM, and 1.5G of the host's 4G budget is free",
         );
-        expect([unread._tag, unread.message]).toEqual([
-          "Internal",
-          "smolvm couldn't read the state of linux_two",
+        expect(unread).toEqual([
+          { resource: "cpu", unread: ["linux_two"] },
+          { resource: "ramMib", limit: 4096, unread: ["linux_two"] },
         ]);
       }),
   );

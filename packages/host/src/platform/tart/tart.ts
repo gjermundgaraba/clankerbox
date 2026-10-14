@@ -23,6 +23,7 @@ import {
   timeoutFail,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
+import { allotted, inUse } from "../../usage.ts";
 import { cliIn, expect, files, portOf } from "../process.ts";
 import * as Forwarder from "./forwarder.ts";
 
@@ -253,24 +254,29 @@ export const make = (
      * booting, since its VM runs only once its job has started. A set, so a running machine an
      * action holds counts once.
      */
-    const countedVms = (machines: ReadonlyArray<Held>) =>
-      Effect.map(list, (vms) => {
-        const counted = new Set<string>();
+    const countedIn = (vms: ReadonlyMap<string, MachineState>, machines: ReadonlyArray<Held>) => {
+      const counted = new Set<string>();
 
-        for (const [vm, observed] of vms) {
-          if (observed === "running") {
-            counted.add(vm);
-          }
+      for (const [vm, observed] of vms) {
+        if (observed === "running") {
+          counted.add(vm);
         }
+      }
 
-        for (const { machine, booting } of machines) {
-          if (booting) {
-            counted.add(vmOf(machine));
-          }
+      for (const { machine, booting } of machines) {
+        if (booting) {
+          counted.add(vmOf(machine));
         }
+      }
 
-        return counted;
-      });
+      return counted;
+    };
+
+    const observedIn = (
+      vms: ReadonlyMap<string, MachineState>,
+      machines: ReadonlyArray<MachineRef>,
+    ): ReadonlyArray<Observed> =>
+      machines.map((machine) => ({ state: vms.get(vmOf(machine)) ?? "missing" }));
 
     const job = (vm: string) => ({
       target: `${domain}/${vm}`,
@@ -553,9 +559,7 @@ export const make = (
         }),
       ),
       observe: Effect.fn("Tart.observe")((machines) =>
-        Effect.map(list, (vms) =>
-          machines.map((machine): Observed => ({ state: vms.get(vmOf(machine)) ?? "missing" })),
-        ),
+        Effect.map(list, (vms) => observedIn(vms, machines)),
       ),
       /**
        * The target counts once even when it runs already. The operator's Linux VMs count too,
@@ -564,7 +568,7 @@ export const make = (
        */
       admit: Effect.fn("Tart.admit")(({ action, machine, machines }) =>
         Effect.gen(function* () {
-          const counted = yield* countedVms(machines);
+          const counted = countedIn(yield* list, machines);
 
           if (counted.size > vmLimit) {
             return yield* new Capacity({
@@ -573,10 +577,24 @@ export const make = (
           }
         }),
       ),
+      /** One `tart list` for every row; `cpu` and `ramMib` count only the host's own machines. */
       capacity: Effect.fn("Tart.capacity")((machines) =>
-        Effect.map(countedVms(machines), (counted) => [
-          { resource: "runningVms" as const, limit: vmLimit, used: counted.size },
-        ]),
+        Effect.gen(function* () {
+          const vms = yield* list;
+
+          const { running, unread } = yield* inUse(machines, (refs) =>
+            Effect.succeed(observedIn(vms, refs)),
+          );
+
+          return [
+            {
+              resource: "runningVms" as const,
+              limit: vmLimit,
+              used: countedIn(vms, machines).size,
+            },
+            ...allotted(running, unread),
+          ];
+        }),
       ),
       create: Effect.fn("Tart.create")((machine, image) =>
         cloneInto(image, machine, [

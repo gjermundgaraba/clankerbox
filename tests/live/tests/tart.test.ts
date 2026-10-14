@@ -602,9 +602,9 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
   test(
     "with two VMs running, the host's capacity is full, and Apple's limit refuses a third create and a start with Capacity before any clone, writing nothing; one list reads every machine's state",
     async () => {
-      const states = Object.fromEntries(
-        (await machines()).machines.map(({ id: listedId, state }) => [listedId, state]),
-      );
+      const listed = (await machines()).machines;
+      const states = Object.fromEntries(listed.map(({ id: listedId, state }) => [listedId, state]));
+      const up = listed.filter(({ state }) => state === "running");
 
       expect(states).toEqual({
         [id("main")]: "stopped",
@@ -613,6 +613,16 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       });
       expect(await capacity()).toEqual([
         { host: suite.env.host.id, resource: "runningVms", limit: 2, used: 2 },
+        {
+          host: suite.env.host.id,
+          resource: "cpu",
+          used: up.reduce((sum, { cpu }) => sum + cpu, 0),
+        },
+        {
+          host: suite.env.host.id,
+          resource: "ramMib",
+          used: up.reduce((sum, { ramMib }) => sum + ramMib, 0),
+        },
       ]);
 
       const third = failure(await createBare("third"));

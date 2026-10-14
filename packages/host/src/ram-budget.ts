@@ -1,34 +1,12 @@
 import { Capacity, formatMib } from "@gjermundgaraba/clankerbox-sdk";
-import { Array as Arr, Effect } from "effect";
-import type { Activation, Held, MachineRef, Observed } from "./runtime.ts";
-
-type Observe = (machines: ReadonlyArray<MachineRef>) => Effect.Effect<ReadonlyArray<Observed>>;
-
-/** Each machine counts once; one whose state couldn't be read counts as running. */
-export const ramInUse = (
-  machines: ReadonlyArray<Held>,
-  observe: Observe,
-): Effect.Effect<{ readonly used: number; readonly unread: ReadonlyArray<MachineRef> }> =>
-  Effect.gen(function* () {
-    const booting = machines.filter((held) => held.booting);
-    const others = machines.filter((held) => !held.booting);
-
-    const observed = yield* observe(others.map(({ machine }) => machine));
-    const read = Arr.zip(others, observed);
-
-    const running = read
-      .filter(([, { state }]) => state === "running" || state === "unknown")
-      .map(([held]) => held);
-
-    return {
-      used: [...booting, ...running].reduce((sum, { machine }) => sum + machine.ramMib, 0),
-      unread: read.filter(([, { state }]) => state === "unknown").map(([{ machine }]) => machine),
-    };
-  });
+import { Effect } from "effect";
+import type { Activation } from "./runtime.ts";
+import { inUse, type Observe } from "./usage.ts";
 
 /**
- * The target is booting, so it is in the sum. Counting the booting ones keeps an action past its
- * check from being missed; the host checks them one at a time, so two never count each other.
+ * The target is booting, so it is in the sum, and a machine whose state couldn't be read counts
+ * as running. Counting the booting ones keeps an action past its check from being missed; the
+ * host checks them one at a time, so two never count each other.
  */
 export const checkRamBudget = (
   budgetMib: number,
@@ -36,7 +14,8 @@ export const checkRamBudget = (
   observe: Observe,
 ): Effect.Effect<void, Capacity> =>
   Effect.gen(function* () {
-    const { used: total } = yield* ramInUse(activation.machines, observe);
+    const { running, unread } = yield* inUse(activation.machines, observe);
+    const total = [...running, ...unread].reduce((sum, { ramMib }) => sum + ramMib, 0);
 
     if (total > budgetMib) {
       const { id, ramMib } = activation.machine;
