@@ -16,7 +16,7 @@
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { Machine } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal, type Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { afterAll, describe, expect, test } from "vite-plus/test";
 import {
   BoatAccount,
@@ -764,7 +764,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         action: {
           name: "createMachine",
           status: "failed",
-          error: { tag: "Internal", message: "host restarted during createMachine" },
+          error: new Internal({ message: "the host stopped during createMachine" }),
         },
       });
 

@@ -1,7 +1,13 @@
 import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Capacity, Conflict, type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Capacity,
+  Conflict,
+  type HostError,
+  Internal,
+  Precondition,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Exit, Fiber, Option, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { layer } from "@effect/vitest";
@@ -284,11 +290,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(row?.action).toEqual({
           name: "startMachine",
           status: "failed",
-          error: {
-            tag: "Internal",
+          error: new Internal({
             message:
               "startMachine linux_dev: the smolvm runtime's admission check didn't answer within 9s",
-          },
+          }),
         });
         expect(linux.fake.calls).toEqual(["admit linux_dev"]);
       }),
@@ -311,10 +316,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(row?.action).toEqual({
           name: "startMachine",
           status: "failed",
-          error: {
-            tag: "Internal",
-            message: "startMachine died; the host log has why",
-          },
+          error: new Internal({ message: "startMachine died; the host log has why" }),
         });
       }),
   );
@@ -458,7 +460,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(row?.action).toEqual({
         name: "startMachine",
         status: "failed",
-        error: { tag: "Capacity", message: "no room" },
+        error: new Capacity({ message: "no room" }),
       });
     }),
   );
@@ -496,7 +498,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(got.action).toEqual({
           name: "createMachine",
           status: "failed",
-          error: { tag: "Internal", message: "krun EINVAL" },
+          error: new Internal({ message: "krun EINVAL" }),
         });
         expect(linux.fake.calls).toContain("delete linux_dev");
         expect(yield* rows(linux)).toEqual([]);
@@ -590,7 +592,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(row?.action).toEqual({
           name: "startMachine",
           status: "failed",
-          error: { tag: "Precondition", message: error.message },
+          error: new Precondition({ message: error.message }),
         });
       }),
   );
@@ -672,7 +674,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(got.action).toEqual({
         name: "createMachine",
         status: "failed",
-        error: { tag: "Internal", message: "the host stopped during createMachine" },
+        error: new Internal({ message: "the host stopped during createMachine" }),
       });
       expect(linux.fake.calls.filter((call) => call === "startup")).toHaveLength(2);
     }),
@@ -699,7 +701,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(got.action).toEqual({
           name: "startMachine",
           status: "failed",
-          error: { tag: "Internal", message: "the host stopped during startMachine" },
+          error: new Internal({ message: "the host stopped during startMachine" }),
         });
       }),
   );
@@ -707,7 +709,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   const stoppedDuringCreate = {
     name: "createMachine",
     status: "failed",
-    error: { tag: "Internal", message: "the host stopped during createMachine" },
+    error: new Internal({ message: "the host stopped during createMachine" }),
   } as const;
 
   it.effect(
@@ -762,7 +764,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(got).toMatchObject({
           state: "running",
           made: false,
-          action: { status: "failed", error: { tag: "Precondition", message: unmade } },
+          action: { status: "failed", error: new Precondition({ message: unmade }) },
         });
         expect(stopped).toMatchObject({
           state: "stopped",
@@ -917,7 +919,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(got.action).toEqual({
         name: "createMachine",
         status: "failed",
-        error: { tag: "Precondition", message: error.message },
+        error: new Precondition({ message: error.message }),
       });
     }),
   );

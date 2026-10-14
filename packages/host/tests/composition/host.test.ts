@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Client } from "@gjermundgaraba/clankerbox-sdk";
+import { Client, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
 import { DateTime, Effect, Layer, Logger } from "effect";
 import { HttpServer } from "effect/http";
@@ -71,7 +71,7 @@ layer(NodeServices.layer)((it) => {
       expect(machine.action).toEqual({
         name: "createMachine",
         status: "failed",
-        error: { tag: "Internal", message: "the host stopped during createMachine" },
+        error: new Internal({ message: "the host stopped during createMachine" }),
       });
     }),
   );

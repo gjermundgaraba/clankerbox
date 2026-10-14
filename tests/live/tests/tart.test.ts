@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { connect } from "node:net";
 import { join } from "node:path";
-import type { SshEndpoint } from "@gjermundgaraba/clankerbox-sdk";
+import { Internal, type SshEndpoint } from "@gjermundgaraba/clankerbox-sdk";
 import { describe, expect, test } from "vite-plus/test";
 import {
   Checkpoints,
@@ -749,7 +749,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
         action: {
           name: "createMachine",
           status: "failed",
-          error: { tag: "Internal", message: "host restarted during createMachine" },
+          error: new Internal({ message: "the host stopped during createMachine" }),
         },
       });
 

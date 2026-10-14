@@ -144,7 +144,7 @@ layer(NodeServices.layer)((it) => {
           Option.some({
             name: "startMachine",
             status: "failed",
-            error: { tag: "Internal", message: "the host stopped during startMachine" },
+            error: new Internal({ message: "the host stopped during startMachine" }),
           }),
         );
         expect(logged).toEqual([]);

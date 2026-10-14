@@ -1,3 +1,4 @@
+import { Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { join } from "node:path";
 import { DateTime, Effect, Schema } from "effect";
@@ -59,7 +60,7 @@ layer(NodeServices.layer)((it) => {
     action: {
       name: "createMachine",
       status: "failed",
-      error: { tag: "Precondition", message: "setup exited 3" },
+      error: new Precondition({ message: "setup exited 3" }),
     },
   });
 

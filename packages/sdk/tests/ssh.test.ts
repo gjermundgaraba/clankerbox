@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Effect, FileSystem } from "effect";
 import { expect } from "vite-plus/test";
-import { type Machine, pinnedSsh, sshTarget } from "../src/index.ts";
+import { type Machine, pinnedSsh, Precondition, sshTarget } from "../src/index.ts";
 import { read } from "./files.ts";
 import { machine } from "./stub-host.ts";
 
@@ -40,7 +40,7 @@ layer(NodeServices.layer)((it) => {
               action: {
                 name: "createMachine",
                 status: "failed",
-                error: { tag: "Precondition", message: "setup exited 1" },
+                error: new Precondition({ message: "setup exited 1" }),
               },
             }),
             "linux_dev has no SSH host key on record (running (unmade), createMachine failed): see clankerbox get linux_dev",

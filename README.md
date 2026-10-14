@@ -674,8 +674,9 @@ is afterwards or a tagged error. Each runs in this order (`claims.ts`):
   A failure only in preparation leaves the machine made, and `start` repairs
   it.
 - **`action: {name, status, error?}`** is a resource's one record of work: its
-  last action, `running` while held, `failed` with the error, or `done`. A
-  checkpoint is ready once its action is `done`.
+  last action, `running` while held, `failed` with the error, or `done`. The
+  error is the host's reply whole, a `Conflict`'s `kind` included, and the
+  row keeps it as JSON. A checkpoint is ready once its action is `done`.
 - The runtime decides `start` and `stop`; the core reads no state for either.
   Every `start` is admitted and calls the runtime's start, which refuses a
   machine the runtime no longer has with `Precondition` before anything native,

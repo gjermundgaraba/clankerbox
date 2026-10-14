@@ -3,6 +3,7 @@ import { expect, test } from "vite-plus/test";
 import {
   ActionRecord,
   Capacity,
+  type ClankerboxError,
   Conflict,
   Internal,
   Invalid,
@@ -35,14 +36,10 @@ test("Unavailable is retryable for a read and not for a mutation", () => {
 test("a recorded action's error is a host error, never Unavailable", () => {
   const isRecord = Schema.is(ActionRecord);
 
-  const failed = (tag: string) => ({
-    name: "createMachine",
-    status: "failed",
-    error: { tag, message: "" },
-  });
+  const failed = (error: ClankerboxError) => ({ name: "createMachine", status: "failed", error });
 
-  expect(isRecord(failed("Capacity"))).toBe(true);
-  expect(isRecord(failed("Unavailable"))).toBe(false);
+  expect(isRecord(failed(new Capacity({ message: "" })))).toBe(true);
+  expect(isRecord(failed(new Unavailable({ message: "", readOnly: false })))).toBe(false);
 });
 
 test("a recorded action carries an error exactly when it failed", () => {
@@ -51,7 +48,7 @@ test("a recorded action carries an error exactly when it failed", () => {
       Schema.decodeUnknownResult(ActionRecord)(record, { onExcessProperty: "error" }),
     );
 
-  const error = { tag: "Internal", message: "m" };
+  const error = Schema.encodeSync(Internal)(new Internal({ message: "m" }));
 
   expect(decodes({ name: "createMachine", status: "done" })).toBe(true);
   expect(decodes({ name: "createMachine", status: "failed", error })).toBe(true);

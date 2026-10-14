@@ -82,7 +82,7 @@ export const checkpointRef = (
 const failed = (token: Token, error: HostError): ActionRecord => ({
   name: token.action,
   status: "failed",
-  error: { tag: error._tag, message: error.message },
+  error,
 });
 
 /** A defect is recorded as `Internal`, so its rows stay deletable; only the log has its cause. */

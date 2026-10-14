@@ -6,6 +6,7 @@ import {
   ActionStatus,
   Checkpoint,
   Conflict,
+  HostError,
   Internal,
   type NotFound,
   Precondition,
@@ -105,13 +106,25 @@ export const migrations: ReadonlyArray<string> = [
     WHEN 'capture' THEN 'captureCheckpoint'
     WHEN 'delete' THEN 'deleteCheckpoint'
   END`,
+  ["machines", "checkpoints"]
+    .map(
+      (table) => `ALTER TABLE ${table} ADD COLUMN action_error TEXT;
+    UPDATE ${table} SET action_error = CASE action_error_tag
+      WHEN 'Conflict' THEN json_object('_tag', 'Conflict', 'message', action_error_message,
+        'kind', CASE WHEN action_error_message LIKE '% is busy: %' THEN 'busy' ELSE 'exists' END)
+      ELSE json_object('_tag', action_error_tag, 'message', action_error_message)
+    END
+    WHERE action_error_tag IS NOT NULL AND action_error_message IS NOT NULL;
+    ALTER TABLE ${table} DROP COLUMN action_error_tag;
+    ALTER TABLE ${table} DROP COLUMN action_error_message`,
+    )
+    .join(";\n"),
 ];
 
 const actionColumns = {
   action_name: ActionName,
   action_status: ActionStatus,
-  action_error_tag: Schema.NullOr(Schema.String),
-  action_error_message: Schema.NullOr(Schema.String),
+  action_error: Schema.NullOr(Schema.fromJsonString(Schema.toEncoded(HostError))),
 };
 
 const columns = {
@@ -155,14 +168,12 @@ const decodeAction = Schema.decodeUnknownSync(ActionRecord);
 
 const actionOf = (row: typeof ActionColumns.Type): ActionRecord =>
   decodeAction(
-    row.action_error_tag === null || row.action_error_message === null
+    row.action_error === null
       ? { name: row.action_name, status: row.action_status }
-      : {
-          name: row.action_name,
-          status: row.action_status,
-          error: { tag: row.action_error_tag, message: row.action_error_message },
-        },
+      : { name: row.action_name, status: row.action_status, error: row.action_error },
   );
+
+const encodeError = Schema.encodeSync(Schema.fromJsonString(HostError));
 
 const resourceOf = (row: typeof Columns.Type): Resource => ({
   name: row.name,
@@ -423,7 +434,7 @@ export const open = (
     const statementsOf = (table: "machines" | "checkpoints") => ({
       record: db.prepare(
         `UPDATE ${table} SET action_name = $action_name, action_status = $action_status,
-          action_error_tag = $action_error_tag, action_error_message = $action_error_message
+          action_error = $action_error
          WHERE name = $name`,
       ),
       remove: db.prepare(`DELETE FROM ${table} WHERE name = ?`),
@@ -456,8 +467,7 @@ export const open = (
         name: row.name,
         action_name: action.name,
         action_status: action.status,
-        action_error_tag: action.status === "failed" ? action.error.tag : null,
-        action_error_message: action.status === "failed" ? action.error.message : null,
+        action_error: action.status === "failed" ? encodeError(action.error) : null,
       });
     };
 
@@ -637,8 +647,8 @@ export const open = (
       failInterrupted: sql("fail interrupted actions", () => {
         for (const table of ["machines", "checkpoints"]) {
           db.prepare(
-            `UPDATE ${table} SET action_status = 'failed', action_error_tag = 'Internal',
-              action_error_message = ? || action_name
+            `UPDATE ${table} SET action_status = 'failed',
+              action_error = json_object('_tag', 'Internal', 'message', ? || action_name)
              WHERE action_status = 'running'`,
           ).run(stoppedDuring);
         }

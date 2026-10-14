@@ -2,7 +2,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { formatMib } from "@gjermundgaraba/clankerbox-sdk";
+import { formatMib, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { beforeAll, describe, expect, test } from "vite-plus/test";
 import {
   Checkpoints,
@@ -1040,7 +1040,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         action: {
           name: "createMachine",
           status: "failed",
-          error: { tag: "Internal", message: "host restarted during createMachine" },
+          error: new Internal({ message: "the host stopped during createMachine" }),
         },
       });
 

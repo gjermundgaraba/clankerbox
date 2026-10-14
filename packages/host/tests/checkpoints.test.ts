@@ -1,6 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { join } from "node:path";
-import { Capacity, Conflict, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Capacity,
+  Conflict,
+  type HostError,
+  Internal,
+  Precondition,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Fiber } from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
@@ -30,11 +36,7 @@ const checkpointActions = (host: TestHost) =>
   );
 
 /** What a refused action records on the rows it held. */
-const refused = (name: string, error: { readonly _tag: string; readonly message: string }) => ({
-  name,
-  status: "failed",
-  error: { tag: error._tag, message: error.message },
-});
+const refused = (name: string, error: HostError) => ({ name, status: "failed", error });
 
 const machineId = (host: TestHost, name: string) =>
   read(join(host.fake.root(name) ?? "", "var/lib/clankerbox/machine-id"));
@@ -208,7 +210,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const failed = {
         name: "forkMachine",
         status: "failed",
-        error: { tag: "Internal", message: "captureCheckpoint failed" },
+        error: new Internal({ message: "captureCheckpoint failed" }),
       };
 
       expect(error).toEqual(new Internal({ message: "captureCheckpoint failed" }));
@@ -473,7 +475,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(got.action).toEqual({
           name: "captureCheckpoint",
           status: "failed",
-          error: { tag: "Internal", message: "ENOTSUP" },
+          error: new Internal({ message: "ENOTSUP" }),
         });
         expect(linux.fake.calls).toContain("deleteCheckpoint linux_snap");
         expect(yield* checkpointActions(linux)).toEqual({});
@@ -704,7 +706,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const interrupted = {
         name: "captureCheckpoint",
         status: "failed",
-        error: { tag: "Internal", message: "the host stopped during captureCheckpoint" },
+        error: new Internal({ message: "the host stopped during captureCheckpoint" }),
       };
 
       expect(yield* checkpointActions(restarted)).toEqual({ snap: interrupted });

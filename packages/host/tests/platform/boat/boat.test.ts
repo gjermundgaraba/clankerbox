@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { inspect } from "node:util";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { HostError, Reading } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, type HostError, type Reading } from "@gjermundgaraba/clankerbox-sdk";
 import {
   DateTime,
   Duration,
@@ -2327,7 +2327,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           {
             name: "startMachine",
             status: "failed",
-            error: { tag: "Capacity", message: refusedStart.message },
+            error: new Capacity({ message: refusedStart.message }),
           },
         ]);
       }),

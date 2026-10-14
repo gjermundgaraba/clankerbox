@@ -157,7 +157,7 @@ it.effect(
             action: {
               name: "captureCheckpoint",
               status: "failed",
-              error: { tag: "Internal", message: "full" },
+              error: new Internal({ message: "full" }),
             },
           }),
         ],

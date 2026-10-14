@@ -68,17 +68,13 @@ export class Internal extends Schema.TaggedError<Internal>()(
 /** What a host may answer with; each action declares its own share. */
 export const hostErrors = [Invalid, NotFound, Conflict, Precondition, Capacity, Internal] as const;
 
-export type HostError = InstanceType<(typeof hostErrors)[number]>;
+export const HostError = Schema.Union(hostErrors);
+
+export type HostError = typeof HostError.Type;
 
 export const ClankerboxError = Schema.Union([...hostErrors, Unavailable]);
 
 export type ClankerboxError = typeof ClankerboxError.Type;
-
-export const HostErrorTag = Schema.Literals(
-  hostErrors.map((error) => error.fields._tag.schema.literal),
-);
-
-export type HostErrorTag = typeof HostErrorTag.Type;
 
 /**
  * Whether the same call may succeed later: a busy resource or a full host may free up, and a read
