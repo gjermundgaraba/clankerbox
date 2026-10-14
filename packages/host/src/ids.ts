@@ -29,4 +29,4 @@ export type Kind = "machine" | "checkpoint";
 export const notFoundOn =
   (host: string) =>
   (kind: Kind, name: string): NotFound =>
-    new NotFound({ message: `no ${kind} ${idOn(host)(name)}` });
+    new NotFound({ message: `no ${kind} ${idOn(host)(name)}`, id: idOn(host)(name) });

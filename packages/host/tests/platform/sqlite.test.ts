@@ -360,7 +360,9 @@ layer(NodeServices.layer)((it) => {
         }),
       );
 
-      expect(name).toEqual(new Conflict({ message: "machine linux_dev exists", kind: "exists" }));
+      expect(name).toEqual(
+        new Conflict({ message: "machine linux_dev exists", kind: "exists", id: "linux_dev" }),
+      );
       expect(port._tag).toBe("Internal");
       expect(port.message).toContain("claim linux_other for create");
       expect(names).toEqual(["dev"]);
@@ -394,9 +396,15 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(busy).toEqual(
-          new Conflict({ message: "machine linux_dev is busy: create is running", kind: "busy" }),
+          new Conflict({
+            message: "machine linux_dev is busy: create is running",
+            kind: "busy",
+            id: "linux_dev",
+          }),
         );
-        expect(missing).toEqual(new NotFound({ message: "no machine linux_gone" }));
+        expect(missing).toEqual(
+          new NotFound({ message: "no machine linux_gone", id: "linux_gone" }),
+        );
 
         const stopping = {
           ...record("dev"),
@@ -580,7 +588,11 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(taken).toEqual(
-          new Conflict({ message: "machine linux_other exists", kind: "exists" }),
+          new Conflict({
+            message: "machine linux_other exists",
+            kind: "exists",
+            id: "linux_other",
+          }),
         );
         expect(held).toEqual({ name: "captureCheckpoint", status: "running" });
         expect(released).toEqual([refused("captureCheckpoint"), []]);
@@ -864,6 +876,7 @@ layer(NodeServices.layer)((it) => {
           new Conflict({
             message: "machine linux_dev is busy: captureCheckpoint is running",
             kind: "busy",
+            id: "linux_dev",
           }),
         );
         expect(Option.getOrUndefined(found)).toEqual({
@@ -915,10 +928,14 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(fork).toEqual(
-          new Conflict({ message: "machine linux_copy exists", kind: "exists" }),
+          new Conflict({ message: "machine linux_copy exists", kind: "exists", id: "linux_copy" }),
         );
         expect(capture).toEqual(
-          new Conflict({ message: "checkpoint linux_snap exists", kind: "exists" }),
+          new Conflict({
+            message: "checkpoint linux_snap exists",
+            kind: "exists",
+            id: "linux_snap",
+          }),
         );
         expect(held).toEqual({ name: "forkMachine", status: "running" });
         expect(Option.getOrUndefined(source)?.action).toEqual(refused("captureCheckpoint"));
@@ -941,7 +958,7 @@ layer(NodeServices.layer)((it) => {
         }),
       );
 
-      expect(missing).toEqual(new NotFound({ message: "no machine linux_dev" }));
+      expect(missing).toEqual(new NotFound({ message: "no machine linux_dev", id: "linux_dev" }));
       expect(rows).toEqual([
         ["copy", { name: "forkMachine", status: "running" }],
         ["dev", { name: "forkMachine", status: "running" }],
@@ -974,9 +991,12 @@ layer(NodeServices.layer)((it) => {
           new Conflict({
             message: "checkpoint linux_snap is busy: captureCheckpoint is running",
             kind: "busy",
+            id: "linux_snap",
           }),
         );
-        expect(missing).toEqual(new NotFound({ message: "no checkpoint linux_gone" }));
+        expect(missing).toEqual(
+          new NotFound({ message: "no checkpoint linux_gone", id: "linux_gone" }),
+        );
         expect(actions).toEqual([
           {
             name: "captureCheckpoint",

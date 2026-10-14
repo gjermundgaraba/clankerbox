@@ -129,6 +129,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const busy = new Conflict({
           message: "machine linux_dev is busy: fork is running",
           kind: "busy",
+          id: "linux_dev",
         });
 
         expect(stop).toEqual(busy);
@@ -309,7 +310,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const error = yield* failure(linux, linux.machines.fork("linux_dev", "copy"));
 
-      expect(error).toEqual(new Conflict({ message: "machine linux_copy exists", kind: "exists" }));
+      expect(error).toEqual(
+        new Conflict({ message: "machine linux_copy exists", kind: "exists", id: "linux_copy" }),
+      );
       expect((yield* actions(linux))["dev"]).toEqual(refused("forkMachine", error));
       expect(linux.fake.calls).toEqual([]);
     }),
@@ -324,7 +327,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const error = yield* failure(linux, linux.checkpoints.capture("linux_dev", "snap"));
 
       expect(error).toEqual(
-        new Conflict({ message: "checkpoint linux_snap exists", kind: "exists" }),
+        new Conflict({ message: "checkpoint linux_snap exists", kind: "exists", id: "linux_snap" }),
       );
       expect((yield* actions(linux))["dev"]).toEqual(refused("captureCheckpoint", error));
       expect(yield* checkpointActions(linux)).toEqual({
@@ -440,7 +443,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* Fiber.join(create);
 
         expect(error).toEqual(
-          new Conflict({ message: "machine linux_dev is busy: create is running", kind: "busy" }),
+          new Conflict({
+            message: "machine linux_dev is busy: create is running",
+            kind: "busy",
+            id: "linux_dev",
+          }),
         );
         expect(yield* checkpointActions(linux)).toEqual({});
       }),
@@ -592,6 +599,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           new Conflict({
             message: "checkpoint linux_snap is busy: its captureCheckpoint is running",
             kind: "busy",
+            id: "linux_snap",
           }),
         );
         expect(none._tag).toBe("NotFound");

@@ -411,6 +411,7 @@ export const make = (
           return yield* new Conflict({
             message: `checkpoint ${id} is busy: its ${action.name} is running`,
             kind: "busy",
+            id,
           });
         }
 

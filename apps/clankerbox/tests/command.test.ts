@@ -137,6 +137,7 @@ layer(NodeServices.layer)((it) => {
         host: "linux",
         action: "createMachine",
         id: "linux_dev",
+        made: "linux_dev",
       });
     }),
   );

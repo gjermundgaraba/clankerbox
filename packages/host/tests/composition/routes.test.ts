@@ -1,10 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   Client,
+  Conflict,
   Http,
   Internal,
   Invalid,
   type MachineSpec,
+  NotFound,
   version,
   versionHeader,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -63,6 +65,44 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(listed.answers.map(({ id }) => id)).toEqual(["linux_dev"]);
       expect(gone._tag).toBe("NotFound");
     }),
+  );
+
+  it.effect(
+    "a failed restore or fork is about the resource that failed it, and names the machine it makes",
+    () =>
+      Effect.gen(function* () {
+        const { url } = yield* serve();
+
+        const [missing, taken] = yield* withClient(url, (client) =>
+          Effect.andThen(
+            Effect.all([client.create("source", spec, {}), client.create("taken", spec, {})]),
+            Effect.all([
+              Effect.flip(client.restoreMachine({ checkpoint: "linux_gone", name: "fresh" })),
+              Effect.flip(client.forkMachine({ machine: "linux_source", name: "taken" })),
+            ]),
+          ),
+        );
+
+        expect(missing).toEqual(
+          new NotFound({
+            message: "no checkpoint linux_gone",
+            host: "linux",
+            action: "restoreMachine",
+            id: "linux_gone",
+            made: "linux_fresh",
+          }),
+        );
+        expect(taken).toEqual(
+          new Conflict({
+            message: "machine linux_taken exists",
+            kind: "exists",
+            host: "linux",
+            action: "forkMachine",
+            id: "linux_taken",
+            made: "linux_taken",
+          }),
+        );
+      }),
   );
 
   it.effect(
