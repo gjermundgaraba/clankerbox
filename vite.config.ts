@@ -107,6 +107,25 @@ export default defineConfig({
         },
       },
       {
+        files: ["packages/host/src/platform/**/*.ts"],
+        rules: {
+          "fence/allowed-imports": [
+            "error",
+            {
+              allow: [
+                "^(?:\\./|(?:\\.\\./)+)(?!\\.\\./)(?!composition/)[a-z/-]+\\.ts$",
+                "^node:",
+                "^effect(/(encoding|http|process))?$",
+                "^@effect/platform-node/",
+                "^@gjermundgaraba/clankerbox-sdk$",
+              ],
+              because:
+                "an adapter implements a domain port and reaches Node or a vendor; only composition/ puts adapters together",
+            },
+          ],
+        },
+      },
+      {
         files: ["packages/sdk/src/**/*.ts"],
         excludeFiles: ["packages/sdk/src/node.ts"],
         rules: {

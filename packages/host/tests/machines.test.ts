@@ -551,6 +551,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* entered;
 
+      const held = yield* linux.run(linux.machines.get("linux_dev"));
+
       const [start, remove] = yield* Effect.all(
         [
           failure(linux, linux.machines.start("linux_dev")),
@@ -567,6 +569,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         kind: "busy",
       });
 
+      expect(held.action).toEqual({ name: "create", status: "running" });
       expect(start).toEqual(busy);
       expect(remove).toEqual(busy);
     }),
