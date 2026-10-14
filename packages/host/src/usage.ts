@@ -27,10 +27,6 @@ export const inUse = (machines: ReadonlyArray<Held>, observe: Observe): Effect.E
     };
   });
 
-/**
- * The `cpu` and `ramMib` given to the running machines, sized as the runtime runs them. With an
- * unread machine there is no sum, as it would be a guess: the row names the unread instead.
- */
 export const allotted = (
   running: ReadonlyArray<Pick<MachineRef, "cpu" | "ramMib">>,
   unread: ReadonlyArray<Pick<MachineRef, "id">>,
@@ -47,11 +43,6 @@ export const allotted = (
     : rows.map((row) => (row.resource === "ramMib" ? { ...row, limit: ramBudgetMib } : row));
 };
 
-/**
- * The target is booting, so it is in the sum, and a machine whose state couldn't be read counts
- * as running. Counting the booting ones keeps an action past its check from being missed; the
- * host checks them one at a time, so two never count each other.
- */
 export const checkRamBudget = (
   budgetMib: number,
   activation: Activation,

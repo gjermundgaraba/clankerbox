@@ -52,6 +52,12 @@ export const SshLogin = Schema.Struct({
 
 export type SshLogin = typeof SshLogin.Type;
 
+/**
+ * `state` is `missing` when the runtime doesn't have the machine, and `unknown` when it couldn't
+ * be read. Until its create, fork or restore has `made` it, a machine can only be read, stopped or
+ * deleted. `ssh` is only on a running machine whose runtime gives it an endpoint, and `hostKey`,
+ * `<type> <base64>`, once preparation has recorded it.
+ */
 export const Machine = Schema.Struct({
   id: Id,
   runtime: Runtime,
@@ -61,14 +67,10 @@ export const Machine = Schema.Struct({
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
-  /** `missing`: the runtime doesn't have it; `unknown`: it couldn't be read. */
   state: Schema.Literals(["running", "stopped", "missing", "unknown"]),
-  /** Until its create, fork or restore has made it, it can only be read, stopped or deleted. */
   made: Schema.Boolean,
   action: ActionRecord,
-  /** Only on a running machine whose runtime gives it an endpoint. */
   ssh: Schema.optionalKey(SshLogin),
-  /** `<type> <base64>`, once preparation has recorded it. */
   hostKey: Schema.optionalKey(Schema.String),
 }).annotate({ identifier: "Machine" });
 
@@ -78,11 +80,11 @@ export type Machine = typeof Machine.Type;
 export const stateLabel = ({ state, made }: Machine): string =>
   made ? state : `${state} (unmade)`;
 
+/** `kind` is `ram` (RAM and disks) on smolvm, and `disk` on Tart and boat. */
 export const Checkpoint = Schema.Struct({
   id: Id,
   createdAt: Schema.DateTimeUtcFromString,
   machine: Id,
-  /** `ram` (RAM and disks) on smolvm, `disk` on Tart and boat. */
   kind: Schema.Literals(["ram", "disk"]),
   base: Schema.String,
   profile: Schema.optionalKey(Schema.String),
@@ -98,13 +100,15 @@ export type Checkpoint = typeof Checkpoint.Type;
 export const isReady = (checkpoint: Pick<Checkpoint, "action">): boolean =>
   checkpoint.action.status === "done";
 
+/**
+ * `runtimeVersion` is boat's API version on boat. `captureFrom` is the state a machine must be in
+ * to be captured: Tart's is `stopped`.
+ */
 export const Host = Schema.Struct({
   id: HostId,
   runtime: Runtime,
   version: Schema.String,
-  /** For boat, its API version. */
   runtimeVersion: Schema.String,
-  /** The state a machine must be in to be captured: Tart's is `stopped`. */
   captureFrom: Schema.Literals(["running", "stopped"]),
   bases: Schema.Array(Schema.String),
 }).annotate({ identifier: "Host" });
@@ -113,10 +117,6 @@ export type Host = typeof Host.Type;
 
 const usageFields = {
   host: HostId,
-  /**
-   * `cpu` and `ramMib`: what the host's running machines were given. `runningVms`: Apple's two
-   * VMs per Mac. `activeSandboxes` and the `starts` of each rolling window: the boat account's.
-   */
   resource: Schema.Literals([
     "cpu",
     "ramMib",
@@ -126,7 +126,6 @@ const usageFields = {
     "startsPerHour",
     "startsPerDay",
   ]),
-  /** Only where the host refuses an action that would pass it. */
   limit: Schema.optionalKey(Schema.Int),
 };
 
@@ -134,6 +133,10 @@ const usageFields = {
  * A resource of a host and how much of it is in use, counted as a refusal counts it, so it
  * needn't match the host's own machines. When a machine the sum counts couldn't be read, the
  * sum would be a guess, so the row names those machines instead.
+ *
+ * `cpu` and `ramMib` are what the host's running machines were given, `runningVms` Apple's two
+ * VMs per Mac, and `activeSandboxes` and the `starts` of each rolling window the boat account's.
+ * `limit` is there only where the host refuses an action that would pass it.
  */
 export const Usage = Schema.Union([
   Schema.Struct({ ...usageFields, used: Schema.Int }),

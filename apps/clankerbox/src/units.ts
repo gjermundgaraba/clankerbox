@@ -1,7 +1,6 @@
 import { Invalid, mibPerGib } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Duration, Effect } from "effect";
 
-/** Sizes are binary however written: `G`, `GB`, `Gi` and `GiB` all mean GiB. */
 const sizePattern = /^(\d+(?:\.\d+)?)([mg])(?:i|b|ib)?$/iu;
 
 const parseSize = (flag: string, text: string, unit: readonly [name: string, mib: number]) => {

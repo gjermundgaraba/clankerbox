@@ -23,7 +23,6 @@ const ref = (index: number, ramMib: number): MachineRef => ({
 
 type Placed = Held & { readonly state: Observed["state"] };
 
-/** Whether `checkRamBudget` lets machine 0, booting, start among `others` under `budgetMib`. */
 const admits = (target: number, others: ReadonlyArray<typeof Machine.Type>, budgetMib: number) =>
   Effect.gen(function* () {
     const machine = ref(0, target);

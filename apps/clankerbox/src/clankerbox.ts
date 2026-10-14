@@ -23,7 +23,6 @@ import { prebuild } from "./prebuilds.ts";
 import { profiles } from "./profiles.ts";
 import { ssh } from "./ssh.ts";
 
-/** Each action's command, so that an action the CLI has no command for fails to type-check. */
 export const actionCommands = {
   listMachines: machines,
   getMachine,
@@ -41,10 +40,6 @@ export const actionCommands = {
   getCapacity: capacity,
 } satisfies Record<keyof typeof actionsByName, Command.Command.Any>;
 
-/**
- * SIGINT or SIGTERM exits 130, the default teardown's code, so a unit that stops the host lists
- * 130 as a success.
- */
 export const clankerbox = Command.make("clankerbox").pipe(
   Command.withDescription("Run machines on clankerbox hosts. `clankerbox host` runs a host."),
   Command.withSubcommands([

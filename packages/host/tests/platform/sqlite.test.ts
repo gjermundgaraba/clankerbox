@@ -82,7 +82,6 @@ const checkpoint = (name: string, fields?: Partial<NewCheckpoint>): NewCheckpoin
 
 const machine = (name: string): RowRef<"machine"> => ({ kind: "machine", name });
 
-/** What a release records on the rows its claim held. */
 const refused = (name: ActionRecord["name"]): ActionRecord => ({
   name,
   status: "failed",
@@ -101,7 +100,6 @@ const capturing = (store: Interface, made: NewCheckpoint) =>
     store.insert("captureCheckpoint", { kind: "checkpoint", record: made }, token),
   );
 
-/** Inserts a machine row whose create is done, and so made. */
 const planted = (store: Interface, made: NewMachine) =>
   Effect.flatMap(store.insert("createMachine", inserting(made)), (token) =>
     Effect.andThen(
@@ -114,7 +112,6 @@ const RowName = Schema.Literals(["a", "b", "c"]);
 
 const Slot = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 3 }));
 
-/** `slot` picks one of the claims not yet given back. */
 const Step = Schema.Union([
   Schema.Struct({ op: Schema.Literal("createMachine"), name: RowName }),
   Schema.Struct({ op: Schema.Literal("startMachine"), name: RowName }),
@@ -705,7 +702,6 @@ layer(NodeServices.layer)((it) => {
         const forbidden =
           "boat POST /sandboxes/bx_1/sshkey answered 403 api_key_action_forbidden: this API key may not add keys (req_0123)";
 
-        // Only a host on an unreleased build recorded a refusal: no v0.16.0 row holds one.
         const unmade =
           "machine linux_dev was never made: its create, fork or restore failed; delete it";
 
@@ -1029,7 +1025,6 @@ layer(NodeServices.layer)((it) => {
 
         yield* Effect.forEach(["a", "b"], (name) => planted(store, record(name)));
 
-        /** What the model says a claim of `name` for `action` does, and does it to the model. */
         const claimed = (name: string, action: ActionRecord["name"]) => {
           const current = rows.get(name);
 

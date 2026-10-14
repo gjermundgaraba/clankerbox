@@ -16,10 +16,6 @@ const prefix = "prebuilt-";
 
 const digestDigits = 12;
 
-/**
- * 64 bits, so no two builds draw one name. With `prebuilding-` it is 28 characters, inside the 29
- * a 32-character host ID and its `_` leave of an ID's 62.
- */
 const builderBytes = 8;
 
 /**

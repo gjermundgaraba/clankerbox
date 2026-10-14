@@ -1,4 +1,3 @@
-/** Nothing here logs a script or a packed recipe: a recipe can carry secrets. */
 import { Effect, FileSystem, Option, type PlatformError, Predicate } from "effect";
 import { Base64 } from "effect/encoding";
 import { Invalid } from "./errors.ts";
@@ -6,7 +5,6 @@ import { describeFileError } from "./describe.ts";
 
 const lineLength = 76;
 
-/** base64 has no `_`, so no line of a file's payload can end its here-document early. */
 const terminator = "CLANKERBOX_RECIPE";
 
 const wrap = (base64: string): string => {
@@ -21,16 +19,10 @@ const wrap = (base64: string): string => {
 
 const quote = (text: string): string => `'${text.replaceAll("'", `'\\''`)}'`;
 
-/** Under `./`, so a name that starts with `-` is never read as an option. */
 const argument = (entry: string): string => quote(`./${entry}`);
 
-/** The one bit of a mode a recipe carries, as git does, so a checkout's umask changes nothing. */
 const executable = 0o111;
 
-/**
- * Under `/var/tmp`, which nothing mounts `noexec`. Setup runs as a child rather than through
- * `exec`, so the cleanup trap still runs after it.
- */
 const selfExtracting = (steps: ReadonlyArray<string>): string =>
   [
     "#!/bin/sh",

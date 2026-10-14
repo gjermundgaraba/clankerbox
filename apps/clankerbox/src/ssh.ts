@@ -14,7 +14,6 @@ const runSsh = (target: SshTarget, user: string, extra: ReadonlyArray<string>) =
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-    // ssh runs in the CLI's process group, so it stays in the terminal's foreground.
     const ssh = yield* spawner.spawn(
       ChildProcess.make("ssh", yield* pinnedSsh(target, user, extra), {
         stdin: "inherit",

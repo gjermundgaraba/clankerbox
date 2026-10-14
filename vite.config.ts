@@ -30,7 +30,6 @@ export default defineConfig({
   },
   lint: {
     options: { typeAware: true, typeCheck: true },
-    // Oxlint's defaults, and vitest for no-restricted-vi-methods.
     plugins: ["unicorn", "typescript", "oxc", "vitest"],
     ignorePatterns: [...agentTooling, "tools/oxlint/anti-slop/**"],
     jsPlugins: [
@@ -45,11 +44,9 @@ export default defineConfig({
     rules: {
       "vite-plus/prefer-vite-plus-imports": "error",
       "oxc/no-accumulating-spread": "error",
-      // Vitest's expect takes a message as its second argument.
       "vitest/valid-expect": ["error", { maxArgs: 2 }],
       "vitest/require-to-throw-message": "error",
       "vitest/no-conditional-expect": "error",
-      // @effect/vitest's testers are test blocks too.
       "vitest/no-standalone-expect": [
         "error",
         {
@@ -85,10 +82,14 @@ export default defineConfig({
       "anti-slop-effect/no-service-constructor-imports": "error",
       "anti-slop-effect/prefer-effect-match": "error",
       "fence/no-manual-run": "error",
+      "fence/no-prose-comments": "error",
     },
     overrides: [
       {
-        // The entry files, and the tests that drive a Promise API or a child program.
+        files: ["packages/sdk/src/**/*.ts", "packages/rivet-sandbox-agent/src/**/*.ts"],
+        rules: { "fence/no-prose-comments": ["error", { publicDocs: true }] },
+      },
+      {
         files: [
           "apps/clankerbox/src/main.ts",
           "packages/rivet-sandbox-agent/src/provider.ts",

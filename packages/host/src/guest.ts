@@ -1,7 +1,3 @@
-/**
- * Nothing here logs a script: setup can carry secrets, and preparation's seed is fresh
- * randomness. Errors carry a script's output, never its text.
- */
 import { ScriptFailed, type Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Stream } from "effect";
 import {
@@ -16,10 +12,6 @@ const tailLines = 20;
 
 const tailCharacters = 4000;
 
-/**
- * `lastLines` trims trailing whitespace before it cuts, so output that ends in up to 12000
- * characters of whitespace still gives a full tail.
- */
 const keptCharacters = 4 * tailCharacters;
 
 export const lastLines = (text: string): string =>
@@ -80,11 +72,6 @@ const runInGuest = (
     return output;
   });
 
-/**
- * The script arrives on stdin, so it never appears in a process list. `/var/tmp` is never
- * mounted `noexec`. A killed exec may leave the file: smolvm SIGKILLs the guest command and its
- * descendants, so no trap runs.
- */
 const setupRunner = [
   "set -eu",
   "script=$(mktemp /var/tmp/clankerbox-setup.XXXXXX)",
@@ -116,13 +103,6 @@ export const runSetup = (
 
 const hostKeyMarker = "clankerbox-host-key: ";
 
-/**
- * The kernel RNG is reseeded first, as a RAM restore clones the guest's CRNG. The instance is
- * written last, so a crash before it repeats the identity steps. sshd re-executes itself on
- * SIGHUP, which loads the new keys and keeps its listener under whatever launched it;
- * `/proc/<pid>/comm` guards against a stale pid file, and macOS has no `/run/sshd.pid`, as
- * launchd starts sshd per connection. Tests set `CLANKERBOX_ROOT` to a temporary root.
- */
 export const preparationScript = [
   "set -eu",
   "instance=$1",
@@ -169,10 +149,6 @@ export const preparationScript = [
   "",
 ].join("\n");
 
-/**
- * P3 measured at most 0.55 s for a re-mint plus an sshd restart and 1.52 s for a `start` with a
- * clankercreds sync after a cold start; 60 s leaves room for a slow network.
- */
 const preparationTimeout = Duration.seconds(60);
 
 const seedBytes = 64;

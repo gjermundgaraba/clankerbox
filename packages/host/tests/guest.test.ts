@@ -83,11 +83,6 @@ const waitFor = (file: string, text: string) =>
     }),
   );
 
-/**
- * Stands in for sshd's listener, until the test's scope ends. The shell runs pending traps in
- * signal-number order, HUP before USR1, so a SIGHUP sent before `settled`'s SIGUSR1 is recorded
- * first.
- */
 const listener = (root: string, comm: string) =>
   Effect.gen(function* () {
     const marker = join(root, "listener");
@@ -120,7 +115,6 @@ const listener = (root: string, comm: string) =>
     return {
       hup: waitFor(marker, "hup"),
       settled: Effect.gen(function* () {
-        // The handle's kill waits for an exit that a trapped signal never brings.
         yield* Effect.sync(() => process.kill(child.pid, "SIGUSR1"));
 
         return yield* waitFor(marker, "usr1");
@@ -128,7 +122,6 @@ const listener = (root: string, comm: string) =>
     };
   });
 
-// The scripts run as real processes, which sleep and take signals on the real clock.
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a new instance reseeds, writes the machine ID and the instance, and runs start", () =>
     Effect.gen(function* () {
@@ -157,7 +150,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const where = yield* guest();
 
-      // Only the stubs and `cat` are on PATH, and the script adds only the guest root's own dirs.
       yield* remove(join(where.bin, "perl"));
       yield* symlink("/bin/cat", join(where.bin, "cat"));
 

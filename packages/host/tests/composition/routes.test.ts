@@ -26,7 +26,6 @@ const spec: MachineSpec = { base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
 const withClient = <A, E>(url: string, use: (client: Client.Interface) => Effect.Effect<A, E>) =>
   Effect.flatMap(Client.Client, use).pipe(Effect.provide(NodeClient.layer([{ id: "linux", url }])));
 
-// The host runs on the real clock, as it does in `clankerbox host`.
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("the SDK's client drives a machine's lifecycle on a served host", () =>
     Effect.gen(function* () {
@@ -139,7 +138,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ).toEqual([["linux", "Internal", "smolvm machine status didn't answer"]]);
         expect(hosts.answers.map(({ id }) => id)).toEqual(["linux"]);
         expect(placed.id).toBe("linux_other");
-        // Neither the read of the host nor the placement asked the runtime for its capacity.
         expect(fake.calls.filter((call) => call.startsWith("capacity"))).toHaveLength(3);
       }),
   );
@@ -230,7 +228,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   const decodeInvalid = Schema.decodeUnknownSync(Schema.fromJsonString(Invalid));
 
-  /** `version` with its minor (1) or its patch (2) moved on by one. */
   const bump = (part: 1 | 2) =>
     version
       .split(".")
@@ -244,7 +241,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const created = yield* createRaw(url, "linux_dev", older);
       const read = yield* post(url, "getHost", {}, older);
       const unversioned = yield* createRaw(url, "linux_dev", {});
-      // A client of another release may send another shape: the version is checked first.
       const malformed = yield* post(url, "createMachine", { id: "linux_dev", labels: [] }, older);
 
       for (const answer of [created, read, unversioned, malformed]) {

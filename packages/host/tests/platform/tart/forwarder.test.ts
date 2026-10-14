@@ -1,7 +1,3 @@
-/**
- * A local command stands in for `tart exec … nc 127.0.0.1 22`. It records when its stdin closed,
- * which a killed command never gets to do.
- */
 import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { connect, createServer, type Socket } from "node:net";
@@ -16,10 +12,6 @@ import { make } from "../../../src/platform/tart/forwarder.ts";
 
 const forwarder = make("127.0.0.1");
 
-/**
- * Node rather than `cat`: under `vp run`'s file tracking, `/bin/cat` held its output until its
- * stdin closed.
- */
 const echo = (marker: string) => (input: Stream.Stream<Uint8Array>) =>
   ChildProcess.make(
     process.execPath,
@@ -31,10 +23,6 @@ const echo = (marker: string) => (input: Stream.Stream<Uint8Array>) =>
     { stdin: input },
   );
 
-/**
- * No other test file uses this range, and it is below the ephemeral ports, so no outgoing
- * connection takes one.
- */
 let nextPort = 21_300;
 
 const ownPort = () => nextPort++;
@@ -168,7 +156,6 @@ layer(NodeServices.layer)((it) => {
           open.once("end", resolve);
         });
 
-        // The first echo shows the forwarder has accepted the connection before it stops listening.
         const echoed = new Promise((resolve) => {
           open.once("data", resolve);
         });

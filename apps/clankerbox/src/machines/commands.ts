@@ -53,7 +53,6 @@ const createArguments = {
   ),
 };
 
-/** A restored prebuild is named on stderr: what its setup installed is as old as it is. */
 export const create = Command.make("create", { ...mutationFlags, ...createArguments }, (flags) =>
   printResource(flags, {
     call: (client, config) =>

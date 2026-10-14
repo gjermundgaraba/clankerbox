@@ -1,8 +1,3 @@
-/**
- * Each machine's guest root is a directory its commands see as `/` through `CLANKERBOX_ROOT`, and
- * commands run under the host's `/bin/sh`. A fork or restore copies the source's root, identity
- * files included, as a RAM copy does.
- */
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -113,7 +108,6 @@ export const fakeRuntime = (options: FakeOptions) => {
     injections.set(operation, [...(injections.get(operation) ?? []), injection]);
   };
 
-  /** Injections fire in the order they were queued. */
   const enter = <O extends Operation>(
     operation: O,
     resource: { readonly id: string },
@@ -251,14 +245,12 @@ export const fakeRuntime = (options: FakeOptions) => {
           Effect.andThen(
             enter("create", machine),
             Effect.promise(async () => {
-              // A machine made again under the same name gets a fresh root.
               const root = join(options.dir, "roots", machine.instance);
 
               await mkdir(join(root, "dev"), { recursive: true });
               machines.set(machine.name, { state: "running", root });
             }),
           ),
-        // As smolvm: a start refuses a machine it doesn't have, and a stop ignores one.
         start: (machine) =>
           Effect.andThen(
             enter("start", machine),
@@ -329,7 +321,6 @@ export const fakeRuntime = (options: FakeOptions) => {
                 ChildProcess.make(file, args, {
                   env: { CLANKERBOX_ROOT: root, PATH: `${bin}:${process.env["PATH"] ?? ""}` },
                   extendEnv: true,
-                  // smolvm SIGKILLs a killed exec's guest command, so no trap runs.
                   killSignal: "SIGKILL",
                   stdin:
                     command.stdin === undefined
@@ -375,7 +366,6 @@ export const fakeRuntime = (options: FakeOptions) => {
     hangNextObserve: () => {
       observeFailures.push("hang");
     },
-    /** `entered` ends once the held call has started, so its action is past its claim. */
     holdNext: (operation: Operation) => {
       const until = Deferred.makeUnsafe<void>();
       const entered = Deferred.makeUnsafe<void>();

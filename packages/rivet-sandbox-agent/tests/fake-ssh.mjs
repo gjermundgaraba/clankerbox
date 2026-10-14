@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-// A stand-in for ssh in the provider's tests: it records its arguments and pid, then serves the
-// forward's local port as the guest's Sandbox Agent would, until its stdin ends. Files in
-// FAKE_SSH_DIR steer it: `refuse` makes it fail like a refused login, and `unhealthy` makes the
-// agent's health check fail.
 import { appendFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { join } from "node:path";

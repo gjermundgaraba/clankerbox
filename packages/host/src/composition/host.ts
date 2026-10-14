@@ -36,10 +36,6 @@ export const servicesLayer = <E, R>(
 > => {
   const store = Sqlite.layer(config);
 
-  // A runtime gets only the store's `NativeIds`, so a runtime asking for the `Store` is a type
-  // error. Taking it from the store also builds the runtime only once the store holds the state
-  // dir's owner lock: a runtime may write there (smolvm creates its inventory), and a second host
-  // must not touch it at all.
   const nativeIds = Layer.effect(Store.NativeIds, Effect.service(Store.NativeIds)).pipe(
     Layer.provide(store),
   );
@@ -51,7 +47,6 @@ export const servicesLayer = <E, R>(
   );
 };
 
-/** The server binds only after startup recovery. */
 export const hostLayer = <E, R>(
   config: HostSettings,
   runtime: Layer.Layer<Runtime, E, R>,

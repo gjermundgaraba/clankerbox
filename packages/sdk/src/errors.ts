@@ -1,10 +1,5 @@
 import { Match, Schema } from "effect";
 
-/**
- * The client sets `host` and `action`. `id` is the resource the error is about: a host sets it on
- * `NotFound` and `Conflict`, and the client sets the call's subject otherwise. `made` is the
- * resource a create, fork, restore or capture makes, which a failure may leave behind.
- */
 const located = {
   host: Schema.optionalKey(Schema.String),
   action: Schema.optionalKey(Schema.String),
@@ -151,6 +146,12 @@ export const HostError = Schema.Union(hostErrors);
 
 export type HostError = typeof HostError.Type;
 
+/**
+ * Each carries, where known: `host` and `action`, which the client sets; `id`, the resource the
+ * error is about, which a host sets on `NotFound` and `Conflict` and the client sets to the call's
+ * subject otherwise; and `made`, the resource a create, fork, restore or capture makes, which a
+ * failure may leave behind.
+ */
 export const ClankerboxError = Schema.Union([...hostErrors, Unavailable]);
 
 export type ClankerboxError = typeof ClankerboxError.Type;

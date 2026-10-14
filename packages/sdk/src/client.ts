@@ -108,7 +108,11 @@ export interface Interface extends Calls {
   readonly checkpoints: Effect.Effect<Gathered<Checkpoint>>;
   /** A host whose runtime couldn't be read is among the unreachable. */
   readonly capacity: Effect.Effect<Gathered<Usage>>;
-  /** The host a create of `base` goes to, read even when `options.host` names it. */
+  /**
+   * The host a create of `base` goes to, read even when `options.host` names it: the first in
+   * list order that offers it. With none, it is `Unavailable` if a host gave no reply, and
+   * `NotOffered` otherwise.
+   */
   readonly place: (
     base: string,
     options?: CreateOptions,
@@ -137,10 +141,6 @@ export class Client extends Context.Service<Client, Interface>()(
   "@gjermundgaraba/clankerbox-sdk/Client",
 ) {}
 
-/**
- * Input that doesn't encode fails as `InvalidInput` before anything is sent, so a `SchemaError`
- * that reaches `settle` is a reply that didn't decode.
- */
 const hostApi = (entry: HostEntry) =>
   ActionHttp.client(Http, {
     baseUrl: entry.url,
@@ -215,9 +215,6 @@ const settle = <A>(
         Effect.fail(
           Match.value(error.reason).pipe(
             Match.tag("TransportError", () => unanswered(context, causeDetail(error))),
-            // The connection closed while the body was read. A body that arrived and doesn't
-            // parse fails as a SyntaxError or a SchemaError, and a wrong status or content
-            // type carries no cause.
             Match.when(
               {
                 _tag: "DecodeError",
@@ -228,7 +225,6 @@ const settle = <A>(
             Match.orElse(() => unexpected(context, error)),
           ),
         ),
-      // Schema issues never carry the rejected values, so a setup script never reaches the message.
       InvalidInput: (error) =>
         Effect.fail(
           new Invalid({
@@ -241,7 +237,6 @@ const settle = <A>(
             message: `host ${context.host.id}'s reply didn't decode: ${error.message}`,
           }),
         ),
-      // Every action is public, so a host never refuses a caller.
       Unauthenticated: (error) => Effect.fail(unexpected(context, error)),
       Forbidden: (error) => Effect.fail(unexpected(context, error)),
     }),
@@ -258,7 +253,6 @@ const encodeError = Schema.encodeSync(ClankerboxError);
 
 const decodeError = Schema.decodeSync(ClankerboxError);
 
-/** The error with the call's location filled in where it has none. */
 const locate =
   ({ action, host, id, made }: Where) =>
   <E extends ClankerboxError>(error: E): E =>
@@ -321,10 +315,6 @@ export const make = (
         : Effect.succeed(found);
     };
 
-    /**
-     * A call of `name` on one host, about `subject`, which makes `made`. Its errors carry the host,
-     * the action, `subject` as their `id` unless the host named another, and `made`.
-     */
     const send = <N extends HostAction>(
       { entry, api }: Route,
       name: N,
@@ -345,12 +335,10 @@ export const make = (
         target: made ?? subject,
       }).pipe(Effect.mapError(locate({ action: name, host: entry.id, id: subject, made })));
 
-      // SAFETY: `settle` passes on the action's declared errors and adds only `Unavailable`,
-      // `Internal` and `Invalid`, which every action declares.
+      // SAFETY: `settle` adds only `Unavailable`, `Internal` and `Invalid`, which every action declares.
       return settled as Effect.Effect<Success<N>, ErrorOf<N>>;
     };
 
-    /** An error raised before the call is sent names its action too. */
     const naming =
       <N extends HostAction>(name: N) =>
       <A, E extends ClankerboxError>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
@@ -388,7 +376,6 @@ export const make = (
         Effect.mapError(locate({ action: "getHost", host: route.entry.id })),
       );
 
-    /** `makes` is the name of the resource the action makes beside its subject. */
     const onResource = <N extends Routed>(name: N, input: Input<N>, makes?: string) =>
       naming(name)(
         Effect.gen(function* () {
@@ -405,11 +392,6 @@ export const make = (
         onResource("createMachine", { ...spec, id }, name),
       );
 
-    /**
-     * The first host in list order that offers `base`; the requests still out are interrupted,
-     * so a silent host after it delays nothing. With no winner it is `Unavailable` only if a
-     * host gave no reply: otherwise asking again changes nothing, and it is `NotOffered`.
-     */
     const offering = (base: string) =>
       Effect.gen(function* () {
         const asked = yield* Effect.forEach(routed, (route) =>

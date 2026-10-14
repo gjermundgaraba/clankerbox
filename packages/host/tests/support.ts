@@ -16,7 +16,6 @@ import { type FakeOptions, type FakeRuntime, fakeRuntime } from "./fake-runtime.
 export const image =
   "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
 
-/** A file that asserts ports passes its own range, so files running at once never share one. */
 const sharedPorts: PortRange = { first: 21_000, last: 21_099 };
 
 export const hostConfig = (stateDir: string, machinePorts = sharedPorts): HostSettings => ({
@@ -72,7 +71,6 @@ export const startHost = (
 
     const context = yield* Layer.buildWithScope(
       hostLayer(hostConfig(stateDir, options?.ports), fake.layer, loopbackServer()).pipe(
-        // Failed actions log no warnings here: the tests read their errors.
         Layer.provideMerge(Logger.layer([])),
         Layer.provide(NodeServices.layer),
       ),

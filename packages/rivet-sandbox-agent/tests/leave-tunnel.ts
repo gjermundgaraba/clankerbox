@@ -17,5 +17,4 @@ const port = await Effect.runPromise(
   }),
 );
 
-// A string, which no FORCE_COLOR colours as it does a number.
 console.log(String(port));

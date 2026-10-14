@@ -21,7 +21,6 @@ import * as Store from "../src/store.ts";
 import { exists, read, remove, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { hostConfig, request, startHost, type TestHost } from "./support.ts";
 
-/** No other test file's host gives out these ports. */
 const ports = { first: 21_100, last: 21_109 };
 
 const host = (options?: Parameters<typeof startHost>[1] & { readonly dir?: string }) =>
@@ -49,7 +48,6 @@ const installsStart = {
   timeoutSeconds: 30,
 };
 
-// Setups and timeouts run on the real clock, as on a host; `onTestClock` moves its own.
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
     "create runs setup once, then preparation, and reports the machine as the runtime sees it",
@@ -197,7 +195,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* linux.run(linux.machines.create(request("a")));
         linux.fake.failNextObserve(new Internal({ message: "tart list exited 1" }));
 
-        // The create's own read, after it is done, is the one that fails.
         const made = yield* linux.run(linux.machines.create(request("b")));
 
         linux.fake.failNextObserve(new Internal({ message: "tart list exited 1" }));
@@ -217,7 +214,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
-  /** Rebuilds the actions on a test clock and moves it a second at a time until `use` ends. */
   const onTestClock = <A>(
     linux: TestHost,
     use: (machines: Machines.Interface) => Effect.Effect<A, HostError>,
@@ -366,7 +362,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const linux = yield* host();
 
-        // With no setup, nothing installs sshd, so preparation records no host key.
         const made = yield* linux.run(linux.machines.create(request("dev")));
         const stopped = yield* linux.run(linux.machines.stop("linux_dev"));
 
@@ -543,8 +538,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const row = Option.getOrThrow(yield* linux.run(linux.store.find("dev")));
 
-      // A crash between inserting the row and the first runtime call leaves this row and nothing
-      // native.
       yield* linux.run(linux.machines.delete("linux_dev"));
       yield* linux.run(linux.store.insert("createMachine", { kind: "machine", record: row }));
       yield* linux.dispose;
@@ -723,7 +716,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const neverMade = ["NotMade", unmade];
 
-        // A setup that fails after the runtime's create leaves its VM running.
         const error = yield* failure(
           linux,
           linux.machines.create(
@@ -745,7 +737,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const got = yield* linux.run(linux.machines.get("linux_dev"));
         const stopped = yield* linux.run(linux.machines.stop("linux_dev"));
 
-        // Still never made once stopped: the check runs before the runtime's own state checks.
         const refusedStopped = yield* Effect.all(
           [
             failure(linux, linux.machines.start("linux_dev")),
@@ -786,7 +777,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const linux = yield* host();
 
-        // Held in setup's exec: the runtime's create has made and booted the machine.
         const { entered } = linux.fake.holdNext("exec");
 
         yield* Effect.forkChild(
@@ -844,7 +834,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const linux = yield* host();
 
-        // With no setup, the first guest command is preparation's.
         linux.fake.failNext("exec", new Internal({ message: "sshd didn't start" }));
 
         const error = yield* failure(linux, linux.machines.create(request("dev")));
@@ -873,7 +862,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const linux = yield* host();
 
-        // Held in preparation's exec: with no setup, the runtime's create is all the work.
         const { entered } = linux.fake.holdNext("exec");
 
         yield* Effect.forkChild(linux.machines.create(request("dev")));
@@ -971,8 +959,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(file).toMatch(/^\/var\/tmp\/clankerbox-setup\./u);
 
-      // The killed setup leaves its file, as on smolvm; the fake's guest shares this host's
-      // /var/tmp.
       yield* remove(file);
 
       expect(error).toBeInstanceOf(ScriptFailed);
@@ -1019,7 +1005,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const idle = yield* linux.run(linux.machines.capacity);
 
-        // A create held in the runtime is past its check, and its machine doesn't run yet.
         const { entered, release } = linux.fake.holdNext("create");
 
         const creating = yield* Effect.forkChild(
@@ -1152,7 +1137,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* entered;
       yield* pause;
 
-      // The second create waits for the first's check, so only one admit has run.
       const admitsWhileHeld = linux.fake.calls.filter((call) => call.startsWith("admit")).length;
 
       yield* release;

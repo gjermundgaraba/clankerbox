@@ -1,7 +1,3 @@
-/**
- * Errors name a call by `what`, never by its arguments: an exec's arguments carry the
- * preparation script, which nothing logs.
- */
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, type PlatformError, type Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";

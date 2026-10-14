@@ -7,7 +7,6 @@ const instanceBytes = 16;
 export const newInstance = (): string =>
   Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(instanceBytes)));
 
-/** A new machine's ID goes through here too, so every row's ID fits clankercreds' pattern. */
 export const nameOn =
   (host: string) =>
   (id: string): Effect.Effect<string, Invalid> =>

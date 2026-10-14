@@ -42,7 +42,6 @@ const decodeFailure = (text: string) =>
     onExcessProperty: "error",
   });
 
-// The host runs on the real clock, as it does in `clankerbox host`.
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("create, stop, start and delete run on the host, and the CLI prints each outcome", () =>
     Effect.gen(function* () {

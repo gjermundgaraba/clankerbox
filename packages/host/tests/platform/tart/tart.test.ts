@@ -1,4 +1,3 @@
-/** The scripted Mac's `tart` and `launchctl` calls answer as Tart 2.40.1 and launchd do. */
 import { existsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
@@ -34,10 +33,6 @@ const binary = "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart";
 
 const launchctl = "/bin/launchctl";
 
-/**
- * No other test file uses this range, and it is below the ephemeral ports, so no outgoing
- * connection takes one.
- */
 let nextPort = 21_200;
 
 const ownPort = () => nextPort++;
@@ -89,7 +84,6 @@ interface Hooks {
   delete?: (vm: string) => Reply | undefined;
 }
 
-/** `kickstart` runs the job's `tart run`; by default the VM then runs and its agent answers. */
 const scriptedMac = (stateDir: string) => {
   const vms = new Map<string, "running" | "stopped" | "suspended">();
   const jobs = new Set<string>();
@@ -126,7 +120,6 @@ const scriptedMac = (stateDir: string) => {
 
         return undefined;
       case "set": {
-        // Every scripted VM's disk is 50 GB, and Tart only grows a disk.
         const at = rest.indexOf("--disk-size");
         const size = at === -1 ? 50 : Number(rest[at + 1]);
 
@@ -264,7 +257,6 @@ const runtimeOn = (options?: { readonly settings?: Partial<Settings> }) =>
     return { mac, runtime };
   });
 
-/** Without the version check and the `tart list` reads. */
 const calls = (mac: ScriptedMac) =>
   mac.spawner.calls
     .slice(1)
@@ -273,7 +265,6 @@ const calls = (mac: ScriptedMac) =>
 
 const vmOf = (machine: MachineRef) => machineName("mac", machine);
 
-// The runtime waits on the clock as it would on a Mac, so the tests run on the real one.
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it("native names carry the host ID, the kind and the instance, and disk sizes round up to GB", () => {
     const ref = { name: "dev", instance: "0123456789abcdef0123456789abcdef" };
@@ -584,8 +575,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const machine = machineOn("dev");
         const vm = vmOf(machine);
 
-        // The create's clone, job file and listener take real time; the clock moves only once the
-        // boot waits for the agent, and then until the create ends, however loaded the machine is.
         const probed = Promise.withResolvers<void>();
 
         mac.hooks.probe = () => {
@@ -788,7 +777,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `startMachine mac_b would run 3 macOS VMs on this Mac, and Apple allows 2: ${[vmOf(a), vmOf(b), "operators-own"].sort().join(", ")}`,
         );
 
-        // A machine an action is booting counts before its VM exists.
         mac.vms.delete("operators-own");
 
         const crowded = yield* Effect.flip(
@@ -837,14 +825,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const lists = mac.spawner.calls.slice(before).map(({ args }) => args);
 
-        // A start of the running `a` holds it as booting, and counts it once; `c` has no VM yet.
         const booting = yield* runtime.capacity([
           { machine: a, booting: true },
           { machine: b, booting: false },
           { machine: c, booting: true },
         ]);
 
-        // The operator's VMs count toward Apple's two, and not toward the host's cpu and RAM.
         expect(lists).toEqual([["list", "--source", "local", "--format", "json"]]);
         expect(idle).toEqual([
           { resource: "runningVms", limit: 2, used: 2 },
@@ -875,7 +861,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           machines: [{ machine: target, booting: true }],
         });
 
-        // Once a third VM runs, the same start is refused.
         mac.vms.set("operators-other", "running");
 
         const crowded = yield* Effect.flip(
@@ -1127,8 +1112,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const before = calls(mac).length;
       const error = yield* Effect.flip(runtime.delete(machine));
 
-      // Exit 1 is a running VM from Tart 2.40.0, so delete forces it off first; a VM that doesn't
-      // run exits 2 there, and the second delete's error is the reply.
       expect(error._tag).toBe("Internal");
       expect(error.message).toBe(`tart delete ${vm} exited 1: Error: permission denied`);
       expect(calls(mac).slice(before)).toEqual([

@@ -1,9 +1,3 @@
-/**
- * Each VM runs as `tart run` under its own launchd job in the user's GUI domain, so a host
- * restart leaves VMs running. Tart has one VM namespace per Tart home, shared with the operator's
- * own VMs and with any other host process on the Mac, so native names carry the host ID, the
- * kind and the row's instance.
- */
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -36,18 +30,9 @@ import { cliIn, expect, files, portOf } from "../process.ts";
 import * as Forwarder from "./forwarder.ts";
 
 export const TartSettings = Schema.Struct({
-  /**
-   * Of a versioned install: VM jobs run it from there, so an upgrade goes into a new
-   * directory.
-   */
   binary: Schema.String,
 });
 
-/**
- * From 2.40.1 clone refuses an existing destination, delete's exit codes are reliable, one accept
- * error no longer disables `tart exec`, and `tart list` no longer fails on running VMs. The
- * bump-tart skill re-checks these at a new release.
- */
 export const minimumVersion = "2.40.1";
 
 export interface Settings {
@@ -60,69 +45,36 @@ export interface Settings {
   readonly tartHome: string | undefined;
 }
 
-/**
- * Softnet, blocking the Mac itself: guests can't reach the host's services. `tart run` without it falls back to Tart's shared NAT.
- */
 const softnet = "--net-softnet-block=@host";
 
-/**
- * Two running macOS VMs per Mac is Apple's limit, the operator's own VMs included. Tart reports
- * Apple's refusal of a third with this text (T@2.40.1:VMStorageHelper.swift:146-147).
- */
+// Source: T@2.40.1:VMStorageHelper.swift:146-147
 const vmLimit = 2;
 
 const limitRefusal = "The number of VMs exceeds the system limit";
 
-/**
- * `tart set --disk-size` only grows a disk, and refuses a smaller size with this text
- * (T@2.40.1:VMDirectory.swift:287-319).
- */
+// Source: T@2.40.1:VMDirectory.swift:287-319
 const shrinkRefusal = "should be larger than the current disk size";
 
-/**
- * How long a boot may take until `tart exec` answers. On Tart 2.40.1, a stock Cirrus image
- * answered 18.5–32.3 s after `tart run` alone, and two booting together after about 61 and 93 s
- * (the bump-tart skill); two is as many as Apple runs at once.
- */
 const bootWait = Duration.minutes(3);
 
 const probePause = Duration.seconds(1);
 
-/**
- * How long the guest's own `shutdown -h now` may take before Tart's forced stop. Stock Cirrus
- * guests stopped 2.3–7.8 s after it on Tart 2.40.1, and 25.6 s for one whose agent was still
- * coming up, as the exec waits for it (the bump-tart skill).
- */
 const shutdownWait = Duration.minutes(1);
 
-/**
- * How long a VM may take to leave `running` after `tart stop --timeout 0`, which SIGKILLs `tart
- * run` right after its SIGINT (T@2.40.1:Commands/Stop.swift:51-68); the VM's lock goes with the
- * process.
- */
+// Source: T@2.40.1:Commands/Stop.swift:51-68
 const forcedStopWait = Duration.seconds(10);
 
 const stopPause = Duration.millis(500);
 
-/**
- * The search path of every tart call and VM job. Tart finds `softnet` (and `sudo`) on it
- * (T@2.40.1:Network/Softnet.swift:86-94, Utils.swift:30-45): the operator installs Softnet,
- * SUID root, in `/usr/local/bin`. Homebrew's `/opt/homebrew/bin` is left out: a Softnet there
- * isn't SUID root, and one found first fails every boot.
- */
+// Source: T@2.40.1:Network/Softnet.swift:86-94, Utils.swift:30-45
 const searchPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
-/**
- * The environment of every tart call and every VM job: the same in both, so the job's `tart run`
- * finds the VM the host made, in the host's Tart home.
- */
 export const environment = (settings: Pick<Settings, "tartHome">) => ({
   PATH: searchPath,
   HOME: homedir(),
   TART_HOME: settings.tartHome,
 });
 
-/** Also its launchd label. */
 export const machineName = (host: string, machine: Pick<MachineRef, "name" | "instance">): string =>
   `cbx-${host}-m-${machine.name}-${machine.instance.slice(0, 8)}`;
 
@@ -131,19 +83,14 @@ export const checkpointName = (
   checkpoint: Pick<CheckpointRef, "name" | "instance">,
 ): string => `cbx-${host}-c-${checkpoint.name}-${checkpoint.instance.slice(0, 8)}`;
 
-/**
- * In the host's state dir, so nothing loads them at login, and a test host's jobs stay apart
- * from production's.
- */
 export const jobsDir = (stateDir: string): string => join(stateDir, "launchd");
 
-/** Tart sizes disks in GB (10^9 bytes, T@2.40.1:VMDirectory.swift:287-301); rounded up from GiB. */
+// Source: T@2.40.1:VMDirectory.swift:287-301
 export const diskGb = (diskGib: number): number => Math.ceil((diskGib * 1024 ** 3) / 1e9);
 
 const xml = (text: string): string =>
   text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
-/** Started only by `kickstart` and never restarted by launchd. */
 export const plist = (job: {
   readonly label: string;
   readonly program: ReadonlyArray<string>;
@@ -182,14 +129,13 @@ export const plist = (job: {
     ``,
   ].join("\n");
 
-/** Every state `tart list` reports (T@2.40.1:VMDirectory.swift:6-10). */
+// Source: T@2.40.1:VMDirectory.swift:6-10
 const VmState = Schema.Literals(["running", "suspended", "stopped"]);
 
 const decodeList = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(Schema.Struct({ Name: Schema.String, State: VmState }))),
 );
 
-/** `State` derives from the VM's lock, held by its `tart run`; a suspended VM boots again. */
 export const stateOf = (state: typeof VmState.Type): MachineState =>
   state === "running" ? "running" : "stopped";
 
@@ -197,7 +143,6 @@ export const supported = (reported: string): boolean =>
   /^\d+\.\d+\.\d+$/u.test(reported) &&
   reported.localeCompare(minimumVersion, "en", { numeric: true }) >= 0;
 
-/** Nested lines of `launchctl print` are indented further. */
 const printed = (output: string, key: string): string | undefined =>
   new RegExp(`^\\t${key} = (.+)$`, "mu").exec(output)?.[1];
 
@@ -256,11 +201,6 @@ export const make = (
 
     const state = (vm: string) => Effect.map(list, (vms) => vms.get(vm) ?? "missing");
 
-    /**
-     * Every running VM in the Tart home, the operator's included, and every machine an action is
-     * booting, since its VM runs only once its job has started. A set, so a running machine an
-     * action holds counts once.
-     */
     const countedIn = (vms: ReadonlyMap<string, MachineState>, machines: ReadonlyArray<Held>) => {
       const counted = new Set<string>();
 
@@ -291,10 +231,6 @@ export const make = (
       log: join(jobs, `${vm}.log`),
     });
 
-    /**
-     * At every boot, so its plist names the configured tart; `boot` reloads a job launchd holds
-     * that names another.
-     */
     const writeJob = (vm: string) => {
       const { plist: file, log } = job(vm);
 
@@ -313,10 +249,6 @@ export const make = (
       );
     };
 
-    /**
-     * From create, or the host's startup, until delete, whatever the machine's state; on a stopped
-     * machine a connection closes at once. A start listens again if startup couldn't.
-     */
     const listen = (machine: MachineRef) =>
       Effect.flatMap(portOf(machine), (port) =>
         forwarder.listen(port, (input) =>
@@ -327,11 +259,6 @@ export const make = (
     const unlisten = (machine: MachineRef) =>
       machine.port === undefined ? Effect.void : forwarder.close(machine.port);
 
-    /**
-     * Before `tart run` holds the VM, an exec fails at once; while the guest boots, it blocks, and
-     * fails after about 30 s if the agent isn't up yet (the bump-tart skill), so it is tried again
-     * until `bootWait` passes.
-     */
     const ready = (machine: MachineRef) => {
       const vm = vmOf(machine);
       const { target, log } = job(vm);
@@ -389,7 +316,6 @@ export const make = (
         Effect.map(Option.isSome),
       );
 
-    /** SIGINT, then SIGKILL of `tart run` at once. Exit 2 is a VM that doesn't run. */
     const forceStop = (vm: string) =>
       Effect.gen(function* () {
         yield* call(["stop", "--timeout", "0", vm], `stop ${vm}`, [0, 2]);
@@ -401,11 +327,6 @@ export const make = (
         }
       });
 
-    /**
-     * Kickstarted without `-k`, which never touches a running VM. `kickstart` returns before Tart
-     * has started the VM, so `ready` waits for the guest agent. A boot that fails from there
-     * leaves the VM as it is, reachable through its listener.
-     */
     const boot = (machine: MachineRef) =>
       Effect.gen(function* () {
         const vm = vmOf(machine);
@@ -416,7 +337,6 @@ export const make = (
         const loaded = yield* launchctl(["print", target], `print ${target}`);
         const program = printed(loaded.stdout, "program");
 
-        // A job launchd holds runs the program it was bootstrapped with, not the plist's.
         const stale =
           loaded.exitCode === 0 &&
           printed(loaded.stdout, "state") === "not running" &&
@@ -437,7 +357,6 @@ export const make = (
           yield* expect(loaded, `launchctl print ${target}`);
         }
 
-        // The log then holds only this boot's output, which a failed boot's error carries.
         yield* files(`couldn't empty ${log}`, fs.writeFileString(log, "", { mode: 0o600 }));
         yield* Effect.flatMap(launchctl(["kickstart", target], `kickstart ${vm}`), (ran) =>
           expect(ran, `launchctl kickstart ${vm}`),
@@ -445,11 +364,6 @@ export const make = (
         yield* ready(machine);
       });
 
-    /**
-     * The guest's own `shutdown -h now` flushes its disks; Tart's forced stop follows if the
-     * guest hasn't stopped within `shutdownWait`. The exec may die with the guest, so only the
-     * VM's state counts.
-     */
     const stop = (machine: MachineRef) =>
       Effect.gen(function* () {
         const vm = vmOf(machine);
@@ -475,10 +389,6 @@ export const make = (
         }
       });
 
-    /**
-     * Exit 2 is a VM that doesn't exist; a running VM exits 1 (from Tart 2.40.0), and is forced
-     * off, then deleted.
-     */
     const deleteVm = (vm: string) =>
       Effect.gen(function* () {
         const first = yield* tart(["delete", vm], `delete ${vm}`);
@@ -491,11 +401,6 @@ export const make = (
         }
       });
 
-    /**
-     * The machine's listener opens first, so a port it can't listen on is refused before anything
-     * native. A `diskGib` below the base's disk is the caller's to fix, so Tart's refusal of it is
-     * `Unsizable`.
-     */
     const cloneInto = (from: string, machine: MachineRef, sizes: ReadonlyArray<string>) => {
       const vm = vmOf(machine);
 
@@ -516,10 +421,6 @@ export const make = (
       });
     };
 
-    /**
-     * A fork and a capture copy a stopped machine's disk, though Tart's clone doesn't require
-     * one. `captureFrom` tells clients so.
-     */
     const copiedFrom = "stopped";
 
     const copyable = (what: string, machine: MachineRef) =>
@@ -556,8 +457,6 @@ export const make = (
             fs.makeDirectory(jobs, { recursive: true, mode: 0o700 }),
           );
 
-          // A port something else holds leaves only its machine unreachable: the host serves
-          // the rest, its delete still works, and its start listens again before it boots.
           for (const machine of machines) {
             yield* listen(machine).pipe(
               Effect.catch((error) =>
@@ -570,11 +469,6 @@ export const make = (
       observe: Effect.fn("Tart.observe")((machines) =>
         Effect.map(list, (vms) => observedIn(vms, machines)),
       ),
-      /**
-       * The target counts once even when it runs already. The operator's Linux VMs count too,
-       * which Apple doesn't limit, so the count is conservative; Apple's own refusal is the real
-       * guard.
-       */
       admit: Effect.fn("Tart.admit")(({ action, machine, machines }) =>
         Effect.gen(function* () {
           const counted = countedIn(yield* list, machines);
@@ -586,7 +480,6 @@ export const make = (
           }
         }),
       ),
-      /** One `tart list` for every row; `cpu` and `ramMib` count only the host's own machines. */
       capacity: Effect.fn("Tart.capacity")((machines) =>
         Effect.gen(function* () {
           const vms = yield* list;
@@ -615,7 +508,6 @@ export const make = (
           String(diskGb(machine.diskGib)),
         ]),
       ),
-      /** A VM Tart no longer has is refused before anything is written. */
       start: Effect.fn("Tart.start")((machine) =>
         Effect.gen(function* () {
           const observed = yield* state(vmOf(machine));
@@ -639,7 +531,6 @@ export const make = (
 
           yield* deleteVm(vm);
 
-          // Exit 3 is a job launchd doesn't hold.
           yield* Effect.flatMap(launchctl(["bootout", target], `bootout ${vm}`), (ran) =>
             expect(ran, `launchctl bootout ${vm}`, [0, 3]),
           );
@@ -648,7 +539,6 @@ export const make = (
             yield* files(`couldn't remove ${path}`, fs.remove(path, { force: true }));
           }
 
-          // Last, so a delete that fails leaves the machine reachable.
           yield* unlisten(machine);
         }),
       ),

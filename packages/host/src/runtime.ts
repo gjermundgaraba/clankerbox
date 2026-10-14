@@ -56,16 +56,8 @@ export interface CheckpointRef {
   readonly port: number | undefined;
 }
 
-/**
- * Bounds each `observe` and `admit`, so a list answers within the client's `readTimeout`
- * however slow the runtime is: a second under it, for the request's way to the host and back.
- */
 export const stateReadWait = Duration.subtract(readTimeout, Duration.seconds(1));
 
-/**
- * A second under `stateReadWait`, so one hung read makes only its own machine `unknown`, and
- * 2 s over the 6 s smolvm's status of an unreachable machine can take (the bump-smolvm skill).
- */
 export const machineReadWait = Duration.subtract(stateReadWait, Duration.seconds(1));
 
 export const timeoutFail =
@@ -79,11 +71,6 @@ export interface Observed {
   readonly ssh?: SshEndpoint | undefined;
 }
 
-/**
- * For a runtime that reads each machine on its own: one that fails, or takes over
- * `machineReadWait` including its wait for one of `concurrency` turns, reads `unknown`, and
- * `warn` logs why.
- */
 export const observeEach = (
   machines: ReadonlyArray<MachineRef>,
   read: (machine: MachineRef) => Effect.Effect<Observed, RuntimeError>,
@@ -147,10 +134,6 @@ export interface Execution {
   readonly exitCode: Effect.Effect<number, RuntimeError>;
 }
 
-/**
- * A runtime error that the runtime knows created nothing native. The core releases the claim,
- * removes a new row, and replies with `error`.
- */
 export class Refusal<E extends HostError> extends Data.TaggedError("Refusal")<{
   readonly error: E;
 }> {}
