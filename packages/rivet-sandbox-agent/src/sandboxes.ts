@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import {
-  actionsByName,
+  ActionName,
   type ClankerboxError,
   Client,
   Conflict,
@@ -27,12 +27,18 @@ import { healthPath } from "./agent.ts";
 import type { Options } from "./options.ts";
 import { forwarding, freePort, LocalTunnelError, open, type Tunnel } from "./tunnel.ts";
 
-/** The calls that make a machine, whose failure may leave it on its host. */
-const makers = [
-  actionsByName.createMachine,
-  actionsByName.forkMachine,
-  actionsByName.restoreMachine,
-];
+const makesMachine = {
+  createMachine: true,
+  forkMachine: true,
+  restoreMachine: true,
+  startMachine: false,
+  stopMachine: false,
+  deleteMachine: false,
+  captureCheckpoint: false,
+  deleteCheckpoint: false,
+} satisfies Record<ActionName, boolean>;
+
+const isActionName = Schema.is(ActionName);
 
 export const name = "clankerbox";
 
@@ -220,7 +226,7 @@ export const make = (options: Options, ssh = "ssh") => {
     Effect.gen(function* () {
       const client = yield* Client.Client;
 
-      if (error.made !== undefined && makers.some(({ name }) => name === error.action)) {
+      if (error.made !== undefined && isActionName(error.action) && makesMachine[error.action]) {
         yield* Effect.ignore(client.deleteMachine({ id: error.made }));
       }
 

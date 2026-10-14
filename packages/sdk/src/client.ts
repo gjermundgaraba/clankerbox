@@ -24,7 +24,7 @@ import {
 import { formatId, HostId, parseId, parseName } from "./ids.ts";
 import { version, versionHeader } from "./release.ts";
 import type { Checkpoint, Host, Machine, MachineSpec, Usage } from "./resources.ts";
-import { describeIssues } from "./text.ts";
+import { describeIssues } from "./describe.ts";
 
 /** `id` is the host part of every ID the host holds. */
 export const HostEntry = Schema.Struct({

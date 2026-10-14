@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   Capacity,
+  formatGib,
   type HostError,
   Internal,
   Unsizable,
@@ -506,7 +507,7 @@ export const make = (
 
         if (set.exitCode !== 0 && set.stderr.includes(shrinkRefusal)) {
           return yield* new Unsizable({
-            message: `machine ${machine.id}'s disk of ${machine.diskGib}G is below its base's, and Tart only grows a disk: ${lastLines(set.stderr)}`,
+            message: `machine ${machine.id}'s disk of ${formatGib(machine.diskGib)} is below its base's, and Tart only grows a disk: ${lastLines(set.stderr)}`,
           });
         }
 

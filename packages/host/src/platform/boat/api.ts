@@ -10,6 +10,7 @@
  */
 import {
   Capacity,
+  formatGib,
   formatMib,
   Internal,
   NotFound,
@@ -96,7 +97,7 @@ const machineTypes: ReadonlyArray<MachineType> = [
 type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 
 const sized = ({ cpu, ramMib, diskGib }: Sizes): string =>
-  `${cpu} vCPU, ${formatMib(ramMib)} of RAM and ${diskGib}G of disk`;
+  `${cpu} vCPU, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
 
 /** The smallest type that covers the sizes. */
 export const typeFor = (sizes: Sizes): Option.Option<MachineType> =>
