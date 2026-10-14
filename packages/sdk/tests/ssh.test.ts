@@ -31,19 +31,19 @@ layer(NodeServices.layer)((it) => {
         const said: ReadonlyArray<readonly [Machine, string]> = [
           [
             machine("linux_dev", { state: "stopped", hostKey }),
-            "linux_dev has no SSH endpoint (stopped, create done): see clankerbox get linux_dev",
+            "linux_dev has no SSH endpoint (stopped, createMachine done): see clankerbox get linux_dev",
           ],
           [
             machine("linux_dev", {
               made: false,
               ssh: login,
               action: {
-                name: "create",
+                name: "createMachine",
                 status: "failed",
                 error: { tag: "Precondition", message: "setup exited 1" },
               },
             }),
-            "linux_dev has no SSH host key on record (running (unmade), create failed): see clankerbox get linux_dev",
+            "linux_dev has no SSH host key on record (running (unmade), createMachine failed): see clankerbox get linux_dev",
           ],
         ];
 

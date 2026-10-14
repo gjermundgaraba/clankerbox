@@ -3,7 +3,7 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Duration, Schema } from "effect";
 import { Capacity, Conflict, Internal, Invalid, NotFound, Precondition } from "./errors.ts";
 import { Id, Name } from "./ids.ts";
-import { Checkpoint, CreateRequest, Host, Machine, Usage } from "./resources.ts";
+import { type ActionName, Checkpoint, CreateRequest, Host, Machine, Usage } from "./resources.ts";
 
 /** A host bounds its own reads of runtime state under it, so a list answers in time. */
 export const readTimeout = Duration.seconds(10);
@@ -128,3 +128,16 @@ export const Http = ActionHttp.make(
 );
 
 export const actionsByName = Action.byName(Http.actions);
+
+type Mutation = {
+  [N in keyof typeof actionsByName]: (typeof actionsByName)[N]["readOnly"] extends false
+    ? N
+    : never;
+}[keyof typeof actionsByName];
+
+// resources.ts lists `ActionName` by hand, as the contract imports it; this keeps it the mutations.
+true satisfies [ActionName] extends [Mutation]
+  ? [Mutation] extends [ActionName]
+    ? true
+    : false
+  : false;

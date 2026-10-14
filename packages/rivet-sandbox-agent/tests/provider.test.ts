@@ -32,7 +32,7 @@ const checkpoint = (id: string): Checkpoint => ({
   cpu: 2,
   ramMib: 2048,
   diskGib: 20,
-  action: { name: "capture", status: "done" },
+  action: { name: "captureCheckpoint", status: "done" },
 });
 
 afterEach(cleanUp);

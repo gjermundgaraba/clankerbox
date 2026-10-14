@@ -46,7 +46,7 @@ layer(NodeServices.layer)((it) => {
       const host = config(dir);
 
       yield* Effect.flatMap(open(host), (store) =>
-        store.insert("create", {
+        store.insert("createMachine", {
           kind: "machine",
           record: {
             name: "dev",
@@ -69,9 +69,9 @@ layer(NodeServices.layer)((it) => {
       );
 
       expect(machine.action).toEqual({
-        name: "create",
+        name: "createMachine",
         status: "failed",
-        error: { tag: "Internal", message: "the host stopped during create" },
+        error: { tag: "Internal", message: "the host stopped during createMachine" },
       });
     }),
   );

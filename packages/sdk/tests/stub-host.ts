@@ -46,7 +46,7 @@ export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   diskGib: 10,
   state: "running",
   made: true,
-  action: { name: "create", status: "done" },
+  action: { name: "createMachine", status: "done" },
   ...fields,
 });
 
@@ -60,7 +60,7 @@ export const checkpoint = (id: string, fields?: Partial<Checkpoint>): Checkpoint
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
-  action: { name: "capture", status: "done" },
+  action: { name: "captureCheckpoint", status: "done" },
   ...fields,
 });
 
@@ -145,7 +145,7 @@ export const stubHost = (options: StubHostOptions) => {
             cpu: found.cpu,
             ramMib: found.ramMib,
             diskGib: found.diskGib,
-            action: { name: "restore", status: "done" },
+            action: { name: "restoreMachine", status: "done" },
           }),
           found.profile,
         ),
@@ -202,7 +202,7 @@ export const stubHost = (options: StubHostOptions) => {
                   cpu: found.cpu,
                   ramMib: found.ramMib,
                   diskGib: found.diskGib,
-                  action: { name: "capture", status: "done" },
+                  action: { name: "captureCheckpoint", status: "done" },
                 },
                 found.profile,
               );

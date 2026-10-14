@@ -240,7 +240,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         cpu: 2,
         ramMib: 4096,
         diskGib: 12,
-        action: { name: "create", status: "done" },
+        action: { name: "createMachine", status: "done" },
       });
       expect(made.ssh?.port).toBeGreaterThan(0);
       expect(made.hostKey).toMatch(/^ssh-ed25519 /u);
@@ -291,7 +291,10 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
 
       const after = decode(OneMachine, ran);
 
-      expect(after).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
+      expect(after).toMatchObject({
+        state: "running",
+        action: { name: "startMachine", status: "done" },
+      });
       expect(after.ssh).toEqual(before?.ssh);
       // Far inside the marker wait's 10 minutes: SSH and preparation take seconds.
       expect(took).toBeLessThan(minutes(1));
@@ -407,7 +410,10 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
 
       const down = decode(OneMachine, stopped);
 
-      expect(down).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
+      expect(down).toMatchObject({
+        state: "stopped",
+        action: { name: "stopMachine", status: "done" },
+      });
       expect(down.ssh).toBeUndefined();
       expect(await natives("main")).toEqual({
         sandboxes: [{ id: expect.any(String), state: "archived" }],
@@ -415,7 +421,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
 
       const again = await cli(["stop"], id("main"), "--json");
 
-      expect(decode(OneMachine, again).action).toEqual({ name: "stop", status: "done" });
+      expect(decode(OneMachine, again).action).toEqual({ name: "stopMachine", status: "done" });
 
       started = performance.now();
 
@@ -426,7 +432,10 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
 
       const after = decode(OneMachine, resumed);
 
-      expect(after).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
+      expect(after).toMatchObject({
+        state: "running",
+        action: { name: "startMachine", status: "done" },
+      });
       expect(after.hostKey).toMatch(/^ssh-ed25519 /u);
       expect(after.hostKey).not.toBe(before.hostKey);
       expect(after.ssh).not.toEqual(before.ssh);
@@ -493,7 +502,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         id: id("snap"),
         machine: id("main"),
         kind: "disk",
-        action: { name: "capture", status: "done" },
+        action: { name: "captureCheckpoint", status: "done" },
       });
       expect(await snapshots()).toHaveLength(1);
 
@@ -516,7 +525,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         cpu: 2,
         ramMib: 4096,
         diskGib: 12,
-        action: { name: "fork", status: "done" },
+        action: { name: "forkMachine", status: "done" },
       });
 
       const copy = await machine("fork-a");
@@ -617,7 +626,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       expect(captured.code, captured.stdout).toBe(0);
       expect(decode(OneCheckpoint, captured)).toMatchObject({
         kind: "disk",
-        action: { name: "capture", status: "done" },
+        action: { name: "captureCheckpoint", status: "done" },
       });
       expect(await snapshots()).toHaveLength(2);
       started = performance.now();
@@ -662,7 +671,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         cpu: 2,
         ramMib: 4096,
         diskGib: 12,
-        action: { name: "restore", status: "done" },
+        action: { name: "restoreMachine", status: "done" },
       });
 
       const copies = await Promise.all(["fork-b", "restore-a"].map(machine));
@@ -753,9 +762,9 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
         state: "running",
         made: false,
         action: {
-          name: "create",
+          name: "createMachine",
           status: "failed",
-          error: { tag: "Internal", message: "host restarted during create" },
+          error: { tag: "Internal", message: "host restarted during createMachine" },
         },
       });
 
@@ -765,7 +774,7 @@ describe.skipIf(!liveOn("boat"))("a boat host, through the CLI", () => {
       expect(decode(OneMachine, stopped)).toMatchObject({
         state: "stopped",
         made: false,
-        action: { name: "stop", status: "done" },
+        action: { name: "stopMachine", status: "done" },
       });
       expect(await natives("crash")).toEqual({
         sandboxes: [{ id: expect.any(String), state: "archived" }],

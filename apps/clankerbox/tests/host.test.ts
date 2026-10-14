@@ -170,7 +170,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ["MACHINE", "linux_dev"],
           ["RAM", "1G"],
           ["DISK", "10G"],
-          ["ACTION", "capture done"],
+          ["ACTION", "captureCheckpoint done"],
           ["ERROR", "-"],
         ]),
       );

@@ -766,7 +766,7 @@ layer(NodeServices.layer)((it) => {
 
       const error = yield* Effect.flip(
         runtime.admit({
-          action: "start",
+          action: "startMachine",
           machine,
           machines: [
             { machine, booting: true },
@@ -804,7 +804,7 @@ layer(NodeServices.layer)((it) => {
           const target = { ...machine, id: "linux_next", name: "next", ramMib };
 
           return runtime.admit({
-            action: "create",
+            action: "createMachine",
             machine: target,
             machines: [...held, { machine: target, booting: true }],
           });

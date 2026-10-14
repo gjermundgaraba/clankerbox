@@ -641,12 +641,14 @@ is afterwards or a tagged error. Each runs in this order (`claims.ts`):
    machine that was never made.
 4. Only then call the runtime.
 
-- **A row's `action`** is the last action that claimed it, and how it ended.
+- **A row's `action`** is the last action that claimed it, and how it ended,
+  under the contract's name for it, as an error's `action` is.
 - **An error before the first runtime call records only the failure:** the
   claims are released, an inserted row removed, and a held row's `action`
   records the action as `failed` with the error, as a start refused for
-  room reads `start failed: Capacity`. A fork or capture refused for its new
-  row's name records it on the source too, as `fork failed: Conflict`.
+  room reads `startMachine failed: Capacity`. A fork or capture refused for its
+  new row's name records it on the source too, as `forkMachine failed:
+  Conflict`.
 - **A host's stop** fails what it cuts off as "the host stopped during …",
   whichever step it reached. A check or runtime call that dies records
   `Internal`, and only the host log has its cause.

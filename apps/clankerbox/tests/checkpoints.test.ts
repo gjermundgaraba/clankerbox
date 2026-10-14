@@ -19,7 +19,7 @@ const host = hostIn(stubs);
 const failed = checkpoint("linux_broken", {
   machine: "linux_dev",
   action: {
-    name: "capture",
+    name: "captureCheckpoint",
     status: "failed",
     error: { tag: "Capacity", message: "no room for the copy" },
   },
@@ -70,7 +70,7 @@ layer(NodeServices.layer)((it) => {
       expect(rows[0]).toEqual(["ID", "KIND", "MACHINE", "BASE", "PROFILE", "AGE", "ACTION"]);
       expect(rows[1]?.slice(0, 5)).toEqual(["linux_snap", "disk", "linux_dev", "ubuntu", "-"]);
       expect(rows[2]?.slice(0, 2)).toEqual(["linux_broken", "disk"]);
-      expect(stdout).toContain("capture failed: Capacity");
+      expect(stdout).toContain("captureCheckpoint failed: Capacity");
     }),
   );
 
@@ -99,7 +99,7 @@ layer(NodeServices.layer)((it) => {
         expect.arrayContaining([
           ["ID", "linux_broken"],
           ["MACHINE", "linux_dev"],
-          ["ACTION", "capture failed: Capacity"],
+          ["ACTION", "captureCheckpoint failed: Capacity"],
           ["RAM", "1G"],
           ["ERROR", "no room for the copy"],
         ]),

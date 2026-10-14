@@ -8,15 +8,16 @@ export type Runtime = typeof Runtime.Type;
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
-/** The mutations that record themselves on a resource's `action`. */
+/** The contract's mutations, which record themselves on a resource's `action`. */
 export const ActionName = Schema.Literals([
-  "create",
-  "start",
-  "stop",
-  "delete",
-  "fork",
-  "restore",
-  "capture",
+  "createMachine",
+  "startMachine",
+  "stopMachine",
+  "deleteMachine",
+  "forkMachine",
+  "restoreMachine",
+  "captureCheckpoint",
+  "deleteCheckpoint",
 ]);
 
 export type ActionName = typeof ActionName.Type;

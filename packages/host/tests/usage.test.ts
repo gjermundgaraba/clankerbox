@@ -45,7 +45,7 @@ const admits = (target: number, others: ReadonlyArray<typeof Machine.Type>, budg
       });
 
     const checked = yield* Effect.exit(
-      checkRamBudget(budgetMib, { action: "start", machine, machines }, observe),
+      checkRamBudget(budgetMib, { action: "startMachine", machine, machines }, observe),
     );
 
     expect(asked).toEqual([machines.flatMap((held) => (held.booting ? [] : [held.machine]))]);
@@ -57,7 +57,7 @@ const admits = (target: number, others: ReadonlyArray<typeof Machine.Type>, budg
     const error = yield* Effect.flip(checked);
 
     expect(error._tag).toBe("Capacity");
-    expect(error.message).toMatch(/^start linux_m0 needs \S+ of RAM, and /u);
+    expect(error.message).toMatch(/^startMachine linux_m0 needs \S+ of RAM, and /u);
 
     return false;
   });
