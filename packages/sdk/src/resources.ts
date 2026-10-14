@@ -85,6 +85,10 @@ export const Machine = Schema.Struct({
 
 export type Machine = typeof Machine.Type;
 
+/** The state as people read it: `running`, or `stopped (unmade)` for one never made. */
+export const stateLabel = ({ state, made }: Machine): string =>
+  made ? state : `${state} (unmade)`;
+
 export const Checkpoint = Schema.Struct({
   id: Id,
   createdAt: Schema.DateTimeUtcFromString,

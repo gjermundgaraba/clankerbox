@@ -401,9 +401,9 @@ program.pipe(
 - `readSetup` sends a file as its text and packs a directory into one
   self-extracting script (`packRecipe`). `loadProfile` reads a profile file.
   Each fails with `Invalid`, naming the `file`.
-- `Prebuild.build(client, spec)` prebuilds a spec, and
-  `Prebuild.create(client, name, spec)` creates from its prebuild when the
-  host has one. `Prebuild.nameOf` is a prebuild's name, and
+- `Prebuild.build(client, spec)` prebuilds a spec, whose type requires a
+  setup, and `Prebuild.create(client, name, spec)` creates from its prebuild
+  when the host has one. `Prebuild.nameOf` is a prebuild's name, and
   `client.place(base, options)` reads the host a create goes to.
 - Every call but the lists fails with its action's errors among seven tags
   (`errors.ts`), each with `retryable` and with where it was met; see
@@ -412,6 +412,10 @@ program.pipe(
   errors.
 - A mutation whose reply is lost fails `Unavailable`, not retryable, naming
   the resource: it may have run, so read it to see. Nothing retries for you.
+- A delete of a resource that is already gone succeeds as `absent`, not
+  `NotFound`.
+- `sshTarget(machine)` is the login, endpoint and host key `pinnedSsh` needs,
+  or `Precondition` naming what the machine lacks.
 
 ## Sandbox Agent provider
 
@@ -656,7 +660,8 @@ is afterwards or a tagged error. Each runs in this order (`claims.ts`):
   again (the repair path). Every `stop` calls the runtime's stop, which reads
   the machine's state itself and does nothing on one that doesn't run; the
   stop is still recorded `done`, replacing the last action and its error.
-  `delete` of a missing resource is `NotFound`, which clients treat as done.
+  A host's `delete` of a missing resource is `NotFound`; the client's
+  `delete` and `deleteCheckpoint` answer it as `absent`, done like `deleted`.
 - Ready checkpoints never change, so restores read them without a claim and
   run in parallel.
 

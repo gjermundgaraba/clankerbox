@@ -36,14 +36,14 @@ const withClient = <A, E>(
     Effect.provide(transport(new Map(hosts.map((stub) => [new URL(url(stub.id)).origin, stub])))),
   );
 
-const spec: MachineSpec = {
+const spec = {
   base: "ubuntu",
   cpu: 2,
   ramMib: 4096,
   diskGib: 20,
   setup: { script: "#!/bin/sh\ntrue\n", timeoutSeconds: 900 },
   profile: "dev",
-};
+} satisfies MachineSpec;
 
 const smolvm = { runtimeVersion: "1.27.3" };
 

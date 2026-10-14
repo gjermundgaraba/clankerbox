@@ -120,6 +120,22 @@ it.effect("a malformed ID is Invalid and sends nothing", () =>
   }),
 );
 
+it.effect("a delete of a resource that is already gone is absent, and done", () =>
+  Effect.gen(function* () {
+    const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_dev")] });
+
+    const deleted = yield* withClient([["linux", linux]], (client) =>
+      Effect.all([
+        client.delete("linux_dev"),
+        client.delete("linux_dev"),
+        client.deleteCheckpoint("linux_gone"),
+      ]),
+    );
+
+    expect(deleted).toEqual(["deleted", "absent", "absent"]);
+  }),
+);
+
 it.effect("a host's error comes back as itself, naming the host, the action and the ID", () =>
   Effect.gen(function* () {
     const linux = host({ id: "linux", bases: ["ubuntu"] });

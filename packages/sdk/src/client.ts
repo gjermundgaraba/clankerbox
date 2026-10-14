@@ -2,7 +2,14 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Context, Duration, Effect, Fiber, Layer, Match, Predicate, Result, Schema } from "effect";
 import { HttpClient, type HttpClientError, HttpClientRequest } from "effect/http";
 import { actionsByName as actions, Http, readTimeout } from "./api.ts";
-import { ClankerboxError, Internal, Invalid, Precondition, Unavailable } from "./errors.ts";
+import {
+  ClankerboxError,
+  Internal,
+  Invalid,
+  type NotFound,
+  Precondition,
+  Unavailable,
+} from "./errors.ts";
 import { formatId, HostId, parseId, parseName } from "./ids.ts";
 import { version, versionHeader } from "./release.ts";
 import type { Checkpoint, Host, Limit, Machine, MachineSpec } from "./resources.ts";
@@ -57,6 +64,9 @@ export interface Options {
   readonly readTimeout?: Duration.Duration | undefined;
 }
 
+/** A delete of a resource that is already gone is `absent`: done either way. */
+export type Deleted = "deleted" | "absent";
+
 export interface CreateOptions {
   /** The host to create on, instead of the first that offers the base. */
   readonly host?: string | undefined;
@@ -82,7 +92,9 @@ export interface Interface {
   ) => Effect.Effect<Machine, ErrorOf<"createMachine">>;
   readonly start: (id: string) => Effect.Effect<Machine, ErrorOf<"startMachine">>;
   readonly stop: (id: string) => Effect.Effect<Machine, ErrorOf<"stopMachine">>;
-  readonly delete: (id: string) => Effect.Effect<void, ErrorOf<"deleteMachine">>;
+  readonly delete: (
+    id: string,
+  ) => Effect.Effect<Deleted, Exclude<ErrorOf<"deleteMachine">, NotFound>>;
   /** Copies a machine to a new name on its host. */
   readonly fork: (machine: string, name: string) => Effect.Effect<Machine, ErrorOf<"forkMachine">>;
   /** Creates a machine named `name` from a checkpoint, on the checkpoint's host. */
@@ -94,7 +106,9 @@ export interface Interface {
     machine: string,
     name: string,
   ) => Effect.Effect<Checkpoint, ErrorOf<"captureCheckpoint">>;
-  readonly deleteCheckpoint: (id: string) => Effect.Effect<void, ErrorOf<"deleteCheckpoint">>;
+  readonly deleteCheckpoint: (
+    id: string,
+  ) => Effect.Effect<Deleted, Exclude<ErrorOf<"deleteCheckpoint">, NotFound>>;
 }
 
 /**
@@ -430,6 +444,14 @@ export const make = (
     ): Effect.Effect<Host, ErrorOf<"getHost"> | Precondition> =>
       options?.host === undefined ? offering(base) : Effect.flatMap(route(options.host), readHost);
 
+    const deleting = (
+      removal: Effect.Effect<void, ErrorOf<"deleteMachine"> | ErrorOf<"deleteCheckpoint">>,
+    ) =>
+      removal.pipe(
+        Effect.as<Deleted>("deleted"),
+        Effect.catchTag("NotFound", () => Effect.succeed<Deleted>("absent")),
+      );
+
     const sibling = (source: string, name: string) =>
       Effect.flatMap(parseId(source), ({ host }) => formatId(host, name));
 
@@ -444,7 +466,7 @@ export const make = (
       create: (name, spec, options) => naming("createMachine")(create(name, spec, options)),
       start: (id) => naming("startMachine")(byId("startMachine", id, { id })),
       stop: (id) => naming("stopMachine")(byId("stopMachine", id, { id })),
-      delete: (id) => naming("deleteMachine")(byId("deleteMachine", id, { id })),
+      delete: (id) => deleting(naming("deleteMachine")(byId("deleteMachine", id, { id }))),
       fork: (machine, name) =>
         naming("forkMachine")(
           Effect.flatMap(sibling(machine, name), (made) =>
@@ -463,7 +485,8 @@ export const make = (
             byId("captureCheckpoint", machine, { machine, name }, made),
           ),
         ),
-      deleteCheckpoint: (id) => naming("deleteCheckpoint")(byId("deleteCheckpoint", id, { id })),
+      deleteCheckpoint: (id) =>
+        deleting(naming("deleteCheckpoint")(byId("deleteCheckpoint", id, { id }))),
     } satisfies Interface;
   });
 
