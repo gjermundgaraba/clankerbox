@@ -774,7 +774,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const refused = yield* Effect.flip(
           runtime.admit({
-            action: "start",
+            action: "startMachine",
             machine: b,
             machines: [
               { machine: a, booting: false },
@@ -785,7 +785,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(refused._tag).toBe("Capacity");
         expect(refused.message).toBe(
-          `start mac_b would run 3 macOS VMs on this Mac, and Apple allows 2: ${[vmOf(a), vmOf(b), "operators-own"].sort().join(", ")}`,
+          `startMachine mac_b would run 3 macOS VMs on this Mac, and Apple allows 2: ${[vmOf(a), vmOf(b), "operators-own"].sort().join(", ")}`,
         );
 
         // A machine an action is booting counts before its VM exists.
@@ -793,7 +793,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const crowded = yield* Effect.flip(
           runtime.admit({
-            action: "start",
+            action: "startMachine",
             machine: b,
             machines: [
               { machine: a, booting: false },
@@ -806,7 +806,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(crowded._tag).toBe("Capacity");
 
         yield* runtime.admit({
-          action: "start",
+          action: "startMachine",
           machine: b,
           machines: [
             { machine: a, booting: false },
@@ -870,7 +870,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         mac.vms.set(vmOf(target), "running");
 
         yield* runtime.admit({
-          action: "start",
+          action: "startMachine",
           machine: target,
           machines: [{ machine: target, booting: true }],
         });
@@ -880,7 +880,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const crowded = yield* Effect.flip(
           runtime.admit({
-            action: "start",
+            action: "startMachine",
             machine: target,
             machines: [{ machine: target, booting: true }],
           }),
@@ -940,7 +940,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const [source, copy] = [machineOn("src"), machineOn("copy")];
 
       const forking = {
-        action: "fork" as const,
+        action: "forkMachine" as const,
         machine: copy,
         machines: [
           { machine: source, booting: false },

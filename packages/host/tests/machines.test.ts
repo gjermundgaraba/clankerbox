@@ -60,7 +60,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           runtime: "smolvm",
           base: "ubuntu",
           state: "running",
-          action: { name: "create", status: "done" },
+          action: { name: "createMachine", status: "done" },
           ssh: { host: "127.0.0.1", port: ports.first },
         });
         expect(made.hostKey).toMatch(/^ssh-ed25519 AAAA[0-9a-f]+$/u);
@@ -89,7 +89,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(started).toMatchObject({
           state: "running",
-          action: { name: "start", status: "done" },
+          action: { name: "startMachine", status: "done" },
         });
         expect(linux.fake.calls).toEqual(["admit linux_dev", "start linux_dev", "exec linux_dev"]);
         expect(yield* read(join(linux.fake.root("dev") ?? "", "starts"))).toBe("start\nstart\n");
@@ -108,10 +108,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* linux.run(linux.machines.delete("linux_dev"));
 
-      expect(stopped).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
+      expect(stopped).toMatchObject({
+        state: "stopped",
+        action: { name: "stopMachine", status: "done" },
+      });
       expect(started).toMatchObject({
         state: "running",
-        action: { name: "start", status: "done" },
+        action: { name: "startMachine", status: "done" },
       });
       expect(linux.fake.calls).toEqual([
         "stop linux_dev",
@@ -135,7 +138,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const again = yield* linux.run(linux.machines.stop("linux_dev"));
 
-      expect(again).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
+      expect(again).toMatchObject({
+        state: "stopped",
+        action: { name: "stopMachine", status: "done" },
+      });
       expect(linux.fake.calls).toEqual(["stop linux_dev"]);
     }),
   );
@@ -192,7 +198,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(made).toMatchObject({
           state: "unknown",
-          action: { name: "create", status: "done" },
+          action: { name: "createMachine", status: "done" },
         });
         expect(made.ssh).toBeUndefined();
         expect(listed.map(({ id, state }) => [id, state])).toEqual([
@@ -245,7 +251,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(waited).toBe("9s");
         expect(Result.getOrThrow(result)).toMatchObject({
           state: "unknown",
-          action: { name: "create", status: "done" },
+          action: { name: "createMachine", status: "done" },
         });
       }),
   );
@@ -273,15 +279,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(waited).toBe("9s");
         expect(Result.isFailure(result) && [result.failure._tag, result.failure.message]).toEqual([
           "Internal",
-          "start linux_dev: the smolvm runtime's admission check didn't answer within 9s",
+          "startMachine linux_dev: the smolvm runtime's admission check didn't answer within 9s",
         ]);
         expect(row?.action).toEqual({
-          name: "start",
+          name: "startMachine",
           status: "failed",
           error: {
             tag: "Internal",
             message:
-              "start linux_dev: the smolvm runtime's admission check didn't answer within 9s",
+              "startMachine linux_dev: the smolvm runtime's admission check didn't answer within 9s",
           },
         });
         expect(linux.fake.calls).toEqual(["admit linux_dev"]);
@@ -303,11 +309,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(Exit.hasDies(exit)).toBe(true);
         expect(row?.action).toEqual({
-          name: "start",
+          name: "startMachine",
           status: "failed",
           error: {
             tag: "Internal",
-            message: "start died; the host log has why",
+            message: "startMachine died; the host log has why",
           },
         });
       }),
@@ -342,7 +348,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const stopped = yield* linux.run(linux.machines.stop("linux_dev"));
 
-      expect(stopped).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
+      expect(stopped).toMatchObject({
+        state: "stopped",
+        action: { name: "stopMachine", status: "done" },
+      });
       expect(linux.fake.calls).toEqual(["stop linux_dev"]);
     }),
   );
@@ -385,7 +394,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(started).toMatchObject({
           state: "running",
-          action: { name: "start", status: "done" },
+          action: { name: "startMachine", status: "done" },
         });
         expect(linux.fake.calls).toEqual(["admit linux_dev", "start linux_dev", "exec linux_dev"]);
       }),
@@ -447,7 +456,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(error._tag).toBe("Capacity");
       expect(row?.action).toEqual({
-        name: "start",
+        name: "startMachine",
         status: "failed",
         error: { tag: "Capacity", message: "no room" },
       });
@@ -485,7 +494,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(error).toEqual(new Internal({ message: "krun EINVAL" }));
         expect(got.action).toEqual({
-          name: "create",
+          name: "createMachine",
           status: "failed",
           error: { tag: "Internal", message: "krun EINVAL" },
         });
@@ -514,7 +523,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* linux.run(linux.machines.delete("linux_dev"));
 
-      expect(stopped.action).toEqual({ name: "stop", status: "done" });
+      expect(stopped.action).toEqual({ name: "stopMachine", status: "done" });
       expect(stopFailed.message).toBe("guest didn't flush");
       expect(yield* rows(linux)).toEqual([]);
     }),
@@ -530,7 +539,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       // A crash between inserting the row and the first runtime call leaves this row and nothing
       // native.
       yield* linux.run(linux.machines.delete("linux_dev"));
-      yield* linux.run(linux.store.insert("create", { kind: "machine", record: row }));
+      yield* linux.run(linux.store.insert("createMachine", { kind: "machine", record: row }));
       yield* linux.dispose;
       linux.fake.calls.length = 0;
 
@@ -579,7 +588,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "machine linux_dev is missing from the smolvm runtime; delete it",
         ]);
         expect(row?.action).toEqual({
-          name: "start",
+          name: "startMachine",
           status: "failed",
           error: { tag: "Precondition", message: error.message },
         });
@@ -612,7 +621,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         kind: "busy",
       });
 
-      expect(held.action).toEqual({ name: "create", status: "running" });
+      expect(held.action).toEqual({ name: "createMachine", status: "running" });
       expect(start).toEqual(busy);
       expect(remove).toEqual(busy);
     }),
@@ -642,7 +651,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const [row] = yield* rows(linux);
 
-        expect(row?.action).toEqual({ name: "create", status: "done" });
+        expect(row?.action).toEqual({ name: "createMachine", status: "done" });
         expect(linux.fake.calls).toContain("exec linux_dev");
       }),
   );
@@ -661,9 +670,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const got = yield* restarted.run(restarted.machines.get("linux_dev"));
 
       expect(got.action).toEqual({
-        name: "create",
+        name: "createMachine",
         status: "failed",
-        error: { tag: "Internal", message: "the host stopped during create" },
+        error: { tag: "Internal", message: "the host stopped during createMachine" },
       });
       expect(linux.fake.calls.filter((call) => call === "startup")).toHaveLength(2);
     }),
@@ -688,17 +697,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const got = yield* restarted.run(restarted.machines.get("linux_dev"));
 
         expect(got.action).toEqual({
-          name: "start",
+          name: "startMachine",
           status: "failed",
-          error: { tag: "Internal", message: "the host stopped during start" },
+          error: { tag: "Internal", message: "the host stopped during startMachine" },
         });
       }),
   );
 
   const stoppedDuringCreate = {
-    name: "create",
+    name: "createMachine",
     status: "failed",
-    error: { tag: "Internal", message: "the host stopped during create" },
+    error: { tag: "Internal", message: "the host stopped during createMachine" },
   } as const;
 
   it.effect(
@@ -758,7 +767,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(stopped).toMatchObject({
           state: "stopped",
           made: false,
-          action: { name: "stop", status: "done" },
+          action: { name: "stopMachine", status: "done" },
         });
         expect(linux.fake.calls).toEqual(["stop linux_dev", "delete linux_dev"]);
         expect(yield* rows(linux)).toEqual([]);
@@ -767,7 +776,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "after a restart during create's setup, the machine is never made: stop stops its VM, start refuses it and delete removes it",
+    "after a restart during createMachine's setup, the machine is never made: stop stops its VM, start refuses it and delete removes it",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
@@ -796,7 +805,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(before).toMatchObject({ state: "running", action: stoppedDuringCreate });
         expect(stopped).toMatchObject({
           state: "stopped",
-          action: { name: "stop", status: "done" },
+          action: { name: "stopMachine", status: "done" },
         });
         expect([start._tag, start.message]).toEqual([
           "Precondition",
@@ -841,17 +850,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const started = yield* linux.run(linux.machines.start("linux_dev"));
 
         expect(error).toEqual(new Internal({ message: "sshd didn't start" }));
-        expect(row).toMatchObject({ made: true, action: { name: "create", status: "failed" } });
+        expect(row).toMatchObject({
+          made: true,
+          action: { name: "createMachine", status: "failed" },
+        });
         expect(started).toMatchObject({
           state: "running",
-          action: { name: "start", status: "done" },
+          action: { name: "startMachine", status: "done" },
         });
         expect(linux.fake.calls).toEqual(["admit linux_dev", "start linux_dev", "exec linux_dev"]);
       }),
   );
 
   it.effect(
-    "after a restart during create's preparation, the machine is made, and start prepares it again",
+    "after a restart during createMachine's preparation, the machine is made, and start prepares it again",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
@@ -870,7 +882,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(row).toMatchObject({ made: true, action: stoppedDuringCreate });
         expect(started).toMatchObject({
           state: "running",
-          action: { name: "start", status: "done" },
+          action: { name: "startMachine", status: "done" },
         });
       }),
   );
@@ -903,7 +915,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(error.message).not.toContain("line 10\n");
       expect(error.message.includes(marker)).toBe(false);
       expect(got.action).toEqual({
-        name: "create",
+        name: "createMachine",
         status: "failed",
         error: { tag: "Precondition", message: error.message },
       });
@@ -935,7 +947,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         linux.machines.create(request("dev", { setup: { script: installsStart.script } })),
       );
 
-      expect(made.action).toEqual({ name: "create", status: "done" });
+      expect(made.action).toEqual({ name: "createMachine", status: "done" });
     }),
   );
 
@@ -983,7 +995,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(full._tag).toBe("Capacity");
         expect(full.message).toContain("needs 1G of RAM, and none of the host's 2G budget is free");
         expect(restart._tag).toBe("Capacity");
-        expect(again.action).toEqual({ name: "start", status: "done" });
+        expect(again.action).toEqual({ name: "startMachine", status: "done" });
         expect((yield* rows(linux)).map(({ name }) => name).sort()).toEqual(["a", "b", "c"]);
       }),
   );
@@ -1072,7 +1084,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const started = yield* linux.run(linux.machines.start("linux_b"));
 
-      expect(started.action).toEqual({ name: "start", status: "done" });
+      expect(started.action).toEqual({ name: "startMachine", status: "done" });
     }),
   );
 

@@ -134,7 +134,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(copy).toMatchObject({
           id: "linux_copy",
           state: "running",
-          action: { name: "fork" },
+          action: { name: "forkMachine" },
         });
         expect(captured).toMatchObject({ id: "linux_snap", machine: "linux_dev", kind: "ram" });
         expect(listed.answers).toEqual([captured]);
@@ -142,7 +142,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(restored).toMatchObject({
           id: "linux_again",
           state: "running",
-          action: { name: "restore" },
+          action: { name: "restoreMachine" },
         });
         expect(gone._tag).toBe("NotFound");
         expect(yield* run(store.checkpoints)).toEqual([]);
@@ -347,7 +347,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* release;
 
-      expect(yield* settled(host)).toEqual({ name: "create", status: "done" });
+      expect(yield* settled(host)).toEqual({ name: "createMachine", status: "done" });
       expect(fake.calls).toContain("exec linux_dev");
     }),
   );

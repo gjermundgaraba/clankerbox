@@ -57,7 +57,7 @@ layer(NodeServices.layer)((it) => {
   const unmade = machine("linux_other", {
     made: false,
     action: {
-      name: "create",
+      name: "createMachine",
       status: "failed",
       error: { tag: "Precondition", message: "setup exited 3" },
     },
@@ -126,7 +126,7 @@ layer(NodeServices.layer)((it) => {
       expect(yield* fields("linux_other")).toEqual(
         expect.arrayContaining([
           ["STATE", "running (unmade)"],
-          ["ACTION", "create failed: Precondition"],
+          ["ACTION", "createMachine failed: Precondition"],
           ["SSH", "-"],
           ["ERROR", "setup exited 3"],
           ["HOST_KEY", "-"],

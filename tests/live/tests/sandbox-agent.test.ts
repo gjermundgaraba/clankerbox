@@ -366,7 +366,7 @@ describe.skipIf(!live)("Sandbox Agent sandboxes on the host, through the provide
             state: "running",
             made: true,
             profile: "agent",
-            action: { name: "restore", status: "done" },
+            action: { name: "restoreMachine", status: "done" },
           });
 
           const session = await restored.createSession({ agent: "claude" });

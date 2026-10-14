@@ -25,7 +25,7 @@ const row: NewMachine = {
 };
 
 const inserting = (store: Interface) =>
-  Effect.map(store.insert("create", { kind: "machine", record: row }), (token) => ({
+  Effect.map(store.insert("createMachine", { kind: "machine", record: row }), (token) => ({
     token,
     held: row,
   }));
@@ -66,7 +66,7 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(result).toEqual(new Precondition({ message: "no room" }));
-        expect(logged).toEqual([["couldn't release the rows of a create: disk full"]]);
+        expect(logged).toEqual([["couldn't release the rows of a createMachine: disk full"]]);
       }),
   );
 
@@ -89,7 +89,7 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect([result._tag, result.message]).toEqual(["Capacity", "no machine"]);
-        expect(logged).toEqual([["couldn't release the rows of a create: disk full"]]);
+        expect(logged).toEqual([["couldn't release the rows of a createMachine: disk full"]]);
       }),
   );
 
@@ -110,7 +110,7 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect([result._tag, result.message]).toEqual(["Capacity", "no machine"]);
-        expect(logged).toEqual([["couldn't record the failure of a create: disk full"]]);
+        expect(logged).toEqual([["couldn't record the failure of a createMachine: disk full"]]);
       }),
   );
 
@@ -126,10 +126,10 @@ layer(NodeServices.layer)((it) => {
           const { claimAndCheck } = claimsOn(store);
           const { token } = yield* inserting(store);
 
-          yield* store.end(token, { action: { name: "create", status: "done" } });
+          yield* store.end(token, { action: { name: "createMachine", status: "done" } });
           yield* Effect.exit(
             claimAndCheck(
-              store.hold("start", { kind: "machine", name: "dev" }),
+              store.hold("startMachine", { kind: "machine", name: "dev" }),
               () => Effect.interrupt,
             ),
           );
@@ -142,9 +142,9 @@ layer(NodeServices.layer)((it) => {
 
         expect(action).toEqual(
           Option.some({
-            name: "start",
+            name: "startMachine",
             status: "failed",
-            error: { tag: "Internal", message: "the host stopped during start" },
+            error: { tag: "Internal", message: "the host stopped during startMachine" },
           }),
         );
         expect(logged).toEqual([]);

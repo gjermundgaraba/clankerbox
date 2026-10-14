@@ -180,7 +180,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       expect(made).toMatchObject({
         id: id("main"),
         state: "running",
-        action: { name: "create", status: "done" },
+        action: { name: "createMachine", status: "done" },
         ssh: { host: new URL(suite.env.host.url).hostname },
       });
       expect(made.ssh?.port).toBeGreaterThanOrEqual(10_000);
@@ -317,7 +317,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       expect(await natives("hot-fork")).toEqual(tart.nothing);
       expect(await machine("main")).toMatchObject({
         state: "running",
-        action: { name: "create", status: "done" },
+        action: { name: "createMachine", status: "done" },
       });
     },
     minutes(3),
@@ -396,7 +396,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       expect(
         Object.fromEntries(listed.machines.map((row) => [row.id, [row.action, row.profile]])),
       ).toEqual({
-        [id("main")]: [{ name: "create", status: "done" }, undefined],
+        [id("main")]: [{ name: "createMachine", status: "done" }, undefined],
         [`${second.id}_${named("pl-first")}`]: [
           expect.objectContaining({ status: "failed" }),
           undefined,
@@ -442,14 +442,17 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
 
       const down = decode(OneMachine, stopped);
 
-      expect(down).toMatchObject({ state: "stopped", action: { name: "stop", status: "done" } });
+      expect(down).toMatchObject({
+        state: "stopped",
+        action: { name: "stopMachine", status: "done" },
+      });
       // The host reports no endpoint for a stopped machine, but its port stays its own.
       expect(down.ssh).toBeUndefined();
       expect(await answer(before.ssh)).toBe("closed");
 
       const again = await cli(["stop"], id("main"), "--json");
 
-      expect(decode(OneMachine, again).action).toEqual({ name: "stop", status: "done" });
+      expect(decode(OneMachine, again).action).toEqual({ name: "stopMachine", status: "done" });
 
       started = performance.now();
 
@@ -460,7 +463,10 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
 
       const after = decode(OneMachine, coldStart);
 
-      expect(after).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
+      expect(after).toMatchObject({
+        state: "running",
+        action: { name: "startMachine", status: "done" },
+      });
       expect(after.hostKey).toBe(before.hostKey);
       expect(after.ssh).toEqual(before.ssh);
       expect(await facts("main")).toMatchObject({ identities: 1, starts: 2, setups: 1 });
@@ -530,7 +536,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
         id: id("snap"),
         machine: id("main"),
         kind: "disk",
-        action: { name: "capture", status: "done" },
+        action: { name: "captureCheckpoint", status: "done" },
       });
       expect(await natives("snap")).toMatchObject({
         machines: [{ state: "stopped" }],
@@ -637,7 +643,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       expect(start.tag).toBe("Capacity");
       expect(await machine("main")).toMatchObject({
         state: "stopped",
-        action: { name: "fork", status: "done" },
+        action: { name: "forkMachine", status: "done" },
       });
     },
     minutes(3),
@@ -741,9 +747,9 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
         state: "running",
         made: false,
         action: {
-          name: "create",
+          name: "createMachine",
           status: "failed",
-          error: { tag: "Internal", message: "host restarted during create" },
+          error: { tag: "Internal", message: "host restarted during createMachine" },
         },
       });
 
@@ -759,7 +765,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       expect(decode(OneMachine, stopped)).toMatchObject({
         state: "stopped",
         made: false,
-        action: { name: "stop", status: "done" },
+        action: { name: "stopMachine", status: "done" },
       });
 
       for (const [command, ...args] of [
@@ -800,7 +806,7 @@ describe.skipIf(!liveOn("tart"))("a Tart host, through the CLI", () => {
       expect(await machine("small")).toMatchObject({
         state: "stopped",
         made: false,
-        action: { name: "create", status: "failed" },
+        action: { name: "createMachine", status: "failed" },
       });
 
       const refused = failure(await cli(["start"], id("small"), "--json"));

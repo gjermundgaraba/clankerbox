@@ -82,7 +82,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ramMib: 1024,
           diskGib: 10,
           state: "running",
-          action: { name: "fork", status: "done" },
+          action: { name: "forkMachine", status: "done" },
         });
         expect([source.ssh?.port, copy.ssh?.port]).toEqual([ports.first, ports.first + 1]);
         expect(copy.hostKey).toMatch(/^ssh-ed25519 AAAA[0-9a-f]+$/u);
@@ -95,8 +95,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "exec linux_copy",
         ]);
         expect(yield* actions(linux)).toEqual({
-          dev: { name: "fork", status: "done" },
-          copy: { name: "fork", status: "done" },
+          dev: { name: "forkMachine", status: "done" },
+          copy: { name: "forkMachine", status: "done" },
         });
       }),
   );
@@ -174,7 +174,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const error = yield* failure(linux, linux.machines.fork("linux_dev", "copy"));
 
         expect(error).toEqual(new Capacity({ message: "no room" }));
-        expect(yield* actions(linux)).toEqual({ dev: refused("fork", error) });
+        expect(yield* actions(linux)).toEqual({ dev: refused("forkMachine", error) });
       }),
   );
 
@@ -190,7 +190,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         "Precondition",
         "linux_dev is stopped: start it first",
       ]);
-      expect(yield* actions(linux)).toEqual({ dev: refused("fork", error) });
+      expect(yield* actions(linux)).toEqual({ dev: refused("forkMachine", error) });
       expect(linux.fake.calls.filter((call) => call.startsWith("fork"))).toEqual([
         "fork linux_copy",
       ]);
@@ -201,17 +201,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const linux = yield* withSource();
 
-      linux.fake.failNext("fork", new Internal({ message: "capture failed" }));
+      linux.fake.failNext("fork", new Internal({ message: "captureCheckpoint failed" }));
 
       const error = yield* failure(linux, linux.machines.fork("linux_dev", "copy"));
 
       const failed = {
-        name: "fork",
+        name: "forkMachine",
         status: "failed",
-        error: { tag: "Internal", message: "capture failed" },
+        error: { tag: "Internal", message: "captureCheckpoint failed" },
       };
 
-      expect(error).toEqual(new Internal({ message: "capture failed" }));
+      expect(error).toEqual(new Internal({ message: "captureCheckpoint failed" }));
       expect(yield* actions(linux)).toEqual({ dev: failed, copy: failed });
 
       yield* linux.run(linux.machines.delete("linux_copy"));
@@ -242,7 +242,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             "Precondition",
             `machine linux_${name} was never made: its create, fork or restore failed; delete it`,
           ]);
-          expect((yield* actions(linux))[name]).toEqual(refused("start", error));
+          expect((yield* actions(linux))[name]).toEqual(refused("startMachine", error));
 
           yield* linux.run(linux.machines.delete(`linux_${name}`));
         }
@@ -253,7 +253,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(started).toMatchObject({
           state: "running",
-          action: { name: "start", status: "done" },
+          action: { name: "startMachine", status: "done" },
         });
         expect(Object.keys(yield* actions(linux))).toEqual(["dev"]);
       }),
@@ -268,8 +268,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* linux.run(linux.checkpoints.capture("linux_dev", "snap"));
 
         for (const [name, operation, make] of [
-          ["forked", "fork", () => linux.machines.fork("linux_dev", "forked")],
-          ["restored", "restore", () => linux.machines.restore("linux_snap", "restored")],
+          ["forked", "forkMachine", () => linux.machines.fork("linux_dev", "forked")],
+          ["restored", "restoreMachine", () => linux.machines.restore("linux_snap", "restored")],
         ] as const) {
           linux.fake.failNext("exec", new Internal({ message: "sshd didn't start" }));
           yield* failure(linux, make());
@@ -285,7 +285,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect(row).toMatchObject({ made: true, action: { name: operation, status: "failed" } });
           expect(started).toMatchObject({
             state: "running",
-            action: { name: "start", status: "done" },
+            action: { name: "startMachine", status: "done" },
           });
           expect(linux.fake.calls).toEqual([
             `admit linux_${name}`,
@@ -306,7 +306,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const error = yield* failure(linux, linux.machines.fork("linux_dev", "copy"));
 
       expect(error).toEqual(new Conflict({ message: "machine linux_copy exists", kind: "exists" }));
-      expect((yield* actions(linux))["dev"]).toEqual(refused("fork", error));
+      expect((yield* actions(linux))["dev"]).toEqual(refused("forkMachine", error));
       expect(linux.fake.calls).toEqual([]);
     }),
   );
@@ -322,9 +322,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(error).toEqual(
         new Conflict({ message: "checkpoint linux_snap exists", kind: "exists" }),
       );
-      expect((yield* actions(linux))["dev"]).toEqual(refused("capture", error));
+      expect((yield* actions(linux))["dev"]).toEqual(refused("captureCheckpoint", error));
       expect(yield* checkpointActions(linux)).toEqual({
-        snap: { name: "capture", status: "done" },
+        snap: { name: "captureCheckpoint", status: "done" },
       });
     }),
   );
@@ -373,10 +373,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           cpu: 1,
           ramMib: 1024,
           diskGib: 10,
-          action: { name: "capture", status: "done" },
+          action: { name: "captureCheckpoint", status: "done" },
         });
         expect(rows.map(({ name, pin }) => [name, pin])).toEqual([["hot", "fake 1"]]);
-        expect((yield* actions(linux))["dev"]).toEqual({ name: "capture", status: "done" });
+        expect((yield* actions(linux))["dev"]).toEqual({
+          name: "captureCheckpoint",
+          status: "done",
+        });
         expect(yield* linux.run(linux.checkpoints.list)).toEqual([ram]);
       }),
   );
@@ -395,7 +398,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           new Precondition({ message: "linux_dev is stopped: start it first" }),
         );
         expect(yield* checkpointActions(linux)).toEqual({});
-        expect((yield* actions(linux))["dev"]).toEqual(refused("capture", error));
+        expect((yield* actions(linux))["dev"]).toEqual(refused("captureCheckpoint", error));
       }),
   );
 
@@ -449,7 +452,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(missing._tag).toBe("Precondition");
         expect(none._tag).toBe("NotFound");
         expect(yield* checkpointActions(linux)).toEqual({});
-        expect((yield* actions(linux))["dev"]).toEqual(refused("capture", missing));
+        expect((yield* actions(linux))["dev"]).toEqual(refused("captureCheckpoint", missing));
       }),
   );
 
@@ -468,7 +471,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(error.message).toBe("ENOTSUP");
         expect(got.action).toEqual({
-          name: "capture",
+          name: "captureCheckpoint",
           status: "failed",
           error: { tag: "Internal", message: "ENOTSUP" },
         });
@@ -494,7 +497,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           id: "linux_dev",
           profile: "small",
           state: "running",
-          action: { name: "restore", status: "done" },
+          action: { name: "restoreMachine", status: "done" },
           ssh: { host: "127.0.0.1", port: ports.first },
         });
         expect(source.ssh).toEqual({ user: "root", host: "127.0.0.1", port: ports.first });
@@ -506,7 +509,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "exec linux_dev",
         ]);
         expect(yield* checkpointActions(linux)).toEqual({
-          snap: { name: "capture", status: "done" },
+          snap: { name: "captureCheckpoint", status: "done" },
         });
       }),
   );
@@ -552,7 +555,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const error = yield* Fiber.join(restore);
 
       expect(error._tag).toBe("Internal");
-      expect((yield* actions(linux))["copy"]).toMatchObject({ name: "restore", status: "failed" });
+      expect((yield* actions(linux))["copy"]).toMatchObject({
+        name: "restoreMachine",
+        status: "failed",
+      });
       expect(yield* checkpointActions(linux)).toEqual({});
     }),
   );
@@ -573,7 +579,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const none = yield* failure(linux, linux.machines.restore("linux_gone", "copy"));
 
       expect(capturing).toEqual(
-        new Precondition({ message: "checkpoint linux_snap isn't ready: its capture is running" }),
+        new Precondition({
+          message: "checkpoint linux_snap isn't ready: its captureCheckpoint is running",
+        }),
       );
       expect(none._tag).toBe("NotFound");
       expect(Object.keys(yield* actions(linux))).toEqual(["dev"]);
@@ -620,7 +628,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const restored = yield* upgraded.run(upgraded.machines.restore("linux_cold", "copy"));
 
-      expect(restored.action).toEqual({ name: "restore", status: "done" });
+      expect(restored.action).toEqual({ name: "restoreMachine", status: "done" });
       expect(upgraded.fake.calls).toEqual([
         "startup",
         "admit linux_copy",
@@ -694,9 +702,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
 
       const interrupted = {
-        name: "capture",
+        name: "captureCheckpoint",
         status: "failed",
-        error: { tag: "Internal", message: "the host stopped during capture" },
+        error: { tag: "Internal", message: "the host stopped during captureCheckpoint" },
       };
 
       expect(yield* checkpointActions(restarted)).toEqual({ snap: interrupted });

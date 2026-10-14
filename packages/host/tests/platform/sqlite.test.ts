@@ -87,21 +87,21 @@ const refused = (name: ActionRecord["name"]): ActionRecord => ({
 const inserting = (made: NewMachine): NewRow => ({ kind: "machine", record: made });
 
 const forking = (store: Interface, source: string, made: NewMachine) =>
-  Effect.flatMap(store.hold("fork", machine(source)), ({ token }) =>
-    store.insert("fork", inserting(made), token),
+  Effect.flatMap(store.hold("forkMachine", machine(source)), ({ token }) =>
+    store.insert("forkMachine", inserting(made), token),
   );
 
 const capturing = (store: Interface, made: NewCheckpoint) =>
-  Effect.flatMap(store.hold("capture", machine(made.machine)), ({ token }) =>
-    store.insert("capture", { kind: "checkpoint", record: made }, token),
+  Effect.flatMap(store.hold("captureCheckpoint", machine(made.machine)), ({ token }) =>
+    store.insert("captureCheckpoint", { kind: "checkpoint", record: made }, token),
   );
 
 /** Inserts a machine row whose create is done, and so made. */
 const planted = (store: Interface, made: NewMachine) =>
-  Effect.flatMap(store.insert("create", inserting(made)), (token) =>
+  Effect.flatMap(store.insert("createMachine", inserting(made)), (token) =>
     Effect.andThen(
       store.markMade(token),
-      store.end(token, { action: { name: "create", status: "done" } }),
+      store.end(token, { action: { name: "createMachine", status: "done" } }),
     ),
   );
 
@@ -111,9 +111,9 @@ const Slot = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 3 }));
 
 /** `slot` picks one of the claims not yet given back. */
 const Step = Schema.Union([
-  Schema.Struct({ op: Schema.Literal("create"), name: RowName }),
-  Schema.Struct({ op: Schema.Literal("start"), name: RowName }),
-  Schema.Struct({ op: Schema.Literal("fork"), source: RowName, name: RowName }),
+  Schema.Struct({ op: Schema.Literal("createMachine"), name: RowName }),
+  Schema.Struct({ op: Schema.Literal("startMachine"), name: RowName }),
+  Schema.Struct({ op: Schema.Literal("forkMachine"), source: RowName, name: RowName }),
   Schema.Struct({ op: Schema.Literal("release"), slot: Slot }),
   Schema.Struct({ op: Schema.Literal("end"), slot: Slot, failed: Schema.Boolean }),
 ]);
@@ -153,14 +153,14 @@ layer(NodeServices.layer)((it) => {
       const stateDir = join(yield* scratch, "state");
       const made = record("dev", { profile: "small", port: 10_000, hostKey: "ssh-ed25519 AAAA" });
 
-      yield* withStore(stateDir, (store) => store.insert("create", inserting(made)));
+      yield* withStore(stateDir, (store) => store.insert("createMachine", inserting(made)));
 
       const found = yield* withStore(stateDir, (store) => store.find("dev"));
 
       expect(Option.getOrUndefined(found)).toEqual({
         ...made,
         made: false,
-        action: { name: "create", status: "running" },
+        action: { name: "createMachine", status: "running" },
       });
     }),
   );
@@ -230,7 +230,9 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const stateDir = join(yield* scratch, "state");
 
-        yield* withStore(stateDir, (store) => store.insert("create", inserting(record("dev"))));
+        yield* withStore(stateDir, (store) =>
+          store.insert("createMachine", inserting(record("dev"))),
+        );
 
         const renamed = yield* opening(stateDir, { id: "mac" });
         const moved = yield* opening(stateDir, { runtime: "tart" });
@@ -339,12 +341,14 @@ layer(NodeServices.layer)((it) => {
 
       const [name, port, names] = yield* withStore(stateDir, (store) =>
         Effect.gen(function* () {
-          yield* store.insert("create", inserting(record("dev", { port: 10_000 })));
+          yield* store.insert("createMachine", inserting(record("dev", { port: 10_000 })));
 
           return [
-            yield* Effect.flip(store.insert("create", inserting(record("dev", { port: 10_001 })))),
             yield* Effect.flip(
-              store.insert("create", inserting(record("other", { port: 10_000 }))),
+              store.insert("createMachine", inserting(record("dev", { port: 10_001 }))),
+            ),
+            yield* Effect.flip(
+              store.insert("createMachine", inserting(record("other", { port: 10_000 }))),
             ),
             (yield* store.list).map((row) => row.name),
           ] as const;
@@ -366,14 +370,14 @@ layer(NodeServices.layer)((it) => {
 
         const [busy, missing, claimed] = yield* withStore(stateDir, (store) =>
           Effect.gen(function* () {
-            const created = yield* store.insert("create", inserting(record("dev")));
+            const created = yield* store.insert("createMachine", inserting(record("dev")));
 
-            const busy = yield* Effect.flip(store.hold("start", machine("dev")));
-            const missing = yield* Effect.flip(store.hold("start", machine("gone")));
+            const busy = yield* Effect.flip(store.hold("startMachine", machine("dev")));
+            const missing = yield* Effect.flip(store.hold("startMachine", machine("gone")));
 
-            yield* store.end(created, { action: { name: "create", status: "done" } });
+            yield* store.end(created, { action: { name: "createMachine", status: "done" } });
 
-            const stopping = yield* store.hold("stop", machine("dev"));
+            const stopping = yield* store.hold("stopMachine", machine("dev"));
             const after = yield* store.find("dev");
 
             return [
@@ -392,7 +396,7 @@ layer(NodeServices.layer)((it) => {
         const stopping = {
           ...record("dev"),
           made: false,
-          action: { name: "stop", status: "running" },
+          action: { name: "stopMachine", status: "running" },
         };
 
         expect(claimed).toEqual([[{ kind: "machine", name: "dev" }], stopping, stopping]);
@@ -411,13 +415,13 @@ layer(NodeServices.layer)((it) => {
 
             const token = yield* forking(store, "dev", record("copy", { port: 10_001 }));
 
-            yield* store.release(token, refused("fork"));
+            yield* store.release(token, refused("forkMachine"));
 
             return (yield* store.list).map(({ name, action }) => [name, action]);
           }),
         );
 
-        expect(rows).toEqual([["dev", refused("fork")]]);
+        expect(rows).toEqual([["dev", refused("forkMachine")]]);
       }),
   );
 
@@ -434,15 +438,15 @@ layer(NodeServices.layer)((it) => {
             const fork = yield* forking(store, "dev", record("copy", { port: 10_001 }));
 
             yield* store.end(fork, {
-              action: { name: "fork", status: "done" },
+              action: { name: "forkMachine", status: "done" },
               prepared: { name: "copy", hostKey: "copy key" },
             });
 
-            const start = yield* store.hold("start", machine("dev"));
+            const start = yield* store.hold("startMachine", machine("dev"));
 
             yield* store.end(start.token, {
               action: {
-                name: "start",
+                name: "startMachine",
                 status: "failed",
                 error: { tag: "Internal", message: "no" },
               },
@@ -453,10 +457,10 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(rows).toEqual([
-          ["copy", { name: "fork", status: "done" }, "copy key"],
+          ["copy", { name: "forkMachine", status: "done" }, "copy key"],
           [
             "dev",
-            { name: "start", status: "failed", error: { tag: "Internal", message: "no" } },
+            { name: "startMachine", status: "failed", error: { tag: "Internal", message: "no" } },
             undefined,
           ],
         ]);
@@ -471,15 +475,19 @@ layer(NodeServices.layer)((it) => {
 
         const made = yield* withStore(stateDir, (store) =>
           Effect.gen(function* () {
-            const created = yield* store.insert("create", inserting(record("dev")));
+            const created = yield* store.insert("createMachine", inserting(record("dev")));
 
-            yield* store.end(created, { action: { name: "create", status: "done" } });
+            yield* store.end(created, { action: { name: "createMachine", status: "done" } });
 
             const fork = yield* forking(store, "dev", record("copy", { port: 10_001 }));
 
             yield* store.markMade(fork);
             yield* store.end(fork, {
-              action: { name: "fork", status: "failed", error: { tag: "Internal", message: "no" } },
+              action: {
+                name: "forkMachine",
+                status: "failed",
+                error: { tag: "Internal", message: "no" },
+              },
             });
 
             return (yield* store.list).map(({ name, made }) => [name, made]);
@@ -503,7 +511,7 @@ layer(NodeServices.layer)((it) => {
           Effect.gen(function* () {
             const { instance } = record("dev");
 
-            yield* store.insert("create", inserting(record("dev")));
+            yield* store.insert("createMachine", inserting(record("dev")));
             yield* store.recordNative("dev", instance, "bx_first");
 
             const found = yield* store.find("dev");
@@ -538,21 +546,25 @@ layer(NodeServices.layer)((it) => {
             yield* planted(store, record("dev"));
             yield* planted(store, record("other", { port: 10_001 }));
 
-            const { token: source } = yield* store.hold("capture", machine("dev"));
+            const { token: source } = yield* store.hold("captureCheckpoint", machine("dev"));
 
             const taken = yield* Effect.flip(
-              store.insert("capture", inserting(record("other", { port: 10_002 })), source),
+              store.insert(
+                "captureCheckpoint",
+                inserting(record("other", { port: 10_002 })),
+                source,
+              ),
             );
 
             const held = Option.getOrUndefined(yield* store.find("dev"))?.action;
 
             const joined = yield* store.insert(
-              "capture",
+              "captureCheckpoint",
               { kind: "checkpoint", record: checkpoint("snap") },
               source,
             );
 
-            yield* store.release(joined, refused("capture"));
+            yield* store.release(joined, refused("captureCheckpoint"));
 
             return [
               taken,
@@ -565,8 +577,8 @@ layer(NodeServices.layer)((it) => {
         expect(taken).toEqual(
           new Conflict({ message: "machine linux_other exists", kind: "exists" }),
         );
-        expect(held).toEqual({ name: "capture", status: "running" });
-        expect(released).toEqual([refused("capture"), []]);
+        expect(held).toEqual({ name: "captureCheckpoint", status: "running" });
+        expect(released).toEqual([refused("captureCheckpoint"), []]);
       }),
   );
 
@@ -576,7 +588,7 @@ layer(NodeServices.layer)((it) => {
 
       const actions = yield* withStore(stateDir, (store) =>
         Effect.gen(function* () {
-          yield* store.insert("create", inserting(record("a")));
+          yield* store.insert("createMachine", inserting(record("a")));
           yield* planted(store, record("b", { port: 10_001 }));
           yield* store.failInterrupted;
 
@@ -588,12 +600,12 @@ layer(NodeServices.layer)((it) => {
         [
           "a",
           {
-            name: "create",
+            name: "createMachine",
             status: "failed",
-            error: { tag: "Internal", message: "the host stopped during create" },
+            error: { tag: "Internal", message: "the host stopped during createMachine" },
           },
         ],
-        ["b", { name: "create", status: "done" }],
+        ["b", { name: "createMachine", status: "done" }],
       ]);
     }),
   );
@@ -653,6 +665,63 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
+  it.effect("a database at schema version 4 records its actions under the contract's names", () =>
+    Effect.gen(function* () {
+      const stateDir = join(yield* scratch, "state");
+
+      yield* mkdir(stateDir);
+
+      const db = new DatabaseSync(join(stateDir, databaseFile));
+
+      for (const migration of migrations.slice(0, 4)) {
+        db.exec(migration);
+      }
+
+      const machineActions = ["create", "start", "stop", "delete", "fork", "restore", "capture"];
+
+      for (const action of machineActions) {
+        db.prepare(
+          `INSERT INTO machines (name, instance, created_at, base, cpu, ram_mib, disk_gib, made,
+          action_name, action_status) VALUES (?, 'abc', '2026-10-04T12:00:00.000Z', 'ubuntu', 1,
+          1024, 10, 1, ?, 'done')`,
+        ).run(action, action);
+      }
+
+      for (const action of ["capture", "delete"]) {
+        db.prepare(
+          `INSERT INTO checkpoints (name, instance, created_at, machine, kind, base, cpu, ram_mib,
+          disk_gib, action_name, action_status) VALUES (?, 'abc', '2026-10-04T12:00:00.000Z',
+          'dev', 'disk', 'ubuntu', 1, 1024, 10, ?, 'done')`,
+        ).run(action, action);
+      }
+
+      db.exec(`PRAGMA user_version = 4; PRAGMA application_id = ${applicationId}`);
+      db.close();
+
+      const [machines, checkpoints] = yield* withStore(stateDir, (store) =>
+        Effect.all([store.list, store.checkpoints]),
+      );
+
+      const named = (
+        rows: ReadonlyArray<{ readonly name: string; readonly action: ActionRecord }>,
+      ) => Object.fromEntries(rows.map(({ name, action }) => [name, action.name]));
+
+      expect(named(machines)).toEqual({
+        create: "createMachine",
+        start: "startMachine",
+        stop: "stopMachine",
+        delete: "deleteMachine",
+        fork: "forkMachine",
+        restore: "restoreMachine",
+        capture: "captureCheckpoint",
+      });
+      expect(named(checkpoints)).toEqual({
+        capture: "captureCheckpoint",
+        delete: "deleteCheckpoint",
+      });
+    }),
+  );
+
   it.effect(
     "checkpoint rows round-trip, and a capture claims its source in the same transaction",
     () =>
@@ -673,20 +742,23 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(token).toEqual({
-          action: "capture",
+          action: "captureCheckpoint",
           inserted: [{ kind: "checkpoint", name: "snap" }],
           held: [{ kind: "machine", name: "dev" }],
         });
         expect(Option.getOrUndefined(source)?.action).toEqual({
-          name: "capture",
+          name: "captureCheckpoint",
           status: "running",
         });
         expect(busy).toEqual(
-          new Conflict({ message: "machine linux_dev is busy: capture is running", kind: "busy" }),
+          new Conflict({
+            message: "machine linux_dev is busy: captureCheckpoint is running",
+            kind: "busy",
+          }),
         );
         expect(Option.getOrUndefined(found)).toEqual({
           ...made,
-          action: { name: "capture", status: "running" },
+          action: { name: "captureCheckpoint", status: "running" },
         });
       }),
   );
@@ -704,29 +776,29 @@ layer(NodeServices.layer)((it) => {
 
             const captured = yield* capturing(store, checkpoint("snap"));
 
-            yield* store.end(captured, { action: { name: "capture", status: "done" } });
+            yield* store.end(captured, { action: { name: "captureCheckpoint", status: "done" } });
 
-            const forked = yield* store.hold("fork", machine("dev"));
+            const forked = yield* store.hold("forkMachine", machine("dev"));
 
             const fork = yield* Effect.flip(
-              store.insert("fork", inserting(record("copy")), forked.token),
+              store.insert("forkMachine", inserting(record("copy")), forked.token),
             );
 
             const held = Option.getOrUndefined(yield* store.find("dev"))?.action;
 
-            yield* store.release(forked.token, refused("fork"));
+            yield* store.release(forked.token, refused("forkMachine"));
 
-            const again = yield* store.hold("capture", machine("dev"));
+            const again = yield* store.hold("captureCheckpoint", machine("dev"));
 
             const capture = yield* Effect.flip(
               store.insert(
-                "capture",
+                "captureCheckpoint",
                 { kind: "checkpoint", record: checkpoint("snap") },
                 again.token,
               ),
             );
 
-            yield* store.release(again.token, refused("capture"));
+            yield* store.release(again.token, refused("captureCheckpoint"));
 
             return [fork, capture, held, yield* store.find("dev")] as const;
           }),
@@ -738,8 +810,8 @@ layer(NodeServices.layer)((it) => {
         expect(capture).toEqual(
           new Conflict({ message: "checkpoint linux_snap exists", kind: "exists" }),
         );
-        expect(held).toEqual({ name: "fork", status: "running" });
-        expect(Option.getOrUndefined(source)?.action).toEqual(refused("capture"));
+        expect(held).toEqual({ name: "forkMachine", status: "running" });
+        expect(Option.getOrUndefined(source)?.action).toEqual(refused("captureCheckpoint"));
       }),
   );
 
@@ -761,8 +833,8 @@ layer(NodeServices.layer)((it) => {
 
       expect(missing).toEqual(new NotFound({ message: "no machine linux_dev" }));
       expect(rows).toEqual([
-        ["copy", { name: "fork", status: "running" }],
-        ["dev", { name: "fork", status: "running" }],
+        ["copy", { name: "forkMachine", status: "running" }],
+        ["dev", { name: "forkMachine", status: "running" }],
       ]);
     }),
   );
@@ -779,8 +851,8 @@ layer(NodeServices.layer)((it) => {
             yield* planted(store, record("dev"));
             yield* capturing(store, checkpoint("snap"));
 
-            const busy = yield* Effect.flip(store.hold("delete", snap("snap")));
-            const missing = yield* Effect.flip(store.hold("delete", snap("gone")));
+            const busy = yield* Effect.flip(store.hold("deleteCheckpoint", snap("snap")));
+            const missing = yield* Effect.flip(store.hold("deleteCheckpoint", snap("gone")));
 
             yield* store.failInterrupted;
 
@@ -790,16 +862,16 @@ layer(NodeServices.layer)((it) => {
 
         expect(busy).toEqual(
           new Conflict({
-            message: "checkpoint linux_snap is busy: capture is running",
+            message: "checkpoint linux_snap is busy: captureCheckpoint is running",
             kind: "busy",
           }),
         );
         expect(missing).toEqual(new NotFound({ message: "no checkpoint linux_gone" }));
         expect(actions).toEqual([
           {
-            name: "capture",
+            name: "captureCheckpoint",
             status: "failed",
-            error: { tag: "Internal", message: "the host stopped during capture" },
+            error: { tag: "Internal", message: "the host stopped during captureCheckpoint" },
           },
         ]);
       }),
@@ -816,7 +888,7 @@ layer(NodeServices.layer)((it) => {
           runtime: "smolvm",
         });
 
-        const done: ActionRecord = { name: "create", status: "done" };
+        const done: ActionRecord = { name: "createMachine", status: "done" };
 
         const rows = new Map<string, ActionRecord>([
           ["a", done],
@@ -845,18 +917,26 @@ layer(NodeServices.layer)((it) => {
         };
 
         for (const step of steps) {
-          if (step.op === "create") {
+          if (step.op === "createMachine") {
             const expected = rows.has(step.name) ? "Conflict exists" : "ok";
-            const exit = yield* Effect.exit(store.insert("create", inserting(record(step.name))));
+
+            const exit = yield* Effect.exit(
+              store.insert("createMachine", inserting(record(step.name))),
+            );
 
             expect(outcome(exit), JSON.stringify(step)).toBe(expected);
 
             if (Exit.isSuccess(exit)) {
-              rows.set(step.name, { name: "create", status: "running" });
-              claims.push({ token: exit.value, action: "create", inserted: [step.name], held: [] });
+              rows.set(step.name, { name: "createMachine", status: "running" });
+              claims.push({
+                token: exit.value,
+                action: "createMachine",
+                inserted: [step.name],
+                held: [],
+              });
             }
-          } else if (step.op === "start" || step.op === "fork") {
-            const source = step.op === "start" ? step.name : step.source;
+          } else if (step.op === "startMachine" || step.op === "forkMachine") {
+            const source = step.op === "startMachine" ? step.name : step.source;
             const before = claimed(source, step.op);
             const exit = yield* Effect.exit(store.hold(step.op, machine(source)));
 
@@ -875,7 +955,7 @@ layer(NodeServices.layer)((it) => {
               held: [source],
             };
 
-            if (step.op === "start") {
+            if (step.op === "startMachine") {
               claims.push(holding);
               continue;
             }
@@ -883,13 +963,13 @@ layer(NodeServices.layer)((it) => {
             const copy = rows.has(step.name) ? "Conflict exists" : "ok";
 
             const joined = yield* Effect.exit(
-              store.insert("fork", inserting(record(step.name)), holding.token),
+              store.insert("forkMachine", inserting(record(step.name)), holding.token),
             );
 
             expect(outcome(joined), JSON.stringify(step)).toBe(copy);
 
             if (Exit.isSuccess(joined)) {
-              rows.set(step.name, { name: "fork", status: "running" });
+              rows.set(step.name, { name: "forkMachine", status: "running" });
               claims.push({ ...holding, token: joined.value, inserted: [step.name] });
             } else {
               claims.push(holding);

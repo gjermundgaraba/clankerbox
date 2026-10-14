@@ -225,7 +225,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(made).toMatchObject({
         id: id("main"),
         state: "running",
-        action: { name: "create", status: "done" },
+        action: { name: "createMachine", status: "done" },
         ssh: { host: new URL(suite.env.host.url).hostname },
       });
       expect(made.ssh?.port).toBeGreaterThanOrEqual(10_000);
@@ -332,12 +332,12 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(stopped.code, stopped.stdout).toBe(0);
       expect(decode(OneMachine, stopped)).toMatchObject({
         state: "stopped",
-        action: { name: "stop", status: "done" },
+        action: { name: "stopMachine", status: "done" },
       });
 
       const again = await cli(["stop"], id("main"), "--json");
 
-      expect(decode(OneMachine, again).action).toEqual({ name: "stop", status: "done" });
+      expect(decode(OneMachine, again).action).toEqual({ name: "stopMachine", status: "done" });
 
       started = performance.now();
 
@@ -348,7 +348,10 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
       const after = decode(OneMachine, coldStart);
 
-      expect(after).toMatchObject({ state: "running", action: { name: "start", status: "done" } });
+      expect(after).toMatchObject({
+        state: "running",
+        action: { name: "startMachine", status: "done" },
+      });
       expect(after.hostKey).toBe(before?.hostKey);
       expect(after.ssh).toEqual(before?.ssh);
       expect(await inGuest("main", "cat /var/lib/clankerbox/machine-id")).toBe(id("main"));
@@ -411,7 +414,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(recovered.code, recovered.stdout).toBe(0);
       expect(decode(OneMachine, recovered)).toMatchObject({
         state: "running",
-        action: { name: "start", status: "done" },
+        action: { name: "startMachine", status: "done" },
         hostKey: before?.hostKey,
         ssh: before?.ssh,
       });
@@ -437,14 +440,14 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
 
       expect(error.tag).toBe("Precondition");
       expect(error.message).toContain("start refused: /root/fail-start exists");
-      expect(failed?.action).toMatchObject({ name: "start", status: "failed" });
+      expect(failed?.action).toMatchObject({ name: "startMachine", status: "failed" });
 
       await inGuest("main", "rm /root/fail-start");
 
       const repaired = await cli(["start"], id("main"), "--json");
 
       expect(repaired.code, repaired.stdout).toBe(0);
-      expect(decode(OneMachine, repaired).action).toEqual({ name: "start", status: "done" });
+      expect(decode(OneMachine, repaired).action).toEqual({ name: "startMachine", status: "done" });
     },
     minutes(3),
   );
@@ -527,7 +530,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       );
       expect(await machine("busy")).toMatchObject({
         state: "running",
-        action: { name: "create", status: "done" },
+        action: { name: "createMachine", status: "done" },
       });
 
       const setupDone = await control("guest", named("busy"), "test -e /root/setup-done");
@@ -555,7 +558,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(decode(OneMachine, ran)).toMatchObject({
         id: id("long"),
         state: "running",
-        action: { name: "create", status: "done" },
+        action: { name: "createMachine", status: "done" },
       });
       await removeMachine("long");
     },
@@ -573,7 +576,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(error.message).toContain("setup exited 7");
       expect(error.message).toContain("setup-refused");
       expect(await machine("failing")).toMatchObject({
-        action: { name: "create", status: "failed" },
+        action: { name: "createMachine", status: "failed" },
       });
       await removeMachine("failing");
     },
@@ -645,7 +648,9 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       const rows = await Promise.all(names.map(machine));
 
       expect(rows.map((row) => row?.action)).toEqual(
-        results.map(({ code }) => (code === 0 ? { name: "create", status: "done" } : undefined)),
+        results.map(({ code }) =>
+          code === 0 ? { name: "createMachine", status: "done" } : undefined,
+        ),
       );
 
       for (const [index, name] of names.entries()) {
@@ -684,7 +689,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         id: id("main-ram"),
         machine: id("main"),
         kind: "ram",
-        action: { name: "capture", status: "done" },
+        action: { name: "captureCheckpoint", status: "done" },
       });
       expect(await stored("main-ram")).toBe(true);
 
@@ -717,7 +722,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(new Set(all.map((listed) => listed?.ssh?.port)).size).toBe(4);
       expect(new Set(all.map((listed) => listed?.hostKey)).size).toBe(4);
       expect(all[0]?.hostKey).toBe(before?.hostKey);
-      expect(all[0]?.action).toEqual({ name: "fork", status: "done" });
+      expect(all[0]?.action).toEqual({ name: "forkMachine", status: "done" });
 
       for (const [index, name] of copies.entries()) {
         expect(all[index + 1]).toMatchObject({
@@ -810,14 +815,17 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         ).toBe("unreachable");
       }
 
-      expect((await machine("main"))?.action).toMatchObject({ name: "fork", status: "failed" });
+      expect((await machine("main"))?.action).toMatchObject({
+        name: "forkMachine",
+        status: "failed",
+      });
 
       const started = await cli(["start"], id("main"), "--json");
 
       expect(started.code, started.stdout).toBe(0);
       expect(decode(OneMachine, started)).toMatchObject({
         state: "running",
-        action: { name: "start", status: "done" },
+        action: { name: "startMachine", status: "done" },
       });
     },
     minutes(10),
@@ -930,7 +938,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(await machine("stopped-fork")).toBeUndefined();
       expect(await natives("stopped-fork")).toEqual(smolvm.nothing);
       expect(await forks()).toEqual([]);
-      expect((await machine("restore-b"))?.action).toEqual({ name: "stop", status: "done" });
+      expect((await machine("restore-b"))?.action).toEqual({ name: "stopMachine", status: "done" });
     },
     minutes(3),
   );
@@ -1030,9 +1038,9 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
         state: "running",
         made: false,
         action: {
-          name: "create",
+          name: "createMachine",
           status: "failed",
-          error: { tag: "Internal", message: "host restarted during create" },
+          error: { tag: "Internal", message: "host restarted during createMachine" },
         },
       });
 
@@ -1047,7 +1055,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(decode(OneMachine, stopped)).toMatchObject({
         state: "stopped",
         made: false,
-        action: { name: "stop", status: "done" },
+        action: { name: "stopMachine", status: "done" },
       });
 
       for (const [command, ...args] of [
@@ -1064,7 +1072,7 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(await machine("crash")).toMatchObject({
         state: "stopped",
         made: false,
-        action: { name: "stop", status: "done" },
+        action: { name: "stopMachine", status: "done" },
       });
       expect(await machine("crash-fork")).toBeUndefined();
       expect(await natives("crash-fork")).toEqual(smolvm.nothing);
@@ -1113,7 +1121,10 @@ describe.skipIf(!liveOn("smolvm"))("a smolvm host, through the CLI", () => {
       expect(error.tag).toBe("Internal");
       expect(error.message).toContain("did not confirm filesystem synchronization");
       expect(error.message).not.toContain("\u001b[");
-      expect(row).toMatchObject({ state: "running", action: { name: "stop", status: "failed" } });
+      expect(row).toMatchObject({
+        state: "running",
+        action: { name: "stopMachine", status: "failed" },
+      });
 
       const started = performance.now();
 

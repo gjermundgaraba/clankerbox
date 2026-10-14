@@ -36,7 +36,7 @@ test("a recorded action's error is a host error, never Unavailable", () => {
   const isRecord = Schema.is(ActionRecord);
 
   const failed = (tag: string) => ({
-    name: "create",
+    name: "createMachine",
     status: "failed",
     error: { tag, message: "" },
   });
@@ -53,8 +53,8 @@ test("a recorded action carries an error exactly when it failed", () => {
 
   const error = { tag: "Internal", message: "m" };
 
-  expect(decodes({ name: "create", status: "done" })).toBe(true);
-  expect(decodes({ name: "create", status: "failed", error })).toBe(true);
-  expect(decodes({ name: "create", status: "failed" })).toBe(false);
-  expect(decodes({ name: "create", status: "done", error })).toBe(false);
+  expect(decodes({ name: "createMachine", status: "done" })).toBe(true);
+  expect(decodes({ name: "createMachine", status: "failed", error })).toBe(true);
+  expect(decodes({ name: "createMachine", status: "failed" })).toBe(false);
+  expect(decodes({ name: "createMachine", status: "done", error })).toBe(false);
 });
