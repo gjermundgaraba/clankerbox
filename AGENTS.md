@@ -107,7 +107,11 @@ runtime, and the SDK's serves stub hosts over an in-memory transport. Neither
 - **A lint fence** (`tools/lint-fence`, each rule with its tests; settings in
   `vite.config.ts`): a host domain file imports only its siblings, `effect`,
   `effect/encoding` and the SDK; an adapter imports domain files, its own
-  folder and `platform/`'s `process.ts` and `address.ts`; the SDK's `.` entry
+  folder and `platform/`'s `process.ts` and `address.ts`; an app command
+  imports only `effect`, the SDK and its siblings, leaving Node,
+  `@effect/platform-node` and the host package to `main.ts` and `host.ts`;
+  the provider takes Node and `@effect/platform-node` only in `index.ts` and
+  `tunnel.ts`; the SDK's `.` entry
   imports no Node and uses no `Buffer` or `process`; `fence/no-manual-run`
   keeps hand-run Effect to the files above; and `fence/no-prose-comments`
   allows only the comments above.
