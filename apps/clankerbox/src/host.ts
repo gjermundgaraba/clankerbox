@@ -14,7 +14,7 @@ const run = (file: string) =>
     return yield* Layer.launch(
       hostLayer(
         config,
-        (recordNative) => runtimeLayer(config, recordNative),
+        runtimeLayer(config),
         NodeHttpServer.layer(createServer, {
           host: config.listen.address,
           port: config.listen.port,

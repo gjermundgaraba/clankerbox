@@ -120,6 +120,14 @@ export interface Interface {
   readonly markMade: (token: Token) => Effect.Effect<void, Internal>;
   /** One transaction, recording `outcome` on every row of the claim. */
   readonly end: (token: Token, outcome: Outcome) => Effect.Effect<void, Internal>;
+  readonly remove: (row: RowRef) => Effect.Effect<void, Internal>;
+  /** Marks every action still running failed: the last host process's end cut it off. */
+  readonly failInterrupted: Effect.Effect<void, Internal>;
+}
+
+export class Store extends Context.Service<Store, Interface>()("@clankerbox/host/Store") {}
+
+export interface NativeIdRecorder {
   /**
    * Called as soon as the runtime knows the ID (boat assigns its sandbox's), so a `delete` after
    * a crash has it. A row that is gone, or now holds another instance, is `Internal`.
@@ -129,9 +137,9 @@ export interface Interface {
     instance: string,
     native: string,
   ) => Effect.Effect<void, Internal>;
-  readonly remove: (row: RowRef) => Effect.Effect<void, Internal>;
-  /** Marks every action still running failed: the last host process's end cut it off. */
-  readonly failInterrupted: Effect.Effect<void, Internal>;
 }
 
-export class Store extends Context.Service<Store, Interface>()("@clankerbox/host/Store") {}
+/** The one write to the host's state a runtime makes. */
+export class NativeIds extends Context.Service<NativeIds, NativeIdRecorder>()(
+  "@clankerbox/host/NativeIds",
+) {}

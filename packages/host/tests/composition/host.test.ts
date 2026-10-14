@@ -19,7 +19,7 @@ const config = (dir: string, fields?: Partial<HostSettings>): HostSettings => ({
 });
 
 const hostOn = (host: HostSettings, fake: FakeRuntime) =>
-  hostLayer(host, () => fake.layer, loopbackServer(host.listen.port));
+  hostLayer(host, fake.layer, loopbackServer(host.listen.port));
 
 const whileServing = <A, E, R>(
   host: HostSettings,

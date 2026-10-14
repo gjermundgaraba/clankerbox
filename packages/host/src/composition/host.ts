@@ -9,7 +9,7 @@ import {
 } from "effect/http";
 import * as Checkpoints from "../checkpoints.ts";
 import * as Machines from "../machines.ts";
-import type { RecordNative, Runtime } from "../runtime.ts";
+import type { Runtime } from "../runtime.ts";
 import * as BindProbe from "../platform/bind-probe.ts";
 import * as Sqlite from "../platform/sqlite.ts";
 import { routes } from "./routes.ts";
@@ -28,35 +28,38 @@ export type ServerLayer = Layer.Layer<
 
 export const servicesLayer = <E, R>(
   config: HostSettings,
-  runtime: (recordNative: RecordNative) => Layer.Layer<Runtime, E, R>,
+  runtime: Layer.Layer<Runtime, E, R>,
 ): Layer.Layer<
   Machines.Machines | Checkpoints.Checkpoints | Store.Store | Runtime,
   HostError | E,
-  R | FileSystem.FileSystem
-> =>
-  Layer.merge(Machines.layer(config), Checkpoints.layer(config)).pipe(
+  Exclude<R, Store.NativeIds> | FileSystem.FileSystem
+> => {
+  const store = Sqlite.layer(config);
+
+  // A runtime gets only the store's `NativeIds`, so a runtime asking for the `Store` is a type
+  // error. Taking it from the store also builds the runtime only once the store holds the state
+  // dir's owner lock: a runtime may write there (smolvm creates its inventory), and a second host
+  // must not touch it at all.
+  const nativeIds = Layer.effect(Store.NativeIds, Effect.service(Store.NativeIds)).pipe(
+    Layer.provide(store),
+  );
+
+  return Layer.merge(Machines.layer(config), Checkpoints.layer(config)).pipe(
     Layer.provide(startup(config)),
     Layer.provide(BindProbe.layer),
-    // The runtime is built only once the store holds the state dir's owner lock: a runtime may
-    // write there (smolvm creates its inventory), and a second host must not touch it at all.
-    // A runtime that owns a native ID, as boat does its sandbox's, records it through the
-    // store's `recordNative`, which is all of the store it gets.
-    Layer.provideMerge(
-      Layer.unwrap(
-        Effect.map(Effect.service(Store.Store), (store) => runtime(store.recordNative)),
-      ).pipe(Layer.provideMerge(Sqlite.layer(config))),
-    ),
+    Layer.provideMerge(Layer.merge(store, runtime.pipe(Layer.provide(nativeIds)))),
   );
+};
 
 /** The server binds only after startup recovery. */
 export const hostLayer = <E, R>(
   config: HostSettings,
-  runtime: (recordNative: RecordNative) => Layer.Layer<Runtime, E, R>,
+  runtime: Layer.Layer<Runtime, E, R>,
   server: ServerLayer,
 ): Layer.Layer<
   HttpServer.HttpServer | Machines.Machines | Checkpoints.Checkpoints | Store.Store,
   HostError | E,
-  R | FileSystem.FileSystem
+  Exclude<R, Store.NativeIds> | FileSystem.FileSystem
 > =>
   HttpRouter.serve(routes(config)).pipe(
     Layer.provideMerge(

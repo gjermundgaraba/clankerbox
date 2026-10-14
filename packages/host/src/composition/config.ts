@@ -8,9 +8,9 @@ import {
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { defaultMachinePorts, reservedPorts } from "../machine-ports.ts";
 import { Address } from "../platform/address.ts";
-import { type BoatHost, BoatSettings } from "../platform/boat/boat.ts";
-import * as Smolvm from "../platform/smolvm.ts";
-import * as Tart from "../platform/tart/tart.ts";
+import { BoatSettings } from "../platform/boat/boat.ts";
+import { SmolvmSettings } from "../platform/smolvm.ts";
+import { TartSettings } from "../platform/tart/tart.ts";
 import type { HostSettings } from "../settings.ts";
 
 const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }));
@@ -39,10 +39,9 @@ const common = {
 };
 
 // Keyed by the SDK's runtime names, so one the SDK names and this table lacks is a type error.
-// `HostConfigFile`, `HostConfig`, `resolveConfig` and `runtimes.ts` follow it by hand.
 const sections = {
-  smolvm: Smolvm.SmolvmSettings,
-  tart: Tart.TartSettings,
+  smolvm: SmolvmSettings,
+  tart: TartSettings,
   boat: BoatSettings,
 } satisfies Record<Runtime, Schema.Struct<Schema.Struct.Fields>>;
 
@@ -54,7 +53,15 @@ const HostConfigFile = Schema.Union([
 
 type HostConfigFile = typeof HostConfigFile.Type;
 
-export type HostConfig = Smolvm.SmolvmHost | Tart.TartHost | BoatHost;
+// The union's arms follow `sections` by hand, so one it lacks is a type error here too.
+true satisfies [Runtime] extends [HostConfigFile["runtime"]] ? true : false;
+
+type Resolved<C> = C extends unknown
+  ? Omit<C, Exclude<keyof HostSettings, "runtime">> & Omit<HostSettings, "runtime">
+  : never;
+
+/** One runtime's section, beside the settings every runtime shares. */
+export type HostConfig = Resolved<HostConfigFile>;
 
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(HostConfigFile));
 
@@ -76,30 +83,11 @@ const resolveConfig = (
       });
     }
 
-    const common = {
-      id: decoded.id,
-      listen: decoded.listen,
+    return {
+      ...decoded,
       stateDir: path.resolve(directory, decoded.stateDir),
       bases: new Map(Object.entries(decoded.bases)),
       machinePorts,
-    } satisfies Omit<HostSettings, "runtime">;
-
-    if (decoded.runtime === "boat") {
-      return { ...common, runtime: decoded.runtime, boat: decoded.boat };
-    }
-
-    if (decoded.runtime === "tart") {
-      return {
-        ...common,
-        runtime: decoded.runtime,
-        tart: Tart.resolveSettings(decoded.tart, decoded.listen),
-      };
-    }
-
-    return {
-      ...common,
-      runtime: decoded.runtime,
-      smolvm: yield* Smolvm.resolveSettings(decoded.smolvm, decoded.listen),
     };
   });
 

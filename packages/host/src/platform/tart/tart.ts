@@ -23,7 +23,6 @@ import {
   timeoutFail,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
-import { Address } from "../address.ts";
 import { cliIn, expect, files, portOf } from "../process.ts";
 import * as Forwarder from "./forwarder.ts";
 
@@ -33,20 +32,7 @@ export const TartSettings = Schema.Struct({
    * directory.
    */
   binary: Schema.String,
-  publishAddress: Schema.optionalKey(Address),
 });
-
-export type Tart = Required<typeof TartSettings.Type>;
-
-export interface TartHost extends HostSettings {
-  readonly runtime: "tart";
-  readonly tart: Tart;
-}
-
-export const resolveSettings = (
-  settings: typeof TartSettings.Type,
-  listen: HostSettings["listen"],
-): Tart => ({ ...settings, publishAddress: settings.publishAddress ?? listen.address });
 
 /**
  * From 2.40.1 clone refuses an existing destination, delete's exit codes are reliable, one accept
@@ -55,7 +41,9 @@ export const resolveSettings = (
  */
 export const minimumVersion = "2.40.1";
 
-export interface Settings extends Tart {
+export interface Settings {
+  readonly binary: string;
+  readonly publishAddress: string;
   readonly hostId: string;
   readonly stateDir: string;
   /** Node has none off POSIX. */
@@ -671,7 +659,9 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<TartHost, "id" | "stateDir" | "tart">,
+  config: Pick<HostSettings, "id" | "stateDir" | "listen"> & {
+    readonly tart: typeof TartSettings.Type;
+  },
 ): Layer.Layer<
   Runtime,
   HostError,
@@ -680,7 +670,8 @@ export const layer = (
   Layer.effect(
     Runtime,
     make({
-      ...config.tart,
+      binary: config.tart.binary,
+      publishAddress: config.listen.address,
       hostId: config.id,
       stateDir: config.stateDir,
       uid: process.getuid?.(),

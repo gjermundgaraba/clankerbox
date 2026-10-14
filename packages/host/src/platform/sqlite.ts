@@ -11,7 +11,17 @@ import {
   Precondition,
   Runtime,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { DateTime, Effect, FileSystem, Layer, Option, Result, Schema, type Scope } from "effect";
+import {
+  Context,
+  DateTime,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Result,
+  Schema,
+  type Scope,
+} from "effect";
 import { idOn, type Kind, notFoundOn } from "../ids.ts";
 import type { HostSettings } from "../settings.ts";
 import {
@@ -19,6 +29,8 @@ import {
   type HeldRow,
   type Interface,
   type MachineRecord,
+  NativeIds,
+  type NativeIdRecorder,
   type NewRow,
   type Records,
   type Resource,
@@ -336,7 +348,11 @@ export type Owner = Pick<HostSettings, "id" | "runtime" | "stateDir">;
  */
 export const open = (
   owner: Owner,
-): Effect.Effect<Interface, Precondition | Internal, FileSystem.FileSystem | Scope.Scope> =>
+): Effect.Effect<
+  Interface & NativeIdRecorder,
+  Precondition | Internal,
+  FileSystem.FileSystem | Scope.Scope
+> =>
   Effect.gen(function* () {
     const { stateDir, id: hostId } = owner;
     const fs = yield* FileSystem.FileSystem;
@@ -507,7 +523,7 @@ export const open = (
     const named = (token: Token) =>
       [...token.inserted, ...token.held].map((row) => id(row.name)).join(", ");
 
-    const store: Interface = {
+    const store: Interface & NativeIdRecorder = {
       list: sql("list machines", () => selectAll.all().map((row) => fromRow(decodeRow(row)))).pipe(
         Effect.withSpan("Store.list"),
       ),
@@ -623,5 +639,9 @@ export const open = (
 
 export const layer = (
   owner: Owner,
-): Layer.Layer<Store, Precondition | Internal, FileSystem.FileSystem> =>
-  Layer.effect(Store, open(owner));
+): Layer.Layer<Store | NativeIds, Precondition | Internal, FileSystem.FileSystem> =>
+  Layer.effectContext(
+    Effect.map(open(owner), (opened) =>
+      Context.make(Store, opened).pipe(Context.add(NativeIds, opened)),
+    ),
+  );
