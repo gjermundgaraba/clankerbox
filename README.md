@@ -7,41 +7,26 @@ reachable over SSH.
 - Three runtimes: smolvm (Linux guests on a Linux host, with RAM forks and RAM
   checkpoints), Tart (macOS guests on a Mac, with disk copies) and boat (Linux
   guests in boat.dev's cloud, with disk forks and checkpoints).
-- Clients talk to hosts directly; there is no controller. A client holds a host
-  list, and a create goes to the first host in it that offers the requested
-  base, unless the request names a host.
+- Clients talk to hosts directly; there is no controller. A create goes to the
+  first host in the client's list that offers the requested base, unless it
+  names a host.
 - A profile is a client-side file: a base, sizes, a setup script and,
-  optionally, a host. Hosts store no profiles.
-- A prebuild is a checkpoint of a machine whose setup has run. A create of the
-  same profile at the same sizes restores it instead of running the setup.
-- Each machine exposes only guest port 22, reported as a `host:port` with the
-  guest's SSH host key. Anything done inside a guest goes through the sshd its
-  setup installs.
+  optionally, a host. A prebuild is a checkpoint of a machine whose setup has
+  run, which later creates of the same profile restore.
+- Each machine exposes only SSH, reported as a `host:port` with the guest's
+  host key.
 - Hosts and clients share a Tailscale tailnet, and its policy is the only gate:
   the API has no keys and no TLS.
 
 One `clankerbox` binary is both the CLI and the host (`clankerbox host`). The
-TypeScript SDK, `@gjermundgaraba/clankerbox-sdk`, holds the API contract and the
-client library the CLI uses.
+TypeScript SDK is `@gjermundgaraba/clankerbox-sdk`.
 
 ## Install
 
-Releases are on the repository's GitHub releases page,
-<https://github.com/gjermundgaraba/clankerbox/releases>, tagged `v<version>`.
-Each release has one bundle per target, `clankerbox-<target>.tar.gz`, beside
-its `.sha256`. The targets are `darwin-arm64` and `linux-x64`. The names carry
-no version: the tag does, and so does `clankerbox --version`. A bundle holds,
-with no top directory:
-
-- `clankerbox`, a Node single-executable binary (the Node `.node-version`
-  pins inside; nothing else to install);
-- `LICENSE`, clankerbox's own;
-- `notices/node/LICENSE` and `notices/npm/`, the licenses of Node and of every
-  production npm dependency.
-
-Download a bundle and its `.sha256` into one directory, and check the bundle
-against it before extracting it: the `.sha256` holds `<sha256>  <bundle name>`,
-which `shasum -a 256 -c` (macOS) and `sha256sum -c` (Linux) check.
+Each [GitHub release](https://github.com/gjermundgaraba/clankerbox/releases)
+has a `clankerbox-<target>.tar.gz` and its `.sha256` for `darwin-arm64` and
+`linux-x64`. The bundle holds a single-executable `clankerbox` binary with
+nothing else to install.
 
 ```sh
 base=https://github.com/gjermundgaraba/clankerbox/releases/latest/download
@@ -52,13 +37,7 @@ mkdir clankerbox && tar -xzf clankerbox-linux-x64.tar.gz -C clankerbox
 clankerbox/clankerbox --version
 ```
 
-A release's own bundles are under `releases/download/v<version>/`.
-
-The darwin binary is ad-hoc signed and not notarized, which a curl, tar or scp
-install doesn't need. The binary ignores `NODE_OPTIONS`.
-
-The release ships no runtime. Each host needs its own, installed by the
-operator (see [Runtime notes](#runtime-notes)):
+Each host needs its runtime, installed by the operator:
 
 | Runtime | Host                    | Prerequisite                                                         |
 | ------- | ----------------------- | -------------------------------------------------------------------- |
@@ -66,16 +45,20 @@ operator (see [Runtime notes](#runtime-notes)):
 | Tart    | Apple Silicon, macOS 26 | Tart 2.40.1 or later, Softnet 0.24.0 installed SUID root             |
 | boat    | either, unprivileged    | a boat.dev API key                                                   |
 
-At startup a smolvm host refuses any smolvm but the one it was tested on, and a
-Tart host any Tart older than 2.40.1.
+smolvm, with both disk templates expanded beside their `.zst` files:
 
-## Quick start
+```sh
+HOME=/opt/smolvm/1.27.3 install.sh --version 1.27.3 --prefix /opt/smolvm/1.27.3 --no-modify-path
+for t in storage-template.ext4 overlay-template.ext4; do
+  zstd -d --sparse /opt/smolvm/1.27.3/$t.zst -o /opt/smolvm/1.27.3/$t
+done
+```
 
-### Run a host
+Softnet, for Tart: `sudo install -o root -g wheel -m 4755 softnet /usr/local/bin/softnet`.
 
-A host process runs one runtime, from one JSON config file
-(`packages/host/src/composition/config.ts`). Two runtimes on one machine are two host
-processes, each with its own ID, state dir and port.
+## Run a host
+
+A host process runs one runtime from one JSON config file:
 
 ```json
 {
@@ -90,49 +73,30 @@ processes, each with its own ID, state dir and port.
 }
 ```
 
-- `id` matches `^[a-z][a-z0-9-]{0,31}$`. It is the host part of every ID the
-  host holds, so keep it short (`linux`, `mac`).
-- `listen.address` must be a tailnet address (100.64.0.0/10 or
-  fd7a:115c:a1e0::/48) or loopback; a wildcard or public address is refused.
-  `listen.port` must lie outside the machines' range.
-- `machinePorts: {first, last}`, optional, is the machines' range: the host
-  ports smolvm and Tart machines get, 10000–19999 by default. The host refuses
-  a range that reaches into smolvm's own fork ports (20000–31999) or the
-  ephemeral ports of Linux (32768–60999) or macOS (49152–65535), from which
-  the kernel can give a machine's port to an outgoing connection.
-- `stateDir` is relative to the config file. It holds the database and the
-  runtime's own state; one host process owns it at a time. The database
-  records the host ID and runtime it was created for, and the host refuses to
-  start when its config names others: under another ID or runtime its
-  machines would read `missing` (Tart names VMs and their launchd jobs after
-  the host ID), and deleting their rows would orphan them. Keep both, or give
-  the host a new state dir.
-- `bases` maps the names clients ask for to images. Hosts that offer the same
-  image should use the same name: placement matches on it.
-- Runtime settings, one block named after the runtime:
-  - `smolvm: {prefix, ramBudgetMib?}`; `ramBudgetMib` defaults to physical
-    RAM minus 2 GiB;
-  - `tart: {binary}`, `binary` being the `tart` executable of a versioned
-    install, such as `/opt/tart/2.40.1/tart.app/Contents/MacOS/tart`;
-  - `boat: {apiKey}`.
-
-  smolvm and Tart publish machines' ports on `listen.address`. Unknown keys
-  are refused.
+- `id` is short and lowercase (`linux`, `mac`); it starts every ID the host
+  holds.
+- `listen.address` is a tailnet address or loopback.
+- `stateDir`, relative to the config, holds the database. Keep it with its
+  host ID and runtime; the host refuses a config that names others. On smolvm
+  it is at most 52 bytes and outside every home directory, such as
+  `/srv/clankerbox/smolvm`.
+- `bases` maps names clients ask for to images, pinned by digest. Hosts
+  offering the same image should use the same name.
+- The runtime's block: `smolvm: {prefix, ramBudgetMib?}`, `tart: {binary}` (the
+  `tart` executable of a versioned install) or `boat: {apiKey}`.
+- `machinePorts: {first, last}`, optional, is the range machines' SSH ports
+  come from, 10000–19999 by default; `listen.port` lies outside it.
 
 ```sh
 clankerbox host --config /etc/clankerbox/linux.json
 ```
 
-There is no default config path: a unit passes it. A smolvm host runs as root
-(a system unit); a Tart host as the operator's user, in its GUI session, since
-its VMs are LaunchAgents in `gui/<uid>`; a boat host unprivileged. Like the
-CLI, the host exits 130 when SIGINT or SIGTERM stops it, and 1 when it fails;
-[Deploy](#deploy) says what a unit or LaunchAgent makes of that.
+The host exits 130 on SIGINT or SIGTERM and 1 when it fails.
 
-### Use the CLI
+## Use the CLI
 
-The client config is one JSON file, `$XDG_CONFIG_HOME/clankerbox/config.json`
-(`~/.config` when that is unset), or `--config PATH`:
+The client config is `$XDG_CONFIG_HOME/clankerbox/config.json` (`~/.config`
+when unset), or `--config PATH`:
 
 ```json
 {
@@ -144,9 +108,8 @@ The client config is one JSON file, `$XDG_CONFIG_HOME/clankerbox/config.json`
 }
 ```
 
-The host list is in placement order. `profiles`, relative to the config file,
-is where `--profile NAME` finds `NAME.json`; a `--profile` value with a `/` or
-ending in `.json` is a path. A profile file:
+The host list is in placement order. `--profile NAME` reads `NAME.json` from
+the profiles directory; a value with a `/` or ending in `.json` is a path:
 
 ```json
 {
@@ -158,207 +121,108 @@ ending in `.json` is a path. A profile file:
 }
 ```
 
-`setup.path`, relative to the profile, is a script or a recipe directory (a
-`setup.sh` and the files it needs). Either runs through its `#!` line, and
-`/bin/sh` runs one without; `setup.sh` needn't be executable, and the other
-files keep their modes. Without a `timeoutSeconds` the host gives it 600 s.
-An optional `host` sends every create from the profile to that host instead of
-placing it, unless `--host` names another. The file's name, without `.json`,
-becomes the machine's `profile` label. `clankerbox profiles` lists the profiles
-directory's profiles, reading only local files.
+`setup.path`, relative to the profile, is a script or a recipe directory with
+a `setup.sh`. An optional `host` sends every create from the profile there.
 
 ```sh
 clankerbox hosts                           # every host, its runtime, versions and bases
-clankerbox capacity                        # every host's resources, their use, and their limits
-clankerbox profiles                        # the profiles directory's profiles
-clankerbox create dev --profile dev        # placed; prints the new ID, linux_dev
+clankerbox capacity                        # every host's resources and limits
+clankerbox create dev --profile dev        # prints the new ID, linux_dev
 clankerbox create review --host mac --base macos --cpu 4 --ram 8G --disk 60G
-clankerbox create scratch --profile dev --setup ./other.sh --setup-timeout 5m
 clankerbox prebuild --profile dev          # run dev's setup once; later creates of dev restore it
-clankerbox machines                        # every host's machines, with their age
-clankerbox get linux_dev                   # one machine: its state, last action and error, SSH login
-clankerbox ssh linux_dev                   # as the runtime's user: root, or admin on Tart
-clankerbox ssh linux_dev -- uptime         # ssh's own arguments go after --
-clankerbox ssh dev@linux_dev               # as another user
+clankerbox machines
+clankerbox get linux_dev
+clankerbox ssh linux_dev -- uptime
 clankerbox stop linux_dev
 clankerbox start linux_dev
 clankerbox fork linux_dev dev2             # linux_dev2
 clankerbox checkpoint capture linux_dev base
-clankerbox checkpoint list
 clankerbox restore linux_base dev3         # linux_dev3
 clankerbox delete linux_dev3
 clankerbox checkpoint delete linux_base
 ```
 
-- Every command takes IDs, `<host>_<name>`, except `create`, which takes a
-  name. `--host` sends it to that host; without it, it goes to the profile's
-  `host`, or is placed.
-- `create` flags override the profile's fields one by one, `--setup` and
-  `--setup-timeout` included; a setup that neither the flag nor the profile
-  times gets the host's default. A create that fails can leave its machine
-  behind, unmade: `get` shows why until another action on it, and `delete`
-  removes it.
-- `prebuild` takes `create`'s flags and no name. It creates a machine, which
-  runs the setup, captures it into a checkpoint named `prebuilt-<digest>`, and
-  deletes the machine. A `create` with a setup then restores that checkpoint
-  when its host has it, and says so on stderr with the prebuild's age;
-  `--fresh` runs the setup anyway. The digest is of the profile's label, base
-  and sizes, its setup as sent and the host's runtime release, so:
-  - a create at other sizes (`--ram 32G`) runs the setup, unless those sizes
-    were prebuilt too (`prebuild --profile dev --ram 32G`);
-  - after an edited setup or a runtime bump, every create runs the setup,
-    saying nothing, until a new `prebuild`;
-  - a prebuild serves its own host only, so give the profile a `host`, or
-    prebuild on each host it is placed on (`--host`).
-
-  A prebuild never changes, and nothing deletes one for you. One that is
-  already there is left as it is: `prebuild` prints its ID and says so. What a
-  setup installed is as old as its prebuild, so to build it anew, delete it
-  with `checkpoint delete` first. `checkpoint list` shows each prebuild with
-  its profile and age, which is how to find those an edit or a bump left
-  behind. `prebuild`'s `--timeout` bounds each of its steps (the create, the
-  capture, the delete) on its own, not the build.
-
-- Sizes and durations are written with their unit: `--ram 512M` or
-  `--ram 8G`, `--disk 60G` (whole GiB), `--setup-timeout 15m`, `--timeout 90s`.
-  A bare number is refused. `machines`, `get` and `profiles` print each one
-  exactly, as its flag takes it. Profile files and `--json` keep the API's
-  integers: `ramMib`, `diskGib`, `timeoutSeconds`.
-- A running machine's `ssh` is its login, `{user, host, port}`, and its
-  `hostKey` is the guest's SSH host key, once preparation has recorded one.
-  The user follows the runtime: `root` on smolvm and boat, `admin` on Tart. A
-  base alone authorizes no key: a setup installs sshd where the base has
-  none, and puts your public key in that user's `authorized_keys`.
-- `ssh` needs both. It writes a one-line known-hosts file pinning the
-  machine's host key and runs the system `ssh` with strict checking, as the
-  login's user; `USER@ID` names another. A `-l` after `--` doesn't apply, nor
-  does a `User` in your `~/.ssh/config`: OpenSSH keeps the first user it is
-  given. The destination is the machine's ID, so a `Host` block there can
-  pick keys and options per machine; other ports go through `-L`. For scp or
-  rsync, take `ssh` and `hostKey` from `clankerbox get ID --json`.
-- `fork` copies what the runtime can: smolvm a running machine, RAM and
-  processes included; Tart a stopped machine's disk; boat the disk of either.
-  A `stop` is a power-off: after a `start`, what runs is what the guest
-  starts at boot plus what its `/etc/clankerbox/start` launches.
-- A mutation returns when its action has finished, however long that takes.
-  Its `--timeout DURATION` only stops waiting: the action runs on, and the CLI
-  says it may have run; `get`, or `checkpoint get`, shows how it ended. A read
-  gives up on a host after 10 s.
-- `--json` prints the resource, or `{"error": {...}}`: the error's own fields,
-  its tag as `tag`, and `retryable` (`ErrorDocument` in
-  `apps/clankerbox/src/command.ts`; see [Errors](#errors)).
-  Lists print what reachable hosts answered and name the unreachable ones; a
-  list exits 1 when every host failed. A list with nothing in it prints no
-  table and says so on stderr.
-- The CLI exits 0 or 1, 130 on Ctrl-C, and `ssh` with ssh's code. Deleting
-  something already gone exits 0.
+- IDs are `<host>_<name>`. `create` flags override the profile's fields.
+- Sizes and durations carry their unit: `--ram 8G`, `--disk 60G`,
+  `--setup-timeout 15m`.
+- `fork` copies a running smolvm machine with its RAM, a stopped Tart
+  machine's disk, or either boat machine's disk.
+- A prebuild matches the profile, its sizes, its setup and the host's runtime
+  release; any change runs the setup again until a new `prebuild`. Nothing
+  deletes prebuilds: `checkpoint list` shows them.
+- `ssh` pins the machine's host key and logs in as `root`, or `admin` on Tart.
+  For scp or rsync, take `ssh` and `hostKey` from `get ID --json`.
+- `--json` prints the resource or `{"error": {...}}`.
 
 `clankerbox COMMAND --help` documents each command.
 
+### Writing a setup
+
+Setup runs once, as root, after the machine's first boot; forks and restores
+carry its results. It must:
+
+- install sshd where the base has none (smolvm's stock images), and put your
+  public key in the login user's `authorized_keys`;
+- write `/etc/clankerbox/start`, if anything should run after each boot, fork
+  or restore: idempotent, daemonizing what it launches, exiting 0 once it's
+  up, and relaunching sshd if `/run/sshd.pid` is dead;
+- optionally write `/etc/clankerbox/new-identity`, run when a fork or restore
+  gets its new identity, to reset per-machine state such as tailnet keys.
+
+Linux guests need `perl`. On Tart, Softnet blocks gateway DNS, so set public
+resolvers. On boat, keep state that must survive under `/home/user`, `/etc`,
+`/usr`, `/opt`, `/srv`, `/root` or `/var/lib`, and leave boat's sshd, TCP 8911
+and its WireGuard tunnel alone. A checkpoint, prebuilds included, holds
+everything the machine had, credentials too.
+
 ## Deploy
 
-A deployment is one host process per runtime, each with its own config,
-state dir and API port, and a client config on each machine that calls them.
 Install the binary at a versioned path, such as
-`/opt/clankerbox/<version>/clankerbox`: VM jobs never reference it, so a
-release replaces it while machines run.
+`/opt/clankerbox/<version>/clankerbox`; VMs never reference it, so a release
+replaces it while machines run.
 
-**smolvm host** (Linux/amd64 with KVM), as root:
+**smolvm**, as root, in a system unit:
 
-1. Install smolvm 1.27.3 under `/opt/smolvm/1.27.3` and expand its two disk
-   templates (the commands are in [smolvm](#smolvm)).
-2. Put the state dir outside every home directory, such as
-   `/srv/clankerbox/smolvm`: as root, smolvm adds others-execute to every
-   directory above its data root. The path is at most 52 bytes.
-3. Run the host as a system unit:
+```ini
+[Unit]
+Description=clankerbox host (smolvm)
+Wants=network-online.target
+After=network-online.target tailscaled.service
 
-   ```ini
-   [Unit]
-   Description=clankerbox host (smolvm)
-   Wants=network-online.target
-   After=network-online.target tailscaled.service
+[Service]
+Type=exec
+ExecStart=/opt/clankerbox/<version>/clankerbox host --config /etc/clankerbox/linux.json
+KillMode=control-group
+SuccessExitStatus=130
+Restart=on-failure
+RestartSec=5
 
-   [Service]
-   Type=exec
-   ExecStart=/opt/clankerbox/<version>/clankerbox host --config /etc/clankerbox/linux.json
-   KillMode=control-group
-   SuccessExitStatus=130
-   Restart=on-failure
-   RestartSec=5
+[Install]
+WantedBy=multi-user.target
+```
 
-   [Install]
-   WantedBy=multi-user.target
-   ```
+VMs run in their own scopes, so restarting the unit leaves them running.
 
-   Each VM runs in its own scope, outside the unit's cgroup, so stopping or
-   restarting the unit leaves machines running. `SuccessExitStatus=130` makes
-   the host's exit on SIGTERM a clean stop rather than a failure.
+**Tart**, as the operator's user, in a LaunchAgent in its GUI session, with
+`KeepAlive` set to `{SuccessfulExit: false}`; stop it with
+`launchctl bootout gui/<uid>/<label>`. Pull each base with `tart pull` as that
+user before its first create.
 
-**Tart host** (Apple Silicon, macOS 26), as the operator's user:
+**boat**, unprivileged, on any always-on machine on the tailnet. Its config
+holds the API key, so keep it readable by its user only.
 
-1. Install Tart 2.40.1 or later at a versioned path, and Softnet 0.24.0 SUID
-   root in `/usr/local/bin`:
-   `sudo install -o root -g wheel -m 4755 softnet /usr/local/bin/softnet`.
-2. Run the host as a LaunchAgent of that user, in its GUI session, since its
-   VMs are LaunchAgents in `gui/<uid>`. launchd has no list of clean exit
-   codes, so it counts the host's 130 on SIGTERM as a failure. Set `KeepAlive`
-   to `{SuccessfulExit: false}`, which restarts the host after any exit but 0,
-   a crash included, and stop it with `launchctl bootout gui/<uid>/<label>`,
-   which unloads the job, so nothing restarts it. A bare SIGTERM (`kill`,
-   `launchctl kill`) leaves the job loaded, and launchd restarts the host.
-3. Pull each base as that user, into the Tart home the host uses
-   (`tart pull <image>`), before its first create; a macOS image is tens of
-   GiB.
-
-**boat host:** unprivileged, on any always-on machine on the tailnet, beside
-another host or alone, with its own host ID, state dir and boat API key. Keep
-its config readable by its user only, since it holds the key. Nothing backs up
-its database; a lost one leaves its sandboxes to be found by display name.
-
-**Host config:** one per host, as in [Run a host](#run-a-host), listening on
-the machine's tailnet address. Each API port lies outside the machines' range
-(`machinePorts`, 10000–19999 by default); the host refuses one inside it. Pin
-every stock base by digest.
-
-**Network and firewalls:**
-
-- The tailnet policy opens each host's API port to the clients that call that
-  host, and the machines' range (10000–19999 by default) on smolvm and Tart
-  hosts to the clients that run `clankerbox ssh`.
-- A packet filter on a host passes the API port and the machines' range on its
-  tailnet address.
-- On a smolvm host, check that no service listens on a public address or a
-  wildcard before any guest runs (`ss -Hltnu`). smolvm's egress floor refuses
-  loopback, private ranges and the tailnet, but not the host's public
-  addresses, so those are a guest's only way to a host service. tailscaled's
-  WireGuard port (UDP, 41641 by default) listens on a wildcard and is
-  expected: a guest that reaches it gets nothing without WireGuard keys.
-- The macOS application firewall, if on, needs an "Allow incoming connections"
-  entry for the binary, and each release's new binary prompts once. Where the
-  firewall isn't managed by MDM, as root:
-
-  ```sh
-  /usr/libexec/ApplicationFirewall/socketfilterfw --add <binary>
-  /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp <binary>
-  ```
+**Network:** the tailnet policy opens each host's API port to its clients, and
+on smolvm and Tart the machines' port range to clients that run
+`clankerbox ssh`. On a smolvm host, nothing may listen on a public address:
+guests can reach those. On macOS with the application firewall on, allow
+incoming connections for each new binary.
 
 ## SDK
 
-`@gjermundgaraba/clankerbox-sdk` (`packages/sdk`) holds the Schemas, the
-API binding, the errors, the profile file schema and the client library. It
-is versioned with the binaries: SDK 1.2.3 talks to hosts of release 1.2.x.
-Every request carries the client's version in a `clankerbox-version` header,
-and a host refuses one of another major.minor with `Invalid`, naming both
-versions, before it runs anything. A request without the header is refused
-too: a client that predates it is of another release anyway. So any change
-to the wire (a route, an input, a reply or an error) takes a new minor
-release, and the check refuses a mismatched pair rather than letting it
-misread a reply.
-`effect` `~4.0.4` is a peer dependency, so an app has one copy of Effect and
-Schema identity holds; so is `@effect/platform-node` `~4.0.4`, needed only by
-the `/node` entry. The range is Effect's 4.0.x patches, as effect-actions
-requires: the HTTP and process modules the SDK uses are unstable in Effect, so
-a minor release may change them.
+`@gjermundgaraba/clankerbox-sdk` holds the API's schemas, errors and the
+client. SDK 1.2.3 talks to hosts of release 1.2.x; hosts refuse other
+releases. `effect` and `@effect/platform-node` (`~4.0.4`) are peer
+dependencies.
 
 ```ts
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -379,10 +243,6 @@ const program = Effect.gen(function* () {
   });
 
   yield* Console.log(machine.id, machine.ssh, machine.hostKey);
-
-  const { answers, unreachable } = yield* client.machines;
-
-  yield* Console.log(answers.length, unreachable);
 }).pipe(Effect.catchTag("Capacity", (error) => Console.error(`no room: ${error.message}`)));
 
 program.pipe(
@@ -392,48 +252,20 @@ program.pipe(
 );
 ```
 
-- `NodeClient.layer` (the `/node` entry) runs over Node's `http` module, which
-  sets no timeout, so a create with a long setup isn't cut off. The main entry
-  never loads `@effect/platform-node`: `Client.make` takes the app's own
-  `HttpClient` instead; one over `fetch` gives up on a reply after 300 s, and
-  `NodeHttpClient.layerUndici` after an hour.
-- A read gives up on a host after 10 s (the exported `readTimeout`, which the
-  host's own read bounds derive from); a mutation waits for as long as it
-  runs, unless `timeout` is set.
-- Every action on an existing resource is a method named and typed as in
-  the contract (`api.ts`), such as `client.getMachine({ id })` or
-  `client.forkMachine({ machine, name })`, and goes to the host its ID names.
-  The one create is `client.create(name, spec, options)`, which places a
-  `createMachine`.
-- `readSetup` sends a file as its text and packs a directory into one
-  self-extracting script (`packRecipe`). `loadProfile` reads a profile file.
-  Each fails with `Invalid`, naming the `file`.
-- `Prebuild.build(client, spec)` prebuilds a spec, whose type requires a
-  setup, and `Prebuild.create(client, name, spec)` creates from its prebuild
-  when the host has one. `Prebuild.nameOf` is a prebuild's name, and
-  `client.place(base, options)` reads the host a create goes to.
-- Every call but the lists fails with its action's errors among fifteen tags
-  (`errors.ts`), each with where it was met, and `retryable(error)` says
-  whether to try again; see
-  [Errors](#errors). A list returns
-  what reachable hosts answered and names the unreachable ones with their
-  errors.
-- A mutation whose reply is lost fails `Unavailable`, not retryable, naming
-  the resource: it may have run, so read it to see. Nothing retries for you.
-- A delete of a resource that is already gone succeeds as `absent`, not
-  `NotFound`.
-- `sshTarget(machine)` is the login, endpoint and host key `pinnedSsh` needs,
-  or `WrongState` naming what the machine lacks.
+- Every action is a method named as in the contract (`api.ts`), such as
+  `client.forkMachine({ machine, name })`, and fails with tagged errors
+  (`errors.ts`); `retryable(error)` says whether to try again.
+- A mutation waits until its action finishes. One whose reply is lost fails
+  `Unavailable`: it may have run, so read the resource.
+- `Prebuild.build` and `Prebuild.create` do what `clankerbox prebuild` and a
+  create of a profile do.
 
 ## Sandbox Agent provider
 
-`@gjermundgaraba/clankerbox-rivet-sandbox-agent` (`packages/rivet-sandbox-agent`)
-is a provider for Rivet's [Sandbox Agent](https://github.com/rivet-dev/agents/tree/main/sandbox-agent) SDK whose
-sandboxes are clankerbox machines. The guest runs the Sandbox Agent's server on
-its loopback, with no token, and the provider reaches it through an `ssh -L`
-tunnel over guest port 22, pinned to the machine's host key as `clankerbox ssh`
-is. Nothing changes on the host or the wire: the machine's setup installs the
-server, and its `/etc/clankerbox/start` keeps it running.
+`@gjermundgaraba/clankerbox-rivet-sandbox-agent` is a provider for Rivet's
+[Sandbox Agent](https://github.com/rivet-dev/agents/tree/main/sandbox-agent)
+SDK whose sandboxes are clankerbox machines, reached through an `ssh -L`
+tunnel pinned to the machine's host key.
 
 ```ts
 import { clankerbox } from "@gjermundgaraba/clankerbox-rivet-sandbox-agent";
@@ -452,925 +284,19 @@ await session.prompt([{ type: "text", text: "Summarize README.md" }]);
 await sdk.destroySandbox();
 ```
 
-- **Sources:** a sandbox is made from a profile file (`{ profile }`), a
-  restore of a checkpoint (`{ checkpoint }`) or a fork of a machine
-  (`{ machine }`). A fork of a running machine on smolvm, and a `ram`
-  restore, carry its memory: the server, its sessions and its processes, so
-  take them from an idle machine. A fork is ready in about 6 s on smolvm,
-  where a create from the Ubuntu recipe takes about 50 s.
-- **Prebuilds:** a create from a profile with a setup restores its host's
-  prebuild of it when there is one, as `clankerbox create` does:
-  `clankerbox prebuild --profile <the same file>` makes it, and
-  `fresh: true` runs the setup anyway. A prebuild is a checkpoint of a
-  machine whose setup ran, so one of a recipe with an `agent.env` holds that
-  credential until `clankerbox checkpoint delete` removes it, and its Claude
-  Code is as old as it is. In the live suite a sandbox restored from the
-  Ubuntu recipe's prebuild started in about 6 s on smolvm, and from the macOS
-  recipe's in about 35 s on Tart.
-- **IDs:** a sandbox's ID is `clankerbox/<machine ID>`, so
-  `SandboxAgent.start({ sandbox, sandboxId })` reconnects to a machine,
-  starting it if it is stopped. `pauseSandbox` stops the machine and
-  `destroySandbox` deletes it. A create that fails tries to delete the
-  machine it left; one it couldn't delete shows in `clankerbox machines`.
-- **Recipes:** `recipes/ubuntu/` (x86_64, smolvm) and `recipes/macos/` (Tart)
-  install the server and Node 22, both pinned by sha256, and Claude Code at
-  its latest release, and run the server as a user of its own (`sandbox`;
-  `admin` on macOS), since Claude Code offers root no bypass-permissions mode. Each takes an
-  `authorized_keys` beside its `setup.sh`, and an optional `agent.env` of
-  `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, that becomes the server's
-  environment, so it holds a credential: keep that recipe private. The
-  server runs with `--no-telemetry`. Codex installs the same way, but
-  `install-agent codex` hangs at 0.5.2; the recipes say how to bound it.
-  Each start hook launches a server that has exited, and ends and relaunches
-  one that doesn't answer its health check within 10 s.
-- **Tunnels:** each runs the system `ssh`, ends with the process that opened
-  it, and doesn't keep that process alive; the provider's `dispose` ends them
-  all sooner, leaving the machines as they are. A sandbox keeps its local port
-  until it is destroyed, so the URL an SDK client holds still leads to it
-  when `ensureServer` opens its tunnel again, a stop and a start between. The
-  SDK calls `ensureServer` only while it starts: a tunnel that ends later, say because
-  its machine stopped, stays down until you call `sandbox.ensureServer(id)`,
-  with the machine's ID (`sdk.sandboxId` without its `clankerbox/`), or start
-  the SDK again. `sshUser` and `sshArguments` choose the login and its
-  key; the tunnel's own options, such as its keepalives and having no
-  connection master, come first, so neither overrides them. Arguments or ssh
-  config that fork the forward or multiplex it (`-f`, `-N`, `-M`, `-S`)
-  would let it outlive the tunnel's ssh, so leave them out.
-- **Not verified:** boat. Its guests are reached the same way, but no live run
-  has covered the recipes or the provider there. A hung server's relaunch ran
-  in an Ubuntu container only; live runs covered launching and relaunching an
-  exited one on both guests.
-- `effect`, `@effect/platform-node` and `sandbox-agent` are peer
-  dependencies. The bump-sandbox-agent skill records what the provider relies
-  on of the SDK and the server.
-
-## Design
-
-The code is the reference; each part below names where it lives. The design
-rests on one rule for every dependency it wraps (smolvm, Tart, boat, Node,
-Effect, effect-actions). Before building a mechanism around it, and again at
-every bump of it:
-
-1. Does the dependency already track this? Don't duplicate its bookkeeping.
-2. Are we deleting its files or managing its processes, and so owning proofs
-   it doesn't need?
-3. A comment stays only where deleting it would lose something a reader needs
-   and the code can't show:
-   - why a value is what it is: a limit, timeout, size, range or pin, with its
-     source, an upstream file or doc or a bump skill;
-   - a hazard or invariant the code depends on but can't express;
-   - a port's contract: what every implementation of a port, such as
-     `Runtime`, `Store` or `PortProbe`, must do, and only that;
-   - one line on each thing the SDK and the provider export, as these ship to
-     consumers, saying what the name and type don't;
-   - a safety comment the linter asks for, and a tool directive with its
-     reason.
-
-   Module headers that restate this document, docs that restate a name or a
-   type, narration of steps, internal field docs, and test comments outside
-   the list above go. A reason a type or a test name can carry goes there.
-
-4. Our comments are not evidence: check each claim against the dependency's
-   source or docs at the pinned version.
-5. A bump re-checks that dependency's claims, not just the tests. The bump
-   skills in `.agents/skills/` (`bump-smolvm`, `bump-tart`, `bump-boat-api`,
-   `bump-node`, `bump-sandbox-agent`) carry each one's claims with their sources, and so the
-   reasons behind the runtime notes below, which point to them.
-
-### Architecture
-
-- **Clients** (`packages/sdk/src/client.ts`) hold the host list.
-  `create` is placed; every other call names an ID and is routed by its host
-  part, without the network. Lists fan out to every host and return partial
-  results. There is no name lookup and no client-side state beyond config and
-  profile files.
-- **A host** (`packages/host/src`) owns everything durable for its machines:
-  machine and checkpoint rows, and their ports. Machine state (`running`,
-  `stopped`, `missing`) is always read from the runtime, never stored; a
-  machine whose state couldn't be read is `unknown`, so a failed read never
-  fails a list or the action it follows. The host gives up on a read of
-  runtime state after 9 s (`stateReadWait`, 1 s under the SDK's 10 s
-  `readTimeout`), so a list answers however slow the runtime is: every machine
-  it read reads `unknown`, and a step-3 check (`admit`) fails with `Internal`,
-  writing nothing. A runtime that reads each machine on its own gives up on
-  one after 8 s (`machineReadWait`), so one hung read leaves only its machine
-  `unknown`. A machine and its checkpoints stay on the host that made them.
-- **One runtime per host process**, behind the `Runtime` interface
-  (`runtime.ts`), picked by the config's `runtime` from the registry in
-  `composition/runtimes.ts`. State, claims, setup and preparation are shared; fork,
-  checkpoint and access are each runtime's. A new provider is a new runtime
-  module behind its own host. Tart passed its live tests against `Runtime` and
-  boat was written to it, so a change to it touches every runtime and needs a
-  reason that holds for all three.
-- **No clankerbox code runs in a guest.** Setup and preparation are host-side
-  scripts over the runtime's exec.
-- **The API** (`packages/sdk/src/api.ts`) is unary HTTP through
-  effect-actions: one binding, each action at `POST /api/<action>`, such as
-  `/api/createMachine`. Input is closed: undeclared fields are refused,
-  and input that doesn't decode is effect-actions' 400 `InvalidInput`, which
-  the client reports as `Invalid`. A request of another release, by its
-  `clankerbox-version` header, is `Invalid` before its input is decoded
-  (`packages/host/src/composition/routes.ts`).
-
-### IDs and names
-
-- Every machine and checkpoint ID is `<host>_<name>` (`packages/sdk/src/ids.ts`).
-  A host ID matches `^[a-z][a-z0-9-]{0,31}$`; a name matches
-  `^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$` (no `--`, no trailing `-`, which
-  smolvm refuses in native names). Neither has `_`, so an ID splits at its one
-  `_`.
-- The whole ID matches `^[A-Za-z0-9_-]{1,62}$` because it is written to
-  `/var/lib/clankerbox/machine-id`, and clankercreds accepts only that
-  pattern. clankercreds is a separate tool that profiles install in guests to
-  sync credentials into them; it reads the ID as the machine's audit-log
-  label. The host validates every new ID, including one a raw HTTP caller
-  sends.
-- Names are unique per host and resource type. Reusing a name is a
-  `Conflict{kind: "exists"}`; there are no idempotency keys.
-- **Native names carry the row's instance**, a random hex value each row gets
-  at insert (`packages/host/src/ids.ts`); `<inst>` is its first 8 characters.
-  smolvm VMs and their scopes are `<name>-<inst>`; Tart VMs
-  `cbx-<host>-m-<name>-<inst>` and checkpoints `cbx-<host>-c-<name>-<inst>`;
-  boat named snapshots `cbx-<host>-<inst>`. So a native resource left by an
-  earlier row with the same name never carries the new row's name, and
-  `delete` only removes what its row could have made.
-- Bases have names, not IDs. Each host names its bases in config.
-
-### Placement
-
-Only `create` is placed (`client.ts`, `place`). A host in its options (the
-CLI's `--host`, or else the profile's `host`) sends it to that host. Otherwise the client reads every
-host's bases in parallel and goes through the answers in list order: the
-first host that answers and offers the base wins, and the reads still out are
-interrupted, so a silent host after it delays nothing. A host that fails its
-read is skipped. Whatever the chosen host replies, `Capacity` included, is the
-reply; placement never moves on. With no host offering the base the reply
-names each host's bases or error, and is `Unavailable` if some host gave no
-reply, and otherwise `NotOffered`: a host that calls itself by another ID,
-or whose reply doesn't decode, won't answer differently when asked again.
-Fork, restore, start, stop and delete go to the host of the resource they
-name: nothing migrates.
-
-### Capacity
-
-`getCapacity` (`clankerbox capacity`, `client.capacity`) lists a host's
-resources as `Usage` rows, `{host, resource, limit?}` with `used` or `unread`:
-the limits its `Capacity` refusals come from (smolvm's RAM budget, Tart's two
-VMs, boat's account limits), and on every runtime the `cpu` and `ramMib` its
-running and booting machines were given. `used` is counted as a refusal counts
-it, so it needn't match the host's own machines; the
-[runtime notes](#runtime-notes) say what each runtime counts. A row that would
-count a machine whose state couldn't be read has `unread`, those machines'
-IDs, instead of a guessed sum. The CLI shows `-` for no limit, `?` for an
-unread sum with the machines named under the table, the resources in its own
-words (`cpu`, `ram`, `running-vms`, `active-sandboxes`, `starts/minute`,
-`starts/hour`, `starts/day`) and RAM to a tenth of a GiB; `--json` has the
-API's names and whole MiB. The rows are read from the runtime at each call, so
-a runtime that fails the read as a whole, or takes over the host's 9 s, fails
-it with `Internal`, and a list names that host among the unreachable.
-
-### Actions
-
-Every mutation replies when its action has finished, with the resource as it
-is afterwards or a tagged error. Each runs in this order (`claims.ts`):
-
-1. Validate the input.
-2. Claim the rows, inserting the new row.
-3. Check runtime state: the runtime's `admit` (Tart's two-VM count, smolvm's
-   RAM budget), a base the host doesn't offer, a machine that was never made.
-4. Only then call the runtime.
-
-- **A row's `action`** is the last action that claimed it, and how it ended,
-  under the contract's name for it, as an error's `action` is.
-- **An error before the first runtime call records only the failure:** the
-  claims are released, an inserted row removed, and a held row's `action`
-  records the action as `failed` with the error, as a start refused for
-  room reads `startMachine failed: Capacity`. A fork or capture refused for its
-  new row's name records it on the source too, as `forkMachine failed:
-  Conflict`.
-- **A host's stop** fails what it cuts off as "the host stopped during …",
-  whichever step it reached. A check or runtime call that dies records
-  `Internal`, and only the host log has its cause.
-- **The refusal rule:** a runtime error the runtime knows created nothing
-  native (a `Refusal` in `runtime.ts`) is handled the same way. Each runtime
-  documents its list: a start of a machine the runtime no longer has, a fork
-  or capture source in a state it doesn't copy, Tart's forwarder failing to
-  listen on a new port, and boat's limit, capacity, plan and API-key refusals.
-- **Any other runtime error** leaves the row with `action.status = failed` and
-  the same error as the reply. Nothing native is released without an explicit
-  `delete`, so no failure needs a proof that it left nothing behind. `delete`
-  and `stop` are never refused for an earlier failure, only while another
-  action holds the row, and `delete` copes with any leftover native state.
-- **Actions outlive their request.** Each runs in a fiber forked into the
-  host's own scope, which only the host's end interrupts, so a dropped
-  connection never interrupts native work, and the outcome is recorded either
-  way.
-- **`made`:** a machine row is made once its create (with setup), fork or
-  restore has done its native work, before preparation, and `Machine.made`
-  says so. Until then the machine has no `hostKey`, and `start`, `fork` and
-  `capture` refuse it with `NotMade`, so a half-made machine never boots;
-  it can be read, stopped and deleted, and its `state` is still the runtime's.
-  A failure only in preparation leaves the machine made, and `start` repairs
-  it.
-- **`action: {name, status, error?}`** is a resource's one record of work: its
-  last action, `running` while held, `failed` with the error, or `done`. The
-  error is the host's reply whole, a `Conflict`'s `kind` included, and the
-  row keeps it as JSON. A v0.16.0 row could hold a `Precondition` only for a
-  failed script, Tart's disk below its base or boat's 403; the migration names
-  each by its message (`ScriptFailed`, `Unsizable`, `Refused`), and any other
-  becomes `Internal`, keeping its message. A checkpoint is ready once its
-  action is `done`.
-- The runtime decides `start` and `stop`; the core reads no state for either.
-  Every `start` is admitted and calls the runtime's start, which refuses a
-  machine the runtime no longer has with `Missing` before anything native,
-  and leaves a running machine as it is, so a start on one runs preparation
-  again (the repair path). Every `stop` calls the runtime's stop, which reads
-  the machine's state itself and does nothing on one that doesn't run; the
-  stop is still recorded `done`, replacing the last action and its error.
-  A host's `delete` of a missing resource is `NotFound`; the client's
-  `deleteMachine` and `deleteCheckpoint` answer it as `absent`, done like
-  `deleted`.
-- A restore from a checkpoint whose capture still runs is `Conflict{busy}`,
-  as a prebuild's is, and from one whose capture failed `NotReady`.
-- Ready checkpoints never change, so restores read them without a claim and
-  run in parallel.
-
-### Errors
-
-Fifteen tags (`packages/sdk/src/errors.ts`), one per failure, each with the
-fields that say which:
-
-- `Invalid`, `NotFound` and `Conflict{kind: exists | busy}`.
-- `NotOffered{base}`: a base the host doesn't offer, or no host does.
-- `NotMade{machine}`: a machine whose create, fork or restore never finished.
-- `Missing{machine}`: a machine the runtime no longer has.
-- `NotReady{checkpoint}`: a checkpoint whose capture failed.
-- `PinMismatch{checkpoint}`: a `ram` checkpoint saved under another pin than
-  the one the host runs.
-- `WrongState{machine, state}`: a machine in a state the action doesn't take;
-  `Host.captureFrom` says which state a capture or fork needs.
-- `Unsizable`: sizes the runtime can't give.
-- `ScriptFailed{script: setup | preparation}`: a guest script that exited
-  non-zero or overran; a failed setup leaves the machine unmade, a failed
-  preparation made.
-- `Refused`: a provider's refusal that waiting won't change.
-
-A field is there when a client acts on it; the rest, such as an exit code, a
-script's output or boat's code, is in the message.
-
-- `Capacity` (no room: Tart's two VMs, smolvm's RAM budget, boat's account
-  limits), `Unavailable` (the client couldn't reach a host) and `Internal`.
-
-`retryable(error)` follows the tag: `busy` and
-`Capacity` retry; `Unavailable` retries for reads only, since a mutation's
-request may have reached the host. In the client, a request that fails to
-encode is `Invalid` and sends nothing, and a host's `InvalidInput` is `Invalid`
-too; a reply that fails to decode is `Internal`.
-
-`NotFound`, `Conflict` and `Invalid` are the host core's: no such row, a row
-another action holds or a name taken, a malformed request. So are `NotOffered`,
-`NotMade`, `NotReady` and `PinMismatch`, checked before any runtime call. A
-runtime fails with `Refused` or `Internal`, with `Capacity` on the calls that
-take room (`admit`, `create`, `start`, `fork`, `restore`, `capture`), and with
-`Missing`, `WrongState`, `Unsizable` or a guest's `ScriptFailed` where its call
-can meet them; the `Runtime` port's types say which (`runtime.ts`). A 404 from
-boat is boat's own, so it is `Internal`. Each action in the contract
-(`api.ts`) declares only what it fails with, and the host's routes are
-type-checked against it: lists `Internal`, reads `NotFound` too, changes
-`Conflict` and `Refused` too, the actions that boot or copy a machine
-`NotMade`, `Missing`, `WrongState` and `Capacity` too, and each action the
-failures only it meets, such as restore's `NotReady` and `PinMismatch`; every
-action also declares `Invalid`,
-which a host answers a client of another release with (a test checks it). Each
-client method fails with its action's errors and the two the client makes itself:
-`Unavailable` for a reply that never came, `Internal` for one it couldn't use
-(`ErrorOf` in `client.ts`).
-
-The client sets where a call met its error, and a host sends none of it:
-`host`, `action` (the contract's name, such as `createMachine`) and `id` (the
-resource the call reads, changes or makes: for a fork, restore, capture or
-create, the one it makes). An error raised before anything is sent, such as a
-malformed ID or a placement no host takes, names only the action. The Rivet provider deletes a failed create's `id`, and
-nothing when there is none.
-
-A file the client reads, a config, profile or setup, that can't be read or
-doesn't decode is `Invalid`, naming the `file`; so is a client config whose host
-list the client refuses, and a host's config. The
-CLI's own `SpawnFailed` names a `program`, such as `ssh`, that couldn't be
-started. Neither is retryable. A host that can't start, such as on a state dir
-another host process holds or a runtime binary of another version, fails with
-the host's own `CannotStart` (`startup.ts`), which never goes on the wire.
-
-### State and claims
-
-- **SQLite through `node:sqlite`**, one database per host,
-  `<stateDir>/host.db` (`platform/sqlite.ts`, behind the `Store` port in
-  `store.ts`). `PRAGMA application_id` (`cbxh`) refuses
-  a foreign database, and an ordered migration list on `PRAGMA user_version`
-  refuses one newer than the binary, so a state dir a newer host has migrated
-  can't go back to an older one. A one-row `host` table records the host
-  ID and runtime at creation, and a config that names others is refused before
-  the runtime starts. Other files in the state dir are left alone.
-- **The owner lock is SQLite's own:** the host opens the database with
-  `locking_mode = EXCLUSIVE` and holds it until it exits, so a second host on
-  the same state dir refuses to start and a crash leaves no stale lock. The
-  cost: nothing else, `sqlite3` included, can read the database while the host
-  runs.
-- **One row per machine and per checkpoint:** spec, `instance`, `createdAt`,
-  port and `action`; a machine's also has its host key, `made`, and `native`,
-  the runtime's own ID for it, such as boat's sandbox ID, which the runtime
-  records as soon as it has one through the `NativeIds` service, the only part
-  of the store a runtime gets. No operation log, no setup script.
-- **Claims** are single transactions: `hold` an existing row or `insert` a new
-  one; a held row is `running`, so a second action on it is
-  `Conflict{kind: busy}`. Fork and capture hold the source, then insert the new
-  row under the same token, and end with the outcome on both rows.
-- **One admission permit** (a `Semaphore` in `machines.ts`) covers claim and
-  check for every action that boots a machine or allocates a port, so two
-  boots never count each other or pick the same port. Native calls themselves
-  aren't serialized: smolvm and Tart take their own locks.
-- **The row comes before any native effect**, so after a crash `delete` has
-  something to own.
-- **At startup** (`startup.ts`) every `running` action becomes `failed` ("the
-  host stopped during …"), then the runtime does its own startup work, before
-  the API listens.
-
-### Setup and preparation
-
-Both run over `Runtime.exec`, as root in the guest (`guest.ts`).
-
-- **Setup** runs once, at create, after the first boot. The script arrives on
-  stdin, so it never shows in a process list, and runs as its own file under
-  `/var/tmp` with its `#!` line and stdin closed. A non-zero exit or overrun
-  fails the create with `ScriptFailed` and the output's last 20 lines (at most
-  4000 characters). Nothing runs setup again; forks and restores carry its
-  results.
-- **Recipes** are packed by the client (`packages/sdk/src/setup.ts`) into
-  one shell script that, in a fresh directory under `/var/tmp`, makes each
-  entry in sorted order (a directory with `mkdir`, a symlink with `ln -s` as
-  it is, a file from base64), marks `setup.sh` executable and runs
-  `./setup.sh` there, so its `#!` line counts as a single file's does. It
-  needs only `sh`, `base64`, `mkdir`, `chmod` and `ln` in the guest.
-  - A symlink is never walked into, wherever it points: nothing outside the
-    recipe is packed, and nothing is written through a link in the guest.
-  - Of a mode only the execute bit is carried, as git carries it: a file is
-    made executable when any of its execute bits is set, and every other mode
-    is the guest's default. A setup sets the modes it relies on itself, as with
-    `install -m`.
-  - Every path is written under `./`, so a name that starts with `-` is no
-    option.
-  - Nothing records a time, an owner or an xattr, so the same files, with the
-    same execute bits, pack into the same script under any umask: a prebuild
-    is named after it. A recipe that holds anything else, such as a FIFO, is
-    refused.
-- **Nothing logs a setup script, a packed recipe or the preparation seed:** not
-  the client, the host, nor any test. Recipes can carry secrets. Errors carry a
-  script's output, never its text.
-- **Preparation** is one script inside the binary, run after every create,
-  start, fork and restore, in one exec with a 60 s timeout. Its arguments are
-  the row's instance and the machine ID; a fresh random seed comes on stdin.
-  1. Identity, when `/var/lib/clankerbox/instance` differs from the row's:
-     write the seed into `/dev/random` and, on Linux, issue `RNDRESEEDCRNG`
-     (a RAM fork clones the guest's CRNG); re-mint the SSH host keys if there
-     are any; SIGHUP the sshd in `/run/sshd.pid` so it serves the new keys;
-     write `/var/lib/clankerbox/machine-id`; run `/etc/clankerbox/new-identity`
-     if the profile installed one; write the instance last, so a crash repeats
-     the step. The instance, not the ID, is compared, because names are
-     reused.
-  2. Run `/etc/clankerbox/start`, if present, on every activation, and wait
-     for it.
-  3. Print the SSH host public key (ed25519, else ecdsa, else rsa), which
-     becomes `Machine.hostKey`.
-
-  A failed preparation is simply run again by the next `start`.
-
-- **The guest's contract**, for profile authors:
-  - A Linux guest has `perl`, which preparation needs for `RNDRESEEDCRNG`;
-    without it, preparation fails saying so. Minimal images, such as Alpine,
-    lack it until setup installs it.
-  - Setup installs sshd and keys, sets the guest's environment and writes
-    `/etc/clankerbox/start`.
-  - `start` is idempotent, daemonizes whatever it launches (`setsid -f`, or
-    launchd on macOS) and exits 0 once the machine's services are up. It
-    relaunches sshd if `/run/sshd.pid` is dead (not `pgrep`, which matches
-    open sessions). Per-machine syncs, such as clankercreds, go here: it runs
-    after every fork and restore.
-  - `new-identity` resets per-machine state the copy carried over (tailnet
-    node state, user-space RNG seeds); it must be idempotent too.
-  - `start` and `new-identity` run under exec, not a login, so they read the
-    environment file themselves. On Linux `/etc/environment` reaches ssh
-    sessions through `pam_env`; on macOS ssh sessions read `/etc/zshenv`.
-
-### Prebuilds
-
-A prebuild is the client's alone (`packages/sdk/src/prebuild.ts`): an ordinary
-checkpoint under a name derived from what it is of, so hosts store nothing new
-and the wire has no action for it.
-
-- **The name** is `prebuilt-` and 12 hex characters of a SHA-256 (WebCrypto)
-  over the spec's `profile` label, base and sizes, the setup script exactly as
-  it is sent, and the host's runtime version. The key and what runs are one
-  value, so a setup edited while a build reads it can't land under another
-  setup's name.
-- **The runtime's version is in the name** because a `ram` checkpoint
-  restores only under the release that saved it: after a smolvm bump a create
-  misses the old prebuild rather than failing to restore it. Tart's and
-  boat's `disk` checkpoints would still restore, so a bump of either costs a
-  rebuild it didn't need; that is cheaper than a field on the wire for it.
-- **A create** reads its host (`client.place`), then the checkpoint by its ID.
-  One whose capture is `done` is restored, and a failed restore is the reply;
-  none, or one that failed or is still being captured, means a create with
-  the setup.
-- **A build** reads the checkpoint first: one that is done is the answer, one
-  that failed is deleted and built again, and one whose capture is still
-  running is `Conflict{kind: busy}`, naming its host, `captureCheckpoint` and
-  its ID, which a later build may get past. Otherwise a machine of its
-  own, `prebuilding-<16 random hex>`, runs the setup, is stopped when the
-  host's `captureFrom` is `stopped` (Tart; smolvm and boat capture a running
-  machine), is captured under the prebuild's name, and is deleted however the
-  build ends. Builders never share a name, and a host takes a checkpoint name
-  once, before any native work: of two builds of one spec, both run the setup
-  and the second's capture is `Conflict`, and neither touches the other's
-  machine or prebuild. Nothing deletes a prebuild that is done.
-
-### Guest access
-
-- **SSH only.** smolvm publishes guest port 22 on a host port, Tart reaches it
-  through the host's forwarder (`platform/tart/forwarder.ts`), and boat through its own
-  relay. `clankerbox ssh` pins the reported host key.
-- **Ports** (`machine-ports.ts`), for smolvm and Tart: one per machine, the lowest
-  free port in the machines' range (`machinePorts`, 10000–19999 by default,
-  clear of smolvm's fork ports and the Linux and macOS ephemeral ports),
-  confirmed with a bind probe on the publish address and recorded with the
-  claim; a unique index backs it up. Forks and restores get their own. The host refuses an API
-  port inside the range, so a tailnet policy can open the range (10000–19999
-  by default) to the clients that run `clankerbox ssh`.
-- **Security:** a published port is reachable by whatever the tailnet policy
-  lets reach the host; sshd and the pinned key protect it. smolvm's strict
-  egress floor and Softnet keep guests off private ranges, the floor the
-  tailnet's too, but it doesn't block the host's public addresses, so no host
-  service may listen on one. A guest must not reach its own host's API port.
-  boat guests have full outbound internet, and their SSH relay is public.
-
-### Supervision
-
-The smolvm CLI starts the VMM in its caller's cgroup, so without its own job a
-host restart would kill every VM. Each runtime supervises its own:
-
-- smolvm: each VM runs in its own systemd scope, `smolvm-vm-<name>.scope`,
-  with no unit files.
-- Tart: one launchd job per VM (`platform/tart/tart.ts`), with its plist and log in the
-  state dir's `launchd/`, rewritten at every boot.
-- boat runs its own machines.
-
-Every VM job references only smolvm or tart at their versioned install paths,
-never the clankerbox binary, so a release leaves running VMs alone and a
-runtime upgrade goes into a new prefix. The bump-smolvm and bump-tart skills
-hold the claims each runtime's supervision rests on.
-
-### Deliberately absent
-
-Each was in the Go implementation (its last release, tag `v0.11.0`) or
-proposed, and has no real consumer: a controller and its queues and
-reservations; idempotency keys, operations and `--async`; host-side profile
-builds and stored profiles; machine and host labels; a guest daemon, sessions
-and `shell`; TLS, PKI and bearer tokens; the `dev` command; shipping smolvm or
-a Linux image pipeline; rewind to an earlier generation; a host-side setup
-cache (a [prebuild](#prebuilds) is a checkpoint the client names); name
-lookup. A feature used only by tests or docs doesn't count as a consumer.
-
-## Accepted cases
-
-These are known, not guarded, and accepted:
-
-- A host crash between claiming a fork's or capture's source and inserting the
-  new row leaves the source's action `failed` and no new row.
-- A release or end of a claim that fails is logged, and its rows stay `running`
-  until the next host start; meanwhile the RAM budget counts them as booting.
-- A setup killed by its timeout or a host crash may leave its script, or a
-  packed recipe's files, in the guest's `/var/tmp`: smolvm SIGKILLs the command
-  tree, so no trap runs.
-- A create whose setup failed, or a fork or restore whose native work failed,
-  can't be repaired with `start`: delete it and make it again.
-- A restore whose checkpoint is deleted under it fails like any runtime
-  failure.
-- A checkpoint holds everything the machine had, credentials its `start`
-  synced included. Capture one meant for other machines from a machine that
-  holds none. A prebuild is such a checkpoint: its machine ran `start` once.
-- A prebuild doesn't follow a base's image: a host only names its bases, so
-  one made before a host's config changed a base's image still matches.
-  Delete it and prebuild again after such a change.
-- An edited setup or a runtime bump leaves the old prebuild behind, and a
-  Tart or boat bump one that would still restore; `checkpoint list` shows
-  them, and `checkpoint delete` removes them.
-- A build that is interrupted, or whose machine's delete fails, as when its
-  `--timeout` passed while the create ran on, leaves its machine,
-  `<host>_prebuilding-<16 random hex>`, behind, possibly running and holding
-  its RAM; `delete` removes it. When the build had failed already, that
-  failure is the reply. When its capture was done, the prebuild is made,
-  `prebuild` exits 0, and it names the machine on stderr.
-- A capture that fails leaves a failed `prebuilt-` checkpoint. Creates run
-  the setup past it, and the next `prebuild` deletes it and builds again.
-- Two builds of one spec at once both run the setup, and the second fails at
-  its capture with `Conflict`.
-- The reseed fixes the kernel RNG only. User-space generators seeded before a
-  fork stay duplicated until the profile's `new-identity` resets them.
-- A lost reply isn't resolved: the caller reads the resource.
-- smolvm: a setup that installs `systemd-resolved` makes every later
-  `machine start` fail (an upstream bug); nothing checks for it.
-- smolvm: a stale template in `<stateDir>/smolvm/.smolvm` would be used
-  silently; nothing of ours writes there.
-- Tart: a `diskGib` below the base's disk fails the create at `tart set`, after
-  the clone, with `Unsizable`; the unmade machine can only be deleted.
-  Nothing checks it before the claim: `tart get` doesn't read OCI references.
-- Tart: the two-VM count sees only the host's Tart home and counts the
-  operator's Linux VMs there too. Apple's own refusal is the backstop; when two
-  starts race it maps to `Capacity` too, but a clone already made stays,
-  `failed`.
-- Tart: a port the forwarder can't listen on at startup is logged and that
-  machine's endpoint goes unserved until a stop and start; the rest of the host
-  serves. A host restart drops open forwarded connections, and a killed
-  `tart exec` leaves the guest's `nc` and `sshd-session` until the session next
-  writes.
-- Tart: replacing a held launchd job that runs another tart isn't verified
-  live; if its bootstrap fails the start fails, and the next start bootstraps
-  it.
-- boat: a row without a sandbox ID (a failed or interrupted create) is deleted
-  as a row only; a sandbox may exist. Look on the dashboard for an unrenamed
-  `Box <time>` sandbox near the row's `createdAt`. Likewise a lost boat host
-  database leaves its sandboxes to be found by display name (the machine ID).
-- boat: the ready marker `/var/lib/ascii-lazy/sys-done` is undocumented;
-  re-check it at every change of boat's API or image.
-
-## Runtime notes
-
-### smolvm
-
-- **Install** upstream smolvm with its own installer into a versioned prefix,
-  then expand both disk templates beside their `.zst` files; the host refuses
-  a prefix without them (the bump-smolvm skill says why).
-
-  ```sh
-  HOME=/opt/smolvm/1.27.3 install.sh --version 1.27.3 --prefix /opt/smolvm/1.27.3 --no-modify-path
-  for t in storage-template.ext4 overlay-template.ext4; do
-    zstd -d --sparse /opt/smolvm/1.27.3/$t.zst -o /opt/smolvm/1.27.3/$t
-  done
-  ```
-
-  Machines keep using their prefix, so an old one stays until its last machine
-  is deleted. The host refuses to start unless it is root and
-  `smolvm --version` is the tested one (`testedVersion` in `platform/smolvm.ts`).
-
-- **Environment:** every smolvm call runs with one fixed environment
-  (`environment` in `platform/smolvm.ts`), with smolvm's state under
-  `<stateDir>/smolvm`, one inventory per host. The bump-smolvm skill lists
-  each variable and its reason.
-- **State dir:** at most 52 bytes, so the control socket path fits Linux's
-  108-byte limit; startup checks it.
-- **Machines** run a digest-pinned OCI image with
-  `--net --net-backend virtio-net -p <port>:22` and `--branchable`, each as its
-  own uid. Reference the base by digest, from `mirror.gcr.io`, as the config
-  example does (the bump-smolvm skill says why). The stock image has no sshd; setup installs it. Install packages with
-  `--no-install-recommends`.
-- **Disks:** `diskGib` is `--storage`, where workload writes land. smolvm
-  builds its host-side image seed for 20 GiB and more, a larger disk being
-  the seed grown; smaller sizes pull the image in the guest on first start.
-- **State** comes from `machine status --name X --json`, at most 8 at once;
-  a machine whose status hasn't answered 8 s after the read began, its wait
-  for a turn included, reads `unknown`. smolvm's exit codes are trusted: no
-  polling around calls.
-- **RAM budget** (`usage.ts`): every start and every new machine checks
-  that running and booting machines' `ramMib` fit `ramBudgetMib`, each once,
-  else `Capacity`; a running target counts once, and a machine whose state
-  couldn't be read counts as running. Set it above physical RAM to
-  overcommit on purpose. The host's capacity is the budget and that sum
-  (`ramMib`), and the same machines' `cpu`, unlimited; a machine whose state
-  couldn't be read leaves both `unread`, naming it, since the sum would be a
-  guess.
-- **Fork** is a checkpoint of the running source into a store of its own,
-  `create --from` it, a port swap (`machine update --remove-port … -p …`),
-  start, then the store is removed whole, whatever happened. The child
-  continues the source's RAM, with a fresh identity and no lineage. A failed
-  fork or `ram` restore stays unmade for `delete`, since its VM may still hold
-  the source's port. smolvm's own `machine branch` is never used (the
-  bump-smolvm skill says why).
-- **Checkpoints** are always `ram`, of a running machine, in one store per host
-  (`<stateDir>/checkpoints/`, `--history 0` so deletes free space, restore
-  cache off). A checkpoint records `smolvm <version> <platform>`, and a restore
-  under another pin is refused. A restored machine keeps its own RAM file for
-  its life.
-- **Start** reads status first: a running machine is left as it is, and an
-  unreachable one (its VMM alive, its agent silent) is booted again, as
-  `machine start` kills its VMM first. A frozen, paused or pausing one is
-  refused with `WrongState`, as is a fork or capture of an unreachable
-  machine.
-- **Stop** reads status first and runs `machine stop` only on a running
-  machine, since a stop of an unknown name leaks a directory; a guest that
-  doesn't confirm its flush stays running and the stop fails, rather than risk
-  lost writes. **Delete** reads
-  status, stops gracefully, then SIGKILLs the VM's scope if it is still loaded,
-  which also ends a VMM that smolvm reads as stopped, then runs
-  `machine delete -f` and `systemctl reset-failed`.
-
-### Tart
-
-- **Softnet:** VMs run with `--net-softnet-block=@host`, which also blocks
-  gateway DNS, so setup sets public resolvers. Install Softnet SUID root
-  before the host starts (the bump-tart skill says why):
-  `sudo install -o root -g wheel -m 4755 softnet /usr/local/bin/softnet`.
-  Tart looks for it on a fixed `PATH` without `/opt/homebrew/bin`, so
-  Homebrew's Softnet, which isn't SUID root, is never used.
-- **Jobs** run `tart run --no-graphics --net-softnet-block=@host <vm>` with a
-  fixed environment, the same as every tart call's (`environment` in
-  `platform/tart/tart.ts`; the bump-tart skill). Each boot waits up to three minutes for
-  `tart exec` to answer, retrying, since the guest agent starts after
-  auto-login.
-- **Bases** are stock Cirrus images (`ghcr.io/cirruslabs/macos-<version>-base`
-  or `-xcode`), pinned by digest; the bump-tart skill records the tested
-  one's. They ship sshd, tart-guest-agent and passwordless sudo for `admin`;
-  exec runs through `sudo -n`, so a base without it fails the create.
-- **Clones** get `tart set --random-serial` and the sizes; Tart rounds
-  `diskGib` up to whole GB and only grows a disk. Never `--overwrite`.
-- **Fork and capture need a stopped machine** (our rule, not Tart's): a clone
-  of a stopped disk is consistent, while one of a running VM's disk is
-  crash-consistent at best. Checkpoints are `disk` clones.
-- **State** is one `tart list` for every machine; one that doesn't answer
-  within the host's 9 s reads them all `unknown`, and fails a boot's two-VM
-  count.
-- **Capacity:** Apple runs two macOS VMs per Mac, the operator's included. Each
-  boot counts the VMs `tart list` reads running plus machines being booted, the
-  target included, each VM once, and refuses with `Capacity` past two; a start
-  of a running machine adds nothing. The host's capacity is that count of two
-  (`runningVms`), so it includes the operator's VMs, Linux ones too, and the
-  `cpu` and `ramMib` of the host's own running and booting machines, from the
-  same `tart list`, unlimited; the operator's VMs aren't in those.
-- **Start** reads `tart list` first and refuses a VM Tart no longer has before
-  it writes a job or listens; it boots only a stopped VM.
-- **Stop** reads `tart list` first and does nothing to a VM that doesn't run.
-  A running one gets `shutdown -h now` in the guest, then
-  `tart stop --timeout 0` after a minute, and the stop waits for `tart list` to
-  read it stopped. **Delete**
-  forces a running VM off, then boots out its job.
-- **The forwarder** listens for each machine from its create until its delete,
-  whatever its state, and carries each connection over
-  `tart exec -i <vm> nc 127.0.0.1 22`: no guest IP, no Softnet exception and no
-  Local Network permission. A new connection costs about 0.3 s.
-- If the Mac's application firewall is on, the binary needs an "Allow incoming
-  connections" entry, and each release's new binary prompts once (see
-  [Deploy](#deploy)).
-
-### boat
-
-- **API:** boat's HTTP API v1 directly (`platform/boat/api.ts`), no boat SDK or CLI. The
-  API key is held `Redacted` from decoding on and travels only as the bearer
-  token; errors carry method, path, status and boat's code and message, never
-  a request or body. Every body boat answers and every transport error is
-  scrubbed of the key as it arrives (`api.ts`), so nothing boat or the
-  transport echoes carries it on; the key never reaches a guest.
-- **Designed for boat's trial,** whose limits the bump-boat-api skill lists.
-  Every create, fork, resume and restore sends `noEnv: true` (no account
-  secrets in the guest) and `ttlSeconds: 7200`, so boat stops a machine two
-  hours after each activation.
-- **Bases:** boat's one image (Ubuntu 24.04, x86_64, with sshd), which boat
-  updates, so it isn't pinned and the base's image value is only a label. Name
-  it apart from stock images unless every profile on that name handles both.
-- **Sizes:** the smallest of `small`, `default`, `large` and `xlarge` that
-  covers the request; none is `Unsizable`, refused before any call to boat,
-  and a type the plan lacks is boat's 403, a `Refused` refusal whose message
-  names boat's code. So is any 403 that carries boat's
-  code, such as an API key that may not perform an action
-  (`api_key_action_forbidden`): the key needs `ssh` and `sandbox.delete`
-  besides create, stop and resume.
-- **Retries:** create, fork and restore carry an `Idempotency-Key`
-  (`clankerbox-<host>-<instance>`). They and every `GET` and `DELETE`, but
-  the `GET` of the limits, are repeated while their outcome is unclear, or
-  boat rate-limits a read, for 5 minutes with backoff from 1 s to 30 s, or
-  until the wait they serve ends. A refusal that answers a repeat isn't
-  trusted as a refusal: the row stays `failed`. Resume takes no key, and it
-  and the other calls are never repeated.
-  A 429 to a create, fork or restore that isn't a limit below (boat's
-  `rate_limited` start window, or a code the host doesn't know) made nothing,
-  but counts as a start: it is repeated twice, 65 s apart, so the minute window
-  rolls past and a longer one costs at most three starts. A `rate_limited` that
-  outlasts them is `Capacity`, any other 429 `Internal`. After an unclear
-  attempt a 429 is repeated once, at least 65 s on, within the 5 minutes.
-- **Refusals** that leave nothing on boat remove the row: to a create, fork,
-  resume, restore or a named snapshot's save, 429
-  `limit_reached`/`member_limit_reached`/`daily_limit_reached` (and
-  `rate_limited` once its repeats run out, or at once to a resume or save) and
-  503 `out_of_capacity`/`no_ready_machine` are `Capacity`, as is 409
-  `named_snapshot_limit`, boat's cap on an account's named snapshots. So is a
-  create, fork or restore boat cancels for want of a machine; one boat answers
-  404 for after accepting it fails and keeps its row, with its sandbox ID.
-- **Capacity** is boat's to count, so the host's is what `GET /limits` answers
-  for the account: its active sandboxes, the operator's own included
-  (`activeSandboxes`), and the starts used of each rolling window that has a
-  limit (`startsPerMinute`, `startsPerHour`, `startsPerDay`). It asks once,
-  so a refusal is boat's own answer. The host checks none of it before a
-  call; boat's refusal is the check. Alongside, it reads each recorded
-  sandbox's state as a list does, for the `cpu` and `ramMib` of the host's own
-  running and booting machines, each the size of the type boat runs it as, so
-  more than it asked for when no type matches exactly, or as it asked when no
-  type covers it, as while its create is refused; the operator's
-  sandboxes aren't in those. A sandbox whose read fails leaves both `unread`;
-  the account's rows still answer.
-- **State** is a `GET` of each recorded sandbox, never a list; a read that
-  still fails after its repeats, or takes over 8 s, reads `unknown`,
-  never `missing`. The SSH endpoint changes at every start and is only
-  reported for a running machine.
-- **Ready:** after a fork, a restore or any start the host waits for boat's
-  lazy-restore marker before preparation writes `/var/lib/clankerbox/`, except
-  on the machine a create made: its SSH wait leaves `/run/clankerbox-created`,
-  which no snapshot or new machine carries, and boat restores nothing there,
-  so no marker comes. A reboot inside that guest clears the mark, so a start
-  of it then waits 10 minutes for a marker that never comes and fails; stop
-  and start it instead, as a resume restores and leaves the marker. A start
-  resumes only a sandbox boat doesn't read active; one it still makes,
-  resumes or runs is waited for instead.
-- **Exec** is SSH as `user` with `sudo -n`, one connection per exec, with the
-  host's own key (`<stateDir>/boat-ssh/id_ed25519`, authorized after create)
-  and the guest's host keys read through boat's command API and pinned per
-  connection.
-- **Fork** syncs the guest, then waits for a boat snapshot begun after the
-  sync; forks carry the disk only. **Checkpoints** are named snapshots
-  (`disk`), from a running or stopped machine, and outlive their source.
-- **Start** refuses a machine with no recorded sandbox, or one boat reports
-  cancelled or gone, before anything native. **Stop** does nothing then, or
-  when boat doesn't read the sandbox active; it never passes `force`, which
-  drops writes since the last snapshot, and a stop boat refuses keeps the
-  machine running and is the error.
-- **Setup rules:** state that must survive a stop, fork or checkpoint lives
-  under `/home/user`, `/etc`, `/usr`, `/opt`, `/srv`, `/root`, `/var/lib` or
-  `/var/opt`. Leave boat's sshd, `user`'s `authorized_keys`, TCP 8911 and its
-  WireGuard tunnel alone.
-
-## Repository layout
-
-| Path                            | Contents                                                                                      |
-| ------------------------------- | --------------------------------------------------------------------------------------------- |
-| `apps/clankerbox/`              | The binary: the CLI commands, `ssh`, and the `host` role                                      |
-| `packages/sdk/`                 | The SDK: Schemas, API binding, errors, IDs, the profile schema, recipe packing and the client |
-| `packages/host/`                | The host: state, claims, actions, setup and preparation, ports, and the three runtimes        |
-| `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                                                    |
-| `tools/release/`                | The SEA build, bundles with their notices, and the smoke test                                 |
-| `tools/oxlint/`                 | The anti-slop lint plugin, vendored from upstream                                             |
-| `tools/lint-fence/`             | The repository's own lint rules: what each folder may import, and where Effect is run         |
-| `tests/live/`                   | Live acceptance suites per runtime, with their drivers                                        |
-| `scripts/work_runs.py`          | Disposable build and test runs ([WORK_RUNS.md](scripts/WORK_RUNS.md))                         |
-
-Code is grouped by domain, not by mechanism. A domain file holds its schemas,
-its errors and its service, with the service's Layer beside it; tests mirror
-`src/` under each package's `tests/`. A port, a service named for a job the
-domain needs done, lives in the domain; its adapters, which reach Node, a
-database or a vendor's API, live in `platform/`.
-
-- **SDK** (`packages/sdk/src`): the contract (`api.ts`), its schemas
-  (`resources.ts`) and errors (`errors.ts`), IDs (`ids.ts`), the release
-  (`release.ts`), profiles (`profile.ts`), setups and recipes (`setup.ts`),
-  prebuilds (`prebuild.ts`), ssh pinning (`ssh.ts`) and units (`text.ts`).
-  The client is `client.ts`. The package's `.` entry
-  needs no Node; `./node` (`node.ts`) holds what does.
-- **Host** (`packages/host/src`): the domains are the machine and checkpoint
-  actions (`machines.ts`, `checkpoints.ts`), the order every action runs in
-  (`claims.ts`), the guest scripts (`guest.ts`), machine ports
-  (`machine-ports.ts`), the machines in use, for the RAM budget and capacity
-  (`usage.ts`), IDs (`ids.ts`) and the settings every runtime shares
-  (`settings.ts`). Its ports are `Store` (`store.ts`), `Runtime`
-  (`runtime.ts`) and `PortProbe` (`machine-ports.ts`). The adapters are `platform/sqlite.ts`,
-  `platform/bind-probe.ts`, the three runtimes (`platform/smolvm.ts`,
-  `platform/tart/`, `platform/boat/`, each with its config section and
-  defaults) and what they share (`platform/process.ts`,
-  `platform/address.ts`). `startup.ts` reconciles state when the host starts.
-  Composition is `composition/`: `config.ts` reads the config, `runtimes.ts`
-  picks the runtime's Layer, `routes.ts` serves the contract, and `host.ts`,
-  the package's entry, builds the host's Layer over a runtime and an HTTP
-  server.
-- **App** (`apps/clankerbox/src`): one file or folder per command group
-  (`machines/`, `checkpoints.ts`, `hosts.ts`, `profiles.ts`, `prebuilds.ts`,
-  `ssh.ts`), over the CLI's kit (`command.ts`), the client config
-  (`config.ts`) and units (`units.ts`); `clankerbox.ts` is the command tree.
-- **Provider** (`packages/rivet-sandbox-agent/src`): sandboxes
-  (`sandboxes.ts`), the ssh tunnel (`tunnel.ts`), the Sandbox Agent's port
-  and health path (`agent.ts`) and the options (`options.ts`).
-
-Layers are chosen and provided at each entrypoint, and nowhere else: the
-CLI's `main.ts` (Node's services and HTTP client), the host role's `host.ts`
-in the app (the config's runtime and Node's HTTP server), and the provider's
-`index.ts` (the client over its hosts), which `provider.ts` runs under one
-`ManagedRuntime`. The app imports the SDK and the host, the host and the
-provider import the SDK, and the SDK imports neither. In the host, a domain
-file never imports `platform/` or `composition/`; only `composition/` puts
-them together. Each package's
-`./testing` export is its test kit (the SDK's stub host, the host's
-in-process host over a fake runtime), which other packages' tests import and
-nothing publishes.
-
-### House style
-
-These practices are in force with the layout, and each is checked where it can be:
-
-- **A service's constructor and Layer live in its file:** `machines.ts`,
-  `checkpoints.ts`, each runtime, the Store (`platform/sqlite.ts`, `open` and
-  `layer`) and the client (`client.ts`, `Client.make` and `layer`).
-  The SDK's Node Layer is in `node.ts` so that `.` loads no Node.
-- **Operations are contracts.** The host API is one effect-actions contract
-  (`packages/sdk/src/api.ts`); the host's routes and the client's calls are
-  derived from it, and the CLI's `actionCommands` fails to type-check when an
-  action has no command.
-- **Errors carry context.** An error from the client names the `host`, the
-  `action` and the `id` it read, changed or made. A file the client couldn't
-  use is `Invalid` with its `file`, and a program the CLI couldn't start is
-  `SpawnFailed` with its `program`.
-- **Tests are Effects** under `@effect/vitest` (`it.effect`, `layer`), on the
-  test clock unless a suite says why it needs real time. Effect is run by hand
-  only in the CLI's `main.ts`, the provider's `provider.ts`, and the provider
-  and live tests that drive its Promise API or a child program.
-- **Property and model tests** cover IDs, units, the RAM budget, recipe
-  packing and the store's claims, a model checked against the SQLite store.
-  Each states its expectation without the code under test.
-- **Comments** follow design rule 3.
-- **A lint fence** (`tools/lint-fence`, each rule with its own tests; the
-  rules' settings are in `vite.config.ts`): a file directly in
-  `packages/host/src/` imports only its siblings, `effect`, `effect/encoding`
-  and the SDK; an adapter in `platform/` imports the domain files, its own
-  subfolder and `platform/`'s shared `process.ts` and `address.ts`, never
-  `composition/` or another adapter; the SDK's `.` entry imports no Node and uses no `Buffer` or
-  `process`; and `fence/no-manual-run` keeps hand-run Effect to the places
-  above. Which package may import which is each `package.json`'s
-  dependencies: pnpm resolves no other.
-- **A runtime is removable.** Removing boat is its `platform/` folder, its arm
-  in `composition/runtimes.ts` and its config section in
-  `composition/config.ts`, the SDK's `Runtime` literal and its tests. What
-  stays is the vocabulary it brought: its resources in the SDK's `Usage` and
-  their labels in the CLI, and the machine row's `native` with the
-  `NativeIds` service, which no other runtime uses.
-
-Lifecycles are not modelled as state machines: an action's claim is a SQLite
-transaction, and its states are the `ActionRecord` a row keeps.
-
-## Development
-
-Node 26 and pnpm 12, through vite-plus (`vp`), and python3 and uv for the
-Python of `scripts/` and `tests/live/`:
-
-```sh
-pnpm install
-vp check                # format, lint and type-check
-vp run check:py         # ruff 0.16.10 through uvx, and scripts/' unit tests
-vp run -r test          # unit tests, over a fake runtime and a fake boat
-vp run -r build
-vp run ready            # all four; CI runs it
-```
-
-Release builds (`tools/release`, on the Node `.node-version` pins, its archives'
-checksums in `release-inputs.json`):
-
-```sh
-pnpm build
-pnpm sea:build [--out DIR] [darwin-arm64|linux-x64]   # into DIR, by default tools/release/dist; darwin needs macOS
-pnpm sea:smoke tools/release/dist/clankerbox-<target>.tar.gz
-```
-
-CI (`.github/workflows/quality.yml`) runs `ready` and builds, bundles and
-smokes both targets, on pull requests and on pushes to `main`, and keeps each
-bundle and its `.sha256` as an artifact. A release tag `v<version>` that names
-the SDK's version runs the release (`.github/workflows/publish-sdk.yml`): it
-runs that CI first, uploads the bundles it smoked and their `.sha256` files to
-the tag's GitHub release, then publishes the SDK to npm with provenance (see
-[Releasing](#releasing)).
-
-The live suites drive real hosts through the binary, one per runtime
-(`pnpm live:smolvm`, `live:tart`, `live:boat`). See
-[tests/live/README.md](tests/live/README.md) for what each needs and what it
-covers. Every disposable build or live run goes through
-`scripts/work_runs.py`, following [AGENTS.md](AGENTS.md).
-
-## Releasing
-
-The binaries, the SDK and the Sandbox Agent provider share one version, the
-SDK's, in `packages/sdk/package.json`.
-
-1. Set that `version`, and the provider's in
-   `packages/rivet-sandbox-agent/package.json`, to `X.Y.Z` and merge to `main`.
-2. Tag the merge commit `vX.Y.Z` and push the tag:
-   `git tag vX.Y.Z <commit> && git push origin vX.Y.Z`.
-
-The tag runs `.github/workflows/publish-sdk.yml`, which refuses a tag that
-doesn't name the version, runs CI on the tagged commit, uploads the two bundles
-CI smoked and their `.sha256` files to the `vX.Y.Z` GitHub release, then
-publishes `@gjermundgaraba/clankerbox-sdk@X.Y.Z` and
-`@gjermundgaraba/clankerbox-rivet-sandbox-agent@X.Y.Z` through npm's trusted
-publishing, with provenance; the provider depends on the SDK of its own
-version. A failing CI stops it before anything is uploaded.
-A failed run can be re-run: the upload replaces the release's files, and a
-package whose version npm already has is skipped, so a run that published the
-SDK but not the provider publishes the provider.
-
-npm's trusted publisher for each of the two packages names this repository and
-the workflow `publish-sdk.yml`, with no environment. Only the
-workflow's `vX.Y.Z` tag trigger gates publishing.
+- A sandbox comes from a profile (`{ profile }`), a checkpoint
+  (`{ checkpoint }`) or a fork (`{ machine }`), and a profile's prebuild is
+  used when there is one.
+- A sandbox's ID is `clankerbox/<machine ID>`; `pauseSandbox` stops the
+  machine and `destroySandbox` deletes it.
+- `recipes/ubuntu/` (smolvm) and `recipes/macos/` (Tart) install the server,
+  Node and Claude Code. Each takes an `authorized_keys` beside its `setup.sh`,
+  and an optional `agent.env` of `NAME=value` lines, such as
+  `ANTHROPIC_API_KEY=…`, so keep a recipe with one private.
+- A tunnel that ends, say because its machine stopped, stays down until
+  `sandbox.ensureServer(id)` or a new `SandboxAgent.start`.
+- `effect`, `@effect/platform-node` and `sandbox-agent` are peer dependencies.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). Release bundles also carry Node's license and
-those of every production npm dependency under `notices/`.
+MIT, see [LICENSE](LICENSE).

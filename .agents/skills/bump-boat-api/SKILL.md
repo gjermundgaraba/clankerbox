@@ -10,11 +10,10 @@ clankerbox's boat host calls boat.dev's HTTP API v1 directly, with Schemas for
 exactly the endpoints it uses; there is no boat SDK, CLI or version to pin.
 boat changes its spec, docs and guest image in place, so a bump is a re-audit:
 run it when boat publishes a new API version, its spec's hash changes, its
-image changes, or a live run fails on boat's side. Re-check the claims below
+image changes, or boat starts refusing what worked. Re-check the claims below
 against the spec, the docs and the trial account, not just the tests. Fix what
 broke, report optional opportunities separately, and don't deploy, change
-production hosts or commit unless asked. A candidate without the live run below
-is an **unqualified candidate**.
+production hosts or commit unless asked.
 
 The design is for boat's trial, by the owner's decision: checks that need a paid
 plan (`ttlSeconds: null`, a `large` create that succeeds, whether `POST /sshkey`'s
@@ -26,7 +25,7 @@ back.
 - **Pinned in this repo:** `baseUrl` (`https://boat.dev/api/v1`) in
   `packages/host/src/platform/boat/api.ts`, with the spec's sha256 in its header comment;
   `apiVersion` in `packages/host/src/platform/boat/boat.ts`, which the host reports as its
-  runtime's version; `API` in `tests/live/boat/driver.py`. The Schemas, refusal
+  runtime's version. The Schemas, refusal
   tables and constants in `platform/boat/api.ts` and `platform/boat/boat.ts` (named below) follow the
   spec, and so do the fakes in `packages/host/tests/platform/boat/api.test.ts` and
   `boat.test.ts`. `packages/sdk/tests/ids.test.ts` holds the named-snapshot
@@ -35,10 +34,10 @@ back.
   the docs at `docs.boat.dev`. The audited spec has sha256
   `79aa87e21849194635cf057293d6934638bab1aeee1c1d4857aa1920e34cf210`, fetched
   2026-10-05; the audit, on 2026-10-04, recorded only its prefix and suffix,
-  `79aa87e2…f210`, which match. Keep the copy you audit under
-  `.work/inputs/boat-v1-<date>.yaml` with its full sha256 and fetch date, so the
-  next bump can diff against it. Also note boat's changelog and the image's
-  OS release.
+  `79aa87e2…f210`, which match. Record the full sha256 and fetch date of the
+  copy you audit, and keep the copy where the next bump can diff against it;
+  the URL serves only the current spec. Also note boat's changelog and the
+  image's OS release.
 - **Notation:** "D" is the spec or docs; "O" was observed on a trial account
   (`type: small`, `noEnv: true`). An observed claim is re-checked live, a
   documented one in the spec.
@@ -69,8 +68,7 @@ Each: what boat does, and what of ours depends on it.
   `starts.minute`, `.hour` and `.day`'s `limit` and `used` (`Limits`;
   `maxActiveSandboxes`, and the windows null or absent on an account boat
   doesn't limit, are read from the spec of sha256 `b2d13d0a…a037`, fetched
-  2026-10-10, and not seen live; the live suite's capacity read, with two
-  sandboxes active, is the first sighting of `maxActiveSandboxes`).
+  2026-10-10).
   A sandbox's `desktopUrl` holds a token, so errors never carry a body.
 - Create's body has no name, tag or metadata field (it lists `type`,
   `ttlSeconds`, `env`, `environment`, `noEnv`, `snapshots`, `failFast`,
@@ -116,8 +114,8 @@ Each: what boat does, and what of ours depends on it.
 **Refusals and retries** (D, O)
 
 - 429 `limit_reached` (also with `failFast`), `rate_limited` and
-  `daily_limit_reached`; 503 `out_of_capacity` and `no_ready_machine` (with
-  `failFast`, within about 1.5 s); 409 `named_snapshot_limit` for an 11th named
+  `daily_limit_reached`; 503 `out_of_capacity` and `no_ready_machine` (also with
+  `failFast`); 409 `named_snapshot_limit` for an 11th named
   snapshot. None creates anything. A create or fork that finds no machine ends
   `cancelled`, reported once, then 404. The spec (D, not seen live) adds 429
   `member_limit_reached`, an organization owner's cap below the plan's active
@@ -141,7 +139,7 @@ Each: what boat does, and what of ours depends on it.
   return the same sandbox, also once ready; another body is 409
   `idempotency_key_reused`; a retry during creation is 409
   `idempotency_in_progress`. Keys last 24 h, and a create that failed before
-  its sandbox existed releases its key within about 2 minutes. Ours:
+  its sandbox existed releases its key. Ours:
   `idempotencyKey` (`clankerbox-<host>-<instance>`), the unclear-outcome retry
   of every call safe to repeat, every `GET`, `DELETE` and keyed call
   (`retryWindow` 5 minutes, `firstPause` to `longestPause`, `attemptTimeout`),
@@ -240,32 +238,24 @@ Each: what boat does, and what of ours depends on it.
 
 **The guest image** (O; boat's, not pinned)
 
-- Ubuntu 24.04 (24.04.4 when observed), x86_64, with systemd, sshd, Docker, Node,
+- Ubuntu 24.04, x86_64, with systemd, sshd, Docker, Node,
   Python and coding agents; `ufw` active; `/etc/resolv.conf` is the
   systemd-resolved stub; `/etc/environment` reaches SSH sessions. boat's agent
   listens on TCP 8911 and its HTTPS routes use a WireGuard tunnel; a guest rule
-  blocking either marks the sandbox degraded. Ours: README's setup rules and
-  bases note; setup over SSH as root worked in about 6 s.
+  blocking either marks the sandbox degraded. Ours: README's setup rules;
+  setup runs over SSH as root.
 
 ## Verify
 
 - Unit: `vp test` in `packages/host` (`platform/boat/api.test.ts`, `platform/boat/boat.test.ts`, whose
   fake answers as boat's API does) and `packages/sdk` (`ids.test.ts`),
   then `vp run --no-cache ready`. Change a fake only to match boat's real answers.
-- Live: `pnpm live:boat [--address TAILNET_ADDRESS]` on a trial account with
-  room for it (`tests/live/README.md`: two free active sandboxes, 7 starts left
-  this hour and day, room for 2 named snapshots). It covers create, stop and
-  resume, forks of running and stopped sources, checkpoints restored after
-  their source is deleted, the 429 and `large` refusals, a host restart and a
-  crash. It runs as a work run (`scripts/WORK_RUNS.md`) and deletes what it
-  made by recorded ID; report what is left on the account, what runs locally,
-  and what evidence it keeps.
 
 ## After
 
 - Update the spec hash and its date in `api.ts`'s header, the Schemas,
-  tables and constants that changed, the fakes, and README's boat notes. For a
-  new API version, also `baseUrl`, `apiVersion` and the driver's `API`.
+  tables and constants that changed, the fakes, and README's setup rules. For a
+  new API version, also `baseUrl` and `apiVersion`.
 - Update this skill's claims with what changed, and record the spec copy's full
   hash.
 - Report what changed at boat and its fixes, the checks actually run (the

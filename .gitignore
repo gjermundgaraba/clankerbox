@@ -1,6 +1,5 @@
 node_modules/
 dist/
-/.work/
 /tools/release/cache/
 *.sqlite*
 __pycache__/

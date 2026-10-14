@@ -64,8 +64,7 @@ const throttledPause = Duration.seconds(65);
 const throttledRepeats = 2;
 
 /**
- * A create answers in about 0.2 s and a stop in well under a second; a hung connection must not
- * hold an action forever.
+ * A hung connection must not hold an action forever.
  */
 const attemptTimeout = Duration.minutes(2);
 

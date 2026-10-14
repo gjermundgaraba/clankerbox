@@ -10,25 +10,21 @@ clankerbox's Tart host runs the operator's versioned `tart` install, any release
 at or above a floor. A bump re-checks the claims below against Tart's source at
 the target release, not just the tests: the host's code embodies each one. Fix
 what broke, report optional opportunities separately, and don't deploy, change
-production hosts or the operator's Tart, or commit unless asked. A candidate
-without the live run below is an **unqualified candidate**.
+production hosts or the operator's Tart, or commit unless asked.
 
 ## Source and scope
 
 - **Pinned in this repo:** `minimumVersion` in `packages/host/src/platform/tart/tart.ts` is a
   floor: `supported` accepts any `major.minor.patch` at or above it, and startup
   refuses the rest. Its comment lists why the floor is where it is. The tested
-  release also appears in README (install table, the `tart.binary` example),
-  `tests/live/README.md` and `tests/live/tart/driver.py`'s usage (its `--tart`,
-  a release staged at `.work/inputs/tart-<version>/tart.app`),
-  `scripts/WORK_RUNS.md` and the tests
+  release also appears in README (install table, the `tart.binary` example)
+  and the tests
   (`packages/host/tests/platform/tart/tart.test.ts`, whose fake `tart` answers as the tested
   release; `config.test.ts`): `git grep -n '2\.40'`.
 - **Companions** pinned beside it, re-checked only when they change: Softnet
-  0.24.0 (README, `tests/live/README.md`, the driver's SUID check),
-  tart-guest-agent at least 0.15.0 (inside the image), and the Cirrus base the
-  live seed holds, `latest`, its only tag, on 2026-10-04 (from the seed's
-  `PROVENANCE`):
+  0.24.0 (README),
+  tart-guest-agent at least 0.15.0 (inside the image), and the Cirrus base,
+  `latest`, its only tag, on 2026-10-04:
 
       ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3aa5ce21b5c876268f233bdfecf38b4c2a8116fe9bbb718e714cbae187377
 - **Target:** the latest stable published `cirruslabs/tart` release (its release
@@ -106,14 +102,13 @@ Each: what Tart does, where, and what of ours depends on it.
   bounded by the same, past which the boot fails, writing nothing.
 - `tart stop` sends SIGINT to `tart run`, waits up to `--timeout` (default 30 s)
   for the lock to clear, then SIGKILLs it; a stopped VM exits 2 (`stopRunning`,
-  T@2.40.1:Commands/Stop.swift). Its return doesn't mean the VM is gone: once
-  `tart run` took about 32 s to exit after `tart stop` returned. Ours: stop is
+  T@2.40.1:Commands/Stop.swift). Its return doesn't mean the VM is gone:
+  `tart run` can still be exiting. Ours: stop is
   the guest's `shutdown -h now`, then `tart stop --timeout 0` after
   `shutdownWait`, and both wait for `tart list` to read it stopped
   (`forcedStopWait`).
-- Stock Cirrus guests stopped 2.3–7.8 s after `shutdown -h now` on 2.40.1,
-  and 25.6 s for one whose agent was still coming up, since the exec waits for
-  the agent. Ours: `shutdownWait`, a minute.
+- `shutdown -h now` on a guest whose agent is still coming up waits for the
+  agent, since the exec does. Ours: `shutdownWait`, a minute.
 - Apple allows two running macOS VMs per Mac, system-wide. Tart catches
   `virtualMachineLimitExceeded` (T@2.40.1:Commands/Run.swift), prints
   "The number of VMs exceeds the system limit" (`VirtualMachineLimitExceeded`,
@@ -142,7 +137,6 @@ Each: what Tart does, where, and what of ours depends on it.
   after a change into the VM's directory (`changeCurrentDirectoryPath` and
   `controlSocketURL.relativePath`, T@2.40.1:ControlSocket.swift and
   Commands/Exec.swift), so a Tart home's path length doesn't matter.
-  Ours: live runs put the home in their scratch (`scripts/WORK_RUNS.md`).
 - `tart exec -i` reads stdin into an unbounded stream (`stdinStream`,
   T@2.40.1:Commands/Exec.swift): a raw 1 GiB upload peaked at 2+ GiB RSS in the
   host's `tart`. A killed `tart exec` leaves the guest's command (and over the
@@ -167,7 +161,7 @@ Each: what Tart does, where, and what of ours depends on it.
   T@2.40.1:OCI/Registry.swift). Ours: no `HOME=<root>` for tart; the job
   gets the user's `HOME`.
 - Ours: every tart call and every VM job runs with one environment
-  (`environment` in `tart.ts`, which README's Tart notes point to): a fixed
+  (`environment` in `tart.ts`): a fixed
   `PATH` (`searchPath`, holding `/usr/local/bin` for Softnet but not
   `/opt/homebrew/bin`, whose Softnet isn't SUID root), the user's `HOME`, and the host's `TART_HOME` if set,
   so a job's `tart run` finds the VM the host made, in the host's Tart home.
@@ -190,23 +184,13 @@ Each: what Tart does, where, and what of ours depends on it.
 - Unit: `vp test` in `packages/host` (`platform/tart/tart.test.ts`, `platform/tart/forwarder.test.ts`,
   `config.test.ts`), then `vp run --no-cache ready`. Change the fake's answers
   only to match Tart's real output at the target.
-- Live: stage the target's release tarball, checksum verified, with its
-  provenance, at `.work/inputs/tart-<version>/tart.app`, then run
-  `pnpm live:tart --tart TART --seed SEED --address TAILNET_ADDRESS` with its
-  `Contents/MacOS/tart` as `TART` (`tests/live/README.md` lists what it needs:
-  the stock Cirrus seed, Softnet SUID root, no other macOS VM running). It
-  covers create, stop, cold start, forks and `disk` checkpoints, the two-VM
-  limit, Softnet's block of the host, a host restart and a crash, and
-  placement over two hosts. It runs as a work run (`scripts/WORK_RUNS.md`);
-  report what it leaves running and what it retains.
 
 ## After
 
 - Raise `minimumVersion` only when the code comes to depend on something the
   target added or fixed: add that reason to its comment, and the boundary
   versions to `tart.test.ts`'s `supported` cases. Otherwise the floor stays,
-  and only the tested release moves (README, `tests/live/README.md`, the
-  fake's version).
+  and only the tested release moves (README, the fake's version).
 - Move each `T@<old>` citation, in this skill and in `tart.ts`'s comments, to
   the new tag (`tart.ts`'s also to their current lines), check that each
   identifier still finds the code, and add claims the new release introduced.

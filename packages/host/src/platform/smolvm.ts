@@ -324,9 +324,8 @@ export const make = (
      * Touches nothing for a name smolvm doesn't know: a stop of an unknown name leaks an empty
      * `vms/<hash>/`. A scope still loaded after the stop holds a VMM that `machine delete` would
      * leave running, on the machine's port and outside the RAM budget: one whose stop failed, or
-     * whose boot was cut short before smolvm recorded its pid, so that smolvm reads it as stopped
-     * (seen live; the bump-smolvm skill). It is killed with the signal smolvm's own `kill_scope`
-     * uses.
+     * whose boot was cut short before smolvm recorded its pid, so that smolvm reads it as stopped.
+     * It is killed with the signal smolvm's own `kill_scope` uses.
      */
     const removeVm = (machine: MachineRef) =>
       Effect.gen(function* () {

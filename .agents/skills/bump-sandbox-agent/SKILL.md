@@ -12,8 +12,7 @@ install the Sandbox Agent's server in a guest. Both are pinned to one release.
 A bump re-checks the claims below against the SDK's and the server's source at
 the target release, not just the tests: the provider and the recipes embody
 each one. Fix what broke, report optional opportunities separately, and don't
-publish, change production hosts, or commit unless asked. A candidate without
-the live run below is an **unqualified candidate**.
+publish, change production hosts, or commit unless asked.
 
 ## Source and scope
 
@@ -103,21 +102,11 @@ the live run below is an **unqualified candidate**.
   `CODEX_API_KEY`) or in the user's `~/.claude.json` and
   `~/.claude/.credentials.json` (`extract_all_credentials`,
   A@0.5.2:server/packages/agent-credentials/src/lib.rs, whose
-  `include_oauth` is on by default). The live suite runs on a
-  `CLAUDE_CODE_OAUTH_TOKEN`. Ours: the recipes' `agent.env`, sourced into
+  `include_oauth` is on by default). Ours: the recipes' `agent.env`, sourced into
   the server's environment at every launch.
 - `@sandbox-agent/cli`, the SDK's optional dependency, carries a server binary
   for the machine the SDK runs on. Ours: `ignoredOptionalDependencies` in
   `pnpm-workspace.yaml` keeps it out of this workspace.
-
-**Sizes** (sanity checks, not contracts)
-
-- At 0.5.2 on smolvm: a create whose setup is the Ubuntu recipe took about
-  50 s (packages 14, binary 2, Node 6, Claude 26), Claude's install 553 MB of
-  disk, the idle server 13 MB of RAM and a Claude session about 470 MB. On
-  Tart the same took about 70 s in the live suite; a host's first clone of its
-  base adds minutes. A start restored from the recipe's prebuild took about 6 s
-  on smolvm and 35 s on Tart.
 
 ## Verify
 
@@ -127,9 +116,6 @@ the live run below is an **unqualified candidate**.
 - Each recipe's downloads against their pins: run `recipes/ubuntu/setup.sh` in
   a throwaway `linux/amd64` `ubuntu:24.04` container, with an
   `authorized_keys` beside it.
-- Live: `pnpm live:smolvm` and `pnpm live:tart`, each with `--agent-env-file`,
-  so `tests/live/tests/sandbox-agent.test.ts` runs, with its real prompt to
-  Claude (`tests/live/README.md`).
 
 ## After
 

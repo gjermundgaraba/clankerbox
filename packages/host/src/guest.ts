@@ -83,7 +83,7 @@ const runInGuest = (
 /**
  * The script arrives on stdin, so it never appears in a process list. `/var/tmp` is never
  * mounted `noexec`. A killed exec may leave the file: smolvm SIGKILLs the guest command and its
- * descendants, so no trap runs (seen live; the bump-smolvm skill).
+ * descendants, so no trap runs.
  */
 const setupRunner = [
   "set -eu",

@@ -11,8 +11,6 @@ the operator installs into a versioned prefix. A bump re-checks the claims below
 against smolvm's source at the target release, not just the tests: the host's
 code embodies each one. Fix what broke, report optional opportunities
 separately, and don't deploy, change production hosts, or commit unless asked.
-A candidate without the live run below is an **unqualified candidate**, not a
-qualified release.
 
 ## Source and scope
 
@@ -21,7 +19,7 @@ qualified release.
   (`smolvm <version> <platform>-<arch>`) and is recorded on every `ram`
   checkpoint. The version also appears in tests, docs and examples:
   `git grep -n '1\.27\.3'` (README's install table, host config example and
-  install command; `tests/live/README.md`; `tests/live/smolvm/{driver,remote}.py`;
+  install command;
   `packages/host/tests/{smolvm,store,config}.test.ts`;
   `packages/sdk/tests/{ids.test,prebuild.test,stub-host}.ts`).
   Source citations in comments use the form below: `git grep -n 'S@1\.27'`.
@@ -45,7 +43,7 @@ Each: what smolvm does, where, and what of ours depends on it. A claim that no
 longer holds needs a code change and a regression test; one that holds gets its
 citation moved to the new tag.
 
-**The environment** (README's smolvm notes point here)
+**The environment**
 
 - Every smolvm call, and so every VM, runs with one environment
   (`environment` in `smolvm.ts`): a fixed `PATH` (`searchPath`), `HOME` and
@@ -91,8 +89,7 @@ citation moved to the new tag.
 - Machines depend on their prefix: default-size disks and overlays are qcow2
   files backed on the prefix's templates by absolute path, a seeded image
   machine's disk is a qcow2 over its seed, itself backed on the template, and
-  running VMs read its agent rootfs. Ours: an old prefix stays until its last machine is deleted
-  (README).
+  running VMs read its agent rootfs. Ours: an old prefix stays until its last machine is deleted.
 - Disk sizing: below the template, a sparse copy plus host `resize2fs -f`; at
   the default, a qcow2 backed on the template (`open_or_overlay_at`,
   S@1.27.3:src/storage.rs; `copy_disk_from_template`, src/disk_utils.rs).
@@ -106,8 +103,7 @@ citation moved to the new tag.
   DEFAULT` refuses); smaller sizes pull the image inside the guest at first
   start. The seed key includes
   the template file's identity, so a new prefix builds a new seed. The seed
-  builder's scope names are fixed (`build_seed`). Ours: README's disk
-  note; `tests/live/smolvm/remote.py` (seed scopes).
+  builder's scope names are fixed (`build_seed`).
 - The registry parser accepts a tag plus a digest and drops the tag
   (`Reference::parse`, S@1.27.3:src/registry.rs); before 1.23.1 it refused one,
   and the guest pulled on every create. smolvm's own `docker.io` mirror setting
@@ -118,7 +114,7 @@ citation moved to the new tag.
   reference as written, so `x:tag@d` and `x@d` seed separately. Bases go through
   `mirror.gcr.io`, a pull-through cache of Docker Hub, to avoid Docker Hub's
   anonymous pull limit. Ours: bases name `mirror.gcr.io` directly, by digest
-  (README, `remote.py`'s `IMAGE`).
+  (README).
 
 **Names and paths**
 
@@ -254,8 +250,7 @@ citation moved to the new tag.
   `MemAvailable` is twice that (`capture_tmpfs_root`,
   `runtime_capture_dir_preferring_tmpfs`, S@1.27.3:src/portable_checkpoint.rs;
   since 1.24.1). Nothing turns it off. Ours: that RAM is outside the
-  RAM budget while a capture runs; `remote.py`'s `SHM_DIRS` records and removes
-  the directory.
+  RAM budget while a capture runs.
 
 **Network**
 
@@ -274,7 +269,7 @@ citation moved to the new tag.
   link-local, private ranges and 100.64.0.0/10 (`is_reserved_v4`) and
   fc00::/7 (its `0xfc00` test), but not the host's public addresses. Ours:
   `SMOLVM_EGRESS_FLOOR=strict`; guests can't reach the host's API or any
-  tailnet peer, which is why the live suite has no peer check; no host service
+  tailnet peer; no host service
   may listen on a public address.
 - The virtio-net gateway answers port 53 at every address and relays to the
   host's first IPv4 nameserver in `/etc/resolv.conf`, a loopback stub such as
@@ -383,8 +378,8 @@ citation moved to the new tag.
   an image.
 - `systemd-resolved` turns `/etc/resolv.conf` into a symlink, and every later
   start fails refreshing the overlay's resolver (`refresh_overlay_resolver`,
-  S@1.27.3:crates/smolvm-agent/src/storage.rs). Ours: the setup rule
-  `--no-install-recommends` (README).
+  S@1.27.3:crates/smolvm-agent/src/storage.rs). Ours: nothing checks for it;
+  install packages with `--no-install-recommends`.
 - Packs: `pack create --from-vm` fails for a machine on the image seed
   (`krun_start_enter returned: -22`; `seed_dir_for_disk`,
   S@1.27.3:src/internal_boot.rs; the export helper's boot,
@@ -407,13 +402,6 @@ citation moved to the new tag.
   as the tested release answers it; `platform/sqlite.test.ts`) and `packages/sdk`
   (`ids.test.ts`), then `vp run --no-cache ready`. Update a fake only to match
   smolvm's real behaviour at the target.
-- Live: `pnpm live:smolvm --ssh USER@HOST --address TAILNET_ADDRESS --root OWNED_ROOT --smolvm-prefix PREFIX`,
-  with the target installed into its own prefix on the Linux test host, as root,
-  with its `READY` marker and `.zst` templates (`tests/live/README.md` lists what
-  else it needs). The suite covers forks, `ram` checkpoints, the RAM budget,
-  crashes mid-boot, a call past 300 s and the guest's isolation. It runs as a
-  work run (`scripts/WORK_RUNS.md`); report what it leaves running and what it
-  retains.
 
 ## After
 

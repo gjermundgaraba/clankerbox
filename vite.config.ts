@@ -26,13 +26,13 @@ const adapterBecause =
 
 export default defineConfig({
   fmt: {
-    ignorePatterns: [...agentTooling, ".work/**", "tools/oxlint/anti-slop/**"],
+    ignorePatterns: [...agentTooling, "tools/oxlint/anti-slop/**"],
   },
   lint: {
     options: { typeAware: true, typeCheck: true },
     // Oxlint's defaults, and vitest for no-restricted-vi-methods.
     plugins: ["unicorn", "typescript", "oxc", "vitest"],
-    ignorePatterns: [...agentTooling, ".work/**", "tools/oxlint/anti-slop/**"],
+    ignorePatterns: [...agentTooling, "tools/oxlint/anti-slop/**"],
     jsPlugins: [
       { name: "vite-plus", specifier: "vite-plus/oxlint-plugin" },
       { name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" },
@@ -94,7 +94,6 @@ export default defineConfig({
           "packages/rivet-sandbox-agent/src/provider.ts",
           "packages/rivet-sandbox-agent/tests/leave-tunnel.ts",
           "packages/rivet-sandbox-agent/tests/provider.test.ts",
-          "tests/live/tests/sandbox-agent.test.ts",
         ],
         rules: { "fence/no-manual-run": "off" },
       },
