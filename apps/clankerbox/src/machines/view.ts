@@ -1,4 +1,4 @@
-import { Checkpoint, formatMib, Machine } from "@gjermundgaraba/clankerbox-sdk";
+import { Checkpoint, formatMib, Machine, stateLabel } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Schema } from "effect";
 import { age } from "../units.ts";
 
@@ -9,8 +9,6 @@ export const actionLabel = ({ action }: Machine | Checkpoint) =>
 
 export const actionError = ({ action }: Machine | Checkpoint) =>
   action.status === "failed" ? action.error.message : "-";
-
-export const stateLabel = ({ state, made }: Machine) => (made ? state : `${state} (unmade)`);
 
 const machineColumns: ReadonlyArray<
   readonly [label: string, cell: (machine: Machine, now: DateTime.Utc) => string]

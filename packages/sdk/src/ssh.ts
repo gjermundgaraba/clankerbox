@@ -1,5 +1,6 @@
 import { Effect, FileSystem, Path, type PlatformError, type Scope } from "effect";
-import type { Machine, SshLogin } from "./resources.ts";
+import { Precondition } from "./errors.ts";
+import { type Machine, type SshLogin, stateLabel } from "./resources.ts";
 
 export interface SshTarget {
   readonly id: string;
@@ -7,17 +8,24 @@ export interface SshTarget {
   readonly hostKey: string;
 }
 
-/** Only a running machine has an endpoint, and only a prepared one a host key. */
-export const sshTarget = (
-  machine: Machine,
-): SshTarget | { readonly lacks: "SSH endpoint" | "SSH host key on record" } => {
-  const { id, ssh: login, hostKey } = machine;
+/**
+ * Only a running machine has an endpoint, and only a prepared one a host key; a machine without
+ * either is `Precondition`, naming what it lacks and why.
+ */
+export const sshTarget = (machine: Machine): Effect.Effect<SshTarget, Precondition> => {
+  const { id, ssh: login, hostKey, action } = machine;
 
-  if (login === undefined) {
-    return { lacks: "SSH endpoint" };
+  if (login !== undefined && hostKey !== undefined) {
+    return Effect.succeed({ id, login, hostKey });
   }
 
-  return hostKey === undefined ? { lacks: "SSH host key on record" } : { id, login, hostKey };
+  const lacks = login === undefined ? "SSH endpoint" : "SSH host key on record";
+
+  return Effect.fail(
+    new Precondition({
+      message: `${id} has no ${lacks} (${stateLabel(machine)}, ${action.name} ${action.status}): see clankerbox get ${id}`,
+    }),
+  );
 };
 
 /**

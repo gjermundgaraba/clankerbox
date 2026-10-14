@@ -135,13 +135,7 @@ export const make = (options: Options, ssh = "ssh") => {
       yield* closed(known);
 
       const client = yield* Client.Client;
-      const target = sshTarget(yield* client.machine(id));
-
-      if ("lacks" in target) {
-        return yield* new Precondition({
-          message: `${id} has no ${target.lacks}, which its tunnel needs: see clankerbox get ${id}`,
-        });
-      }
+      const target = yield* sshTarget(yield* client.machine(id));
 
       const port = yield* portOf(known);
       const scope = yield* Scope.make();
@@ -249,7 +243,7 @@ export const make = (options: Options, ssh = "ssh") => {
           const client = yield* Client.Client;
 
           yield* closed(known);
-          yield* Effect.catchTag(client.delete(id), "NotFound", () => Effect.void);
+          yield* client.delete(id);
           known.port = undefined;
         }),
       ),

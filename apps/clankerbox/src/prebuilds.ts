@@ -11,14 +11,19 @@ export const prebuild = Command.make("prebuild", { ...mutationFlags, ...specArgu
     call: (client, config) =>
       Effect.gen(function* () {
         const { spec, host } = yield* flagsRequest("prebuild", flags, config);
+        const { setup } = spec;
 
-        if (spec.setup === undefined) {
+        if (setup === undefined) {
           return yield* new Invalid({
             message: "prebuild needs a setup: pass --setup, or a profile that has one",
           });
         }
 
-        const { checkpoint, built, leftover } = yield* Prebuild.build(client, spec, { host });
+        const { checkpoint, built, leftover } = yield* Prebuild.build(
+          client,
+          { ...spec, setup },
+          { host },
+        );
 
         if (leftover !== undefined) {
           yield* Console.error(

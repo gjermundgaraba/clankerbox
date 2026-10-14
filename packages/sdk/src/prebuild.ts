@@ -1,8 +1,8 @@
 import { Effect, Option } from "effect";
 import type * as Client from "./client.ts";
-import { type ClankerboxError, Invalid, Precondition } from "./errors.ts";
+import { type ClankerboxError, Precondition } from "./errors.ts";
 import { formatId } from "./ids.ts";
-import type { Checkpoint, Host, Machine, MachineSpec } from "./resources.ts";
+import type { Checkpoint, Host, Machine, MachineSpec, Setup } from "./resources.ts";
 
 const prefix = "prebuilt-";
 
@@ -102,14 +102,10 @@ export interface Built {
  */
 export const build = (
   client: Client.Interface,
-  spec: MachineSpec,
+  spec: MachineSpec & { readonly setup: Setup },
   options?: Client.CreateOptions,
 ): Effect.Effect<Built, ClankerboxError> =>
   Effect.gen(function* () {
-    if (spec.setup === undefined) {
-      return yield* new Invalid({ message: "a prebuild needs a setup" });
-    }
-
     const host = yield* client.place(spec.base, options);
     const name = yield* nameOf(spec, host);
     const id = yield* formatId(host.id, name);
@@ -127,7 +123,7 @@ export const build = (
 
     const builder = `prebuilding-${hex(globalThis.crypto.getRandomValues(new Uint8Array(builderBytes)))}`;
     const builderId = yield* formatId(host.id, builder);
-    const removal = Effect.catchTag(client.delete(builderId), "NotFound", () => Effect.void);
+    const removal = client.delete(builderId);
 
     const checkpoint = yield* Effect.gen(function* () {
       yield* client.create(builder, spec, { host: host.id });

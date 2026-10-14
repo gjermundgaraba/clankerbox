@@ -251,12 +251,14 @@ export const printResource = <A, Encoded extends object, R>(
 
 export const newId = ({ id }: { readonly id: string }) => id;
 
-export const deleted = (json: boolean, id: string, removal: Effect.Effect<void, ClankerboxError>) =>
+export const deleted = (
+  json: boolean,
+  id: string,
+  removal: Effect.Effect<Client.Deleted, ClankerboxError>,
+) =>
   removal.pipe(
-    Effect.as(false),
-    Effect.catchTag("NotFound", () => Effect.succeed(true)),
-    Effect.flatMap((gone) =>
-      gone && !json
+    Effect.flatMap((outcome) =>
+      outcome === "absent" && !json
         ? Console.error(`clankerbox: ${id} was already gone`)
         : print(
             json,

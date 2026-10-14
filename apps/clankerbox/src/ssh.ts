@@ -1,32 +1,13 @@
-import {
-  type Machine,
-  pinnedSsh,
-  Precondition,
-  type SshTarget,
-  sshTarget,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { pinnedSsh, type SshTarget, sshTarget } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
 import { Argument, Command } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { clientFlags, Exited, fail, SpawnFailed, withClient } from "./command.ts";
-import { stateLabel } from "./machines/view.ts";
 
 const destination = (machine: string): { readonly id: string; readonly user?: string } => {
   const at = machine.lastIndexOf("@");
 
   return at < 1 ? { id: machine } : { id: machine.slice(at + 1), user: machine.slice(0, at) };
-};
-
-const targetOf = (machine: Machine): Effect.Effect<SshTarget, Precondition> => {
-  const target = sshTarget(machine);
-
-  return "lacks" in target
-    ? Effect.fail(
-        new Precondition({
-          message: `${machine.id} has no ${target.lacks} (${stateLabel(machine)}, ${machine.action.name} ${machine.action.status}): see clankerbox get ${machine.id}`,
-        }),
-      )
-    : Effect.succeed(target);
 };
 
 const runSsh = (target: SshTarget, user: string, extra: ReadonlyArray<string>) =>
@@ -67,7 +48,7 @@ export const ssh = Command.make(
       const { id, user } = destination(flags.machine);
 
       const target = yield* withClient(flags, (client) =>
-        Effect.flatMap(client.machine(id), targetOf),
+        Effect.flatMap(client.machine(id), sshTarget),
       );
 
       const code = yield* runSsh(target, user ?? target.login.user, flags.args).pipe(
