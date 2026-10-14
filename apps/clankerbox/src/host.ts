@@ -5,7 +5,7 @@ import { runtimeLayer } from "@clankerbox/host/runtimes";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Layer } from "effect";
 import { Command, Flag } from "effect/cli";
-import { fail } from "./command.ts";
+import { failText } from "./command.ts";
 
 const run = (file: string) =>
   Effect.gen(function* () {
@@ -30,5 +30,5 @@ export const host = Command.make(
       Flag.withDescription("The host config file: its ID, runtime, address, state dir and bases."),
     ),
   },
-  ({ config }) => run(config).pipe(Effect.catch(fail(false))),
+  ({ config }) => run(config).pipe(Effect.catch(failText)),
 ).pipe(Command.withDescription("Run a clankerbox host, until it is stopped."));

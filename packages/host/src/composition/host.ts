@@ -15,9 +15,6 @@ import * as Sqlite from "../platform/sqlite.ts";
 import { routes } from "./routes.ts";
 import type { HostSettings } from "../settings.ts";
 import { type CannotStart, startup } from "../startup.ts";
-
-export { CannotStart } from "../startup.ts";
-
 import * as Store from "../store.ts";
 
 export type ServerLayer = Layer.Layer<
