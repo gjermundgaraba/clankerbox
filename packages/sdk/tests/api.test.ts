@@ -1,7 +1,7 @@
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { Http, Invalid } from "../src/index.ts";
+import { Http, Invalid, Usage } from "../src/index.ts";
 import { type StubHost, stubHost } from "./stub-host.ts";
 
 let host: StubHost | undefined;
@@ -107,4 +107,13 @@ test("a refused create's message doesn't carry its setup script", async () => {
 
   expect(answer.status).toBe(400);
   expect(answer.body.includes(marker)).toBe(false);
+});
+
+test("a capacity row has a sum or the machines it couldn't count, and needs one of them", () => {
+  const decode = Schema.decodeUnknownExit(Usage);
+  const row = { host: "linux", resource: "cpu" };
+
+  expect(decode({ ...row, used: 3 })._tag).toBe("Success");
+  expect(decode({ ...row, unread: ["linux_dev"] })._tag).toBe("Success");
+  expect(decode(row)._tag).toBe("Failure");
 });

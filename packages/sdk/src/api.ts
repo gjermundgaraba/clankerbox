@@ -3,7 +3,7 @@ import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Duration, Schema } from "effect";
 import { Capacity, Conflict, Internal, Invalid, NotFound, Precondition } from "./errors.ts";
 import { Id, Name } from "./ids.ts";
-import { Checkpoint, CreateRequest, Host, Limit, Machine } from "./resources.ts";
+import { Checkpoint, CreateRequest, Host, Machine, Usage } from "./resources.ts";
 
 /** A host bounds its own reads of runtime state under it, so a list answers in time. */
 export const readTimeout = Duration.seconds(10);
@@ -121,7 +121,7 @@ export const Http = ActionHttp.make(
       error: [Invalid, Precondition, Internal] as const,
       description:
         "Read the host's resources, how much of each is in use, and their limits. A machine whose state can't be read leaves the rows that count it unread; it fails when the runtime can't be read at all.",
-      success: Schema.Array(Limit),
+      success: Schema.Array(Usage),
     }),
   ],
   { prefix: "/api" },

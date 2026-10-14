@@ -12,7 +12,7 @@ import {
 } from "./errors.ts";
 import { formatId, HostId, parseId, parseName } from "./ids.ts";
 import { version, versionHeader } from "./release.ts";
-import type { Checkpoint, Host, Limit, Machine, MachineSpec } from "./resources.ts";
+import type { Checkpoint, Host, Machine, MachineSpec, Usage } from "./resources.ts";
 import { describeIssues } from "./text.ts";
 
 /** `id` is the host part of every ID the host holds. */
@@ -99,7 +99,7 @@ export interface Interface extends Calls {
   readonly machines: Effect.Effect<Gathered<Machine>>;
   readonly checkpoints: Effect.Effect<Gathered<Checkpoint>>;
   /** A host whose runtime couldn't be read is among the unreachable. */
-  readonly capacity: Effect.Effect<Gathered<Limit>>;
+  readonly capacity: Effect.Effect<Gathered<Usage>>;
   /** The host a create of `base` goes to, read even when `options.host` names it. */
   readonly place: (
     base: string,

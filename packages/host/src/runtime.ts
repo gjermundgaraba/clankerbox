@@ -8,9 +8,9 @@ import {
   type Checkpoint,
   type Host,
   Internal,
-  type Limit,
   type Machine,
   Precondition,
+  type Reading,
   readTimeout,
   type Runtime as RuntimeName,
   type SshEndpoint,
@@ -120,8 +120,6 @@ export interface Held {
   readonly booting: boolean;
 }
 
-export type Usage = Omit<Limit, "host">;
-
 export interface Activation {
   readonly action: ActionName;
   /** Already claimed by the action. */
@@ -200,7 +198,7 @@ export interface Interface {
    */
   readonly capacity: (
     machines: ReadonlyArray<Held>,
-  ) => Effect.Effect<ReadonlyArray<Usage>, RuntimeError>;
+  ) => Effect.Effect<ReadonlyArray<Reading>, RuntimeError>;
   /** Returns once exec works. */
   readonly create: (machine: MachineRef, image: string) => Effect.Effect<void, RoomError | Refusal>;
   /**

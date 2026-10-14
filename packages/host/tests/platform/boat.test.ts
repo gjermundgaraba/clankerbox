@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { inspect } from "node:util";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
+import type { HostError, Reading } from "@gjermundgaraba/clankerbox-sdk";
 import {
   DateTime,
   Duration,
@@ -52,7 +52,6 @@ import {
   type MachineRef,
   Refusal,
   Runtime,
-  type Usage,
 } from "../../src/runtime.ts";
 import { servicesLayer } from "../../src/composition/host.ts";
 import type { HostSettings } from "../../src/settings.ts";
@@ -478,12 +477,7 @@ const rigOn = (boat = fakeBoat()) =>
     return rig;
   });
 
-/**
- * Until `waiting` resolves, each step of the test clock leaves a moment of real time for the
- * host's files and processes. After it, steps follow one another, so a wait of minutes doesn't
- * take minutes' worth of real moments on a loaded machine.
- */
-const limits = (maxActiveSandboxes: number, starts: Schema.Json): Answer => ({
+const limitsReply = (maxActiveSandboxes: number, starts: Schema.Json): Answer => ({
   status: 200,
   body: {
     ok: true,
@@ -497,6 +491,11 @@ const limits = (maxActiveSandboxes: number, starts: Schema.Json): Answer => ({
   },
 });
 
+/**
+ * Until `waiting` resolves, each step of the test clock leaves a moment of real time for the
+ * host's files and processes. After it, steps follow one another, so a wait of minutes doesn't
+ * take minutes' worth of real moments on a loaded machine.
+ */
 const timed = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>, waiting?: Promise<void>) =>
   Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(Effect.exit(Effect.scoped(effect)));
@@ -1913,7 +1912,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const rig = yield* rigOn();
 
-        let answer: Answer = limits(2, {
+        let answer: Answer = limitsReply(2, {
           unlimited: false,
           minute: { limit: 5, used: 0, remaining: 5 },
           hour: { limit: 25, used: 3, remaining: 22 },
@@ -1924,7 +1923,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const trial = yield* succeeds(rig.runtime.capacity([]));
 
-        answer = limits(100, { unlimited: true, minute: null, hour: null, day: null });
+        answer = limitsReply(100, { unlimited: true, minute: null, hour: null, day: null });
 
         const unlimited = yield* succeeds(rig.runtime.capacity([]));
 
@@ -1969,7 +1968,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "capacity's cpu and RAM are the host's running sandboxes, each the size of its type, and none when a sandbox can't be read: the unread are named instead",
+    "capacity's cpu and RAM are the host's running sandboxes, each the size of its type or, with none, as it asked, and none when a sandbox can't be read: the unread are named instead",
     () =>
       Effect.gen(function* () {
         const boat = fakeBoat({ instant: true });
@@ -1987,7 +1986,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         boat.hooks.answer = (sent) => {
           if (sent.path === "/limits") {
-            return limits(2, { unlimited: true, minute: null, hour: null, day: null });
+            return limitsReply(2, { unlimited: true, minute: null, hour: null, day: null });
           }
 
           return broken && sent.path.endsWith("/bx_up")
@@ -1995,15 +1994,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             : undefined;
         };
 
-        // `up` asks for 3 vCPU and runs as `default`; `new` has no sandbox yet and boots as `small`.
+        // `up` asks for 3 vCPU and runs as `default`; `new` has no sandbox yet and boots as
+        // `small`; no type covers `huge`, whose create is being refused, so it counts as it asked.
         const machines = [
           { machine: machineOn("up", { native: "bx_up", cpu: 3, ramMib: 6144 }), booting: false },
           { machine: machineOn("down", { native: "bx_down" }), booting: false },
           { machine: machineOn("new"), booting: true },
+          { machine: machineOn("huge", { cpu: 32 }), booting: true },
         ];
 
-        const rows = (limits: ReadonlyArray<Usage>) =>
-          limits.filter(({ resource }) => resource === "cpu" || resource === "ramMib");
+        const rows = (usage: ReadonlyArray<Reading>) =>
+          usage.filter(({ resource }) => resource === "cpu" || resource === "ramMib");
 
         const read = rows(yield* succeeds(rig.runtime.capacity(machines)));
 
@@ -2012,8 +2013,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const unread = rows(yield* succeeds(rig.runtime.capacity(machines)));
 
         expect(read).toEqual([
-          { resource: "cpu", used: 6 },
-          { resource: "ramMib", used: 12_288 },
+          { resource: "cpu", used: 38 },
+          { resource: "ramMib", used: 16_384 },
         ]);
         expect(unread).toEqual([
           { resource: "cpu", unread: ["boat_up"] },

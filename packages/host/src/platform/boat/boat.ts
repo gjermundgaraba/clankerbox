@@ -37,6 +37,7 @@ import {
   make as makeApi,
   type Sandbox,
   snapshotName,
+  typeFor,
 } from "./api.ts";
 import { sshKey } from "./key.ts";
 import { lastLines } from "../../guest.ts";
@@ -693,7 +694,8 @@ export const make = (
               concurrency: "unbounded",
             });
 
-          const sizes = yield* Effect.forEach(running, machineType);
+          // A machine no type covers is being refused at its admission: it counts as it asked.
+          const sizes = running.map((machine) => Option.getOrElse(typeFor(machine), () => machine));
 
           const windows = [
             ["startsPerMinute", starts?.minute],

@@ -97,23 +97,23 @@ type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 const sized = ({ cpu, ramMib, diskGib }: Sizes): string =>
   `${cpu} vCPU, ${formatMib(ramMib)} of RAM and ${diskGib}G of disk`;
 
-export const machineType = (sizes: Sizes): Effect.Effect<MachineType, Precondition> =>
-  Option.match(
-    Arr.findFirst(
-      machineTypes,
-      (type) =>
-        type.cpu >= sizes.cpu && type.ramMib >= sizes.ramMib && type.diskGib >= sizes.diskGib,
-    ),
-    {
-      onNone: () =>
-        Effect.fail(
-          new Precondition({
-            message: `no boat machine type has ${sized(sizes)}; the largest, ${largest.name}, has ${sized(largest)}`,
-          }),
-        ),
-      onSome: Effect.succeed,
-    },
+/** The smallest type that covers the sizes. */
+export const typeFor = (sizes: Sizes): Option.Option<MachineType> =>
+  Arr.findFirst(
+    machineTypes,
+    (type) => type.cpu >= sizes.cpu && type.ramMib >= sizes.ramMib && type.diskGib >= sizes.diskGib,
   );
+
+export const machineType = (sizes: Sizes): Effect.Effect<MachineType, Precondition> =>
+  Option.match(typeFor(sizes), {
+    onNone: () =>
+      Effect.fail(
+        new Precondition({
+          message: `no boat machine type has ${sized(sizes)}; the largest, ${largest.name}, has ${sized(largest)}`,
+        }),
+      ),
+    onSome: Effect.succeed,
+  });
 
 /**
  * Names are account-wide, so they carry the host ID and the row's instance; a host ID of at most

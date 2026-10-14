@@ -4,7 +4,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Checkpoint, Host, Limit, Machine } from "@gjermundgaraba/clankerbox-sdk";
+import { Checkpoint, Host, Machine, Usage } from "@gjermundgaraba/clankerbox-sdk";
 import { Schema } from "effect";
 import { afterAll, beforeAll, expect, test } from "vite-plus/test";
 
@@ -88,7 +88,7 @@ export const Checkpoints = Schema.fromJsonString(
 export const OneCheckpoint = Schema.fromJsonString(Checkpoint);
 
 export const Limits = Schema.fromJsonString(
-  Schema.Struct({ capacity: Schema.Array(Limit), unreachable: Unreachable }),
+  Schema.Struct({ capacity: Schema.Array(Usage), unreachable: Unreachable }),
 );
 
 export const Names = Schema.fromJsonString(Schema.Array(Schema.String));

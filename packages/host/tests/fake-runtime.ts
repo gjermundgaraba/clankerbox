@@ -9,8 +9,7 @@ import { join } from "node:path";
 import { Capacity, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { checkRamBudget } from "../src/ram-budget.ts";
-import { allotted, inUse } from "../src/usage.ts";
+import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
 import {
   type Activation,
   type CheckpointKind,

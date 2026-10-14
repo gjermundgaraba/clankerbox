@@ -5,10 +5,10 @@ import {
   type HostError,
   Internal,
   isReady,
-  type Limit,
   type Machine,
   Precondition,
   type Setup,
+  type Usage,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Array as Arr,
@@ -66,7 +66,7 @@ export interface Interface {
    * Unlike a machine's state, this is all the reply holds, so a runtime that can't be read fails
    * it; a machine it can't read makes only the rows that count it `unread`.
    */
-  readonly capacity: Effect.Effect<ReadonlyArray<Limit>, RuntimeError>;
+  readonly capacity: Effect.Effect<ReadonlyArray<Usage>, RuntimeError>;
 }
 
 export class Machines extends Context.Service<Machines, Interface>()("@clankerbox/host/Machines") {}
@@ -234,7 +234,9 @@ export const make = (
     const capacity = Effect.flatMap(heldRows, (machines) =>
       runtime.capacity(machines).pipe(
         inTime(`the ${runtime.name} runtime`),
-        Effect.map((limits) => limits.map((limit): Limit => ({ host: config.id, ...limit }))),
+        Effect.map((readings) =>
+          readings.map((reading): Usage => ({ host: config.id, ...reading })),
+        ),
       ),
     );
 

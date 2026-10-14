@@ -8,7 +8,6 @@ import { join } from "node:path";
 import { type HostError, Internal, Invalid, Precondition } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Layer, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
-import { checkRamBudget } from "../ram-budget.ts";
 import {
   type CheckpointRef,
   type Interface,
@@ -20,7 +19,7 @@ import {
   Runtime,
 } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
-import { allotted, inUse } from "../usage.ts";
+import { allotted, checkRamBudget, inUse } from "../usage.ts";
 import { cliIn, expect, failure, files, portOf } from "./process.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
