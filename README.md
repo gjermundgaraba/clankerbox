@@ -196,7 +196,8 @@ clankerbox checkpoint delete linux_base
 - `create` flags override the profile's fields one by one, `--setup` and
   `--setup-timeout` included; a setup that neither the flag nor the profile
   times gets the host's default. A create that fails can leave its machine
-  behind, unmade: `get` shows why, and `delete` removes it.
+  behind, unmade: `get` shows why until another action on it, and `delete`
+  removes it.
 - `prebuild` takes `create`'s flags and no name. It creates a machine, which
   runs the setup, captures it into a checkpoint named `prebuilt-<digest>`, and
   deletes the machine. A `create` with a setup then restores that checkpoint
@@ -627,9 +628,15 @@ is afterwards or a tagged error. Each runs in this order (`claims.ts`):
    machine that was never made.
 4. Only then call the runtime.
 
-- **An error before the first runtime call writes nothing:** the claims are
-  released, an inserted row removed, and a held row gets its last `action`
-  back.
+- **A row's `action`** is the last action that claimed it, and how it ended.
+- **An error before the first runtime call records only the failure:** the
+  claims are released, an inserted row removed, and a held row's `action`
+  records the action as `failed` with the error, as a start refused for
+  room reads `start failed: Capacity`. A fork or capture refused for its new
+  row's name records it on the source too, as `fork failed: Conflict`.
+- **A host's stop** fails what it cuts off as "the host stopped during …",
+  whichever step it reached. A check or runtime call that dies records
+  `Internal`, and only the host log has its cause.
 - **The refusal rule:** a runtime error the runtime knows created nothing
   native (a `Refusal` in `runtime.ts`) is handled the same way. Each runtime
   documents its list: a start of a machine the runtime no longer has, a fork
@@ -735,9 +742,9 @@ started. Neither is retryable.
   aren't serialized: smolvm and Tart take their own locks.
 - **The row comes before any native effect**, so after a crash `delete` has
   something to own.
-- **At startup** (`startup.ts`) every `running` action becomes `failed` ("host
-  restarted during …"), then the runtime does its own startup work, before the
-  API listens.
+- **At startup** (`startup.ts`) every `running` action becomes `failed` ("the
+  host stopped during …"), then the runtime does its own startup work, before
+  the API listens.
 
 ### Setup and preparation
 

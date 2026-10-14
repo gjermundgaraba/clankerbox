@@ -65,14 +65,10 @@ export type NewRow =
   | { readonly kind: "machine"; readonly record: NewMachine }
   | { readonly kind: "checkpoint"; readonly record: NewCheckpoint };
 
-export interface HeldRow extends RowRef {
-  readonly before: ActionRecord;
-}
-
 export interface Token {
   readonly action: ActionName;
   readonly inserted: ReadonlyArray<RowRef>;
-  readonly held: ReadonlyArray<HeldRow>;
+  readonly held: ReadonlyArray<RowRef>;
 }
 
 export interface Claim<A> {
@@ -114,18 +110,21 @@ export interface Interface {
     row: R,
     joining?: Token,
   ) => Effect.Effect<Token, Conflict | Internal>;
-  /** One transaction: its inserted rows go, its held rows get `before`. */
-  readonly release: (token: Token) => Effect.Effect<void, Internal>;
+  /** One transaction: its inserted rows go, and its held rows record `action`. */
+  readonly release: (token: Token, action: ActionRecord) => Effect.Effect<void, Internal>;
   /** One transaction; called once the runtime's work is done and before preparation. */
   readonly markMade: (token: Token) => Effect.Effect<void, Internal>;
   /** One transaction, recording `outcome` on every row of the claim. */
   readonly end: (token: Token, outcome: Outcome) => Effect.Effect<void, Internal>;
   readonly remove: (row: RowRef) => Effect.Effect<void, Internal>;
-  /** Marks every action still running failed: the last host process's end cut it off. */
+  /** Marks every action still running failed, `stoppedDuring` it: the last host's end cut it off. */
   readonly failInterrupted: Effect.Effect<void, Internal>;
 }
 
 export class Store extends Context.Service<Store, Interface>()("@clankerbox/host/Store") {}
+
+/** An action the host's stop cut off records this and its name, whatever phase it was in. */
+export const stoppedDuring = "the host stopped during ";
 
 export interface NativeIdRecorder {
   /**

@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Capacity, type HostError, Internal, Precondition } from "@gjermundgaraba/clankerbox-sdk";
-import { DateTime, Effect, Logger } from "effect";
+import { DateTime, Effect, Logger, Option } from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { claimsOn } from "../src/claims.ts";
@@ -115,7 +115,44 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a defect is logged with its cause, and the reply is Internal with its message alone",
+    "a check the host's stop cuts off records the stop on its held rows, and logs nothing",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = join(yield* scratch, "state");
+        const logged: Array<unknown> = [];
+
+        const action = yield* Effect.gen(function* () {
+          const store = yield* open({ stateDir, id: "linux", runtime: "smolvm" });
+          const { claimAndCheck } = claimsOn(store);
+          const { token } = yield* inserting(store);
+
+          yield* store.end(token, { action: { name: "create", status: "done" } });
+          yield* Effect.exit(
+            claimAndCheck(
+              store.hold("start", { kind: "machine", name: "dev" }),
+              () => Effect.interrupt,
+            ),
+          );
+
+          return Option.map(yield* store.find("dev"), (record) => record.action);
+        }).pipe(
+          Effect.scoped,
+          Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))])),
+        );
+
+        expect(action).toEqual(
+          Option.some({
+            name: "start",
+            status: "failed",
+            error: { tag: "Internal", message: "the host stopped during start" },
+          }),
+        );
+        expect(logged).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "a defect is logged with its cause, and the reply is Internal, which leaves it to the log",
     () =>
       Effect.gen(function* () {
         const { result, logged } = yield* withFailing(
@@ -128,7 +165,7 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(result).toEqual(
-          new Internal({ message: "create linux_dev died: Error: bad state" }),
+          new Internal({ message: "create linux_dev died; the host log has why" }),
         );
         expect(logged).toHaveLength(1);
         expect(String(logged[0])).toMatch(/^create linux_dev died:\nError: bad state\n\s+at /u);

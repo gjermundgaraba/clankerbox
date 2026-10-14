@@ -85,6 +85,7 @@ interface FakeMachine {
 
 type Injection =
   | { readonly kind: "fail"; readonly error: RuntimeError | Capacity | Refusal }
+  | { readonly kind: "die"; readonly message: string }
   | {
       readonly kind: "hold";
       readonly entered: Deferred.Deferred<void>;
@@ -135,6 +136,10 @@ export const fakeRuntime = (options: FakeOptions) => {
         yield* Deferred.succeed(injection.entered, undefined);
 
         return yield* Deferred.await(injection.until);
+      }
+
+      if (injection.kind === "die") {
+        return yield* Effect.die(new Error(injection.message));
       }
 
       // SAFETY: `failNext` queues only a `FailureOf<O>` for `O`.
@@ -365,6 +370,9 @@ export const fakeRuntime = (options: FakeOptions) => {
     stubs: () => stubs,
     failNext: <O extends Operation>(operation: O, error: FailureOf<O>) => {
       inject(operation, { kind: "fail", error });
+    },
+    dieNext: (operation: Operation, message: string) => {
+      inject(operation, { kind: "die", message });
     },
     failNextObserve: (error: RuntimeError) => {
       observeFailures.push(error);
