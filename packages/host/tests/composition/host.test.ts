@@ -71,7 +71,7 @@ layer(NodeServices.layer)((it) => {
       expect(machine.action).toEqual({
         name: "create",
         status: "failed",
-        error: { tag: "Internal", message: "host restarted during create" },
+        error: { tag: "Internal", message: "the host stopped during create" },
       });
     }),
   );

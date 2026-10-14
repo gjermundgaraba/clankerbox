@@ -77,6 +77,13 @@ const checkpoint = (name: string, fields?: Partial<NewCheckpoint>): NewCheckpoin
 
 const machine = (name: string): RowRef<"machine"> => ({ kind: "machine", name });
 
+/** What a release records on the rows its claim held. */
+const refused = (name: ActionRecord["name"]): ActionRecord => ({
+  name,
+  status: "failed",
+  error: { tag: "Capacity", message: "no room" },
+});
+
 const inserting = (made: NewMachine): NewRow => ({ kind: "machine", record: made });
 
 const forking = (store: Interface, source: string, made: NewMachine) =>
@@ -115,7 +122,7 @@ interface Held {
   readonly token: Token;
   readonly action: ActionRecord["name"];
   readonly inserted: ReadonlyArray<string>;
-  readonly held: ReadonlyArray<readonly [name: string, before: ActionRecord]>;
+  readonly held: ReadonlyArray<string>;
 }
 
 const outcome = (exit: Exit.Exit<unknown, { readonly _tag: string }>) =>
@@ -388,16 +395,12 @@ layer(NodeServices.layer)((it) => {
           action: { name: "stop", status: "running" },
         };
 
-        expect(claimed).toEqual([
-          [{ kind: "machine", name: "dev", before: { name: "create", status: "done" } }],
-          stopping,
-          stopping,
-        ]);
+        expect(claimed).toEqual([[{ kind: "machine", name: "dev" }], stopping, stopping]);
       }),
   );
 
   it.effect(
-    "a release removes the rows its claim inserted and puts back what it replaced, at once",
+    "a release removes the rows its claim inserted and records the failure on those it held, at once",
     () =>
       Effect.gen(function* () {
         const stateDir = join(yield* scratch, "state");
@@ -408,13 +411,13 @@ layer(NodeServices.layer)((it) => {
 
             const token = yield* forking(store, "dev", record("copy", { port: 10_001 }));
 
-            yield* store.release(token);
+            yield* store.release(token, refused("fork"));
 
             return (yield* store.list).map(({ name, action }) => [name, action]);
           }),
         );
 
-        expect(rows).toEqual([["dev", { name: "create", status: "done" }]]);
+        expect(rows).toEqual([["dev", refused("fork")]]);
       }),
   );
 
@@ -549,7 +552,7 @@ layer(NodeServices.layer)((it) => {
               source,
             );
 
-            yield* store.release(joined);
+            yield* store.release(joined, refused("capture"));
 
             return [
               taken,
@@ -563,11 +566,11 @@ layer(NodeServices.layer)((it) => {
           new Conflict({ message: "machine linux_other exists", kind: "exists" }),
         );
         expect(held).toEqual({ name: "capture", status: "running" });
-        expect(released).toEqual([{ name: "create", status: "done" }, []]);
+        expect(released).toEqual([refused("capture"), []]);
       }),
   );
 
-  it.effect("startup marks every running action failed: the host restarted during it", () =>
+  it.effect("startup marks every running action failed: the host stopped during it", () =>
     Effect.gen(function* () {
       const stateDir = join(yield* scratch, "state");
 
@@ -587,7 +590,7 @@ layer(NodeServices.layer)((it) => {
           {
             name: "create",
             status: "failed",
-            error: { tag: "Internal", message: "host restarted during create" },
+            error: { tag: "Internal", message: "the host stopped during create" },
           },
         ],
         ["b", { name: "create", status: "done" }],
@@ -672,7 +675,7 @@ layer(NodeServices.layer)((it) => {
         expect(token).toEqual({
           action: "capture",
           inserted: [{ kind: "checkpoint", name: "snap" }],
-          held: [{ kind: "machine", name: "dev", before: { name: "create", status: "done" } }],
+          held: [{ kind: "machine", name: "dev" }],
         });
         expect(Option.getOrUndefined(source)?.action).toEqual({
           name: "capture",
@@ -711,7 +714,7 @@ layer(NodeServices.layer)((it) => {
 
             const held = Option.getOrUndefined(yield* store.find("dev"))?.action;
 
-            yield* store.release(forked.token);
+            yield* store.release(forked.token, refused("fork"));
 
             const again = yield* store.hold("capture", machine("dev"));
 
@@ -723,7 +726,7 @@ layer(NodeServices.layer)((it) => {
               ),
             );
 
-            yield* store.release(again.token);
+            yield* store.release(again.token, refused("capture"));
 
             return [fork, capture, held, yield* store.find("dev")] as const;
           }),
@@ -736,7 +739,7 @@ layer(NodeServices.layer)((it) => {
           new Conflict({ message: "checkpoint linux_snap exists", kind: "exists" }),
         );
         expect(held).toEqual({ name: "fork", status: "running" });
-        expect(Option.getOrUndefined(source)?.action).toEqual({ name: "capture", status: "done" });
+        expect(Option.getOrUndefined(source)?.action).toEqual(refused("capture"));
       }),
   );
 
@@ -796,7 +799,7 @@ layer(NodeServices.layer)((it) => {
           {
             name: "capture",
             status: "failed",
-            error: { tag: "Internal", message: "host restarted during capture" },
+            error: { tag: "Internal", message: "the host stopped during capture" },
           },
         ]);
       }),
@@ -826,19 +829,19 @@ layer(NodeServices.layer)((it) => {
 
         /** What the model says a claim of `name` for `action` does, and does it to the model. */
         const claimed = (name: string, action: ActionRecord["name"]) => {
-          const before = rows.get(name);
+          const current = rows.get(name);
 
-          if (before === undefined) {
+          if (current === undefined) {
             return Result.fail("NotFound");
           }
 
-          if (before.status === "running") {
+          if (current.status === "running") {
             return Result.fail("Conflict busy");
           }
 
           rows.set(name, { name: action, status: "running" });
 
-          return Result.succeed(before);
+          return Result.void;
         };
 
         for (const step of steps) {
@@ -869,7 +872,7 @@ layer(NodeServices.layer)((it) => {
               token: exit.value.token,
               action: step.op,
               inserted: [],
-              held: [[source, before.success]],
+              held: [source],
             };
 
             if (step.op === "start") {
@@ -898,13 +901,13 @@ layer(NodeServices.layer)((it) => {
               continue;
             }
 
-            const names = [...claim.inserted, ...claim.held.map(([name]) => name)];
+            const names = [...claim.inserted, ...claim.held];
 
             if (step.op === "release") {
-              yield* store.release(claim.token);
+              yield* store.release(claim.token, refused(claim.action));
 
               claim.inserted.forEach((name) => rows.delete(name));
-              claim.held.forEach(([name, before]) => rows.set(name, before));
+              claim.held.forEach((name) => rows.set(name, refused(claim.action)));
             } else {
               const action: ActionRecord = step.failed
                 ? {

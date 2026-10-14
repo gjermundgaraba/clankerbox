@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:net";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Capacity, Conflict, type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Fiber, Option, Result } from "effect";
+import { Duration, Effect, Exit, Fiber, Option, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
@@ -251,7 +251,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "an admit whose reads don't answer within 9 s fails the check with Internal, writing nothing",
+    "an admit whose reads don't answer within 9 s fails the check with Internal, which the row records",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
@@ -275,8 +275,41 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "Internal",
           "start linux_dev: the smolvm runtime's admission check didn't answer within 9s",
         ]);
-        expect(row?.action).toEqual({ name: "stop", status: "done" });
+        expect(row?.action).toEqual({
+          name: "start",
+          status: "failed",
+          error: {
+            tag: "Internal",
+            message:
+              "start linux_dev: the smolvm runtime's admission check didn't answer within 9s",
+          },
+        });
         expect(linux.fake.calls).toEqual(["admit linux_dev"]);
+      }),
+  );
+
+  it.effect(
+    "a check that dies records Internal, whose message leaves the cause to the host log",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+        yield* linux.run(linux.machines.stop("linux_dev"));
+        linux.fake.dieNext("admit", "admit blew up");
+
+        const exit = yield* linux.run(Effect.exit(linux.machines.start("linux_dev")));
+        const [row] = yield* rows(linux);
+
+        expect(Exit.hasDies(exit)).toBe(true);
+        expect(row?.action).toEqual({
+          name: "start",
+          status: "failed",
+          error: {
+            tag: "Internal",
+            message: "start died; the host log has why",
+          },
+        });
       }),
   );
 
@@ -401,7 +434,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect("a check that fails on an existing row puts its last action back", () =>
+  it.effect("a check that fails on an existing row records the refusal on it", () =>
     Effect.gen(function* () {
       const linux = yield* host();
 
@@ -413,7 +446,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const [row] = yield* rows(linux);
 
       expect(error._tag).toBe("Capacity");
-      expect(row?.action).toEqual({ name: "stop", status: "done" });
+      expect(row?.action).toEqual({
+        name: "start",
+        status: "failed",
+        error: { tag: "Capacity", message: "no room" },
+      });
     }),
   );
 
@@ -525,22 +562,28 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect("start of a machine the runtime no longer has is Precondition and writes nothing", () =>
-    Effect.gen(function* () {
-      const linux = yield* host();
+  it.effect(
+    "start of a machine the runtime no longer has is Precondition, which the row records",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
 
-      yield* linux.run(linux.machines.create(request("dev")));
-      linux.fake.machines.clear();
+        yield* linux.run(linux.machines.create(request("dev")));
+        linux.fake.machines.clear();
 
-      const error = yield* failure(linux, linux.machines.start("linux_dev"));
-      const [row] = yield* rows(linux);
+        const error = yield* failure(linux, linux.machines.start("linux_dev"));
+        const [row] = yield* rows(linux);
 
-      expect([error._tag, error.message]).toEqual([
-        "Precondition",
-        "machine linux_dev is missing from the smolvm runtime; delete it",
-      ]);
-      expect(row?.action).toEqual({ name: "create", status: "done" });
-    }),
+        expect([error._tag, error.message]).toEqual([
+          "Precondition",
+          "machine linux_dev is missing from the smolvm runtime; delete it",
+        ]);
+        expect(row?.action).toEqual({
+          name: "start",
+          status: "failed",
+          error: { tag: "Precondition", message: error.message },
+        });
+      }),
   );
 
   it.effect("a second action on a claimed machine is Conflict{busy}", () =>
@@ -620,16 +663,42 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(got.action).toEqual({
         name: "create",
         status: "failed",
-        error: { tag: "Internal", message: "host restarted during create" },
+        error: { tag: "Internal", message: "the host stopped during create" },
       });
       expect(linux.fake.calls.filter((call) => call === "startup")).toHaveLength(2);
     }),
   );
 
-  const restartedDuringCreate = {
+  it.effect(
+    "a host stopped during a check records it on the held row, as during runtime work",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+        yield* linux.run(linux.machines.stop("linux_dev"));
+
+        const { entered } = linux.fake.holdNext("admit");
+
+        yield* Effect.forkChild(linux.machines.start("linux_dev"));
+        yield* entered;
+        yield* linux.dispose;
+
+        const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
+        const got = yield* restarted.run(restarted.machines.get("linux_dev"));
+
+        expect(got.action).toEqual({
+          name: "start",
+          status: "failed",
+          error: { tag: "Internal", message: "the host stopped during start" },
+        });
+      }),
+  );
+
+  const stoppedDuringCreate = {
     name: "create",
     status: "failed",
-    error: { tag: "Internal", message: "host restarted during create" },
+    error: { tag: "Internal", message: "the host stopped during create" },
   } as const;
 
   it.effect(
@@ -638,10 +707,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const linux = yield* host();
 
-        const neverMade = [
-          "Precondition",
-          "machine linux_dev was never made: its create, fork or restore failed; delete it",
-        ];
+        const unmade =
+          "machine linux_dev was never made: its create, fork or restore failed; delete it";
+
+        const neverMade = ["Precondition", unmade];
 
         // A setup that fails after the runtime's create leaves its VM running.
         const error = yield* failure(
@@ -684,7 +753,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(got).toMatchObject({
           state: "running",
           made: false,
-          action: { name: "create", status: "failed" },
+          action: { status: "failed", error: { tag: "Precondition", message: unmade } },
         });
         expect(stopped).toMatchObject({
           state: "stopped",
@@ -724,7 +793,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* restarted.run(restarted.machines.delete("linux_dev"));
 
-        expect(before).toMatchObject({ state: "running", action: restartedDuringCreate });
+        expect(before).toMatchObject({ state: "running", action: stoppedDuringCreate });
         expect(stopped).toMatchObject({
           state: "stopped",
           action: { name: "stop", status: "done" },
@@ -798,7 +867,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const [row] = yield* rows(restarted);
         const started = yield* restarted.run(restarted.machines.start("linux_dev"));
 
-        expect(row).toMatchObject({ made: true, action: restartedDuringCreate });
+        expect(row).toMatchObject({ made: true, action: stoppedDuringCreate });
         expect(started).toMatchObject({
           state: "running",
           action: { name: "start", status: "done" },

@@ -1,4 +1,5 @@
 import {
+  type ActionRecord,
   type Conflict,
   type HostError,
   Internal,
@@ -9,15 +10,16 @@ import {
 import { Cause, Effect, Fiber, Option, Ref } from "effect";
 import { idOn, type Kind, notFoundOn } from "./ids.ts";
 import { type CheckpointRef, type MachineRef, Refusal, type RoomError } from "./runtime.ts";
-import type {
-  CheckpointRecord,
-  Claim,
-  MachineRecord,
-  NewMachine,
-  NewRow,
-  Outcome,
-  Interface as StoreInterface,
-  Token,
+import {
+  type CheckpointRecord,
+  type Claim,
+  type MachineRecord,
+  type NewMachine,
+  type NewRow,
+  type Outcome,
+  stoppedDuring,
+  type Interface as StoreInterface,
+  type Token,
 } from "./store.ts";
 
 /** A read of one row: a malformed or another host's ID, no such row, or the store. */
@@ -77,33 +79,54 @@ export const checkpointRef = (
   port: record.port,
 });
 
+const failed = (token: Token, error: HostError): ActionRecord => ({
+  name: token.action,
+  status: "failed",
+  error: { tag: error._tag, message: error.message },
+});
+
+/** A defect is recorded as `Internal`, so its rows stay deletable; only the log has its cause. */
+const died = (what: string, cause: Cause.Cause<unknown>): Effect.Effect<Internal> =>
+  Effect.as(
+    Effect.logError(`${what} died:\n${Cause.pretty(cause)}`),
+    new Internal({ message: `${what} died; the host log has why` }),
+  );
+
+/** What a check that ended without its own error records: the host's stop, or a defect. */
+const ended = (token: Token, cause: Cause.Cause<HostError>): Effect.Effect<HostError> =>
+  Option.match(Cause.findErrorOption(cause), {
+    onSome: Effect.succeed,
+    onNone: () =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.succeed(new Internal({ message: `${stoppedDuring}${token.action}` }))
+        : died(token.action, cause),
+  });
+
 export const claimsOn = (store: StoreInterface) => {
-  const release = (token: Token) =>
+  /**
+   * Before any runtime work, so its inserted rows go and its held rows record the failure.
+   * Logged, not failed, so the action's own error stays the reply.
+   */
+  const release = (token: Token, error: HostError) =>
     store
-      .release(token)
+      .release(token, failed(token, error))
       .pipe(
-        Effect.catch((error) =>
-          Effect.logWarning(`couldn't release the rows of a ${token.action}: ${error.message}`),
+        Effect.catch((failure) =>
+          Effect.logWarning(`couldn't release the rows of a ${token.action}: ${failure.message}`),
         ),
       );
 
   /** Logged, not failed, so the action's own error stays the reply. */
   const endFailed = (token: Token, error: HostError) =>
     store
-      .end(token, {
-        action: {
-          name: token.action,
-          status: "failed",
-          error: { tag: error._tag, message: error.message },
-        },
-      })
+      .end(token, { action: failed(token, error) })
       .pipe(
         Effect.catch((failure) =>
           Effect.logWarning(`couldn't record the failure of a ${token.action}: ${failure.message}`),
         ),
       );
 
-  const claimAndCheck = <H, B, R, EClaim, ECheck>(
+  const claimAndCheck = <H, B, R, EClaim, ECheck extends HostError>(
     claim: Effect.Effect<Claim<H>, EClaim>,
     check: (
       held: H,
@@ -125,20 +148,20 @@ export const claimsOn = (store: StoreInterface) => {
           );
 
         const checked = yield* restore(check(held, join)).pipe(
-          Effect.onError(() => Effect.flatMap(Ref.get(claimed), release)),
+          Effect.onError((cause) =>
+            Effect.flatMap(Ref.get(claimed), (joined) =>
+              Effect.flatMap(ended(joined, cause), (error) => release(joined, error)),
+            ),
+          ),
         );
 
         return [yield* Ref.get(claimed), checked] as const;
       }),
     );
 
-  /** A defect is recorded as `Internal`, so its rows stay deletable; only the log has its cause. */
   const surviving = <A, E>(what: string, work: Effect.Effect<A, E>) =>
-    Effect.catchCauseFilter(work, Cause.findDefect, (defect, cause) =>
-      Effect.andThen(
-        Effect.logError(`${what} died:\n${Cause.pretty(cause)}`),
-        Effect.fail(new Internal({ message: `${what} died: ${String(defect)}` })),
-      ),
+    Effect.catchCauseFilter(work, Cause.findDefect, (_defect, cause) =>
+      Effect.flatMap(died(what, cause), Effect.fail),
     );
 
   const native = <A, E extends HostError>(
@@ -156,7 +179,7 @@ export const claimsOn = (store: StoreInterface) => {
   ): Effect.Effect<A, E | RoomError> =>
     Effect.catch(surviving(what, work), (error): Effect.Effect<never, E | RoomError> =>
       error instanceof Refusal
-        ? Effect.andThen(release(token), Effect.fail(error.error))
+        ? Effect.andThen(release(token, error.error), Effect.fail(error.error))
         : Effect.andThen(endFailed(token, error), Effect.fail(error)),
     );
 

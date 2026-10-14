@@ -2219,7 +2219,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "through the host: boat's refusals leave no row, and a refused start keeps the machine as it was",
+    "through the host: boat's refusals leave no row, and a refused start leaves the machine stopped, recording it",
     () =>
       Effect.gen(function* () {
         const boat = fakeBoat({ instant: true });
@@ -2260,7 +2260,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const after = yield* machines.get("boat_dev");
 
         expect(refusedStart._tag).toBe("Capacity");
-        expect([after.state, after.action]).toEqual(["stopped", { name: "stop", status: "done" }]);
+        expect([after.state, after.action]).toEqual([
+          "stopped",
+          {
+            name: "start",
+            status: "failed",
+            error: { tag: "Capacity", message: refusedStart.message },
+          },
+        ]);
       }),
   );
 

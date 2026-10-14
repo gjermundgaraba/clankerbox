@@ -26,7 +26,6 @@ import { idOn, type Kind, notFoundOn } from "../ids.ts";
 import type { HostSettings } from "../settings.ts";
 import {
   type CheckpointRecord,
-  type HeldRow,
   type Interface,
   type MachineRecord,
   NativeIds,
@@ -36,6 +35,7 @@ import {
   type Resource,
   type RowRef,
   Store,
+  stoppedDuring,
   type Token,
 } from "../store.ts";
 
@@ -452,7 +452,7 @@ export const open = (
       action: ActionName,
       row: RowRef<K>,
     ): Result.Result<
-      { readonly row: HeldRow; readonly record: Records[K] },
+      { readonly row: RowRef; readonly record: Records[K] },
       NotFound | Conflict
     > => {
       const { kind } = row;
@@ -462,12 +462,10 @@ export const open = (
         return Result.fail(notFound(kind, row.name));
       }
 
-      const before = found.action;
-
-      if (before.status === "running") {
+      if (found.action.status === "running") {
         return Result.fail(
           new Conflict({
-            message: `${kind} ${id(row.name)} is busy: ${before.name} is running`,
+            message: `${kind} ${id(row.name)} is busy: ${found.action.name} is running`,
             kind: "busy",
           }),
         );
@@ -478,7 +476,7 @@ export const open = (
       record(row, running);
 
       return Result.succeed({
-        row: { kind: row.kind, name: row.name, before },
+        row: { kind: row.kind, name: row.name },
         record: { ...found, action: running },
       });
     };
@@ -566,14 +564,14 @@ export const open = (
           })),
         ),
       ),
-      release: Effect.fn("Store.release")((token) =>
+      release: Effect.fn("Store.release")((token, action) =>
         transaction(db, `release ${named(token)} from ${token.action}`, () => {
           for (const row of token.inserted) {
             statements[row.kind].remove.run(row.name);
           }
 
           for (const row of token.held) {
-            record(row, row.before);
+            record(row, action);
           }
 
           return Result.void;
@@ -625,11 +623,11 @@ export const open = (
       ),
       failInterrupted: sql("fail interrupted actions", () => {
         for (const table of ["machines", "checkpoints"]) {
-          db.exec(
+          db.prepare(
             `UPDATE ${table} SET action_status = 'failed', action_error_tag = 'Internal',
-              action_error_message = 'host restarted during ' || action_name
+              action_error_message = ? || action_name
              WHERE action_status = 'running'`,
-          );
+          ).run(stoppedDuring);
         }
       }).pipe(Effect.withSpan("Store.failInterrupted")),
     };
