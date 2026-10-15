@@ -18,4 +18,6 @@ export * from "./setup.ts";
 
 export * from "./ssh.ts";
 
-export * from "./text.ts";
+export * from "./describe.ts";
+
+export * from "./sizes.ts";

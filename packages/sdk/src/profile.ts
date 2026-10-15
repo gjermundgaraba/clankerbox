@@ -3,7 +3,7 @@ import { Invalid } from "./errors.ts";
 import { HostId } from "./ids.ts";
 import { MachineSpec, Setup } from "./resources.ts";
 import { readSetup } from "./setup.ts";
-import { describeFileError, describeIssues } from "./text.ts";
+import { describeFileError, describeIssues } from "./describe.ts";
 
 /**
  * A client-side file that fills in a create's spec; hosts never see it. `setup.path` is a script

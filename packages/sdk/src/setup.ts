@@ -2,7 +2,7 @@
 import { Effect, FileSystem, Option, type PlatformError, Predicate } from "effect";
 import { Base64 } from "effect/encoding";
 import { Invalid } from "./errors.ts";
-import { describeFileError } from "./text.ts";
+import { describeFileError } from "./describe.ts";
 
 const lineLength = 76;
 

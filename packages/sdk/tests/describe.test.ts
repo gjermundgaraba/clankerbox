@@ -4,19 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Schema } from "effect";
 import { it } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { describeFileError, describeIssues, formatMib } from "../src/index.ts";
-
-it("a RAM size reads exactly: in GiB when whole or half GiB, and in MiB when not", () => {
-  expect([512, 1024, 1500, 1536, 4097, 32_768, 126_608].map(formatMib)).toEqual([
-    "512M",
-    "1G",
-    "1500M",
-    "1.5G",
-    "4097M",
-    "32G",
-    "126608M",
-  ]);
-});
+import { describeFileError, describeIssues } from "../src/index.ts";
 
 const Config = Schema.Struct({
   hosts: Schema.Array(Schema.Struct({ id: Schema.String, url: Schema.String })),

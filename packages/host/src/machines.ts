@@ -68,6 +68,17 @@ interface Spec extends Pick<MachineRecord, "base" | "cpu" | "ramMib" | "diskGib"
   readonly profile?: string | undefined;
 }
 
+const booting = {
+  createMachine: () => true,
+  startMachine: () => true,
+  restoreMachine: () => true,
+  forkMachine: (made) => !made,
+  stopMachine: () => false,
+  deleteMachine: () => false,
+  captureCheckpoint: () => false,
+  deleteCheckpoint: () => false,
+} satisfies Record<ActionName, (made: boolean) => boolean>;
+
 /** The runtime's work on the new machine, which fails with `E` or refuses with `R`. */
 type Work<E extends HostError, R extends HostError> = Effect.Effect<void, E | Refusal<R>>;
 
@@ -204,11 +215,7 @@ export const make = (
      * until the next host start.
      */
     const boots = ({ action, made }: MachineRecord) =>
-      action.status === "running" &&
-      (action.name === "createMachine" ||
-        action.name === "restoreMachine" ||
-        action.name === "startMachine" ||
-        (action.name === "forkMachine" && !made));
+      action.status === "running" && booting[action.name](made);
 
     const heldRows = Effect.map(store.list, (records) =>
       records.map((record) => ({ machine: ref(record), booting: boots(record) })),
