@@ -178,6 +178,10 @@ const decodeCheckpointRow = Schema.decodeUnknownSync(CheckpointRow);
 
 const ActionColumns = Schema.Struct(actionColumns);
 
+const decodeRunning = Schema.decodeUnknownSync(
+  Schema.Struct({ name: Schema.String, action_name: ActionName }),
+);
+
 const decodeAction = Schema.decodeUnknownSync(ActionRecord);
 
 const actionOf = (row: typeof ActionColumns.Type): ActionRecord =>
@@ -452,6 +456,9 @@ export const open = (
          WHERE name = $name`,
       ),
       remove: db.prepare(`DELETE FROM ${table} WHERE name = ?`),
+      running: db.prepare(
+        `SELECT name, action_name FROM ${table} WHERE action_status = 'running' ORDER BY name`,
+      ),
     });
 
     const statements = {
@@ -660,14 +667,21 @@ export const open = (
           statements[row.kind].remove.run(row.name);
         }),
       ),
-      failInterrupted: sql("fail interrupted actions", () => {
-        for (const table of ["machines", "checkpoints"]) {
-          db.prepare(
-            `UPDATE ${table} SET action_status = 'failed',
-              action_error = json_object('_tag', 'Internal', 'message', ? || action_name)
-             WHERE action_status = 'running'`,
-          ).run(stoppedDuring);
+      failInterrupted: transaction(db, "fail interrupted actions", () => {
+        for (const kind of ["machine", "checkpoint"] as const) {
+          for (const running of statements[kind].running.all().map((row) => decodeRunning(row))) {
+            record(
+              { kind, name: running.name },
+              {
+                name: running.action_name,
+                status: "failed",
+                error: new Internal({ message: `${stoppedDuring}${running.action_name}` }),
+              },
+            );
+          }
         }
+
+        return Result.void;
       }).pipe(Effect.withSpan("Store.failInterrupted")),
     };
 

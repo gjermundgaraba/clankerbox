@@ -20,7 +20,6 @@ import {
   Schema,
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
-import { CannotStart } from "@clankerbox/host";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { type LoadedConfig, loadConfig } from "./config.ts";
@@ -40,8 +39,8 @@ export class SpawnFailed extends Schema.TaggedError<SpawnFailed>()("SpawnFailed"
   program: Schema.String,
 }) {}
 
-/** Everything the CLI reports: a host's errors, the client's, its own, and a host that can't start. */
-const failures = [...hostErrors, Unavailable, SpawnFailed, CannotStart] as const;
+/** Everything a client command reports: a host's errors, the client's, and its own. */
+const failures = [...hostErrors, Unavailable, SpawnFailed] as const;
 
 const Failure = Schema.Union(failures);
 
@@ -65,19 +64,25 @@ const errorDocument = (error: Failure) => {
     ...fields,
     tag: _tag,
     retryable: Match.value(error).pipe(
-      Match.tag("SpawnFailed", "CannotStart", () => false),
+      Match.tag("SpawnFailed", () => false),
       Match.orElse(retryable),
     ),
   };
 };
 
-export const fail = (json: boolean) => (error: Failure) =>
+export const failText = (error: { readonly _tag: string; readonly message: string }) =>
   Effect.andThen(
-    json
-      ? Console.log(JSON.stringify({ error: errorDocument(error) }))
-      : Console.error(`clankerbox: ${error._tag}: ${error.message}`),
+    Console.error(`clankerbox: ${error._tag}: ${error.message}`),
     Effect.fail(new Exited({ code: 1 })),
   );
+
+export const fail = (json: boolean) => (error: Failure) =>
+  json
+    ? Effect.andThen(
+        Console.log(JSON.stringify({ error: errorDocument(error) })),
+        Effect.fail(new Exited({ code: 1 })),
+      )
+    : failText(error);
 
 export const table = (rows: ReadonlyArray<ReadonlyArray<string>>): string => {
   const widths: Array<number> = [];
