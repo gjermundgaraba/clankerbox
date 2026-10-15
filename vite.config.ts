@@ -146,6 +146,48 @@ export default defineConfig({
         },
       },
       {
+        files: ["apps/clankerbox/src/**/*.ts"],
+        excludeFiles: ["apps/clankerbox/src/main.ts", "apps/clankerbox/src/host.ts"],
+        rules: {
+          "fence/allowed-imports": [
+            "error",
+            {
+              allow: [
+                "^\\.\\.?/[a-z-]+(/[a-z-]+)?\\.ts$",
+                "^effect$",
+                "^effect/(cli|http|process)$",
+                "^@gjermundgaraba/clankerbox-sdk$",
+              ],
+              because:
+                "a command imports effect, the SDK and its siblings; Node, @effect/platform-node and the host package are for main.ts and host.ts",
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/rivet-sandbox-agent/src/**/*.ts"],
+        excludeFiles: [
+          "packages/rivet-sandbox-agent/src/index.ts",
+          "packages/rivet-sandbox-agent/src/tunnel.ts",
+        ],
+        rules: {
+          "fence/allowed-imports": [
+            "error",
+            {
+              allow: [
+                "^\\./[a-z-]+\\.ts$",
+                "^effect$",
+                "^effect/(encoding|process)$",
+                "^@gjermundgaraba/clankerbox-sdk$",
+                "^sandbox-agent$",
+              ],
+              because:
+                "Node and @effect/platform-node enter the provider only in index.ts, its Layers, and tunnel.ts, the ssh tunnel",
+            },
+          ],
+        },
+      },
+      {
         files: ["packages/sdk/src/**/*.ts"],
         excludeFiles: ["packages/sdk/src/node.ts"],
         rules: {

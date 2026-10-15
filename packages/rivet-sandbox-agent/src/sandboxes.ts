@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import {
   ActionName,
   type ClankerboxError,
@@ -21,6 +20,7 @@ import {
   Scope,
   Semaphore,
 } from "effect";
+import { Hex } from "effect/encoding";
 import type { ChildProcessSpawner } from "effect/process";
 import { SandboxDestroyedError } from "sandbox-agent";
 import { healthPath } from "./agent.ts";
@@ -226,7 +226,7 @@ export const make = (options: Options, ssh = "ssh") => {
 
   return {
     create: Effect.suspend(() => {
-      const named = `${options.namePrefix ?? "sandbox"}-${randomBytes(4).toString("hex")}`;
+      const named = `${options.namePrefix ?? "sandbox"}-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(4)))}`;
 
       return made(named).pipe(
         Effect.map((machine) => machine.id),
