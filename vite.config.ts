@@ -155,7 +155,7 @@ export default defineConfig({
               allow: [
                 "^\\.\\.?/[a-z-]+(/[a-z-]+)?\\.ts$",
                 "^effect$",
-                "^effect/(cli|http|process)$",
+                "^effect/(cli|http|process|socket)$",
                 "^@gjermundgaraba/clankerbox-sdk$",
               ],
               because:

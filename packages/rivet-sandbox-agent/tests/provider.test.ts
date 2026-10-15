@@ -18,6 +18,7 @@ import {
   cleanups,
   fakeSsh,
   listening,
+  login,
   reachable,
   runtimeVersion,
   setup,
@@ -61,8 +62,9 @@ test("the SDK starts a sandbox from a profile and reaches its agent through a tu
 
   expect(more).toEqual([]);
   expect(args.slice(0, 2)).toEqual(["-l", "root"]);
-  expect(args.slice(args.indexOf(id))).toEqual([
-    id,
+  expect(args).toContain(`HostKeyAlias=${id}`);
+  expect(args.slice(args.indexOf(login.host))).toEqual([
+    login.host,
     "-T",
     "-o",
     "BatchMode=yes",

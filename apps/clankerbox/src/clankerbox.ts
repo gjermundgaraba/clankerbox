@@ -21,7 +21,7 @@ import {
 } from "./machines/commands.ts";
 import { prebuild } from "./prebuilds.ts";
 import { profiles } from "./profiles.ts";
-import { ssh } from "./ssh.ts";
+import { ssh, sshKnownHosts, sshProxy } from "./ssh.ts";
 
 export const actionCommands = {
   listMachines: machines,
@@ -57,6 +57,8 @@ export const clankerbox = Command.make("clankerbox").pipe(
     checkpoint,
     restore,
     ssh,
+    sshProxy,
+    sshKnownHosts,
     host,
   ]),
 );

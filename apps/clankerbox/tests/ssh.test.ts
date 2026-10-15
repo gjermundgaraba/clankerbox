@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { existsSync, readFileSync } from "node:fs";
-import { Effect, Layer, PlatformError, Sink, Stream } from "effect";
+import { createServer, type Socket } from "node:net";
+import { Effect, Layer, PlatformError, Predicate, Sink, Stdio, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
@@ -96,7 +97,12 @@ layer(NodeServices.layer)((it) => {
           "linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n",
         );
         expect(spawned?.args.slice(0, 2)).toEqual(["-l", "root"]);
-        expect(spawned?.args.slice(-4)).toEqual(["linux_dev", "-L", "8080:localhost:80", "uptime"]);
+        expect(spawned?.args.slice(-4)).toEqual([
+          "100.64.0.7",
+          "-L",
+          "8080:localhost:80",
+          "uptime",
+        ]);
         expect(existsSync(spawned?.knownHostsFile ?? "")).toBe(false);
       }),
   );
@@ -113,7 +119,7 @@ layer(NodeServices.layer)((it) => {
 
       expect(code).toBe(0);
       expect(ssh.spawned[0]?.args.slice(0, 2)).toEqual(["-l", "dev"]);
-      expect(ssh.spawned[0]?.args.at(-1)).toBe("linux_dev");
+      expect(ssh.spawned[0]?.args.at(-1)).toBe("100.64.0.7");
     }),
   );
 
@@ -176,6 +182,113 @@ layer(NodeServices.layer)((it) => {
         message: expect.stringContaining("couldn't run ssh"),
         retryable: false,
       });
+    }),
+  );
+
+  it.effect("ssh-known-hosts prints the machine's host key under the name ssh asked for", () =>
+    Effect.gen(function* () {
+      const { config, endpoints } = yield* setup();
+
+      const { code, stdout } = yield* cli(
+        ["ssh-known-hosts", "--config", config, "linux_dev", "linux_dev"],
+        { endpoints },
+      );
+
+      expect(code).toBe(0);
+      expect(stdout).toBe("linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample");
+    }),
+  );
+
+  it.effect("ssh-proxy to a machine that isn't a target fails with its reason", () =>
+    Effect.gen(function* () {
+      const { config, endpoints } = yield* setup(machine("linux_dev", { state: "stopped" }));
+
+      const { code, stderr } = yield* cli(["ssh-proxy", "--config", config, "linux_dev"], {
+        endpoints,
+      });
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("clankerbox: WrongState: linux_dev has no SSH endpoint");
+    }),
+  );
+});
+
+const proxied = (serve: (socket: Socket) => void, stdin: Stream.Stream<Uint8Array>) =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.callback<ReturnType<typeof createServer>>((resume) => {
+        const listening = createServer(serve);
+
+        listening.listen(0, "127.0.0.1", () => resume(Effect.succeed(listening)));
+      }),
+      (listening) =>
+        Effect.callback<void>((resume) => {
+          listening.close(() => resume(Effect.void));
+        }),
+    );
+
+    const address = server.address();
+    const port = address === null || Predicate.isString(address) ? 0 : address.port;
+    const dir = yield* scratch;
+    const config = yield* writeConfig(dir, ["linux"]);
+
+    const linux = stubHost({
+      id: "linux",
+      bases: ["ubuntu"],
+      machines: [
+        machine("linux_dev", {
+          ssh: { user: "root", host: "127.0.0.1", port },
+          hostKey: "ssh-ed25519 AAAA",
+        }),
+      ],
+    });
+
+    stubs.push(linux);
+
+    const received: Array<string> = [];
+
+    const stdio = Stdio.layerTest({
+      stdin,
+      stdout: () => Sink.forEach((chunk) => Effect.sync(() => received.push(String(chunk)))),
+    });
+
+    const run = yield* cli(["ssh-proxy", "--config", config, "linux_dev"], {
+      endpoints: [["linux", linux]],
+      stdio,
+    });
+
+    return { ...run, received: received.join("") };
+  }).pipe(Effect.scoped);
+
+layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it.effect(
+    "ssh-proxy carries stdin to the machine's endpoint and its replies to stdout, until it closes",
+    () =>
+      Effect.gen(function* () {
+        const { code, stderr, received } = yield* proxied(
+          (socket) => {
+            socket.write("SSH-2.0-machine\r\n");
+            socket.on("data", (data) => socket.write(`echo ${data.toString()}`));
+            socket.on("end", () => socket.end());
+          },
+          Stream.make(new TextEncoder().encode("SSH-2.0-client")),
+        );
+
+        expect(stderr).toBe("");
+        expect(code).toBe(0);
+        expect(received).toBe("SSH-2.0-machine\r\necho SSH-2.0-client");
+      }),
+  );
+
+  it.effect("ssh-proxy passes on the end of stdin even when it comes before the connection", () =>
+    Effect.gen(function* () {
+      const { code, received } = yield* proxied((socket) => {
+        socket.on("data", () => undefined);
+        socket.on("end", () => socket.end("bye"));
+      }, Stream.empty);
+
+      expect(code).toBe(0);
+      expect(received).toBe("bye");
     }),
   );
 });

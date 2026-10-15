@@ -26,10 +26,11 @@ export const sshTarget = (machine: Machine): Effect.Effect<SshTarget, WrongState
   return Effect.fail(new WrongState({ message, machine: id, state }));
 };
 
-const knownHostsLine = (id: string, hostKey: string): string => {
+/** A known_hosts line pinning `name` to a host key on record, `<type> <base64>`. */
+export const knownHostsLine = (name: string, hostKey: string): string => {
   const [type = "", key = ""] = hostKey.trim().split(/\s+/u);
 
-  return `${id} ${type} ${key}\n`;
+  return `${name} ${type} ${key}\n`;
 };
 
 const sshArguments = (
@@ -41,8 +42,6 @@ const sshArguments = (
   "-l",
   user,
   "-o",
-  `HostName=${target.login.host}`,
-  "-o",
   `Port=${target.login.port}`,
   "-o",
   `HostKeyAlias=${target.id}`,
@@ -52,14 +51,15 @@ const sshArguments = (
   "GlobalKnownHostsFile=/dev/null",
   "-o",
   "StrictHostKeyChecking=yes",
-  target.id,
+  target.login.host,
   ...extra,
 ];
 
 /**
- * ssh's arguments, pinned to the target's host key through a known-hosts file that lasts as long
- * as the scope, which must outlast the ssh. Ports change on fork, restore, and every boat start,
- * so read the target anew for each ssh.
+ * ssh's arguments to the target's address, pinned to its host key through a known-hosts file that
+ * lasts as long as the scope, which must outlast the ssh. The destination is the address, not the
+ * ID, so no ssh_config block for the ID applies. Ports change on fork, restore, and every boat
+ * start, so read the target anew for each ssh.
  */
 export const pinnedSsh = (
   target: SshTarget,

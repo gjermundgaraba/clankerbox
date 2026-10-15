@@ -1,8 +1,20 @@
 import { Client, describeFileError, describeIssues, Invalid } from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 
+const userRule =
+  "an SSH user is lowercase letters, digits, '_' and '-', starting with a letter or '_'";
+
+const HostEntry = Schema.Struct({
+  ...Client.HostEntry.fields,
+  sshUser: Schema.optionalKey(
+    Schema.String.check(Schema.isPattern(/^[a-z_][a-z0-9_-]{0,31}$/u, { message: userRule })),
+  ),
+});
+
+export type HostEntry = typeof HostEntry.Type;
+
 const ClientConfig = Schema.Struct({
-  hosts: Schema.Array(Client.HostEntry),
+  hosts: Schema.Array(HostEntry),
   profiles: Schema.optionalKey(Schema.String),
 });
 
@@ -10,7 +22,8 @@ const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(ClientConf
 
 export interface LoadedConfig {
   readonly file: string;
-  readonly hosts: ReadonlyArray<Client.HostEntry>;
+  /** `sshUser` is the login of the SSH config's block for the host's machines; default: root. */
+  readonly hosts: ReadonlyArray<HostEntry>;
   readonly profiles: string | undefined;
 }
 

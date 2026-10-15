@@ -53,8 +53,9 @@ entry loads no Node; `./node` (`node.ts`) holds what needs it.
 
 **App** (`apps/clankerbox/src`). One file or folder per command group
 (`machines/`, `checkpoints.ts`, `hosts.ts`, `profiles.ts`, `prebuilds.ts`,
-`ssh.ts`, and `host.ts` for the host role) over the CLI's shared kit
-(`command.ts`), the client config (`config.ts`) and flag units (`units.ts`).
+`ssh.ts` and `ssh-config.ts`, the SSH config it keeps, and `host.ts` for the
+host role) over the CLI's shared kit (`command.ts`), the client config
+(`config.ts`) and flag units (`units.ts`).
 `clankerbox.ts` is the command tree.
 
 **Provider** (`packages/rivet-sandbox-agent/src`). `sandboxes.ts` (the
@@ -63,13 +64,13 @@ operations), `tunnel.ts` (the ssh tunnel), `options.ts`, `agent.ts`, and
 
 ## Where Layers are chosen
 
-Only at an entry: the CLI's `main.ts` (Node's services and HTTP client), the
-app's `host.ts` (the config's runtime and Node's HTTP server, given to
-`hostLayer`), the SDK's `node.ts` (the client over Node's HTTP), and the
-provider's `index.ts` (the client over its hosts, given to `provider`). Tests
-pass their own: the host's `./testing` export builds a host over a fake
-runtime, and the SDK's serves stub hosts over an in-memory transport. Neither
-`./testing` export is published.
+Only at an entry: the CLI's `main.ts` (Node's services, HTTP client and TCP
+dial, and the path that runs it), the app's `host.ts` (the config's runtime and
+Node's HTTP server, given to `hostLayer`), the SDK's `node.ts` (the client over
+Node's HTTP), and the provider's `index.ts` (the client over its hosts, given
+to `provider`). Tests pass their own: the host's `./testing` export builds a
+host over a fake runtime, and the SDK's serves stub hosts over an in-memory
+transport. Neither `./testing` export is published.
 
 ## House style
 
@@ -108,8 +109,9 @@ runtime, and the SDK's serves stub hosts over an in-memory transport. Neither
   `vite.config.ts`): a host domain file imports only its siblings, `effect`,
   `effect/encoding` and the SDK; an adapter imports domain files, its own
   folder and `platform/`'s `process.ts` and `address.ts`; an app command
-  imports only `effect`, the SDK and its siblings, leaving Node,
-  `@effect/platform-node` and the host package to `main.ts` and `host.ts`;
+  imports only `effect` (with its `cli`, `http`, `process` and `socket`), the
+  SDK and its siblings, leaving Node, `@effect/platform-node` and the host
+  package to `main.ts` and `host.ts`;
   the provider takes Node and `@effect/platform-node` only in `index.ts` and
   `tunnel.ts`; the SDK's `.` entry
   imports no Node and uses no `Buffer` or `process`; `fence/no-manual-run`

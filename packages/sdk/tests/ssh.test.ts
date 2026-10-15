@@ -67,7 +67,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "pinnedSsh logs in as the user, pins the key under the ID in a one-line known-hosts file, and puts the caller's args after the destination",
+    "pinnedSsh logs in as the user at the address, so no ssh_config block for the ID applies, pins the key under the ID in a one-line known-hosts file, and puts the caller's args after the address",
     () =>
       Effect.gen(function* () {
         const target = yield* sshTarget(reachable);
@@ -78,8 +78,6 @@ layer(NodeServices.layer)((it) => {
           "-l",
           "dev",
           "-o",
-          "HostName=100.64.0.7",
-          "-o",
           "Port=10022",
           "-o",
           "HostKeyAlias=linux_dev",
@@ -89,7 +87,7 @@ layer(NodeServices.layer)((it) => {
           "GlobalKnownHostsFile=/dev/null",
           "-o",
           "StrictHostKeyChecking=yes",
-          "linux_dev",
+          "100.64.0.7",
           "-L",
           "8080:localhost:80",
           "uptime",

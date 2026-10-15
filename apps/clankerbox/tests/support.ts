@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ConfigProvider, Effect, Layer, Runtime, Schema } from "effect";
+import * as NodeSocket from "@effect/platform-node/NodeSocket";
+import { ConfigProvider, Effect, Layer, Option, Runtime, Schema, type Stdio } from "effect";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { TestConsole } from "effect/testing";
@@ -14,6 +15,8 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { dispatch } from "../src/clankerbox.ts";
 import { ErrorDocument } from "../src/command.ts";
+import { Dial } from "../src/ssh.ts";
+import { Executable } from "../src/ssh-config.ts";
 
 export const url = (id: string) => `http://${id}.test`;
 
@@ -44,7 +47,12 @@ export interface CliOptions {
   readonly spawner?: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>;
   readonly env?: Readonly<Record<string, string>>;
   readonly http?: Layer.Layer<HttpClient.HttpClient>;
+  readonly stdio?: Layer.Layer<Stdio.Stdio>;
+  /** Default: none, so no SSH config is kept. */
+  readonly executable?: string;
 }
+
+const dial = Layer.succeed(Dial, (host, port) => NodeSocket.makeNet({ host, port }));
 
 export const cli = (args: ReadonlyArray<string>, options?: CliOptions): Effect.Effect<CliRun> => {
   const network = new Map(
@@ -66,11 +74,18 @@ export const cli = (args: ReadonlyArray<string>, options?: CliOptions): Effect.E
   });
 
   return program.pipe(
-    Effect.provide(options?.spawner ?? Layer.empty),
+    Effect.provide(
+      Layer.mergeAll(
+        options?.spawner ?? Layer.empty,
+        options?.stdio ?? Layer.empty,
+        Layer.succeed(Executable, Option.fromUndefinedOr(options?.executable)),
+      ),
+    ),
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
         Layer.fresh(TestConsole.layer),
+        dial,
         options?.http ?? transport(network),
         ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ...options?.env } })),
       ),

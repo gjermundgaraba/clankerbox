@@ -23,6 +23,7 @@ import { Argument, Command, Flag } from "effect/cli";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
 import { type LoadedConfig, loadConfig } from "./config.ts";
+import { syncSshConfig } from "./ssh-config.ts";
 import { parseSeconds } from "./units.ts";
 
 export class Exited extends Data.TaggedError("Exited")<{ readonly code: number }> {
@@ -167,6 +168,10 @@ export const withClient = <A, R>(
     const client = yield* Client.make(config.hosts, {
       timeout: Option.getOrUndefined(Option.map(timeout, Duration.seconds)),
     }).pipe(Effect.mapError(({ message }) => new Invalid({ message, file: config.file })));
+
+    if (Option.isNone(flags.config)) {
+      yield* syncSshConfig(config);
+    }
 
     return yield* body(client, config);
   }).pipe(Effect.catch(fail(flags.json)));

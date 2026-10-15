@@ -102,13 +102,14 @@ when unset), or `--config PATH`:
 {
   "hosts": [
     { "id": "linux", "url": "http://100.64.0.10:8484" },
-    { "id": "mac", "url": "http://100.64.0.20:8484" }
+    { "id": "mac", "url": "http://100.64.0.20:8484", "sshUser": "admin" }
   ],
   "profiles": "profiles"
 }
 ```
 
-The host list is in placement order. `--profile NAME` reads `NAME.json` from
+The host list is in placement order. `sshUser` is the user plain `ssh` logs
+in to the host's machines as: `root`, the default, or `admin` on Tart. `--profile NAME` reads `NAME.json` from
 the profiles directory; a value with a `/` or ending in `.json` is a path:
 
 ```json
@@ -151,7 +152,14 @@ clankerbox checkpoint delete linux_base
   release; any change runs the setup again until a new `prebuild`. Nothing
   deletes prebuilds: `checkpoint list` shows them.
 - `ssh` pins the machine's host key and logs in as `root`, or `admin` on Tart.
-  For scp or rsync, take `ssh` and `hostKey` from `get ID --json`.
+- Plain OpenSSH reaches machines by ID too, so `ssh linux_dev`, scp, rsync and
+  tools that run ssh work. The released binary, on the default client config,
+  keeps `~/.ssh/clankerbox` with one `Host <host>_*` block per host, as its
+  `sshUser`, and ends `~/.ssh/config` with `Match all` and `Include
+  clankerbox`, so your own entries come first and win. Each connection runs
+  `clankerbox ssh-proxy` and `clankerbox ssh-known-hosts` for the machine's
+  current endpoint and host key, so nothing goes stale when a port changes or
+  a machine is recreated. `CLANKERBOX_SSH_CONFIG=false` removes both.
 - `--json` prints the resource or `{"error": {...}}`.
 
 `clankerbox COMMAND --help` documents each command.
