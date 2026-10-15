@@ -504,6 +504,7 @@ export const open = (
           new Conflict({
             message: `${kind} ${id(row.name)} is busy: ${found.action.name} is running`,
             kind: "busy",
+            id: id(row.name),
           }),
         );
       }
@@ -545,6 +546,7 @@ export const open = (
             new Conflict({
               message: `${row.kind} ${id(row.record.name)} exists`,
               kind: "exists",
+              id: id(row.record.name),
             }),
           );
         }

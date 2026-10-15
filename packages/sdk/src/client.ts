@@ -1,5 +1,16 @@
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
-import { Context, Duration, Effect, Fiber, Layer, Match, Predicate, Result, Schema } from "effect";
+import {
+  Context,
+  Duration,
+  Effect,
+  Fiber,
+  Layer,
+  Match,
+  Predicate,
+  Record,
+  Result,
+  Schema,
+} from "effect";
 import { HttpClient, type HttpClientError, HttpClientRequest } from "effect/http";
 import { actionsByName as actions, type Declared, Http, readTimeout } from "./api.ts";
 import {
@@ -82,8 +93,8 @@ export type Routed = {
 
 /**
  * One method per action on a resource, named and typed as in the contract, but for `create` and
- * the deletes. A fork, restore or capture's errors name the resource it makes, so a caller can find
- * what a failure left behind.
+ * the deletes. A create, fork, restore or capture's errors carry `made`, the resource it makes, so
+ * a caller can find what a failure left behind.
  */
 export type Calls = {
   readonly [N in Exclude<Routed, "createMachine" | "deleteMachine" | "deleteCheckpoint">]: (
@@ -238,20 +249,24 @@ const settle = <A>(
 
 interface Where {
   readonly action: HostAction;
-  readonly host?: string;
-  readonly id?: string;
+  readonly host?: string | undefined;
+  readonly id?: string | undefined;
+  readonly made?: string | undefined;
 }
 
 const encodeError = Schema.encodeSync(ClankerboxError);
 
 const decodeError = Schema.decodeSync(ClankerboxError);
 
-/** The error with the call's location set, and every other field it had. */
+/** The error with the call's location filled in where it has none. */
 const locate =
-  (where: Where) =>
+  ({ action, host, id, made }: Where) =>
   <E extends ClankerboxError>(error: E): E =>
     // SAFETY: decoding what the same union encoded rebuilds the error's own class.
-    decodeError({ ...encodeError(error), ...where }) as E;
+    decodeError({
+      ...Record.filter({ action, host, id, made }, Predicate.isNotUndefined),
+      ...encodeError(error),
+    }) as E;
 
 const checkHost = (entry: HostEntry, host: Host): Effect.Effect<Host, Invalid> =>
   host.id === entry.id
@@ -307,15 +322,15 @@ export const make = (
     };
 
     /**
-     * A call of `name` on one host, about `subject`. Its errors carry the host, the action and
-     * `target`, the resource it reads, changes or makes.
+     * A call of `name` on one host, about `subject`, which makes `made`. Its errors carry the host,
+     * the action, `subject` as their `id` unless the host named another, and `made`.
      */
     const send = <N extends HostAction>(
       { entry, api }: Route,
       name: N,
       input: Input<N>,
       subject?: string,
-      target: string | undefined = subject,
+      made?: string,
     ): Effect.Effect<Success<N>, ErrorOf<N>> => {
       const { readOnly } = actions[name];
 
@@ -327,16 +342,8 @@ export const make = (
         timeout: readOnly ? (options?.readTimeout ?? readTimeout) : options?.timeout,
         readOnly,
         what: subject === undefined ? name : `${name} ${subject}`,
-        target,
-      }).pipe(
-        Effect.mapError(
-          locate(
-            target === undefined
-              ? { action: name, host: entry.id }
-              : { action: name, host: entry.id, id: target },
-          ),
-        ),
-      );
+        target: made ?? subject,
+      }).pipe(Effect.mapError(locate({ action: name, host: entry.id, id: subject, made })));
 
       // SAFETY: `settle` passes on the action's declared errors and adds only `Unavailable`,
       // `Internal` and `Invalid`, which every action declares.
@@ -387,14 +394,16 @@ export const make = (
         Effect.gen(function* () {
           const subject = subjectOf(input);
           const { host } = yield* parseId(subject);
-          const made = makes === undefined ? subject : yield* formatId(host, makes);
+          const made = makes === undefined ? undefined : yield* formatId(host, makes);
 
           return yield* send(yield* route(host), name, input, subject, made);
         }),
       );
 
     const createOn = (host: string, name: string, spec: MachineSpec) =>
-      Effect.flatMap(formatId(host, name), (id) => onResource("createMachine", { ...spec, id }));
+      Effect.flatMap(formatId(host, name), (id) =>
+        onResource("createMachine", { ...spec, id }, name),
+      );
 
     /**
      * The first host in list order that offers `base`; the requests still out are interrupted,

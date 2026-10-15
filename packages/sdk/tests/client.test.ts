@@ -506,7 +506,12 @@ it.effect("Capacity from the chosen host is the reply; placement never moves on"
     );
 
     expect(error._tag).toBe("Capacity");
-    expect(error).toMatchObject({ host: "linux", action: "createMachine", id: "linux_dev" });
+    expect(error).toMatchObject({
+      host: "linux",
+      action: "createMachine",
+      id: "linux_dev",
+      made: "linux_dev",
+    });
     expect(full.creates).toHaveLength(1);
     expect(spare.creates).toHaveLength(0);
   }),
@@ -528,7 +533,7 @@ it.effect("a mutation whose reply is lost is Unavailable, names the ID, and is n
   }),
 );
 
-it.effect("a fork whose reply is lost names the new machine's ID", () =>
+it.effect("a fork whose reply is lost is about its source and names the machine it makes", () =>
   Effect.gen(function* () {
     const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_src")] });
 
@@ -539,7 +544,12 @@ it.effect("a fork whose reply is lost names the new machine's ID", () =>
     expect(error._tag).toBe("Unavailable");
     expect(retryable(error)).toBe(false);
     expect(error.message).toContain("read linux_copy");
-    expect(error).toMatchObject({ host: "linux", action: "forkMachine", id: "linux_copy" });
+    expect(error).toMatchObject({
+      host: "linux",
+      action: "forkMachine",
+      id: "linux_src",
+      made: "linux_copy",
+    });
     expect(linux.calls).toEqual(["machine.fork"]);
   }),
 );

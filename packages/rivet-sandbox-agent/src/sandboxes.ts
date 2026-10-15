@@ -212,16 +212,16 @@ export const make = (options: Options, ssh = "ssh") => {
     });
 
   /**
-   * Only a failed create, fork or restore leaves its machine on the host, and then its error names
-   * it; a delete of one it never wrote is `absent`. A `Conflict` names a machine another call
-   * holds, so it is never deleted. A failed delete leaves it to the user.
+   * Only a failed create, fork or restore leaves its machine on the host, and then its error's
+   * `made` names it; a delete of one it never wrote is `absent`. A `Conflict` is about a machine
+   * another call holds or made, so it is never deleted. A failed delete leaves it to the user.
    */
   const discard = (error: ClankerboxError) =>
     Effect.gen(function* () {
       const client = yield* Client.Client;
 
-      if (error.id !== undefined && makers.some(({ name }) => name === error.action)) {
-        yield* Effect.ignore(client.deleteMachine({ id: error.id }));
+      if (error.made !== undefined && makers.some(({ name }) => name === error.action)) {
+        yield* Effect.ignore(client.deleteMachine({ id: error.made }));
       }
 
       return yield* error;

@@ -413,7 +413,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const error = yield* failure(linux, linux.machines.create(request("dev")));
 
-      expect(error).toEqual(new Conflict({ message: "machine linux_dev exists", kind: "exists" }));
+      expect(error).toEqual(
+        new Conflict({ message: "machine linux_dev exists", kind: "exists", id: "linux_dev" }),
+      );
       expect(linux.fake.calls).toEqual([]);
     }),
   );
@@ -618,6 +620,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const busy = new Conflict({
         message: "machine linux_dev is busy: create is running",
         kind: "busy",
+        id: "linux_dev",
       });
 
       expect(held.action).toEqual({ name: "createMachine", status: "running" });

@@ -1,10 +1,15 @@
 import { Match, Schema } from "effect";
 
-/** A host sends none of these; the client library sets them. */
+/**
+ * The client sets `host` and `action`. `id` is the resource the error is about: a host sets it on
+ * `NotFound` and `Conflict`, and the client sets the call's subject otherwise. `made` is the
+ * resource a create, fork, restore or capture makes, which a failure may leave behind.
+ */
 const located = {
   host: Schema.optionalKey(Schema.String),
   action: Schema.optionalKey(Schema.String),
   id: Schema.optionalKey(Schema.String),
+  made: Schema.optionalKey(Schema.String),
 };
 
 /**
