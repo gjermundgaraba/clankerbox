@@ -23,10 +23,8 @@ const resourceNames = {
   startsPerDay: "starts/day",
 } satisfies Record<Usage["resource"], string>;
 
-/** A tenth of a GiB: a budget is seldom a round size, and `--json` has the exact MiB. */
 const roughGib = (mib: number): string => `${Math.round((mib * 10) / mibPerGib) / 10}G`;
 
-/** `?` is a sum the host couldn't count, and `-` a resource it doesn't limit. */
 export const usageRows = (usage: ReadonlyArray<Usage>) => [
   ["HOST", "RESOURCE", "USED", "LIMIT"],
   ...usage.map((row) => {
@@ -41,7 +39,6 @@ export const usageRows = (usage: ReadonlyArray<Usage>) => [
   }),
 ];
 
-/** One line a host, naming each machine once however many of its rows it left unread. */
 export const unreadNotes = (usage: ReadonlyArray<Usage>): ReadonlyArray<string> =>
   Arr.dedupe(usage.map(({ host }) => host)).flatMap((host) => {
     const unread = Arr.dedupe(

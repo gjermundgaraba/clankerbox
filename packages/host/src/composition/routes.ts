@@ -45,7 +45,6 @@ const app = (config: Pick<HostSettings, "id" | "bases">) =>
 
 const refusal = (sent: Option.Option<string>): Option.Option<Invalid> =>
   Option.match(sent, {
-    // A client before this header existed is of an older release anyway.
     onNone: () =>
       Option.some(
         new Invalid({
@@ -64,15 +63,10 @@ const refusal = (sent: Option.Option<string>): Option.Option<Invalid> =>
 
 const encodeInvalid = Schema.encodeSync(Invalid);
 
-/**
- * Refuses another release, or none, before decoding: its input may have another shape, and no
- * handler runs. Every action declares `Invalid` (the SDK's api.ts), so the client decodes it.
- */
 const versionCheck = HttpRouter.middleware((handle) =>
   Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
     Option.match(refusal(Headers.get(request.headers, versionHeader)), {
       onNone: () => handle,
-      // 400 is Invalid's `httpApiStatus` (errors.ts), as the routes would answer it.
       onSome: (error) =>
         Effect.succeed(HttpServerResponse.jsonUnsafe(encodeInvalid(error), { status: 400 })),
     }),

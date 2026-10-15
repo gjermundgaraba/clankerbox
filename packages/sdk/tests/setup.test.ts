@@ -30,7 +30,6 @@ const recipe = (setup: string) =>
     yield* write(join(dir, "files", "run me.sh"), '#!/bin/sh\necho helper ran >"$OUT/helper"\n');
     yield* chmod(join(dir, "files", "run me.sh"), 0o755);
 
-    // An extended attribute is what makes macOS tar add a `._greeting` file unless told not to.
     if (process.platform === "darwin") {
       yield* exitOf("xattr", ["-w", "com.example.clankerbox", "1", join(dir, "files", "greeting")]);
     }
@@ -72,7 +71,6 @@ const RecipeFile = Schema.Struct({
   executable: Schema.Boolean,
 });
 
-/** Distinct paths even on a case-insensitive file system, none where a directory is. */
 const recipeFiles = Arbitrary.map(Arbitrary.schema(Schema.Array(RecipeFile)), (files) => {
   const paths = new Set(["lib", "lib/deep"]);
 
@@ -157,7 +155,6 @@ layer(NodeServices.layer)((it) => {
       yield* chmod(join(dir, "files", "secret"), 0o600);
       yield* mkdir(join(dir, "files", "closed"));
       yield* chmod(join(dir, "files", "closed"), 0o500);
-      // The scratch directory's removal needs to write in it.
       yield* Effect.addFinalizer(() => Effect.orDie(chmod(join(dir, "files", "closed"), 0o700)));
 
       const { out, exitCode } = yield* runPacked(yield* packRecipe(dir));
@@ -186,7 +183,6 @@ layer(NodeServices.layer)((it) => {
         ].join("\n"),
       );
 
-      // `alias` sorts before the directory it points at, and `loop` at the recipe itself.
       yield* mkdir(join(dir, "real"));
       yield* write(join(dir, "real", "inside"), "inside\n");
       yield* symlink("real", join(dir, "alias"));

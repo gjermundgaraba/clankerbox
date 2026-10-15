@@ -1,9 +1,3 @@
-/**
- * The refusal rule covers boat's answers that leave nothing on boat (the bump-boat-api skill):
- * its `Capacity` and `Refused` refusals of a create, fork, resume, restore or capture, a
- * create, fork or restore that ends `cancelled` because boat found no machine, and a machine to
- * start, or a fork's or capture's source, that boat doesn't have.
- */
 import { join } from "node:path";
 import {
   Capacity,
@@ -58,10 +52,6 @@ import { NativeIds } from "../../store.ts";
 import { allotted, inUse } from "../../usage.ts";
 import { cliIn, describe, files } from "../process.ts";
 
-/**
- * The API key stays `Redacted` from the moment it is decoded, so nothing that prints the config
- * prints it.
- */
 export const BoatSettings = Schema.Struct({
   apiKey: Schema.RedactedFromValue(Schema.String.check(Schema.isNonEmpty())),
 });
@@ -75,19 +65,13 @@ export interface Settings {
 
 const apiVersion = "v1";
 
-/** boat reports `ready` before its lazy restore is done. */
 const upStates: ReadonlySet<string> = new Set(["ready", "idle", "running"]);
 
-/**
- * boat counts these as active (`GET /limits`): a sandbox still being made or resumed, which
- * `stop` must not skip and `start` doesn't resume again.
- */
 const activeStates: ReadonlySet<string> = new Set([...upStates, "provisioned", "cloning"]);
 
 export const stateOf = (state: string): MachineState =>
   activeStates.has(state) ? "running" : state === "cancelled" ? "missing" : "stopped";
 
-/** Both change on every start, so they are read with the state, never stored. */
 export const endpointOf = (sandbox: Sandbox): SshEndpoint | undefined => {
   const relay = sandbox.sshEndpoint;
 
@@ -117,10 +101,6 @@ const why = (sandbox: Pick<Sandbox, "error">): string =>
 
 export const quote = (argument: string): string => `'${argument.replaceAll("'", `'\\''`)}'`;
 
-/**
- * ssh joins its arguments into one string that the guest's shell parses, so every argument is
- * quoted.
- */
 export const remoteCommand = (argv: ReadonlyArray<string>): string =>
   ["sudo", "-n", "--", ...argv].map(quote).join(" ");
 
@@ -135,29 +115,14 @@ export const knownHosts = (alias: string, printed: string): ReadonlyArray<string
     return match === null ? [] : [`${alias} ${match[1]} ${match[2]}`];
   });
 
-/**
- * boat's marker that `/var/lib` and `/var/opt` are restored in full. Undocumented: re-check it at
- * every change of boat's API or image.
- */
 export const restoredMarker = "/var/lib/ascii-lazy/sys-done";
 
-/**
- * The create's machine has nothing restored into it, so no restore marker comes. `/run` is a
- * tmpfs that no snapshot carries, and boat runs every fork, resume and restore on a fresh
- * machine, so the mark never outlives the create's machine. Preparation's instance file can't
- * take its place: a resume restores this machine's own, while the rest of `/var/lib` may still
- * be on its way.
- */
 export const createdMark = "/run/clankerbox-created";
 
 export const restoredWait = `[ -e ${createdMark} ] || until [ -e ${restoredMarker} ]; do sleep 0.25; done`;
 
 const searchPath = "/usr/bin:/bin";
 
-/**
- * boat answered ready 0.1–4.4 s after a create, fork, resume or restore, and without `failFast` a
- * call waits for a machine.
- */
 const upWait = Duration.minutes(10);
 
 const upPause = Duration.seconds(1);
@@ -166,29 +131,20 @@ const sshWait = Duration.minutes(3);
 
 const sshPause = Duration.seconds(2);
 
-/** 10–14 s with 1 GiB in `/var/lib`, and Docker keeps its images and volumes there too. */
 const markerWait = Duration.minutes(10);
 
-/** It took 2.3–18.9 s. */
 const stopWait = Duration.minutes(5);
 
 const stopPause = Duration.seconds(1);
 
-/** It took under a second. */
 const deleteWait = Duration.minutes(1);
 
 const deletePause = Duration.millis(500);
 
-/**
- * For a running fork source's snapshot attempt begun after its sync: 41 s with little new data,
- * 102 s after writing 3 GiB. boat starts one every 60 s, and one attempt took 3.8–24.4 s in the
- * timing spike (the bump-boat-api skill).
- */
 const snapshotWait = Duration.minutes(10);
 
 const snapshotPause = Duration.seconds(5);
 
-/** About two minutes from a running sandbox. */
 const captureWait = Duration.minutes(15);
 
 const capturePause = Duration.seconds(3);
@@ -197,7 +153,6 @@ const syncWait = Duration.minutes(5);
 
 const hostKeysTimeoutSeconds = 30;
 
-/** A fresh activation may answer with this for a moment, so the SSH wait tries again. */
 class HostKeysUnread extends Data.TaggedError("HostKeysUnread")<{ readonly message: string }> {}
 
 const poll = <A, B, E, R, L>(
@@ -213,7 +168,6 @@ const poll = <A, B, E, R, L>(
       Effect.tap((answer) => Ref.set(last, Option.some(answer))),
       Effect.map(settled),
       Effect.repeat({ until: Option.isSome, schedule: Schedule.spaced(timing.pause) }),
-      // The repeat ends only on `Some`.
       Effect.map(Option.getOrThrow),
       Effect.timeoutOrElse({
         duration: timing.wait,
@@ -238,17 +192,12 @@ export const make = (
     const api = yield* makeApi({ apiKey: settings.apiKey, url: settings.url });
     const { exec: spawn } = yield* cliIn({ PATH: searchPath });
 
-    // The store holds the state dir's lock before the runtime is built.
     const key = yield* sshKey(settings.stateDir);
     const keyDir = join(settings.stateDir, "boat-ssh");
 
     const keyOf = (machine: MachineRef) => idempotencyKey(settings.hostId, machine.instance);
     const snapshotOf = (instance: string) => snapshotName(settings.hostId, instance);
 
-    /**
-     * The core reads the row again after a create, fork or restore, and the runtime's own steps
-     * pass on the ID they made.
-     */
     const sandboxOf = (machine: MachineRef): Option.Option<string> =>
       Option.fromNullishOr(machine.native);
 
@@ -261,10 +210,6 @@ export const make = (
         onSome: Effect.succeed,
       });
 
-    /**
-     * One without a recorded sandbox, or one boat reports cancelled or gone, is refused before
-     * anything native.
-     */
     const presentSandbox = (machine: MachineRef) =>
       Effect.gen(function* () {
         const id = sandboxOf(machine);
@@ -295,12 +240,6 @@ export const make = (
         }),
       );
 
-    /**
-     * A create, fork or restore that ends cancelled found no machine and left nothing: a refusal.
-     * One boat answers 404 for after accepting it is unclear, as boat reports a cancelled sandbox
-     * once before its 404: a failure, so its row and sandbox ID stay. At a start, either is a
-     * failure.
-     */
     const running = (machine: MachineRef, id: string, fresh: boolean) => {
       const read = Effect.flatMap(
         api.sandbox(id),
@@ -348,10 +287,6 @@ export const make = (
       );
     };
 
-    /**
-     * Read over boat's command API, over HTTPS. Every activation has new keys, and preparation
-     * re-mints them, so a pin is never reused.
-     */
     const pin = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
         const ran = yield* Effect.mapError(
@@ -385,10 +320,6 @@ export const make = (
         return file;
       });
 
-    /**
-     * Each exec opens its own connection. Errors name the machine, never the command. A sandbox
-     * that doesn't run, or has no address, fails before the host keys are read.
-     */
     const session = (machine: MachineRef, id: string, { argv, stdin }: Command) =>
       Effect.gen(function* () {
         const found = yield* api.sandbox(id);
@@ -472,10 +403,6 @@ export const make = (
     const runToEnd = (machine: MachineRef, id: string, argv: ReadonlyArray<string>) =>
       Effect.scoped(Effect.flatMap(execIn(machine, id, { argv }), finished));
 
-    /**
-     * SSH may not answer for a moment after boat reads the sandbox ready. Only a failed SSH and a
-     * failed read of the host keys, which may fail that early too, are tried again.
-     */
     const reachable = (machine: MachineRef, id: string, argv: ReadonlyArray<string> = ["true"]) =>
       poll(
         Effect.scoped(Effect.flatMap(session(machine, id, { argv }), finished)).pipe(
@@ -491,10 +418,6 @@ export const make = (
           }),
       );
 
-    /**
-     * `/var/lib` and `/var/opt` hold preparation's state and what enabled units start from;
-     * a create restores nothing, so no marker comes on its own machine (`createdMark`).
-     */
     const restored = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
         const waited = yield* runToEnd(machine, id, ["/bin/sh", "-c", restoredWait]).pipe(
@@ -514,10 +437,6 @@ export const make = (
         }
       });
 
-    /**
-     * The sandbox is recorded on the row before anything else. The name is only the operator's
-     * label, and delete goes by the recorded ID, so a rename boat refuses is a warning.
-     */
     const made = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
         yield* nativeIds.recordNative(machine.name, machine.instance, id);
@@ -539,10 +458,6 @@ export const make = (
         Effect.andThen(reachable(machine, id), restored(machine, id)),
       );
 
-    /**
-     * So the snapshot boat takes for a fork or a capture holds everything written before the
-     * call.
-     */
     const sync = (machine: MachineRef, id: string, before: "fork" | "capture") =>
       Effect.gen(function* () {
         const synced = yield* runToEnd(machine, id, ["sync"]).pipe(
@@ -562,11 +477,6 @@ export const make = (
         }
       });
 
-    /**
-     * boat stamps `lastSnapshotAttemptAt` when an attempt starts (the bump-boat-api skill), so the
-     * value read after the sync names the last attempt begun before it; once it changes, a later
-     * attempt has begun. Only boat's own values are compared, never against the host's clock.
-     */
     const freshSnapshot = (source: MachineRef, id: string) =>
       Effect.gen(function* () {
         yield* sync(source, id, "fork");
@@ -611,11 +521,6 @@ export const make = (
           }),
       );
 
-    /**
-     * A `GET` of each recorded sandbox, all at once: a host holds few machines, and boat limits
-     * starts, not reads; a list would also hold the operator's own sandboxes, a page at a time.
-     * A few quick repeats ride out a blip, and one hung read makes only its own machine unknown.
-     */
     const observe = Effect.fn("Boat.observe")((machines: ReadonlyArray<MachineRef>) =>
       observeEach(
         machines,
@@ -644,16 +549,7 @@ export const make = (
       loginUser: "root",
       startup: Effect.fn("Boat.startup")(() => Effect.void),
       observe,
-      /**
-       * A create, fork or restore refuses sizes no type covers before anything native, and whether
-       * the account's plan includes the type is boat's to say. boat's own count of active
-       * sandboxes includes the operator's, so its 429 refusal is the count.
-       */
       admit: Effect.fn("Boat.admit")(() => Effect.void),
-      /**
-       * One request for the account's limits, so a refusal is boat's own answer. `cpu` and
-       * `ramMib` are the host's own sandboxes, each the size of the type boat runs it as.
-       */
       capacity: Effect.fn("Boat.capacity")((machines) =>
         Effect.gen(function* () {
           const [{ activeSandboxes, maxActiveSandboxes, starts }, { running, unread }] =
@@ -661,7 +557,6 @@ export const make = (
               concurrency: "unbounded",
             });
 
-          // A machine no type covers is being refused at its admission: it counts as it asked.
           const sizes = running.map((machine) => Option.getOrElse(typeFor(machine), () => machine));
 
           const windows = [
@@ -683,7 +578,6 @@ export const make = (
           ];
         }),
       ),
-      /** boat has one image, so `image` names it only in the host's bases. */
       create: Effect.fn("Boat.create")((machine) =>
         Effect.gen(function* () {
           const type = yield* typeOf(machine);
@@ -695,11 +589,6 @@ export const make = (
           yield* reachable(machine, id, ["touch", createdMark]);
         }),
       ),
-      /**
-       * A sandbox boat still makes or resumes, or that runs, isn't resumed again. The start waits
-       * for the marker too, as boat reads a sandbox ready before it exists, so preparation never
-       * meets a half-restored `/var/lib`.
-       */
       start: Effect.fn("Boat.start")((machine) =>
         Effect.gen(function* () {
           const { id, state } = yield* presentSandbox(machine);
@@ -713,9 +602,6 @@ export const make = (
           yield* restored(machine, id);
         }),
       ),
-      /**
-       * Never with `force`: a stop boat refuses, as when its final snapshot fails, is the error.
-       */
       stop: Effect.fn("Boat.stop")((machine) =>
         Effect.gen(function* () {
           const id = sandboxOf(machine);
@@ -734,10 +620,6 @@ export const make = (
           yield* archived(machine, id.value);
         }),
       ),
-      /**
-       * Never waits for the purge. A sandbox boat reports cancelled or gone gets no `DELETE`: boat
-       * answers that with a 403, not a 404, for a sandbox another API key made, even once gone.
-       */
       delete: Effect.fn("Boat.delete")((machine) =>
         Effect.gen(function* () {
           const id = sandboxOf(machine);
@@ -765,7 +647,6 @@ export const make = (
           );
         }),
       ),
-      /** Always of the disk. A running sandbox syncs first, as a fork's source does. */
       capture: Effect.fn("Boat.capture")((machine, checkpoint) =>
         Effect.gen(function* () {
           const source = yield* presentSandbox(machine);
@@ -805,10 +686,6 @@ export const make = (
           yield* restoredSandbox(machine, id);
         }),
       ),
-      /**
-       * A stopped source forks at once. A running one keeps running, and forks once a snapshot
-       * begun after its sync has completed. Forks carry the disk only.
-       */
       fork: Effect.fn("Boat.fork")((source, machine) =>
         Effect.gen(function* () {
           const type = yield* typeOf(machine);

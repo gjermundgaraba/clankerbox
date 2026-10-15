@@ -18,7 +18,6 @@ interface Spawned {
   readonly knownHostsFile: string;
 }
 
-/** Reads the known-hosts file while ssh would run: `pinnedSsh`'s scope removes it after. */
 const fakeSsh = (code: number) => {
   const spawned: Array<Spawned> = [];
 

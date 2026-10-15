@@ -88,7 +88,6 @@ layer(NodeServices.layer)((it) => {
           ["boat", "ram", "?", "-"],
         ]);
         expect(stderr).toContain("mac");
-        // Once for the host, however many rows its machines left unread.
         expect(stderr.split("\n").filter((line) => line.includes("couldn't read"))).toEqual([
           "clankerbox: boat couldn't read the state of boat_review, boat_ci, so it shows ? for what they use",
         ]);

@@ -16,14 +16,13 @@ const isAllowedImports = (option: unknown): option is AllowedImports =>
 const isStringLiteral = (node: ESTree.Node | undefined): node is ESTree.StringLiteral =>
   node?.type === "Literal" && typeof node.value === "string";
 
-/**
- * Every specifier a file names must match one of `allow`, regular expressions, whether it is a
- * static, type-only, re-exported or dynamic import, or a `require`.
- */
 export const allowedImportsRule = defineRule({
   meta: {
     type: "problem",
-    docs: { description: "Allow a file to import only the specifiers its folder may depend on." },
+    docs: {
+      description:
+        "Allow a file to import only the specifiers its folder may depend on, whether static, type-only, re-exported, dynamic or required.",
+    },
     messages: { notAllowed: '"{{specifier}}" is outside what this file may import: {{because}}' },
     schema: [
       {
@@ -93,14 +92,13 @@ const runners = new Set(["Effect", "Runtime", "NodeRuntime", "BunRuntime"]);
 
 const isRun = (name: string) => /^run[A-Z]/u.test(name);
 
-/**
- * Effect is run by hand only where a program starts: `Effect.run*`, a platform's `runMain`,
- * `Runtime.run*` and any `ManagedRuntime`, and the same names imported on their own.
- */
 export const noManualRunRule = defineRule({
   meta: {
     type: "problem",
-    docs: { description: "Run Effect by hand only in an entry file." },
+    docs: {
+      description:
+        "Run Effect by hand only in an entry file: no Effect.run*, runMain, Runtime.run* or ManagedRuntime, nor those names imported alone.",
+    },
     messages: {
       manualRun:
         "`{{name}}` runs Effect by hand: return the Effect, and let the entry file or @effect/vitest run it.",
@@ -146,11 +144,100 @@ export const noManualRunRule = defineRule({
   },
 });
 
-/** The repository's own boundaries: what each folder may import, and where Effect is run. */
+interface ProseComments {
+  readonly publicDocs?: boolean;
+}
+
+const isProseComments = (option: unknown): option is ProseComments =>
+  typeof option === "object" && option !== null;
+
+const markedLine = /^ (?:SAFETY|Source): \S/u;
+
+const directive = /^\s*(?:(?:oxlint|eslint)-\S+ .*\S -- \S|@ts-expect-error \S)/u;
+
+const typeDocs = new Set([
+  "TSPropertySignature",
+  "TSMethodSignature",
+  "TSIndexSignature",
+  "TSInterfaceDeclaration",
+  "TSTypeAliasDeclaration",
+]);
+
+export const noProseCommentsRule = defineRule({
+  meta: {
+    type: "problem",
+    docs: {
+      description:
+        "Allow only a one-line SAFETY: or Source: comment, a tool directive with its reason after --, and a doc block on a type, an interface or a member of one; with publicDocs, a doc block on an export too.",
+    },
+    messages: {
+      prose:
+        "A comment here is prose: carry its reason in a type, a test or the commit, or mark it as SAFETY: or Source:.",
+    },
+    schema: [
+      {
+        type: "object",
+        properties: { publicDocs: { type: "boolean" } },
+        additionalProperties: false,
+      },
+    ],
+  },
+  createOnce(context) {
+    const documented = new Set<number>();
+
+    const document = (node: ESTree.Node) => {
+      for (const comment of context.sourceCode.getCommentsBefore(node)) {
+        if (comment.type === "Block" && comment.value.startsWith("*")) {
+          documented.add(comment.start);
+        }
+      }
+    };
+
+    const exported = (node: ESTree.ExportNamedDeclaration | ESTree.ExportDefaultDeclaration) => {
+      const option = context.options?.[0];
+      const declaration = node.declaration;
+
+      if (
+        (isProseComments(option) && option.publicDocs === true) ||
+        (declaration !== null && declaration !== undefined && typeDocs.has(declaration.type))
+      ) {
+        document(node);
+      }
+    };
+
+    return {
+      before() {
+        documented.clear();
+      },
+      TSPropertySignature: document,
+      TSMethodSignature: document,
+      TSIndexSignature: document,
+      TSInterfaceDeclaration: document,
+      TSTypeAliasDeclaration: document,
+      ExportNamedDeclaration: exported,
+      ExportDefaultDeclaration: exported,
+      after() {
+        for (const comment of context.sourceCode.getAllComments()) {
+          const allowed =
+            comment.type === "Shebang" ||
+            (comment.type === "Line"
+              ? markedLine.test(comment.value) || directive.test(comment.value)
+              : documented.has(comment.start) || directive.test(comment.value));
+
+          if (!allowed) {
+            context.report({ loc: comment.loc, messageId: "prose" });
+          }
+        }
+      },
+    };
+  },
+});
+
 export default eslintCompatPlugin({
   meta: { name: "fence" },
   rules: {
     "allowed-imports": allowedImportsRule,
     "no-manual-run": noManualRunRule,
+    "no-prose-comments": noProseCommentsRule,
   },
 });

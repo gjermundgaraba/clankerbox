@@ -16,7 +16,6 @@ import { fakeRuntime } from "./fake-runtime.ts";
 import { read, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { request, startHost, type TestHost } from "./support.ts";
 
-/** No other test file's host gives out these ports. */
 const ports = { first: 21_110, last: 21_119 };
 
 const host = (options?: Parameters<typeof startHost>[1] & { readonly dir?: string }) =>
@@ -37,7 +36,6 @@ const checkpointActions = (host: TestHost) =>
     Object.fromEntries(rows.map(({ name, action }) => [name, action])),
   );
 
-/** What a refused action records on the rows it held. */
 const refused = (name: string, error: HostError) => ({ name, status: "failed", error });
 
 const machineId = (host: TestHost, name: string) =>
@@ -68,7 +66,6 @@ const withSource = (options?: Parameters<typeof host>[0]) =>
     return linux;
   });
 
-// The host runs on the real clock, as it does in `clankerbox host`.
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
     "a fork copies the running machine to a new one, prepared with its own identity and port",
@@ -691,7 +688,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       );
 
       yield* entered;
-      // Long enough for the restore to reach the permit, were it free.
       yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 50)));
 
       const admitsWhileHeld = linux.fake.calls.filter((call) => call.startsWith("admit")).length;
@@ -702,7 +698,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         concurrency: "unbounded",
       });
 
-      // The budget fits the source and one more: exactly one of the two passes.
       expect(admitsWhileHeld).toBe(1);
       expect(ended.filter(({ _tag }) => _tag === "Success")).toHaveLength(1);
       expect(Object.keys(yield* actions(linux))).toHaveLength(2);

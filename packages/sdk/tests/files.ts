@@ -1,7 +1,6 @@
 import { Effect, FileSystem, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-/** Removed when the test's scope closes. */
 export const scratch = Effect.flatMap(FileSystem.FileSystem, (fs) =>
   fs.makeTempDirectoryScoped({ prefix: "clankerbox-test-" }),
 );
@@ -33,7 +32,6 @@ export const utimes = (path: string, time: Date) =>
 export const exists = (path: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.exists(path));
 
-/** Output discarded. */
 export const exitOf = (
   command: string,
   args: ReadonlyArray<string>,
@@ -49,7 +47,6 @@ export const exitOf = (
     return yield* handle.exitCode;
   });
 
-/** Runs `command` to its end with `input` on its stdin, and returns its exit code and output. */
 export const outputOf = (
   command: string,
   args: ReadonlyArray<string>,

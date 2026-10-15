@@ -116,7 +116,6 @@ test("a sandbox is a fork of a machine or a restore of a checkpoint when the pro
     host: "linux",
     action: "restoreMachine",
   });
-  // The cleanup's delete of the machine the restore never wrote finds nothing.
   expect(missing.stub.calls).toEqual(["machine.restore", "machine.delete"]);
   expect(missing.stub.held()).toEqual([]);
 });

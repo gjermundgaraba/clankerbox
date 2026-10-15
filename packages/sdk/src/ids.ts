@@ -5,21 +5,12 @@ const separator = "_";
 
 const maxIdLength = 62;
 
-/** The ID is written to `/var/lib/clankerbox/machine-id`, and clankercreds accepts only this. */
 const idPattern = /^[A-Za-z0-9_-]{1,62}$/u;
 
-/**
- * boat's named snapshots are `cbx-<host>-<inst>`, and boat allows `^[a-z0-9][a-z0-9-]{0,62}$`:
- * a lowercase host ID of at most 32 characters keeps the name within 63.
- */
 const hostIdPattern = /^[a-z][a-z0-9-]{0,31}$/u;
 
 const hostIdRule = "a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter";
 
-/**
- * smolvm names a machine `<name>-<inst>` and refuses consecutive hyphens, so a name has no
- * `--` and doesn't end in `-`.
- */
 const namePattern = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$/u;
 
 const nameRule =

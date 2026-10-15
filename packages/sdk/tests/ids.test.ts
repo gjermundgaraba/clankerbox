@@ -85,7 +85,6 @@ it.effect("formatting and parsing round-trip", () =>
   }),
 );
 
-/** Padded so that IDs reach past the 62-character limit. */
 const longName = Arbitrary.map(
   Arbitrary.all([
     Arbitrary.schema(Name),
@@ -123,7 +122,7 @@ it("a host ID is a lowercase letter, then up to 31 lowercase letters, digits and
   }
 });
 
-/** boat's named-snapshot names (`boat-v1.yaml`; the bump-boat-api skill). */
+// Source: docs.boat.dev/openapi/boat-v1.yaml, named-snapshot names
 const boatAccepts = (name: string): boolean => /^[a-z0-9][a-z0-9-]{0,62}$/u.test(name);
 
 it("boat accepts cbx-<host>-<inst> for every host ID, the longest included", () => {
@@ -160,7 +159,7 @@ it.effect("a name has no '_', no '--' and doesn't end in '-'", () =>
   }),
 );
 
-/** smolvm 1.27.3's `validate_vm_name` (src/data/mod.rs:58-103). */
+// Source: smolvm 1.27.3 src/data/mod.rs:58-103, validate_vm_name
 const smolvmAccepts = (name: string): boolean =>
   name.length <= 128 &&
   /^[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(name) &&

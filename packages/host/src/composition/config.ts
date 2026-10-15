@@ -38,7 +38,6 @@ const common = {
   machinePorts: Schema.optionalKey(MachinePorts),
 };
 
-// Keyed by the SDK's runtime names, so one the SDK names and this table lacks is a type error.
 const sections = {
   smolvm: SmolvmSettings,
   tart: TartSettings,
@@ -53,7 +52,6 @@ const HostConfigFile = Schema.Union([
 
 type HostConfigFile = typeof HostConfigFile.Type;
 
-// The union's arms follow `sections` by hand, so one it lacks is a type error here too.
 true satisfies [Runtime] extends [HostConfigFile["runtime"]] ? true : false;
 
 type Resolved<C> = C extends unknown
@@ -74,9 +72,6 @@ const resolveConfig = (
     const machinePorts = decoded.machinePorts ?? defaultMachinePorts;
     const { port } = decoded.listen;
 
-    // The tailnet is the API's only gate, so a policy that opens the machines' range to the
-    // clients would open an API port inside it too. That holds for boat, which publishes no
-    // machine ports: in production it shares the smolvm host's tailnet address and range.
     if (port >= machinePorts.first && port <= machinePorts.last) {
       return yield* new Invalid({
         message: `listen.port ${port}: must lie outside ${machinePorts.first}-${machinePorts.last}, the machines' range`,

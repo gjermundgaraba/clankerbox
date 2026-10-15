@@ -2,7 +2,6 @@ import { join } from "node:path";
 import { Effect, FileSystem } from "effect";
 import { cliIn, expect, files } from "../process.ts";
 
-/** Where `ssh-keygen` is, on macOS and on Ubuntu. */
 const searchPath = "/usr/bin:/bin";
 
 export interface SshKey {
@@ -12,10 +11,6 @@ export interface SshKey {
 
 export const keyFile = (stateDir: string): string => join(stateDir, "boat-ssh", "id_ed25519");
 
-/**
- * Generated beside its place and renamed there public half first, so the private key's presence
- * means a whole key.
- */
 export const sshKey = (stateDir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

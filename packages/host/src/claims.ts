@@ -86,14 +86,12 @@ const failed = (token: Token, error: HostError): ActionRecord => ({
   error,
 });
 
-/** A defect is recorded as `Internal`, so its rows stay deletable; only the log has its cause. */
 const died = (what: string, cause: Cause.Cause<unknown>): Effect.Effect<Internal> =>
   Effect.as(
     Effect.logError(`${what} died:\n${Cause.pretty(cause)}`),
     new Internal({ message: `${what} died; the host log has why` }),
   );
 
-/** What a check that ended without its own error records: the host's stop, or a defect. */
 const ended = (token: Token, cause: Cause.Cause<HostError>): Effect.Effect<HostError> =>
   Option.match(Cause.findErrorOption(cause), {
     onSome: Effect.succeed,
@@ -104,10 +102,6 @@ const ended = (token: Token, cause: Cause.Cause<HostError>): Effect.Effect<HostE
   });
 
 export const claimsOn = (store: StoreInterface) => {
-  /**
-   * Before any runtime work, so its inserted rows go and its held rows record the failure.
-   * Logged, not failed, so the action's own error stays the reply.
-   */
   const release = (token: Token, error: HostError) =>
     store
       .release(token, failed(token, error))
@@ -117,7 +111,6 @@ export const claimsOn = (store: StoreInterface) => {
         ),
       );
 
-  /** Logged, not failed, so the action's own error stays the reply. */
   const endFailed = (token: Token, error: HostError) =>
     store
       .end(token, { action: failed(token, error) })
@@ -172,7 +165,6 @@ export const claimsOn = (store: StoreInterface) => {
   ): Effect.Effect<A, E | Internal> =>
     Effect.tapError(surviving(what, work), (error) => endFailed(token, error));
 
-  /** A runtime `Refusal` releases the claim like a failed check. */
   const refusable = <A, E extends HostError, R extends HostError>(
     token: Token,
     what: string,
@@ -190,10 +182,6 @@ export const claimsOn = (store: StoreInterface) => {
   return { claimAndCheck, native, refusable, done };
 };
 
-/**
- * Runs mutations in the host's own scope, so a dropped connection never interrupts one and its
- * outcome is recorded either way.
- */
 export const detacher = Effect.map(
   Effect.scope,
   (scope) =>

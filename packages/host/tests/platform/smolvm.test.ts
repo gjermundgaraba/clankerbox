@@ -32,7 +32,6 @@ const refused = (error: Refusal<HostError> | HostError) =>
 
 const encoder = new TextEncoder();
 
-/** `--version` answers the tested version unless `reply` says otherwise. */
 const scripted = (reply: (call: Call) => Reply | undefined) =>
   scriptedSpawner(
     (call) =>
@@ -40,10 +39,6 @@ const scripted = (reply: (call: Call) => Reply | undefined) =>
       (call.args[0] === "--version" ? { stdout: `smolvm ${testedVersion}\n` } : undefined),
   );
 
-/**
- * The state dir is under `/tmp`: macOS's temporary directory can be too deep for smolvm's
- * sockets.
- */
 const prepared = (expanded: ReadonlyArray<string> = templates) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -87,13 +82,11 @@ const machine: MachineRef = {
   port: 10_000,
 };
 
-/** Skips the startup version check. */
 const smolvmArgs = (calls: ReadonlyArray<Call>) =>
   calls
     .slice(1)
     .map((call) => (call.file.endsWith("/smolvm") ? call.args : [call.file, ...call.args]));
 
-/** As smolvm 1.27.3 answers: a running machine's status also probes its published ports. */
 const status = (state: string): Reply => ({
   stdout: JSON.stringify({
     name: "dev-01234567",
@@ -586,7 +579,6 @@ layer(NodeServices.layer)((it) => {
             return { stdout: "loaded\n" };
           }
 
-          // smolvm recorded no pid for the cut-short boot, so it reads the VM as stopped.
           return call.args[1] === "status" ? status("stopped") : undefined;
         });
 
@@ -718,7 +710,6 @@ layer(NodeServices.layer)((it) => {
         const spawner = scripted(() => undefined);
         const missing = join(settings.prefix, "missing");
 
-        // A real spawn of a missing file, whose own error names the whole command line.
         const failing = ChildProcessSpawner.make((command) =>
           ChildProcess.isStandardCommand(command) && command.args[0] === "machine"
             ? Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (node) =>
@@ -803,7 +794,6 @@ layer(NodeServices.layer)((it) => {
 
         const capacity = yield* runtime.capacity(held);
 
-        // What is left of the budget is exactly what one more machine may take.
         yield* next(4096 - 2560);
 
         const refused = yield* Effect.flip(next(4096 - 2560 + 1));
@@ -1040,11 +1030,6 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
-  /**
-   * A spawner whose `machine checkpoint` makes its output in its store, as smolvm does, whose
-   * `machine create` answers `create`, and whose `machine status` reads the source running and
-   * knows no copy.
-   */
   const forking = (create: Reply) =>
     scripted((call) => {
       if (call.args[1] === "checkpoint") {

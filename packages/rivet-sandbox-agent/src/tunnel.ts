@@ -1,8 +1,3 @@
-/**
- * The tunnel's ssh runs `cat` on a pipe this process holds, so it ends however this process ends.
- * Neither keeps the event loop alive; that takes `node:child_process`, as Effect's process handle
- * can't unref the pipe.
- */
 import { type ChildProcess, spawn } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
@@ -19,16 +14,12 @@ export class LocalTunnelError extends Data.TaggedError("LocalTunnelError")<{
   readonly message: string;
 }> {}
 
-/** ssh's default ConnectTimeout is the system's TCP timeout, minutes; the SDK waits on this. */
 const openWait = Duration.seconds(30);
 
-/** A login takes about a second. */
 const openPause = Duration.millis(100);
 
-/** ssh ends in milliseconds once told to. */
 const closeWait = Duration.seconds(5);
 
-/** Enough for ssh's last few lines, such as a refusal. */
 const stderrTail = 600;
 
 export interface Tunnel {
@@ -95,10 +86,8 @@ export const forwarding = (port: number, extra: ReadonlyArray<string>): Array<st
   "cat",
 ];
 
-/** Node sets an exit code for a child that failed to start too. */
 const over = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
 
-/** A program that couldn't be run emits `error`, with no `exit`. */
 const exited = (child: ChildProcess): Effect.Effect<void> =>
   Effect.callback((resume) => {
     if (over(child)) {
@@ -126,7 +115,9 @@ export interface Start {
 
 /**
  * A port another program holds is refused first: the wait for the port to listen can't tell whose
- * listener it finds. Closing the scope waits for ssh's exit, so the port is free again.
+ * listener it finds. Closing the scope waits for ssh's exit, so the port is free again. The ssh
+ * runs `cat` on a pipe this process holds, so it ends however this process ends, and neither keeps
+ * the event loop alive.
  */
 export const open = (
   start: Start,
@@ -181,7 +172,6 @@ export const open = (
             spawned.stdin.unref();
           }
 
-          // A write to a tunnel that has ended would otherwise be an uncaught error.
           spawned.stdin?.on("error", () => {});
 
           return spawned;

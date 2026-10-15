@@ -86,8 +86,9 @@ runtime, and the SDK's serves stub hosts over an in-memory transport. Neither
   error with fields. The client sets `host` and `action`; `id` is the resource
   the error is about, and `made` the resource a create, fork, restore or
   capture makes. A file is `Invalid` with its `file`.
-- **Tests are Effects** under `@effect/vitest`, on the test clock unless a
-  suite says why it needs real time. Effect is run by hand only in the CLI's
+- **Tests are Effects** under `@effect/vitest`, on the test clock, except the
+  suites that serve a host or run scripts in real time, which pass
+  `excludeTestServices: true`. Effect is run by hand only in the CLI's
   `main.ts` and the provider's `provider.ts`, and in the provider's tests that
   drive its Promise API or a child program.
 - **Property and model tests** cover IDs, units, the RAM budget, recipe
@@ -95,12 +96,21 @@ runtime, and the SDK's serves stub hosts over an in-memory transport. Neither
   states what is right without calling the code under test.
 - **Lifecycles are not state machines.** An action's claim is a SQLite
   transaction, and its states are the `ActionRecord` its row keeps.
+- **No prose comments.** A reason goes where something can check or show it:
+  a type, a test's name, or the commit message. What stays: a one-line
+  `// SAFETY:` above a type assertion, a one-line `// Source:` citing the
+  upstream file a value comes from when a bump must re-check it, a tool
+  directive with its reason after `--`, and a doc block on a type, an
+  interface or one of their members, which is how a port states its contract.
+  The SDK's and the provider's `src/` also keep a doc block on each export,
+  since it ships to consumers.
 - **A lint fence** (`tools/lint-fence`, each rule with its tests; settings in
   `vite.config.ts`): a host domain file imports only its siblings, `effect`,
   `effect/encoding` and the SDK; an adapter imports domain files, its own
   folder and `platform/`'s `process.ts` and `address.ts`; the SDK's `.` entry
-  imports no Node and uses no `Buffer` or `process`; and `fence/no-manual-run`
-  keeps hand-run Effect to the files above.
+  imports no Node and uses no `Buffer` or `process`; `fence/no-manual-run`
+  keeps hand-run Effect to the files above; and `fence/no-prose-comments`
+  allows only the comments above.
 
 Removable packages are not a practice here: the provider package is optional,
 but CI publishes it beside the SDK.

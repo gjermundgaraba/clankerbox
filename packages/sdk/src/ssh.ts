@@ -26,22 +26,12 @@ export const sshTarget = (machine: Machine): Effect.Effect<SshTarget, WrongState
   return Effect.fail(new WrongState({ message, machine: id, state }));
 };
 
-/**
- * ssh looks the key up by `HostKeyAlias`, so the line doesn't depend on the endpoint, which
- * changes.
- */
 const knownHostsLine = (id: string, hostKey: string): string => {
   const [type = "", key = ""] = hostKey.trim().split(/\s+/u);
 
   return `${id} ${type} ${key}\n`;
 };
 
-/**
- * OpenSSH keeps the first user it is given, so the leading `-l` decides it. The destination is
- * the machine's ID, so a `Host <pattern>` block in the user's ssh config can match it, while the
- * endpoint and the pinned key come from options no config overrides. The caller's arguments go
- * after the destination, where OpenSSH still reads options (`-L …`) before a remote command.
- */
 const sshArguments = (
   target: SshTarget,
   user: string,

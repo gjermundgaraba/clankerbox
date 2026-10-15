@@ -1,4 +1,3 @@
-/** The fake boat answers as boat's API v1 does (the bump-boat-api skill). */
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -138,11 +137,6 @@ const refusal = (status: number, code: string, message = `boat says ${code}`): A
 
 const minute = 60_000;
 
-/**
- * A fake boat. Created, forked and restored sandboxes start `provisioned` or `cloning` and run
- * after one read; a stop archives after one read, a named snapshot is saved after one read.
- * `instant` skips those steps. `answer` overrides any request.
- */
 const fakeBoat = (options?: { readonly instant?: boolean }) => {
   const sandboxes = new Map<string, FakeSandbox>();
   const snapshots = new Map<string, { name: string; status: string; error?: string }>();
@@ -163,8 +157,6 @@ const fakeBoat = (options?: { readonly instant?: boolean }) => {
       desktopUrl: `https://desktop.example/stream.html?token=secret-${sandbox.id}`,
     };
 
-    // boat attempts a snapshot at every whole minute of its clock, stamped as it starts, and
-    // completes it two seconds later.
     if (sandbox.snapshots === true) {
       const boatNow = now - (sandbox.behind ?? 0);
       const phase = ((boatNow % minute) + minute) % minute;
@@ -360,7 +352,6 @@ interface SshCall {
   readonly pinned: string;
 }
 
-/** Every ssh call exits 0 unless `answer` says otherwise. */
 const fakeGuest = () => {
   const calls: Array<SshCall> = [];
   const hooks: GuestHooks = {};
@@ -404,7 +395,6 @@ const machineOn = (name: string, fields?: Partial<MachineRef>): MachineRef => ({
   ...fields,
 });
 
-/** Its snapshot is `cbx-boat-cafe000<n>`. */
 const checkpointOn = (name: string, n = 1): CheckpointRef => ({
   id: `boat_${name}`,
   name,
@@ -427,7 +417,6 @@ const row = (machine: MachineRef): Store.NewMachine => ({
   hostKey: undefined,
 });
 
-/** The host key is already there, so no `ssh-keygen` runs. */
 const stateDirIn = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -491,11 +480,6 @@ const limitsReply = (maxActiveSandboxes: number, starts: Schema.Json): Answer =>
   },
 });
 
-/**
- * Until `waiting` resolves, each step of the test clock leaves a moment of real time for the
- * host's files and processes. After it, steps follow one another, so a wait of minutes doesn't
- * take minutes' worth of real moments on a loaded machine.
- */
 const timed = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>, waiting?: Promise<void>) =>
   Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(Effect.exit(Effect.scoped(effect)));
@@ -549,8 +533,6 @@ const remotes = (guest: FakeGuest) => guest.calls.map((call) => call.remote);
 
 const activations = ["/sandboxes", "/fork", "/resume"];
 
-// The runtime and the guest wait as they would on a host, so the tests run on the real clock;
-// `timed` moves a test clock of its own.
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it("states read from boat's: the active ones run, cancelled is gone, anything else is stopped", () => {
     expect(["provisioned", "cloning", "ready", "idle", "running"].map(stateOf)).toEqual([
@@ -624,7 +606,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           return { child, exited };
         };
 
-        // Off the create's machine, nothing ends the wait but the marker.
         const restoring = waiting();
 
         expect(
@@ -633,7 +614,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* write(marker, "");
         expect(yield* Effect.promise(() => restoring.exited)).toBe(0);
 
-        // On the create's own machine it doesn't wait, though no marker ever comes.
         yield* remove(marker);
         yield* write(mark, "");
         expect(
@@ -676,8 +656,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         expect(rig.boat.sandboxes.get("bx_made0001")?.state).toBe("ready");
 
-        // A fresh create isn't a restore: it waits for SSH, which marks the guest's machine as the
-        // create's own, and not for boat's marker.
         expect(remotes(rig.guest)).toEqual([remoteCommand(["touch", createdMark])]);
       }),
   );
@@ -830,7 +808,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `bx_made0001 ${guestKey}\nbx_made0001 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQGuestRsa\n`,
         );
 
-        // The pin lives only as long as its connection.
         expect(existsSync(pinnedFile?.slice("UserKnownHostsFile=".length) ?? "")).toBe(false);
 
         const command = rig.boat.sent.findLast((sent) => sent.path.endsWith("/commands"));
@@ -890,7 +867,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           return refusals >= 0 ? { exitCode: 255, stderr: "Connection refused\n" } : undefined;
         };
 
-        // boat's command API isn't up yet either, at first.
         let unready = 1;
 
         rig.boat.hooks.answer = (sent) => {
@@ -912,7 +888,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* rig.insert(other);
 
-        // Each probe pins host keys in a file of its own; by the second, the first's output is noted.
         const probedTwice = Promise.withResolvers<void>();
         let probes = 0;
 
@@ -942,7 +917,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]);
         expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(180);
 
-        // The sandbox stays recorded for delete.
         expect(yield* nativeOf(rig, "other")).toBe("bx_made0002");
       }),
   );
@@ -955,7 +929,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* rig.insert(machine);
 
-        // The first probe finds SSH not up yet; then boat gives the sandbox up.
         rig.guest.hooks.answer = () => {
           const sandbox = rig.boat.sandboxes.get("bx_made0001");
 
@@ -979,7 +952,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "Internal",
           `machine boat_dev doesn't run: boat reads its sandbox bx_made0001 ${ending}`,
         ]);
-        // Short of the SSH wait's 3 minutes, which a retried read of the gone sandbox would use up.
         expect(Duration.toSeconds(waited)).toBeLessThan(180);
         expect(remotes(rig.guest)).toHaveLength(1);
       }
@@ -1079,8 +1051,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const gone = yield* fails(rig.runtime.create(other, "boat"));
 
-        // boat accepted the create, so a 404 doesn't say it made nothing: the row stays, failed, with
-        // the sandbox ID to find it by.
         expect(refused(gone)).toEqual([
           "not refused",
           "Internal",
@@ -1110,7 +1080,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(refused(restored)[0]).toBe("Unsizable");
         expect(rig.boat.sent).toEqual([]);
 
-        // A running source would sync and wait for a snapshot: the type is refused before either.
         rig.boat.sandboxes.set("bx_source", {
           id: "bx_source",
           state: "idle",
@@ -1204,22 +1173,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ]),
         );
 
-        // A blip is ridden out; a read boat keeps failing ends at its 8 s, and only its own machine
-        // reads unknown.
         expect(Duration.format(waited)).toBe("8s");
         expect(Exit.isSuccess(exit) ? exit.value : exit).toEqual([
           { state: "running", ssh: { host: "203.0.113.10", port: 19_044 } },
           { state: "running", ssh: { host: "198.51.100.7", port: 22 } },
           { state: "stopped" },
-          // Active but not up yet: it runs, with no endpoint until it answers.
           { state: "running" },
           { state: "missing" },
           { state: "missing" },
           { state: "missing" },
-          // A read that fails is no answer: the sandbox may still be there.
           { state: "unknown" },
         ]);
-        // Never the operator's own sandbox: only the recorded ones are read.
         expect(new Set(boat.sent.map((sent) => `${sent.method} ${sent.path}`))).toEqual(
           new Set([
             "GET /sandboxes/bx_booting",
@@ -1271,7 +1235,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         remoteCommand(["/bin/sh", "-c", restoredWait]),
       ]);
 
-      // The relay moved on resume; the exec reads it with the state.
       expect(rig.guest.calls.map((call) => call.args.at(-2))).toEqual([
         "203.0.113.11",
         "203.0.113.11",
@@ -1447,7 +1410,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         sshEndpoint: "203.0.113.10:19044",
       });
 
-      // After the stop, the wait only reads boat; by the second read the first one is noted.
       const readTwice = Promise.withResolvers<void>();
       let reads = 0;
 
@@ -1501,7 +1463,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       ]);
       expect(rig.boat.sent[1]?.headers["x-ascii-confirm-delete"]).toBe("bx_made0001");
 
-      // A repeat after the sandbox is gone is done too.
       yield* succeeds(rig.runtime.delete({ ...machine, native: "bx_made0001" }));
     }),
   );
@@ -1559,7 +1520,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* rig.insert(machine);
 
-        // The create's call answered and the sandbox was recorded, then the host died.
         rig.guest.hooks.answer = () => ({ exitCode: 255 });
         rig.boat.hooks.answer = (sent) =>
           sent.path.endsWith("/sshkey") ? refusal(400, "host_died_here") : undefined;
@@ -1642,8 +1602,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(Exit.isSuccess(exit)).toBe(true);
 
-        // The sync ran at the clock's start; boat's next attempt began a minute later and completed
-        // two seconds after that.
         expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(62);
         expect(rig.guest.calls[0]?.remote).toBe(remoteCommand(["sync"]));
         expect(rig.boat.calls()).toEqual([
@@ -1663,7 +1621,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* rig.insert(copy);
 
-        // boat's clock runs an hour behind the host's, and an attempt began a second before the sync.
         rig.boat.sandboxes.set("bx_source", {
           id: "bx_source",
           state: "idle",
@@ -1679,9 +1636,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(Exit.isSuccess(exit)).toBe(true);
 
-        // The attempt under way at the sync completed a second later and wasn't taken; the next began
-        // at 59 s and completed at 61 s. The test clock runs on while the host works, so a busy machine
-        // may note that next attempt and wait for the one after: only the lower bound is boat's.
         expect(Duration.toSeconds(waited)).toBeGreaterThanOrEqual(61);
         expect(rig.boat.calls()).toEqual([
           "POST /sandboxes/bx_source/fork",
@@ -1701,7 +1655,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         sshEndpoint: "203.0.113.10:19044",
       });
 
-      // Once the sync has run, the wait only reads boat.
       const synced = Promise.withResolvers<void>();
 
       rig.boat.hooks.answer = () => {
@@ -1782,7 +1735,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         rig.guest.calls.length = 0;
         yield* succeeds(rig.runtime.capture(recorded, checkpoint));
 
-        // A running machine syncs over SSH before boat saves its disk.
         expect(rig.boat.sent.map((sent) => `${sent.method} ${sent.path}`)).toEqual([
           "GET /sandboxes/bx_made0001",
           "GET /sandboxes/bx_made0001",
@@ -1797,7 +1749,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         expect(remotes(rig.guest)).toEqual([remoteCommand(["sync"])]);
 
-        // A stopped one doesn't.
         yield* succeeds(rig.runtime.stop(recorded));
         rig.guest.calls.length = 0;
         yield* succeeds(rig.runtime.capture(recorded, checkpointOn("cq", 2)));
@@ -1989,8 +1940,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             : undefined;
         };
 
-        // `up` asks for 3 vCPU and runs as `default`; `new` has no sandbox yet and boots as
-        // `small`; no type covers `huge`, whose create is being refused, so it counts as it asked.
         const machines = [
           { machine: machineOn("up", { native: "bx_up", cpu: 3, ramMib: 6144 }), booting: false },
           { machine: machineOn("down", { native: "bx_down" }), booting: false },
@@ -2042,7 +1991,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             ),
         );
 
-        // The rename's refusal is a warning, the authorization's the error.
         expect(logged).toHaveLength(1);
 
         for (const text of [
@@ -2102,13 +2050,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           yield* fails(rig.runtime.start(machineOn("refused", { native: "bx_stopped" }))),
         );
 
-        // A dropped connection, whose description echoes the request.
         rig.boat.hooks.answer = (sent) => (sent.path.endsWith("/resume") ? "drop" : undefined);
         errors.push(
           yield* fails(rig.runtime.start(machineOn("dropped", { native: "bx_stopped" }))),
         );
 
-        // boat's own error, and a state, on a sandbox it fails.
         rig.boat.hooks.answer = (sent) =>
           sent.path.endsWith("/resume") ? { status: 202, body: { ok: true } } : undefined;
         rig.boat.sandboxes.set("bx_stopped", {
@@ -2120,7 +2066,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           sshEndpoint: null,
         });
         errors.push(yield* fails(rig.runtime.start(machineOn("failed", { native: "bx_stopped" }))));
-        // The stop reads the sandbox running; every read after it, a state that echoes the key.
         let failingReads = 0;
 
         rig.boat.hooks.answer = (sent): Answer | undefined =>
@@ -2165,7 +2110,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ),
         );
 
-        // A warning: a state read boat refuses.
         rig.boat.hooks.answer = () => refusal(400, "bad", echo);
         yield* succeeds(
           rig.runtime.observe([machineOn("unread", { native: "bx_failing" })]).pipe(logging),
@@ -2265,7 +2209,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           setup: { script: "#!/bin/sh\ntrue\n", timeoutSeconds: 30 },
         });
 
-        // The probe, the setup and preparation each pinned the sandbox's keys under its ID.
         expect(guest.calls).toHaveLength(3);
 
         for (const call of guest.calls) {

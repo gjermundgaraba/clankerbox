@@ -256,7 +256,6 @@ it.effect("a host that didn't answer after the chosen one doesn't matter", () =>
   }),
 );
 
-// Without a winner's early return this waits out the 10 s read bound, past the test's timeout.
 it.effect(
   "a silent host after the chosen one doesn't delay the create, and its read is interrupted",
   () =>
@@ -481,7 +480,6 @@ it.effect("every call kind sends the SDK's version", () =>
       }),
     );
 
-    // Placement reads the host before the create by name.
     expect(linux.calls).toHaveLength(15);
     expect(linux.versions).toEqual(linux.calls.map(() => version));
   }),
@@ -583,8 +581,6 @@ const briefly = { timeout: Duration.millis(50) };
 
 const readBriefly = { readTimeout: Duration.millis(50) };
 
-// Each clock test has one host whose timer runs, so moving the clock can't time out another;
-// keeping the other hosts' answers and skipping a failed host are the tests with a down host.
 it.effect("the read timeout bounds a fan-out: a host that never answers is named, retryable", () =>
   Effect.gen(function* () {
     const mac = new Silent();

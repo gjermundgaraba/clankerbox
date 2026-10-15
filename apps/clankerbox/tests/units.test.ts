@@ -125,7 +125,6 @@ it.effect.prop(
     }),
 );
 
-/** A size in MiB, quarter, half or whole GiB, so that each way of printing one comes up. */
 const ramSize = Arbitrary.map(
   Arbitrary.all([
     Arbitrary.schema(upTo(1 << 16)),

@@ -35,7 +35,6 @@ export const reachable = (id: string, fields?: Partial<Machine>) =>
 
 export const cleanups: Array<() => Promise<void>> = [];
 
-/** For each test file's `afterEach`: undoes what its tests set up, last first. */
 export const cleanUp = async () => {
   for (const cleanup of cleanups.splice(0).reverse()) {
     await cleanup();
@@ -125,7 +124,6 @@ export const listening = (port: number) =>
     socket.once("error", () => resolve(false));
   });
 
-/** Node reaps a child and records its exit in one step; a closed port alone may come first. */
 export const gone = (pid: number) => {
   try {
     process.kill(pid, 0);

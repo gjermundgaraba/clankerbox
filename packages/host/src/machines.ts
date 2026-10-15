@@ -152,10 +152,6 @@ export const make = (
           }),
       );
 
-    /**
-     * A read that fails as a whole, or runs past `stateReadWait`, reads every machine `unknown`:
-     * a state read never fails an action.
-     */
     const observeAll = (records: ReadonlyArray<MachineRecord>) =>
       runtime.observe(records.map(ref)).pipe(
         inTime(`the ${runtime.name} runtime`),
@@ -201,19 +197,8 @@ export const make = (
     const holding = (action: ActionName, name: string) =>
       store.hold(action, { kind: "machine", name });
 
-    /**
-     * The RAM budget counts every machine a booting action holds, so two such actions checked
-     * at once would each count the other, and both could be refused although one fits. One at a
-     * time, exactly one of two that fit only alone passes, and no two pick the same port.
-     */
     const admitted = admission.withPermits(1);
 
-    /**
-     * Over-approximates on purpose. Booting actions claim under the admission permit, so any
-     * other such row is past its check. A start on a running machine boots nothing yet reads
-     * booting, which counts no machine twice; a row whose release or end failed reads booting
-     * until the next host start.
-     */
     const boots = ({ action, made }: MachineRecord) =>
       action.status === "running" && booting[action.name](made);
 
@@ -230,7 +215,6 @@ export const make = (
       ),
     );
 
-    /** Bounded by `stateReadWait`, so it never holds the admission permit longer. */
     const admit = (action: ActionName, machine: NewMachine) =>
       Effect.flatMap(heldRows, (machines) =>
         runtime
@@ -242,17 +226,11 @@ export const make = (
           ),
       );
 
-    /** A row this action holds that is gone under it is the host's failure, not the caller's. */
     const held = (name: string) =>
       Effect.catchTag(rows.machine(name), "NotFound", (gone) =>
         Effect.fail(new Internal({ message: `${gone.message}, though an action holds it` })),
       );
 
-    /**
-     * The work may have recorded the runtime's own ID on the row, so setup and preparation read
-     * the row again. A failure in preparation leaves the machine made, so `start` prepares it
-     * again; one before, or in the marking, leaves it unmade.
-     */
     const finish = <E extends HostError, R extends HostError>(
       action: ActionName,
       token: Token,
@@ -286,7 +264,6 @@ export const make = (
         return yield* shown(yield* held(row.name));
       });
 
-    /** A create or restore inserts its own row, and holds nothing else. */
     const makeFresh = <E extends HostError, R extends HostError>(
       action: "createMachine" | "restoreMachine",
       name: string,
@@ -306,7 +283,6 @@ export const make = (
         ([token, row]) => finish(action, token, row, work, setup),
       );
 
-    /** A fork holds its source, which must be made, and joins its new row to the claim. */
     const makeFork = (source: string, name: string) =>
       Effect.flatMap(
         admitted(
@@ -405,9 +381,6 @@ export const make = (
         return yield* makeFork(source, name);
       });
 
-    /**
-     * A ready checkpoint never changes, so restores read it without a claim and run in parallel.
-     */
     const ready = (id: string) =>
       Effect.gen(function* () {
         const checkpoint = yield* rows.checkpoint(yield* nameOf(id));

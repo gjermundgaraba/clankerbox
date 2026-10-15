@@ -1,10 +1,6 @@
 import { Client, describeFileError, describeIssues, Invalid } from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 
-/**
- * An empty or repeated host is `Client.make`'s to refuse, so `profiles`, which asks no host,
- * still runs.
- */
 const ClientConfig = Schema.Struct({
   hosts: Schema.Array(Client.HostEntry),
   profiles: Schema.optionalKey(Schema.String),

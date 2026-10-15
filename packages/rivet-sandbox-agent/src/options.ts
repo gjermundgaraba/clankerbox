@@ -1,4 +1,3 @@
-/** Types alone, so their declarations need no inference. */
 import type { Client } from "@gjermundgaraba/clankerbox-sdk";
 import type { SandboxProvider } from "sandbox-agent";
 

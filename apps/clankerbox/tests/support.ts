@@ -70,7 +70,6 @@ export const cli = (args: ReadonlyArray<string>, options?: CliOptions): Effect.E
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
-        // Each run its own console: a test that runs the CLI twice reads each run's output alone.
         Layer.fresh(TestConsole.layer),
         options?.http ?? transport(network),
         ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ...options?.env } })),
@@ -91,7 +90,6 @@ const JsonError = Schema.fromJsonString(Schema.Struct({ error: ErrorDocument }))
 
 const decodeJson = Schema.decodeUnknownSync(JsonError);
 
-/** Strict, so a field the CLI prints and `ErrorDocument` lacks fails the test. */
 export const decodeJsonError = (text: string) => decodeJson(text, { onExcessProperty: "error" });
 
 export const sizes = ["--base", "ubuntu", "--cpu", "2", "--ram", "4G", "--disk", "20G"];

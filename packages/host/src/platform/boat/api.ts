@@ -1,13 +1,4 @@
-/**
- * Shapes follow `docs.boat.dev/openapi/boat-v1.yaml` (sha256
- * `79aa87e21849194635cf057293d6934638bab1aeee1c1d4857aa1920e34cf210`, fetched 2026-10-05) and what
- * the trial account showed; the bump-boat-api skill lists the claims they rest on.
- *
- * The API key travels only in the `Authorization` header, held `Redacted`. Errors are built from
- * the method, the path, the status and boat's own code and message, never from a request or a
- * whole body (a sandbox's `desktopUrl` carries a token). Every body and transport error is
- * scrubbed of the key as it arrives, so nothing boat or the transport echoes carries it on.
- */
+// Source: docs.boat.dev/openapi/boat-v1.yaml sha256 79aa87e21849194635cf057293d6934638bab1aeee1c1d4857aa1920e34cf210, 2026-10-05
 import {
   Capacity,
   formatGib,
@@ -34,42 +25,22 @@ import type { MachineRef, RoomError, RuntimeError } from "../../runtime.ts";
 
 export const baseUrl = "https://boat.dev/api/v1";
 
-/**
- * The trial's longest auto-stop: it refuses longer, or none, with 400
- * `trial_auto_stop_required`, and a fork without one stops after an hour.
- */
 export const ttlSeconds = 7200;
 
-/** No account secrets, GitHub token or model logins reach the guest. */
 const activation = { noEnv: true, ttlSeconds } as const;
 
-/**
- * Counted from the first unclear answer; a caller with a deadline of its own cuts it short. With
- * `attemptTimeout` on the first and last attempts, a call can take up to 9.5 minutes, after a
- * throttled call's repeats (`throttledPause`).
- */
 export const retryWindow = Duration.minutes(5);
 
-/** Doubling up to `longestPause`. */
 const firstPause = Duration.seconds(1);
 
 const longestPause = Duration.seconds(30);
 
-/**
- * A 429 to a create, fork or restore counts as a start against boat's rolling minute, hour and
- * day windows, so a repeat waits until the minute has rolled past, and there are at most
- * `throttledRepeats` of them: a throttle that outlasts them has cost at most three starts.
- */
 const throttledPause = Duration.seconds(65);
 
 const throttledRepeats = 2;
 
-/**
- * A hung connection must not hold an action forever.
- */
 const attemptTimeout = Duration.minutes(2);
 
-/** A command's own timeout is boat's to enforce; the attempt gets this much on top. */
 const commandMargin = Duration.seconds(30);
 
 export type TypeName = "small" | "default" | "large" | "xlarge";
@@ -81,10 +52,6 @@ export interface MachineType {
   readonly diskGib: number;
 }
 
-/**
- * Smallest first (the bump-boat-api skill). A type the account's plan doesn't include is boat's
- * to refuse: the trial refuses `large` and `xlarge`.
- */
 const largest: MachineType = { name: "xlarge", cpu: 16, ramMib: 32_768, diskGib: 251 };
 
 const machineTypes: ReadonlyArray<MachineType> = [
@@ -99,7 +66,6 @@ type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 const sized = ({ cpu, ramMib, diskGib }: Sizes): string =>
   `${cpu} vCPU, ${formatMib(ramMib)} of RAM and ${formatGib(diskGib)} of disk`;
 
-/** The smallest type that covers the sizes. */
 export const typeFor = (sizes: Sizes): Option.Option<MachineType> =>
   Arr.findFirst(
     machineTypes,
@@ -117,31 +83,19 @@ export const machineType = (sizes: Sizes): Effect.Effect<MachineType, Unsizable>
     onSome: Effect.succeed,
   });
 
-/**
- * Names are account-wide, so they carry the host ID and the row's instance; a host ID of at most
- * 32 characters keeps it within boat's 63.
- */
 export const snapshotName = (host: string, instance: string): string =>
   `cbx-${host}-${instance.slice(0, 8)}`;
 
-/**
- * One per row, so a repeat within boat's 24-hour window returns the sandbox the first call made.
- */
 export const idempotencyKey = (host: string, instance: string): string =>
   `clankerbox-${host}-${instance}`;
 
 const Nullable = <S extends Schema.Top>(schema: S) => Schema.optionalKey(Schema.NullOr(schema));
 
-/**
- * A `cancelled` one is reported once with only `id`, `state` and `error`, so the rest is
- * optional. A `state` the runtime doesn't know reads as `stopped`.
- */
 export const Sandbox = Schema.Struct({
   id: Schema.String,
   state: Schema.String,
   error: Nullable(Schema.String),
   ip: Nullable(Schema.String),
-  /** Set only when the machine has no IPv4 of its own. */
   sshEndpoint: Nullable(Schema.String),
   lastSnapshotAttemptAt: Nullable(Schema.String),
   lastSnapshotStatus: Nullable(Schema.String),
@@ -168,13 +122,8 @@ const NamedSnapshot = Schema.Struct({
 
 const NamedSnapshotInfo = Schema.Struct({ snapshot: NamedSnapshot });
 
-/** Create, fork and resume each count as a start. */
 const StartWindow = Schema.Struct({ limit: Schema.Int, used: Schema.Int });
 
-/**
- * For the wallet a create bills: the host passes no `org` to either. An account boat doesn't
- * limit has no `starts`, or null windows (the bump-boat-api skill).
- */
 const Limits = Schema.Struct({
   activeSandboxes: Schema.Int,
   maxActiveSandboxes: Schema.Int,
@@ -189,7 +138,6 @@ const Limits = Schema.Struct({
 
 const Accepted = Schema.Struct({});
 
-/** boat's own error body. */
 const BoatError = Schema.Struct({
   code: Schema.String,
   message: Schema.String,
@@ -198,10 +146,6 @@ const BoatError = Schema.Struct({
 
 const decodeBoatError = Schema.decodeUnknownEffect(Schema.fromJsonString(BoatError));
 
-/**
- * boat's answers that leave nothing on boat and mean "no room now". They count only for a call
- * that takes room (`sendTakingRoom`).
- */
 const capacityRefusals: ReadonlyArray<readonly [number, string]> = [
   [429, "limit_reached"],
   [429, "member_limit_reached"],
@@ -215,16 +159,8 @@ const inProgress = "idempotency_in_progress";
 
 const rateLimited = "rate_limited";
 
-/**
- * A dropped connection, a timeout, a 5xx boat doesn't call a refusal, a repeat still in
- * progress, a 2xx whose body didn't arrive whole, or a 429 to a call that takes no room.
- */
 class Unclear extends Data.TaggedError("Unclear")<{ readonly message: string }> {}
 
-/**
- * boat made nothing, and the call carries its key, so it is repeated. One that outlasts its
- * repeats is `Capacity` when boat said `rate_limited`, and `Internal` otherwise.
- */
 class Throttled extends Data.TaggedError("Throttled")<{
   readonly message: string;
   readonly rateLimited: boolean;
@@ -309,11 +245,6 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         call.body === undefined ? built : HttpClientRequest.bodyJsonUnsafe(built, call.body),
       );
 
-    /**
-     * A 4xx is definite whatever its body. A 403 with boat's code made nothing and waiting won't
-     * help, so it is `Refused`; a proxy's HTML 403 is `Internal`. A 429 to a call that takes
-     * no room is boat's rate limit on reads and the like, which passes.
-     */
     const refusal = <E>(
       call: Call,
       room: Room<E>,
@@ -380,8 +311,6 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
           return yield* refusal(call, room, response);
         }
 
-        // A body cut off midway leaves the outcome unknown, as a dropped connection does; one that
-        // arrived whole but isn't the answer is boat's, or a proxy's, definite word.
         const text = yield* Effect.mapError(
           response.text,
           (error) =>
@@ -399,7 +328,6 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         );
       });
 
-    /** The request is built once by the caller, so a repeat sends the same bytes. */
     const attempt = <A, E>(
       call: Call,
       room: Room<E>,
@@ -407,7 +335,6 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
       schema: Schema.Decoder<A>,
     ): Effect.Effect<A, Failure | E | Unclear | Throttled> =>
       http.execute(built).pipe(
-        // No span and no trace headers: boat is a third party, and a span would record the call.
         Effect.provideService(HttpClient.TracerDisabledWhen, () => true),
         Effect.mapError(
           (error) =>
@@ -429,11 +356,6 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         }),
       );
 
-    /**
-     * A call safe to repeat is repeated for `retryWindow`, far inside boat's 24-hour key window.
-     * After an unclear attempt no refusal is trusted as one: that attempt may have made a
-     * sandbox, which the refusal may be counting.
-     */
     const sendWith =
       <E extends Capacity>(room: Room<E>) =>
       <A>(call: Call, schema: Schema.Decoder<A>): Effect.Effect<A, Failure | E> => {
@@ -466,10 +388,6 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
           }),
         );
 
-        /**
-         * Each 429 counts as a start, so the `throttledRepeats`th ends them: with the unclear
-         * attempt, at most three starts here, as in `paced`, which may come first.
-         */
         const repeats = (since: number) =>
           Effect.flatMap(Ref.make(0), (throttles) =>
             Effect.retry(once, {
@@ -524,10 +442,8 @@ export const make = (settings: Settings): Effect.Effect<Api, never, HttpClient.H
         );
       };
 
-    /** For the reads and deletes, to which a 404 means the sandbox or snapshot is gone. */
     const sendOrAbsent = sendWith<never>(undefined);
 
-    /** To any other call a 404 is boat's own: what it acts on went away under it. */
     const present = <A, E extends RoomError>(
       call: Effect.Effect<A, E | NotFound>,
     ): Effect.Effect<A, E | Internal> =>

@@ -25,7 +25,6 @@ import type { ChildProcessSpawner } from "effect/process";
 import { type LoadedConfig, loadConfig } from "./config.ts";
 import { parseSeconds } from "./units.ts";
 
-/** A failure the CLI has already printed, so the runtime only exits with `code`. */
 export class Exited extends Data.TaggedError("Exited")<{ readonly code: number }> {
   readonly [Runtime.errorReported] = false;
 
@@ -39,7 +38,6 @@ export class SpawnFailed extends Schema.TaggedError<SpawnFailed>()("SpawnFailed"
   program: Schema.String,
 }) {}
 
-/** Everything a client command reports: a host's errors, the client's, and its own. */
 const failures = [...hostErrors, Unavailable, SpawnFailed] as const;
 
 const Failure = Schema.Union(failures);
@@ -48,7 +46,6 @@ export type Failure = typeof Failure.Type;
 
 const encodeFailure = Schema.encodeSync(Failure);
 
-/** `--json`'s error: the error's own fields, with its tag as `tag`, and `retryable`. */
 export const ErrorDocument = Schema.Union(
   failures.map(({ fields: { _tag, ...fields } }) =>
     Schema.Struct({ ...fields, tag: _tag, retryable: Schema.Boolean }),
@@ -129,7 +126,6 @@ export const clientFlags = {
   ),
 };
 
-/** Only mutations take `--timeout`: the client gives each read its own 10 s `readTimeout`. */
 export const mutationFlags = {
   ...clientFlags,
   timeout: Flag.String("timeout").pipe(
@@ -168,7 +164,6 @@ export const withClient = <A, R>(
     const timeout = yield* parsed(flags.timeout ?? Option.none(), "--timeout", parseSeconds);
     const config = yield* loadConfig(flags.config);
 
-    // Each refusal is of the host list, which the config file holds.
     const client = yield* Client.make(config.hosts, {
       timeout: Option.getOrUndefined(Option.map(timeout, Duration.seconds)),
     }).pipe(Effect.mapError(({ message }) => new Invalid({ message, file: config.file })));

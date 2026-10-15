@@ -1,9 +1,3 @@
-/**
- * `tart exec -i <vm> nc 127.0.0.1 22` needs no guest IP, no Softnet exception and no Local
- * Network permission. A connection ends by closing the command's stdin, never by killing it: a
- * killed `tart exec` leaves the guest's `nc` and `sshd-session` running until the session next
- * writes (the bump-tart skill).
- */
 import { createServer, type Server, type Socket } from "node:net";
 import * as NodeStream from "@effect/platform-node/NodeStream";
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
@@ -19,10 +13,6 @@ export interface Forwarder {
   readonly close: (port: number) => Effect.Effect<void>;
 }
 
-/**
- * Once the client has gone the chunk is dropped, so the command's output is still read to its
- * end and the command can exit on its closed stdin.
- */
 const write = (socket: Socket, chunk: Uint8Array) =>
   Effect.callback<void>((resume) => {
     if (!socket.writable) {
@@ -105,10 +95,7 @@ export const make = (
           return;
         }
 
-        // A client that half-closes still gets the rest of the guest's output.
         const server = createServer({ allowHalfOpen: true }, (socket) => {
-          // The connection's streams see a reset as the end of the client's side; this keeps a
-          // late error on a finished connection from being unhandled.
           socket.on("error", () => undefined);
           run(connection(socket, port, dial));
         });
@@ -134,7 +121,6 @@ export const make = (
           resume(Effect.void);
         });
 
-        // Interrupted before it listens, the server is no listener's yet, so nothing else closes it.
         return Effect.sync(() => {
           if (listeners.get(port) !== server) {
             server.close();

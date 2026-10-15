@@ -27,20 +27,16 @@ const ById = Schema.Struct({ id: Id });
 
 const FromMachine = Schema.Struct({ machine: Id, name: Name });
 
-/** Every action is public, as a host listens only on the tailnet or loopback. */
 const read = { caller: Action.Anyone, readOnly: true } as const;
 
 const write = { caller: Action.Anyone, readOnly: false } as const;
 
-/** What each action fails with; each has `Invalid`, which the host's version check answers. */
 const listing = [Invalid, Internal] as const;
 
 const reading = [Invalid, NotFound, Internal] as const;
 
-/** On a held row, through a runtime, which a provider like boat may refuse. */
 const changing = [Invalid, NotFound, Conflict, Refused, Internal] as const;
 
-/** Booting a made machine from its own or a source's state. */
 const booting = [...changing, NotMade, Missing, WrongState, Capacity] as const;
 
 export const Http = ActionHttp.make(
@@ -165,7 +161,6 @@ type Mutation = {
     : never;
 }[keyof typeof actionsByName];
 
-// resources.ts lists `ActionName` by hand, as the contract imports it; this keeps it the mutations.
 true satisfies [ActionName] extends [Mutation]
   ? [Mutation] extends [ActionName]
     ? true

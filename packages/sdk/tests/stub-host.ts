@@ -49,7 +49,6 @@ export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   ...fields,
 });
 
-/** A ready checkpoint of the machine `machine` makes by default, unless `fields` say otherwise. */
 export const checkpoint = (id: string, fields?: Partial<Checkpoint>): Checkpoint => ({
   id,
   createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
@@ -246,15 +245,12 @@ export const stubHost = (options: StubHostOptions) => {
   return {
     id: options.id,
     creates,
-    /** Labelled such as `machine.start`. */
     calls,
     versions,
-    /** Replaces the machine of its ID, as a failed create or a moved endpoint does. */
     hold: (held: Machine) => {
       machines.set(held.id, held);
     },
     held: () => [...machines.keys()],
-    /** To serve on a real HTTP server. */
     routes,
     handler: (request: Request) => {
       versions.push(request.headers.get(versionHeader));
@@ -267,10 +263,6 @@ export const stubHost = (options: StubHostOptions) => {
 
 export type StubHost = ReturnType<typeof stubHost>;
 
-/**
- * Never answers; `aborted` counts the requests the client gave up on, and `reached` settles once
- * a request has arrived, after the client started its timer.
- */
 export class Silent {
   aborted = 0;
   readonly #reached = Promise.withResolvers<void>();
@@ -300,10 +292,6 @@ const unanswered = (silent: Silent, signal: AbortSignal | null | undefined) =>
     });
   });
 
-/**
- * Sends each request to the stub named by its URL's origin, through the real router. A `down`
- * origin, or one no stub serves, fails like a refused connection.
- */
 export const transport = (
   endpoints: ReadonlyMap<string, Endpoint>,
 ): Layer.Layer<HttpClient.HttpClient> => {

@@ -1,4 +1,3 @@
-// No setup script is kept: setup can carry secrets.
 import { DatabaseSync } from "node:sqlite";
 import {
   ActionName,
@@ -42,13 +41,8 @@ import {
 
 export const databaseFile = "host.db";
 
-/** `PRAGMA application_id`, "cbxh": tells our database from any other SQLite file. */
 export const applicationId = 0x63_62_78_68;
 
-/**
- * Entry `i` takes `user_version` from `i` to `i + 1`. Append only; a released entry never
- * changes, and one added since the last release may be folded into another before it ships.
- */
 export const migrations: ReadonlyArray<string> = [
   `CREATE TABLE machines (
     name TEXT PRIMARY KEY,
@@ -239,10 +233,10 @@ type Finders = { readonly [K in Kind]: (name: string) => Records[K] | undefined 
 const isSqliteError = (cause: unknown): cause is Error & { readonly errcode: number } =>
   cause instanceof Error && "errcode" in cause && typeof cause.errcode === "number";
 
-/** SQLITE_BUSY (sqlite3.h): the database file is locked. */
+// Source: sqlite3.h SQLITE_BUSY
 const sqliteBusy = 5;
 
-/** SQLITE_CONSTRAINT_PRIMARYKEY: node:sqlite reports SQLite's extended result codes. */
+// Source: sqlite3.h SQLITE_CONSTRAINT_PRIMARYKEY
 const sqlitePrimaryKey = 1555;
 
 const describe = (cause: unknown): string =>
@@ -254,10 +248,6 @@ const sql = <A>(what: string, run: () => A): Effect.Effect<A, Internal> =>
     catch: (cause) => new Internal({ message: `state database: ${what}: ${describe(cause)}` }),
   });
 
-/**
- * Some of SQLite's errors, such as a full disk, roll the transaction back themselves, so a throw
- * rolls back only a transaction still open, and the error is SQLite's.
- */
 export const transaction = <A, E>(
   db: DatabaseSync,
   what: string,
@@ -290,11 +280,6 @@ const pragma = (db: DatabaseSync, name: string): number => {
   return Schema.decodeUnknownSync(Schema.Struct({ [name]: Schema.Int }))(row)[name] ?? 0;
 };
 
-/**
- * With `locking_mode = EXCLUSIVE`, SQLite keeps its exclusive file lock after the first write
- * transaction, so another host process can't even read the database. The OS drops the lock when
- * the process ends, so a crash leaves no stale lock.
- */
 const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, CannotStart | Internal> =>
   Effect.try({
     try: () => {
@@ -308,10 +293,6 @@ const lock = (db: DatabaseSync, stateDir: string): Effect.Effect<void, CannotSta
         : new Internal({ message: `couldn't lock state dir ${stateDir}: ${describe(cause)}` }),
   });
 
-/**
- * A database left empty by a crash during init is initialized; a newer or foreign one is
- * refused.
- */
 const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, CannotStart | Internal> =>
   Effect.gen(function* () {
     const { id, version, tables } = yield* sql("read its header", () => ({
@@ -352,11 +333,6 @@ const decodeOwner = Schema.decodeUnknownSync(
   Schema.Struct({ id: Schema.String, runtime: Runtime }),
 );
 
-/**
- * Tart names its VMs and launchd jobs after the host ID, and each runtime knows only its own
- * machines, so under another ID or runtime the rows' machines would read `missing`, and deleting
- * the rows would orphan what the runtime made for them.
- */
 const own = (
   db: DatabaseSync,
   file: string,
@@ -384,10 +360,6 @@ const own = (
 
 export type Owner = Pick<HostSettings, "id" | "runtime" | "stateDir">;
 
-/**
- * Other files in the directory, such as a mount point's `lost+found`, are left alone:
- * `application_id` refuses a foreign database, and the lock a second host.
- */
 export const open = (
   owner: Owner,
 ): Effect.Effect<
@@ -526,7 +498,6 @@ export const open = (
       });
     };
 
-    /** The port's unique index is only a backstop, so its refusal is SQLite's. */
     const insertSync = (action: ActionName, row: NewRow): Result.Result<RowRef, Conflict> => {
       const columns = columnParameters(row.record, action);
 

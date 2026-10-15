@@ -122,9 +122,9 @@ export interface Interface {
 
 export class Store extends Context.Service<Store, Interface>()("@clankerbox/host/Store") {}
 
-/** An action the host's stop cut off records this and its name, whatever phase it was in. */
 export const stoppedDuring = "the host stopped during ";
 
+/** The one write to the host's state a runtime makes. */
 export interface NativeIdRecorder {
   /**
    * Called as soon as the runtime knows the ID (boat assigns its sandbox's), so a `delete` after
@@ -137,7 +137,6 @@ export interface NativeIdRecorder {
   ) => Effect.Effect<void, Internal>;
 }
 
-/** The one write to the host's state a runtime makes. */
 export class NativeIds extends Context.Service<NativeIds, NativeIdRecorder>()(
   "@clankerbox/host/NativeIds",
 ) {}

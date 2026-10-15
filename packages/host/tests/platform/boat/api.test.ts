@@ -95,7 +95,6 @@ const created = (id: string): Answered => ({
   body: { ok: true, type: "sandbox.created", status: "provisioning", sandbox: sandbox(id) },
 });
 
-/** Answers as boat's API v1 does (the bump-boat-api skill). */
 const fakeBoat = (reply: (sent: Sent, index: number) => Reply, delay = Duration.zero) => {
   const sent: Array<Sent> = [];
 
@@ -148,7 +147,6 @@ const run = <A, E>(boat: ReturnType<typeof fakeBoat>, use: (api: Api) => Effect.
     Effect.provide(boat.layer),
   );
 
-/** Moves the test clock a second at a time until `use` ends. */
 const runTimed = <A, E>(
   boat: ReturnType<typeof fakeBoat>,
   use: (api: Api) => Effect.Effect<A, E>,
@@ -240,7 +238,6 @@ it.effect("every create, fork, resume and restore sends noEnv and the trial's TT
       ],
     ]);
 
-    // Create, fork and restore carry their key; boat's resume takes none. None asks to fail fast.
     expect(boat.sent.map((sent) => sent.headers["idempotency-key"])).toEqual([
       "key-create",
       "key-fork",
@@ -302,7 +299,6 @@ it.effect(
         "boat POST /sandboxes answered 503 without boat's error, and repeats for 5m got no clearer answer",
       ]);
 
-      // Pauses of 1, 2, 4, 8 and 16 s, then 30 s each, until 5 minutes have passed: 15 attempts.
       expect(boat.sent).toHaveLength(15);
       expect(Duration.format(waited)).toBe("5m 1s");
       expect(Duration.isGreaterThanOrEqualTo(waited, retryWindow)).toBe(true);
@@ -329,8 +325,6 @@ it.effect(
         "Internal",
         "boat POST /sandboxes had no answer within 2m, and repeats for 5m got no clearer answer",
       ]);
-      // 2 minutes until the first answers nothing; repeats after 1, 2 and 4 s, the last begun 4m 7s
-      // into the window; 2 minutes more.
       expect(boat.sent).toHaveLength(4);
       expect(Duration.format(waited)).toBe("8m 7s");
     }),
@@ -416,7 +410,6 @@ it.effect(
       );
       expect(snapshotBoat.sent).toHaveLength(5);
 
-      // The bound is a keyed call's: 15 attempts in 5 minutes, then the read fails.
       const down = fakeBoat(() => refusal(429, "rate_limited", "slow down"));
       const { exit } = yield* runTimed(down, (api) => Effect.flip(api.sandbox("bx_made0001")));
       const error = Exit.isSuccess(exit) ? exit.value : undefined;
@@ -441,7 +434,6 @@ it.effect("other calls without a key aren't repeated: an unclear outcome fails t
       "boat POST /sandboxes/bx_made0001/resume answered 500 internal_error: boat says internal_error (req_0123)",
     );
 
-    // A 2xx whose body breaks off is unclear too, and fails a call made once.
     const cut = fakeBoat(() => ({ status: 200, cut: '{"ok":true,"type":"command.finished",' }));
     const unread = yield* run(cut, (api) => Effect.flip(api.command("bx_made0001", "true", 30)));
 
@@ -484,8 +476,6 @@ it.effect(
         }
       }
 
-      // Each 429 made nothing, so a refusal after them is boat's word: Capacity, or a plan's
-      // Refused, as on a first attempt.
       for (const [refused, tag] of [
         [refusal(429, "limit_reached", "2 active"), "Capacity"],
         [refusal(403, "trial_machine_class_not_allowed", "no large"), "Refused"],
@@ -549,8 +539,6 @@ it.effect("after an unclear attempt a 429 is repeated 65 s on, once, and never t
 
     const recovered = yield* runTimed(recovers, (api) => api.create("key-1", "small"));
 
-    // The drop, the 429 a second later, the 5xx 65 s after it, and the create after the next
-    // doubled pause, 4 s.
     expect(recovered.exit).toEqual(Exit.succeed("bx_made0001"));
     expect(recovers.sent).toHaveLength(4);
     expect(Duration.format(recovered.waited)).toBe("1m 10s");
@@ -565,8 +553,6 @@ it.effect("after an unclear attempt a 429 is repeated 65 s on, once, and never t
 
     const error = Exit.isSuccess(exit) ? exit.value : undefined;
 
-    // Each 429 counts as a start: the drop, the 429 a second later and the one 65 s after it are
-    // at most three, as without the drop.
     expect(throttled.sent).toHaveLength(3);
     expect(Duration.format(waited)).toBe("1m 6s");
     expect([error?._tag, error?.message]).toEqual([
@@ -627,7 +613,6 @@ it.effect("a 4xx is a definite answer whatever its body, and is never repeated",
     const answers: ReadonlyArray<readonly [Reply, string, string]> = [
       [{ status: 403, text: "<html>Forbidden</html>" }, "Internal", `403 ${bare}`],
       [{ status: 403, cut: '{"ok":false,"code":"trial_' }, "Internal", `403 ${bare}`],
-      // To a create, a 404 is boat's own: only the reads and deletes take it as gone.
       [{ status: 404, text: "" }, "Internal", `404 ${bare}`],
       [{ status: 404, cut: '{"ok":false,' }, "Internal", `404 ${bare}`],
       [
@@ -646,7 +631,6 @@ it.effect("a 4xx is a definite answer whatever its body, and is never repeated",
       expect([error?._tag, error?.message]).toEqual([tag, `boat POST /sandboxes answered ${said}`]);
     }
 
-    // A 404 without a body still means boat has no such sandbox or snapshot.
     const bodiless = fakeBoat(() => ({ status: 404, text: "" }));
 
     const gone = yield* run(bodiless, (api) =>
@@ -685,7 +669,6 @@ it.effect(
         ]);
       }
 
-      // A 403 with boat's code, whichever it is, won't come with waiting: Refused, naming the code.
       const keyBoat = fakeBoat(() =>
         refusal(403, "api_key_action_forbidden", "this API key may not create sandboxes"),
       );
@@ -716,8 +699,6 @@ it.effect(
 
       expect(snapshotError._tag).toBe("Capacity");
 
-      // A call that takes no room isn't refused for room: boat's limit on it passes, and the call,
-      // made once, fails.
       for (const [status, code] of [
         [429, "rate_limited"],
         [429, "limit_reached"],
@@ -736,7 +717,6 @@ it.effect(
         expect(errors.map((error) => error._tag)).toEqual(["Internal", "Internal"]);
       }
 
-      // Other refusals are boat's to explain, and not the host's room.
       for (const [status, code] of [
         [409, "idempotency_key_reused"],
         [400, "trial_auto_stop_required"],
@@ -771,7 +751,6 @@ it.effect("a DELETE is repeated while its outcome is unclear, and a 404 to a rep
       );
     }
 
-    // One that stays unclear fails at the bound, as a GET does.
     const down = fakeBoat(() => refusal(500, "internal_error"));
     const { exit } = yield* runTimed(down, (api) => Effect.flip(api.delete("bx_made0001")));
     const error = Exit.isSuccess(exit) ? exit.value : undefined;
@@ -864,7 +843,6 @@ it.effect("a cancelled sandbox, reported with only its ID, state and error, stil
   }),
 );
 
-/** A real server, for connections that really drop. */
 const loopback = (
   respond: (request: IncomingMessage, body: string, index: number) => Answered | "drop",
 ) =>
@@ -917,7 +895,6 @@ const overFetch = <A, E>(serverUrl: string, use: (api: Api) => Effect.Effect<A, 
     Effect.provide(FetchHttpClient.layer),
   );
 
-// A real socket answers on the real clock, and the create's repeat waits on it.
 it.live("over a real connection: a drop fails a call made once, and a create rides it out", () =>
   Effect.gen(function* () {
     const dropping = yield* loopback(() => "drop");

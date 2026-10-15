@@ -44,7 +44,6 @@ export const name = "clankerbox";
 
 export const defaultCwd = "/home/sandbox";
 
-/** The agent answers on loopback in milliseconds, so a slower one counts as not answering. */
 const healthWait = Duration.seconds(3);
 
 const Health = Schema.Struct({ status: Schema.Literal("ok") });
@@ -87,7 +86,6 @@ export const make = (options: Options, ssh = "ssh") => {
     return known;
   };
 
-  /** A sandbox's operations never overlap: the host would refuse a second start or stop as busy. */
   const locked = <A, E, R>(id: string, use: (known: Sandbox) => Effect.Effect<A, E, R>) =>
     Effect.suspend(() => {
       const known = sandbox(id);
@@ -126,7 +124,6 @@ export const make = (options: Options, ssh = "ssh") => {
       return was === undefined ? Effect.void : Scope.close(was.scope, Exit.void);
     });
 
-  /** The machine is read for each tunnel, as its endpoint changes: on boat at every start. */
   const opened = (
     id: string,
     known: Sandbox,
@@ -181,7 +178,6 @@ export const make = (options: Options, ssh = "ssh") => {
       Effect.catch(() => Effect.succeed(false)),
     );
 
-  /** A start reruns a running machine's start hook and may move its endpoint: the tunnel ends. */
   const started = (id: string, known: Sandbox) =>
     Effect.gen(function* () {
       const client = yield* Client.Client;
@@ -217,11 +213,6 @@ export const make = (options: Options, ssh = "ssh") => {
       return machine;
     });
 
-  /**
-   * Only a failed create, fork or restore leaves its machine on the host, and then its error's
-   * `made` names it; a delete of one it never wrote is `absent`. A `Conflict` is about a machine
-   * another call holds or made, so it is never deleted. A failed delete leaves it to the user.
-   */
   const discard = (error: ClankerboxError) =>
     Effect.gen(function* () {
       const client = yield* Client.Client;
@@ -261,12 +252,7 @@ export const make = (options: Options, ssh = "ssh") => {
           yield* client.stopMachine({ id });
         }),
       ),
-    /** The SDK's `ensureServer`, which follows, opens the tunnel. */
     reconnect: (id: string) => locked(id, (known) => started(id, known)),
-    /**
-     * A local tunnel failure fails at once, since no start changes it. The SDK calls this only
-     * while it starts: a tunnel that ends later stays down until a caller calls it again.
-     */
     ensureServer: (id: string) =>
       locked(id, (known) =>
         Effect.gen(function* () {
