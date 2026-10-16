@@ -1,6 +1,6 @@
 import packageJson from "../package.json" with { type: "json" };
 
-/** Also the version of the clankerbox binaries it ships with. */
+/** Also the version of the clankerbox CLI released with it. */
 export const version: string = packageJson.version;
 
 /** major.minor: releases that share it speak the same API. */

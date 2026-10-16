@@ -18,23 +18,17 @@ reachable over SSH.
 - Hosts and clients share a Tailscale tailnet, and its policy is the only gate:
   the API has no keys and no TLS.
 
-One `clankerbox` binary is both the CLI and the host (`clankerbox host`). The
-TypeScript SDK is `@gjermundgaraba/clankerbox-sdk`.
+One `clankerbox` command, the npm package `@gjermundgaraba/clankerbox`, is both
+the CLI and the host (`clankerbox host`). The TypeScript SDK is
+`@gjermundgaraba/clankerbox-sdk`.
 
 ## Install
 
-Each [GitHub release](https://github.com/gjermundgaraba/clankerbox/releases)
-has a `clankerbox-<target>.tar.gz` and its `.sha256` for `darwin-arm64` and
-`linux-x64`. The bundle holds a single-executable `clankerbox` binary with
-nothing else to install.
+The package needs Node 26 or later, and bundles everything else it runs.
 
 ```sh
-base=https://github.com/gjermundgaraba/clankerbox/releases/latest/download
-curl -fLO "$base/clankerbox-linux-x64.tar.gz"
-curl -fLO "$base/clankerbox-linux-x64.tar.gz.sha256"
-shasum -a 256 -c clankerbox-linux-x64.tar.gz.sha256   # or sha256sum -c
-mkdir clankerbox && tar -xzf clankerbox-linux-x64.tar.gz -C clankerbox
-clankerbox/clankerbox --version
+npm install --global @gjermundgaraba/clankerbox
+clankerbox --version
 ```
 
 Each host needs its runtime, installed by the operator:
@@ -153,13 +147,15 @@ clankerbox checkpoint delete linux_base
   deletes prebuilds: `checkpoint list` shows them.
 - `ssh` pins the machine's host key and logs in as `root`, or `admin` on Tart.
 - Plain OpenSSH reaches machines by ID too, so `ssh linux_dev`, scp, rsync and
-  tools that run ssh work. The released binary, on the default client config,
-  keeps `~/.ssh/clankerbox` with one `Host <host>_*` block per host, as its
-  `sshUser`, and ends `~/.ssh/config` with `Match all` and `Include
-  clankerbox`, so your own entries come first and win. Each connection runs
-  `clankerbox ssh-proxy` and `clankerbox ssh-known-hosts` for the machine's
-  current endpoint and host key, so nothing goes stale when a port changes or
-  a machine is recreated. `CLANKERBOX_SSH_CONFIG=false` removes both.
+  tools that run ssh work. A command on the default client config keeps
+  `~/.ssh/clankerbox` with one `Host <host>_*` block per host, as its
+  `sshUser`, and ends `~/.ssh/config` with `Match all` and
+  `Include clankerbox`, so your own entries come first and win. Each
+  connection runs `clankerbox ssh-proxy` and `clankerbox ssh-known-hosts` for
+  the machine's current endpoint and host key, so nothing goes stale when a
+  port changes or a machine is recreated. They run the `clankerbox` on ssh's
+  `PATH`, which an app started outside a shell may not have.
+  `CLANKERBOX_SSH_CONFIG=false` removes both.
 - `--json` prints the resource or `{"error": {...}}`.
 
 `clankerbox COMMAND --help` documents each command.
@@ -185,9 +181,13 @@ everything the machine had, credentials too.
 
 ## Deploy
 
-Install the binary at a versioned path, such as
-`/opt/clankerbox/<version>/clankerbox`; VMs never reference it, so a release
-replaces it while machines run.
+Install the package in a versioned prefix; VMs never reference it, so a
+release replaces it while machines run. Its `bin/clankerbox` runs the `node` on
+the service's `PATH`, which must be Node 26 or later.
+
+```sh
+npm install --global --prefix /opt/clankerbox/<version> @gjermundgaraba/clankerbox@<version>
+```
 
 **smolvm**, as root, in a system unit:
 
@@ -199,7 +199,7 @@ After=network-online.target tailscaled.service
 
 [Service]
 Type=exec
-ExecStart=/opt/clankerbox/<version>/clankerbox host --config /etc/clankerbox/linux.json
+ExecStart=/opt/clankerbox/<version>/bin/clankerbox host --config /etc/clankerbox/linux.json
 KillMode=control-group
 SuccessExitStatus=130
 Restart=on-failure
@@ -223,7 +223,8 @@ holds the API key, so keep it readable by its user only.
 on smolvm and Tart the machines' port range to clients that run
 `clankerbox ssh`. On a smolvm host, nothing may listen on a public address:
 guests can reach those. On macOS with the application firewall on, allow
-incoming connections for each new binary.
+incoming connections for each new `node` binary, which allows them for every
+program that `node` runs.
 
 ## SDK
 

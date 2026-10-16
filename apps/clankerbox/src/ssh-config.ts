@@ -1,21 +1,14 @@
-import { Config, Console, Context, Effect, FileSystem, Option, Path } from "effect";
+import { Config, Console, Effect, FileSystem, Option, Path } from "effect";
 import type { LoadedConfig } from "./config.ts";
-
-export const Executable = Context.Reference<Option.Option<string>>(
-  "@clankerbox/clankerbox/Executable",
-  { defaultValue: Option.none },
-);
 
 export const includeLines = "Match all\nInclude clankerbox\n";
 
-const unquotable = /["'$`\\%\n]/u;
-
-const block = (run: (command: string) => string, host: LoadedConfig["hosts"][number]): string =>
+const block = (host: LoadedConfig["hosts"][number]): string =>
   [
     `Host ${host.id}_*`,
     `  User ${host.sshUser ?? "root"}`,
-    `  ProxyCommand ${run("ssh-proxy")} %n`,
-    `  KnownHostsCommand ${run("ssh-known-hosts")} %n %H`,
+    "  ProxyCommand clankerbox ssh-proxy %n",
+    "  KnownHostsCommand clankerbox ssh-known-hosts %n %H",
     "  UserKnownHostsFile /dev/null",
     "  GlobalKnownHostsFile /dev/null",
     "  StrictHostKeyChecking yes",
@@ -24,15 +17,12 @@ const block = (run: (command: string) => string, host: LoadedConfig["hosts"][num
     "",
   ].join("\n");
 
-export const renderSshConfig = (executable: string, config: LoadedConfig): string => {
-  const run = (command: string) => `"${executable}" ${command} --config "${config.file}"`;
-
-  return [
+export const renderSshConfig = (hosts: LoadedConfig["hosts"]): string =>
+  [
     "# Managed by clankerbox; do not edit. CLANKERBOX_SSH_CONFIG=false removes it.",
     "",
-    ...config.hosts.map((host) => block(run, host)),
+    ...hosts.map(block),
   ].join("\n");
-};
 
 export const withInclude = (text: string): string =>
   text.includes(includeLines)
@@ -64,7 +54,6 @@ export const syncSshConfig = (config: LoadedConfig) =>
     const path = yield* Path.Path;
     const enabled = yield* Config.Boolean("CLANKERBOX_SSH_CONFIG").pipe(Config.withDefault(true));
     const home = yield* Config.option(Config.String("HOME"));
-    const executable = yield* Executable;
 
     if (Option.isNone(home)) {
       return;
@@ -81,15 +70,7 @@ export const syncSshConfig = (config: LoadedConfig) =>
       return;
     }
 
-    if (Option.isNone(executable)) {
-      return;
-    }
-
-    if (unquotable.test(executable.value) || unquotable.test(config.file)) {
-      return yield* warn(`${executable.value} or ${config.file} has a character it can't quote`);
-    }
-
     yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
-    yield* update(fs, managed, () => renderSshConfig(executable.value, config));
+    yield* update(fs, managed, () => renderSshConfig(config.hosts));
     yield* update(fs, userConfig, withInclude);
   }).pipe(Effect.catch((error) => warn(error.message)));

@@ -1,6 +1,6 @@
 name: Quality
 # A pull request's branch runs once, as the pull request; pushes run on main. The release calls
-# it first and publishes the bundles its sea job uploads.
+# it first.
 on:
   push:
     branches: [main]
@@ -17,37 +17,13 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup
       - run: pnpm ready
-  sea:
-    strategy:
-      matrix:
-        include:
-          - runner: macos-15 # arm64
-            target: darwin-arm64
-          - runner: ubuntu-24.04
-            target: linux-x64
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: ./.github/actions/setup
-      - run: pnpm build
-      # No cache: every run downloads and verifies its Node archives afresh, as the release's must.
-      - name: Bundle and smoke
-        id: bundle
-        shell: bash
-        env:
-          TARGET: ${{ matrix.target }}
+      - name: Pack, install and run the CLI
         run: |
-          pnpm sea:build --out "$RUNNER_TEMP/dist" "$TARGET" | tee "$RUNNER_TEMP/sea-build.log"
-          bundle=$(sed -n 's/^bundled //p' "$RUNNER_TEMP/sea-build.log")
-          test -s "$bundle"
-          pnpm sea:smoke "$bundle"
-          echo "path=$bundle" >>"$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: bundle-${{ matrix.target }}
-          path: |
-            ${{ steps.bundle.outputs.path }}
-            ${{ steps.bundle.outputs.path }}.sha256
-          if-no-files-found: error
+          pnpm --filter @gjermundgaraba/clankerbox pack --pack-destination "$RUNNER_TEMP/cli"
+          tar -tzf "$RUNNER_TEMP/cli/"*.tgz | grep -qx package/LICENSE
+          npm install --global --prefix "$RUNNER_TEMP/cli-prefix" --ignore-scripts "$RUNNER_TEMP/cli/"*.tgz
+          bin="$RUNNER_TEMP/cli-prefix/bin/clankerbox"
+          test "$("$bin" --version)" = "clankerbox v$(jq -r .version apps/clankerbox/package.json)"
+          "$bin" --help | grep -qF "clankerbox <subcommand> [flags]"
+          "$bin" host --help | grep -qF -- "--config"
+          if "$bin" host >/dev/null 2>&1; then exit 1; fi

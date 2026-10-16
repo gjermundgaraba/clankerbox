@@ -14,7 +14,7 @@ import { clientFlags, Exited, fail, machineArgument, SpawnFailed, withClient } f
 export class Dial extends Context.Service<
   Dial,
   (host: string, port: number) => Effect.Effect<Socket.Socket>
->()("@clankerbox/clankerbox/Dial") {}
+>()("@gjermundgaraba/clankerbox/Dial") {}
 
 const destination = (machine: string): { readonly id: string; readonly user?: string } => {
   const at = machine.lastIndexOf("@");

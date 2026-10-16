@@ -22,8 +22,6 @@ afterEach(() => cleanup(stubs));
 
 const mine = "Host linux_dev\n  User developer\n";
 
-const executable = "/opt/clankerbox";
-
 const home = (hosts: ReadonlyArray<object> = [{ id: "linux", url: url("linux") }]) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
@@ -45,25 +43,18 @@ const home = (hosts: ReadonlyArray<object> = [{ id: "linux", url: url("linux") }
   });
 
 layer(NodeServices.layer)((it) => {
-  it("renders one block per host, as its sshUser or root, running this clankerbox with its config", () => {
-    const text = renderSshConfig("/opt/clankerbox", {
-      file: "/home/me/config.json",
-      hosts: [
-        { id: "linux", url: "http://linux:8484" },
-        { id: "mac", url: "http://mac:8484", sshUser: "admin" },
-      ],
-      profiles: undefined,
-    });
-
-    const run = `"/opt/clankerbox"`;
-    const flags = `--config "/home/me/config.json"`;
+  it("renders one block per host, as its sshUser or root, running the clankerbox on ssh's PATH", () => {
+    const text = renderSshConfig([
+      { id: "linux", url: "http://linux:8484" },
+      { id: "mac", url: "http://mac:8484", sshUser: "admin" },
+    ]);
 
     expect(text).toContain(
       [
         "Host linux_*",
         "  User root",
-        `  ProxyCommand ${run} ssh-proxy ${flags} %n`,
-        `  KnownHostsCommand ${run} ssh-known-hosts ${flags} %n %H`,
+        "  ProxyCommand clankerbox ssh-proxy %n",
+        "  KnownHostsCommand clankerbox ssh-known-hosts %n %H",
         "  UserKnownHostsFile /dev/null",
         "  GlobalKnownHostsFile /dev/null",
         "  StrictHostKeyChecking yes",
@@ -86,23 +77,17 @@ layer(NodeServices.layer)((it) => {
     "a command on the default config writes ~/.ssh/clankerbox and includes it after the user's own entries, so theirs win",
     () =>
       Effect.gen(function* () {
-        const { dir, file, env, managed, sshConfig, endpoints } = yield* home();
+        const { dir, env, managed, sshConfig, endpoints } = yield* home();
 
         yield* mkdir(join(dir, ".ssh"));
         yield* write(sshConfig, mine);
 
-        const { code, stderr } = yield* cli(["machines"], { endpoints, env, executable });
+        const { code, stderr } = yield* cli(["machines"], { endpoints, env });
 
         expect(code).toBe(0);
         expect(stderr).not.toContain("SSH config");
         expect(yield* read(sshConfig)).toBe(`${mine}Match all\nInclude clankerbox\n`);
-        expect(yield* read(managed)).toBe(
-          renderSshConfig(executable, {
-            file,
-            hosts: [{ id: "linux", url: url("linux") }],
-            profiles: undefined,
-          }),
-        );
+        expect(yield* read(managed)).toBe(renderSshConfig([{ id: "linux", url: url("linux") }]));
       }),
   );
 
@@ -112,11 +97,11 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const { env, managed, sshConfig, endpoints } = yield* home();
 
-        yield* cli(["machines"], { endpoints, env, executable });
+        yield* cli(["machines"], { endpoints, env });
         yield* chmod(sshConfig, 0o400);
         yield* chmod(managed, 0o400);
 
-        const { code, stderr } = yield* cli(["machines"], { endpoints, env, executable });
+        const { code, stderr } = yield* cli(["machines"], { endpoints, env });
 
         expect(code).toBe(0);
         expect(stderr).not.toContain("SSH config");
@@ -129,27 +114,10 @@ layer(NodeServices.layer)((it) => {
         { id: "linux", url: url("linux"), sshUser: "root\n  ProxyCommand evil" },
       ]);
 
-      const { code, stderr } = yield* cli(["machines"], { endpoints, env, executable });
+      const { code, stderr } = yield* cli(["machines"], { endpoints, env });
 
       expect(code).toBe(1);
       expect(stderr).toContain("hosts[0].sshUser: an SSH user is lowercase letters");
-    }),
-  );
-
-  it.effect("a path it can't quote in ssh_config is warned about, and nothing is written", () =>
-    Effect.gen(function* () {
-      const { env, managed, sshConfig, endpoints } = yield* home();
-
-      const { code, stderr } = yield* cli(["machines"], {
-        endpoints,
-        env,
-        executable: "/opt/it's/clankerbox",
-      });
-
-      expect(code).toBe(0);
-      expect(stderr).toContain("couldn't update the SSH config");
-      expect(yield* exists(managed)).toBe(false);
-      expect(yield* exists(sshConfig)).toBe(false);
     }),
   );
 
@@ -157,7 +125,7 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const { file, env, managed, sshConfig, endpoints } = yield* home();
 
-      yield* cli(["machines", "--config", file], { endpoints, env, executable });
+      yield* cli(["machines", "--config", file], { endpoints, env });
 
       expect(yield* exists(managed)).toBe(false);
       expect(yield* exists(sshConfig)).toBe(false);
@@ -170,28 +138,16 @@ layer(NodeServices.layer)((it) => {
 
       yield* mkdir(join(dir, ".ssh"));
       yield* write(sshConfig, mine);
-      yield* cli(["machines"], { endpoints, env, executable });
+      yield* cli(["machines"], { endpoints, env });
 
       const { code } = yield* cli(["machines"], {
         endpoints,
         env: { ...env, CLANKERBOX_SSH_CONFIG: "false" },
-        executable,
       });
 
       expect(code).toBe(0);
       expect(yield* exists(managed)).toBe(false);
       expect(yield* read(sshConfig)).toBe(mine);
-    }),
-  );
-
-  it.effect("a run that can't name its own executable, such as from source, writes nothing", () =>
-    Effect.gen(function* () {
-      const { env, managed, sshConfig, endpoints } = yield* home();
-
-      yield* cli(["machines"], { endpoints, env });
-
-      expect(yield* exists(managed)).toBe(false);
-      expect(yield* exists(sshConfig)).toBe(false);
     }),
   );
 });

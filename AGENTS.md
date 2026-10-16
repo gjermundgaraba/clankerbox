@@ -7,10 +7,9 @@
 | `packages/sdk/`                 | The contract, its schemas and errors, the client, profiles, prebuilds  |
 | `packages/host/`                | The host: state, claims, actions, guest scripts and the three runtimes |
 | `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                             |
-| `apps/clankerbox/`              | The binary: the CLI's commands and the `host` role                     |
+| `apps/clankerbox/`              | The CLI package: its commands and the `host` role                      |
 | `tools/lint-fence/`             | The repository's own lint rules                                        |
 | `tools/oxlint/anti-slop/`       | Vendored lint plugin                                                   |
-| `tools/release/`                | The single-executable build and its smoke test                         |
 
 The app imports the SDK and the host; the host and the provider import the SDK;
 the SDK imports neither. Each package's `package.json` dependencies are that

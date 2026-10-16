@@ -1,23 +1,43 @@
 {
-  "name": "@clankerbox/clankerbox",
-  "private": true,
+  "name": "@gjermundgaraba/clankerbox",
+  "version": "0.18.1",
+  "description": "The clankerbox command line, and the host it runs as `clankerbox host`",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gjermundgaraba/clankerbox.git",
+    "directory": "apps/clankerbox"
+  },
+  "bin": {
+    "clankerbox": "./dist/clankerbox.mjs"
+  },
+  "files": [
+    "dist"
+  ],
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "vp pack",
     "test": "vp test"
   },
   "dependencies": {
-    "@clankerbox/host": "workspace:*",
-    "@effect/platform-node": "catalog:",
-    "@gjermundgaraba/clankerbox-sdk": "workspace:*",
-    "effect": "catalog:"
+    "@effect/platform-node": "~4.0.4",
+    "@gjermundgaraba/effect-actions": "catalog:",
+    "effect": "~4.0.4"
   },
   "devDependencies": {
+    "@clankerbox/host": "workspace:*",
     "@effect/vitest": "catalog:",
+    "@gjermundgaraba/clankerbox-sdk": "workspace:*",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:",
     "vitest": "catalog:"
+  },
+  "engines": {
+    "node": ">=26"
   }
 }

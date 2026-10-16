@@ -1,9 +1,9 @@
 name: Release
-# Release tags only, vX.Y.Z, naming the SDK's version, which the binaries share. It runs Quality
-# first, whose sea job builds, bundles and smokes both targets; then it uploads those bundles and
-# their .sha256 files to the tag's GitHub release and publishes the SDK and the Sandbox Agent
-# provider, which shares its version, to npm. Each package's npm trusted publisher is bound to
-# this file's name; only the tag trigger gates publishing.
+# Release tags only, vX.Y.Z, naming the SDK's version, which the CLI and the Sandbox Agent provider
+# share. It runs Quality first, then publishes the SDK, the provider and the CLI to npm. Each
+# package's npm trusted publisher is bound to this file's name; only the tag trigger gates
+# publishing. npm registers a trusted publisher only on a package that exists, so a new package's
+# first version is published by hand, with `pnpm publish` from its directory after `npm login`.
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
@@ -20,43 +20,18 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check that the tag names the SDK's version, which the provider shares
+      - name: Check that the tag names the SDK's version, which the provider and the CLI share
         run: |
           test "$GITHUB_REF_NAME" = "v$(jq -r .version packages/sdk/package.json)"
           test "$GITHUB_REF_NAME" = "v$(jq -r .version packages/rivet-sandbox-agent/package.json)"
+          test "$GITHUB_REF_NAME" = "v$(jq -r .version apps/clankerbox/package.json)"
   quality:
     needs: tag
     uses: ./.github/workflows/quality.yml
     permissions:
       contents: read
-  release:
-    needs: quality
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: bundle-*
-          path: bundles
-          merge-multiple: true
-      - name: Upload the bundles to the tag's GitHub release
-        working-directory: bundles
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          for target in darwin-arm64 linux-x64; do
-            test -s "clankerbox-$target.tar.gz"
-            test -s "clankerbox-$target.tar.gz.sha256"
-          done
-          sha256sum -c ./*.sha256
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
-              --notes "One bundle per target, each beside its .sha256. The SDK is @gjermundgaraba/clankerbox-sdk@${TAG#v} on npm."
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber ./*.tar.gz ./*.sha256
   publish:
-    needs: release
+    needs: quality
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -68,7 +43,7 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           registry-url: https://registry.npmjs.org
-      - run: pnpm --filter @gjermundgaraba/clankerbox-sdk --filter @gjermundgaraba/clankerbox-rivet-sandbox-agent build
+      - run: pnpm --filter @gjermundgaraba/clankerbox-sdk --filter @gjermundgaraba/clankerbox-rivet-sandbox-agent --filter @gjermundgaraba/clankerbox build
       - name: Pack and check the package
         run: |
           mkdir -p "$RUNNER_TEMP/sdk"
@@ -105,6 +80,8 @@ jobs:
             assert.equal(dependencies["@gjermundgaraba/clankerbox-sdk"], process.env.VERSION);
           '
           git diff --exit-code
+      - name: Pack the CLI
+        run: pnpm --filter @gjermundgaraba/clankerbox pack --pack-destination "$RUNNER_TEMP/cli"
       # The SDK first: the provider depends on it at the same version. A package whose version npm
       # already has is skipped, so a re-run of a run that published only the SDK finishes it.
       - name: Publish with npm trusted publishing
@@ -118,3 +95,4 @@ jobs:
           }
           publish @gjermundgaraba/clankerbox-sdk "$RUNNER_TEMP/sdk"
           publish @gjermundgaraba/clankerbox-rivet-sandbox-agent "$RUNNER_TEMP/provider"
+          publish @gjermundgaraba/clankerbox "$RUNNER_TEMP/cli"

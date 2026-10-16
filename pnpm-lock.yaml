@@ -218,22 +218,25 @@ importers:
 
   apps/clankerbox:
     dependencies:
+      '@effect/platform-node':
+        specifier: ~4.0.4
+        version: 4.0.4(effect@4.0.4)(redis@6.3.0)
+      '@gjermundgaraba/effect-actions':
+        specifier: 'catalog:'
+        version: 0.17.0(effect@4.0.4)
+      effect:
+        specifier: ~4.0.4
+        version: 4.0.4
+    devDependencies:
       '@clankerbox/host':
         specifier: workspace:*
         version: link:../../packages/host
-      '@effect/platform-node':
-        specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)(redis@6.3.0)
-      '@gjermundgaraba/clankerbox-sdk':
-        specifier: workspace:*
-        version: link:../../packages/sdk
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.4
-    devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
         version: 4.0.4(effect@4.0.4)(vitest@5.0.4)
+      '@gjermundgaraba/clankerbox-sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.4

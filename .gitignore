@@ -1,6 +1,5 @@
 node_modules/
 dist/
-/tools/release/cache/
 *.sqlite*
 __pycache__/
 .vitest/
