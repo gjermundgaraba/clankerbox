@@ -149,9 +149,10 @@ export type HostError = typeof HostError.Type;
 /**
  * Each carries, where known: `host` and `action`, which the client sets; `id`, the resource the
  * error is about, which a host sets on `NotFound` and `Conflict` and the client sets to the call's
- * subject otherwise; and `made`, the resource a create, fork, restore or capture makes. A failure
- * the host answers leaves no machine unmade, and deletes one it couldn't make; only a call whose
- * answer was lost, `Unavailable`, may leave `made` behind unmade.
+ * subject otherwise; and `made`, the resource a create, fork, restore or capture makes. The host
+ * deletes a machine whose copy or setup fails, again at each recheck while that delete fails, and
+ * keeps one whose preparation fails; a call whose answer was lost, `Unavailable`, may leave
+ * `made` behind unmade.
  */
 export const ClankerboxError = Schema.Union([...hostErrors, Unavailable]);
 

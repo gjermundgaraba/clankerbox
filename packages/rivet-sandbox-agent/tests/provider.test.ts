@@ -118,7 +118,7 @@ test("a sandbox is a fork of a machine or a restore of a checkpoint when the pro
     host: "linux",
     action: "restoreMachine",
   });
-  expect(missing.stub.calls).toEqual(["machine.restore"]);
+  expect(missing.stub.calls).toEqual(["machine.restore", "machine.delete"]);
   expect(missing.stub.held()).toEqual([]);
 });
 
@@ -162,14 +162,14 @@ test("a create from a profile with a setup restores its host's prebuild of it, u
   expect(unbuilt.stub.creates.map((request) => request.setup)).toEqual([sent]);
 });
 
-test("a create the host answers with a failure deletes nothing: the host deleted what it couldn't make", async () => {
+test("a create the host fails, as a preparation the host keeps the machine for, deletes the machine", async () => {
   const failure = new ScriptFailed({
-    message: "setup exited 1: no network",
-    script: "setup",
+    message: "preparation exited 1: no network",
+    script: "preparation",
   });
 
   const { stub, sandbox } = await setup({
-    createRefused: failure,
+    createFails: failure,
     machines: [reachable("linux_other")],
   });
 
@@ -183,7 +183,7 @@ test("a create the host answers with a failure deletes nothing: the host deleted
     id: expect.stringMatching(/^linux_sandbox-[0-9a-f]{8}$/u),
   });
 
-  expect(stub.calls).toEqual(["host.get", "machine.create"]);
+  expect(stub.calls).toEqual(["host.get", "machine.create", "machine.delete"]);
   expect(stub.held()).toEqual(["linux_other"]);
 });
 

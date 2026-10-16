@@ -75,7 +75,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: creating,
       description:
-        "Create a machine from a base, run its setup once, and prepare it. A create or setup that fails deletes the machine, and the error is the answer.",
+        "Create a machine from a base, run its setup once, and prepare it. A create or setup that fails deletes the machine, again at each recheck while that delete fails, and the error is the answer; a preparation that fails keeps it.",
       input: CreateRequest,
       success: Machine,
     }),

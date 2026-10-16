@@ -148,7 +148,8 @@ clankerbox checkpoint delete linux_base
   its host while asked to run is started again at its host's next check,
   every 30 s.
 - A create, fork or restore whose copy or setup fails deletes its machine and
-  answers the error; so does a host that restarts before it finished. Only a
+  answers the error, and a delete that fails runs again at the next check; a
+  host that restarts before it finished deletes the machine too. Only a
   `delete` stops a machine being made: a `stop` waits for it to be made, then
   stops it. A `start` on a running machine runs its preparation again, and so
   does a host that restarts, for each machine it finds running.
@@ -313,9 +314,9 @@ await sdk.destroySandbox();
   (`{ checkpoint }`) or a fork (`{ machine }`), and a profile's prebuild is
   used when there is one.
 - A sandbox's ID is `clankerbox/<machine ID>`; `pauseSandbox` stops the
-  machine and `destroySandbox` deletes it. A create whose reply never came
-  deletes the machine it may have made; one the host fails left nothing
-  unmade.
+  machine and `destroySandbox` deletes it. A create that fails deletes the
+  machine it may have made, unless the host answers `Conflict`, as the name
+  is another machine's, or `Superseded`, as a later request owns it.
 - `recipes/ubuntu/` (smolvm) and `recipes/macos/` (Tart) install the server,
   Node and Claude Code. Each takes an `authorized_keys` beside its `setup.sh`,
   and an optional `agent.env` of `NAME=value` lines, such as

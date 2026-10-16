@@ -1,12 +1,13 @@
 import {
   type ClankerboxError,
   Client,
+  Conflict,
   loadProfile,
   pinnedSsh,
   Prebuild,
   specRequest,
   sshTarget,
-  Unavailable,
+  Superseded,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Duration,
@@ -203,7 +204,7 @@ export const make = (options: Options, ssh = "ssh") => {
     Effect.gen(function* () {
       const client = yield* Client.Client;
 
-      if (error instanceof Unavailable && error.made !== undefined) {
+      if (error.made !== undefined && !(error instanceof Conflict || error instanceof Superseded)) {
         yield* Effect.ignore(client.deleteMachine({ id: error.made }));
       }
 

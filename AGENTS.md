@@ -118,10 +118,11 @@ transport. Neither `./testing` export is published.
   begins, and never changes; the next delete of its name clears what a failed
   one left. A start starts the machine, also when it runs already, and
   prepares it. A machine is made by one step in the request that creates it,
-  from what only that request holds: a copy or setup that fails deletes it,
-  so a failure the host answers leaves no machine unmade, and a host that
-  starts deletes every machine the last one's end left unmade, clears its
-  failed captures and deletes and lets the actors finish the rest.
+  from what only that request holds: a copy or setup that fails deletes it
+  and answers the failure, and a delete that fails runs again at each
+  recheck. A host that starts deletes every machine the last one's end left
+  unmade, clears its failed captures and deletes and lets the actors finish
+  the rest.
 - **No prose comments.** A reason goes where something can check or show it:
   a type, a test's name, or the commit message. What stays: a one-line
   `// SAFETY:` above a type assertion, a one-line `// Source:` citing the

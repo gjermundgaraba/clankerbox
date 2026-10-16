@@ -900,6 +900,36 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a setup that fails answers its failure though the delete after it fails, and the next recheck deletes the machine",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host({ recheck: Duration.millis(200) });
+
+        linux.fake.failNext("delete", new Internal({ message: "krun busy" }));
+
+        const error = yield* failure(
+          linux,
+          linux.machines.create(
+            request("dev", { setup: { script: "#!/bin/sh\nexit 3\n", timeoutSeconds: 30 } }),
+          ),
+        );
+
+        const left = yield* linux.run(linux.machines.get("linux_dev"));
+
+        expect(error._tag).toBe("ScriptFailed");
+        expect([left.desired, left.phase, left.error?._tag]).toEqual([
+          "deleted",
+          "failed",
+          "Internal",
+        ]);
+
+        yield* eventually(rows(linux), (intents) => intents.length === 0);
+
+        expect(linux.fake.machines.size).toBe(0);
+      }),
+  );
+
+  it.effect(
     "a fork of a machine whose setup still runs is NotMade, and a stop waits for the setup, then stops it",
     () =>
       Effect.gen(function* () {
