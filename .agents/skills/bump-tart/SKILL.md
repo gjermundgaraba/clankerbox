@@ -68,7 +68,7 @@ Each: what Tart does, where, and what of ours depends on it.
   `runGarbageCollection` in Root.swift). It doesn't require a stopped source,
   only a stacked one must be stopped ("must be stopped before cloning"). Ours:
   no checks around clone; fork and capture of a running machine are refused by
-  our own rule, after the claim, since a clone of a stopped disk is consistent
+  our own rule, before anything native, since a clone of a stopped disk is consistent
   and one of a running VM's disk is crash-consistent at best.
 - Clone regenerates a colliding MAC, checking one Tart home only
   (`hasVMsWithMACAddress`, T@2.40.1:Commands/Clone.swift;
@@ -87,7 +87,7 @@ Each: what Tart does, where, and what of ours depends on it.
 - `tart get` opens local VMs only (`VMStorageLocal().open`,
   T@2.40.1:Commands/Get.swift), not an OCI reference, and `tart list` reports no
   OS (`VMInfo`, Commands/List.swift). Ours: no check of `diskGib` against the
-  base before the claim; Tart's refusal at `tart set` is the check.
+  base before the create; Tart's refusal at `tart set` is the check.
 
 **State, stop and capacity**
 
@@ -115,7 +115,7 @@ Each: what Tart does, where, and what of ours depends on it.
   VMStorageHelper.swift) and exits 1 (`Foundation.exit(1)` in Run.swift)
   within 0.3–0.6 s; under launchd the job just
   exits. Its hint lists the same home's VMs only. Ours: `vmLimit`, the count in
-  step 3, and `limitRefusal` read from the job's log as `Capacity`.
+  `admit`, and `limitRefusal` read from the job's log as `Capacity`.
 
 **Softnet and the network**
 

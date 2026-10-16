@@ -25,7 +25,9 @@
   "dependencies": {
     "@effect/platform-node": "~4.0.4",
     "@gjermundgaraba/effect-actions": "catalog:",
-    "effect": "~4.0.4"
+    "@xstate/effect": "catalog:",
+    "effect": "~4.0.4",
+    "xstate": "catalog:"
   },
   "devDependencies": {
     "@clankerbox/host": "workspace:*",

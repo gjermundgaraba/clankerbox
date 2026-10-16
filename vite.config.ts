@@ -100,6 +100,7 @@ export default defineConfig({
       },
       {
         files: ["packages/host/src/*.ts"],
+        excludeFiles: ["packages/host/src/lifecycle.ts"],
         rules: {
           "fence/allowed-imports": [
             "error",
@@ -111,7 +112,26 @@ export default defineConfig({
                 "^@gjermundgaraba/clankerbox-sdk$",
               ],
               because:
-                "a host domain file imports only other domain files, effect and the SDK; platform/, Node and effect/process are for composition/",
+                "a host domain file imports only other domain files, effect and the SDK; platform/, Node and effect/process are for composition/, and xstate for lifecycle.ts",
+            },
+          ],
+        },
+      },
+      {
+        files: ["packages/host/src/lifecycle.ts"],
+        rules: {
+          "fence/allowed-imports": [
+            "error",
+            {
+              allow: [
+                "^\\./[a-z-]+\\.ts$",
+                "^effect$",
+                "^@gjermundgaraba/clankerbox-sdk$",
+                "^xstate$",
+                "^@xstate/effect$",
+              ],
+              because:
+                "lifecycle.ts holds the machines' statechart, the one domain file on xstate, beside its siblings, effect and the SDK",
             },
           ],
         },

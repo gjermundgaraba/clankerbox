@@ -13,35 +13,27 @@ export const Desired = Schema.Literals(["running", "stopped", "deleted"]);
 
 export type Desired = typeof Desired.Type;
 
-/** The contract's mutations, which record themselves on a resource's `action`. */
-export const ActionName = Schema.Literals([
-  "createMachine",
-  "startMachine",
-  "stopMachine",
-  "deleteMachine",
-  "forkMachine",
-  "restoreMachine",
-  "captureCheckpoint",
-  "deleteCheckpoint",
+/**
+ * What the host is doing about a machine. A request waits for a rest: `settled`, at rest with what
+ * was asked; `failed`, after a step failed, until the next request; `lost`, one the runtime no
+ * longer has, which can only be deleted; and `waiting`, one the runtime can't read, which fails the
+ * request and is read again at the host's next recheck. `creating` copies the machine and runs its
+ * setup, and a machine whose create or setup fails is deleted. `starting` starts the machine, also
+ * when it runs already, and prepares it.
+ */
+export const Phase = Schema.Literals([
+  "observing",
+  "waiting",
+  "creating",
+  "starting",
+  "stopping",
+  "deleting",
+  "settled",
+  "failed",
+  "lost",
 ]);
 
-export type ActionName = typeof ActionName.Type;
-
-export const ActionStatus = Schema.Literals(["running", "failed", "done"]);
-
-export type ActionStatus = typeof ActionStatus.Type;
-
-/** A resource's last action; the next action replaces it. */
-export const ActionRecord = Schema.Union([
-  Schema.Struct({ name: ActionName, status: Schema.Literals(["running", "done"]) }),
-  Schema.Struct({
-    name: ActionName,
-    status: Schema.Literal("failed"),
-    error: HostError,
-  }),
-]);
-
-export type ActionRecord = typeof ActionRecord.Type;
+export type Phase = typeof Phase.Type;
 
 export const SshEndpoint = Schema.Struct({
   host: Schema.String,
@@ -58,10 +50,11 @@ export const SshLogin = Schema.Struct({
 export type SshLogin = typeof SshLogin.Type;
 
 /**
- * `state` is `missing` when the runtime doesn't have the machine, and `unknown` when it couldn't
- * be read. Until its create, fork or restore has `made` it, a machine can only be read, stopped or
- * deleted. `ssh` is only on a running machine whose runtime gives it an endpoint, and `hostKey`,
- * `<type> <base64>`, once preparation has recorded it.
+ * `state` is what the runtime reports: `missing` when it doesn't have the machine, and `unknown`
+ * when it couldn't be read. `desired` is what the last request asked for, `phase` what the host is
+ * doing about it, and `error` why the last step failed, until the next request. `ssh` is only
+ * on a running machine whose runtime gives it an endpoint, and `hostKey`, `<type> <base64>`, once
+ * preparation has recorded it.
  */
 export const Machine = Schema.Struct({
   id: Id,
@@ -73,19 +66,30 @@ export const Machine = Schema.Struct({
   ramMib: Size,
   diskGib: Size,
   state: Schema.Literals(["running", "stopped", "missing", "unknown"]),
-  made: Schema.Boolean,
-  action: ActionRecord,
+  desired: Desired,
+  phase: Phase,
+  error: Schema.optionalKey(HostError),
   ssh: Schema.optionalKey(SshLogin),
   hostKey: Schema.optionalKey(Schema.String),
 }).annotate({ identifier: "Machine" });
 
 export type Machine = typeof Machine.Type;
 
-/** The state as people read it: `running`, or `stopped (unmade)` for one never made. */
-export const stateLabel = ({ state, made }: Machine): string =>
-  made ? state : `${state} (unmade)`;
+/**
+ * The state as people read it: `running` at rest, `running (failed)` where it is but not at rest,
+ * and `stopped, wants running (starting)` on the way.
+ */
+export const stateLabel = ({ state, desired, phase }: Machine): string =>
+  phase === "settled"
+    ? state
+    : state === desired
+      ? `${state} (${phase})`
+      : `${state}, wants ${desired} (${phase})`;
 
-/** `kind` is `ram` (RAM and disks) on smolvm, and `disk` on Tart and boat. */
+/**
+ * `kind` is `ram` (RAM and disks) on smolvm, and `disk` on Tart and boat. A checkpoint exists only
+ * once its capture is done, and never changes after.
+ */
 export const Checkpoint = Schema.Struct({
   id: Id,
   createdAt: Schema.DateTimeUtcFromString,
@@ -96,14 +100,9 @@ export const Checkpoint = Schema.Struct({
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
-  action: ActionRecord,
 }).annotate({ identifier: "Checkpoint" });
 
 export type Checkpoint = typeof Checkpoint.Type;
-
-/** A checkpoint restores once its capture is done; it never changes after. */
-export const isReady = (checkpoint: Pick<Checkpoint, "action">): boolean =>
-  checkpoint.action.status === "done";
 
 /**
  * `runtimeVersion` is boat's API version on boat. `captureFrom` is the state a machine must be in

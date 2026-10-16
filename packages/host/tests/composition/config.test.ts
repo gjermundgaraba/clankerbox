@@ -5,6 +5,7 @@ import { Effect, Redacted, type Schema } from "effect";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { loadConfig } from "../../src/composition/config.ts";
+import { defaultRecheck } from "../../src/settings.ts";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 
 const image =
@@ -30,7 +31,7 @@ const load = (contents: Schema.Json) =>
 
 layer(NodeServices.layer)((it) => {
   it.effect(
-    "a host config resolves its state dir against its own directory and defaults the machine ports",
+    "a host config resolves its state dir against its own directory and defaults the machine ports and the recheck",
     () =>
       Effect.gen(function* () {
         const { file, loaded } = yield* load(config);
@@ -43,6 +44,7 @@ layer(NodeServices.layer)((it) => {
           stateDir: join(file, "..", "state"),
           bases: new Map([["ubuntu", image]]),
           machinePorts: { first: 10_000, last: 19_999 },
+          recheck: defaultRecheck,
           smolvm: { prefix: "/opt/smolvm/1.27.3" },
         });
       }),
@@ -81,6 +83,7 @@ layer(NodeServices.layer)((it) => {
         stateDir: join(file, "..", "state"),
         bases: new Map([["tahoe", "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3"]]),
         machinePorts: { first: 10_000, last: 19_999 },
+        recheck: defaultRecheck,
         tart: { binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart" },
       });
     }),

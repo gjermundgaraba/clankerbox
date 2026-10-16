@@ -1,40 +1,43 @@
-import type {
-  ActionName,
-  ActionRecord,
-  Checkpoint,
-  Conflict,
-  Internal,
-  NotFound,
-} from "@gjermundgaraba/clankerbox-sdk";
+import type { Checkpoint, Conflict, Desired, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, type DateTime, type Effect, type Option } from "effect";
-import type { Kind } from "./ids.ts";
 
-export interface Resource {
+/** What the store answers a request with: what the row now asks for, and the request's number. */
+export interface Desire {
+  readonly desired: Desired;
+  readonly generation: number;
+}
+
+/** A machine's row: what the operator asked for, and the progress toward it. */
+export interface Intent {
   readonly name: string;
   readonly instance: string;
+  /** Recorded by the runtime through `NativeIds`; a step reads it from the row, never a copy. */
+  readonly native: string | undefined;
   readonly createdAt: DateTime.Utc;
   readonly base: string;
   readonly profile: string | undefined;
   readonly cpu: number;
   readonly ramMib: number;
   readonly diskGib: number;
-}
-
-export interface MachineRecord extends Resource {
-  readonly native: string | undefined;
-  readonly action: ActionRecord;
+  /** Picked when the row is inserted, and never changes. */
   readonly port: number | undefined;
-  readonly hostKey: string | undefined;
+  readonly desired: Desired;
+  /** Raised by every request, so a request can tell its own answer from a later one's. */
+  readonly generation: number;
   /**
-   * Until the runtime work of the create, fork or restore succeeds, the machine can only be
-   * read, stopped or deleted.
+   * Once its copy and its setup succeeded, in the request that created it; one the host finds
+   * unmade at its start is deleted. After that, a machine the runtime lacks is lost.
    */
   readonly made: boolean;
+  /** The key the last preparation that printed one printed, which no runtime can tell again. */
+  readonly hostKey: string | undefined;
 }
 
-/** Ready checkpoints never change, so restores read them without a claim. */
-export interface CheckpointRecord extends Resource {
-  readonly action: ActionRecord;
+/** Only a capture that succeeded is a checkpoint; the store keeps the rest out of every read. */
+export interface CheckpointRecord {
+  readonly name: string;
+  readonly instance: string;
+  readonly createdAt: DateTime.Utc;
   readonly machine: string;
   readonly kind: Checkpoint["kind"];
   /** A `ram` checkpoint restores only under the runtime's pin at capture. */
@@ -44,85 +47,49 @@ export interface CheckpointRecord extends Resource {
    * it to the new machine's own.
    */
   readonly port: number | undefined;
-}
-
-export type NewMachine = Omit<MachineRecord, "action" | "made">;
-
-export type NewCheckpoint = Omit<CheckpointRecord, "action">;
-
-export interface Records {
-  readonly machine: MachineRecord;
-  readonly checkpoint: CheckpointRecord;
-}
-
-export interface RowRef<K extends Kind = Kind> {
-  readonly kind: K;
-  readonly name: string;
-}
-
-export type NewRow =
-  | { readonly kind: "machine"; readonly record: NewMachine }
-  | { readonly kind: "checkpoint"; readonly record: NewCheckpoint };
-
-export interface Token {
-  readonly action: ActionName;
-  readonly inserted: ReadonlyArray<RowRef>;
-  readonly held: ReadonlyArray<RowRef>;
-}
-
-export interface Claim<A> {
-  readonly token: Token;
-  readonly held: A;
-}
-
-export interface Outcome {
-  readonly action: ActionRecord;
-  /** A preparation that printed no host key leaves the row's key as it was. */
-  readonly prepared?: { readonly name: string; readonly hostKey: string | undefined } | undefined;
+  readonly base: string;
+  readonly profile: string | undefined;
+  readonly cpu: number;
+  readonly ramMib: number;
+  readonly diskGib: number;
 }
 
 export interface Interface {
-  readonly list: Effect.Effect<ReadonlyArray<MachineRecord>, Internal>;
-  readonly find: (name: string) => Effect.Effect<Option.Option<MachineRecord>, Internal>;
+  readonly machines: Effect.Effect<ReadonlyArray<Intent>, Internal>;
+  readonly findMachine: (name: string) => Effect.Effect<Option.Option<Intent>, Internal>;
   readonly ports: Effect.Effect<ReadonlySet<number>, Internal>;
+  /** A taken name is `Conflict`, and then nothing is written. */
+  readonly insertMachine: (intent: Intent) => Effect.Effect<void, Conflict | Internal>;
+  /**
+   * Numbers the request one past the row's last, in the one write that records it; a deleted row
+   * stays deleted. `None` when the row is gone.
+   */
+  readonly desire: (
+    name: string,
+    desired: Desired,
+  ) => Effect.Effect<Option.Option<Desire>, Internal>;
+  readonly made: (name: string) => Effect.Effect<void, Internal>;
+  readonly hostKey: (name: string, hostKey: string) => Effect.Effect<void, Internal>;
+  readonly removeMachine: (name: string) => Effect.Effect<void, Internal>;
   readonly checkpoints: Effect.Effect<ReadonlyArray<CheckpointRecord>, Internal>;
   readonly findCheckpoint: (
     name: string,
   ) => Effect.Effect<Option.Option<CheckpointRecord>, Internal>;
-  /**
-   * One transaction. A missing row is NotFound and one another action holds `Conflict{busy}`,
-   * and then nothing is written. The token covers `joining`'s rows too, so an action can claim
-   * in steps and still release or end everything at once.
-   */
-  readonly hold: <K extends Kind>(
-    action: ActionName,
-    row: RowRef<K>,
-    joining?: Token,
-  ) => Effect.Effect<Claim<Records[K]>, NotFound | Conflict | Internal>;
-  /**
-   * One transaction, held by `action` from the start and joined to `joining` as `hold` does. A
-   * taken name is `Conflict{exists}`, and then nothing is written. Actions pick ports one at a
-   * time, so the port's unique index is only a backstop.
-   */
-  readonly insert: <R extends NewRow>(
-    action: ActionName,
-    row: R,
-    joining?: Token,
-  ) => Effect.Effect<Token, Conflict | Internal>;
-  /** One transaction: its inserted rows go, and its held rows record `action`. */
-  readonly release: (token: Token, action: ActionRecord) => Effect.Effect<void, Internal>;
-  /** One transaction; called once the runtime's work is done and before preparation. */
-  readonly markMade: (token: Token) => Effect.Effect<void, Internal>;
-  /** One transaction, recording `outcome` on every row of the claim. */
-  readonly end: (token: Token, outcome: Outcome) => Effect.Effect<void, Internal>;
-  readonly remove: (row: RowRef) => Effect.Effect<void, Internal>;
-  /** Marks every action still running failed, `stoppedDuring` it: the last host's end cut it off. */
-  readonly failInterrupted: Effect.Effect<void, Internal>;
+  /** The row under `name`, also one a capture or a delete that failed left unready. */
+  readonly anyCheckpoint: (
+    name: string,
+  ) => Effect.Effect<Option.Option<CheckpointRecord>, Internal>;
+  /** The row of a capture under way, which no read shows; a taken name is `Conflict`. */
+  readonly beginCheckpoint: (record: CheckpointRecord) => Effect.Effect<void, Conflict | Internal>;
+  readonly readyCheckpoint: (name: string) => Effect.Effect<void, Internal>;
+  /** Hides a checkpoint whose delete begins, so a delete that fails leaves it unready for the next. */
+  readonly retireCheckpoint: (name: string) => Effect.Effect<void, Internal>;
+  readonly removeCheckpoint: (name: string) => Effect.Effect<void, Internal>;
+  /** The captures and deletes that failed, or that the last host's end cut off, with what they left. */
+  readonly unready: Effect.Effect<ReadonlyArray<CheckpointRecord>, Internal>;
 }
 
 export class Store extends Context.Service<Store, Interface>()("@clankerbox/host/Store") {}
-
-export const stoppedDuring = "the host stopped during ";
 
 /** The one write to the host's state a runtime makes. */
 export interface NativeIdRecorder {

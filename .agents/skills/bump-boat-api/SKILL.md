@@ -121,8 +121,8 @@ Each: what boat does, and what of ours depends on it.
   `member_limit_reached`, an organization owner's cap below the plan's active
   limit, and says `rate_limited` names the rolling start window it hit,
   minute, hour or day; no `Retry-After` is documented. Ours:
-  `capacityRefusals` (all but `rate_limited`) as `Capacity` under the refusal
-  rule, only for the calls that take room (`takesRoom`: create, fork, resume,
+  `capacityRefusals` (all but `rate_limited`) as `Capacity`, only for the
+  calls that take room (`takesRoom`: create, fork, resume,
   restore and a named snapshot's save). Any other 429 to a keyed call
   (`Throttled`) is repeated `throttledRepeats` (2) times `throttledPause` (65 s)
   apart, past the minute window, so an hour's or a day's limit costs at most

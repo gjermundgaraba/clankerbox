@@ -6,34 +6,41 @@ import {
   Conflict,
   type HostError,
   Internal,
-  NotMade,
   NotOffered,
   ScriptFailed,
+  Superseded,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Exit, Fiber, Option, Result } from "effect";
+import { Duration, Effect, Fiber, Option, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import * as Machines from "../src/machines.ts";
-import * as BindProbe from "../src/platform/bind-probe.ts";
-import { Refusal } from "../src/runtime.ts";
-import * as Store from "../src/store.ts";
-import { exists, read, remove, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { hostConfig, request, startHost, type TestHost } from "./support.ts";
+import { exists, read, remove } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { at, failure, hostOn, pause, request, type TestHost } from "./support.ts";
 
 const ports = { first: 21_100, last: 21_109 };
 
-const host = (options?: Parameters<typeof startHost>[1] & { readonly dir?: string }) =>
+const host = hostOn(ports);
+
+const rows = (host: TestHost) => host.run(host.store.machines);
+
+const eventually = <A>(read_: Effect.Effect<A, HostError>, done: (value: A) => boolean) =>
   Effect.gen(function* () {
-    return yield* startHost(options?.dir ?? (yield* scratch), { ports, ...options });
+    for (let tries = 0; tries < 100; tries++) {
+      const value = yield* read_;
+
+      if (done(value)) {
+        return value;
+      }
+
+      yield* pause;
+    }
+
+    const last = yield* read_;
+
+    expect(done(last), `never got there: ${JSON.stringify(last)}`).toBe(true);
+
+    return last;
   });
-
-const failure = <A, E>(host: TestHost, effect: Effect.Effect<A, E>) =>
-  host.run(Effect.flip(effect));
-
-const rows = (host: TestHost) => host.run(host.store.list);
-
-const pause = Effect.sleep(Duration.millis(50));
 
 const installsStart = {
   script: [
@@ -50,7 +57,7 @@ const installsStart = {
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
-    "create runs setup once, then preparation, and reports the machine as the runtime sees it",
+    "create runs setup once, then preparation, and answers once the machine runs as asked",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
@@ -66,9 +73,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           runtime: "smolvm",
           base: "ubuntu",
           state: "running",
-          action: { name: "createMachine", status: "done" },
+          desired: "running",
+          phase: "settled",
           ssh: { host: "127.0.0.1", port: ports.first },
         });
+        expect(made.error).toBeUndefined();
         expect(made.hostKey).toMatch(/^ssh-ed25519 AAAA[0-9a-f]+$/u);
         expect(yield* read(join(root, "var/lib/clankerbox/machine-id"))).toBe("linux_dev\n");
         expect(yield* read(join(root, "starts"))).toBe("start\n");
@@ -77,32 +86,28 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "admit linux_dev",
           "create linux_dev",
           "exec linux_dev",
+          "start linux_dev",
           "exec linux_dev",
         ]);
       }),
   );
 
-  it.effect(
-    "start on a running machine is admitted, calls the runtime's start and runs preparation again; setup never runs again",
-    () =>
-      Effect.gen(function* () {
-        const linux = yield* host();
+  it.effect("a start of a machine that already runs prepares it again, admitting nothing", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
 
-        yield* linux.run(linux.machines.create(request("dev", { setup: installsStart })));
-        linux.fake.calls.length = 0;
+      yield* linux.run(linux.machines.create(request("dev", { setup: installsStart })));
+      linux.fake.calls.length = 0;
 
-        const started = yield* linux.run(linux.machines.start("linux_dev"));
+      const started = yield* linux.run(linux.machines.start("linux_dev"));
 
-        expect(started).toMatchObject({
-          state: "running",
-          action: { name: "startMachine", status: "done" },
-        });
-        expect(linux.fake.calls).toEqual(["admit linux_dev", "start linux_dev", "exec linux_dev"]);
-        expect(yield* read(join(linux.fake.root("dev") ?? "", "starts"))).toBe("start\nstart\n");
-      }),
+      expect(at(started)).toEqual(["running", "running", "settled"]);
+      expect(linux.fake.calls).toEqual(["start linux_dev", "exec linux_dev"]);
+      expect(yield* read(join(linux.fake.root("dev") ?? "", "starts"))).toBe("start\nstart\n");
+    }),
   );
 
-  it.effect("stop, start and delete run the runtime's calls in turn", () =>
+  it.effect("stop, start and delete run the runtime's calls in turn, start preparing again", () =>
     Effect.gen(function* () {
       const linux = yield* host();
 
@@ -114,14 +119,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* linux.run(linux.machines.delete("linux_dev"));
 
-      expect(stopped).toMatchObject({
-        state: "stopped",
-        action: { name: "stopMachine", status: "done" },
-      });
-      expect(started).toMatchObject({
-        state: "running",
-        action: { name: "startMachine", status: "done" },
-      });
+      expect(at(stopped)).toEqual(["stopped", "stopped", "settled"]);
+      expect(at(started)).toEqual(["running", "running", "settled"]);
       expect(linux.fake.calls).toEqual([
         "stop linux_dev",
         "admit linux_dev",
@@ -134,7 +133,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect("stop on a stopped machine calls the runtime's stop, which leaves it stopped", () =>
+  it.effect("a stop of a machine that is already stopped calls nothing", () =>
     Effect.gen(function* () {
       const linux = yield* host();
 
@@ -144,11 +143,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const again = yield* linux.run(linux.machines.stop("linux_dev"));
 
-      expect(again).toMatchObject({
-        state: "stopped",
-        action: { name: "stopMachine", status: "done" },
-      });
-      expect(linux.fake.calls).toEqual(["stop linux_dev"]);
+      expect(at(again)).toEqual(["stopped", "stopped", "settled"]);
+      expect(linux.fake.calls).toEqual([]);
     }),
   );
 
@@ -187,57 +183,102 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a read of every machine that fails reads them all unknown, and never fails the action it follows",
+    "a read of every machine that fails reads them all unknown, and a list goes on to answer",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
 
         yield* linux.run(linux.machines.create(request("a")));
-        linux.fake.failNextObserve(new Internal({ message: "tart list exited 1" }));
-
-        const made = yield* linux.run(linux.machines.create(request("b")));
-
+        yield* linux.run(linux.machines.create(request("b")));
         linux.fake.failNextObserve(new Internal({ message: "tart list exited 1" }));
 
         const listed = yield* linux.run(linux.machines.list);
 
-        expect(made).toMatchObject({
-          state: "unknown",
-          action: { name: "createMachine", status: "done" },
-        });
-        expect(made.ssh).toBeUndefined();
         expect(listed.map(({ id, state }) => [id, state])).toEqual([
           ["linux_a", "unknown"],
           ["linux_b", "unknown"],
         ]);
-        expect(yield* linux.run(linux.machines.get("linux_b"))).toMatchObject({ state: "running" });
+        expect(listed.map(({ ssh }) => ssh)).toEqual([undefined, undefined]);
+        expect((yield* linux.run(linux.machines.get("linux_b"))).state).toBe("running");
       }),
   );
 
-  const onTestClock = <A>(
-    linux: TestHost,
-    use: (machines: Machines.Interface) => Effect.Effect<A, HostError>,
-  ) =>
-    linux.run(
+  it.effect(
+    "a stop sent while the runtime can't read the machine fails, and the next recheck stops it",
+    () =>
       Effect.gen(function* () {
-        const machines = yield* Machines.make(hostConfig(linux.stateDir, ports)).pipe(
-          Effect.provideService(Store.Store, linux.store),
-          Effect.provide(linux.fake.layer),
-          Effect.provide(BindProbe.layer),
+        const linux = yield* host({ recheck: Duration.millis(200) });
+
+        yield* linux.run(linux.machines.create(request("dev")));
+        linux.fake.machines.set("dev", { state: "unknown", root: linux.fake.root("dev") ?? "" });
+        linux.fake.calls.length = 0;
+
+        const unread = yield* failure(linux, linux.machines.stop("linux_dev"));
+        const whileUnread = [...linux.fake.calls];
+
+        linux.fake.machines.set("dev", { state: "running", root: linux.fake.root("dev") ?? "" });
+
+        const stopped = yield* eventually(
+          linux.run(linux.machines.get("linux_dev")),
+          (machine) => machine.phase === "settled",
         );
 
-        const fiber = yield* Effect.forkChild(Effect.result(use(machines)));
-        let waited = Duration.zero;
+        expect([unread, whileUnread]).toEqual([
+          new Internal({
+            message:
+              "the smolvm runtime couldn't read machine linux_dev; the host reads it again at its next recheck",
+          }),
+          [],
+        ]);
+        expect(at(stopped)).toEqual(["stopped", "stopped", "settled"]);
+        expect(linux.fake.calls).toEqual(["stop linux_dev"]);
+      }),
+  );
 
-        while (fiber.pollUnsafe() === undefined) {
-          yield* Effect.yieldNow;
-          yield* TestClock.adjust(Duration.seconds(1));
-          waited = Duration.sum(waited, Duration.seconds(1));
-        }
+  it.effect(
+    "a create whose runtime can't be read after the copy fails though it is made, and a recheck prepares it",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host({ recheck: Duration.millis(200) });
+        const { entered, release } = linux.fake.holdNext("exec");
 
-        return { result: yield* Fiber.join(fiber), waited: Duration.format(waited) };
-      }).pipe(Effect.scoped, Effect.provide(TestClock.layer()), Effect.provide(NodeServices.layer)),
-    );
+        const creating = yield* Effect.forkChild(
+          linux.run(Effect.flip(linux.machines.create(request("dev", { setup: installsStart })))),
+        );
+
+        yield* entered;
+        linux.fake.failNextObserve(new Internal({ message: "tart list exited 1" }));
+        yield* release;
+
+        const unread = yield* Fiber.join(creating);
+
+        const settled = yield* eventually(
+          linux.run(linux.machines.get("linux_dev")),
+          (machine) => machine.phase === "settled",
+        );
+
+        expect(unread._tag).toBe("Internal");
+        expect((yield* rows(linux)).map(({ made }) => made)).toEqual([true]);
+        expect([at(settled), settled.hostKey === undefined]).toEqual([
+          ["running", "running", "settled"],
+          false,
+        ]);
+      }),
+  );
+
+  const onTestClock = <A>(use: Effect.Effect<A, HostError>) =>
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkChild(Effect.result(use));
+      let waited = Duration.zero;
+
+      while (fiber.pollUnsafe() === undefined) {
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(Duration.seconds(1));
+        waited = Duration.sum(waited, Duration.seconds(1));
+      }
+
+      return { result: yield* Fiber.join(fiber), waited: Duration.format(waited) };
+    });
 
   it.effect(
     "a read of runtime state that doesn't answer within 9 s reads every machine unknown",
@@ -248,20 +289,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* linux.run(linux.machines.create(request("dev")));
         linux.fake.hangNextObserve();
 
-        const { result, waited } = yield* onTestClock(linux, (machines) =>
-          machines.get("linux_dev"),
-        );
+        const { result, waited } = yield* onTestClock(linux.machines.get("linux_dev"));
 
         expect(waited).toBe("9s");
-        expect(Result.getOrThrow(result)).toMatchObject({
-          state: "unknown",
-          action: { name: "createMachine", status: "done" },
-        });
-      }),
+        expect(Result.getOrThrow(result).state).toBe("unknown");
+      }).pipe(Effect.provide(TestClock.layer())),
   );
 
   it.effect(
-    "an admit whose reads don't answer within 9 s fails the check with Internal, which the row records",
+    "an admission whose reads don't answer within 9 s fails the start with Internal, which the machine shows",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
@@ -272,33 +308,43 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const { release } = linux.fake.holdNext("admit");
 
-        const { result, waited } = yield* onTestClock(linux, (machines) =>
-          machines.start("linux_dev"),
+        const { result } = yield* onTestClock(
+          Effect.flatMap(Effect.result(linux.machines.start("linux_dev")), (started) =>
+            Effect.map(linux.machines.get("linux_dev"), (got) => ({ started, got })),
+          ),
         );
 
         yield* release;
 
-        const [row] = yield* rows(linux);
+        const { started, got } = Result.getOrThrow(result);
 
-        expect(waited).toBe("9s");
-        expect(Result.isFailure(result) && [result.failure._tag, result.failure.message]).toEqual([
-          "Internal",
-          "startMachine linux_dev: the smolvm runtime's admission check didn't answer within 9s",
-        ]);
-        expect(row?.action).toEqual({
-          name: "startMachine",
-          status: "failed",
-          error: new Internal({
-            message:
-              "startMachine linux_dev: the smolvm runtime's admission check didn't answer within 9s",
-          }),
+        const timedOut = new Internal({
+          message:
+            "startMachine linux_dev: the smolvm runtime's admission check didn't answer within 9s",
         });
+
+        expect(started).toEqual(Result.fail(timedOut));
+        expect([got.phase, got.error]).toEqual(["failed", timedOut]);
         expect(linux.fake.calls).toEqual(["admit linux_dev"]);
-      }),
+      }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("a read of runtime state that dies reads unknown, and the machine lives on", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      linux.fake.dieNextObserve();
+
+      const died = yield* linux.run(linux.machines.get("linux_dev"));
+      const stopped = yield* linux.run(linux.machines.stop("linux_dev"));
+
+      expect([died.state, at(stopped)]).toEqual(["unknown", ["stopped", "stopped", "settled"]]);
+    }),
   );
 
   it.effect(
-    "a check that dies records Internal, whose message leaves the cause to the host log",
+    "a step that dies fails with Internal, whose message leaves the cause to the host log",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
@@ -307,15 +353,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* linux.run(linux.machines.stop("linux_dev"));
         linux.fake.dieNext("admit", "admit blew up");
 
-        const exit = yield* linux.run(Effect.exit(linux.machines.start("linux_dev")));
-        const [row] = yield* rows(linux);
+        const error = yield* failure(linux, linux.machines.start("linux_dev"));
+        const got = yield* linux.run(linux.machines.get("linux_dev"));
 
-        expect(Exit.hasDies(exit)).toBe(true);
-        expect(row?.action).toEqual({
-          name: "startMachine",
-          status: "failed",
-          error: new Internal({ message: "startMachine died; the host log has why" }),
-        });
+        expect(error).toEqual(
+          new Internal({ message: "start linux_dev died; the host log has why" }),
+        );
+        expect([got.phase, got.error]).toEqual(["failed", error]);
       }),
   );
 
@@ -336,24 +380,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ["linux_b", "running"],
         ]);
       }),
-  );
-
-  it.effect("stop on a machine the runtime can't read calls the runtime's stop", () =>
-    Effect.gen(function* () {
-      const linux = yield* host();
-
-      yield* linux.run(linux.machines.create(request("dev")));
-      linux.fake.machines.set("dev", { state: "unknown", root: linux.fake.root("dev") ?? "" });
-      linux.fake.calls.length = 0;
-
-      const stopped = yield* linux.run(linux.machines.stop("linux_dev"));
-
-      expect(stopped).toMatchObject({
-        state: "stopped",
-        action: { name: "stopMachine", status: "done" },
-      });
-      expect(linux.fake.calls).toEqual(["stop linux_dev"]);
-    }),
   );
 
   it.effect(
@@ -379,27 +405,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
-  it.effect(
-    "start on a machine the runtime can't read admits it and calls the runtime's start",
-    () =>
-      Effect.gen(function* () {
-        const linux = yield* host();
-
-        yield* linux.run(linux.machines.create(request("dev")));
-        linux.fake.machines.set("dev", { state: "unknown", root: linux.fake.root("dev") ?? "" });
-        linux.fake.calls.length = 0;
-
-        const started = yield* linux.run(linux.machines.start("linux_dev"));
-
-        expect(started).toMatchObject({
-          state: "running",
-          action: { name: "startMachine", status: "done" },
-        });
-        expect(linux.fake.calls).toEqual(["admit linux_dev", "start linux_dev", "exec linux_dev"]);
-      }),
-  );
-
-  it.effect("a duplicate name is Conflict{exists}, and the runtime is never called", () =>
+  it.effect("a duplicate name is Conflict, and the runtime is never called", () =>
     Effect.gen(function* () {
       const linux = yield* host();
 
@@ -408,9 +414,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const error = yield* failure(linux, linux.machines.create(request("dev")));
 
-      expect(error).toEqual(
-        new Conflict({ message: "machine linux_dev exists", kind: "exists", id: "linux_dev" }),
-      );
+      expect(error).toEqual(new Conflict({ message: "machine linux_dev exists", id: "linux_dev" }));
       expect(linux.fake.calls).toEqual([]);
     }),
   );
@@ -431,7 +435,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect("an error before the first runtime call writes nothing", () =>
+  it.effect("a create refused at admission leaves nothing behind, and creates nothing", () =>
     Effect.gen(function* () {
       const linux = yield* host();
 
@@ -441,71 +445,103 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(error).toEqual(new Capacity({ message: "no room" }));
       expect(yield* rows(linux)).toEqual([]);
-      expect(linux.fake.calls).toEqual(["startup", "admit linux_dev"]);
-    }),
-  );
-
-  it.effect("a check that fails on an existing row records the refusal on it", () =>
-    Effect.gen(function* () {
-      const linux = yield* host();
-
-      yield* linux.run(linux.machines.create(request("dev")));
-      yield* linux.run(linux.machines.stop("linux_dev"));
-      linux.fake.failNext("admit", new Capacity({ message: "no room" }));
-
-      const error = yield* failure(linux, linux.machines.start("linux_dev"));
-      const [row] = yield* rows(linux);
-
-      expect(error._tag).toBe("Capacity");
-      expect(row?.action).toEqual({
-        name: "startMachine",
-        status: "failed",
-        error: new Capacity({ message: "no room" }),
-      });
-    }),
-  );
-
-  it.effect("a runtime refusal is handled like a failed check: the new row is removed", () =>
-    Effect.gen(function* () {
-      const linux = yield* host();
-
-      linux.fake.failNext(
-        "create",
-        new Refusal({ error: new Capacity({ message: "account full" }) }),
-      );
-
-      const error = yield* failure(linux, linux.machines.create(request("dev")));
-
-      expect(error).toEqual(new Capacity({ message: "account full" }));
-      expect(yield* rows(linux)).toEqual([]);
+      expect(linux.fake.calls).toEqual(["startup", "admit linux_dev", "delete linux_dev"]);
     }),
   );
 
   it.effect(
-    "a native failure leaves the row failed with the reply's error, and delete cleans up",
+    "a start refused at admission rests failed with the refusal, and the next start tries again",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
 
-        linux.fake.failNext("create", new Internal({ message: "krun EINVAL" }));
+        yield* linux.run(linux.machines.create(request("dev")));
+        yield* linux.run(linux.machines.stop("linux_dev"));
+        linux.fake.failNext("admit", new Capacity({ message: "no room" }));
 
-        const error = yield* failure(linux, linux.machines.create(request("dev")));
+        const error = yield* failure(linux, linux.machines.start("linux_dev"));
         const got = yield* linux.run(linux.machines.get("linux_dev"));
+        const retried = yield* linux.run(linux.machines.start("linux_dev"));
 
-        yield* linux.run(linux.machines.delete("linux_dev"));
-
-        expect(error).toEqual(new Internal({ message: "krun EINVAL" }));
-        expect(got.action).toEqual({
-          name: "createMachine",
-          status: "failed",
-          error: new Internal({ message: "krun EINVAL" }),
-        });
-        expect(linux.fake.calls).toContain("delete linux_dev");
-        expect(yield* rows(linux)).toEqual([]);
+        expect(error).toEqual(new Capacity({ message: "no room" }));
+        expect([...at(got), got.error]).toEqual(["stopped", "running", "failed", error]);
+        expect([...at(retried), retried.error]).toEqual([
+          "running",
+          "running",
+          "settled",
+          undefined,
+        ]);
       }),
   );
 
-  it.effect("stop and delete of a made machine are never refused for an earlier failure", () =>
+  it.effect("a create whose native work failed deletes what it left, and answers the failure", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      linux.fake.failNext("create", new Internal({ message: "krun EINVAL" }));
+
+      const error = yield* failure(linux, linux.machines.create(request("dev")));
+      const got = yield* failure(linux, linux.machines.get("linux_dev"));
+
+      expect(error).toEqual(new Internal({ message: "krun EINVAL" }));
+      expect(got._tag).toBe("NotFound");
+      expect(linux.fake.calls).toEqual([
+        "startup",
+        "admit linux_dev",
+        "create linux_dev",
+        "delete linux_dev",
+      ]);
+      expect(yield* rows(linux)).toEqual([]);
+    }),
+  );
+
+  it.effect("a create a caller left before it failed is deleted all the same", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+      const { release, entered } = linux.fake.holdNext("admit");
+
+      linux.fake.failNext("create", new Internal({ message: "krun EINVAL" }));
+
+      const caller = yield* Effect.forkChild(linux.machines.create(request("dev")));
+
+      yield* entered;
+      yield* Fiber.interrupt(caller);
+      yield* release;
+
+      const left = yield* eventually(rows(linux), (found) => found.length === 0);
+
+      expect(left).toEqual([]);
+      expect(linux.fake.calls).toContain("delete linux_dev");
+    }),
+  );
+
+  it.effect("a restore whose checkpoint was captured again under its name copies nothing", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      yield* linux.run(linux.checkpoints.capture("linux_dev", "snap"));
+
+      const { release, entered } = linux.fake.holdNext("admit");
+
+      const restoring = yield* Effect.forkChild(
+        linux.run(Effect.flip(linux.machines.restore("linux_snap", "copy"))),
+      );
+
+      yield* entered;
+      yield* linux.run(linux.checkpoints.delete("linux_snap"));
+      yield* linux.run(linux.checkpoints.capture("linux_dev", "snap"));
+      yield* release;
+
+      const error = yield* Fiber.join(restoring);
+
+      expect([error._tag, error.message]).toEqual(["NotFound", "no checkpoint linux_snap"]);
+      expect(linux.fake.calls).not.toContain("restore linux_copy");
+      expect((yield* rows(linux)).map(({ name }) => name)).toEqual(["dev"]);
+    }),
+  );
+
+  it.effect("a stop and a delete of a made machine are never refused for an earlier failure", () =>
     Effect.gen(function* () {
       const linux = yield* host();
 
@@ -525,30 +561,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* linux.run(linux.machines.delete("linux_dev"));
 
-      expect(stopped.action).toEqual({ name: "stopMachine", status: "done" });
+      expect(at(stopped)).toEqual(["stopped", "stopped", "settled"]);
       expect(stopFailed.message).toBe("guest didn't flush");
       expect(yield* rows(linux)).toEqual([]);
-    }),
-  );
-
-  it.effect("delete removes a row whose create never reached the runtime", () =>
-    Effect.gen(function* () {
-      const linux = yield* host();
-      yield* linux.run(linux.machines.create(request("dev")));
-
-      const row = Option.getOrThrow(yield* linux.run(linux.store.find("dev")));
-
-      yield* linux.run(linux.machines.delete("linux_dev"));
-      yield* linux.run(linux.store.insert("createMachine", { kind: "machine", record: row }));
-      yield* linux.dispose;
-      linux.fake.calls.length = 0;
-
-      const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
-
-      yield* restarted.run(restarted.machines.delete("linux_dev"));
-
-      expect(linux.fake.calls).toEqual(["startup", "delete linux_dev"]);
-      expect(yield* rows(restarted)).toEqual([]);
     }),
   );
 
@@ -571,110 +586,130 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect("start of a machine the runtime no longer has is Missing, which the row records", () =>
+  it.effect(
+    "a made machine the runtime no longer has is lost: a start is Missing, a delete removes it",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+        yield* linux.run(linux.machines.stop("linux_dev"));
+        linux.fake.machines.clear();
+        linux.fake.calls.length = 0;
+
+        const error = yield* failure(linux, linux.machines.start("linux_dev"));
+        const got = yield* linux.run(linux.machines.get("linux_dev"));
+
+        yield* linux.run(linux.machines.delete("linux_dev"));
+
+        expect([error._tag, error.message]).toEqual([
+          "Missing",
+          "machine linux_dev is missing from the smolvm runtime; delete it",
+        ]);
+        expect(at(got)).toEqual(["missing", "running", "lost"]);
+        expect(linux.fake.calls).toEqual(["delete linux_dev"]);
+      }),
+  );
+
+  it.effect("a stop sent while a start boots cuts the start short: the start is Superseded", () =>
     Effect.gen(function* () {
       const linux = yield* host();
 
       yield* linux.run(linux.machines.create(request("dev")));
-      linux.fake.machines.clear();
+      yield* linux.run(linux.machines.stop("linux_dev"));
 
-      const error = yield* failure(linux, linux.machines.start("linux_dev"));
-      const [row] = yield* rows(linux);
+      const { entered, release } = linux.fake.holdNext("start");
 
-      expect([error._tag, error.message]).toEqual([
-        "Missing",
-        "machine linux_dev is missing from the smolvm runtime; delete it",
-      ]);
-      expect(row?.action).toEqual({ name: "startMachine", status: "failed", error });
+      const starting = yield* Effect.forkChild(
+        linux.run(Effect.flip(linux.machines.start("linux_dev"))),
+      );
+
+      yield* entered;
+
+      const stopped = yield* linux.run(linux.machines.stop("linux_dev"));
+      const start = yield* Fiber.join(starting);
+
+      yield* release;
+
+      expect(start).toEqual(
+        new Superseded({
+          message: "a later request asked machine linux_dev to be stopped before it got to running",
+          by: "stopped",
+        }),
+      );
+      expect(at(stopped)).toEqual(["stopped", "stopped", "settled"]);
     }),
   );
 
-  it.effect("a second action on a claimed machine is Conflict{busy}", () =>
+  it.effect("two starts at once both answer with the running machine", () =>
     Effect.gen(function* () {
       const linux = yield* host();
-      const { release, entered } = linux.fake.holdNext("create");
-      const create = yield* Effect.forkChild(linux.machines.create(request("dev")));
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      yield* linux.run(linux.machines.stop("linux_dev"));
+      linux.fake.calls.length = 0;
+
+      const started = yield* linux.run(
+        Effect.all([linux.machines.start("linux_dev"), linux.machines.start("linux_dev")], {
+          concurrency: "unbounded",
+        }),
+      );
+
+      expect(started.map(at)).toEqual([
+        ["running", "running", "settled"],
+        ["running", "running", "settled"],
+      ]);
+      expect(linux.fake.calls).toEqual(["admit linux_dev", "start linux_dev", "exec linux_dev"]);
+    }),
+  );
+
+  it.effect("a delete sent while a create runs cuts it short, and the create is Superseded", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+      const { entered } = linux.fake.holdNext("create");
+
+      const creating = yield* Effect.forkChild(
+        linux.run(Effect.flip(linux.machines.create(request("dev")))),
+      );
 
       yield* entered;
 
       const held = yield* linux.run(linux.machines.get("linux_dev"));
 
-      const [start, remove] = yield* Effect.all(
-        [
-          failure(linux, linux.machines.start("linux_dev")),
-          failure(linux, linux.machines.delete("linux_dev")),
-        ],
-        { concurrency: "unbounded" },
-      );
+      yield* linux.run(linux.machines.delete("linux_dev"));
 
-      yield* release;
-      yield* Fiber.join(create);
-
-      const busy = new Conflict({
-        message: "machine linux_dev is busy: create is running",
-        kind: "busy",
-        id: "linux_dev",
-      });
-
-      expect(held.action).toEqual({ name: "createMachine", status: "running" });
-      expect(start).toEqual(busy);
-      expect(remove).toEqual(busy);
+      expect([held.desired, held.phase]).toEqual(["running", "creating"]);
+      expect((yield* Fiber.join(creating))._tag).toBe("Superseded");
+      expect(linux.fake.calls).toEqual([
+        "startup",
+        "admit linux_dev",
+        "create linux_dev",
+        "delete linux_dev",
+      ]);
+      expect(yield* rows(linux)).toEqual([]);
     }),
   );
 
-  it.effect(
-    "a caller that goes away doesn't interrupt the action, and its outcome is recorded",
-    () =>
-      Effect.gen(function* () {
-        const linux = yield* host();
-        const { release, entered } = linux.fake.holdNext("create");
-        const caller = yield* Effect.forkChild(linux.machines.create(request("dev")));
-
-        yield* entered;
-        yield* Fiber.interrupt(caller);
-        yield* release;
-
-        for (let tries = 0; tries < 50; tries++) {
-          const [row] = yield* rows(linux);
-
-          if (row?.action.status === "done") {
-            break;
-          }
-
-          yield* pause;
-        }
-
-        const [row] = yield* rows(linux);
-
-        expect(row?.action).toEqual({ name: "createMachine", status: "done" });
-        expect(linux.fake.calls).toContain("exec linux_dev");
-      }),
-  );
-
-  it.effect("host startup fails every action the last host process left running", () =>
+  it.effect("a delete sent while a create's setup runs cuts the setup short and deletes it", () =>
     Effect.gen(function* () {
       const linux = yield* host();
+      const { entered } = linux.fake.holdNext("exec");
 
-      const { entered } = linux.fake.holdNext("create");
+      const creating = yield* Effect.forkChild(
+        linux.run(Effect.flip(linux.machines.create(request("dev", { setup: installsStart })))),
+      );
 
-      yield* Effect.forkChild(linux.machines.create(request("dev")));
       yield* entered;
-      yield* linux.dispose;
+      yield* linux.run(linux.machines.delete("linux_dev"));
 
-      const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
-      const got = yield* restarted.run(restarted.machines.get("linux_dev"));
-
-      expect(got.action).toEqual({
-        name: "createMachine",
-        status: "failed",
-        error: new Internal({ message: "the host stopped during createMachine" }),
-      });
-      expect(linux.fake.calls.filter((call) => call === "startup")).toHaveLength(2);
+      expect((yield* Fiber.join(creating))._tag).toBe("Superseded");
+      expect(linux.fake.calls.slice(-2)).toEqual(["exec linux_dev", "delete linux_dev"]);
+      expect(yield* rows(linux)).toEqual([]);
     }),
   );
 
   it.effect(
-    "a host stopped during a check records it on the held row, as during runtime work",
+    "a stop sent while a start boots reads the machine only once the start's native work ends",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
@@ -682,39 +717,195 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* linux.run(linux.machines.create(request("dev")));
         yield* linux.run(linux.machines.stop("linux_dev"));
 
-        const { entered } = linux.fake.holdNext("admit");
+        const { entered, release } = linux.fake.holdNext("start", { runsOn: true });
 
-        yield* Effect.forkChild(linux.machines.start("linux_dev"));
+        const starting = yield* Effect.forkChild(
+          linux.run(Effect.flip(linux.machines.start("linux_dev"))),
+        );
+
         yield* entered;
-        yield* linux.dispose;
 
-        const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
-        const got = yield* restarted.run(restarted.machines.get("linux_dev"));
+        const stopping = yield* Effect.forkChild(linux.run(linux.machines.stop("linux_dev")));
 
-        expect(got.action).toEqual({
-          name: "startMachine",
-          status: "failed",
-          error: new Internal({ message: "the host stopped during startMachine" }),
-        });
+        yield* eventually(
+          linux.run(linux.machines.get("linux_dev")),
+          (machine) => machine.desired === "stopped",
+        );
+        yield* release;
+
+        const stopped = yield* Fiber.join(stopping);
+
+        expect((yield* Fiber.join(starting))._tag).toBe("Superseded");
+        expect(at(stopped)).toEqual(["stopped", "stopped", "settled"]);
+        expect(linux.fake.machines.get("dev")?.state).toBe("stopped");
+        expect(linux.fake.calls.slice(-2)).toEqual(["start linux_dev", "stop linux_dev"]);
       }),
   );
 
-  const stoppedDuringCreate = {
-    name: "createMachine",
-    status: "failed",
-    error: new Internal({ message: "the host stopped during createMachine" }),
-  } as const;
+  it.effect("a start sent to a machine being deleted is Superseded at once, booting nothing", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      linux.fake.calls.length = 0;
+
+      const { entered, release } = linux.fake.holdNext("delete");
+      const deleting = yield* Effect.forkChild(linux.run(linux.machines.delete("linux_dev")));
+
+      yield* entered;
+
+      const refused = yield* failure(linux, linux.machines.start("linux_dev"));
+
+      yield* release;
+      yield* Fiber.join(deleting);
+
+      expect(refused).toEqual(
+        new Superseded({ message: "machine linux_dev is being deleted", by: "deleted" }),
+      );
+      expect(linux.fake.calls.filter((call) => call.startsWith("start "))).toEqual([]);
+    }),
+  );
+
+  it.effect("the next host finishes a delete the last one's end cut off", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev")));
+
+      const { entered } = linux.fake.holdNext("delete");
+
+      yield* Effect.forkChild(linux.run(linux.machines.delete("linux_dev")));
+      yield* entered;
+      yield* linux.dispose;
+      linux.fake.calls.length = 0;
+
+      const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
+
+      yield* eventually(rows(restarted), (left) => left.length === 0);
+
+      expect(yield* rows(restarted)).toEqual([]);
+      expect(linux.fake.calls).toEqual(["startup", "delete linux_dev"]);
+    }),
+  );
 
   it.effect(
-    "a machine whose create failed is only read, stopped or deleted: start, fork and capture refuse it",
+    "a host that starts reads every machine in one read, then starts each running one",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
 
-        const unmade =
-          "machine linux_dev was never made: its create, fork or restore failed; delete it";
+        yield* linux.run(linux.machines.create(request("dev")));
+        yield* linux.run(linux.machines.create(request("other")));
+        yield* linux.run(linux.machines.stop("linux_other"));
+        yield* linux.dispose;
+        linux.fake.calls.length = 0;
+        linux.fake.observed.length = 0;
 
-        const neverMade = ["NotMade", unmade];
+        const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
+
+        yield* eventually(restarted.run(restarted.machines.list), (machines) =>
+          machines.every(({ phase }) => phase === "settled"),
+        );
+
+        expect(linux.fake.observed[0]).toEqual(["linux_dev", "linux_other"]);
+        expect(linux.fake.calls.filter((call) => !call.startsWith("exec "))).toEqual([
+          "startup",
+          "start linux_dev",
+        ]);
+      }),
+  );
+
+  it.effect("a caller that goes away doesn't interrupt the work, which carries on to rest", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+      const { release, entered } = linux.fake.holdNext("create");
+      const caller = yield* Effect.forkChild(linux.machines.create(request("dev")));
+
+      yield* entered;
+      yield* Fiber.interrupt(caller);
+      yield* release;
+
+      const settled = yield* eventually(
+        linux.run(linux.machines.get("linux_dev")),
+        (machine) => machine.phase === "settled",
+      );
+
+      expect(at(settled)).toEqual(["running", "running", "settled"]);
+      expect(linux.fake.calls).toContain("exec linux_dev");
+    }),
+  );
+
+  it.effect(
+    "a create the last host's end cut off is deleted by the next host, with what it left",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+        const { entered } = linux.fake.holdNext("create");
+
+        yield* Effect.forkChild(linux.machines.create(request("dev")));
+        yield* entered;
+        yield* linux.dispose;
+        linux.fake.calls.length = 0;
+
+        const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
+        const left = yield* eventually(rows(restarted), (found) => found.length === 0);
+
+        expect(left).toEqual([]);
+        expect(linux.fake.calls).toEqual(["startup", "delete linux_dev"]);
+      }),
+  );
+
+  it.effect("a start the last host's end cut off is finished by the next host", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      yield* linux.run(linux.machines.stop("linux_dev"));
+
+      const { entered } = linux.fake.holdNext("admit");
+
+      yield* Effect.forkChild(linux.machines.start("linux_dev"));
+      yield* entered;
+      yield* linux.dispose;
+
+      const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
+
+      const settled = yield* eventually(
+        restarted.run(restarted.machines.get("linux_dev")),
+        (machine) => machine.phase === "settled",
+      );
+
+      expect(at(settled)).toEqual(["running", "running", "settled"]);
+    }),
+  );
+
+  it.effect("a setup that fails deletes the machine, VM and all", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      const error = yield* failure(
+        linux,
+        linux.machines.create(
+          request("dev", { setup: { script: "#!/bin/sh\nexit 3\n", timeoutSeconds: 30 } }),
+        ),
+      );
+
+      const got = yield* failure(linux, linux.machines.get("linux_dev"));
+
+      expect([error._tag, got._tag]).toEqual(["ScriptFailed", "NotFound"]);
+      expect(linux.fake.calls.slice(-2)).toEqual(["exec linux_dev", "delete linux_dev"]);
+      expect(linux.fake.machines.size).toBe(0);
+      expect(yield* rows(linux)).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "a setup that fails answers its failure though the delete after it fails, and the next recheck deletes the machine",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host({ recheck: Duration.millis(200) });
+
+        linux.fake.failNext("delete", new Internal({ message: "krun busy" }));
 
         const error = yield* failure(
           linux,
@@ -723,99 +914,98 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ),
         );
 
-        linux.fake.calls.length = 0;
-
-        const refused = yield* Effect.all(
-          [
-            failure(linux, linux.machines.start("linux_dev")),
-            failure(linux, linux.machines.fork("linux_dev", "copy")),
-            failure(linux, linux.checkpoints.capture("linux_dev", "snap")),
-          ],
-          { concurrency: "unbounded" },
-        );
-
-        const got = yield* linux.run(linux.machines.get("linux_dev"));
-        const stopped = yield* linux.run(linux.machines.stop("linux_dev"));
-
-        const refusedStopped = yield* Effect.all(
-          [
-            failure(linux, linux.machines.start("linux_dev")),
-            failure(linux, linux.machines.fork("linux_dev", "copy")),
-            failure(linux, linux.checkpoints.capture("linux_dev", "snap")),
-          ],
-          { concurrency: "unbounded" },
-        );
-
-        yield* linux.run(linux.machines.delete("linux_dev"));
+        const left = yield* linux.run(linux.machines.get("linux_dev"));
 
         expect(error._tag).toBe("ScriptFailed");
-        expect([...refused, ...refusedStopped].map(({ _tag, message }) => [_tag, message])).toEqual(
-          Array.from({ length: 6 }, () => neverMade),
-        );
-        expect(got).toMatchObject({
-          state: "running",
-          made: false,
-          action: {
-            status: "failed",
-            error: new NotMade({ message: unmade, machine: "linux_dev" }),
-          },
-        });
-        expect(stopped).toMatchObject({
-          state: "stopped",
-          made: false,
-          action: { name: "stopMachine", status: "done" },
-        });
-        expect(linux.fake.calls).toEqual(["stop linux_dev", "delete linux_dev"]);
-        expect(yield* rows(linux)).toEqual([]);
-        expect(yield* linux.run(linux.store.checkpoints)).toEqual([]);
+        expect([left.desired, left.phase, left.error?._tag]).toEqual([
+          "deleted",
+          "failed",
+          "Internal",
+        ]);
+
+        yield* eventually(rows(linux), (intents) => intents.length === 0);
+
+        expect(linux.fake.machines.size).toBe(0);
       }),
   );
 
   it.effect(
-    "after a restart during createMachine's setup, the machine is never made: stop stops its VM, start refuses it and delete removes it",
+    "a fork of a machine whose setup still runs is NotMade, and a stop waits for the setup, then stops it",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
+        const { release, entered } = linux.fake.holdNext("exec");
 
-        const { entered } = linux.fake.holdNext("exec");
-
-        yield* Effect.forkChild(
-          linux.machines.create(
-            request("dev", { setup: { script: "#!/bin/sh\n", timeoutSeconds: 30 } }),
+        const creating = yield* Effect.forkChild(
+          linux.run(
+            Effect.flip(
+              linux.machines.create(
+                request("dev", { setup: { script: "#!/bin/sh\n", timeoutSeconds: 30 } }),
+              ),
+            ),
           ),
         );
+
         yield* entered;
-        yield* linux.dispose;
 
-        const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
-        const before = yield* restarted.run(restarted.machines.get("linux_dev"));
+        const refused = yield* failure(linux, linux.machines.fork("linux_dev", "copy"));
+        const stopping = yield* Effect.forkChild(linux.run(linux.machines.stop("linux_dev")));
 
-        linux.fake.calls.length = 0;
+        yield* eventually(
+          linux.run(linux.machines.get("linux_dev")),
+          (machine) => machine.desired === "stopped",
+        );
+        yield* release;
 
-        const stopped = yield* restarted.run(restarted.machines.stop("linux_dev"));
-        const start = yield* failure(restarted, restarted.machines.start("linux_dev"));
-
-        yield* restarted.run(restarted.machines.delete("linux_dev"));
-
-        expect(before).toMatchObject({ state: "running", action: stoppedDuringCreate });
-        expect(stopped).toMatchObject({
-          state: "stopped",
-          action: { name: "stopMachine", status: "done" },
-        });
-        expect([start._tag, start.message]).toEqual([
-          "NotMade",
-          "machine linux_dev was never made: its create, fork or restore failed; delete it",
+        const [superseded, stopped] = yield* Effect.all([
+          Fiber.join(creating),
+          Fiber.join(stopping),
         ]);
-        expect(linux.fake.calls).toEqual(["stop linux_dev", "delete linux_dev"]);
-        expect(yield* rows(restarted)).toEqual([]);
+
+        expect([refused._tag, refused.message]).toEqual([
+          "NotMade",
+          "machine linux_dev isn't made yet: its create or setup still runs",
+        ]);
+        expect(superseded).toEqual(
+          new Superseded({
+            message:
+              "a later request asked machine linux_dev to be stopped before it got to running",
+            by: "stopped",
+          }),
+        );
+        expect(at(stopped)).toEqual(["stopped", "stopped", "settled"]);
+        expect((yield* rows(linux)).map(({ made }) => made)).toEqual([true]);
       }),
   );
 
-  it.effect("a create, fork or restore that succeeds marks its machine made", () =>
+  it.effect("a create whose setup the last host's end cut off is deleted by the next host", () =>
     Effect.gen(function* () {
       const linux = yield* host();
 
-      yield* linux.run(linux.machines.create(request("dev")));
+      const { entered } = linux.fake.holdNext("exec");
+
+      yield* Effect.forkChild(
+        linux.machines.create(
+          request("dev", { setup: { script: "#!/bin/sh\n", timeoutSeconds: 30 } }),
+        ),
+      );
+      yield* entered;
+      yield* linux.dispose;
+      linux.fake.calls.length = 0;
+
+      const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
+      const left = yield* eventually(rows(restarted), (found) => found.length === 0);
+
+      expect(left).toEqual([]);
+      expect(linux.fake.calls).toEqual(["startup", "delete linux_dev"]);
+    }),
+  );
+
+  it.effect("a create, fork or restore that succeeds makes its machine, setup and all", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev", { setup: installsStart })));
       yield* linux.run(linux.checkpoints.capture("linux_dev", "snap"));
       yield* linux.run(linux.machines.fork("linux_dev", "forked"));
       yield* linux.run(linux.machines.restore("linux_snap", "restored"));
@@ -829,7 +1019,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a create that fails only in preparation leaves its machine made, and start prepares it again",
+    "a create that fails only in preparation leaves its machine made, and a start prepares it again",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
@@ -844,40 +1034,34 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const started = yield* linux.run(linux.machines.start("linux_dev"));
 
         expect(error).toEqual(new Internal({ message: "sshd didn't start" }));
-        expect(row).toMatchObject({
-          made: true,
-          action: { name: "createMachine", status: "failed" },
-        });
-        expect(started).toMatchObject({
-          state: "running",
-          action: { name: "startMachine", status: "done" },
-        });
-        expect(linux.fake.calls).toEqual(["admit linux_dev", "start linux_dev", "exec linux_dev"]);
+        expect(row?.made).toBe(true);
+        expect(at(started)).toEqual(["running", "running", "settled"]);
+        expect(linux.fake.calls).toEqual(["start linux_dev", "exec linux_dev"]);
       }),
   );
 
-  it.effect(
-    "after a restart during createMachine's preparation, the machine is made, and start prepares it again",
-    () =>
-      Effect.gen(function* () {
-        const linux = yield* host();
+  it.effect("the next host finishes a preparation the last one's end cut off", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
 
-        const { entered } = linux.fake.holdNext("exec");
+      const { entered } = linux.fake.holdNext("exec");
 
-        yield* Effect.forkChild(linux.machines.create(request("dev")));
-        yield* entered;
-        yield* linux.dispose;
+      yield* Effect.forkChild(linux.machines.create(request("dev")));
+      yield* entered;
+      yield* linux.dispose;
 
-        const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
-        const [row] = yield* rows(restarted);
-        const started = yield* restarted.run(restarted.machines.start("linux_dev"));
+      const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
 
-        expect(row).toMatchObject({ made: true, action: stoppedDuringCreate });
-        expect(started).toMatchObject({
-          state: "running",
-          action: { name: "startMachine", status: "done" },
-        });
-      }),
+      const settled = yield* eventually(
+        restarted.run(restarted.machines.get("linux_dev")),
+        (machine) => machine.phase === "settled",
+      );
+
+      const [row] = yield* rows(restarted);
+
+      expect(at(settled)).toEqual(["running", "running", "settled"]);
+      expect(row?.made).toBe(true);
+    }),
   );
 
   const marker = "setup-text-marker";
@@ -900,7 +1084,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         linux.machines.create(request("dev", { setup: { script, timeoutSeconds: 30 } })),
       );
 
-      const got = yield* linux.run(linux.machines.get("linux_dev"));
+      const got = yield* failure(linux, linux.machines.get("linux_dev"));
 
       expect(error).toBeInstanceOf(ScriptFailed);
       expect(error).toMatchObject({ script: "setup" });
@@ -908,11 +1092,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(error.message).toContain("line 29\nbroke");
       expect(error.message).not.toContain("line 10\n");
       expect(error.message.includes(marker)).toBe(false);
-      expect(got.action).toEqual({
-        name: "createMachine",
-        status: "failed",
-        error,
-      });
+      expect(got._tag).toBe("NotFound");
     }),
   );
 
@@ -941,7 +1121,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         linux.machines.create(request("dev", { setup: { script: installsStart.script } })),
       );
 
-      expect(made.action).toEqual({ name: "createMachine", status: "done" });
+      expect(made.phase).toBe("settled");
     }),
   );
 
@@ -969,7 +1149,69 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "the RAM budget counts running machines and refuses with Capacity, writing nothing",
+    "the next recheck reads every settled machine in one read, and starts those that stopped under them",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host({
+          recheck: Duration.millis(200),
+        });
+
+        yield* linux.run(linux.machines.create(request("dev")));
+        yield* linux.run(linux.machines.create(request("other")));
+        linux.fake.calls.length = 0;
+        linux.fake.observed.length = 0;
+        linux.fake.machines.forEach((machine) => {
+          machine.state = "stopped";
+        });
+
+        yield* eventually(
+          Effect.sync(() => [...linux.fake.calls]),
+          (calls) => calls.length >= 6,
+        );
+
+        expect(linux.fake.observed[0]).toEqual(["linux_dev", "linux_other"]);
+        expect(linux.fake.calls.toSorted()).toEqual([
+          "admit linux_dev",
+          "admit linux_other",
+          "exec linux_dev",
+          "exec linux_other",
+          "start linux_dev",
+          "start linux_other",
+        ]);
+      }),
+  );
+
+  it.effect(
+    "a recheck's reading of a machine that a step changed while it read is dropped, not acted on",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host({ recheck: Duration.millis(200) });
+
+        yield* linux.run(linux.machines.create(request("dev")));
+
+        const { entered, release } = linux.fake.holdNextObserve();
+
+        yield* entered;
+        yield* linux.run(linux.machines.stop("linux_dev"));
+        linux.fake.calls.length = 0;
+
+        const reads = linux.fake.observed.length;
+
+        yield* release;
+        yield* eventually(
+          Effect.sync(() => linux.fake.observed.length),
+          (count) => count > reads,
+        );
+
+        const got = yield* linux.run(linux.machines.get("linux_dev"));
+
+        expect(linux.fake.calls).toEqual([]);
+        expect(at(got)).toEqual(["stopped", "stopped", "settled"]);
+      }),
+  );
+
+  it.effect(
+    "the RAM budget counts running machines and refuses with Capacity, a create leaving nothing behind",
     () =>
       Effect.gen(function* () {
         const linux = yield* host({ runtime: { ramBudgetMib: 2048 } });
@@ -978,23 +1220,66 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* linux.run(linux.machines.create(request("b")));
 
         const full = yield* failure(linux, linux.machines.create(request("c")));
+        const before = (yield* rows(linux)).map(({ name }) => name);
 
         yield* linux.run(linux.machines.stop("linux_a"));
         yield* linux.run(linux.machines.create(request("c")));
 
         const restart = yield* failure(linux, linux.machines.start("linux_a"));
-        const again = yield* linux.run(linux.machines.start("linux_b"));
 
         expect(full._tag).toBe("Capacity");
         expect(full.message).toContain("needs 1G of RAM, and none of the host's 2G budget is free");
+        expect(before).toEqual(["a", "b"]);
         expect(restart._tag).toBe("Capacity");
-        expect(again.action).toEqual({ name: "startMachine", status: "done" });
         expect((yield* rows(linux)).map(({ name }) => name).sort()).toEqual(["a", "b", "c"]);
       }),
   );
 
+  it.effect("a create a delete cuts short after admission is no longer counted as booting", () =>
+    Effect.gen(function* () {
+      const linux = yield* host({ runtime: { ramBudgetMib: 4096 } });
+      const { entered } = linux.fake.holdNext("create");
+
+      const creating = yield* Effect.forkChild(
+        linux.run(Effect.flip(linux.machines.create(request("c", { ramMib: 2048 })))),
+      );
+
+      yield* entered;
+      yield* linux.run(linux.machines.delete("linux_c"));
+      yield* Fiber.join(creating);
+
+      expect(yield* linux.run(linux.machines.capacity)).toEqual([
+        { host: "linux", resource: "cpu", used: 0 },
+        { host: "linux", resource: "ramMib", limit: 4096, used: 0 },
+      ]);
+    }),
+  );
+
+  it.effect("a delete that fails is tried again at each recheck until it succeeds", () =>
+    Effect.gen(function* () {
+      const linux = yield* host({
+        recheck: Duration.millis(200),
+      });
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      linux.fake.failNext("delete", new Internal({ message: "EBUSY" }));
+      linux.fake.calls.length = 0;
+
+      const refused = yield* failure(linux, linux.machines.delete("linux_dev"));
+
+      yield* eventually(rows(linux), (left) => left.length === 0);
+
+      expect(refused).toEqual(new Internal({ message: "EBUSY" }));
+      expect(yield* rows(linux)).toEqual([]);
+      expect(linux.fake.calls.filter((call) => call.startsWith("delete"))).toEqual([
+        "delete linux_dev",
+        "delete linux_dev",
+      ]);
+    }),
+  );
+
   it.effect(
-    "the host's capacity is what step 3 counts, for cpu too: running machines, and one an action is booting",
+    "the host's capacity counts running machines and one a step is booting, for cpu too",
     () =>
       Effect.gen(function* () {
         const linux = yield* host({ runtime: { ramBudgetMib: 4096 } });
@@ -1040,7 +1325,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const failed = yield* failure(linux, linux.machines.capacity);
       const { release } = linux.fake.holdNext("capacity");
-      const { result, waited } = yield* onTestClock(linux, (machines) => machines.capacity);
+      const { result, waited } = yield* onTestClock(linux.machines.capacity);
 
       yield* release;
 
@@ -1050,7 +1335,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         "Internal",
         "the smolvm runtime didn't answer within 9s",
       ]);
-    }),
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 
   it.effect("the RAM budget counts a machine the runtime can't read as running", () =>
@@ -1067,21 +1352,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect("the RAM budget counts a running machine's start once: it already runs", () =>
-    Effect.gen(function* () {
-      const linux = yield* host({ runtime: { ramBudgetMib: 2048 } });
-
-      yield* linux.run(linux.machines.create(request("a")));
-      yield* linux.run(linux.machines.create(request("b")));
-
-      const started = yield* linux.run(linux.machines.start("linux_b"));
-
-      expect(started.action).toEqual({ name: "startMachine", status: "done" });
-    }),
-  );
-
   it.effect(
-    "a start reads state once under the admission permit: the RAM budget's one observe",
+    "admission counts the machine it boots, and reads the machines no step boots in one observe",
     () =>
       Effect.gen(function* () {
         const linux = yield* host({ runtime: { ramBudgetMib: 4096 } });
@@ -1089,33 +1361,24 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* linux.run(linux.machines.create(request("a")));
         yield* linux.run(linux.machines.create(request("b")));
         yield* linux.run(linux.machines.stop("linux_b"));
-        linux.fake.observed.length = 0;
 
         const { release, entered } = linux.fake.holdNext("start");
         const start = yield* Effect.forkChild(linux.machines.start("linux_b"));
 
         yield* entered;
 
-        const read = [...linux.fake.observed];
+        const [activation] = linux.fake.activations.slice(-1);
+        const read = linux.fake.observed.at(-1);
 
         yield* release;
         yield* Fiber.join(start);
 
-        expect(read).toEqual([["linux_a"]]);
+        expect(read).toEqual(["linux_a"]);
+        expect(activation?.machines.map(({ machine, booting }) => [machine.id, booting])).toEqual([
+          ["linux_a", false],
+          ["linux_b", true],
+        ]);
       }),
-  );
-
-  it.effect("the RAM budget reads the machines no action boots in one observe", () =>
-    Effect.gen(function* () {
-      const linux = yield* host({ runtime: { ramBudgetMib: 4096 } });
-
-      yield* linux.run(linux.machines.create(request("a")));
-      yield* linux.run(linux.machines.create(request("b")));
-      linux.fake.observed.length = 0;
-      yield* linux.run(linux.machines.create(request("c")));
-
-      expect(linux.fake.observed[0]).toEqual(["linux_a", "linux_b"]);
-    }),
   );
 
   const together = <A>(actions: ReadonlyArray<Effect.Effect<A, HostError>>) =>
@@ -1217,25 +1480,28 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
-  it.effect("a host whose ports are all taken refuses a create with Capacity", () =>
-    Effect.gen(function* () {
-      const linux = yield* host({ ports: { first: ports.first, last: ports.first + 1 } });
+  it.effect(
+    "a host whose ports are all taken refuses a create with Capacity, writing nothing",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host({ ports: { first: ports.first, last: ports.first + 1 } });
 
-      yield* linux.run(linux.machines.create(request("a")));
-      yield* linux.run(linux.machines.create(request("b")));
+        yield* linux.run(linux.machines.create(request("a")));
+        yield* linux.run(linux.machines.create(request("b")));
 
-      const full = yield* failure(linux, linux.machines.create(request("c")));
+        const full = yield* failure(linux, linux.machines.create(request("c")));
 
-      expect(full._tag).toBe("Capacity");
-      expect(full.message).toBe(`no free port in ${ports.first}-${ports.first + 1} on 127.0.0.1`);
-    }),
+        expect(full._tag).toBe("Capacity");
+        expect(full.message).toBe(`no free port in ${ports.first}-${ports.first + 1} on 127.0.0.1`);
+        expect(yield* rows(linux)).toHaveLength(2);
+      }),
   );
 
   it.effect("a runtime without a publish address gives machines no port", () =>
     Effect.gen(function* () {
       const linux = yield* host({ runtime: { publishAddress: undefined } });
       const made = yield* linux.run(linux.machines.create(request("dev")));
-      const row = yield* linux.run(linux.store.find("dev"));
+      const row = yield* linux.run(linux.store.findMachine("dev"));
 
       expect(made.ssh).toBeUndefined();
       expect(Option.getOrUndefined(row)?.port).toBeUndefined();

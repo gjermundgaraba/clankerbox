@@ -2,8 +2,9 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { CreateRequest } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Effect, Exit, Layer, Logger, Scope } from "effect";
+import type { CreateRequest, Machine } from "@gjermundgaraba/clankerbox-sdk";
+import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
 import { HttpServer } from "effect/http";
 import * as Checkpoints from "../src/checkpoints.ts";
 import { hostLayer } from "../src/composition/host.ts";
@@ -18,13 +19,20 @@ export const image =
 
 const sharedPorts: PortRange = { first: 21_000, last: 21_099 };
 
-export const hostConfig = (stateDir: string, machinePorts = sharedPorts): HostSettings => ({
+export const quiet = Duration.hours(1);
+
+export const hostConfig = (
+  stateDir: string,
+  machinePorts = sharedPorts,
+  recheck = quiet,
+): HostSettings => ({
   id: "linux",
   runtime: "smolvm",
   listen: { address: "127.0.0.1", port: 0 },
   bases: new Map([["ubuntu", image]]),
   stateDir,
   machinePorts,
+  recheck,
 });
 
 export const request = (name: string, fields?: Partial<CreateRequest>): CreateRequest => ({
@@ -60,6 +68,7 @@ export const startHost = (
     readonly fake?: FakeRuntime;
     readonly runtime?: Omit<FakeOptions, "dir">;
     readonly ports?: PortRange;
+    readonly recheck?: Duration.Duration;
   },
 ) =>
   Effect.gen(function* () {
@@ -70,10 +79,11 @@ export const startHost = (
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
 
     const context = yield* Layer.buildWithScope(
-      hostLayer(hostConfig(stateDir, options?.ports), fake.layer, loopbackServer()).pipe(
-        Layer.provideMerge(Logger.layer([])),
-        Layer.provide(NodeServices.layer),
-      ),
+      hostLayer(
+        hostConfig(stateDir, options?.ports, options?.recheck),
+        fake.layer,
+        loopbackServer(),
+      ).pipe(Layer.provideMerge(Logger.layer([])), Layer.provide(NodeServices.layer)),
       scope,
     );
 
@@ -91,3 +101,16 @@ export const startHost = (
 
     return host;
   });
+
+export const hostOn =
+  (ports: PortRange) => (options?: Parameters<typeof startHost>[1] & { readonly dir?: string }) =>
+    Effect.gen(function* () {
+      return yield* startHost(options?.dir ?? (yield* scratch), { ports, ...options });
+    });
+
+export const failure = <A, E>(host: TestHost, effect: Effect.Effect<A, E>) =>
+  host.run(Effect.flip(effect));
+
+export const pause = Effect.sleep(Duration.millis(50));
+
+export const at = ({ state, desired, phase }: Machine) => [state, desired, phase];

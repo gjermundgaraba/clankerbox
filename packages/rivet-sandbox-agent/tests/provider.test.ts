@@ -8,6 +8,7 @@ import {
   NotOffered,
   Prebuild,
   ScriptFailed,
+  Superseded,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect } from "effect";
@@ -34,7 +35,6 @@ const checkpoint = (id: string): Checkpoint => ({
   cpu: 2,
   ramMib: 2048,
   diskGib: 20,
-  action: { name: "captureCheckpoint", status: "done" },
 });
 
 afterEach(cleanUp);
@@ -162,10 +162,10 @@ test("a create from a profile with a setup restores its host's prebuild of it, u
   expect(unbuilt.stub.creates.map((request) => request.setup)).toEqual([sent]);
 });
 
-test("a create that fails deletes the machine it left, and fails with the host's error", async () => {
+test("a create the host fails, as a preparation the host keeps the machine for, deletes the machine", async () => {
   const failure = new ScriptFailed({
-    message: "setup exited 1: no network",
-    script: "setup",
+    message: "preparation exited 1: no network",
+    script: "preparation",
   });
 
   const { stub, sandbox } = await setup({
@@ -185,6 +185,39 @@ test("a create that fails deletes the machine it left, and fails with the host's
 
   expect(stub.calls).toEqual(["host.get", "machine.create", "machine.delete"]);
   expect(stub.held()).toEqual(["linux_other"]);
+});
+
+test("a create a later request superseded keeps the machine that request asked for", async () => {
+  const { stub, sandbox } = await setup({
+    createFails: new Superseded({ message: "asked to be stopped", by: "stopped" }),
+  });
+
+  await expect(sandbox.create()).rejects.toBeInstanceOf(Superseded);
+  expect(stub.calls).toEqual(["host.get", "machine.create"]);
+  expect(stub.held()).toEqual([expect.stringMatching(/^linux_sandbox-[0-9a-f]{8}$/u)]);
+});
+
+test("a create whose answer was lost deletes the machine it may have made", async () => {
+  const { stub, sandbox } = await setup({}, {}, undefined, (client) => ({
+    ...client,
+    create: (name, spec, options) =>
+      Effect.andThen(
+        client.create(name, spec, options),
+        Effect.fail(
+          new Unavailable({
+            message: "no reply",
+            readOnly: false,
+            host: "linux",
+            action: "createMachine",
+            made: `linux_${name}`,
+          }),
+        ),
+      ),
+  }));
+
+  await expect(sandbox.create()).rejects.toBeInstanceOf(Unavailable);
+  expect(stub.calls).toEqual(["host.get", "machine.create", "machine.delete"]);
+  expect(stub.held()).toEqual([]);
 });
 
 test("a create that fails before any host makes a machine, as a placement no host takes, deletes nothing", async () => {
@@ -247,16 +280,13 @@ test("a create whose prebuild read fails deletes nothing, though the error names
 });
 
 test("a create refused with Conflict, as a name already taken is, deletes nothing", async () => {
-  const refusal = new Conflict({ kind: "exists", message: "linux_taken already exists" });
+  const refusal = new Conflict({ message: "linux_taken already exists" });
   const { stub, sandbox } = await setup({ createRefused: refusal });
 
   const creating = sandbox.create();
 
   await expect(creating).rejects.toBeInstanceOf(Conflict);
-  await expect(creating).rejects.toMatchObject({
-    kind: "exists",
-    message: refusal.message,
-  });
+  await expect(creating).rejects.toMatchObject({ message: refusal.message });
   expect(stub.calls).toEqual(["host.get", "machine.create"]);
 });
 

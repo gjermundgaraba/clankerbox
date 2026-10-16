@@ -60,41 +60,36 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(listed.stdout).toContain("linux_dev");
       expect(removed).toMatchObject({ code: 0, stdout: "linux_dev" });
       expect(again.stderr).toContain("already gone");
-      expect(yield* host.run(host.store.list)).toEqual([]);
+      expect(yield* host.run(host.store.machines)).toEqual([]);
     }),
   );
 
-  it.effect(
-    "a setup that fails replies with its output, and the machine stays failed until delete",
-    () =>
-      Effect.gen(function* () {
-        const { run, dir } = yield* setUp();
-        const script = join(dir, "setup.sh");
+  it.effect("a setup that fails replies with its output, and the machine is gone", () =>
+    Effect.gen(function* () {
+      const { host, run, dir } = yield* setUp();
+      const script = join(dir, "setup.sh");
 
-        yield* write(script, "#!/bin/sh\necho installing\necho no network >&2\nexit 7\n");
+      yield* write(script, "#!/bin/sh\necho installing\necho no network >&2\nexit 7\n");
 
-        const created = yield* run([
-          "create",
-          "dev",
-          ...sizes,
-          "--setup",
-          script,
-          "--setup-timeout",
-          "30s",
-          "--json",
-        ]);
+      const created = yield* run([
+        "create",
+        "dev",
+        ...sizes,
+        "--setup",
+        script,
+        "--setup-timeout",
+        "30s",
+        "--json",
+      ]);
 
-        const listed = yield* run(["machines", "--json"]);
+      const { error } = decodeFailure(created.stdout);
 
-        const { error } = decodeFailure(created.stdout);
-
-        expect(created.code).toBe(1);
-        expect(error.tag).toBe("ScriptFailed");
-        expect(error.message).toContain("setup exited 7");
-        expect(error.message).toContain("installing\nno network");
-        expect(listed.stdout).toContain('"status":"failed"');
-        expect((yield* run(["delete", "linux_dev"])).code).toBe(0);
-      }),
+      expect(created.code).toBe(1);
+      expect(error.tag).toBe("ScriptFailed");
+      expect(error.message).toContain("setup exited 7");
+      expect(error.message).toContain("installing\nno network");
+      expect(yield* host.run(host.store.machines)).toEqual([]);
+    }),
   );
 
   it.effect("a duplicate name is Conflict, and the hosts listing names the host's bases", () =>
@@ -130,7 +125,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(created.code).toBe(1);
         expect(created.stderr).toContain("Invalid: mis_dev names host mis, and this is host linux");
-        expect(yield* host.run(host.store.list)).toEqual([]);
+        expect(yield* host.run(host.store.machines)).toEqual([]);
       }),
   );
 
@@ -169,8 +164,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ["MACHINE", "linux_dev"],
           ["RAM", "1G"],
           ["DISK", "10G"],
-          ["ACTION", "captureCheckpoint done"],
-          ["ERROR", "-"],
         ]),
       );
       expect(removed).toMatchObject({ code: 0, stdout: "linux_dev" });

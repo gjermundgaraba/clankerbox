@@ -1,15 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import {
-  ActionName,
-  ActionRecord,
-  ActionStatus,
-  Checkpoint,
-  Conflict,
-  HostError,
-  Internal,
-  type NotFound,
-  Runtime,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { Checkpoint, Conflict, Desired, Internal, Runtime } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Context,
   DateTime,
@@ -21,30 +11,29 @@ import {
   Schema,
   type Scope,
 } from "effect";
-import { idOn, type Kind, notFoundOn } from "../ids.ts";
+import { idOn, type Kind } from "../ids.ts";
 import type { HostSettings } from "../settings.ts";
 import { CannotStart } from "../startup.ts";
 import {
   type CheckpointRecord,
+  type Intent,
   type Interface,
-  type MachineRecord,
   NativeIds,
   type NativeIdRecorder,
-  type NewRow,
-  type Records,
-  type Resource,
-  type RowRef,
   Store,
-  stoppedDuring,
-  type Token,
 } from "../store.ts";
 
 export const databaseFile = "host.db";
 
-export const applicationId = 0x63_62_78_68;
+export const applicationId = 0x63_62_78_69;
 
 export const migrations: ReadonlyArray<string> = [
-  `CREATE TABLE machines (
+  `CREATE TABLE host (
+    one INTEGER PRIMARY KEY CHECK (one = 1),
+    id TEXT NOT NULL,
+    runtime TEXT NOT NULL
+  ) STRICT;
+  CREATE TABLE machines (
     name TEXT PRIMARY KEY,
     instance TEXT NOT NULL,
     native TEXT,
@@ -55,17 +44,14 @@ export const migrations: ReadonlyArray<string> = [
     ram_mib INTEGER NOT NULL,
     disk_gib INTEGER NOT NULL,
     port INTEGER UNIQUE,
-    host_key TEXT,
+    desired TEXT NOT NULL,
+    generation INTEGER NOT NULL,
     made INTEGER NOT NULL,
-    action_name TEXT NOT NULL,
-    action_status TEXT NOT NULL,
-    action_error_tag TEXT,
-    action_error_message TEXT
-  ) STRICT`,
-  `CREATE TABLE checkpoints (
+    host_key TEXT
+  ) STRICT;
+  CREATE TABLE checkpoints (
     name TEXT PRIMARY KEY,
     instance TEXT NOT NULL,
-    native TEXT,
     created_at TEXT NOT NULL,
     machine TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -76,66 +62,13 @@ export const migrations: ReadonlyArray<string> = [
     cpu INTEGER NOT NULL,
     ram_mib INTEGER NOT NULL,
     disk_gib INTEGER NOT NULL,
-    action_name TEXT NOT NULL,
-    action_status TEXT NOT NULL,
-    action_error_tag TEXT,
-    action_error_message TEXT
+    ready INTEGER NOT NULL
   ) STRICT`,
-  `CREATE TABLE host (
-    one INTEGER PRIMARY KEY CHECK (one = 1),
-    id TEXT NOT NULL,
-    runtime TEXT NOT NULL
-  ) STRICT`,
-  "ALTER TABLE checkpoints DROP COLUMN native",
-  `UPDATE machines SET action_name = CASE action_name
-    WHEN 'create' THEN 'createMachine'
-    WHEN 'start' THEN 'startMachine'
-    WHEN 'stop' THEN 'stopMachine'
-    WHEN 'delete' THEN 'deleteMachine'
-    WHEN 'fork' THEN 'forkMachine'
-    WHEN 'restore' THEN 'restoreMachine'
-    WHEN 'capture' THEN 'captureCheckpoint'
-  END;
-  UPDATE checkpoints SET action_name = CASE action_name
-    WHEN 'capture' THEN 'captureCheckpoint'
-    WHEN 'delete' THEN 'deleteCheckpoint'
-  END`,
-  ["machines", "checkpoints"]
-    .map(
-      (table) => `ALTER TABLE ${table} ADD COLUMN action_error TEXT;
-    UPDATE ${table} SET action_error = CASE action_error_tag
-      WHEN 'Conflict' THEN json_object('_tag', 'Conflict', 'message', action_error_message,
-        'kind', CASE WHEN action_error_message LIKE '% is busy: %' THEN 'busy' ELSE 'exists' END)
-      WHEN 'Precondition' THEN CASE
-        WHEN action_error_message GLOB 'setup exited *'
-          OR action_error_message GLOB 'setup ran past *'
-          THEN json_object('_tag', 'ScriptFailed', 'message', action_error_message, 'script', 'setup')
-        WHEN action_error_message GLOB 'preparation exited *'
-          OR action_error_message GLOB 'preparation ran past *'
-          THEN json_object('_tag', 'ScriptFailed', 'message', action_error_message,
-            'script', 'preparation')
-        WHEN action_error_message GLOB 'machine *''s disk of *G is below its base''s*'
-          THEN json_object('_tag', 'Unsizable', 'message', action_error_message)
-        WHEN action_error_message GLOB 'boat * answered 403 *'
-          THEN json_object('_tag', 'Refused', 'message', action_error_message)
-        ELSE json_object('_tag', 'Internal', 'message', action_error_message)
-      END
-      ELSE json_object('_tag', action_error_tag, 'message', action_error_message)
-    END
-    WHERE action_error_tag IS NOT NULL AND action_error_message IS NOT NULL;
-    ALTER TABLE ${table} DROP COLUMN action_error_tag;
-    ALTER TABLE ${table} DROP COLUMN action_error_message`,
-    )
-    .join(";\n"),
 ];
 
-const actionColumns = {
-  action_name: ActionName,
-  action_status: ActionStatus,
-  action_error: Schema.NullOr(Schema.fromJsonString(Schema.toEncoded(HostError))),
-};
+const Flag = Schema.Literals([0, 1]);
 
-const columns = {
+const shared = {
   name: Schema.String,
   instance: Schema.String,
   created_at: Schema.DateTimeUtcFromString,
@@ -144,53 +77,58 @@ const columns = {
   cpu: Schema.Int,
   ram_mib: Schema.Int,
   disk_gib: Schema.Int,
+  port: Schema.NullOr(Schema.Int),
 };
 
-const Columns = Schema.Struct(columns);
-
-const Row = Schema.Struct({
-  ...columns,
-  ...actionColumns,
+const MachineRow = Schema.Struct({
+  ...shared,
   native: Schema.NullOr(Schema.String),
-  port: Schema.NullOr(Schema.Int),
+  desired: Desired,
+  generation: Schema.Int,
+  made: Flag,
   host_key: Schema.NullOr(Schema.String),
-  made: Schema.Literals([0, 1]),
 });
 
 const CheckpointRow = Schema.Struct({
-  ...columns,
-  ...actionColumns,
+  ...shared,
   machine: Schema.String,
   kind: Checkpoint.fields.kind,
   pin: Schema.NullOr(Schema.String),
-  port: Schema.NullOr(Schema.Int),
 });
 
-const decodeRow = Schema.decodeUnknownSync(Row);
+const decodeMachine = Schema.decodeUnknownSync(MachineRow);
 
-const decodeCheckpointRow = Schema.decodeUnknownSync(CheckpointRow);
+const decodeCheckpoint = Schema.decodeUnknownSync(CheckpointRow);
 
-const ActionColumns = Schema.Struct(actionColumns);
-
-const decodeRunning = Schema.decodeUnknownSync(
-  Schema.Struct({ name: Schema.String, action_name: ActionName }),
+const decodeDesire = Schema.decodeUnknownSync(
+  Schema.Struct({ desired: Desired, generation: Schema.Int }),
 );
 
-const decodeAction = Schema.decodeUnknownSync(ActionRecord);
+const intentOf = (row: typeof MachineRow.Type): Intent => ({
+  name: row.name,
+  instance: row.instance,
+  native: row.native ?? undefined,
+  createdAt: row.created_at,
+  base: row.base,
+  profile: row.profile ?? undefined,
+  cpu: row.cpu,
+  ramMib: row.ram_mib,
+  diskGib: row.disk_gib,
+  port: row.port ?? undefined,
+  desired: row.desired,
+  generation: row.generation,
+  made: row.made === 1,
+  hostKey: row.host_key ?? undefined,
+});
 
-const actionOf = (row: typeof ActionColumns.Type): ActionRecord =>
-  decodeAction(
-    row.action_error === null
-      ? { name: row.action_name, status: row.action_status }
-      : { name: row.action_name, status: row.action_status, error: row.action_error },
-  );
-
-const encodeError = Schema.encodeSync(Schema.fromJsonString(HostError));
-
-const resourceOf = (row: typeof Columns.Type): Resource => ({
+const checkpointOf = (row: typeof CheckpointRow.Type): CheckpointRecord => ({
   name: row.name,
   instance: row.instance,
   createdAt: row.created_at,
+  machine: row.machine,
+  kind: row.kind,
+  pin: row.pin ?? undefined,
+  port: row.port ?? undefined,
   base: row.base,
   profile: row.profile ?? undefined,
   cpu: row.cpu,
@@ -198,37 +136,7 @@ const resourceOf = (row: typeof Columns.Type): Resource => ({
   diskGib: row.disk_gib,
 });
 
-const fromRow = (row: typeof Row.Type): MachineRecord => ({
-  ...resourceOf(row),
-  native: row.native ?? undefined,
-  action: actionOf(row),
-  port: row.port ?? undefined,
-  hostKey: row.host_key ?? undefined,
-  made: row.made === 1,
-});
-
-const fromCheckpointRow = (row: typeof CheckpointRow.Type): CheckpointRecord => ({
-  ...resourceOf(row),
-  action: actionOf(row),
-  machine: row.machine,
-  kind: row.kind,
-  pin: row.pin ?? undefined,
-  port: row.port ?? undefined,
-});
-
-const columnParameters = (record: Resource, action: ActionName) => ({
-  name: record.name,
-  instance: record.instance,
-  created_at: DateTime.formatIso(record.createdAt),
-  base: record.base,
-  profile: record.profile ?? null,
-  cpu: record.cpu,
-  ram_mib: record.ramMib,
-  disk_gib: record.diskGib,
-  action_name: action,
-});
-
-type Finders = { readonly [K in Kind]: (name: string) => Records[K] | undefined };
+const flag = (value: boolean) => (value ? 1 : 0);
 
 const isSqliteError = (cause: unknown): cause is Error & { readonly errcode: number } =>
   cause instanceof Error && "errcode" in cause && typeof cause.errcode === "number";
@@ -304,7 +212,9 @@ const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, CannotStar
     }));
 
     if (id !== applicationId && (id !== 0 || version !== 0 || tables !== 0)) {
-      return yield* new CannotStart({ message: `${file} isn't a clankerbox host database` });
+      return yield* new CannotStart({
+        message: `${file} isn't a host database this clankerbox reads: give the host a new state dir`,
+      });
     }
 
     if (version > migrations.length) {
@@ -391,159 +301,90 @@ export const open = (
     yield* own(db, file, owner);
 
     const id = idOn(hostId);
-    const notFound = notFoundOn(hostId);
 
-    const selectAll = db.prepare("SELECT * FROM machines ORDER BY created_at, name");
-    const selectOne = db.prepare("SELECT * FROM machines WHERE name = ?");
+    const selectMachines = db.prepare("SELECT * FROM machines ORDER BY created_at, name");
+    const selectMachine = db.prepare("SELECT * FROM machines WHERE name = ?");
     const selectPorts = db.prepare("SELECT port FROM machines WHERE port IS NOT NULL");
-    const selectCheckpoints = db.prepare("SELECT * FROM checkpoints ORDER BY created_at, name");
-    const selectCheckpoint = db.prepare("SELECT * FROM checkpoints WHERE name = ?");
 
     const insertMachine = db.prepare(
       `INSERT INTO machines (name, instance, native, created_at, base, profile, cpu, ram_mib,
-        disk_gib, port, host_key, made, action_name, action_status)
+        disk_gib, port, desired, generation, made, host_key)
        VALUES ($name, $instance, $native, $created_at, $base, $profile, $cpu, $ram_mib,
-        $disk_gib, $port, $host_key, 0, $action_name, 'running')`,
+        $disk_gib, $port, $desired, $generation, $made, $host_key)`,
     );
 
-    const insertCheckpoint = db.prepare(
-      `INSERT INTO checkpoints (name, instance, created_at, machine, kind, pin, port, base,
-        profile, cpu, ram_mib, disk_gib, action_name, action_status)
-       VALUES ($name, $instance, $created_at, $machine, $kind, $pin, $port, $base,
-        $profile, $cpu, $ram_mib, $disk_gib, $action_name, 'running')`,
+    const updateDesire = db.prepare(
+      `UPDATE machines SET
+        desired = CASE WHEN desired = 'deleted' THEN desired ELSE $desired END,
+        generation = generation + 1
+       WHERE name = $name
+       RETURNING desired, generation`,
     );
-
-    const updateHostKey = db.prepare("UPDATE machines SET host_key = ? WHERE name = ?");
 
     const updateMade = db.prepare("UPDATE machines SET made = 1 WHERE name = ?");
+
+    const updateHostKey = db.prepare("UPDATE machines SET host_key = $host_key WHERE name = $name");
 
     const updateNative = db.prepare(
       "UPDATE machines SET native = $native WHERE name = $name AND instance = $instance",
     );
 
-    const statementsOf = (table: "machines" | "checkpoints") => ({
-      record: db.prepare(
-        `UPDATE ${table} SET action_name = $action_name, action_status = $action_status,
-          action_error = $action_error
-         WHERE name = $name`,
-      ),
-      remove: db.prepare(`DELETE FROM ${table} WHERE name = ?`),
-      running: db.prepare(
-        `SELECT name, action_name FROM ${table} WHERE action_status = 'running' ORDER BY name`,
-      ),
-    });
+    const deleteMachine = db.prepare("DELETE FROM machines WHERE name = ?");
 
-    const statements = {
-      machine: statementsOf("machines"),
-      checkpoint: statementsOf("checkpoints"),
-    } satisfies Record<Kind, ReturnType<typeof statementsOf>>;
+    const selectCheckpoints = db.prepare(
+      "SELECT * FROM checkpoints WHERE ready = 1 ORDER BY created_at, name",
+    );
 
-    const findSync = (name: string) => {
-      const row = selectOne.get(name);
+    const selectCheckpoint = db.prepare("SELECT * FROM checkpoints WHERE name = ? AND ready = 1");
 
-      return row === undefined ? undefined : fromRow(decodeRow(row));
-    };
+    const selectAnyCheckpoint = db.prepare("SELECT * FROM checkpoints WHERE name = ?");
 
-    const findCheckpointSync = (name: string) => {
-      const row = selectCheckpoint.get(name);
+    const selectUnready = db.prepare("SELECT * FROM checkpoints WHERE ready = 0 ORDER BY name");
 
-      return row === undefined ? undefined : fromCheckpointRow(decodeCheckpointRow(row));
-    };
+    const insertCheckpoint = db.prepare(
+      `INSERT INTO checkpoints (name, instance, created_at, machine, kind, pin, port, base,
+        profile, cpu, ram_mib, disk_gib, ready)
+       VALUES ($name, $instance, $created_at, $machine, $kind, $pin, $port, $base,
+        $profile, $cpu, $ram_mib, $disk_gib, 0)`,
+    );
 
-    const finders: Finders = {
-      machine: findSync,
-      checkpoint: findCheckpointSync,
-    };
+    const updateReady = db.prepare("UPDATE checkpoints SET ready = 1 WHERE name = ?");
 
-    const record = (row: RowRef, action: ActionRecord) => {
-      statements[row.kind].record.run({
-        name: row.name,
-        action_name: action.name,
-        action_status: action.status,
-        action_error: action.status === "failed" ? encodeError(action.error) : null,
-      });
-    };
+    const updateRetired = db.prepare("UPDATE checkpoints SET ready = 0 WHERE name = ?");
 
-    const holdSync = <K extends Kind>(
-      action: ActionName,
-      row: RowRef<K>,
-    ): Result.Result<
-      { readonly row: RowRef; readonly record: Records[K] },
-      NotFound | Conflict
-    > => {
-      const { kind } = row;
-      const found = finders[row.kind](row.name);
+    const deleteCheckpoint = db.prepare("DELETE FROM checkpoints WHERE name = ?");
 
-      if (found === undefined) {
-        return Result.fail(notFound(kind, row.name));
-      }
+    const taken = (kind: Kind, name: string) =>
+      new Conflict({ message: `${kind} ${id(name)} exists`, id: id(name) });
 
-      if (found.action.status === "running") {
-        return Result.fail(
-          new Conflict({
-            message: `${kind} ${id(row.name)} is busy: ${found.action.name} is running`,
-            kind: "busy",
-            id: id(row.name),
-          }),
-        );
-      }
+    const inserting = (kind: Kind, name: string, run: () => void) =>
+      Effect.flatMap(
+        sql(`insert ${kind} ${id(name)}`, () => {
+          try {
+            run();
 
-      const running: ActionRecord = { name: action, status: "running" };
+            return Result.void;
+          } catch (cause) {
+            if (isSqliteError(cause) && cause.errcode === sqlitePrimaryKey) {
+              return Result.fail(taken(kind, name));
+            }
 
-      record(row, running);
-
-      return Result.succeed({
-        row: { kind: row.kind, name: row.name },
-        record: { ...found, action: running },
-      });
-    };
-
-    const insertSync = (action: ActionName, row: NewRow): Result.Result<RowRef, Conflict> => {
-      const columns = columnParameters(row.record, action);
-
-      try {
-        if (row.kind === "machine") {
-          insertMachine.run({
-            ...columns,
-            native: row.record.native ?? null,
-            port: row.record.port ?? null,
-            host_key: row.record.hostKey ?? null,
-          });
-        } else {
-          insertCheckpoint.run({
-            ...columns,
-            machine: row.record.machine,
-            kind: row.record.kind,
-            pin: row.record.pin ?? null,
-            port: row.record.port ?? null,
-          });
-        }
-      } catch (cause) {
-        if (isSqliteError(cause) && cause.errcode === sqlitePrimaryKey) {
-          return Result.fail(
-            new Conflict({
-              message: `${row.kind} ${id(row.record.name)} exists`,
-              kind: "exists",
-              id: id(row.record.name),
-            }),
-          );
-        }
-
-        throw cause;
-      }
-
-      return Result.succeed({ kind: row.kind, name: row.record.name });
-    };
-
-    const named = (token: Token) =>
-      [...token.inserted, ...token.held].map((row) => id(row.name)).join(", ");
+            throw cause;
+          }
+        }),
+        Effect.fromResult,
+      );
 
     const store: Interface & NativeIdRecorder = {
-      list: sql("list machines", () => selectAll.all().map((row) => fromRow(decodeRow(row)))).pipe(
-        Effect.withSpan("Store.list"),
-      ),
-      find: Effect.fn("Store.find")((name) =>
-        sql(`read ${id(name)}`, () => Option.fromNullishOr(findSync(name))),
+      machines: sql("list machines", () =>
+        selectMachines.all().map((row) => intentOf(decodeMachine(row))),
+      ).pipe(Effect.withSpan("Store.machines")),
+      findMachine: Effect.fn("Store.findMachine")((name) =>
+        sql(`read ${id(name)}`, () => {
+          const row = selectMachine.get(name);
+
+          return row === undefined ? Option.none() : Option.some(intentOf(decodeMachine(row)));
+        }),
       ),
       ports: sql(
         "read ports",
@@ -554,70 +395,105 @@ export const open = (
             ).map(({ port }) => port),
           ),
       ).pipe(Effect.withSpan("Store.ports")),
+      insertMachine: Effect.fn("Store.insertMachine")((intent) =>
+        inserting("machine", intent.name, () => {
+          insertMachine.run({
+            name: intent.name,
+            instance: intent.instance,
+            native: intent.native ?? null,
+            created_at: DateTime.formatIso(intent.createdAt),
+            base: intent.base,
+            profile: intent.profile ?? null,
+            cpu: intent.cpu,
+            ram_mib: intent.ramMib,
+            disk_gib: intent.diskGib,
+            port: intent.port ?? null,
+            desired: intent.desired,
+            generation: intent.generation,
+            made: flag(intent.made),
+            host_key: intent.hostKey ?? null,
+          });
+        }),
+      ),
+      desire: Effect.fn("Store.desire")((name, desired) =>
+        sql(`record what ${id(name)} should be`, () => {
+          const row = updateDesire.get({ name, desired });
+
+          return row === undefined ? Option.none() : Option.some(decodeDesire(row));
+        }),
+      ),
+      made: Effect.fn("Store.made")((name) =>
+        sql(`record ${id(name)} made`, () => {
+          updateMade.run(name);
+        }),
+      ),
+      hostKey: Effect.fn("Store.hostKey")((name, hostKey) =>
+        sql(`record ${id(name)}'s host key`, () => {
+          updateHostKey.run({ name, host_key: hostKey });
+        }),
+      ),
+      removeMachine: Effect.fn("Store.removeMachine")((name) =>
+        sql(`remove machine ${id(name)}`, () => {
+          deleteMachine.run(name);
+        }),
+      ),
       checkpoints: sql("list checkpoints", () =>
-        selectCheckpoints.all().map((row) => fromCheckpointRow(decodeCheckpointRow(row))),
+        selectCheckpoints.all().map((row) => checkpointOf(decodeCheckpoint(row))),
       ).pipe(Effect.withSpan("Store.checkpoints")),
       findCheckpoint: Effect.fn("Store.findCheckpoint")((name) =>
-        sql(`read checkpoint ${id(name)}`, () => Option.fromNullishOr(findCheckpointSync(name))),
-      ),
-      hold: Effect.fn("Store.hold")((action, row, joining) =>
-        transaction(db, `claim ${id(row.name)} for ${action}`, () =>
-          Result.map(holdSync(action, row), ({ row: held, record }) => ({
-            token: {
-              action,
-              inserted: joining?.inserted ?? [],
-              held: [...(joining?.held ?? []), held],
-            },
-            held: record,
-          })),
-        ),
-      ),
-      insert: Effect.fn("Store.insert")((action, row, joining) =>
-        transaction(db, `claim ${id(row.record.name)} for ${action}`, () =>
-          Result.map(insertSync(action, row), (inserted) => ({
-            action,
-            inserted: [...(joining?.inserted ?? []), inserted],
-            held: joining?.held ?? [],
-          })),
-        ),
-      ),
-      release: Effect.fn("Store.release")((token, action) =>
-        transaction(db, `release ${named(token)} from ${token.action}`, () => {
-          for (const row of token.inserted) {
-            statements[row.kind].remove.run(row.name);
-          }
+        sql(`read checkpoint ${id(name)}`, () => {
+          const row = selectCheckpoint.get(name);
 
-          for (const row of token.held) {
-            record(row, action);
-          }
-
-          return Result.void;
+          return row === undefined
+            ? Option.none()
+            : Option.some(checkpointOf(decodeCheckpoint(row)));
         }),
       ),
-      markMade: Effect.fn("Store.markMade")((token) =>
-        transaction(db, `mark ${token.inserted.map((row) => id(row.name)).join(", ")} made`, () => {
-          for (const row of token.inserted) {
-            if (row.kind === "machine") {
-              updateMade.run(row.name);
-            }
-          }
+      anyCheckpoint: Effect.fn("Store.anyCheckpoint")((name) =>
+        sql(`read checkpoint ${id(name)}'s row`, () => {
+          const row = selectAnyCheckpoint.get(name);
 
-          return Result.void;
+          return row === undefined
+            ? Option.none()
+            : Option.some(checkpointOf(decodeCheckpoint(row)));
         }),
       ),
-      end: Effect.fn("Store.end")((token, { action, prepared }) =>
-        transaction(db, `record ${action.name} on ${named(token)}`, () => {
-          for (const row of [...token.inserted, ...token.held]) {
-            record(row, action);
-          }
-
-          if (prepared?.hostKey !== undefined) {
-            updateHostKey.run(prepared.hostKey, prepared.name);
-          }
-
-          return Result.void;
+      beginCheckpoint: Effect.fn("Store.beginCheckpoint")((record) =>
+        inserting("checkpoint", record.name, () => {
+          insertCheckpoint.run({
+            name: record.name,
+            instance: record.instance,
+            created_at: DateTime.formatIso(record.createdAt),
+            machine: record.machine,
+            kind: record.kind,
+            pin: record.pin ?? null,
+            port: record.port ?? null,
+            base: record.base,
+            profile: record.profile ?? null,
+            cpu: record.cpu,
+            ram_mib: record.ramMib,
+            disk_gib: record.diskGib,
+          });
         }),
       ),
+      readyCheckpoint: Effect.fn("Store.readyCheckpoint")((name) =>
+        sql(`mark checkpoint ${id(name)} ready`, () => {
+          updateReady.run(name);
+        }),
+      ),
+      retireCheckpoint: Effect.fn("Store.retireCheckpoint")((name) =>
+        sql(`retire checkpoint ${id(name)}`, () => {
+          updateRetired.run(name);
+        }),
+      ),
+      removeCheckpoint: Effect.fn("Store.removeCheckpoint")((name) =>
+        sql(`remove checkpoint ${id(name)}`, () => {
+          deleteCheckpoint.run(name);
+        }),
+      ),
+      unready: sql("list failed captures", () =>
+        selectUnready.all().map((row) => checkpointOf(decodeCheckpoint(row))),
+      ).pipe(Effect.withSpan("Store.unready")),
       recordNative: Effect.fn("Store.recordNative")((name, instance, native) =>
         Effect.flatMap(
           sql(`record ${id(name)}'s native ID`, () =>
@@ -633,27 +509,6 @@ export const open = (
                 ),
         ),
       ),
-      remove: Effect.fn("Store.remove")((row) =>
-        sql(`remove ${row.kind} ${id(row.name)}`, () => {
-          statements[row.kind].remove.run(row.name);
-        }),
-      ),
-      failInterrupted: transaction(db, "fail interrupted actions", () => {
-        for (const kind of ["machine", "checkpoint"] as const) {
-          for (const running of statements[kind].running.all().map((row) => decodeRunning(row))) {
-            record(
-              { kind, name: running.name },
-              {
-                name: running.action_name,
-                status: "failed",
-                error: new Internal({ message: `${stoppedDuring}${running.action_name}` }),
-              },
-            );
-          }
-        }
-
-        return Result.void;
-      }).pipe(Effect.withSpan("Store.failInterrupted")),
     };
 
     return store;

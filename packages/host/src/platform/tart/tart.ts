@@ -19,7 +19,6 @@ import {
   type MachineState,
   missing,
   type Observed,
-  Refusal,
   Runtime,
   timeoutFail,
 } from "../../runtime.ts";
@@ -405,7 +404,7 @@ export const make = (
       const vm = vmOf(machine);
 
       return Effect.gen(function* () {
-        yield* Effect.mapError(listen(machine), (error) => new Refusal({ error }));
+        yield* listen(machine);
         yield* call(["clone", from, vm], `clone ${from} ${vm}`);
 
         const set = yield* tart(["set", vm, "--random-serial", ...sizes], `set ${vm}`);
@@ -432,12 +431,10 @@ export const make = (
         return Effect.fail(
           observed === "missing"
             ? missing("tart", machine)
-            : new Refusal({
-                error: new WrongState({
-                  message: `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is running: stop it first`,
-                  machine: machine.id,
-                  state: observed,
-                }),
+            : new WrongState({
+                message: `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is running: stop it first`,
+                machine: machine.id,
+                state: observed,
               }),
         );
       });

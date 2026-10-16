@@ -55,20 +55,16 @@ layer(NodeServices.layer)((it) => {
     hostKey: "ssh-ed25519 AAAAexample",
   });
 
-  const unmade = machine("linux_other", {
-    made: false,
-    action: {
-      name: "createMachine",
-      status: "failed",
-      error: new ScriptFailed({
-        message: "setup exited 3",
-        script: "setup",
-      }),
-    },
+  const failing = machine("linux_other", {
+    phase: "failed",
+    error: new ScriptFailed({
+      message: "preparation exited 3",
+      script: "preparation",
+    }),
   });
 
   it.effect(
-    "machines shows sizes with their units, marks an unmade machine, and leaves the SSH login to get",
+    "machines shows sizes with their units, marks a failed machine, and leaves the SSH login to get",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -76,7 +72,7 @@ layer(NodeServices.layer)((it) => {
 
         const { stdout } = yield* cli(["machines", "--config", config], {
           endpoints: [
-            ["linux", host({ id: "linux", bases: ["ubuntu"], machines: [held, unmade] })],
+            ["linux", host({ id: "linux", bases: ["ubuntu"], machines: [held, failing] })],
           ],
         });
 
@@ -92,57 +88,62 @@ layer(NodeServices.layer)((it) => {
           "RAM",
           "DISK",
           "AGE",
-          "ACTION",
+          "ERROR",
         ]);
         expect(rows[1]?.split(/\s+/u).slice(4, 7)).toEqual(["1", "1G", "10G"]);
-        expect(rows[2]).toContain("running (unmade)");
+        expect(rows[2]).toContain("running (failed)");
+        expect(rows[2]).toContain("ScriptFailed");
       }),
   );
 
-  it.effect("get reads one machine a field a line, with its action's error and its host key", () =>
-    Effect.gen(function* () {
-      const dir = yield* scratch;
-      const config = yield* writeConfig(dir, ["linux"]);
+  it.effect(
+    "get reads one machine a field a line, with what it was asked to be, its last error and its host key",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const config = yield* writeConfig(dir, ["linux"]);
 
-      const endpoints = [
-        ["linux", host({ id: "linux", bases: ["ubuntu"], machines: [held, unmade] })],
-      ] as const;
+        const endpoints = [
+          ["linux", host({ id: "linux", bases: ["ubuntu"], machines: [held, failing] })],
+        ] as const;
 
-      const fields = (id: string) =>
-        Effect.map(cli(["get", id, "--config", config], { endpoints }), ({ stdout }) =>
-          stdout.split("\n").map((line) => line.split(/\s{2,}/u)),
+        const fields = (id: string) =>
+          Effect.map(cli(["get", id, "--config", config], { endpoints }), ({ stdout }) =>
+            stdout.split("\n").map((line) => line.split(/\s{2,}/u)),
+          );
+
+        const json = yield* cli(["get", "linux_dev", "--json", "--config", config], { endpoints });
+        const gone = yield* cli(["get", "linux_gone", "--json", "--config", config], { endpoints });
+
+        expect(yield* fields("linux_dev")).toEqual(
+          expect.arrayContaining([
+            ["ID", "linux_dev"],
+            ["STATE", "running"],
+            ["RAM", "1G"],
+            ["DISK", "10G"],
+            ["DESIRED", "running"],
+            ["PHASE", "settled"],
+            ["SSH", "root@100.64.0.7:10022"],
+            ["ERROR", "-"],
+            ["HOST_KEY", "ssh-ed25519 AAAAexample"],
+          ]),
         );
-
-      const json = yield* cli(["get", "linux_dev", "--json", "--config", config], { endpoints });
-      const gone = yield* cli(["get", "linux_gone", "--json", "--config", config], { endpoints });
-
-      expect(yield* fields("linux_dev")).toEqual(
-        expect.arrayContaining([
-          ["ID", "linux_dev"],
-          ["STATE", "running"],
-          ["RAM", "1G"],
-          ["DISK", "10G"],
-          ["SSH", "root@100.64.0.7:10022"],
-          ["ERROR", "-"],
-          ["HOST_KEY", "ssh-ed25519 AAAAexample"],
-        ]),
-      );
-      expect(yield* fields("linux_other")).toEqual(
-        expect.arrayContaining([
-          ["STATE", "running (unmade)"],
-          ["ACTION", "createMachine failed: ScriptFailed"],
-          ["SSH", "-"],
-          ["ERROR", "setup exited 3"],
-          ["HOST_KEY", "-"],
-        ]),
-      );
-      expect(JSON.parse(json.stdout)).toMatchObject({
-        id: "linux_dev",
-        ssh: held.ssh,
-        hostKey: held.hostKey,
-      });
-      expect([gone.code, decodeJsonError(gone.stdout).error.tag]).toEqual([1, "NotFound"]);
-    }),
+        expect(yield* fields("linux_other")).toEqual(
+          expect.arrayContaining([
+            ["STATE", "running (failed)"],
+            ["PHASE", "failed"],
+            ["SSH", "-"],
+            ["ERROR", "ScriptFailed: preparation exited 3"],
+            ["HOST_KEY", "-"],
+          ]),
+        );
+        expect(JSON.parse(json.stdout)).toMatchObject({
+          id: "linux_dev",
+          ssh: held.ssh,
+          hostKey: held.hostKey,
+        });
+        expect([gone.code, decodeJsonError(gone.stdout).error.tag]).toEqual([1, "NotFound"]);
+      }),
   );
 
   it.effect("machines --json carries the machines and the unreachable hosts", () =>

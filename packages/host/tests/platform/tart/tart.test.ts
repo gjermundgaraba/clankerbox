@@ -8,7 +8,7 @@ import { Duration, Effect, Fiber, Layer, Logger, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { type Interface, type MachineRef, Refusal } from "../../../src/runtime.ts";
+import { type Interface, type MachineRef } from "../../../src/runtime.ts";
 import {
   checkpointName,
   diskGb,
@@ -24,10 +24,7 @@ import {
 import { read, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { type Call, type Reply, scripted } from "../../scripted.ts";
 
-const refused = (error: Refusal<HostError> | HostError) =>
-  error instanceof Refusal
-    ? [error.error._tag, error.error.message]
-    : ["not refused", error.message];
+const failure = (error: HostError) => [error._tag, error.message];
 
 const binary = "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart";
 
@@ -485,7 +482,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const error = yield* Effect.flip(runtime.start(machine));
 
-        expect(refused(error)).toEqual([
+        expect(failure(error)).toEqual([
           "Missing",
           "machine mac_dev is missing from the tart runtime; delete it",
         ]);
@@ -636,7 +633,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             );
 
             for (const error of errors) {
-              expect(refused(error)).toEqual([
+              expect(failure(error)).toEqual([
                 "Internal",
                 expect.stringMatching(
                   new RegExp(
@@ -902,7 +899,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(runtime.checkpointKind).toBe("disk");
         expect(runtime.captureFrom).toBe("stopped");
-        expect([fork, capture, missing].map(refused)).toEqual([
+        expect([fork, capture, missing].map(failure)).toEqual([
           [
             "WrongState",
             "a Tart fork copies a stopped machine's disk, and mac_src is running: stop it first",

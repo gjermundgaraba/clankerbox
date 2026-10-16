@@ -13,7 +13,7 @@ export interface SshTarget {
  * either is `WrongState`, naming what it lacks and why.
  */
 export const sshTarget = (machine: Machine): Effect.Effect<SshTarget, WrongState> => {
-  const { id, ssh: login, hostKey, action } = machine;
+  const { id, ssh: login, hostKey } = machine;
 
   if (login !== undefined && hostKey !== undefined) {
     return Effect.succeed({ id, login, hostKey });
@@ -21,7 +21,7 @@ export const sshTarget = (machine: Machine): Effect.Effect<SshTarget, WrongState
 
   const lacks = login === undefined ? "SSH endpoint" : "SSH host key on record";
   const state = stateLabel(machine);
-  const message = `${id} has no ${lacks} (${state}, ${action.name} ${action.status}): see clankerbox get ${id}`;
+  const message = `${id} has no ${lacks} (${state}): see clankerbox get ${id}`;
 
   return Effect.fail(new WrongState({ message, machine: id, state }));
 };

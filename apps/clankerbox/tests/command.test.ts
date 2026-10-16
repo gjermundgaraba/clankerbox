@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { join } from "node:path";
-import { Capacity, Conflict } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, Superseded } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Queue } from "effect";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
@@ -142,29 +142,32 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect("a Conflict's kind is in --json", () =>
+  it.effect("a Superseded error's later request is in --json, and it isn't retryable", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
       const config = yield* writeConfig(dir, ["linux"]);
 
-      const busy = host({
+      const replaced = host({
         id: "linux",
         bases: ["ubuntu"],
-        create: () => Effect.fail(new Conflict({ kind: "busy", message: "linux_dev is busy" })),
+        create: () =>
+          Effect.fail(
+            new Superseded({ by: "deleted", message: "machine linux_dev was deleted first" }),
+          ),
       });
 
       const { code, stdout } = yield* cli(
         ["create", "dev", ...sizes, "--json", "--config", config],
         {
-          endpoints: [["linux", busy]],
+          endpoints: [["linux", replaced]],
         },
       );
 
       expect(code).toBe(1);
       expect(decodeJsonError(stdout).error).toMatchObject({
-        tag: "Conflict",
-        kind: "busy",
-        retryable: true,
+        tag: "Superseded",
+        by: "deleted",
+        retryable: false,
         id: "linux_dev",
       });
     }),

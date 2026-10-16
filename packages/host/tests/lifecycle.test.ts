@@ -1,0 +1,534 @@
+import { describe, expect, it } from "@effect/vitest";
+import { Capacity, Internal, Refused, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
+import { waitFor } from "@xstate/effect";
+import { Deferred, Effect, Predicate, Ref } from "effect";
+import { TestClock } from "effect/testing";
+import {
+  answer,
+  ask,
+  type Born,
+  lifecycle,
+  type Making,
+  phaseOf,
+  type Snapshot,
+  spawn,
+  type StepError,
+  type Steps,
+  tell,
+} from "../src/lifecycle.ts";
+import type { MachineState, RuntimeError } from "../src/runtime.ts";
+
+type Row = Omit<Born, "making" | "seen">;
+
+const intent = (fields?: Partial<Row>): Row => ({
+  name: "dev",
+  desired: "running",
+  generation: 1,
+  made: false,
+  ...fields,
+});
+
+const made = intent({ made: true });
+
+const fresh: Making = { source: { kind: "base", image: "ubuntu" }, script: undefined };
+
+type Name = Exclude<keyof Steps, "observe">;
+
+interface Gate {
+  readonly entered: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
+  readonly interrupted: Deferred.Deferred<void>;
+}
+
+const gated = Effect.gen(function* () {
+  const gate: Gate = {
+    entered: yield* Deferred.make<void>(),
+    release: yield* Deferred.make<void>(),
+    interrupted: yield* Deferred.make<void>(),
+  };
+
+  return gate;
+});
+
+const world = (initial: MachineState) =>
+  Effect.gen(function* () {
+    const state = yield* Ref.make(initial);
+    const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+    const failures = new Map<Name, StepError>();
+    const gates = new Map<Name, Gate>();
+
+    const enter = (name: Name) =>
+      Effect.gen(function* () {
+        yield* Ref.update(calls, (all) => [...all, name]);
+
+        const gate = gates.get(name);
+
+        if (gate !== undefined) {
+          gates.delete(name);
+          yield* Deferred.succeed(gate.entered, undefined);
+          yield* Deferred.await(gate.release).pipe(
+            Effect.onInterrupt(() => Deferred.succeed(gate.interrupted, undefined)),
+          );
+        }
+
+        const failure = failures.get(name);
+
+        if (failure !== undefined) {
+          failures.delete(name);
+
+          return yield* Effect.fail(failure);
+        }
+      });
+
+    const step = (name: Name, after: MachineState) =>
+      Effect.andThen(enter(name), Ref.set(state, after));
+
+    const steps: Steps = {
+      observe: () => Effect.map(Ref.get(state), (seen) => ({ state: seen })),
+      make: (life) =>
+        Effect.andThen(
+          life.making?.script === undefined
+            ? Effect.void
+            : Ref.update(calls, (all) => [...all, "setup"]),
+          step("make", "running"),
+        ),
+      start: () => step("start", "running"),
+      stop: () => step("stop", "stopped"),
+      remove: () =>
+        Effect.mapError(step("remove", "missing"), (error): RuntimeError =>
+          Predicate.isTagged(error, "Refused") ? error : new Internal({ message: error.message }),
+        ),
+    };
+
+    const hold = (name: Name) =>
+      Effect.tap(gated, (gate) => Effect.sync(() => gates.set(name, gate)));
+
+    return {
+      steps,
+      state,
+      calls: Ref.get(calls),
+      hold,
+      failNext: (name: Name, error: StepError) => Effect.sync(() => failures.set(name, error)),
+    };
+  });
+
+const rig = (
+  initial: MachineState,
+  born: Row,
+  options?: { readonly making?: Making; readonly hold?: Name; readonly fail?: [Name, StepError] },
+) =>
+  Effect.gen(function* () {
+    const at = yield* world(initial);
+    const gate = options?.hold === undefined ? yield* gated : yield* at.hold(options.hold);
+
+    if (options?.fail !== undefined) {
+      yield* at.failNext(...options.fail);
+    }
+
+    const actor = yield* spawn(lifecycle(at.steps), {
+      ...born,
+      making: options?.making ?? (born.made ? undefined : fresh),
+      seen: { state: initial },
+    });
+
+    let generation = born.generation;
+
+    const request = (desired: Row["desired"]) =>
+      Effect.gen(function* () {
+        generation++;
+
+        const mine = generation;
+
+        yield* ask(actor, { desired, generation: mine });
+
+        return mine;
+      });
+
+    const until = (generation_: number) => answer(actor, generation_);
+
+    return { ...at, actor, request, until, gate };
+  });
+
+const settledAfter = (calls: Effect.Effect<ReadonlyArray<string>>, count: number) =>
+  Effect.repeat(
+    Effect.flatMap(Effect.yieldNow, () => calls),
+    { until: (made_) => made_.length >= count, times: 100 },
+  );
+
+const at = (snapshot: Snapshot) => [phaseOf(snapshot), snapshot.context.desired] as const;
+
+describe("a machine's lifecycle", () => {
+  it.effect("a new machine is made, then started and prepared, then rests settled", () =>
+    Effect.gen(function* () {
+      const { actor, calls } = yield* rig("missing", intent());
+
+      expect(at(yield* answer(actor, 1))).toEqual(["settled", "running"]);
+      expect(yield* calls).toEqual(["make", "start"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a machine is made in one step with its setup, and what its create held is dropped",
+    () =>
+      Effect.gen(function* () {
+        const { actor, calls } = yield* rig("missing", intent(), {
+          making: { ...fresh, script: { script: "echo hi" } },
+        });
+
+        const settled = yield* answer(actor, 1);
+
+        expect([phaseOf(settled), settled.context.making]).toEqual(["settled", undefined]);
+        expect(yield* calls).toEqual(["setup", "make", "start"]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("a made machine that runs is started and prepared again when the host starts", () =>
+    Effect.gen(function* () {
+      const { actor, calls } = yield* rig("running", made);
+
+      expect(at(yield* answer(actor, 1))).toEqual(["settled", "running"]);
+      expect(yield* calls).toEqual(["start"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a stop sent while a start boots cuts the start short, and the stop is the answer",
+    () =>
+      Effect.gen(function* () {
+        const machine = yield* rig("stopped", { ...made, desired: "stopped" });
+
+        yield* answer(machine.actor, 1);
+
+        const boot = yield* machine.hold("start");
+        const started = yield* machine.request("running");
+
+        yield* Deferred.await(boot.entered);
+
+        const stopped = yield* machine.request("stopped");
+        const rest = yield* machine.until(stopped);
+
+        yield* Deferred.await(boot.interrupted);
+
+        expect(at(rest)).toEqual(["settled", "stopped"]);
+        expect(rest.context.generation).toBeGreaterThan(started);
+        expect([yield* machine.calls, yield* Ref.get(machine.state)]).toEqual([
+          ["start"],
+          "stopped",
+        ]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("a stop sent while a running machine is prepared cuts its start short", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made, { hold: "start" });
+      const preparing = machine.gate;
+
+      yield* Deferred.await(preparing.entered);
+
+      const rest = yield* machine.until(yield* machine.request("stopped"));
+
+      yield* Deferred.await(preparing.interrupted);
+
+      expect(at(rest)).toEqual(["settled", "stopped"]);
+      expect(yield* machine.calls).toEqual(["start", "stop"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a start sent while a machine stops cuts the stop short", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made);
+
+      yield* answer(machine.actor, 1);
+
+      const stopping = yield* machine.hold("stop");
+
+      yield* machine.request("stopped");
+      yield* Deferred.await(stopping.entered);
+
+      const rest = yield* machine.until(yield* machine.request("running"));
+
+      yield* Deferred.await(stopping.interrupted);
+
+      expect(at(rest)).toEqual(["settled", "running"]);
+      expect(yield* machine.calls).toEqual(["start", "stop", "start"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a second request for what a step already works toward lets the step finish", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("stopped", { ...made, desired: "stopped" });
+
+      yield* answer(machine.actor, 1);
+
+      const boot = yield* machine.hold("start");
+
+      yield* machine.request("running");
+      yield* Deferred.await(boot.entered);
+
+      const again = yield* machine.request("running");
+
+      yield* waitFor(machine.actor, (snapshot) => snapshot.context.generation === again);
+      yield* Deferred.succeed(boot.release, undefined);
+
+      expect(at(yield* machine.until(again))).toEqual(["settled", "running"]);
+      expect(yield* machine.calls).toEqual(["start"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a delete sent while a machine is made cuts its making short and deletes it", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("missing", intent(), { hold: "make" });
+      const making = machine.gate;
+
+      yield* Deferred.await(making.entered);
+
+      const gone = yield* machine.until(yield* machine.request("deleted"));
+
+      yield* Deferred.await(making.interrupted);
+
+      expect([gone.status, gone.context.making, gone.context.undone]).toEqual([
+        "done",
+        undefined,
+        undefined,
+      ]);
+      expect(yield* machine.calls).toEqual(["make", "remove"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a stop sent while a machine is made waits for the making, then is acted on", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("missing", intent(), { hold: "make" });
+      const making = machine.gate;
+
+      yield* Deferred.await(making.entered);
+
+      const stopped = yield* machine.request("stopped");
+
+      const taken = yield* waitFor(
+        machine.actor,
+        (snapshot) => snapshot.context.desired === "stopped",
+      );
+
+      expect(phaseOf(taken)).toBe("creating");
+
+      yield* Deferred.succeed(making.release, undefined);
+
+      expect(at(yield* machine.until(stopped))).toEqual(["settled", "stopped"]);
+      expect(yield* machine.calls).toEqual(["make", "stop"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a create that fails deletes the machine, and its error is the answer", () =>
+    Effect.gen(function* () {
+      const full = new Capacity({ message: "no room" });
+      const machine = yield* rig("missing", intent(), { fail: ["make", full] });
+
+      const gone = yield* answer(machine.actor, 1);
+
+      expect([gone.status, gone.context.desired, gone.context.undone]).toEqual([
+        "done",
+        "deleted",
+        full,
+      ]);
+      expect(yield* machine.calls).toEqual(["make", "remove"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a setup that fails deletes the machine, though a stop was asked meanwhile", () =>
+    Effect.gen(function* () {
+      const exited = new ScriptFailed({ message: "setup exited 1", script: "setup" });
+
+      const machine = yield* rig("missing", intent(), {
+        making: { ...fresh, script: { script: "exit 1" } },
+        hold: "make",
+        fail: ["make", exited],
+      });
+
+      yield* Deferred.await(machine.gate.entered);
+      yield* machine.request("stopped");
+      yield* Deferred.succeed(machine.gate.release, undefined);
+
+      const gone = yield* answer(machine.actor, 2);
+
+      expect([gone.status, gone.context.making, gone.context.undone]).toEqual([
+        "done",
+        undefined,
+        exited,
+      ]);
+      expect(yield* machine.calls).toEqual(["setup", "make", "remove"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a step that fails on a made machine rests failed until a request tries again", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made);
+      const stuck = new Capacity({ message: "stop refused" });
+
+      yield* answer(machine.actor, 1);
+      yield* machine.failNext("stop", stuck);
+
+      const failed = yield* machine.until(yield* machine.request("stopped"));
+
+      expect([phaseOf(failed), failed.context.error]).toEqual(["failed", stuck]);
+
+      const retried = yield* machine.until(yield* machine.request("stopped"));
+
+      expect([phaseOf(retried), retried.context.error]).toEqual(["settled", undefined]);
+      expect(yield* machine.calls).toEqual(["start", "stop", "stop"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a request sent while a step runs that then fails is acted on, not the failure", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("stopped", { ...made, desired: "stopped" });
+
+      yield* answer(machine.actor, 1);
+
+      const boot = yield* machine.hold("start");
+
+      yield* machine.failNext("start", new Capacity({ message: "no room" }));
+      yield* machine.request("running");
+      yield* Deferred.await(boot.entered);
+
+      const again = yield* machine.request("running");
+
+      yield* waitFor(machine.actor, (snapshot) => snapshot.context.generation === again);
+      yield* Deferred.succeed(boot.release, undefined);
+
+      const rest = yield* machine.until(again);
+
+      expect([phaseOf(rest), rest.context.error]).toEqual(["settled", undefined]);
+      expect(yield* machine.calls).toEqual(["start", "start"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a start on a machine that runs already starts and prepares it again", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made);
+
+      yield* answer(machine.actor, 1);
+
+      const rest = yield* machine.until(yield* machine.request("running"));
+
+      expect(at(rest)).toEqual(["settled", "running"]);
+      expect(yield* machine.calls).toEqual(["start", "start"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a settled machine reads nothing by itself, however long it rests", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made);
+
+      yield* answer(machine.actor, 1);
+      yield* Ref.set(machine.state, "stopped");
+      yield* TestClock.adjust("1 hour");
+
+      expect([phaseOf(machine.actor.getSnapshot()), yield* settledAfter(machine.calls, 1)]).toEqual(
+        ["settled", ["start"]],
+      );
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a settled machine told it stopped under it decides again, and starts it", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made);
+
+      yield* answer(machine.actor, 1);
+      yield* Ref.set(machine.state, "stopped");
+      yield* tell(machine.actor, { state: "stopped" });
+
+      expect(yield* settledAfter(machine.calls, 2)).toEqual(["start", "start"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a state the runtime can't read rests waiting until the host reads it again", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("unknown", made);
+
+      const waiting = yield* answer(machine.actor, 1);
+
+      yield* Ref.set(machine.state, "running");
+      yield* TestClock.adjust("1 hour");
+
+      const still = phaseOf(machine.actor.getSnapshot());
+
+      yield* tell(machine.actor, { state: "running" });
+
+      expect([phaseOf(waiting), still]).toEqual(["waiting", "waiting"]);
+      expect(
+        at(yield* waitFor(machine.actor, (snapshot) => phaseOf(snapshot) === "settled")),
+      ).toEqual(["settled", "running"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a made machine the runtime no longer has is lost, which only a delete leaves", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("missing", made);
+
+      expect(phaseOf(yield* answer(machine.actor, 1))).toBe("lost");
+
+      const started = yield* machine.until(yield* machine.request("running"));
+
+      expect(phaseOf(started)).toBe("lost");
+      expect(yield* machine.calls).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a request older than the machine's last changes nothing", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", { ...made, generation: 5 });
+
+      yield* answer(machine.actor, 5);
+      yield* ask(machine.actor, { desired: "stopped", generation: 3 });
+
+      const rest = yield* answer(machine.actor, 5);
+
+      expect([...at(rest), rest.context.generation]).toEqual(["settled", "running", 5]);
+      expect(yield* machine.calls).toEqual(["start"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a delete sent again after one failed shows no error while it retries", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made);
+      const busy = new Refused({ message: "delete refused" });
+
+      yield* answer(machine.actor, 1);
+      yield* machine.failNext("remove", busy);
+
+      const failed = yield* machine.until(yield* machine.request("deleted"));
+      const retrying = yield* machine.hold("remove");
+
+      yield* machine.request("deleted");
+      yield* Deferred.await(retrying.entered);
+
+      const during = machine.actor.getSnapshot().context.error;
+
+      yield* Deferred.succeed(retrying.release, undefined);
+
+      expect([phaseOf(failed), failed.context.error, during]).toEqual(["failed", busy, undefined]);
+      expect((yield* machine.until(3)).status).toBe("done");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a machine being deleted stays deleted: a later start only raises the generation", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made);
+
+      yield* answer(machine.actor, 1);
+
+      const removing = yield* machine.hold("remove");
+
+      yield* machine.request("deleted");
+      yield* Deferred.await(removing.entered);
+      yield* machine.request("running");
+
+      expect(machine.actor.getSnapshot().context.desired).toBe("deleted");
+
+      yield* Deferred.succeed(removing.release, undefined);
+
+      expect((yield* machine.until(3)).status).toBe("done");
+      expect(yield* machine.calls).toEqual(["start", "remove"]);
+    }).pipe(Effect.scoped),
+  );
+});

@@ -8,6 +8,7 @@ import {
   type HttpServerError,
 } from "effect/http";
 import * as Checkpoints from "../checkpoints.ts";
+import * as Leases from "../leases.ts";
 import * as Machines from "../machines.ts";
 import type { Runtime } from "../runtime.ts";
 import * as BindProbe from "../platform/bind-probe.ts";
@@ -42,7 +43,7 @@ export const servicesLayer = <E, R>(
 
   return Layer.merge(Machines.layer(config), Checkpoints.layer(config)).pipe(
     Layer.provide(startup(config)),
-    Layer.provide(BindProbe.layer),
+    Layer.provide(Layer.merge(BindProbe.layer, Leases.layer)),
     Layer.provideMerge(Layer.merge(store, runtime.pipe(Layer.provide(nativeIds)))),
   );
 };

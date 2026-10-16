@@ -32,30 +32,31 @@ layer(NodeServices.layer)((it) => {
           [
             machine("linux_dev", { state: "stopped", hostKey }),
             new WrongState({
-              message:
-                "linux_dev has no SSH endpoint (stopped, createMachine done): see clankerbox get linux_dev",
+              message: "linux_dev has no SSH endpoint (stopped): see clankerbox get linux_dev",
               machine: "linux_dev",
               state: "stopped",
             }),
           ],
           [
             machine("linux_dev", {
-              made: false,
+              phase: "failed",
               ssh: login,
-              action: {
-                name: "createMachine",
-                status: "failed",
-                error: new ScriptFailed({
-                  message: "setup exited 1",
-                  script: "setup",
-                }),
-              },
+              error: new ScriptFailed({ message: "setup exited 1", script: "setup" }),
             }),
             new WrongState({
               message:
-                "linux_dev has no SSH host key on record (running (unmade), createMachine failed): see clankerbox get linux_dev",
+                "linux_dev has no SSH host key on record (running (failed)): see clankerbox get linux_dev",
               machine: "linux_dev",
-              state: "running (unmade)",
+              state: "running (failed)",
+            }),
+          ],
+          [
+            machine("linux_dev", { state: "stopped", desired: "running", phase: "starting" }),
+            new WrongState({
+              message:
+                "linux_dev has no SSH endpoint (stopped, wants running (starting)): see clankerbox get linux_dev",
+              machine: "linux_dev",
+              state: "stopped, wants running (starting)",
             }),
           ],
         ];

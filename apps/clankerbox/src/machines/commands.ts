@@ -38,7 +38,7 @@ export const getMachine = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    `${actionsByName.getMachine.description} Prints its state, its last action and the error it failed with, its SSH login and its host key.`,
+    `${actionsByName.getMachine.description} Prints its state, what it was asked to be and what the host is doing about it, the error its last step failed with, its SSH login and its host key.`,
   ),
 );
 
@@ -77,7 +77,7 @@ export const create = Command.make("create", { ...mutationFlags, ...createArgume
   }),
 ).pipe(
   Command.withDescription(
-    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. With a setup, the machine is restored from the setup's prebuild when its host has one (see prebuild). A create that fails can leave its machine behind, unmade: get shows why, and delete removes it. Prints the new ID.",
+    "Create a machine from a profile, from a base with sizes and an optional setup, or from both: each flag overrides the profile's field. With a setup, the machine is restored from the setup's prebuild when its host has one (see prebuild). A create whose copy or setup fails deletes its machine and fails with why. Prints the new ID.",
   ),
 );
 

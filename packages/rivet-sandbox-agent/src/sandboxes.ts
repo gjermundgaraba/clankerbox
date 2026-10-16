@@ -1,5 +1,4 @@
 import {
-  ActionName,
   type ClankerboxError,
   Client,
   Conflict,
@@ -8,6 +7,7 @@ import {
   Prebuild,
   specRequest,
   sshTarget,
+  Superseded,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Duration,
@@ -26,19 +26,6 @@ import { SandboxDestroyedError } from "sandbox-agent";
 import { healthPath } from "./agent.ts";
 import type { Options } from "./options.ts";
 import { forwarding, freePort, LocalTunnelError, open, type Tunnel } from "./tunnel.ts";
-
-const makesMachine = {
-  createMachine: true,
-  forkMachine: true,
-  restoreMachine: true,
-  startMachine: false,
-  stopMachine: false,
-  deleteMachine: false,
-  captureCheckpoint: false,
-  deleteCheckpoint: false,
-} satisfies Record<ActionName, boolean>;
-
-const isActionName = Schema.is(ActionName);
 
 export const name = "clankerbox";
 
@@ -217,7 +204,7 @@ export const make = (options: Options, ssh = "ssh") => {
     Effect.gen(function* () {
       const client = yield* Client.Client;
 
-      if (error.made !== undefined && isActionName(error.action) && makesMachine[error.action]) {
+      if (error.made !== undefined && !(error instanceof Conflict || error instanceof Superseded)) {
         yield* Effect.ignore(client.deleteMachine({ id: error.made }));
       }
 
@@ -230,7 +217,7 @@ export const make = (options: Options, ssh = "ssh") => {
 
       return made(named).pipe(
         Effect.map((machine) => machine.id),
-        Effect.catch((error) => (error instanceof Conflict ? Effect.fail(error) : discard(error))),
+        Effect.catch(discard),
       );
     }),
     destroy: (id: string) =>

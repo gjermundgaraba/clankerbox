@@ -10,6 +10,7 @@ import {
   Duration,
   Effect,
   Context,
+  Deferred,
   Exit,
   Fiber,
   FileSystem,
@@ -49,7 +50,6 @@ import {
   type CheckpointRef,
   type Interface,
   type MachineRef,
-  Refusal,
   Runtime,
 } from "../../../src/runtime.ts";
 import { servicesLayer } from "../../../src/composition/host.ts";
@@ -58,6 +58,7 @@ import * as Sqlite from "../../../src/platform/sqlite.ts";
 import * as Store from "../../../src/store.ts";
 import { remove, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { type Call, type Reply, scripted } from "../../scripted.ts";
+import { quiet } from "../../support.ts";
 
 const apiKey = "boat_fake-key-that-must-never-print";
 
@@ -65,10 +66,7 @@ const publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostOwnKeyForTests clank
 
 const guestKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGuestHostKeyForTests";
 
-const refused = (error: Refusal<HostError> | HostError) =>
-  error instanceof Refusal
-    ? [error.error._tag, error.error.message]
-    : ["not refused", error._tag, error.message];
+const failure = (error: HostError) => [error._tag, error.message];
 
 interface Sent {
   readonly method: string;
@@ -82,6 +80,8 @@ type Answer = { readonly status: number; readonly body: Schema.Json };
 interface BoatHooks {
   answer?: (sent: Sent) => Answer | "drop" | undefined;
   made?: (sandbox: FakeSandbox) => void;
+  /** Awaited after boat acted on a request and before its answer arrives. */
+  answering?: (sent: Sent) => Effect.Effect<void> | undefined;
 }
 
 interface GuestHooks {
@@ -308,6 +308,8 @@ const fakeBoat = (options?: { readonly instant?: boolean }) => {
 
       const answer = route(recorded, DateTime.toEpochMillis(yield* DateTime.now));
 
+      yield* hooks.answering?.(recorded) ?? Effect.void;
+
       if (answer === "drop") {
         return yield* new HttpClientError.HttpClientError({
           reason: new HttpClientError.TransportError({
@@ -403,7 +405,7 @@ const checkpointOn = (name: string, n = 1): CheckpointRef => ({
   port: undefined,
 });
 
-const row = (machine: MachineRef): Store.NewMachine => ({
+const row = (machine: MachineRef): Store.Intent => ({
   name: machine.name,
   instance: machine.instance,
   native: machine.native,
@@ -414,6 +416,9 @@ const row = (machine: MachineRef): Store.NewMachine => ({
   ramMib: machine.ramMib,
   diskGib: machine.diskGib,
   port: undefined,
+  desired: "running",
+  generation: 1,
+  made: false,
   hostKey: undefined,
 });
 
@@ -458,8 +463,7 @@ const rigOn = (boat = fakeBoat()) =>
       Effect.provide(Layer.merge(guest.spawner.layer, boat.layer)),
     );
 
-    const insert = (machine: MachineRef) =>
-      Effect.asVoid(store.insert("createMachine", { kind: "machine", record: row(machine) }));
+    const insert = (machine: MachineRef) => store.insertMachine(row(machine));
 
     const rig: Rig = { boat, guest, store, runtime, stateDir, insert };
 
@@ -525,7 +529,7 @@ const fails = <A, E>(effect: Effect.Effect<A, E, Scope.Scope>, waiting?: Promise
   });
 
 const nativeOf = (rig: Rig, name: string) =>
-  Effect.map(rig.store.find(name), (found) =>
+  Effect.map(rig.store.findMachine(name), (found) =>
     Option.getOrUndefined(Option.map(found, ({ native }) => native)),
   );
 
@@ -837,13 +841,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const stopped = yield* fails(rig.runtime.exec(recorded, { argv: ["true"] }));
         const none = yield* fails(rig.runtime.exec(machineOn("other"), { argv: ["true"] }));
 
-        expect(refused(stopped)).toEqual([
-          "not refused",
+        expect(failure(stopped)).toEqual([
           "Internal",
           "machine boat_dev doesn't run: boat reads its sandbox bx_made0001 archived",
         ]);
-        expect(refused(none)).toEqual([
-          "not refused",
+        expect(failure(none)).toEqual([
           "Internal",
           "machine boat_other has no boat sandbox recorded",
         ]);
@@ -910,8 +912,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ? Option.getOrThrow(Exit.findErrorOption(exit))
           : undefined;
 
-        expect(error === undefined ? undefined : refused(error)).toEqual([
-          "not refused",
+        expect(error === undefined ? undefined : failure(error)).toEqual([
           "Internal",
           "boat_other didn't answer SSH within 3m: Connection refused",
         ]);
@@ -947,8 +948,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ? Option.getOrThrow(Exit.findErrorOption(exit))
           : undefined;
 
-        expect(error === undefined ? undefined : refused(error)).toEqual([
-          "not refused",
+        expect(error === undefined ? undefined : failure(error)).toEqual([
           "Internal",
           `machine boat_dev doesn't run: boat reads its sandbox bx_made0001 ${ending}`,
         ]);
@@ -958,7 +958,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect("boat's refusals of a create leave nothing: a Refusal, and no sandbox recorded", () =>
+  it.effect("boat's refusals of a create leave nothing: no sandbox recorded", () =>
     Effect.gen(function* () {
       const rig = yield* rigOn();
 
@@ -979,7 +979,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const error = yield* fails(rig.runtime.create(machine, "boat"));
 
-        expect(refused(error)).toEqual([
+        expect(failure(error)).toEqual([
           tag,
           `boat POST /sandboxes answered ${status} ${code}: no room (req_0123)`,
         ]);
@@ -1008,7 +1008,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ? Option.getOrThrow(Exit.findErrorOption(exit))
           : undefined;
 
-        expect(error === undefined ? undefined : refused(error)).toEqual([
+        expect(error === undefined ? undefined : failure(error)).toEqual([
           "Capacity",
           "boat POST /sandboxes answered 429 rate_limited: 5 starts per minute (req_0123), and 2 repeats 1m 5s apart met the same",
         ]);
@@ -1036,7 +1036,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const cancelled = yield* fails(rig.runtime.create(machine, "boat"));
 
-        expect(refused(cancelled)).toEqual([
+        expect(failure(cancelled)).toEqual([
           "Capacity",
           "boat cancelled sandbox bx_made0001 of boat_dev: no machine available; it found no machine",
         ]);
@@ -1051,8 +1051,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const gone = yield* fails(rig.runtime.create(other, "boat"));
 
-        expect(refused(gone)).toEqual([
-          "not refused",
+        expect(failure(gone)).toEqual([
           "Internal",
           "boat no longer has sandbox bx_made0002 of boat_other",
         ]);
@@ -1073,11 +1072,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const created = yield* fails(rig.runtime.create(big, "boat"));
         const restored = yield* fails(rig.runtime.restore(checkpointOn("cp"), big));
 
-        expect(refused(created)).toEqual([
+        expect(failure(created)).toEqual([
           "Unsizable",
           "no boat machine type has 16 vCPU, 32G of RAM and 252G of disk; the largest, xlarge, has 16 vCPU, 32G of RAM and 251G of disk",
         ]);
-        expect(refused(restored)[0]).toBe("Unsizable");
+        expect(failure(restored)[0]).toBe("Unsizable");
         expect(rig.boat.sent).toEqual([]);
 
         rig.boat.sandboxes.set("bx_source", {
@@ -1091,7 +1090,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           rig.runtime.fork(machineOn("dev", { native: "bx_source" }), big),
         );
 
-        expect(refused(forked)[0]).toBe("Unsizable");
+        expect(failure(forked)[0]).toBe("Unsizable");
         expect(rig.boat.sent).toEqual([]);
         expect(rig.guest.calls).toEqual([]);
 
@@ -1305,7 +1304,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const error = yield* fails(rig.runtime.start(machineOn("dev", { native: "bx_made0009" })));
 
-      expect(refused(error)).toEqual([
+      expect(failure(error)).toEqual([
         "Capacity",
         "boat POST /sandboxes/bx_made0009/resume answered 429 limit_reached: 2 active (req_0123)",
       ]);
@@ -1338,7 +1337,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const errors: Array<ReadonlyArray<string>> = [];
 
         for (const machine of gone) {
-          errors.push(refused(yield* fails(rig.runtime.start(machine))));
+          errors.push(failure(yield* fails(rig.runtime.start(machine))));
           yield* succeeds(rig.runtime.stop(machine));
         }
 
@@ -1391,8 +1390,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const error = yield* fails(rig.runtime.stop(recorded));
 
-        expect(refused(error)).toEqual([
-          "not refused",
+        expect(failure(error)).toEqual([
           "Internal",
           "boat POST /sandboxes/bx_made0001/stop answered 409 snapshot_failed: the final snapshot failed; the sandbox keeps running (req_0123)",
         ]);
@@ -1670,8 +1668,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         synced.promise,
       );
 
-      expect(refused(error)).toEqual([
-        "not refused",
+      expect(failure(error)).toEqual([
         "Internal",
         "boat completed no snapshot of boat_dev within 10m of its sync, so the fork wouldn't hold its latest writes",
       ]);
@@ -1687,11 +1684,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const copy = machineOn("copy");
 
         for (const source of [machineOn("dev"), machineOn("dev", { native: "bx_gone" })]) {
-          expect(refused(yield* fails(rig.runtime.fork(source, copy)))).toEqual([
+          expect(failure(yield* fails(rig.runtime.fork(source, copy)))).toEqual([
             "Missing",
             "machine boat_dev is missing from the boat runtime; delete it",
           ]);
-          expect(refused(yield* fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
+          expect(failure(yield* fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
             "Missing",
             "machine boat_dev is missing from the boat runtime; delete it",
           ]);
@@ -1707,7 +1704,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           sent.path.endsWith("/fork") ? refusal(429, "limit_reached", "2 active") : undefined;
 
         expect(
-          refused(yield* fails(rig.runtime.fork(machineOn("dev", { native: "bx_source" }), copy))),
+          failure(yield* fails(rig.runtime.fork(machineOn("dev", { native: "bx_source" }), copy))),
         ).toEqual([
           "Capacity",
           "boat POST /sandboxes/bx_source/fork answered 429 limit_reached: 2 active (req_0123)",
@@ -1792,8 +1789,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         rig.runtime.capture(machineOn("dev", { native: "bx_source" }), checkpointOn("cp")),
       );
 
-      expect(refused(error)).toEqual([
-        "not refused",
+      expect(failure(error)).toEqual([
         "Internal",
         "sync in boat_dev before its capture exited 1: sync: I/O error",
       ]);
@@ -1819,7 +1815,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             ? refusal(409, "named_snapshot_limit", "10 named snapshots")
             : undefined;
 
-        expect(refused(yield* fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
+        expect(failure(yield* fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
           "Capacity",
           "boat POST /named-snapshots answered 409 named_snapshot_limit: 10 named snapshots (req_0123)",
         ]);
@@ -1832,8 +1828,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
               }
             : undefined;
 
-        expect(refused(yield* fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
-          "not refused",
+        expect(failure(yield* fails(rig.runtime.capture(source, checkpointOn("cp"))))).toEqual([
           "Internal",
           "boat's snapshot cbx-boat-cafe0001 of boat_dev is failed: disk",
         ]);
@@ -1844,8 +1839,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* rig.insert(back);
 
-        expect(refused(yield* fails(rig.runtime.restore(checkpointOn("gone", 9), back)))).toEqual([
-          "not refused",
+        expect(failure(yield* fails(rig.runtime.restore(checkpointOn("gone", 9), back)))).toEqual([
           "Internal",
           "boat POST /sandboxes answered 404 named_snapshot_not_found: boat says named_snapshot_not_found (req_0123)",
         ]);
@@ -1894,13 +1888,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           { resource: "cpu", used: 0 },
           { resource: "ramMib", used: 0 },
         ]);
-        expect(refused(error)).toEqual([
-          "not refused",
+        expect(failure(error)).toEqual([
           "Internal",
           "boat GET /limits answered 401 unauthorized: no account has the key <redacted> (req_0123)",
         ]);
-        expect(refused(down)).toEqual([
-          "not refused",
+        expect(failure(down)).toEqual([
           "Internal",
           "boat GET /limits answered 503 unavailable: boat is down for maintenance (req_0123)",
         ]);
@@ -2025,7 +2017,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           Logger.layer([Logger.make(({ message }) => logged.push(message))]),
         );
 
-        const errors: Array<Refusal<HostError> | HostError> = [];
+        const errors: Array<HostError> = [];
 
         rig.boat.sandboxes.set("bx_stopped", {
           id: "bx_stopped",
@@ -2115,9 +2107,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           rig.runtime.observe([machineOn("unread", { native: "bx_failing" })]).pipe(logging),
         );
 
-        expect(
-          errors.map((error) => (error instanceof Refusal ? error.error : error).message),
-        ).toEqual([
+        expect(errors.map((error) => error.message)).toEqual([
           "boat POST /sandboxes/bx_stopped/resume answered 429 limit_reached: Bearer <redacted> (req_0123)",
           "boat POST /sandboxes/bx_stopped/resume: TransportError: socket hang up after Authorization: Bearer <redacted>",
           "boat's sandbox bx_stopped of boat_failed failed: Bearer <redacted>",
@@ -2135,10 +2125,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
-  const hostOn = (boat: FakeBoat) =>
+  const hostOn = (boat: FakeBoat, rows: ReadonlyArray<Store.Intent> = []) =>
     Effect.gen(function* () {
       const stateDir = yield* stateDirIn(yield* scratch);
       const guest = fakeGuest();
+
+      yield* Effect.scoped(
+        Effect.flatMap(Sqlite.open({ stateDir, id: "boat", runtime: "boat" }), (store) =>
+          Effect.forEach(rows, store.insertMachine, { discard: true }),
+        ),
+      );
 
       const config: HostSettings = {
         id: "boat",
@@ -2147,6 +2143,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         bases: new Map([["boat", "boat"]]),
         stateDir,
         machinePorts: defaultMachinePorts,
+        recheck: quiet,
       };
 
       const context = yield* Layer.build(
@@ -2168,6 +2165,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       };
     });
 
+  const cutOff = (machine: MachineRef, desired: Store.Intent["desired"]): Store.Intent => ({
+    ...row(machine),
+    desired,
+  });
+
   it.effect(
     "through the host: a create records the sandbox and reads running at boat's relay, with the key preparation printed",
     () =>
@@ -2183,13 +2185,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           diskGib: 12,
         });
 
-        expect([machine.state, machine.ssh, machine.hostKey, machine.action]).toEqual([
+        expect([
+          machine.state,
+          machine.ssh,
+          machine.hostKey,
+          machine.desired,
+          machine.phase,
+        ]).toEqual([
           "running",
           { user: "root", host: "203.0.113.10", port: 19_001 },
           guestKey,
-          { name: "createMachine", status: "done" },
+          "running",
+          "settled",
         ]);
-        expect((yield* store.list).map((found) => found.native)).toEqual(["bx_made0001"]);
+        expect((yield* store.machines).map((found) => found.native)).toEqual(["bx_made0001"]);
       }),
   );
 
@@ -2209,7 +2218,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           setup: { script: "#!/bin/sh\ntrue\n", timeoutSeconds: 30 },
         });
 
-        expect(guest.calls).toHaveLength(3);
+        expect(guest.calls).toHaveLength(5);
 
         for (const call of guest.calls) {
           expect(call.args).toContain("HostKeyAlias=bx_made0001");
@@ -2219,7 +2228,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "through the host: boat's refusals leave no row, and a refused start leaves the machine stopped, recording it",
+    "through the host: boat's refusals leave no row, and a refused start leaves the machine stopped, failed with it",
     () =>
       Effect.gen(function* () {
         const boat = fakeBoat({ instant: true });
@@ -2235,7 +2244,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(refusedCreate._tag).toBe("Capacity");
-        expect(yield* store.list).toEqual([]);
+        expect(yield* store.machines).toEqual([]);
 
         boat.hooks.answer = undefined;
         boat.hooks.made = (sandbox) => {
@@ -2247,7 +2256,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
 
         expect(cancelled._tag).toBe("Capacity");
-        expect(yield* store.list).toEqual([]);
+        expect(yield* store.machines).toEqual([]);
 
         boat.hooks.made = undefined;
         yield* machines.create({ id: "boat_dev", base: "boat", cpu: 2, ramMib: 4096, diskGib: 12 });
@@ -2260,47 +2269,72 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const after = yield* machines.get("boat_dev");
 
         expect(refusedStart._tag).toBe("Capacity");
-        expect([after.state, after.action]).toEqual([
+        expect([after.state, after.desired, after.phase, after.error]).toEqual([
           "stopped",
-          {
-            name: "startMachine",
-            status: "failed",
-            error: new Capacity({ message: refusedStart.message }),
-          },
+          "running",
+          "failed",
+          new Capacity({ message: refusedStart.message }),
         ]);
       }),
   );
 
   it.effect(
-    "through the host: stop and delete after a crash before the sandbox was recorded write nothing on boat",
+    "through the host: a delete sent while boat's create answers waits for the sandbox's ID, and deletes the sandbox",
     () =>
       Effect.gen(function* () {
         const boat = fakeBoat({ instant: true });
         const { machines, store } = yield* hostOn(boat);
+        const accepted = yield* Deferred.make<void>();
+        const answered = yield* Deferred.make<void>();
 
-        yield* store.insert("createMachine", {
-          kind: "machine",
-          record: row(machineOn("dev")),
+        boat.hooks.answering = (sent) =>
+          sent.method === "POST" && sent.path === "/sandboxes"
+            ? Effect.andThen(Deferred.succeed(accepted, undefined), Deferred.await(answered))
+            : undefined;
+
+        const creating = yield* Effect.forkChild(
+          Effect.flip(
+            machines.create({ id: "boat_dev", base: "boat", cpu: 2, ramMib: 4096, diskGib: 12 }),
+          ),
+        );
+
+        yield* Deferred.await(accepted);
+
+        const deleting = yield* Effect.forkChild(machines.delete("boat_dev"));
+
+        yield* Effect.repeat(machines.get("boat_dev"), {
+          until: (machine) => machine.desired === "deleted",
+          times: 200,
         });
-        yield* store.failInterrupted;
+        yield* Deferred.succeed(answered, undefined);
+        yield* Fiber.join(deleting);
 
-        const stopped = yield* machines.stop("boat_dev");
+        expect((yield* Fiber.join(creating))._tag).toBe("Superseded");
+        expect(yield* store.machines).toEqual([]);
+        expect([...boat.sandboxes.keys()]).toEqual([]);
+        expect(boat.calls()).toContain("DELETE /sandboxes/bx_made0001");
+      }),
+  );
 
-        expect([stopped.state, stopped.made]).toEqual(["missing", false]);
+  it.effect(
+    "through the host: a machine cut off before boat recorded a sandbox is deleted once the host starts, writing nothing on boat",
+    () =>
+      Effect.gen(function* () {
+        const boat = fakeBoat({ instant: true });
+        const { machines, store } = yield* hostOn(boat, [cutOff(machineOn("dev"), "running")]);
 
-        yield* machines.delete("boat_dev");
+        yield* machines.delete("boat_dev").pipe(Effect.catchTag("NotFound", () => Effect.void));
 
-        expect(yield* store.list).toEqual([]);
+        expect(yield* store.machines).toEqual([]);
         expect(boat.sent.filter((sent) => sent.method !== "GET")).toEqual([]);
       }),
   );
 
   it.effect(
-    "through the host: after a crash mid-create, a stop stops the sandbox boat is still making",
+    "through the host: a create cut off after boat recorded its sandbox deletes that sandbox once the host starts, and makes none",
     () =>
       Effect.gen(function* () {
         const boat = fakeBoat({ instant: true });
-        const { machines, store } = yield* hostOn(boat);
 
         boat.sandboxes.set("bx_booting", {
           id: "bx_booting",
@@ -2308,19 +2342,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ip: null,
           sshEndpoint: null,
         });
-        yield* store.insert("createMachine", {
-          kind: "machine",
-          record: row(machineOn("dev", { native: "bx_booting" })),
-        });
-        yield* store.failInterrupted;
 
-        const stopped = yield* machines.stop("boat_dev");
-
-        expect([stopped.state, stopped.action]).toEqual([
-          "stopped",
-          { name: "stopMachine", status: "done" },
+        const { machines, store } = yield* hostOn(boat, [
+          cutOff(machineOn("dev", { native: "bx_booting" }), "stopped"),
         ]);
-        expect(boat.calls()).toEqual(["POST /sandboxes/bx_booting/stop"]);
+
+        yield* machines.delete("boat_dev").pipe(Effect.catchTag("NotFound", () => Effect.void));
+
+        expect(yield* store.machines).toEqual([]);
+        expect(boat.calls()).toEqual(["DELETE /sandboxes/bx_booting"]);
       }),
   );
 });

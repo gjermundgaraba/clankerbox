@@ -14,7 +14,6 @@ import {
   table,
   withClient,
 } from "./command.ts";
-import { actionError, actionLabel } from "./machines/view.ts";
 import { age } from "./units.ts";
 
 const checkpointColumns: ReadonlyArray<
@@ -26,7 +25,6 @@ const checkpointColumns: ReadonlyArray<
   ["BASE", (checkpoint) => checkpoint.base],
   ["PROFILE", (checkpoint) => checkpoint.profile ?? "-"],
   ["AGE", (checkpoint, now) => age(checkpoint.createdAt, now)],
-  ["ACTION", actionLabel],
 ];
 
 export const checkpointRows = (checkpoints: ReadonlyArray<Checkpoint>, now: DateTime.Utc) => [
@@ -39,7 +37,6 @@ export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
   ["CPU", String(checkpoint.cpu)],
   ["RAM", formatMib(checkpoint.ramMib)],
   ["DISK", formatGib(checkpoint.diskGib)],
-  ["ERROR", actionError(checkpoint)],
 ];
 
 export const encodeCheckpoint = Schema.encodeSync(Checkpoint);
@@ -75,7 +72,7 @@ export const getCheckpoint = Command.make(
     }),
 ).pipe(
   Command.withDescription(
-    `${actionsByName.getCheckpoint.description} Prints its machine, the sizes a restore gives, its last action and the error it failed with.`,
+    `${actionsByName.getCheckpoint.description} Prints its machine and the sizes a restore gives.`,
   ),
 );
 

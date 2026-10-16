@@ -15,7 +15,6 @@ import {
   missing,
   type Interface,
   type Observed,
-  Refusal,
   Runtime,
   type RuntimeError,
 } from "../src/runtime.ts";
@@ -41,6 +40,8 @@ export interface FakeOptions {
   readonly pin?: string | undefined;
   /** `ram`, the default, captures and forks only a running machine, as smolvm does. */
   readonly checkpointKind?: CheckpointKind | undefined;
+  /** `running` by default; Tart's is `stopped`. */
+  readonly captureFrom?: "running" | "stopped" | undefined;
 }
 
 export const writeStubs = (dir: string, uname = "Linux"): string => {
@@ -79,12 +80,14 @@ interface FakeMachine {
 }
 
 type Injection =
-  | { readonly kind: "fail"; readonly error: HostError | Refusal<HostError> }
+  | { readonly kind: "fail"; readonly error: HostError }
   | { readonly kind: "die"; readonly message: string }
   | {
       readonly kind: "hold";
       readonly entered: Deferred.Deferred<void>;
       readonly until: Deferred.Deferred<void>;
+      /** As native work does, the call goes on to its end though the caller interrupts it. */
+      readonly runsOn: boolean;
     };
 
 /** What `operation` may fail with, as the `Runtime` port types it. */
@@ -100,7 +103,13 @@ export const fakeRuntime = (options: FakeOptions) => {
   const activations: Array<Activation> = [];
   const observed: Array<ReadonlyArray<string>> = [];
   const injections = new Map<Operation, Array<Injection>>();
-  const observeFailures: Array<RuntimeError | "hang"> = [];
+  const observeFailures: Array<RuntimeError | "hang" | "die"> = [];
+
+  const observeHolds: Array<{
+    readonly entered: Deferred.Deferred<void>;
+    readonly until: Deferred.Deferred<void>;
+  }> = [];
+
   const publishAddress = "publishAddress" in options ? options.publishAddress : "127.0.0.1";
   let stubs: string | undefined;
 
@@ -108,32 +117,41 @@ export const fakeRuntime = (options: FakeOptions) => {
     injections.set(operation, [...(injections.get(operation) ?? []), injection]);
   };
 
-  const enter = <O extends Operation>(
+  const call = <O extends Operation, A, E, R>(
     operation: O,
     resource: { readonly id: string },
-  ): Effect.Effect<void, FailureOf<O>> =>
-    Effect.gen(function* () {
-      calls.push(`${operation} ${resource.id}`);
+    body: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E | FailureOf<O>, R> =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.suspend((): Effect.Effect<A, E | FailureOf<O>, R> => {
+        calls.push(`${operation} ${resource.id}`);
 
-      const injection = injections.get(operation)?.shift();
+        const injection = injections.get(operation)?.shift();
 
-      if (injection === undefined) {
-        return;
-      }
+        if (injection === undefined) {
+          return restore(body);
+        }
 
-      if (injection.kind === "hold") {
-        yield* Deferred.succeed(injection.entered, undefined);
+        if (injection.kind === "hold") {
+          const held = Effect.andThen(
+            Effect.andThen(
+              Deferred.succeed(injection.entered, undefined),
+              Deferred.await(injection.until),
+            ),
+            body,
+          );
 
-        return yield* Deferred.await(injection.until);
-      }
+          return injection.runsOn ? held : restore(held);
+        }
 
-      if (injection.kind === "die") {
-        return yield* Effect.die(new Error(injection.message));
-      }
+        if (injection.kind === "die") {
+          return Effect.die(new Error(injection.message));
+        }
 
-      // SAFETY: `failNext` queues only a `FailureOf<O>` for `O`.
-      return yield* Effect.fail(injection.error as FailureOf<O>);
-    });
+        // SAFETY: `failNext` queues only a `FailureOf<O>` for `O`.
+        return Effect.fail(injection.error as FailureOf<O>);
+      }),
+    );
 
   const states = (refs: ReadonlyArray<MachineRef>): Effect.Effect<ReadonlyArray<Observed>> =>
     Effect.sync(() => {
@@ -144,18 +162,31 @@ export const fakeRuntime = (options: FakeOptions) => {
 
   const observe = (refs: ReadonlyArray<MachineRef>) =>
     Effect.suspend(() => {
+      const held = observeHolds.shift();
+
+      if (held !== undefined) {
+        return Effect.tap(states(refs), () =>
+          Effect.andThen(Deferred.succeed(held.entered, undefined), Deferred.await(held.until)),
+        );
+      }
+
       const failure = observeFailures.shift();
 
       if (failure === undefined) {
         return states(refs);
       }
 
-      return failure === "hang" ? Effect.never : Effect.fail(failure);
+      if (failure === "hang") {
+        return Effect.never;
+      }
+
+      return failure === "die" ? Effect.die(new Error("observe blew up")) : Effect.fail(failure);
     });
 
   const capacity = (held: ReadonlyArray<Held>) =>
-    Effect.andThen(
-      enter("capacity", { id: "host" }),
+    call(
+      "capacity",
+      { id: "host" },
       Effect.map(inUse(held, states), ({ running, unread }) =>
         allotted(running, unread, options.ramBudgetMib),
       ),
@@ -186,12 +217,10 @@ export const fakeRuntime = (options: FakeOptions) => {
     return Effect.fail(
       state === "missing"
         ? missing("smolvm", machine)
-        : new Refusal({
-            error: new WrongState({
-              message: `${machine.id} is stopped: start it first`,
-              machine: machine.id,
-              state,
-            }),
+        : new WrongState({
+            message: `${machine.id} is stopped: start it first`,
+            machine: machine.id,
+            state,
           }),
     );
   };
@@ -226,24 +255,26 @@ export const fakeRuntime = (options: FakeOptions) => {
         publishAddress,
         pin: options.pin ?? "fake 1",
         checkpointKind: options.checkpointKind ?? "ram",
-        captureFrom: "running",
+        captureFrom: options.captureFrom ?? "running",
         loginUser: "root",
         startup: () => Effect.sync(() => calls.push("startup")),
         observe,
         admit: (activation: Activation) =>
           Effect.andThen(
-            Effect.andThen(
-              Effect.sync(() => activations.push(activation)),
-              enter("admit", activation.machine),
+            Effect.sync(() => activations.push(activation)),
+            call(
+              "admit",
+              activation.machine,
+              options.ramBudgetMib === undefined
+                ? Effect.void
+                : checkRamBudget(options.ramBudgetMib, activation, states),
             ),
-            options.ramBudgetMib === undefined
-              ? Effect.void
-              : checkRamBudget(options.ramBudgetMib, activation, states),
           ),
         capacity,
         create: (machine) =>
-          Effect.andThen(
-            enter("create", machine),
+          call(
+            "create",
+            machine,
             Effect.promise(async () => {
               const root = join(options.dir, "roots", machine.instance);
 
@@ -252,8 +283,9 @@ export const fakeRuntime = (options: FakeOptions) => {
             }),
           ),
         start: (machine) =>
-          Effect.andThen(
-            enter("start", machine),
+          call(
+            "start",
+            machine,
             Effect.suspend(() => {
               const found = machines.get(machine.name);
 
@@ -267,8 +299,9 @@ export const fakeRuntime = (options: FakeOptions) => {
             }),
           ),
         stop: (machine) =>
-          Effect.andThen(
-            enter("stop", machine),
+          call(
+            "stop",
+            machine,
             Effect.sync(() => {
               const found = machines.get(machine.name);
 
@@ -278,15 +311,17 @@ export const fakeRuntime = (options: FakeOptions) => {
             }),
           ),
         delete: (machine) =>
-          Effect.andThen(
-            enter("delete", machine),
+          call(
+            "delete",
+            machine,
             Effect.sync(() => {
               machines.delete(machine.name);
             }),
           ),
         capture: (machine, checkpoint) =>
-          Effect.andThen(
-            enter("capture", checkpoint),
+          call(
+            "capture",
+            checkpoint,
             Effect.andThen(
               copyable(machine),
               Effect.flatMap(rootOf(machine), (root) =>
@@ -295,52 +330,56 @@ export const fakeRuntime = (options: FakeOptions) => {
             ),
           ),
         restore: (checkpoint, machine) =>
-          Effect.andThen(enter("restore", machine), copyInto(checkpointRoot(checkpoint), machine)),
+          call("restore", machine, copyInto(checkpointRoot(checkpoint), machine)),
         fork: (source, machine) =>
-          Effect.andThen(
-            enter("fork", machine),
+          call(
+            "fork",
+            machine,
             Effect.andThen(
               copyable(source),
               Effect.flatMap(rootOf(source), (root) => copyInto(root, machine)),
             ),
           ),
         deleteCheckpoint: (checkpoint) =>
-          Effect.andThen(
-            enter("deleteCheckpoint", checkpoint),
+          call(
+            "deleteCheckpoint",
+            checkpoint,
             Effect.promise(() => rm(checkpointRoot(checkpoint), { recursive: true, force: true })),
           ),
         exec: (machine, command) =>
-          Effect.gen(function* () {
-            yield* enter("exec", machine);
+          call(
+            "exec",
+            machine,
+            Effect.gen(function* () {
+              const { root } = yield* running(machine);
+              const [file = "/bin/sh", ...args] = command.argv;
 
-            const { root } = yield* running(machine);
-            const [file = "/bin/sh", ...args] = command.argv;
+              const handle = yield* spawner
+                .spawn(
+                  ChildProcess.make(file, args, {
+                    env: { CLANKERBOX_ROOT: root, PATH: `${bin}:${process.env["PATH"] ?? ""}` },
+                    extendEnv: true,
+                    killSignal: "SIGKILL",
+                    stdin:
+                      command.stdin === undefined
+                        ? "ignore"
+                        : Stream.make(Uint8Array.from(command.stdin)),
+                  }),
+                )
+                .pipe(Effect.mapError((error) => new Internal({ message: error.message })));
 
-            const handle = yield* spawner
-              .spawn(
-                ChildProcess.make(file, args, {
-                  env: { CLANKERBOX_ROOT: root, PATH: `${bin}:${process.env["PATH"] ?? ""}` },
-                  extendEnv: true,
-                  killSignal: "SIGKILL",
-                  stdin:
-                    command.stdin === undefined
-                      ? "ignore"
-                      : Stream.make(Uint8Array.from(command.stdin)),
-                }),
-              )
-              .pipe(Effect.mapError((error) => new Internal({ message: error.message })));
-
-            return {
-              output: Stream.mapError(
-                handle.all,
-                (error) => new Internal({ message: error.message }),
-              ),
-              exitCode: Effect.mapError(
-                handle.exitCode,
-                (error) => new Internal({ message: error.message }),
-              ),
-            };
-          }),
+              return {
+                output: Stream.mapError(
+                  handle.all,
+                  (error) => new Internal({ message: error.message }),
+                ),
+                exitCode: Effect.mapError(
+                  handle.exitCode,
+                  (error) => new Internal({ message: error.message }),
+                ),
+              };
+            }),
+          ),
       });
     }),
   );
@@ -354,8 +393,8 @@ export const fakeRuntime = (options: FakeOptions) => {
     machines,
     stubs: () => stubs,
     failNext: <O extends Operation>(operation: O, error: FailureOf<O>) => {
-      // SAFETY: every port method fails with host errors and refusals of them.
-      inject(operation, { kind: "fail", error: error as HostError | Refusal<HostError> });
+      // SAFETY: every port method fails with host errors.
+      inject(operation, { kind: "fail", error: error as HostError });
     },
     dieNext: (operation: Operation, message: string) => {
       inject(operation, { kind: "die", message });
@@ -366,11 +405,22 @@ export const fakeRuntime = (options: FakeOptions) => {
     hangNextObserve: () => {
       observeFailures.push("hang");
     },
-    holdNext: (operation: Operation) => {
+    dieNextObserve: () => {
+      observeFailures.push("die");
+    },
+    holdNextObserve: () => {
       const until = Deferred.makeUnsafe<void>();
       const entered = Deferred.makeUnsafe<void>();
 
-      inject(operation, { kind: "hold", entered, until });
+      observeHolds.push({ entered, until });
+
+      return { release: Deferred.succeed(until, undefined), entered: Deferred.await(entered) };
+    },
+    holdNext: (operation: Operation, options?: { readonly runsOn?: boolean }) => {
+      const until = Deferred.makeUnsafe<void>();
+      const entered = Deferred.makeUnsafe<void>();
+
+      inject(operation, { kind: "hold", entered, until, runsOn: options?.runsOn ?? false });
 
       return { release: Deferred.succeed(until, undefined), entered: Deferred.await(entered) };
     },
