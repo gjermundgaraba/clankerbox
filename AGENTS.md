@@ -2,14 +2,14 @@
 
 ## Packages
 
-| Path                            | Holds                                                                  |
-| ------------------------------- | ---------------------------------------------------------------------- |
-| `packages/sdk/`                 | The contract, its schemas and errors, the client, profiles, prebuilds  |
-| `packages/host/`                | The host: state, claims, actions, guest scripts and the three runtimes |
-| `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                             |
-| `apps/clankerbox/`              | The CLI package: its commands and the `host` role                      |
-| `tools/lint-fence/`             | The repository's own lint rules                                        |
-| `tools/oxlint/anti-slop/`       | Vendored lint plugin                                                   |
+| Path                            | Holds                                                                     |
+| ------------------------------- | ------------------------------------------------------------------------- |
+| `packages/sdk/`                 | The contract, its schemas and errors, the client, profiles, prebuilds     |
+| `packages/host/`                | The host: state, lifecycles, leases, guest scripts and the three runtimes |
+| `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                                |
+| `apps/clankerbox/`              | The CLI package: its commands and the `host` role                         |
+| `tools/lint-fence/`             | The repository's own lint rules                                           |
+| `tools/oxlint/anti-slop/`       | Vendored lint plugin                                                      |
 
 The app imports the SDK and the host; the host and the provider import the SDK;
 the SDK imports neither. Each package's `package.json` dependencies are that
@@ -24,14 +24,18 @@ whole CLI span domains on purpose.
 **Host** (`packages/host/src`). Domain files sit flat in `src/`:
 
 - `machines.ts`, `checkpoints.ts`: the `Machines` and `Checkpoints` services,
-  one per resource, each with its `make` and `layer`.
-- `claims.ts`: the order every action runs in: claim, check, work, record.
+  one per resource, each with its `make` and `layer`. `Machines` runs an actor
+  per machine and the runtime steps it invokes; `Checkpoints` captures
+  and deletes.
+- `lifecycle.ts`: a machine's statechart, the one domain file on xstate.
 - `reconcile.ts`: `next`, what a machine does next from what was asked, its
   progress and what the runtime reports.
 - `leases.ts`: the in-memory leases a step holds on what it changes or copies.
+- `refs.ts`: the refs a runtime call takes, and whether a machine is made.
 - `guest.ts`: setup and preparation, run in the guest.
 - `usage.ts`: the machines in use, for the RAM budget and capacity.
-- `startup.ts`: recovery before the host serves, and `CannotStart`.
+- `startup.ts`: what runs before the actors start (clearing the captures the
+  last host's end left), and `CannotStart`.
 - `ids.ts`, `settings.ts`: IDs on this host, and the settings every runtime
   shares.
 - Ports: `Store` and `NativeIds` (`store.ts`), `Runtime` (`runtime.ts`),
@@ -95,11 +99,29 @@ transport. Neither `./testing` export is published.
   `main.ts` and the provider's `provider.ts`, and in the provider's tests that
   drive its Promise API or a child program.
 - **Property and model tests** cover IDs, units, the RAM budget, recipe
-  packing and the store's claims, as a model checked against SQLite; `next`,
-  small enough, is checked over every state it decides from. Each states what
-  is right without calling the code under test.
-- **Lifecycles are not state machines.** An action's claim is a SQLite
-  transaction, and its states are the `ActionRecord` its row keeps.
+  packing, and the store's `desire`, as a model checked against SQLite;
+  `next`, small enough, is checked over every state it decides from. Each
+  states what is right without calling the code under test.
+- **A machine's row is intent; its lifecycle is a statechart.** The row keeps
+  what was asked (`desired`, numbered by the store's `generation` in the
+  write that records it) and the progress no runtime can tell again (`made`,
+  the host key). What the VM is doing is always read from the runtime, never
+  stored, and the host reads every machine at once when it starts and every
+  resting one at each recheck, one it couldn't read included. One actor per
+  machine (`lifecycle.ts`, xstate under `@xstate/effect`) moves it toward what
+  was asked a step at a time; a later request cuts a step short. A request
+  answers from where the machine rests once the store has it: `Superseded`
+  when a later request asked for something else by then. Steps hold leases
+  instead of claims: what changes a resource owns it, what copies or reads it
+  shares it, in memory only, so a host's end drops them with the work. A
+  checkpoint exists only from a capture that succeeded until its delete
+  begins, and never changes; the next delete of its name clears what a failed
+  one left. A start starts the machine, also when it runs already, and
+  prepares it. A machine is made by one step in the request that creates it,
+  from what only that request holds: a copy or setup that fails deletes it,
+  so a failure the host answers leaves no machine unmade, and a host that
+  starts deletes every machine the last one's end left unmade, clears its
+  failed captures and deletes and lets the actors finish the rest.
 - **No prose comments.** A reason goes where something can check or show it:
   a type, a test's name, or the commit message. What stays: a one-line
   `// SAFETY:` above a type assertion, a one-line `// Source:` citing the
@@ -110,7 +132,8 @@ transport. Neither `./testing` export is published.
   since it ships to consumers.
 - **A lint fence** (`tools/lint-fence`, each rule with its tests; settings in
   `vite.config.ts`): a host domain file imports only its siblings, `effect`,
-  `effect/encoding` and the SDK; an adapter imports domain files, its own
+  `effect/encoding` and the SDK, and `lifecycle.ts` alone also `xstate` and
+  `@xstate/effect`; an adapter imports domain files, its own
   folder and `platform/`'s `process.ts` and `address.ts`; an app command
   imports only `effect` (with its `cli`, `http`, `process` and `socket`), the
   SDK and its siblings, leaving Node, `@effect/platform-node` and the host

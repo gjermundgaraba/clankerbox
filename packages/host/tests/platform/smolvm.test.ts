@@ -8,7 +8,7 @@ import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { type CheckpointRef, type MachineRef, Refusal } from "../../src/runtime.ts";
+import { type CheckpointRef, type MachineRef } from "../../src/runtime.ts";
 import {
   controlSocket,
   environment,
@@ -25,10 +25,7 @@ import {
 import { mkdir, readDirectory, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { type Call, type Reply, scripted as scriptedSpawner } from "../scripted.ts";
 
-const refused = (error: Refusal<HostError> | HostError) =>
-  error instanceof Refusal
-    ? [error.error._tag, error.error.message]
-    : ["not refused", error.message];
+const failure = (error: HostError) => [error._tag, error.message];
 
 const encoder = new TextEncoder();
 
@@ -478,7 +475,7 @@ layer(NodeServices.layer)((it) => {
           refusals.push(yield* Effect.flip(runtime.start(machine)));
         }
 
-        expect(refusals.map(refused)).toEqual([
+        expect(refusals.map(failure)).toEqual([
           ["WrongState", "smolvm reads machine linux_dev frozen, and doesn't start it from there"],
           ["WrongState", "smolvm reads machine linux_dev paused, and doesn't start it from there"],
           ["WrongState", "smolvm reads machine linux_dev pausing, and doesn't start it from there"],
@@ -508,8 +505,8 @@ layer(NodeServices.layer)((it) => {
 
       const error = yield* Effect.flip(runtime.start(machine));
 
-      expect(refused(error)).toEqual([
-        "not refused",
+      expect(failure(error)).toEqual([
+        "Internal",
         "smolvm machine status dev-01234567 exited 1: Error: database is locked",
       ]);
       expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["status"]);
@@ -894,7 +891,7 @@ layer(NodeServices.layer)((it) => {
 
         const paused = yield* Effect.flip(runtime.fork(machine, copy));
 
-        expect([capture, fork, missing, unreachable, frozen, paused].map(refused)).toEqual([
+        expect([capture, fork, missing, unreachable, frozen, paused].map(failure)).toEqual([
           [
             "WrongState",
             "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",

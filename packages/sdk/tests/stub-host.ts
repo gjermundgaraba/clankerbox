@@ -44,8 +44,8 @@ export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   ramMib: 1024,
   diskGib: 10,
   state: "running",
-  made: true,
-  action: { name: "createMachine", status: "done" },
+  desired: "running",
+  phase: "settled",
   ...fields,
 });
 
@@ -58,7 +58,6 @@ export const checkpoint = (id: string, fields?: Partial<Checkpoint>): Checkpoint
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
-  action: { name: "captureCheckpoint", status: "done" },
   ...fields,
 });
 
@@ -97,9 +96,7 @@ export const stubHost = (options: StubHostOptions) => {
   };
 
   const taken = (held: ReadonlyMap<string, unknown>, id: string) =>
-    held.has(id)
-      ? Effect.fail(new Conflict({ message: `${id} exists`, kind: "exists" }))
-      : Effect.void;
+    held.has(id) ? Effect.fail(new Conflict({ message: `${id} exists` })) : Effect.void;
 
   const add = (made: Machine) =>
     Effect.andThen(
@@ -143,7 +140,6 @@ export const stubHost = (options: StubHostOptions) => {
             cpu: found.cpu,
             ramMib: found.ramMib,
             diskGib: found.diskGib,
-            action: { name: "restoreMachine", status: "done" },
           }),
           found.profile,
         ),
@@ -162,7 +158,11 @@ export const stubHost = (options: StubHostOptions) => {
     stopMachine: ({ id }) =>
       Effect.andThen(
         record("machine.stop"),
-        Effect.map(find(id), (found): Machine => ({ ...found, state: "stopped" })),
+        Effect.map(find(id), (found): Machine => ({
+          ...found,
+          state: "stopped",
+          desired: "stopped",
+        })),
       ),
     deleteMachine: ({ id }) =>
       Effect.andThen(
@@ -200,7 +200,6 @@ export const stubHost = (options: StubHostOptions) => {
                   cpu: found.cpu,
                   ramMib: found.ramMib,
                   diskGib: found.diskGib,
-                  action: { name: "captureCheckpoint", status: "done" },
                 },
                 found.profile,
               );

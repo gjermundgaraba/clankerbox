@@ -10,15 +10,15 @@ import {
   NotFound,
   NotMade,
   NotOffered,
-  NotReady,
   PinMismatch,
   Refused,
   ScriptFailed,
+  Superseded,
   Unsizable,
   WrongState,
 } from "./errors.ts";
 import { Id, Name } from "./ids.ts";
-import { type ActionName, Checkpoint, CreateRequest, Host, Machine, Usage } from "./resources.ts";
+import { Checkpoint, CreateRequest, Host, Machine, Usage } from "./resources.ts";
 
 /** A host bounds its own reads of runtime state under it, so a list answers in time. */
 export const readTimeout = Duration.seconds(10);
@@ -35,9 +35,26 @@ const listing = [Invalid, Internal] as const;
 
 const reading = [Invalid, NotFound, Internal] as const;
 
-const changing = [Invalid, NotFound, Conflict, Refused, Internal] as const;
+const removing = [Invalid, NotFound, Refused, Internal] as const;
 
-const booting = [...changing, NotMade, Missing, WrongState, Capacity] as const;
+const converging = [
+  Invalid,
+  NotFound,
+  NotMade,
+  Missing,
+  WrongState,
+  PinMismatch,
+  Unsizable,
+  ScriptFailed,
+  Refused,
+  Capacity,
+  Superseded,
+  Internal,
+] as const;
+
+const making = [...converging, Conflict] as const;
+
+const creating = [...making, NotOffered] as const;
 
 export const Http = ActionHttp.make(
   [
@@ -56,52 +73,47 @@ export const Http = ActionHttp.make(
     }),
     Action.make("createMachine", {
       ...write,
-      error: [
-        Invalid,
-        Conflict,
-        NotOffered,
-        Unsizable,
-        ScriptFailed,
-        Refused,
-        Capacity,
-        Internal,
-      ] as const,
-      description: "Create a machine from a base, run its setup once, and prepare it.",
+      error: creating,
+      description:
+        "Create a machine from a base, run its setup once, and prepare it. A create or setup that fails deletes the machine, and the error is the answer.",
       input: CreateRequest,
       success: Machine,
     }),
     Action.make("startMachine", {
       ...write,
-      error: [...booting, ScriptFailed] as const,
-      description: "Start a machine. On a running machine, run preparation again.",
+      error: converging,
+      description:
+        "Ask for a machine to run, and wait until it does: start it and prepare it again, also when it runs already.",
       input: ById,
       success: Machine,
     }),
     Action.make("stopMachine", {
       ...write,
-      error: changing,
+      error: converging,
       description:
-        "Stop a machine: a power-off that keeps its disk and ends its processes. A stopped machine stays stopped, and the stop is still its last action.",
+        "Ask for a machine to stay stopped, and wait until it is: a power-off that keeps its disk and ends its processes. A start under way is cut short; a machine still being made is made first, and its create answers Superseded.",
       input: ById,
       success: Machine,
     }),
     Action.make("deleteMachine", {
       ...write,
-      error: changing,
-      description: "Delete a machine and everything native it owns.",
+      error: converging,
+      description: "Delete a machine and everything native it owns, whatever it is doing.",
       input: ById,
     }),
     Action.make("forkMachine", {
       ...write,
-      error: [...booting, Unsizable, ScriptFailed] as const,
-      description: "Copy a machine to a new name on the same host.",
+      error: making,
+      description:
+        "Copy a machine to a new name on the same host. A copy that fails deletes the new machine.",
       input: FromMachine,
       success: Machine,
     }),
     Action.make("restoreMachine", {
       ...write,
-      error: [...changing, NotReady, PinMismatch, Unsizable, ScriptFailed, Capacity] as const,
-      description: "Create a machine on the checkpoint's host from that checkpoint.",
+      error: making,
+      description:
+        "Create a machine on the checkpoint's host from that checkpoint. A restore that fails deletes the new machine.",
       input: Schema.Struct({ checkpoint: Id, name: Name }),
       success: Machine,
     }),
@@ -120,7 +132,17 @@ export const Http = ActionHttp.make(
     }),
     Action.make("captureCheckpoint", {
       ...write,
-      error: booting,
+      error: [
+        Invalid,
+        NotFound,
+        Conflict,
+        NotMade,
+        Missing,
+        WrongState,
+        Refused,
+        Capacity,
+        Internal,
+      ] as const,
       description:
         "Capture a checkpoint of a machine. Its kind follows the runtime: ram on smolvm, which captures only a running machine, and disk on Tart and boat.",
       input: FromMachine,
@@ -128,8 +150,8 @@ export const Http = ActionHttp.make(
     }),
     Action.make("deleteCheckpoint", {
       ...write,
-      error: changing,
-      description: "Delete a checkpoint.",
+      error: removing,
+      description: "Delete a checkpoint, once the restores that read it are done.",
       input: ById,
     }),
     Action.make("getHost", {
@@ -154,15 +176,3 @@ export const actionsByName = Action.byName(Http.actions);
 /** What a host may answer action `N` with: the errors the contract declares for it. */
 export type Declared<N extends keyof typeof actionsByName> =
   (typeof actionsByName)[N]["error"][number]["Type"];
-
-type Mutation = {
-  [N in keyof typeof actionsByName]: (typeof actionsByName)[N]["readOnly"] extends false
-    ? N
-    : never;
-}[keyof typeof actionsByName];
-
-true satisfies [ActionName] extends [Mutation]
-  ? [Mutation] extends [ActionName]
-    ? true
-    : false
-  : false;

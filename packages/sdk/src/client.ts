@@ -94,7 +94,7 @@ export type Routed = {
 /**
  * One method per action on a resource, named and typed as in the contract, but for `create` and
  * the deletes. A create, fork, restore or capture's errors carry `made`, the resource it makes, so
- * a caller can find what a failure left behind.
+ * a caller whose answer was lost can find what it left behind.
  */
 export type Calls = {
   readonly [N in Exclude<Routed, "createMachine" | "deleteMachine" | "deleteCheckpoint">]: (
@@ -443,8 +443,8 @@ export const make = (
     ): Effect.Effect<Host, ErrorOf<"getHost"> | NotOffered> =>
       options?.host === undefined ? offering(base) : Effect.flatMap(route(options.host), readHost);
 
-    const deleting = (
-      removal: Effect.Effect<void, ErrorOf<"deleteMachine"> | ErrorOf<"deleteCheckpoint">>,
+    const deleting = <E extends { readonly _tag: string }>(
+      removal: Effect.Effect<void, E | NotFound>,
     ) =>
       removal.pipe(
         Effect.as<Deleted>("deleted"),

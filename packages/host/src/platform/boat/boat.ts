@@ -1,11 +1,5 @@
 import { join } from "node:path";
-import {
-  Capacity,
-  HostError,
-  Internal,
-  type Refused,
-  type SshEndpoint,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity, HostError, Internal, type SshEndpoint } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Data,
   Duration,
@@ -41,10 +35,8 @@ import {
   missing,
   observeEach,
   type Observed,
-  Refusal,
   type RoomError,
   Runtime,
-  type RuntimeError,
   timeoutFail,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
@@ -227,23 +219,10 @@ export const make = (
         return found.value;
       });
 
-    const typeOf = (machine: MachineRef) =>
-      Effect.mapError(machineType(machine), (error) => new Refusal({ error }));
-
-    const refusing = <A>(
-      call: Effect.Effect<A, RoomError>,
-    ): Effect.Effect<A, Internal | Refusal<Capacity | Refused>> =>
-      call.pipe(
-        Effect.catchTags({
-          Capacity: (error) => Effect.fail(new Refusal({ error })),
-          Refused: (error) => Effect.fail(new Refusal({ error })),
-        }),
-      );
-
     const running = (machine: MachineRef, id: string, fresh: boolean) => {
       const read = Effect.flatMap(
         api.sandbox(id),
-        (found): Effect.Effect<Option.Option<Sandbox>, RuntimeError | Refusal<Capacity>> => {
+        (found): Effect.Effect<Option.Option<Sandbox>, RoomError> => {
           if (Option.isSome(found) && upStates.has(found.value.state)) {
             return Effect.succeed(found);
           }
@@ -259,7 +238,7 @@ export const make = (
 
             return Effect.fail(
               fresh
-                ? new Refusal({ error: new Capacity({ message: `${said}; it found no machine` }) })
+                ? new Capacity({ message: `${said}; it found no machine` })
                 : new Internal({ message: said }),
             );
           }
@@ -437,9 +416,13 @@ export const make = (
         }
       });
 
+    const allocated = <E>(machine: MachineRef, allocate: Effect.Effect<string, E>) =>
+      Effect.uninterruptible(
+        Effect.tap(allocate, (id) => nativeIds.recordNative(machine.name, machine.instance, id)),
+      );
+
     const made = (machine: MachineRef, id: string) =>
       Effect.gen(function* () {
-        yield* nativeIds.recordNative(machine.name, machine.instance, id);
         yield* running(machine, id, true);
         yield* api
           .rename(id, machine.id)
@@ -580,9 +563,9 @@ export const make = (
       ),
       create: Effect.fn("Boat.create")((machine) =>
         Effect.gen(function* () {
-          const type = yield* typeOf(machine);
+          const type = yield* machineType(machine);
 
-          const id = yield* refusing(api.create(keyOf(machine), type.name));
+          const id = yield* allocated(machine, api.create(keyOf(machine), type.name));
 
           yield* made(machine, id);
           yield* api.authorize(id, key.publicKey);
@@ -594,7 +577,7 @@ export const make = (
           const { id, state } = yield* presentSandbox(machine);
 
           if (!activeStates.has(state)) {
-            yield* refusing(api.resume(id));
+            yield* api.resume(id);
           }
 
           yield* running(machine, id, false);
@@ -656,7 +639,7 @@ export const make = (
             yield* sync(machine, source.id, "capture");
           }
 
-          yield* refusing(api.saveSnapshot(source.id, name));
+          yield* api.saveSnapshot(source.id, name);
 
           const settled = yield* poll(
             api.snapshot(name),
@@ -677,9 +660,10 @@ export const make = (
       ),
       restore: Effect.fn("Boat.restore")((checkpoint, machine) =>
         Effect.gen(function* () {
-          const type = yield* typeOf(machine);
+          const type = yield* machineType(machine);
 
-          const id = yield* refusing(
+          const id = yield* allocated(
+            machine,
             api.create(keyOf(machine), type.name, snapshotOf(checkpoint.instance)),
           );
 
@@ -688,14 +672,14 @@ export const make = (
       ),
       fork: Effect.fn("Boat.fork")((source, machine) =>
         Effect.gen(function* () {
-          const type = yield* typeOf(machine);
+          const type = yield* machineType(machine);
           const from = yield* presentSandbox(source);
 
           if (upStates.has(from.state)) {
             yield* freshSnapshot(source, from.id);
           }
 
-          const id = yield* refusing(api.fork(keyOf(machine), from.id, type.name));
+          const id = yield* allocated(machine, api.fork(keyOf(machine), from.id, type.name));
 
           yield* restoredSandbox(machine, id);
         }),

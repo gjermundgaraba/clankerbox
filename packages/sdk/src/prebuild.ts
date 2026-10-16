@@ -1,16 +1,9 @@
 import { Effect, Option } from "effect";
 import { Hex } from "effect/encoding";
 import type * as Client from "./client.ts";
-import { type ClankerboxError, Conflict } from "./errors.ts";
+import type { ClankerboxError } from "./errors.ts";
 import { formatId } from "./ids.ts";
-import {
-  type Checkpoint,
-  type Host,
-  isReady,
-  type Machine,
-  type MachineSpec,
-  type Setup,
-} from "./resources.ts";
+import type { Checkpoint, Host, Machine, MachineSpec, Setup } from "./resources.ts";
 
 const prefix = "prebuilt-";
 
@@ -65,8 +58,8 @@ export interface Created {
 }
 
 /**
- * `client.create`, restoring the spec's prebuild when the host it is placed on has one whose
- * capture is done, unless `fresh`. A failed restore is the reply.
+ * `client.create`, restoring the spec's prebuild when the host it is placed on has one, unless
+ * `fresh`. A failed restore is the reply.
  */
 export const create = (
   client: Client.Interface,
@@ -83,7 +76,7 @@ export const create = (
     const id = yield* formatId(host.id, yield* nameOf(spec, host));
     const found = yield* lookup(client, id);
 
-    if (Option.isSome(found) && isReady(found.value)) {
+    if (Option.isSome(found)) {
       return {
         machine: yield* client.restoreMachine({ checkpoint: id, name }),
         prebuild: found.value,
@@ -102,10 +95,8 @@ export interface Built {
 
 /**
  * Builds the spec's prebuild on the host a create of it is placed on, with a machine of its own
- * that it deletes however it ends. A prebuild that is there and done is the answer, one that
- * failed is deleted and built again, and one still running is `Conflict{busy}`, as its capture
- * holds it. Of two builds of one spec at once, the second's capture is `Conflict`, and neither
- * touches the other's machine.
+ * that it deletes however it ends. A prebuild that is there is the answer. Of two builds of one
+ * spec at once, the second's capture is `Conflict`, and neither touches the other's machine.
  */
 export const build = (
   client: Client.Interface,
@@ -119,23 +110,7 @@ export const build = (
     const found = yield* lookup(client, id);
 
     if (Option.isSome(found)) {
-      const { action } = found.value;
-
-      if (isReady(found.value)) {
-        return { checkpoint: found.value, built: false };
-      }
-
-      if (action.status === "running") {
-        return yield* new Conflict({
-          message: `prebuild ${id} is busy: its ${action.name} is running`,
-          kind: "busy",
-          host: host.id,
-          action: "captureCheckpoint" satisfies Client.HostAction,
-          id,
-        });
-      }
-
-      yield* client.deleteCheckpoint({ id });
+      return { checkpoint: found.value, built: false };
     }
 
     const builder = `prebuilding-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(builderBytes)))}`;

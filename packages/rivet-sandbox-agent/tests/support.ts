@@ -71,7 +71,7 @@ export const setup = async (
         return Effect.fail(host.createRefused);
       }
 
-      const made = reachable(id, { made: host.createFails === undefined });
+      const made = reachable(id, { phase: host.createFails === undefined ? "settled" : "failed" });
 
       stub.hold(made);
 

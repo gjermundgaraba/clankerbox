@@ -142,6 +142,20 @@ clankerbox checkpoint delete linux_base
   `--setup-timeout 15m`.
 - `fork` copies a running smolvm machine with its RAM, a stopped Tart
   machine's disk, or either boat machine's disk.
+- `start`, `stop` and `delete` ask for a state and wait until the machine is
+  there; a request fails `Superseded` when a later one for the same machine
+  asked for something else before it got there. A machine that stops under
+  its host while asked to run is started again at its host's next check,
+  every 30 s.
+- A create, fork or restore whose copy or setup fails deletes its machine and
+  answers the error; so does a host that restarts before it finished. Only a
+  `delete` stops a machine being made: a `stop` waits for it to be made, then
+  stops it. A `start` on a running machine runs its preparation again, and so
+  does a host that restarts, for each machine it finds running.
+- A request on a machine its runtime can't read fails, and the host reads it
+  again at its next check.
+- A checkpoint is gone once its delete begins; what a delete that fails left
+  behind is cleared by the next delete of it, or when its host next starts.
 - A prebuild matches the profile, its sizes, its setup and the host's runtime
   release; any change runs the setup again until a new `prebuild`. Nothing
   deletes prebuilds: `checkpoint list` shows them.
@@ -265,8 +279,9 @@ program.pipe(
 - Every action is a method named as in the contract (`api.ts`), such as
   `client.forkMachine({ machine, name })`, and fails with tagged errors
   (`errors.ts`); `retryable(error)` says whether to try again.
-- A mutation waits until its action finishes. One whose reply is lost fails
-  `Unavailable`: it may have run, so read the resource.
+- A mutation waits until the host is done with it: a machine at rest with
+  what was asked, its `phase` and `error` saying how it got there. One whose
+  reply is lost fails `Unavailable`: it may have run, so read the resource.
 - `Prebuild.build` and `Prebuild.create` do what `clankerbox prebuild` and a
   create of a profile do.
 
@@ -298,7 +313,9 @@ await sdk.destroySandbox();
   (`{ checkpoint }`) or a fork (`{ machine }`), and a profile's prebuild is
   used when there is one.
 - A sandbox's ID is `clankerbox/<machine ID>`; `pauseSandbox` stops the
-  machine and `destroySandbox` deletes it.
+  machine and `destroySandbox` deletes it. A create whose reply never came
+  deletes the machine it may have made; one the host fails left nothing
+  unmade.
 - `recipes/ubuntu/` (smolvm) and `recipes/macos/` (Tart) install the server,
   Node and Claude Code. Each takes an `authorized_keys` beside its `setup.sh`,
   and an optional `agent.env` of `NAME=value` lines, such as

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Client, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Client } from "@gjermundgaraba/clankerbox-sdk";
 import * as NodeClient from "@gjermundgaraba/clankerbox-sdk/node";
 import { DateTime, Effect, Layer, Logger } from "effect";
 import { HttpServer } from "effect/http";
@@ -40,15 +40,16 @@ const withClient = <A, E>(url: string, use: (client: Client.Interface) => Effect
   Effect.flatMap(Client.Client, use).pipe(Effect.provide(NodeClient.layer([{ id: "linux", url }])));
 
 layer(NodeServices.layer)((it) => {
-  it.effect("the host fails the actions its last process left running before it serves", () =>
-    Effect.gen(function* () {
-      const dir = yield* scratch;
-      const host = config(dir);
+  it.effect(
+    "a machine the last host process left mid-create is deleted once the host serves, never made again",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const host = config(dir);
+        const fake = fakeRuntime({ dir });
 
-      yield* Effect.flatMap(open(host), (store) =>
-        store.insert("createMachine", {
-          kind: "machine",
-          record: {
+        yield* Effect.flatMap(open(host), (store) =>
+          store.insertMachine({
             name: "dev",
             instance: "0123456789abcdef0123456789abcdef",
             native: undefined,
@@ -59,21 +60,25 @@ layer(NodeServices.layer)((it) => {
             ramMib: 1024,
             diskGib: 10,
             port: undefined,
+            desired: "running",
+            generation: 1,
+            made: false,
             hostKey: undefined,
-          },
-        }),
-      ).pipe(Effect.scoped);
+          }),
+        ).pipe(Effect.scoped);
 
-      const machine = yield* whileServing(host, dir, (url) =>
-        withClient(url, (client) => client.getMachine({ id: "linux_dev" })),
-      );
+        const listed = yield* Effect.flatMap(Effect.service(HttpServer.HttpServer), (server) =>
+          withClient(HttpServer.formatAddress(server.address), (client) =>
+            Effect.repeat(client.machines, {
+              until: (machines) => machines.answers.length === 0,
+              times: 200,
+            }),
+          ),
+        ).pipe(Effect.provide(hostOn(host, fake)), Effect.provide(Logger.layer([])));
 
-      expect(machine.action).toEqual({
-        name: "createMachine",
-        status: "failed",
-        error: new Internal({ message: "the host stopped during createMachine" }),
-      });
-    }),
+        expect(listed.answers).toEqual([]);
+        expect(fake.calls).toEqual(["startup", "delete linux_dev"]);
+      }),
   );
 
   it.effect(

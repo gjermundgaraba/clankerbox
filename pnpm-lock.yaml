@@ -176,6 +176,9 @@ catalogs:
     '@types/node':
       specifier: 26.6.4
       version: 26.6.4
+    '@xstate/effect':
+      specifier: 0.1.0-alpha.7
+      version: 0.1.0-alpha.7
     effect:
       specifier: 4.0.4
       version: 4.0.4
@@ -194,6 +197,9 @@ catalogs:
     vitest:
       specifier: 5.0.4
       version: 5.0.4
+    xstate:
+      specifier: 6.0.0-alpha.66
+      version: 6.0.0-alpha.66
 
 overrides:
   vite@*: npm:@voidzero-dev/vite-plus-core@1.2.0
@@ -224,9 +230,15 @@ importers:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
         version: 0.17.0(effect@4.0.4)
+      '@xstate/effect':
+        specifier: 'catalog:'
+        version: 0.1.0-alpha.7(effect@4.0.4)(xstate@6.0.0-alpha.66)
       effect:
         specifier: ~4.0.4
         version: 4.0.4
+      xstate:
+        specifier: 'catalog:'
+        version: 6.0.0-alpha.66
     devDependencies:
       '@clankerbox/host':
         specifier: workspace:*
@@ -264,9 +276,15 @@ importers:
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
         version: 0.17.0(effect@4.0.4)
+      '@xstate/effect':
+        specifier: 'catalog:'
+        version: 0.1.0-alpha.7(effect@4.0.4)(xstate@6.0.0-alpha.66)
       effect:
         specifier: 'catalog:'
         version: 4.0.4
+      xstate:
+        specifier: 'catalog:'
+        version: 6.0.0-alpha.66
     devDependencies:
       '@effect/vitest':
         specifier: 'catalog:'
@@ -1052,6 +1070,12 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@xstate/effect@0.1.0-alpha.7':
+    resolution: {integrity: sha512-EYHVGzFxFVfQfp14Evqx+qOQKMh7khHVFriolVqUgGXdQEv0hJm/x+O7jSyzWItaT+DA74XsPd2OTvgSbhC+kw==}
+    peerDependencies:
+      effect: ^4.0.0
+      xstate: ^6.0.0-alpha.65
+
   '@yuku-core/binding-android-arm64@0.19.0':
     resolution: {integrity: sha512-wdL2XmTiZixAOaHk9Z0JJZ8u9Qm8d333Zjpc6gaxXFX+UR5BlsfxZ7a2+2Rm71pamppsPYGUGFq2oVLbh6DISw==}
     cpu: [arm64]
@@ -1502,6 +1526,10 @@ packages:
       utf-8-validate:
         optional: true
 
+  xstate@6.0.0-alpha.66:
+    resolution: {integrity: sha512-SfbhdplVpjX/D+LEWKmHcxLZFvIpIgS0b0ZTAEx/FKouNzEfIfEVQEXC/0t3vcjw0JQ55brbyBMN1uOI1ZDjEQ==}
+    hasBin: true
+
   yuku-core@0.19.0:
     resolution: {integrity: sha512-kYK9e1XdfirNhkipzW0wmMcSWcVF/CWnuugodfVYRCUwvoBefweL9HzB96OiKEhsx78V5WbUxbJqlizMX869Qg==}
     engines: {node: '>=14.18.0'}
@@ -1937,6 +1965,11 @@ snapshots:
   '@voidzero-dev/vite-plus-win32-x64-msvc@1.2.0':
     optional: true
 
+  '@xstate/effect@0.1.0-alpha.7(effect@4.0.4)(xstate@6.0.0-alpha.66)':
+    dependencies:
+      effect: 4.0.4
+      xstate: 6.0.0-alpha.66
+
   '@yuku-core/binding-android-arm64@0.19.0':
     optional: true
 
@@ -2321,6 +2354,8 @@ snapshots:
   why-is-node-running@3.2.1: {}
 
   ws@8.22.0: {}
+
+  xstate@6.0.0-alpha.66: {}
 
   yuku-core@0.19.0:
     dependencies:

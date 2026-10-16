@@ -16,7 +16,9 @@
     "@effect/platform-node": "catalog:",
     "@gjermundgaraba/clankerbox-sdk": "workspace:*",
     "@gjermundgaraba/effect-actions": "catalog:",
-    "effect": "catalog:"
+    "@xstate/effect": "catalog:",
+    "effect": "catalog:",
+    "xstate": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

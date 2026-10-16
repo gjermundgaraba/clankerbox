@@ -94,7 +94,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(taken).toEqual(
           new Conflict({
             message: "machine linux_taken exists",
-            kind: "exists",
             host: "linux",
             action: "forkMachine",
             id: "linux_taken",
@@ -169,19 +168,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ),
         );
 
-        expect(copy).toMatchObject({
-          id: "linux_copy",
-          state: "running",
-          action: { name: "forkMachine" },
-        });
+        expect(copy).toMatchObject({ id: "linux_copy", state: "running", phase: "settled" });
         expect(captured).toMatchObject({ id: "linux_snap", machine: "linux_dev", kind: "ram" });
         expect(listed.answers).toEqual([captured]);
         expect(got).toEqual(captured);
-        expect(restored).toMatchObject({
-          id: "linux_again",
-          state: "running",
-          action: { name: "restoreMachine" },
-        });
+        expect(restored).toMatchObject({ id: "linux_again", state: "running", phase: "settled" });
         expect(gone._tag).toBe("NotFound");
         expect(yield* run(store.checkpoints)).toEqual([]);
       }),
@@ -221,7 +212,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(elsewhere.status).toBe(400);
         expect(elsewhere.body).toContain('"_tag":"Invalid"');
         expect(elsewhere.body).toContain("this is host linux");
-        expect(yield* run(store.list)).toEqual([]);
+        expect(yield* run(store.machines)).toEqual([]);
         expect(fake.calls).toEqual(["startup"]);
       }),
   );
@@ -255,7 +246,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(decodeInvalid(unversioned.body).message).toContain(`no ${versionHeader} header`);
       expect(decodeInvalid(unversioned.body).message).toContain(`clankerbox ${version}`);
-      expect(yield* run(store.list)).toEqual([]);
+      expect(yield* run(store.machines)).toEqual([]);
       expect(fake.calls).toEqual(["startup"]);
     }),
   );
@@ -269,7 +260,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect((yield* createRaw(url, "linux_dev")).status).toBe(200);
 
         const calls = [...fake.calls];
-        const rows = yield* run(store.list);
+        const rows = yield* run(store.machines);
 
         const paths = Http.actions.map((action) => action.name);
 
@@ -284,7 +275,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           }
         }
 
-        expect(yield* run(store.list)).toEqual(rows);
+        expect(yield* run(store.machines)).toEqual(rows);
         expect(fake.calls).toEqual(calls);
       }),
   );
@@ -295,7 +286,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const created = yield* createRaw(url, "linux_dev", versioned(bump(2)));
 
       expect(created.status).toBe(200);
-      expect((yield* run(store.list)).map(({ name }) => name)).toEqual(["dev"]);
+      expect((yield* run(store.machines)).map(({ name }) => name)).toEqual(["dev"]);
     }),
   );
 
@@ -342,18 +333,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         "Invalid",
         expect.stringContaining(refused),
       ]);
-      expect(yield* run(store.list)).toEqual([]);
+      expect(yield* run(store.machines)).toEqual([]);
       expect(fake.calls).toEqual(["startup"]);
     }),
   );
 
-  const settled = ({ run, store }: TestHost) =>
+  const settled = ({ run, machines }: TestHost) =>
     Effect.gen(function* () {
       for (let tries = 0; tries < 100; tries++) {
-        const [row] = yield* run(store.list);
+        const [machine] = yield* run(machines.list);
 
-        if (row !== undefined && row.action.status !== "running") {
-          return row.action;
+        if (machine !== undefined && (machine.phase === "settled" || machine.phase === "failed")) {
+          return machine.phase;
         }
 
         yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 20)));
@@ -383,7 +374,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* release;
 
-      expect(yield* settled(host)).toEqual({ name: "createMachine", status: "done" });
+      expect(yield* settled(host)).toBe("settled");
       expect(fake.calls).toContain("exec linux_dev");
     }),
   );

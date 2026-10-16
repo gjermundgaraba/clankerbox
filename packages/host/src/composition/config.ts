@@ -11,7 +11,7 @@ import { Address } from "../platform/address.ts";
 import { BoatSettings } from "../platform/boat/boat.ts";
 import { SmolvmSettings } from "../platform/smolvm.ts";
 import { TartSettings } from "../platform/tart/tart.ts";
-import type { HostSettings } from "../settings.ts";
+import { defaultRecheck, type HostSettings } from "../settings.ts";
 
 const Port = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 }));
 
@@ -83,6 +83,7 @@ const resolveConfig = (
       stateDir: path.resolve(directory, decoded.stateDir),
       bases: new Map(Object.entries(decoded.bases)),
       machinePorts,
+      recheck: defaultRecheck,
     };
   });
 

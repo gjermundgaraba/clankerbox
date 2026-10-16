@@ -1,4 +1,3 @@
-import { Capacity } from "@gjermundgaraba/clankerbox-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect } from "effect";
 import { layer } from "@effect/vitest";
@@ -17,14 +16,7 @@ afterEach(() => cleanup(stubs));
 
 const host = hostIn(stubs);
 
-const failed = checkpoint("linux_broken", {
-  machine: "linux_dev",
-  action: {
-    name: "captureCheckpoint",
-    status: "failed",
-    error: new Capacity({ message: "no room for the copy" }),
-  },
-});
+const other = checkpoint("linux_other", { machine: "linux_dev", kind: "ram", profile: "dev" });
 
 layer(NodeServices.layer)((it) => {
   it.effect("checkpoint capture goes to the machine's host and prints the new ID", () =>
@@ -50,7 +42,7 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect("checkpoint list shows every host's checkpoints with their machine and action", () =>
+  it.effect("checkpoint list shows every host's checkpoints with their kind and machine", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
       const config = yield* writeConfig(dir, ["linux"]);
@@ -58,7 +50,7 @@ layer(NodeServices.layer)((it) => {
       const linux = host({
         id: "linux",
         bases: ["ubuntu"],
-        checkpoints: [checkpoint("linux_snap", { machine: "linux_dev" }), failed],
+        checkpoints: [checkpoint("linux_snap", { machine: "linux_dev" }), other],
       });
 
       const { code, stdout } = yield* cli(["checkpoint", "list", "--config", config], {
@@ -68,72 +60,77 @@ layer(NodeServices.layer)((it) => {
       const rows = stdout.split("\n").map((line) => line.split(/\s+/u));
 
       expect(code).toBe(0);
-      expect(rows[0]).toEqual(["ID", "KIND", "MACHINE", "BASE", "PROFILE", "AGE", "ACTION"]);
+      expect(rows[0]).toEqual(["ID", "KIND", "MACHINE", "BASE", "PROFILE", "AGE"]);
       expect(rows[1]?.slice(0, 5)).toEqual(["linux_snap", "disk", "linux_dev", "ubuntu", "-"]);
-      expect(rows[2]?.slice(0, 2)).toEqual(["linux_broken", "disk"]);
-      expect(stdout).toContain("captureCheckpoint failed: Capacity");
+      expect(rows[2]?.slice(0, 5)).toEqual(["linux_other", "ram", "linux_dev", "ubuntu", "dev"]);
     }),
   );
 
-  it.effect("checkpoint get reads one checkpoint a field a line, with its action's error", () =>
-    Effect.gen(function* () {
-      const dir = yield* scratch;
-      const config = yield* writeConfig(dir, ["linux"]);
+  it.effect(
+    "checkpoint get reads one checkpoint a field a line, with the sizes a restore gives",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const config = yield* writeConfig(dir, ["linux"]);
 
-      const endpoints = [
-        ["linux", host({ id: "linux", bases: ["ubuntu"], checkpoints: [failed] })],
-      ] as const;
+        const endpoints = [
+          ["linux", host({ id: "linux", bases: ["ubuntu"], checkpoints: [other] })],
+        ] as const;
 
-      const text = yield* cli(["checkpoint", "get", "linux_broken", "--config", config], {
-        endpoints,
-      });
+        const text = yield* cli(["checkpoint", "get", "linux_other", "--config", config], {
+          endpoints,
+        });
 
-      const json = yield* cli(["checkpoint", "get", "linux_broken", "--json", "--config", config], {
-        endpoints,
-      });
+        const json = yield* cli(
+          ["checkpoint", "get", "linux_other", "--json", "--config", config],
+          {
+            endpoints,
+          },
+        );
 
-      const gone = yield* cli(["checkpoint", "get", "linux_gone", "--json", "--config", config], {
-        endpoints,
-      });
+        const gone = yield* cli(["checkpoint", "get", "linux_gone", "--json", "--config", config], {
+          endpoints,
+        });
 
-      expect(text.stdout.split("\n").map((line) => line.split(/\s{2,}/u))).toEqual(
-        expect.arrayContaining([
-          ["ID", "linux_broken"],
-          ["MACHINE", "linux_dev"],
-          ["ACTION", "captureCheckpoint failed: Capacity"],
-          ["RAM", "1G"],
-          ["ERROR", "no room for the copy"],
-        ]),
-      );
-      expect(JSON.parse(json.stdout)).toMatchObject({ id: "linux_broken", machine: "linux_dev" });
-      expect([gone.code, decodeJsonError(gone.stdout).error.tag]).toEqual([1, "NotFound"]);
-    }),
+        expect(text.stdout.split("\n").map((line) => line.split(/\s{2,}/u))).toEqual(
+          expect.arrayContaining([
+            ["ID", "linux_other"],
+            ["KIND", "ram"],
+            ["MACHINE", "linux_dev"],
+            ["CPU", "1"],
+            ["RAM", "1G"],
+            ["DISK", "10G"],
+          ]),
+        );
+        expect(JSON.parse(json.stdout)).toMatchObject({ id: "linux_other", machine: "linux_dev" });
+        expect([gone.code, decodeJsonError(gone.stdout).error.tag]).toEqual([1, "NotFound"]);
+      }),
   );
 
   it.effect("checkpoint delete prints the ID, and one that is already gone counts as done", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
       const config = yield* writeConfig(dir, ["linux"]);
-      const linux = host({ id: "linux", bases: ["ubuntu"], checkpoints: [failed] });
+      const linux = host({ id: "linux", bases: ["ubuntu"], checkpoints: [other] });
       const endpoints = [["linux", linux]] as const;
 
-      const removed = yield* cli(["checkpoint", "delete", "linux_broken", "--config", config], {
+      const removed = yield* cli(["checkpoint", "delete", "linux_other", "--config", config], {
         endpoints,
       });
 
-      const text = yield* cli(["checkpoint", "delete", "linux_broken", "--config", config], {
+      const text = yield* cli(["checkpoint", "delete", "linux_other", "--config", config], {
         endpoints,
       });
 
       const json = yield* cli(
-        ["checkpoint", "delete", "linux_broken", "--json", "--config", config],
+        ["checkpoint", "delete", "linux_other", "--json", "--config", config],
         { endpoints },
       );
 
-      expect(removed).toMatchObject({ code: 0, stdout: "linux_broken" });
+      expect(removed).toMatchObject({ code: 0, stdout: "linux_other" });
       expect(text).toMatchObject({ code: 0, stdout: "" });
-      expect(text.stderr).toContain("linux_broken was already gone");
-      expect(json).toMatchObject({ code: 0, stdout: JSON.stringify({ deleted: "linux_broken" }) });
+      expect(text.stderr).toContain("linux_other was already gone");
+      expect(json).toMatchObject({ code: 0, stdout: JSON.stringify({ deleted: "linux_other" }) });
       expect(linux.calls).toEqual(["checkpoint.delete", "checkpoint.delete", "checkpoint.delete"]);
     }),
   );

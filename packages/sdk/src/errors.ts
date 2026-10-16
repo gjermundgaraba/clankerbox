@@ -24,14 +24,20 @@ export class NotFound extends Schema.TaggedError<NotFound>()(
   { httpApiStatus: 404 },
 ) {}
 
-export const ConflictKind = Schema.Literals(["exists", "busy"]);
-
-export type ConflictKind = typeof ConflictKind.Type;
-
-/** The name is taken (`exists`), or another action holds the resource (`busy`). */
+/** The name is taken. */
 export class Conflict extends Schema.TaggedError<Conflict>()(
   "Conflict",
-  { message: Schema.String, kind: ConflictKind, ...located },
+  { message: Schema.String, ...located },
+  { httpApiStatus: 409 },
+) {}
+
+/**
+ * A later request on the machine replaced this one before the host got there: `by` is what that
+ * request asked for. The machine's own state says where it is now.
+ */
+export class Superseded extends Schema.TaggedError<Superseded>()(
+  "Superseded",
+  { message: Schema.String, ...located, by: Schema.Literals(["running", "stopped", "deleted"]) },
   { httpApiStatus: 409 },
 ) {}
 
@@ -42,7 +48,7 @@ export class NotOffered extends Schema.TaggedError<NotOffered>()(
   { httpApiStatus: 412 },
 ) {}
 
-/** `machine`'s create, fork or restore failed before it was made: it can only be deleted. */
+/** `machine` isn't made yet: its create or setup still runs, so it can't be copied or captured. */
 export class NotMade extends Schema.TaggedError<NotMade>()(
   "NotMade",
   { message: Schema.String, ...located, machine: Schema.String },
@@ -53,13 +59,6 @@ export class NotMade extends Schema.TaggedError<NotMade>()(
 export class Missing extends Schema.TaggedError<Missing>()(
   "Missing",
   { message: Schema.String, ...located, machine: Schema.String },
-  { httpApiStatus: 412 },
-) {}
-
-/** `checkpoint`'s capture failed, so nothing restores from it: it can only be deleted. */
-export class NotReady extends Schema.TaggedError<NotReady>()(
-  "NotReady",
-  { message: Schema.String, ...located, checkpoint: Schema.String },
   { httpApiStatus: 412 },
 ) {}
 
@@ -86,7 +85,8 @@ export class Unsizable extends Schema.TaggedError<Unsizable>()(
 
 /**
  * A guest script exited non-zero or ran past its timeout; the message says which, with its
- * output's tail. A failed `setup` leaves the machine unmade, a failed `preparation` made.
+ * output's tail. A failed `setup` deletes the machine; a failed `preparation` runs again on the
+ * next start.
  */
 export class ScriptFailed extends Schema.TaggedError<ScriptFailed>()(
   "ScriptFailed",
@@ -129,10 +129,10 @@ export const hostErrors = [
   Invalid,
   NotFound,
   Conflict,
+  Superseded,
   NotOffered,
   NotMade,
   Missing,
-  NotReady,
   PinMismatch,
   WrongState,
   Unsizable,
@@ -149,27 +149,28 @@ export type HostError = typeof HostError.Type;
 /**
  * Each carries, where known: `host` and `action`, which the client sets; `id`, the resource the
  * error is about, which a host sets on `NotFound` and `Conflict` and the client sets to the call's
- * subject otherwise; and `made`, the resource a create, fork, restore or capture makes, which a
- * failure may leave behind.
+ * subject otherwise; and `made`, the resource a create, fork, restore or capture makes. A failure
+ * the host answers leaves no machine unmade, and deletes one it couldn't make; only a call whose
+ * answer was lost, `Unavailable`, may leave `made` behind unmade.
  */
 export const ClankerboxError = Schema.Union([...hostErrors, Unavailable]);
 
 export type ClankerboxError = typeof ClankerboxError.Type;
 
 /**
- * Whether the same call may succeed later: a busy resource or a full host may free up, and a read
- * that got no reply may get one.
+ * Whether the same call may succeed later: a full host may free up, and a read that got no reply
+ * may get one.
  */
 export const retryable = (error: ClankerboxError): boolean =>
   Match.value(error).pipe(
     Match.tagsExhaustive({
       Invalid: () => false,
       NotFound: () => false,
-      Conflict: ({ kind }) => kind === "busy",
+      Conflict: () => false,
+      Superseded: () => false,
       NotOffered: () => false,
       NotMade: () => false,
       Missing: () => false,
-      NotReady: () => false,
       PinMismatch: () => false,
       WrongState: () => false,
       Unsizable: () => false,

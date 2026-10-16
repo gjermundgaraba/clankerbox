@@ -10,7 +10,6 @@ import {
   type MachineState,
   missing,
   observeEach,
-  Refusal,
   Runtime,
   type StateError,
 } from "../runtime.ts";
@@ -216,31 +215,24 @@ export const make = (
       call(["machine", "start", "--name", native, "--branchable"], `machine start ${native}`);
 
     const copyable = (machine: MachineRef, stopped: string) =>
-      Effect.flatMap(
-        status(nativeName(machine)),
-        (recorded): Effect.Effect<void, Refusal<StateError>> => {
-          if (recorded === "running") {
-            return Effect.void;
-          }
+      Effect.flatMap(status(nativeName(machine)), (recorded): Effect.Effect<void, StateError> => {
+        if (recorded === "running") {
+          return Effect.void;
+        }
 
-          if (recorded === "missing") {
-            return Effect.fail(missing("smolvm", machine));
-          }
+        if (recorded === "missing") {
+          return Effect.fail(missing("smolvm", machine));
+        }
 
-          const message =
-            recorded === "unreachable"
-              ? `smolvm reads machine ${machine.id} unreachable: its VM runs, but its agent doesn't answer; start it to boot it again`
-              : alive.has(recorded) || unstartable.has(recorded)
-                ? `smolvm reads machine ${machine.id} ${recorded}, and copies only a running machine`
-                : stopped;
+        const message =
+          recorded === "unreachable"
+            ? `smolvm reads machine ${machine.id} unreachable: its VM runs, but its agent doesn't answer; start it to boot it again`
+            : alive.has(recorded) || unstartable.has(recorded)
+              ? `smolvm reads machine ${machine.id} ${recorded}, and copies only a running machine`
+              : stopped;
 
-          return Effect.fail(
-            new Refusal({
-              error: new WrongState({ message, machine: machine.id, state: recorded }),
-            }),
-          );
-        },
-      );
+        return Effect.fail(new WrongState({ message, machine: machine.id, state: recorded }));
+      });
 
     const checkpointDir = (checkpoint: CheckpointRef) =>
       join(paths.store, `${nativeName(checkpoint)}.checkpoint`);
@@ -461,12 +453,10 @@ export const make = (
           }
 
           if (unstartable.has(recorded)) {
-            return yield* new Refusal({
-              error: new WrongState({
-                message: `smolvm reads machine ${machine.id} ${recorded}, and doesn't start it from there`,
-                machine: machine.id,
-                state: recorded,
-              }),
+            return yield* new WrongState({
+              message: `smolvm reads machine ${machine.id} ${recorded}, and doesn't start it from there`,
+              machine: machine.id,
+              state: recorded,
             });
           }
 
