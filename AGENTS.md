@@ -26,6 +26,9 @@ whole CLI span domains on purpose.
 - `machines.ts`, `checkpoints.ts`: the `Machines` and `Checkpoints` services,
   one per resource, each with its `make` and `layer`.
 - `claims.ts`: the order every action runs in: claim, check, work, record.
+- `reconcile.ts`: `next`, what a machine does next from what was asked, its
+  progress and what the runtime reports.
+- `leases.ts`: the in-memory leases a step holds on what it changes or copies.
 - `guest.ts`: setup and preparation, run in the guest.
 - `usage.ts`: the machines in use, for the RAM budget and capacity.
 - `startup.ts`: recovery before the host serves, and `CannotStart`.
@@ -92,8 +95,9 @@ transport. Neither `./testing` export is published.
   `main.ts` and the provider's `provider.ts`, and in the provider's tests that
   drive its Promise API or a child program.
 - **Property and model tests** cover IDs, units, the RAM budget, recipe
-  packing and the store's claims, as a model checked against SQLite. Each
-  states what is right without calling the code under test.
+  packing and the store's claims, as a model checked against SQLite; `next`,
+  small enough, is checked over every state it decides from. Each states what
+  is right without calling the code under test.
 - **Lifecycles are not state machines.** An action's claim is a SQLite
   transaction, and its states are the `ActionRecord` its row keeps.
 - **No prose comments.** A reason goes where something can check or show it:

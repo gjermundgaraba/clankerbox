@@ -8,6 +8,11 @@ export type Runtime = typeof Runtime.Type;
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
+/** What the operator asked a machine to be; the host keeps moving the machine toward it. */
+export const Desired = Schema.Literals(["running", "stopped", "deleted"]);
+
+export type Desired = typeof Desired.Type;
+
 /** The contract's mutations, which record themselves on a resource's `action`. */
 export const ActionName = Schema.Literals([
   "createMachine",
