@@ -62,6 +62,7 @@ layer(NodeServices.layer)((it) => {
             port: undefined,
             desired: "running",
             generation: 1,
+            ephemeral: false,
             made: false,
             hostKey: undefined,
           }),

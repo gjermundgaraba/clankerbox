@@ -58,10 +58,18 @@ import {
 import type { HostSettings } from "./settings.ts";
 import { type Intent, Store } from "./store.ts";
 
+export interface CreateOptions {
+  /** A prebuild's builder, which a host that starts deletes. */
+  readonly ephemeral?: boolean | undefined;
+}
+
 export interface Interface {
   readonly list: Effect.Effect<ReadonlyArray<Machine>, Internal>;
   readonly get: (id: string) => Effect.Effect<Machine, Declared<"getMachine">>;
-  readonly create: (request: CreateRequest) => Effect.Effect<Machine, Declared<"createMachine">>;
+  readonly create: (
+    request: CreateRequest,
+    options?: CreateOptions,
+  ) => Effect.Effect<Machine, Declared<"createMachine">>;
   readonly start: (id: string) => Effect.Effect<Machine, Declared<"startMachine">>;
   readonly stop: (id: string) => Effect.Effect<Machine, Declared<"stopMachine">>;
   readonly delete: (id: string) => Effect.Effect<void, Declared<"deleteMachine">>;
@@ -525,7 +533,7 @@ export const make = (
       readonly diskGib: number;
     }
 
-    const born = (name: string, spec: Spec) =>
+    const born = (name: string, spec: Spec, ephemeral: boolean) =>
       Effect.gen(function* () {
         const address = runtime.publishAddress;
 
@@ -545,6 +553,7 @@ export const make = (
               : yield* pickPort(probe, address, config.machinePorts, yield* store.ports),
           desired: "running",
           generation: 1,
+          ephemeral,
           made: false,
           hostKey: undefined,
         };
@@ -554,10 +563,10 @@ export const make = (
         return intent;
       });
 
-    const making = (name: string, spec: Spec, making: Making) =>
+    const making = (name: string, spec: Spec, making: Making, ephemeral: boolean) =>
       Effect.gen(function* () {
         const actor = yield* Effect.uninterruptible(
-          Effect.flatMap(inserting.withPermits(1)(born(name, spec)), (intent) =>
+          Effect.flatMap(inserting.withPermits(1)(born(name, spec, ephemeral)), (intent) =>
             register(bornOf(intent, making, unknown)),
           ),
         );
@@ -565,7 +574,7 @@ export const make = (
         return yield* answered(name, actor, "running", 1);
       });
 
-    const create = (request_: CreateRequest) =>
+    const create = (request_: CreateRequest, options?: CreateOptions) =>
       Effect.gen(function* () {
         const name = yield* nameOf(request_.id);
         const image = config.bases.get(request_.base);
@@ -577,10 +586,12 @@ export const make = (
           });
         }
 
-        return yield* making(name, request_, {
-          source: { kind: "base", image },
-          script: request_.setup,
-        });
+        return yield* making(
+          name,
+          request_,
+          { source: { kind: "base", image }, script: request_.setup },
+          options?.ephemeral ?? false,
+        );
       });
 
     const fork = (sourceId: string, name: string) =>
@@ -593,7 +604,12 @@ export const make = (
 
         yield* made(from);
 
-        return yield* making(name, from, { source: { kind: "machine", from }, script: undefined });
+        return yield* making(
+          name,
+          from,
+          { source: { kind: "machine", from }, script: undefined },
+          false,
+        );
       });
 
     const restore = (checkpointId: string, name: string) =>
@@ -604,10 +620,12 @@ export const make = (
 
         const record = yield* readyCheckpoint(source);
 
-        return yield* making(name, record, {
-          source: { kind: "checkpoint", record },
-          script: undefined,
-        });
+        return yield* making(
+          name,
+          record,
+          { source: { kind: "checkpoint", record }, script: undefined },
+          false,
+        );
       });
 
     const capacity = Effect.flatMap(heldMachines, (machines) =>

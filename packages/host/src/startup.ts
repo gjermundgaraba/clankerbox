@@ -37,6 +37,9 @@ export const startup = (config: Pick<HostSettings, "id">) =>
           yield* Effect.logWarning(
             `machine ${idOn(config.id)(intent.name)} of instance ${intent.instance} was cut off before it was made, so it is deleted${intent.native === undefined ? "; the runtime recorded no native ID for it" : ""}`,
           );
+        }
+
+        if (intent.ephemeral || !intent.made) {
           yield* store.desire(intent.name, "deleted");
         }
       }

@@ -4,10 +4,14 @@ import {
   formatId,
   type HostError,
   Internal,
+  type PrebuildRequest,
+  type Prebuilt,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, DateTime, Effect, Exit, Fiber, Layer, type Scope } from "effect";
+import { Context, DateTime, Effect, Exit, Fiber, Layer, Option, type Scope } from "effect";
+import { Hex } from "effect/encoding";
 import { foundOn, idOn, nameOn, newInstance } from "./ids.ts";
 import { Leases } from "./leases.ts";
+import { Machines } from "./machines.ts";
 import { checkpointRef, machineRef, madeOn } from "./refs.ts";
 import { Runtime } from "./runtime.ts";
 import type { HostSettings } from "./settings.ts";
@@ -21,19 +25,26 @@ export interface Interface {
     name: string,
   ) => Effect.Effect<Checkpoint, Declared<"captureCheckpoint">>;
   readonly delete: (id: string) => Effect.Effect<void, Declared<"deleteCheckpoint">>;
+  readonly prebuild: (
+    request: PrebuildRequest,
+  ) => Effect.Effect<Prebuilt, Declared<"prebuildCheckpoint">>;
 }
 
 export class Checkpoints extends Context.Service<Checkpoints, Interface>()(
   "@clankerbox/host/Checkpoints",
 ) {}
 
+export const builderName = (): string =>
+  `prebuilding-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(8)))}`;
+
 export const make = (
   config: Pick<HostSettings, "id">,
-): Effect.Effect<Interface, HostError, Store | Runtime | Leases | Scope.Scope> =>
+): Effect.Effect<Interface, HostError, Store | Runtime | Leases | Machines | Scope.Scope> =>
   Effect.gen(function* () {
     const store = yield* Store;
     const runtime = yield* Runtime;
     const leases = yield* Leases;
+    const machines = yield* Machines;
     const hostScope = yield* Effect.scope;
 
     const idOf = idOn(config.id);
@@ -132,6 +143,68 @@ export const make = (
         }),
       );
 
+    const build = (name: string, request: PrebuildRequest) =>
+      Effect.gen(function* () {
+        const builder = builderName();
+        const builderId = idOf(builder);
+
+        const deleted = machines.delete(builderId).pipe(
+          Effect.catchTag("NotFound", () => Effect.void),
+          Effect.catch((error) =>
+            Effect.logWarning(
+              `couldn't delete prebuild ${idOf(name)}'s builder ${builderId}: ${error.message}`,
+            ),
+          ),
+        );
+
+        return yield* Effect.gen(function* () {
+          yield* machines.create(
+            {
+              id: builderId,
+              base: request.base,
+              profile: request.profile,
+              cpu: request.cpu,
+              ramMib: request.ramMib,
+              diskGib: request.diskGib,
+              setup: request.setup,
+            },
+            { ephemeral: true },
+          );
+
+          if (runtime.captureFrom === "stopped") {
+            yield* machines.stop(builderId);
+          }
+
+          return yield* capturing(builder, name);
+        }).pipe(Effect.ensuring(deleted));
+      });
+
+    const prebuild = (name: string, request: PrebuildRequest) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* leases.own("prebuild", name);
+
+          const existing = Option.map(yield* store.findCheckpoint(name), resource);
+
+          if (Option.isSome(existing)) {
+            return { checkpoint: existing.value, built: false };
+          }
+
+          return yield* build(name, request).pipe(
+            Effect.map((checkpoint) => ({ checkpoint, built: true })),
+            Effect.catchTag("Conflict", (taken) =>
+              Effect.flatMap(store.findCheckpoint(name), (captured) =>
+                Option.match(captured, {
+                  onNone: () => Effect.fail(taken),
+                  onSome: (record) =>
+                    Effect.succeed({ checkpoint: resource(record), built: false }),
+                }),
+              ),
+            ),
+          );
+        }),
+      );
+
     return {
       list: Effect.map(store.checkpoints, (records) => records.map(resource)).pipe(
         Effect.withSpan("Checkpoints.list"),
@@ -156,10 +229,15 @@ export const make = (
       delete: Effect.fn("Checkpoints.delete")((id) =>
         Effect.flatMap(nameOf(id), (name) => detached(`deleteCheckpoint ${id}`, remove(name))),
       ),
+      prebuild: Effect.fn("Checkpoints.prebuild")((request) =>
+        Effect.flatMap(nameOf(request.id), (name) =>
+          detached(`prebuildCheckpoint ${request.id}`, prebuild(name, request)),
+        ),
+      ),
     } satisfies Interface;
   });
 
 export const layer = (
   config: Pick<HostSettings, "id">,
-): Layer.Layer<Checkpoints, HostError, Store | Runtime | Leases> =>
+): Layer.Layer<Checkpoints, HostError, Store | Runtime | Leases | Machines> =>
   Layer.effect(Checkpoints, make(config));

@@ -64,6 +64,7 @@ export const migrations: ReadonlyArray<string> = [
     disk_gib INTEGER NOT NULL,
     ready INTEGER NOT NULL
   ) STRICT`,
+  "ALTER TABLE machines ADD COLUMN ephemeral INTEGER NOT NULL DEFAULT 0",
 ];
 
 const Flag = Schema.Literals([0, 1]);
@@ -85,6 +86,7 @@ const MachineRow = Schema.Struct({
   native: Schema.NullOr(Schema.String),
   desired: Desired,
   generation: Schema.Int,
+  ephemeral: Flag,
   made: Flag,
   host_key: Schema.NullOr(Schema.String),
 });
@@ -117,6 +119,7 @@ const intentOf = (row: typeof MachineRow.Type): Intent => ({
   port: row.port ?? undefined,
   desired: row.desired,
   generation: row.generation,
+  ephemeral: row.ephemeral === 1,
   made: row.made === 1,
   hostKey: row.host_key ?? undefined,
 });
@@ -308,9 +311,9 @@ export const open = (
 
     const insertMachine = db.prepare(
       `INSERT INTO machines (name, instance, native, created_at, base, profile, cpu, ram_mib,
-        disk_gib, port, desired, generation, made, host_key)
+        disk_gib, port, desired, generation, ephemeral, made, host_key)
        VALUES ($name, $instance, $native, $created_at, $base, $profile, $cpu, $ram_mib,
-        $disk_gib, $port, $desired, $generation, $made, $host_key)`,
+        $disk_gib, $port, $desired, $generation, $ephemeral, $made, $host_key)`,
     );
 
     const updateDesire = db.prepare(
@@ -410,6 +413,7 @@ export const open = (
             port: intent.port ?? null,
             desired: intent.desired,
             generation: intent.generation,
+            ephemeral: flag(intent.ephemeral),
             made: flag(intent.made),
             host_key: intent.hostKey ?? null,
           });

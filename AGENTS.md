@@ -25,8 +25,8 @@ whole CLI span domains on purpose.
 
 - `machines.ts`, `checkpoints.ts`: the `Machines` and `Checkpoints` services,
   one per resource, each with its `make` and `layer`. `Machines` runs an actor
-  per machine and the runtime steps it invokes; `Checkpoints` captures
-  and deletes.
+  per machine and the runtime steps it invokes; `Checkpoints` captures,
+  deletes and prebuilds.
 - `lifecycle.ts`: a machine's statechart, the one domain file on xstate.
 - `reconcile.ts`: `next`, what a machine does next from what was asked, its
   progress and what the runtime reports.
@@ -34,8 +34,8 @@ whole CLI span domains on purpose.
 - `refs.ts`: the refs a runtime call takes, and whether a machine is made.
 - `guest.ts`: setup and preparation, run in the guest.
 - `usage.ts`: the machines in use, for the RAM budget and capacity.
-- `startup.ts`: what runs before the actors start (clearing the captures the
-  last host's end left), and `CannotStart`.
+- `startup.ts`: what runs before the actors start (clearing the captures and
+  builders the last host's end left), and `CannotStart`.
 - `ids.ts`, `settings.ts`: IDs on this host, and the settings every runtime
   shares.
 - Ports: `Store` and `NativeIds` (`store.ts`), `Runtime` (`runtime.ts`),
@@ -113,10 +113,11 @@ transport. Neither `./testing` export is published.
   answers from where the machine rests once the store has it: `Superseded`
   when a later request asked for something else by then. Steps hold leases
   instead of claims: what changes a resource owns it, what copies or reads it
-  shares it, in memory only, so a host's end drops them with the work. A
-  checkpoint exists only from a capture that succeeded until its delete
-  begins, and never changes; the next delete of its name clears what a failed
-  one left. A start starts the machine, also when it runs already, and
+  shares it, in memory only, so a host's end drops them with the work; a
+  prebuild owns its name's own lease, so two prebuilds of one name build
+  once. A checkpoint exists only from a capture that succeeded until its
+  delete begins, and never changes; the next delete of its name clears what a
+  failed one left. A start starts the machine, also when it runs already, and
   prepares it. A machine is made by one step in the request that creates it,
   from what only that request holds: a copy or setup that fails deletes it
   and answers the failure, and a delete that fails runs again at each

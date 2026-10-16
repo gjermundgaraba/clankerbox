@@ -19,17 +19,7 @@ export const prebuild = Command.make("prebuild", { ...mutationFlags, ...specArgu
           });
         }
 
-        const { checkpoint, built, leftover } = yield* Prebuild.build(
-          client,
-          { ...spec, setup },
-          { host },
-        );
-
-        if (leftover !== undefined) {
-          yield* Console.error(
-            `clankerbox: ${checkpoint.id} is prebuilt, but its builder ${leftover} couldn't be deleted, and may still run: delete it`,
-          );
-        }
+        const { checkpoint, built } = yield* Prebuild.build(client, { ...spec, setup }, { host });
 
         if (!built && !flags.json) {
           yield* Console.error(
@@ -44,6 +34,6 @@ export const prebuild = Command.make("prebuild", { ...mutationFlags, ...specArgu
   }),
 ).pipe(
   Command.withDescription(
-    "Prebuild a setup, so that creates of the same spec on that host skip it: create a machine as create does, capture it into a checkpoint named prebuilt-<digest>, and delete the machine. A create restores the prebuild only when its profile label, base, sizes and setup are the same, so a profile created at other sizes needs a prebuild at those sizes, and an edited setup a new one. A prebuild that is already there is left as it is: delete it with checkpoint delete to build it anew. It is a checkpoint like any other: it holds whatever the machine did, credentials its start synced included. --timeout bounds each step on its own: the create, the capture and the delete. Prints its ID.",
+    "Prebuild a setup, so that creates of the same spec on that host skip it: the host creates a machine as create does, captures it into a checkpoint named prebuilt-<digest>, and deletes the machine; two prebuilds of one spec at once share the one build. A create restores the prebuild only when its profile label, base, sizes and setup are the same, so a profile created at other sizes needs a prebuild at those sizes, and an edited setup a new one. A prebuild that is already there is left as it is: delete it with checkpoint delete to build it anew. It is a checkpoint like any other: it holds whatever the machine did, credentials its start synced included. --timeout bounds the whole build. Prints its ID.",
   ),
 );

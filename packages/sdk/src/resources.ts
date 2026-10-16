@@ -180,3 +180,13 @@ export type MachineSpec = typeof MachineSpec.Type;
 export const CreateRequest = Schema.Struct({ id: Id, ...specFields });
 
 export type CreateRequest = typeof CreateRequest.Type;
+
+/** A prebuild is the checkpoint `id` of a machine made from the spec, setup and all. */
+export const PrebuildRequest = Schema.Struct({ id: Id, ...specFields, setup: Setup });
+
+export type PrebuildRequest = typeof PrebuildRequest.Type;
+
+/** `built` is false when the host already had the checkpoint. */
+export const Prebuilt = Schema.Struct({ checkpoint: Checkpoint, built: Schema.Boolean });
+
+export type Prebuilt = typeof Prebuilt.Type;

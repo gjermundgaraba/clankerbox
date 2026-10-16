@@ -46,6 +46,7 @@ const intent = (name: string, fields?: Partial<Intent>): Intent => ({
   port: undefined,
   desired: "running",
   generation: 1,
+  ephemeral: false,
   made: false,
   hostKey: undefined,
   ...fields,
@@ -92,6 +93,7 @@ layer(NodeServices.layer)((it) => {
           port: 10_000,
           native: "bx_1",
           hostKey: "ssh-ed25519 AAAA",
+          ephemeral: true,
           made: true,
           desired: "stopped",
           generation: 4,
@@ -150,6 +152,32 @@ layer(NodeServices.layer)((it) => {
       );
 
       expect(reader).toContain("database is locked");
+    }),
+  );
+
+  it.effect("a database from before builders were marked gains the mark, unset on its rows", () =>
+    Effect.gen(function* () {
+      const stateDir = join(yield* scratch, "state");
+
+      yield* withStore(stateDir, (store) => store.insertMachine(intent("dev")));
+
+      const db = new DatabaseSync(join(stateDir, databaseFile));
+
+      db.exec("ALTER TABLE machines DROP COLUMN ephemeral");
+      db.exec(`PRAGMA user_version = ${migrations.length - 1}`);
+      db.close();
+
+      const found = yield* withStore(stateDir, (store) =>
+        Effect.flatMap(
+          store.insertMachine(intent("builder", { ephemeral: true })),
+          () => store.machines,
+        ),
+      );
+
+      expect(found.map(({ name, ephemeral }) => [name, ephemeral])).toEqual([
+        ["builder", true],
+        ["dev", false],
+      ]);
     }),
   );
 

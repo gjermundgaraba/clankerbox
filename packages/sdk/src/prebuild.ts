@@ -3,13 +3,11 @@ import { Hex } from "effect/encoding";
 import type * as Client from "./client.ts";
 import type { ClankerboxError } from "./errors.ts";
 import { formatId } from "./ids.ts";
-import type { Checkpoint, Host, Machine, MachineSpec, Setup } from "./resources.ts";
+import type { Checkpoint, Host, Machine, MachineSpec, Prebuilt, Setup } from "./resources.ts";
 
 const prefix = "prebuilt-";
 
 const digestDigits = 12;
-
-const builderBytes = 8;
 
 /**
  * A digest of the spec's label, base, sizes, setup script as sent, and the host's runtime
@@ -86,51 +84,18 @@ export const create = (
     return { machine: yield* client.create(name, spec, { host: host.id }) };
   });
 
-export interface Built {
-  readonly checkpoint: Checkpoint;
-  readonly built: boolean;
-  /** The builder's ID when its delete failed: it may still run, holding its RAM. */
-  readonly leftover?: string | undefined;
-}
-
 /**
- * Builds the spec's prebuild on the host a create of it is placed on, with a machine of its own
- * that it deletes however it ends. A prebuild that is there is the answer. Of two builds of one
- * spec at once, the second's capture is `Conflict`, and neither touches the other's machine.
+ * Asks the host a create of the spec is placed on for the spec's prebuild, which it builds with a
+ * machine of its own unless it has it. Two builds of one spec at once share the host's one build.
  */
 export const build = (
   client: Client.Interface,
   spec: MachineSpec & { readonly setup: Setup },
   options?: Client.CreateOptions,
-): Effect.Effect<Built, ClankerboxError> =>
+): Effect.Effect<Prebuilt, ClankerboxError> =>
   Effect.gen(function* () {
     const host = yield* client.place(spec.base, options);
-    const name = yield* nameOf(spec, host);
-    const id = yield* formatId(host.id, name);
-    const found = yield* lookup(client, id);
+    const id = yield* formatId(host.id, yield* nameOf(spec, host));
 
-    if (Option.isSome(found)) {
-      return { checkpoint: found.value, built: false };
-    }
-
-    const builder = `prebuilding-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(builderBytes)))}`;
-    const builderId = yield* formatId(host.id, builder);
-    const removal = client.deleteMachine({ id: builderId });
-
-    const checkpoint = yield* Effect.gen(function* () {
-      yield* client.create(builder, spec, { host: host.id });
-
-      if (host.captureFrom === "stopped") {
-        yield* client.stopMachine({ id: builderId });
-      }
-
-      return yield* client.captureCheckpoint({ machine: builderId, name });
-    }).pipe(Effect.onError(() => Effect.ignore(removal)));
-
-    const leftover = yield* removal.pipe(
-      Effect.as(undefined),
-      Effect.catch(() => Effect.succeed(builderId)),
-    );
-
-    return { checkpoint, built: true, leftover };
+    return yield* client.prebuildCheckpoint({ id, ...spec });
   });

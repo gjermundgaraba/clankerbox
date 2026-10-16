@@ -18,7 +18,15 @@ import {
   WrongState,
 } from "./errors.ts";
 import { Id, Name } from "./ids.ts";
-import { Checkpoint, CreateRequest, Host, Machine, Usage } from "./resources.ts";
+import {
+  Checkpoint,
+  CreateRequest,
+  Host,
+  Machine,
+  PrebuildRequest,
+  Prebuilt,
+  Usage,
+} from "./resources.ts";
 
 /** A host bounds its own reads of runtime state under it, so a list answers in time. */
 export const readTimeout = Duration.seconds(10);
@@ -153,6 +161,14 @@ export const Http = ActionHttp.make(
       error: removing,
       description: "Delete a checkpoint, once the restores that read it are done.",
       input: ById,
+    }),
+    Action.make("prebuildCheckpoint", {
+      ...write,
+      error: creating,
+      description:
+        "Make checkpoint id from a machine the host builds from the spec, setup and all, and deletes after. A checkpoint id that exists is the answer, and two prebuilds of one id share one build.",
+      input: PrebuildRequest,
+      success: Prebuilt,
     }),
     Action.make("getHost", {
       ...read,

@@ -3,9 +3,11 @@ import { join } from "node:path";
 import {
   Capacity,
   Conflict,
+  formatId,
   type HostError,
   Internal,
   PinMismatch,
+  type PrebuildRequest,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Duration, Effect, Fiber, Option, Schedule } from "effect";
@@ -13,6 +15,7 @@ import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import * as Sqlite from "../src/platform/sqlite.ts";
 import type * as Store from "../src/store.ts";
+import { builderName } from "../src/checkpoints.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import { read } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { at, failure, hostOn, pause, request, type TestHost } from "./support.ts";
@@ -54,6 +57,16 @@ const withSource = (options?: Parameters<typeof host>[0]) =>
 
     return linux;
   });
+
+const prebuild = (fields?: Partial<PrebuildRequest>): PrebuildRequest => ({
+  id: "linux_prebuilt-0123456789ab",
+  base: "ubuntu",
+  cpu: 1,
+  ramMib: 1024,
+  diskGib: 10,
+  setup: keyed,
+  ...fields,
+});
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
@@ -296,11 +309,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             failure(linux, linux.checkpoints.capture("linux_dev", long)),
             failure(linux, linux.checkpoints.get("mac_snap")),
             failure(linux, linux.checkpoints.delete("mac_snap")),
+            failure(linux, linux.checkpoints.prebuild(prebuild({ id: "mac_prebuilt" }))),
           ],
           { concurrency: "unbounded" },
         );
 
-        expect(errors.map(({ _tag }) => _tag)).toEqual(Array.from({ length: 8 }, () => "Invalid"));
+        expect(errors.map(({ _tag }) => _tag)).toEqual(Array.from({ length: 9 }, () => "Invalid"));
         expect(errors[1]?.message).toContain(`linux_${long}`);
         expect(linux.fake.calls).toEqual([]);
       }),
@@ -768,5 +782,190 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           [],
         ]);
       }),
+  );
+
+  it.effect(
+    "a prebuild builds the checkpoint from a machine of its own, setup and all, and deletes the machine after",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+        const built = yield* linux.run(linux.checkpoints.prebuild(prebuild({ profile: "small" })));
+
+        expect(built).toMatchObject({
+          built: true,
+          checkpoint: {
+            id: "linux_prebuilt-0123456789ab",
+            kind: "ram",
+            base: "ubuntu",
+            profile: "small",
+          },
+        });
+        expect(built.checkpoint.machine).toMatch(/^linux_prebuilding-[0-9a-f]{16}$/u);
+        expect(linux.fake.calls.map((call) => call.split(" ")[0])).toEqual([
+          "startup",
+          "admit",
+          "create",
+          "exec",
+          "start",
+          "exec",
+          "capture",
+          "delete",
+        ]);
+        expect(yield* names(linux)).toEqual([]);
+      }),
+  );
+
+  it.effect("a prebuild's builder ID fits the longest host ID", () =>
+    Effect.gen(function* () {
+      const id = yield* formatId("h".repeat(32), builderName());
+
+      expect(id.length).toBeLessThanOrEqual(61);
+    }),
+  );
+
+  it.effect("a prebuild that exists is the answer, built by nothing", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+      const first = yield* linux.run(linux.checkpoints.prebuild(prebuild()));
+
+      linux.fake.calls.length = 0;
+
+      const again = yield* linux.run(linux.checkpoints.prebuild(prebuild()));
+
+      expect(again).toEqual({ checkpoint: first.checkpoint, built: false });
+      expect(linux.fake.calls).toEqual([]);
+    }),
+  );
+
+  it.effect("two prebuilds of one ID at once share one build", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+      const { release, entered } = linux.fake.holdNext("capture");
+      const first = yield* Effect.forkChild(linux.run(linux.checkpoints.prebuild(prebuild())));
+
+      yield* entered;
+
+      const second = yield* Effect.forkChild(linux.run(linux.checkpoints.prebuild(prebuild())));
+
+      yield* pause;
+      yield* release;
+
+      const built = yield* Effect.all([Fiber.join(first), Fiber.join(second)]);
+
+      expect(built.map(({ checkpoint }) => checkpoint.id)).toEqual([
+        "linux_prebuilt-0123456789ab",
+        "linux_prebuilt-0123456789ab",
+      ]);
+      expect(linux.fake.calls.filter((call) => call.startsWith("create"))).toHaveLength(1);
+    }),
+  );
+
+  it.effect("two prebuilds of one ID sent together build once, and the later answers with it", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      const built = yield* linux.run(
+        Effect.all(
+          [linux.checkpoints.prebuild(prebuild()), linux.checkpoints.prebuild(prebuild())],
+          {
+            concurrency: "unbounded",
+          },
+        ),
+      );
+
+      expect(
+        built.map(({ built: fresh }) => fresh).toSorted((a, b) => Number(a) - Number(b)),
+      ).toEqual([false, true]);
+      expect(new Set(built.map(({ checkpoint }) => checkpoint.id)).size).toBe(1);
+      expect(linux.fake.calls.filter((call) => call.startsWith("create"))).toHaveLength(1);
+    }),
+  );
+
+  it.effect(
+    "a capture of a prebuild's builder to its name waits for the setup, and the prebuild answers that capture",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+        const { release, entered } = linux.fake.holdNext("exec");
+        const building = yield* Effect.forkChild(linux.run(linux.checkpoints.prebuild(prebuild())));
+
+        yield* entered;
+
+        const [builder] = yield* names(linux);
+
+        const capturing = yield* Effect.forkChild(
+          linux.run(linux.checkpoints.capture(`linux_${builder}`, "prebuilt-0123456789ab")),
+        );
+
+        yield* release;
+
+        const captured = yield* Fiber.join(capturing);
+        const built = yield* Fiber.join(building);
+
+        expect([captured.id, captured.machine]).toEqual([
+          "linux_prebuilt-0123456789ab",
+          `linux_${builder}`,
+        ]);
+        expect(built).toEqual({ checkpoint: captured, built: false });
+        expect(yield* names(linux)).toEqual([]);
+      }),
+  );
+
+  it.effect("a disk runtime's prebuild stops its builder before the capture", () =>
+    Effect.gen(function* () {
+      const linux = yield* host({ runtime: { checkpointKind: "disk", captureFrom: "stopped" } });
+
+      yield* linux.run(linux.checkpoints.prebuild(prebuild()));
+
+      const ops = linux.fake.calls.map((call) => call.split(" ")[0]);
+
+      expect(ops.indexOf("stop")).toBeGreaterThan(-1);
+      expect(ops.indexOf("stop")).toBeLessThan(ops.indexOf("capture"));
+    }),
+  );
+
+  it.effect("a prebuild whose setup fails deletes its builder and makes no checkpoint", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      const error = yield* failure(
+        linux,
+        linux.checkpoints.prebuild(prebuild({ setup: { script: "#!/bin/sh\nexit 4\n" } })),
+      );
+
+      expect(error._tag).toBe("ScriptFailed");
+      expect(yield* names(linux)).toEqual([]);
+      expect(yield* checkpointNames(linux)).toEqual([]);
+      expect(linux.fake.calls.at(-1)).toMatch(/^delete linux_prebuilding-/u);
+    }),
+  );
+
+  it.effect("a builder a crash left behind is deleted by the next host", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("prebuilding-0123456789abcdef")));
+      yield* linux.dispose;
+      yield* seeded(linux, (store) =>
+        Effect.flatMap(store.findMachine("prebuilding-0123456789abcdef"), (found) =>
+          Effect.gen(function* () {
+            const builder = Option.getOrThrow(found);
+
+            yield* store.removeMachine(builder.name);
+            yield* store.insertMachine({ ...builder, ephemeral: true });
+          }),
+        ),
+      );
+      linux.fake.calls.length = 0;
+
+      const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
+
+      for (let tries = 0; tries < 100 && (yield* names(restarted)).length > 0; tries++) {
+        yield* pause;
+      }
+
+      expect(yield* names(restarted)).toEqual([]);
+      expect(linux.fake.calls).toEqual(["startup", "delete linux_prebuilding-0123456789abcdef"]);
+    }),
   );
 });
