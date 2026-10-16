@@ -3,12 +3,14 @@ import type { LoadedConfig } from "./config.ts";
 
 export const includeLines = "Match all\nInclude clankerbox\n";
 
-const block = (host: LoadedConfig["hosts"][number]): string =>
+const usableShell = /^\/[^\s"'$`\\%]*$/u;
+
+const block = (shell: string, host: LoadedConfig["hosts"][number]): string =>
   [
     `Host ${host.id}_*`,
     `  User ${host.sshUser ?? "root"}`,
     "  ProxyCommand clankerbox ssh-proxy %n",
-    "  KnownHostsCommand clankerbox ssh-known-hosts %n %H",
+    `  KnownHostsCommand ${shell} -c "exec clankerbox ssh-known-hosts %n %H"`,
     "  UserKnownHostsFile /dev/null",
     "  GlobalKnownHostsFile /dev/null",
     "  StrictHostKeyChecking yes",
@@ -17,11 +19,11 @@ const block = (host: LoadedConfig["hosts"][number]): string =>
     "",
   ].join("\n");
 
-export const renderSshConfig = (hosts: LoadedConfig["hosts"]): string =>
+export const renderSshConfig = (shell: string, hosts: LoadedConfig["hosts"]): string =>
   [
     "# Managed by clankerbox; do not edit. CLANKERBOX_SSH_CONFIG=false removes it.",
     "",
-    ...hosts.map(block),
+    ...hosts.map((host) => block(shell, host)),
   ].join("\n");
 
 export const withInclude = (text: string): string =>
@@ -54,6 +56,7 @@ export const syncSshConfig = (config: LoadedConfig) =>
     const path = yield* Path.Path;
     const enabled = yield* Config.Boolean("CLANKERBOX_SSH_CONFIG").pipe(Config.withDefault(true));
     const home = yield* Config.option(Config.String("HOME"));
+    const shell = yield* Config.String("SHELL").pipe(Config.withDefault("/bin/sh"));
 
     if (Option.isNone(home)) {
       return;
@@ -70,7 +73,13 @@ export const syncSshConfig = (config: LoadedConfig) =>
       return;
     }
 
+    if (!usableShell.test(shell)) {
+      return yield* warn(
+        `SHELL ${JSON.stringify(shell)} isn't an absolute path ssh_config can take`,
+      );
+    }
+
     yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
-    yield* update(fs, managed, () => renderSshConfig(config.hosts));
+    yield* update(fs, managed, () => renderSshConfig(shell, config.hosts));
     yield* update(fs, userConfig, withInclude);
   }).pipe(Effect.catch((error) => warn(error.message)));

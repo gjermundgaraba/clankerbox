@@ -153,9 +153,10 @@ clankerbox checkpoint delete linux_base
   `Include clankerbox`, so your own entries come first and win. Each
   connection runs `clankerbox ssh-proxy` and `clankerbox ssh-known-hosts` for
   the machine's current endpoint and host key, so nothing goes stale when a
-  port changes or a machine is recreated. They run the `clankerbox` on ssh's
-  `PATH`, which an app started outside a shell may not have.
-  `CLANKERBOX_SSH_CONFIG=false` removes both.
+  port changes or a machine is recreated. Both run through your login shell,
+  `$SHELL` as of the command that wrote the file (`/bin/sh` without one), so
+  `clankerbox` must be on the `PATH` that shell sets up, even for an app
+  started outside a terminal. `CLANKERBOX_SSH_CONFIG=false` removes both.
 - `--json` prints the resource or `{"error": {...}}`.
 
 `clankerbox COMMAND --help` documents each command.

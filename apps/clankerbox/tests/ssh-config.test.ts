@@ -43,8 +43,8 @@ const home = (hosts: ReadonlyArray<object> = [{ id: "linux", url: url("linux") }
   });
 
 layer(NodeServices.layer)((it) => {
-  it("renders one block per host, as its sshUser or root, running the clankerbox on ssh's PATH", () => {
-    const text = renderSshConfig([
+  it("renders one block per host, as its sshUser or root, running the clankerbox the login shell finds, since ssh runs a KnownHostsCommand only by absolute path", () => {
+    const text = renderSshConfig("/bin/zsh", [
       { id: "linux", url: "http://linux:8484" },
       { id: "mac", url: "http://mac:8484", sshUser: "admin" },
     ]);
@@ -54,7 +54,7 @@ layer(NodeServices.layer)((it) => {
         "Host linux_*",
         "  User root",
         "  ProxyCommand clankerbox ssh-proxy %n",
-        "  KnownHostsCommand clankerbox ssh-known-hosts %n %H",
+        '  KnownHostsCommand /bin/zsh -c "exec clankerbox ssh-known-hosts %n %H"',
         "  UserKnownHostsFile /dev/null",
         "  GlobalKnownHostsFile /dev/null",
         "  StrictHostKeyChecking yes",
@@ -87,7 +87,41 @@ layer(NodeServices.layer)((it) => {
         expect(code).toBe(0);
         expect(stderr).not.toContain("SSH config");
         expect(yield* read(sshConfig)).toBe(`${mine}Match all\nInclude clankerbox\n`);
-        expect(yield* read(managed)).toBe(renderSshConfig([{ id: "linux", url: url("linux") }]));
+        expect(yield* read(managed)).toBe(
+          renderSshConfig("/bin/sh", [{ id: "linux", url: url("linux") }]),
+        );
+      }),
+  );
+
+  it.effect("the KnownHostsCommand runs through SHELL, as ssh runs the ProxyCommand", () =>
+    Effect.gen(function* () {
+      const { env, managed, endpoints } = yield* home();
+
+      yield* cli(["machines"], { endpoints, env: { ...env, SHELL: "/opt/homebrew/bin/fish" } });
+
+      expect(yield* read(managed)).toBe(
+        renderSshConfig("/opt/homebrew/bin/fish", [{ id: "linux", url: url("linux") }]),
+      );
+    }),
+  );
+
+  it.effect(
+    "a SHELL that isn't an absolute path ssh_config can take writes nothing and says so",
+    () =>
+      Effect.gen(function* () {
+        const { env, managed, sshConfig, endpoints } = yield* home();
+
+        const { code, stderr } = yield* cli(["machines"], {
+          endpoints,
+          env: { ...env, SHELL: "zsh -i" },
+        });
+
+        expect(code).toBe(0);
+        expect(stderr).toContain(
+          `couldn't update the SSH config: SHELL "zsh -i" isn't an absolute path`,
+        );
+        expect(yield* exists(managed)).toBe(false);
+        expect(yield* exists(sshConfig)).toBe(false);
       }),
   );
 
