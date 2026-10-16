@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerbox-rivet-sandbox-agent",
-  "version": "0.18.2",
+  "version": "0.18.3",
   "description": "clankerbox machines as sandboxes for Rivet's Sandbox Agent",
   "license": "MIT",
   "repository": {
