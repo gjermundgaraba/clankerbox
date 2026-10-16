@@ -19,7 +19,7 @@ const app = (config: Pick<HostSettings, "id" | "bases">) =>
       return {
         listMachines: () => machines.list,
         getMachine: ({ id }) => machines.get(id),
-        createMachine: machines.create,
+        createMachine: (request) => machines.create(request),
         startMachine: ({ id }) => machines.start(id),
         stopMachine: ({ id }) => machines.stop(id),
         deleteMachine: ({ id }) => machines.delete(id),
@@ -29,6 +29,7 @@ const app = (config: Pick<HostSettings, "id" | "bases">) =>
         getCheckpoint: ({ id }) => checkpoints.get(id),
         captureCheckpoint: ({ machine, name }) => checkpoints.capture(machine, name),
         deleteCheckpoint: ({ id }) => checkpoints.delete(id),
+        prebuildCheckpoint: checkpoints.prebuild,
         getHost: () =>
           Effect.succeed({
             id: config.id,

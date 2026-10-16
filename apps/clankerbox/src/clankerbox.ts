@@ -36,6 +36,7 @@ export const actionCommands = {
   getCheckpoint,
   captureCheckpoint: capture,
   deleteCheckpoint,
+  prebuildCheckpoint: prebuild,
   getHost: hosts,
   getCapacity: capacity,
 } satisfies Record<keyof typeof actionsByName, Command.Command.Any>;

@@ -41,7 +41,8 @@ export const servicesLayer = <E, R>(
     Layer.provide(store),
   );
 
-  return Layer.merge(Machines.layer(config), Checkpoints.layer(config)).pipe(
+  return Checkpoints.layer(config).pipe(
+    Layer.provideMerge(Machines.layer(config)),
     Layer.provide(startup(config)),
     Layer.provide(Layer.merge(BindProbe.layer, Leases.layer)),
     Layer.provideMerge(Layer.merge(store, runtime.pipe(Layer.provide(nativeIds)))),

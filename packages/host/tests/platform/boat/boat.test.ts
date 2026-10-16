@@ -418,6 +418,7 @@ const row = (machine: MachineRef): Store.Intent => ({
   port: undefined,
   desired: "running",
   generation: 1,
+  ephemeral: false,
   made: false,
   hostKey: undefined,
 });

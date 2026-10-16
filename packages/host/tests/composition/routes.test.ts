@@ -353,6 +353,30 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       return undefined;
     });
 
+  it.effect(
+    "the SDK's client prebuilds a checkpoint on a served host once, and the builder is gone after",
+    () =>
+      Effect.gen(function* () {
+        const { url, fake } = yield* serve();
+        const request = { id: "linux_pre", ...spec, setup: { script: "true" } };
+
+        const [first, second, machines] = yield* withClient(url, (client) =>
+          Effect.all([
+            client.prebuildCheckpoint(request),
+            client.prebuildCheckpoint(request),
+            client.machines,
+          ]),
+        );
+
+        expect(first).toMatchObject({ built: true, checkpoint: { id: "linux_pre", kind: "ram" } });
+        expect(second).toEqual({ built: false, checkpoint: first.checkpoint });
+        expect(machines.answers).toEqual([]);
+        expect(fake.calls.filter((call) => call.startsWith("capture"))).toEqual([
+          "capture linux_pre",
+        ]);
+      }),
+  );
+
   it.effect("a create whose client disconnects still finishes and records its outcome", () =>
     Effect.gen(function* () {
       const host = yield* serve();

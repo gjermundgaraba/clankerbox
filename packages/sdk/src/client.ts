@@ -467,6 +467,7 @@ export const make = (
       getCheckpoint: (input) => onResource("getCheckpoint", input),
       captureCheckpoint: (input) => onResource("captureCheckpoint", input, input.name),
       deleteCheckpoint: (input) => deleting(onResource("deleteCheckpoint", input)),
+      prebuildCheckpoint: (input) => onResource("prebuildCheckpoint", input),
     } satisfies Interface;
   });
 

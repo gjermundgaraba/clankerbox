@@ -24,6 +24,8 @@ export interface Intent {
   readonly desired: Desired;
   /** Raised by every request, so a request can tell its own answer from a later one's. */
   readonly generation: number;
+  /** A prebuild's builder: a host that starts asks for every one to be deleted. */
+  readonly ephemeral: boolean;
   /**
    * Once its copy and its setup succeeded, in the request that created it; one the host finds
    * unmade at its start is deleted. After that, a machine the runtime lacks is lost.

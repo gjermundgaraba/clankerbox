@@ -4,10 +4,9 @@ import { afterEach, expect } from "vite-plus/test";
 import {
   type Checkpoint,
   Client,
-  formatId,
-  Internal,
   type MachineSpec,
   Prebuild,
+  retryable,
   ScriptFailed,
 } from "../src/index.ts";
 import { checkpoint, type StubHost, stubHost, transport } from "./stub-host.ts";
@@ -90,54 +89,38 @@ it.effect(
     }),
 );
 
-it.effect("a prebuild's builder fits an ID on the longest host ID", () =>
-  Effect.gen(function* () {
-    const longest = "h".repeat(32);
-    const built = host({ id: longest, bases: ["ubuntu"] });
-
-    const { checkpoint: made } = yield* withClient([built], (client) =>
-      Prebuild.build(client, spec),
-    );
-
-    expect(made.machine).toMatch(new RegExp(`^${longest}_prebuilding-[0-9a-f]{16}$`, "u"));
-    expect(made.machine).toHaveLength(61);
-    expect(yield* formatId(longest, made.machine.split("_")[1] ?? "")).toBe(made.machine);
-  }),
-);
-
 it.effect(
-  "a build runs the setup on a machine of its own, captures it under the prebuild's name and deletes it",
+  "a build asks the host a create is placed on for the prebuild under its name, with the spec and its setup",
   () =>
     Effect.gen(function* () {
+      const other = host({ id: "other", bases: ["debian"] });
       const linux = host({ id: "linux", bases: ["ubuntu"] });
+      const id = `linux_${yield* nameOf(spec)}`;
 
-      const { checkpoint: made, built } = yield* withClient([linux], (client) =>
+      const { checkpoint: made, built } = yield* withClient([other, linux], (client) =>
         Prebuild.build(client, spec),
       );
 
       expect(built).toBe(true);
-      expect(made).toMatchObject({ id: `linux_${yield* nameOf(spec)}`, profile: "dev", cpu: 2 });
-      expect(linux.creates[0]).toMatchObject({
-        id: made.machine,
-        profile: "dev",
-        setup: spec.setup,
-      });
-      expect(yield* holdings(linux)).toEqual({ machines: [], checkpoints: [made.id] });
+      expect(made).toMatchObject({ id, profile: "dev", cpu: 2 });
+      expect(linux.prebuilds).toEqual([{ id, ...spec }]);
+      expect(other.prebuilds).toEqual([]);
+      expect(yield* holdings(linux)).toEqual({ machines: [], checkpoints: [id] });
     }),
 );
 
-it.effect(
-  "a builder is stopped before its capture only on a host that captures stopped machines",
-  () =>
-    Effect.gen(function* () {
-      for (const captureFrom of ["stopped", "running"] as const) {
-        const stub = host({ id: "box", bases: ["ubuntu"], captureFrom });
+it.effect("a build placed on a named host asks that host, whatever the list's order", () =>
+  Effect.gen(function* () {
+    const first = host({ id: "first", bases: ["ubuntu"] });
+    const second = host({ id: "second", bases: ["ubuntu"] });
 
-        yield* withClient([stub], (client) => Prebuild.build(client, spec));
+    const { checkpoint: made } = yield* withClient([first, second], (client) =>
+      Prebuild.build(client, spec, { host: "second" }),
+    );
 
-        expect(stub.calls.includes("machine.stop")).toBe(captureFrom === "stopped");
-      }
-    }),
+    expect(made.id).toBe(`second_${yield* nameOf(spec)}`);
+    expect([first.prebuilds.length, second.prebuilds.length]).toEqual([0, 1]);
+  }),
 );
 
 it.effect("a prebuild the host has is the answer as it is, built by no one", () =>
@@ -152,97 +135,27 @@ it.effect("a prebuild the host has is the answer as it is, built by no one", () 
   }),
 );
 
-it.effect(
-  "two builds of one spec at once both run the setup; the first capture wins and neither undoes the other",
-  () =>
-    Effect.gen(function* () {
-      let arrived = 0;
-      let release = () => {};
-
-      const both = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-
-      const linux = host({
-        id: "linux",
-        bases: ["ubuntu"],
-        beforeCreate: () =>
-          Effect.promise(() => {
-            arrived += 1;
-
-            if (arrived === 2) {
-              release();
-            }
-
-            return both;
-          }),
-      });
-
-      const [first, second] = yield* withClient([linux], (client) =>
-        Effect.all(
-          [Prebuild.build(client, spec), Prebuild.build(client, spec)].map(Effect.result),
-          {
-            concurrency: "unbounded",
-          },
-        ),
-      );
-
-      const outcomes = [first, second].map((outcome) =>
-        outcome?._tag === "Success" ? "built" : outcome?.failure._tag,
-      );
-
-      expect(outcomes.toSorted()).toEqual(["Conflict", "built"]);
-      expect(linux.creates.map(({ id }) => id)).toHaveLength(2);
-      expect(new Set(linux.creates.map(({ id }) => id)).size).toBe(2);
-      expect(yield* holdings(linux)).toEqual({
-        machines: [],
-        checkpoints: [`linux_${yield* nameOf(spec)}`],
-      });
-    }),
-);
-
-it.effect("a build whose setup fails deletes its machine and makes no prebuild", () =>
+it.effect("a build's failure is the host's, located at its host, action and prebuild", () =>
   Effect.gen(function* () {
+    const id = `linux_${yield* nameOf(spec)}`;
+
     const linux = host({
       id: "linux",
       bases: ["ubuntu"],
-      create: () =>
-        Effect.fail(
-          new ScriptFailed({
-            message: "setup exited 1",
-            script: "setup",
-          }),
-        ),
+      prebuild: () => Effect.fail(new ScriptFailed({ message: "setup exited 1", script: "setup" })),
     });
 
     const error = yield* withClient([linux], (client) => Effect.flip(Prebuild.build(client, spec)));
 
-    expect(error._tag).toBe("ScriptFailed");
-    expect(error.message).toBe("setup exited 1");
-    expect(linux.calls.slice(-2)).toEqual(["machine.create", "machine.delete"]);
-    expect(yield* holdings(linux)).toEqual({ machines: [], checkpoints: [] });
+    expect(error).toBeInstanceOf(ScriptFailed);
+    expect(error).toMatchObject({
+      message: "setup exited 1",
+      host: "linux",
+      action: "prebuildCheckpoint",
+      id,
+    });
+    expect(retryable(error)).toBe(false);
   }),
-);
-
-it.effect(
-  "a builder whose delete fails after the capture is the build's leftover, and the prebuild stands",
-  () =>
-    Effect.gen(function* () {
-      const linux = host({
-        id: "linux",
-        bases: ["ubuntu"],
-        deleteMachine: () => Effect.fail(new Internal({ message: "no answer" })),
-      });
-
-      const made = yield* withClient([linux], (client) => Prebuild.build(client, spec));
-
-      expect(made.built).toBe(true);
-      expect(made.leftover).toBe(made.checkpoint.machine);
-      expect(yield* holdings(linux)).toEqual({
-        machines: [made.checkpoint.machine],
-        checkpoints: [made.checkpoint.id],
-      });
-    }),
 );
 
 it.effect("a create restores its spec's prebuild, and runs the setup where there is none", () =>

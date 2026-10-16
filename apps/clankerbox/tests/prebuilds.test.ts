@@ -1,6 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { join } from "node:path";
-import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
@@ -63,7 +63,8 @@ layer(NodeServices.layer)((it) => {
             "u",
           ),
         );
-        expect(linux.creates).toHaveLength(1);
+        expect(linux.prebuilds.map(({ id }) => id)).toEqual([built.stdout, built.stdout]);
+        expect(linux.creates).toEqual([]);
 
         const listed = yield* cli(["checkpoint", "list", "--config", config], { endpoints });
 
@@ -84,7 +85,7 @@ layer(NodeServices.layer)((it) => {
             "u",
           ),
         );
-        expect(linux.creates).toHaveLength(1);
+        expect(linux.creates).toEqual([]);
 
         for (const flags of [["--ram", "8G"], ["--fresh"]]) {
           const before = linux.creates.length;
@@ -102,7 +103,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "prebuild exits 0 when its builder can't be deleted, and names the builder on stderr",
+    "prebuild sends the host its spec and its setup's script, and prints the host's error",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -111,25 +112,35 @@ layer(NodeServices.layer)((it) => {
 
         yield* write(script, "#!/bin/sh\ntrue\n");
 
-        const linux = host({
+        const linux = host({ id: "linux", bases: ["ubuntu"] });
+
+        const failing = host({
           id: "linux",
           bases: ["ubuntu"],
-          deleteMachine: () => Effect.fail(new Internal({ message: "no answer" })),
+          prebuild: () => Effect.fail(new Capacity({ message: "no room for the builder" })),
         });
 
-        const { code, stdout, stderr } = yield* cli(
-          ["prebuild", ...sizes, "--setup", script, "--config", config],
-          { endpoints: [["linux", linux]] },
-        );
+        const built = yield* cli(["prebuild", ...sizes, "--setup", script, "--config", config], {
+          endpoints: [["linux", linux]],
+        });
 
-        expect(code).toBe(0);
-        expect(stdout).toMatch(/^linux_prebuilt-[0-9a-f]{12}$/u);
-        expect(stderr).toMatch(
-          new RegExp(
-            `^clankerbox: ${stdout} is prebuilt, but its builder linux_prebuilding-[0-9a-f]{16} couldn't be deleted, and may still run: delete it$`,
-            "u",
-          ),
-        );
+        const refused = yield* cli(["prebuild", ...sizes, "--setup", script, "--config", config], {
+          endpoints: [["linux", failing]],
+        });
+
+        expect(built.code).toBe(0);
+        expect(linux.prebuilds).toEqual([
+          {
+            id: built.stdout,
+            base: "ubuntu",
+            cpu: 2,
+            ramMib: 4096,
+            diskGib: 20,
+            setup: { script: "#!/bin/sh\ntrue\n" },
+          },
+        ]);
+        expect(refused.code).toBe(1);
+        expect(refused.stderr).toContain("Capacity: no room for the builder");
       }),
   );
 

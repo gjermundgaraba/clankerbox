@@ -7,10 +7,11 @@ import {
   Conflict,
   type CreateRequest,
   type Declared,
-  type Host,
   Http,
   type Machine,
   NotFound,
+  type PrebuildRequest,
+  type Prebuilt,
   type Reading,
   type Runtime,
   version,
@@ -24,11 +25,11 @@ export interface StubHostOptions {
   /** Default: 1.27.3. */
   readonly runtimeVersion?: string;
   /** Default: running. */
-  readonly captureFrom?: Host["captureFrom"];
   readonly create?: (request: CreateRequest) => Effect.Effect<Machine, Declared<"createMachine">>;
-  readonly deleteMachine?: (id: string) => Effect.Effect<void, Declared<"deleteMachine">>;
-  /** Runs before each create's default handler, such as to hold two creates at once. */
-  readonly beforeCreate?: (request: CreateRequest) => Effect.Effect<void>;
+  /** Replaces the default prebuild, which captures a builder of its own unless it has the checkpoint. */
+  readonly prebuild?: (
+    request: PrebuildRequest,
+  ) => Effect.Effect<Prebuilt, Declared<"prebuildCheckpoint">>;
   readonly machines?: ReadonlyArray<Machine>;
   readonly checkpoints?: ReadonlyArray<Checkpoint>;
   /** Default: none. */
@@ -66,6 +67,7 @@ export const stubHost = (options: StubHostOptions) => {
   const machines = new Map<string, Machine>();
   const checkpoints = new Map<string, Checkpoint>();
   const creates: Array<CreateRequest> = [];
+  const prebuilds: Array<PrebuildRequest> = [];
   const calls: Array<string> = [];
   const versions: Array<string | null> = [];
 
@@ -113,19 +115,16 @@ export const stubHost = (options: StubHostOptions) => {
 
   const create = (request: CreateRequest) =>
     options.create === undefined
-      ? Effect.andThen(
-          options.beforeCreate?.(request) ?? Effect.void,
-          add(
-            labelled(
-              machine(request.id, {
-                runtime,
-                base: request.base,
-                cpu: request.cpu,
-                ramMib: request.ramMib,
-                diskGib: request.diskGib,
-              }),
-              request.profile,
-            ),
+      ? add(
+          labelled(
+            machine(request.id, {
+              runtime,
+              base: request.base,
+              cpu: request.cpu,
+              ramMib: request.ramMib,
+              diskGib: request.diskGib,
+            }),
+            request.profile,
           ),
         )
       : options.create(request);
@@ -145,6 +144,37 @@ export const stubHost = (options: StubHostOptions) => {
         ),
       ),
     );
+
+  const prebuild = (
+    request: PrebuildRequest,
+  ): Effect.Effect<Prebuilt, Declared<"prebuildCheckpoint">> => {
+    if (options.prebuild !== undefined) {
+      return options.prebuild(request);
+    }
+
+    const found = checkpoints.get(request.id);
+
+    if (found !== undefined) {
+      return Effect.succeed({ checkpoint: found, built: false });
+    }
+
+    return Effect.sync(() => {
+      const made = labelled<Checkpoint>(
+        checkpoint(request.id, {
+          machine: `${options.id}_prebuilding-0000000000000000`,
+          base: request.base,
+          cpu: request.cpu,
+          ramMib: request.ramMib,
+          diskGib: request.diskGib,
+        }),
+        request.profile,
+      );
+
+      checkpoints.set(made.id, made);
+
+      return { checkpoint: made, built: true };
+    });
+  };
 
   const app = Action.implement(Http.actions, {
     listMachines: () => Effect.as(record("machine.list"), [...machines.values()]),
@@ -167,12 +197,10 @@ export const stubHost = (options: StubHostOptions) => {
     deleteMachine: ({ id }) =>
       Effect.andThen(
         record("machine.delete"),
-        options.deleteMachine === undefined
-          ? Effect.andThen(
-              find(id),
-              Effect.sync(() => machines.delete(id)),
-            )
-          : options.deleteMachine(id),
+        Effect.andThen(
+          find(id),
+          Effect.sync(() => machines.delete(id)),
+        ),
       ),
     forkMachine: ({ machine: source, name }) =>
       Effect.andThen(
@@ -219,13 +247,18 @@ export const stubHost = (options: StubHostOptions) => {
           Effect.sync(() => checkpoints.delete(id)),
         ),
       ),
+    prebuildCheckpoint: (request) =>
+      Effect.andThen(
+        Effect.sync(() => prebuilds.push(request)),
+        Effect.andThen(record("checkpoint.prebuild"), prebuild(request)),
+      ),
     getHost: () =>
       Effect.as(record("host.get"), {
         id: options.id,
         runtime,
         version,
         runtimeVersion: options.runtimeVersion ?? "1.27.3",
-        captureFrom: options.captureFrom ?? "running",
+        captureFrom: "running",
         bases: options.bases,
       }),
     getCapacity: () =>
@@ -244,6 +277,7 @@ export const stubHost = (options: StubHostOptions) => {
   return {
     id: options.id,
     creates,
+    prebuilds,
     calls,
     versions,
     hold: (held: Machine) => {
