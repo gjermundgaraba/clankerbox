@@ -40,7 +40,8 @@ peerDependencyRules:
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - vite-plus
-  - "@gjermundgaraba/effect-actions"
+  - "@gjermundgaraba/*"
+  - "@gjermundgaraba-designs/*"
   - effect
   - "@effect/*"
   - "@voidzero-dev/*"
@@ -52,5 +53,7 @@ minimumReleaseAgeExclude:
   - "@oxfmt/*"
   - vitest
   - "@vitest/*"
+  # xstate 6 and @xstate/effect are alphas released together and pinned by hand, so a bump of
+  # the pair lands the day it publishes, as Effect's does.
   - xstate
   - "@xstate/*"

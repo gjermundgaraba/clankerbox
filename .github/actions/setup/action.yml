@@ -1,7 +1,7 @@
 name: Set up
 description: >-
-  The Node .node-version pins, the pnpm package.json names, and the workspace's dependencies
-  from the lockfile, with no cache. Check out the repository first.
+  The Node .node-version pins, the pnpm package.json's devEngines names, and the workspace's
+  dependencies from the lockfile, with no cache. Check out the repository first.
 inputs:
   registry-url:
     description: The npm registry setup-node writes an .npmrc for, to publish to; none by default.
@@ -15,7 +15,7 @@ runs:
         node-version-file: .node-version
         registry-url: ${{ inputs.registry-url }}
         package-manager-cache: false
-    - run: npm install -g "$(node -p "require('./package.json').packageManager")"
+    - run: npm install -g "pnpm@$(node -p "require('./package.json').devEngines.packageManager.version")"
       shell: bash
     - run: pnpm install --frozen-lockfile
       shell: bash
