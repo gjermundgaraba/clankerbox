@@ -1,5 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Capacity, Internal, Refused, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Capacity,
+  Internal,
+  Refused,
+  ScriptFailed,
+  type TailnetStatus,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { waitFor } from "@xstate/effect";
 import { Deferred, Effect, Predicate, Ref } from "effect";
 import { TestClock } from "effect/testing";
@@ -7,7 +13,9 @@ import {
   answer,
   ask,
   type Born,
+  checked,
   lifecycle,
+  longestBackoff,
   type Making,
   phaseOf,
   type Snapshot,
@@ -54,6 +62,7 @@ const world = (initial: MachineState) =>
   Effect.gen(function* () {
     const state = yield* Ref.make(initial);
     const calls = yield* Ref.make<ReadonlyArray<string>>([]);
+    const tailnet = yield* Ref.make<TailnetStatus | undefined>(undefined);
     const failures = new Map<Name, StepError>();
     const gates = new Map<Name, Gate>();
 
@@ -93,6 +102,7 @@ const world = (initial: MachineState) =>
           step("make", "running"),
         ),
       start: () => step("start", "running"),
+      join: () => Effect.andThen(Effect.orDie(enter("join")), Ref.get(tailnet)),
       stop: () => step("stop", "stopped"),
       remove: () =>
         Effect.mapError(step("remove", "missing"), (error): RuntimeError =>
@@ -106,7 +116,9 @@ const world = (initial: MachineState) =>
     return {
       steps,
       state,
-      calls: Ref.get(calls),
+      tailnet,
+      calls: Effect.map(Ref.get(calls), (all) => all.filter((call) => call !== "join")),
+      joins: Effect.map(Ref.get(calls), (all) => all.filter((call) => call === "join").length),
       hold,
       failNext: (name: Name, error: StepError) => Effect.sync(() => failures.set(name, error)),
     };
@@ -529,6 +541,136 @@ describe("a machine's lifecycle", () => {
 
       expect((yield* machine.until(3)).status).toBe("done");
       expect(yield* machine.calls).toEqual(["start", "remove"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a start checks the machine's tailnet once it settles, and keeps what it found", () =>
+    Effect.gen(function* () {
+      const joined: TailnetStatus = { state: "joined", name: "linux-dev.example.ts.net" };
+      const machine = yield* rig("running", made);
+
+      yield* Ref.set(machine.tailnet, joined);
+      yield* answer(machine.actor, 1);
+
+      const after = yield* waitFor(
+        machine.actor,
+        (snapshot) => snapshot.value === "settled" && snapshot.context.tailnet.status !== undefined,
+      );
+
+      expect(after.context.tailnet.status).toEqual(joined);
+      expect([yield* machine.calls, yield* machine.joins]).toEqual([["start"], 1]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a failed check is tried again after one recheck, then after two", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made);
+
+      const rested = (wait: number) =>
+        waitFor(
+          machine.actor,
+          (snapshot) =>
+            snapshot.value === "settled" &&
+            snapshot.context.tailnet.status !== undefined &&
+            snapshot.context.tailnet.wait === wait,
+        );
+
+      yield* Ref.set(machine.tailnet, { state: "failed", error: "no answer" });
+      yield* answer(machine.actor, 1);
+      yield* rested(1);
+
+      const joinsAfter = Effect.fnUntraced(function* (wait: number) {
+        yield* tell(machine.actor, { state: "running" });
+        yield* rested(wait);
+
+        return yield* machine.joins;
+      });
+
+      expect(yield* joinsAfter(2)).toBe(2);
+      expect(yield* joinsAfter(1)).toBe(2);
+      expect(yield* joinsAfter(4)).toBe(3);
+    }).pipe(Effect.scoped),
+  );
+
+  it("each failure in a row doubles the rechecks the next check waits, up to a cap", () => {
+    const failed: TailnetStatus = { state: "failed", error: "no answer" };
+    let check = checked({ status: undefined, wait: 0, backoff: 1 }, failed);
+    const waits = [check.wait];
+
+    for (let failures = 1; failures < 9; failures++) {
+      check = checked(check, failed);
+      waits.push(check.wait);
+    }
+
+    expect(waits).toEqual([1, 2, 4, 8, 16, 32, longestBackoff, longestBackoff, longestBackoff]);
+    expect(checked(check, { state: "joined" })).toMatchObject({ wait: 60, backoff: 1 });
+    expect(checked(check, { state: "missing" }).wait).toBeUndefined();
+    expect(checked(check, undefined)).toEqual({ status: undefined, wait: undefined, backoff: 1 });
+  });
+
+  it.effect("a machine without tailscaled isn't checked again until it starts again", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made);
+
+      yield* Ref.set(machine.tailnet, { state: "missing" });
+      yield* answer(machine.actor, 1);
+      yield* waitFor(machine.actor, (snapshot) => snapshot.context.tailnet.status !== undefined);
+
+      for (let rechecks = 0; rechecks < 3; rechecks++) {
+        yield* tell(machine.actor, { state: "running" });
+      }
+
+      yield* waitFor(machine.actor, (snapshot) => snapshot.value === "settled");
+
+      expect(yield* machine.joins).toBe(1);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a stop sent while a check runs cuts the check short", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made, { hold: "join" });
+
+      yield* Deferred.await(machine.gate.entered);
+
+      const stopped = yield* machine.until(yield* machine.request("stopped"));
+
+      yield* Deferred.await(machine.gate.interrupted);
+
+      expect(at(stopped)).toEqual(["settled", "stopped"]);
+      expect(yield* machine.calls).toEqual(["start", "stop"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a check whose machine is seen stopped meanwhile is cut short, and it starts again",
+    () =>
+      Effect.gen(function* () {
+        const machine = yield* rig("running", made, { hold: "join" });
+
+        yield* Deferred.await(machine.gate.entered);
+        yield* Ref.set(machine.state, "stopped");
+        yield* tell(machine.actor, { state: "stopped" });
+        yield* Deferred.await(machine.gate.interrupted);
+        yield* settledAfter(machine.calls, 2);
+
+        expect(yield* machine.calls).toEqual(["start", "start"]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("a machine asked to stop is stopped, not checked, when it runs again", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made);
+
+      yield* Ref.set(machine.tailnet, { state: "failed", error: "no answer" });
+      yield* answer(machine.actor, 1);
+      yield* waitFor(machine.actor, (snapshot) => snapshot.context.tailnet.status !== undefined);
+
+      yield* machine.until(yield* machine.request("stopped"));
+      yield* Ref.set(machine.state, "running");
+      yield* tell(machine.actor, { state: "running" });
+      yield* settledAfter(machine.calls, 3);
+
+      expect([yield* machine.calls, yield* machine.joins]).toEqual([["start", "stop", "stop"], 1]);
     }).pipe(Effect.scoped),
   );
 });

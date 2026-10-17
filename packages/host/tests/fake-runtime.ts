@@ -74,6 +74,55 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
   return bin;
 };
 
+export const writeTailscaleStubs = (bin: string): void => {
+  mkdirSync(bin, { recursive: true });
+
+  const running = String.raw`{\n  "BackendState": "Running",\n  "Self": {\n    "ID": "n2",\n    "DNSName": "linux-dev.example.ts.net."\n  }\n}\n`;
+  const needsLogin = String.raw`{\n  "BackendState": "NeedsLogin",\n  "Self": {\n    "ID": "n1",\n    "DNSName": ""\n  }\n}\n`;
+
+  const stubs: ReadonlyArray<readonly [string, string]> = [
+    [
+      "tailscaled",
+      ['echo "tailscaled $*" >>"$CLANKERBOX_ROOT/calls"', ': >"$CLANKERBOX_ROOT/daemon"'].join(
+        "\n",
+      ),
+    ],
+    [
+      "tailscale",
+      [
+        'case " $* " in',
+        '  *" up "*)',
+        '    echo "tailscale $*" >>"$CLANKERBOX_ROOT/calls"',
+        '    for arg in "$@"; do',
+        '      case "$arg" in',
+        "        --auth-key=file:*)",
+        "          key=${arg#--auth-key=file:}",
+        '          cp "$key" "$CLANKERBOX_ROOT/key-seen"',
+        '          ls -l "$key" | cut -c1-10 >"$CLANKERBOX_ROOT/key-mode"',
+        "          ;;",
+        "      esac",
+        "    done",
+        `    printf '${running}' >"$CLANKERBOX_ROOT/status.json"`,
+        "    ;;",
+        '  *" status "*)',
+        '    [ -e "$CLANKERBOX_ROOT/daemon" ] || exit 1',
+        '    if [ -e "$CLANKERBOX_ROOT/status.json" ]; then cat "$CLANKERBOX_ROOT/status.json"; else',
+        `      printf '${needsLogin}'`,
+        "    fi",
+        "    ;;",
+        "esac",
+      ].join("\n"),
+    ],
+  ];
+
+  for (const [name, body] of stubs) {
+    const file = join(bin, name);
+
+    writeFileSync(file, `#!/bin/sh\n${body}\n`);
+    chmodSync(file, 0o755);
+  }
+};
+
 interface FakeMachine {
   state: MachineState;
   readonly root: string;

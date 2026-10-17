@@ -50,11 +50,27 @@ export const SshLogin = Schema.Struct({
 export type SshLogin = typeof SshLogin.Type;
 
 /**
+ * A running machine's place on the tailnet, as the host last checked it: `joined` once
+ * `tailscaled` runs signed in, with the MagicDNS name Tailscale gave it, if any; `failed` with
+ * why; or `missing` when the guest has no `tailscaled`. Kept in the host's memory only: each start
+ * checks again, a joined machine is checked again every half hour or so, and a failed one sooner,
+ * waiting longer after each failure.
+ */
+export const TailnetStatus = Schema.Union([
+  Schema.Struct({ state: Schema.Literal("joined"), name: Schema.optionalKey(Schema.String) }),
+  Schema.Struct({ state: Schema.Literal("failed"), error: Schema.String }),
+  Schema.Struct({ state: Schema.Literal("missing") }),
+]).annotate({ identifier: "TailnetStatus" });
+
+export type TailnetStatus = typeof TailnetStatus.Type;
+
+/**
  * `state` is what the runtime reports: `missing` when it doesn't have the machine, and `unknown`
  * when it couldn't be read. `desired` is what the last request asked for, `phase` what the host is
  * doing about it, and `error` why the last step failed, until the next request. `ssh` is only
  * on a running machine whose runtime gives it an endpoint, and `hostKey`, `<type> <base64>`, once
- * preparation has recorded it.
+ * preparation has recorded it. `tailnet` is on a running machine of a host that joins its machines
+ * to a tailnet, once the host has checked it.
  */
 export const Machine = Schema.Struct({
   id: Id,
@@ -71,6 +87,7 @@ export const Machine = Schema.Struct({
   error: Schema.optionalKey(HostError),
   ssh: Schema.optionalKey(SshLogin),
   hostKey: Schema.optionalKey(Schema.String),
+  tailnet: Schema.optionalKey(TailnetStatus),
 }).annotate({ identifier: "Machine" });
 
 export type Machine = typeof Machine.Type;

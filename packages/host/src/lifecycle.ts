@@ -1,4 +1,11 @@
-import type { Declared, Invalid, Phase, Setup, Superseded } from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  Declared,
+  Invalid,
+  Phase,
+  Setup,
+  Superseded,
+  TailnetStatus,
+} from "@gjermundgaraba/clankerbox-sdk";
 import {
   createEffectActor,
   type EffectActor,
@@ -42,6 +49,22 @@ export interface Life extends Decided {
   readonly error: StepError | undefined;
   /** Why the machine is being deleted though no request asked: what failed before it was made. */
   readonly undone: StepError | undefined;
+  readonly tailnet: TailnetCheck;
+}
+
+/**
+ * A machine's place on the tailnet, as this host last checked it since the machine started, and
+ * when to check again: never stored, as each start checks again, and shown only while the runtime
+ * reads the machine running. A check starts `tailscaled` if it isn't running and joins it if it
+ * isn't signed in.
+ */
+export interface TailnetCheck {
+  /** What the last check found: `undefined` before the first, or on a host that joins no tailnet. */
+  readonly status: TailnetStatus | undefined;
+  /** Rechecks to wait before the next check, while the machine runs: `undefined` for none. */
+  readonly wait: number | undefined;
+  /** Rechecks the next failure waits: doubling with each failure in a row, up to `longestBackoff`. */
+  readonly backoff: number;
 }
 
 /** What a new actor starts from: its row, what its create holds, and what the runtime last read. */
@@ -65,6 +88,11 @@ export interface Steps {
   readonly make: (life: Life) => Effect.Effect<void, StepError>;
   /** Starts the machine, also when it runs already, and prepares it. */
   readonly start: (life: Life) => Effect.Effect<void, StepError>;
+  /**
+   * Checks a running machine's place on the host's tailnet, and joins it if it isn't: `undefined`
+   * on a host that joins no tailnet, and a failure is a status, which no request answers.
+   */
+  readonly join: (life: Life) => Effect.Effect<TailnetStatus | undefined>;
   readonly stop: (life: Life) => Effect.Effect<void, StepError>;
   readonly remove: (life: Life) => Effect.Effect<void, RuntimeError>;
 }
@@ -76,6 +104,7 @@ const phases = {
   creating: "creating",
   starting: "starting",
   stopping: "stopping",
+  joining: "settled",
   deleting: "deleting",
   removed: "deleting",
   settled: "settled",
@@ -84,6 +113,39 @@ const phases = {
 } satisfies Record<Snapshot["value"], Phase>;
 
 export const phaseOf = (snapshot: Snapshot): Phase => phases[snapshot.value];
+
+const joinedWait = 60;
+
+export const longestBackoff = 64;
+
+const unchecked: TailnetCheck = { status: undefined, wait: undefined, backoff: 1 };
+
+export const checked = (check: TailnetCheck, status: TailnetStatus | undefined): TailnetCheck => {
+  if (status?.state === "joined") {
+    return { status, wait: joinedWait, backoff: 1 };
+  }
+
+  if (status?.state === "failed") {
+    return {
+      status,
+      wait: check.backoff,
+      backoff: Math.min(check.backoff * 2, longestBackoff),
+    };
+  }
+
+  return { ...unchecked, status };
+};
+
+const ticked = (check: TailnetCheck): TailnetCheck =>
+  check.wait === undefined || check.wait === 0 ? check : { ...check, wait: check.wait - 1 };
+
+const decide = (life: Life) => {
+  const target = next(life, life.seen.state);
+
+  return target === "settled" && life.seen.state === "running" && life.tailnet.wait === 0
+    ? "joining"
+    : target;
+};
 
 export const wanted = (life: Life, desire: Desire): Life => {
   if (desire.generation <= life.generation) {
@@ -157,6 +219,15 @@ const resting = {
   },
 };
 
+const settled = {
+  tags: ["resting" as const],
+  on: {
+    desire: ({ context, event }: Given<Desire>) => again(context, event),
+    seen: ({ context, event }: Given<{ readonly seen: Observed }>) =>
+      reread({ ...context, tailnet: ticked(context.tailnet) }, event.seen),
+  },
+};
+
 const stepping = <Src extends "make" | "start" | "stop">(
   src: Src,
   desired: (life: Life, desire: Desire) => { readonly context: Life },
@@ -192,6 +263,7 @@ export const lifecycle = (steps: Steps) => {
       observe: fromEffect(({ input }: { input: Life }) => steps.observe(input)),
       make: fromEffect(step(steps.make)),
       start: fromEffect(step(steps.start)),
+      join: fromEffect(({ input }: { input: Life }) => steps.join(input)),
       stop: fromEffect(step(steps.stop)),
       remove: fromEffect(step(steps.remove)),
     },
@@ -202,6 +274,7 @@ export const lifecycle = (steps: Steps) => {
       prepared: false,
       error: undefined,
       undone: undefined,
+      tailnet: unchecked,
     }),
     initial: "deciding",
     on: {
@@ -217,10 +290,28 @@ export const lifecycle = (steps: Steps) => {
       },
       deciding: {
         type: "choice",
-        choice: ({ context }) => ({ target: next(context, context.seen.state) }),
+        choice: ({ context }) => ({ target: decide(context) }),
       },
       waiting: resting,
-      settled: resting,
+      settled,
+      joining: {
+        tags: ["resting"],
+        invoke: {
+          src: "join",
+          input: ({ context }) => context,
+          onDone: ({ context, event }) => ({
+            target: "settled",
+            context: { ...context, tailnet: checked(context.tailnet, event.output) },
+          }),
+        },
+        on: {
+          desire: ({ context, event }) => again(context, event),
+          seen: ({ context, event }) =>
+            event.seen.state === "running" || event.seen.state === "unknown"
+              ? {}
+              : reread(context, event.seen),
+        },
+      },
       failed: {
         tags: ["resting"],
         on: {
@@ -231,7 +322,10 @@ export const lifecycle = (steps: Steps) => {
       },
       lost: resting,
       creating: stepping("make", cutting, { made: true, making: undefined, prepared: false }),
-      starting: stepping("start", interrupting, { prepared: true }),
+      starting: stepping("start", interrupting, {
+        prepared: true,
+        tailnet: { ...unchecked, wait: 0 },
+      }),
       stopping: stepping("stop", interrupting, { prepared: false }),
       deleting: {
         invoke: {

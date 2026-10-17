@@ -2,6 +2,7 @@ import { type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, type FileSystem, Layer, type Path } from "effect";
 import {
   type Etag,
+  type HttpClient,
   type HttpPlatform,
   HttpRouter,
   type HttpServer,
@@ -13,6 +14,7 @@ import * as Machines from "../machines.ts";
 import type { Runtime } from "../runtime.ts";
 import * as BindProbe from "../platform/bind-probe.ts";
 import * as Sqlite from "../platform/sqlite.ts";
+import * as Tailscale from "../platform/tailscale.ts";
 import { routes } from "./routes.ts";
 import type { HostSettings } from "../settings.ts";
 import { type CannotStart, startup } from "../startup.ts";
@@ -49,14 +51,19 @@ export const servicesLayer = <E, R>(
   );
 };
 
+/** What a host is built from: its settings, and the tailnet it joins its machines to, if any. */
+export interface HostLayerConfig extends HostSettings {
+  readonly tailnet?: Tailscale.TailnetSettings | undefined;
+}
+
 export const hostLayer = <E, R>(
-  config: HostSettings,
+  config: HostLayerConfig,
   runtime: Layer.Layer<Runtime, E, R>,
   server: ServerLayer,
 ): Layer.Layer<
   HttpServer.HttpServer | Machines.Machines | Checkpoints.Checkpoints | Store.Store,
   HostError | CannotStart | E,
-  Exclude<R, Store.NativeIds> | FileSystem.FileSystem
+  Exclude<R, Store.NativeIds> | FileSystem.FileSystem | HttpClient.HttpClient
 > =>
   HttpRouter.serve(routes(config)).pipe(
     Layer.provideMerge(
@@ -71,4 +78,5 @@ export const hostLayer = <E, R>(
       ),
     ),
     Layer.provideMerge(servicesLayer(config, runtime)),
+    Layer.provide(config.tailnet === undefined ? Layer.empty : Tailscale.layer(config.tailnet)),
   );

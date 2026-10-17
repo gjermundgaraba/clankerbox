@@ -10,6 +10,7 @@ import { defaultMachinePorts, reservedPorts } from "../machine-ports.ts";
 import { Address } from "../platform/address.ts";
 import { BoatSettings } from "../platform/boat/boat.ts";
 import { SmolvmSettings } from "../platform/smolvm.ts";
+import { TailnetSettings } from "../platform/tailscale.ts";
 import { TartSettings } from "../platform/tart/tart.ts";
 import { defaultRecheck, type HostSettings } from "../settings.ts";
 
@@ -36,6 +37,7 @@ const common = {
   stateDir: Schema.String,
   bases: Schema.Record(Schema.String, Schema.String),
   machinePorts: Schema.optionalKey(MachinePorts),
+  tailnet: Schema.optionalKey(TailnetSettings),
 };
 
 const sections = {

@@ -85,12 +85,16 @@ export class Unsizable extends Schema.TaggedError<Unsizable>()(
 
 /**
  * A guest script exited non-zero or ran past its timeout; the message says which, with its
- * output's tail. A failed `setup` deletes the machine; a failed `preparation` runs again on the
- * next start.
+ * output's tail, and `script` names it: a failed `setup` deletes the machine, and a failed
+ * `preparation` runs again on the next start.
  */
 export class ScriptFailed extends Schema.TaggedError<ScriptFailed>()(
   "ScriptFailed",
-  { message: Schema.String, ...located, script: Schema.Literals(["setup", "preparation"]) },
+  {
+    message: Schema.String,
+    ...located,
+    script: Schema.String,
+  },
   { httpApiStatus: 422 },
 ) {}
 

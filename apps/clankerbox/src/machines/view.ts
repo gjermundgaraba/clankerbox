@@ -38,7 +38,23 @@ export const machineFields = (machine: Machine, now: DateTime.Utc) => {
       machine.error === undefined ? "-" : `${machine.error._tag}: ${machine.error.message}`,
     ],
     ["HOST_KEY", machine.hostKey ?? "-"],
+    ["TAILNET", tailnetLabel(machine)],
   ];
+};
+
+const tailnetLabel = ({ tailnet }: Machine): string => {
+  if (tailnet === undefined) {
+    return "-";
+  }
+
+  switch (tailnet.state) {
+    case "joined":
+      return tailnet.name ?? "joined, with no MagicDNS name";
+    case "failed":
+      return `failed: ${tailnet.error}`;
+    case "missing":
+      return "missing: the guest has no tailscaled";
+  }
 };
 
 export const encodeMachine = Schema.encodeSync(Machine);

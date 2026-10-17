@@ -15,32 +15,13 @@ import { TestClock } from "effect/testing";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { exists, read, remove } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { at, failure, hostOn, pause, request, type TestHost } from "./support.ts";
+import { at, eventually, failure, hostOn, pause, request, type TestHost } from "./support.ts";
 
 const ports = { first: 21_100, last: 21_109 };
 
 const host = hostOn(ports);
 
 const rows = (host: TestHost) => host.run(host.store.machines);
-
-const eventually = <A>(read_: Effect.Effect<A, HostError>, done: (value: A) => boolean) =>
-  Effect.gen(function* () {
-    for (let tries = 0; tries < 100; tries++) {
-      const value = yield* read_;
-
-      if (done(value)) {
-        return value;
-      }
-
-      yield* pause;
-    }
-
-    const last = yield* read_;
-
-    expect(done(last), `never got there: ${JSON.stringify(last)}`).toBe(true);
-
-    return last;
-  });
 
 const installsStart = {
   script: [

@@ -5,11 +5,14 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { CreateRequest, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
-import { HttpServer } from "effect/http";
+import { HttpClient, HttpServer } from "effect/http";
+import { expect } from "vite-plus/test";
 import * as Checkpoints from "../src/checkpoints.ts";
 import { hostLayer } from "../src/composition/host.ts";
 import * as Machines from "../src/machines.ts";
 import type { PortRange } from "../src/machine-ports.ts";
+import type { TailnetSettings } from "../src/platform/tailscale.ts";
+import type { Tailnet } from "../src/tailnet.ts";
 import type { HostSettings } from "../src/settings.ts";
 import * as Store from "../src/store.ts";
 import { type FakeOptions, type FakeRuntime, fakeRuntime } from "./fake-runtime.ts";
@@ -62,6 +65,11 @@ export interface TestHost {
   readonly dispose: Effect.Effect<void>;
 }
 
+export const noHttp = Layer.succeed(
+  HttpClient.HttpClient,
+  HttpClient.make(() => Effect.die("a test host made an HTTP request it was given no client for")),
+);
+
 export const startHost = (
   dir: string,
   options?: {
@@ -69,6 +77,10 @@ export const startHost = (
     readonly runtime?: Omit<FakeOptions, "dir">;
     readonly ports?: PortRange;
     readonly recheck?: Duration.Duration;
+    readonly tailnet?: Layer.Layer<Tailnet>;
+    /** The config's tailnet, which the host's own Tailscale adapter reaches through `http`. */
+    readonly tailnetSettings?: TailnetSettings;
+    readonly http?: Layer.Layer<HttpClient.HttpClient>;
   },
 ) =>
   Effect.gen(function* () {
@@ -80,10 +92,18 @@ export const startHost = (
 
     const context = yield* Layer.buildWithScope(
       hostLayer(
-        hostConfig(stateDir, options?.ports, options?.recheck),
+        {
+          ...hostConfig(stateDir, options?.ports, options?.recheck),
+          tailnet: options?.tailnetSettings,
+        },
         fake.layer,
         loopbackServer(),
-      ).pipe(Layer.provideMerge(Logger.layer([])), Layer.provide(NodeServices.layer)),
+      ).pipe(
+        Layer.provide(options?.tailnet ?? Layer.empty),
+        Layer.provide(options?.http ?? noHttp),
+        Layer.provideMerge(Logger.layer([])),
+        Layer.provide(NodeServices.layer),
+      ),
       scope,
     );
 
@@ -112,5 +132,24 @@ export const failure = <A, E>(host: TestHost, effect: Effect.Effect<A, E>) =>
   host.run(Effect.flip(effect));
 
 export const pause = Effect.sleep(Duration.millis(50));
+
+export const eventually = <A, E>(read: Effect.Effect<A, E>, done: (value: A) => boolean) =>
+  Effect.gen(function* () {
+    for (let tries = 0; tries < 100; tries++) {
+      const value = yield* read;
+
+      if (done(value)) {
+        return value;
+      }
+
+      yield* pause;
+    }
+
+    const last = yield* read;
+
+    expect(done(last), `never got there: ${JSON.stringify(last)}`).toBe(true);
+
+    return last;
+  });
 
 export const at = ({ state, desired, phase }: Machine) => [state, desired, phase];
