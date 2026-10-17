@@ -37,6 +37,7 @@
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",
+    "@gjermundgaraba/effect-actions": "catalog:",
     "@types/node": "catalog:",
     "effect": "catalog:",
     "sandbox-agent": "catalog:",
@@ -46,6 +47,7 @@
   },
   "peerDependencies": {
     "@effect/platform-node": "~4.0.4",
+    "@gjermundgaraba/effect-actions": "^0.18.0",
     "effect": "~4.0.4",
     "sandbox-agent": "~0.5.2"
   }

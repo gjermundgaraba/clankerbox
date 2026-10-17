@@ -6,6 +6,10 @@ packages:
 catalogMode: prefer
 catalog:
   "@effect/platform-node": 4.0.5
+  # The CLI depends on it directly, at effect's version, for npm installs: platform-node takes
+  # it by caret, and a newer one requires a newer effect, so npm would install a second effect
+  # under it. Keep it equal to effect.
+  "@effect/platform-node-shared": 4.0.5
   "@effect/vitest": 4.0.5
   "@gjermundgaraba/effect-actions": 0.18.2
   "@types/node": 26.6.5
