@@ -84,7 +84,9 @@ jobs:
         run: pnpm --filter @gjermundgaraba/clankerbox pack --pack-destination "$RUNNER_TEMP/cli"
       # The SDK first: the provider depends on it at the same version. A package whose version npm
       # already has is skipped, so a re-run of a run that published only the SDK finishes it.
+      # Outside the checkout: npm refuses to run in a project whose devEngines names pnpm.
       - name: Publish with npm trusted publishing
+        working-directory: ${{ runner.temp }}
         run: |
           publish() {
             if npm view "$1@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1; then
