@@ -11,7 +11,7 @@ import { open } from "../../src/platform/sqlite.ts";
 import type { HostSettings } from "../../src/settings.ts";
 import { type FakeRuntime, fakeRuntime } from "../fake-runtime.ts";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { hostConfig, loopbackServer } from "../support.ts";
+import { hostConfig, loopbackServer, noHttp } from "../support.ts";
 
 const config = (dir: string, fields?: Partial<HostSettings>): HostSettings => ({
   ...hostConfig(join(dir, "state")),
@@ -19,7 +19,7 @@ const config = (dir: string, fields?: Partial<HostSettings>): HostSettings => ({
 });
 
 const hostOn = (host: HostSettings, fake: FakeRuntime) =>
-  hostLayer(host, fake.layer, loopbackServer(host.listen.port));
+  hostLayer(host, fake.layer, loopbackServer(host.listen.port)).pipe(Layer.provide(noHttp));
 
 const whileServing = <A, E, R>(
   host: HostSettings,

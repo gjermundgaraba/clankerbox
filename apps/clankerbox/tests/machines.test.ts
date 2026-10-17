@@ -53,6 +53,7 @@ layer(NodeServices.layer)((it) => {
   const held = machine("linux_dev", {
     ssh: { user: "root", host: "100.64.0.7", port: 10_022 },
     hostKey: "ssh-ed25519 AAAAexample",
+    tailnet: { state: "joined", name: "linux-dev.example.ts.net" },
   });
 
   const failing = machine("linux_other", {
@@ -61,6 +62,7 @@ layer(NodeServices.layer)((it) => {
       message: "preparation exited 3",
       script: "preparation",
     }),
+    tailnet: { state: "failed", error: "tailscaled is NeedsMachineAuth, not signed in" },
   });
 
   it.effect(
@@ -97,14 +99,16 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "get reads one machine a field a line, with what it was asked to be, its last error and its host key",
+    "get reads one machine a field a line, with what it was asked to be, its last error, its host key and its tailnet",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
         const config = yield* writeConfig(dir, ["linux"]);
 
+        const unnamed = machine("linux_plain", { tailnet: { state: "joined" } });
+
         const endpoints = [
-          ["linux", host({ id: "linux", bases: ["ubuntu"], machines: [held, failing] })],
+          ["linux", host({ id: "linux", bases: ["ubuntu"], machines: [held, failing, unnamed] })],
         ] as const;
 
         const fields = (id: string) =>
@@ -126,6 +130,7 @@ layer(NodeServices.layer)((it) => {
             ["SSH", "root@100.64.0.7:10022"],
             ["ERROR", "-"],
             ["HOST_KEY", "ssh-ed25519 AAAAexample"],
+            ["TAILNET", "linux-dev.example.ts.net"],
           ]),
         );
         expect(yield* fields("linux_other")).toEqual(
@@ -135,12 +140,17 @@ layer(NodeServices.layer)((it) => {
             ["SSH", "-"],
             ["ERROR", "ScriptFailed: preparation exited 3"],
             ["HOST_KEY", "-"],
+            ["TAILNET", "failed: tailscaled is NeedsMachineAuth, not signed in"],
           ]),
+        );
+        expect(yield* fields("linux_plain")).toEqual(
+          expect.arrayContaining([["TAILNET", "joined, with no MagicDNS name"]]),
         );
         expect(JSON.parse(json.stdout)).toMatchObject({
           id: "linux_dev",
           ssh: held.ssh,
           hostKey: held.hostKey,
+          tailnet: held.tailnet,
         });
         expect([gone.code, decodeJsonError(gone.stdout).error.tag]).toEqual([1, "NotFound"]);
       }),

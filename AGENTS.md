@@ -39,17 +39,19 @@ whole CLI span domains on purpose.
 - `ids.ts`, `settings.ts`: IDs on this host, and the settings every runtime
   shares.
 - Ports: `Store` and `NativeIds` (`store.ts`), `Runtime` (`runtime.ts`),
-  `PortProbe` (`machine-ports.ts`).
+  `PortProbe` (`machine-ports.ts`), `Tailnet` (`tailnet.ts`), which mints a
+  machine's tailnet key, provided only on a host that joins a tailnet.
 
 Adapters live in `platform/`: `sqlite.ts` (the `Store`), `bind-probe.ts`
-(`PortProbe`), the runtimes `smolvm.ts`, `tart/` and `boat/`, and what
+(`PortProbe`), `tailscale.ts` (`Tailnet`, over Tailscale's API), the runtimes
+`smolvm.ts`, `tart/` and `boat/`, and what
 they share, `process.ts` and `address.ts`. A domain file never imports
 `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
 `runtimes.ts` picks the runtime's Layer, `routes.ts` serves the contract, and
 `host.ts`, the package's entry, builds the host over a runtime Layer and a
-server Layer it is given.
+server Layer it is given, with the config's tailnet, if any.
 
 **SDK** (`packages/sdk/src`). A library. Its root modules are the contract and
 the vocabulary everything else imports: `api.ts`, `resources.ts`,

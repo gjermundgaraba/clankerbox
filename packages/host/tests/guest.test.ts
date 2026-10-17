@@ -16,8 +16,8 @@ import {
   symlink,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { hostKeyIn, preparationScript } from "../src/guest.ts";
-import { writeStubs } from "./fake-runtime.ts";
+import { hostKeyIn, preparationScript, tailnetIn, tailnetScript } from "../src/guest.ts";
+import { writeStubs, writeTailscaleStubs } from "./fake-runtime.ts";
 
 const seedOf = () => globalThis.crypto.getRandomValues(new Uint8Array(64));
 
@@ -118,6 +118,56 @@ const listener = (root: string, comm: string) =>
         yield* Effect.sync(() => process.kill(child.pid, "SIGUSR1"));
 
         return yield* waitFor(marker, "usr1");
+      }),
+    };
+  });
+
+const tailnet = (
+  where: { readonly root: string; readonly bin: string },
+  args: ReadonlyArray<string>,
+  input?: string,
+) =>
+  Effect.map(
+    outputOf("/bin/sh", ["-c", tailnetScript, "tailnet", ...args], {
+      env: { CLANKERBOX_ROOT: where.root, PATH: `${where.bin}:/usr/bin:/bin` },
+      extendEnv: true,
+      input: new TextEncoder().encode(input ?? ""),
+    }),
+    ({ code, stdout, stderr }) => ({ code, output: `${stdout}${stderr}` }),
+  );
+
+const daemon = (root: string, comm: string) =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+    const child = yield* spawner.spawn(
+      ChildProcess.make("/bin/sh", ["-c", "while :; do sleep 0.05; done"], {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+        killSignal: "SIGKILL",
+      }),
+    );
+
+    const pid = String(child.pid);
+    const dir = join(root, "var", "lib", "clankerbox", "tailscale");
+
+    yield* mkdir(join(dir, "state"));
+    yield* write(join(dir, "state", "tailscaled.state"), "{}\n");
+    yield* write(join(dir, "tailscaled.pid"), `${pid}\n`);
+    yield* mkdir(join(root, "proc", pid));
+    yield* write(join(root, "proc", pid, "comm"), `${comm}\n`);
+
+    return {
+      dir,
+      alive: Effect.sync(() => {
+        try {
+          process.kill(child.pid, 0);
+
+          return true;
+        } catch {
+          return false;
+        }
       }),
     };
   });
@@ -300,5 +350,179 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     ).toBe("ssh-ed25519 AAAAnew=");
     expect(hostKeyIn("clankerbox-host-key: not a key\n")).toBeUndefined();
     expect(hostKeyIn("no key here\n")).toBeUndefined();
+  });
+
+  it.effect(
+    "a new instance stops the tailscaled its source left running before wiping its node",
+    () =>
+      Effect.gen(function* () {
+        const where = yield* guest();
+        const node = yield* daemon(where.root, "tailscaled");
+        const { code, output } = yield* prepare(where, "aaaa1111");
+
+        expect(code, output).toBe(0);
+        expect(yield* Effect.repeat(node.alive, { while: (alive) => alive, times: 50 })).toBe(
+          false,
+        );
+        expect(yield* isMissing(node.dir)).toBe(true);
+      }),
+  );
+
+  it.effect("a stale tailscaled.pid naming another process is left alone, and the node wiped", () =>
+    Effect.gen(function* () {
+      const where = yield* guest();
+      const other = yield* daemon(where.root, "sleep");
+      const { code, output } = yield* prepare(where, "aaaa1111");
+
+      expect(code, output).toBe(0);
+      expect(yield* other.alive).toBe(true);
+      expect(yield* isMissing(other.dir)).toBe(true);
+    }),
+  );
+
+  it.effect("the same instance again keeps its tailscaled and its node", () =>
+    Effect.gen(function* () {
+      const where = yield* guest();
+
+      expect((yield* prepare(where, "aaaa1111")).code).toBe(0);
+
+      const node = yield* daemon(where.root, "tailscaled");
+      const { code, output } = yield* prepare(where, "aaaa1111");
+
+      expect(code, output).toBe(0);
+      expect(yield* node.alive).toBe(true);
+      expect(yield* isMissing(join(node.dir, "state", "tailscaled.state"))).toBe(false);
+    }),
+  );
+
+  it.effect("a guest without tailscaled reports it missing, and the check starts nothing", () =>
+    Effect.gen(function* () {
+      const where = yield* guest();
+      const { code, output } = yield* tailnet(where, ["linux-dev"]);
+
+      expect(code, output).toBe(0);
+      expect(tailnetIn(output)).toEqual({ missing: true });
+      expect(yield* calls(where.root)).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "the check starts tailscaled from its saved state, in userspace networking, with a fresh log, and reports it",
+    () =>
+      Effect.gen(function* () {
+        const where = yield* guest();
+        const dir = join(where.root, "var", "lib", "clankerbox", "tailscale");
+
+        yield* Effect.sync(() => writeTailscaleStubs(where.bin));
+        yield* mkdir(dir);
+        yield* write(join(dir, "tailscaled.log"), "the last boot's daemon\n");
+
+        const { code, output } = yield* tailnet(where, ["linux-dev"]);
+
+        expect(code, output).toBe(0);
+        expect(tailnetIn(output)).toEqual({
+          missing: false,
+          backend: "NeedsLogin",
+          name: undefined,
+        });
+        expect(yield* calls(where.root)).toEqual([
+          `tailscaled --tun=userspace-networking --statedir=${dir}/state --socket=${dir}/tailscaled.sock --port=0`,
+        ]);
+        expect(yield* isMissing(join(dir, "tailscaled.pid"))).toBe(false);
+        expect(yield* read(dir, "tailscaled.log")).toBe("");
+      }),
+  );
+
+  it.effect("a check that finds tailscaled answering starts no second one", () =>
+    Effect.gen(function* () {
+      const where = yield* guest();
+
+      yield* Effect.sync(() => writeTailscaleStubs(where.bin));
+      yield* write(join(where.root, "daemon"), "");
+      yield* write(
+        join(where.root, "status.json"),
+        '{\n  "BackendState": "Running",\n  "Self": {\n    "ID": "n1",\n    "DNSName": "linux-dev.example.ts.net."\n  }\n}\n',
+      );
+
+      const { code, output } = yield* tailnet(where, ["linux-dev"]);
+
+      expect(code, output).toBe(0);
+      expect(tailnetIn(output)).toEqual({
+        missing: false,
+        backend: "Running",
+        name: "linux-dev.example.ts.net",
+      });
+      expect(yield* calls(where.root)).toEqual([]);
+    }),
+  );
+
+  it.effect("a check that finds tailscaled stopped leaves it so, and says so", () =>
+    Effect.gen(function* () {
+      const where = yield* guest();
+
+      yield* Effect.sync(() => writeTailscaleStubs(where.bin));
+      yield* write(join(where.root, "daemon"), "");
+      yield* write(join(where.root, "status.json"), '{"BackendState": "Stopped", "Self": {}}\n');
+
+      const { code, output } = yield* tailnet(where, ["linux-dev"]);
+
+      expect(code, output).toBe(0);
+      expect(tailnetIn(output)).toMatchObject({ backend: "Stopped" });
+      expect(yield* calls(where.root)).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "a join signs in as the hostname given, with the key in a private file it removes",
+    () =>
+      Effect.gen(function* () {
+        const where = yield* guest();
+        const dir = join(where.root, "var", "lib", "clankerbox", "tailscale");
+
+        yield* Effect.sync(() => writeTailscaleStubs(where.bin));
+        yield* write(join(where.root, "daemon"), "");
+
+        const { code, output } = yield* tailnet(where, ["linux-dev", "join"], "tskey-auth-k1");
+        const [up] = yield* calls(where.root);
+
+        expect(code, output).toBe(0);
+        expect(tailnetIn(output)).toEqual({
+          missing: false,
+          backend: "Running",
+          name: "linux-dev.example.ts.net",
+        });
+        expect(up).toMatch(
+          new RegExp(
+            `^tailscale --socket=${dir}/tailscaled\\.sock up --reset --hostname=linux-dev --accept-dns=false --timeout=60s --auth-key=file:${dir}/key\\.\\S+$`,
+            "u",
+          ),
+        );
+        expect(yield* read(where.root, "key-seen")).toBe("tskey-auth-k1");
+        expect((yield* read(where.root, "key-mode")).trim()).toBe("-rw-------");
+        expect((yield* outputOf("/bin/sh", ["-c", `ls "${dir}"`])).stdout).not.toContain("key.");
+      }),
+  );
+
+  it("tailnetIn decodes the last report, whatever order its fields come in", () => {
+    expect(
+      tailnetIn(
+        [
+          'clankerbox-tailnet: {"BackendState": "NeedsLogin"}',
+          "log",
+          'clankerbox-tailnet: {"Self": {"CapMap": {"a": null}, "DNSName": "a.ts.net."}, "BackendState": "Running"}',
+        ].join("\n"),
+      ),
+    ).toEqual({ missing: false, backend: "Running", name: "a.ts.net" });
+    expect(
+      tailnetIn('clankerbox-tailnet: {"BackendState": "Running", "Self": {"DNSName": ""}}'),
+    ).toEqual({ missing: false, backend: "Running", name: undefined });
+    expect(tailnetIn("clankerbox-tailnet:  \n")).toEqual({
+      missing: false,
+      backend: "unreachable",
+      name: undefined,
+    });
+    expect(tailnetIn("clankerbox-tailnet: missing\n")).toEqual({ missing: true });
+    expect(tailnetIn("clankerbox-tailnet: {not json\n")).toBeUndefined();
+    expect(tailnetIn("nothing\n")).toBeUndefined();
   });
 });

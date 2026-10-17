@@ -158,6 +158,66 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
+  const clientSecret = "tskey-client-k1-that-never-prints";
+
+  const tailnet = {
+    oauthClient: { id: "k1", secret: clientSecret },
+    tags: ["tag:clankerbox-machine"],
+  };
+
+  it.effect(
+    "a host config's tailnet holds its OAuth client, whose secret nothing that prints the config shows",
+    () =>
+      Effect.gen(function* () {
+        const { loaded } = yield* load({ ...config, tailnet });
+        const host = yield* loaded;
+
+        expect(host.tailnet?.tags).toEqual(["tag:clankerbox-machine"]);
+        expect(host.tailnet?.oauthClient.id).toBe("k1");
+        expect(
+          host.tailnet === undefined ? undefined : Redacted.value(host.tailnet.oauthClient.secret),
+        ).toBe(clientSecret);
+
+        for (const printed of [JSON.stringify(host), inspect(host, { depth: 10 })]) {
+          expect(printed).not.toContain(clientSecret);
+        }
+      }),
+  );
+
+  it.effect(
+    "a tailnet needs a client and at least one tag, and a refused one doesn't print its secret",
+    () =>
+      Effect.gen(function* () {
+        const refused: Array<Schema.Json> = [
+          { ...config, tailnet: { ...tailnet, tags: [] } },
+          { ...config, tailnet: { ...tailnet, tags: ["clankerbox-machine"] } },
+          { ...config, tailnet: { ...tailnet, tags: ["tag:1st"] } },
+          { ...config, tailnet: { ...tailnet, tags: ["tag:-machine"] } },
+          { ...config, tailnet: { ...tailnet, tags: ["tag:clankerbox_machine"] } },
+          { ...config, tailnet: { ...tailnet, oauthClient: { id: "k1", secret: "" } } },
+          { ...config, tailnet: { tags: tailnet.tags } },
+          { ...config, tailnet: { ...tailnet, authKey: clientSecret } },
+        ];
+
+        for (const contents of refused) {
+          const { loaded } = yield* load(contents);
+          const error = yield* Effect.flip(loaded);
+
+          expect(error._tag).toBe("Invalid");
+          expect(error.message).not.toContain(clientSecret);
+        }
+      }),
+  );
+
+  it.effect("a tag takes what Tailscale's own check takes, capitals included", () =>
+    Effect.gen(function* () {
+      const tags = ["tag:Dev", "tag:a", "tag:clankerbox-machine-2"];
+      const { loaded } = yield* load({ ...config, tailnet: { ...tailnet, tags } });
+
+      expect((yield* loaded).tailnet?.tags).toEqual(tags);
+    }),
+  );
+
   it.effect("a host listens only on a tailnet or loopback address", () =>
     Effect.gen(function* () {
       for (const address of ["127.0.0.1", "127.0.0.2", "::1", "100.64.0.1", "fd7a:115c:a1e0::5"]) {

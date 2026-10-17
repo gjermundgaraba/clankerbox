@@ -14,7 +14,8 @@ reachable over SSH.
   optionally, a host. A prebuild is a checkpoint of a machine whose setup has
   run, which later creates of the same profile restore.
 - Each machine exposes only SSH, reported as a `host:port` with the guest's
-  host key.
+  host key. A host can also join its machines to the tailnet, each as its own
+  node, so their ports are reachable there.
 - Hosts and clients share a Tailscale tailnet, and its policy is the only gate:
   the API has no keys and no TLS.
 
@@ -80,6 +81,9 @@ A host process runs one runtime from one JSON config file:
   `tart` executable of a versioned install) or `boat: {apiKey}`.
 - `machinePorts: {first, last}`, optional, is the range machines' SSH ports
   come from, 10000–19999 by default; `listen.port` lies outside it.
+- `tailnet: {oauthClient: {id, secret}, tags}`, optional, joins the host's
+  machines to the tailnet (see below). The client needs the `auth_keys` scope
+  and the tags; its secret never leaves the host.
 
 ```sh
 clankerbox host --config /etc/clankerbox/linux.json
@@ -174,6 +178,38 @@ clankerbox checkpoint delete linux_base
   started outside a terminal. `CLANKERBOX_SSH_CONFIG=false` removes both.
 - `--json` prints the resource or `{"error": {...}}`.
 
+### Joining machines to the tailnet
+
+A host with `tailnet` joins each machine whose guest has `tailscale` and
+`tailscaled` on its `PATH` (`/opt/homebrew/bin` included). Installing them in
+a recipe is the opt-in:
+
+- clankerbox runs its own `tailscaled`, in userspace networking, from
+  `/var/lib/clankerbox/tailscale`, so no route, netfilter rule or firewall in
+  the guest is touched. Leave the distribution's own `tailscaled` service off.
+- Tailnet connections arrive on the guest's loopback, so a server bound to
+  `127.0.0.1` is reachable on the tailnet: loopback is no longer private to
+  the guest, and the tailnet policy is what gates it. Keep tokenless services
+  off recipes that join.
+- A check runs in the background once a start settles: it starts `tailscaled`
+  from its saved state if it isn't running, and a node that needs a login gets
+  a key. The host mints one per join: single-use, ephemeral, preauthorized, for
+  the configured tags, expiring in 10 minutes, and passes it on stdin. A
+  request that arrives meanwhile cuts the check short.
+- The node is named after the machine's ID, `_` as `-`. A fork or restore
+  kills the daemon its source left and drops the node first, so it joins as
+  its own node.
+- `get` shows `TAILNET`, while the machine runs: the MagicDNS name Tailscale
+  gave the node, why the last check failed, or that the guest has no
+  `tailscaled`. The status is the host's memory only, never stored. A joined
+  machine is checked again every 60 rechecks (half an hour at the default 30
+  seconds), which restarts a daemon that died; a failed one after 1 recheck,
+  then 2, 4 and so on up to 64. A guest without `tailscaled` is checked again
+  at its next start. A prebuild's builder joins nothing.
+- Nodes are ephemeral, so a deleted machine's node goes once it has been
+  offline a while; a machine of the same name made again before then gets a
+  suffixed name.
+
 `clankerbox COMMAND --help` documents each command.
 
 ### Writing a setup
@@ -187,7 +223,9 @@ carry its results. It must:
   or restore: idempotent, daemonizing what it launches, exiting 0 once it's
   up, and relaunching sshd if `/run/sshd.pid` is dead;
 - optionally write `/etc/clankerbox/new-identity`, run when a fork or restore
-  gets its new identity, to reset per-machine state such as tailnet keys.
+  gets its new identity, to reset per-machine state of its own;
+- install `tailscale` and `tailscaled`, without starting them, on a host that
+  joins its machines to the tailnet.
 
 Linux guests need `perl`. On Tart, Softnet blocks gateway DNS, so set public
 resolvers. On boat, keep state that must survive under `/home/user`, `/etc`,

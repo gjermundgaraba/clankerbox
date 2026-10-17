@@ -9,6 +9,7 @@ import {
   NotOffered,
   PinMismatch,
   Superseded,
+  type TailnetStatus,
   type Usage,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
@@ -25,7 +26,7 @@ import {
   Semaphore,
 } from "effect";
 import { foundOn, idOn, nameOn, newInstance, notFoundOn } from "./ids.ts";
-import { prepare, runSetup } from "./guest.ts";
+import { checkTailnet, prepare, runSetup, type TailnetReport } from "./guest.ts";
 import { Leases } from "./leases.ts";
 import {
   answer,
@@ -57,6 +58,7 @@ import {
 } from "./runtime.ts";
 import type { HostSettings } from "./settings.ts";
 import { type Intent, Store } from "./store.ts";
+import { Tailnet } from "./tailnet.ts";
 
 export interface CreateOptions {
   /** A prebuild's builder, which a host that starts deletes. */
@@ -95,6 +97,24 @@ const booted = {
 
 const unknown: Observed = { state: "unknown" };
 
+const joinTimeout = Duration.minutes(3);
+
+const statusOf = (report: TailnetReport | undefined): TailnetStatus => {
+  if (report === undefined) {
+    return { state: "failed", error: "the tailnet script reported nothing readable" };
+  }
+
+  if (report.missing) {
+    return { state: "missing" };
+  }
+
+  if (report.backend !== "Running") {
+    return { state: "failed", error: `tailscaled is ${report.backend}, not signed in` };
+  }
+
+  return report.name === undefined ? { state: "joined" } : { state: "joined", name: report.name };
+};
+
 const bornOf = (intent: Intent, making: Making | undefined, seen: Observed): Born => ({
   name: intent.name,
   desired: intent.desired,
@@ -110,6 +130,7 @@ export const make = (
   Effect.gen(function* () {
     const store = yield* Store;
     const runtime = yield* Runtime;
+    const tailnet = yield* Effect.serviceOption(Tailnet);
     const probe = yield* PortProbe;
     const leases = yield* Leases;
     const hostScope = yield* Effect.scope;
@@ -314,6 +335,54 @@ export const make = (
             }
           }),
         ),
+      join: (life) =>
+        Option.match(tailnet, {
+          onNone: () => Effect.succeed(undefined),
+          onSome: ({ mint }) => {
+            const id = idOf(life.name);
+            const hostname = id.replaceAll("_", "-");
+
+            return surviving(
+              `tailnet join ${id}`,
+              Effect.scoped(
+                Effect.gen(function* () {
+                  yield* leases.share("machine", life.name);
+
+                  const intent = yield* held(life.name);
+
+                  if (intent.ephemeral) {
+                    return undefined;
+                  }
+
+                  const machine = ref(intent);
+                  const report = yield* checkTailnet(runtime, machine, hostname);
+
+                  return statusOf(
+                    report?.missing === false && report.backend === "NeedsLogin"
+                      ? yield* checkTailnet(runtime, machine, hostname, yield* mint)
+                      : report,
+                  );
+                }),
+              ),
+            ).pipe(
+              timeoutFail(
+                joinTimeout,
+                () =>
+                  new Internal({
+                    message: `the join didn't finish within ${Duration.format(joinTimeout)}`,
+                  }),
+              ),
+              Effect.catch((error) =>
+                Effect.succeed<TailnetStatus>({ state: "failed", error: error.message }),
+              ),
+              Effect.tap((status) =>
+                status?.state === "failed"
+                  ? Effect.logWarning(`tailnet join ${id} failed: ${status.error}`)
+                  : Effect.void,
+              ),
+            );
+          },
+        }),
       stop: (life) => owning("stop", life, (intent) => runtime.stop(ref(intent))),
       remove: (life) =>
         owning("delete", life, (intent) =>
@@ -403,6 +472,10 @@ export const make = (
 
       if (intent.hostKey !== undefined) {
         machine = { ...machine, hostKey: intent.hostKey };
+      }
+
+      if (observed.state === "running" && life.tailnet.status !== undefined) {
+        machine = { ...machine, tailnet: life.tailnet.status };
       }
 
       return machine;
