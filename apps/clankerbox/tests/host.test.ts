@@ -4,7 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { operatorKey, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { startHost } from "@clankerbox/host/testing";
 import { ErrorDocument, UnreachableDocument } from "../src/command.ts";
 import { cli } from "./support.ts";
@@ -24,10 +24,17 @@ const setUp = (down: ReadonlyArray<string> = []) =>
     const config = join(dir, "config.json");
 
     const others = yield* Effect.forEach(down, (id) =>
-      Effect.map(refusedUrl, (url) => ({ id, url })),
+      Effect.map(refusedUrl, (url) => ({ id, url, sshUser: "user" })),
     );
 
-    yield* write(config, JSON.stringify({ hosts: [{ id: "linux", url: host.url }, ...others] }));
+    yield* write(join(dir, "id.pub"), operatorKey);
+    yield* write(
+      config,
+      JSON.stringify({
+        hosts: [{ id: "linux", url: host.url, sshUser: "user" }, ...others],
+        authorizedKeys: "id.pub",
+      }),
+    );
 
     const run = (args: ReadonlyArray<string>) =>
       cli([...args, "--config", config], { http: NodeHttpClient.layerNodeHttp });
@@ -114,7 +121,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { host, dir } = yield* setUp();
         const config = join(dir, "misnamed.json");
 
-        yield* write(config, JSON.stringify({ hosts: [{ id: "mis", url: host.url }] }));
+        yield* write(
+          config,
+          JSON.stringify({ hosts: [{ id: "mis", url: host.url, sshUser: "user" }] }),
+        );
 
         const created = yield* cli(
           ["create", "dev", ...sizes, "--host", "mis", "--config", config],

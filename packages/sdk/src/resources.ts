@@ -171,10 +171,34 @@ type WithoutHost<Row> = Row extends unknown ? Omit<Row, "host"> : never;
 /** A `Usage` row as a runtime reads it, before the host names itself on it. */
 export type Reading = WithoutHost<Usage>;
 
-/** Nothing logs the script: it can carry secrets. */
+const publicKeyLine = /^(?:ssh|ecdsa|sk)-[a-z0-9@.-]+ [A-Za-z0-9+/]+={0,3}(?: .*)?$/u;
+
+const blankLine = /^\s*$/u;
+
+/**
+ * Public keys, as `.pub` files hold them: each line that isn't blank is `<type> <base64>
+ * [comment]`, the type an OpenSSH key's, its certificate's or a hardware key's, and at least one
+ * line is. Anything else, a private key included, is refused.
+ */
+export const PublicKeys = Schema.String.check(
+  Schema.makeFilter((text: string) => {
+    const lines = text.split("\n").filter((line) => !blankLine.test(line));
+
+    return (
+      (lines.length > 0 && lines.every((line) => publicKeyLine.test(line))) ||
+      "each line that isn't blank is a public key, <type> <base64> [comment], as a .pub file holds it"
+    );
+  }),
+);
+
+/**
+ * Nothing logs the script: it can carry secrets. `authorizedKeys` is appended to the login user's
+ * `~/.ssh/authorized_keys` once the script exits 0, through the guest's `sudo`.
+ */
 export const Setup = Schema.Struct({
   script: Schema.String,
   timeoutSeconds: Schema.optionalKey(Size),
+  authorizedKeys: Schema.optionalKey(PublicKeys),
 });
 
 export type Setup = typeof Setup.Type;

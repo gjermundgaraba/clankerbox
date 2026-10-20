@@ -1,13 +1,13 @@
 #!/bin/sh
 # A clankerbox setup that makes a macOS machine (Tart, a Cirrus base) a sandbox for Rivet's
-# Sandbox Agent: your key for `admin`, the Sandbox Agent's server and Claude Code under `admin`,
-# a LaunchDaemon that runs the server on the guest's loopback, port 2468, and an
-# /etc/clankerbox/start that keeps it running. Give the provider `cwd: "/Users/admin"`.
+# Sandbox Agent: the Sandbox Agent's server and Claude Code under `admin`, the login user, for
+# whom the host then installs your keys, a LaunchDaemon that runs the server on the guest's
+# loopback, port 2468, and an /etc/clankerbox/start that keeps it running. Give the provider
+# `cwd: "/Users/admin"`.
 #
-# Copy this directory, put the public keys that may log in into `authorized_keys` beside this
-# file, and name the copy as a profile's `setup.path`. An optional `agent.env` beside it, of
-# `NAME=value` lines such as `ANTHROPIC_API_KEY=…`, becomes the server's environment, which is
-# where the agents it launches find their credentials.
+# Name this directory, or a copy, as a profile's `setup.path`. An optional `agent.env` beside
+# it, of `NAME=value` lines such as `ANTHROPIC_API_KEY=…`, becomes the server's environment,
+# which is where the agents it launches find their credentials.
 set -eu
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
@@ -18,18 +18,10 @@ agent_sha256=58417cf5fa1e2dc417fc4a92d11840cc245ad599b87dd4c9a41686b05c36d877
 node_version=22.23.3
 node_sha256=23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53
 
-if [ ! -s authorized_keys ]; then
-  echo "this recipe needs an authorized_keys file beside setup.sh, holding your public key"
-  exit 1
-fi
-
 # Softnet blocks the gateway's DNS, so public resolvers come first.
 networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while IFS= read -r service; do
   networksetup -setdnsservers "$service" 1.1.1.1 9.9.9.9
 done
-
-install -d -m 700 -o admin -g staff /Users/admin/.ssh
-install -m 600 -o admin -g staff authorized_keys /Users/admin/.ssh/authorized_keys
 
 # Downloads $1 to $3 and refuses it unless its sha256 is $2.
 fetch() {

@@ -14,7 +14,8 @@ import { Duration, Effect, Fiber, Option, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { exists, read, remove } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { exists, operatorKey, read, remove, stat } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { loginSetup } from "./fake-runtime.ts";
 import { at, eventually, failure, hostOn, pause, request, type TestHost } from "./support.ts";
 
 const ports = { first: 21_100, last: 21_109 };
@@ -22,6 +23,8 @@ const ports = { first: 21_100, last: 21_109 };
 const host = hostOn(ports);
 
 const rows = (host: TestHost) => host.run(host.store.machines);
+
+const theirs = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBoatKeyForTests clankerbox-boat";
 
 const installsStart = {
   script: [
@@ -377,7 +380,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const missing = yield* linux.run(linux.machines.get("linux_dev"));
         const [row] = yield* rows(linux);
 
-        expect(made.ssh).toEqual({ user: "root", host: "127.0.0.1", port: row?.port });
+        expect(made.ssh).toEqual({ user: "user", host: "127.0.0.1", port: row?.port });
         expect(made.hostKey).toBeUndefined();
         expect([stopped, missing].map(({ state, ssh }) => [state, ssh])).toEqual([
           ["stopped", undefined],
@@ -857,6 +860,82 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       );
 
       expect(at(settled)).toEqual(["running", "running", "settled"]);
+    }),
+  );
+
+  it.effect(
+    "a setup's authorized keys go to the login user once it exits 0, in the same exec, beside the keys already there",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+        const keys = join("home", "user", ".ssh", "authorized_keys");
+
+        yield* linux.run(
+          linux.machines.create(
+            request("dev", {
+              setup: {
+                script: [
+                  installsStart.script,
+                  loginSetup,
+                  'mkdir -p "$CLANKERBOX_ROOT/home/user/.ssh"',
+                  `printf "${theirs}" >"$CLANKERBOX_ROOT/${keys}"`,
+                ].join("\n"),
+                authorizedKeys: `${operatorKey}\n`,
+              },
+            }),
+          ),
+        );
+        yield* linux.run(
+          linux.machines.create(
+            request("fresh", {
+              setup: { script: `#!/bin/sh\n${loginSetup}`, authorizedKeys: operatorKey },
+            }),
+          ),
+        );
+
+        const fresh = join(linux.fake.root("fresh") ?? "", keys);
+
+        expect(yield* read(join(linux.fake.root("dev") ?? "", keys))).toBe(
+          `${theirs}\n${operatorKey}\n\n`,
+        );
+        expect(linux.fake.calls.filter((call) => call === "exec linux_dev")).toHaveLength(2);
+        expect(yield* read(fresh)).toBe(`\n${operatorKey}\n`);
+        expect((yield* stat(fresh)).mode & 0o777).toBe(0o600);
+      }),
+  );
+
+  it.effect(
+    "a setup with authorized keys that leaves no login user fails, and deletes the machine",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        const error = yield* failure(
+          linux,
+          linux.machines.create(
+            request("dev", {
+              setup: { script: "#!/bin/sh\ntrue\n", authorizedKeys: operatorKey },
+            }),
+          ),
+        );
+
+        expect(error._tag).toBe("ScriptFailed");
+        expect(error).toMatchObject({ script: "setup" });
+        expect(error.message).toContain("sudo: unknown user user");
+        expect(error.message).toContain(
+          "couldn't install the authorized keys for user: setup must leave that user, and sudo",
+        );
+        expect(yield* rows(linux)).toEqual([]);
+      }),
+  );
+
+  it.effect("a setup with no authorized keys installs none, so it needs no login user", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev", { setup: installsStart })));
+
+      expect(yield* exists(join(linux.fake.root("dev") ?? "", "home"))).toBe(false);
     }),
   );
 

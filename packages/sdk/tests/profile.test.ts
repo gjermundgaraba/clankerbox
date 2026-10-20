@@ -5,10 +5,13 @@ import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { loadProfile, Profile, specRequest } from "../src/index.ts";
 import { scratch, write } from "./files.ts";
+import { operatorKey } from "./keys.ts";
 
 const decode = Schema.decodeUnknownResult(Profile);
 
 const sizes = { base: "ubuntu", cpu: 2, ramMib: 4096, diskGib: 20 };
+
+const keys = `${operatorKey}\n`;
 
 it("a profile decodes with or without setup", () => {
   expect(decode(sizes)._tag).toBe("Success");
@@ -83,12 +86,14 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a create of a profile asks for its fields, its setup read with its timeout, and its host",
+    "a create of a profile asks for its fields, its setup read with its timeout and authorized keys, and its host",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
+        const authorizedKeys = join(dir, "id.pub");
 
         yield* write(join(dir, "setup.sh"), "#!/bin/sh\necho hi\n");
+        yield* write(authorizedKeys, keys);
 
         const profile = {
           ...sizes,
@@ -97,23 +102,28 @@ layer(NodeServices.layer)((it) => {
           host: "linux",
         };
 
-        expect(yield* specRequest("create", profile, {})).toEqual({
+        expect(yield* specRequest("create", profile, { authorizedKeys })).toEqual({
           spec: {
             ...sizes,
             profile: "dev",
-            setup: { script: "#!/bin/sh\necho hi\n", timeoutSeconds: 600 },
+            setup: { script: "#!/bin/sh\necho hi\n", timeoutSeconds: 600, authorizedKeys: keys },
           },
           host: "linux",
         });
 
         expect(
-          yield* specRequest("create", profile, { cpu: 4, setupTimeoutSeconds: 60, host: "mac" }),
+          yield* specRequest("create", profile, {
+            cpu: 4,
+            setupTimeoutSeconds: 60,
+            host: "mac",
+            authorizedKeys,
+          }),
         ).toEqual({
           spec: {
             ...sizes,
             cpu: 4,
             profile: "dev",
-            setup: { script: "#!/bin/sh\necho hi\n", timeoutSeconds: 60 },
+            setup: { script: "#!/bin/sh\necho hi\n", timeoutSeconds: 60, authorizedKeys: keys },
           },
           host: "mac",
         });
@@ -121,12 +131,13 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a create refuses a field nobody gives, and a setup timeout with no setup, naming each as told",
+    "a create refuses a field nobody gives, a setup timeout with no setup, and a setup with no authorized keys, naming each as told",
     () =>
       Effect.gen(function* () {
         const names = new Map<PropertyKey, string>([
           ["cpu", "--cpu"],
           ["setupTimeoutSeconds", "--setup-timeout"],
+          ["authorizedKeys", "the config's authorizedKeys"],
         ]);
 
         const missing = yield* refusal("create", undefined, { base: "ubuntu" }, names);
@@ -138,8 +149,18 @@ layer(NodeServices.layer)((it) => {
           names,
         );
 
+        const keyless = yield* refusal(
+          "create",
+          { ...sizes, label: "dev", setup: { path: "/nowhere/setup.sh" } },
+          {},
+          names,
+        );
+
         expect(missing.message).toBe("create: --cpu: missing; ramMib: missing; diskGib: missing");
         expect(untimed.message).toBe("create: --setup-timeout needs a setup to time");
+        expect(keyless.message).toBe(
+          "create: a setup needs the config's authorizedKeys, the public keys the host installs for the login user after it",
+        );
       }),
   );
 });

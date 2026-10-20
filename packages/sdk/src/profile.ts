@@ -2,7 +2,7 @@ import { Effect, FileSystem, Path, Predicate, Record, Schema } from "effect";
 import { Invalid } from "./errors.ts";
 import { HostId } from "./ids.ts";
 import { MachineSpec, Setup } from "./resources.ts";
-import { readSetup } from "./setup.ts";
+import { readAuthorizedKeys, readSetup } from "./setup.ts";
 import { describeFileError, describeIssues } from "./describe.ts";
 
 /**
@@ -75,6 +75,8 @@ export type Overrides = { readonly [K in keyof Sizes]?: Sizes[K] | undefined } &
   readonly setup?: string | undefined;
   readonly setupTimeoutSeconds?: number | undefined;
   readonly host?: string | undefined;
+  /** A public-key file, already resolved, which a setup needs and which is read only for one. */
+  readonly authorizedKeys?: string | undefined;
 };
 
 export interface SpecRequest {
@@ -104,17 +106,30 @@ export const specRequest = (
       });
     }
 
-    const script = file === undefined ? undefined : yield* readSetup(file);
+    const keys = overrides.authorizedKeys;
+
+    const setup =
+      file === undefined
+        ? undefined
+        : keys === undefined
+          ? yield* new Invalid({
+              message: `${what}: a setup needs ${names?.get("authorizedKeys") ?? "authorizedKeys"}, the public keys the host installs for the login user after it`,
+            })
+          : Record.filter(
+              {
+                script: yield* readSetup(file),
+                timeoutSeconds,
+                authorizedKeys: yield* readAuthorizedKeys(keys),
+              },
+              Predicate.isNotUndefined,
+            );
 
     const fields = {
       base: overrides.base ?? profile?.base,
       cpu: overrides.cpu ?? profile?.cpu,
       ramMib: overrides.ramMib ?? profile?.ramMib,
       diskGib: overrides.diskGib ?? profile?.diskGib,
-      setup:
-        script === undefined
-          ? undefined
-          : Record.filter({ script, timeoutSeconds }, Predicate.isNotUndefined),
+      setup,
       profile: profile?.label,
     } satisfies Record<keyof Sizes | "setup" | "profile", unknown>;
 

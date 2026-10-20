@@ -2194,7 +2194,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           machine.phase,
         ]).toEqual([
           "running",
-          { user: "root", host: "203.0.113.10", port: 19_001 },
+          { user: "user", host: "203.0.113.10", port: 19_001 },
           guestKey,
           "running",
           "settled",

@@ -351,7 +351,7 @@ export const make = (
       observe: Effect.fn("Smolvm.observe")(observe),
       checkpointKind: "ram",
       captureFrom: "running",
-      loginUser: "root",
+      loginUser: "user",
       admit: Effect.fn("Smolvm.admit")((activation) =>
         checkRamBudget(settings.ramBudgetMib, activation, observe),
       ),

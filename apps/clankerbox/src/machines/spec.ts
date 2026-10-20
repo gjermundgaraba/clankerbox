@@ -2,7 +2,7 @@ import { loadProfile, specRequest } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Option, Path } from "effect";
 import { Command, Flag } from "effect/cli";
 import { parsed } from "../command.ts";
-import type { LoadedConfig } from "../config.ts";
+import { configPath, type LoadedConfig } from "../config.ts";
 import { profileFile } from "../profiles.ts";
 import { parseGib, parseMib, parseSeconds } from "../units.ts";
 
@@ -33,7 +33,7 @@ export const specArguments = {
   ),
   setup: Flag.String("setup").pipe(
     Flag.withDescription(
-      "A setup script, or a recipe directory holding setup.sh. A base alone authorizes no SSH key: a setup does.",
+      "A setup script, or a recipe directory holding setup.sh. After it, the host installs the config's authorizedKeys for the login user; a base alone authorizes no SSH key.",
     ),
     Flag.optional,
   ),
@@ -48,12 +48,13 @@ export const specArguments = {
 
 export type SpecFlags = Command.Command.Config.Infer<typeof specArguments>;
 
-const specFlags = new Map<PropertyKey, string>([
+const specNames = new Map<PropertyKey, string>([
   ["base", "--base"],
   ["cpu", "--cpu"],
   ["ramMib", "--ram"],
   ["diskGib", "--disk"],
   ["setupTimeoutSeconds", "--setup-timeout"],
+  ["authorizedKeys", "the client config's authorizedKeys"],
 ]);
 
 export const flagsRequest = (command: string, flags: SpecFlags, config: LoadedConfig) =>
@@ -79,7 +80,11 @@ export const flagsRequest = (command: string, flags: SpecFlags, config: LoadedCo
         setup: Option.getOrUndefined(Option.map(flags.setup, (given) => path.resolve(given))),
         setupTimeoutSeconds: Option.getOrUndefined(timeout),
         host: Option.getOrUndefined(flags.host),
+        authorizedKeys:
+          config.authorizedKeys === undefined
+            ? undefined
+            : yield* configPath(config, config.authorizedKeys),
       },
-      specFlags,
+      specNames,
     );
   });

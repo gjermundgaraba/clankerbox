@@ -1,7 +1,8 @@
-import { Effect, FileSystem, Option, type PlatformError, Predicate } from "effect";
+import { Effect, FileSystem, Option, type PlatformError, Predicate, Schema } from "effect";
 import { Base64 } from "effect/encoding";
 import { Invalid } from "./errors.ts";
-import { describeFileError } from "./describe.ts";
+import { describeFileError, describeIssues } from "./describe.ts";
+import { PublicKeys } from "./resources.ts";
 
 const lineLength = 76;
 
@@ -140,3 +141,33 @@ export const readSetup = (path: string): Effect.Effect<string, Invalid, FileSyst
       ),
     ),
   );
+
+const decodePublicKeys = Schema.decodeUnknownEffect(PublicKeys);
+
+/**
+ * A public-key file's text, such as `~/.ssh/id_ed25519.pub`'s, for a setup's `authorizedKeys`, with
+ * its line endings as `\n`.
+ */
+export const readAuthorizedKeys = (
+  path: string,
+): Effect.Effect<string, Invalid, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+
+    const text = yield* fs.readFileString(path).pipe(
+      Effect.mapError(
+        (error) =>
+          new Invalid({
+            message: `couldn't read authorized keys ${path}: ${describeFileError(error)}`,
+            file: path,
+          }),
+      ),
+    );
+
+    return yield* decodePublicKeys(text.replaceAll("\r\n", "\n")).pipe(
+      Effect.mapError(
+        (error) =>
+          new Invalid({ message: `authorized keys ${path}: ${describeIssues(error)}`, file: path }),
+      ),
+    );
+  });

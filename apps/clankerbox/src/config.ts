@@ -6,8 +6,8 @@ const userRule =
 
 const HostEntry = Schema.Struct({
   ...Client.HostEntry.fields,
-  sshUser: Schema.optionalKey(
-    Schema.String.check(Schema.isPattern(/^[a-z_][a-z0-9_-]{0,31}$/u, { message: userRule })),
+  sshUser: Schema.String.check(
+    Schema.isPattern(/^[a-z_][a-z0-9_-]{0,31}$/u, { message: userRule }),
   ),
 });
 
@@ -16,15 +16,19 @@ export type HostEntry = typeof HostEntry.Type;
 const ClientConfig = Schema.Struct({
   hosts: Schema.Array(HostEntry),
   profiles: Schema.optionalKey(Schema.String),
+  authorizedKeys: Schema.optionalKey(Schema.String),
 });
 
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(ClientConfig));
 
 export interface LoadedConfig {
   readonly file: string;
-  /** `sshUser` is the login of the SSH config's block for the host's machines; default: root. */
+  /** `sshUser` is the login of the SSH config's block for the host's machines. */
   readonly hosts: ReadonlyArray<HostEntry>;
+  /** As written: `configPath` resolves it where it is used, under `~/` or else beside the config. */
   readonly profiles: string | undefined;
+  /** The public-key file every setup authorizes for the login user, as written, as `profiles`. */
+  readonly authorizedKeys: string | undefined;
 }
 
 const defaultPath = Effect.gen(function* () {
@@ -74,9 +78,31 @@ export const loadConfig = (
     return {
       file,
       hosts: config.hosts,
-      profiles:
-        config.profiles === undefined
-          ? undefined
-          : path.resolve(path.dirname(file), config.profiles),
+      profiles: config.profiles,
+      authorizedKeys: config.authorizedKeys,
     };
+  });
+
+export const configPath = (
+  config: LoadedConfig,
+  given: string,
+): Effect.Effect<string, Invalid, Path.Path> =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+
+    if (!given.startsWith("~/")) {
+      return path.resolve(path.dirname(config.file), given);
+    }
+
+    const home = yield* Config.String("HOME").pipe(
+      Effect.mapError(
+        () =>
+          new Invalid({
+            message: `client config ${config.file}: ${given} starts with ~/, and HOME is unset`,
+            file: config.file,
+          }),
+      ),
+    );
+
+    return path.join(home, given.slice(2));
   });

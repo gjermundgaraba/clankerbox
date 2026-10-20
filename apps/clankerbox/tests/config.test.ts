@@ -4,7 +4,7 @@ import { layer } from "@effect/vitest";
 import { Effect } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 import { mkdir, type StubHost, write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { cleanup, cli, decodeJsonError, hostIn, writeConfig } from "./support.ts";
+import { cleanup, cli, decodeJsonError, hostIn, sizes, url, writeConfig } from "./support.ts";
 
 const stubs: Array<StubHost> = [];
 
@@ -60,14 +60,17 @@ layer(NodeServices.layer)((it) => {
 
         yield* write(
           typo,
-          JSON.stringify({ hosts: [{ id: "linux", url: "http://linux.test" }], host: [] }),
+          JSON.stringify({
+            hosts: [{ id: "linux", url: "http://linux.test", sshUser: "user" }],
+            host: [],
+          }),
         );
         yield* write(
           twice,
           JSON.stringify({
             hosts: [
-              { id: "linux", url: "http://linux.test" },
-              { id: "linux", url: "http://other.test" },
+              { id: "linux", url: "http://linux.test", sshUser: "user" },
+              { id: "linux", url: "http://other.test", sshUser: "user" },
             ],
           }),
         );
@@ -85,7 +88,43 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a config's mistakes are all named, each by its JSON path, and an empty host list by what it lacks",
+    "a config path under ~/ needs HOME only where a command uses it, and says so naming the file",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const config = join(dir, "config.json");
+        const script = join(dir, "setup.sh");
+
+        const unset = (given: string) =>
+          `clankerbox: Invalid: client config ${config}: ${given} starts with ~/, and HOME is unset`;
+
+        yield* write(script, "#!/bin/sh\n");
+        yield* write(
+          config,
+          JSON.stringify({
+            hosts: [{ id: "linux", url: url("linux"), sshUser: "user" }],
+            profiles: "~/profiles",
+            authorizedKeys: "~/.ssh/id_ed25519.pub",
+          }),
+        );
+
+        const run = (args: ReadonlyArray<string>) =>
+          cli([...args, "--config", config], {
+            endpoints: [["linux", host({ id: "linux", bases: ["ubuntu"] })]],
+          });
+
+        const hosts = yield* run(["hosts"]);
+        const profiles = yield* run(["profiles"]);
+        const create = yield* run(["create", "box", ...sizes, "--setup", script]);
+
+        expect(hosts.code).toBe(0);
+        expect(profiles.stderr).toBe(unset("~/profiles"));
+        expect(create.stderr).toBe(unset("~/.ssh/id_ed25519.pub"));
+      }),
+  );
+
+  it.effect(
+    "a config's mistakes are all named, each by its JSON path, a host's sshUser included as it has no default, and an empty host list by what it lacks",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -99,7 +138,7 @@ layer(NodeServices.layer)((it) => {
           Effect.map(cli(["hosts", "--config", config]), ({ stderr }) => stderr);
 
         expect(yield* run(wrong)).toBe(
-          `clankerbox: Invalid: client config ${wrong}: host: not a known field; hosts[0].id: a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter; hosts[0].url: missing`,
+          `clankerbox: Invalid: client config ${wrong}: host: not a known field; hosts[0].id: a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter; hosts[0].url: missing; hosts[0].sshUser: missing`,
         );
         expect(yield* run(empty)).toBe(
           "clankerbox: Invalid: the host list is empty: a client needs a host",

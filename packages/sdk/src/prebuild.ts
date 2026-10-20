@@ -10,8 +10,8 @@ const prefix = "prebuilt-";
 const digestDigits = 12;
 
 /**
- * A digest of the spec's label, base, sizes, setup script as sent, and the host's runtime
- * version: a `ram` checkpoint restores only under the release that saved it, so after a runtime
+ * A digest of the spec's label, base, sizes, setup script as sent, authorized keys, and the host's
+ * runtime version: a `ram` checkpoint restores only under the release that saved it, so after a runtime
  * bump a create misses the old prebuild instead of failing to restore it. The setup's timeout and
  * the base's image are no part of it.
  */
@@ -30,6 +30,7 @@ export const nameOf = (
           spec.ramMib,
           spec.diskGib,
           spec.setup?.script ?? null,
+          spec.setup?.authorizedKeys ?? null,
           host.runtimeVersion,
         ]),
       ),

@@ -99,15 +99,24 @@ when unset), or `--config PATH`:
 ```json
 {
   "hosts": [
-    { "id": "linux", "url": "http://100.64.0.10:8484" },
+    { "id": "linux", "url": "http://100.64.0.10:8484", "sshUser": "user" },
     { "id": "mac", "url": "http://100.64.0.20:8484", "sshUser": "admin" }
   ],
-  "profiles": "profiles"
+  "profiles": "profiles",
+  "authorizedKeys": "~/.ssh/id_ed25519.pub"
 }
 ```
 
-The host list is in placement order. `sshUser` is the user plain `ssh` logs
-in to the host's machines as: `root`, the default, or `admin` on Tart. `--profile NAME` reads `NAME.json` from
+The host list is in placement order. `sshUser`, required, is the user plain
+`ssh` logs in to the host's machines as: `user` on smolvm and boat, `admin` on
+Tart. `authorizedKeys` is a public-key file, such as an `id_ed25519.pub`, or
+several concatenated: each line that isn't blank is `<type> <base64>
+[comment]`, so a private key or any other file is refused. Every create or
+prebuild with a setup needs it: the host installs its keys for the login user
+once the setup exits 0, and a create without a setup sends none. Paths in the
+config, `profiles` and `authorizedKeys`, are under `~/` or else relative to
+the config. `profiles` is read only by `profiles` and by commands given
+`--profile NAME`, and `authorizedKeys` only by `create` and `prebuild`. `--profile NAME` reads `NAME.json` from
 the profiles directory; a value with a `/` or ending in `.json` is a path:
 
 ```json
@@ -161,10 +170,11 @@ clankerbox checkpoint delete linux_base
   again at its next check.
 - A checkpoint is gone once its delete begins; what a delete that fails left
   behind is cleared by the next delete of it, or when its host next starts.
-- A prebuild matches the profile, its sizes, its setup and the host's runtime
-  release; any change runs the setup again until a new `prebuild`. Nothing
+- A prebuild matches the profile, its sizes, its setup, the config's
+  authorized keys and the host's runtime release; any change runs the setup
+  again until a new `prebuild`. Nothing
   deletes prebuilds: `checkpoint list` shows them.
-- `ssh` pins the machine's host key and logs in as `root`, or `admin` on Tart.
+- `ssh` pins the machine's host key and logs in as `user`, or `admin` on Tart.
 - Plain OpenSSH reaches machines by ID too, so `ssh linux_dev`, scp, rsync and
   tools that run ssh work. A command on the default client config keeps
   `~/.ssh/clankerbox` with one `Host <host>_*` block per host, as its
@@ -181,7 +191,9 @@ clankerbox checkpoint delete linux_base
 ### Joining machines to the tailnet
 
 A host with `tailnet` joins each machine whose guest has `tailscale` and
-`tailscaled` on its `PATH` (`/opt/homebrew/bin` included). Installing them in
+`tailscaled` in one of `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`,
+`/usr/bin`, `/sbin`, `/bin` or `/opt/homebrew/bin`. Nothing else is searched,
+not the guest's own `PATH`, `/snap/bin` or Linux Homebrew. Installing them in
 a recipe is the opt-in:
 
 - clankerbox runs its own `tailscaled`, in userspace networking, from
@@ -217,8 +229,12 @@ a recipe is the opt-in:
 Setup runs once, as root, after the machine's first boot; forks and restores
 carry its results. It must:
 
-- install sshd where the base has none (smolvm's stock images), and put your
-  public key in the login user's `authorized_keys`;
+- leave the login user, `user` on Linux or `admin` on Tart, and `sudo`: create
+  `user` and install `sudo` where the base has neither (smolvm's stock
+  images). The recipes also give it passwordless `sudo`, which the host
+  doesn't require;
+- install sshd where the base has none (smolvm's stock images), with
+  `PermitRootLogin no`;
 - write `/etc/clankerbox/start`, if anything should run after each boot, fork
   or restore: idempotent, daemonizing what it launches, exiting 0 once it's
   up, and relaunching sshd if `/run/sshd.pid` is dead;
@@ -226,6 +242,12 @@ carry its results. It must:
   gets its new identity, to reset per-machine state of its own;
 - install `tailscale` and `tailscaled`, without starting them, on a host that
   joins its machines to the tailnet.
+
+Once a setup exits 0, the host appends the client config's `authorizedKeys`
+to the login user's `~/.ssh/authorized_keys`, as that user through `sudo`,
+beside any keys already there, such as boat's own. A setup that leaves no
+login user, or no `sudo`, fails then, and its machine is deleted. Put no key
+in root's: nothing logs in as root.
 
 Linux guests need `perl`. On Tart, Softnet blocks gateway DNS, so set public
 resolvers. On boat, keep state that must survive under `/home/user`, `/etc`,
@@ -338,6 +360,7 @@ import { SandboxAgent } from "sandbox-agent";
 const sandbox = clankerbox({
   hosts: [{ id: "linux", url: "http://100.64.0.10:8484" }],
   from: { profile: "profiles/agent.json" },
+  authorizedKeys: "/path/to/key.pub",
   sshArguments: ["-i", "/path/to/key"],
 });
 
@@ -350,15 +373,19 @@ await sdk.destroySandbox();
 
 - A sandbox comes from a profile (`{ profile }`), a checkpoint
   (`{ checkpoint }`) or a fork (`{ machine }`), and a profile's prebuild is
-  used when there is one.
+  used when there is one. `authorizedKeys` does what the client config's
+  does, for the key the tunnel logs in with, and a profile with a setup needs
+  it.
 - A sandbox's ID is `clankerbox/<machine ID>`; `pauseSandbox` stops the
   machine and `destroySandbox` deletes it. A create that fails deletes the
   machine it may have made, unless the host answers `Conflict`, as the name
   is another machine's, or `Superseded`, as a later request owns it.
 - `recipes/ubuntu/` (smolvm) and `recipes/macos/` (Tart) install the server,
-  Node and Claude Code. Each takes an `authorized_keys` beside its `setup.sh`,
-  and an optional `agent.env` of `NAME=value` lines, such as
-  `ANTHROPIC_API_KEY=…`, so keep a recipe with one private.
+  Node and Claude Code, and run the server as the login user, whose home,
+  `/home/user` on Linux, is the default `cwd`; on macOS, give
+  `cwd: "/Users/admin"`. Each takes an optional `agent.env` beside its
+  `setup.sh`, of `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, so keep a
+  recipe with one private.
 - A tunnel that ends, say because its machine stopped, stays down until
   `sandbox.ensureServer(id)` or a new `SandboxAgent.start`.
 - `effect`, `@effect/platform-node` and `sandbox-agent` are peer dependencies.

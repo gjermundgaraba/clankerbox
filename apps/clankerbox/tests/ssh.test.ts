@@ -61,7 +61,7 @@ const fakeSsh = (code: number) => {
 };
 
 const reachable = machine("linux_dev", {
-  ssh: { user: "root", host: "100.64.0.7", port: 10_022 },
+  ssh: { user: "user", host: "100.64.0.7", port: 10_022 },
   hostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@linux_dev",
 });
 
@@ -96,7 +96,7 @@ layer(NodeServices.layer)((it) => {
         expect(spawned?.knownHosts).toBe(
           "linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n",
         );
-        expect(spawned?.args.slice(0, 2)).toEqual(["-l", "root"]);
+        expect(spawned?.args.slice(0, 2)).toEqual(["-l", "user"]);
         expect(spawned?.args.slice(-4)).toEqual([
           "100.64.0.7",
           "-L",
@@ -237,7 +237,7 @@ const proxied = (serve: (socket: Socket) => void, stdin: Stream.Stream<Uint8Arra
       bases: ["ubuntu"],
       machines: [
         machine("linux_dev", {
-          ssh: { user: "root", host: "127.0.0.1", port },
+          ssh: { user: "user", host: "127.0.0.1", port },
           hostKey: "ssh-ed25519 AAAA",
         }),
       ],

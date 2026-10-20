@@ -67,7 +67,7 @@ const prebuilt = (id: string, fields?: Partial<Checkpoint>): Checkpoint =>
   });
 
 it.effect(
-  "a prebuild is named after its label, base, sizes, script and runtime release, and nothing else",
+  "a prebuild is named after its label, base, sizes, script, authorized keys and runtime release, and nothing else",
   () =>
     Effect.gen(function* () {
       const name = yield* nameOf(spec);
@@ -82,6 +82,13 @@ it.effect(
         nameOf({ ...spec, ramMib: 8192 }),
         nameOf({ ...spec, diskGib: 40 }),
         nameOf({ ...spec, setup: { script: "#!/bin/sh\nfalse\n" } }),
+        nameOf({
+          ...spec,
+          setup: {
+            script: spec.setup?.script ?? "",
+            authorizedKeys: "ssh-ed25519 AAAA operator\n",
+          },
+        }),
         nameOf(spec, { runtimeVersion: "1.23.0" }),
       ]);
 

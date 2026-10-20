@@ -4,13 +4,13 @@ import { Capacity } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
-import { type StubHost, write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { operatorKey, type StubHost, write, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
 import {
   cleanup,
   cli,
-  type CliOptions,
   hostIn,
   sizes,
+  type CliOptions,
   writeConfig,
   writeProfiles,
 } from "./support.ts";
@@ -136,7 +136,7 @@ layer(NodeServices.layer)((it) => {
             cpu: 2,
             ramMib: 4096,
             diskGib: 20,
-            setup: { script: "#!/bin/sh\ntrue\n" },
+            setup: { script: "#!/bin/sh\ntrue\n", authorizedKeys: `${operatorKey}\n` },
           },
         ]);
         expect(refused.code).toBe(1);

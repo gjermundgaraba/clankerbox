@@ -7,12 +7,13 @@ import { afterEach, expect } from "vite-plus/test";
 import {
   machine,
   mkdir,
+  operatorKey,
   type StubHost,
   write,
   scratch,
 } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { UnreachableDocument } from "../src/command.ts";
-import { cleanup, cli, decodeJsonError, hostIn, sizes, writeConfig } from "./support.ts";
+import { cleanup, cli, decodeJsonError, hostIn, sizes, url, writeConfig } from "./support.ts";
 
 const stubs: Array<StubHost> = [];
 
@@ -51,7 +52,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   const held = machine("linux_dev", {
-    ssh: { user: "root", host: "100.64.0.7", port: 10_022 },
+    ssh: { user: "user", host: "100.64.0.7", port: 10_022 },
     hostKey: "ssh-ed25519 AAAAexample",
     tailnet: { state: "joined", name: "linux-dev.example.ts.net" },
   });
@@ -127,7 +128,7 @@ layer(NodeServices.layer)((it) => {
             ["DISK", "10G"],
             ["DESIRED", "running"],
             ["PHASE", "settled"],
-            ["SSH", "root@100.64.0.7:10022"],
+            ["SSH", "user@100.64.0.7:10022"],
             ["ERROR", "-"],
             ["HOST_KEY", "ssh-ed25519 AAAAexample"],
             ["TAILNET", "linux-dev.example.ts.net"],
@@ -505,6 +506,50 @@ layer(NodeServices.layer)((it) => {
       expect(linux.creates[0]?.setup?.script === "#!/bin/sh\necho set up\n").toBe(true);
       expect(linux.creates[0]?.setup?.timeoutSeconds).toBe(60);
     }),
+  );
+
+  it.effect(
+    "create sends the config's authorizedKeys, relative to the config or under ~/, with a setup alone, which needs them",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const key = `${operatorKey}\n`;
+        const script = join(dir, "setup.sh");
+        const relative = join(dir, "relative.json");
+        const home = join(dir, "home.json");
+        const keyless = join(dir, "keyless.json");
+        const hosts = [{ id: "linux", url: url("linux"), sshUser: "user" }];
+
+        yield* mkdir(join(dir, "keys"));
+        yield* write(join(dir, "keys", "id.pub"), key);
+        yield* write(script, "#!/bin/sh\n");
+        yield* write(relative, JSON.stringify({ hosts, authorizedKeys: "keys/id.pub" }));
+        yield* write(home, JSON.stringify({ hosts, authorizedKeys: "~/keys/id.pub" }));
+        yield* write(keyless, JSON.stringify({ hosts }));
+
+        const linux = host({ id: "linux", bases: ["ubuntu"] });
+
+        const create = (config: string, ...args: ReadonlyArray<string>) =>
+          cli(["create", "box", ...sizes, ...args, "--config", config], {
+            endpoints: [["linux", linux]],
+            env: { HOME: dir },
+          });
+
+        yield* create(relative, "--setup", script);
+        yield* create(home, "--setup", script);
+        yield* create(relative);
+
+        const refused = yield* create(keyless, "--setup", script);
+
+        expect(linux.creates.map((sent) => sent.setup?.authorizedKeys)).toEqual([
+          key,
+          key,
+          undefined,
+        ]);
+        expect(refused.stderr).toBe(
+          "clankerbox: Invalid: create: a setup needs the client config's authorizedKeys, the public keys the host installs for the login user after it",
+        );
+      }),
   );
 
   it.effect("deleting a machine that is already gone counts as done", () =>

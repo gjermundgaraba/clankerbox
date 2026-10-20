@@ -529,7 +529,7 @@ export const make = (
       pin: undefined,
       checkpointKind: "disk",
       captureFrom: "running",
-      loginUser: "root",
+      loginUser: "user",
       startup: Effect.fn("Boat.startup")(() => Effect.void),
       observe,
       admit: Effect.fn("Boat.admit")(() => Effect.void),

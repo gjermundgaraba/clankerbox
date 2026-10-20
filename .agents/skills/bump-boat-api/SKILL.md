@@ -155,7 +155,8 @@ Each: what boat does, and what of ours depends on it.
 - `POST /sandboxes/{id}/sshkey` authorizes a public key for `user`; it survives
   fork, resume and named-snapshot restores in `~/.ssh/authorized_keys`. Its
   reply also carries a `hostKey`, unused. Ours: one host key, authorized once
-  after create.
+  after create; `user` is the login user too, so the host appends the
+  operator's keys beside ours after a setup (`runSetup` in `guest.ts`).
 - `ip` is IPv6 or IPv4; `sshEndpoint` is a public IPv4 `host:port` relay to port
   22, set only when the machine has no IPv4 of its own. Both change on every
   start. Ours: `endpointOf`, read with the state and never stored.

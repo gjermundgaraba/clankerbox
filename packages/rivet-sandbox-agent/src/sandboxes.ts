@@ -29,7 +29,7 @@ import { forwarding, freePort, LocalTunnelError, open, type Tunnel } from "./tun
 
 export const name = "clankerbox";
 
-export const defaultCwd = "/home/sandbox";
+export const defaultCwd = "/home/user";
 
 const healthWait = Duration.seconds(3);
 
@@ -190,7 +190,9 @@ export const make = (options: Options, ssh = "ssh") => {
         return yield* client.forkMachine({ machine: from.machine, name: named });
       }
 
-      const { spec, host } = yield* specRequest("create", yield* loadProfile(from.profile), {});
+      const { spec, host } = yield* specRequest("create", yield* loadProfile(from.profile), {
+        authorizedKeys: options.authorizedKeys,
+      });
 
       const { machine } = yield* Prebuild.create(client, named, spec, {
         host,

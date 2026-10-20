@@ -1,7 +1,8 @@
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import { Schema } from "effect";
 import { afterEach, expect, test } from "vite-plus/test";
-import { Http, Invalid, Usage } from "../src/index.ts";
+import { Http, Invalid, PublicKeys, Usage } from "../src/index.ts";
+import { operatorKey } from "./keys.ts";
 import { type StubHost, stubHost } from "./stub-host.ts";
 
 let host: StubHost | undefined;
@@ -108,6 +109,77 @@ test("a refused create's message doesn't carry its setup script", async () => {
   expect(answer.status).toBe(400);
   expect(answer.body.includes(marker)).toBe(false);
 });
+
+test("a refused create's message doesn't carry authorized keys that aren't public keys", async () => {
+  const secret = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEsecret\n";
+
+  const answer = await post("createMachine", {
+    ...create,
+    setup: { script: "#!/bin/sh\n", authorizedKeys: secret },
+  });
+
+  expect(answer.status).toBe(400);
+  expect(answer.body.includes("b3BlbnNzaC1rZXktdjEsecret")).toBe(false);
+});
+
+const decodeKeys = Schema.decodeUnknownExit(PublicKeys);
+
+for (const [kind, key] of [
+  ["an ed25519", operatorKey],
+  ["an RSA", "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQExample me@laptop"],
+  ["an ecdsa-sha2-nistp256", "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYExample="],
+  [
+    "a hardware sk-ssh-ed25519@openssh.com",
+    "sk-ssh-ed25519@openssh.com AAAAGnNrLXNzaC1lZDI1NTE5QG9wZW5zc2guY29tExample== yubikey",
+  ],
+  [
+    "a hardware sk-ecdsa-sha2-nistp256@openssh.com",
+    "sk-ecdsa-sha2-nistp256@openssh.com AAAAInNrLWVjZHNhLXNoYTItbmlzdHAyNTZAb3BlbnNzaC5jb20Example",
+  ],
+  [
+    "an ssh-ed25519-cert-v01@openssh.com certificate",
+    "ssh-ed25519-cert-v01@openssh.com AAAAIHNzaC1lZDI1NTE5LWNlcnQtdjAxQG9wZW5zc2guY29tExample me",
+  ],
+  [
+    "an ecdsa-sha2-nistp256-cert-v01@openssh.com certificate",
+    "ecdsa-sha2-nistp256-cert-v01@openssh.com AAAAKGVjZHNhLXNoYTItbmlzdHAyNTYtY2VydC12MDFAb3BlbnNzaC5jb20Example",
+  ],
+] as const) {
+  test(`authorized keys take ${kind} public key, as a .pub file holds it`, () => {
+    expect(decodeKeys(`${key}\n`)._tag).toBe("Success");
+  });
+}
+
+test("authorized keys take blank lines, so two .pub files concatenated are one value", () => {
+  const rsa = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQExample me@laptop";
+
+  expect(decodeKeys(`${operatorKey}\n\n${rsa}\n\n`)._tag).toBe("Success");
+  expect(decodeKeys(`${operatorKey}\n${rsa}`)._tag).toBe("Success");
+});
+
+for (const [what, text] of [
+  [
+    "an OpenSSH private key",
+    "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjE=\n-----END OPENSSH PRIVATE KEY-----\n",
+  ],
+  [
+    "a PEM private key",
+    "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\n",
+  ],
+  [
+    "a PuTTY key",
+    "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nPrivate-Lines: 1\nAAAAIExample\n",
+  ],
+  ["a .netrc", "machine example.com login me password hunter2\n"],
+  ["a key line with authorized_keys options", `restrict ${operatorKey}\n`],
+  ["a public key followed by anything else", `${operatorKey}\nmachine example.com login me\n`],
+  ["an empty file", ""],
+  ["blank lines alone", "\n \n"],
+] as const) {
+  test(`authorized keys refuse ${what}`, () => {
+    expect(decodeKeys(text)._tag).toBe("Failure");
+  });
+}
 
 test("a capacity row has a sum or the machines it couldn't count, and needs one of them", () => {
   const decode = Schema.decodeUnknownExit(Usage);

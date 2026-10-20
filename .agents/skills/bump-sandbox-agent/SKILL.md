@@ -93,7 +93,7 @@ publish, change production hosts, or commit unless asked.
   which doesn't exit. The recipes install Claude alone and tell whoever adds
   Codex to bound it. If the target fixes this, drop that note.
 - As root, Claude Code offers no `bypassPermissions` mode, so the server runs
-  as `sandbox` (Ubuntu) or `admin` (macOS). The server keeps its state under
+  as the login user, `user` (Ubuntu) or `admin` (macOS). The server keeps its state under
   the user's `~/.local/share/sandbox-agent` (Linux) or
   `~/Library/Application Support/sandbox-agent` (macOS).
 - The server finds an agent's credential in its own environment
@@ -114,8 +114,9 @@ publish, change production hosts, or commit unless asked.
   package's tests run the real SDK against the provider, over a stub host and
   a stand-in ssh.
 - Each recipe's downloads against their pins: run `recipes/ubuntu/setup.sh` in
-  a throwaway `linux/amd64` `ubuntu:24.04` container, with an
-  `authorized_keys` beside it.
+  a throwaway `linux/amd64` `ubuntu:24.04` container. It needs no keys: the
+  host installs the operator's after a setup, which the host's tests cover
+  (`packages/host/tests/machines.test.ts`), not this run.
 
 ## After
 

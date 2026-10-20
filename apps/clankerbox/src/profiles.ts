@@ -10,7 +10,7 @@ import {
 import { Console, Effect, FileSystem, Path, Schema } from "effect";
 import { Command } from "effect/cli";
 import { clientFlags, fail, print, table } from "./command.ts";
-import { type LoadedConfig, loadConfig } from "./config.ts";
+import { configPath, type LoadedConfig, loadConfig } from "./config.ts";
 import { formatSeconds } from "./units.ts";
 
 export const profileFile = (
@@ -31,7 +31,7 @@ export const profileFile = (
       });
     }
 
-    return path.join(config.profiles, `${profile}.json`);
+    return path.join(yield* configPath(config, config.profiles), `${profile}.json`);
   });
 
 export const profileFiles = (
@@ -44,14 +44,15 @@ export const profileFiles = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const directory = config.profiles;
 
-    if (directory === undefined) {
+    if (config.profiles === undefined) {
       return yield* new Invalid({
         message: "the client config has no profiles directory",
         file: config.file,
       });
     }
+
+    const directory = yield* configPath(config, config.profiles);
 
     const entries = yield* fs.readDirectory(directory).pipe(
       Effect.mapError(

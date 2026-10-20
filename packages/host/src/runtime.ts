@@ -156,8 +156,9 @@ export interface Interface {
   /** The state `capture` needs its machine in. */
   readonly captureFrom: Host["captureFrom"];
   /**
-   * The user a setup authorizes the operator's key for: root on Linux, as setup runs as root;
-   * Tart's bases ship `admin`, and macOS has no root login.
+   * The user a setup, run as root, leaves in the guest, for whom the host then installs the
+   * operator's keys through `sudo`: `user` on Linux, which boat's bases ship, and `admin` on
+   * Tart, which its bases ship. Never root.
    */
   readonly loginUser: string;
   /** Runs after the failed captures are cleared, before the host serves. */

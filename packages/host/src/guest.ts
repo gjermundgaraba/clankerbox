@@ -74,11 +74,22 @@ const runInGuest = (
 
 const setupRunner = [
   "set -eu",
+  "login=$1",
+  "root=${CLANKERBOX_ROOT-}",
   "script=$(mktemp /var/tmp/clankerbox-setup.XXXXXX)",
   `trap 'rm -f "$script"' EXIT`,
   `cat >"$script"`,
   `chmod 700 "$script"`,
   `"$script" </dev/null`,
+  `if [ "$#" -gt 1 ]; then`,
+  "  (",
+  "    PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
+  `    sudo -n -u "$login" -H sh -c 'umask 077 && mkdir -p "$HOME/.ssh" && printf "\\n%s\\n" "$1" >>"$HOME/.ssh/authorized_keys"' clankerbox-keys "$2"`,
+  "  ) || {",
+  `    echo "couldn't install the authorized keys for $login: setup must leave that user, and sudo"`,
+  "    exit 1",
+  "  }",
+  "fi",
 ].join("\n");
 
 const defaultSetupTimeoutSeconds = 600;
@@ -89,13 +100,17 @@ export const runSetup = (
   setup: Setup,
 ): Effect.Effect<void, RuntimeError | ScriptFailed> => {
   const timeout = Duration.seconds(setup.timeoutSeconds ?? defaultSetupTimeoutSeconds);
+  const keys = setup.authorizedKeys === undefined ? [] : [setup.authorizedKeys];
 
   return Effect.asVoid(
     runInGuest(
       runtime,
       "setup",
       machine,
-      { argv: ["/bin/sh", "-c", setupRunner], stdin: new TextEncoder().encode(setup.script) },
+      {
+        argv: ["/bin/sh", "-c", setupRunner, "clankerbox-setup", runtime.loginUser, ...keys],
+        stdin: new TextEncoder().encode(setup.script),
+      },
       timeout,
     ),
   );
@@ -118,7 +133,7 @@ export const tailnetScript = [
   "set -eu",
   "hostname=$1",
   "root=${CLANKERBOX_ROOT-}",
-  "PATH=$PATH:$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin:$root/opt/homebrew/bin",
+  "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin:$root/opt/homebrew/bin",
   `dir="${tailnetDir}"`,
   String.raw`ts() { tailscale --socket="$dir/tailscaled.sock" "$@"; }`,
   String.raw`status() { ts status --json --peers=false 2>/dev/null | tr -d '\n'; }`,
@@ -200,7 +215,7 @@ export const preparationScript = [
   "instance=$1",
   "id=$2",
   "root=${CLANKERBOX_ROOT-}",
-  "PATH=$PATH:$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
+  "PATH=$root/usr/local/sbin:$root/usr/local/bin:$root/usr/sbin:$root/usr/bin:$root/sbin:$root/bin",
   "state=$root/var/lib/clankerbox",
   `if [ "$(cat "$state/instance" 2>/dev/null || true)" != "$instance" ]; then`,
   `  cat >"$root/dev/random"`,

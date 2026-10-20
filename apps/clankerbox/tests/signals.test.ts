@@ -84,7 +84,9 @@ test.each(["SIGINT", "SIGTERM"] as const)(
 
     await writeFile(
       config,
-      JSON.stringify({ hosts: [{ id: "linux", url: `http://127.0.0.1:${port}` }] }),
+      JSON.stringify({
+        hosts: [{ id: "linux", url: `http://127.0.0.1:${port}`, sshUser: "user" }],
+      }),
     );
 
     const { child, exited } = run(join(import.meta.dirname, "../src/main.ts"), [

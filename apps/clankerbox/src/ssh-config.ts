@@ -8,7 +8,7 @@ const usableShell = /^\/[^\s"'$`\\%]*$/u;
 const block = (shell: string, host: LoadedConfig["hosts"][number]): string =>
   [
     `Host ${host.id}_*`,
-    `  User ${host.sshUser ?? "root"}`,
+    `  User ${host.sshUser}`,
     "  ProxyCommand clankerbox ssh-proxy %n",
     `  KnownHostsCommand ${shell} -c "exec clankerbox ssh-known-hosts %n %H"`,
     "  UserKnownHostsFile /dev/null",

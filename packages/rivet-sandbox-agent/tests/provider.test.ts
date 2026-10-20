@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   type Checkpoint,
   Conflict,
+  Invalid,
   NotFound,
   NotOffered,
   Prebuild,
@@ -13,6 +14,7 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import { DateTime, Effect } from "effect";
 import { SandboxAgent, SandboxDestroyedError } from "sandbox-agent";
+import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { afterEach, expect, test } from "vite-plus/test";
 import {
   cleanUp,
@@ -25,6 +27,8 @@ import {
   setup,
   until,
 } from "./support.ts";
+
+const keys = `${operatorKey}\n`;
 
 const checkpoint = (id: string): Checkpoint => ({
   id,
@@ -61,7 +65,7 @@ test("the SDK starts a sandbox from a profile and reaches its agent through a tu
   const args = call?.args ?? [];
 
   expect(more).toEqual([]);
-  expect(args.slice(0, 2)).toEqual(["-l", "root"]);
+  expect(args.slice(0, 2)).toEqual(["-l", "user"]);
   expect(args).toContain(`HostKeyAlias=${id}`);
   expect(args.slice(args.indexOf(login.host))).toEqual([
     login.host,
@@ -122,7 +126,7 @@ test("a sandbox is a fork of a machine or a restore of a checkpoint when the pro
   expect(missing.stub.held()).toEqual([]);
 });
 
-test("a create from a profile with a setup restores its host's prebuild of it, unless fresh, and runs the setup without one", async () => {
+test("a create from a profile with a setup and authorizedKeys restores its host's prebuild of both, unless fresh, and runs the setup without one", async () => {
   const dir = await mkdtemp(join(tmpdir(), "clankerbox-profile-"));
 
   cleanups.push(() => rm(dir, { recursive: true, force: true }));
@@ -131,12 +135,15 @@ test("a create from a profile with a setup restores its host's prebuild of it, u
   const profile = join(dir, "agent.json");
 
   await writeFile(join(dir, "setup.sh"), "echo set up\n");
+  await writeFile(join(dir, "id.pub"), keys);
   await writeFile(
     profile,
     JSON.stringify({ ...sizes, setup: { path: "setup.sh", timeoutSeconds: 300 } }),
   );
 
-  const sent = { script: "echo set up\n", timeoutSeconds: 300 };
+  const sent = { script: "echo set up\n", timeoutSeconds: 300, authorizedKeys: keys };
+  const from = { profile };
+  const authorizedKeys = join(dir, "id.pub");
 
   const name = await Effect.runPromise(
     Prebuild.nameOf({ ...sizes, profile: "agent", setup: sent }, { runtimeVersion }),
@@ -144,22 +151,53 @@ test("a create from a profile with a setup restores its host's prebuild of it, u
 
   const prebuilt = { checkpoints: [checkpoint(`linux_${name}`)] };
 
-  const restored = await setup(prebuilt, { from: { profile } });
+  const restored = await setup(prebuilt, { from, authorizedKeys });
 
   expect(await restored.sandbox.create()).toMatch(/^linux_sandbox-[0-9a-f]{8}$/u);
   expect(restored.stub.calls).toEqual(["host.get", "checkpoint.get", "machine.restore"]);
 
-  const fresh = await setup(prebuilt, { from: { profile }, fresh: true });
+  const fresh = await setup(prebuilt, { from, authorizedKeys, fresh: true });
 
   await fresh.sandbox.create();
   expect(fresh.stub.calls).toEqual(["host.get", "machine.create"]);
   expect(fresh.stub.creates.map((request) => request.setup)).toEqual([sent]);
 
-  const unbuilt = await setup({}, { from: { profile } });
+  const unbuilt = await setup({}, { from, authorizedKeys });
 
   await unbuilt.sandbox.create();
   expect(unbuilt.stub.calls).toEqual(["host.get", "checkpoint.get", "machine.create"]);
   expect(unbuilt.stub.creates.map((request) => request.setup)).toEqual([sent]);
+});
+
+test("a create from a profile with a setup and no authorizedKeys is Invalid, and asks no host", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "clankerbox-profile-"));
+
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+
+  const profile = join(dir, "agent.json");
+
+  await writeFile(join(dir, "setup.sh"), "echo set up\n");
+  await writeFile(
+    profile,
+    JSON.stringify({
+      base: "ubuntu",
+      cpu: 2,
+      ramMib: 2048,
+      diskGib: 20,
+      setup: { path: "setup.sh" },
+    }),
+  );
+
+  const { stub, sandbox } = await setup({}, { from: { profile } });
+
+  const creating = sandbox.create();
+
+  await expect(creating).rejects.toBeInstanceOf(Invalid);
+  await expect(creating).rejects.toMatchObject({
+    message:
+      "create: a setup needs authorizedKeys, the public keys the host installs for the login user after it",
+  });
+  expect(stub.calls).toEqual([]);
 });
 
 test("a create the host fails, as a preparation the host keeps the machine for, deletes the machine", async () => {
@@ -260,6 +298,7 @@ test("a create whose prebuild read fails deletes nothing, though the error names
       setup: { path: "setup.sh" },
     }),
   );
+  await writeFile(join(dir, "id.pub"), keys);
 
   const lost = new Unavailable({
     message: "no reply",
@@ -269,7 +308,9 @@ test("a create whose prebuild read fails deletes nothing, though the error names
     id: "linux_prebuilt-000000000000",
   });
 
-  const { stub, sandbox } = await setup({}, { from: { profile } }, undefined, (client) => ({
+  const options = { from: { profile }, authorizedKeys: join(dir, "id.pub") };
+
+  const { stub, sandbox } = await setup({}, options, undefined, (client) => ({
     ...client,
     getCheckpoint: () => Effect.fail(lost),
   }));

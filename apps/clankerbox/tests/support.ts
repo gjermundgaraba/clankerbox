@@ -8,6 +8,7 @@ import { TestConsole } from "effect/testing";
 import {
   type Endpoint,
   mkdir,
+  operatorKey,
   type StubHost,
   stubHost,
   transport,
@@ -27,9 +28,14 @@ export const writeConfig = (dir: string, hosts: ReadonlyArray<string>, profiles?
   Effect.gen(function* () {
     const file = join(dir, "config.json");
 
+    yield* write(join(dir, "id.pub"), `${operatorKey}\n`);
     yield* write(
       file,
-      JSON.stringify({ hosts: hosts.map((id) => ({ id, url: url(id) })), profiles }),
+      JSON.stringify({
+        hosts: hosts.map((id) => ({ id, url: url(id), sshUser: "user" })),
+        profiles,
+        authorizedKeys: "id.pub",
+      }),
     );
 
     return file;

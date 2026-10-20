@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { type HostError, Internal, WrongState } from "@gjermundgaraba/clankerbox-sdk";
@@ -44,6 +44,19 @@ export interface FakeOptions {
   readonly captureFrom?: "running" | "stopped" | undefined;
 }
 
+export const loginSetup = [
+  'mkdir -p "$CLANKERBOX_ROOT/etc"',
+  'echo "user:x:1000:1000::/home/user:/bin/sh" >>"$CLANKERBOX_ROOT/etc/passwd"',
+  "",
+].join("\n");
+
+export const furnish = (root: string, stubs: string): void => {
+  mkdirSync(join(root, "usr", "local"), { recursive: true });
+  symlinkSync(stubs, join(root, "usr", "local", "bin"));
+  symlinkSync("/usr/bin", join(root, "usr", "bin"));
+  symlinkSync("/bin", join(root, "bin"));
+};
+
 export const writeStubs = (dir: string, uname = "Linux"): string => {
   const bin = join(dir, "bin");
 
@@ -51,6 +64,25 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
 
   const stubs: ReadonlyArray<readonly [string, string]> = [
     ["uname", `echo ${uname}`],
+    [
+      "sudo",
+      [
+        "user=root",
+        'while [ "$#" -gt 0 ]; do',
+        '  case "$1" in',
+        "    -n | -H) shift ;;",
+        "    -u) user=$2; shift 2 ;;",
+        "    --) shift; break ;;",
+        "    *) break ;;",
+        "  esac",
+        "done",
+        'if ! grep -q "^$user:" "$CLANKERBOX_ROOT/etc/passwd" 2>/dev/null; then',
+        '  echo "sudo: unknown user $user" >&2',
+        "  exit 1",
+        "fi",
+        'HOME=$CLANKERBOX_ROOT/home/$user exec "$@"',
+      ].join("\n"),
+    ],
     ["perl", `echo "perl $3" >>"$CLANKERBOX_ROOT/calls"`],
     [
       "ssh-keygen",
@@ -305,7 +337,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         pin: options.pin ?? "fake 1",
         checkpointKind: options.checkpointKind ?? "ram",
         captureFrom: options.captureFrom ?? "running",
-        loginUser: "root",
+        loginUser: "user",
         startup: () => Effect.sync(() => calls.push("startup")),
         observe,
         admit: (activation: Activation) =>
@@ -328,6 +360,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               const root = join(options.dir, "roots", machine.instance);
 
               await mkdir(join(root, "dev"), { recursive: true });
+              furnish(root, bin);
               machines.set(machine.name, { state: "running", root });
             }),
           ),

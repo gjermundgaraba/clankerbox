@@ -68,7 +68,7 @@ test("a tunnel whose ssh fails says what ssh printed or why it couldn't run, and
   await expect(sandbox.getUrl("linux_kept")).rejects.toEqual(
     new Internal({
       message:
-        "the tunnel to linux_kept ended before it listened: root@100.64.0.7: Permission denied (publickey).",
+        "the tunnel to linux_kept ended before it listened: user@100.64.0.7: Permission denied (publickey).",
     }),
   );
 

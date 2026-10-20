@@ -3,7 +3,7 @@ import { layer } from "@effect/vitest";
 import { join } from "node:path";
 import { Arbitrary, Effect, FileSystem, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { Name, packRecipe, readSetup } from "../src/index.ts";
+import { Name, packRecipe, readAuthorizedKeys, readSetup } from "../src/index.ts";
 import {
   chmod,
   exists,
@@ -18,6 +18,7 @@ import {
   write,
   writeBytes,
 } from "./files.ts";
+import { operatorKey } from "./keys.ts";
 
 const recipe = (setup: string) =>
   Effect.gen(function* () {
@@ -392,6 +393,35 @@ layer(NodeServices.layer)((it) => {
       expect(error._tag).toBe("Invalid");
       expect(error.file).toBe(missing);
     }),
+  );
+
+  it.effect(
+    "authorized keys are their file's text with its line endings as \\n, and a file that isn't public keys or a missing path is Invalid naming it",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+
+        const [pub, windows, secret, missing] = ["id.pub", "crlf.pub", "id", "missing"].map(
+          (name) => join(dir, name),
+        );
+
+        yield* write(pub ?? "", `${operatorKey}\n`);
+        yield* write(windows ?? "", `${operatorKey}\r\n\r\n${operatorKey}\r\n`);
+        yield* write(secret ?? "", "-----BEGIN OPENSSH PRIVATE KEY-----\n");
+
+        expect(yield* readAuthorizedKeys(pub ?? "")).toBe(`${operatorKey}\n`);
+        expect(yield* readAuthorizedKeys(windows ?? "")).toBe(`${operatorKey}\n\n${operatorKey}\n`);
+
+        for (const [file, says] of [
+          [secret, `authorized keys ${secret}: each line that isn't blank is a public key`],
+          [missing, `couldn't read authorized keys ${missing}`],
+        ] as const) {
+          const error = yield* Effect.flip(readAuthorizedKeys(file ?? ""));
+
+          expect([error._tag, error.file]).toEqual(["Invalid", file]);
+          expect(error.message).toContain(says);
+        }
+      }),
   );
 
   it.effect.prop(

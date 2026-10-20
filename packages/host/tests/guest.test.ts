@@ -17,7 +17,7 @@ import {
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { hostKeyIn, preparationScript, tailnetIn, tailnetScript } from "../src/guest.ts";
-import { writeStubs, writeTailscaleStubs } from "./fake-runtime.ts";
+import { furnish, writeStubs, writeTailscaleStubs } from "./fake-runtime.ts";
 
 const seedOf = () => globalThis.crypto.getRandomValues(new Uint8Array(64));
 
@@ -26,20 +26,22 @@ const guest = (uname = "Linux") =>
     const dir = yield* scratch;
     const root = join(dir, "root");
 
-    yield* mkdir(join(root, "dev"));
+    const bin = writeStubs(dir, uname);
 
-    return { root, bin: writeStubs(dir, uname) };
+    yield* mkdir(join(root, "dev"));
+    furnish(root, bin);
+
+    return { root, bin };
   });
 
 const prepare = (
   where: { readonly root: string; readonly bin: string },
   instance: string,
   seed: Uint8Array = seedOf(),
-  path = `${where.bin}:${process.env["PATH"]}`,
 ) =>
   Effect.map(
     outputOf("/bin/sh", ["-c", preparationScript, "prepare", instance, "linux_dev"], {
-      env: { CLANKERBOX_ROOT: where.root, PATH: path },
+      env: { CLANKERBOX_ROOT: where.root, PATH: "/nowhere" },
       extendEnv: true,
       input: seed,
     }),
@@ -129,7 +131,7 @@ const tailnet = (
 ) =>
   Effect.map(
     outputOf("/bin/sh", ["-c", tailnetScript, "tailnet", ...args], {
-      env: { CLANKERBOX_ROOT: where.root, PATH: `${where.bin}:/usr/bin:/bin` },
+      env: { CLANKERBOX_ROOT: where.root, PATH: "/nowhere" },
       extendEnv: true,
       input: new TextEncoder().encode(input ?? ""),
     }),
@@ -201,9 +203,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const where = yield* guest();
 
       yield* remove(join(where.bin, "perl"));
+      yield* remove(join(where.root, "usr", "bin"));
+      yield* remove(join(where.root, "bin"));
       yield* symlink("/bin/cat", join(where.bin, "cat"));
 
-      const { code, output } = yield* prepare(where, "aaaa1111", seedOf(), where.bin);
+      const { code, output } = yield* prepare(where, "aaaa1111");
 
       expect(code).toBe(1);
       expect(output).toContain("preparation needs perl");
@@ -431,6 +435,19 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* isMissing(join(dir, "tailscaled.pid"))).toBe(false);
         expect(yield* read(dir, "tailscaled.log")).toBe("");
       }),
+  );
+
+  it.effect("the check finds tailscale in /opt/homebrew/bin, where Tart's guests have it", () =>
+    Effect.gen(function* () {
+      const where = yield* guest("Darwin");
+
+      yield* Effect.sync(() => writeTailscaleStubs(join(where.root, "opt", "homebrew", "bin")));
+
+      const { code, output } = yield* tailnet(where, ["mac-dev"]);
+
+      expect(code, output).toBe(0);
+      expect(tailnetIn(output)).toMatchObject({ missing: false, backend: "NeedsLogin" });
+    }),
   );
 
   it.effect("a check that finds tailscaled answering starts no second one", () =>

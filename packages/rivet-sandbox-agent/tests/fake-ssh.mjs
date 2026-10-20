@@ -12,7 +12,7 @@ const port = Number((args[args.indexOf("-L") + 1] ?? "").split(":")[1]);
 appendFileSync(join(dir, "calls"), `${JSON.stringify({ pid: process.pid, port, args })}\n`);
 
 if (existsSync(join(dir, "refuse"))) {
-  console.error("root@100.64.0.7: Permission denied (publickey).");
+  console.error("user@100.64.0.7: Permission denied (publickey).");
   process.exit(255);
 }
 

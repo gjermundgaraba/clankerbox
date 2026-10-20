@@ -6,7 +6,7 @@ import { type Machine, pinnedSsh, ScriptFailed, sshTarget, WrongState } from "..
 import { read } from "./files.ts";
 import { machine } from "./stub-host.ts";
 
-const login = { user: "root", host: "100.64.0.7", port: 10_022 };
+const login = { user: "user", host: "100.64.0.7", port: 10_022 };
 
 const hostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@linux_dev";
 
@@ -105,7 +105,7 @@ layer(NodeServices.layer)((it) => {
 
       const knownHosts = yield* Effect.scoped(
         Effect.map(
-          Effect.flatMap(sshTarget(reachable), (target) => pinnedSsh(target, "root", [])),
+          Effect.flatMap(sshTarget(reachable), (target) => pinnedSsh(target, "user", [])),
           knownHostsIn,
         ),
       );

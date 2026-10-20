@@ -483,7 +483,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           phase: "settled",
           ssh: { host: "127.0.0.1", port: ports.first },
         });
-        expect(source.ssh).toEqual({ user: "root", host: "127.0.0.1", port: ports.first });
+        expect(source.ssh).toEqual({ user: "user", host: "127.0.0.1", port: ports.first });
         expect(restored.hostKey).not.toBe(source.hostKey);
         expect(yield* machineId(linux, "dev")).toBe("linux_dev\n");
         expect(linux.fake.calls).toEqual([

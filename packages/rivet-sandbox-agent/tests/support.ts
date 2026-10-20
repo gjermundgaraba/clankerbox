@@ -24,7 +24,7 @@ export const fakeSsh = fileURLToPath(new URL("fake-ssh.mjs", import.meta.url));
 
 const url = "http://linux.test";
 
-export const login = { user: "root", host: "100.64.0.7", port: 10_022 };
+export const login = { user: "user", host: "100.64.0.7", port: 10_022 };
 
 export const runtimeVersion = "0.0.0-test";
 
