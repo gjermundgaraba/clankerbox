@@ -199,6 +199,11 @@ a recipe is the opt-in:
 - clankerbox runs its own `tailscaled`, in userspace networking, from
   `/var/lib/clankerbox/tailscale`, so no route, netfilter rule or firewall in
   the guest is touched. Leave the distribution's own `tailscaled` service off.
+- The login user, and no other user but root, may fetch the node's
+  certificates from that `tailscaled`: `/localapi/v0/cert/<domain>` through
+  `/var/lib/clankerbox/tailscale/tailscaled.sock`, granted by
+  `TS_PERMIT_CERT_UID`. No operator is set, so nothing else on the daemon is
+  open to it; reading its status is open to every local user.
 - Tailnet connections arrive on the guest's loopback, so a server bound to
   `127.0.0.1` is reachable on the tailnet: loopback is no longer private to
   the guest, and the tailnet policy is what gates it. Keep tokenless services
@@ -242,6 +247,10 @@ carry its results. It must:
   gets its new identity, to reset per-machine state of its own;
 - install `tailscale` and `tailscaled`, without starting them, on a host that
   joins its machines to the tailnet.
+
+A service of the login user that serves TLS on the tailnet can take the
+node's certificate from clankerbox's `tailscaled` (see above), retrying until
+the check after each start has the daemon up.
 
 Once a setup exits 0, the host appends the client config's `authorizedKeys`
 to the login user's `~/.ssh/authorized_keys`, as that user through `sudo`,
