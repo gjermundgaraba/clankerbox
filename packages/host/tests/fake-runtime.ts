@@ -115,9 +115,11 @@ export const writeTailscaleStubs = (bin: string): void => {
   const stubs: ReadonlyArray<readonly [string, string]> = [
     [
       "tailscaled",
-      ['echo "tailscaled $*" >>"$CLANKERBOX_ROOT/calls"', ': >"$CLANKERBOX_ROOT/daemon"'].join(
-        "\n",
-      ),
+      [
+        'echo "tailscaled $*" >>"$CLANKERBOX_ROOT/calls"',
+        'env >"$CLANKERBOX_ROOT/tailscaled.env"',
+        ': >"$CLANKERBOX_ROOT/daemon"',
+      ].join("\n"),
     ],
     [
       "tailscale",

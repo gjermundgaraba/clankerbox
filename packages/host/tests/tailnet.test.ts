@@ -97,6 +97,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(yield* read(join(linux.fake.machines.get("dev")?.root ?? "", "key-seen"))).toBe(
           "tskey-auth-1",
         );
+        expect(
+          (yield* read(join(linux.fake.machines.get("dev")?.root ?? "", "tailscaled.env"))).split(
+            "\n",
+          ),
+        ).toContain("TS_PERMIT_CERT_UID=user");
       }),
   );
 

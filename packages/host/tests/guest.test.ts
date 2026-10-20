@@ -402,7 +402,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect("a guest without tailscaled reports it missing, and the check starts nothing", () =>
     Effect.gen(function* () {
       const where = yield* guest();
-      const { code, output } = yield* tailnet(where, ["linux-dev"]);
+      const { code, output } = yield* tailnet(where, ["linux-dev", "user"]);
 
       expect(code, output).toBe(0);
       expect(tailnetIn(output)).toEqual({ missing: true });
@@ -421,7 +421,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* mkdir(dir);
         yield* write(join(dir, "tailscaled.log"), "the last boot's daemon\n");
 
-        const { code, output } = yield* tailnet(where, ["linux-dev"]);
+        const { code, output } = yield* tailnet(where, ["linux-dev", "user"]);
 
         expect(code, output).toBe(0);
         expect(tailnetIn(output)).toEqual({
@@ -443,11 +443,41 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       yield* Effect.sync(() => writeTailscaleStubs(join(where.root, "opt", "homebrew", "bin")));
 
-      const { code, output } = yield* tailnet(where, ["mac-dev"]);
+      const { code, output } = yield* tailnet(where, ["mac-dev", "admin"]);
 
       expect(code, output).toBe(0);
       expect(tailnetIn(output)).toMatchObject({ missing: false, backend: "NeedsLogin" });
+      expect((yield* read(where.root, "tailscaled.env")).split("\n")).toContain(
+        "TS_PERMIT_CERT_UID=admin",
+      );
     }),
+  );
+
+  it.effect(
+    "the check lets the login user fetch the node's certificate, and reach the socket across rechecks",
+    () =>
+      Effect.gen(function* () {
+        const where = yield* guest();
+        const dir = join(where.root, "var", "lib", "clankerbox", "tailscale");
+
+        yield* Effect.sync(() => writeTailscaleStubs(where.bin));
+
+        const first = yield* tailnet(where, ["linux-dev", "user"]);
+
+        expect(first.code, first.output).toBe(0);
+        expect((yield* read(where.root, "tailscaled.env")).split("\n")).toContain(
+          "TS_PERMIT_CERT_UID=user",
+        );
+        expect((yield* stat(dir)).mode & 0o777).toBe(0o711);
+
+        yield* chmod(dir, 0o755);
+
+        const second = yield* tailnet(where, ["linux-dev", "user"]);
+
+        expect(second.code, second.output).toBe(0);
+        expect(yield* calls(where.root)).toHaveLength(1);
+        expect((yield* stat(dir)).mode & 0o777).toBe(0o711);
+      }),
   );
 
   it.effect("a check that finds tailscaled answering starts no second one", () =>
@@ -461,7 +491,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         '{\n  "BackendState": "Running",\n  "Self": {\n    "ID": "n1",\n    "DNSName": "linux-dev.example.ts.net."\n  }\n}\n',
       );
 
-      const { code, output } = yield* tailnet(where, ["linux-dev"]);
+      const { code, output } = yield* tailnet(where, ["linux-dev", "user"]);
 
       expect(code, output).toBe(0);
       expect(tailnetIn(output)).toEqual({
@@ -481,7 +511,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* write(join(where.root, "daemon"), "");
       yield* write(join(where.root, "status.json"), '{"BackendState": "Stopped", "Self": {}}\n');
 
-      const { code, output } = yield* tailnet(where, ["linux-dev"]);
+      const { code, output } = yield* tailnet(where, ["linux-dev", "user"]);
 
       expect(code, output).toBe(0);
       expect(tailnetIn(output)).toMatchObject({ backend: "Stopped" });
@@ -499,7 +529,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* Effect.sync(() => writeTailscaleStubs(where.bin));
         yield* write(join(where.root, "daemon"), "");
 
-        const { code, output } = yield* tailnet(where, ["linux-dev", "join"], "tskey-auth-k1");
+        const { code, output } = yield* tailnet(
+          where,
+          ["linux-dev", "user", "join"],
+          "tskey-auth-k1",
+        );
+
         const [up] = yield* calls(where.root);
 
         expect(code, output).toBe(0);
