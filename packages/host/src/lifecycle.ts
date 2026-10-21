@@ -206,54 +206,13 @@ const reread = (life: Life, seen: MachineState) => ({
   context: { ...life, seen },
 });
 
-interface Given<E> {
-  readonly context: Life;
-  readonly event: E;
-}
-
-const resting = {
-  tags: ["resting" as const],
-  on: {
-    desire: ({ context, event }: Given<Desire>) => again(context, event),
-    seen: ({ context, event }: Given<{ readonly seen: MachineState }>) =>
-      reread(context, event.seen),
-  },
-};
-
-const settled = {
-  tags: ["resting" as const],
-  on: {
-    desire: ({ context, event }: Given<Desire>) => again(context, event),
-    seen: ({ context, event }: Given<{ readonly seen: MachineState }>) =>
-      reread({ ...context, tailnet: ticked(context.tailnet) }, event.seen),
-  },
-};
-
-const stepping = <Src extends "make" | "start" | "stop">(
-  src: Src,
-  desired: (life: Life, desire: Desire) => { readonly context: Life },
-  reached: Partial<Life>,
-) => ({
-  invoke: {
-    src,
-    input: ({ context }: { readonly context: Life }) => context,
-    onDone: ({ context }: { readonly context: Life }) => ({
-      target: "observing" as const,
-      context: { ...context, ...reached },
-    }),
-    onError: ({ context, event }: Given<{ readonly error: Failure }>) =>
-      failing(context, event.error),
-  },
-  on: { desire: ({ context, event }: Given<Desire>) => desired(context, event) },
-});
-
 export const lifecycle = (steps: Steps) => {
   const step =
     <A>(run: (life: Life) => Effect.Effect<A, StepError>) =>
     ({ input }: { input: Life }) =>
       Effect.mapError(run(input), (error): Failure => ({ error, generation: input.generation }));
 
-  return setupEffect({
+  const setup = setupEffect({
     schemas: {
       input: types<Born>(),
       context: types<Life>(),
@@ -268,7 +227,41 @@ export const lifecycle = (steps: Steps) => {
       stop: createEffectLogic(step(steps.stop)),
       remove: createEffectLogic(step(steps.remove)),
     },
-  }).createMachine({
+  });
+
+  const resting = setup.createStateConfig({
+    tags: ["resting"],
+    on: {
+      desire: ({ context, event }) => again(context, event),
+      seen: ({ context, event }) => reread(context, event.seen),
+    },
+  });
+
+  const settled = setup.createStateConfig({
+    tags: ["resting"],
+    on: {
+      desire: ({ context, event }) => again(context, event),
+      seen: ({ context, event }) =>
+        reread({ ...context, tailnet: ticked(context.tailnet) }, event.seen),
+    },
+  });
+
+  const stepping = (
+    src: "make" | "start" | "stop",
+    desired: (life: Life, desire: Desire) => { readonly context: Life },
+    reached: Partial<Life>,
+  ) =>
+    setup.createStateConfig({
+      invoke: {
+        src,
+        input: ({ context }) => context,
+        onDone: ({ context }) => ({ target: "observing", context: { ...context, ...reached } }),
+        onError: ({ context, event }) => failing(context, event.error),
+      },
+      on: { desire: ({ context, event }) => desired(context, event) },
+    });
+
+  return setup.createMachine({
     id: "machine",
     context: ({ input }) => ({
       ...input,
