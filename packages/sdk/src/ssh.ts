@@ -58,8 +58,8 @@ const sshArguments = (
 /**
  * ssh's arguments to the target's address, pinned to its host key through a known-hosts file that
  * lasts as long as the scope, which must outlast the ssh. The destination is the address, not the
- * ID, so no ssh_config block for the ID applies. Ports change on fork, restore, and every boat
- * start, so read the target anew for each ssh.
+ * ID, so no ssh_config block for the ID applies. Ports change on fork and restore, so read the
+ * target anew for each ssh.
  */
 export const pinnedSsh = (
   target: SshTarget,

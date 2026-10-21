@@ -101,7 +101,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           (yield* read(join(linux.fake.machines.get("dev")?.root ?? "", "tailscaled.env"))).split(
             "\n",
           ),
-        ).toContain("TS_PERMIT_CERT_UID=user");
+        ).toContain("TS_PERMIT_CERT_UID=admin");
       }),
   );
 

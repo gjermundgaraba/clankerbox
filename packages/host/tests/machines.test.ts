@@ -10,7 +10,7 @@ import {
   ScriptFailed,
   Superseded,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Fiber, Option, Result } from "effect";
+import { Duration, Effect, Fiber, Result } from "effect";
 import { TestClock } from "effect/testing";
 import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
@@ -24,7 +24,7 @@ const host = hostOn(ports);
 
 const rows = (host: TestHost) => host.run(host.store.machines);
 
-const theirs = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBoatKeyForTests clankerbox-boat";
+const theirs = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITheirKeyForTests clankerbox-theirs";
 
 const installsStart = {
   script: [
@@ -54,7 +54,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(made).toMatchObject({
           id: "linux_dev",
-          runtime: "smolvm",
+          kind: "linux",
           base: "ubuntu",
           state: "running",
           desired: "running",
@@ -74,6 +74,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "exec linux_dev",
         ]);
       }),
+  );
+
+  it.effect("a mac host's machine is mac", () =>
+    Effect.gen(function* () {
+      const mac = yield* host({ kind: "mac" });
+      const made = yield* mac.run(mac.machines.create(request("dev", {}, "mac")));
+
+      expect(made).toMatchObject({ id: "mac_dev", kind: "mac" });
+    }),
   );
 
   it.effect("a start of a machine that already runs prepares it again, admitting nothing", () =>
@@ -210,7 +219,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect([unread, whileUnread]).toEqual([
           new Internal({
             message:
-              "the smolvm runtime couldn't read machine linux_dev; the host reads it again at its next recheck",
+              "the linux runtime couldn't read machine linux_dev; the host reads it again at its next recheck",
           }),
           [],
         ]);
@@ -304,7 +313,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const timedOut = new Internal({
           message:
-            "startMachine linux_dev: the smolvm runtime's admission check didn't answer within 9s",
+            "startMachine linux_dev: the linux runtime's admission check didn't answer within 9s",
         });
 
         expect(started).toEqual(Result.fail(timedOut));
@@ -380,7 +389,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const missing = yield* linux.run(linux.machines.get("linux_dev"));
         const [row] = yield* rows(linux);
 
-        expect(made.ssh).toEqual({ user: "user", host: "127.0.0.1", port: row?.port });
+        expect(made.ssh).toEqual({ user: "admin", host: "127.0.0.1", port: row?.port });
         expect(made.hostKey).toBeUndefined();
         expect([stopped, missing].map(({ state, ssh }) => [state, ssh])).toEqual([
           ["stopped", undefined],
@@ -588,7 +597,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([error._tag, error.message]).toEqual([
           "Missing",
-          "machine linux_dev is missing from the smolvm runtime; delete it",
+          "machine linux_dev is missing from the linux runtime; delete it",
         ]);
         expect(at(got)).toEqual(["missing", "running", "lost"]);
         expect(linux.fake.calls).toEqual(["delete linux_dev"]);
@@ -868,7 +877,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
-        const keys = join("home", "user", ".ssh", "authorized_keys");
+        const keys = join("home", "admin", ".ssh", "authorized_keys");
 
         yield* linux.run(
           linux.machines.create(
@@ -877,7 +886,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 script: [
                   installsStart.script,
                   loginSetup,
-                  'mkdir -p "$CLANKERBOX_ROOT/home/user/.ssh"',
+                  'mkdir -p "$CLANKERBOX_ROOT/home/admin/.ssh"',
                   `printf "${theirs}" >"$CLANKERBOX_ROOT/${keys}"`,
                 ].join("\n"),
                 authorizedKeys: `${operatorKey}\n`,
@@ -921,9 +930,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(error._tag).toBe("ScriptFailed");
         expect(error).toMatchObject({ script: "setup" });
-        expect(error.message).toContain("sudo: unknown user user");
+        expect(error.message).toContain("sudo: unknown user admin");
         expect(error.message).toContain(
-          "couldn't install the authorized keys for user: setup must leave that user, and sudo",
+          "couldn't install the authorized keys for admin: setup must leave that user, and sudo",
         );
         expect(yield* rows(linux)).toEqual([]);
       }),
@@ -1393,7 +1402,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(waited).toBe("9s");
       expect(Result.isFailure(result) && [result.failure._tag, result.failure.message]).toEqual([
         "Internal",
-        "the smolvm runtime didn't answer within 9s",
+        "the linux runtime didn't answer within 9s",
       ]);
     }).pipe(Effect.provide(TestClock.layer())),
   );
@@ -1555,16 +1564,5 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(full.message).toBe(`no free port in ${ports.first}-${ports.first + 1} on 127.0.0.1`);
         expect(yield* rows(linux)).toHaveLength(2);
       }),
-  );
-
-  it.effect("a runtime without a publish address gives machines no port", () =>
-    Effect.gen(function* () {
-      const linux = yield* host({ runtime: { publishAddress: undefined } });
-      const made = yield* linux.run(linux.machines.create(request("dev")));
-      const row = yield* linux.run(linux.store.findMachine("dev"));
-
-      expect(made.ssh).toBeUndefined();
-      expect(Option.getOrUndefined(row)?.port).toBeUndefined();
-    }),
   );
 });

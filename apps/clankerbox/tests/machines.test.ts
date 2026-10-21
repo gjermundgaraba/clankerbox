@@ -52,7 +52,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   const held = machine("linux_dev", {
-    ssh: { user: "user", host: "100.64.0.7", port: 10_022 },
+    ssh: { user: "admin", host: "100.64.0.7", port: 10_022 },
     hostKey: "ssh-ed25519 AAAAexample",
     tailnet: { state: "joined", name: "linux-dev.example.ts.net" },
   });
@@ -128,7 +128,7 @@ layer(NodeServices.layer)((it) => {
             ["DISK", "10G"],
             ["DESIRED", "running"],
             ["PHASE", "settled"],
-            ["SSH", "user@100.64.0.7:10022"],
+            ["SSH", "admin@100.64.0.7:10022"],
             ["ERROR", "-"],
             ["HOST_KEY", "ssh-ed25519 AAAAexample"],
             ["TAILNET", "linux-dev.example.ts.net"],
@@ -518,7 +518,7 @@ layer(NodeServices.layer)((it) => {
         const relative = join(dir, "relative.json");
         const home = join(dir, "home.json");
         const keyless = join(dir, "keyless.json");
-        const hosts = [{ id: "linux", url: url("linux"), sshUser: "user" }];
+        const hosts = [{ id: "linux", url: url("linux") }];
 
         yield* mkdir(join(dir, "keys"));
         yield* write(join(dir, "keys", "id.pub"), key);

@@ -17,7 +17,7 @@ import {
 import { Effect, type Scope } from "effect";
 import { type SnapshotFrom, types } from "xstate";
 import { type Decided, next } from "./reconcile.ts";
-import type { Observed, RuntimeError } from "./runtime.ts";
+import type { MachineState, RuntimeError } from "./runtime.ts";
 import type { CheckpointRecord, Desire, Intent } from "./store.ts";
 
 /** What a step fails with: what a request that waits on the steps answers, short of its own checks. */
@@ -44,7 +44,7 @@ export interface Life extends Decided {
   readonly generation: number;
   /** Dropped once the machine is made, or its making failed. */
   readonly making: Making | undefined;
-  readonly seen: Observed;
+  readonly seen: MachineState;
   /** Why the last step failed, until the next request. */
   readonly error: StepError | undefined;
   /** Why the machine is being deleted though no request asked: what failed before it was made. */
@@ -83,7 +83,7 @@ export interface Failure {
  */
 export interface Steps {
   /** A runtime that can't be read reads `unknown`. */
-  readonly observe: (life: Life) => Effect.Effect<Observed>;
+  readonly observe: (life: Life) => Effect.Effect<MachineState>;
   /** Copies the machine's disk and runs its setup: a machine is made by one step or none. */
   readonly make: (life: Life) => Effect.Effect<void, StepError>;
   /** Starts the machine, also when it runs already, and prepares it. */
@@ -140,9 +140,9 @@ const ticked = (check: TailnetCheck): TailnetCheck =>
   check.wait === undefined || check.wait === 0 ? check : { ...check, wait: check.wait - 1 };
 
 const decide = (life: Life) => {
-  const target = next(life, life.seen.state);
+  const target = next(life, life.seen);
 
-  return target === "settled" && life.seen.state === "running" && life.tailnet.wait === 0
+  return target === "settled" && life.seen === "running" && life.tailnet.wait === 0
     ? "joining"
     : target;
 };
@@ -201,7 +201,7 @@ const again = (life: Life, desire: Desire) => ({
   context: wanted(life, desire),
 });
 
-const reread = (life: Life, seen: Observed) => ({
+const reread = (life: Life, seen: MachineState) => ({
   target: "deciding" as const,
   context: { ...life, seen },
 });
@@ -215,7 +215,8 @@ const resting = {
   tags: ["resting" as const],
   on: {
     desire: ({ context, event }: Given<Desire>) => again(context, event),
-    seen: ({ context, event }: Given<{ readonly seen: Observed }>) => reread(context, event.seen),
+    seen: ({ context, event }: Given<{ readonly seen: MachineState }>) =>
+      reread(context, event.seen),
   },
 };
 
@@ -223,7 +224,7 @@ const settled = {
   tags: ["resting" as const],
   on: {
     desire: ({ context, event }: Given<Desire>) => again(context, event),
-    seen: ({ context, event }: Given<{ readonly seen: Observed }>) =>
+    seen: ({ context, event }: Given<{ readonly seen: MachineState }>) =>
       reread({ ...context, tailnet: ticked(context.tailnet) }, event.seen),
   },
 };
@@ -256,7 +257,7 @@ export const lifecycle = (steps: Steps) => {
     schemas: {
       input: types<Born>(),
       context: types<Life>(),
-      events: { desire: types<Desire>(), seen: types<{ readonly seen: Observed }>() },
+      events: { desire: types<Desire>(), seen: types<{ readonly seen: MachineState }>() },
       tags: types<"resting">(),
     },
     actors: {
@@ -307,9 +308,7 @@ export const lifecycle = (steps: Steps) => {
         on: {
           desire: ({ context, event }) => again(context, event),
           seen: ({ context, event }) =>
-            event.seen.state === "running" || event.seen.state === "unknown"
-              ? {}
-              : reread(context, event.seen),
+            event.seen === "running" || event.seen === "unknown" ? {} : reread(context, event.seen),
         },
       },
       failed: {
@@ -354,7 +353,7 @@ export const spawn = (
 export const ask = (actor: MachineActor, desire: Desire): Effect.Effect<void> =>
   send(actor, { type: "desire", ...desire });
 
-export const tell = (actor: MachineActor, seen: Observed): Effect.Effect<void> =>
+export const tell = (actor: MachineActor, seen: MachineState): Effect.Effect<void> =>
   send(actor, { type: "seen", seen });
 
 export const isResting = (snapshot: Snapshot): boolean => snapshot.hasTag("resting");

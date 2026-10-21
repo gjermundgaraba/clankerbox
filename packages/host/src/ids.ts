@@ -23,23 +23,23 @@ export const idOn =
   (name: string): string =>
     `${host}_${name}`;
 
-export type Kind = "machine" | "checkpoint";
+export type Resource = "machine" | "checkpoint";
 
 export const notFoundOn =
   (host: string) =>
-  (kind: Kind, name: string): NotFound =>
-    new NotFound({ message: `no ${kind} ${idOn(host)(name)}`, id: idOn(host)(name) });
+  (resource: Resource, name: string): NotFound =>
+    new NotFound({ message: `no ${resource} ${idOn(host)(name)}`, id: idOn(host)(name) });
 
 export const foundOn =
   (host: string) =>
   <A, E>(
-    kind: Kind,
+    resource: Resource,
     name: string,
     lookup: Effect.Effect<Option.Option<A>, E>,
   ): Effect.Effect<A, E | NotFound> =>
     Effect.flatMap(lookup, (found) =>
       Option.match(found, {
-        onNone: () => Effect.fail(notFoundOn(host)(kind, name)),
+        onNone: () => Effect.fail(notFoundOn(host)(resource, name)),
         onSome: Effect.succeed,
       }),
     );

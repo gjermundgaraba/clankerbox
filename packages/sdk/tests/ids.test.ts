@@ -8,7 +8,7 @@ const parse = (id: string) => Effect.exit(parseId(id));
 it.effect("an ID splits at its '_'", () =>
   Effect.gen(function* () {
     expect(yield* parseId("linux_dev")).toEqual({ host: "linux", name: "dev" });
-    expect(yield* parseId("boat-1_a-b")).toEqual({ host: "boat-1", name: "a-b" });
+    expect(yield* parseId("linux-2_a-b")).toEqual({ host: "linux-2", name: "a-b" });
     expect(yield* parseId("mac_Dev2")).toEqual({ host: "mac", name: "Dev2" });
   }),
 );
@@ -113,21 +113,12 @@ it.effect.prop(
 it("a host ID is a lowercase letter, then up to 31 lowercase letters, digits and '-'", () => {
   const isHostId = Schema.is(HostId);
 
-  for (const host of ["linux", "boat-1", "h", "h".repeat(32)]) {
+  for (const host of ["linux", "linux-2", "h", "h".repeat(32)]) {
     expect(isHostId(host), host).toBe(true);
   }
 
   for (const host of ["", "Linux", "1linux", "-linux", "li_nux", "h".repeat(33)]) {
     expect(isHostId(host), host).toBe(false);
-  }
-});
-
-// Source: docs.boat.dev/openapi/boat-v1.yaml, named-snapshot names
-const boatAccepts = (name: string): boolean => /^[a-z0-9][a-z0-9-]{0,62}$/u.test(name);
-
-it("boat accepts cbx-<host>-<inst> for every host ID, the longest included", () => {
-  for (const host of ["linux", "boat-1", "h".repeat(32)]) {
-    expect(boatAccepts(`cbx-${host}-0f3a9c1e`), host).toBe(true);
   }
 });
 

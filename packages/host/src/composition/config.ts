@@ -3,12 +3,11 @@ import {
   describeIssues,
   HostId,
   Invalid,
-  type Runtime,
+  type Kind,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { defaultMachinePorts, reservedPorts } from "../machine-ports.ts";
 import { Address } from "../platform/address.ts";
-import { BoatSettings } from "../platform/boat/boat.ts";
 import { SmolvmSettings } from "../platform/smolvm.ts";
 import { TailnetSettings } from "../platform/tailscale.ts";
 import { TartSettings } from "../platform/tart/tart.ts";
@@ -40,27 +39,20 @@ const common = {
   tailnet: Schema.optionalKey(TailnetSettings),
 };
 
-const sections = {
-  smolvm: SmolvmSettings,
-  tart: TartSettings,
-  boat: BoatSettings,
-} satisfies Record<Runtime, Schema.Struct<Schema.Struct.Fields>>;
-
 const HostConfigFile = Schema.Union([
-  Schema.Struct({ ...common, runtime: Schema.Literal("smolvm"), smolvm: sections.smolvm }),
-  Schema.Struct({ ...common, runtime: Schema.Literal("tart"), tart: sections.tart }),
-  Schema.Struct({ ...common, runtime: Schema.Literal("boat"), boat: sections.boat }),
+  Schema.Struct({ ...common, kind: Schema.Literal("linux"), linux: SmolvmSettings }),
+  Schema.Struct({ ...common, kind: Schema.Literal("mac"), mac: TartSettings }),
 ]);
 
 type HostConfigFile = typeof HostConfigFile.Type;
 
-true satisfies [Runtime] extends [HostConfigFile["runtime"]] ? true : false;
+true satisfies [Kind] extends [HostConfigFile["kind"]] ? true : false;
 
 type Resolved<C> = C extends unknown
-  ? Omit<C, Exclude<keyof HostSettings, "runtime">> & Omit<HostSettings, "runtime">
+  ? Omit<C, Exclude<keyof HostSettings, "kind">> & Omit<HostSettings, "kind">
   : never;
 
-/** One runtime's section, beside the settings every runtime shares. */
+/** One kind's section, beside the settings every kind shares. */
 export type HostConfig = Resolved<HostConfigFile>;
 
 const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(HostConfigFile));

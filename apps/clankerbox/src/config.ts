@@ -1,20 +1,8 @@
 import { Client, describeFileError, describeIssues, Invalid } from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Effect, FileSystem, Option, Path, Schema } from "effect";
 
-const userRule =
-  "an SSH user is lowercase letters, digits, '_' and '-', starting with a letter or '_'";
-
-const HostEntry = Schema.Struct({
-  ...Client.HostEntry.fields,
-  sshUser: Schema.String.check(
-    Schema.isPattern(/^[a-z_][a-z0-9_-]{0,31}$/u, { message: userRule }),
-  ),
-});
-
-export type HostEntry = typeof HostEntry.Type;
-
 const ClientConfig = Schema.Struct({
-  hosts: Schema.Array(HostEntry),
+  hosts: Schema.Array(Client.HostEntry),
   profiles: Schema.optionalKey(Schema.String),
   authorizedKeys: Schema.optionalKey(Schema.String),
 });
@@ -23,8 +11,7 @@ const decodeConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(ClientConf
 
 export interface LoadedConfig {
   readonly file: string;
-  /** `sshUser` is the login of the SSH config's block for the host's machines. */
-  readonly hosts: ReadonlyArray<HostEntry>;
+  readonly hosts: ReadonlyArray<Client.HostEntry>;
   /** As written: `configPath` resolves it where it is used, under `~/` or else beside the config. */
   readonly profiles: string | undefined;
   /** The public-key file every setup authorizes for the login user, as written, as `profiles`. */

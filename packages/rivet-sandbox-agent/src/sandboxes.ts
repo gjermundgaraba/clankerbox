@@ -29,7 +29,7 @@ import { forwarding, freePort, LocalTunnelError, open, type Tunnel } from "./tun
 
 export const name = "clankerbox";
 
-export const defaultCwd = "/home/user";
+export const defaultCwd = "/home/admin";
 
 const healthWait = Duration.seconds(3);
 
@@ -134,7 +134,7 @@ export const make = (options: Options, ssh = "ssh") => {
 
         const args = yield* pinnedSsh(
           target,
-          options.sshUser ?? target.login.user,
+          target.login.user,
           forwarding(port, options.sshArguments ?? []),
         );
 

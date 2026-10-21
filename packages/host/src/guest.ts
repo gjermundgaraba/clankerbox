@@ -1,4 +1,4 @@
-import { ScriptFailed, type Setup } from "@gjermundgaraba/clankerbox-sdk";
+import { loginUser, ScriptFailed, type Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Option, Redacted, Schema, Stream } from "effect";
 import {
   type Command,
@@ -108,7 +108,7 @@ export const runSetup = (
       "setup",
       machine,
       {
-        argv: ["/bin/sh", "-c", setupRunner, "clankerbox-setup", runtime.loginUser, ...keys],
+        argv: ["/bin/sh", "-c", setupRunner, "clankerbox-setup", loginUser, ...keys],
         stdin: new TextEncoder().encode(setup.script),
       },
       timeout,
@@ -314,7 +314,7 @@ export const checkTailnet = (
         tailnetScript,
         "clankerbox-tailnet",
         hostname,
-        runtime.loginUser,
+        loginUser,
         ...(key === undefined ? [] : ["join"]),
       ],
       stdin: key === undefined ? undefined : new TextEncoder().encode(Redacted.value(key)),

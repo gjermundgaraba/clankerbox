@@ -27,7 +27,7 @@ export const host = Command.make(
   "host",
   {
     config: Flag.String("config").pipe(
-      Flag.withDescription("The host config file: its ID, runtime, address, state dir and bases."),
+      Flag.withDescription("The host config file: its ID, kind, address, state dir and bases."),
     ),
   },
   ({ config }) => run(config).pipe(Effect.catch(failText)),

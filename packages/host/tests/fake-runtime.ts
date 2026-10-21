@@ -1,20 +1,18 @@
 import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { type HostError, Internal, WrongState } from "@gjermundgaraba/clankerbox-sdk";
+import { type HostError, Internal, type Kind, WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
 import {
   type Activation,
-  type CheckpointKind,
   type CheckpointRef,
   type Held,
   type MachineRef,
   type MachineState,
   missing,
   type Interface,
-  type Observed,
   Runtime,
   type RuntimeError,
 } from "../src/runtime.ts";
@@ -34,19 +32,16 @@ export type Operation =
 
 export interface FakeOptions {
   readonly dir: string;
-  /** Set to `undefined`, not left out, for machines with no host port. Default: 127.0.0.1. */
-  readonly publishAddress?: string | undefined;
+  /** `linux` by default, which captures and forks only a running machine. */
+  readonly kind?: Kind | undefined;
   readonly ramBudgetMib?: number | undefined;
+  /** `fake 1` by default on linux; mac has none. */
   readonly pin?: string | undefined;
-  /** `ram`, the default, captures and forks only a running machine, as smolvm does. */
-  readonly checkpointKind?: CheckpointKind | undefined;
-  /** `running` by default; Tart's is `stopped`. */
-  readonly captureFrom?: "running" | "stopped" | undefined;
 }
 
 export const loginSetup = [
   'mkdir -p "$CLANKERBOX_ROOT/etc"',
-  'echo "user:x:1000:1000::/home/user:/bin/sh" >>"$CLANKERBOX_ROOT/etc/passwd"',
+  'echo "admin:x:1000:1000::/home/admin:/bin/sh" >>"$CLANKERBOX_ROOT/etc/passwd"',
   "",
 ].join("\n");
 
@@ -193,7 +188,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     readonly until: Deferred.Deferred<void>;
   }> = [];
 
-  const publishAddress = "publishAddress" in options ? options.publishAddress : "127.0.0.1";
+  const kind = options.kind ?? "linux";
   let stubs: string | undefined;
 
   const inject = (operation: Operation, injection: Injection) => {
@@ -236,11 +231,11 @@ export const fakeRuntime = (options: FakeOptions) => {
       }),
     );
 
-  const states = (refs: ReadonlyArray<MachineRef>): Effect.Effect<ReadonlyArray<Observed>> =>
+  const states = (refs: ReadonlyArray<MachineRef>): Effect.Effect<ReadonlyArray<MachineState>> =>
     Effect.sync(() => {
       observed.push(refs.map(({ id }) => id));
 
-      return refs.map((machine) => ({ state: machines.get(machine.name)?.state ?? "missing" }));
+      return refs.map((machine) => machines.get(machine.name)?.state ?? "missing");
     });
 
   const observe = (refs: ReadonlyArray<MachineRef>) =>
@@ -293,15 +288,15 @@ export const fakeRuntime = (options: FakeOptions) => {
   const copyable = (machine: MachineRef) => {
     const state = machines.get(machine.name)?.state ?? "missing";
 
-    if (state === "running" || (state === "stopped" && options.checkpointKind === "disk")) {
+    if (state === (kind === "mac" ? "stopped" : "running")) {
       return Effect.void;
     }
 
     return Effect.fail(
       state === "missing"
-        ? missing("smolvm", machine)
+        ? missing(kind, machine)
         : new WrongState({
-            message: `${machine.id} is stopped: start it first`,
+            message: `${machine.id} is ${state}: ${kind === "mac" ? "stop" : "start"} it first`,
             machine: machine.id,
             state,
           }),
@@ -333,13 +328,9 @@ export const fakeRuntime = (options: FakeOptions) => {
       stubs = bin;
 
       return Runtime.of({
-        name: "smolvm",
         version: "fake",
-        publishAddress,
-        pin: options.pin ?? "fake 1",
-        checkpointKind: options.checkpointKind ?? "ram",
-        captureFrom: options.captureFrom ?? "running",
-        loginUser: "user",
+        publishAddress: "127.0.0.1",
+        pin: options.pin ?? (kind === "linux" ? "fake 1" : undefined),
         startup: () => Effect.sync(() => calls.push("startup")),
         observe,
         admit: (activation: Activation) =>
@@ -374,7 +365,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               const found = machines.get(machine.name);
 
               if (found === undefined) {
-                return Effect.fail(missing("smolvm", machine));
+                return Effect.fail(missing(kind, machine));
               }
 
               found.state = "running";

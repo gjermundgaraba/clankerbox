@@ -24,14 +24,14 @@ const setUp = (down: ReadonlyArray<string> = []) =>
     const config = join(dir, "config.json");
 
     const others = yield* Effect.forEach(down, (id) =>
-      Effect.map(refusedUrl, (url) => ({ id, url, sshUser: "user" })),
+      Effect.map(refusedUrl, (url) => ({ id, url })),
     );
 
     yield* write(join(dir, "id.pub"), operatorKey);
     yield* write(
       config,
       JSON.stringify({
-        hosts: [{ id: "linux", url: host.url, sshUser: "user" }, ...others],
+        hosts: [{ id: "linux", url: host.url }, ...others],
         authorizedKeys: "id.pub",
       }),
     );
@@ -121,10 +121,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { host, dir } = yield* setUp();
         const config = join(dir, "misnamed.json");
 
-        yield* write(
-          config,
-          JSON.stringify({ hosts: [{ id: "mis", url: host.url, sshUser: "user" }] }),
-        );
+        yield* write(config, JSON.stringify({ hosts: [{ id: "mis", url: host.url }] }));
 
         const created = yield* cli(
           ["create", "dev", ...sizes, "--host", "mis", "--config", config],
@@ -217,7 +214,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 hosts: Schema.Array(
                   Schema.Struct({
                     id: Schema.String,
-                    runtime: Schema.String,
+                    kind: Schema.String,
                     bases: Schema.Array(Schema.String),
                   }),
                 ),
@@ -226,7 +223,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             ),
           )(hosts.stdout, { onExcessProperty: "ignore" }),
         ).toEqual({
-          hosts: [{ id: "linux", runtime: "smolvm", bases: ["ubuntu"] }],
+          hosts: [{ id: "linux", kind: "linux", bases: ["ubuntu"] }],
           unreachable: [{ host: "mac", error: expect.objectContaining({ tag: "Unavailable" }) }],
         });
       }),

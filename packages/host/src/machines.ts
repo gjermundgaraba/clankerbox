@@ -5,6 +5,7 @@ import {
   formatId,
   type HostError,
   Internal,
+  loginUser,
   type Machine,
   NotOffered,
   PinMismatch,
@@ -49,8 +50,8 @@ import { checkpointRef, machineRef, madeOn } from "./refs.ts";
 import {
   type Booting,
   type MachineRef,
+  type MachineState,
   missing,
-  type Observed,
   Runtime,
   type RuntimeError,
   stateReadWait,
@@ -95,8 +96,6 @@ const booted = {
   machine: "forkMachine",
 } satisfies Record<Source["kind"], Booting>;
 
-const unknown: Observed = { state: "unknown" };
-
 const joinTimeout = Duration.minutes(3);
 
 const statusOf = (report: TailnetReport | undefined): TailnetStatus => {
@@ -115,7 +114,7 @@ const statusOf = (report: TailnetReport | undefined): TailnetStatus => {
   return report.name === undefined ? { state: "joined" } : { state: "joined", name: report.name };
 };
 
-const bornOf = (intent: Intent, making: Making | undefined, seen: Observed): Born => ({
+const bornOf = (intent: Intent, making: Making | undefined, seen: MachineState): Born => ({
   name: intent.name,
   desired: intent.desired,
   generation: intent.generation,
@@ -125,7 +124,7 @@ const bornOf = (intent: Intent, making: Making | undefined, seen: Observed): Bor
 });
 
 export const make = (
-  config: Pick<HostSettings, "id" | "bases" | "machinePorts" | "recheck">,
+  config: Pick<HostSettings, "id" | "kind" | "bases" | "machinePorts" | "recheck">,
 ): Effect.Effect<Interface, HostError, Store | Runtime | PortProbe | Leases | Scope.Scope> =>
   Effect.gen(function* () {
     const store = yield* Store;
@@ -171,15 +170,17 @@ export const make = (
         ),
       );
 
-    const observeAll = (intents: ReadonlyArray<Intent>): Effect.Effect<ReadonlyArray<Observed>> =>
+    const observeAll = (
+      intents: ReadonlyArray<Intent>,
+    ): Effect.Effect<ReadonlyArray<MachineState>> =>
       intents.length === 0
         ? Effect.succeed([])
-        : surviving(`the ${runtime.name} runtime's read`, runtime.observe(intents.map(ref))).pipe(
-            inTime(`the ${runtime.name} runtime`),
+        : surviving(`the ${config.kind} runtime's read`, runtime.observe(intents.map(ref))).pipe(
+            inTime(`the ${config.kind} runtime`),
             Effect.catch((error) =>
               Effect.as(
                 Effect.logWarning(`couldn't read the machines' states: ${error.message}`),
-                intents.map(() => unknown),
+                intents.map((): MachineState => "unknown"),
               ),
             ),
           );
@@ -191,9 +192,9 @@ export const make = (
 
           const [observed] = yield* observeAll([yield* held(name)]);
 
-          return observed ?? unknown;
+          return observed ?? "unknown";
         }),
-      ).pipe(Effect.catch(() => Effect.succeed(unknown)));
+      ).pipe(Effect.catch(() => Effect.succeed<MachineState>("unknown")));
 
     const heldMachines = Effect.map(store.machines, (intents) =>
       intents.map((intent) => ({ machine: ref(intent), booting: booting.has(intent.name) })),
@@ -210,7 +211,7 @@ export const make = (
             .admit({ action, machine: ref(intent), machines })
             .pipe(
               inTime(
-                `${action} ${idOf(intent.name)}: the ${runtime.name} runtime's admission check`,
+                `${action} ${idOf(intent.name)}: the ${config.kind} runtime's admission check`,
               ),
             );
 
@@ -245,7 +246,7 @@ export const make = (
       Effect.gen(function* () {
         const checkpoint = yield* found("checkpoint", name, store.findCheckpoint(name));
 
-        if (checkpoint.kind === "ram" && checkpoint.pin !== runtime.pin) {
+        if (checkpoint.pin !== runtime.pin) {
           return yield* new PinMismatch({
             message: `checkpoint ${idOf(name)} holds RAM state saved under ${checkpoint.pin ?? "no pin"}, and this host runs ${runtime.pin ?? "no pin"}; it restores only under the same one`,
             checkpoint: idOf(name),
@@ -324,7 +325,7 @@ export const make = (
           Effect.gen(function* () {
             const started = runtime.start(ref(intent));
 
-            yield* life.seen.state === "running"
+            yield* life.seen === "running"
               ? started
               : Effect.scoped(Effect.andThen(admitted("startMachine", intent), started));
 
@@ -435,23 +436,21 @@ export const make = (
         return found === undefined ? Effect.fail(notFound("machine", name)) : Effect.succeed(found);
       });
 
-    const resource = (intent: Intent, life: Life, phase: Machine["phase"], observed: Observed) => {
-      const endpoint =
-        observed.state !== "running"
-          ? undefined
-          : runtime.publishAddress === undefined || intent.port === undefined
-            ? observed.ssh
-            : { host: runtime.publishAddress, port: intent.port };
-
+    const resource = (
+      intent: Intent,
+      life: Life,
+      phase: Machine["phase"],
+      observed: MachineState,
+    ) => {
       let machine: Machine = {
         id: idOf(intent.name),
-        runtime: runtime.name,
+        kind: config.kind,
         createdAt: intent.createdAt,
         base: intent.base,
         cpu: intent.cpu,
         ramMib: intent.ramMib,
         diskGib: intent.diskGib,
-        state: observed.state,
+        state: observed,
         desired: life.desired,
         phase,
       };
@@ -466,15 +465,22 @@ export const make = (
         machine = { ...machine, error };
       }
 
-      if (endpoint !== undefined) {
-        machine = { ...machine, ssh: { user: runtime.loginUser, ...endpoint } };
+      if (observed === "running") {
+        machine = {
+          ...machine,
+          ssh: {
+            user: loginUser,
+            host: runtime.publishAddress,
+            port: intent.port,
+          },
+        };
       }
 
       if (intent.hostKey !== undefined) {
         machine = { ...machine, hostKey: intent.hostKey };
       }
 
-      if (observed.state === "running" && life.tailnet.status !== undefined) {
+      if (observed === "running" && life.tailnet.status !== undefined) {
         machine = { ...machine, tailnet: life.tailnet.status };
       }
 
@@ -551,7 +557,7 @@ export const make = (
 
         if (phase === "waiting") {
           return yield* new Internal({
-            message: `the ${runtime.name} runtime couldn't read machine ${id}; the host reads it again at its next recheck`,
+            message: `the ${config.kind} runtime couldn't read machine ${id}; the host reads it again at its next recheck`,
           });
         }
 
@@ -562,7 +568,7 @@ export const make = (
         }
 
         if (phase === "lost") {
-          return yield* missing(runtime.name, { id });
+          return yield* missing(config.kind, { id });
         }
 
         return resource(yield* row(name), life, phase, life.seen);
@@ -608,22 +614,21 @@ export const make = (
 
     const born = (name: string, spec: Spec, ephemeral: boolean) =>
       Effect.gen(function* () {
-        const address = runtime.publishAddress;
-
         const intent: Intent = {
           name,
           instance: newInstance(),
-          native: undefined,
           createdAt: yield* DateTime.now,
           base: spec.base,
           profile: spec.profile,
           cpu: spec.cpu,
           ramMib: spec.ramMib,
           diskGib: spec.diskGib,
-          port:
-            address === undefined
-              ? undefined
-              : yield* pickPort(probe, address, config.machinePorts, yield* store.ports),
+          port: yield* pickPort(
+            probe,
+            runtime.publishAddress,
+            config.machinePorts,
+            yield* store.ports,
+          ),
           desired: "running",
           generation: 1,
           ephemeral,
@@ -640,7 +645,7 @@ export const make = (
       Effect.gen(function* () {
         const actor = yield* Effect.uninterruptible(
           Effect.flatMap(inserting.withPermits(1)(born(name, spec, ephemeral)), (intent) =>
-            register(bornOf(intent, making, unknown)),
+            register(bornOf(intent, making, "unknown")),
           ),
         );
 
@@ -703,7 +708,7 @@ export const make = (
 
     const capacity = Effect.flatMap(heldMachines, (machines) =>
       runtime.capacity(machines).pipe(
-        inTime(`the ${runtime.name} runtime`),
+        inTime(`the ${config.kind} runtime`),
         Effect.map((readings) =>
           readings.map((reading): Usage => ({ host: config.id, ...reading })),
         ),
@@ -769,6 +774,6 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<HostSettings, "id" | "bases" | "machinePorts" | "recheck">,
+  config: Pick<HostSettings, "id" | "kind" | "bases" | "machinePorts" | "recheck">,
 ): Layer.Layer<Machines, HostError, Store | Runtime | PortProbe | Leases> =>
   Layer.effect(Machines, make(config));

@@ -1,3 +1,4 @@
+import { loginUser } from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Console, Effect, FileSystem, Option, Path } from "effect";
 import type { LoadedConfig } from "./config.ts";
 
@@ -8,7 +9,7 @@ const usableShell = /^\/[^\s"'$`\\%]*$/u;
 const block = (shell: string, host: LoadedConfig["hosts"][number]): string =>
   [
     `Host ${host.id}_*`,
-    `  User ${host.sshUser}`,
+    `  User ${loginUser}`,
     "  ProxyCommand clankerbox ssh-proxy %n",
     `  KnownHostsCommand ${shell} -c "exec clankerbox ssh-known-hosts %n %H"`,
     "  UserKnownHostsFile /dev/null",

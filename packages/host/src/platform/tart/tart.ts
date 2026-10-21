@@ -18,14 +18,13 @@ import {
   type MachineRef,
   type MachineState,
   missing,
-  type Observed,
   Runtime,
   timeoutFail,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
 import { CannotStart } from "../../startup.ts";
 import { allotted, inUse } from "../../usage.ts";
-import { cliIn, expect, files, portOf } from "../process.ts";
+import { cliIn, expect, files } from "../process.ts";
 import * as Forwarder from "./forwarder.ts";
 
 export const TartSettings = Schema.Struct({
@@ -221,8 +220,8 @@ export const make = (
     const observedIn = (
       vms: ReadonlyMap<string, MachineState>,
       machines: ReadonlyArray<MachineRef>,
-    ): ReadonlyArray<Observed> =>
-      machines.map((machine) => ({ state: vms.get(vmOf(machine)) ?? "missing" }));
+    ): ReadonlyArray<MachineState> =>
+      machines.map((machine) => vms.get(vmOf(machine)) ?? "missing");
 
     const job = (vm: string) => ({
       target: `${domain}/${vm}`,
@@ -249,14 +248,11 @@ export const make = (
     };
 
     const listen = (machine: MachineRef) =>
-      Effect.flatMap(portOf(machine), (port) =>
-        forwarder.listen(port, (input) =>
-          command(settings.binary, ["exec", "-i", vmOf(machine), "nc", "127.0.0.1", "22"], input),
-        ),
+      forwarder.listen(machine.port, (input) =>
+        command(settings.binary, ["exec", "-i", vmOf(machine), "nc", "127.0.0.1", "22"], input),
       );
 
-    const unlisten = (machine: MachineRef) =>
-      machine.port === undefined ? Effect.void : forwarder.close(machine.port);
+    const unlisten = (machine: MachineRef) => forwarder.close(machine.port);
 
     const ready = (machine: MachineRef) => {
       const vm = vmOf(machine);
@@ -420,17 +416,15 @@ export const make = (
       });
     };
 
-    const copiedFrom = "stopped";
-
     const copyable = (what: string, machine: MachineRef) =>
       Effect.flatMap(state(vmOf(machine)), (observed) => {
-        if (observed === copiedFrom) {
+        if (observed === "stopped") {
           return Effect.void;
         }
 
         return Effect.fail(
           observed === "missing"
-            ? missing("tart", machine)
+            ? missing("mac", machine)
             : new WrongState({
                 message: `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is running: stop it first`,
                 machine: machine.id,
@@ -440,13 +434,9 @@ export const make = (
       });
 
     return {
-      name: "tart",
       version: reported,
       publishAddress: settings.publishAddress,
       pin: undefined,
-      checkpointKind: "disk",
-      captureFrom: copiedFrom,
-      loginUser: "admin",
       startup: Effect.fn("Tart.startup")((machines) =>
         Effect.gen(function* () {
           yield* files(
@@ -510,7 +500,7 @@ export const make = (
           const observed = yield* state(vmOf(machine));
 
           if (observed === "missing") {
-            return yield* missing("tart", machine);
+            return yield* missing("mac", machine);
           }
 
           yield* listen(machine);
@@ -574,7 +564,7 @@ export const make = (
 
 export const layer = (
   config: Pick<HostSettings, "id" | "stateDir" | "listen"> & {
-    readonly tart: typeof TartSettings.Type;
+    readonly mac: typeof TartSettings.Type;
   },
 ): Layer.Layer<
   Runtime,
@@ -584,7 +574,7 @@ export const layer = (
   Layer.effect(
     Runtime,
     make({
-      binary: config.tart.binary,
+      binary: config.mac.binary,
       publishAddress: config.listen.address,
       hostId: config.id,
       stateDir: config.stateDir,

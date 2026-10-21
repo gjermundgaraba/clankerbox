@@ -2,12 +2,11 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   Capacity,
   Internal,
-  Refused,
   ScriptFailed,
   type TailnetStatus,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { waitFor } from "@xstate/effect";
-import { Deferred, Effect, Predicate, Ref } from "effect";
+import { Deferred, Effect, Ref } from "effect";
 import { TestClock } from "effect/testing";
 import {
   answer,
@@ -93,7 +92,7 @@ const world = (initial: MachineState) =>
       Effect.andThen(enter(name), Ref.set(state, after));
 
     const steps: Steps = {
-      observe: () => Effect.map(Ref.get(state), (seen) => ({ state: seen })),
+      observe: () => Ref.get(state),
       make: (life) =>
         Effect.andThen(
           life.making?.script === undefined
@@ -105,8 +104,9 @@ const world = (initial: MachineState) =>
       join: () => Effect.andThen(Effect.orDie(enter("join")), Ref.get(tailnet)),
       stop: () => step("stop", "stopped"),
       remove: () =>
-        Effect.mapError(step("remove", "missing"), (error): RuntimeError =>
-          Predicate.isTagged(error, "Refused") ? error : new Internal({ message: error.message }),
+        Effect.mapError(
+          step("remove", "missing"),
+          (error): RuntimeError => new Internal({ message: error.message }),
         ),
     };
 
@@ -140,7 +140,7 @@ const rig = (
     const actor = yield* spawn(lifecycle(at.steps), {
       ...born,
       making: options?.making ?? (born.made ? undefined : fresh),
-      seen: { state: initial },
+      seen: initial,
     });
 
     let generation = born.generation;
@@ -447,7 +447,7 @@ describe("a machine's lifecycle", () => {
 
       yield* answer(machine.actor, 1);
       yield* Ref.set(machine.state, "stopped");
-      yield* tell(machine.actor, { state: "stopped" });
+      yield* tell(machine.actor, "stopped");
 
       expect(yield* settledAfter(machine.calls, 2)).toEqual(["start", "start"]);
     }).pipe(Effect.scoped),
@@ -464,7 +464,7 @@ describe("a machine's lifecycle", () => {
 
       const still = phaseOf(machine.actor.getSnapshot());
 
-      yield* tell(machine.actor, { state: "running" });
+      yield* tell(machine.actor, "running");
 
       expect([phaseOf(waiting), still]).toEqual(["waiting", "waiting"]);
       expect(
@@ -503,7 +503,7 @@ describe("a machine's lifecycle", () => {
   it.effect("a delete sent again after one failed shows no error while it retries", () =>
     Effect.gen(function* () {
       const machine = yield* rig("running", made);
-      const busy = new Refused({ message: "delete refused" });
+      const busy = new Internal({ message: "delete failed" });
 
       yield* answer(machine.actor, 1);
       yield* machine.failNext("remove", busy);
@@ -580,7 +580,7 @@ describe("a machine's lifecycle", () => {
       yield* rested(1);
 
       const joinsAfter = Effect.fnUntraced(function* (wait: number) {
-        yield* tell(machine.actor, { state: "running" });
+        yield* tell(machine.actor, "running");
         yield* rested(wait);
 
         return yield* machine.joins;
@@ -617,7 +617,7 @@ describe("a machine's lifecycle", () => {
       yield* waitFor(machine.actor, (snapshot) => snapshot.context.tailnet.status !== undefined);
 
       for (let rechecks = 0; rechecks < 3; rechecks++) {
-        yield* tell(machine.actor, { state: "running" });
+        yield* tell(machine.actor, "running");
       }
 
       yield* waitFor(machine.actor, (snapshot) => snapshot.value === "settled");
@@ -649,7 +649,7 @@ describe("a machine's lifecycle", () => {
 
         yield* Deferred.await(machine.gate.entered);
         yield* Ref.set(machine.state, "stopped");
-        yield* tell(machine.actor, { state: "stopped" });
+        yield* tell(machine.actor, "stopped");
         yield* Deferred.await(machine.gate.interrupted);
         yield* settledAfter(machine.calls, 2);
 
@@ -667,7 +667,7 @@ describe("a machine's lifecycle", () => {
 
       yield* machine.until(yield* machine.request("stopped"));
       yield* Ref.set(machine.state, "running");
-      yield* tell(machine.actor, { state: "running" });
+      yield* tell(machine.actor, "running");
       yield* settledAfter(machine.calls, 3);
 
       expect([yield* machine.calls, yield* machine.joins]).toEqual([["start", "stop", "stop"], 1]);

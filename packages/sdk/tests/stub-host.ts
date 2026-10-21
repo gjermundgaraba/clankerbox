@@ -12,8 +12,8 @@ import {
   NotFound,
   type PrebuildRequest,
   type Prebuilt,
+  type Kind,
   type Reading,
-  type Runtime,
   version,
   versionHeader,
 } from "../src/index.ts";
@@ -21,7 +21,7 @@ import {
 export interface StubHostOptions {
   readonly id: string;
   readonly bases: ReadonlyArray<string>;
-  readonly runtime?: Runtime;
+  readonly kind?: Kind;
   /** Default: 1.27.3. */
   readonly runtimeVersion?: string;
   /** Default: running. */
@@ -38,7 +38,7 @@ export interface StubHostOptions {
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   id,
-  runtime: "smolvm",
+  kind: "linux",
   createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
   base: "ubuntu",
   cpu: 1,
@@ -63,7 +63,7 @@ export const checkpoint = (id: string, fields?: Partial<Checkpoint>): Checkpoint
 });
 
 export const stubHost = (options: StubHostOptions) => {
-  const runtime = options.runtime ?? "smolvm";
+  const kind = options.kind ?? "linux";
   const machines = new Map<string, Machine>();
   const checkpoints = new Map<string, Checkpoint>();
   const creates: Array<CreateRequest> = [];
@@ -118,7 +118,7 @@ export const stubHost = (options: StubHostOptions) => {
       ? add(
           labelled(
             machine(request.id, {
-              runtime,
+              kind,
               base: request.base,
               cpu: request.cpu,
               ramMib: request.ramMib,
@@ -134,7 +134,7 @@ export const stubHost = (options: StubHostOptions) => {
       add(
         labelled(
           machine(`${options.id}_${name}`, {
-            runtime,
+            kind,
             base: found.base,
             cpu: found.cpu,
             ramMib: found.ramMib,
@@ -255,10 +255,9 @@ export const stubHost = (options: StubHostOptions) => {
     getHost: () =>
       Effect.as(record("host.get"), {
         id: options.id,
-        runtime,
+        kind,
         version,
         runtimeVersion: options.runtimeVersion ?? "1.27.3",
-        captureFrom: "running",
         bases: options.bases,
       }),
     getCapacity: () =>

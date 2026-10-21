@@ -14,7 +14,7 @@ import { Leases } from "./leases.ts";
 import { Machines } from "./machines.ts";
 import { checkpointRef, machineRef, madeOn } from "./refs.ts";
 import { Runtime } from "./runtime.ts";
-import type { HostSettings } from "./settings.ts";
+import { checkpointKinds, type HostSettings } from "./settings.ts";
 import { type CheckpointRecord, Store } from "./store.ts";
 
 export interface Interface {
@@ -38,7 +38,7 @@ export const builderName = (): string =>
   `prebuilding-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(8)))}`;
 
 export const make = (
-  config: Pick<HostSettings, "id">,
+  config: Pick<HostSettings, "id" | "kind">,
 ): Effect.Effect<Interface, HostError, Store | Runtime | Leases | Machines | Scope.Scope> =>
   Effect.gen(function* () {
     const store = yield* Store;
@@ -66,7 +66,7 @@ export const make = (
         id: idOf(record.name),
         createdAt: record.createdAt,
         machine: idOf(record.machine),
-        kind: record.kind,
+        kind: checkpointKinds[config.kind],
         base: record.base,
         cpu: record.cpu,
         ramMib: record.ramMib,
@@ -92,15 +92,12 @@ export const make = (
             yield* discarded(left);
           }
 
-          const kind = runtime.checkpointKind;
-
           const record: CheckpointRecord = {
             name,
             instance: newInstance(),
             createdAt: yield* DateTime.now,
             machine: source,
-            kind,
-            pin: kind === "ram" ? runtime.pin : undefined,
+            pin: runtime.pin,
             port: intent.port,
             base: intent.base,
             profile: intent.profile,
@@ -171,7 +168,7 @@ export const make = (
             { ephemeral: true },
           );
 
-          if (runtime.captureFrom === "stopped") {
+          if (checkpointKinds[config.kind] === "disk") {
             yield* machines.stop(builderId);
           }
 
@@ -238,6 +235,6 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<HostSettings, "id">,
+  config: Pick<HostSettings, "id" | "kind">,
 ): Layer.Layer<Checkpoints, HostError, Store | Runtime | Leases | Machines> =>
   Layer.effect(Checkpoints, make(config));

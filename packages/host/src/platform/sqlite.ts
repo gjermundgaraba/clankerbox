@@ -1,51 +1,34 @@
 import { DatabaseSync } from "node:sqlite";
-import { Checkpoint, Conflict, Desired, Internal, Runtime } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  Context,
-  DateTime,
-  Effect,
-  FileSystem,
-  Layer,
-  Option,
-  Result,
-  Schema,
-  type Scope,
-} from "effect";
-import { idOn, type Kind } from "../ids.ts";
+import { Conflict, Desired, Internal, Kind } from "@gjermundgaraba/clankerbox-sdk";
+import { DateTime, Effect, FileSystem, Layer, Option, Result, Schema, type Scope } from "effect";
+import { idOn, type Resource } from "../ids.ts";
 import type { HostSettings } from "../settings.ts";
 import { CannotStart } from "../startup.ts";
-import {
-  type CheckpointRecord,
-  type Intent,
-  type Interface,
-  NativeIds,
-  type NativeIdRecorder,
-  Store,
-} from "../store.ts";
+import { type CheckpointRecord, type Intent, type Interface, Store } from "../store.ts";
 
 export const databaseFile = "host.db";
 
-export const applicationId = 0x63_62_78_69;
+export const applicationId = 0x63_62_78_6a;
 
 export const migrations: ReadonlyArray<string> = [
   `CREATE TABLE host (
     one INTEGER PRIMARY KEY CHECK (one = 1),
     id TEXT NOT NULL,
-    runtime TEXT NOT NULL
+    kind TEXT NOT NULL
   ) STRICT;
   CREATE TABLE machines (
     name TEXT PRIMARY KEY,
     instance TEXT NOT NULL,
-    native TEXT,
     created_at TEXT NOT NULL,
     base TEXT NOT NULL,
     profile TEXT,
     cpu INTEGER NOT NULL,
     ram_mib INTEGER NOT NULL,
     disk_gib INTEGER NOT NULL,
-    port INTEGER UNIQUE,
+    port INTEGER NOT NULL UNIQUE,
     desired TEXT NOT NULL,
     generation INTEGER NOT NULL,
+    ephemeral INTEGER NOT NULL,
     made INTEGER NOT NULL,
     host_key TEXT
   ) STRICT;
@@ -54,9 +37,8 @@ export const migrations: ReadonlyArray<string> = [
     instance TEXT NOT NULL,
     created_at TEXT NOT NULL,
     machine TEXT NOT NULL,
-    kind TEXT NOT NULL,
     pin TEXT,
-    port INTEGER,
+    port INTEGER NOT NULL,
     base TEXT NOT NULL,
     profile TEXT,
     cpu INTEGER NOT NULL,
@@ -64,7 +46,6 @@ export const migrations: ReadonlyArray<string> = [
     disk_gib INTEGER NOT NULL,
     ready INTEGER NOT NULL
   ) STRICT`,
-  "ALTER TABLE machines ADD COLUMN ephemeral INTEGER NOT NULL DEFAULT 0",
 ];
 
 const Flag = Schema.Literals([0, 1]);
@@ -78,12 +59,11 @@ const shared = {
   cpu: Schema.Int,
   ram_mib: Schema.Int,
   disk_gib: Schema.Int,
-  port: Schema.NullOr(Schema.Int),
+  port: Schema.Int,
 };
 
 const MachineRow = Schema.Struct({
   ...shared,
-  native: Schema.NullOr(Schema.String),
   desired: Desired,
   generation: Schema.Int,
   ephemeral: Flag,
@@ -94,7 +74,6 @@ const MachineRow = Schema.Struct({
 const CheckpointRow = Schema.Struct({
   ...shared,
   machine: Schema.String,
-  kind: Checkpoint.fields.kind,
   pin: Schema.NullOr(Schema.String),
 });
 
@@ -109,14 +88,13 @@ const decodeDesire = Schema.decodeUnknownSync(
 const intentOf = (row: typeof MachineRow.Type): Intent => ({
   name: row.name,
   instance: row.instance,
-  native: row.native ?? undefined,
   createdAt: row.created_at,
   base: row.base,
   profile: row.profile ?? undefined,
   cpu: row.cpu,
   ramMib: row.ram_mib,
   diskGib: row.disk_gib,
-  port: row.port ?? undefined,
+  port: row.port,
   desired: row.desired,
   generation: row.generation,
   ephemeral: row.ephemeral === 1,
@@ -129,9 +107,8 @@ const checkpointOf = (row: typeof CheckpointRow.Type): CheckpointRecord => ({
   instance: row.instance,
   createdAt: row.created_at,
   machine: row.machine,
-  kind: row.kind,
   pin: row.pin ?? undefined,
-  port: row.port ?? undefined,
+  port: row.port,
   base: row.base,
   profile: row.profile ?? undefined,
   cpu: row.cpu,
@@ -242,44 +219,38 @@ const migrate = (db: DatabaseSync, file: string): Effect.Effect<void, CannotStar
     });
   });
 
-const decodeOwner = Schema.decodeUnknownSync(
-  Schema.Struct({ id: Schema.String, runtime: Runtime }),
-);
+const decodeOwner = Schema.decodeUnknownSync(Schema.Struct({ id: Schema.String, kind: Kind }));
 
 const own = (
   db: DatabaseSync,
   file: string,
-  { id, runtime }: Owner,
+  { id, kind }: Owner,
 ): Effect.Effect<void, CannotStart | Internal> =>
   transaction(db, "record its host", () => {
-    const row = db.prepare("SELECT id, runtime FROM host").get();
+    const row = db.prepare("SELECT id, kind FROM host").get();
 
     if (row === undefined) {
-      db.prepare("INSERT INTO host (one, id, runtime) VALUES (1, ?, ?)").run(id, runtime);
+      db.prepare("INSERT INTO host (one, id, kind) VALUES (1, ?, ?)").run(id, kind);
 
       return Result.void;
     }
 
     const owner = decodeOwner(row);
 
-    return owner.id === id && owner.runtime === runtime
+    return owner.id === id && owner.kind === kind
       ? Result.void
       : Result.fail(
           new CannotStart({
-            message: `${file} holds host ${owner.id} on ${owner.runtime}, and this config names host ${id} on ${runtime}: run it as ${owner.id} on ${owner.runtime}, or give it a new state dir`,
+            message: `${file} holds ${owner.kind} host ${owner.id}, and this config names ${kind} host ${id}: run it as ${owner.kind} host ${owner.id}, or give it a new state dir`,
           }),
         );
   });
 
-export type Owner = Pick<HostSettings, "id" | "runtime" | "stateDir">;
+export type Owner = Pick<HostSettings, "id" | "kind" | "stateDir">;
 
 export const open = (
   owner: Owner,
-): Effect.Effect<
-  Interface & NativeIdRecorder,
-  CannotStart | Internal,
-  FileSystem.FileSystem | Scope.Scope
-> =>
+): Effect.Effect<Interface, CannotStart | Internal, FileSystem.FileSystem | Scope.Scope> =>
   Effect.gen(function* () {
     const { stateDir, id: hostId } = owner;
     const fs = yield* FileSystem.FileSystem;
@@ -307,13 +278,13 @@ export const open = (
 
     const selectMachines = db.prepare("SELECT * FROM machines ORDER BY created_at, name");
     const selectMachine = db.prepare("SELECT * FROM machines WHERE name = ?");
-    const selectPorts = db.prepare("SELECT port FROM machines WHERE port IS NOT NULL");
+    const selectPorts = db.prepare("SELECT port FROM machines");
 
     const insertMachine = db.prepare(
-      `INSERT INTO machines (name, instance, native, created_at, base, profile, cpu, ram_mib,
-        disk_gib, port, desired, generation, ephemeral, made, host_key)
-       VALUES ($name, $instance, $native, $created_at, $base, $profile, $cpu, $ram_mib,
-        $disk_gib, $port, $desired, $generation, $ephemeral, $made, $host_key)`,
+      `INSERT INTO machines (name, instance, created_at, base, profile, cpu, ram_mib, disk_gib,
+        port, desired, generation, ephemeral, made, host_key)
+       VALUES ($name, $instance, $created_at, $base, $profile, $cpu, $ram_mib, $disk_gib,
+        $port, $desired, $generation, $ephemeral, $made, $host_key)`,
     );
 
     const updateDesire = db.prepare(
@@ -328,10 +299,6 @@ export const open = (
 
     const updateHostKey = db.prepare("UPDATE machines SET host_key = $host_key WHERE name = $name");
 
-    const updateNative = db.prepare(
-      "UPDATE machines SET native = $native WHERE name = $name AND instance = $instance",
-    );
-
     const deleteMachine = db.prepare("DELETE FROM machines WHERE name = ?");
 
     const selectCheckpoints = db.prepare(
@@ -345,10 +312,10 @@ export const open = (
     const selectUnready = db.prepare("SELECT * FROM checkpoints WHERE ready = 0 ORDER BY name");
 
     const insertCheckpoint = db.prepare(
-      `INSERT INTO checkpoints (name, instance, created_at, machine, kind, pin, port, base,
-        profile, cpu, ram_mib, disk_gib, ready)
-       VALUES ($name, $instance, $created_at, $machine, $kind, $pin, $port, $base,
-        $profile, $cpu, $ram_mib, $disk_gib, 0)`,
+      `INSERT INTO checkpoints (name, instance, created_at, machine, pin, port, base, profile,
+        cpu, ram_mib, disk_gib, ready)
+       VALUES ($name, $instance, $created_at, $machine, $pin, $port, $base, $profile,
+        $cpu, $ram_mib, $disk_gib, 0)`,
     );
 
     const updateReady = db.prepare("UPDATE checkpoints SET ready = 1 WHERE name = ?");
@@ -357,19 +324,19 @@ export const open = (
 
     const deleteCheckpoint = db.prepare("DELETE FROM checkpoints WHERE name = ?");
 
-    const taken = (kind: Kind, name: string) =>
-      new Conflict({ message: `${kind} ${id(name)} exists`, id: id(name) });
+    const taken = (resource: Resource, name: string) =>
+      new Conflict({ message: `${resource} ${id(name)} exists`, id: id(name) });
 
-    const inserting = (kind: Kind, name: string, run: () => void) =>
+    const inserting = (resource: Resource, name: string, run: () => void) =>
       Effect.flatMap(
-        sql(`insert ${kind} ${id(name)}`, () => {
+        sql(`insert ${resource} ${id(name)}`, () => {
           try {
             run();
 
             return Result.void;
           } catch (cause) {
             if (isSqliteError(cause) && cause.errcode === sqlitePrimaryKey) {
-              return Result.fail(taken(kind, name));
+              return Result.fail(taken(resource, name));
             }
 
             throw cause;
@@ -378,7 +345,7 @@ export const open = (
         Effect.fromResult,
       );
 
-    const store: Interface & NativeIdRecorder = {
+    const store: Interface = {
       machines: sql("list machines", () =>
         selectMachines.all().map((row) => intentOf(decodeMachine(row))),
       ).pipe(Effect.withSpan("Store.machines")),
@@ -403,14 +370,13 @@ export const open = (
           insertMachine.run({
             name: intent.name,
             instance: intent.instance,
-            native: intent.native ?? null,
             created_at: DateTime.formatIso(intent.createdAt),
             base: intent.base,
             profile: intent.profile ?? null,
             cpu: intent.cpu,
             ram_mib: intent.ramMib,
             disk_gib: intent.diskGib,
-            port: intent.port ?? null,
+            port: intent.port,
             desired: intent.desired,
             generation: intent.generation,
             ephemeral: flag(intent.ephemeral),
@@ -469,9 +435,8 @@ export const open = (
             instance: record.instance,
             created_at: DateTime.formatIso(record.createdAt),
             machine: record.machine,
-            kind: record.kind,
             pin: record.pin ?? null,
-            port: record.port ?? null,
+            port: record.port,
             base: record.base,
             profile: record.profile ?? null,
             cpu: record.cpu,
@@ -498,21 +463,6 @@ export const open = (
       unready: sql("list failed captures", () =>
         selectUnready.all().map((row) => checkpointOf(decodeCheckpoint(row))),
       ).pipe(Effect.withSpan("Store.unready")),
-      recordNative: Effect.fn("Store.recordNative")((name, instance, native) =>
-        Effect.flatMap(
-          sql(`record ${id(name)}'s native ID`, () =>
-            Number(updateNative.run({ name, instance, native }).changes),
-          ),
-          (changes) =>
-            changes === 1
-              ? Effect.void
-              : Effect.fail(
-                  new Internal({
-                    message: `state database: machine ${id(name)} of instance ${instance} is gone, so its native ID ${native} wasn't recorded`,
-                  }),
-                ),
-        ),
-      ),
     };
 
     return store;
@@ -520,9 +470,5 @@ export const open = (
 
 export const layer = (
   owner: Owner,
-): Layer.Layer<Store | NativeIds, CannotStart | Internal, FileSystem.FileSystem> =>
-  Layer.effectContext(
-    Effect.map(open(owner), (opened) =>
-      Context.make(Store, opened).pipe(Context.add(NativeIds, opened)),
-    ),
-  );
+): Layer.Layer<Store, CannotStart | Internal, FileSystem.FileSystem> =>
+  Layer.effect(Store, open(owner));

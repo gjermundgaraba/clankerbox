@@ -2,7 +2,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { CreateRequest, Machine } from "@gjermundgaraba/clankerbox-sdk";
+import type { CreateRequest, Kind, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
 import { HttpClient, HttpServer } from "effect/http";
@@ -28,9 +28,10 @@ export const hostConfig = (
   stateDir: string,
   machinePorts = sharedPorts,
   recheck = quiet,
+  kind: Kind = "linux",
 ): HostSettings => ({
-  id: "linux",
-  runtime: "smolvm",
+  id: kind,
+  kind,
   listen: { address: "127.0.0.1", port: 0 },
   bases: new Map([["ubuntu", image]]),
   stateDir,
@@ -38,8 +39,12 @@ export const hostConfig = (
   recheck,
 });
 
-export const request = (name: string, fields?: Partial<CreateRequest>): CreateRequest => ({
-  id: `linux_${name}`,
+export const request = (
+  name: string,
+  fields?: Partial<CreateRequest>,
+  host = "linux",
+): CreateRequest => ({
+  id: `${host}_${name}`,
   base: "ubuntu",
   cpu: 1,
   ramMib: 1024,
@@ -74,7 +79,9 @@ export const startHost = (
   dir: string,
   options?: {
     readonly fake?: FakeRuntime;
-    readonly runtime?: Omit<FakeOptions, "dir">;
+    /** `linux` by default: the host's kind and ID, and its fake runtime's kind. */
+    readonly kind?: Kind;
+    readonly runtime?: Omit<FakeOptions, "dir" | "kind">;
     readonly ports?: PortRange;
     readonly recheck?: Duration.Duration;
     readonly tailnet?: Layer.Layer<Tailnet>;
@@ -84,7 +91,7 @@ export const startHost = (
   },
 ) =>
   Effect.gen(function* () {
-    const fake = options?.fake ?? fakeRuntime({ dir, ...options?.runtime });
+    const fake = options?.fake ?? fakeRuntime({ dir, kind: options?.kind, ...options?.runtime });
     const stateDir = join(dir, "state");
     const scope = yield* Scope.make();
 
@@ -93,7 +100,7 @@ export const startHost = (
     const context = yield* Layer.buildWithScope(
       hostLayer(
         {
-          ...hostConfig(stateDir, options?.ports, options?.recheck),
+          ...hostConfig(stateDir, options?.ports, options?.recheck, options?.kind),
           tailnet: options?.tailnetSettings,
         },
         fake.layer,

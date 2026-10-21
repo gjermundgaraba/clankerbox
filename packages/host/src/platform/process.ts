@@ -2,7 +2,7 @@ import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, type PlatformError, type Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { lastLines } from "../guest.ts";
-import type { Execution, MachineRef } from "../runtime.ts";
+import type { Execution } from "../runtime.ts";
 
 export const describe = (error: PlatformError.PlatformError): string =>
   `${error.reason._tag}: ${error.reason.method}${error.reason.description === undefined ? "" : `: ${error.reason.description}`}`;
@@ -28,11 +28,6 @@ export const files = <A>(
   effect: Effect.Effect<A, PlatformError.PlatformError>,
 ): Effect.Effect<A, Internal> =>
   Effect.mapError(effect, (error) => new Internal({ message: `${what}: ${describe(error)}` }));
-
-export const portOf = (machine: MachineRef): Effect.Effect<number, Internal> =>
-  machine.port === undefined
-    ? Effect.fail(new Internal({ message: `machine ${machine.id} has no host port` }))
-    : Effect.succeed(machine.port);
 
 export const cliIn = (env: Readonly<Record<string, string | undefined>>) =>
   Effect.gen(function* () {

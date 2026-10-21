@@ -11,7 +11,6 @@ import {
   NotMade,
   NotOffered,
   PinMismatch,
-  Refused,
   ScriptFailed,
   Superseded,
   Unsizable,
@@ -43,8 +42,6 @@ const listing = [Invalid, Internal] as const;
 
 const reading = [Invalid, NotFound, Internal] as const;
 
-const removing = [Invalid, NotFound, Refused, Internal] as const;
-
 const converging = [
   Invalid,
   NotFound,
@@ -54,7 +51,6 @@ const converging = [
   PinMismatch,
   Unsizable,
   ScriptFailed,
-  Refused,
   Capacity,
   Superseded,
   Internal,
@@ -147,18 +143,17 @@ export const Http = ActionHttp.make(
         NotMade,
         Missing,
         WrongState,
-        Refused,
         Capacity,
         Internal,
       ] as const,
       description:
-        "Capture a checkpoint of a machine. Its kind follows the runtime: ram on smolvm, which captures only a running machine, and disk on Tart and boat.",
+        "Capture a checkpoint of a machine. Its kind follows the host's: ram on linux, which captures only a running machine, and disk on mac, which captures only a stopped one.",
       input: FromMachine,
       success: Checkpoint,
     }),
     Action.make("deleteCheckpoint", {
       ...write,
-      error: removing,
+      error: reading,
       description: "Delete a checkpoint, once the restores that read it are done.",
       input: ById,
     }),
@@ -173,12 +168,12 @@ export const Http = ActionHttp.make(
     Action.make("getHost", {
       ...read,
       error: [Invalid] as const,
-      description: "Read the host: its runtime, versions and bases.",
+      description: "Read the host: its kind, versions and bases.",
       success: Host,
     }),
     Action.make("getCapacity", {
       ...read,
-      error: [Invalid, Refused, Internal] as const,
+      error: listing,
       description:
         "Read the host's resources, how much of each is in use, and their limits. A machine whose state can't be read leaves the rows that count it unread; it fails when the runtime can't be read at all.",
       success: Schema.Array(Usage),

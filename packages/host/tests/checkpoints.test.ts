@@ -32,7 +32,7 @@ const checkpointNames = (host: TestHost) =>
 
 const seeded = <A, E>(linux: TestHost, use: (store: Store.Interface) => Effect.Effect<A, E>) =>
   Effect.scoped(
-    Effect.flatMap(Sqlite.open({ stateDir: linux.stateDir, id: "linux", runtime: "smolvm" }), use),
+    Effect.flatMap(Sqlite.open({ stateDir: linux.stateDir, id: "linux", kind: "linux" }), use),
   );
 
 const machineId = (host: TestHost, name: string) =>
@@ -52,7 +52,9 @@ const withSource = (options?: Parameters<typeof host>[0]) =>
   Effect.gen(function* () {
     const linux = yield* host(options);
 
-    yield* linux.run(linux.machines.create(request("dev", { profile: "small", setup: keyed })));
+    yield* linux.run(
+      linux.machines.create(request("dev", { profile: "small", setup: keyed }, options?.kind)),
+    );
     linux.fake.calls.length = 0;
 
     return linux;
@@ -367,16 +369,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
-  it.effect("a disk runtime's capture of a stopped machine is disk, with no pin", () =>
+  it.effect("a mac capture of a stopped machine is disk, with no pin", () =>
     Effect.gen(function* () {
-      const linux = yield* withSource({ runtime: { checkpointKind: "disk" } });
+      const mac = yield* withSource({ kind: "mac" });
 
-      yield* linux.run(linux.machines.stop("linux_dev"));
+      yield* mac.run(mac.machines.stop("mac_dev"));
 
-      const disk = yield* linux.run(linux.checkpoints.capture("linux_dev", "cold"));
-      const rows = yield* linux.run(linux.store.checkpoints);
+      const disk = yield* mac.run(mac.checkpoints.capture("mac_dev", "cold"));
+      const rows = yield* mac.run(mac.store.checkpoints);
 
-      expect(disk).toMatchObject({ id: "linux_cold", kind: "disk" });
+      expect(disk).toMatchObject({ id: "mac_cold", kind: "disk" });
       expect(rows.map(({ name, pin }) => [name, pin])).toEqual([["cold", undefined]]);
     }),
   );
@@ -483,7 +485,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           phase: "settled",
           ssh: { host: "127.0.0.1", port: ports.first },
         });
-        expect(source.ssh).toEqual({ user: "user", host: "127.0.0.1", port: ports.first });
+        expect(source.ssh).toEqual({ user: "admin", host: "127.0.0.1", port: ports.first });
         expect(restored.hostKey).not.toBe(source.hostKey);
         expect(yield* machineId(linux, "dev")).toBe("linux_dev\n");
         expect(linux.fake.calls).toEqual([
@@ -618,25 +620,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect("a disk checkpoint restores under any pin", () =>
-    Effect.gen(function* () {
-      const first = yield* withSource({ runtime: { checkpointKind: "disk" } });
-
-      yield* first.run(first.machines.stop("linux_dev"));
-      yield* first.run(first.checkpoints.capture("linux_dev", "cold"));
-      yield* first.dispose;
-
-      const upgraded = yield* host({
-        dir: first.dir,
-        fake: fakeRuntime({ dir: first.dir, pin: "fake 2", checkpointKind: "disk" }),
-      });
-
-      const restored = yield* upgraded.run(upgraded.machines.restore("linux_cold", "copy"));
-
-      expect(restored.state).toBe("running");
-    }),
-  );
-
   it.effect("a capture cut short by the host's end deletes what it began", () =>
     Effect.gen(function* () {
       const linux = yield* withSource();
@@ -665,7 +648,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           instance: "cafe0001cafe0001cafe0001cafe0001",
           createdAt: DateTime.makeUnsafe("2026-10-15T10:00:00Z"),
           machine: "dev",
-          kind: "ram",
           pin: "fake 1",
           port: ports.first,
           base: "ubuntu",
@@ -911,13 +893,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
-  it.effect("a disk runtime's prebuild stops its builder before the capture", () =>
+  it.effect("a mac prebuild stops its builder before the capture", () =>
     Effect.gen(function* () {
-      const linux = yield* host({ runtime: { checkpointKind: "disk", captureFrom: "stopped" } });
+      const mac = yield* host({ kind: "mac" });
 
-      yield* linux.run(linux.checkpoints.prebuild(prebuild()));
+      yield* mac.run(mac.checkpoints.prebuild(prebuild({ id: "mac_prebuilt-0123456789ab" })));
 
-      const ops = linux.fake.calls.map((call) => call.split(" ")[0]);
+      const ops = mac.fake.calls.map((call) => call.split(" ")[0]);
 
       expect(ops.indexOf("stop")).toBeGreaterThan(-1);
       expect(ops.indexOf("stop")).toBeLessThan(ops.indexOf("capture"));

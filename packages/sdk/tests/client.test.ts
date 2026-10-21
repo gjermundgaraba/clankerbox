@@ -182,18 +182,18 @@ it.effect("a malformed ID is Invalid naming the action, sent to no host", () =>
 it.effect("a list fans out and names the host that didn't answer", () =>
   Effect.gen(function* () {
     const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_a")] });
-    const boat = host({ id: "boat", bases: ["boat"], machines: [machine("boat_b")] });
+    const other = host({ id: "other", bases: ["ubuntu"], machines: [machine("other_b")] });
 
     const { answers, unreachable } = yield* withClient(
       [
         ["linux", linux],
         ["mac", "down"],
-        ["boat", boat],
+        ["other", other],
       ],
       (client) => client.machines,
     );
 
-    expect(answers.map(({ id }) => id).sort()).toEqual(["boat_b", "linux_a"]);
+    expect(answers.map(({ id }) => id).sort()).toEqual(["linux_a", "other_b"]);
     expect(unreachable.map(({ host: id }) => id)).toEqual(["mac"]);
     expect(unreachable[0]?.error._tag).toBe("Unavailable");
     expect(unreachable.map(({ error }) => retryable(error))).toEqual([true]);
@@ -318,7 +318,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const first = host({ id: "linux", bases: ["ubuntu"] });
-      const second = host({ id: "mac", bases: ["tahoe"], runtime: "tart" });
+      const second = host({ id: "mac", bases: ["tahoe"], kind: "mac" });
 
       const { placed, named } = yield* withClient(
         [
@@ -332,8 +332,8 @@ it.effect(
           }),
       );
 
-      expect(placed).toMatchObject({ id: "mac", runtime: "tart" });
-      expect(named).toMatchObject({ id: "linux", runtime: "smolvm" });
+      expect(placed).toMatchObject({ id: "mac", kind: "mac" });
+      expect(named).toMatchObject({ id: "linux", kind: "linux" });
       expect(first.calls).toEqual(["host.get", "host.get"]);
     }),
 );

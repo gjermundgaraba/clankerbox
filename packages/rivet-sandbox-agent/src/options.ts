@@ -18,8 +18,6 @@ export interface Options {
   readonly fresh?: boolean | undefined;
   /** `sandbox` by default. */
   readonly namePrefix?: string | undefined;
-  /** The machine's own login user by default. */
-  readonly sshUser?: string | undefined;
   /**
    * The path of a public-key file, such as your `id_ed25519.pub`, whose keys the host installs for
    * the login user after a profile's setup, as the client config's `authorizedKeys` does: the key
@@ -32,7 +30,7 @@ export interface Options {
    * `-S`): the tunnel ends with its ssh, and those would outlive it.
    */
   readonly sshArguments?: ReadonlyArray<string> | undefined;
-  /** `/home/user` by default, the login user's home, where the Ubuntu recipe runs the server. */
+  /** `/home/admin` by default, the login user's home, where the Ubuntu recipe runs the server. */
   readonly cwd?: string | undefined;
 }
 

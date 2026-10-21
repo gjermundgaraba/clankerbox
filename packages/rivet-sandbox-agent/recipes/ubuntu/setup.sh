@@ -1,9 +1,8 @@
 #!/bin/sh
 # A clankerbox setup that makes an x86_64 Ubuntu machine a sandbox for Rivet's Sandbox Agent:
-# the login user `user` with passwordless sudo, for whom the host then installs your keys, sshd
-# with root's login off where this recipe installs it, the Sandbox Agent's server and Claude Code
-# under `user`, and an /etc/clankerbox/start that keeps the server running on the guest's
-# loopback, port 2468.
+# the login user `admin` with passwordless sudo, for whom the host then installs your keys, sshd
+# with root's login off, the Sandbox Agent's server and Claude Code under `admin`, and an
+# /etc/clankerbox/start that keeps the server running on the guest's loopback, port 2468.
 #
 # Name this directory, or a copy, as a profile's `setup.path`. An optional `agent.env` beside
 # it, of `NAME=value` lines such as `ANTHROPIC_API_KEY=…`, becomes the server's environment,
@@ -20,27 +19,22 @@ agent_sha256=5ebefccb130cccb0aa7972eacc8ff7c55550b959b2dd682a232a21a5712d955e
 node_version=22.23.3
 node_sha256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
 
-# A base with its own sshd, such as boat's, keeps it as it is.
-if [ -x /usr/sbin/sshd ]; then own_sshd=false; else own_sshd=true; fi
-
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
   openssh-server sudo curl ca-certificates xz-utils procps >/dev/null
 
-if [ "$own_sshd" = true ]; then
-  install -d /etc/ssh/sshd_config.d
-  echo "PermitRootLogin no" >/etc/ssh/sshd_config.d/10-clankerbox.conf
+install -d /etc/ssh/sshd_config.d
+echo "PermitRootLogin no" >/etc/ssh/sshd_config.d/10-clankerbox.conf
+
+if ! id admin >/dev/null 2>&1; then
+  groupadd -f admin
+  useradd -m -s /bin/bash -g admin admin
 fi
 
-# The login user, which boat's bases already have.
-if ! id user >/dev/null 2>&1; then
-  useradd -m -s /bin/bash user
-fi
-
-echo "user ALL=(ALL) NOPASSWD: ALL" >/var/tmp/sudoers-user
-visudo -cf /var/tmp/sudoers-user >/dev/null
-install -m 440 /var/tmp/sudoers-user /etc/sudoers.d/user
-rm /var/tmp/sudoers-user
+echo "admin ALL=(ALL) NOPASSWD: ALL" >/var/tmp/sudoers-admin
+visudo -cf /var/tmp/sudoers-admin >/dev/null
+install -m 440 /var/tmp/sudoers-admin /etc/sudoers.d/admin
+rm /var/tmp/sudoers-admin
 
 # Downloads $1 to $3 and refuses it unless its sha256 is $2.
 fetch() {
@@ -58,16 +52,16 @@ fetch "https://nodejs.org/dist/v$node_version/node-v$node_version-linux-x64.tar.
 tar -xJf /var/tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner
 rm /var/tmp/node.tar.xz
 
-# The agents run as `user`: as root, Claude Code offers no bypass-permissions mode.
+# The agents run as `admin`: as root, Claude Code offers no bypass-permissions mode.
 if [ -s agent.env ]; then
-  install -m 600 -o user -g "$(id -gn user)" agent.env /etc/sandbox-agent.env
+  install -m 600 -o admin -g "$(id -gn admin)" agent.env /etc/sandbox-agent.env
 fi
 
 # Claude Code at its latest release, and its adapter at the version the server pins. Other
 # agents install the same way; `install-agent codex` hangs in its own check at this version, so
 # give it a timeout too, and end what it leaves running. Claude's install takes about 30 s; 300 s
 # leaves room for a slow mirror.
-timeout 300 su - user -c 'sandbox-agent install-agent claude' >/var/tmp/install-agent.log 2>&1 || {
+timeout 300 su - admin -c 'sandbox-agent install-agent claude' >/var/tmp/install-agent.log 2>&1 || {
   tail -n 15 /var/tmp/install-agent.log
   exit 1
 }
@@ -103,17 +97,17 @@ answers_within() {
 }
 
 running() {
-  pgrep -u user -f 'sandbox-agent server' >/dev/null
+  pgrep -u admin -f 'sandbox-agent server' >/dev/null
 }
 
 # A running server gets 10 s to answer, since this runs at every start, a running machine's too,
 # before it is ended as hung: TERM, then KILL after 5 s, as a hung one may ignore TERM.
 if running && ! answers_within 10; then
-  pkill -u user -f 'sandbox-agent server' || true
+  pkill -u admin -f 'sandbox-agent server' || true
   for tries in $(seq 40); do
     running || break
     if [ "$tries" -eq 20 ]; then
-      pkill -KILL -u user -f 'sandbox-agent server' || true
+      pkill -KILL -u admin -f 'sandbox-agent server' || true
     fi
     sleep 0.25
   done
@@ -121,7 +115,7 @@ fi
 
 # The server listens on loopback alone, with no token: guest port 22 is the only way to it.
 if ! running; then
-  su - user -c '
+  su - admin -c '
     if [ -r /etc/sandbox-agent.env ]; then set -a; . /etc/sandbox-agent.env; set +a; fi
     setsid -f sandbox-agent server --no-token --no-telemetry >/dev/null 2>&1
   '

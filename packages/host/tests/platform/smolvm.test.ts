@@ -2,18 +2,20 @@ import { mkdirSync } from "node:fs";
 import { totalmem } from "node:os";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
+import { type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Fiber, FileSystem, Layer, Logger, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { layer } from "@effect/vitest";
+import { it, layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
-import { type CheckpointRef, type MachineRef } from "../../src/runtime.ts";
+import { type CheckpointRef, type MachineRef, type MachineState } from "../../src/runtime.ts";
 import {
   controlSocket,
   environment,
+  machineReadWait,
   make,
   nativeName,
+  observeEach,
   pathsIn,
   pin,
   type Settings,
@@ -72,7 +74,6 @@ const machine: MachineRef = {
   id: "linux_dev",
   name: "dev",
   instance: "0123456789abcdef0123456789abcdef",
-  native: undefined,
   cpu: 2,
   ramMib: 2048,
   diskGib: 20,
@@ -259,7 +260,7 @@ layer(NodeServices.layer)((it) => {
         { ...machine, id: "linux_gone", name: "gone", port: 10_002 },
       ]);
 
-      expect(observed).toEqual([{ state: "running" }, { state: "stopped" }, { state: "missing" }]);
+      expect(observed).toEqual(["running", "stopped", "missing"]);
       expect(smolvmArgs(spawner.calls).map((args) => args[3])).toEqual(
         expect.arrayContaining(["dev-01234567", "two-01234567", "gone-01234567"]),
       );
@@ -286,7 +287,7 @@ layer(NodeServices.layer)((it) => {
           .observe([machine, { ...machine, id: "linux_two", name: "two", port: 10_001 }])
           .pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))])));
 
-        expect(observed).toEqual([{ state: "unknown" }, { state: "stopped" }]);
+        expect(observed).toEqual(["unknown", "stopped"]);
         expect(logged).toEqual([
           [
             "couldn't read linux_dev's state: smolvm machine status dev-01234567 exited 1: Error: database is locked",
@@ -336,7 +337,7 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(Duration.format(waited)).toBe("8s");
-        expect(value).toEqual([{ state: "stopped" }, ...hanging.map(() => ({ state: "unknown" }))]);
+        expect(value).toEqual(["stopped", ...hanging.map(() => "unknown")]);
       }),
   );
 
@@ -479,7 +480,7 @@ layer(NodeServices.layer)((it) => {
           ["WrongState", "smolvm reads machine linux_dev frozen, and doesn't start it from there"],
           ["WrongState", "smolvm reads machine linux_dev paused, and doesn't start it from there"],
           ["WrongState", "smolvm reads machine linux_dev pausing, and doesn't start it from there"],
-          ["Missing", "machine linux_dev is missing from the smolvm runtime; delete it"],
+          ["Missing", "machine linux_dev is missing from the linux runtime; delete it"],
         ]);
         expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual([
           "status",
@@ -817,7 +818,6 @@ layer(NodeServices.layer)((it) => {
     id: "linux_snap",
     name: "snap",
     instance: "fedcba9876543210fedcba9876543210",
-    kind: "ram",
     port: 10_000,
   };
 
@@ -900,7 +900,7 @@ layer(NodeServices.layer)((it) => {
             "WrongState",
             "a fork copies a running machine, RAM included, and linux_dev is stopped: start it first",
           ],
-          ["Missing", "machine linux_dev is missing from the smolvm runtime; delete it"],
+          ["Missing", "machine linux_dev is missing from the linux runtime; delete it"],
           [
             "WrongState",
             "smolvm reads machine linux_dev unreachable: its VM runs, but its agent doesn't answer; start it to boot it again",
@@ -1143,3 +1143,92 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 });
+
+const observed = (name: string): MachineRef => ({
+  id: `linux_${name}`,
+  name,
+  instance: name.padStart(32, "0"),
+  cpu: 1,
+  ramMib: 1024,
+  diskGib: 10,
+  port: 10_000,
+});
+
+const machines = ["a", "b", "c", "d"].map(observed);
+
+const logging = (logged: Array<unknown>) =>
+  Logger.layer([Logger.make(({ message }) => logged.push(message))]);
+
+it.effect("each machine's state comes back in the machines' order", () =>
+  Effect.gen(function* () {
+    const states: ReadonlyArray<MachineState> = ["running", "stopped", "missing", "running"];
+
+    const read = yield* observeEach(machines, (machine) =>
+      Effect.succeed(states[machines.indexOf(machine)] ?? "unknown"),
+    );
+
+    expect(read).toEqual(states);
+  }),
+);
+
+it.effect("a read that fails reads unknown, warns why, and leaves the others", () =>
+  Effect.gen(function* () {
+    const logged: Array<unknown> = [];
+
+    const read = yield* observeEach(machines, (machine) =>
+      machine.name === "b"
+        ? Effect.fail(new Internal({ message: "smolvm machine status exited 1" }))
+        : Effect.succeed<MachineState>("running"),
+    ).pipe(Effect.provide(logging(logged)));
+
+    expect(read).toEqual(["running", "unknown", "running", "running"]);
+    expect(logged).toEqual([["couldn't read linux_b's state: smolvm machine status exited 1"]]);
+  }),
+);
+
+it.effect(
+  "a read that takes over machineReadWait reads unknown, and the others don't wait on it",
+  () =>
+    Effect.gen(function* () {
+      const logged: Array<unknown> = [];
+
+      const fiber = yield* Effect.forkChild(
+        observeEach(machines, (machine) =>
+          machine.name === "c" ? Effect.never : Effect.succeed<MachineState>("stopped"),
+        ).pipe(Effect.provide(logging(logged))),
+      );
+
+      yield* TestClock.adjust(machineReadWait);
+
+      const read = yield* Fiber.join(fiber);
+
+      expect(read).toEqual(["stopped", "stopped", "unknown", "stopped"]);
+      expect(logged).toEqual([
+        [`couldn't read linux_c's state: no answer within ${Duration.format(machineReadWait)}`],
+      ]);
+    }),
+);
+
+it.effect("no more than 8 reads run at once", () =>
+  Effect.gen(function* () {
+    let running = 0;
+    let most = 0;
+
+    yield* observeEach(
+      Array.from({ length: 12 }, (_, index) => observed(`m${index}`)),
+      () =>
+        Effect.gen(function* (): Effect.fn.Return<MachineState> {
+          running += 1;
+          most = Math.max(most, running);
+
+          yield* Effect.yieldNow;
+
+          running -= 1;
+
+          return "running" satisfies MachineState;
+        }),
+    );
+
+    expect(most).toBe(8);
+  }),
+);

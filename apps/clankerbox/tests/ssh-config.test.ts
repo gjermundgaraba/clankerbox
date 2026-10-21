@@ -22,9 +22,7 @@ afterEach(() => cleanup(stubs));
 
 const mine = "Host linux_dev\n  User developer\n";
 
-const home = (
-  hosts: ReadonlyArray<object> = [{ id: "linux", url: url("linux"), sshUser: "user" }],
-) =>
+const home = (hosts: ReadonlyArray<object> = [{ id: "linux", url: url("linux") }]) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
     const file = join(dir, ".config", "clankerbox", "config.json");
@@ -45,16 +43,16 @@ const home = (
   });
 
 layer(NodeServices.layer)((it) => {
-  it("renders one block per host, as its sshUser, running the clankerbox the login shell finds, since ssh runs a KnownHostsCommand only by absolute path", () => {
+  it("renders one block per host, as the login user, running the clankerbox the login shell finds, since ssh runs a KnownHostsCommand only by absolute path", () => {
     const text = renderSshConfig("/bin/zsh", [
-      { id: "linux", url: "http://linux:8484", sshUser: "user" },
-      { id: "mac", url: "http://mac:8484", sshUser: "admin" },
+      { id: "linux", url: "http://linux:8484" },
+      { id: "mac", url: "http://mac:8484" },
     ]);
 
     expect(text).toContain(
       [
         "Host linux_*",
-        "  User user",
+        "  User admin",
         "  ProxyCommand clankerbox ssh-proxy %n",
         '  KnownHostsCommand /bin/zsh -c "exec clankerbox ssh-known-hosts %n %H"',
         "  UserKnownHostsFile /dev/null",
@@ -90,7 +88,7 @@ layer(NodeServices.layer)((it) => {
         expect(stderr).not.toContain("SSH config");
         expect(yield* read(sshConfig)).toBe(`${mine}Match all\nInclude clankerbox\n`);
         expect(yield* read(managed)).toBe(
-          renderSshConfig("/bin/sh", [{ id: "linux", url: url("linux"), sshUser: "user" }]),
+          renderSshConfig("/bin/sh", [{ id: "linux", url: url("linux") }]),
         );
       }),
   );
@@ -102,9 +100,7 @@ layer(NodeServices.layer)((it) => {
       yield* cli(["machines"], { endpoints, env: { ...env, SHELL: "/opt/homebrew/bin/fish" } });
 
       expect(yield* read(managed)).toBe(
-        renderSshConfig("/opt/homebrew/bin/fish", [
-          { id: "linux", url: url("linux"), sshUser: "user" },
-        ]),
+        renderSshConfig("/opt/homebrew/bin/fish", [{ id: "linux", url: url("linux") }]),
       );
     }),
   );
@@ -144,19 +140,6 @@ layer(NodeServices.layer)((it) => {
         expect(code).toBe(0);
         expect(stderr).not.toContain("SSH config");
       }),
-  );
-
-  it.effect("a host's sshUser that ssh_config can't take is Invalid", () =>
-    Effect.gen(function* () {
-      const { env, endpoints } = yield* home([
-        { id: "linux", url: url("linux"), sshUser: "root\n  ProxyCommand evil" },
-      ]);
-
-      const { code, stderr } = yield* cli(["machines"], { endpoints, env });
-
-      expect(code).toBe(1);
-      expect(stderr).toContain("hosts[0].sshUser: an SSH user is lowercase letters");
-    }),
   );
 
   it.effect("a command given --config leaves the SSH config alone", () =>

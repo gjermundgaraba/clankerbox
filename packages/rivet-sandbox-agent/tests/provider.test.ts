@@ -65,7 +65,7 @@ test("the SDK starts a sandbox from a profile and reaches its agent through a tu
   const args = call?.args ?? [];
 
   expect(more).toEqual([]);
-  expect(args.slice(0, 2)).toEqual(["-l", "user"]);
+  expect(args.slice(0, 2)).toEqual(["-l", "admin"]);
   expect(args).toContain(`HostKeyAlias=${id}`);
   expect(args.slice(args.indexOf(login.host))).toEqual([
     login.host,

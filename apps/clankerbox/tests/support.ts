@@ -32,7 +32,7 @@ export const writeConfig = (dir: string, hosts: ReadonlyArray<string>, profiles?
     yield* write(
       file,
       JSON.stringify({
-        hosts: hosts.map((id) => ({ id, url: url(id), sshUser: "user" })),
+        hosts: hosts.map((id) => ({ id, url: url(id) })),
         profiles,
         authorizedKeys: "id.pub",
       }),

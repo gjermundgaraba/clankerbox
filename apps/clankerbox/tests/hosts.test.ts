@@ -20,11 +20,21 @@ layer(NodeServices.layer)((it) => {
       const { code, stdout } = yield* cli(["hosts", "--config", config], {
         endpoints: [
           ["linux", host({ id: "linux", bases: ["ubuntu", "ubuntu-dev"] })],
-          ["mac", host({ id: "mac", bases: ["tahoe"], runtime: "tart" })],
+          ["mac", host({ id: "mac", bases: ["tahoe"], kind: "mac" })],
         ],
       });
 
       expect(code).toBe(0);
+      expect(
+        stdout
+          .trim()
+          .split("\n")
+          .map((row) => row.split(/\s+/u).slice(0, 2)),
+      ).toEqual([
+        ["ID", "KIND"],
+        ["linux", "linux"],
+        ["mac", "mac"],
+      ]);
       expect(stdout).toContain("ubuntu,ubuntu-dev");
       expect(stdout).toContain("tahoe");
     }),
@@ -35,7 +45,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
-        const config = yield* writeConfig(dir, ["linux", "mac", "boat"]);
+        const config = yield* writeConfig(dir, ["linux", "mac", "spare"]);
 
         const endpoints: CliOptions["endpoints"] = [
           [
@@ -49,21 +59,20 @@ layer(NodeServices.layer)((it) => {
               ],
             }),
           ],
-          ["mac", "down"],
           [
-            "boat",
+            "mac",
             host({
-              id: "boat",
-              bases: ["boat"],
-              runtime: "boat",
+              id: "mac",
+              bases: ["tahoe"],
+              kind: "mac",
               capacity: [
-                { resource: "activeSandboxes", limit: 2, used: 1 },
-                { resource: "startsPerDay", limit: 75, used: 12 },
-                { resource: "cpu", unread: ["boat_review", "boat_ci"] },
-                { resource: "ramMib", unread: ["boat_review", "boat_ci"] },
+                { resource: "runningVms", limit: 2, used: 1 },
+                { resource: "cpu", unread: ["mac_review", "mac_ci"] },
+                { resource: "ramMib", unread: ["mac_review", "mac_ci"] },
               ],
             }),
           ],
+          ["spare", "down"],
         ];
 
         const { code, stdout, stderr } = yield* cli(["capacity", "--config", config], {
@@ -82,25 +91,23 @@ layer(NodeServices.layer)((it) => {
           ["HOST", "RESOURCE", "USED", "LIMIT"],
           ["linux", "cpu", "3", "-"],
           ["linux", "ram", "3G", "14G"],
-          ["boat", "active-sandboxes", "1", "2"],
-          ["boat", "starts/day", "12", "75"],
-          ["boat", "cpu", "?", "-"],
-          ["boat", "ram", "?", "-"],
+          ["mac", "running-vms", "1", "2"],
+          ["mac", "cpu", "?", "-"],
+          ["mac", "ram", "?", "-"],
         ]);
-        expect(stderr).toContain("mac");
+        expect(stderr).toContain("spare");
         expect(stderr.split("\n").filter((line) => line.includes("couldn't read"))).toEqual([
-          "clankerbox: boat couldn't read the state of boat_review, boat_ci, so it shows ? for what they use",
+          "clankerbox: mac couldn't read the state of mac_review, mac_ci, so it shows ? for what they use",
         ]);
         expect(JSON.parse(json.stdout)).toMatchObject({
           capacity: [
             { host: "linux", resource: "cpu", used: 3 },
             { host: "linux", resource: "ramMib", limit: 14_336, used: 3072 },
-            { host: "boat", resource: "activeSandboxes", limit: 2, used: 1 },
-            { host: "boat", resource: "startsPerDay", limit: 75, used: 12 },
-            { host: "boat", resource: "cpu", unread: ["boat_review", "boat_ci"] },
-            { host: "boat", resource: "ramMib", unread: ["boat_review", "boat_ci"] },
+            { host: "mac", resource: "runningVms", limit: 2, used: 1 },
+            { host: "mac", resource: "cpu", unread: ["mac_review", "mac_ci"] },
+            { host: "mac", resource: "ramMib", unread: ["mac_review", "mac_ci"] },
           ],
-          unreachable: [{ host: "mac" }],
+          unreachable: [{ host: "spare" }],
         });
       }),
   );

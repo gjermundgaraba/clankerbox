@@ -2,7 +2,7 @@ import { it } from "@effect/vitest";
 import { Effect, Exit, Schema } from "effect";
 import { expect } from "vite-plus/test";
 import { checkRamBudget } from "../src/usage.ts";
-import type { Held, MachineRef, Observed } from "../src/runtime.ts";
+import type { Held, MachineRef, MachineState } from "../src/runtime.ts";
 
 const Machine = Schema.Struct({
   ramMib: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_536 })),
@@ -14,14 +14,13 @@ const ref = (index: number, ramMib: number): MachineRef => ({
   id: `linux_m${index}`,
   name: `m${index}`,
   instance: index.toString(16).padStart(32, "0"),
-  native: undefined,
   cpu: 1,
   ramMib,
   diskGib: 10,
-  port: undefined,
+  port: 10_000 + index,
 });
 
-type Placed = Held & { readonly state: Observed["state"] };
+type Placed = Held & { readonly state: MachineState };
 
 const admits = (target: number, others: ReadonlyArray<typeof Machine.Type>, budgetMib: number) =>
   Effect.gen(function* () {
@@ -38,9 +37,9 @@ const admits = (target: number, others: ReadonlyArray<typeof Machine.Type>, budg
       Effect.sync(() => {
         asked.push(refs);
 
-        return refs.map((asking) => ({
-          state: machines.find((held) => held.machine.id === asking.id)?.state ?? "missing",
-        }));
+        return refs.map(
+          (asking) => machines.find((held) => held.machine.id === asking.id)?.state ?? "missing",
+        );
       });
 
     const checked = yield* Effect.exit(

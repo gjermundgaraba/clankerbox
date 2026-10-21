@@ -66,7 +66,6 @@ const machineOn = (name: string): MachineRef => ({
   id: `mac_${name}`,
   name,
   instance: `${name.length.toString(16).padStart(2, "0")}23456789abcdef0123456789abcdef`,
-  native: undefined,
   cpu: 4,
   ramMib: 8192,
   diskGib: 60,
@@ -371,8 +370,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             log,
           }),
         );
-        expect(yield* accepts(machine.port ?? 0)).toBe(true);
-        expect(yield* runtime.observe([machine])).toEqual([{ state: "running" }]);
+        expect(yield* accepts(machine.port)).toBe(true);
+        expect(yield* runtime.observe([machine])).toEqual(["running"]);
       }),
   );
 
@@ -461,13 +460,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       mac.vms.set(vmOf(machine), "running");
 
-      const listened = yield* accepts(machine.port ?? 0);
+      const listened = yield* accepts(machine.port);
 
       yield* runtime.start(machine);
 
       expect(listened).toBe(false);
       expect(calls(mac)).toEqual([]);
-      expect(yield* accepts(machine.port ?? 0)).toBe(true);
+      expect(yield* accepts(machine.port)).toBe(true);
     }),
   );
 
@@ -484,14 +483,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(failure(error)).toEqual([
           "Missing",
-          "machine mac_dev is missing from the tart runtime; delete it",
+          "machine mac_dev is missing from the mac runtime; delete it",
         ]);
         expect(calls(mac)).toEqual([]);
         expect([existsSync(join(dir, `${vm}.plist`)), existsSync(join(dir, `${vm}.log`))]).toEqual([
           false,
           false,
         ]);
-        expect(yield* accepts(machine.port ?? 0)).toBe(false);
+        expect(yield* accepts(machine.port)).toBe(false);
       }),
   );
 
@@ -599,7 +598,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         );
         expect(calls(mac).filter((line) => line.includes("stop"))).toEqual([]);
         expect(mac.vms.get(vm)).toBe("running");
-        expect(yield* accepts(machine.port ?? 0)).toBe(true);
+        expect(yield* accepts(machine.port)).toBe(true);
       }),
   );
 
@@ -614,8 +613,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           id: "mac_snap",
           name: "snap",
           instance: "fedcba9876543210fedcba9876543210",
-          native: undefined,
-          kind: "disk" as const,
           port: source.port,
         };
 
@@ -883,8 +880,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           id: "mac_snap",
           name: "snap",
           instance: "fedcba9876543210fedcba9876543210",
-          native: undefined,
-          kind: "disk" as const,
           port: source.port,
         };
 
@@ -897,8 +892,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const missing = yield* Effect.flip(runtime.capture(source, checkpoint));
 
-        expect(runtime.checkpointKind).toBe("disk");
-        expect(runtime.captureFrom).toBe("stopped");
         expect([fork, capture, missing].map(failure)).toEqual([
           [
             "WrongState",
@@ -908,11 +901,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             "WrongState",
             "a Tart checkpoint copies a stopped machine's disk, and mac_src is running: stop it first",
           ],
-          ["Missing", "machine mac_src is missing from the tart runtime; delete it"],
+          ["Missing", "machine mac_src is missing from the mac runtime; delete it"],
         ]);
         expect(calls(mac)).toEqual([]);
         expect(existsSync(join(jobsDir(mac.settings.stateDir), `${vmOf(copy)}.plist`))).toBe(false);
-        expect(yield* accepts(copy.port ?? 0)).toBe(false);
+        expect(yield* accepts(copy.port)).toBe(false);
       }),
   );
 
@@ -956,8 +949,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           id: "mac_snap",
           name: "snap",
           instance: "fedcba9876543210fedcba9876543210",
-          native: undefined,
-          kind: "disk" as const,
           port: source.port,
         };
 
@@ -1001,7 +992,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(calls(mac).slice(before)).toEqual([`tart exec ${vm} sudo -n /sbin/shutdown -h now`]);
         expect(mac.vms.get(vm)).toBe("stopped");
-        expect(yield* accepts(machine.port ?? 0)).toBe(true);
+        expect(yield* accepts(machine.port)).toBe(true);
       }),
   );
 
@@ -1080,7 +1071,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         false,
         false,
       ]);
-      expect(yield* accepts(machine.port ?? 0)).toBe(false);
+      expect(yield* accepts(machine.port)).toBe(false);
     }),
   );
 
@@ -1117,7 +1108,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         `tart delete ${vm}`,
       ]);
       expect(mac.jobs.has(vm)).toBe(true);
-      expect(yield* accepts(machine.port ?? 0)).toBe(true);
+      expect(yield* accepts(machine.port)).toBe(true);
     }),
   );
 
@@ -1156,7 +1147,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* runtime.startup([up, down]);
 
       expect(existsSync(jobsDir(mac.settings.stateDir))).toBe(true);
-      expect([yield* accepts(up.port ?? 0), yield* accepts(down.port ?? 0)]).toEqual([true, true]);
+      expect([yield* accepts(up.port), yield* accepts(down.port)]).toEqual([true, true]);
     }),
   );
 
@@ -1188,7 +1179,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                 ),
               ],
             ]);
-            expect(yield* accepts(other.port ?? 0)).toBe(true);
+            expect(yield* accepts(other.port)).toBe(true);
 
             const before = calls(mac).length;
             const error = yield* Effect.flip(runtime.start(blocked));
@@ -1204,7 +1195,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* runtime.start(blocked);
         expect(mac.vms.get(vm)).toBe("running");
-        expect(yield* accepts(blocked.port ?? 0)).toBe(true);
+        expect(yield* accepts(blocked.port)).toBe(true);
       }),
   );
 
@@ -1241,7 +1232,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const before = mac.spawner.calls.length;
       const observed = yield* runtime.observe([up, down, gone]);
 
-      expect(observed).toEqual([{ state: "running" }, { state: "stopped" }, { state: "missing" }]);
+      expect(observed).toEqual(["running", "stopped", "missing"]);
       expect(mac.spawner.calls.slice(before).map(({ args }) => args)).toEqual([
         ["list", "--source", "local", "--format", "json"],
       ]);

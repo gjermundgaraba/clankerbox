@@ -8,7 +8,6 @@ export const machineRef = (host: string, intent: Intent): MachineRef => ({
   id: idOn(host)(intent.name),
   name: intent.name,
   instance: intent.instance,
-  native: intent.native,
   cpu: intent.cpu,
   ramMib: intent.ramMib,
   diskGib: intent.diskGib,
@@ -19,7 +18,6 @@ export const checkpointRef = (host: string, record: CheckpointRecord): Checkpoin
   id: idOn(host)(record.name),
   name: record.name,
   instance: record.instance,
-  kind: record.kind,
   port: record.port,
 });
 

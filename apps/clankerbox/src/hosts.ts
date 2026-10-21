@@ -3,10 +3,10 @@ import { Array as Arr, Schema } from "effect";
 import { listCommand } from "./command.ts";
 
 export const hostRows = (hosts: ReadonlyArray<Host>) => [
-  ["ID", "RUNTIME", "VERSION", "RUNTIME_VERSION", "BASES"],
+  ["ID", "KIND", "VERSION", "RUNTIME_VERSION", "BASES"],
   ...hosts.map((host) => [
     host.id,
-    host.runtime,
+    host.kind,
     host.version,
     host.runtimeVersion,
     host.bases.join(","),
@@ -17,10 +17,6 @@ const resourceNames = {
   cpu: "cpu",
   ramMib: "ram",
   runningVms: "running-vms",
-  activeSandboxes: "active-sandboxes",
-  startsPerMinute: "starts/minute",
-  startsPerHour: "starts/hour",
-  startsPerDay: "starts/day",
 } satisfies Record<Usage["resource"], string>;
 
 const roughGib = (mib: number): string => `${Math.round((mib * 10) / mibPerGib) / 10}G`;
@@ -58,7 +54,7 @@ export const encodeUsage = Schema.encodeSync(Usage);
 
 export const hosts = listCommand({
   name: "hosts",
-  description: "List every host, with its runtime, versions and bases.",
+  description: "List every host, with its kind, versions and bases.",
   key: "hosts",
   read: (client) => client.hosts,
   encode: encodeHost,

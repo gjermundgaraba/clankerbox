@@ -2,14 +2,14 @@
 
 ## Packages
 
-| Path                            | Holds                                                                     |
-| ------------------------------- | ------------------------------------------------------------------------- |
-| `packages/sdk/`                 | The contract, its schemas and errors, the client, profiles, prebuilds     |
-| `packages/host/`                | The host: state, lifecycles, leases, guest scripts and the three runtimes |
-| `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                                |
-| `apps/clankerbox/`              | The CLI package: its commands and the `host` role                         |
-| `tools/lint-fence/`             | The repository's own lint rules                                           |
-| `tools/oxlint/anti-slop/`       | Vendored lint plugin                                                      |
+| Path                            | Holds                                                                   |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| `packages/sdk/`                 | The contract, its schemas and errors, the client, profiles, prebuilds   |
+| `packages/host/`                | The host: state, lifecycles, leases, guest scripts and the two runtimes |
+| `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                              |
+| `apps/clankerbox/`              | The CLI package: its commands and the `host` role                       |
+| `tools/lint-fence/`             | The repository's own lint rules                                         |
+| `tools/oxlint/anti-slop/`       | Vendored lint plugin                                                    |
 
 The app imports the SDK and the host; the host and the provider import the SDK;
 the SDK imports neither. Each package's `package.json` dependencies are that
@@ -36,20 +36,20 @@ whole CLI span domains on purpose.
 - `usage.ts`: the machines in use, for the RAM budget and capacity.
 - `startup.ts`: what runs before the actors start (clearing the captures and
   builders the last host's end left), and `CannotStart`.
-- `ids.ts`, `settings.ts`: IDs on this host, and the settings every runtime
-  shares.
-- Ports: `Store` and `NativeIds` (`store.ts`), `Runtime` (`runtime.ts`),
+- `ids.ts`, `settings.ts`: IDs on this host, and the settings every kind
+  shares, with the checkpoints each kind captures.
+- Ports: `Store` (`store.ts`), `Runtime` (`runtime.ts`),
   `PortProbe` (`machine-ports.ts`), `Tailnet` (`tailnet.ts`), which mints a
   machine's tailnet key, provided only on a host that joins a tailnet.
 
 Adapters live in `platform/`: `sqlite.ts` (the `Store`), `bind-probe.ts`
 (`PortProbe`), `tailscale.ts` (`Tailnet`, over Tailscale's API), the runtimes
-`smolvm.ts`, `tart/` and `boat/`, and what
-they share, `process.ts` and `address.ts`. A domain file never imports
+`smolvm.ts` (`linux`) and `tart/` (`mac`), and what they share, `process.ts`
+and `address.ts`. A domain file never imports
 `platform/` or `composition/`.
 
 `composition/` assembles the host: `config.ts` reads the config file,
-`runtimes.ts` picks the runtime's Layer, `routes.ts` serves the contract, and
+`runtimes.ts` picks the kind's runtime Layer, `routes.ts` serves the contract, and
 `host.ts`, the package's entry, builds the host over a runtime Layer and a
 server Layer it is given, with the config's tailnet, if any.
 
@@ -73,7 +73,7 @@ operations), `tunnel.ts` (the ssh tunnel), `options.ts`, `agent.ts`, and
 ## Where Layers are chosen
 
 Only at an entry: the CLI's `main.ts` (Node's services, HTTP client and TCP
-dial, and the path that runs it), the app's `host.ts` (the config's runtime and
+dial, and the path that runs it), the app's `host.ts` (the config kind's runtime and
 Node's HTTP server, given to `hostLayer`), the SDK's `node.ts` (the client over
 Node's HTTP), and the provider's `index.ts` (the client over its hosts, given
 to `provider`). Tests pass their own: the host's `./testing` export builds a

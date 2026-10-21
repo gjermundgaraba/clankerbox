@@ -13,11 +13,11 @@ const image =
 
 const config = {
   id: "linux",
-  runtime: "smolvm",
+  kind: "linux",
   listen: { address: "100.95.240.37", port: 8484 },
   stateDir: "state",
   bases: { ubuntu: image },
-  smolvm: { prefix: "/opt/smolvm/1.27.3" },
+  linux: { prefix: "/opt/smolvm/1.27.3" },
 };
 
 const load = (contents: Schema.Json) =>
@@ -39,13 +39,13 @@ layer(NodeServices.layer)((it) => {
 
         expect(host).toEqual({
           id: "linux",
-          runtime: "smolvm",
+          kind: "linux",
           listen: { address: "100.95.240.37", port: 8484 },
           stateDir: join(file, "..", "state"),
           bases: new Map([["ubuntu", image]]),
           machinePorts: { first: 10_000, last: 19_999 },
           recheck: defaultRecheck,
-          smolvm: { prefix: "/opt/smolvm/1.27.3" },
+          linux: { prefix: "/opt/smolvm/1.27.3" },
         });
       }),
   );
@@ -54,108 +54,53 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const { loaded } = yield* load({
         ...config,
-        smolvm: { ...config.smolvm, ramBudgetMib: 1_000_000 },
+        linux: { ...config.linux, ramBudgetMib: 1_000_000 },
       });
 
       expect(yield* loaded).toMatchObject({
-        smolvm: { ramBudgetMib: 1_000_000 },
+        linux: { ramBudgetMib: 1_000_000 },
       });
     }),
   );
 
-  const tart = {
+  const mac = {
     id: "mac",
-    runtime: "tart",
+    kind: "mac",
     listen: { address: "100.122.69.11", port: 8484 },
     stateDir: "state",
     bases: { tahoe: "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3" },
-    tart: { binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart" },
+    mac: { binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart" },
   };
 
-  it.effect("a Tart host config names its tart binary", () =>
+  it.effect("a mac host config names its tart binary", () =>
     Effect.gen(function* () {
-      const { file, loaded } = yield* load(tart);
+      const { file, loaded } = yield* load(mac);
 
       expect(yield* loaded).toEqual({
         id: "mac",
-        runtime: "tart",
+        kind: "mac",
         listen: { address: "100.122.69.11", port: 8484 },
         stateDir: join(file, "..", "state"),
         bases: new Map([["tahoe", "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3"]]),
         machinePorts: { first: 10_000, last: 19_999 },
         recheck: defaultRecheck,
-        tart: { binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart" },
+        mac: { binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart" },
       });
     }),
   );
 
-  it.effect("a Tart host config takes only Tart's settings", () =>
+  it.effect("a mac host config takes only its own settings", () =>
     Effect.gen(function* () {
       for (const contents of [
-        { ...tart, smolvm: config.smolvm },
-        { ...tart, tart: { ...tart.tart, ramBudgetMib: 4096 } },
-        { ...tart, tart: {} },
+        { ...mac, linux: config.linux },
+        { ...mac, mac: { ...mac.mac, ramBudgetMib: 4096 } },
+        { ...mac, mac: {} },
       ]) {
         const { loaded } = yield* load(contents);
 
         expect((yield* Effect.flip(loaded))._tag).toBe("Invalid");
       }
     }),
-  );
-
-  const apiKey = "boat_test-key-that-never-prints";
-
-  const boat = {
-    id: "boat",
-    runtime: "boat",
-    listen: { address: "100.95.240.37", port: 8486 },
-    stateDir: "state",
-    bases: { "boat-ubuntu": "boat" },
-    boat: { apiKey },
-  };
-
-  it.effect(
-    "a boat host config holds its API key, which nothing that prints the config shows",
-    () =>
-      Effect.gen(function* () {
-        const { file, loaded } = yield* load(boat);
-        const host = yield* loaded;
-
-        expect(host).toMatchObject({
-          id: "boat",
-          runtime: "boat",
-          stateDir: join(file, "..", "state"),
-          bases: new Map([["boat-ubuntu", "boat"]]),
-        });
-        expect(host.runtime === "boat" ? Redacted.value(host.boat.apiKey) : undefined).toBe(apiKey);
-
-        for (const printed of [JSON.stringify(host), inspect(host, { depth: 10 })]) {
-          expect(printed).not.toContain(apiKey);
-        }
-      }),
-  );
-
-  it.effect(
-    "a boat host config takes only boat's settings, and a refused one doesn't print its key",
-    () =>
-      Effect.gen(function* () {
-        const refused: Array<Schema.Json> = [
-          { ...boat, boat: {} },
-          { ...boat, boat: { apiKey: "" } },
-          { ...boat, boat: { apiKey, baseUrl: "http://boat.test" } },
-          { ...boat, boat: { apiKey, publishAddress: "127.0.0.1" } },
-          { ...boat, tart: tart.tart },
-          { ...boat, listen: { address: "0.0.0.0", port: 8486 } },
-        ];
-
-        for (const contents of refused) {
-          const { loaded } = yield* load(contents);
-          const error = yield* Effect.flip(loaded);
-
-          expect(error._tag).toBe("Invalid");
-          expect(error.message).not.toContain(apiKey);
-        }
-      }),
   );
 
   const clientSecret = "tskey-client-k1-that-never-prints";
@@ -256,10 +201,10 @@ layer(NodeServices.layer)((it) => {
       }
 
       for (const port of [10_000, 14_000, 19_999]) {
-        const smolvm = yield* load({ ...config, listen: { ...config.listen, port } });
-        const onBoat = yield* load({ ...boat, listen: { ...boat.listen, port } });
+        const linux = yield* load({ ...config, listen: { ...config.listen, port } });
+        const onMac = yield* load({ ...mac, listen: { ...mac.listen, port } });
 
-        for (const { loaded } of [smolvm, onBoat]) {
+        for (const { loaded } of [linux, onMac]) {
           const error = yield* Effect.flip(loaded);
 
           expect(error._tag, String(port)).toBe("Invalid");
@@ -330,13 +275,13 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
-  it.effect("an unknown key, another runtime or a bad host ID is Invalid", () =>
+  it.effect("an unknown key, another kind or a bad host ID is Invalid", () =>
     Effect.gen(function* () {
       for (const contents of [
         { ...config, labels: [] },
-        { ...config, runtime: "tart" },
+        { ...config, kind: "mac" },
         { ...config, id: "Linux" },
-        { ...config, smolvm: { ...config.smolvm, ramBudgetMib: 0 } },
+        { ...config, linux: { ...config.linux, ramBudgetMib: 0 } },
       ]) {
         const { loaded } = yield* load(contents);
 

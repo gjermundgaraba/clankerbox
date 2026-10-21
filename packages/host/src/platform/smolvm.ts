@@ -1,7 +1,7 @@
 import { totalmem } from "node:os";
 import { join } from "node:path";
 import { type HostError, Internal, Invalid, WrongState } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, FileSystem, Layer, Schema } from "effect";
+import { Duration, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import {
   type CheckpointRef,
@@ -9,14 +9,15 @@ import {
   type MachineRef,
   type MachineState,
   missing,
-  observeEach,
   Runtime,
   type StateError,
+  stateReadWait,
+  timeoutFail,
 } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
 import { CannotStart } from "../startup.ts";
 import { allotted, checkRamBudget, inUse } from "../usage.ts";
-import { cliIn, expect, failure, files, portOf } from "./process.ts";
+import { cliIn, expect, failure, files } from "./process.ts";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -35,7 +36,7 @@ export const ramBudget = (set: number | undefined): Effect.Effect<number, Invali
   return ramBudgetMib <= 0
     ? Effect.fail(
         new Invalid({
-          message: "smolvm.ramBudgetMib: physical RAM leaves no default budget; set one",
+          message: "linux.ramBudgetMib: physical RAM leaves no default budget; set one",
         }),
       )
     : Effect.succeed(ramBudgetMib);
@@ -62,6 +63,35 @@ export const nativeName = (resource: Pick<MachineRef, "name" | "instance">): str
   `${resource.name}-${resource.instance.slice(0, 8)}`;
 
 const observeConcurrency = 8;
+
+export const machineReadWait = Duration.subtract(stateReadWait, Duration.seconds(1));
+
+export const observeEach = (
+  machines: ReadonlyArray<MachineRef>,
+  read: (machine: MachineRef) => Effect.Effect<MachineState, Internal>,
+): Effect.Effect<ReadonlyArray<MachineState>> =>
+  Effect.flatMap(Semaphore.make(observeConcurrency), (turns) =>
+    Effect.forEach(
+      machines,
+      (machine) =>
+        turns
+          .withPermits(1)(read(machine))
+          .pipe(
+            timeoutFail(
+              machineReadWait,
+              () =>
+                new Internal({ message: `no answer within ${Duration.format(machineReadWait)}` }),
+            ),
+            Effect.catch((error): Effect.Effect<MachineState> =>
+              Effect.as(
+                Effect.logWarning(`couldn't read ${machine.id}'s state: ${error.message}`),
+                "unknown",
+              ),
+            ),
+          ),
+      { concurrency: "unbounded" },
+    ),
+  );
 
 // Source: S@1.27.3:src/systemd_scope.rs:151-164
 const scopeName = (native: string): string => `smolvm-vm-${native}.scope`;
@@ -205,11 +235,7 @@ export const make = (
       );
 
     const observe = (machines: ReadonlyArray<MachineRef>) =>
-      observeEach(
-        machines,
-        (machine) => Effect.map(state(nativeName(machine)), (observed) => ({ state: observed })),
-        { concurrency: observeConcurrency, warn: Effect.logWarning },
-      );
+      observeEach(machines, (machine) => state(nativeName(machine)));
 
     const boot = (native: string) =>
       call(["machine", "start", "--name", native, "--branchable"], `machine start ${native}`);
@@ -221,7 +247,7 @@ export const make = (
         }
 
         if (recorded === "missing") {
-          return Effect.fail(missing("smolvm", machine));
+          return Effect.fail(missing("linux", machine));
         }
 
         const message =
@@ -298,10 +324,10 @@ export const make = (
         }
       });
 
-    const restoreRam = (from: string, sourcePort: number | undefined, machine: MachineRef) =>
+    const restoreRam = (from: string, sourcePort: number, machine: MachineRef) =>
       Effect.gen(function* () {
         const native = nativeName(machine);
-        const port = yield* portOf(machine);
+        const { port } = machine;
 
         yield* call(
           ["machine", "create", "--name", native, "--from", from, "--restore-cache-entries", "0"],
@@ -309,10 +335,6 @@ export const make = (
         );
 
         if (sourcePort !== port) {
-          if (sourcePort === undefined) {
-            return yield* new Internal({ message: `the checkpoint of ${machine.id} has no port` });
-          }
-
           yield* call(
             [
               "machine",
@@ -332,7 +354,6 @@ export const make = (
       });
 
     return {
-      name: "smolvm",
       version: testedVersion,
       publishAddress: settings.publishAddress,
       pin,
@@ -349,9 +370,6 @@ export const make = (
         }),
       ),
       observe: Effect.fn("Smolvm.observe")(observe),
-      checkpointKind: "ram",
-      captureFrom: "running",
-      loginUser: "user",
       admit: Effect.fn("Smolvm.admit")((activation) =>
         checkRamBudget(settings.ramBudgetMib, activation, observe),
       ),
@@ -411,7 +429,6 @@ export const make = (
       create: Effect.fn("Smolvm.create")((machine, image) =>
         Effect.gen(function* () {
           const native = nativeName(machine);
-          const port = yield* portOf(machine);
 
           yield* call(
             [
@@ -429,7 +446,7 @@ export const make = (
               "--net-backend",
               "virtio-net",
               "-p",
-              `${port}:22`,
+              `${machine.port}:22`,
               "--storage",
               String(machine.diskGib),
             ],
@@ -449,7 +466,7 @@ export const make = (
           }
 
           if (recorded === "missing") {
-            return yield* missing("smolvm", machine);
+            return yield* missing("linux", machine);
           }
 
           if (unstartable.has(recorded)) {
@@ -488,7 +505,7 @@ export const make = (
 
 export const layer = (
   config: Pick<HostSettings, "stateDir" | "listen"> & {
-    readonly smolvm: typeof SmolvmSettings.Type;
+    readonly linux: typeof SmolvmSettings.Type;
   },
 ): Layer.Layer<
   Runtime,
@@ -497,10 +514,10 @@ export const layer = (
 > =>
   Layer.effect(
     Runtime,
-    Effect.flatMap(ramBudget(config.smolvm.ramBudgetMib), (ramBudgetMib) =>
+    Effect.flatMap(ramBudget(config.linux.ramBudgetMib), (ramBudgetMib) =>
       make(
         {
-          prefix: config.smolvm.prefix,
+          prefix: config.linux.prefix,
           publishAddress: config.listen.address,
           ramBudgetMib,
           stateDir: config.stateDir,

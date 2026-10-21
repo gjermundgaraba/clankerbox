@@ -1,26 +1,21 @@
 import {
   type Capacity,
-  type Checkpoint,
-  type Host,
   Internal,
+  type Kind,
   type Machine,
   Missing,
   type Reading,
   readTimeout,
-  type Refused,
-  type Runtime as RuntimeName,
-  type SshEndpoint,
   type Unsizable,
   type WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Duration, Effect, type Scope, Semaphore, type Stream } from "effect";
+import { Context, Duration, Effect, type Scope, type Stream } from "effect";
 
 /**
- * What any runtime call fails with: what broke, or the provider's own refusal. `NotFound`,
- * `Conflict` and `Invalid` are the core's, about its rows and the request; only the calls that
- * take room add `Capacity`.
+ * What any runtime call fails with: what broke. `NotFound`, `Conflict` and `Invalid` are the
+ * core's, about its rows and the request; only the calls that take room add `Capacity`.
  */
-export type RuntimeError = Refused | Internal;
+export type RuntimeError = Internal;
 
 export type RoomError = RuntimeError | Capacity;
 
@@ -32,72 +27,30 @@ export interface MachineRef {
   readonly name: string;
   /** Native names carry its first 8 characters. */
   readonly instance: string;
-  readonly native: string | undefined;
   readonly cpu: number;
   readonly ramMib: number;
   readonly diskGib: number;
   /** Picked when the row is inserted, and never changes. */
-  readonly port: number | undefined;
+  readonly port: number;
 }
 
 export type MachineState = Machine["state"];
-
-export type CheckpointKind = Checkpoint["kind"];
 
 export interface CheckpointRef {
   readonly id: string;
   readonly name: string;
   /** Native names carry its first 8 characters. */
   readonly instance: string;
-  readonly kind: CheckpointKind;
   /** A `ram` restore comes up on the source's port at capture. */
-  readonly port: number | undefined;
+  readonly port: number;
 }
 
 export const stateReadWait = Duration.subtract(readTimeout, Duration.seconds(1));
-
-export const machineReadWait = Duration.subtract(stateReadWait, Duration.seconds(1));
 
 export const timeoutFail =
   <E2>(duration: Duration.Input, error: () => E2) =>
   <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E | E2, R> =>
     Effect.timeoutOrElse(self, { duration, orElse: () => Effect.fail(error()) });
-
-export interface Observed {
-  readonly state: MachineState;
-  /** For a runtime without a `publishAddress`; the core reports it only for a running machine. */
-  readonly ssh?: SshEndpoint | undefined;
-}
-
-export const observeEach = (
-  machines: ReadonlyArray<MachineRef>,
-  read: (machine: MachineRef) => Effect.Effect<Observed, RuntimeError>,
-  options: {
-    readonly concurrency?: number | undefined;
-    readonly warn: (message: string) => Effect.Effect<void>;
-  },
-): Effect.Effect<ReadonlyArray<Observed>> =>
-  Effect.flatMap(Semaphore.make(options.concurrency ?? Math.max(machines.length, 1)), (turns) =>
-    Effect.forEach(
-      machines,
-      (machine) =>
-        turns
-          .withPermits(1)(read(machine))
-          .pipe(
-            timeoutFail(
-              machineReadWait,
-              () =>
-                new Internal({ message: `no answer within ${Duration.format(machineReadWait)}` }),
-            ),
-            Effect.catch((error) =>
-              Effect.as(options.warn(`couldn't read ${machine.id}'s state: ${error.message}`), {
-                state: "unknown",
-              } satisfies Observed),
-            ),
-          ),
-      { concurrency: "unbounded" },
-    ),
-  );
 
 export interface Held {
   readonly machine: MachineRef;
@@ -135,42 +88,32 @@ export interface Execution {
   readonly exitCode: Effect.Effect<number, RuntimeError>;
 }
 
-export const missing = (runtime: RuntimeName, machine: Pick<MachineRef, "id">): Missing =>
+export const missing = (kind: Kind, machine: Pick<MachineRef, "id">): Missing =>
   new Missing({
-    message: `machine ${machine.id} is missing from the ${runtime} runtime; delete it`,
+    message: `machine ${machine.id} is missing from the ${kind} runtime; delete it`,
     machine: machine.id,
   });
 
 export interface Interface {
-  readonly name: RuntimeName;
-  /** Read when the runtime starts; for boat, its API version. */
+  /** Read when the runtime starts. */
   readonly version: string;
-  /** One host port per machine is published here; without it, machines get no port. */
-  readonly publishAddress: string | undefined;
+  /** One host port per machine is published here. */
+  readonly publishAddress: string;
   /**
    * What a `ram` checkpoint must be restored under: RAM state restores only into the build that
-   * saved it. `undefined` on a runtime with no `ram` checkpoints.
+   * saved it. `undefined` on mac, which has no `ram` checkpoints.
    */
   readonly pin: string | undefined;
-  readonly checkpointKind: CheckpointKind;
-  /** The state `capture` needs its machine in. */
-  readonly captureFrom: Host["captureFrom"];
-  /**
-   * The user a setup, run as root, leaves in the guest, for whom the host then installs the
-   * operator's keys through `sudo`: `user` on Linux, which boat's bases ship, and `admin` on
-   * Tart, which its bases ship. Never root.
-   */
-  readonly loginUser: string;
   /** Runs after the failed captures are cleared, before the host serves. */
   readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, RuntimeError>;
   /**
    * One state per machine, in their order: callers rely on it without checking. A machine the
-   * runtime doesn't know is `missing`, and one whose read fails or takes over `machineReadWait`
-   * is `unknown`. Only a read of every machine at once may fail.
+   * runtime doesn't know is `missing`, and one whose read fails or doesn't answer in time is
+   * `unknown`. Only a read of every machine at once may fail.
    */
   readonly observe: (
     machines: ReadonlyArray<MachineRef>,
-  ) => Effect.Effect<ReadonlyArray<Observed>, RuntimeError>;
+  ) => Effect.Effect<ReadonlyArray<MachineState>, RuntimeError>;
   /**
    * The capacity checks before a machine boots. A failure writes nothing. A running target counts
    * once, as it already runs.
@@ -185,10 +128,7 @@ export interface Interface {
     machines: ReadonlyArray<Held>,
   ) => Effect.Effect<ReadonlyArray<Reading>, RuntimeError>;
   /**
-   * Returns once exec works. A create that fails is never called again: the core deletes it. A
-   * native ID the runtime allocates is recorded before the call can be cut short, here and in a
-   * fork or restore, so the delete that cut it finds what it made: what cuts it, the host's end
-   * included, waits for the allocation, retries and all.
+   * Returns once exec works. A create that fails is never called again: the core deletes it.
    */
   readonly create: (
     machine: MachineRef,
@@ -211,8 +151,8 @@ export interface Interface {
    */
   readonly delete: (machine: MachineRef) => Effect.Effect<void, RuntimeError>;
   /**
-   * Of the runtime's `checkpointKind`. A machine in a state the runtime doesn't capture is
-   * `WrongState`, read before anything native.
+   * Of the host's kind's checkpoint, in `checkpointKinds`. A machine in a state the runtime
+   * doesn't capture is `WrongState`, read before anything native.
    */
   readonly capture: (
     machine: MachineRef,

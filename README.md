@@ -4,9 +4,9 @@ clankerbox runs machines (VMs) for coding agents and reports where each one is
 reachable over SSH.
 
 - Lifecycle: create, start, stop, delete, fork, checkpoint capture and restore.
-- Three runtimes: smolvm (Linux guests on a Linux host, with RAM forks and RAM
-  checkpoints), Tart (macOS guests on a Mac, with disk copies) and boat (Linux
-  guests in boat.dev's cloud, with disk forks and checkpoints).
+- Two kinds of host: `linux`, Linux guests on a Linux host under smolvm, with
+  RAM forks and RAM checkpoints, and `mac`, macOS guests on a Mac under Tart,
+  with disk copies.
 - Clients talk to hosts directly; there is no controller. A create goes to the
   first host in the client's list that offers the requested base, unless it
   names a host.
@@ -32,13 +32,12 @@ npm install --global @gjermundgaraba/clankerbox
 clankerbox --version
 ```
 
-Each host needs its runtime, installed by the operator:
+Each host needs its kind's runtime, installed by the operator:
 
-| Runtime | Host                    | Prerequisite                                                         |
-| ------- | ----------------------- | -------------------------------------------------------------------- |
-| smolvm  | Linux/amd64 with KVM    | smolvm exactly 1.27.3, upstream, in a versioned prefix; runs as root |
-| Tart    | Apple Silicon, macOS 26 | Tart 2.40.1 or later, Softnet 0.24.0 installed SUID root             |
-| boat    | either, unprivileged    | a boat.dev API key                                                   |
+| Kind  | Host                    | Prerequisite                                                         |
+| ----- | ----------------------- | -------------------------------------------------------------------- |
+| linux | Linux/amd64 with KVM    | smolvm exactly 1.27.3, upstream, in a versioned prefix; runs as root |
+| mac   | Apple Silicon, macOS 26 | Tart 2.40.1 or later, Softnet 0.24.0 installed SUID root             |
 
 smolvm, with both disk templates expanded beside their `.zst` files:
 
@@ -53,18 +52,18 @@ Softnet, for Tart: `sudo install -o root -g wheel -m 4755 softnet /usr/local/bin
 
 ## Run a host
 
-A host process runs one runtime from one JSON config file:
+A host process runs one kind from one JSON config file:
 
 ```json
 {
   "id": "linux",
-  "runtime": "smolvm",
+  "kind": "linux",
   "listen": { "address": "100.64.0.10", "port": 8484 },
   "stateDir": "state",
   "bases": {
     "ubuntu": "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7"
   },
-  "smolvm": { "prefix": "/opt/smolvm/1.27.3" }
+  "linux": { "prefix": "/opt/smolvm/1.27.3" }
 }
 ```
 
@@ -72,13 +71,13 @@ A host process runs one runtime from one JSON config file:
   holds.
 - `listen.address` is a tailnet address or loopback.
 - `stateDir`, relative to the config, holds the database. Keep it with its
-  host ID and runtime; the host refuses a config that names others. On smolvm
+  host ID and kind; the host refuses a config that names others. On linux
   it is at most 52 bytes and outside every home directory, such as
   `/srv/clankerbox/smolvm`.
 - `bases` maps names clients ask for to images, pinned by digest. Hosts
   offering the same image should use the same name.
-- The runtime's block: `smolvm: {prefix, ramBudgetMib?}`, `tart: {binary}` (the
-  `tart` executable of a versioned install) or `boat: {apiKey}`.
+- The kind's block: `linux: {prefix, ramBudgetMib?}`, smolvm's install, or
+  `mac: {binary}`, the `tart` executable of a versioned install.
 - `machinePorts: {first, last}`, optional, is the range machines' SSH ports
   come from, 10000–19999 by default; `listen.port` lies outside it.
 - `tailnet: {oauthClient: {id, secret}, tags}`, optional, joins the host's
@@ -91,6 +90,27 @@ clankerbox host --config /etc/clankerbox/linux.json
 
 The host exits 130 on SIGINT or SIGTERM and 1 when it fails.
 
+### Upgrading from 0.20
+
+0.21 reads no 0.20 state dir, and logs in to machines of either kind as
+`admin`. For each host:
+
+1. While it still runs 0.20, delete its machines and checkpoints
+   (`clankerbox delete`, `clankerbox checkpoint delete`) until
+   `clankerbox machines` and `clankerbox checkpoint list` show none of its
+   own, then stop it. 0.21 never reads a VM it leaves, which keeps running:
+   on mac, `tart stop` then `tart delete` each in `tart list` named
+   `cbx-<host ID>-…`; on linux, `systemctl stop` each of
+   `systemctl list-units 'smolvm-vm-*.scope'` named
+   `smolvm-vm-<machine name>-<8 hex>.scope` for one of the host's machines,
+   leaving any other smolvm VM running.
+2. Point `stateDir` at a new directory, rename `runtime` to `kind`, `smolvm`
+   to `linux` and `tart` to `mac`, and start it on 0.21.
+3. Drop each host's `sshUser` from the client config, and `sshUser` from the
+   Sandbox Agent provider's options.
+4. Rebuild your prebuilds and recreate your machines. A setup of your own
+   must now leave `admin`, not `user`.
+
 ## Use the CLI
 
 The client config is `$XDG_CONFIG_HOME/clankerbox/config.json` (`~/.config`
@@ -99,17 +119,16 @@ when unset), or `--config PATH`:
 ```json
 {
   "hosts": [
-    { "id": "linux", "url": "http://100.64.0.10:8484", "sshUser": "user" },
-    { "id": "mac", "url": "http://100.64.0.20:8484", "sshUser": "admin" }
+    { "id": "linux", "url": "http://100.64.0.10:8484" },
+    { "id": "mac", "url": "http://100.64.0.20:8484" }
   ],
   "profiles": "profiles",
   "authorizedKeys": "~/.ssh/id_ed25519.pub"
 }
 ```
 
-The host list is in placement order. `sshUser`, required, is the user plain
-`ssh` logs in to the host's machines as: `user` on smolvm and boat, `admin` on
-Tart. `authorizedKeys` is a public-key file, such as an `id_ed25519.pub`, or
+The host list is in placement order. Machines of either kind are logged in
+to as `admin`. `authorizedKeys` is a public-key file, such as an `id_ed25519.pub`, or
 several concatenated: each line that isn't blank is `<type> <base64>
 [comment]`, so a private key or any other file is refused. Every create or
 prebuild with a setup needs it: the host installs its keys for the login user
@@ -133,7 +152,7 @@ the profiles directory; a value with a `/` or ending in `.json` is a path:
 a `setup.sh`. An optional `host` sends every create from the profile there.
 
 ```sh
-clankerbox hosts                           # every host, its runtime, versions and bases
+clankerbox hosts                           # every host, its kind, versions and bases
 clankerbox capacity                        # every host's resources and limits
 clankerbox create dev --profile dev        # prints the new ID, linux_dev
 clankerbox create review --host mac --base macos --cpu 4 --ram 8G --disk 60G
@@ -153,8 +172,9 @@ clankerbox checkpoint delete linux_base
 - IDs are `<host>_<name>`. `create` flags override the profile's fields.
 - Sizes and durations carry their unit: `--ram 8G`, `--disk 60G`,
   `--setup-timeout 15m`.
-- `fork` copies a running smolvm machine with its RAM, a stopped Tart
-  machine's disk, or either boat machine's disk.
+- `fork` copies a running linux machine with its RAM, or a stopped mac
+  machine's disk. `checkpoint capture` does the same, so a linux checkpoint is
+  `ram` and a mac one `disk`.
 - `start`, `stop` and `delete` ask for a state and wait until the machine is
   there; a request fails `Superseded` when a later one for the same machine
   asked for something else before it got there. A machine that stops under
@@ -174,11 +194,11 @@ clankerbox checkpoint delete linux_base
   authorized keys and the host's runtime release; any change runs the setup
   again until a new `prebuild`. Nothing
   deletes prebuilds: `checkpoint list` shows them.
-- `ssh` pins the machine's host key and logs in as `user`, or `admin` on Tart.
+- `ssh` pins the machine's host key and logs in as `admin`.
 - Plain OpenSSH reaches machines by ID too, so `ssh linux_dev`, scp, rsync and
   tools that run ssh work. A command on the default client config keeps
-  `~/.ssh/clankerbox` with one `Host <host>_*` block per host, as its
-  `sshUser`, and ends `~/.ssh/config` with `Match all` and
+  `~/.ssh/clankerbox` with one `Host <host>_*` block per host, as `admin`,
+  and ends `~/.ssh/config` with `Match all` and
   `Include clankerbox`, so your own entries come first and win. Each
   connection runs `clankerbox ssh-proxy` and `clankerbox ssh-known-hosts` for
   the machine's current endpoint and host key, so nothing goes stale when a
@@ -234,9 +254,9 @@ a recipe is the opt-in:
 Setup runs once, as root, after the machine's first boot; forks and restores
 carry its results. It must:
 
-- leave the login user, `user` on Linux or `admin` on Tart, and `sudo`: create
-  `user` and install `sudo` where the base has neither (smolvm's stock
-  images). The recipes also give it passwordless `sudo`, which the host
+- leave the login user, `admin`, and `sudo`: create `admin` and install
+  `sudo` where the base has neither (smolvm's stock images; Tart's bases ship
+  both). The recipes also give it passwordless `sudo`, which the host
   doesn't require;
 - install sshd where the base has none (smolvm's stock images), with
   `PermitRootLogin no`;
@@ -254,14 +274,12 @@ the check after each start has the daemon up.
 
 Once a setup exits 0, the host appends the client config's `authorizedKeys`
 to the login user's `~/.ssh/authorized_keys`, as that user through `sudo`,
-beside any keys already there, such as boat's own. A setup that leaves no
+beside any keys already there. A setup that leaves no
 login user, or no `sudo`, fails then, and its machine is deleted. Put no key
 in root's: nothing logs in as root.
 
-Linux guests need `perl`. On Tart, Softnet blocks gateway DNS, so set public
-resolvers. On boat, keep state that must survive under `/home/user`, `/etc`,
-`/usr`, `/opt`, `/srv`, `/root` or `/var/lib`, and leave boat's sshd, TCP 8911
-and its WireGuard tunnel alone. A checkpoint, prebuilds included, holds
+Linux guests need `perl`. On mac, Softnet blocks gateway DNS, so set public
+resolvers. A checkpoint, prebuilds included, holds
 everything the machine had, credentials too.
 
 ## Deploy
@@ -274,11 +292,11 @@ the service's `PATH`, which must be Node 26 or later.
 npm install --global --prefix /opt/clankerbox/<version> @gjermundgaraba/clankerbox@<version>
 ```
 
-**smolvm**, as root, in a system unit:
+**linux**, as root, in a system unit:
 
 ```ini
 [Unit]
-Description=clankerbox host (smolvm)
+Description=clankerbox host (linux)
 Wants=network-online.target
 After=network-online.target tailscaled.service
 
@@ -296,17 +314,14 @@ WantedBy=multi-user.target
 
 VMs run in their own scopes, so restarting the unit leaves them running.
 
-**Tart**, as the operator's user, in a LaunchAgent in its GUI session, with
+**mac**, as the operator's user, in a LaunchAgent in its GUI session, with
 `KeepAlive` set to `{SuccessfulExit: false}`; stop it with
 `launchctl bootout gui/<uid>/<label>`. Pull each base with `tart pull` as that
 user before its first create.
 
-**boat**, unprivileged, on any always-on machine on the tailnet. Its config
-holds the API key, so keep it readable by its user only.
-
 **Network:** the tailnet policy opens each host's API port to its clients, and
-on smolvm and Tart the machines' port range to clients that run
-`clankerbox ssh`. On a smolvm host, nothing may listen on a public address:
+the machines' port range to clients that run `clankerbox ssh`. On a linux
+host, nothing may listen on a public address:
 guests can reach those. On macOS with the application firewall on, allow
 incoming connections for each new `node` binary, which allows them for every
 program that `node` runs.
@@ -389,9 +404,9 @@ await sdk.destroySandbox();
   machine and `destroySandbox` deletes it. A create that fails deletes the
   machine it may have made, unless the host answers `Conflict`, as the name
   is another machine's, or `Superseded`, as a later request owns it.
-- `recipes/ubuntu/` (smolvm) and `recipes/macos/` (Tart) install the server,
+- `recipes/ubuntu/` (linux) and `recipes/macos/` (mac) install the server,
   Node and Claude Code, and run the server as the login user, whose home,
-  `/home/user` on Linux, is the default `cwd`; on macOS, give
+  `/home/admin` on Linux, is the default `cwd`; on macOS, give
   `cwd: "/Users/admin"`. Each takes an optional `agent.env` beside its
   `setup.sh`, of `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, so keep a
   recipe with one private.

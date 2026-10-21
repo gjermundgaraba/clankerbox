@@ -51,10 +51,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(hosts.answers).toEqual([
         {
           id: "linux",
-          runtime: "smolvm",
+          kind: "linux",
           version,
           runtimeVersion: "fake",
-          captureFrom: "running",
           bases: ["ubuntu"],
         },
       ]);

@@ -8,7 +8,7 @@ import type { HostSettings } from "../settings.ts";
 import { Machines } from "../machines.ts";
 import { Runtime } from "../runtime.ts";
 
-const app = (config: Pick<HostSettings, "id" | "bases">) =>
+const app = (config: Pick<HostSettings, "id" | "kind" | "bases">) =>
   Action.implement(
     Http.actions,
     Effect.gen(function* () {
@@ -33,10 +33,9 @@ const app = (config: Pick<HostSettings, "id" | "bases">) =>
         getHost: () =>
           Effect.succeed({
             id: config.id,
-            runtime: runtime.name,
+            kind: config.kind,
             version,
             runtimeVersion: runtime.version,
-            captureFrom: runtime.captureFrom,
             bases: [...config.bases.keys()],
           }),
         getCapacity: () => machines.capacity,
@@ -74,5 +73,5 @@ const versionCheck = HttpRouter.middleware((handle) =>
   ),
 );
 
-export const routes = (config: Pick<HostSettings, "id" | "bases">) =>
+export const routes = (config: Pick<HostSettings, "id" | "kind" | "bases">) =>
   ActionHttp.layer(Http, [app(config)]).pipe(Layer.provide(versionCheck.layer));

@@ -277,10 +277,7 @@ layer(NodeServices.layer)((it) => {
       const dir = yield* scratch;
       const config = join(dir, "config.json");
 
-      yield* write(
-        config,
-        JSON.stringify({ hosts: [{ id: "linux", url: "http://linux.test/", sshUser: "user" }] }),
-      );
+      yield* write(config, JSON.stringify({ hosts: [{ id: "linux", url: "http://linux.test/" }] }));
 
       const { code, stdout } = yield* cli(["hosts", "--config", config], {
         endpoints: [["linux", host({ id: "linux", bases: ["ubuntu"] })]],

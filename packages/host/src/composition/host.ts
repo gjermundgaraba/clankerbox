@@ -35,21 +35,14 @@ export const servicesLayer = <E, R>(
 ): Layer.Layer<
   Machines.Machines | Checkpoints.Checkpoints | Store.Store | Runtime,
   HostError | CannotStart | E,
-  Exclude<R, Store.NativeIds> | FileSystem.FileSystem
-> => {
-  const store = Sqlite.layer(config);
-
-  const nativeIds = Layer.effect(Store.NativeIds, Effect.service(Store.NativeIds)).pipe(
-    Layer.provide(store),
-  );
-
-  return Checkpoints.layer(config).pipe(
+  R | FileSystem.FileSystem
+> =>
+  Checkpoints.layer(config).pipe(
     Layer.provideMerge(Machines.layer(config)),
     Layer.provide(startup(config)),
     Layer.provide(Layer.merge(BindProbe.layer, Leases.layer)),
-    Layer.provideMerge(Layer.merge(store, runtime.pipe(Layer.provide(nativeIds)))),
+    Layer.provideMerge(runtime.pipe(Layer.provideMerge(Sqlite.layer(config)))),
   );
-};
 
 /** What a host is built from: its settings, and the tailnet it joins its machines to, if any. */
 export interface HostLayerConfig extends HostSettings {
@@ -63,7 +56,7 @@ export const hostLayer = <E, R>(
 ): Layer.Layer<
   HttpServer.HttpServer | Machines.Machines | Checkpoints.Checkpoints | Store.Store,
   HostError | CannotStart | E,
-  Exclude<R, Store.NativeIds> | FileSystem.FileSystem | HttpClient.HttpClient
+  R | FileSystem.FileSystem | HttpClient.HttpClient
 > =>
   HttpRouter.serve(routes(config)).pipe(
     Layer.provideMerge(

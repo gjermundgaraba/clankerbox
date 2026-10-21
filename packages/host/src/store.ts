@@ -1,4 +1,4 @@
-import type { Checkpoint, Conflict, Desired, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import type { Conflict, Desired, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, type DateTime, type Effect, type Option } from "effect";
 
 /** What the store answers a request with: what the row now asks for, and the request's number. */
@@ -11,8 +11,6 @@ export interface Desire {
 export interface Intent {
   readonly name: string;
   readonly instance: string;
-  /** Recorded by the runtime through `NativeIds`; a step reads it from the row, never a copy. */
-  readonly native: string | undefined;
   readonly createdAt: DateTime.Utc;
   readonly base: string;
   readonly profile: string | undefined;
@@ -20,7 +18,7 @@ export interface Intent {
   readonly ramMib: number;
   readonly diskGib: number;
   /** Picked when the row is inserted, and never changes. */
-  readonly port: number | undefined;
+  readonly port: number;
   readonly desired: Desired;
   /** Raised by every request, so a request can tell its own answer from a later one's. */
   readonly generation: number;
@@ -41,14 +39,13 @@ export interface CheckpointRecord {
   readonly instance: string;
   readonly createdAt: DateTime.Utc;
   readonly machine: string;
-  readonly kind: Checkpoint["kind"];
-  /** A `ram` checkpoint restores only under the runtime's pin at capture. */
+  /** A checkpoint restores only under the runtime's pin at capture; mac's is `undefined`. */
   readonly pin: string | undefined;
   /**
    * The source's host port at capture: a `ram` restore comes up on it, until the runtime moves
    * it to the new machine's own.
    */
-  readonly port: number | undefined;
+  readonly port: number;
   readonly base: string;
   readonly profile: string | undefined;
   readonly cpu: number;
@@ -92,20 +89,3 @@ export interface Interface {
 }
 
 export class Store extends Context.Service<Store, Interface>()("@clankerbox/host/Store") {}
-
-/** The one write to the host's state a runtime makes. */
-export interface NativeIdRecorder {
-  /**
-   * Called as soon as the runtime knows the ID (boat assigns its sandbox's), so a `delete` after
-   * a crash has it. A row that is gone, or now holds another instance, is `Internal`.
-   */
-  readonly recordNative: (
-    name: string,
-    instance: string,
-    native: string,
-  ) => Effect.Effect<void, Internal>;
-}
-
-export class NativeIds extends Context.Service<NativeIds, NativeIdRecorder>()(
-  "@clankerbox/host/NativeIds",
-) {}

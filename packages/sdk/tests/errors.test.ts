@@ -12,7 +12,6 @@ import {
   Machine,
   NotFound,
   NotOffered,
-  Refused,
   retryable,
   Superseded,
   Unavailable,
@@ -29,7 +28,6 @@ test("retryable follows the tag", () => {
   expect(retryable(new Invalid({ message }))).toBe(false);
   expect(retryable(new NotFound({ message }))).toBe(false);
   expect(retryable(new NotOffered({ message, base: "fedora" }))).toBe(false);
-  expect(retryable(new Refused({ message }))).toBe(false);
   expect(retryable(new Capacity({ message }))).toBe(true);
   expect(retryable(new Internal({ message }))).toBe(false);
 });

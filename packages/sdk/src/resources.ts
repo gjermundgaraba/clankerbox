@@ -2,9 +2,18 @@ import { Schema } from "effect";
 import { HostError } from "./errors.ts";
 import { HostId, Id } from "./ids.ts";
 
-export const Runtime = Schema.Literals(["smolvm", "tart", "boat"]);
+/** What a host's machines are: `linux` guests on smolvm, or `mac` guests on Tart. */
+export const Kind = Schema.Literals(["linux", "mac"]);
 
-export type Runtime = typeof Runtime.Type;
+export type Kind = typeof Kind.Type;
+
+const CheckpointKind = Schema.Literals(["ram", "disk"]);
+
+/**
+ * The user a machine is logged in as, on either kind: the user a setup, run as root, leaves in the
+ * guest, for whom the host installs the operator's keys. Tart's bases ship it; never root.
+ */
+export const loginUser = "admin";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -74,7 +83,7 @@ export type TailnetStatus = typeof TailnetStatus.Type;
  */
 export const Machine = Schema.Struct({
   id: Id,
-  runtime: Runtime,
+  kind: Kind,
   createdAt: Schema.DateTimeUtcFromString,
   base: Schema.String,
   profile: Schema.optionalKey(Schema.String),
@@ -104,14 +113,15 @@ export const stateLabel = ({ state, desired, phase }: Machine): string =>
       : `${state}, wants ${desired} (${phase})`;
 
 /**
- * `kind` is `ram` (RAM and disks) on smolvm, and `disk` on Tart and boat. A checkpoint exists only
- * once its capture is done, and never changes after.
+ * `kind` follows its host's: `ram` (RAM and disks) on linux, captured from a running machine, and
+ * `disk` on mac, from a stopped one. A checkpoint exists only once its capture is done, and never
+ * changes after.
  */
 export const Checkpoint = Schema.Struct({
   id: Id,
   createdAt: Schema.DateTimeUtcFromString,
   machine: Id,
-  kind: Schema.Literals(["ram", "disk"]),
+  kind: CheckpointKind,
   base: Schema.String,
   profile: Schema.optionalKey(Schema.String),
   cpu: Size,
@@ -121,16 +131,12 @@ export const Checkpoint = Schema.Struct({
 
 export type Checkpoint = typeof Checkpoint.Type;
 
-/**
- * `runtimeVersion` is boat's API version on boat. `captureFrom` is the state a machine must be in
- * to be captured: Tart's is `stopped`.
- */
+/** `runtimeVersion` is the version of smolvm on linux, and of Tart on mac. */
 export const Host = Schema.Struct({
   id: HostId,
-  runtime: Runtime,
+  kind: Kind,
   version: Schema.String,
   runtimeVersion: Schema.String,
-  captureFrom: Schema.Literals(["running", "stopped"]),
   bases: Schema.Array(Schema.String),
 }).annotate({ identifier: "Host" });
 
@@ -138,15 +144,7 @@ export type Host = typeof Host.Type;
 
 const usageFields = {
   host: HostId,
-  resource: Schema.Literals([
-    "cpu",
-    "ramMib",
-    "runningVms",
-    "activeSandboxes",
-    "startsPerMinute",
-    "startsPerHour",
-    "startsPerDay",
-  ]),
+  resource: Schema.Literals(["cpu", "ramMib", "runningVms"]),
   limit: Schema.optionalKey(Schema.Int),
 };
 
@@ -155,8 +153,8 @@ const usageFields = {
  * needn't match the host's own machines. When a machine the sum counts couldn't be read, the
  * sum would be a guess, so the row names those machines instead.
  *
- * `cpu` and `ramMib` are what the host's running machines were given, `runningVms` Apple's two
- * VMs per Mac, and `activeSandboxes` and the `starts` of each rolling window the boat account's.
+ * `cpu` and `ramMib` are what the host's running machines were given, and `runningVms`, on mac,
+ * Apple's two VMs per Mac.
  * `limit` is there only where the host refuses an action that would pass it.
  */
 export const Usage = Schema.Union([

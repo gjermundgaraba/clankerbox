@@ -93,7 +93,7 @@ publish, change production hosts, or commit unless asked.
   which doesn't exit. The recipes install Claude alone and tell whoever adds
   Codex to bound it. If the target fixes this, drop that note.
 - As root, Claude Code offers no `bypassPermissions` mode, so the server runs
-  as the login user, `user` (Ubuntu) or `admin` (macOS). The server keeps its state under
+  as the login user, `admin`. The server keeps its state under
   the user's `~/.local/share/sandbox-agent` (Linux) or
   `~/Library/Application Support/sandbox-agent` (macOS).
 - The server finds an agent's credential in its own environment

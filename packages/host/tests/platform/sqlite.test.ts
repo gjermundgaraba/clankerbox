@@ -22,28 +22,37 @@ const withStore = <A, E>(
   stateDir: string,
   use: (store: Effect.Success<ReturnType<typeof open>>) => Effect.Effect<A, E>,
 ) =>
-  Effect.flatMap(open({ stateDir, id: "linux", runtime: "smolvm" }), use).pipe(
+  Effect.flatMap(open({ stateDir, id: "linux", kind: "linux" }), use).pipe(
     Effect.scoped,
     Effect.provide(NodeServices.layer),
   );
 
 const opening = (stateDir: string, owner?: Partial<Owner>) =>
-  Effect.flip(open({ stateDir, id: "linux", runtime: "smolvm", ...owner })).pipe(
+  Effect.flip(open({ stateDir, id: "linux", kind: "linux", ...owner })).pipe(
     Effect.scoped,
     Effect.provide(NodeServices.layer),
   );
 
+const ports = new Map<string, number>();
+
+const portOf = (name: string): number => {
+  const port = ports.get(name) ?? 11_000 + ports.size;
+
+  ports.set(name, port);
+
+  return port;
+};
+
 const intent = (name: string, fields?: Partial<Intent>): Intent => ({
   name,
   instance: "0123456789abcdef0123456789abcdef",
-  native: undefined,
   createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
   base: "ubuntu",
   profile: undefined,
   cpu: 1,
   ramMib: 1024,
   diskGib: 10,
-  port: undefined,
+  port: portOf(name),
   desired: "running",
   generation: 1,
   ephemeral: false,
@@ -57,7 +66,6 @@ const checkpoint = (name: string, fields?: Partial<CheckpointRecord>): Checkpoin
   instance: "fedcba9876543210fedcba9876543210",
   createdAt: DateTime.makeUnsafe("2026-10-04T13:00:00Z"),
   machine: "dev",
-  kind: "ram",
   pin: "smolvm 1.27.3 linux-x64",
   port: 10_000,
   base: "ubuntu",
@@ -91,7 +99,6 @@ layer(NodeServices.layer)((it) => {
         intent("dev", {
           profile: "small",
           port: 10_000,
-          native: "bx_1",
           hostKey: "ssh-ed25519 AAAA",
           ephemeral: true,
           made: true,
@@ -155,32 +162,6 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect("a database from before builders were marked gains the mark, unset on its rows", () =>
-    Effect.gen(function* () {
-      const stateDir = join(yield* scratch, "state");
-
-      yield* withStore(stateDir, (store) => store.insertMachine(intent("dev")));
-
-      const db = new DatabaseSync(join(stateDir, databaseFile));
-
-      db.exec("ALTER TABLE machines DROP COLUMN ephemeral");
-      db.exec(`PRAGMA user_version = ${migrations.length - 1}`);
-      db.close();
-
-      const found = yield* withStore(stateDir, (store) =>
-        Effect.flatMap(
-          store.insertMachine(intent("builder", { ephemeral: true })),
-          () => store.machines,
-        ),
-      );
-
-      expect(found.map(({ name, ephemeral }) => [name, ephemeral])).toEqual([
-        ["builder", true],
-        ["dev", false],
-      ]);
-    }),
-  );
-
   it.effect("a database newer than the binary is refused", () =>
     Effect.gen(function* () {
       const stateDir = join(yield* scratch, "state");
@@ -199,26 +180,24 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect(
-    "a database refuses a host of another ID or runtime, and keeps its rows for its own",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = join(yield* scratch, "state");
+  it.effect("a database refuses a host of another ID or kind, and keeps its rows for its own", () =>
+    Effect.gen(function* () {
+      const stateDir = join(yield* scratch, "state");
 
-        yield* withStore(stateDir, (store) => store.insertMachine(intent("dev")));
+      yield* withStore(stateDir, (store) => store.insertMachine(intent("dev")));
 
-        const renamed = yield* opening(stateDir, { id: "mac" });
-        const moved = yield* opening(stateDir, { runtime: "tart" });
-        const kept = yield* withStore(stateDir, (store) => store.machines);
+      const renamed = yield* opening(stateDir, { id: "mac" });
+      const moved = yield* opening(stateDir, { kind: "mac" });
+      const kept = yield* withStore(stateDir, (store) => store.machines);
 
-        expect(renamed).toEqual(
-          new CannotStart({
-            message: `${join(stateDir, databaseFile)} holds host linux on smolvm, and this config names host mac on smolvm: run it as linux on smolvm, or give it a new state dir`,
-          }),
-        );
-        expect(moved.message).toContain("this config names host linux on tart");
-        expect(kept.map(({ name }) => name)).toEqual(["dev"]);
-      }),
+      expect(renamed).toEqual(
+        new CannotStart({
+          message: `${join(stateDir, databaseFile)} holds linux host linux, and this config names linux host mac: run it as linux host linux, or give it a new state dir`,
+        }),
+      );
+      expect(moved.message).toContain("this config names mac host linux");
+      expect(kept.map(({ name }) => name)).toEqual(["dev"]);
+    }),
   );
 
   it.effect(
@@ -276,7 +255,7 @@ layer(NodeServices.layer)((it) => {
         const old = new DatabaseSync(join(earlier, databaseFile));
 
         old.exec("CREATE TABLE machines (name TEXT PRIMARY KEY)");
-        old.exec(`PRAGMA user_version = 6; PRAGMA application_id = ${0x63_62_78_68}`);
+        old.exec(`PRAGMA user_version = 2; PRAGMA application_id = ${0x63_62_78_69}`);
         old.close();
 
         for (const stateDir of [other, earlier]) {
@@ -331,58 +310,30 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
-  it.effect(
-    "made and a host key write only themselves, never what was asked or the native ID",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = join(yield* scratch, "state");
+  it.effect("made and a host key write only themselves, never what was asked", () =>
+    Effect.gen(function* () {
+      const stateDir = join(yield* scratch, "state");
 
-        const found = yield* withStore(stateDir, (store) =>
-          Effect.gen(function* () {
-            yield* store.insertMachine(intent("dev"));
-            yield* store.recordNative("dev", "0123456789abcdef0123456789abcdef", "bx_1");
-            yield* store.desire("dev", "stopped");
-            yield* store.made("dev");
-            yield* store.hostKey("dev", "ssh-ed25519 AAAAnew");
+      const found = yield* withStore(stateDir, (store) =>
+        Effect.gen(function* () {
+          yield* store.insertMachine(intent("dev"));
+          yield* store.desire("dev", "stopped");
+          yield* store.made("dev");
+          yield* store.hostKey("dev", "ssh-ed25519 AAAAnew");
 
-            return yield* store.findMachine("dev");
-          }),
-        );
+          return yield* store.findMachine("dev");
+        }),
+      );
 
-        expect(Option.getOrUndefined(found)).toEqual(
-          intent("dev", {
-            made: true,
-            hostKey: "ssh-ed25519 AAAAnew",
-            native: "bx_1",
-            desired: "stopped",
-            generation: 2,
-          }),
-        );
-      }),
-  );
-
-  it.effect(
-    "a native ID is recorded only on the row of its instance; another instance's is Internal",
-    () =>
-      Effect.gen(function* () {
-        const stateDir = join(yield* scratch, "state");
-
-        const [stale, gone, found] = yield* withStore(stateDir, (store) =>
-          Effect.gen(function* () {
-            yield* store.insertMachine(intent("dev"));
-
-            return [
-              yield* Effect.flip(store.recordNative("dev", "ffff", "bx_2")),
-              yield* Effect.flip(store.recordNative("gone", "ffff", "bx_3")),
-              yield* store.findMachine("dev"),
-            ] as const;
-          }),
-        );
-
-        expect(stale.message).toContain("machine linux_dev of instance ffff is gone");
-        expect(gone.message).toContain("native ID bx_3 wasn't recorded");
-        expect(Option.map(found, ({ native }) => native)).toEqual(Option.some(undefined));
-      }),
+      expect(Option.getOrUndefined(found)).toEqual(
+        intent("dev", {
+          made: true,
+          hostKey: "ssh-ed25519 AAAAnew",
+          desired: "stopped",
+          generation: 2,
+        }),
+      );
+    }),
   );
 
   it.effect("removeMachine deletes the row and frees its name and port", () =>
@@ -413,7 +364,7 @@ layer(NodeServices.layer)((it) => {
         const store = yield* open({
           stateDir: join(yield* scratch, "state"),
           id: "linux",
-          runtime: "smolvm",
+          kind: "linux",
         });
 
         yield* store.insertMachine(intent("dev", { made: true }));
@@ -446,7 +397,7 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const stateDir = join(yield* scratch, "state");
         const snap = checkpoint("snap", { profile: "small" });
-        const disk = checkpoint("disk", { kind: "disk", pin: undefined, port: undefined });
+        const disk = checkpoint("disk", { pin: undefined });
 
         const [before, foundBefore, unread, row, after, foundAfter, unreadAfter] = yield* withStore(
           stateDir,

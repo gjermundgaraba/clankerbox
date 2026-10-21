@@ -98,13 +98,6 @@ export class ScriptFailed extends Schema.TaggedError<ScriptFailed>()(
   { httpApiStatus: 422 },
 ) {}
 
-/** The provider under the runtime refused the call for good, such as for its plan or API key. */
-export class Refused extends Schema.TaggedError<Refused>()(
-  "Refused",
-  { message: Schema.String, ...located },
-  { httpApiStatus: 403 },
-) {}
-
 /** The host has no room now; room can free up, so a later call may succeed. */
 export class Capacity extends Schema.TaggedError<Capacity>()(
   "Capacity",
@@ -141,7 +134,6 @@ export const hostErrors = [
   WrongState,
   Unsizable,
   ScriptFailed,
-  Refused,
   Capacity,
   Internal,
 ] as const;
@@ -180,7 +172,6 @@ export const retryable = (error: ClankerboxError): boolean =>
       WrongState: () => false,
       Unsizable: () => false,
       ScriptFailed: () => false,
-      Refused: () => false,
       Capacity: () => true,
       Unavailable: ({ readOnly }) => readOnly,
       Internal: () => false,

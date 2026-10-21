@@ -52,14 +52,13 @@ layer(NodeServices.layer)((it) => {
           store.insertMachine({
             name: "dev",
             instance: "0123456789abcdef0123456789abcdef",
-            native: undefined,
             createdAt: DateTime.makeUnsafe("2026-10-04T12:00:00Z"),
             base: "ubuntu",
             profile: undefined,
             cpu: 1,
             ramMib: 1024,
             diskGib: 10,
-            port: undefined,
+            port: 10_000,
             desired: "running",
             generation: 1,
             ephemeral: false,
@@ -98,7 +97,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a host renamed, or moved to another runtime, refuses its state dir before it builds its runtime",
+    "a host renamed, or moved to another kind, refuses its state dir before it builds its runtime",
     () =>
       Effect.gen(function* () {
         const dir = yield* scratch;
@@ -108,13 +107,13 @@ layer(NodeServices.layer)((it) => {
         yield* whileServing(config(dir), dir, () => Effect.void);
 
         const renamed = yield* refused(config(dir, { id: "mac" }), fake);
-        const moved = yield* refused(config(dir, { runtime: "tart" }), fake);
+        const moved = yield* refused(config(dir, { kind: "mac" }), fake);
 
         expect(renamed._tag).toBe("CannotStart");
         expect(renamed.message).toContain(
-          "holds host linux on smolvm, and this config names host mac",
+          "holds linux host linux, and this config names linux host mac",
         );
-        expect(moved.message).toContain("this config names host linux on tart");
+        expect(moved.message).toContain("this config names mac host linux");
         expect(fake.stubs()).toBeUndefined();
       }),
   );
