@@ -6,7 +6,7 @@ export interface PortRange {
   readonly last: number;
 }
 
-// Source: S@1.27.3:src/agent/fork.rs:3978-3980
+// Source: smolvm src/agent/fork.rs CLONE_PORT_FLOOR, CLONE_PORT_CEILING
 export const reservedPorts: ReadonlyArray<PortRange & { readonly owner: string }> = [
   { first: 20_000, last: 31_999, owner: "smolvm's fork ports" },
   { first: 32_768, last: 60_999, owner: "Linux's ephemeral ports" },

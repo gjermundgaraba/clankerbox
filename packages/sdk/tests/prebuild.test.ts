@@ -44,7 +44,7 @@ const spec = {
   profile: "dev",
 } satisfies MachineSpec;
 
-const smolvm = { runtimeVersion: "1.27.3" };
+const smolvm = { runtimeVersion: "0.0.0-test" };
 
 const nameOf = (of: MachineSpec, on = smolvm) => Prebuild.nameOf(of, on);
 

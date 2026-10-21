@@ -30,9 +30,9 @@ publish, change production hosts, or commit unless asked.
   read-only cache at `~/.cache/checkouts/github.com/rivet-dev/agents`, and
   read at the release's tag. The published SDK is also at hand, built, in
   `packages/rivet-sandbox-agent/node_modules/sandbox-agent/dist`.
-- **Notation:** `A@<version>:path` is that repository's `sandbox-agent/`
-  directory at the release, and `dist:` the published package's `dist/`. The
-  identifier beside a citation finds the code. Every citation is at 0.5.3.
+- **Notation:** a citation is a path in that repository's `sandbox-agent/`
+  directory at the tested release, 0.5.3, or `dist:` in the published
+  package's `dist/`; the identifier beside it finds the code.
 
 ## Claims to re-check
 
@@ -101,7 +101,7 @@ publish, change production hosts, or commit unless asked.
   `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_AUTH_TOKEN`; `OPENAI_API_KEY` or
   `CODEX_API_KEY`) or in the user's `~/.claude.json` and
   `~/.claude/.credentials.json` (`extract_all_credentials`,
-  A@0.5.3:server/packages/agent-credentials/src/lib.rs, whose
+  server/packages/agent-credentials/src/lib.rs, whose
   `include_oauth` is on by default). Ours: the recipes' `agent.env`, sourced into
   the server's environment at every launch.
 - `@sandbox-agent/cli`, the SDK's optional dependency, carries a server binary
@@ -121,7 +121,8 @@ publish, change production hosts, or commit unless asked.
 ## After
 
 - Move the catalog pin, the peer range and both recipes' pins together, and
-  each citation here to the new version; add claims the release introduced.
+  the release in Notation above; edit a citation only where its identifier
+  moved, and add claims the release introduced.
 - Report the version transition, the checksums and how they were verified,
   the claims that changed and their fixes, the checks actually run, and
   remaining runtime resources and retained disk separately.

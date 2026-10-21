@@ -36,15 +36,17 @@ Each host needs its kind's runtime, installed by the operator:
 
 | Kind  | Host                    | Prerequisite                                                         |
 | ----- | ----------------------- | -------------------------------------------------------------------- |
-| linux | Linux/amd64 with KVM    | smolvm exactly 1.27.3, upstream, in a versioned prefix; runs as root |
+| linux | Linux/amd64 with KVM    | smolvm exactly 1.31.1, upstream, in a versioned prefix; runs as root |
 | mac   | Apple Silicon, macOS 26 | Tart 2.41.1 or later, Softnet 0.24.0 installed SUID root             |
 
 smolvm, with both disk templates expanded beside their `.zst` files:
 
 ```sh
-HOME=/opt/smolvm/1.27.3 install.sh --version 1.27.3 --prefix /opt/smolvm/1.27.3 --no-modify-path
+version=1.31.1
+prefix=/opt/smolvm/$version
+HOME=$prefix install.sh --version $version --prefix $prefix --no-modify-path
 for t in storage-template.ext4 overlay-template.ext4; do
-  zstd -d --sparse /opt/smolvm/1.27.3/$t.zst -o /opt/smolvm/1.27.3/$t
+  zstd -d --sparse $prefix/$t.zst -o $prefix/$t
 done
 ```
 
@@ -63,7 +65,7 @@ A host process runs one kind from one JSON config file:
   "bases": {
     "ubuntu": "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7"
   },
-  "linux": { "prefix": "/opt/smolvm/1.27.3" }
+  "linux": { "prefix": "/opt/smolvm/1.31.1" }
 }
 ```
 

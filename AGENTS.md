@@ -129,7 +129,8 @@ transport. Neither `./testing` export is published.
 - **No prose comments.** A reason goes where something can check or show it:
   a type, a test's name, or the commit message. What stays: a one-line
   `// SAFETY:` above a type assertion, a one-line `// Source:` citing the
-  upstream file a value comes from when a bump must re-check it, a tool
+  upstream, file and identifier a value comes from when a bump must re-check
+  it (`// Source: smolvm src/config.rs RecordState`, no version or lines), a tool
   directive with its reason after `--`, and a doc block on a type, an
   interface or one of their members, which is how a port states its contract.
   The SDK's and the provider's `src/` also keep a doc block on each export,

@@ -66,7 +66,7 @@ const checkpoint = (name: string, fields?: Partial<CheckpointRecord>): Checkpoin
   instance: "fedcba9876543210fedcba9876543210",
   createdAt: DateTime.makeUnsafe("2026-10-04T13:00:00Z"),
   machine: "dev",
-  pin: "smolvm 1.27.3 linux-x64",
+  pin: "smolvm 0.0.0-test linux-x64",
   port: 10_000,
   base: "ubuntu",
   profile: undefined,

@@ -83,7 +83,7 @@ tester.run("no-manual-run", noManualRunRule, {
 tester.run("no-prose-comments", noProseCommentsRule, {
   valid: [
     "// SAFETY: the union decodes what it encoded.\nconst error = decode(encoded) as E;",
-    "// Source: S@1.27.3:src/agent/fork.rs:3978\nconst floor = 20_000;",
+    "// Source: smolvm src/agent/fork.rs CLONE_PORT_FLOOR\nconst floor = 20_000;",
     "// oxlint-disable-next-line no-console -- the CLI's own output\nconsole.log(1);",
     "interface Port {\n  /** Returns once exec works. */\n  readonly start: () => void;\n}",
     "/** A port's contract. */\nexport interface Port {}",

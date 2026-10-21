@@ -37,10 +37,11 @@ production hosts or the operator's Tart, or commit unless asked.
   Fetch missing tags (no `v` prefix, such as `2.41.1`); read with
   `git show <tag>:Sources/tart/<path>`. Never edit, reset or switch it. Run
   tests on a private install of the target, never by upgrading the operator's.
-- **Notation:** `T@<tag>:path` is `Sources/tart/<path>` at that tag, and the
-  identifier beside it (a type, function, case or message) finds the code:
-  `git grep -n <identifier> <tag> -- Sources/tart/<path>`. `tart.ts`'s
-  comments cite lines too (`T@<tag>:path:lines`); those move with each bump.
+- **Notation:** a citation is a path under `Sources/tart/` at the tested
+  release, 2.41.1, and the identifier beside it (a type, function, case or
+  message) finds the code: `git grep -n <identifier> <tag> --
+  Sources/tart/<path>`. Code comments cite the same way, as `// Source: tart
+  <path> <identifier>`: `git grep -n 'Source: tart'`.
 - Read the release notes and the full changed-file list, then each claim's file.
 
 ## Claims to re-check
@@ -51,51 +52,51 @@ Each: what Tart does, where, and what of ours depends on it.
 
 - `tart list` skips a VM deleted between enumerating the Tart home and reading
   its metadata, where before it failed outright (`isFileNotFound` in
-  `compactMap`, T@2.41.1:Commands/List.swift; fixed in 2.41.1). Ours: nothing
+  `compactMap`, Commands/List.swift; fixed in 2.41.1). Ours: nothing
   orders a machine's `tart list` (`state`, `halted`, `observe`, `admit`,
   `capacity`) against another machine's or a checkpoint's `tart delete`, so
   below 2.41.1 a stop, start, fork or capture racing a delete failed `Internal`
   and a recheck read every machine `unknown`.
 
 - Clone refuses an existing destination unless `--overwrite`
-  (`rejectExistingDestination`, T@2.41.1:Commands/Clone.swift). Ours:
+  (`rejectExistingDestination`, Commands/Clone.swift). Ours:
   native names carry the row's instance, so a clone never meets one, and
   `--overwrite` is never passed.
 - Delete's exit codes: `VMDoesNotExist` and `VMNotRunning` exit 2, anything else
-  1 (`RuntimeError`'s `exitCode`, T@2.41.1:VMStorageHelper.swift); a running
+  1 (`RuntimeError`'s `exitCode`, VMStorageHelper.swift); a running
   VM exits 1 from 2.40.0.
   Ours: delete treats 2 as gone, and on 1 forces the VM off
   (`tart stop --timeout 0`) and deletes again.
 - One control-socket accept error no longer disables `tart exec` until restart
-  (`ControlSocketAcceptErrorHandler`, T@2.41.1:ControlSocket.swift), and
+  (`ControlSocketAcceptErrorHandler`, ControlSocket.swift), and
   `tart list` no longer fails on running VMs.
 
 **Clone, names and sizes**
 
 - Clone builds in a temp directory (`VMDirectory.temporary`) under a lock
   (`FileLock`), then moves it into place; interrupted clones are
-  garbage-collected (`run` in T@2.41.1:Commands/Clone.swift;
+  garbage-collected (`run` in Commands/Clone.swift;
   `runGarbageCollection` in Root.swift). It doesn't require a stopped source,
   only a stacked one must be stopped ("must be stopped before cloning"). Ours:
   no checks around clone; fork and capture of a running machine are refused by
   our own rule, before anything native, since a clone of a stopped disk is consistent
   and one of a running VM's disk is crash-consistent at best.
 - Clone regenerates a colliding MAC, checking one Tart home only
-  (`hasVMsWithMACAddress`, T@2.41.1:Commands/Clone.swift;
+  (`hasVMsWithMACAddress`, Commands/Clone.swift;
   `hasRunningMACCollision`, Commands/Run.swift). Ours: no `--random-mac`;
   `tart set --random-serial` once per clone.
 - A local VM name only has to be free of `/` (`validate`,
-  T@2.41.1:Commands/Clone.swift). Ours: `machineName` and `checkpointName`,
+  Commands/Clone.swift). Ours: `machineName` and `checkpointName`,
   `cbx-<host>-{m,c}-<name>-<inst>`.
 - `tart set --disk-size` only grows a disk, in GB (10^9 bytes); a smaller size
   throws "new disk size … should be larger than the current disk size" for raw
   and ASIF disks (`resizeRawDisk`, `resizeASIFDisk`,
-  T@2.41.1:VMDirectory.swift), and a stacked disk grows only its writable
+  VMDirectory.swift), and a stacked disk grows only its writable
   overlay (`growWritableOverlay`, DiskImageStack.swift). Ours: `diskGb` rounds
   `diskGib` up, `shrinkRefusal` matches that text and makes it `Unsizable`.
   The pinned Cirrus base has a 50 GB raw disk.
 - `tart get` opens local VMs only (`VMStorageLocal().open`,
-  T@2.41.1:Commands/Get.swift), not an OCI reference, and `tart list` reports no
+  Commands/Get.swift), not an OCI reference, and `tart list` reports no
   OS (`VMInfo`, Commands/List.swift). Ours: no check of `diskGib` against the
   base before the create; Tart's refusal at `tart set` is the check.
 
@@ -103,7 +104,7 @@ Each: what Tart does, where, and what of ours depends on it.
 
 - `tart list --format json` gives `Source`, `Name`, `Disk` (can be null),
   `Size`, `Accessed`, `Running` (deprecated, kept in JSON for compatibility,
-  T@2.41.1:Formatter/Format.swift) and `State`: `running`, `suspended` or
+  Formatter/Format.swift) and `State`: `running`, `suspended` or
   `stopped` (`VMDirectory.State`, VMDirectory.swift), from the VM's lock,
   which `tart run` holds. It sees one Tart home only. Ours: `VmState`,
   `decodeList`, `stateOf` (suspended reads stopped), the two-VM count, and
@@ -112,7 +113,7 @@ Each: what Tart does, where, and what of ours depends on it.
   bounded by the same, past which the boot fails, writing nothing.
 - `tart stop` sends SIGINT to `tart run`, waits up to `--timeout` (default 30 s)
   for the lock to clear, then SIGKILLs it; a stopped VM exits 2 (`stopRunning`,
-  T@2.41.1:Commands/Stop.swift). Its return doesn't mean the VM is gone:
+  Commands/Stop.swift). Its return doesn't mean the VM is gone:
   `tart run` can still be exiting. Ours: stop is
   the guest's `shutdown -h now`, then `tart stop --timeout 0` after
   `shutdownWait`, and both wait for `tart list` to read it stopped
@@ -120,7 +121,7 @@ Each: what Tart does, where, and what of ours depends on it.
 - `shutdown -h now` on a guest whose agent is still coming up waits for the
   agent, since the exec does. Ours: `shutdownWait`, a minute.
 - Apple allows two running macOS VMs per Mac, system-wide. Tart catches
-  `virtualMachineLimitExceeded` (T@2.41.1:Commands/Run.swift), prints
+  `virtualMachineLimitExceeded` (Commands/Run.swift), prints
   "The number of VMs exceeds the system limit" (`VirtualMachineLimitExceeded`,
   VMStorageHelper.swift) and exits 1 (`Foundation.exit(1)` in Run.swift)
   within 0.3–0.6 s; under launchd the job just
@@ -130,7 +131,7 @@ Each: what Tart does, where, and what of ours depends on it.
 **Softnet and the network**
 
 - `--net-softnet-block` implies `--net-softnet` (`netSoftnetBlock`,
-  T@2.41.1:Commands/Run.swift). Tart finds `softnet` on `PATH`
+  Commands/Run.swift). Tart finds `softnet` on `PATH`
   (`resolveBinaryPath`, Network/Softnet.swift, Utils.swift), and sets its SUID
   bit only from an interactive session (`isInteractiveSession` before
   `configureSUIDBitIfNeeded`, Run.swift), never under launchd. Ours:
@@ -145,10 +146,10 @@ Each: what Tart does, where, and what of ours depends on it.
 
 - The control socket is bound and dialled as the relative name `control.sock`
   after a change into the VM's directory (`changeCurrentDirectoryPath` and
-  `controlSocketURL.relativePath`, T@2.41.1:ControlSocket.swift and
+  `controlSocketURL.relativePath`, ControlSocket.swift and
   Commands/Exec.swift), so a Tart home's path length doesn't matter.
 - `tart exec -i` reads stdin into an unbounded stream (`stdinStream`,
-  T@2.41.1:Commands/Exec.swift): a raw 1 GiB upload peaked at 2+ GiB RSS in the
+  Commands/Exec.swift): a raw 1 GiB upload peaked at 2+ GiB RSS in the
   host's `tart`. A killed `tart exec` leaves the guest's command (and over the
   forwarder its `nc` and `sshd-session`) until its session next writes (the
   proxy in `executeThenClose`, ControlSocket.swift). Ours: bulk data goes
@@ -156,7 +157,7 @@ Each: what Tart does, where, and what of ours depends on it.
   window keeps it at about 20 MiB; the forwarder ends a connection by closing
   the exec's stdin.
 - From 2.41.1 `tart exec` asks the guest agent for 64 KiB HTTP/2 windows
-  (`targetWindowSize`, T@2.41.1:GuestAgentChannel.swift), so at most 64 KiB of
+  (`targetWindowSize`, GuestAgentChannel.swift), so at most 64 KiB of
   guest output is in flight per stream, against virtio-vsock dropping whole
   blocks of fast output from macOS 12–15 guests (openai/tart#1347). Tahoe
   guests didn't lose any. Ours: the pinned base is Tahoe; the forwarder's
@@ -175,7 +176,7 @@ Each: what Tart does, where, and what of ours depends on it.
   end-of-input at once with stdin closed. Ours: `exec` adds `sudo -n`.
 - Registry credentials are looked up only on an auth challenge, and a failed
   lookup only prints a warning (`auth(response:)`, `lookupCredentials`,
-  T@2.41.1:OCI/Registry.swift). Ours: no `HOME=<root>` for tart; the job
+  OCI/Registry.swift). Ours: no `HOME=<root>` for tart; the job
   gets the user's `HOME`.
 - Ours: every tart call and every VM job runs with one environment
   (`environment` in `tart.ts`): a fixed
@@ -209,9 +210,9 @@ Each: what Tart does, where, and what of ours depends on it.
   commit message, and the boundary
   versions to `tart.test.ts`'s `supported` cases. Otherwise the floor stays,
   and only the tested release moves (README, the fake's version).
-- Move each `T@<old>` citation, in this skill and in `tart.ts`'s comments, to
-  the new tag (`tart.ts`'s also to their current lines), check that each
-  identifier still finds the code, and add claims the new release introduced.
+- Set the tested release in Notation above. Edit a claim or a `Source: tart`
+  comment only where the target changed it: check each identifier still finds
+  the code, and add claims the new release introduced.
 - Tell the operator how to move: install the new release in its own versioned
   path, change `tart.binary`, restart the host. Every `start` writes the VM's
   job again, and a stopped job launchd still holds that names another `tart` is

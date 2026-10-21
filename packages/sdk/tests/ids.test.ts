@@ -150,7 +150,7 @@ it.effect("a name has no '_', no '--' and doesn't end in '-'", () =>
   }),
 );
 
-// Source: smolvm 1.27.3 src/data/mod.rs:58-103, validate_vm_name
+// Source: smolvm src/data/mod.rs validate_vm_name
 const smolvmAccepts = (name: string): boolean =>
   name.length <= 128 &&
   /^[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(name) &&

@@ -22,7 +22,7 @@ export interface StubHostOptions {
   readonly id: string;
   readonly bases: ReadonlyArray<string>;
   readonly kind?: Kind;
-  /** Default: 1.27.3. */
+  /** Default: 0.0.0-test. */
   readonly runtimeVersion?: string;
   /** Default: running. */
   readonly create?: (request: CreateRequest) => Effect.Effect<Machine, Declared<"createMachine">>;
@@ -257,7 +257,7 @@ export const stubHost = (options: StubHostOptions) => {
         id: options.id,
         kind,
         version,
-        runtimeVersion: options.runtimeVersion ?? "1.27.3",
+        runtimeVersion: options.runtimeVersion ?? "0.0.0-test",
         bases: options.bases,
       }),
     getCapacity: () =>

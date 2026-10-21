@@ -17,7 +17,7 @@ const config = {
   listen: { address: "100.95.240.37", port: 8484 },
   stateDir: "state",
   bases: { ubuntu: image },
-  linux: { prefix: "/opt/smolvm/1.27.3" },
+  linux: { prefix: "/opt/smolvm" },
 };
 
 const load = (contents: Schema.Json) =>
@@ -45,7 +45,7 @@ layer(NodeServices.layer)((it) => {
           bases: new Map([["ubuntu", image]]),
           machinePorts: { first: 10_000, last: 19_999 },
           recheck: defaultRecheck,
-          linux: { prefix: "/opt/smolvm/1.27.3" },
+          linux: { prefix: "/opt/smolvm" },
         });
       }),
   );

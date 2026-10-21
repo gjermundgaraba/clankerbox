@@ -123,7 +123,7 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* runtimeOf(settings, spawner);
 
-        expect(runtime.version).toBe("1.27.3");
+        expect(runtime.version).toBe(testedVersion);
         expect(spawner.calls).toEqual([
           {
             file: join(settings.prefix, "smolvm"),
@@ -135,6 +135,8 @@ layer(NodeServices.layer)((it) => {
               SMOLVM_AGENT_ROOTFS: join(settings.prefix, ".local/share/smolvm/agent-rootfs"),
               SMOLVM_RESTORE_TMPFS: "0",
               SMOLVM_VM_USE_SCOPE: "1",
+              SMOLVM_OOM_VICTIM_ORDER: "0",
+              SMOLVM_USAGE: "0",
               SMOLVM_PUBLISH_ADDR: "100.95.240.37",
               SMOLVM_EGRESS_FLOOR: "strict",
               NO_COLOR: "1",
@@ -195,12 +197,12 @@ layer(NodeServices.layer)((it) => {
 
       const error = yield* startupError(
         settings,
-        scripted(() => ({ stdout: "smolvm 1.27.4\n" })),
+        scripted(() => ({ stdout: "smolvm 0.0.0-test\n" })),
       );
 
       expect(error._tag).toBe("CannotStart");
       expect(error.message).toBe(
-        `${join(settings.prefix, "smolvm")} reports "smolvm 1.27.4", and this host was tested on smolvm 1.27.3`,
+        `${join(settings.prefix, "smolvm")} reports "smolvm 0.0.0-test", and this host was tested on smolvm ${testedVersion}`,
       );
     }),
   );
@@ -527,27 +529,29 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect("delete stops a running machine, finds its scope gone, then deletes it", () =>
-    Effect.gen(function* () {
-      const spawner = scripted((call) => {
-        if (call.file === "systemctl") {
-          return { stdout: "not-found\n" };
-        }
+  it.effect(
+    "delete stops a running machine, giving its workload no time, finds its scope gone, then deletes it",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) => {
+          if (call.file === "systemctl") {
+            return { stdout: "not-found\n" };
+          }
 
-        return call.args[1] === "status" ? status("running") : undefined;
-      });
+          return call.args[1] === "status" ? status("running") : undefined;
+        });
 
-      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-      yield* runtime.delete(machine);
+        yield* runtime.delete(machine);
 
-      expect(smolvmArgs(spawner.calls)).toEqual([
-        ["machine", "status", "--name", "dev-01234567", "--json"],
-        ["machine", "stop", "--name", "dev-01234567"],
-        ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
-        ["machine", "delete", "--name", "dev-01234567", "--force"],
-      ]);
-    }),
+        expect(smolvmArgs(spawner.calls)).toEqual([
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+          ["machine", "stop", "--name", "dev-01234567", "--timeout", "0"],
+          ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
+          ["machine", "delete", "--name", "dev-01234567", "--force"],
+        ]);
+      }),
   );
 
   it.effect("delete of a stopped machine deletes it without a stop", () =>
@@ -618,7 +622,7 @@ layer(NodeServices.layer)((it) => {
 
         expect(smolvmArgs(spawner.calls)).toEqual([
           ["machine", "status", "--name", "dev-01234567", "--json"],
-          ["machine", "stop", "--name", "dev-01234567"],
+          ["machine", "stop", "--name", "dev-01234567", "--timeout", "0"],
           ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
           ["systemctl", "kill", "--signal=SIGKILL", "smolvm-vm-dev-01234567.scope"],
           ["machine", "delete", "--name", "dev-01234567", "--force"],

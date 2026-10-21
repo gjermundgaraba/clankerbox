@@ -42,7 +42,7 @@ export const ramBudget = (set: number | undefined): Effect.Effect<number, Invali
     : Effect.succeed(ramBudgetMib);
 };
 
-export const testedVersion = "1.27.3";
+export const testedVersion = "1.31.1";
 
 export interface Settings {
   readonly prefix: string;
@@ -93,12 +93,12 @@ export const observeEach = (
     ),
   );
 
-// Source: S@1.27.3:src/systemd_scope.rs:151-164
+// Source: smolvm src/systemd_scope.rs scope_name
 const scopeName = (native: string): string => `smolvm-vm-${native}.scope`;
 
 export const templates = ["storage-template.ext4", "overlay-template.ext4"] as const;
 
-// Source: S@1.27.3:src/agent/manager.rs:286-306, src/agent/fork.rs:301
+// Source: smolvm src/agent/manager.rs vm_data_dir, src/agent/fork.rs control_socket_path, src/agent/launcher_dynamic.rs MAX_UNIX_SOCKET_PATH
 const socketPathMax = 107;
 
 export const controlSocket = (dataDir: string): string =>
@@ -106,7 +106,7 @@ export const controlSocket = (dataDir: string): string =>
 
 const searchPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-// Source: S@1.27.3:src/main.rs:139-143; tracing-subscriber 0.3.23 src/fmt/fmt_layer.rs:739-743
+// Source: smolvm src/main.rs apply_system_data_root, src/process.rs oom_score_adj_for, src/usage.rs recording_enabled; tracing-subscriber NO_COLOR
 export const environment = (settings: Settings) => ({
   PATH: searchPath,
   HOME: pathsIn(settings.stateDir).dataDir,
@@ -114,12 +114,14 @@ export const environment = (settings: Settings) => ({
   SMOLVM_AGENT_ROOTFS: join(settings.prefix, ".local", "share", "smolvm", "agent-rootfs"),
   SMOLVM_RESTORE_TMPFS: "0",
   SMOLVM_VM_USE_SCOPE: "1",
+  SMOLVM_OOM_VICTIM_ORDER: "0",
+  SMOLVM_USAGE: "0",
   SMOLVM_PUBLISH_ADDR: settings.publishAddress,
   SMOLVM_EGRESS_FLOOR: "strict",
   NO_COLOR: "1",
 });
 
-// Source: S@1.27.3:src/config.rs:36-85
+// Source: smolvm src/config.rs RecordState
 const RecordState = Schema.Literals([
   "created",
   "running",
@@ -139,7 +141,7 @@ const decodeStatus = Schema.decodeUnknownEffect(
 
 const alive: ReadonlySet<RecordState> = new Set(["running", "pausing", "unreachable", "frozen"]);
 
-// Source: S@1.27.3:src/cli/vm_common.rs start_vm_named_with_db
+// Source: smolvm src/cli/vm_common.rs start_vm_named_with_db
 const unstartable: ReadonlySet<RecordState> = new Set(["frozen", "pausing", "paused"]);
 
 export const stateOf = (state: RecordState): MachineState =>
@@ -295,7 +297,7 @@ export const make = (
 
         if (observed === "running") {
           const stopped = yield* smolvm(
-            ["machine", "stop", "--name", native],
+            ["machine", "stop", "--name", native, "--timeout", "0"],
             `machine stop ${native}`,
           );
 
@@ -414,7 +416,7 @@ export const make = (
       deleteCheckpoint: Effect.fn("Smolvm.deleteCheckpoint")((checkpoint) => {
         const objects = join(paths.store, "objects");
 
-        // Source: S@1.27.3:crates/smolvm-checkpoint/src/store.rs:1550-1552
+        // Source: smolvm crates/smolvm-checkpoint/src/store.rs prune
         return Effect.gen(function* () {
           yield* removeAll(checkpointDir(checkpoint));
 
