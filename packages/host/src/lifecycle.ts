@@ -8,8 +8,8 @@ import type {
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   createEffectActor,
+  createEffectLogic,
   type EffectActor,
-  fromEffect,
   send,
   setupEffect,
   waitFor,
@@ -261,12 +261,12 @@ export const lifecycle = (steps: Steps) => {
       tags: types<"resting">(),
     },
     actors: {
-      observe: fromEffect(({ input }: { input: Life }) => steps.observe(input)),
-      make: fromEffect(step(steps.make)),
-      start: fromEffect(step(steps.start)),
-      join: fromEffect(({ input }: { input: Life }) => steps.join(input)),
-      stop: fromEffect(step(steps.stop)),
-      remove: fromEffect(step(steps.remove)),
+      observe: createEffectLogic(({ input }: { input: Life }) => steps.observe(input)),
+      make: createEffectLogic(step(steps.make)),
+      start: createEffectLogic(step(steps.start)),
+      join: createEffectLogic(({ input }: { input: Life }) => steps.join(input)),
+      stop: createEffectLogic(step(steps.stop)),
+      remove: createEffectLogic(step(steps.remove)),
     },
   }).createMachine({
     id: "machine",
