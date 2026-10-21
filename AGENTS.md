@@ -154,3 +154,7 @@ but CI publishes it beside the SDK.
 ## Effect
 
 Before writing or reviewing Effect code, read `node_modules/effect/AGENTS.md` in the package you are changing and the examples it links under `ai-docs/`. They ship with the installed `effect`, so they match the APIs the code compiles against. For exact signatures, read that package's installed source and types in `node_modules/effect` and `node_modules/@effect/*`. Do not write Effect APIs from memory or from examples for another version.
+
+## xstate
+
+Before writing or reviewing `lifecycle.ts`, read the docs the installed `xstate` ships in `packages/host/node_modules/xstate/docs/`, from `index.md`, and `@xstate/effect`'s `README.md` beside it. Both are v6 alphas whose APIs change between releases, so the installed docs and types are the ones the code compiles against; do not write xstate APIs from memory or from v5 examples. Neither package ships its changelog: a bump reads `packages/core/CHANGELOG.md` and `packages/xstate-effect/CHANGELOG.md` on the `next` branch of `statelyai/xstate`.
