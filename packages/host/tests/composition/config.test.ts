@@ -69,7 +69,7 @@ layer(NodeServices.layer)((it) => {
     listen: { address: "100.122.69.11", port: 8484 },
     stateDir: "state",
     bases: { tahoe: "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3" },
-    mac: { binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart" },
+    mac: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },
   };
 
   it.effect("a mac host config names its tart binary", () =>
@@ -84,7 +84,7 @@ layer(NodeServices.layer)((it) => {
         bases: new Map([["tahoe", "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3"]]),
         machinePorts: { first: 10_000, last: 19_999 },
         recheck: defaultRecheck,
-        mac: { binary: "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart" },
+        mac: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },
       });
     }),
   );

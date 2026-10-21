@@ -31,7 +31,7 @@ export const TartSettings = Schema.Struct({
   binary: Schema.String,
 });
 
-export const minimumVersion = "2.40.1";
+export const minimumVersion = "2.41.1";
 
 export interface Settings {
   readonly binary: string;
@@ -45,12 +45,12 @@ export interface Settings {
 
 const softnet = "--net-softnet-block=@host";
 
-// Source: T@2.40.1:VMStorageHelper.swift:146-147
+// Source: T@2.41.1:VMStorageHelper.swift:146-147
 const vmLimit = 2;
 
 const limitRefusal = "The number of VMs exceeds the system limit";
 
-// Source: T@2.40.1:VMDirectory.swift:287-319
+// Source: T@2.41.1:VMDirectory.swift:287-319
 const shrinkRefusal = "should be larger than the current disk size";
 
 const bootWait = Duration.minutes(3);
@@ -59,12 +59,12 @@ const probePause = Duration.seconds(1);
 
 const shutdownWait = Duration.minutes(1);
 
-// Source: T@2.40.1:Commands/Stop.swift:51-68
+// Source: T@2.41.1:Commands/Stop.swift:51-68
 const forcedStopWait = Duration.seconds(10);
 
 const stopPause = Duration.millis(500);
 
-// Source: T@2.40.1:Network/Softnet.swift:86-94, Utils.swift:30-45
+// Source: T@2.41.1:Network/Softnet.swift:86-94, Utils.swift:30-45
 const searchPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 export const environment = (settings: Pick<Settings, "tartHome">) => ({
@@ -83,7 +83,7 @@ export const checkpointName = (
 
 export const jobsDir = (stateDir: string): string => join(stateDir, "launchd");
 
-// Source: T@2.40.1:VMDirectory.swift:287-301
+// Source: T@2.41.1:VMDirectory.swift:287-301
 export const diskGb = (diskGib: number): number => Math.ceil((diskGib * 1024 ** 3) / 1e9);
 
 const xml = (text: string): string =>
@@ -127,7 +127,7 @@ export const plist = (job: {
     ``,
   ].join("\n");
 
-// Source: T@2.40.1:VMDirectory.swift:6-10
+// Source: T@2.41.1:VMDirectory.swift:6-10
 const VmState = Schema.Literals(["running", "suspended", "stopped"]);
 
 const decodeList = Schema.decodeUnknownEffect(

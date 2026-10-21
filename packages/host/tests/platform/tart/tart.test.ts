@@ -26,7 +26,7 @@ import { type Call, type Reply, scripted } from "../../scripted.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
 
-const binary = "/opt/tart/2.40.1/tart.app/Contents/MacOS/tart";
+const binary = "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart";
 
 const launchctl = "/bin/launchctl";
 
@@ -94,7 +94,7 @@ const scriptedMac = (stateDir: string) => {
 
     switch (command) {
       case "--version":
-        return { stdout: "2.40.1\n" };
+        return { stdout: "2.41.1\n" };
       case "list":
         return (
           hooks.list?.() ?? {
@@ -275,22 +275,23 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     ]);
   });
 
-  it.effect("Tart 2.40.1 or later is required, and an older one is refused at startup", () =>
+  it.effect("Tart 2.41.1 or later is required, and an older one is refused at startup", () =>
     Effect.gen(function* () {
-      expect(["2.40.1", "2.40.2", "2.41.0", "2.100.0", "10.0.0"].map(supported)).toEqual([
+      expect(["2.41.1", "2.41.2", "2.42.0", "2.100.0", "10.0.0"].map(supported)).toEqual([
         true,
         true,
         true,
         true,
         true,
       ]);
-      expect(["2.40.0", "2.39.9", "2.9.0", "1.99.0"].map(supported)).toEqual([
+      expect(["2.41.0", "2.40.1", "2.39.9", "2.9.0", "1.99.0"].map(supported)).toEqual([
+        false,
         false,
         false,
         false,
         false,
       ]);
-      expect(["2.40", "2.41.0-rc1", "v2.41.0", "dev", ""].map(supported)).toEqual([
+      expect(["2.41", "2.41.1-rc1", "v2.41.1", "dev", ""].map(supported)).toEqual([
         false,
         false,
         false,
@@ -311,7 +312,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(error._tag).toBe("CannotStart");
       expect(error.message).toBe(
-        `${binary} reports version "2.38.0", and this host needs Tart 2.40.1 or later`,
+        `${binary} reports version "2.38.0", and this host needs Tart 2.41.1 or later`,
       );
     }),
   );
@@ -320,7 +321,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const { mac, runtime } = yield* runtimeOn();
 
-      expect(runtime.version).toBe("2.40.1");
+      expect(runtime.version).toBe("2.41.1");
       expect(runtime.pin).toBeUndefined();
 
       for (const call of mac.spawner.calls) {

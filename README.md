@@ -37,7 +37,7 @@ Each host needs its kind's runtime, installed by the operator:
 | Kind  | Host                    | Prerequisite                                                         |
 | ----- | ----------------------- | -------------------------------------------------------------------- |
 | linux | Linux/amd64 with KVM    | smolvm exactly 1.27.3, upstream, in a versioned prefix; runs as root |
-| mac   | Apple Silicon, macOS 26 | Tart 2.40.1 or later, Softnet 0.24.0 installed SUID root             |
+| mac   | Apple Silicon, macOS 26 | Tart 2.41.1 or later, Softnet 0.24.0 installed SUID root             |
 
 smolvm, with both disk templates expanded beside their `.zst` files:
 
