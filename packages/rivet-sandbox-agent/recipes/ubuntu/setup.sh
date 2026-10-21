@@ -13,11 +13,11 @@ export DEBIAN_FRONTEND=noninteractive
 
 # The pins, each an x86_64 Linux download with its sha256. The bump-sandbox-agent skill says
 # where each comes from.
-agent_version=0.5.2
-agent_sha256=5ebefccb130cccb0aa7972eacc8ff7c55550b959b2dd682a232a21a5712d955e
+agent_version=0.5.3
+agent_sha256=48b8bcdabf7d22e276593651a64c72e84e41fd8ef743b524721e949f9c330b90
 # The agents' adapters run on Node, and need a newer one than Ubuntu 24.04 packages.
-node_version=22.23.3
-node_sha256=df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
+node_version=22.23.4
+node_sha256=1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce
 
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \

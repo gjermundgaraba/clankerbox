@@ -13,10 +13,10 @@ PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 # The pins, each an arm64 macOS download with its sha256. The bump-sandbox-agent skill says
 # where each comes from.
-agent_version=0.5.2
-agent_sha256=58417cf5fa1e2dc417fc4a92d11840cc245ad599b87dd4c9a41686b05c36d877
-node_version=22.23.3
-node_sha256=23b25245dcfb9af7262f8ff142e9e2e0af025368117329e7a7458a51e5922f53
+agent_version=0.5.3
+agent_sha256=b4bf7244a67bd74ed91bef68051717503d3b4db6aad8f76c1ba71fccb9712b48
+node_version=22.23.4
+node_sha256=c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428
 
 # Softnet blocks the gateway's DNS, so public resolvers come first.
 networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while IFS= read -r service; do

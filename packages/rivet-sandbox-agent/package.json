@@ -49,6 +49,6 @@
     "@effect/platform-node": "~4.0.4",
     "@gjermundgaraba/effect-actions": "^0.18.0",
     "effect": "~4.0.4",
-    "sandbox-agent": "~0.5.2"
+    "sandbox-agent": "~0.5.3"
   }
 }

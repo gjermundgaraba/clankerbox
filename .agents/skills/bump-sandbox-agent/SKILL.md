@@ -21,7 +21,7 @@ publish, change production hosts, or commit unless asked.
   `packages/rivet-sandbox-agent/package.json`; `agent_version` and
   `agent_sha256` in `recipes/ubuntu/setup.sh` and `recipes/macos/setup.sh`,
   with `node_version` and `node_sha256` beside them. The SDK and the server
-  move together: one version in all of them. `git grep -n '0\.5\.2'`.
+  move together: one version in all of them. `git grep -n '0\.5\.3'`.
 - **Target:** the latest stable `sandbox-agent` on npm (`npm view
   sandbox-agent version`), unless the user names one. Record old and new
   versions; if already current, say so.
@@ -32,7 +32,7 @@ publish, change production hosts, or commit unless asked.
   `packages/rivet-sandbox-agent/node_modules/sandbox-agent/dist`.
 - **Notation:** `A@<version>:path` is that repository's `sandbox-agent/`
   directory at the release, and `dist:` the published package's `dist/`. The
-  identifier beside a citation finds the code. Every citation is at 0.5.2.
+  identifier beside a citation finds the code. Every citation is at 0.5.3.
 
 ## Claims to re-check
 
@@ -101,7 +101,7 @@ publish, change production hosts, or commit unless asked.
   `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_AUTH_TOKEN`; `OPENAI_API_KEY` or
   `CODEX_API_KEY`) or in the user's `~/.claude.json` and
   `~/.claude/.credentials.json` (`extract_all_credentials`,
-  A@0.5.2:server/packages/agent-credentials/src/lib.rs, whose
+  A@0.5.3:server/packages/agent-credentials/src/lib.rs, whose
   `include_oauth` is on by default). Ours: the recipes' `agent.env`, sourced into
   the server's environment at every launch.
 - `@sandbox-agent/cli`, the SDK's optional dependency, carries a server binary
