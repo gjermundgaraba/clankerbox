@@ -11,7 +11,7 @@ catalog:
   # under it. Keep it equal to effect.
   "@effect/platform-node-shared": 4.0.5
   "@effect/vitest": 4.0.5
-  "@gjermundgaraba/effect-actions": 0.18.2
+  "@gjermundgaraba/effect-actions": 0.19.0
   "@types/node": 26.6.5
   effect: 4.0.5
   sandbox-agent: 0.5.3

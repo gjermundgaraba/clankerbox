@@ -50,7 +50,7 @@
   },
   "peerDependencies": {
     "@effect/platform-node": "~4.0.4",
-    "@gjermundgaraba/effect-actions": "^0.18.0",
+    "@gjermundgaraba/effect-actions": "^0.19.0",
     "effect": "~4.0.4"
   },
   "peerDependenciesMeta": {
