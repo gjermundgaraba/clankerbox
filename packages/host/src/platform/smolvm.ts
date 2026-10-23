@@ -497,7 +497,7 @@ export const make = (
 
         return exec(
           binary,
-          ["machine", "exec", "--name", native, "-i", "--", ...argv],
+          ["machine", "exec", "--name", native, "--user", "root", "-i", "--", ...argv],
           stdin,
           `smolvm machine exec ${native}`,
         );

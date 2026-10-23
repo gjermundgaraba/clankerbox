@@ -221,6 +221,10 @@ as it is.
   each machine's status bounded by `machineReadWait` (8 s from the read's
   start, its turn included, under the core's 9 s `stateReadWait`), so a status
   held by the busy timeout reads `unknown`.
+- `machine exec` runs as `-u/--user`, by default the machine's configured user,
+  then the image's `USER` (`ExecCmd`, src/cli/machine.rs). Ours: every exec
+  passes `--user root`, since setup, preparation and the tailnet check run as
+  root, and an image such as Amp's orb image sets `USER user`.
 - When a `machine exec` client is signalled, smolvm SIGKILLs the guest command
   and every descendant (`kill_child_on_disconnect`,
   crates/smolvm-agent/src/main.rs; `kill_child_tree`,
