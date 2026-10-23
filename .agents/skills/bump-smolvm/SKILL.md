@@ -17,7 +17,7 @@ separately, and don't deploy, change production hosts, or commit unless asked.
 - **Pinned in this repo:** `testedVersion` in `packages/host/src/platform/smolvm.ts` is
   exact: startup refuses any other `smolvm --version`. `pin` derives from it
   (`smolvm <version> <platform>-<arch>`) and is recorded on every `ram`
-  checkpoint. Tests use `testedVersion` or a neutral `0.0.0-test`; only README
+  checkpoint and every paused machine (`pausePin`). Tests use `testedVersion` or a neutral `0.0.0-test`; only README
   repeats the version: `git grep -n '<old version>'` finds every place.
 - **Target:** the latest stable published `smol-machines/smolvm` release (its
   release metadata, such as `gh release view --repo smol-machines/smolvm`),
@@ -375,7 +375,10 @@ as it is.
   (`declined_deferred_save`). A branchable machine gets no idle balloon
   reclaim. Every capture first compacts the guest's memory (an exec of up to
   300 s) and hints its free pages, both best-effort
-  (`release_free_guest_memory`). Ours: every start passes `--branchable`; a
+  (`release_free_guest_memory`). `machine resume` takes no `--branchable`,
+  and resumes branchable only on x86_64 Linux (`resume_vm`,
+  src/embedded/control.rs). Ours: every start passes `--branchable`, and
+  README's linux hosts are amd64, so a resumed machine stays branchable; a
   capture or fork of a stopped machine is `WrongState` before anything native;
   no bound on capture.
 - Capture is atomic (temp file, fsync, publish without clobbering,
@@ -462,9 +465,11 @@ as it is.
   start until its config names a prefix with the new release (install into a
   new prefix, expand its templates, change `linux.prefix`, restart); running
   VMs keep their old prefix, which must stay until its last machine is deleted;
-  the new prefix builds new image seeds; and every existing `ram` checkpoint
+  the new prefix builds new image seeds; every existing `ram` checkpoint
   now fails its restore with `PinMismatch`, since its pin names the old
-  release.
+  release; and so does a start or stop of every paused machine, which smolvm
+  can't stop without resuming, leaving it only `delete`, disk and all: start
+  each paused machine before the move.
 - Report the tag transition, the claims that changed and their fixes, the checks
   actually run, optional opportunities (with touchpoints and the smallest useful
   check), and remaining runtime resources and retained disk separately.

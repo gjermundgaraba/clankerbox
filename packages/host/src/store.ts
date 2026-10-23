@@ -31,7 +31,10 @@ export interface Intent {
   readonly made: boolean;
   /** The key the last preparation that printed one printed, which no runtime can tell again. */
   readonly hostKey: string | undefined;
-  /** The runtime pin the last pause saved the machine under, until a start or a stop resumes it. */
+  /**
+   * The runtime pin of the last pause, written before it saves the machine, until a start or a stop
+   * resumes it: the core reads it only while the runtime reads the machine paused.
+   */
   readonly pausedPin: string | undefined;
 }
 

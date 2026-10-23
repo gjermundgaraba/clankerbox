@@ -332,7 +332,9 @@ export const make = (
       start: (life) =>
         owning("start", life, (intent) =>
           Effect.gen(function* () {
-            yield* resumable(intent);
+            if (life.seen === "paused") {
+              yield* resumable(intent);
+            }
 
             const started = runtime.start(ref(intent));
 
@@ -419,8 +421,8 @@ export const make = (
       pause: (life) =>
         owning("pause", life, (intent) =>
           Effect.andThen(
-            runtime.pause(ref(intent)),
             store.pausedUnder(intent.name, runtime.pausePin),
+            runtime.pause(ref(intent)),
           ),
         ),
       remove: (life) =>

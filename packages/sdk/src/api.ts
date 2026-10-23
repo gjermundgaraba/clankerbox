@@ -97,7 +97,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: converging,
       description:
-        "Ask for a machine to stay stopped, and wait until it is: a power-off that keeps its disk and ends its processes. A start under way is cut short; a machine still being made is made first, and its create answers Superseded.",
+        "Ask for a machine to stay stopped, and wait until it is: a power-off that keeps its disk and ends its processes. A start under way is cut short; a machine still being made is made first, and its create answers Superseded. A paused linux machine is resumed to end its processes, so it needs room as a start does and the runtime build that paused it; a paused mac machine's saved state is discarded.",
       input: ById,
       success: Machine,
     }),
@@ -105,7 +105,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: converging,
       description:
-        "Ask for a machine to stay paused, and wait until it is: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped. A stop of a paused machine ends its processes and keeps its disk.",
+        "Ask for a machine to stay paused, and wait until it is: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it under the runtime build that paused it. A machine that is stopped stays stopped.",
       input: ById,
       success: Machine,
     }),

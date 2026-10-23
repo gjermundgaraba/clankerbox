@@ -1,3 +1,4 @@
+import { Machine as MachineResource } from "@gjermundgaraba/clankerbox-sdk";
 import { it } from "@effect/vitest";
 import { Effect, Exit, Schema } from "effect";
 import { expect } from "vite-plus/test";
@@ -7,7 +8,7 @@ import type { Held, MachineRef, MachineState } from "../src/runtime.ts";
 const Machine = Schema.Struct({
   ramMib: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_536 })),
   booting: Schema.Boolean,
-  state: Schema.Literals(["running", "stopped", "missing", "unknown"]),
+  state: MachineResource.fields.state,
 });
 
 const ref = (index: number, ramMib: number): MachineRef => ({
@@ -74,7 +75,7 @@ it.effect.prop(
 );
 
 it.effect.prop(
-  "another machine that boots, runs or can't be read adds its RAM; one stopped or missing adds none",
+  "another machine that boots, runs or can't be read adds its RAM; one stopped, paused or missing adds none",
   { target: Ram, others: Schema.Array(Machine), extra: Machine, budget: Budget },
   ({ target, others, extra, budget }) =>
     Effect.gen(function* () {

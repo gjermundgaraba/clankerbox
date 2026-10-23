@@ -141,9 +141,6 @@ const decodeStatus = Schema.decodeUnknownEffect(
 
 const alive: ReadonlySet<RecordState> = new Set(["running", "pausing", "unreachable", "frozen"]);
 
-// Source: smolvm src/cli/vm_common.rs start_vm_named_with_db
-const unstartable: ReadonlySet<RecordState> = new Set(["frozen", "pausing", "paused"]);
-
 // Source: smolvm src/embedded/runtime.rs resume_machine_inner
 const resumable: ReadonlySet<RecordState> = new Set(["pausing", "paused"]);
 
@@ -266,7 +263,7 @@ export const make = (
         const message =
           recorded === "unreachable"
             ? `smolvm reads machine ${machine.id} unreachable: its VM runs, but its agent doesn't answer; start it to boot it again`
-            : alive.has(recorded) || unstartable.has(recorded)
+            : alive.has(recorded) || resumable.has(recorded)
               ? `smolvm reads machine ${machine.id} ${recorded}, and copies only a running machine`
               : stopped;
 
@@ -488,7 +485,8 @@ export const make = (
             return yield* resume(native);
           }
 
-          if (unstartable.has(recorded)) {
+          // Source: smolvm src/cli/vm_common.rs start_vm_named_with_db
+          if (recorded === "frozen") {
             return yield* new WrongState({
               message: `smolvm reads machine ${machine.id} ${recorded}, and doesn't start it from there`,
               machine: machine.id,

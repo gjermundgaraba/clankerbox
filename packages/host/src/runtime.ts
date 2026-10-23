@@ -56,8 +56,8 @@ export const timeoutFail =
 export interface Held {
   readonly machine: MachineRef;
   /**
-   * Admitted to a create, start, fork or restore still under way: its VM may not run yet, so
-   * admission counts it as running. A fork's source is not booted by it.
+   * Admitted to a create, start, fork, restore, or a stop that resumes it, still under way: its VM
+   * may not run yet, so admission counts it as running. A fork's source is not booted by it.
    */
   readonly booting: boolean;
 }
@@ -158,10 +158,10 @@ export interface Interface {
    */
   readonly start: (machine: MachineRef) => Effect.Effect<void, RoomError | StateError | Locked>;
   /**
-   * The core reads no state first, so the runtime does nothing on a machine that is stopped or
-   * that it no longer has. A paused machine ends its saved execution and keeps its disk.
+   * Does nothing on a machine that is stopped or that the runtime no longer has, as the core calls
+   * it whatever it last read. A paused machine ends its saved execution and keeps its disk.
    */
-  readonly stop: (machine: MachineRef) => Effect.Effect<void, RuntimeError | StateError>;
+  readonly stop: (machine: MachineRef) => Effect.Effect<void, RuntimeError>;
   /**
    * Saves a running machine's execution, RAM and disks, and stops its VM; a paused machine stays
    * as it is. The core never pauses a stopped one.

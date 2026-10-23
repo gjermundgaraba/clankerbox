@@ -204,11 +204,7 @@ export const stubHost = (options: StubHostOptions) => {
     stopMachine: ({ id }) =>
       Effect.andThen(
         record("machine.stop"),
-        Effect.map(find(id), (found): Machine => ({
-          ...found,
-          state: "stopped",
-          desired: "stopped",
-        })),
+        Effect.map(find(id), (found) => settled(found, "stopped", "stopped")),
       ),
     pauseMachine: ({ id }) =>
       Effect.andThen(

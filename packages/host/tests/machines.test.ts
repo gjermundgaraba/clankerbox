@@ -663,6 +663,20 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
+  it.effect("a pin a pause left on a machine that runs again holds back no start", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      yield* linux.run(linux.store.pausedUnder("dev", "fake 0"));
+
+      const started = yield* linux.run(linux.machines.start("linux_dev"));
+
+      expect(at(started)).toEqual(["running", "running", "settled"]);
+      expect(yield* pausedPins(linux)).toEqual([undefined]);
+    }),
+  );
+
   it.effect("a pause of a stopped machine leaves it stopped, and calls no runtime", () =>
     Effect.gen(function* () {
       const linux = yield* host();
