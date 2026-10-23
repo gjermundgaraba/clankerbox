@@ -425,8 +425,9 @@ await sdk.destroySandbox();
   used when there is one. `authorizedKeys` does what the client config's
   does, for the key the tunnel logs in with, and a profile with a setup needs
   it.
-- A sandbox's ID is `clankerbox/<machine ID>`; `pauseSandbox` stops the
-  machine and `destroySandbox` deletes it. A create that fails deletes the
+- A sandbox's ID is `clankerbox/<machine ID>`; `pauseSandbox` pauses the
+  machine, RAM and processes kept, which a reconnect resumes, and
+  `destroySandbox` deletes it. A create that fails deletes the
   machine it may have made, unless the host answers `Conflict`, as the name
   is another machine's, or `Superseded`, as a later request owns it.
 - `recipes/ubuntu/` (linux) and `recipes/macos/` (mac) install the server,

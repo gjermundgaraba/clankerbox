@@ -238,7 +238,7 @@ export const make = (options: Options, ssh = "ssh") => {
           const client = yield* Client.Client;
 
           yield* closed(known);
-          yield* client.stopMachine({ id });
+          yield* client.pauseMachine({ id });
         }),
       ),
     reconnect: (id: string) => locked(id, (known) => started(id, known)),

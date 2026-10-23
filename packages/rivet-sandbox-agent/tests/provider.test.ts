@@ -342,7 +342,7 @@ test("reconnecting to a machine that is gone, or ensuring its server, is the SDK
   );
 });
 
-test("the SDK reconnects to a machine by its ID: the machine is started and its tunnel opened", async () => {
+test("the SDK reconnects to a machine by its ID, started and its tunnel opened, and pauses it", async () => {
   const { stub, sandbox, calls } = await setup({ machines: [reachable("linux_kept")] });
   const sdk = await SandboxAgent.start({ sandbox, sandboxId: "clankerbox/linux_kept" });
 
@@ -352,7 +352,7 @@ test("the SDK reconnects to a machine by its ID: the machine is started and its 
 
   await sdk.pauseSandbox();
 
-  expect(stub.calls).toEqual(["machine.start", "machine.get", "machine.stop"]);
+  expect(stub.calls).toEqual(["machine.start", "machine.get", "machine.pause"]);
 });
 
 test("one sandbox's calls take turns: two reconnects never start its machine at the same time", async () => {
