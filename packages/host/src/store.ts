@@ -32,10 +32,11 @@ export interface Intent {
   /** The key the last preparation that printed one printed, which no runtime can tell again. */
   readonly hostKey: string | undefined;
   /**
-   * The runtime pin of the last pause, written before it saves the machine, until a start or a stop
-   * resumes it: the core reads it only while the runtime reads the machine paused.
+   * The runtime pin the machine's VM last booted under, written as a create makes it and before a
+   * start boots it from stopped: a pause saves only a VM booted under the host's pin, and a paused
+   * one resumes only under it. `undefined` on a row an older host made.
    */
-  readonly pausedPin: string | undefined;
+  readonly pin: string | undefined;
 }
 
 /** Only a capture that succeeded is a checkpoint; the store keeps the rest out of every read. */
@@ -74,8 +75,7 @@ export interface Interface {
   ) => Effect.Effect<Option.Option<Desire>, Internal>;
   readonly made: (name: string) => Effect.Effect<void, Internal>;
   readonly hostKey: (name: string, hostKey: string) => Effect.Effect<void, Internal>;
-  /** `undefined` once a start or a stop resumes the machine. */
-  readonly pausedUnder: (name: string, pin: string | undefined) => Effect.Effect<void, Internal>;
+  readonly bootedUnder: (name: string, pin: string | undefined) => Effect.Effect<void, Internal>;
   readonly removeMachine: (name: string) => Effect.Effect<void, Internal>;
   readonly checkpoints: Effect.Effect<ReadonlyArray<CheckpointRecord>, Internal>;
   readonly findCheckpoint: (

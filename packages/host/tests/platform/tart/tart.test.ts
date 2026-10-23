@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { connect, createServer, type Server } from "node:net";
@@ -1352,7 +1352,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "pause refuses a VM whose job an older host loaded without --suspendable, which Tart would power off",
+    "pause shuts down a VM whose job an older host loaded without --suspendable, which Tart would power off",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1362,13 +1362,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* runtime.create(machine, "base");
         mac.programs.set(vm, [binary, "run", "--no-graphics", "--net-softnet-block=@host", vm]);
 
-        const error = yield* Effect.flip(runtime.pause(machine));
+        const before = calls(mac).length;
 
-        expect(failure(error)).toEqual([
-          "WrongState",
-          "mac_dev runs as an older host booted it, which Tart can't suspend: stop and start it, then pause it",
+        yield* runtime.pause(machine);
+
+        expect(calls(mac).slice(before)).toEqual([
+          `launchctl print gui/501/${vm}`,
+          `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
         ]);
-        expect(calls(mac)).not.toContain(`tart suspend ${vm}`);
+        expect(yield* runtime.observe([machine])).toEqual(["stopped"]);
       }),
   );
 
@@ -1417,6 +1419,27 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(calls(mac).slice(-2)).toEqual([`tart suspend ${vm}`, `tart stop ${vm}`]);
         expect(yield* runtime.observe([machine])).toEqual(["stopped"]);
       }),
+  );
+
+  it.effect("a suspend whose job log can't be read fails, and keeps what Tart saved", () =>
+    Effect.gen(function* () {
+      const { mac, runtime } = yield* runtimeOn();
+      const machine = machineOn("dev");
+      const vm = vmOf(machine);
+
+      yield* runtime.create(machine, "base");
+      mac.hooks.suspend = (label) => {
+        rmSync(mac.logOf(label));
+        mac.vms.set(label, "suspended");
+      };
+
+      const error = yield* Effect.flip(runtime.pause(machine));
+
+      expect(failure(error)[0]).toBe("Internal");
+      expect(failure(error)[1]).toContain(`couldn't read ${mac.logOf(vm)}`);
+      expect(calls(mac).slice(-1)).toEqual([`tart suspend ${vm}`]);
+      expect(yield* runtime.observe([machine])).toEqual(["paused"]);
+    }),
   );
 
   it.effect(
@@ -1471,31 +1494,29 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect(
-    "a resume macOS refuses while the session is locked is Locked, and the VM stays paused",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
+  it.effect("a resume that fails says a locked session refuses it, and the VM stays paused", () =>
+    Effect.gen(function* () {
+      const { mac, runtime } = yield* runtimeOn();
+      const machine = machineOn("dev");
 
-        yield* runtime.create(machine, "base");
-        yield* runtime.pause(machine);
-        mac.hooks.kickstart = (label) => {
-          mac.exited.set(label, 1);
-          appendFileSync(
-            mac.logOf(label),
-            'restoring VM state from a snapshot...\nError Domain=VZErrorDomain Code=12 "The virtual machine failed to restore with error “permission denied”."\n',
-          );
-        };
+      yield* runtime.create(machine, "base");
+      yield* runtime.pause(machine);
+      mac.hooks.kickstart = (label) => {
+        mac.exited.set(label, 1);
+        appendFileSync(
+          mac.logOf(label),
+          'restoring VM state from a snapshot...\nError Domain=VZErrorDomain Code=12 "The virtual machine failed to restore with error “permission denied”."\n',
+        );
+      };
 
-        const error = yield* Effect.flip(runtime.start(machine));
+      const error = yield* Effect.flip(runtime.start(machine));
 
-        expect(failure(error)).toEqual([
-          "Locked",
-          "the Mac's session is locked, and macOS resumes mac_dev's saved state only in an unlocked one: unlock it and start mac_dev again; its saved state is kept",
-        ]);
-        expect(yield* runtime.observe([machine])).toEqual(["paused"]);
-      }),
+      expect(failure(error)[0]).toBe("Internal");
+      expect(failure(error)[1]).toContain(
+        "macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start mac_dev again: a resume that fails keeps the saved state, and a stop discards it",
+      );
+      expect(yield* runtime.observe([machine])).toEqual(["paused"]);
+    }),
   );
 
   it.effect("stop of a paused VM discards its saved state with tart stop, booting nothing", () =>

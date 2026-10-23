@@ -223,12 +223,12 @@ export const make = (
         }),
       );
 
-    const resumable = ({ name, pausedPin }: Intent) =>
-      pausedPin === undefined || pausedPin === runtime.pin
+    const resumable = ({ name, pin }: Intent) =>
+      pin === runtime.pin
         ? Effect.void
         : Effect.fail(
             new PinMismatch({
-              message: `machine ${idOf(name)} was paused under ${pausedPin}, and this host runs ${runtime.pin}; it resumes only under the same one: delete it, or resume it under that one`,
+              message: `machine ${idOf(name)} was paused under ${pin ?? "no pin"}, and this host runs ${runtime.pin ?? "no pin"}; it resumes only under the same one: delete it, or resume it under that one`,
             }),
           );
 
@@ -336,15 +336,15 @@ export const make = (
               yield* resumable(intent);
             }
 
+            if (life.seen === "stopped" && intent.pin !== runtime.pin) {
+              yield* store.bootedUnder(intent.name, runtime.pin);
+            }
+
             const started = runtime.start(ref(intent));
 
             yield* life.seen === "running"
               ? started
               : Effect.scoped(Effect.andThen(admitted("startMachine", intent), started));
-
-            if (intent.pausedPin !== undefined) {
-              yield* store.pausedUnder(intent.name, undefined);
-            }
 
             const hostKey = yield* prepare(runtime, ref(intent));
 
@@ -412,15 +412,18 @@ export const make = (
             } else {
               yield* stopped;
             }
-
-            if (intent.pausedPin !== undefined) {
-              yield* store.pausedUnder(intent.name, undefined);
-            }
           }),
         ),
       pause: (life) =>
         owning("pause", life, (intent) =>
-          Effect.andThen(store.pausedUnder(intent.name, runtime.pin), runtime.pause(ref(intent))),
+          intent.pin === runtime.pin
+            ? runtime.pause(ref(intent))
+            : Effect.andThen(
+                Effect.logWarning(
+                  `pause ${idOf(intent.name)}: its VM booted under ${intent.pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`,
+                ),
+                runtime.stop(ref(intent)),
+              ),
         ),
       remove: (life) =>
         owning("delete", life, (intent) =>
@@ -671,7 +674,7 @@ export const make = (
           ephemeral,
           made: false,
           hostKey: undefined,
-          pausedPin: undefined,
+          pin: runtime.pin,
         };
 
         yield* store.insertMachine(intent);

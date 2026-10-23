@@ -2,7 +2,6 @@ import {
   type Capacity,
   Internal,
   type Kind,
-  type Locked,
   type Machine,
   Missing,
   type Reading,
@@ -109,14 +108,15 @@ export interface Interface {
   /** One host port per machine is published here. */
   readonly publishAddress: string;
   /**
-   * What a `ram` checkpoint must be restored under, and a paused machine resumed under: RAM state
-   * restores only into the build that saved it. `undefined` on mac, which has no `ram` checkpoints
-   * and where a resume Tart can't make fails and keeps the saved state.
+   * What a `ram` checkpoint must be restored under, and what the core records a machine's VM booted
+   * under: RAM state restores only into the build that saved it, so the core pauses a machine only
+   * when its VM booted under this pin, and stops it otherwise. `undefined` on mac, which has no
+   * `ram` checkpoints and where a resume Tart can't make fails and keeps the saved state.
    */
   readonly pin: string | undefined;
   /**
    * Whether a stop of a paused machine resumes it to end its saved execution, so the core admits
-   * it as a boot under its pause's pin, rather than discarding that execution with no boot.
+   * it as a boot under the pin it booted under, rather than discarding that execution with no boot.
    */
   readonly stopResumes: boolean;
   /** Runs after the failed captures are cleared, before the host serves. */
@@ -155,7 +155,7 @@ export interface Interface {
    * answers it leaves as it is. A paused machine, or one a pause left part way, resumes its saved
    * execution. A machine it no longer has is `missing`, before anything native.
    */
-  readonly start: (machine: MachineRef) => Effect.Effect<void, RoomError | StateError | Locked>;
+  readonly start: (machine: MachineRef) => Effect.Effect<void, RoomError | StateError>;
   /**
    * Does nothing on a machine that is stopped or that the runtime no longer has, as the core calls
    * it whatever it last read. A paused machine ends its saved execution and keeps its disk.
@@ -163,7 +163,8 @@ export interface Interface {
   readonly stop: (machine: MachineRef) => Effect.Effect<void, RuntimeError>;
   /**
    * Saves a running machine's execution, RAM and disks, and stops its VM; a paused machine stays
-   * as it is. The core never pauses a stopped one.
+   * as it is, and one it can't save, as a VM an older host booted, it stops. The core never pauses
+   * a stopped one.
    */
   readonly pause: (machine: MachineRef) => Effect.Effect<void, RuntimeError | StateError>;
   /**

@@ -142,10 +142,11 @@ Each: what Tart does, where, and what of ours depends on it.
   drops the VM's audio and entropy devices and its non-Mac input devices
   (`suspendable`'s help, Commands/Run.swift). Ours: every job runs
   `--suspendable` (`program`), so every mac VM boots without those devices; a
-  pause refuses a VM whose loaded job's arguments lack it, then, without
-  interruption, waits `suspendWait` for `tart list` to read it not running and
-  reads `saved` in the job's log, or runs `tart stop <vm>` to remove what it
-  left of `state.vzvmsave` and fails.
+  pause stops a VM whose loaded job's arguments lack it, as `stop` does, then,
+  without interruption, waits `suspendWait` for `tart list` to read it not
+  running and reads `saved` in the job's log, or runs `tart stop <vm>` to
+  remove what it left of `state.vzvmsave` and fails; a log it can't read fails
+  the pause and keeps the state.
 - `tart run` of a VM with a `state.vzvmsave` turns on `--suspendable` itself,
   prints "restoring VM state from a snapshot...", removes the file only once
   the restore succeeds, and on a failed restore prints the error and exits 1
@@ -154,17 +155,18 @@ Each: what Tart does, where, and what of ours depends on it.
 - `tart stop` of a suspended VM removes its `state.vzvmsave` and exits 0,
   booting nothing (`stopSuspended`, Commands/Stop.swift). Ours: `stop` of a
   paused machine is `tart stop <vm>`, and `stopResumes` is false, so the core
-  neither admits it nor checks its pause's pin.
+  neither admits it nor checks its pin.
 - Virtualization.framework seals saved state with a key in the operator's
   session keychain: a restore while the session is locked fails, printed by
   `tart run` as `Error Domain=VZErrorDomain Code=12 "The virtual machine
   failed to restore with error “permission denied”."`, macOS's English text;
   the first save, which creates the key, fails too, later saves work locked,
   and a root LaunchDaemon can't save at all (no keychain, -25291). macOS, not
-  Tart, so re-check it on a macOS upgrade. Ours: `unrestored` with `denied`
-  in the job's log is `Locked`, the saved state kept; README's mac Deploy
-  says to make the first pause unlocked; `pin` is `undefined`, as a
-  restore that fails keeps the saved state, so no pin guards a resume.
+  Tart, so re-check it on a macOS upgrade. Ours: every failed resume is
+  `Internal`, its message saying a locked session refuses one, the saved state
+  kept; README's mac Deploy says to make the first pause unlocked; `pin` is
+  `undefined`, as a restore that fails keeps the saved state, so no pin guards
+  a resume.
 
 **Softnet and the network**
 

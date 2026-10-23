@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { HostError } from "./errors.ts";
+import { Desired, HostError } from "./errors.ts";
 import { HostId, Id } from "./ids.ts";
 
 /** What a host's machines are: `linux` guests on smolvm, or `mac` guests on Tart. */
@@ -16,15 +16,6 @@ const CheckpointKind = Schema.Literals(["ram", "disk"]);
 export const loginUser = "admin";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
-
-/**
- * What the operator asked a machine to be; the host keeps moving the machine toward it. `paused`
- * keeps its RAM, processes and disks, saved by the runtime with the VM stopped, and a start
- * resumes it; a machine that is stopped when a pause comes stays stopped.
- */
-export const Desired = Schema.Literals(["running", "stopped", "paused", "deleted"]);
-
-export type Desired = typeof Desired.Type;
 
 /**
  * What the host is doing about a machine. A request waits for a rest: `settled`, at rest with what

@@ -212,8 +212,10 @@ as it is.
   `checkpoint` refuse a paused machine, and `delete -f` deletes it. Ours:
   `resumable` (`paused`, `pausing`); `pause` reads `machine status` first,
   leaves `paused` as it is, resumes `pausing` before it pauses and refuses
-  anything else not `running` with `WrongState`; a pause records the release
-  pin, so a paused machine resumes only under the smolvm build that paused it.
+  anything else not `running` with `WrongState`; the core records the release
+  pin a machine boots under and pauses only a machine booted under the host's,
+  stopping any other, so a paused machine resumes only under the smolvm build
+  that paused it.
 - `machine status --name X --json` states are `created`, `running`, `stopped`,
   `paused`, `pausing`, `failed`, `unreachable` and `frozen` (`RecordState`,
   src/config.rs); an unknown name is "machine '<name>' not found"
@@ -470,9 +472,9 @@ as it is.
   its restore with `PinMismatch`, since its pin names the old release; and so
   does a start or stop of every paused machine, which smolvm can't stop without
   resuming, leaving it only `delete`, disk and all: start or stop each paused
-  machine before the move (a stop needs room for one at a time). A pause records
-  the host's pin, not the build a running VM was booted under, so a machine left
-  running across the move must be stopped and started before its next pause.
+  machine before the move (a stop needs room for one at a time). A machine left
+  running across the move booted under the old pin, so its next pause stops it,
+  and it pauses after its next start.
 - Report the tag transition, the claims that changed and their fixes, the checks
   actually run, optional opportunities (with touchpoints and the smallest useful
   check), and remaining runtime resources and retained disk separately.

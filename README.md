@@ -102,22 +102,21 @@ together, as for every release.
 - A host migrates its state dir on its first start, after which a 0.23 host
   refuses it: copy its `host.db` first to keep a way back.
 - In the SDK, `PinMismatch` names its checkpoint or machine as `id`, no
-  longer `checkpoint`; `Locked` is a new error; `Desired`, `Machine.state`
-  and `Superseded.by` gain `paused`, and `Phase` gains `pausing`.
+  longer `checkpoint`; `Desired`, `Machine.state` and `Superseded.by` gain
+  `paused`, and `Phase` gains `pausing`.
+- A pause of a machine running since before the upgrade stops it, as the host
+  can't tell what booted it; it pauses after its next start.
 - mac: each Tart job runs `--suspendable`, which drops its audio and entropy
-  devices and its non-Mac input devices. A machine running since before the
-  upgrade pauses only once it is stopped and started. Set the lock screen as
-  Deploy describes and make each Mac's first pause while unlocked: one made
-  while locked powers the VM off and fails. A start of a paused machine while
-  the session is locked fails `Locked`.
+  devices and its non-Mac input devices. Set the lock screen as Deploy
+  describes and make each Mac's first pause while unlocked: one made while
+  locked powers the VM off and fails.
 - linux: start or stop paused machines before moving `linux.prefix` to another
   smolvm. Setup, preparation and the tailnet check now run as root whatever the
   image's USER; prebuilds made under another USER aren't rebuilt.
-- The Sandbox Agent provider's `pauseSandbox` pauses the machine rather than
-  stopping it, so the above applies to its sandboxes: on a Mac, a sandbox
-  running since before the upgrade pauses only once its machine is stopped
-  and started, and a paused sandbox keeps its RAM on the host's disk and
-  can't be forked.
+- The Sandbox Agent provider's `pauseSandbox` closes the sandbox's ACP servers
+  and pauses the machine rather than stopping it, so the above applies to its
+  sandboxes: a paused sandbox keeps its RAM on the host's disk and can't be
+  forked.
 
 ### Upgrading from 0.20
 
@@ -213,21 +212,23 @@ clankerbox checkpoint delete linux_base
 - `pause` saves a running machine's RAM, processes and disks and stops its VM,
   so it holds no RAM, and on a Mac none of its two VMs, until a `start` resumes
   it where it was. A `pause` leaves a stopped machine stopped, and a paused
-  machine can't be forked or captured.
+  machine can't be forked or captured. A `pause` stops a machine it can't save,
+  which then reads `stopped`: on linux one booted under another smolvm build, or
+  before its host recorded which, and on a Mac one an older host booted.
 - On linux a paused machine resumes only under the smolvm build that paused it:
   after a host moves to another one, a `start` of it fails `PinMismatch`, so
   start or stop paused machines before upgrading; a stop needs room for one
   machine at a time, where each start keeps its RAM. A machine left running
-  across the move still runs the old build, which a pause can't tell from the
-  new one: stop and start it before its next pause. A Mac tries the resume under
-  any Tart and macOS, and a restore it can't make fails, keeping the saved
-  state: a `stop` discards it, and the next `start` boots from the disk.
+  across the move is stopped by its next pause, and pauses after a start. A Mac
+  tries the resume under any Tart and macOS, and a restore it can't make fails,
+  keeping the saved state: a `stop` discards it, and the next `start` boots
+  from the disk.
 - A `stop` of a paused machine resumes it on linux to end its processes,
   needing room as a start does, and fails `PinMismatch` after an upgrade too;
   on a Mac it discards the saved state without booting. Either keeps the disk.
 - On a Mac, macOS restores a VM's state only in the operator's unlocked login
-  session: a `start` of a paused machine while it is locked fails `Locked` and
-  keeps the saved state (see Deploy).
+  session: a `start` of a paused machine while it is locked fails and keeps
+  the saved state (see Deploy).
 - A create, fork or restore whose copy or setup fails deletes its machine and
   answers the error, and a delete that fails runs again at the next check; a
   host that restarts before it finished deletes the machine too. Only a

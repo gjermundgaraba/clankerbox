@@ -6,7 +6,6 @@ import {
   Conflict,
   Internal,
   Invalid,
-  Locked,
   Missing,
   NotFound,
   NotMade,
@@ -49,7 +48,6 @@ const converging = [
   NotMade,
   Missing,
   WrongState,
-  Locked,
   PinMismatch,
   Unsizable,
   ScriptFailed,
@@ -89,7 +87,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: converging,
       description:
-        "Ask for a machine to run, and wait until it does: start it, or resume it when it is paused, and prepare it again, also when it runs already. A paused linux machine resumes only under the smolvm build that paused it, and a paused mac machine fails Locked while the host's session is locked.",
+        "Ask for a machine to run, and wait until it does: start it, or resume it when it is paused, and prepare it again, also when it runs already. A paused linux machine resumes only under the smolvm build that paused it, and a paused mac machine only while the Mac's session is unlocked, keeping its saved state when it can't.",
       input: ById,
       success: Machine,
     }),
@@ -105,7 +103,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: converging,
       description:
-        "Ask for a machine to stay paused, and wait until it is: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped.",
+        "Ask for a machine to stay paused, and wait until it is: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped, and one whose VM the runtime can't save, booted under another smolvm build or by an older mac host, is stopped instead.",
       input: ById,
       success: Machine,
     }),

@@ -58,7 +58,7 @@ const intent = (name: string, fields?: Partial<Intent>): Intent => ({
   ephemeral: false,
   made: false,
   hostKey: undefined,
-  pausedPin: undefined,
+  pin: undefined,
   ...fields,
 });
 
@@ -105,7 +105,7 @@ layer(NodeServices.layer)((it) => {
           made: true,
           desired: "paused",
           generation: 4,
-          pausedPin: "smolvm 0.0.0-test linux-x64",
+          pin: "smolvm 0.0.0-test linux-x64",
         }),
         intent("copy", { createdAt: DateTime.makeUnsafe("2026-10-04T12:01:00Z") }),
       ];
@@ -312,23 +312,23 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
-  it.effect("made, a host key and a pause's pin write only themselves, never what was asked", () =>
+  it.effect("made, a host key and a boot's pin write only themselves, never what was asked", () =>
     Effect.gen(function* () {
       const stateDir = join(yield* scratch, "state");
 
-      const [paused, resumed] = yield* withStore(stateDir, (store) =>
+      const [booted, unpinned] = yield* withStore(stateDir, (store) =>
         Effect.gen(function* () {
           yield* store.insertMachine(intent("dev"));
           yield* store.desire("dev", "stopped");
           yield* store.made("dev");
           yield* store.hostKey("dev", "ssh-ed25519 AAAAnew");
-          yield* store.pausedUnder("dev", "smolvm 0.0.0-test linux-x64");
+          yield* store.bootedUnder("dev", "smolvm 0.0.0-test linux-x64");
 
-          const paused = yield* store.findMachine("dev");
+          const booted = yield* store.findMachine("dev");
 
-          yield* store.pausedUnder("dev", undefined);
+          yield* store.bootedUnder("dev", undefined);
 
-          return [paused, yield* store.findMachine("dev")];
+          return [booted, yield* store.findMachine("dev")];
         }),
       );
 
@@ -339,11 +339,11 @@ layer(NodeServices.layer)((it) => {
         generation: 2,
       });
 
-      expect(Option.getOrUndefined(paused)).toEqual({
+      expect(Option.getOrUndefined(booted)).toEqual({
         ...written,
-        pausedPin: "smolvm 0.0.0-test linux-x64",
+        pin: "smolvm 0.0.0-test linux-x64",
       });
-      expect(Option.getOrUndefined(resumed)).toEqual(written);
+      expect(Option.getOrUndefined(unpinned)).toEqual(written);
     }),
   );
 

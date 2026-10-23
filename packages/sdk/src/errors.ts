@@ -32,6 +32,16 @@ export class Conflict extends Schema.TaggedError<Conflict>()(
 ) {}
 
 /**
+ * What the operator asked a machine to be; the host keeps moving the machine toward it. `paused`
+ * keeps its RAM, processes and disks, saved by the runtime with the VM stopped, and a start
+ * resumes it; a machine that is stopped when a pause comes stays stopped, and one the runtime
+ * can't save, such as a VM an older runtime booted, is stopped instead.
+ */
+export const Desired = Schema.Literals(["running", "stopped", "paused", "deleted"]);
+
+export type Desired = typeof Desired.Type;
+
+/**
  * A later request on the machine replaced this one before the host got there: `by` is what that
  * request asked for. The machine's own state says where it is now.
  */
@@ -40,7 +50,7 @@ export class Superseded extends Schema.TaggedError<Superseded>()(
   {
     message: Schema.String,
     ...located,
-    by: Schema.Literals(["running", "stopped", "paused", "deleted"]),
+    by: Desired,
   },
   { httpApiStatus: 409 },
 ) {}
@@ -68,7 +78,7 @@ export class Missing extends Schema.TaggedError<Missing>()(
 
 /**
  * The checkpoint or paused machine `id` holds RAM state saved under another runtime pin than the
- * one the host runs, and restores only under that one.
+ * one the host runs, and restores or resumes only under that one.
  */
 export class PinMismatch extends Schema.TaggedError<PinMismatch>()(
   "PinMismatch",
@@ -81,16 +91,6 @@ export class WrongState extends Schema.TaggedError<WrongState>()(
   "WrongState",
   { message: Schema.String, ...located, machine: Schema.String, state: Schema.String },
   { httpApiStatus: 412 },
-) {}
-
-/**
- * The host's login session is locked, and macOS restores a paused machine's saved state only in an
- * unlocked one: the state is kept for a start once it is unlocked.
- */
-export class Locked extends Schema.TaggedError<Locked>()(
-  "Locked",
-  { message: Schema.String, ...located },
-  { httpApiStatus: 423 },
 ) {}
 
 /** The runtime can't give the requested sizes, such as a disk below the base's. */
@@ -149,7 +149,6 @@ export const hostErrors = [
   Missing,
   PinMismatch,
   WrongState,
-  Locked,
   Unsizable,
   ScriptFailed,
   Capacity,
@@ -188,7 +187,6 @@ export const retryable = (error: ClankerboxError): boolean =>
       Missing: () => false,
       PinMismatch: () => false,
       WrongState: () => false,
-      Locked: () => false,
       Unsizable: () => false,
       ScriptFailed: () => false,
       Capacity: () => true,

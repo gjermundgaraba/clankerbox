@@ -64,7 +64,7 @@ layer(NodeServices.layer)((it) => {
             ephemeral: false,
             made: false,
             hostKey: undefined,
-            pausedPin: undefined,
+            pin: undefined,
           }),
         ).pipe(Effect.scoped);
 

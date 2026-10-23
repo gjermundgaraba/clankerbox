@@ -5,7 +5,6 @@ import {
   formatGib,
   type HostError,
   Internal,
-  Locked,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -48,10 +47,6 @@ const softnet = "--net-softnet-block=@host";
 
 // Source: tart Commands/Run.swift run
 const saved = "snapshot created successfully";
-
-const unrestored = "failed to restore with error";
-
-const denied = "permission denied";
 
 // Source: tart VMStorageHelper.swift VirtualMachineLimitExceeded
 const vmLimit = 2;
@@ -463,14 +458,10 @@ export const make = (
     const resume = (machine: MachineRef) =>
       boot(machine).pipe(
         Effect.catchTag("Internal", (error) =>
-          Effect.flatMap(logOf(vmOf(machine)), (output) =>
-            Effect.fail(
-              output.includes(unrestored) && output.includes(denied)
-                ? new Locked({
-                    message: `the Mac's session is locked, and macOS resumes ${machine.id}'s saved state only in an unlocked one: unlock it and start ${machine.id} again; its saved state is kept`,
-                  })
-                : error,
-            ),
+          Effect.fail(
+            new Internal({
+              message: `${error.message}; macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start ${machine.id} again: a resume that fails keeps the saved state, and a stop discards it`,
+            }),
           ),
         ),
       );
@@ -478,7 +469,7 @@ export const make = (
     const suspend = (machine: MachineRef) =>
       Effect.gen(function* () {
         const vm = vmOf(machine);
-        const { target } = job(vm);
+        const { target, log } = job(vm);
         const observed = yield* state(vm);
 
         if (observed === "paused") {
@@ -511,11 +502,11 @@ export const make = (
         }
 
         if (!loadedArguments.includes("--suspendable")) {
-          return yield* new WrongState({
-            message: `${machine.id} runs as an older host booted it, which Tart can't suspend: stop and start it, then pause it`,
-            machine: machine.id,
-            state: observed,
-          });
+          yield* Effect.logWarning(
+            `pause ${machine.id}: an older host booted it without --suspendable, which Tart can't suspend, so it stops it instead`,
+          );
+
+          return yield* stop(machine);
         }
 
         yield* Effect.uninterruptible(
@@ -528,7 +519,7 @@ export const make = (
               });
             }
 
-            const output = yield* logOf(vm);
+            const output = yield* files(`couldn't read ${log}`, fs.readFileString(log));
 
             if (!output.includes(saved)) {
               yield* call(["stop", vm], `stop ${vm}`, [0, 2]);
