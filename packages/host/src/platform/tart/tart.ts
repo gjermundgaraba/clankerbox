@@ -460,7 +460,7 @@ export const make = (
         Effect.catchTag("Internal", (error) =>
           Effect.fail(
             new Internal({
-              message: `${error.message}; macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start ${machine.id} again: a resume that fails keeps the saved state, and a stop discards it`,
+              message: `${error.message}; macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start ${machine.id} again: a restore that fails keeps the saved state, and a stop discards it`,
             }),
           ),
         ),

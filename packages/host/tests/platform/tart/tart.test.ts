@@ -1513,7 +1513,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(failure(error)[0]).toBe("Internal");
       expect(failure(error)[1]).toContain(
-        "macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start mac_dev again: a resume that fails keeps the saved state, and a stop discards it",
+        "macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start mac_dev again: a restore that fails keeps the saved state, and a stop discards it",
       );
       expect(yield* runtime.observe([machine])).toEqual(["paused"]);
     }),
