@@ -93,6 +93,32 @@ clankerbox host --config /etc/clankerbox/linux.json
 
 The host exits 130 on SIGINT or SIGTERM and 1 when it fails.
 
+### Upgrading from 0.23
+
+Runtimes, prebuilds, checkpoints, the recipes, and the host and client
+configs are as in 0.23, so machines carry over. Upgrade hosts and clients
+together, as for every release.
+
+- A host migrates its state dir on its first start, after which a 0.23 host
+  refuses it: copy its `host.db` first to keep a way back.
+- In the SDK, `PinMismatch` names its checkpoint or machine as `id`, no
+  longer `checkpoint`; `Locked` is a new error; `Desired`, `Machine.state`
+  and `Superseded.by` gain `paused`, and `Phase` gains `pausing`.
+- mac: each Tart job runs `--suspendable`, which drops its audio and entropy
+  devices and its non-Mac input devices. A machine running since before the
+  upgrade pauses only once it is stopped and started. Set the lock screen as
+  Deploy describes and make each Mac's first pause while unlocked: one made
+  while locked powers the VM off and fails. A start of a paused machine while
+  the session is locked fails `Locked`.
+- linux: resume paused machines before moving `linux.prefix` to another
+  smolvm. Setup, preparation and the tailnet check now run as root whatever
+  the image's USER; prebuilds made under another USER aren't rebuilt.
+- The Sandbox Agent provider's `pauseSandbox` pauses the machine rather than
+  stopping it, so the above applies to its sandboxes: on a Mac, a sandbox
+  running since before the upgrade pauses only once its machine is stopped
+  and started, and a paused sandbox keeps its RAM on the host's disk and
+  can't be forked.
+
 ### Upgrading from 0.20
 
 0.21 reads no 0.20 state dir, and logs in to machines of either kind as
