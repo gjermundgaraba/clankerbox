@@ -23,7 +23,7 @@ import {
 import { Hex } from "effect/encoding";
 import type { ChildProcessSpawner } from "effect/process";
 import { SandboxDestroyedError } from "sandbox-agent";
-import { healthPath } from "./agent.ts";
+import { acpPath, healthPath } from "./agent.ts";
 import type { Options } from "./options.ts";
 import { forwarding, freePort, LocalTunnelError, open, type Tunnel } from "./tunnel.ts";
 
@@ -36,6 +36,10 @@ const healthWait = Duration.seconds(3);
 const Health = Schema.Struct({ status: Schema.Literal("ok") });
 
 const isHealth = Schema.is(Health);
+
+const decodeAcpServers = Schema.decodeUnknownEffect(
+  Schema.Struct({ servers: Schema.Array(Schema.Struct({ serverId: Schema.String })) }),
+);
 
 interface Held {
   readonly tunnel: Tunnel;
@@ -165,6 +169,28 @@ export const make = (options: Options, ssh = "ssh") => {
       Effect.catch(() => Effect.succeed(false)),
     );
 
+  const unserved = (known: Sandbox) =>
+    Effect.gen(function* () {
+      if (known.held?.tunnel.running() !== true || known.port === undefined) {
+        return;
+      }
+
+      const acp = `http://127.0.0.1:${known.port}${acpPath}`;
+
+      const { servers } = yield* decodeAcpServers(
+        yield* Effect.tryPromise((signal) => fetch(acp, { signal }).then((reply) => reply.json())),
+      );
+
+      yield* Effect.forEach(
+        servers,
+        ({ serverId }) =>
+          Effect.tryPromise((signal) =>
+            fetch(`${acp}/${encodeURIComponent(serverId)}`, { method: "DELETE", signal }),
+          ),
+        { concurrency: "unbounded", discard: true },
+      );
+    }).pipe(Effect.timeout(healthWait), Effect.ignore);
+
   const started = (id: string, known: Sandbox) =>
     Effect.gen(function* () {
       const client = yield* Client.Client;
@@ -237,6 +263,7 @@ export const make = (options: Options, ssh = "ssh") => {
         Effect.gen(function* () {
           const client = yield* Client.Client;
 
+          yield* unserved(known);
           yield* closed(known);
           yield* client.pauseMachine({ id });
         }),

@@ -3,7 +3,8 @@ import type { SandboxProvider } from "sandbox-agent";
 
 /**
  * A profile whose setup installs the Sandbox Agent, a checkpoint of a machine that has it, or a
- * machine to fork. A fork or `ram` restore carries its source's sessions: take it from an idle one.
+ * machine to fork. A fork or `ram` restore carries its source's sessions: take it from an idle one,
+ * and not a paused one, which can't be forked.
  */
 export type Source =
   | { readonly profile: string }
@@ -40,6 +41,11 @@ export interface Options {
  */
 export interface ClankerboxProvider extends SandboxProvider {
   reconnect(sandboxId: string): Promise<void>;
+  /**
+   * Closes the server's ACP servers, whose agents the SDK can't reach again, then pauses the
+   * machine, which a reconnect resumes with its disk, processes and server. A reconnect then
+   * replays each session into a new ACP server, as after a stop.
+   */
   pause(sandboxId: string): Promise<void>;
   ensureServer(sandboxId: string): Promise<void>;
   getUrl(sandboxId: string): Promise<string>;

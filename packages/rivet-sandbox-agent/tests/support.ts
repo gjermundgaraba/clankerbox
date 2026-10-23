@@ -109,7 +109,12 @@ export const setup = async (
       .filter((line) => line !== "")
       .map((line) => JSON.parse(line));
 
-  return { dir, stub, sandbox, calls };
+  const acp = async (): Promise<Array<string>> =>
+    (await readFile(join(dir, "acp"), "utf8").catch(() => ""))
+      .split("\n")
+      .filter((line) => line !== "");
+
+  return { dir, stub, sandbox, calls, acp };
 };
 
 export const listening = (port: number) =>

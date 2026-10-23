@@ -16,7 +16,21 @@ if (existsSync(join(dir, "refuse"))) {
   process.exit(255);
 }
 
-createServer((_request, reply) => {
+createServer((request, reply) => {
+  if (request.url?.startsWith("/v1/acp") === true) {
+    appendFileSync(join(dir, "acp"), `${request.method} ${request.url}\n`);
+    reply.writeHead(200, { "content-type": "application/json" });
+    reply.end(
+      JSON.stringify(
+        request.method === "GET"
+          ? { servers: [{ serverId: "sdk-claude-1" }, { serverId: "sdk codex/2" }] }
+          : {},
+      ),
+    );
+
+    return;
+  }
+
   const healthy = !existsSync(join(dir, "unhealthy"));
 
   reply.writeHead(healthy ? 200 : 503, { "content-type": "application/json" });
