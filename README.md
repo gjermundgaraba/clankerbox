@@ -522,16 +522,16 @@ machine on a linux host, booted from Amp's orb image.
 - A `spawn` finds the orb's machine on any host in the client config and
   starts it, which resumes it when it is paused. When there is none, it
   restores the checkpoint of `ORB_SNAPSHOT_ID`, or creates the machine from
-  the profile and its prebuild, as it also does when that restore fails
-  `PinMismatch` or `Capacity`. It then logs in over ssh as `admin` and starts
+  the profile and its prebuild, as it also does when no host's snapshot of the
+  ID restores, failing `PinMismatch` or `Capacity`. It then logs in over ssh as `admin` and starts
   `amp orb bootstrap`, detached, as the image's `user`, in the image's
   environment, which the recipe records in `/etc/clankerbox/image-env`, with
   `ORB_TOKEN` and `AMP_URL` sent on stdin. Its log is
   `~user/.local/state/clankerbox/amp-orb.log`.
 - A `pause` pauses the machine, so the orb keeps its memory and processes and
   holds no RAM until its next spawn, and leaves a stopped one stopped. With
-  `ORB_SNAPSHOT_ID` it first stops the machine and starts it again, so the
-  snapshot carries no processes, deletes each host's snapshot of that ID and
+  `ORB_SNAPSHOT_ID` it first stops the machine and starts it again, ending
+  the orb's processes, so the snapshot carries none, deletes each host's snapshot of that ID and
   captures it as `snapshot-<ID>`; later orbs of the project restore it. Two
   orbs of a project paused with one at once may both capture it, and one
   fails `Conflict`.

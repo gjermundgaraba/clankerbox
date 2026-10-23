@@ -203,9 +203,7 @@ const spawn = <R>(
 
     yield* unread(located, job);
 
-    const [snapshot] = located.snapshots;
-
-    if (snapshot !== undefined) {
+    for (const snapshot of located.snapshots) {
       const spawned = yield* restored(client, job, snapshot);
 
       if (Option.isSome(spawned)) {

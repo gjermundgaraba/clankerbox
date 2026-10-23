@@ -297,6 +297,45 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
+  it.effect("a spawn tries each host's snapshot of the ID, restoring the one that restores", () =>
+    Effect.gen(function* () {
+      const config = yield* setup(["linux", "spare"]);
+
+      const linux = stub({
+        id: "linux",
+        bases: ["amp-orb"],
+        checkpoints: [checkpoint("linux_snapshot-prj-42")],
+        restoreFails: new PinMismatch({
+          message: "linux_snapshot-prj-42 was captured under another smolvm",
+          id: "linux_snapshot-prj-42",
+        }),
+      });
+
+      const spare = stub({
+        id: "spare",
+        bases: ["amp-orb"],
+        made: reachable,
+        checkpoints: [checkpoint("spare_snapshot-prj-42")],
+      });
+
+      const { code, stdout } = yield* dispatch(
+        config,
+        [
+          ["linux", linux],
+          ["spare", spare],
+        ],
+        spawnJob({ ORB_SNAPSHOT_ID: "prj-42" }),
+      );
+
+      expect([code, stdout]).toEqual([
+        0,
+        `spawn ${orb}: spare_${orb} restored from spare_snapshot-prj-42`,
+      ]);
+      expect(linux.calls).toContain("machine.restore");
+      expect(linux.creates).toEqual([]);
+    }),
+  );
+
   it.effect(
     "a spawn whose snapshot was captured under another smolvm creates the orb from the profile",
     () =>
