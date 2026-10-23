@@ -220,6 +220,12 @@ const spawn = <R>(
 
     const placed = yield* client.place(spec.base, { host });
 
+    if (placed.kind !== "linux") {
+      return yield* new Invalid({
+        message: `host ${placed.id} is a ${placed.kind} host, and Amp's orbs run on linux hosts only`,
+      });
+    }
+
     const { machine, prebuild } = yield* Prebuild.create(
       client,
       yield* nameOn(placed.id, job.orb),
@@ -411,6 +417,6 @@ export const ampOrb = Command.make("amp-orb", { ...mutationFlags, ...specArgumen
   }),
 ).pipe(
   Command.withDescription(
-    "Run one job of Amp's self-hosted orbs as amp orb provider's dispatch program, from the ORB_* environment it sets: spawn, pause or delete the orb's machine, named as the orb. README's Amp orbs section has the steps.",
+    "Run one job of Amp's self-hosted orbs as amp orb provider's dispatch program, from the ORB_* environment it sets: spawn, pause or delete the orb's machine, a linux machine named as the orb. README's Amp orbs section has the steps.",
   ),
 );

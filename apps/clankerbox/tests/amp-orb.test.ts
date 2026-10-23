@@ -533,6 +533,19 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
+  it.effect("a spawn placed on a mac host is Invalid, and creates nothing", () =>
+    Effect.gen(function* () {
+      const config = yield* setup(["mac"]);
+      const mac = stub({ id: "mac", kind: "mac", bases: ["amp-orb"], made: reachable });
+
+      const { code, stderr } = yield* dispatch(config, [["mac", mac]], spawnJob());
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("host mac is a mac host, and Amp's orbs run on linux hosts only");
+      expect(mac.creates).toEqual([]);
+    }),
+  );
+
   it.effect("a spawn finds the orb on the second host, under that host's ID", () =>
     Effect.gen(function* () {
       const config = yield* setup(["linux", "spare"]);
