@@ -333,7 +333,6 @@ export const fakeRuntime = (options: FakeOptions) => {
         version: "fake",
         publishAddress: "127.0.0.1",
         pin: options.pin ?? (kind === "linux" ? "fake 1" : undefined),
-        pausePin: kind === "linux" ? (options.pin ?? "fake 1") : undefined,
         stopResumes: kind === "linux",
         startup: () => Effect.sync(() => calls.push("startup")),
         observe,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import type { Desired } from "@gjermundgaraba/clankerbox-sdk";
+import { Desired, Machine } from "@gjermundgaraba/clankerbox-sdk";
 import { type Decided, type Next, next } from "../src/reconcile.ts";
 import type { MachineState } from "../src/runtime.ts";
 
@@ -7,11 +7,11 @@ interface State extends Decided {
   readonly seen: MachineState;
 }
 
-const desires: ReadonlyArray<Desired> = ["running", "stopped", "paused", "deleted"];
+const desires = Desired.literals;
 
 const flags: ReadonlyArray<boolean> = [false, true];
 
-const seens: ReadonlyArray<MachineState> = ["running", "stopped", "paused", "missing", "unknown"];
+const seens = Machine.fields.state.literals;
 
 const states: ReadonlyArray<State> = desires.flatMap((desired) =>
   flags.flatMap((made) =>
@@ -55,10 +55,6 @@ const restsWithin = (state: State, steps: number): boolean => {
 };
 
 describe("next", () => {
-  it("covers every state: four desires, made or not, prepared or not, five readings", () => {
-    expect(states).toHaveLength(80);
-  });
-
   it("a machine asked to be deleted is deleted, whatever else holds", () => {
     expect(
       states.filter((state) => state.desired === "deleted" && decide(state) !== "deleting"),

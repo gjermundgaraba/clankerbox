@@ -224,11 +224,11 @@ export const make = (
       );
 
     const resumable = ({ name, pausedPin }: Intent) =>
-      pausedPin === undefined || runtime.pausePin === undefined || pausedPin === runtime.pausePin
+      pausedPin === undefined || pausedPin === runtime.pin
         ? Effect.void
         : Effect.fail(
             new PinMismatch({
-              message: `machine ${idOf(name)} was paused under ${pausedPin}, and this host runs ${runtime.pausePin}; it resumes only under the same one: delete it, or resume it under that one`,
+              message: `machine ${idOf(name)} was paused under ${pausedPin}, and this host runs ${runtime.pin}; it resumes only under the same one: delete it, or resume it under that one`,
             }),
           );
 
@@ -420,10 +420,7 @@ export const make = (
         ),
       pause: (life) =>
         owning("pause", life, (intent) =>
-          Effect.andThen(
-            store.pausedUnder(intent.name, runtime.pausePin),
-            runtime.pause(ref(intent)),
-          ),
+          Effect.andThen(store.pausedUnder(intent.name, runtime.pin), runtime.pause(ref(intent))),
         ),
       remove: (life) =>
         owning("delete", life, (intent) =>

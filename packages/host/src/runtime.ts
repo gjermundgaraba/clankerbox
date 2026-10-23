@@ -109,15 +109,11 @@ export interface Interface {
   /** One host port per machine is published here. */
   readonly publishAddress: string;
   /**
-   * What a `ram` checkpoint must be restored under: RAM state restores only into the build that
-   * saved it. `undefined` on mac, which has no `ram` checkpoints.
+   * What a `ram` checkpoint must be restored under, and a paused machine resumed under: RAM state
+   * restores only into the build that saved it. `undefined` on mac, which has no `ram` checkpoints
+   * and where a resume Tart can't make fails and keeps the saved state.
    */
   readonly pin: string | undefined;
-  /**
-   * What a paused machine must resume under: the build whose saved execution it holds. `undefined`
-   * on mac, where a restore Tart can't make fails and keeps the saved state.
-   */
-  readonly pausePin: string | undefined;
   /**
    * Whether a stop of a paused machine resumes it to end its saved execution, so the core admits
    * it as a boot under its pause's pin, rather than discarding that execution with no boot.

@@ -17,7 +17,7 @@ separately, and don't deploy, change production hosts, or commit unless asked.
 - **Pinned in this repo:** `testedVersion` in `packages/host/src/platform/smolvm.ts` is
   exact: startup refuses any other `smolvm --version`. `pin` derives from it
   (`smolvm <version> <platform>-<arch>`) and is recorded on every `ram`
-  checkpoint and every paused machine (`pausePin`). Tests use `testedVersion` or a neutral `0.0.0-test`; only README
+  checkpoint and every paused machine. Tests use `testedVersion` or a neutral `0.0.0-test`; only README
   repeats the version: `git grep -n '<old version>'` finds every place.
 - **Target:** the latest stable published `smol-machines/smolvm` release (its
   release metadata, such as `gh release view --repo smol-machines/smolvm`),
@@ -211,7 +211,7 @@ as it is.
   `checkpoint` refuse a paused machine, and `delete -f` deletes it. Ours:
   `resumable` (`paused`, `pausing`); `pause` reads `machine status` first,
   leaves `paused` as it is, resumes `pausing` before it pauses and refuses
-  anything else not `running` with `WrongState`; `pausePin` is the release
+  anything else not `running` with `WrongState`; a pause records the release
   pin, so a paused machine resumes only under the smolvm build that paused it.
 - `machine status --name X --json` states are `created`, `running`, `stopped`,
   `paused`, `pausing`, `failed`, `unreachable` and `frozen` (`RecordState`,
@@ -469,7 +469,9 @@ as it is.
   now fails its restore with `PinMismatch`, since its pin names the old
   release; and so does a start or stop of every paused machine, which smolvm
   can't stop without resuming, leaving it only `delete`, disk and all: start
-  each paused machine before the move.
+  each paused machine before the move. A pause records the host's pin, not
+  the build a running VM was booted under, so a machine left running across
+  the move must be stopped and started before its next pause.
 - Report the tag transition, the claims that changed and their fixes, the checks
   actually run, optional opportunities (with touchpoints and the smallest useful
   check), and remaining runtime resources and retained disk separately.

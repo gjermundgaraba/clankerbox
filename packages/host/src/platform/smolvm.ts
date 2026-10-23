@@ -367,7 +367,6 @@ export const make = (
       version: testedVersion,
       publishAddress: settings.publishAddress,
       pin,
-      pausePin: pin,
       stopResumes: true,
       startup: Effect.fn("Smolvm.startup")(() =>
         Effect.gen(function* () {

@@ -537,7 +537,6 @@ export const make = (
       version: reported,
       publishAddress: settings.publishAddress,
       pin: undefined,
-      pausePin: undefined,
       stopResumes: false,
       startup: Effect.fn("Tart.startup")((machines) =>
         Effect.gen(function* () {

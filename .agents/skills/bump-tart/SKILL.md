@@ -163,8 +163,8 @@ Each: what Tart does, where, and what of ours depends on it.
   and a root LaunchDaemon can't save at all (no keychain, -25291). macOS, not
   Tart, so re-check it on a macOS upgrade. Ours: `unrestored` with `denied`
   in the job's log is `Locked`, the saved state kept; README's mac Deploy
-  says to make the first pause unlocked; `pausePin` is `undefined`, as a
-  restore that fails keeps the saved state, so no pin guards it.
+  says to make the first pause unlocked; `pin` is `undefined`, as a
+  restore that fails keeps the saved state, so no pin guards a resume.
 
 **Softnet and the network**
 

@@ -216,8 +216,11 @@ clankerbox checkpoint delete linux_base
   machine can't be forked or captured.
 - On linux a paused machine resumes only under the smolvm build that paused
   it: after a host moves to another one, a `start` of it fails `PinMismatch`,
-  so resume paused machines before upgrading. A Mac tries the resume under any
-  Tart and macOS, and a restore it can't make fails, keeping the saved state.
+  so resume paused machines before upgrading. A machine left running across
+  the move still runs the old build, which a pause can't tell from the new
+  one: stop and start it before its next pause. A Mac tries the resume under
+  any Tart and macOS, and a restore it can't make fails, keeping the saved
+  state.
 - A `stop` of a paused machine resumes it on linux to end its processes,
   needing room as a start does, and fails `PinMismatch` after an upgrade too;
   on a Mac it discards the saved state without booting. Either keeps the disk.

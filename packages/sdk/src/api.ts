@@ -89,7 +89,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: converging,
       description:
-        "Ask for a machine to run, and wait until it does: start it, or resume it when it is paused, and prepare it again, also when it runs already. A paused machine resumes only under the runtime build that paused it.",
+        "Ask for a machine to run, and wait until it does: start it, or resume it when it is paused, and prepare it again, also when it runs already. A paused linux machine resumes only under the smolvm build that paused it, and a paused mac machine fails Locked while the host's session is locked.",
       input: ById,
       success: Machine,
     }),
@@ -105,7 +105,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: converging,
       description:
-        "Ask for a machine to stay paused, and wait until it is: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it under the runtime build that paused it. A machine that is stopped stays stopped.",
+        "Ask for a machine to stay paused, and wait until it is: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped.",
       input: ById,
       success: Machine,
     }),
