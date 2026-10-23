@@ -3,10 +3,19 @@
 # `clankerbox amp-orb`: the login user `admin` with passwordless sudo, for whom the host then
 # installs your keys, and an /etc/clankerbox/start that keeps sshd running with root's login and
 # passwords off. The image already has sshd, sudo, perl and Amp's own user `user`, which runs the
-# orb's bootstrap and tools.
+# orb's bootstrap and tools, in the image's environment this records in /etc/clankerbox/image-env.
 #
 # Name this directory, or a copy, as a profile's `setup.path`.
 set -eu
+
+# smolvm runs a setup in the image's environment, and sudo's env_reset drops it: Amp's git,
+# libraries and Node options are only on the PATH, LD_LIBRARY_PATH and NODE_OPTIONS it sets.
+install -d /etc/clankerbox
+export -p |
+  grep -vE '^export (HOME|USER|LOGNAME|SHELL|PWD|OLDPWD|SHLVL|MAIL|TERM|SMOLVM_[A-Z_]*)=' \
+    >/etc/clankerbox/image-env
+chmod 644 /etc/clankerbox/image-env
+
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 install -d /etc/ssh/sshd_config.d
@@ -22,7 +31,6 @@ visudo -cf /var/tmp/sudoers-admin >/dev/null
 install -m 440 /var/tmp/sudoers-admin /etc/sudoers.d/admin
 rm /var/tmp/sudoers-admin
 
-install -d /etc/clankerbox
 cat >/etc/clankerbox/start <<'START'
 #!/bin/sh
 # Runs at every activation: after a create, a start, a fork and a restore.

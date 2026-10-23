@@ -16,15 +16,16 @@ import {
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Config,
-  DateTime,
   Effect,
   type FileSystem,
   Option,
   type Path,
   Redacted,
+  Result,
   Stream,
 } from "effect";
 import { Command } from "effect/cli";
+import { Hex } from "effect/encoding";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { fail, mutationFlags, print, SpawnFailed, withClient } from "./command.ts";
 import type { LoadedConfig } from "./config.ts";
@@ -32,39 +33,44 @@ import { flagsRequest, type SpecFlags, specArguments } from "./machines/spec.ts"
 
 const orbUser = "user";
 
+export const imageEnvironment = "/etc/clankerbox/image-env";
+
 const operations = ["spawn", "pause", "delete"] as const;
 
-const Job = Config.all({
-  operation: Config.Literals(operations, "ORB_OPERATION"),
-  orb: Config.NonEmptyString("ORB_ID"),
-  snapshot: Config.option(Config.String("ORB_SNAPSHOT_ID")),
-  token: Config.option(Config.Redacted("ORB_TOKEN")),
-  ampUrl: Config.option(Config.String("AMP_URL")),
-});
+const inEnvironment = <A>(config: Config.Config<A>): Effect.Effect<A, Invalid> =>
+  Effect.gen(function* () {
+    return yield* config;
+  }).pipe(
+    Effect.mapError(
+      (error) =>
+        new Invalid({
+          message: `amp-orb reads its job from the environment amp orb provider sets: ${error.message}`,
+        }),
+    ),
+  );
 
-type Job = Config.Success<typeof Job>;
+const optional = (name: string) =>
+  Config.option(Config.String(name)).pipe(
+    Config.map((value) => Option.filter(value, (text) => text !== "")),
+  );
 
-const readJob = Effect.gen(function* () {
-  const job = yield* Job;
-
-  return {
-    ...job,
-    snapshot: Option.filter(job.snapshot, (id) => id !== ""),
-    ampUrl: Option.filter(job.ampUrl, (url) => url !== ""),
-  };
-}).pipe(
-  Effect.mapError(
-    (error) =>
-      new Invalid({
-        message: `amp-orb reads its job from the environment amp orb provider sets: ${error.message}`,
-      }),
-  ),
+const readJob = inEnvironment(
+  Config.all({
+    operation: Config.Literals(operations, "ORB_OPERATION"),
+    orb: Config.NonEmptyString("ORB_ID"),
+    snapshot: optional("ORB_SNAPSHOT_ID"),
+  }),
 );
 
-const digestDigits = 16;
+type Job = Effect.Success<typeof readJob>;
 
-const hex = (bytes: ArrayBuffer) =>
-  Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("");
+const readBootstrap = inEnvironment(
+  Config.all({ token: Config.Redacted("ORB_TOKEN"), ampUrl: optional("AMP_URL") }),
+);
+
+export type Bootstrap = Effect.Success<typeof readBootstrap>;
+
+const digestDigits = 16;
 
 export const nameOn = (host: string, text: string): Effect.Effect<string> =>
   formatId(host, text).pipe(
@@ -72,7 +78,9 @@ export const nameOn = (host: string, text: string): Effect.Effect<string> =>
     Effect.catch(() =>
       Effect.promise(() =>
         globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
-      ).pipe(Effect.map((digest) => `amp-${hex(digest).slice(0, digestDigits)}`)),
+      ).pipe(
+        Effect.map((digest) => `amp-${Hex.encode(new Uint8Array(digest)).slice(0, digestDigits)}`),
+      ),
     ),
   );
 
@@ -83,8 +91,6 @@ const snapshotText = (snapshot: string) => `snapshot-${snapshot}`;
 
 interface Located {
   readonly machine: Option.Option<Machine>;
-  /** The checkpoint a pause left, named as the machine, which a spawn restores. */
-  readonly paused: Option.Option<Checkpoint>;
   readonly snapshot: Option.Option<Checkpoint>;
   readonly unreachable: ReadonlyArray<Client.Unreachable>;
 }
@@ -109,7 +115,6 @@ const locate = (client: Client.Interface, config: LoadedConfig, job: Job) =>
 
     return {
       machine: Option.fromNullishOr(machines.answers.find(({ id }) => orbIds.has(id))),
-      paused: Option.fromNullishOr(checkpoints.answers.find(({ id }) => orbIds.has(id))),
       snapshot: Option.fromNullishOr(checkpoints.answers.find(({ id }) => snapshotIds.has(id))),
       unreachable: [...machines.unreachable, ...checkpoints.unreachable],
     } satisfies Located;
@@ -131,22 +136,50 @@ const unread = (located: Located, job: Job): Effect.Effect<void, Unavailable> =>
 interface Outcome {
   readonly orb: string;
   readonly operation: Job["operation"];
+  /** What the job did to the orb's machine. */
+  readonly result: "started" | "resumed" | "restored" | "created" | "paused" | "deleted" | "absent";
   readonly machine?: string | undefined;
+  /** The snapshot or prebuild a spawn restored, or the snapshot a pause captured. */
   readonly checkpoint?: string | undefined;
-  /** How a spawn found its machine, or what a pause or delete did. */
-  readonly how: string;
 }
 
-interface Spawned extends Outcome {
+interface Spawned {
+  readonly outcome: Outcome;
   readonly running: Machine;
 }
 
-const created = <R>(
+const spawn = <R>(
   client: Client.Interface,
   job: Job,
+  located: Located,
   request: Effect.Effect<SpecRequest, Invalid, R>,
-) =>
+): Effect.Effect<Spawned, ClankerboxError | Invalid, R> =>
   Effect.gen(function* () {
+    const spawned = (running: Machine, result: Outcome["result"], checkpoint?: string) => ({
+      outcome: { orb: job.orb, operation: job.operation, result, machine: running.id, checkpoint },
+      running,
+    });
+
+    if (Option.isSome(located.machine)) {
+      const held = located.machine.value;
+      const running = yield* client.startMachine({ id: held.id });
+
+      return spawned(running, held.state === "paused" ? "resumed" : "started");
+    }
+
+    yield* unread(located, job);
+
+    if (Option.isSome(located.snapshot)) {
+      const snapshot = located.snapshot.value;
+
+      const running = yield* client.restoreMachine({
+        checkpoint: snapshot.id,
+        name: yield* nameOn((yield* parseId(snapshot.id)).host, job.orb),
+      });
+
+      return spawned(running, "restored", snapshot.id);
+    }
+
     const { spec, host } = yield* request;
 
     if (spec.setup === undefined) {
@@ -171,72 +204,7 @@ const created = <R>(
       { host: placed.id },
     );
 
-    return {
-      running: machine,
-      how: prebuild === undefined ? "created, its setup run" : `restored from ${prebuild.id}`,
-      checkpoint: prebuild?.id,
-    };
-  });
-
-const spawn = <R>(
-  client: Client.Interface,
-  job: Job,
-  located: Located,
-  request: Effect.Effect<SpecRequest, Invalid, R>,
-): Effect.Effect<Spawned, ClankerboxError | Invalid, R> =>
-  Effect.gen(function* () {
-    const { machine, paused, snapshot } = located;
-    const base = { orb: job.orb, operation: "spawn" } as const;
-
-    if (Option.isSome(machine)) {
-      const running = yield* client.startMachine({ id: machine.value.id });
-
-      if (Option.isSome(paused)) {
-        yield* client.deleteCheckpoint({ id: paused.value.id });
-      }
-
-      return { ...base, running, machine: running.id, how: "started" };
-    }
-
-    if (Option.isSome(paused)) {
-      const running = yield* client.restoreMachine({
-        checkpoint: paused.value.id,
-        name: (yield* parseId(paused.value.id)).name,
-      });
-
-      yield* client.deleteCheckpoint({ id: paused.value.id });
-
-      return {
-        ...base,
-        running,
-        machine: running.id,
-        checkpoint: paused.value.id,
-        how: "restored from its pause",
-      };
-    }
-
-    yield* unread(located, job);
-
-    if (Option.isSome(snapshot)) {
-      const { host } = yield* parseId(snapshot.value.id);
-
-      const running = yield* client.restoreMachine({
-        checkpoint: snapshot.value.id,
-        name: yield* nameOn(host, job.orb),
-      });
-
-      return {
-        ...base,
-        running,
-        machine: running.id,
-        checkpoint: snapshot.value.id,
-        how: "restored from its snapshot",
-      };
-    }
-
-    const made = yield* created(client, job, request);
-
-    return { ...base, ...made, machine: made.running.id };
+    return spawned(machine, "created", prebuild?.id);
   });
 
 const pause = (
@@ -245,113 +213,92 @@ const pause = (
   located: Located,
 ): Effect.Effect<Outcome, ClankerboxError | Invalid> =>
   Effect.gen(function* () {
-    const base = { orb: job.orb, operation: "pause" } as const;
+    const paused = { orb: job.orb, operation: job.operation, result: "paused" } as const;
 
     if (Option.isNone(located.machine)) {
-      yield* Option.isSome(located.paused) ? Effect.void : unread(located, job);
+      yield* unread(located, job);
 
-      return {
-        ...base,
-        checkpoint: Option.getOrUndefined(Option.map(located.paused, ({ id }) => id)),
-        how: Option.isSome(located.paused) ? "already paused" : "no machine to pause",
-      };
+      return { ...paused, result: "absent" };
     }
 
-    const held = located.machine.value;
-    const { host, name } = yield* parseId(held.id);
+    const { id } = located.machine.value;
 
-    if (
-      Option.isSome(located.paused) &&
-      DateTime.isGreaterThan(located.paused.value.createdAt, held.createdAt)
-    ) {
-      yield* client.deleteMachine({ id: held.id });
+    if (Option.isNone(job.snapshot)) {
+      yield* client.pauseMachine({ id });
 
-      return {
-        ...base,
-        checkpoint: located.paused.value.id,
-        how: "captured already, its machine deleted",
-      };
+      return { ...paused, machine: id };
     }
 
-    if (held.state !== "running") {
-      yield* client.startMachine({ id: held.id });
+    yield* client.stopMachine({ id });
+    yield* client.startMachine({ id });
+
+    if (Option.isSome(located.snapshot)) {
+      yield* client.deleteCheckpoint({ id: located.snapshot.value.id });
     }
 
-    if (Option.isSome(job.snapshot) && Option.isNone(located.snapshot)) {
-      yield* client
-        .captureCheckpoint({
-          machine: held.id,
-          name: yield* nameOn(host, snapshotText(job.snapshot.value)),
-        })
-        .pipe(Effect.catchTag("Conflict", () => Effect.void));
-    }
+    const captured = yield* client.captureCheckpoint({
+      machine: id,
+      name: yield* nameOn((yield* parseId(id)).host, snapshotText(job.snapshot.value)),
+    });
 
-    if (Option.isSome(located.paused)) {
-      yield* client.deleteCheckpoint({ id: located.paused.value.id });
-    }
+    yield* client.pauseMachine({ id });
 
-    const captured = yield* client.captureCheckpoint({ machine: held.id, name });
-
-    yield* client.deleteMachine({ id: held.id });
-
-    return { ...base, checkpoint: captured.id, how: "captured, its machine deleted" };
+    return { ...paused, machine: id, checkpoint: captured.id };
   });
 
 const remove = (
   client: Client.Interface,
+  config: LoadedConfig,
   job: Job,
-  located: Located,
 ): Effect.Effect<Outcome, ClankerboxError | Invalid> =>
   Effect.gen(function* () {
-    yield* unread(located, job);
+    const removals = yield* Effect.forEach(
+      config.hosts,
+      ({ id: host }) =>
+        Effect.flatMap(idOn(host, job.orb), (id) =>
+          Effect.map(Effect.result(client.deleteMachine({ id })), (removed) => ({ id, removed })),
+        ),
+      { concurrency: "unbounded" },
+    );
 
-    if (Option.isSome(located.machine)) {
-      yield* client.deleteMachine({ id: located.machine.value.id });
+    const gone = { orb: job.orb, operation: job.operation, result: "absent" } as const;
+
+    const deleted = removals.find(
+      ({ removed }) => Result.isSuccess(removed) && removed.success === "deleted",
+    );
+
+    if (deleted !== undefined) {
+      return { ...gone, result: "deleted", machine: deleted.id };
     }
 
-    if (Option.isSome(located.paused)) {
-      yield* client.deleteCheckpoint({ id: located.paused.value.id });
+    for (const { removed } of removals) {
+      if (Result.isFailure(removed)) {
+        return yield* removed.failure;
+      }
     }
 
-    return {
-      orb: job.orb,
-      operation: "delete",
-      machine: Option.getOrUndefined(Option.map(located.machine, ({ id }) => id)),
-      checkpoint: Option.getOrUndefined(Option.map(located.paused, ({ id }) => id)),
-      how:
-        Option.isSome(located.machine) || Option.isSome(located.paused)
-          ? "deleted"
-          : "already gone",
-    };
+    return gone;
   });
 
 const quoted = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`;
 
-export const bootstrapScript = (job: Job, token: Redacted.Redacted<string>) =>
+export const bootstrapScript = (bootstrap: Bootstrap, environment: string) =>
   [
     "set -eu",
-    `orb=${quoted(job.orb)}`,
-    `export ORB_TOKEN=${quoted(Redacted.value(token))}`,
-    ...Option.match(job.ampUrl, {
-      onNone: () => ["unset AMP_URL"],
-      onSome: (url) => [`export AMP_URL=${quoted(url)}`],
-    }),
+    `. ${quoted(environment)}`,
+    `export ORB_TOKEN=${quoted(Redacted.value(bootstrap.token))}`,
+    ...Option.toArray(Option.map(bootstrap.ampUrl, (url) => `export AMP_URL=${quoted(url)}`)),
+    `command -v amp >/dev/null 2>&1 || { echo "amp isn't on the image's PATH, $PATH" >&2; exit 127; }`,
     'state="$HOME/.local/state/clankerbox"',
     'mkdir -p "$state"',
-    'if [ -r "$state/amp-orb" ] && read -r was <"$state/amp-orb" && [ "$was" != "$orb" ]; then',
-    `  for pid in $(pgrep -u "$(id -u)" -f 'amp orb bootstrap$' || true); do`,
-    '    kill -TERM "-$pid" 2>/dev/null || true',
-    "  done",
-    "fi",
     'cd "$HOME"',
     'setsid amp orb bootstrap </dev/null >>"$state/amp-orb.log" 2>&1 &',
-    `printf '%s\\n' "$orb" >"$state/amp-orb"`,
     "",
   ].join("\n");
 
 const tailCharacters = 4000;
 
-const bootstrap = (target: SshTarget, job: Job, token: Redacted.Redacted<string>) =>
+const bootstrapIn = (target: SshTarget, bootstrap: Bootstrap) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -365,7 +312,7 @@ const bootstrap = (target: SshTarget, job: Job, token: Redacted.Redacted<string>
 
     const ssh = yield* spawner.spawn(
       ChildProcess.make("ssh", args, {
-        stdin: Stream.make(new TextEncoder().encode(bootstrapScript(job, token))),
+        stdin: Stream.make(new TextEncoder().encode(bootstrapScript(bootstrap, imageEnvironment))),
         detached: false,
       }),
     );
@@ -394,75 +341,73 @@ const bootstrap = (target: SshTarget, job: Job, token: Redacted.Redacted<string>
 interface Run {
   readonly outcome: Outcome;
   /** On a spawn: the machine to start `amp orb bootstrap` in. */
-  readonly start?: {
-    readonly target: SshTarget;
-    readonly job: Job;
-    readonly token: Redacted.Redacted<string>;
-  };
+  readonly target?: SshTarget;
 }
 
 const run = (
   client: Client.Interface,
   config: LoadedConfig,
+  job: Job,
   flags: SpecFlags,
 ): Effect.Effect<Run, ClankerboxError | Invalid, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
-    const job = yield* readJob;
+    if (job.operation === "delete") {
+      return { outcome: yield* remove(client, config, job) };
+    }
+
     const located = yield* locate(client, config, job);
 
     if (job.operation === "pause") {
       return { outcome: yield* pause(client, job, located) };
     }
 
-    if (job.operation === "delete") {
-      return { outcome: yield* remove(client, job, located) };
-    }
-
-    if (Option.isNone(job.token)) {
-      return yield* new Invalid({
-        message: "a spawn needs ORB_TOKEN, which amp orb provider sets",
-      });
-    }
-
-    const { running, ...outcome } = yield* spawn(
+    const { outcome, running } = yield* spawn(
       client,
       job,
       located,
       flagsRequest("amp-orb", flags, config),
     );
 
-    return {
-      outcome,
-      start: { target: yield* sshTarget(running), job, token: job.token.value },
-    };
+    return { outcome, target: yield* sshTarget(running) };
   });
+
+const text = ({ operation, orb, result, machine, checkpoint }: Outcome) =>
+  [
+    `${operation} ${orb}:`,
+    machine,
+    result === "absent" ? "no machine" : result,
+    ...(checkpoint === undefined
+      ? []
+      : [result === "paused" ? `with snapshot ${checkpoint}` : `from ${checkpoint}`]),
+  ]
+    .filter((part) => part !== undefined)
+    .join(" ");
 
 export const ampOrb = Command.make("amp-orb", { ...mutationFlags, ...specArguments }, (flags) =>
   Effect.gen(function* () {
-    const { outcome, start } = yield* withClient(flags, (client, config) =>
-      run(client, config, flags),
+    const job = yield* readJob.pipe(Effect.catch(fail(flags.json)));
+
+    const bootstrap =
+      job.operation === "spawn"
+        ? Option.some(yield* readBootstrap.pipe(Effect.catch(fail(flags.json))))
+        : Option.none<Bootstrap>();
+
+    const { outcome, target } = yield* withClient(flags, (client, config) =>
+      run(client, config, job, flags),
     );
 
-    if (start !== undefined) {
-      yield* bootstrap(start.target, start.job, start.token).pipe(Effect.catch(fail(flags.json)));
+    if (target !== undefined && Option.isSome(bootstrap)) {
+      yield* bootstrapIn(target, bootstrap.value).pipe(Effect.catch(fail(flags.json)));
     }
 
     yield* print(
       flags.json,
       () => outcome,
-      () =>
-        [
-          `${outcome.operation} ${outcome.orb}:`,
-          outcome.machine,
-          outcome.how,
-          ...(outcome.checkpoint === undefined ? [] : [`(${outcome.checkpoint})`]),
-        ]
-          .filter((part) => part !== undefined)
-          .join(" "),
+      () => text(outcome),
     );
   }),
 ).pipe(
   Command.withDescription(
-    "Run one job of Amp's self-hosted orbs, as amp orb provider's dispatch program, from the ORB_* environment it sets. A spawn starts the orb's machine, restoring it from its pause or from ORB_SNAPSHOT_ID's checkpoint, or creating it from the profile and its prebuild, then starts amp orb bootstrap in it over ssh. A pause captures the machine, RAM and all, into a checkpoint named as it, and the snapshot's when ORB_SNAPSHOT_ID names one, and deletes the machine; a delete deletes the machine and its pause. Each is safe to repeat. The machine is named ORB_ID, or amp- and its digest when that doesn't fit.",
+    "Run one job of Amp's self-hosted orbs as amp orb provider's dispatch program, from the ORB_* environment it sets: spawn, pause or delete the orb's machine, a linux machine named as the orb. README's Amp orbs section has the steps.",
   ),
 );

@@ -144,7 +144,8 @@ transport. Neither `./testing` export is published.
   `effect/encoding` and the SDK, and `lifecycle.ts` alone also `xstate` and
   `@xstate/effect`; an adapter imports domain files, its own
   folder and `platform/`'s `process.ts` and `address.ts`; an app command
-  imports only `effect` (with its `cli`, `http`, `process` and `socket`), the
+  imports only `effect` (with its `cli`, `encoding`, `http`, `process` and
+  `socket`), the
   SDK and its siblings, leaving Node, `@effect/platform-node` and the host
   package to `main.ts` and `host.ts`;
   the provider takes Node and `@effect/platform-node` only in `index.ts` and

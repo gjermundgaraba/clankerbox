@@ -486,32 +486,36 @@ machine on a linux host, booted from Amp's orb image.
    ```
 
 - A `spawn` finds the orb's machine on any host in the client config and
-  starts it. When there is none, it restores the orb's pause, or the checkpoint
-  of `ORB_SNAPSHOT_ID`, or creates the machine from the profile and its
-  prebuild. It then logs in over ssh as `admin` and starts `amp orb bootstrap`,
-  detached, as the image's `user`, with `ORB_TOKEN` and `AMP_URL` sent on
-  stdin. Its log is `~user/.local/state/clankerbox/amp-orb.log`.
-- A `pause` keeps the orb's memory: it captures the machine, RAM and all,
-  into a checkpoint named as the machine, then deletes the machine. With
-  `ORB_SNAPSHOT_ID` it also captures `snapshot-<ID>`, which later orbs of the
-  project restore. A spawn from a snapshot ends the bootstraps the snapshot's
-  orb left running.
-- A `delete` deletes the orb's machine and its pause. Snapshots stay until
-  `clankerbox checkpoint delete`, since Amp's `amp projects snapshots delete`
-  runs no job.
+  starts it, which resumes it when it is paused. When there is none, it
+  restores the checkpoint of `ORB_SNAPSHOT_ID`, or creates the machine from
+  the profile and its prebuild. It then logs in over ssh as `admin` and starts
+  `amp orb bootstrap`, detached, as the image's `user`, in the image's
+  environment, which the recipe records in `/etc/clankerbox/image-env`, with
+  `ORB_TOKEN` and `AMP_URL` sent on stdin. Its log is
+  `~user/.local/state/clankerbox/amp-orb.log`.
+- A `pause` pauses the machine, so the orb keeps its memory and processes and
+  holds no RAM until its next spawn. With `ORB_SNAPSHOT_ID` it first stops the
+  machine and starts it again, so the snapshot carries no processes, and
+  captures it as `snapshot-<ID>`, replacing a snapshot of that ID on any host;
+  later orbs of the project restore it.
+- A `delete` deletes the orb's machine on whichever host holds it. Snapshots
+  stay until `clankerbox checkpoint delete`, since Amp's `amp projects
+  snapshots delete` runs no job, and a project whose snapshot IDs change keeps
+  each one.
 - Each job is safe to repeat, and one cut short is finished by the next. A
-  job fails, and changes nothing, when a host it can't read might hold the orb.
+  spawn or pause fails, and changes nothing, when a host it can't read might
+  hold the orb; a delete fails only when no host it reached held the machine.
 - The machine is named `ORB_ID` and a snapshot `snapshot-<ORB_SNAPSHOT_ID>`,
   each `amp-` and a digest of it instead when it isn't a name on the host: a
   letter, then letters, digits and single `-`, at most 62 characters with
   `<host>_`.
 - Amp pauses a thread whenever it goes idle or is archived, and deletes it only
-  when the thread is deleted, so each idle or archived thread keeps a checkpoint
-  of its RAM and disk.
-- Pauses and snapshots are `ram` checkpoints, which restore only under the
-  smolvm release that captured them. Before moving a host's smolvm, delete
-  them with `clankerbox checkpoint delete`, or a spawn of a paused orb, or
-  from its project's snapshot, fails.
+  when the thread is deleted, so each idle or archived thread keeps a paused
+  machine, its RAM and disk on the host's disk.
+- A paused orb resumes, and a snapshot restores, only under the smolvm release
+  that paused or captured it: resume paused orbs before moving a host's
+  smolvm, and delete its snapshots with `clankerbox checkpoint delete`, or a
+  spawn of a paused orb, or from its project's snapshot, fails.
 - The base, not `ORB_IMAGE`, picks the image: move its digest to take a new one,
   then prebuild again. The `amp` CLI in the orb updates itself either way.
 
