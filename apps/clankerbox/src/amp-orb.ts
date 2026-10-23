@@ -1,5 +1,4 @@
 import {
-  Capacity,
   type Checkpoint,
   type ClankerboxError,
   type Client,
@@ -7,7 +6,6 @@ import {
   Invalid,
   type Machine,
   parseId,
-  PinMismatch,
   pinnedSsh,
   Prebuild,
   ScriptFailed,
@@ -26,7 +24,7 @@ import { flagsRequest, specArguments } from "./machines/spec.ts";
 
 const orbUser = "user";
 
-export const imageEnvironment = "/etc/clankerbox/image-env";
+const imageEnvironment = "/etc/clankerbox/image-env";
 
 const operations = ["spawn", "pause", "delete"] as const;
 
@@ -175,12 +173,7 @@ const restored = (client: Client.Interface, job: Job, snapshot: Checkpoint) =>
       outcome: outcome(job, "restored", { machine: running.id, checkpoint: snapshot.id }),
       running,
     });
-  }).pipe(
-    Effect.catchIf(
-      (error) => error instanceof PinMismatch || error instanceof Capacity,
-      () => Effect.succeedNone,
-    ),
-  );
+  }).pipe(Effect.catchTag(["PinMismatch", "Capacity"], () => Effect.succeedNone));
 
 const spawn = <R>(
   client: Client.Interface,

@@ -581,14 +581,14 @@ const guest = Effect.gen(function* () {
   yield* chmod(join(bin, "setsid"), 0o755);
   yield* chmod(join(bin, "amp"), 0o755);
 
-  const run = (ampUrl: Option.Option<string>, path = "/usr/bin:/bin") =>
+  const run = (ampUrl: Option.Option<string>) =>
     outputOf(
       "/bin/sh",
       ["-c", bootstrapScript({ token: Redacted.make("it's-secret"), ampUrl }, environment)],
-      { env: { HOME: home, PATH: path }, extendEnv: false, detached: false },
+      { env: { HOME: home, PATH: "/usr/bin:/bin" }, extendEnv: false, detached: false },
     );
 
-  return { bin, home, environment, run };
+  return { home, environment, run };
 });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
