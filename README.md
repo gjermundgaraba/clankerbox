@@ -440,10 +440,11 @@ machine on a linux host, booted from Amp's orb image.
    }
    ```
 
-2. Write a profile, `amp-orb.json`, whose setup is the package's
-   `recipes/amp-orb/` (under `$(npm root --global)/@gjermundgaraba/clankerbox`),
-   or a copy of it, and prebuild it: Amp gives each job five minutes, which a
-   setup run from scratch may not fit in.
+2. Copy the package's `recipes/amp-orb/` (under
+   `$(npm root --global)/@gjermundgaraba/clankerbox`) into the profiles
+   directory, write a profile beside it, `amp-orb.json`, whose setup is that
+   copy, and prebuild it: Amp gives each job five minutes, which a setup run
+   from scratch may not fit in.
 
    ```json
    {
@@ -486,8 +487,10 @@ machine on a linux host, booted from Amp's orb image.
   runs no job.
 - Each job is safe to repeat, and one cut short is finished by the next. A
   job fails, and changes nothing, when a host it can't read might hold the orb.
-- The machine is named `ORB_ID`, or `amp-` and a digest of it when
-  `<host>_<ORB_ID>` passes 62 characters.
+- The machine is named `ORB_ID` and a snapshot `snapshot-<ORB_SNAPSHOT_ID>`,
+  each `amp-` and a digest of it instead when it isn't a name on the host: a
+  letter, then letters, digits and single `-`, at most 62 characters with
+  `<host>_`.
 - Amp pauses a thread whenever it goes idle or is archived, and deletes it only
   when the thread is deleted, so each idle or archived thread keeps a checkpoint
   of its RAM and disk.

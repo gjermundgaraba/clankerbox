@@ -2,11 +2,11 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { existsSync, readFileSync } from "node:fs";
 import { createServer, type Socket } from "node:net";
 import { Effect, Layer, PlatformError, Predicate, Sink, Stdio, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { ChildProcessSpawner } from "effect/process";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
 import { machine, scratch, stubHost, type StubHost } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { cleanup, cli, decodeJsonError, writeConfig } from "./support.ts";
+import { cleanup, cli, decodeJsonError, fakeSpawner, writeConfig } from "./support.ts";
 
 const stubs: Array<StubHost> = [];
 
@@ -19,46 +19,20 @@ interface Spawned {
   readonly knownHostsFile: string;
 }
 
-const fakeSsh = (code: number) => {
-  const spawned: Array<Spawned> = [];
+const fakeSsh = (code: number) =>
+  fakeSpawner(code, (command) =>
+    Effect.sync((): Spawned => {
+      const option = command.args.find((arg) => arg.startsWith("UserKnownHostsFile="));
+      const knownHostsFile = option?.slice("UserKnownHostsFile=".length) ?? "";
 
-  const layer = Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make((command) =>
-      Effect.sync(() => {
-        if (!ChildProcess.isStandardCommand(command)) {
-          throw new Error("ssh is a single command");
-        }
-
-        const option = command.args.find((arg) => arg.startsWith("UserKnownHostsFile="));
-        const knownHostsFile = option?.slice("UserKnownHostsFile=".length) ?? "";
-
-        spawned.push({
-          command: command.command,
-          args: command.args,
-          knownHosts: readFileSync(knownHostsFile, "utf8"),
-          knownHostsFile,
-        });
-
-        return ChildProcessSpawner.makeHandle({
-          pid: ChildProcessSpawner.ProcessId(1),
-          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(code)),
-          isRunning: Effect.succeed(false),
-          kill: () => Effect.void,
-          stdin: Sink.drain,
-          stdout: Stream.empty,
-          stderr: Stream.empty,
-          all: Stream.empty,
-          getInputFd: () => Sink.drain,
-          getOutputFd: () => Stream.empty,
-          unref: Effect.succeed(Effect.void),
-        });
-      }),
-    ),
+      return {
+        command: command.command,
+        args: command.args,
+        knownHosts: readFileSync(knownHostsFile, "utf8"),
+        knownHostsFile,
+      };
+    }),
   );
-
-  return { spawned, layer };
-};
 
 const reachable = machine("linux_dev", {
   ssh: { user: "admin", host: "100.64.0.7", port: 10_022 },

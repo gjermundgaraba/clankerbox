@@ -1,9 +1,9 @@
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
-import { ConfigProvider, Effect, Layer, Runtime, Schema, type Stdio } from "effect";
+import { ConfigProvider, Effect, Layer, Runtime, Schema, Sink, type Stdio, Stream } from "effect";
 import type { HttpClient } from "effect/http";
-import type { ChildProcessSpawner } from "effect/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { TestConsole } from "effect/testing";
 import {
   type Endpoint,
@@ -19,6 +19,43 @@ import { ErrorDocument } from "../src/command.ts";
 import { Dial } from "../src/ssh.ts";
 
 export const url = (id: string) => `http://${id}.test`;
+
+export const fakeSpawner = <A>(
+  code: number,
+  record: (command: ChildProcess.StandardCommand) => Effect.Effect<A, unknown>,
+  output = "",
+) => {
+  const spawned: Array<A> = [];
+
+  const layer = Layer.succeed(
+    ChildProcessSpawner.ChildProcessSpawner,
+    ChildProcessSpawner.make((command) =>
+      Effect.gen(function* () {
+        if (!ChildProcess.isStandardCommand(command)) {
+          return yield* Effect.die("the fake spawns single commands");
+        }
+
+        spawned.push(yield* record(command));
+
+        return ChildProcessSpawner.makeHandle({
+          pid: ChildProcessSpawner.ProcessId(1),
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(code)),
+          isRunning: Effect.succeed(false),
+          kill: () => Effect.void,
+          stdin: Sink.drain,
+          stdout: Stream.empty,
+          stderr: Stream.empty,
+          all: Stream.make(new TextEncoder().encode(output)),
+          getInputFd: () => Sink.drain,
+          getOutputFd: () => Stream.empty,
+          unref: Effect.succeed(Effect.void),
+        });
+      }).pipe(Effect.orDie),
+    ),
+  );
+
+  return { spawned, layer };
+};
 
 export const cleanup = async (stubs: Array<StubHost>) => {
   await Promise.all(stubs.splice(0).map((stub) => stub.dispose()));

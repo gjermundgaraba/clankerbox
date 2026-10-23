@@ -1,18 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
-import {
-  DateTime,
-  Effect,
-  Exit,
-  Layer,
-  Option,
-  Redacted,
-  Schedule,
-  Schema,
-  Sink,
-  Stream,
-} from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { DateTime, Effect, Exit, Option, Redacted, Schedule, Schema, Stream } from "effect";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
 import {
@@ -27,8 +16,8 @@ import {
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { formatId, HostId, Id, Name } from "@gjermundgaraba/clankerbox-sdk";
-import { bootstrapScript, nameOn, snapshotText } from "../src/amp-orb.ts";
-import { cleanup, cli, hostIn, writeConfig } from "./support.ts";
+import { bootstrapScript, nameOn } from "../src/amp-orb.ts";
+import { cleanup, cli, fakeSpawner, hostIn, writeConfig } from "./support.ts";
 
 const stubs: Array<StubHost> = [];
 
@@ -48,45 +37,16 @@ interface Spawned {
   readonly stdin: string;
 }
 
-const fakeSsh = (code = 0) => {
-  const spawned: Array<Spawned> = [];
-
-  const layer = Layer.succeed(
-    ChildProcessSpawner.ChildProcessSpawner,
-    ChildProcessSpawner.make((command) =>
-      Effect.gen(function* () {
-        if (!ChildProcess.isStandardCommand(command)) {
-          return yield* Effect.die("ssh is a single command");
-        }
-
-        const { stdin } = command.options;
-
-        spawned.push({
-          args: command.args,
-          stdin: Stream.isStream(stdin) ? yield* Stream.mkString(Stream.decodeText(stdin)) : "",
-        });
-
-        return ChildProcessSpawner.makeHandle({
-          pid: ChildProcessSpawner.ProcessId(1),
-          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(code)),
-          isRunning: Effect.succeed(false),
-          kill: () => Effect.void,
-          stdin: Sink.drain,
-          stdout: Stream.empty,
-          stderr: Stream.empty,
-          all: Stream.make(
-            new TextEncoder().encode(code === 0 ? "" : "sudo: a password is required\n"),
-          ),
-          getInputFd: () => Sink.drain,
-          getOutputFd: () => Stream.empty,
-          unref: Effect.succeed(Effect.void),
-        });
-      }).pipe(Effect.orDie),
-    ),
+const fakeSsh = (code = 0) =>
+  fakeSpawner(
+    code,
+    ({ args, options: { stdin } }) =>
+      Effect.map(
+        Stream.isStream(stdin) ? Stream.mkString(Stream.decodeText(stdin)) : Effect.succeed(""),
+        (text): Spawned => ({ args, stdin: text }),
+      ),
+    code === 0 ? "" : "sudo: a password is required\n",
   );
-
-  return { spawned, layer };
-};
 
 const setup = (hosts: ReadonlyArray<string> = ["linux"]) =>
   Effect.gen(function* () {
@@ -320,7 +280,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const config = yield* setup();
-        const snapshot = `linux_${snapshotText("prj-42")}`;
+        const snapshot = "linux_snapshot-prj-42";
 
         const linux = stub({
           id: "linux",
@@ -477,8 +437,9 @@ layer(NodeServices.layer)((it) => {
       });
 
       expect(code).toBe(0);
-      expect(linux.held()).toEqual([`linux_${yield* nameOn("linux", long)}`]);
-      expect(linux.held()[0]).toMatch(/^linux_amp-[0-9a-f]{16}$/u);
+      expect(linux.held()).toEqual([
+        `linux_amp-${createHash("sha256").update(long).digest("hex").slice(0, 16)}`,
+      ]);
     }),
   );
 

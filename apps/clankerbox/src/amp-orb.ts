@@ -79,7 +79,7 @@ export const nameOn = (host: string, text: string): Effect.Effect<string> =>
 const idOn = (host: string, text: string) =>
   Effect.flatMap(nameOn(host, text), (name) => formatId(host, name));
 
-export const snapshotText = (snapshot: string) => `snapshot-${snapshot}`;
+const snapshotText = (snapshot: string) => `snapshot-${snapshot}`;
 
 interface Located {
   readonly machine: Option.Option<Machine>;
@@ -366,6 +366,7 @@ const bootstrap = (target: SshTarget, job: Job, token: Redacted.Redacted<string>
     const ssh = yield* spawner.spawn(
       ChildProcess.make("ssh", args, {
         stdin: Stream.make(new TextEncoder().encode(bootstrapScript(job, token))),
+        detached: false,
       }),
     );
 
