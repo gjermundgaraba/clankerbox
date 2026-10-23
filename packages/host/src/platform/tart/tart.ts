@@ -502,7 +502,15 @@ export const make = (
           (ran) => expect(ran, `launchctl print ${target}`),
         );
 
-        if (!(printedArguments(loaded.stdout) ?? []).includes("--suspendable")) {
+        const loadedArguments = printedArguments(loaded.stdout);
+
+        if (loadedArguments === undefined) {
+          return yield* new Internal({
+            message: `couldn't read the arguments in launchctl print ${target}, so the pause can't tell whether Tart can suspend ${machine.id}`,
+          });
+        }
+
+        if (!loadedArguments.includes("--suspendable")) {
           return yield* new WrongState({
             message: `${machine.id} runs as an older host booted it, which Tart can't suspend: stop and start it, then pause it`,
             machine: machine.id,

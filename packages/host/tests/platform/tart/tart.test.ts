@@ -79,6 +79,7 @@ interface Hooks {
   shutdown?: (vm: string) => Reply;
   delete?: (vm: string) => Reply | undefined;
   suspend?: (vm: string) => void;
+  print?: (vm: string) => Reply | undefined;
 }
 
 const programIn = (plistText: string) =>
@@ -223,6 +224,10 @@ const scriptedMac = (stateDir: string) => {
 
     switch (command) {
       case "print":
+        if (hooks.print?.(label) !== undefined) {
+          return hooks.print(label);
+        }
+
         if (!jobs.has(label)) {
           return { exitCode: 113, stderr: `Could not find service "${label}" in domain\n` };
         }
@@ -1363,6 +1368,25 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "WrongState",
           "mac_dev runs as an older host booted it, which Tart can't suspend: stop and start it, then pause it",
         ]);
+        expect(calls(mac)).not.toContain(`tart suspend ${vm}`);
+      }),
+  );
+
+  it.effect(
+    "pause refuses, signalling nothing, when launchctl print's arguments can't be read",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        yield* runtime.create(machine, "base");
+        mac.hooks.print = () => ({ stdout: "gui/501/job = {\n\tstate = running\n}\n" });
+
+        const error = yield* Effect.flip(runtime.pause(machine));
+
+        expect(failure(error)[0]).toBe("Internal");
+        expect(failure(error)[1]).toContain("couldn't read the arguments in launchctl print");
         expect(calls(mac)).not.toContain(`tart suspend ${vm}`);
       }),
   );
