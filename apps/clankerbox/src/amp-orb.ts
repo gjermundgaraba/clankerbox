@@ -14,7 +14,7 @@ import {
   sshTarget,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Config, Effect, Option, Redacted, Result, Stream } from "effect";
+import { Config, DateTime, Effect, Option, Redacted, Result, Stream } from "effect";
 import { Command } from "effect/cli";
 import { Hex } from "effect/encoding";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -77,9 +77,11 @@ const idOn = (host: string, text: string) =>
 
 const snapshotText = (snapshot: string) => `snapshot-${snapshot}`;
 
+const spawnSnapshot = (job: Job) => (job.operation === "spawn" ? job.snapshot : Option.none());
+
 interface Located {
   readonly machine: Option.Option<Machine>;
-  /** Each host's snapshot of `ORB_SNAPSHOT_ID`, listed only when the job has one. */
+  /** Each host's snapshot of `ORB_SNAPSHOT_ID`, newest first, listed only for a spawn with one. */
   readonly snapshots: ReadonlyArray<Checkpoint>;
   readonly unreachable: ReadonlyArray<Client.Unreachable>;
 }
@@ -96,21 +98,24 @@ const locate = (client: Client.Interface, config: LoadedConfig, job: Job) =>
 
     const orbIds = yield* ids(job.orb);
 
-    const snapshotIds = Option.isSome(job.snapshot)
-      ? yield* ids(snapshotText(job.snapshot.value))
+    const snapshot = spawnSnapshot(job);
+
+    const snapshotIds = Option.isSome(snapshot)
+      ? yield* ids(snapshotText(snapshot.value))
       : new Set<string>();
 
     const [machines, checkpoints] = yield* Effect.all(
-      [
-        client.machines,
-        Option.isSome(job.snapshot) ? client.checkpoints : Effect.succeed(unlisted),
-      ],
+      [client.machines, Option.isSome(snapshot) ? client.checkpoints : Effect.succeed(unlisted)],
       { concurrency: "unbounded" },
     );
 
     return {
       machine: Option.fromNullishOr(machines.answers.find(({ id }) => orbIds.has(id))),
-      snapshots: checkpoints.answers.filter(({ id }) => snapshotIds.has(id)),
+      snapshots: checkpoints.answers
+        .filter(({ id }) => snapshotIds.has(id))
+        .toSorted(
+          (a, b) => DateTime.toEpochMillis(b.createdAt) - DateTime.toEpochMillis(a.createdAt),
+        ),
       unreachable: [...machines.unreachable, ...checkpoints.unreachable],
     } satisfies Located;
   });
@@ -118,7 +123,7 @@ const locate = (client: Client.Interface, config: LoadedConfig, job: Job) =>
 const unread = (located: Located, job: Job): Effect.Effect<void, Unavailable> => {
   const [first] = located.unreachable;
 
-  const held = Option.match(job.snapshot, {
+  const held = Option.match(spawnSnapshot(job), {
     onNone: () => `orb ${job.orb}`,
     onSome: (snapshot) => `orb ${job.orb} or snapshot ${snapshot}`,
   });
@@ -215,12 +220,6 @@ const spawn = <R>(
 
     const placed = yield* client.place(spec.base, { host });
 
-    if (placed.kind !== "linux") {
-      return yield* new Invalid({
-        message: `host ${placed.id} is a ${placed.kind} host, and Amp's orbs run on linux hosts only`,
-      });
-    }
-
     const { machine, prebuild } = yield* Prebuild.create(
       client,
       yield* nameOn(placed.id, job.orb),
@@ -254,22 +253,18 @@ const pause = (
       return outcome(job, rested.state === "stopped" ? "stopped" : "paused", { machine: id });
     }
 
-    yield* unread(located, job);
+    const { host } = yield* parseId(id);
+    const name = yield* nameOn(host, snapshotText(job.snapshot.value));
+
     yield* client.stopMachine({ id });
     yield* client.startMachine({ id });
-    yield* Effect.forEach(located.snapshots, (held) => client.deleteCheckpoint({ id: held.id }), {
-      concurrency: "unbounded",
-      discard: true,
-    });
+    yield* client.deleteCheckpoint({ id: yield* formatId(host, name) });
 
-    const captured = yield* client.captureCheckpoint({
-      machine: id,
-      name: yield* nameOn((yield* parseId(id)).host, snapshotText(job.snapshot.value)),
-    });
+    const captured = yield* client.captureCheckpoint({ machine: id, name });
 
-    yield* client.pauseMachine({ id });
+    yield* client.stopMachine({ id });
 
-    return outcome(job, "paused", { machine: id, checkpoint: captured.id });
+    return outcome(job, "stopped", { machine: id, checkpoint: captured.id });
   });
 
 const remove = (
@@ -369,7 +364,7 @@ const text = ({ operation, orb, result, machine, checkpoint }: Outcome) =>
     result === "absent" ? "no machine" : result,
     ...(checkpoint === undefined
       ? []
-      : [result === "paused" ? `with snapshot ${checkpoint}` : `from ${checkpoint}`]),
+      : [operation === "pause" ? `with snapshot ${checkpoint}` : `from ${checkpoint}`]),
   ]
     .filter((part) => part !== undefined)
     .join(" ");
@@ -416,6 +411,6 @@ export const ampOrb = Command.make("amp-orb", { ...mutationFlags, ...specArgumen
   }),
 ).pipe(
   Command.withDescription(
-    "Run one job of Amp's self-hosted orbs as amp orb provider's dispatch program, from the ORB_* environment it sets: spawn, pause or delete the orb's machine, a linux machine named as the orb. README's Amp orbs section has the steps.",
+    "Run one job of Amp's self-hosted orbs as amp orb provider's dispatch program, from the ORB_* environment it sets: spawn, pause or delete the orb's machine, named as the orb. README's Amp orbs section has the steps.",
   ),
 );

@@ -524,28 +524,29 @@ machine on a linux host, booted from Amp's orb image.
 
 - A `spawn` finds the orb's machine on any host in the client config and starts
   it, which resumes it when it is paused. When there is none, it restores the
-  checkpoint of `ORB_SNAPSHOT_ID`, or creates the machine from the profile and
-  its prebuild, as it also does when no host's snapshot of the ID restores,
-  failing `PinMismatch`, `Capacity` or `NotFound`. It then logs in over ssh as
+  newest of the hosts' snapshots of `ORB_SNAPSHOT_ID`, the next when one fails
+  `PinMismatch`, `Capacity` or `NotFound`, or creates the machine from the
+  profile and its prebuild. It then logs in over ssh as
   `admin` and starts `amp orb bootstrap`, detached, as the image's `user`, in
   the image's environment, which the recipe records in
   `/etc/clankerbox/image-env`, with `ORB_TOKEN` and `AMP_URL` sent on stdin. Its
   log is `~user/.local/state/clankerbox/amp-orb.log`.
 - A `pause` pauses the machine, so the orb keeps its memory and processes and
   holds no RAM until its next spawn, and leaves a stopped one stopped. With
-  `ORB_SNAPSHOT_ID` it first stops the machine and starts it again, ending the
-  orb's processes, so the snapshot carries none, deletes each host's snapshot of
-  that ID and captures it as `snapshot-<ID>`; later orbs of the project restore
-  it. Two orbs of a project paused with one at once may both capture it, and one
-  fails `Conflict`.
+  `ORB_SNAPSHOT_ID` it stops the machine and starts it again, ending the orb's
+  processes, so the snapshot carries none, replaces its host's snapshot of that
+  ID with a capture, `snapshot-<ID>`, and stops the machine; later orbs of the
+  project restore it, and the orb's next spawn boots it. Each host keeps the
+  snapshot of an ID its last snapshot pause made. Two orbs of a project on one
+  host paused with one at once may both capture it, and one fails `Conflict`.
 - A `delete` deletes the orb's machine on whichever host holds it. Snapshots
   stay until `clankerbox checkpoint delete`, since Amp's `amp projects
   snapshots delete` runs no job, and a project whose snapshot IDs change keeps
   each one.
 - Each job is safe to repeat, and one cut short is finished by the next. A
-  spawn or pause fails, and changes nothing, when a host it can't read might
-  hold the orb or its snapshot; a delete fails when no host deleted the
-  machine and one gave no answer.
+  spawn fails, and changes nothing, when a host it can't read might hold the
+  orb or its snapshot, and a pause when one might hold the orb; a delete fails
+  when no host deleted the machine and one gave no answer.
 - The machine is named `ORB_ID` and a snapshot `snapshot-<ORB_SNAPSHOT_ID>`,
   each `amp-` and a digest of it instead when it isn't a name on the host: a
   letter, then letters, digits and single `-`, at most 62 characters with
@@ -554,12 +555,11 @@ machine on a linux host, booted from Amp's orb image.
   when the thread is deleted, so each idle or archived thread keeps a paused
   machine, its RAM and disk on the host's disk.
 - A paused orb resumes, and a snapshot restores, only under the smolvm release
-  that paused or captured it. Before moving a host's smolvm, stop its orbs'
-  machines, paused or running, with `clankerbox stop`: Amp pauses an orb
-  whenever its thread idles, and a pause can't tell an orb left running from
-  the new release; each spawn then boots its orb again. A spawn from a
-  snapshot captured under another release creates the orb from the profile
-  until the project's next snapshot pause replaces it.
+  that paused or captured it. Before moving a host's smolvm, stop its paused
+  orbs' machines with `clankerbox stop`; each spawn then boots its orb again,
+  and the next pause of an orb left running stops it. A spawn passes over a
+  snapshot captured under another release until the project's next snapshot
+  pause on that host replaces it.
 - The base, not `ORB_IMAGE`, picks the image: move its digest to take a new one,
   then delete the profile's prebuild (`prebuilt-…` in `clankerbox checkpoint
   list`), which names no image, and prebuild again. The `amp` CLI in the orb
