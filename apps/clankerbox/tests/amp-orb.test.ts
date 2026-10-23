@@ -15,7 +15,7 @@ import {
   type StubHost,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { formatId, HostId, Id, Name } from "@gjermundgaraba/clankerbox-sdk";
+import { formatId, HostId, Id, Name, PinMismatch } from "@gjermundgaraba/clankerbox-sdk";
 import { bootstrapScript, nameOn } from "../src/amp-orb.ts";
 import { cleanup, cli, fakeSpawner, hostIn, writeConfig } from "./support.ts";
 
@@ -200,9 +200,7 @@ layer(NodeServices.layer)((it) => {
         expect(paused.code).toBe(0);
         expect(paused.stdout).toBe(`pause ${orb}: ${id} paused with snapshot ${snapshot}`);
         expect(
-          linux.calls.filter((call) =>
-            ["machine.stop", "machine.start", "checkpoint.capture", "machine.pause"].includes(call),
-          ),
+          linux.calls.filter((call) => call !== "machine.list" && call !== "checkpoint.list"),
         ).toEqual(["machine.stop", "machine.start", "checkpoint.capture", "machine.pause"]);
         expect(linux.heldCheckpoints()).toEqual([snapshot]);
 
@@ -219,30 +217,113 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
-  it.effect("a pause with an ORB_SNAPSHOT_ID already held replaces that snapshot", () =>
-    Effect.gen(function* () {
-      const config = yield* setup(["linux", "spare"]);
-      const linux = stub({ id: "linux", bases: ["amp-orb"], machines: [machine(id, reachable)] });
+  it.effect(
+    "a pause with an ORB_SNAPSHOT_ID replaces the snapshot of that ID on every host, its own host's deleted before the capture",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* setup(["linux", "spare"]);
 
-      const spare = stub({
-        id: "spare",
+        const linux = stub({
+          id: "linux",
+          bases: ["amp-orb"],
+          machines: [machine(id, reachable)],
+          checkpoints: [checkpoint("linux_snapshot-prj-42")],
+        });
+
+        const spare = stub({
+          id: "spare",
+          bases: ["amp-orb"],
+          checkpoints: [checkpoint("spare_snapshot-prj-42")],
+        });
+
+        const { code } = yield* dispatch(
+          config,
+          [
+            ["linux", linux],
+            ["spare", spare],
+          ],
+          job("pause", { ORB_SNAPSHOT_ID: "prj-42" }),
+        );
+
+        expect(code).toBe(0);
+        expect(spare.heldCheckpoints()).toEqual([]);
+        expect(linux.heldCheckpoints()).toEqual(["linux_snapshot-prj-42"]);
+        expect(linux.calls.filter((call) => call.startsWith("checkpoint."))).toEqual([
+          "checkpoint.list",
+          "checkpoint.delete",
+          "checkpoint.capture",
+        ]);
+      }),
+  );
+
+  it.effect(
+    "a pause with an ORB_SNAPSHOT_ID fails, and changes nothing, when a host it can't read might hold that snapshot",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* setup(["linux", "spare"]);
+        const linux = stub({ id: "linux", bases: ["amp-orb"], machines: [machine(id, reachable)] });
+
+        const { code, stderr } = yield* dispatch(
+          config,
+          [
+            ["linux", linux],
+            ["spare", "down"],
+          ],
+          job("pause", { ORB_SNAPSHOT_ID: "prj-42" }),
+        );
+
+        expect(code).toBe(1);
+        expect(stderr).toContain(
+          `couldn't read host spare, which may hold orb ${orb} or snapshot prj-42`,
+        );
+        expect(linux.calls.filter((call) => !call.endsWith(".list"))).toEqual([]);
+      }),
+  );
+
+  it.effect("a pause of a stopped orb leaves it stopped, and says so", () =>
+    Effect.gen(function* () {
+      const config = yield* setup();
+
+      const linux = stub({
+        id: "linux",
         bases: ["amp-orb"],
-        checkpoints: [checkpoint("spare_snapshot-prj-42")],
+        machines: [machine(id, { ...reachable, state: "stopped", desired: "stopped" })],
       });
 
-      const { code } = yield* dispatch(
-        config,
-        [
-          ["linux", linux],
-          ["spare", spare],
-        ],
-        job("pause", { ORB_SNAPSHOT_ID: "prj-42" }),
-      );
+      const { code, stdout } = yield* dispatch(config, [["linux", linux]], job("pause"));
 
-      expect(code).toBe(0);
-      expect(spare.heldCheckpoints()).toEqual([]);
-      expect(linux.heldCheckpoints()).toEqual(["linux_snapshot-prj-42"]);
+      expect([code, stdout]).toEqual([0, `pause ${orb}: ${id} stopped`]);
+      expect(linux.calls).toEqual(["machine.list", "machine.pause"]);
     }),
+  );
+
+  it.effect(
+    "a spawn whose snapshot was captured under another smolvm creates the orb from the profile",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* setup();
+
+        const linux = stub({
+          id: "linux",
+          bases: ["amp-orb"],
+          made: reachable,
+          checkpoints: [checkpoint("linux_snapshot-prj-42")],
+          restoreFails: new PinMismatch({
+            message: "linux_snapshot-prj-42 was captured under another smolvm",
+            id: "linux_snapshot-prj-42",
+          }),
+        });
+
+        const { code, stdout } = yield* dispatch(
+          config,
+          [["linux", linux]],
+          spawnJob({ ORB_SNAPSHOT_ID: "prj-42" }),
+        );
+
+        expect([code, stdout]).toEqual([0, `spawn ${orb}: ${id} created`]);
+        expect(linux.calls).toContain("machine.restore");
+        expect(linux.held()).toEqual([id]);
+      }),
   );
 
   it.effect(

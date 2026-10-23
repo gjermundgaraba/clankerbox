@@ -1,4 +1,5 @@
 import {
+  Capacity,
   type Checkpoint,
   type ClankerboxError,
   type Client,
@@ -6,6 +7,7 @@ import {
   Invalid,
   type Machine,
   parseId,
+  PinMismatch,
   pinnedSsh,
   Prebuild,
   ScriptFailed,
@@ -14,22 +16,13 @@ import {
   sshTarget,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import {
-  Config,
-  Effect,
-  type FileSystem,
-  Option,
-  type Path,
-  Redacted,
-  Result,
-  Stream,
-} from "effect";
+import { Config, Effect, Option, Redacted, Result, Stream } from "effect";
 import { Command } from "effect/cli";
 import { Hex } from "effect/encoding";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { fail, mutationFlags, print, SpawnFailed, withClient } from "./command.ts";
 import type { LoadedConfig } from "./config.ts";
-import { flagsRequest, type SpecFlags, specArguments } from "./machines/spec.ts";
+import { flagsRequest, specArguments } from "./machines/spec.ts";
 
 const orbUser = "user";
 
@@ -38,15 +31,12 @@ export const imageEnvironment = "/etc/clankerbox/image-env";
 const operations = ["spawn", "pause", "delete"] as const;
 
 const inEnvironment = <A>(config: Config.Config<A>): Effect.Effect<A, Invalid> =>
-  Effect.gen(function* () {
-    return yield* config;
-  }).pipe(
-    Effect.mapError(
-      (error) =>
-        new Invalid({
-          message: `amp-orb reads its job from the environment amp orb provider sets: ${error.message}`,
-        }),
-    ),
+  Effect.mapError(
+    config,
+    (error) =>
+      new Invalid({
+        message: `amp-orb reads its job from the environment amp orb provider sets: ${error.message}`,
+      }),
   );
 
 const optional = (name: string) =>
@@ -91,9 +81,12 @@ const snapshotText = (snapshot: string) => `snapshot-${snapshot}`;
 
 interface Located {
   readonly machine: Option.Option<Machine>;
-  readonly snapshot: Option.Option<Checkpoint>;
+  /** Each host's snapshot of `ORB_SNAPSHOT_ID`, listed only when the job has one. */
+  readonly snapshots: ReadonlyArray<Checkpoint>;
   readonly unreachable: ReadonlyArray<Client.Unreachable>;
 }
+
+const unlisted: Client.Gathered<Checkpoint> = { answers: [], unreachable: [] };
 
 const locate = (client: Client.Interface, config: LoadedConfig, job: Job) =>
   Effect.gen(function* () {
@@ -109,13 +102,17 @@ const locate = (client: Client.Interface, config: LoadedConfig, job: Job) =>
       ? yield* ids(snapshotText(job.snapshot.value))
       : new Set<string>();
 
-    const [machines, checkpoints] = yield* Effect.all([client.machines, client.checkpoints], {
-      concurrency: "unbounded",
-    });
+    const [machines, checkpoints] = yield* Effect.all(
+      [
+        client.machines,
+        Option.isSome(job.snapshot) ? client.checkpoints : Effect.succeed(unlisted),
+      ],
+      { concurrency: "unbounded" },
+    );
 
     return {
       machine: Option.fromNullishOr(machines.answers.find(({ id }) => orbIds.has(id))),
-      snapshot: Option.fromNullishOr(checkpoints.answers.find(({ id }) => snapshotIds.has(id))),
+      snapshots: checkpoints.answers.filter(({ id }) => snapshotIds.has(id)),
       unreachable: [...machines.unreachable, ...checkpoints.unreachable],
     } satisfies Located;
   });
@@ -123,11 +120,16 @@ const locate = (client: Client.Interface, config: LoadedConfig, job: Job) =>
 const unread = (located: Located, job: Job): Effect.Effect<void, Unavailable> => {
   const [first] = located.unreachable;
 
+  const held = Option.match(job.snapshot, {
+    onNone: () => `orb ${job.orb}`,
+    onSome: (snapshot) => `orb ${job.orb} or snapshot ${snapshot}`,
+  });
+
   return first === undefined
     ? Effect.void
     : Effect.fail(
         new Unavailable({
-          message: `couldn't read host ${first.host}, which may hold orb ${job.orb}: ${first.error.message}`,
+          message: `couldn't read host ${first.host}, which may hold ${held}: ${first.error.message}`,
           readOnly: true,
         }),
       );
@@ -137,16 +139,48 @@ interface Outcome {
   readonly orb: string;
   readonly operation: Job["operation"];
   /** What the job did to the orb's machine. */
-  readonly result: "started" | "resumed" | "restored" | "created" | "paused" | "deleted" | "absent";
+  readonly result:
+    | "started"
+    | "resumed"
+    | "restored"
+    | "created"
+    | "paused"
+    | "stopped"
+    | "deleted"
+    | "absent";
   readonly machine?: string | undefined;
   /** The snapshot or prebuild a spawn restored, or the snapshot a pause captured. */
   readonly checkpoint?: string | undefined;
 }
 
+const outcome = (
+  job: Job,
+  result: Outcome["result"],
+  fields?: Pick<Outcome, "machine" | "checkpoint">,
+): Outcome => ({ orb: job.orb, operation: job.operation, result, ...fields });
+
 interface Spawned {
   readonly outcome: Outcome;
   readonly running: Machine;
 }
+
+const restored = (client: Client.Interface, job: Job, snapshot: Checkpoint) =>
+  Effect.gen(function* () {
+    const running = yield* client.restoreMachine({
+      checkpoint: snapshot.id,
+      name: yield* nameOn((yield* parseId(snapshot.id)).host, job.orb),
+    });
+
+    return Option.some<Spawned>({
+      outcome: outcome(job, "restored", { machine: running.id, checkpoint: snapshot.id }),
+      running,
+    });
+  }).pipe(
+    Effect.catchIf(
+      (error) => error instanceof PinMismatch || error instanceof Capacity,
+      () => Effect.succeedNone,
+    ),
+  );
 
 const spawn = <R>(
   client: Client.Interface,
@@ -155,29 +189,28 @@ const spawn = <R>(
   request: Effect.Effect<SpecRequest, Invalid, R>,
 ): Effect.Effect<Spawned, ClankerboxError | Invalid, R> =>
   Effect.gen(function* () {
-    const spawned = (running: Machine, result: Outcome["result"], checkpoint?: string) => ({
-      outcome: { orb: job.orb, operation: job.operation, result, machine: running.id, checkpoint },
-      running,
-    });
-
     if (Option.isSome(located.machine)) {
       const held = located.machine.value;
       const running = yield* client.startMachine({ id: held.id });
 
-      return spawned(running, held.state === "paused" ? "resumed" : "started");
+      return {
+        outcome: outcome(job, held.state === "paused" ? "resumed" : "started", {
+          machine: running.id,
+        }),
+        running,
+      };
     }
 
     yield* unread(located, job);
 
-    if (Option.isSome(located.snapshot)) {
-      const snapshot = located.snapshot.value;
+    const [snapshot] = located.snapshots;
 
-      const running = yield* client.restoreMachine({
-        checkpoint: snapshot.id,
-        name: yield* nameOn((yield* parseId(snapshot.id)).host, job.orb),
-      });
+    if (snapshot !== undefined) {
+      const spawned = yield* restored(client, job, snapshot);
 
-      return spawned(running, "restored", snapshot.id);
+      if (Option.isSome(spawned)) {
+        return spawned.value;
+      }
     }
 
     const { spec, host } = yield* request;
@@ -204,7 +237,10 @@ const spawn = <R>(
       { host: placed.id },
     );
 
-    return spawned(machine, "created", prebuild?.id);
+    return {
+      outcome: outcome(job, "created", { machine: machine.id, checkpoint: prebuild?.id }),
+      running: machine,
+    };
   });
 
 const pause = (
@@ -213,28 +249,27 @@ const pause = (
   located: Located,
 ): Effect.Effect<Outcome, ClankerboxError | Invalid> =>
   Effect.gen(function* () {
-    const paused = { orb: job.orb, operation: job.operation, result: "paused" } as const;
-
     if (Option.isNone(located.machine)) {
       yield* unread(located, job);
 
-      return { ...paused, result: "absent" };
+      return outcome(job, "absent");
     }
 
     const { id } = located.machine.value;
 
     if (Option.isNone(job.snapshot)) {
-      yield* client.pauseMachine({ id });
+      const rested = yield* client.pauseMachine({ id });
 
-      return { ...paused, machine: id };
+      return outcome(job, rested.state === "stopped" ? "stopped" : "paused", { machine: id });
     }
 
+    yield* unread(located, job);
     yield* client.stopMachine({ id });
     yield* client.startMachine({ id });
-
-    if (Option.isSome(located.snapshot)) {
-      yield* client.deleteCheckpoint({ id: located.snapshot.value.id });
-    }
+    yield* Effect.forEach(located.snapshots, (held) => client.deleteCheckpoint({ id: held.id }), {
+      concurrency: "unbounded",
+      discard: true,
+    });
 
     const captured = yield* client.captureCheckpoint({
       machine: id,
@@ -243,7 +278,7 @@ const pause = (
 
     yield* client.pauseMachine({ id });
 
-    return { ...paused, machine: id, checkpoint: captured.id };
+    return outcome(job, "paused", { machine: id, checkpoint: captured.id });
   });
 
 const remove = (
@@ -261,14 +296,12 @@ const remove = (
       { concurrency: "unbounded" },
     );
 
-    const gone = { orb: job.orb, operation: job.operation, result: "absent" } as const;
-
     const deleted = removals.find(
       ({ removed }) => Result.isSuccess(removed) && removed.success === "deleted",
     );
 
     if (deleted !== undefined) {
-      return { ...gone, result: "deleted", machine: deleted.id };
+      return outcome(job, "deleted", { machine: deleted.id });
     }
 
     for (const { removed } of removals) {
@@ -277,7 +310,7 @@ const remove = (
       }
     }
 
-    return gone;
+    return outcome(job, "absent");
   });
 
 const quoted = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`;
@@ -338,39 +371,6 @@ const bootstrapIn = (target: SshTarget, bootstrap: Bootstrap) =>
     ),
   );
 
-interface Run {
-  readonly outcome: Outcome;
-  /** On a spawn: the machine to start `amp orb bootstrap` in. */
-  readonly target?: SshTarget;
-}
-
-const run = (
-  client: Client.Interface,
-  config: LoadedConfig,
-  job: Job,
-  flags: SpecFlags,
-): Effect.Effect<Run, ClankerboxError | Invalid, FileSystem.FileSystem | Path.Path> =>
-  Effect.gen(function* () {
-    if (job.operation === "delete") {
-      return { outcome: yield* remove(client, config, job) };
-    }
-
-    const located = yield* locate(client, config, job);
-
-    if (job.operation === "pause") {
-      return { outcome: yield* pause(client, job, located) };
-    }
-
-    const { outcome, running } = yield* spawn(
-      client,
-      job,
-      located,
-      flagsRequest("amp-orb", flags, config),
-    );
-
-    return { outcome, target: yield* sshTarget(running) };
-  });
-
 const text = ({ operation, orb, result, machine, checkpoint }: Outcome) =>
   [
     `${operation} ${orb}:`,
@@ -387,23 +387,40 @@ export const ampOrb = Command.make("amp-orb", { ...mutationFlags, ...specArgumen
   Effect.gen(function* () {
     const job = yield* readJob.pipe(Effect.catch(fail(flags.json)));
 
-    const bootstrap =
-      job.operation === "spawn"
-        ? Option.some(yield* readBootstrap.pipe(Effect.catch(fail(flags.json))))
-        : Option.none<Bootstrap>();
+    const report = (done: Outcome) =>
+      print(
+        flags.json,
+        () => done,
+        () => text(done),
+      );
 
-    const { outcome, target } = yield* withClient(flags, (client, config) =>
-      run(client, config, job, flags),
-    );
+    if (job.operation === "spawn") {
+      const bootstrap = yield* readBootstrap.pipe(Effect.catch(fail(flags.json)));
 
-    if (target !== undefined && Option.isSome(bootstrap)) {
-      yield* bootstrapIn(target, bootstrap.value).pipe(Effect.catch(fail(flags.json)));
+      const { outcome: spawned, target } = yield* withClient(flags, (client, config) =>
+        Effect.gen(function* () {
+          const { outcome: done, running } = yield* spawn(
+            client,
+            job,
+            yield* locate(client, config, job),
+            flagsRequest("amp-orb", flags, config),
+          );
+
+          return { outcome: done, target: yield* sshTarget(running) };
+        }),
+      );
+
+      yield* bootstrapIn(target, bootstrap).pipe(Effect.catch(fail(flags.json)));
+
+      return yield* report(spawned);
     }
 
-    yield* print(
-      flags.json,
-      () => outcome,
-      () => text(outcome),
+    yield* report(
+      yield* withClient(flags, (client, config) =>
+        job.operation === "delete"
+          ? remove(client, config, job)
+          : Effect.flatMap(locate(client, config, job), (located) => pause(client, job, located)),
+      ),
     );
   }),
 ).pipe(

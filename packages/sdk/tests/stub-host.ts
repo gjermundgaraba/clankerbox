@@ -34,6 +34,8 @@ export interface StubHostOptions {
   /** Fields every machine the stub creates, restores or forks carries, such as an SSH login. */
   readonly made?: Partial<Machine>;
   readonly checkpoints?: ReadonlyArray<Checkpoint>;
+  /** What every restore fails with. Default: none. */
+  readonly restoreFails?: Declared<"restoreMachine">;
   /** Default: none. */
   readonly capacity?: ReadonlyArray<Reading>;
 }
@@ -229,7 +231,12 @@ export const stubHost = (options: StubHostOptions) => {
         ),
       ),
     restoreMachine: ({ checkpoint, name }) =>
-      Effect.andThen(record("machine.restore"), restore(checkpoint, name)),
+      Effect.andThen(
+        record("machine.restore"),
+        options.restoreFails === undefined
+          ? restore(checkpoint, name)
+          : Effect.fail(options.restoreFails),
+      ),
     listCheckpoints: () => Effect.as(record("checkpoint.list"), [...checkpoints.values()]),
     getCheckpoint: ({ id }) => Effect.andThen(record("checkpoint.get"), findCheckpoint(id)),
     captureCheckpoint: ({ machine: source, name }) =>
