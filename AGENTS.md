@@ -61,8 +61,9 @@ entry loads no Node; `./node` (`node.ts`) holds what needs it.
 
 **App** (`apps/clankerbox/src`). One file or folder per command group
 (`machines/`, `checkpoints.ts`, `hosts.ts`, `profiles.ts`, `prebuilds.ts`,
-`ssh.ts` and `ssh-config.ts`, the SSH config it keeps, and `host.ts` for the
-host role) over the CLI's shared kit (`command.ts`), the client config
+`ssh.ts` and `ssh-config.ts`, the SSH config it keeps, `amp-orb.ts`, the
+dispatch program for Amp's self-hosted orbs, with its recipe in `recipes/`,
+and `host.ts` for the host role) over the CLI's shared kit (`command.ts`), the client config
 (`config.ts`) and flag units (`units.ts`).
 `clankerbox.ts` is the command tree.
 

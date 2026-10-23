@@ -12,7 +12,8 @@
     "clankerbox": "./dist/clankerbox.mjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "recipes"
   ],
   "type": "module",
   "publishConfig": {

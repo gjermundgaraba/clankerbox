@@ -416,6 +416,78 @@ await sdk.destroySandbox();
   `sandbox.ensureServer(id)` or a new `SandboxAgent.start`.
 - `effect`, `@effect/platform-node` and `sandbox-agent` are peer dependencies.
 
+## Amp orbs
+
+`clankerbox amp-orb` is a dispatch program for Amp's
+[self-hosted orbs](https://ampcode.com/docs/orbs/self-hosted): each orb is a
+machine on a linux host, booted from Amp's orb image.
+
+1. Offer the image as a base on a linux host, pinned by digest:
+
+   ```json
+   "bases": {
+     "amp-orb": "us-central1-docker.pkg.dev/amp-prod-0/amp-orb/amp-orb@sha256:a80a55e6561b2e69f96f73029cc1dfae53f89198465cbc117855a32514aa39be"
+   }
+   ```
+
+2. Write a profile, `amp-orb.json`, whose setup is the package's
+   `recipes/amp-orb/` (under `$(npm root --global)/@gjermundgaraba/clankerbox`),
+   or a copy of it, and prebuild it: Amp gives each job five minutes, which a
+   setup run from scratch may not fit in.
+
+   ```json
+   {
+     "base": "amp-orb",
+     "cpu": 4,
+     "ramMib": 8192,
+     "diskGib": 40,
+     "setup": { "path": "amp-orb" }
+   }
+   ```
+
+   ```sh
+   clankerbox prebuild --profile amp-orb
+   ```
+
+3. On the machine that runs Amp's provider, with the client config and an SSH
+   key that `authorizedKeys` holds, write the program Amp runs, which takes
+   no arguments, and run the provider with the token from Amp's **Settings →
+   Orbs**:
+
+   ```sh
+   printf '#!/bin/sh\nexec clankerbox amp-orb --profile amp-orb\n' >/opt/orbs/dispatch
+   chmod +x /opt/orbs/dispatch
+   AMP_ORB_PROVIDER_TOKEN=aop_live_… amp orb provider /opt/orbs/dispatch
+   ```
+
+- A `spawn` finds the orb's machine on any host in the client config and
+  starts it. When there is none, it restores the orb's pause, or the checkpoint
+  of `ORB_SNAPSHOT_ID`, or creates the machine from the profile and its
+  prebuild. It then logs in over ssh as `admin` and starts `amp orb bootstrap`,
+  detached, as the image's `user`, with `ORB_TOKEN` and `AMP_URL` sent on
+  stdin. Its log is `~user/.local/state/clankerbox/amp-orb.log`.
+- A `pause` keeps the orb's memory: it captures the machine, RAM and all,
+  into a checkpoint named as the machine, then deletes the machine. With
+  `ORB_SNAPSHOT_ID` it also captures `snapshot-<ID>`, which later orbs of the
+  project restore. A spawn from a snapshot ends the bootstraps the snapshot's
+  orb left running.
+- A `delete` deletes the orb's machine and its pause. Snapshots stay until
+  `clankerbox checkpoint delete`, since Amp's `amp projects snapshots delete`
+  runs no job.
+- Each job is safe to repeat, and one cut short is finished by the next. A
+  job fails, and changes nothing, when a host it can't read might hold the orb.
+- The machine is named `ORB_ID`, or `amp-` and a digest of it when
+  `<host>_<ORB_ID>` passes 62 characters.
+- Amp pauses a thread whenever it goes idle or is archived, and deletes it only
+  when the thread is deleted, so each idle or archived thread keeps a checkpoint
+  of its RAM and disk.
+- Pauses and snapshots are `ram` checkpoints, which restore only under the
+  smolvm release that captured them. Before moving a host's smolvm, delete
+  them with `clankerbox checkpoint delete`, or a spawn of a paused orb, or
+  from its project's snapshot, fails.
+- The base, not `ORB_IMAGE`, picks the image: move its digest to take a new one,
+  then prebuild again. The `amp` CLI in the orb updates itself either way.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).

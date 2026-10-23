@@ -1,5 +1,6 @@
 import { type actionsByName, version } from "@gjermundgaraba/clankerbox-sdk";
 import { Command } from "effect/cli";
+import { ampOrb } from "./amp-orb.ts";
 import {
   capture,
   checkpoint,
@@ -60,6 +61,7 @@ export const clankerbox = Command.make("clankerbox").pipe(
     ssh,
     sshProxy,
     sshKnownHosts,
+    ampOrb,
     host,
   ]),
 );

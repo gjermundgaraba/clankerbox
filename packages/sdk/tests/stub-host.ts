@@ -31,6 +31,8 @@ export interface StubHostOptions {
     request: PrebuildRequest,
   ) => Effect.Effect<Prebuilt, Declared<"prebuildCheckpoint">>;
   readonly machines?: ReadonlyArray<Machine>;
+  /** Fields every machine the stub creates, restores or forks carries, such as an SSH login. */
+  readonly made?: Partial<Machine>;
   readonly checkpoints?: ReadonlyArray<Checkpoint>;
   /** Default: none. */
   readonly capacity?: ReadonlyArray<Reading>;
@@ -123,6 +125,7 @@ export const stubHost = (options: StubHostOptions) => {
               cpu: request.cpu,
               ramMib: request.ramMib,
               diskGib: request.diskGib,
+              ...options.made,
             }),
             request.profile,
           ),
@@ -139,6 +142,7 @@ export const stubHost = (options: StubHostOptions) => {
             cpu: found.cpu,
             ramMib: found.ramMib,
             diskGib: found.diskGib,
+            ...options.made,
           }),
           found.profile,
         ),
@@ -205,7 +209,9 @@ export const stubHost = (options: StubHostOptions) => {
     forkMachine: ({ machine: source, name }) =>
       Effect.andThen(
         record("machine.fork"),
-        Effect.flatMap(find(source), (found) => add({ ...found, id: `${options.id}_${name}` })),
+        Effect.flatMap(find(source), (found) =>
+          add({ ...found, ...options.made, id: `${options.id}_${name}` }),
+        ),
       ),
     restoreMachine: ({ checkpoint, name }) =>
       Effect.andThen(record("machine.restore"), restore(checkpoint, name)),
@@ -283,6 +289,7 @@ export const stubHost = (options: StubHostOptions) => {
       machines.set(held.id, held);
     },
     held: () => [...machines.keys()],
+    heldCheckpoints: () => [...checkpoints.keys()],
     routes,
     handler: (request: Request) => {
       versions.push(request.headers.get(versionHeader));
