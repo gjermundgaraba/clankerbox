@@ -238,10 +238,17 @@ as it is.
   each machine's status bounded by `machineReadWait` (8 s from the read's
   start, its turn included, under the core's 9 s `stateReadWait`), so a status
   held by the busy timeout reads `unknown`.
-- `machine exec` runs as `-u/--user`, by default the machine's configured user,
-  then the image's `USER` (`ExecCmd`, src/cli/machine.rs). Ours: every exec
-  passes `--user root`, since setup, preparation and the tailnet check run as
-  root, and an image such as Amp's orb image sets `USER user`.
+- `machine exec` runs as `-u/--user`, which wins over the machine's recorded
+  user, the image's `USER` resolved at first start (`ExecCmd`'s run,
+  src/cli/machine.rs). A name is looked up in the image rootfs's
+  `/etc/passwd`, and the exec fails when it isn't there
+  (`resolve_user_token`, `resolve_process_identity`,
+  crates/smolvm-agent/src/oci.rs). An explicit `--user` is refused on a
+  machine with no image ("needs an image machine"), and `machine create
+  --from` keeps the checkpoint's image and user (`checkpoint_workload`,
+  src/portable_checkpoint.rs). Ours: every create passes `--image`, and every
+  exec passes `--user root`, since setup, preparation and the tailnet check
+  run as root, forks and restores included.
 - When a `machine exec` client is signalled, smolvm SIGKILLs the guest command
   and every descendant (`kill_child_on_disconnect`,
   crates/smolvm-agent/src/main.rs; `kill_child_tree`,

@@ -731,7 +731,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "exec runs the command as given, as root whatever the image's USER, with its stdin, and passes on its output and exit code",
+    "exec runs the command as given, as root, with its stdin, and passes on its output and exit code",
     () =>
       Effect.gen(function* () {
         const spawner = scripted((call) =>
