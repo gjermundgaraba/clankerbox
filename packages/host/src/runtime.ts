@@ -64,7 +64,7 @@ export interface Held {
 
 /**
  * The actions that may boot a machine, as the runtime's refusals name them. A stop boots only a
- * paused machine, on a runtime whose `stopResumes`.
+ * paused machine, on a runtime whose `stopResumes` is true.
  */
 export type Booting =
   | "createMachine"
@@ -113,8 +113,11 @@ export interface Interface {
    * saved it. `undefined` on mac, which has no `ram` checkpoints.
    */
   readonly pin: string | undefined;
-  /** What a paused machine must resume under: the build whose saved execution it holds. */
-  readonly pausePin: string;
+  /**
+   * What a paused machine must resume under: the build whose saved execution it holds. `undefined`
+   * on mac, where a restore Tart can't make fails and keeps the saved state.
+   */
+  readonly pausePin: string | undefined;
   /**
    * Whether a stop of a paused machine resumes it to end its saved execution, so the core admits
    * it as a boot under its pause's pin, rather than discarding that execution with no boot.
@@ -166,7 +169,7 @@ export interface Interface {
    * Saves a running machine's execution, RAM and disks, and stops its VM; a paused machine stays
    * as it is. The core never pauses a stopped one.
    */
-  readonly pause: (machine: MachineRef) => Effect.Effect<void, RuntimeError | StateError | Locked>;
+  readonly pause: (machine: MachineRef) => Effect.Effect<void, RuntimeError | StateError>;
   /**
    * Removes everything native the row could have made, whatever an earlier failure left: a
    * running VM, a VM whose stop failed, or nothing, as after a crash before the first call.

@@ -138,32 +138,33 @@ Each: what Tart does, where, and what of ours depends on it.
   run; a save that fails prints "Failed to suspend the VM: …" and exits 1,
   powering the VM off and possibly leaving a partial `state.vzvmsave`, and a VM
   run without `--suspendable` fails the same way (the SIGUSR1 handler in `run`,
-  `validateSaveRestoreSupport`, Commands/Run.swift). Ours: every job runs
-  `--suspendable` (`program`); a pause refuses a VM whose loaded job's
-  arguments lack it, waits `suspendWait` for `tart list` to read it not
-  running, then reads `saved` in the job's log, or removes `state.vzvmsave`
-  and fails.
+  `validateSaveRestoreSupport`, Commands/Run.swift). `--suspendable` also
+  drops the VM's audio and entropy devices and its non-Mac input devices
+  (`suspendable`'s help, Commands/Run.swift). Ours: every job runs
+  `--suspendable` (`program`), so every mac VM boots without those devices; a
+  pause refuses a VM whose loaded job's arguments lack it, then, without
+  interruption, waits `suspendWait` for `tart list` to read it not running and
+  reads `saved` in the job's log, or runs `tart stop <vm>` to remove what it
+  left of `state.vzvmsave` and fails.
 - `tart run` of a VM with a `state.vzvmsave` turns on `--suspendable` itself,
   prints "restoring VM state from a snapshot...", removes the file only once
   the restore succeeds, and on a failed restore prints the error and exits 1
   (`run`, Commands/Run.swift). Ours: a start boots a paused VM's job as it
-  boots a stopped one, and reads `unrestored` with "permission denied" in the
-  job's log as `Locked`, the saved state kept.
+  boots a stopped one, its log emptied first.
 - `tart stop` of a suspended VM removes its `state.vzvmsave` and exits 0,
   booting nothing (`stopSuspended`, Commands/Stop.swift). Ours: `stop` of a
   paused machine is `tart stop <vm>`, and `stopResumes` is false, so the core
   neither admits it nor checks its pause's pin.
 - Virtualization.framework seals saved state with a key in the operator's
-  session keychain: a restore fails "permission denied" (VZErrorDomain 12)
-  while the session is locked, the first save, which creates the key, does
-  too, later saves work locked, and a root LaunchDaemon can't save at all
-  (no keychain, -25291); macOS, not Tart, so re-check it on a macOS upgrade.
-  `ioreg -n Root -d1 -a`'s `IOConsoleUsers` entry for the user carries
-  `CGSSessionScreenIsLocked`, which also reads true while an unlocked
-  session's display sleeps. Ours: `consoleLocked` refuses a pause with
-  `Locked` only until `suspendedOnce`'s marker records a save on this host,
-  and `pausePin` is Tart's version and the macOS build (`sw_vers
-  -buildVersion`), since a host update can break a restore.
+  session keychain: a restore while the session is locked fails, printed by
+  `tart run` as `Error Domain=VZErrorDomain Code=12 "The virtual machine
+  failed to restore with error “permission denied”."`, macOS's English text;
+  the first save, which creates the key, fails too, later saves work locked,
+  and a root LaunchDaemon can't save at all (no keychain, -25291). macOS, not
+  Tart, so re-check it on a macOS upgrade. Ours: `unrestored` with `denied`
+  in the job's log is `Locked`, the saved state kept; README's mac Deploy
+  says to make the first pause unlocked; `pausePin` is `undefined`, as a
+  restore that fails keeps the saved state, so no pin guards it.
 
 **Softnet and the network**
 
@@ -254,9 +255,9 @@ Each: what Tart does, where, and what of ours depends on it.
   path, change `tart.binary`, restart the host. Every `start` writes the VM's
   job again, and a stopped job launchd still holds whose arguments aren't this
   host's is reloaded, so VMs move as they restart; keep the old install until
-  no running VM's job names it. A paused machine resumes only under the Tart
-  and macOS that paused it (`pausePin`): start or stop every paused machine
-  before the move.
+  no running VM's job names it. A paused machine resumes under the new Tart,
+  or fails and keeps its saved state; start every paused machine before the
+  move to keep that from happening.
 - Report the tag transition, exact executable provenance, the claims that
   changed and their fixes, the checks actually run, optional opportunities, and
   remaining runtime resources and retained disk separately.

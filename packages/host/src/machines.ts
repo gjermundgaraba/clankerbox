@@ -224,7 +224,7 @@ export const make = (
       );
 
     const resumable = ({ name, pausedPin }: Intent) =>
-      pausedPin === undefined || pausedPin === runtime.pausePin
+      pausedPin === undefined || runtime.pausePin === undefined || pausedPin === runtime.pausePin
         ? Effect.void
         : Effect.fail(
             new PinMismatch({

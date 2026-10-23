@@ -84,9 +84,8 @@ export class WrongState extends Schema.TaggedError<WrongState>()(
 ) {}
 
 /**
- * The Mac's login session is locked, and macOS saves or restores a VM's state only in an unlocked
- * one: a start of a paused machine keeps its saved state for a start once it is unlocked, and the
- * first pause on a host is refused, VM untouched, until a suspend has once succeeded there.
+ * The host's login session is locked, and macOS restores a paused machine's saved state only in an
+ * unlocked one: the state is kept for a start once it is unlocked.
  */
 export class Locked extends Schema.TaggedError<Locked>()(
   "Locked",

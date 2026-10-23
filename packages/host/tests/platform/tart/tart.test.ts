@@ -17,12 +17,11 @@ import {
   machineName,
   make,
   plist,
-  program,
   type Settings,
   stateOf,
   supported,
 } from "../../../src/platform/tart/tart.ts";
-import { mkdir, read, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { read, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { type Call, type Reply, scripted } from "../../scripted.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
@@ -82,24 +81,6 @@ interface Hooks {
   suspend?: (vm: string) => void;
 }
 
-const consoleUsers = (uid: number, locked: boolean) =>
-  [
-    `<plist version="1.0">`,
-    `<dict>`,
-    `\t<key>IOConsoleUsers</key>`,
-    `\t<array>`,
-    `\t\t<dict>`,
-    `\t\t\t<key>CGSSessionScreenIsLocked</key>`,
-    `\t\t\t<${locked}/>`,
-    `\t\t\t<key>kCGSSessionUserIDKey</key>`,
-    `\t\t\t<integer>${uid}</integer>`,
-    `\t\t</dict>`,
-    `\t</array>`,
-    `</dict>`,
-    `</plist>`,
-    ``,
-  ].join("\n");
-
 const programIn = (plistText: string) =>
   [
     ...(
@@ -114,7 +95,6 @@ const scriptedMac = (stateDir: string) => {
   const jobs = new Set<string>();
   const programs = new Map<string, ReadonlyArray<string>>();
   const exited = new Map<string, number>();
-  const session = { locked: false };
 
   const hooks: Hooks = {};
 
@@ -291,10 +271,6 @@ const scriptedMac = (stateDir: string) => {
         return tart(call.args);
       case launchctl:
         return launchd(call.args);
-      case "/usr/bin/sw_vers":
-        return { stdout: "26A434\n" };
-      case "/usr/sbin/ioreg":
-        return { stdout: consoleUsers(501, session.locked) };
       default:
         return undefined;
     }
@@ -309,7 +285,7 @@ const scriptedMac = (stateDir: string) => {
     tartHome: "/Users/operator/.tart-test",
   };
 
-  return { vms, jobs, programs, exited, session, hooks, spawner, settings, logOf };
+  return { vms, jobs, programs, exited, hooks, spawner, settings, logOf };
 };
 
 type ScriptedMac = ReturnType<typeof scriptedMac>;
@@ -329,7 +305,7 @@ const runtimeOn = (options?: { readonly settings?: Partial<Settings> }) =>
 
 const calls = (mac: ScriptedMac) =>
   mac.spawner.calls
-    .slice(2)
+    .slice(1)
     .map((call) => [call.file === binary ? "tart" : basename(call.file), ...call.args].join(" "))
     .filter((line) => !line.startsWith("tart list"));
 
@@ -397,9 +373,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(runtime.version).toBe("2.41.1");
       expect(runtime.pin).toBeUndefined();
-      expect(runtime.pausePin).toBe("tart 2.41.1 on macOS 26A434");
+      expect([runtime.pausePin, runtime.stopResumes]).toEqual([undefined, false]);
 
-      for (const call of mac.spawner.calls.filter(({ args }) => args[0] === "--version")) {
+      for (const call of mac.spawner.calls) {
         expect(call.file).toBe(binary);
         expect(call.env).toEqual({
           PATH: "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -774,7 +750,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           expect(yield* read(file(machine))).toBe(
             plist({
               label: vmOf(machine),
-              program: program(binary, vmOf(machine)),
+              program: [
+                binary,
+                "run",
+                "--no-graphics",
+                "--net-softnet-block=@host",
+                "--suspendable",
+                vmOf(machine),
+              ],
               environment: environment(mac.settings),
               log: join(jobsDir(mac.settings.stateDir), `${vmOf(machine)}.log`),
             }),
@@ -829,7 +812,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             `tart exec ${vmOf(older)} true`,
           ],
         ]);
-        expect(mac.programs.get(vmOf(older))).toEqual(program(binary, vmOf(older)));
+        expect(mac.programs.get(vmOf(older))).toEqual([
+          binary,
+          "run",
+          "--no-graphics",
+          "--net-softnet-block=@host",
+          "--suspendable",
+          vmOf(older),
+        ]);
       }),
   );
 
@@ -1336,54 +1326,24 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect(
-    "pause suspends a VM its job runs suspendable, and reads the session's lock only before the host's first suspend",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const [first, second] = [machineOn("first"), machineOn("second")];
+  it.effect("pause suspends a VM its job runs suspendable, and waits for Tart to save it", () =>
+    Effect.gen(function* () {
+      const { mac, runtime } = yield* runtimeOn();
+      const machine = machineOn("dev");
+      const vm = vmOf(machine);
 
-        for (const machine of [first, second]) {
-          yield* runtime.create(machine, "base");
-        }
+      yield* runtime.create(machine, "base");
 
-        const before = calls(mac).length;
+      const before = calls(mac).length;
 
-        yield* runtime.pause(first);
-        mac.session.locked = true;
-        yield* runtime.pause(second);
-        yield* runtime.pause(second);
+      yield* runtime.pause(machine);
 
-        expect(calls(mac).slice(before)).toEqual([
-          `launchctl print gui/501/${vmOf(first)}`,
-          "ioreg -n Root -d1 -a",
-          `tart suspend ${vmOf(first)}`,
-          `launchctl print gui/501/${vmOf(second)}`,
-          `tart suspend ${vmOf(second)}`,
-        ]);
-        expect(yield* runtime.observe([first, second])).toEqual(["paused", "paused"]);
-      }),
-  );
-
-  it.effect(
-    "a first pause while the session is locked is Locked, and the VM keeps running untouched",
-    () =>
-      Effect.gen(function* () {
-        const { mac, runtime } = yield* runtimeOn();
-        const machine = machineOn("dev");
-
-        yield* runtime.create(machine, "base");
-        mac.session.locked = true;
-
-        const error = yield* Effect.flip(runtime.pause(machine));
-
-        expect(failure(error)).toEqual([
-          "Locked",
-          "the Mac's session is locked, and the first suspend on this Mac needs it unlocked: unlock it and pause mac_dev again",
-        ]);
-        expect(calls(mac)).not.toContain(`tart suspend ${vmOf(machine)}`);
-        expect(mac.vms.get(vmOf(machine))).toBe("running");
-      }),
+      expect(calls(mac).slice(before)).toEqual([
+        `launchctl print gui/501/${vm}`,
+        `tart suspend ${vm}`,
+      ]);
+      expect(yield* runtime.observe([machine])).toEqual(["paused"]);
+    }),
   );
 
   it.effect(
@@ -1408,14 +1368,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a suspend whose save fails removes what it left of the state and fails, as Tart powered the VM off",
+    "a suspend whose save fails has tart stop remove what it left of the state, and fails, as Tart powered the VM off",
     () =>
       Effect.gen(function* () {
-        const tartHome = yield* scratch;
-        const { mac, runtime } = yield* runtimeOn({ settings: { tartHome } });
+        const { mac, runtime } = yield* runtimeOn();
         const machine = machineOn("dev");
         const vm = vmOf(machine);
-        const partial = join(tartHome, "vms", vm, "state.vzvmsave");
 
         yield* runtime.create(machine, "base");
         mac.hooks.suspend = (label) => {
@@ -1426,16 +1384,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           mac.vms.set(label, "suspended");
         };
 
-        yield* mkdir(join(tartHome, "vms", vm));
-        yield* write(partial, "half a save");
-
         const error = yield* Effect.flip(runtime.pause(machine));
 
         expect(failure(error)).toEqual([
           "Internal",
-          "Tart couldn't save mac_dev's state and powered its VM off: creating a snapshot...\nFailed to suspend the VM: The virtual machine failed to save with error “permission denied”.",
+          "Tart couldn't save mac_dev's state and powered its VM off, as it does when the first save on a Mac runs while its session is locked: creating a snapshot...\nFailed to suspend the VM: The virtual machine failed to save with error “permission denied”.",
         ]);
-        expect(existsSync(partial)).toBe(false);
+        expect(calls(mac).slice(-2)).toEqual([`tart suspend ${vm}`, `tart stop ${vm}`]);
+        expect(yield* runtime.observe([machine])).toEqual(["stopped"]);
       }),
   );
 
@@ -1533,7 +1489,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(calls(mac).slice(before)).toEqual([`tart stop ${vm}`]);
       expect(yield* runtime.observe([machine])).toEqual(["stopped"]);
-      expect(runtime.stopResumes).toBe(false);
     }),
   );
 });

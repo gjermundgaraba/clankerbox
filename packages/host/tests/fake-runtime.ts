@@ -37,7 +37,7 @@ export interface FakeOptions {
   /** `linux` by default, which captures and forks only a running machine. */
   readonly kind?: Kind | undefined;
   readonly ramBudgetMib?: number | undefined;
-  /** `fake 1` by default on linux; mac has none. A paused machine resumes under it, `fake 1` on mac. */
+  /** `fake 1` by default on linux, where a paused machine resumes under it too; mac has none. */
   readonly pin?: string | undefined;
 }
 
@@ -333,7 +333,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         version: "fake",
         publishAddress: "127.0.0.1",
         pin: options.pin ?? (kind === "linux" ? "fake 1" : undefined),
-        pausePin: options.pin ?? "fake 1",
+        pausePin: kind === "linux" ? (options.pin ?? "fake 1") : undefined,
         stopResumes: kind === "linux",
         startup: () => Effect.sync(() => calls.push("startup")),
         observe,

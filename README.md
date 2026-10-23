@@ -188,17 +188,16 @@ clankerbox checkpoint delete linux_base
   so it holds no RAM, and on a Mac none of its two VMs, until a `start` resumes
   it where it was. A `pause` leaves a stopped machine stopped, and a paused
   machine can't be forked or captured.
-- A paused machine resumes only under the runtime build that paused it:
-  smolvm's on linux, and Tart's and macOS's on a Mac. After a host moves to
-  another one, a `start` of it fails `PinMismatch`, so resume paused machines
-  before upgrading.
+- On linux a paused machine resumes only under the smolvm build that paused
+  it: after a host moves to another one, a `start` of it fails `PinMismatch`,
+  so resume paused machines before upgrading. A Mac tries the resume under any
+  Tart and macOS, and a restore it can't make fails, keeping the saved state.
 - A `stop` of a paused machine resumes it on linux to end its processes,
   needing room as a start does, and fails `PinMismatch` after an upgrade too;
   on a Mac it discards the saved state without booting. Either keeps the disk.
-- On a Mac, macOS saves and restores a VM's state only in the operator's
-  unlocked login session: a `start` of a paused machine while it is locked
-  fails `Locked` and keeps the saved state, and so does the first `pause` on a
-  host (see Deploy).
+- On a Mac, macOS restores a VM's state only in the operator's unlocked login
+  session: a `start` of a paused machine while it is locked fails `Locked` and
+  keeps the saved state (see Deploy).
 - A create, fork or restore whose copy or setup fails deletes its machine and
   answers the error, and a delete that fails runs again at the next check; a
   host that restarts before it finished deletes the machine too. Only a
@@ -341,8 +340,10 @@ user before its first create. For `pause`, keep that session unlocked: set
 off** to **Never** (the display can still sleep), and log in once after each
 reboot, since FileVault rules out automatic login. macOS keeps the key that
 seals saved VM state in the session's keychain, so a root daemon can't save it
-at all; the first pause creates that key, then later pauses work while locked,
-but every resume needs the session unlocked.
+at all. The first pause on a Mac creates that key, so make it while you're
+logged in and unlocked: a save while locked before then powers the VM off,
+keeping its disk, and fails. Later pauses work while locked, but every resume
+needs the session unlocked.
 
 **Network:** the tailnet policy opens each host's API port to its clients, and
 the machines' port range to clients that run `clankerbox ssh`. On a linux
