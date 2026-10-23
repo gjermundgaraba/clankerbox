@@ -2,7 +2,9 @@ import {
   type ClankerboxError,
   Client,
   Conflict,
+  Internal,
   loadProfile,
+  type Machine,
   pinnedSsh,
   Prebuild,
   specRequest,
@@ -32,6 +34,8 @@ export const name = "clankerbox";
 export const defaultCwd = "/home/admin";
 
 const healthWait = Duration.seconds(3);
+
+const closeWait = Duration.seconds(30);
 
 const Health = Schema.Struct({ status: Schema.Literal("ok") });
 
@@ -118,6 +122,7 @@ export const make = (options: Options, ssh = "ssh") => {
   const opened = (
     id: string,
     known: Sandbox,
+    read?: Machine,
   ): Effect.Effect<number, ClankerboxError | LocalTunnelError, Services> =>
     Effect.gen(function* () {
       if (known.held?.tunnel.running() === true) {
@@ -127,7 +132,7 @@ export const make = (options: Options, ssh = "ssh") => {
       yield* closed(known);
 
       const client = yield* Client.Client;
-      const target = yield* sshTarget(yield* client.getMachine({ id }));
+      const target = yield* sshTarget(read ?? (yield* client.getMachine({ id })));
 
       const port = yield* portOf(known);
       const scope = yield* Scope.make();
@@ -169,27 +174,57 @@ export const make = (options: Options, ssh = "ssh") => {
       Effect.catch(() => Effect.succeed(false)),
     );
 
-  const unserved = (known: Sandbox) =>
+  const answered = (url: string, init: RequestInit, ok: (status: number) => boolean) =>
+    Effect.flatMap(
+      Effect.tryPromise((signal) => fetch(url, { ...init, signal })),
+      (reply) =>
+        ok(reply.status)
+          ? Effect.succeed(reply)
+          : Effect.fail(new Error(`${init.method ?? "GET"} ${url} answered ${reply.status}`)),
+    );
+
+  const unserved = (id: string, known: Sandbox) =>
     Effect.gen(function* () {
-      if (known.held?.tunnel.running() !== true || known.port === undefined) {
+      const client = yield* Client.Client;
+      const tunneled = known.held?.tunnel.running() === true;
+      const read = tunneled ? undefined : yield* client.getMachine({ id });
+
+      if (read !== undefined && read.state !== "running") {
         return;
       }
 
-      const acp = `http://127.0.0.1:${known.port}${acpPath}`;
+      const port = yield* opened(id, known, read);
 
-      const { servers } = yield* decodeAcpServers(
-        yield* Effect.tryPromise((signal) => fetch(acp, { signal }).then((reply) => reply.json())),
-      );
+      if (!(yield* healthy(port))) {
+        return;
+      }
 
-      yield* Effect.forEach(
-        servers,
-        ({ serverId }) =>
-          Effect.tryPromise((signal) =>
-            fetch(`${acp}/${encodeURIComponent(serverId)}`, { method: "DELETE", signal }),
-          ),
-        { concurrency: "unbounded", discard: true },
+      const acp = `http://127.0.0.1:${port}${acpPath}`;
+
+      yield* Effect.gen(function* () {
+        const listed = yield* answered(acp, {}, (status) => status === 200);
+        const { servers } = yield* decodeAcpServers(yield* Effect.tryPromise(() => listed.json()));
+
+        yield* Effect.forEach(
+          servers,
+          ({ serverId }) =>
+            answered(
+              `${acp}/${encodeURIComponent(serverId)}`,
+              { method: "DELETE" },
+              (status) => (status >= 200 && status < 300) || status === 404,
+            ),
+          { concurrency: "unbounded", discard: true },
+        );
+      }).pipe(
+        Effect.timeout(closeWait),
+        Effect.mapError(
+          (error) =>
+            new Internal({
+              message: `couldn't close ${id}'s ACP servers, so it isn't paused: ${error.message}`,
+            }),
+        ),
       );
-    }).pipe(Effect.timeout(healthWait), Effect.ignore);
+    });
 
   const started = (id: string, known: Sandbox) =>
     Effect.gen(function* () {
@@ -263,7 +298,7 @@ export const make = (options: Options, ssh = "ssh") => {
         Effect.gen(function* () {
           const client = yield* Client.Client;
 
-          yield* unserved(known);
+          yield* unserved(id, known);
           yield* closed(known);
           yield* client.pauseMachine({ id });
         }),

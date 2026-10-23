@@ -19,7 +19,10 @@ if (existsSync(join(dir, "refuse"))) {
 createServer((request, reply) => {
   if (request.url?.startsWith("/v1/acp") === true) {
     appendFileSync(join(dir, "acp"), `${request.method} ${request.url}\n`);
-    reply.writeHead(200, { "content-type": "application/json" });
+    reply.writeHead(
+      request.method === "DELETE" && existsSync(join(dir, "acp-refuses")) ? 503 : 200,
+      { "content-type": "application/json" },
+    );
     reply.end(
       JSON.stringify(
         request.method === "GET"
