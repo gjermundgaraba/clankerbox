@@ -726,6 +726,25 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
+  it.effect(
+    "on a runtime whose stop discards a pause, a stop of a paused machine admits nothing and needs no pin",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* host({ kind: "mac" });
+
+        yield* mac.run(mac.machines.create(request("dev", {}, "mac")));
+        yield* mac.run(mac.machines.pause("mac_dev"));
+        yield* mac.run(mac.store.pausedUnder("dev", "fake 0"));
+        mac.fake.calls.length = 0;
+
+        const stopped = yield* mac.run(mac.machines.stop("mac_dev"));
+
+        expect(at(stopped)).toEqual(["stopped", "stopped", "settled"]);
+        expect(mac.fake.calls).toEqual(["stop mac_dev"]);
+        expect(yield* pausedPins(mac)).toEqual([undefined]);
+      }),
+  );
+
   it.effect("two starts at once both answer with the running machine", () =>
     Effect.gen(function* () {
       const linux = yield* host();

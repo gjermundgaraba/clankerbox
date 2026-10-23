@@ -83,6 +83,17 @@ export class WrongState extends Schema.TaggedError<WrongState>()(
   { httpApiStatus: 412 },
 ) {}
 
+/**
+ * The Mac's login session is locked, and macOS saves or restores a VM's state only in an unlocked
+ * one: a start of a paused machine keeps its saved state for a start once it is unlocked, and the
+ * first pause on a host is refused, VM untouched, until a suspend has once succeeded there.
+ */
+export class Locked extends Schema.TaggedError<Locked>()(
+  "Locked",
+  { message: Schema.String, ...located },
+  { httpApiStatus: 423 },
+) {}
+
 /** The runtime can't give the requested sizes, such as a disk below the base's. */
 export class Unsizable extends Schema.TaggedError<Unsizable>()(
   "Unsizable",
@@ -139,6 +150,7 @@ export const hostErrors = [
   Missing,
   PinMismatch,
   WrongState,
+  Locked,
   Unsizable,
   ScriptFailed,
   Capacity,
@@ -177,6 +189,7 @@ export const retryable = (error: ClankerboxError): boolean =>
       Missing: () => false,
       PinMismatch: () => false,
       WrongState: () => false,
+      Locked: () => false,
       Unsizable: () => false,
       ScriptFailed: () => false,
       Capacity: () => true,

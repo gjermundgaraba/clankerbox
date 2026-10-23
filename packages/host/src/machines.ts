@@ -402,13 +402,14 @@ export const make = (
       stop: (life) =>
         owning("stop", life, (intent) =>
           Effect.gen(function* () {
-            yield* resumable(intent);
-
             const stopped = runtime.stop(ref(intent));
 
-            yield* life.seen === "paused"
-              ? Effect.scoped(Effect.andThen(admitted("stopMachine", intent), stopped))
-              : stopped;
+            if (life.seen === "paused" && runtime.stopResumes) {
+              yield* resumable(intent);
+              yield* Effect.scoped(Effect.andThen(admitted("stopMachine", intent), stopped));
+            } else {
+              yield* stopped;
+            }
 
             if (intent.pausedPin !== undefined) {
               yield* store.pausedUnder(intent.name, undefined);

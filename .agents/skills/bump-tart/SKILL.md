@@ -106,8 +106,9 @@ Each: what Tart does, where, and what of ours depends on it.
   `Size`, `Accessed`, `Running` (deprecated, kept in JSON for compatibility,
   Formatter/Format.swift) and `State`: `running`, `suspended` or
   `stopped` (`VMDirectory.State`, VMDirectory.swift), from the VM's lock,
-  which `tart run` holds. It sees one Tart home only. Ours: `VmState`,
-  `decodeList`, `stateOf` (suspended reads stopped), the two-VM count, and
+  which `tart run` holds, then whether `state.vzvmsave` exists (`state`,
+  `stateURL`). It sees one Tart home only. Ours: `VmState`, `decodeList`,
+  `stateOf` (suspended reads paused), the two-VM count, and
   `observe`'s `tart list`, bounded by the core's `stateReadWait` (9 s), past
   which every machine reads `unknown`; the two-VM count's `tart list` is
   bounded by the same, past which the boot fails, writing nothing.
@@ -127,6 +128,42 @@ Each: what Tart does, where, and what of ours depends on it.
   within 0.3–0.6 s; under launchd the job just
   exits. Its hint lists the same home's VMs only. Ours: `vmLimit`, the count in
   `admit`, and `limitRefusal` read from the job's log as `Capacity`.
+
+**Suspend and resume**
+
+- `tart suspend` only sends SIGUSR1 to the VM's `tart run` and returns
+  (`Suspend`, Commands/Suspend.swift), so its exit code says nothing of the
+  save. `tart run`'s handler pauses the VM, saves it to `state.vzvmsave`,
+  prints "snapshot created successfully! shutting down the VM..." and ends the
+  run; a save that fails prints "Failed to suspend the VM: …" and exits 1,
+  powering the VM off and possibly leaving a partial `state.vzvmsave`, and a VM
+  run without `--suspendable` fails the same way (the SIGUSR1 handler in `run`,
+  `validateSaveRestoreSupport`, Commands/Run.swift). Ours: every job runs
+  `--suspendable` (`program`); a pause refuses a VM whose loaded job's
+  arguments lack it, waits `suspendWait` for `tart list` to read it not
+  running, then reads `saved` in the job's log, or removes `state.vzvmsave`
+  and fails.
+- `tart run` of a VM with a `state.vzvmsave` turns on `--suspendable` itself,
+  prints "restoring VM state from a snapshot...", removes the file only once
+  the restore succeeds, and on a failed restore prints the error and exits 1
+  (`run`, Commands/Run.swift). Ours: a start boots a paused VM's job as it
+  boots a stopped one, and reads `unrestored` with "permission denied" in the
+  job's log as `Locked`, the saved state kept.
+- `tart stop` of a suspended VM removes its `state.vzvmsave` and exits 0,
+  booting nothing (`stopSuspended`, Commands/Stop.swift). Ours: `stop` of a
+  paused machine is `tart stop <vm>`, and `stopResumes` is false, so the core
+  neither admits it nor checks its pause's pin.
+- Virtualization.framework seals saved state with a key in the operator's
+  session keychain: a restore fails "permission denied" (VZErrorDomain 12)
+  while the session is locked, the first save, which creates the key, does
+  too, later saves work locked, and a root LaunchDaemon can't save at all
+  (no keychain, -25291); macOS, not Tart, so re-check it on a macOS upgrade.
+  `ioreg -n Root -d1 -a`'s `IOConsoleUsers` entry for the user carries
+  `CGSSessionScreenIsLocked`, which also reads true while an unlocked
+  session's display sleeps. Ours: `consoleLocked` refuses a pause with
+  `Locked` only until `suspendedOnce`'s marker records a save on this host,
+  and `pausePin` is Tart's version and the macOS build (`sw_vers
+  -buildVersion`), since a host update can break a restore.
 
 **Softnet and the network**
 
@@ -215,9 +252,11 @@ Each: what Tart does, where, and what of ours depends on it.
   the code, and add claims the new release introduced.
 - Tell the operator how to move: install the new release in its own versioned
   path, change `tart.binary`, restart the host. Every `start` writes the VM's
-  job again, and a stopped job launchd still holds that names another `tart` is
-  reloaded, so VMs move as they restart; keep the old install until no running
-  VM's job names it.
+  job again, and a stopped job launchd still holds whose arguments aren't this
+  host's is reloaded, so VMs move as they restart; keep the old install until
+  no running VM's job names it. A paused machine resumes only under the Tart
+  and macOS that paused it (`pausePin`): start or stop every paused machine
+  before the move.
 - Report the tag transition, exact executable provenance, the claims that
   changed and their fixes, the checks actually run, optional opportunities, and
   remaining runtime resources and retained disk separately.

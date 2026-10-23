@@ -5,6 +5,7 @@ import {
   formatGib,
   type HostError,
   Internal,
+  Locked,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -45,6 +46,14 @@ export interface Settings {
 
 const softnet = "--net-softnet-block=@host";
 
+// Source: tart Commands/Run.swift run
+const saved = "snapshot created successfully";
+
+// Source: tart Commands/Run.swift run
+const unrestored = "failed to restore with error";
+
+const denied = "permission denied";
+
 // Source: tart VMStorageHelper.swift VirtualMachineLimitExceeded
 const vmLimit = 2;
 
@@ -58,6 +67,8 @@ const bootWait = Duration.minutes(3);
 const probePause = Duration.seconds(1);
 
 const shutdownWait = Duration.minutes(1);
+
+const suspendWait = Duration.minutes(2);
 
 // Source: tart Commands/Stop.swift gracefulWaitDuration
 const forcedStopWait = Duration.seconds(10);
@@ -82,6 +93,17 @@ export const checkpointName = (
 ): string => `cbx-${host}-c-${checkpoint.name}-${checkpoint.instance.slice(0, 8)}`;
 
 export const jobsDir = (stateDir: string): string => join(stateDir, "launchd");
+
+export const suspendedOnce = (stateDir: string): string => join(stateDir, "tart-suspended-once");
+
+export const program = (binary: string, vm: string): ReadonlyArray<string> => [
+  binary,
+  "run",
+  "--no-graphics",
+  softnet,
+  "--suspendable",
+  vm,
+];
 
 // Source: tart VMDirectory.swift resizeRawDisk
 export const diskGb = (diskGib: number): number => Math.ceil((diskGib * 1024 ** 3) / 1e9);
@@ -135,7 +157,7 @@ const decodeList = Schema.decodeUnknownEffect(
 );
 
 export const stateOf = (state: typeof VmState.Type): MachineState =>
-  state === "running" ? "running" : "stopped";
+  state === "suspended" ? "paused" : state;
 
 export const supported = (reported: string): boolean =>
   /^\d+\.\d+\.\d+$/u.test(reported) &&
@@ -143,6 +165,23 @@ export const supported = (reported: string): boolean =>
 
 const printed = (output: string, key: string): string | undefined =>
   new RegExp(`^\\t${key} = (.+)$`, "mu").exec(output)?.[1];
+
+const printedArguments = (output: string): ReadonlyArray<string> | undefined =>
+  /^\targuments = \{\n((?:\t\t.*\n)*)\t\}$/mu
+    .exec(output)?.[1]
+    ?.split("\n")
+    .filter((line) => line !== "")
+    .map((line) => line.slice(2));
+
+export const consoleLocked = (consoleUsers: string, uid: number): boolean => {
+  const session = consoleUsers
+    .split("<dict>")
+    .find((entry) =>
+      new RegExp(`<key>kCGSSessionUserIDKey</key>\\s*<integer>${uid}</integer>`, "u").test(entry),
+    );
+
+  return session === undefined || /<key>CGSSessionScreenIsLocked<\/key>\s*<true\/>/u.test(session);
+};
 
 export const make = (
   settings: Settings,
@@ -162,6 +201,7 @@ export const make = (
     }
 
     const domain = `gui/${settings.uid}`;
+    const tartHome = settings.tartHome ?? join(homedir(), ".tart");
     const forwarder = yield* Forwarder.make(settings.publishAddress);
     const vmOf = (machine: MachineRef) => machineName(settings.hostId, machine);
     const checkpointVm = (checkpoint: CheckpointRef) => checkpointName(settings.hostId, checkpoint);
@@ -182,6 +222,21 @@ export const make = (
         message: `${settings.binary} reports version "${reported}", and this host needs Tart ${minimumVersion} or later`,
       });
     }
+
+    const build = yield* Effect.flatMap(
+      run("/usr/bin/sw_vers", ["-buildVersion"], "sw_vers"),
+      (ran) => expect(ran, "sw_vers -buildVersion"),
+    );
+
+    const locked = Effect.flatMap(
+      run("/usr/sbin/ioreg", ["-n", "Root", "-d1", "-a"], "ioreg"),
+      (ran) =>
+        Effect.map(expect(ran, "ioreg -n Root"), ({ stdout }) =>
+          consoleLocked(stdout, settings.uid ?? 0),
+        ),
+    );
+
+    const marker = suspendedOnce(settings.stateDir);
 
     const list = Effect.flatMap(
       call(["list", "--source", "local", "--format", "json"], "list"),
@@ -236,16 +291,14 @@ export const make = (
         `couldn't write ${file}`,
         fs.writeFileString(
           file,
-          plist({
-            label: vm,
-            program: [settings.binary, "run", "--no-graphics", softnet, vm],
-            environment: env,
-            log,
-          }),
+          plist({ label: vm, program: program(settings.binary, vm), environment: env, log }),
           { mode: 0o600 },
         ),
       );
     };
+
+    const logOf = (vm: string) =>
+      fs.readFileString(job(vm).log).pipe(Effect.orElseSucceed(() => ""));
 
     const listen = (machine: MachineRef) =>
       forwarder.listen(machine.port, (input) =>
@@ -256,7 +309,7 @@ export const make = (
 
     const ready = (machine: MachineRef) => {
       const vm = vmOf(machine);
-      const { target, log } = job(vm);
+      const { target } = job(vm);
 
       const probe = Effect.gen(function* () {
         if ((yield* tart(["exec", vm, "true"], `exec ${vm}`)).exitCode === 0) {
@@ -272,7 +325,7 @@ export const make = (
           return false;
         }
 
-        const output = yield* fs.readFileString(log).pipe(Effect.orElseSucceed(() => ""));
+        const output = yield* logOf(vm);
 
         if (output.includes(limitRefusal)) {
           return yield* new Capacity({
@@ -330,13 +383,11 @@ export const make = (
         yield* writeJob(vm);
 
         const loaded = yield* launchctl(["print", target], `print ${target}`);
-        const program = printed(loaded.stdout, "program");
 
         const stale =
           loaded.exitCode === 0 &&
           printed(loaded.stdout, "state") === "not running" &&
-          program !== undefined &&
-          program !== settings.binary;
+          printedArguments(loaded.stdout)?.join("\n") !== program(settings.binary, vm).join("\n");
 
         if (stale) {
           yield* Effect.flatMap(launchctl(["bootout", target], `bootout ${vm}`), (ran) =>
@@ -362,8 +413,13 @@ export const make = (
     const stop = (machine: MachineRef) =>
       Effect.gen(function* () {
         const vm = vmOf(machine);
+        const observed = yield* state(vm);
 
-        if ((yield* state(vm)) !== "running") {
+        if (observed === "paused") {
+          return yield* call(["stop", vm], `stop ${vm}`);
+        }
+
+        if (observed !== "running") {
           return;
         }
 
@@ -426,18 +482,102 @@ export const make = (
           observed === "missing"
             ? missing("mac", machine)
             : new WrongState({
-                message: `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is running: stop it first`,
+                message: `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is ${observed}: stop it first`,
                 machine: machine.id,
                 state: observed,
               }),
         );
       });
 
+    const resume = (machine: MachineRef) =>
+      boot(machine).pipe(
+        Effect.catchTag("Internal", (error) =>
+          Effect.flatMap(logOf(vmOf(machine)), (output) =>
+            Effect.fail(
+              output.includes(unrestored) && output.includes(denied)
+                ? new Locked({
+                    message: `the Mac's session is locked, and macOS resumes ${machine.id}'s saved state only in an unlocked one: unlock it and start ${machine.id} again; its saved state is kept`,
+                  })
+                : error,
+            ),
+          ),
+        ),
+      );
+
+    const suspend = (machine: MachineRef) =>
+      Effect.gen(function* () {
+        const vm = vmOf(machine);
+        const { target } = job(vm);
+        const observed = yield* state(vm);
+
+        if (observed === "paused") {
+          return;
+        }
+
+        if (observed === "missing") {
+          return yield* missing("mac", machine);
+        }
+
+        if (observed !== "running") {
+          return yield* new WrongState({
+            message: `Tart reads ${machine.id} ${observed}, and suspends only a running machine`,
+            machine: machine.id,
+            state: observed,
+          });
+        }
+
+        const loaded = yield* Effect.flatMap(
+          launchctl(["print", target], `print ${target}`),
+          (ran) => expect(ran, `launchctl print ${target}`),
+        );
+
+        if (!(printedArguments(loaded.stdout) ?? []).includes("--suspendable")) {
+          return yield* new WrongState({
+            message: `${machine.id} runs as an older host booted it, which Tart can't suspend: stop and start it, then pause it`,
+            machine: machine.id,
+            state: observed,
+          });
+        }
+
+        const once = yield* files(`couldn't read ${marker}`, fs.exists(marker));
+
+        if (!once && (yield* locked)) {
+          return yield* new Locked({
+            message: `the Mac's session is locked, and the first suspend on this Mac needs it unlocked: unlock it and pause ${machine.id} again`,
+          });
+        }
+
+        yield* call(["suspend", vm], `suspend ${vm}`);
+
+        if (!(yield* halted(vm, suspendWait))) {
+          return yield* new Internal({
+            message: `${machine.id} still runs ${Duration.format(suspendWait)} after tart suspend`,
+          });
+        }
+
+        const output = yield* logOf(vm);
+
+        if (!output.includes(saved)) {
+          const partial = join(tartHome, "vms", vm, "state.vzvmsave");
+
+          yield* files(`couldn't remove ${partial}`, fs.remove(partial, { force: true }));
+
+          return yield* new Internal({
+            message: `Tart couldn't save ${machine.id}'s state and powered its VM off: ${lastLines(output)}`,
+          });
+        }
+
+        if (!once) {
+          yield* files(`couldn't write ${marker}`, fs.writeFileString(marker, ""));
+        }
+      });
+
     return {
       version: reported,
       publishAddress: settings.publishAddress,
       pin: undefined,
-      pausePin: `tart ${reported}`,
+      pausePin: `tart ${reported} on macOS ${build.stdout.trim()}`,
+      stopResumes: false,
       startup: Effect.fn("Tart.startup")((machines) =>
         Effect.gen(function* () {
           yield* files(
@@ -509,18 +649,14 @@ export const make = (
           if (observed === "stopped") {
             yield* boot(machine);
           }
+
+          if (observed === "paused") {
+            yield* resume(machine);
+          }
         }),
       ),
       stop: Effect.fn("Tart.stop")(stop),
-      pause: Effect.fn("Tart.pause")((machine) =>
-        Effect.fail(
-          new WrongState({
-            message: `this host doesn't pause machines on Tart yet; stop ${machine.id} instead`,
-            machine: machine.id,
-            state: "running",
-          }),
-        ),
-      ),
+      pause: Effect.fn("Tart.pause")(suspend),
       delete: Effect.fn("Tart.delete")((machine) =>
         Effect.gen(function* () {
           const vm = vmOf(machine);

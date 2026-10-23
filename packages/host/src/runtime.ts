@@ -2,6 +2,7 @@ import {
   type Capacity,
   Internal,
   type Kind,
+  type Locked,
   type Machine,
   Missing,
   type Reading,
@@ -63,7 +64,7 @@ export interface Held {
 
 /**
  * The actions that may boot a machine, as the runtime's refusals name them. A stop boots only a
- * paused machine, on a runtime that resumes it to end its saved execution.
+ * paused machine, on a runtime whose `stopResumes`.
  */
 export type Booting =
   | "createMachine"
@@ -114,6 +115,11 @@ export interface Interface {
   readonly pin: string | undefined;
   /** What a paused machine must resume under: the build whose saved execution it holds. */
   readonly pausePin: string;
+  /**
+   * Whether a stop of a paused machine resumes it to end its saved execution, so the core admits
+   * it as a boot under its pause's pin, rather than discarding that execution with no boot.
+   */
+  readonly stopResumes: boolean;
   /** Runs after the failed captures are cleared, before the host serves. */
   readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, RuntimeError>;
   /**
@@ -150,7 +156,7 @@ export interface Interface {
    * answers it leaves as it is. A paused machine, or one a pause left part way, resumes its saved
    * execution. A machine it no longer has is `missing`, before anything native.
    */
-  readonly start: (machine: MachineRef) => Effect.Effect<void, RoomError | StateError>;
+  readonly start: (machine: MachineRef) => Effect.Effect<void, RoomError | StateError | Locked>;
   /**
    * The core reads no state first, so the runtime does nothing on a machine that is stopped or
    * that it no longer has. A paused machine ends its saved execution and keeps its disk.
@@ -160,7 +166,7 @@ export interface Interface {
    * Saves a running machine's execution, RAM and disks, and stops its VM; a paused machine stays
    * as it is. The core never pauses a stopped one.
    */
-  readonly pause: (machine: MachineRef) => Effect.Effect<void, RuntimeError | StateError>;
+  readonly pause: (machine: MachineRef) => Effect.Effect<void, RuntimeError | StateError | Locked>;
   /**
    * Removes everything native the row could have made, whatever an earlier failure left: a
    * running VM, a VM whose stop failed, or nothing, as after a crash before the first call.

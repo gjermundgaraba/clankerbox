@@ -123,8 +123,8 @@ transport. Neither `./testing` export is published.
   failed one left. A start starts the machine, also when it runs already, or
   resumes it when it is paused, and prepares it. A pause saves a running
   machine and stops its VM, leaving a stopped one stopped; a paused machine
-  resumes, for a start or a stop, only under the pin it was paused under. A
-  machine is made by one step in the request that creates it,
+  resumes only under the pin it was paused under, for a start, and for a stop
+  on a runtime whose stop resumes it. A machine is made by one step in the request that creates it,
   from what only that request holds: a copy or setup that fails deletes it
   and answers the failure, and a delete that fails runs again at each
   recheck. A host that starts deletes every machine the last one's end left

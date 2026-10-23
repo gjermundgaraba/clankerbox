@@ -371,6 +371,7 @@ export const make = (
       publishAddress: settings.publishAddress,
       pin,
       pausePin: pin,
+      stopResumes: true,
       startup: Effect.fn("Smolvm.startup")(() =>
         Effect.gen(function* () {
           yield* removeAll(paths.forks);

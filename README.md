@@ -184,14 +184,21 @@ clankerbox checkpoint delete linux_base
   asked for something else before it got there. A machine that stops under
   its host while asked to run is started again at its host's next check,
   every 30 s.
-- `pause` saves a running linux machine's RAM, processes and disks and stops
-  its VM, so it holds no RAM on its host until a `start` resumes it where it
-  was. A paused machine resumes only under the smolvm build that paused it:
-  after a host moves to another one, a `start` or `stop` of it fails
-  `PinMismatch`, and only `delete` clears it. A `pause` leaves a stopped machine
-  stopped, and a `stop` of a paused one resumes it to end its processes, keeping
-  its disk. A paused machine can't be forked or captured. mac hosts refuse
-  `pause` for now.
+- `pause` saves a running machine's RAM, processes and disks and stops its VM,
+  so it holds no RAM, and on a Mac none of its two VMs, until a `start` resumes
+  it where it was. A `pause` leaves a stopped machine stopped, and a paused
+  machine can't be forked or captured.
+- A paused machine resumes only under the runtime build that paused it:
+  smolvm's on linux, and Tart's and macOS's on a Mac. After a host moves to
+  another one, a `start` of it fails `PinMismatch`, so resume paused machines
+  before upgrading.
+- A `stop` of a paused machine resumes it on linux to end its processes,
+  needing room as a start does, and fails `PinMismatch` after an upgrade too;
+  on a Mac it discards the saved state without booting. Either keeps the disk.
+- On a Mac, macOS saves and restores a VM's state only in the operator's
+  unlocked login session: a `start` of a paused machine while it is locked
+  fails `Locked` and keeps the saved state, and so does the first `pause` on a
+  host (see Deploy).
 - A create, fork or restore whose copy or setup fails deletes its machine and
   answers the error, and a delete that fails runs again at the next check; a
   host that restarts before it finished deletes the machine too. Only a
@@ -329,7 +336,13 @@ VMs run in their own scopes, so restarting the unit leaves them running.
 **mac**, as the operator's user, in a LaunchAgent in its GUI session, with
 `KeepAlive` set to `{SuccessfulExit: false}`; stop it with
 `launchctl bootout gui/<uid>/<label>`. Pull each base with `tart pull` as that
-user before its first create.
+user before its first create. For `pause`, keep that session unlocked: set
+**Lock Screen → Require password after screen saver begins or display is turned
+off** to **Never** (the display can still sleep), and log in once after each
+reboot, since FileVault rules out automatic login. macOS keeps the key that
+seals saved VM state in the session's keychain, so a root daemon can't save it
+at all; the first pause creates that key, then later pauses work while locked,
+but every resume needs the session unlocked.
 
 **Network:** the tailnet policy opens each host's API port to its clients, and
 the machines' port range to clients that run `clankerbox ssh`. On a linux
