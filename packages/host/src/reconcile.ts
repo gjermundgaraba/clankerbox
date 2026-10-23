@@ -6,6 +6,7 @@ export type Next =
   | "creating"
   | "starting"
   | "stopping"
+  | "pausing"
   | "deleting"
   | "waiting"
   | "settled"
@@ -36,11 +37,13 @@ export const next = (decided: Decided, seen: MachineState): Next => {
     return "lost";
   }
 
-  const running = seen === "running";
-
-  if (decided.desired === "stopped") {
-    return running ? "stopping" : "settled";
+  if (decided.desired === "paused") {
+    return seen === "running" ? "pausing" : "settled";
   }
 
-  return running && decided.prepared ? "settled" : "starting";
+  if (decided.desired === "stopped") {
+    return seen === "stopped" ? "settled" : "stopping";
+  }
+
+  return seen === "running" && decided.prepared ? "settled" : "starting";
 };

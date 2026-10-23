@@ -461,6 +461,7 @@ export const make = (
       getMachine: (input) => onResource("getMachine", input),
       startMachine: (input) => onResource("startMachine", input),
       stopMachine: (input) => onResource("stopMachine", input),
+      pauseMachine: (input) => onResource("pauseMachine", input),
       deleteMachine: (input) => deleting(onResource("deleteMachine", input)),
       forkMachine: (input) => onResource("forkMachine", input, input.name),
       restoreMachine: (input) => onResource("restoreMachine", input, input.name),

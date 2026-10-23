@@ -46,6 +46,7 @@ export const migrations: ReadonlyArray<string> = [
     disk_gib INTEGER NOT NULL,
     ready INTEGER NOT NULL
   ) STRICT`,
+  "ALTER TABLE machines ADD COLUMN paused_pin TEXT",
 ];
 
 const Flag = Schema.Literals([0, 1]);
@@ -69,6 +70,7 @@ const MachineRow = Schema.Struct({
   ephemeral: Flag,
   made: Flag,
   host_key: Schema.NullOr(Schema.String),
+  paused_pin: Schema.NullOr(Schema.String),
 });
 
 const CheckpointRow = Schema.Struct({
@@ -100,6 +102,7 @@ const intentOf = (row: typeof MachineRow.Type): Intent => ({
   ephemeral: row.ephemeral === 1,
   made: row.made === 1,
   hostKey: row.host_key ?? undefined,
+  pausedPin: row.paused_pin ?? undefined,
 });
 
 const checkpointOf = (row: typeof CheckpointRow.Type): CheckpointRecord => ({
@@ -282,9 +285,9 @@ export const open = (
 
     const insertMachine = db.prepare(
       `INSERT INTO machines (name, instance, created_at, base, profile, cpu, ram_mib, disk_gib,
-        port, desired, generation, ephemeral, made, host_key)
+        port, desired, generation, ephemeral, made, host_key, paused_pin)
        VALUES ($name, $instance, $created_at, $base, $profile, $cpu, $ram_mib, $disk_gib,
-        $port, $desired, $generation, $ephemeral, $made, $host_key)`,
+        $port, $desired, $generation, $ephemeral, $made, $host_key, $paused_pin)`,
     );
 
     const updateDesire = db.prepare(
@@ -298,6 +301,10 @@ export const open = (
     const updateMade = db.prepare("UPDATE machines SET made = 1 WHERE name = ?");
 
     const updateHostKey = db.prepare("UPDATE machines SET host_key = $host_key WHERE name = $name");
+
+    const updatePausedPin = db.prepare(
+      "UPDATE machines SET paused_pin = $paused_pin WHERE name = $name",
+    );
 
     const deleteMachine = db.prepare("DELETE FROM machines WHERE name = ?");
 
@@ -382,6 +389,7 @@ export const open = (
             ephemeral: flag(intent.ephemeral),
             made: flag(intent.made),
             host_key: intent.hostKey ?? null,
+            paused_pin: intent.pausedPin ?? null,
           });
         }),
       ),
@@ -400,6 +408,11 @@ export const open = (
       hostKey: Effect.fn("Store.hostKey")((name, hostKey) =>
         sql(`record ${id(name)}'s host key`, () => {
           updateHostKey.run({ name, host_key: hostKey });
+        }),
+      ),
+      pausedUnder: Effect.fn("Store.pausedUnder")((name, pin) =>
+        sql(`record the pin ${id(name)} is paused under`, () => {
+          updatePausedPin.run({ name, paused_pin: pin ?? null });
         }),
       ),
       removeMachine: Effect.fn("Store.removeMachine")((name) =>

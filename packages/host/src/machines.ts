@@ -75,6 +75,7 @@ export interface Interface {
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
   readonly start: (id: string) => Effect.Effect<Machine, Declared<"startMachine">>;
   readonly stop: (id: string) => Effect.Effect<Machine, Declared<"stopMachine">>;
+  readonly pause: (id: string) => Effect.Effect<Machine, Declared<"pauseMachine">>;
   readonly delete: (id: string) => Effect.Effect<void, Declared<"deleteMachine">>;
   readonly fork: (id: string, name: string) => Effect.Effect<Machine, Declared<"forkMachine">>;
   readonly restore: (
@@ -222,6 +223,15 @@ export const make = (
         }),
       );
 
+    const resumable = ({ name, pausedPin }: Intent) =>
+      pausedPin === undefined || pausedPin === runtime.pausePin
+        ? Effect.void
+        : Effect.fail(
+            new PinMismatch({
+              message: `machine ${idOf(name)} was paused under ${pausedPin}, and this host runs ${runtime.pausePin}; it resumes only under the same one: delete it, or resume it under that one`,
+            }),
+          );
+
     const owning = <A, E extends { readonly message: string }>(
       what: string,
       life: Life,
@@ -249,7 +259,6 @@ export const make = (
         if (checkpoint.pin !== runtime.pin) {
           return yield* new PinMismatch({
             message: `checkpoint ${idOf(name)} holds RAM state saved under ${checkpoint.pin ?? "no pin"}, and this host runs ${runtime.pin ?? "no pin"}; it restores only under the same one`,
-            checkpoint: idOf(name),
           });
         }
 
@@ -323,11 +332,17 @@ export const make = (
       start: (life) =>
         owning("start", life, (intent) =>
           Effect.gen(function* () {
+            yield* resumable(intent);
+
             const started = runtime.start(ref(intent));
 
             yield* life.seen === "running"
               ? started
               : Effect.scoped(Effect.andThen(admitted("startMachine", intent), started));
+
+            if (intent.pausedPin !== undefined) {
+              yield* store.pausedUnder(intent.name, undefined);
+            }
 
             const hostKey = yield* prepare(runtime, ref(intent));
 
@@ -384,7 +399,29 @@ export const make = (
             );
           },
         }),
-      stop: (life) => owning("stop", life, (intent) => runtime.stop(ref(intent))),
+      stop: (life) =>
+        owning("stop", life, (intent) =>
+          Effect.gen(function* () {
+            yield* resumable(intent);
+
+            const stopped = runtime.stop(ref(intent));
+
+            yield* life.seen === "paused"
+              ? Effect.scoped(Effect.andThen(admitted("stopMachine", intent), stopped))
+              : stopped;
+
+            if (intent.pausedPin !== undefined) {
+              yield* store.pausedUnder(intent.name, undefined);
+            }
+          }),
+        ),
+      pause: (life) =>
+        owning("pause", life, (intent) =>
+          Effect.andThen(
+            runtime.pause(ref(intent)),
+            store.pausedUnder(intent.name, runtime.pausePin),
+          ),
+        ),
       remove: (life) =>
         owning("delete", life, (intent) =>
           Effect.andThen(runtime.delete(ref(intent)), store.removeMachine(intent.name)),
@@ -522,7 +559,7 @@ export const make = (
     const answered = (
       name: string,
       actor: MachineActor,
-      desired: "running" | "stopped",
+      desired: Exclude<Desired, "deleted">,
       generation: number,
     ) =>
       Effect.gen(function* () {
@@ -574,7 +611,7 @@ export const make = (
         return resource(yield* row(name), life, phase, life.seen);
       });
 
-    const settledOn = (name: string, desired: "running" | "stopped") =>
+    const settledOn = (name: string, desired: Exclude<Desired, "deleted">) =>
       Effect.gen(function* () {
         const actor = yield* actorOf(name);
 
@@ -634,6 +671,7 @@ export const make = (
           ephemeral,
           made: false,
           hostKey: undefined,
+          pausedPin: undefined,
         };
 
         yield* store.insertMachine(intent);
@@ -765,6 +803,9 @@ export const make = (
       ),
       stop: Effect.fn("Machines.stop")((id) =>
         Effect.flatMap(nameOf(id), (name) => settledOn(name, "stopped")),
+      ),
+      pause: Effect.fn("Machines.pause")((id) =>
+        Effect.flatMap(nameOf(id), (name) => settledOn(name, "paused")),
       ),
       delete: Effect.fn("Machines.delete")((id) => Effect.flatMap(nameOf(id), remove)),
       fork: Effect.fn("Machines.fork")(fork),

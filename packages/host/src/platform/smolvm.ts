@@ -144,8 +144,16 @@ const alive: ReadonlySet<RecordState> = new Set(["running", "pausing", "unreacha
 // Source: smolvm src/cli/vm_common.rs start_vm_named_with_db
 const unstartable: ReadonlySet<RecordState> = new Set(["frozen", "pausing", "paused"]);
 
-export const stateOf = (state: RecordState): MachineState =>
-  alive.has(state) ? "running" : "stopped";
+// Source: smolvm src/embedded/runtime.rs resume_machine_inner
+const resumable: ReadonlySet<RecordState> = new Set(["pausing", "paused"]);
+
+export const stateOf = (state: RecordState): MachineState => {
+  if (state === "paused") {
+    return "paused";
+  }
+
+  return alive.has(state) ? "running" : "stopped";
+};
 
 export const make = (
   settings: Settings,
@@ -241,6 +249,9 @@ export const make = (
 
     const boot = (native: string) =>
       call(["machine", "start", "--name", native, "--branchable"], `machine start ${native}`);
+
+    const resume = (native: string) =>
+      call(["machine", "resume", "--name", native], `machine resume ${native}`);
 
     const copyable = (machine: MachineRef, stopped: string) =>
       Effect.flatMap(status(nativeName(machine)), (recorded): Effect.Effect<void, StateError> => {
@@ -359,6 +370,7 @@ export const make = (
       version: testedVersion,
       publishAddress: settings.publishAddress,
       pin,
+      pausePin: pin,
       startup: Effect.fn("Smolvm.startup")(() =>
         Effect.gen(function* () {
           yield* removeAll(paths.forks);
@@ -471,6 +483,10 @@ export const make = (
             return yield* missing("linux", machine);
           }
 
+          if (resumable.has(recorded)) {
+            return yield* resume(native);
+          }
+
           if (unstartable.has(recorded)) {
             return yield* new WrongState({
               message: `smolvm reads machine ${machine.id} ${recorded}, and doesn't start it from there`,
@@ -485,10 +501,45 @@ export const make = (
       stop: Effect.fn("Smolvm.stop")((machine) =>
         Effect.gen(function* () {
           const native = nativeName(machine);
+          const recorded = yield* status(native);
 
-          if ((yield* state(native)) === "running") {
-            yield* call(["machine", "stop", "--name", native], `machine stop ${native}`);
+          if (recorded === "missing") {
+            return;
           }
+
+          if (resumable.has(recorded)) {
+            yield* resume(native);
+          } else if (!alive.has(recorded)) {
+            return;
+          }
+
+          yield* call(["machine", "stop", "--name", native], `machine stop ${native}`);
+        }),
+      ),
+      pause: Effect.fn("Smolvm.pause")((machine) =>
+        Effect.gen(function* () {
+          const native = nativeName(machine);
+          const recorded = yield* status(native);
+
+          if (recorded === "paused") {
+            return;
+          }
+
+          if (recorded === "missing") {
+            return yield* missing("linux", machine);
+          }
+
+          if (recorded === "pausing") {
+            yield* resume(native);
+          } else if (recorded !== "running") {
+            return yield* new WrongState({
+              message: `smolvm reads machine ${machine.id} ${recorded}, and pauses only a running machine`,
+              machine: machine.id,
+              state: recorded,
+            });
+          }
+
+          yield* call(["machine", "pause", "--name", native], `machine pause ${native}`);
         }),
       ),
       delete: Effect.fn("Smolvm.delete")(removeVm),

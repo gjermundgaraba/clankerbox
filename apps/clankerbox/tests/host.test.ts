@@ -50,25 +50,29 @@ const decodeFailure = (text: string) =>
   });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
-  it.effect("create, stop, start and delete run on the host, and the CLI prints each outcome", () =>
-    Effect.gen(function* () {
-      const { host, run } = yield* setUp();
+  it.effect(
+    "create, pause, stop, start and delete run on the host, and the CLI prints each outcome",
+    () =>
+      Effect.gen(function* () {
+        const { host, run } = yield* setUp();
 
-      const created = yield* run(["create", "dev", ...sizes]);
-      const stopped = yield* run(["stop", "linux_dev"]);
-      const started = yield* run(["start", "linux_dev"]);
-      const listed = yield* run(["machines"]);
-      const removed = yield* run(["delete", "linux_dev"]);
-      const again = yield* run(["delete", "linux_dev"]);
+        const created = yield* run(["create", "dev", ...sizes]);
+        const paused = yield* run(["pause", "linux_dev"]);
+        const stopped = yield* run(["stop", "linux_dev"]);
+        const started = yield* run(["start", "linux_dev"]);
+        const listed = yield* run(["machines"]);
+        const removed = yield* run(["delete", "linux_dev"]);
+        const again = yield* run(["delete", "linux_dev"]);
 
-      expect(created).toMatchObject({ code: 0, stdout: "linux_dev" });
-      expect(stopped).toMatchObject({ code: 0, stdout: "linux_dev stopped" });
-      expect(started).toMatchObject({ code: 0, stdout: "linux_dev running" });
-      expect(listed.stdout).toContain("linux_dev");
-      expect(removed).toMatchObject({ code: 0, stdout: "linux_dev" });
-      expect(again.stderr).toContain("already gone");
-      expect(yield* host.run(host.store.machines)).toEqual([]);
-    }),
+        expect(created).toMatchObject({ code: 0, stdout: "linux_dev" });
+        expect(paused).toMatchObject({ code: 0, stdout: "linux_dev paused" });
+        expect(stopped).toMatchObject({ code: 0, stdout: "linux_dev stopped" });
+        expect(started).toMatchObject({ code: 0, stdout: "linux_dev running" });
+        expect(listed.stdout).toContain("linux_dev");
+        expect(removed).toMatchObject({ code: 0, stdout: "linux_dev" });
+        expect(again.stderr).toContain("already gone");
+        expect(yield* host.run(host.store.machines)).toEqual([]);
+      }),
   );
 
   it.effect("a setup that fails replies with its output, and the machine is gone", () =>

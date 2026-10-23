@@ -58,6 +58,7 @@ const intent = (name: string, fields?: Partial<Intent>): Intent => ({
   ephemeral: false,
   made: false,
   hostKey: undefined,
+  pausedPin: undefined,
   ...fields,
 });
 
@@ -102,8 +103,9 @@ layer(NodeServices.layer)((it) => {
           hostKey: "ssh-ed25519 AAAA",
           ephemeral: true,
           made: true,
-          desired: "stopped",
+          desired: "paused",
           generation: 4,
+          pausedPin: "smolvm 0.0.0-test linux-x64",
         }),
         intent("copy", { createdAt: DateTime.makeUnsafe("2026-10-04T12:01:00Z") }),
       ];
@@ -310,30 +312,71 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
-  it.effect("made and a host key write only themselves, never what was asked", () =>
+  it.effect("made, a host key and a pause's pin write only themselves, never what was asked", () =>
     Effect.gen(function* () {
       const stateDir = join(yield* scratch, "state");
 
-      const found = yield* withStore(stateDir, (store) =>
+      const [paused, resumed] = yield* withStore(stateDir, (store) =>
         Effect.gen(function* () {
           yield* store.insertMachine(intent("dev"));
           yield* store.desire("dev", "stopped");
           yield* store.made("dev");
           yield* store.hostKey("dev", "ssh-ed25519 AAAAnew");
+          yield* store.pausedUnder("dev", "smolvm 0.0.0-test linux-x64");
 
-          return yield* store.findMachine("dev");
+          const paused = yield* store.findMachine("dev");
+
+          yield* store.pausedUnder("dev", undefined);
+
+          return [paused, yield* store.findMachine("dev")];
         }),
       );
 
-      expect(Option.getOrUndefined(found)).toEqual(
-        intent("dev", {
-          made: true,
-          hostKey: "ssh-ed25519 AAAAnew",
-          desired: "stopped",
-          generation: 2,
-        }),
-      );
+      const written = intent("dev", {
+        made: true,
+        hostKey: "ssh-ed25519 AAAAnew",
+        desired: "stopped",
+        generation: 2,
+      });
+
+      expect(Option.getOrUndefined(paused)).toEqual({
+        ...written,
+        pausedPin: "smolvm 0.0.0-test linux-x64",
+      });
+      expect(Option.getOrUndefined(resumed)).toEqual(written);
     }),
+  );
+
+  it.effect(
+    "a database the last release left, at schema version 1, gains the pause's pin and keeps its machines",
+    () =>
+      Effect.gen(function* () {
+        const stateDir = join(yield* scratch, "state");
+
+        yield* mkdir(stateDir);
+
+        const old = new DatabaseSync(join(stateDir, databaseFile));
+
+        old.exec(migrations[0] ?? "");
+        old.exec(
+          `INSERT INTO host (one, id, kind) VALUES (1, 'linux', 'linux');
+           INSERT INTO machines (name, instance, created_at, base, profile, cpu, ram_mib,
+             disk_gib, port, desired, generation, ephemeral, made, host_key)
+           VALUES ('dev', '0123456789abcdef0123456789abcdef', '2026-10-04T12:00:00Z', 'ubuntu',
+             NULL, 1, 1024, 10, 10000, 'running', 1, 0, 1, NULL);
+           PRAGMA user_version = 1; PRAGMA application_id = ${applicationId}`,
+        );
+        old.close();
+
+        const found = yield* withStore(stateDir, (store) => store.findMachine("dev"));
+
+        expect(Option.getOrUndefined(found)).toEqual(intent("dev", { port: 10_000, made: true }));
+
+        const db = new DatabaseSync(join(stateDir, databaseFile));
+
+        expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+        db.close();
+      }),
   );
 
   it.effect("removeMachine deletes the row and frees its name and port", () =>

@@ -158,8 +158,8 @@ as it is.
   cleared, then starts afresh (`cli_recover_if_unreachable` in
   `start_vm_named_with_db`, src/cli/vm_common.rs), and `frozen`, `paused` and
   `pausing` are refused. Ours: `start` reads `machine status` first, leaves
-  `running` as it is, boots `unreachable` again and refuses `unstartable`
-  before anything native. `copyable` takes only `running`, so an unreachable
+  `running` as it is, boots `unreachable` again, resumes `resumable` with
+  `machine resume` and refuses `frozen` before anything native. `copyable` takes only `running`, so an unreachable
   source is refused, and the RAM budget counts `unreachable` as running. The
   ping's socket waits 3 s to read and 3 s to write
   (`connect_for_state_probe`, src/agent/client.rs), so `machine status` reads
@@ -186,7 +186,8 @@ as it is.
   removes the record only after the process is dead and storage removed. A
   `machine stop` of an unknown name says "vm not found" but leaves an empty
   `vms/<hash>/`. Ours: stop reads `machine status` first and stops only a
-  running machine, its workload given its stop timeout; delete reads it first
+  running machine, resuming a `resumable` one first, its workload given its
+  stop timeout; delete reads it first
   too, stops with `--timeout 0` (the guest still syncs and acks), kills a
   still-loaded scope with SIGKILL (the signal smolvm's own `kill_scope` sends,
   src/systemd_scope.rs), then `machine delete -f` and `systemctl
@@ -196,6 +197,22 @@ as it is.
   before `finalize_launch` writes `agent.pid`, and the record gets `running`
   and the pid only after the start's image setup (`start_via_subprocess`,
   `start_vm_named_with_db`); re-check whether that window still exists.
+- `machine pause --name` saves the machine's RAM, processes and disks to a
+  `pause-*.smolcheckpoint` in its data dir and stops its VM; a paused machine
+  pauses again as a no-op, a pause cut short leaves `pausing` or a saved file
+  the record still holds, so the next pause fails "a previous pause needs
+  recovery; use resume", and a stopped machine fails "must be running"
+  (`PauseCmd`, src/cli/machine.rs; `pause_machine_inner`,
+  src/embedded/runtime.rs; `validated_capture_source`,
+  src/portable_checkpoint.rs). `machine resume --name` restores a paused
+  machine, recovers a `pausing` one in place, returns at once for a running
+  one and refuses any other ("machine is not paused; use start for a fresh
+  boot") (`ResumeCmd`; `resume_machine_inner`). `start`, `stop` and
+  `checkpoint` refuse a paused machine, and `delete -f` deletes it. Ours:
+  `resumable` (`paused`, `pausing`); `pause` reads `machine status` first,
+  leaves `paused` as it is, resumes `pausing` before it pauses and refuses
+  anything else not `running` with `WrongState`; `pausePin` is the release
+  pin, so a paused machine resumes only under the smolvm build that paused it.
 - `machine status --name X --json` states are `created`, `running`, `stopped`,
   `paused`, `pausing`, `failed`, `unreachable` and `frozen` (`RecordState`,
   src/config.rs); an unknown name is "machine '<name>' not found"

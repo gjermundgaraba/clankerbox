@@ -31,6 +31,8 @@ export interface Intent {
   readonly made: boolean;
   /** The key the last preparation that printed one printed, which no runtime can tell again. */
   readonly hostKey: string | undefined;
+  /** The runtime pin the last pause saved the machine under, until a start or a stop resumes it. */
+  readonly pausedPin: string | undefined;
 }
 
 /** Only a capture that succeeded is a checkpoint; the store keeps the rest out of every read. */
@@ -69,6 +71,8 @@ export interface Interface {
   ) => Effect.Effect<Option.Option<Desire>, Internal>;
   readonly made: (name: string) => Effect.Effect<void, Internal>;
   readonly hostKey: (name: string, hostKey: string) => Effect.Effect<void, Internal>;
+  /** `undefined` once a start or a stop resumes the machine. */
+  readonly pausedUnder: (name: string, pin: string | undefined) => Effect.Effect<void, Internal>;
   readonly removeMachine: (name: string) => Effect.Effect<void, Internal>;
   readonly checkpoints: Effect.Effect<ReadonlyArray<CheckpointRecord>, Internal>;
   readonly findCheckpoint: (

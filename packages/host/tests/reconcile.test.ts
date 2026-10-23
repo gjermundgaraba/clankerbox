@@ -7,11 +7,11 @@ interface State extends Decided {
   readonly seen: MachineState;
 }
 
-const desires: ReadonlyArray<Desired> = ["running", "stopped", "deleted"];
+const desires: ReadonlyArray<Desired> = ["running", "stopped", "paused", "deleted"];
 
 const flags: ReadonlyArray<boolean> = [false, true];
 
-const seens: ReadonlyArray<MachineState> = ["running", "stopped", "missing", "unknown"];
+const seens: ReadonlyArray<MachineState> = ["running", "stopped", "paused", "missing", "unknown"];
 
 const states: ReadonlyArray<State> = desires.flatMap((desired) =>
   flags.flatMap((made) =>
@@ -31,6 +31,8 @@ const succeeded = (state: State, step: Next): State => {
       return { ...state, prepared: true, seen: "running" };
     case "stopping":
       return { ...state, prepared: false, seen: "stopped" };
+    case "pausing":
+      return { ...state, prepared: false, seen: "paused" };
     default:
       return state;
   }
@@ -53,8 +55,8 @@ const restsWithin = (state: State, steps: number): boolean => {
 };
 
 describe("next", () => {
-  it("covers every state: three desires, made or not, prepared or not, four readings", () => {
-    expect(states).toHaveLength(48);
+  it("covers every state: four desires, made or not, prepared or not, five readings", () => {
+    expect(states).toHaveLength(80);
   });
 
   it("a machine asked to be deleted is deleted, whatever else holds", () => {
@@ -70,6 +72,30 @@ describe("next", () => {
           state.made &&
           state.desired === "stopped" &&
           ["creating", "starting"].includes(decide(state)),
+      ),
+    ).toEqual([]);
+  });
+
+  it("a made machine asked to pause is paused only from running, and never made, started or stopped", () => {
+    expect(
+      states.filter(
+        (state) =>
+          state.made &&
+          state.desired === "paused" &&
+          (["creating", "starting", "stopping"].includes(decide(state)) ||
+            (decide(state) === "pausing") !== (state.seen === "running")),
+      ),
+    ).toEqual([]);
+  });
+
+  it("a paused machine asked to run or stop is started or stopped, never left at rest", () => {
+    expect(
+      states.filter(
+        (state) =>
+          state.made &&
+          state.seen === "paused" &&
+          ((state.desired === "running" && decide(state) !== "starting") ||
+            (state.desired === "stopped" && decide(state) !== "stopping")),
       ),
     ).toEqual([]);
   });

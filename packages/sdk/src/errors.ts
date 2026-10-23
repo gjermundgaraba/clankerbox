@@ -37,7 +37,11 @@ export class Conflict extends Schema.TaggedError<Conflict>()(
  */
 export class Superseded extends Schema.TaggedError<Superseded>()(
   "Superseded",
-  { message: Schema.String, ...located, by: Schema.Literals(["running", "stopped", "deleted"]) },
+  {
+    message: Schema.String,
+    ...located,
+    by: Schema.Literals(["running", "stopped", "paused", "deleted"]),
+  },
   { httpApiStatus: 409 },
 ) {}
 
@@ -62,10 +66,13 @@ export class Missing extends Schema.TaggedError<Missing>()(
   { httpApiStatus: 412 },
 ) {}
 
-/** `checkpoint` holds RAM state saved under another runtime pin than the one the host runs. */
+/**
+ * The checkpoint or paused machine `id` holds RAM state saved under another runtime pin than the
+ * one the host runs, and restores only under that one.
+ */
 export class PinMismatch extends Schema.TaggedError<PinMismatch>()(
   "PinMismatch",
-  { message: Schema.String, ...located, checkpoint: Schema.String },
+  { message: Schema.String, ...located },
   { httpApiStatus: 412 },
 ) {}
 

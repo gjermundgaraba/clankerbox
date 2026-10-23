@@ -108,7 +108,7 @@ transport. Neither `./testing` export is published.
 - **A machine's row is intent; its lifecycle is a statechart.** The row keeps
   what was asked (`desired`, numbered by the store's `generation` in the
   write that records it) and the progress no runtime can tell again (`made`,
-  the host key). What the VM is doing is always read from the runtime, never
+  the host key, the runtime pin a pause saved it under). What the VM is doing is always read from the runtime, never
   stored, and the host reads every machine at once when it starts and every
   resting one at each recheck, one it couldn't read included. One actor per
   machine (`lifecycle.ts`, xstate under `@xstate/effect`) moves it toward what
@@ -120,8 +120,11 @@ transport. Neither `./testing` export is published.
   prebuild owns its name's own lease, so two prebuilds of one name build
   once. A checkpoint exists only from a capture that succeeded until its
   delete begins, and never changes; the next delete of its name clears what a
-  failed one left. A start starts the machine, also when it runs already, and
-  prepares it. A machine is made by one step in the request that creates it,
+  failed one left. A start starts the machine, also when it runs already, or
+  resumes it when it is paused, and prepares it. A pause saves a running
+  machine and stops its VM, leaving a stopped one stopped; a paused machine
+  resumes, for a start or a stop, only under the pin it was paused under. A
+  machine is made by one step in the request that creates it,
   from what only that request holds: a copy or setup that fails deletes it
   and answers the failure, and a delete that fails runs again at each
   recheck. A host that starts deletes every machine the last one's end left

@@ -3,7 +3,8 @@
 clankerbox runs machines (VMs) for coding agents and reports where each one is
 reachable over SSH.
 
-- Lifecycle: create, start, stop, delete, fork, checkpoint capture and restore.
+- Lifecycle: create, start, stop, pause, delete, fork, checkpoint capture and
+  restore.
 - Two kinds of host: `linux`, Linux guests on a Linux host under smolvm, with
   RAM forks and RAM checkpoints, and `mac`, macOS guests on a Mac under Tart,
   with disk copies.
@@ -162,6 +163,7 @@ clankerbox prebuild --profile dev          # run dev's setup once; later creates
 clankerbox machines
 clankerbox get linux_dev
 clankerbox ssh linux_dev -- uptime
+clankerbox pause linux_dev                 # saves its RAM and frees it; start resumes it
 clankerbox stop linux_dev
 clankerbox start linux_dev
 clankerbox fork linux_dev dev2             # linux_dev2
@@ -177,11 +179,19 @@ clankerbox checkpoint delete linux_base
 - `fork` copies a running linux machine with its RAM, or a stopped mac
   machine's disk. `checkpoint capture` does the same, so a linux checkpoint is
   `ram` and a mac one `disk`.
-- `start`, `stop` and `delete` ask for a state and wait until the machine is
-  there; a request fails `Superseded` when a later one for the same machine
+- `start`, `stop`, `pause` and `delete` ask for a state and wait until the
+  machine is there; a request fails `Superseded` when a later one for the same machine
   asked for something else before it got there. A machine that stops under
   its host while asked to run is started again at its host's next check,
   every 30 s.
+- `pause` saves a running linux machine's RAM, processes and disks and stops
+  its VM, so it holds no RAM on its host until a `start` resumes it where it
+  was. A paused machine resumes only under the smolvm build that paused it:
+  after a host moves to another one, a `start` or `stop` of it fails
+  `PinMismatch`, and only `delete` clears it. A `pause` leaves a stopped machine
+  stopped, and a `stop` of a paused one resumes it to end its processes, keeping
+  its disk. A paused machine can't be forked or captured. mac hosts refuse
+  `pause` for now.
 - A create, fork or restore whose copy or setup fails deletes its machine and
   answers the error, and a delete that fails runs again at the next check; a
   host that restarts before it finished deletes the machine too. Only a

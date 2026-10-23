@@ -17,8 +17,12 @@ export const loginUser = "admin";
 
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
-/** What the operator asked a machine to be; the host keeps moving the machine toward it. */
-export const Desired = Schema.Literals(["running", "stopped", "deleted"]);
+/**
+ * What the operator asked a machine to be; the host keeps moving the machine toward it. `paused`
+ * keeps its RAM, processes and disks, saved by the runtime with the VM stopped, and a start
+ * resumes it; a machine that is stopped when a pause comes stays stopped.
+ */
+export const Desired = Schema.Literals(["running", "stopped", "paused", "deleted"]);
 
 export type Desired = typeof Desired.Type;
 
@@ -28,7 +32,7 @@ export type Desired = typeof Desired.Type;
  * longer has, which can only be deleted; and `waiting`, one the runtime can't read, which fails the
  * request and is read again at the host's next recheck. `creating` copies the machine and runs its
  * setup, and a machine whose create or setup fails is deleted. `starting` starts the machine, also
- * when it runs already, and prepares it.
+ * when it runs already, resumes a paused one, and prepares it.
  */
 export const Phase = Schema.Literals([
   "observing",
@@ -36,6 +40,7 @@ export const Phase = Schema.Literals([
   "creating",
   "starting",
   "stopping",
+  "pausing",
   "deleting",
   "settled",
   "failed",
@@ -74,12 +79,13 @@ export const TailnetStatus = Schema.Union([
 export type TailnetStatus = typeof TailnetStatus.Type;
 
 /**
- * `state` is what the runtime reports: `missing` when it doesn't have the machine, and `unknown`
- * when it couldn't be read. `desired` is what the last request asked for, `phase` what the host is
- * doing about it, and `error` why the last step failed, until the next request. `ssh` is only
- * on a running machine whose runtime gives it an endpoint, and `hostKey`, `<type> <base64>`, once
- * preparation has recorded it. `tailnet` is on a running machine of a host that joins its machines
- * to a tailnet, once the host has checked it.
+ * `state` is what the runtime reports: `paused` while it holds the machine's saved execution,
+ * `missing` when it doesn't have the machine, and `unknown` when it couldn't be read. `desired` is
+ * what the last request asked for, `phase` what the host is doing about it, and `error` why the
+ * last step failed, until the next request. `ssh` is only on a running machine whose runtime gives
+ * it an endpoint, and `hostKey`, `<type> <base64>`, once preparation has recorded it. `tailnet` is
+ * on a running machine of a host that joins its machines to a tailnet, once the host has checked
+ * it.
  */
 export const Machine = Schema.Struct({
   id: Id,
@@ -90,7 +96,7 @@ export const Machine = Schema.Struct({
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
-  state: Schema.Literals(["running", "stopped", "missing", "unknown"]),
+  state: Schema.Literals(["running", "stopped", "paused", "missing", "unknown"]),
   desired: Desired,
   phase: Phase,
   error: Schema.optionalKey(HostError),

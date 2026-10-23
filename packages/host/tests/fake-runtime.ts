@@ -15,6 +15,7 @@ import {
   type Interface,
   Runtime,
   type RuntimeError,
+  type StateError,
 } from "../src/runtime.ts";
 
 export type Operation =
@@ -23,6 +24,7 @@ export type Operation =
   | "create"
   | "start"
   | "stop"
+  | "pause"
   | "delete"
   | "exec"
   | "capture"
@@ -35,7 +37,7 @@ export interface FakeOptions {
   /** `linux` by default, which captures and forks only a running machine. */
   readonly kind?: Kind | undefined;
   readonly ramBudgetMib?: number | undefined;
-  /** `fake 1` by default on linux; mac has none. */
+  /** `fake 1` by default on linux; mac has none. A paused machine resumes under it, `fake 1` on mac. */
   readonly pin?: string | undefined;
 }
 
@@ -331,6 +333,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         version: "fake",
         publishAddress: "127.0.0.1",
         pin: options.pin ?? (kind === "linux" ? "fake 1" : undefined),
+        pausePin: options.pin ?? "fake 1",
         startup: () => Effect.sync(() => calls.push("startup")),
         observe,
         admit: (activation: Activation) =>
@@ -383,6 +386,32 @@ export const fakeRuntime = (options: FakeOptions) => {
               if (found !== undefined) {
                 found.state = "stopped";
               }
+            }),
+          ),
+        pause: (machine) =>
+          call(
+            "pause",
+            machine,
+            Effect.suspend((): Effect.Effect<void, StateError> => {
+              const found = machines.get(machine.name);
+
+              if (found === undefined) {
+                return Effect.fail(missing(kind, machine));
+              }
+
+              if (found.state === "stopped") {
+                return Effect.fail(
+                  new WrongState({
+                    message: `${machine.id} is stopped: start it first`,
+                    machine: machine.id,
+                    state: found.state,
+                  }),
+                );
+              }
+
+              found.state = "paused";
+
+              return Effect.void;
             }),
           ),
         delete: (machine) =>

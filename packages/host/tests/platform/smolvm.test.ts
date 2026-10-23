@@ -207,7 +207,7 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it("smolvm's states map onto running and stopped by whether the VMM is alive", () => {
+  it("smolvm's paused state is its own, and the rest map onto running and stopped by whether the VMM is alive", () => {
     expect(
       Object.fromEntries(
         (
@@ -227,7 +227,7 @@ layer(NodeServices.layer)((it) => {
       created: "stopped",
       running: "running",
       stopped: "stopped",
-      paused: "stopped",
+      paused: "paused",
       pausing: "running",
       failed: "stopped",
       unreachable: "running",
@@ -458,7 +458,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "start leaves a running machine as it is, boots an unreachable one again, and refuses a frozen, paused, pausing or missing one before anything native",
+    "start leaves a running machine as it is, boots an unreachable one again, resumes a paused one or one a pause left part way, and refuses a frozen or missing one before anything native",
     () =>
       Effect.gen(function* () {
         let reply = status("running");
@@ -466,32 +466,100 @@ layer(NodeServices.layer)((it) => {
         const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        yield* runtime.start(machine);
-
-        reply = status("unreachable");
-        yield* runtime.start(machine);
+        for (const next of ["running", "unreachable", "paused", "pausing"] as const) {
+          reply = status(next);
+          yield* runtime.start(machine);
+        }
 
         const refusals = [];
 
-        for (const next of [status("frozen"), status("paused"), status("pausing"), unknown]) {
+        for (const next of [status("frozen"), unknown]) {
           reply = next;
           refusals.push(yield* Effect.flip(runtime.start(machine)));
         }
 
         expect(refusals.map(failure)).toEqual([
           ["WrongState", "smolvm reads machine linux_dev frozen, and doesn't start it from there"],
-          ["WrongState", "smolvm reads machine linux_dev paused, and doesn't start it from there"],
-          ["WrongState", "smolvm reads machine linux_dev pausing, and doesn't start it from there"],
           ["Missing", "machine linux_dev is missing from the linux runtime; delete it"],
         ]);
-        expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual([
-          "status",
-          "status",
-          "start",
-          "status",
-          "status",
-          "status",
-          "status",
+        expect(smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))).toEqual([
+          "status --name dev-01234567",
+          "status --name dev-01234567",
+          "start --name dev-01234567",
+          "status --name dev-01234567",
+          "resume --name dev-01234567",
+          "status --name dev-01234567",
+          "resume --name dev-01234567",
+          "status --name dev-01234567",
+          "status --name dev-01234567",
+        ]);
+      }),
+  );
+
+  it.effect(
+    "pause saves a running machine, leaves a paused one, resumes one a pause left part way before pausing it again, and refuses a stopped or missing one",
+    () =>
+      Effect.gen(function* () {
+        let reply = status("running");
+
+        const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        for (const next of ["running", "paused", "pausing"] as const) {
+          reply = status(next);
+          yield* runtime.pause(machine);
+        }
+
+        const refusals = [];
+
+        for (const next of [status("stopped"), unknown]) {
+          reply = next;
+          refusals.push(yield* Effect.flip(runtime.pause(machine)));
+        }
+
+        expect(refusals.map(failure)).toEqual([
+          [
+            "WrongState",
+            "smolvm reads machine linux_dev stopped, and pauses only a running machine",
+          ],
+          ["Missing", "machine linux_dev is missing from the linux runtime; delete it"],
+        ]);
+        expect(smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))).toEqual([
+          "status --name dev-01234567",
+          "pause --name dev-01234567",
+          "status --name dev-01234567",
+          "status --name dev-01234567",
+          "resume --name dev-01234567",
+          "pause --name dev-01234567",
+          "status --name dev-01234567",
+          "status --name dev-01234567",
+        ]);
+      }),
+  );
+
+  it.effect(
+    "stop resumes a paused machine, or one a pause left part way, to end its saved execution, and leaves a stopped or missing one",
+    () =>
+      Effect.gen(function* () {
+        let reply = status("paused");
+
+        const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        for (const next of [status("paused"), status("pausing"), status("stopped"), unknown]) {
+          reply = next;
+          yield* runtime.stop(machine);
+        }
+
+        expect(smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))).toEqual([
+          "status --name dev-01234567",
+          "resume --name dev-01234567",
+          "stop --name dev-01234567",
+          "status --name dev-01234567",
+          "resume --name dev-01234567",
+          "stop --name dev-01234567",
+          "status --name dev-01234567",
+          "status --name dev-01234567",
         ]);
       }),
   );

@@ -437,6 +437,7 @@ export const make = (
       version: reported,
       publishAddress: settings.publishAddress,
       pin: undefined,
+      pausePin: `tart ${reported}`,
       startup: Effect.fn("Tart.startup")((machines) =>
         Effect.gen(function* () {
           yield* files(
@@ -511,6 +512,15 @@ export const make = (
         }),
       ),
       stop: Effect.fn("Tart.stop")(stop),
+      pause: Effect.fn("Tart.pause")((machine) =>
+        Effect.fail(
+          new WrongState({
+            message: `this host doesn't pause machines on Tart yet; stop ${machine.id} instead`,
+            machine: machine.id,
+            state: "running",
+          }),
+        ),
+      ),
       delete: Effect.fn("Tart.delete")((machine) =>
         Effect.gen(function* () {
           const vm = vmOf(machine);

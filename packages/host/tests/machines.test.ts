@@ -634,6 +634,98 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
+  const pausedPins = (host: TestHost) =>
+    Effect.map(rows(host), (intents) => intents.map(({ pausedPin }) => pausedPin));
+
+  it.effect(
+    "a pause keeps the runtime's pin until a start resumes the machine and prepares it again",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+        linux.fake.calls.length = 0;
+
+        const paused = yield* linux.run(linux.machines.pause("linux_dev"));
+        const pinned = yield* pausedPins(linux);
+        const started = yield* linux.run(linux.machines.start("linux_dev"));
+
+        expect(at(paused)).toEqual(["paused", "paused", "settled"]);
+        expect(pinned).toEqual(["fake 1"]);
+        expect(at(started)).toEqual(["running", "running", "settled"]);
+        expect(yield* pausedPins(linux)).toEqual([undefined]);
+        expect(linux.fake.calls).toEqual([
+          "pause linux_dev",
+          "admit linux_dev",
+          "start linux_dev",
+          "exec linux_dev",
+        ]);
+      }),
+  );
+
+  it.effect("a pause of a stopped machine leaves it stopped, and calls no runtime", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      yield* linux.run(linux.machines.stop("linux_dev"));
+      linux.fake.calls.length = 0;
+
+      const paused = yield* linux.run(linux.machines.pause("linux_dev"));
+
+      expect(at(paused)).toEqual(["stopped", "paused", "settled"]);
+      expect(yield* pausedPins(linux)).toEqual([undefined]);
+      expect(linux.fake.calls).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "a machine paused under another runtime build is PinMismatch to a start or a stop, and never resumed",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+        yield* linux.run(linux.machines.pause("linux_dev"));
+        yield* linux.run(linux.store.pausedUnder("dev", "fake 0"));
+        linux.fake.calls.length = 0;
+
+        const errors = [
+          yield* failure(linux, linux.machines.start("linux_dev")),
+          yield* failure(linux, linux.machines.stop("linux_dev")),
+        ];
+
+        expect(errors.map((error) => [error._tag, error.message])).toEqual(
+          Array.from({ length: 2 }, () => [
+            "PinMismatch",
+            "machine linux_dev was paused under fake 0, and this host runs fake 1; it resumes only under the same one: delete it, or resume it under that one",
+          ]),
+        );
+        expect(linux.fake.calls).toEqual([]);
+        expect(yield* pausedPins(linux)).toEqual(["fake 0"]);
+      }),
+  );
+
+  it.effect(
+    "a stop of a paused machine boots it through admission, as a stop, and drops its pin",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+        yield* linux.run(linux.machines.pause("linux_dev"));
+        linux.fake.calls.length = 0;
+
+        const stopped = yield* linux.run(linux.machines.stop("linux_dev"));
+        const [activation] = linux.fake.activations.slice(-1);
+
+        expect(at(stopped)).toEqual(["stopped", "stopped", "settled"]);
+        expect(activation?.action).toBe("stopMachine");
+        expect(linux.fake.calls).toEqual(["admit linux_dev", "stop linux_dev"]);
+        expect(yield* pausedPins(linux)).toEqual([undefined]);
+      }),
+  );
+
   it.effect("two starts at once both answer with the running machine", () =>
     Effect.gen(function* () {
       const linux = yield* host();

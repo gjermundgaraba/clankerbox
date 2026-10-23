@@ -91,6 +91,14 @@ export const stubHost = (options: StubHostOptions) => {
       : Effect.succeed(found);
   };
 
+  const settled = (found: Machine, state: Machine["state"], desired: Machine["desired"]) => {
+    const now: Machine = { ...found, state, desired };
+
+    machines.set(now.id, now);
+
+    return now;
+  };
+
   const findCheckpoint = (id: string) => {
     const found = checkpoints.get(id);
 
@@ -188,7 +196,11 @@ export const stubHost = (options: StubHostOptions) => {
         Effect.sync(() => creates.push(request)),
         Effect.andThen(record("machine.create"), create(request)),
       ),
-    startMachine: ({ id }) => Effect.andThen(record("machine.start"), find(id)),
+    startMachine: ({ id }) =>
+      Effect.andThen(
+        record("machine.start"),
+        Effect.map(find(id), (found) => settled(found, "running", "running")),
+      ),
     stopMachine: ({ id }) =>
       Effect.andThen(
         record("machine.stop"),
@@ -197,6 +209,13 @@ export const stubHost = (options: StubHostOptions) => {
           state: "stopped",
           desired: "stopped",
         })),
+      ),
+    pauseMachine: ({ id }) =>
+      Effect.andThen(
+        record("machine.pause"),
+        Effect.map(find(id), (found) =>
+          settled(found, found.state === "stopped" ? "stopped" : "paused", "paused"),
+        ),
       ),
     deleteMachine: ({ id }) =>
       Effect.andThen(

@@ -94,6 +94,8 @@ export interface Steps {
    */
   readonly join: (life: Life) => Effect.Effect<TailnetStatus | undefined>;
   readonly stop: (life: Life) => Effect.Effect<void, StepError>;
+  /** Saves a running machine's execution and stops its VM. */
+  readonly pause: (life: Life) => Effect.Effect<void, StepError>;
   readonly remove: (life: Life) => Effect.Effect<void, RuntimeError>;
 }
 
@@ -104,6 +106,7 @@ const phases = {
   creating: "creating",
   starting: "starting",
   stopping: "stopping",
+  pausing: "pausing",
   joining: "settled",
   deleting: "deleting",
   removed: "deleting",
@@ -225,6 +228,7 @@ export const lifecycle = (steps: Steps) => {
       start: createEffectLogic(step(steps.start)),
       join: createEffectLogic(({ input }: { input: Life }) => steps.join(input)),
       stop: createEffectLogic(step(steps.stop)),
+      pause: createEffectLogic(step(steps.pause)),
       remove: createEffectLogic(step(steps.remove)),
     },
   });
@@ -247,7 +251,7 @@ export const lifecycle = (steps: Steps) => {
   });
 
   const stepping = (
-    src: "make" | "start" | "stop",
+    src: "make" | "start" | "stop" | "pause",
     desired: (life: Life, desire: Desire) => { readonly context: Life },
     reached: Partial<Life>,
   ) =>
@@ -319,6 +323,7 @@ export const lifecycle = (steps: Steps) => {
         tailnet: { ...unchecked, wait: 0 },
       }),
       stopping: stepping("stop", interrupting, { prepared: false }),
+      pausing: stepping("pause", interrupting, { prepared: false }),
       deleting: {
         invoke: {
           src: "remove",

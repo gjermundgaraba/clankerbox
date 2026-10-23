@@ -612,7 +612,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         new PinMismatch({
           message:
             "checkpoint linux_hot holds RAM state saved under fake 1, and this host runs fake 2; it restores only under the same one",
-          checkpoint: "linux_hot",
         }),
       );
       expect(upgraded.fake.calls).toEqual(["startup"]);

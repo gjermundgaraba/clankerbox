@@ -103,6 +103,17 @@ export const stop = Command.make("stop", { ...mutationFlags, machine: machineArg
   }),
 ).pipe(Command.withDescription(actionsByName.stopMachine.description));
 
+export const pause = Command.make(
+  "pause",
+  { ...mutationFlags, machine: machineArgument },
+  (flags) =>
+    printResource(flags, {
+      call: (client) => client.pauseMachine({ id: flags.machine }),
+      encode: encodeMachine,
+      text: machineState,
+    }),
+).pipe(Command.withDescription(actionsByName.pauseMachine.description));
+
 export const deleteMachine = Command.make(
   "delete",
   { ...mutationFlags, machine: machineArgument },

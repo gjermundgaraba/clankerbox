@@ -570,7 +570,7 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect("start, stop and fork route by ID", () =>
+  it.effect("start, pause, stop and fork route by ID", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
       const config = yield* writeConfig(dir, ["mac", "linux"]);
@@ -584,17 +584,24 @@ layer(NodeServices.layer)((it) => {
 
       const runs = [
         yield* cli(["start", "linux_dev", "--config", config], { endpoints }),
+        yield* cli(["pause", "linux_dev", "--config", config], { endpoints }),
         yield* cli(["stop", "linux_dev", "--config", config], { endpoints }),
         yield* cli(["fork", "linux_dev", "copy", "--config", config], { endpoints }),
       ];
 
-      expect(runs.map(({ code }) => code)).toEqual([0, 0, 0]);
+      expect(runs.map(({ code }) => code)).toEqual([0, 0, 0, 0]);
       expect(runs.map(({ stdout }) => stdout)).toEqual([
         "linux_dev running",
+        "linux_dev paused",
         "linux_dev stopped",
         "linux_copy",
       ]);
-      expect(linux.calls).toEqual(["machine.start", "machine.stop", "machine.fork"]);
+      expect(linux.calls).toEqual([
+        "machine.start",
+        "machine.pause",
+        "machine.stop",
+        "machine.fork",
+      ]);
       expect(mac.calls).toEqual([]);
     }),
   );

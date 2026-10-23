@@ -103,6 +103,7 @@ const world = (initial: MachineState) =>
       start: () => step("start", "running"),
       join: () => Effect.andThen(Effect.orDie(enter("join")), Ref.get(tailnet)),
       stop: () => step("stop", "stopped"),
+      pause: () => step("pause", "paused"),
       remove: () =>
         Effect.mapError(
           step("remove", "missing"),
@@ -263,6 +264,71 @@ describe("a machine's lifecycle", () => {
 
       expect(at(rest)).toEqual(["settled", "running"]);
       expect(yield* machine.calls).toEqual(["start", "stop", "start"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "a pause of a running machine pauses it and rests paused, and a start resumes and prepares it",
+    () =>
+      Effect.gen(function* () {
+        const machine = yield* rig("running", made);
+
+        yield* answer(machine.actor, 1);
+
+        const paused = yield* machine.until(yield* machine.request("paused"));
+        const resumed = yield* machine.until(yield* machine.request("running"));
+
+        expect([at(paused), at(resumed)]).toEqual([
+          ["settled", "paused"],
+          ["settled", "running"],
+        ]);
+        expect(yield* machine.calls).toEqual(["start", "pause", "start"]);
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("a pause of a stopped machine leaves it stopped: it has nothing to save", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("stopped", { ...made, desired: "stopped" });
+
+      yield* answer(machine.actor, 1);
+
+      const rest = yield* machine.until(yield* machine.request("paused"));
+
+      expect([at(rest), rest.context.seen]).toEqual([["settled", "paused"], "stopped"]);
+      expect(yield* machine.calls).toEqual([]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a stop of a paused machine stops it, ending its saved execution", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("paused", { ...made, desired: "paused" });
+
+      expect(at(yield* answer(machine.actor, 1))).toEqual(["settled", "paused"]);
+
+      const rest = yield* machine.until(yield* machine.request("stopped"));
+
+      expect([at(rest), rest.context.seen]).toEqual([["settled", "stopped"], "stopped"]);
+      expect(yield* machine.calls).toEqual(["stop"]);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a start sent while a machine pauses cuts the pause short", () =>
+    Effect.gen(function* () {
+      const machine = yield* rig("running", made);
+
+      yield* answer(machine.actor, 1);
+
+      const pausing = yield* machine.hold("pause");
+
+      yield* machine.request("paused");
+      yield* Deferred.await(pausing.entered);
+
+      const rest = yield* machine.until(yield* machine.request("running"));
+
+      yield* Deferred.await(pausing.interrupted);
+
+      expect(at(rest)).toEqual(["settled", "running"]);
+      expect(yield* machine.calls).toEqual(["start", "pause", "start"]);
     }).pipe(Effect.scoped),
   );
 

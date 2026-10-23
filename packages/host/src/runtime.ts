@@ -61,8 +61,16 @@ export interface Held {
   readonly booting: boolean;
 }
 
-/** The actions that may boot a machine, as the runtime's refusals name them. */
-export type Booting = "createMachine" | "startMachine" | "forkMachine" | "restoreMachine";
+/**
+ * The actions that may boot a machine, as the runtime's refusals name them. A stop boots only a
+ * paused machine, on a runtime that resumes it to end its saved execution.
+ */
+export type Booting =
+  | "createMachine"
+  | "startMachine"
+  | "stopMachine"
+  | "forkMachine"
+  | "restoreMachine";
 
 export interface Activation {
   readonly action: Booting;
@@ -104,6 +112,8 @@ export interface Interface {
    * saved it. `undefined` on mac, which has no `ram` checkpoints.
    */
   readonly pin: string | undefined;
+  /** What a paused machine must resume under: the build whose saved execution it holds. */
+  readonly pausePin: string;
   /** Runs after the failed captures are cleared, before the host serves. */
   readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, RuntimeError>;
   /**
@@ -137,14 +147,20 @@ export interface Interface {
   /**
    * Returns once exec works. The core calls it on every start, also of a machine `observe` reads
    * running, so it is where a runtime boots again one that runs but doesn't answer; one that
-   * answers it leaves as it is. A machine it no longer has is `missing`, before anything native.
+   * answers it leaves as it is. A paused machine, or one a pause left part way, resumes its saved
+   * execution. A machine it no longer has is `missing`, before anything native.
    */
   readonly start: (machine: MachineRef) => Effect.Effect<void, RoomError | StateError>;
   /**
-   * The core reads no state first, so the runtime does nothing on a machine that doesn't run or
-   * that it no longer has.
+   * The core reads no state first, so the runtime does nothing on a machine that is stopped or
+   * that it no longer has. A paused machine ends its saved execution and keeps its disk.
    */
-  readonly stop: (machine: MachineRef) => Effect.Effect<void, RuntimeError>;
+  readonly stop: (machine: MachineRef) => Effect.Effect<void, RuntimeError | StateError>;
+  /**
+   * Saves a running machine's execution, RAM and disks, and stops its VM; a paused machine stays
+   * as it is. The core never pauses a stopped one.
+   */
+  readonly pause: (machine: MachineRef) => Effect.Effect<void, RuntimeError | StateError>;
   /**
    * Removes everything native the row could have made, whatever an earlier failure left: a
    * running VM, a VM whose stop failed, or nothing, as after a crash before the first call.

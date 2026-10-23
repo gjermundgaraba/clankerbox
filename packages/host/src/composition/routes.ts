@@ -22,6 +22,7 @@ const app = (config: Pick<HostSettings, "id" | "kind" | "bases">) =>
         createMachine: (request) => machines.create(request),
         startMachine: ({ id }) => machines.start(id),
         stopMachine: ({ id }) => machines.stop(id),
+        pauseMachine: ({ id }) => machines.pause(id),
         deleteMachine: ({ id }) => machines.delete(id),
         forkMachine: ({ machine, name }) => machines.fork(machine, name),
         restoreMachine: ({ checkpoint, name }) => machines.restore(checkpoint, name),
