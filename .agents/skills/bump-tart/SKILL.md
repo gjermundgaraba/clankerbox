@@ -256,8 +256,8 @@ Each: what Tart does, where, and what of ours depends on it.
   job again, and a stopped job launchd still holds whose arguments aren't this
   host's is reloaded, so VMs move as they restart; keep the old install until
   no running VM's job names it. A paused machine resumes under the new Tart,
-  or fails and keeps its saved state; start every paused machine before the
-  move to keep that from happening.
+  or fails and keeps its saved state, which a stop discards; start or stop
+  each paused machine before the move to keep that from happening.
 - Report the tag transition, exact executable provenance, the claims that
   changed and their fixes, the checks actually run, optional opportunities, and
   remaining runtime resources and retained disk separately.

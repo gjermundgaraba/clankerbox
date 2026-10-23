@@ -14,10 +14,11 @@ separately, and don't deploy, change production hosts, or commit unless asked.
 
 ## Source and scope
 
-- **Pinned in this repo:** `testedVersion` in `packages/host/src/platform/smolvm.ts` is
-  exact: startup refuses any other `smolvm --version`. `pin` derives from it
-  (`smolvm <version> <platform>-<arch>`) and is recorded on every `ram`
-  checkpoint and every paused machine. Tests use `testedVersion` or a neutral `0.0.0-test`; only README
+- **Pinned in this repo:** `testedVersion` in
+  `packages/host/src/platform/smolvm.ts` is exact: startup refuses any other
+  `smolvm --version`. `pin` derives from it (`smolvm <version>
+  <platform>-<arch>`) and is recorded on every `ram` checkpoint and every paused
+  machine. Tests use `testedVersion` or a neutral `0.0.0-test`; only README
   repeats the version: `git grep -n '<old version>'` finds every place.
 - **Target:** the latest stable published `smol-machines/smolvm` release (its
   release metadata, such as `gh release view --repo smol-machines/smolvm`),
@@ -152,19 +153,19 @@ as it is.
   without boot progress (the console log growing, or a VMM thread in disk
   wait) or at 180 s (`AGENT_READY_TIMEOUT`, `AGENT_READY_MAX`,
   `BootProgress`). Ours: no bound on start, create or restore.
-- `machine start` resolves the state with an agent ping first
-  (`resolve_state`, src/agent/state_probe.rs): `running` returns at once,
-  `unreachable` (VMM alive, agent silent) has its VMM killed and its record
-  cleared, then starts afresh (`cli_recover_if_unreachable` in
-  `start_vm_named_with_db`, src/cli/vm_common.rs), and `frozen`, `paused` and
-  `pausing` are refused. Ours: `start` reads `machine status` first, leaves
-  `running` as it is, boots `unreachable` again, resumes `resumable` with
-  `machine resume` and refuses `frozen` before anything native. `copyable` takes only `running`, so an unreachable
-  source is refused, and the RAM budget counts `unreachable` as running. The
-  ping's socket waits 3 s to read and 3 s to write
-  (`connect_for_state_probe`, src/agent/client.rs), so `machine status` reads
-  an unreachable machine within the host's 8 s `machineReadWait`, which the
-  live stall test relies on.
+- `machine start` resolves the state with an agent ping first (`resolve_state`,
+  src/agent/state_probe.rs): `running` returns at once, `unreachable` (VMM
+  alive, agent silent) has its VMM killed and its record cleared, then starts
+  afresh (`cli_recover_if_unreachable` in `start_vm_named_with_db`,
+  src/cli/vm_common.rs), and `frozen`, `paused` and `pausing` are refused. Ours:
+  `start` reads `machine status` first, leaves `running` as it is, boots
+  `unreachable` again, resumes `resumable` with `machine resume` and refuses
+  `frozen` before anything native. `copyable` takes only `running`, so an
+  unreachable source is refused, and the RAM budget counts `unreachable` as
+  running. The ping's socket waits 3 s to read and 3 s to write
+  (`connect_for_state_probe`, src/agent/client.rs), so `machine status` reads an
+  unreachable machine within the host's 8 s `machineReadWait`, which the live
+  stall test relies on.
 - `stop` returns after the process is dead. It needs the guest's shutdown ack;
   it hard-kills an unreachable VM or an orphaned VMM
   (`cli_recover_if_unreachable`, `kill_orphaned_boot_process`,
@@ -462,16 +463,16 @@ as it is.
   only where the target changed it: check each identifier still finds the
   code, and add claims the new release introduced.
 - Tell the operator what the bump does to a running host: the host refuses to
-  start until its config names a prefix with the new release (install into a
-  new prefix, expand its templates, change `linux.prefix`, restart); running
-  VMs keep their old prefix, which must stay until its last machine is deleted;
-  the new prefix builds new image seeds; every existing `ram` checkpoint
-  now fails its restore with `PinMismatch`, since its pin names the old
-  release; and so does a start or stop of every paused machine, which smolvm
-  can't stop without resuming, leaving it only `delete`, disk and all: start
-  each paused machine before the move. A pause records the host's pin, not
-  the build a running VM was booted under, so a machine left running across
-  the move must be stopped and started before its next pause.
+  start until its config names a prefix with the new release (install into a new
+  prefix, expand its templates, change `linux.prefix`, restart); running VMs
+  keep their old prefix, which must stay until its last machine is deleted; the
+  new prefix builds new image seeds; every existing `ram` checkpoint now fails
+  its restore with `PinMismatch`, since its pin names the old release; and so
+  does a start or stop of every paused machine, which smolvm can't stop without
+  resuming, leaving it only `delete`, disk and all: start or stop each paused
+  machine before the move (a stop needs room for one at a time). A pause records
+  the host's pin, not the build a running VM was booted under, so a machine left
+  running across the move must be stopped and started before its next pause.
 - Report the tag transition, the claims that changed and their fixes, the checks
   actually run, optional opportunities (with touchpoints and the smallest useful
   check), and remaining runtime resources and retained disk separately.

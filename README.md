@@ -110,9 +110,9 @@ together, as for every release.
   Deploy describes and make each Mac's first pause while unlocked: one made
   while locked powers the VM off and fails. A start of a paused machine while
   the session is locked fails `Locked`.
-- linux: resume paused machines before moving `linux.prefix` to another
-  smolvm. Setup, preparation and the tailnet check now run as root whatever
-  the image's USER; prebuilds made under another USER aren't rebuilt.
+- linux: start or stop paused machines before moving `linux.prefix` to another
+  smolvm. Setup, preparation and the tailnet check now run as root whatever the
+  image's USER; prebuilds made under another USER aren't rebuilt.
 - The Sandbox Agent provider's `pauseSandbox` pauses the machine rather than
   stopping it, so the above applies to its sandboxes: on a Mac, a sandbox
   running since before the upgrade pauses only once its machine is stopped
@@ -189,7 +189,7 @@ clankerbox prebuild --profile dev          # run dev's setup once; later creates
 clankerbox machines
 clankerbox get linux_dev
 clankerbox ssh linux_dev -- uptime
-clankerbox pause linux_dev                 # saves its RAM and frees it; start resumes it
+clankerbox pause linux_dev                 # saves its RAM and frees it
 clankerbox stop linux_dev
 clankerbox start linux_dev
 clankerbox fork linux_dev dev2             # linux_dev2
@@ -206,21 +206,22 @@ clankerbox checkpoint delete linux_base
   machine's disk. `checkpoint capture` does the same, so a linux checkpoint is
   `ram` and a mac one `disk`.
 - `start`, `stop`, `pause` and `delete` ask for a state and wait until the
-  machine is there; a request fails `Superseded` when a later one for the same machine
-  asked for something else before it got there. A machine that stops under
-  its host while asked to run is started again at its host's next check,
+  machine is there; a request fails `Superseded` when a later one for the same
+  machine asked for something else before it got there. A machine that stops
+  under its host while asked to run is started again at its host's next check,
   every 30 s.
 - `pause` saves a running machine's RAM, processes and disks and stops its VM,
   so it holds no RAM, and on a Mac none of its two VMs, until a `start` resumes
   it where it was. A `pause` leaves a stopped machine stopped, and a paused
   machine can't be forked or captured.
-- On linux a paused machine resumes only under the smolvm build that paused
-  it: after a host moves to another one, a `start` of it fails `PinMismatch`,
-  so resume paused machines before upgrading. A machine left running across
-  the move still runs the old build, which a pause can't tell from the new
-  one: stop and start it before its next pause. A Mac tries the resume under
+- On linux a paused machine resumes only under the smolvm build that paused it:
+  after a host moves to another one, a `start` of it fails `PinMismatch`, so
+  start or stop paused machines before upgrading; a stop needs room for one
+  machine at a time, where each start keeps its RAM. A machine left running
+  across the move still runs the old build, which a pause can't tell from the
+  new one: stop and start it before its next pause. A Mac tries the resume under
   any Tart and macOS, and a restore it can't make fails, keeping the saved
-  state.
+  state: a `stop` discards it, and the next `start` boots from the disk.
 - A `stop` of a paused machine resumes it on linux to end its processes,
   needing room as a start does, and fails `PinMismatch` after an upgrade too;
   on a Mac it discards the saved state without booting. Either keeps the disk.
@@ -519,21 +520,21 @@ machine on a linux host, booted from Amp's orb image.
    AMP_ORB_PROVIDER_TOKEN=aop_live_… amp orb provider /opt/orbs/dispatch
    ```
 
-- A `spawn` finds the orb's machine on any host in the client config and
-  starts it, which resumes it when it is paused. When there is none, it
-  restores the checkpoint of `ORB_SNAPSHOT_ID`, or creates the machine from
-  the profile and its prebuild, as it also does when no host's snapshot of the
-  ID restores, failing `PinMismatch` or `Capacity`. It then logs in over ssh as `admin` and starts
-  `amp orb bootstrap`, detached, as the image's `user`, in the image's
+- A `spawn` finds the orb's machine on any host in the client config and starts
+  it, which resumes it when it is paused. When there is none, it restores the
+  checkpoint of `ORB_SNAPSHOT_ID`, or creates the machine from the profile and
+  its prebuild, as it also does when no host's snapshot of the ID restores,
+  failing `PinMismatch` or `Capacity`. It then logs in over ssh as `admin` and
+  starts `amp orb bootstrap`, detached, as the image's `user`, in the image's
   environment, which the recipe records in `/etc/clankerbox/image-env`, with
   `ORB_TOKEN` and `AMP_URL` sent on stdin. Its log is
   `~user/.local/state/clankerbox/amp-orb.log`.
 - A `pause` pauses the machine, so the orb keeps its memory and processes and
   holds no RAM until its next spawn, and leaves a stopped one stopped. With
-  `ORB_SNAPSHOT_ID` it first stops the machine and starts it again, ending
-  the orb's processes, so the snapshot carries none, deletes each host's snapshot of that ID and
-  captures it as `snapshot-<ID>`; later orbs of the project restore it. Two
-  orbs of a project paused with one at once may both capture it, and one
+  `ORB_SNAPSHOT_ID` it first stops the machine and starts it again, ending the
+  orb's processes, so the snapshot carries none, deletes each host's snapshot of
+  that ID and captures it as `snapshot-<ID>`; later orbs of the project restore
+  it. Two orbs of a project paused with one at once may both capture it, and one
   fails `Conflict`.
 - A `delete` deletes the orb's machine on whichever host holds it. Snapshots
   stay until `clankerbox checkpoint delete`, since Amp's `amp projects
@@ -551,10 +552,12 @@ machine on a linux host, booted from Amp's orb image.
   when the thread is deleted, so each idle or archived thread keeps a paused
   machine, its RAM and disk on the host's disk.
 - A paused orb resumes, and a snapshot restores, only under the smolvm release
-  that paused or captured it: resume paused orbs before moving a host's
-  smolvm, or their spawns fail; a spawn from a snapshot captured under
-  another creates the orb from the profile until the project's next snapshot
-  pause replaces it.
+  that paused or captured it. Before moving a host's smolvm, stop its orbs'
+  machines, paused or running, with `clankerbox stop`: Amp pauses an orb
+  whenever its thread idles, and a pause can't tell an orb left running from
+  the new release; each spawn then boots its orb again. A spawn from a
+  snapshot captured under another release creates the orb from the profile
+  until the project's next snapshot pause replaces it.
 - The base, not `ORB_IMAGE`, picks the image: move its digest to take a new one,
   then prebuild again. The `amp` CLI in the orb updates itself either way.
 

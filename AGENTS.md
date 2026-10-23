@@ -106,30 +106,30 @@ transport. Neither `./testing` export is published.
   `next`, small enough, is checked over every state it decides from. Each
   states what is right without calling the code under test.
 - **A machine's row is intent; its lifecycle is a statechart.** The row keeps
-  what was asked (`desired`, numbered by the store's `generation` in the
-  write that records it) and the progress no runtime can tell again (`made`,
-  the host key, the runtime pin a pause saved it under). What the VM is doing is always read from the runtime, never
-  stored, and the host reads every machine at once when it starts and every
-  resting one at each recheck, one it couldn't read included. One actor per
-  machine (`lifecycle.ts`, xstate under `@xstate/effect`) moves it toward what
-  was asked a step at a time; a later request cuts a step short. A request
-  answers from where the machine rests once the store has it: `Superseded`
-  when a later request asked for something else by then. Steps hold leases
-  instead of claims: what changes a resource owns it, what copies or reads it
-  shares it, in memory only, so a host's end drops them with the work; a
-  prebuild owns its name's own lease, so two prebuilds of one name build
-  once. A checkpoint exists only from a capture that succeeded until its
-  delete begins, and never changes; the next delete of its name clears what a
-  failed one left. A start starts the machine, also when it runs already, or
-  resumes it when it is paused, and prepares it. A pause saves a running
-  machine and stops its VM, leaving a stopped one stopped; a paused machine
-  resumes only under the pin it was paused under, on a runtime that has one,
-  for a start, and for a stop on a runtime whose stop resumes it. A machine is
-  made by one step in the request that creates it, from what only that
-  request holds: a copy or setup that fails deletes it and answers the
-  failure, and a delete that fails runs again at each recheck. A host that starts deletes every machine the last one's end left
-  unmade, clears its failed captures and deletes and lets the actors finish
-  the rest.
+  what was asked (`desired`, numbered by the store's `generation` in the write
+  that records it) and the progress no runtime can tell again (`made`, the host
+  key, the runtime pin a pause saved it under). What the VM is doing is always
+  read from the runtime, never stored, and the host reads every machine at once
+  when it starts and every resting one at each recheck, one it couldn't read
+  included. One actor per machine (`lifecycle.ts`, xstate under
+  `@xstate/effect`) moves it toward what was asked a step at a time; a later
+  request cuts a step short. A request answers from where the machine rests once
+  the store has it: `Superseded` when a later request asked for something else
+  by then. Steps hold leases instead of claims: what changes a resource owns it,
+  what copies or reads it shares it, in memory only, so a host's end drops them
+  with the work; a prebuild owns its name's own lease, so two prebuilds of one
+  name build once. A checkpoint exists only from a capture that succeeded until
+  its delete begins, and never changes; the next delete of its name clears what
+  a failed one left. A start starts the machine, also when it runs already, or
+  resumes it when it is paused, and prepares it. A pause saves a running machine
+  and stops its VM, leaving a stopped one stopped; a paused machine resumes only
+  under the pin it was paused under, on a runtime that has one, for a start, and
+  for a stop on a runtime whose stop resumes it. A machine is made by one step
+  in the request that creates it, from what only that request holds: a copy or
+  setup that fails deletes it and answers the failure, and a delete that fails
+  runs again at each recheck. A host that starts deletes every machine the last
+  one's end left unmade, clears its failed captures and deletes and lets the
+  actors finish the rest.
 - **No prose comments.** A reason goes where something can check or show it:
   a type, a test's name, or the commit message. What stays: a one-line
   `// SAFETY:` above a type assertion, a one-line `// Source:` citing the
