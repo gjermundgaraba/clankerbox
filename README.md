@@ -524,11 +524,11 @@ machine on a linux host, booted from Amp's orb image.
   it, which resumes it when it is paused. When there is none, it restores the
   checkpoint of `ORB_SNAPSHOT_ID`, or creates the machine from the profile and
   its prebuild, as it also does when no host's snapshot of the ID restores,
-  failing `PinMismatch` or `Capacity`. It then logs in over ssh as `admin` and
-  starts `amp orb bootstrap`, detached, as the image's `user`, in the image's
-  environment, which the recipe records in `/etc/clankerbox/image-env`, with
-  `ORB_TOKEN` and `AMP_URL` sent on stdin. Its log is
-  `~user/.local/state/clankerbox/amp-orb.log`.
+  failing `PinMismatch`, `Capacity` or `NotFound`. It then logs in over ssh as
+  `admin` and starts `amp orb bootstrap`, detached, as the image's `user`, in
+  the image's environment, which the recipe records in
+  `/etc/clankerbox/image-env`, with `ORB_TOKEN` and `AMP_URL` sent on stdin. Its
+  log is `~user/.local/state/clankerbox/amp-orb.log`.
 - A `pause` pauses the machine, so the orb keeps its memory and processes and
   holds no RAM until its next spawn, and leaves a stopped one stopped. With
   `ORB_SNAPSHOT_ID` it first stops the machine and starts it again, ending the
@@ -559,7 +559,9 @@ machine on a linux host, booted from Amp's orb image.
   snapshot captured under another release creates the orb from the profile
   until the project's next snapshot pause replaces it.
 - The base, not `ORB_IMAGE`, picks the image: move its digest to take a new one,
-  then prebuild again. The `amp` CLI in the orb updates itself either way.
+  then delete the profile's prebuild (`prebuilt-…` in `clankerbox checkpoint
+  list`), which names no image, and prebuild again. The `amp` CLI in the orb
+  updates itself either way.
 
 ## License
 

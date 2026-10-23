@@ -173,7 +173,7 @@ const restored = (client: Client.Interface, job: Job, snapshot: Checkpoint) =>
       outcome: outcome(job, "restored", { machine: running.id, checkpoint: snapshot.id }),
       running,
     });
-  }).pipe(Effect.catchTag(["PinMismatch", "Capacity"], () => Effect.succeedNone));
+  }).pipe(Effect.catchTag(["PinMismatch", "Capacity", "NotFound"], () => Effect.succeedNone));
 
 const spawn = <R>(
   client: Client.Interface,

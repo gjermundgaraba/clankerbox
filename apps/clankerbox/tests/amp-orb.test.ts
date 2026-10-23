@@ -15,7 +15,17 @@ import {
   type StubHost,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { formatId, HostId, Id, Name, PinMismatch } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Capacity,
+  type Declared,
+  formatId,
+  HostId,
+  Id,
+  Internal,
+  Name,
+  NotFound,
+  PinMismatch,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { bootstrapScript, nameOn } from "../src/amp-orb.ts";
 import { cleanup, cli, fakeSpawner, hostIn, writeConfig } from "./support.ts";
 
@@ -336,33 +346,65 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
+  const restoreSpawn = (restoreFails: Declared<"restoreMachine">) =>
+    Effect.gen(function* () {
+      const config = yield* setup();
+
+      const linux = stub({
+        id: "linux",
+        bases: ["amp-orb"],
+        made: reachable,
+        checkpoints: [checkpoint("linux_snapshot-prj-42")],
+        restoreFails,
+      });
+
+      const run = yield* dispatch(
+        config,
+        [["linux", linux]],
+        spawnJob({ ORB_SNAPSHOT_ID: "prj-42" }),
+      );
+
+      return { ...run, linux };
+    });
+
   it.effect(
-    "a spawn whose snapshot was captured under another smolvm creates the orb from the profile",
+    "a spawn whose snapshot can't restore, captured under another smolvm, on a full host or deleted since, creates the orb from the profile",
     () =>
       Effect.gen(function* () {
-        const config = yield* setup();
+        const snapshot = "linux_snapshot-prj-42";
 
-        const linux = stub({
-          id: "linux",
-          bases: ["amp-orb"],
-          made: reachable,
-          checkpoints: [checkpoint("linux_snapshot-prj-42")],
-          restoreFails: new PinMismatch({
-            message: "linux_snapshot-prj-42 was captured under another smolvm",
-            id: "linux_snapshot-prj-42",
+        for (const refusal of [
+          new PinMismatch({
+            message: `${snapshot} was captured under another smolvm`,
+            id: snapshot,
           }),
-        });
+          new Capacity({ message: "the host's RAM budget is full", id: snapshot }),
+          new NotFound({ message: `no checkpoint ${snapshot}`, id: snapshot }),
+        ]) {
+          const { code, stdout, linux } = yield* restoreSpawn(refusal);
 
-        const { code, stdout } = yield* dispatch(
-          config,
-          [["linux", linux]],
-          spawnJob({ ORB_SNAPSHOT_ID: "prj-42" }),
-        );
-
-        expect([code, stdout]).toEqual([0, `spawn ${orb}: ${id} created`]);
-        expect(linux.calls).toContain("machine.restore");
-        expect(linux.held()).toEqual([id]);
+          expect([refusal._tag, code, stdout]).toEqual([
+            refusal._tag,
+            0,
+            `spawn ${orb}: ${id} created`,
+          ]);
+          expect(linux.calls).toContain("machine.restore");
+          expect(linux.held()).toEqual([id]);
+        }
       }),
+  );
+
+  it.effect("a spawn whose snapshot restore fails otherwise fails, and creates nothing", () =>
+    Effect.gen(function* () {
+      const { code, stderr, linux } = yield* restoreSpawn(
+        new Internal({ message: "smolvm exited 1", id: "linux_snapshot-prj-42" }),
+      );
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("smolvm exited 1");
+      expect(linux.creates).toEqual([]);
+      expect(linux.held()).toEqual([]);
+    }),
   );
 
   it.effect(
