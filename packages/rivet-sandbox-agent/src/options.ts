@@ -41,12 +41,6 @@ export interface Options {
  */
 export interface ClankerboxProvider extends SandboxProvider {
   reconnect(sandboxId: string): Promise<void>;
-  /**
-   * Closes the server's ACP servers, whose agents the SDK can't reach again, then pauses the
-   * machine, which a reconnect resumes with its disk, processes and server; a close that fails
-   * fails the pause and leaves the machine running. A reconnect then replays each session into a
-   * new ACP server, as after a stop.
-   */
   pause(sandboxId: string): Promise<void>;
   ensureServer(sandboxId: string): Promise<void>;
   getUrl(sandboxId: string): Promise<string>;

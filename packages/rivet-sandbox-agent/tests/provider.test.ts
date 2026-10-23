@@ -342,8 +342,8 @@ test("reconnecting to a machine that is gone, or ensuring its server, is the SDK
   );
 });
 
-test("the SDK reconnects to a machine by its ID, started and its tunnel opened, and pauses it, its ACP servers closed first", async () => {
-  const { stub, sandbox, calls, acp } = await setup({ machines: [reachable("linux_kept")] });
+test("the SDK reconnects to a machine by its ID: the machine is started and its tunnel opened", async () => {
+  const { stub, sandbox, calls } = await setup({ machines: [reachable("linux_kept")] });
   const sdk = await SandboxAgent.start({ sandbox, sandboxId: "clankerbox/linux_kept" });
 
   expect(await sdk.getHealth()).toEqual({ status: "ok" });
@@ -352,63 +352,7 @@ test("the SDK reconnects to a machine by its ID, started and its tunnel opened, 
 
   await sdk.pauseSandbox();
 
-  expect(stub.calls).toEqual(["machine.start", "machine.get", "machine.pause"]);
-  expect((await acp()).toSorted()).toEqual([
-    "DELETE /v1/acp/sdk%20codex%2F2",
-    "DELETE /v1/acp/sdk-claude-1",
-    "GET /v1/acp",
-  ]);
-
-  const resumed = await SandboxAgent.start({ sandbox, sandboxId: "clankerbox/linux_kept" });
-
-  expect(await resumed.getHealth()).toEqual({ status: "ok" });
-  expect(stub.calls).toEqual([
-    "machine.start",
-    "machine.get",
-    "machine.pause",
-    "machine.start",
-    "machine.get",
-  ]);
-});
-
-test("a pause with no tunnel open opens one to close a running machine's ACP servers first", async () => {
-  const { stub, sandbox, calls, acp } = await setup({ machines: [reachable("linux_kept")] });
-
-  await sandbox.pause("linux_kept");
-
-  expect(stub.calls).toEqual(["machine.get", "machine.pause"]);
-  expect(await calls()).toHaveLength(1);
-  expect((await acp()).toSorted()).toEqual([
-    "DELETE /v1/acp/sdk%20codex%2F2",
-    "DELETE /v1/acp/sdk-claude-1",
-    "GET /v1/acp",
-  ]);
-});
-
-test("a pause of a machine that isn't running, or whose server doesn't answer, closes nothing", async () => {
-  const { dir, stub, sandbox, acp } = await setup({
-    machines: [reachable("linux_paused", { state: "paused" }), reachable("linux_down")],
-  });
-
-  await writeFile(join(dir, "unhealthy"), "");
-  await sandbox.pause("linux_paused");
-  await sandbox.pause("linux_down");
-
-  expect(stub.calls).toEqual(["machine.get", "machine.pause", "machine.get", "machine.pause"]);
-  expect(await acp()).toEqual([]);
-});
-
-test("a pause whose ACP servers won't close leaves the machine running, and says why", async () => {
-  const { dir, stub, sandbox } = await setup({ machines: [reachable("linux_kept")] });
-
-  await writeFile(join(dir, "acp-refuses"), "");
-
-  await expect(sandbox.pause("linux_kept")).rejects.toMatchObject({
-    message: expect.stringContaining(
-      "couldn't close linux_kept's ACP servers, so it isn't paused: DELETE http://127.0.0.1:",
-    ),
-  });
-  expect(stub.calls).toEqual(["machine.get"]);
+  expect(stub.calls).toEqual(["machine.start", "machine.get", "machine.stop"]);
 });
 
 test("one sandbox's calls take turns: two reconnects never start its machine at the same time", async () => {

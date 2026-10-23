@@ -2,9 +2,7 @@ import {
   type ClankerboxError,
   Client,
   Conflict,
-  Internal,
   loadProfile,
-  type Machine,
   pinnedSsh,
   Prebuild,
   specRequest,
@@ -25,7 +23,7 @@ import {
 import { Hex } from "effect/encoding";
 import type { ChildProcessSpawner } from "effect/process";
 import { SandboxDestroyedError } from "sandbox-agent";
-import { acpPath, healthPath } from "./agent.ts";
+import { healthPath } from "./agent.ts";
 import type { Options } from "./options.ts";
 import { forwarding, freePort, LocalTunnelError, open, type Tunnel } from "./tunnel.ts";
 
@@ -35,15 +33,9 @@ export const defaultCwd = "/home/admin";
 
 const healthWait = Duration.seconds(3);
 
-const closeWait = Duration.seconds(30);
-
 const Health = Schema.Struct({ status: Schema.Literal("ok") });
 
 const isHealth = Schema.is(Health);
-
-const decodeAcpServers = Schema.decodeUnknownEffect(
-  Schema.Struct({ servers: Schema.Array(Schema.Struct({ serverId: Schema.String })) }),
-);
 
 interface Held {
   readonly tunnel: Tunnel;
@@ -122,7 +114,6 @@ export const make = (options: Options, ssh = "ssh") => {
   const opened = (
     id: string,
     known: Sandbox,
-    read?: Machine,
   ): Effect.Effect<number, ClankerboxError | LocalTunnelError, Services> =>
     Effect.gen(function* () {
       if (known.held?.tunnel.running() === true) {
@@ -132,7 +123,7 @@ export const make = (options: Options, ssh = "ssh") => {
       yield* closed(known);
 
       const client = yield* Client.Client;
-      const target = yield* sshTarget(read ?? (yield* client.getMachine({ id })));
+      const target = yield* sshTarget(yield* client.getMachine({ id }));
 
       const port = yield* portOf(known);
       const scope = yield* Scope.make();
@@ -173,58 +164,6 @@ export const make = (options: Options, ssh = "ssh") => {
       Effect.timeoutOrElse({ duration: healthWait, orElse: () => Effect.succeed(false) }),
       Effect.catch(() => Effect.succeed(false)),
     );
-
-  const answered = (url: string, init: RequestInit, ok: (status: number) => boolean) =>
-    Effect.flatMap(
-      Effect.tryPromise((signal) => fetch(url, { ...init, signal })),
-      (reply) =>
-        ok(reply.status)
-          ? Effect.succeed(reply)
-          : Effect.fail(new Error(`${init.method ?? "GET"} ${url} answered ${reply.status}`)),
-    );
-
-  const unserved = (id: string, known: Sandbox) =>
-    Effect.gen(function* () {
-      const client = yield* Client.Client;
-      const tunneled = known.held?.tunnel.running() === true;
-      const read = tunneled ? undefined : yield* client.getMachine({ id });
-
-      if (read !== undefined && read.state !== "running") {
-        return;
-      }
-
-      const port = yield* opened(id, known, read);
-
-      if (!(yield* healthy(port))) {
-        return;
-      }
-
-      const acp = `http://127.0.0.1:${port}${acpPath}`;
-
-      yield* Effect.gen(function* () {
-        const listed = yield* answered(acp, {}, (status) => status === 200);
-        const { servers } = yield* decodeAcpServers(yield* Effect.tryPromise(() => listed.json()));
-
-        yield* Effect.forEach(
-          servers,
-          ({ serverId }) =>
-            answered(
-              `${acp}/${encodeURIComponent(serverId)}`,
-              { method: "DELETE" },
-              (status) => (status >= 200 && status < 300) || status === 404,
-            ),
-          { concurrency: "unbounded", discard: true },
-        );
-      }).pipe(
-        Effect.timeout(closeWait),
-        Effect.mapError(
-          (error) =>
-            new Internal({
-              message: `couldn't close ${id}'s ACP servers, so it isn't paused: ${error.message}`,
-            }),
-        ),
-      );
-    });
 
   const started = (id: string, known: Sandbox) =>
     Effect.gen(function* () {
@@ -298,9 +237,8 @@ export const make = (options: Options, ssh = "ssh") => {
         Effect.gen(function* () {
           const client = yield* Client.Client;
 
-          yield* unserved(id, known);
           yield* closed(known);
-          yield* client.pauseMachine({ id });
+          yield* client.stopMachine({ id });
         }),
       ),
     reconnect: (id: string) => locked(id, (known) => started(id, known)),
