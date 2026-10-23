@@ -454,7 +454,10 @@ await sdk.destroySandbox();
   does, for the key the tunnel logs in with, and a profile with a setup needs
   it.
 - A sandbox's ID is `clankerbox/<machine ID>`; `pauseSandbox` stops the
-  machine and `destroySandbox` deletes it. A create that fails deletes the
+  machine and `destroySandbox` deletes it. Stop a sandbox's machine rather
+  than `clankerbox pause` it: a reconnect resumes a paused one with its old
+  agents, which then run beside the sessions the SDK replays into new ones,
+  and a paused one can't be forked. A create that fails deletes the
   machine it may have made, unless the host answers `Conflict`, as the name
   is another machine's, or `Superseded`, as a later request owns it.
 - `recipes/ubuntu/` (linux) and `recipes/macos/` (mac) install the server,
