@@ -125,9 +125,16 @@ as it is.
   image under the original one (`cache_as` in the pull, `get_mirror`,
   `rewrite_image_registry`, src/agent/client.rs). Neither was tried live. The
   seed key hashes the reference as written, so `x:tag@d` and `x@d` seed
-  separately. Bases go through `mirror.gcr.io`, a pull-through cache of Docker
-  Hub, to avoid Docker Hub's anonymous pull limit. Ours: bases name
-  `mirror.gcr.io` directly, by digest (README).
+  separately, and the digest it resolves to at the registry at every first
+  start, cached only under `--seed-digest-ttl` (`resolved_digest`,
+  `seed_key`, src/image_seed.rs), so a moved tag gets a new seed. Seeds no disk
+  backs onto are evicted least recently used once the cache passes 20 GiB,
+  checked after each new seed (`prune`, `DEFAULT_MAX_BYTES`,
+  `SMOLVM_IMAGE_SEED_MAX_BYTES`). Bases go through `mirror.gcr.io`, a
+  pull-through cache of Docker Hub, to avoid Docker Hub's anonymous pull
+  limit. Ours: bases name `mirror.gcr.io` directly, by digest (README); a
+  create from an image reference, as amp-orb's `ORB_IMAGE` tag, boots what the
+  tag names then, with no `--seed-digest-ttl`.
 
 **Names and paths**
 
@@ -261,9 +268,13 @@ as it is.
   crates/smolvm-agent/src/oci.rs). An explicit `--user` is refused on a
   machine with no image ("needs an image machine"), and `machine create
   --from` keeps the checkpoint's image and user (`checkpoint_workload`,
-  src/portable_checkpoint.rs). Ours: every create passes `--image`, and every
-  exec passes `--user root`, since setup, preparation and the tailnet check
-  run as root, forks and restores included.
+  src/portable_checkpoint.rs). An exec runs in the image's environment, with
+  `HOME` the user's from `/etc/passwd` when the environment leaves it out
+  (`apply_process_env`, `process_env_for`, crates/smolvm-agent/src/oci.rs).
+  Ours: every create passes `--image`, and every exec passes `--user`: root
+  for setup, preparation and the tailnet check, forks and restores included,
+  and an `execMachine` caller's user otherwise, such as amp-orb's bootstrap as
+  the image's `user`, which needs Amp's `PATH` and `HOME`.
 - When a `machine exec` client is signalled, smolvm SIGKILLs the guest command
   and every descendant (`kill_child_on_disconnect`,
   crates/smolvm-agent/src/main.rs; `kill_child_tree`,
@@ -272,10 +283,22 @@ as it is.
   `container-init`, which the image's command is exec'd under and which reaps
   such a child. Ours: a setup killed by its timeout or a host crash runs no
   exit trap and may leave its file in `/var/tmp` (`setupRunner` in
-  `packages/host/src/guest.ts`); `start` scripts daemonize with `setsid -f`.
+  `packages/host/src/guest.ts`); `start` scripts and amp-orb's bootstrap
+  (`bootstrapScript`) daemonize with `setsid -f`; an `execMachine` request
+  that ends, its caller gone or past the client's `--timeout`, ends the
+  client, so smolvm kills its command.
+  Live on 1.31.1: a SIGTERM to the client ended it with 143 and the guest
+  command with it; a `machine stop` or `machine pause` while an exec ran
+  returned at once and ended the exec with exit 1, "io operation failed:
+  connection closed", its command gone after a resume; an exec of a stopped
+  machine exits 1, "is not running". Ours: `execMachine`'s contract, and
+  `Executed`'s note that a runtime's failure answers its own exit code.
 - A `machine exec` sent while `machine start` is still making the guest's
   container made the start fail ("smolvm-fork-ready: No such file", "`/bin/bash`
-  not found"). Ours: the host never runs a guest command before start returns.
+  not found"). Ours: a guest command is sent only after a read under the
+  machine's lease found it running, so never during a start the host runs;
+  `execMachine` releases the lease before its command starts, so only a stop
+  and a whole start in that gap could still race it.
 - smolvm's log lines, which errors carry, are coloured even into a pipe unless
   `NO_COLOR` is set (tracing-subscriber, `NO_COLOR` in `src/fmt/fmt_layer.rs`,
   at the version in smolvm's `Cargo.lock`). Ours: `NO_COLOR=1`.

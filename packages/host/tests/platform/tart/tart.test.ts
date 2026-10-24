@@ -1229,6 +1229,33 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
+  it.effect("exec runs the command as the user it names through sudo -n -u, with its HOME", () =>
+    Effect.gen(function* () {
+      const { mac, runtime } = yield* runtimeOn();
+      const machine = machineOn("dev");
+
+      yield* Effect.scoped(
+        Effect.flatMap(
+          runtime.exec(machine, { argv: ["true"], user: "admin" }),
+          (execution) => execution.exitCode,
+        ),
+      );
+
+      expect(mac.spawner.calls.at(-1)?.args).toEqual([
+        "exec",
+        "-i",
+        vmOf(machine),
+        "sudo",
+        "-n",
+        "-u",
+        "admin",
+        "-H",
+        "--",
+        "true",
+      ]);
+    }),
+  );
+
   it.effect("startup makes the jobs dir and listens again for every machine, running or not", () =>
     Effect.gen(function* () {
       const { mac, runtime } = yield* runtimeOn();

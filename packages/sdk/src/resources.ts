@@ -217,6 +217,53 @@ export const CreateRequest = Schema.Struct({ id: Id, ...specFields });
 
 export type CreateRequest = typeof CreateRequest.Type;
 
+/**
+ * A base holding a `/` is an image reference, such as `registry.example/team/image:tag`, which a
+ * linux host boots as smolvm resolves it at the create; a host's own base names hold none.
+ */
+export const isImageReference = (base: string): boolean => base.includes("/");
+
+/** Whether `host` creates from `base`: a base it names, or an image reference on linux. */
+export const offers = (host: Pick<Host, "kind" | "bases">, base: string): boolean =>
+  host.bases.includes(base) || (host.kind === "linux" && isImageReference(base));
+
+/** What `host` creates from, as a refusal names it. */
+export const offered = ({ kind, bases }: Pick<Host, "kind" | "bases">): string =>
+  [
+    bases.length > 0 ? bases.join(", ") : "no bases",
+    ...(kind === "linux" ? ["and any image reference"] : []),
+  ].join(", ");
+
+/**
+ * A command run in a running machine as `user`, root when it is left out, with `stdin` written
+ * whole. It runs as long as the request does: ending the request ends it, though on mac a command
+ * that writes nothing runs on until it next writes.
+ */
+export const ExecRequest = Schema.Struct({
+  id: Id,
+  argv: Schema.NonEmptyArray(Schema.String),
+  user: Schema.optional(Schema.NonEmptyString),
+  stdin: Schema.optional(Schema.String),
+});
+
+export type ExecRequest = typeof ExecRequest.Type;
+
+/** How many characters of a command's output `Executed` keeps, the last ones. */
+export const outputLimit = 65_536;
+
+/**
+ * `output` is stdout and stderr together, as they arrived, cut to the last `outputLimit`
+ * characters, and `truncated` when that dropped any. A runtime that fails to run the command answers
+ * its own exit code, with its message in `output`.
+ */
+export const Executed = Schema.Struct({
+  exitCode: Schema.Int,
+  output: Schema.String,
+  truncated: Schema.Boolean,
+}).annotate({ identifier: "Executed" });
+
+export type Executed = typeof Executed.Type;
+
 /** A prebuild is the checkpoint `id` of a machine made from the spec, setup and all. */
 export const PrebuildRequest = Schema.Struct({ id: Id, ...specFields, setup: Setup });
 

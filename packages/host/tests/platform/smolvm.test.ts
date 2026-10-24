@@ -774,6 +774,32 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
+  it.effect("exec runs the command as the user it names", () =>
+    Effect.gen(function* () {
+      const spawner = scripted(() => undefined);
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+      yield* Effect.scoped(
+        Effect.flatMap(
+          runtime.exec(machine, { argv: ["true"], user: "user" }),
+          (execution) => execution.exitCode,
+        ),
+      );
+
+      expect(spawner.calls.at(-1)?.args).toEqual([
+        "machine",
+        "exec",
+        "--name",
+        "dev-01234567",
+        "--user",
+        "user",
+        "-i",
+        "--",
+        "true",
+      ]);
+    }),
+  );
+
   it.effect(
     "an exec that can't start fails without its command line, which can carry a script",
     () =>

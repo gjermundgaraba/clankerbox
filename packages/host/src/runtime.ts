@@ -82,6 +82,8 @@ export interface Activation {
 
 export interface Command {
   readonly argv: ReadonlyArray<string>;
+  /** Root when it is left out. On linux, the command runs in the image's environment as this user. */
+  readonly user?: string | undefined;
   /**
    * Written whole, then closed, while the output is read: a script that reads stdin to its end
    * would otherwise wait forever, and a large input would fill the pipe.
@@ -192,7 +194,7 @@ export interface Interface {
   ) => Effect.Effect<void, RoomError | StateError | Unsizable>;
   /** Removes everything native the checkpoint's row could have made. */
   readonly deleteCheckpoint: (checkpoint: CheckpointRef) => Effect.Effect<void, RuntimeError>;
-  /** As root, in a running guest. */
+  /** As the command's user, in a running guest. */
   readonly exec: (
     machine: MachineRef,
     command: Command,

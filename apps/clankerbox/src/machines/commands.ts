@@ -1,20 +1,23 @@
-import { actionsByName, Prebuild } from "@gjermundgaraba/clankerbox-sdk";
-import { Console, DateTime, Effect } from "effect";
+import { actionsByName, Invalid, outputLimit, Prebuild } from "@gjermundgaraba/clankerbox-sdk";
+import { Console, DateTime, Duration, Effect, Option, Stdio, Stream } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import {
   checkpointArgument,
   clientFlags,
   deleted,
+  Exited,
+  fail,
   listCommand,
   machineArgument,
   mutationFlags,
   nameArgument,
   newId,
+  parsed,
   printResource,
   table,
   withClient,
 } from "../command.ts";
-import { age } from "../units.ts";
+import { age, parseSeconds } from "../units.ts";
 import { flagsRequest, specArguments } from "./spec.ts";
 import { encodeMachine, machineFields, machineRows } from "./view.ts";
 
@@ -148,3 +151,94 @@ export const restore = Command.make(
       text: newId,
     }),
 ).pipe(Command.withDescription(`${actionsByName.restoreMachine.description} Prints the new ID.`));
+
+const readStdin = Effect.gen(function* () {
+  const stdio = yield* Stdio.Stdio;
+
+  return yield* Stream.mkString(Stream.decodeText(stdio.stdin)).pipe(
+    Effect.mapError((error) => new Invalid({ message: `couldn't read stdin: ${error.message}` })),
+  );
+});
+
+export const exec = Command.make(
+  "exec",
+  {
+    ...clientFlags,
+    limit: Flag.String("timeout").pipe(
+      Flag.withMetavar("DURATION"),
+      Flag.withDescription(
+        "End the command after this long, such as 90s or 30m, and exit 124; unbounded by default.",
+      ),
+      Flag.optional,
+    ),
+    user: Flag.String("user").pipe(
+      Flag.withDescription("The user to run it as. Default: root."),
+      Flag.optional,
+    ),
+    stdin: Flag.Boolean("stdin").pipe(
+      Flag.withDescription("Send this command's stdin, read to its end, as the command's."),
+      Flag.withDefault(false),
+    ),
+    machine: machineArgument,
+    program: Argument.String("program").pipe(
+      Argument.withDescription("The program to run, after `--`."),
+    ),
+    args: Argument.String("args").pipe(
+      Argument.withDescription("Its arguments."),
+      Argument.variadic(),
+    ),
+  },
+  (flags) =>
+    Effect.gen(function* () {
+      const limit = yield* parsed(flags.limit, "--timeout", parseSeconds).pipe(
+        Effect.catch(fail(flags.json)),
+      );
+
+      const stdin = flags.stdin ? yield* readStdin.pipe(Effect.catch(fail(flags.json))) : undefined;
+
+      const answered = yield* withClient(flags, (client) =>
+        client.execMachine({
+          id: flags.machine,
+          argv: [flags.program, ...flags.args],
+          user: Option.getOrUndefined(flags.user),
+          stdin,
+        }),
+      ).pipe(
+        Effect.timeoutOption(
+          Option.match(limit, { onNone: () => Duration.infinity, onSome: Duration.seconds }),
+        ),
+      );
+
+      if (Option.isNone(answered)) {
+        yield* Console.error(
+          `clankerbox: the command ran past --timeout ${Option.getOrElse(flags.limit, () => "")} and was ended`,
+        );
+
+        return yield* new Exited({ code: 124 });
+      }
+
+      const executed = answered.value;
+
+      if (flags.json) {
+        yield* Console.log(JSON.stringify(executed));
+      } else {
+        const stdio = yield* Stdio.Stdio;
+
+        yield* Stream.run(Stream.make(new TextEncoder().encode(executed.output)), stdio.stdout());
+
+        if (executed.truncated) {
+          yield* Console.error(
+            `clankerbox: the output above is only its last ${outputLimit} characters`,
+          );
+        }
+      }
+
+      if (executed.exitCode !== 0) {
+        return yield* new Exited({ code: executed.exitCode });
+      }
+    }),
+).pipe(
+  Command.withDescription(
+    `${actionsByName.execMachine.description} Prints its output and exits with its exit code.`,
+  ),
+);

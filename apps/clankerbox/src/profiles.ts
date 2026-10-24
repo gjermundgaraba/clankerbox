@@ -79,7 +79,7 @@ export const profileRows = (
   ["NAME", "BASE", "CPU", "RAM", "DISK", "SETUP", "TIMEOUT", "HOST"],
   ...profiles.map(({ label, base, cpu, ramMib, diskGib, setup, host }) => [
     label,
-    base,
+    base ?? "-",
     String(cpu),
     formatMib(ramMib),
     formatGib(diskGib),

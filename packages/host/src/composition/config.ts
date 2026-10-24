@@ -3,6 +3,7 @@ import {
   describeIssues,
   HostId,
   Invalid,
+  isImageReference,
   type Kind,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, FileSystem, Path, Schema } from "effect";
@@ -34,7 +35,16 @@ const common = {
   id: HostId,
   listen: Schema.Struct({ address: Address, port: Port }),
   stateDir: Schema.String,
-  bases: Schema.Record(Schema.String, Schema.String),
+  bases: Schema.Record(Schema.String, Schema.String).check(
+    Schema.makeFilter((bases) => {
+      const reference = Object.keys(bases).find(isImageReference);
+
+      return (
+        reference === undefined ||
+        `a base name holds no /, which marks an image reference: ${reference}`
+      );
+    }),
+  ),
   machinePorts: Schema.optionalKey(MachinePorts),
   tailnet: Schema.optionalKey(TailnetSettings),
 };

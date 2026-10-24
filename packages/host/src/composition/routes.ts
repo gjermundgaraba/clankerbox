@@ -26,6 +26,7 @@ const app = (config: Pick<HostSettings, "id" | "kind" | "bases">) =>
         deleteMachine: ({ id }) => machines.delete(id),
         forkMachine: ({ machine, name }) => machines.fork(machine, name),
         restoreMachine: ({ checkpoint, name }) => machines.restore(checkpoint, name),
+        execMachine: machines.exec,
         listCheckpoints: () => checkpoints.list,
         getCheckpoint: ({ id }) => checkpoints.get(id),
         captureCheckpoint: ({ machine, name }) => checkpoints.capture(machine, name),

@@ -179,6 +179,7 @@ type FailureOf<O extends Operation> = Interface[O] extends (
 
 export const fakeRuntime = (options: FakeOptions) => {
   const machines = new Map<string, FakeMachine>();
+  const images = new Map<string, string>();
   const calls: Array<string> = [];
   const activations: Array<Activation> = [];
   const observed: Array<ReadonlyArray<string>> = [];
@@ -313,13 +314,12 @@ export const fakeRuntime = (options: FakeOptions) => {
       : Effect.succeed(found.root);
   };
 
-  const running = (machine: MachineRef) => {
-    const found = machines.get(machine.name);
+  const commands = new Map<string, Set<ChildProcessSpawner.ChildProcessHandle>>();
 
-    return found?.state === "running"
-      ? Effect.succeed(found)
-      : Effect.fail(new Internal({ message: `exec: ${machine.id} isn't running` }));
-  };
+  const endCommands = (machine: MachineRef) =>
+    Effect.forEach(commands.get(machine.name) ?? [], (handle) => Effect.ignore(handle.kill()), {
+      discard: true,
+    });
 
   const layer = Layer.effect(
     Runtime,
@@ -348,11 +348,12 @@ export const fakeRuntime = (options: FakeOptions) => {
             ),
           ),
         capacity,
-        create: (machine) =>
+        create: (machine, image) =>
           call(
             "create",
             machine,
             Effect.promise(async () => {
+              images.set(machine.name, image);
               const root = join(options.dir, "roots", machine.instance);
 
               await mkdir(join(root, "dev"), { recursive: true });
@@ -380,13 +381,16 @@ export const fakeRuntime = (options: FakeOptions) => {
           call(
             "stop",
             machine,
-            Effect.sync(() => {
-              const found = machines.get(machine.name);
+            Effect.andThen(
+              endCommands(machine),
+              Effect.sync(() => {
+                const found = machines.get(machine.name);
 
-              if (found !== undefined) {
-                found.state = "stopped";
-              }
-            }),
+                if (found !== undefined) {
+                  found.state = "stopped";
+                }
+              }),
+            ),
           ),
         pause: (machine) =>
           call(
@@ -418,9 +422,12 @@ export const fakeRuntime = (options: FakeOptions) => {
           call(
             "delete",
             machine,
-            Effect.sync(() => {
-              machines.delete(machine.name);
-            }),
+            Effect.andThen(
+              endCommands(machine),
+              Effect.sync(() => {
+                machines.delete(machine.name);
+              }),
+            ),
           ),
         capture: (machine, checkpoint) =>
           call(
@@ -455,13 +462,28 @@ export const fakeRuntime = (options: FakeOptions) => {
             "exec",
             machine,
             Effect.gen(function* () {
-              const { root } = yield* running(machine);
+              const found = machines.get(machine.name);
+
+              if (found?.state !== "running") {
+                return {
+                  output: Stream.make(
+                    new TextEncoder().encode(`exec: ${machine.id} isn't running\n`),
+                  ),
+                  exitCode: Effect.succeed(1),
+                };
+              }
+
+              const { root } = found;
               const [file = "/bin/sh", ...args] = command.argv;
 
               const handle = yield* spawner
                 .spawn(
                   ChildProcess.make(file, args, {
-                    env: { CLANKERBOX_ROOT: root, PATH: `${bin}:${process.env["PATH"] ?? ""}` },
+                    env: {
+                      CLANKERBOX_ROOT: root,
+                      CLANKERBOX_USER: command.user ?? "root",
+                      PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+                    },
                     extendEnv: true,
                     killSignal: "SIGKILL",
                     stdin:
@@ -472,15 +494,17 @@ export const fakeRuntime = (options: FakeOptions) => {
                 )
                 .pipe(Effect.mapError((error) => new Internal({ message: error.message })));
 
+              const running = commands.get(machine.name) ?? new Set();
+
+              commands.set(machine.name, running.add(handle));
+              yield* Effect.addFinalizer(() => Effect.sync(() => running.delete(handle)));
+
               return {
                 output: Stream.mapError(
                   handle.all,
                   (error) => new Internal({ message: error.message }),
                 ),
-                exitCode: Effect.mapError(
-                  handle.exitCode,
-                  (error) => new Internal({ message: error.message }),
-                ),
+                exitCode: Effect.orElseSucceed(handle.exitCode, () => 137),
               };
             }),
           ),
@@ -494,6 +518,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     activations,
     observed,
     root: (name: string) => machines.get(name)?.root,
+    images,
     machines,
     stubs: () => stubs,
     failNext: <O extends Operation>(operation: O, error: FailureOf<O>) => {

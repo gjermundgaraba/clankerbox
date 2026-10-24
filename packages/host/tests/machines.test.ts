@@ -6,9 +6,12 @@ import {
   Conflict,
   type HostError,
   Internal,
+  NotFound,
   NotOffered,
+  outputLimit,
   ScriptFailed,
   Superseded,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Fiber, Result } from "effect";
 import { TestClock } from "effect/testing";
@@ -16,7 +19,16 @@ import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { exists, operatorKey, read, remove, stat } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { loginSetup } from "./fake-runtime.ts";
-import { at, eventually, failure, hostOn, pause, request, type TestHost } from "./support.ts";
+import {
+  at,
+  eventually,
+  failure,
+  hostOn,
+  image,
+  pause,
+  request,
+  type TestHost,
+} from "./support.ts";
 
 const ports = { first: 21_100, last: 21_109 };
 
@@ -426,6 +438,201 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(error.message).toContain("offers ubuntu");
       expect(yield* rows(linux)).toEqual([]);
     }),
+  );
+
+  it.effect(
+    "a linux host creates from an image reference no base names, and records it as the machine's base",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+        const reference = "registry.example/team/orb:latest";
+
+        const named = yield* linux.run(linux.machines.create(request("named")));
+        const made = yield* linux.run(linux.machines.create(request("dev", { base: reference })));
+
+        expect(named.base).toBe("ubuntu");
+        expect(linux.fake.images.get("named")).toBe(image);
+        expect(made.base).toBe(reference);
+        expect(linux.fake.images.get("dev")).toBe(reference);
+      }),
+  );
+
+  it.effect(
+    "a mac host's create from an image reference is NotOffered, before anything is written",
+    () =>
+      Effect.gen(function* () {
+        const mac = yield* host({ kind: "mac" });
+
+        const error = yield* failure(
+          mac,
+          mac.machines.create(request("dev", { base: "registry.example/team/orb:latest" }, "mac")),
+        );
+
+        expect(error).toBeInstanceOf(NotOffered);
+        expect(yield* rows(mac)).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "exec runs the command as the user it names, root by default, with its stdin, and answers its exit code and output",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+
+        const argv = ["/bin/sh", "-c", 'echo "$CLANKERBOX_USER"; cat; exit 3'] as const;
+
+        const asUser = yield* linux.run(
+          linux.machines.exec({ id: "linux_dev", argv: [...argv], user: "user", stdin: "hello\n" }),
+        );
+
+        const asRoot = yield* linux.run(linux.machines.exec({ id: "linux_dev", argv: [...argv] }));
+
+        expect(asUser).toEqual({ exitCode: 3, output: "user\nhello\n", truncated: false });
+        expect(asRoot).toEqual({ exitCode: 3, output: "root\n", truncated: false });
+      }),
+  );
+
+  it.effect("exec in a stopped machine is WrongState, and runs nothing", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      yield* linux.run(linux.machines.stop("linux_dev"));
+      linux.fake.calls.length = 0;
+
+      const error = yield* failure(linux, linux.machines.exec({ id: "linux_dev", argv: ["true"] }));
+
+      expect(error).toBeInstanceOf(WrongState);
+      expect(error).toMatchObject({ machine: "linux_dev", state: "stopped" });
+      expect(linux.fake.calls).toEqual([]);
+    }),
+  );
+
+  it.effect("exec in a machine the host doesn't hold is NotFound", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      const error = yield* failure(linux, linux.machines.exec({ id: "linux_dev", argv: ["true"] }));
+
+      expect(error).toBeInstanceOf(NotFound);
+    }),
+  );
+
+  it.effect(
+    "a stop asked for while a command runs doesn't wait for it, and ends it, which answers its exit code",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+
+        const started = join(linux.fake.root("dev") ?? "", "started");
+
+        const running = yield* Effect.forkChild(
+          linux.run(
+            linux.machines.exec({
+              id: "linux_dev",
+              argv: ["/bin/sh", "-c", ': >"$0" && exec sleep 30', started],
+            }),
+          ),
+        );
+
+        yield* Effect.eventually(read(started));
+
+        const stopped = yield* linux.run(linux.machines.stop("linux_dev"));
+        const executed = yield* Fiber.join(running);
+
+        expect(stopped.state).toBe("stopped");
+        expect(executed.exitCode).not.toBe(0);
+      }),
+  );
+
+  it.effect(
+    "exec in a machine whose state can't be read runs the command, and answers what the runtime does",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+        linux.fake.machines.set("dev", { state: "unknown", root: linux.fake.root("dev") ?? "" });
+        linux.fake.calls.length = 0;
+
+        const executed = yield* linux.run(linux.machines.exec({ id: "linux_dev", argv: ["true"] }));
+
+        expect(linux.fake.calls).toEqual(["exec linux_dev"]);
+        expect(executed).toEqual({
+          exitCode: 1,
+          output: "exec: linux_dev isn't running\n",
+          truncated: false,
+        });
+      }),
+  );
+
+  it.effect("an exec cut short ends its command", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev")));
+
+      const pidFile = join(linux.fake.root("dev") ?? "", "exec.pid");
+
+      const running = yield* Effect.forkChild(
+        linux.run(
+          linux.machines.exec({
+            id: "linux_dev",
+            argv: [
+              "/bin/sh",
+              "-c",
+              'echo "$$" >"$0.partial" && mv "$0.partial" "$0" && exec sleep 30',
+              pidFile,
+            ],
+          }),
+        ),
+      );
+
+      const pid = Number(yield* Effect.eventually(read(pidFile)));
+
+      yield* Fiber.interrupt(running);
+
+      expect(() => process.kill(pid, 0)).toThrow("ESRCH");
+    }),
+  );
+
+  it.effect(
+    "exec keeps the last outputLimit characters of a longer output, a cut-off last character included, and says so",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+
+        const executed = yield* linux.run(
+          linux.machines.exec({
+            id: "linux_dev",
+            argv: ["/bin/sh", "-c", `head -c ${outputLimit} /dev/zero | tr '\\0' a; printf end`],
+          }),
+        );
+
+        const cutShort = yield* linux.run(
+          linux.machines.exec({
+            id: "linux_dev",
+            argv: [
+              "/bin/sh",
+              "-c",
+              `head -c ${outputLimit} /dev/zero | tr '\\0' a; printf '\\303'`,
+            ],
+          }),
+        );
+
+        expect(executed.truncated).toBe(true);
+        expect(executed.output).toHaveLength(outputLimit);
+        expect(executed.output.endsWith("aend")).toBe(true);
+        expect(cutShort.truncated).toBe(true);
+        expect(cutShort.output).toHaveLength(outputLimit);
+        expect(cutShort.output.endsWith("a\uFFFD")).toBe(true);
+      }),
   );
 
   it.effect("a create refused at admission leaves nothing behind, and creates nothing", () =>

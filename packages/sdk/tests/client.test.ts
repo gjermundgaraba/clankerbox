@@ -338,6 +338,30 @@ it.effect(
     }),
 );
 
+it.effect(
+  "place puts an image reference no host names on the first linux host, and a mac host never offers one",
+  () =>
+    Effect.gen(function* () {
+      const mac = host({ id: "mac", bases: ["tahoe"], kind: "mac" });
+      const linux = host({ id: "linux", bases: ["ubuntu"] });
+
+      const { placed, refused } = yield* withClient(
+        [
+          ["mac", mac],
+          ["linux", linux],
+        ],
+        (client) =>
+          Effect.all({
+            placed: client.place("registry.example/team/orb:latest"),
+            refused: Effect.flip(client.place("orb:latest")),
+          }),
+      );
+
+      expect(placed).toMatchObject({ id: "linux", kind: "linux" });
+      expect(refused._tag).toBe("NotOffered");
+    }),
+);
+
 it.effect("a host that isn't in the host list is Invalid and sends nothing", () =>
   Effect.gen(function* () {
     const linux = host({ id: "linux", bases: ["ubuntu"] });
@@ -382,8 +406,9 @@ it.effect(
       );
 
       expect(error._tag).toBe("NotOffered");
-      expect(error.message).toContain("linux offers ubuntu, ubuntu-dev");
-      expect(error.message).toContain("mac offers tahoe");
+      expect(error.message).toContain(
+        "linux offers ubuntu, ubuntu-dev, and any image reference; mac offers tahoe",
+      );
       expect(linux.creates).toHaveLength(0);
     }),
 );

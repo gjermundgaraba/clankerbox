@@ -7,6 +7,8 @@ import {
   Conflict,
   type CreateRequest,
   type Declared,
+  type Executed,
+  type ExecRequest,
   Http,
   type Machine,
   NotFound,
@@ -31,13 +33,13 @@ export interface StubHostOptions {
     request: PrebuildRequest,
   ) => Effect.Effect<Prebuilt, Declared<"prebuildCheckpoint">>;
   readonly machines?: ReadonlyArray<Machine>;
-  /** Fields every machine the stub creates, restores or forks carries, such as an SSH login. */
-  readonly made?: Partial<Machine>;
   readonly checkpoints?: ReadonlyArray<Checkpoint>;
   /** What every restore fails with. Default: none. */
   readonly restoreFails?: Declared<"restoreMachine">;
   /** Default: none. */
   readonly capacity?: ReadonlyArray<Reading>;
+  /** Default: exit 0 with no output, in a machine the stub holds. */
+  readonly exec?: (request: ExecRequest) => Effect.Effect<Executed, Declared<"execMachine">>;
 }
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
@@ -72,6 +74,7 @@ export const stubHost = (options: StubHostOptions) => {
   const checkpoints = new Map<string, Checkpoint>();
   const creates: Array<CreateRequest> = [];
   const prebuilds: Array<PrebuildRequest> = [];
+  const execs: Array<ExecRequest> = [];
   const calls: Array<string> = [];
   const versions: Array<string | null> = [];
 
@@ -135,7 +138,6 @@ export const stubHost = (options: StubHostOptions) => {
               cpu: request.cpu,
               ramMib: request.ramMib,
               diskGib: request.diskGib,
-              ...options.made,
             }),
             request.profile,
           ),
@@ -152,7 +154,6 @@ export const stubHost = (options: StubHostOptions) => {
             cpu: found.cpu,
             ramMib: found.ramMib,
             diskGib: found.diskGib,
-            ...options.made,
           }),
           found.profile,
         ),
@@ -198,6 +199,16 @@ export const stubHost = (options: StubHostOptions) => {
         Effect.sync(() => creates.push(request)),
         Effect.andThen(record("machine.create"), create(request)),
       ),
+    execMachine: (request) =>
+      Effect.andThen(
+        Effect.sync(() => execs.push(request)),
+        Effect.andThen(
+          record("machine.exec"),
+          options.exec === undefined
+            ? Effect.as(find(request.id), { exitCode: 0, output: "", truncated: false })
+            : options.exec(request),
+        ),
+      ),
     startMachine: ({ id }) =>
       Effect.andThen(
         record("machine.start"),
@@ -226,9 +237,7 @@ export const stubHost = (options: StubHostOptions) => {
     forkMachine: ({ machine: source, name }) =>
       Effect.andThen(
         record("machine.fork"),
-        Effect.flatMap(find(source), (found) =>
-          add({ ...found, ...options.made, id: `${options.id}_${name}` }),
-        ),
+        Effect.flatMap(find(source), (found) => add({ ...found, id: `${options.id}_${name}` })),
       ),
     restoreMachine: ({ checkpoint, name }) =>
       Effect.andThen(
@@ -305,6 +314,7 @@ export const stubHost = (options: StubHostOptions) => {
     id: options.id,
     creates,
     prebuilds,
+    execs,
     calls,
     versions,
     hold: (held: Machine) => {

@@ -70,6 +70,25 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
+  it.effect(
+    "a profile without a base takes the create's, and a create with neither is refused, naming it as told",
+    () =>
+      Effect.gen(function* () {
+        const { base: _, ...unbased } = sizes;
+        const profile = { ...unbased, label: "orb" };
+        const names = new Map<PropertyKey, string>([["base", "--base"]]);
+
+        expect(decode(unbased)._tag).toBe("Success");
+        expect(yield* specRequest("create", profile, { base: "registry.example/orb:1" })).toEqual({
+          spec: { ...unbased, base: "registry.example/orb:1", profile: "orb" },
+          host: undefined,
+        });
+        expect((yield* refusal("create", profile, {}, names)).message).toBe(
+          "create: --base: missing",
+        );
+      }),
+  );
+
   it.effect("a profile with an unknown key, or setup without its path, is Invalid", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;

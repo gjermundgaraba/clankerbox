@@ -290,6 +290,19 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
+  it.effect("a base name holding a /, which marks an image reference, is Invalid", () =>
+    Effect.gen(function* () {
+      const { loaded } = yield* load({ ...config, bases: { "team/orb": image } });
+
+      const error = yield* Effect.flip(loaded);
+
+      expect(error._tag).toBe("Invalid");
+      expect(error.message).toContain(
+        "a base name holds no /, which marks an image reference: team/orb",
+      );
+    }),
+  );
+
   it.effect("a missing config file is Invalid, naming it", () =>
     Effect.gen(function* () {
       const missing = join(yield* scratch, "nope.json");

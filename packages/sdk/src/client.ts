@@ -23,7 +23,15 @@ import {
 } from "./errors.ts";
 import { formatId, HostId, parseId, parseName } from "./ids.ts";
 import { version, versionHeader } from "./release.ts";
-import type { Checkpoint, Host, Machine, MachineSpec, Usage } from "./resources.ts";
+import {
+  type Checkpoint,
+  type Host,
+  type Machine,
+  type MachineSpec,
+  offered,
+  offers,
+  type Usage,
+} from "./resources.ts";
 import { describeIssues } from "./describe.ts";
 
 /** `id` is the host part of every ID the host holds. */
@@ -64,8 +72,9 @@ export interface Gathered<A> {
 
 export interface Options {
   /**
-   * The wait for a mutation's reply, unbounded by default, as a create's setup can take hours.
-   * It ends only the wait: a mutation that outlasts it fails like a lost reply.
+   * The wait for a mutation's reply, unbounded by default, as a create's setup can take hours. A
+   * mutation that outlasts it fails like a lost reply and still finishes on the host, except
+   * `execMachine`, whose command ends with the wait.
    */
   readonly timeout?: Duration.Duration | undefined;
   /** The wait for a read's reply, `readTimeout` by default; a fan-out bounds each host's own. */
@@ -110,7 +119,7 @@ export interface Interface extends Calls {
   readonly capacity: Effect.Effect<Gathered<Usage>>;
   /**
    * The host a create of `base` goes to, read even when `options.host` names it: the first in
-   * list order that offers it. With none, it is `Unavailable` if a host gave no reply, and
+   * list order that offers it, a base it names or, on linux, an image reference. With none, it is `Unavailable` if a host gave no reply, and
    * `NotOffered` otherwise.
    */
   readonly place: (
@@ -410,12 +419,10 @@ export const make = (
           if (Result.isFailure(result)) {
             noReply ||= Predicate.isTagged(result.failure, "Unavailable");
             misses.push(`${host} failed: ${result.failure.message}`);
-          } else if (result.success.bases.includes(base)) {
+          } else if (offers(result.success, base)) {
             return result.success;
           } else {
-            const { bases } = result.success;
-
-            misses.push(`${host} offers ${bases.length > 0 ? bases.join(", ") : "no bases"}`);
+            misses.push(`${host} offers ${offered(result.success)}`);
           }
         }
 
@@ -465,6 +472,7 @@ export const make = (
       deleteMachine: (input) => deleting(onResource("deleteMachine", input)),
       forkMachine: (input) => onResource("forkMachine", input, input.name),
       restoreMachine: (input) => onResource("restoreMachine", input, input.name),
+      execMachine: (input) => onResource("execMachine", input),
       getCheckpoint: (input) => onResource("getCheckpoint", input),
       captureCheckpoint: (input) => onResource("captureCheckpoint", input, input.name),
       deleteCheckpoint: (input) => deleting(onResource("deleteCheckpoint", input)),

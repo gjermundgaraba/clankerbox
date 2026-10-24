@@ -20,6 +20,8 @@ import { Id, Name } from "./ids.ts";
 import {
   Checkpoint,
   CreateRequest,
+  ExecRequest,
+  Executed,
   Host,
   Machine,
   PrebuildRequest,
@@ -79,7 +81,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: creating,
       description:
-        "Create a machine from a base, run its setup once, and prepare it. A create or setup that fails deletes the machine, again at each recheck while that delete fails, and the error is the answer; a preparation that fails keeps it.",
+        "Create a machine from a base, or on linux from an image reference, run its setup once, and prepare it. A create or setup that fails deletes the machine, again at each recheck while that delete fails, and the error is the answer; a preparation that fails keeps it.",
       input: CreateRequest,
       success: Machine,
     }),
@@ -128,6 +130,14 @@ export const Http = ActionHttp.make(
         "Create a machine on the checkpoint's host from that checkpoint. A restore that fails deletes the new machine.",
       input: Schema.Struct({ checkpoint: Id, name: Name }),
       success: Machine,
+    }),
+    Action.make("execMachine", {
+      ...write,
+      error: [Invalid, NotFound, NotMade, Missing, WrongState, Internal] as const,
+      description:
+        "Run a command in a running machine, as the user it names or root, with the image's environment on linux, and answer its exit code and output once it exits, whatever the code. It waits for a start or stop under way before it begins, and a stop or delete ends it, as does a pause on linux. It runs as long as the request does: ending the request ends the command, though on mac one that writes nothing runs on until it next writes.",
+      input: ExecRequest,
+      success: Executed,
     }),
     Action.make("listCheckpoints", {
       ...read,

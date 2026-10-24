@@ -2,16 +2,21 @@ import {
   type CreateRequest,
   type Declared,
   type Desired,
+  type Executed,
+  type ExecRequest,
   formatId,
   type HostError,
   Internal,
   loginUser,
   type Machine,
   NotOffered,
+  offered,
+  offers,
   PinMismatch,
   Superseded,
   type TailnetStatus,
   type Usage,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Array as Arr,
@@ -27,7 +32,7 @@ import {
   Semaphore,
 } from "effect";
 import { foundOn, idOn, nameOn, newInstance, notFoundOn } from "./ids.ts";
-import { checkTailnet, prepare, runSetup, type TailnetReport } from "./guest.ts";
+import { checkTailnet, prepare, runCommand, runSetup, type TailnetReport } from "./guest.ts";
 import { Leases } from "./leases.ts";
 import {
   answer,
@@ -82,6 +87,7 @@ export interface Interface {
     checkpoint: string,
     name: string,
   ) => Effect.Effect<Machine, Declared<"restoreMachine">>;
+  readonly exec: (request: ExecRequest) => Effect.Effect<Executed, Declared<"execMachine">>;
   /**
    * Unlike a machine's state, this is all the reply holds, so a runtime that can't be read fails
    * it; a machine it can't read makes only the rows that count it `unread`.
@@ -698,14 +704,16 @@ export const make = (
     const create = (request_: CreateRequest, options?: CreateOptions) =>
       Effect.gen(function* () {
         const name = yield* nameOf(request_.id);
-        const image = config.bases.get(request_.base);
+        const host = { kind: config.kind, bases: [...config.bases.keys()] };
 
-        if (image === undefined) {
+        if (!offers(host, request_.base)) {
           return yield* new NotOffered({
-            message: `host ${config.id} doesn't offer base ${request_.base}; it offers ${[...config.bases.keys()].join(", ") || "no bases"}`,
+            message: `host ${config.id} doesn't offer base ${request_.base}; it offers ${offered(host)}`,
             base: request_.base,
           });
         }
+
+        const image = config.bases.get(request_.base) ?? request_.base;
 
         return yield* making(
           name,
@@ -748,6 +756,45 @@ export const make = (
           false,
         );
       });
+
+    const exec = (request: ExecRequest) =>
+      surviving(
+        `exec in ${request.id}`,
+        Effect.gen(function* () {
+          const name = yield* nameOf(request.id);
+          const id = idOf(name);
+
+          const intent = yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* leases.share("machine", name);
+
+              const intent = yield* row(name);
+
+              yield* made(intent);
+
+              const [seen = "unknown"] = yield* runtime
+                .observe([ref(intent)])
+                .pipe(inTime(`the ${config.kind} runtime`));
+
+              if (seen === "missing") {
+                return yield* missing(config.kind, { id });
+              }
+
+              if (seen === "stopped" || seen === "paused") {
+                return yield* new WrongState({
+                  message: `machine ${id} is ${seen}, and a command runs only in a running machine: start it first`,
+                  machine: id,
+                  state: seen,
+                });
+              }
+
+              return intent;
+            }),
+          );
+
+          return yield* runCommand(runtime, ref(intent), request);
+        }),
+      );
 
     const capacity = Effect.flatMap(heldMachines, (machines) =>
       runtime.capacity(machines).pipe(
@@ -815,6 +862,7 @@ export const make = (
       delete: Effect.fn("Machines.delete")((id) => Effect.flatMap(nameOf(id), remove)),
       fork: Effect.fn("Machines.fork")(fork),
       restore: Effect.fn("Machines.restore")(restore),
+      exec: Effect.fn("Machines.exec")(exec),
       capacity: capacity.pipe(Effect.withSpan("Machines.capacity")),
     } satisfies Interface;
   });

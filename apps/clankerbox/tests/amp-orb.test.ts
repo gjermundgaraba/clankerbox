@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { DateTime, Effect, Exit, Option, Redacted, Schedule, Schema, Stream } from "effect";
+import { DateTime, Effect, Exit, Option, Redacted, Schedule, Schema } from "effect";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
 import {
@@ -27,7 +27,7 @@ import {
   PinMismatch,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { bootstrapScript, nameOn } from "../src/amp-orb.ts";
-import { cleanup, cli, fakeSpawner, hostIn, writeConfig } from "./support.ts";
+import { cleanup, cli, hostIn, writeConfig } from "./support.ts";
 
 const stubs: Array<StubHost> = [];
 
@@ -37,43 +37,17 @@ const stub = hostIn(stubs);
 
 const orb = "amp-T-0193a5f2-7c41-7d2e-9b1a-3f6c2e8d4b10";
 
-const reachable = {
-  ssh: { user: "admin", host: "100.64.0.7", port: 10_022 },
-  hostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample",
-};
+const image = "us-central1-docker.pkg.dev/amp-prod-0/amp-orb/amp-orb:latest";
 
-interface Spawned {
-  readonly args: ReadonlyArray<string>;
-  readonly stdin: string;
-}
-
-const fakeSsh = (code = 0) =>
-  fakeSpawner(
-    code,
-    ({ args, options: { stdin } }) =>
-      Effect.map(
-        Stream.isStream(stdin) ? Stream.mkString(Stream.decodeText(stdin)) : Effect.succeed(""),
-        (text): Spawned => ({ args, stdin: text }),
-      ),
-    code === 0 ? "" : "sudo: a password is required\n",
-  );
-
-const setup = (hosts: ReadonlyArray<string> = ["linux"]) =>
+const setup = (hosts: ReadonlyArray<string> = ["linux"], profile?: { readonly base: string }) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
     const profiles = join(dir, "profiles");
 
-    yield* mkdir(join(profiles, "amp-orb"));
-    yield* write(join(profiles, "amp-orb", "setup.sh"), "#!/bin/sh\ntrue\n");
+    yield* mkdir(profiles);
     yield* write(
       join(profiles, "amp-orb.json"),
-      JSON.stringify({
-        base: "amp-orb",
-        cpu: 4,
-        ramMib: 8192,
-        diskGib: 40,
-        setup: { path: "amp-orb" },
-      }),
+      JSON.stringify({ cpu: 4, ramMib: 8192, diskGib: 40, ...profile }),
     );
 
     return yield* writeConfig(dir, hosts, "profiles");
@@ -82,7 +56,7 @@ const setup = (hosts: ReadonlyArray<string> = ["linux"]) =>
 const job = (operation: string, extra?: Readonly<Record<string, string>>) => ({
   ORB_OPERATION: operation,
   ORB_ID: orb,
-  ORB_IMAGE: "us-central1-docker.pkg.dev/amp-prod-0/amp-orb/amp-orb:latest",
+  ORB_IMAGE: image,
   ...extra,
 });
 
@@ -93,53 +67,56 @@ const dispatch = (
   config: string,
   linux: ReadonlyArray<readonly [string, StubHost | "down"]>,
   env: Readonly<Record<string, string>>,
-  ssh = fakeSsh(),
-) =>
-  cli(["amp-orb", "--config", config, "--profile", "amp-orb"], {
-    endpoints: linux,
-    spawner: ssh.layer,
-    env,
-  });
+) => cli(["amp-orb", "--config", config, "--profile", "amp-orb"], { endpoints: linux, env });
 
 const id = `linux_${orb}`;
 
 layer(NodeServices.layer)((it) => {
   it.effect(
-    "a spawn of a new orb creates its machine from the profile, named as the orb, and starts bootstrap in it over ssh as the orb's user",
+    "a spawn of a new orb creates its machine from ORB_IMAGE with the profile's sizes, named as the orb, and starts bootstrap in it as the orb's user",
     () =>
       Effect.gen(function* () {
         const config = yield* setup();
-        const linux = stub({ id: "linux", bases: ["amp-orb"], made: reachable });
-        const ssh = fakeSsh();
+        const linux = stub({ id: "linux", bases: [] });
 
-        const { code, stdout } = yield* dispatch(config, [["linux", linux]], spawnJob(), ssh);
+        const { code, stdout } = yield* dispatch(config, [["linux", linux]], spawnJob());
 
         expect(code).toBe(0);
         expect(linux.held()).toEqual([id]);
-        expect(linux.creates[0]).toMatchObject({ id, base: "amp-orb", cpu: 4, profile: "amp-orb" });
+        expect(linux.creates[0]).toMatchObject({ id, base: image, cpu: 4, profile: "amp-orb" });
+        expect(linux.creates[0]?.setup).toBeUndefined();
         expect(stdout).toBe(`spawn ${orb}: ${id} created`);
 
-        const [spawned] = ssh.spawned;
+        const [ran] = linux.execs;
 
-        expect(spawned?.args.slice(0, 2)).toEqual(["-l", "admin"]);
-        expect(spawned?.args.at(-1)).toBe("sudo -n -u user -H sh -s");
-        expect(spawned?.stdin).toContain("export ORB_TOKEN='orb-token-secret'");
-        expect(spawned?.args.join(" ")).not.toContain("orb-token-secret");
+        expect(ran).toMatchObject({ id, user: "user", argv: ["/bin/sh", "-s"] });
+        expect(ran?.stdin).toContain("export ORB_TOKEN='orb-token-secret'");
+        expect(ran?.argv.join(" ")).not.toContain("orb-token-secret");
       }),
+  );
+
+  it.effect("a spawn creates from ORB_IMAGE though the profile names a base", () =>
+    Effect.gen(function* () {
+      const config = yield* setup(["linux"], { base: "amp-orb" });
+      const linux = stub({ id: "linux", bases: ["amp-orb"] });
+
+      const { code } = yield* dispatch(config, [["linux", linux]], spawnJob());
+
+      expect(code).toBe(0);
+      expect(linux.creates[0]).toMatchObject({ id, base: image });
+    }),
   );
 
   it.effect("a spawn of a running orb starts it again and runs bootstrap again", () =>
     Effect.gen(function* () {
       const config = yield* setup();
-      const linux = stub({ id: "linux", bases: ["amp-orb"], machines: [machine(id, reachable)] });
-      const ssh = fakeSsh();
-
-      const { code, stdout } = yield* dispatch(config, [["linux", linux]], spawnJob(), ssh);
+      const linux = stub({ id: "linux", bases: [], machines: [machine(id)] });
+      const { code, stdout } = yield* dispatch(config, [["linux", linux]], spawnJob());
 
       expect(code).toBe(0);
       expect(linux.calls).toContain("machine.start");
       expect(linux.creates).toEqual([]);
-      expect(ssh.spawned).toHaveLength(1);
+      expect(linux.execs).toHaveLength(1);
       expect(stdout).toBe(`spawn ${orb}: ${id} started`);
     }),
   );
@@ -150,25 +127,23 @@ layer(NodeServices.layer)((it) => {
 
       const linux = stub({
         id: "linux",
-        bases: ["amp-orb"],
-        machines: [machine(id, { ...reachable, state: "paused", desired: "paused" })],
+        bases: [],
+        machines: [machine(id, { state: "paused", desired: "paused" })],
       });
 
-      const ssh = fakeSsh();
-
-      const { code, stdout } = yield* dispatch(config, [["linux", linux]], spawnJob(), ssh);
+      const { code, stdout } = yield* dispatch(config, [["linux", linux]], spawnJob());
 
       expect(code).toBe(0);
       expect(stdout).toBe(`spawn ${orb}: ${id} resumed`);
       expect(linux.calls).toContain("machine.start");
-      expect(ssh.spawned).toHaveLength(1);
+      expect(linux.execs).toHaveLength(1);
     }),
   );
 
   it.effect("a pause pauses the orb's machine, and so does a second", () =>
     Effect.gen(function* () {
       const config = yield* setup();
-      const linux = stub({ id: "linux", bases: ["amp-orb"], machines: [machine(id, reachable)] });
+      const linux = stub({ id: "linux", bases: [], machines: [machine(id)] });
 
       const runs = [
         yield* dispatch(config, [["linux", linux]], job("pause")),
@@ -196,9 +171,8 @@ layer(NodeServices.layer)((it) => {
 
         const linux = stub({
           id: "linux",
-          bases: ["amp-orb"],
-          machines: [machine(id, reachable)],
-          made: reachable,
+          bases: [],
+          machines: [machine(id)],
         });
 
         const paused = yield* dispatch(
@@ -239,14 +213,14 @@ layer(NodeServices.layer)((it) => {
 
         const linux = stub({
           id: "linux",
-          bases: ["amp-orb"],
-          machines: [machine(id, reachable)],
+          bases: [],
+          machines: [machine(id)],
           checkpoints: [checkpoint("linux_snapshot-prj-42")],
         });
 
         const spare = stub({
           id: "spare",
-          bases: ["amp-orb"],
+          bases: [],
           checkpoints: [checkpoint("spare_snapshot-prj-42")],
         });
 
@@ -273,7 +247,7 @@ layer(NodeServices.layer)((it) => {
   it.effect("a pause with an ORB_SNAPSHOT_ID captures it while another host can't be read", () =>
     Effect.gen(function* () {
       const config = yield* setup(["linux", "spare"]);
-      const linux = stub({ id: "linux", bases: ["amp-orb"], machines: [machine(id, reachable)] });
+      const linux = stub({ id: "linux", bases: [], machines: [machine(id)] });
 
       const { code } = yield* dispatch(
         config,
@@ -295,8 +269,8 @@ layer(NodeServices.layer)((it) => {
 
       const linux = stub({
         id: "linux",
-        bases: ["amp-orb"],
-        machines: [machine(id, { ...reachable, state: "stopped", desired: "stopped" })],
+        bases: [],
+        machines: [machine(id, { state: "stopped", desired: "stopped" })],
       });
 
       const { code, stdout } = yield* dispatch(config, [["linux", linux]], job("pause"));
@@ -312,7 +286,7 @@ layer(NodeServices.layer)((it) => {
 
       const linux = stub({
         id: "linux",
-        bases: ["amp-orb"],
+        bases: [],
         checkpoints: [checkpoint("linux_snapshot-prj-42")],
         restoreFails: new PinMismatch({
           message: "linux_snapshot-prj-42 was captured under another smolvm",
@@ -322,8 +296,7 @@ layer(NodeServices.layer)((it) => {
 
       const spare = stub({
         id: "spare",
-        bases: ["amp-orb"],
-        made: reachable,
+        bases: [],
         checkpoints: [checkpoint("spare_snapshot-prj-42")],
       });
 
@@ -351,15 +324,13 @@ layer(NodeServices.layer)((it) => {
 
       const linux = stub({
         id: "linux",
-        bases: ["amp-orb"],
-        made: reachable,
+        bases: [],
         checkpoints: [checkpoint("linux_snapshot-prj-42")],
       });
 
       const spare = stub({
         id: "spare",
-        bases: ["amp-orb"],
-        made: reachable,
+        bases: [],
         checkpoints: [
           checkpoint("spare_snapshot-prj-42", {
             createdAt: DateTime.makeUnsafe("2026-10-02T00:00:00Z"),
@@ -390,8 +361,7 @@ layer(NodeServices.layer)((it) => {
 
       const linux = stub({
         id: "linux",
-        bases: ["amp-orb"],
-        made: reachable,
+        bases: [],
         checkpoints: [checkpoint("linux_snapshot-prj-42")],
         restoreFails,
       });
@@ -450,13 +420,13 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const config = yield* setup(["linux", "spare"]);
-        const linux = stub({ id: "linux", bases: ["amp-orb"] });
+        const linux = stub({ id: "linux", bases: [] });
 
         const gone = yield* dispatch(
           config,
           [
             ["linux", linux],
-            ["spare", stub({ id: "spare", bases: ["amp-orb"] })],
+            ["spare", stub({ id: "spare", bases: [] })],
           ],
           job("pause"),
         );
@@ -479,7 +449,7 @@ layer(NodeServices.layer)((it) => {
   it.effect("a delete removes the orb's machine, and a second finds it gone", () =>
     Effect.gen(function* () {
       const config = yield* setup();
-      const linux = stub({ id: "linux", bases: ["amp-orb"], machines: [machine(id)] });
+      const linux = stub({ id: "linux", bases: [], machines: [machine(id)] });
 
       const first = yield* dispatch(config, [["linux", linux]], job("delete"));
       const second = yield* dispatch(config, [["linux", linux]], job("delete"));
@@ -495,7 +465,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const config = yield* setup(["linux", "spare"]);
-        const linux = stub({ id: "linux", bases: ["amp-orb"], machines: [machine(id)] });
+        const linux = stub({ id: "linux", bases: [], machines: [machine(id)] });
 
         const down = [
           ["linux", linux],
@@ -516,7 +486,7 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const config = yield* setup(["linux", "spare"]);
-        const linux = stub({ id: "linux", bases: ["amp-orb"], made: reachable });
+        const linux = stub({ id: "linux", bases: [] });
 
         const { code, stderr } = yield* dispatch(
           config,
@@ -533,15 +503,40 @@ layer(NodeServices.layer)((it) => {
       }),
   );
 
-  it.effect("a spawn placed on a mac host is Invalid, and creates nothing", () =>
+  it.effect(
+    "a spawn without ORB_IMAGE, or with one that isn't an image reference, is Invalid, and touches no host",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* setup(["linux", "mac"]);
+        const linux = stub({ id: "linux", bases: [] });
+        const mac = stub({ id: "mac", kind: "mac", bases: ["orb:latest"] });
+
+        const hosts = [
+          ["linux", linux],
+          ["mac", mac],
+        ] as const;
+
+        const { ORB_IMAGE: _, ...withoutImage } = spawnJob();
+        const unset = yield* dispatch(config, hosts, withoutImage);
+        const named = yield* dispatch(config, hosts, spawnJob({ ORB_IMAGE: "orb:latest" }));
+
+        expect(unset.code).toBe(1);
+        expect(unset.stderr).toContain("ORB_IMAGE");
+        expect(named.code).toBe(1);
+        expect(named.stderr).toContain("ORB_IMAGE is an image reference, holding a /: orb:latest");
+        expect([...linux.calls, ...mac.calls]).toEqual([]);
+      }),
+  );
+
+  it.effect("a spawn with only a mac host is NotOffered, and creates nothing", () =>
     Effect.gen(function* () {
       const config = yield* setup(["mac"]);
-      const mac = stub({ id: "mac", kind: "mac", bases: ["amp-orb"], made: reachable });
+      const mac = stub({ id: "mac", kind: "mac", bases: [] });
 
       const { code, stderr } = yield* dispatch(config, [["mac", mac]], spawnJob());
 
       expect(code).toBe(1);
-      expect(stderr).toContain("host mac is a mac host, and Amp's orbs run on linux hosts only");
+      expect(stderr).toContain(`NotOffered: no host offers base ${image}`);
       expect(mac.creates).toEqual([]);
     }),
   );
@@ -549,12 +544,12 @@ layer(NodeServices.layer)((it) => {
   it.effect("a spawn finds the orb on the second host, under that host's ID", () =>
     Effect.gen(function* () {
       const config = yield* setup(["linux", "spare"]);
-      const linux = stub({ id: "linux", bases: ["amp-orb"] });
+      const linux = stub({ id: "linux", bases: [] });
 
       const spare = stub({
         id: "spare",
-        bases: ["amp-orb"],
-        machines: [machine(`spare_${orb}`, reachable)],
+        bases: [],
+        machines: [machine(`spare_${orb}`)],
       });
 
       const { code } = yield* dispatch(
@@ -575,7 +570,7 @@ layer(NodeServices.layer)((it) => {
   it.effect("a spawn without ORB_TOKEN is refused before it calls a host", () =>
     Effect.gen(function* () {
       const config = yield* setup();
-      const linux = stub({ id: "linux", bases: ["amp-orb"], made: reachable });
+      const linux = stub({ id: "linux", bases: [] });
       const env = { ORB_OPERATION: "spawn", ORB_ID: orb };
 
       const { code, stderr } = yield* dispatch(config, [["linux", linux]], env);
@@ -589,7 +584,7 @@ layer(NodeServices.layer)((it) => {
   it.effect("an unknown ORB_OPERATION is Invalid, naming the variable", () =>
     Effect.gen(function* () {
       const config = yield* setup();
-      const linux = stub({ id: "linux", bases: ["amp-orb"] });
+      const linux = stub({ id: "linux", bases: [] });
 
       const { code, stderr } = yield* dispatch(config, [["linux", linux]], job("resume"));
 
@@ -600,16 +595,27 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
-  it.effect("a bootstrap whose ssh exits non-zero fails the spawn with its output", () =>
+  it.effect("a bootstrap that exits non-zero fails the spawn with its output", () =>
     Effect.gen(function* () {
       const config = yield* setup();
-      const linux = stub({ id: "linux", bases: ["amp-orb"], machines: [machine(id, reachable)] });
 
-      const { code, stderr } = yield* dispatch(config, [["linux", linux]], spawnJob(), fakeSsh(1));
+      const linux = stub({
+        id: "linux",
+        bases: [],
+        machines: [machine(id)],
+        exec: () =>
+          Effect.succeed({
+            exitCode: 127,
+            output: "amp isn't on the image's PATH, /usr/bin:/bin\n",
+            truncated: false,
+          }),
+      });
+
+      const { code, stderr } = yield* dispatch(config, [["linux", linux]], spawnJob());
 
       expect(code).toBe(1);
-      expect(stderr).toContain("ScriptFailed: starting amp orb bootstrap over ssh exited 1");
-      expect(stderr).toContain("sudo: a password is required");
+      expect(stderr).toContain("ScriptFailed: starting amp orb bootstrap exited 127");
+      expect(stderr).toContain("amp isn't on the image's PATH");
     }),
   );
 
@@ -617,7 +623,7 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const config = yield* setup();
       const long = `amp-${"T".repeat(80)}`;
-      const linux = stub({ id: "linux", bases: ["amp-orb"], made: reachable });
+      const linux = stub({ id: "linux", bases: [] });
 
       const { code } = yield* dispatch(config, [["linux", linux]], {
         ...spawnJob(),
@@ -651,17 +657,18 @@ const guest = Effect.gen(function* () {
   const dir = yield* scratch;
   const bin = join(dir, "bin");
   const home = join(dir, "home");
-  const environment = join(dir, "image-env");
 
   yield* mkdir(bin);
   yield* mkdir(home);
   yield* write(
-    environment,
-    `export ORB_IMAGE_TOOL='from the image'\nexport PATH='${bin}:/usr/bin:/bin'\n`,
-  );
-  yield* write(
     join(bin, "setsid"),
-    '#!/bin/sh\nexec perl -MPOSIX -e \'POSIX::setsid() or die "setsid: $!"; exec @ARGV\' "$@"\n',
+    [
+      "#!/bin/sh",
+      '[ "$1" = -f ] || { echo "setsid: expected -f" >&2; exit 2; }',
+      "shift",
+      'perl -MPOSIX -e \'POSIX::setsid() or die "setsid: $!"; exec @ARGV\' "$@" &',
+      "",
+    ].join("\n"),
   );
   yield* write(
     join(bin, "amp"),
@@ -674,19 +681,19 @@ const guest = Effect.gen(function* () {
   yield* chmod(join(bin, "setsid"), 0o755);
   yield* chmod(join(bin, "amp"), 0o755);
 
-  const run = (ampUrl: Option.Option<string>) =>
-    outputOf(
-      "/bin/sh",
-      ["-c", bootstrapScript({ token: Redacted.make("it's-secret"), ampUrl }, environment)],
-      { env: { HOME: home, PATH: "/usr/bin:/bin" }, extendEnv: false, detached: false },
-    );
+  const run = (ampUrl: Option.Option<string>, path = `${bin}:/usr/bin:/bin`) =>
+    outputOf("/bin/sh", ["-c", bootstrapScript({ token: Redacted.make("it's-secret"), ampUrl })], {
+      env: { HOME: home, PATH: path, ORB_IMAGE_TOOL: "from the image" },
+      extendEnv: false,
+      detached: false,
+    });
 
-  return { home, environment, run };
+  return { home, run };
 });
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   it.effect(
-    "the bootstrap script starts amp orb bootstrap detached in HOME, in the image's environment, with ORB_TOKEN and AMP_URL",
+    "the bootstrap script starts amp orb bootstrap detached in HOME, in the environment exec gives it, with ORB_TOKEN and AMP_URL",
     () =>
       Effect.gen(function* () {
         const { home, run } = yield* guest;
@@ -704,11 +711,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
   it.effect("the bootstrap script fails, naming the PATH, when the image's has no amp", () =>
     Effect.gen(function* () {
-      const { environment, run } = yield* guest;
+      const { run } = yield* guest;
 
-      yield* write(environment, "export PATH='/usr/bin:/bin'\n");
-
-      const { code, stderr } = yield* run(Option.none());
+      const { code, stderr } = yield* run(Option.none(), "/usr/bin:/bin");
 
       expect(code).toBe(127);
       expect(stderr).toBe("amp isn't on the image's PATH, /usr/bin:/bin\n");

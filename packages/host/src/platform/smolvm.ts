@@ -541,12 +541,12 @@ export const make = (
         }),
       ),
       delete: Effect.fn("Smolvm.delete")(removeVm),
-      exec: Effect.fn("Smolvm.exec")((machine, { argv, stdin }) => {
+      exec: Effect.fn("Smolvm.exec")((machine, { argv, stdin, user }) => {
         const native = nativeName(machine);
 
         return exec(
           binary,
-          ["machine", "exec", "--name", native, "--user", "root", "-i", "--", ...argv],
+          ["machine", "exec", "--name", native, "--user", user ?? "root", "-i", "--", ...argv],
           stdin,
           `smolvm machine exec ${native}`,
         );

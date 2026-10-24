@@ -132,7 +132,7 @@ export const mutationFlags = {
   timeout: Flag.String("timeout").pipe(
     Flag.withMetavar("DURATION"),
     Flag.withDescription(
-      "Stop waiting for the mutation's reply after this long, such as 90s or 10m; unbounded by default. It cancels nothing on the host.",
+      "Stop waiting for the mutation's reply after this long, such as 90s or 10m; unbounded by default. A mutation under way still finishes on the host, except a command an exec runs, which ends with the wait.",
     ),
     Flag.optional,
   ),

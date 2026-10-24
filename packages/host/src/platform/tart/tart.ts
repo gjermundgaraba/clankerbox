@@ -654,12 +654,13 @@ export const make = (
           call(["delete", checkpointVm(checkpoint)], `delete ${checkpointVm(checkpoint)}`, [0, 2]),
         ),
       ),
-      exec: Effect.fn("Tart.exec")((machine, { argv, stdin }) => {
+      exec: Effect.fn("Tart.exec")((machine, { argv, stdin, user }) => {
         const vm = vmOf(machine);
+        const as = user === undefined ? [] : ["-u", user, "-H"];
 
         return exec(
           settings.binary,
-          ["exec", "-i", vm, "sudo", "-n", "--", ...argv],
+          ["exec", "-i", vm, "sudo", "-n", ...as, "--", ...argv],
           stdin,
           `tart exec ${vm}`,
         );

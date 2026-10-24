@@ -77,8 +77,11 @@ A host process runs one kind from one JSON config file:
   host ID and kind; the host refuses a config that names others. On linux
   it is at most 52 bytes and outside every home directory, such as
   `/srv/clankerbox/smolvm`.
-- `bases` maps names clients ask for to images, pinned by digest. Hosts
-  offering the same image should use the same name.
+- `bases` maps names clients ask for to images, pinned by digest. A name holds
+  no `/`. Hosts offering the same image should use the same name. A linux host also creates
+  from any image reference a create names as its base, one with a `/`, such as
+  `registry.example/team/image:tag`. A prebuild names its base, not the image,
+  so one made from a tag keeps the image the tag named then.
 - The kind's block: `linux: {prefix, ramBudgetMib?}`, smolvm's install, or
   `mac: {binary}`, the `tart` executable of a versioned install.
 - `machinePorts: {first, last}`, optional, is the range machines' SSH ports
@@ -173,7 +176,8 @@ the profiles directory; a value with a `/` or ending in `.json` is a path:
 ```
 
 `setup.path`, relative to the profile, is a script or a recipe directory with
-a `setup.sh`. An optional `host` sends every create from the profile there.
+a `setup.sh`. An optional `host` sends every create from the profile there. A
+profile may leave out `base` for each create to name, with `--base`.
 
 ```sh
 clankerbox hosts                           # every host, its kind, versions and bases
@@ -184,6 +188,7 @@ clankerbox prebuild --profile dev          # run dev's setup once; later creates
 clankerbox machines
 clankerbox get linux_dev
 clankerbox ssh linux_dev -- uptime
+clankerbox exec linux_dev --user admin -- uname -a   # no SSH; --timeout ends the command
 clankerbox pause linux_dev                 # saves its RAM and frees it
 clankerbox stop linux_dev
 clankerbox start linux_dev
@@ -474,40 +479,22 @@ await sdk.destroySandbox();
 
 `clankerbox amp-orb` is a dispatch program for Amp's
 [self-hosted orbs](https://ampcode.com/docs/orbs/self-hosted): each orb is a
-machine on a linux host, booted from Amp's orb image.
+machine on a linux host, booted from the image Amp names in `ORB_IMAGE`: its
+x64 image, or the provider's own `ORB_IMAGE` when its environment sets one. On
+an ARM64 host, run the provider with
+`ORB_IMAGE=us-central1-docker.pkg.dev/amp-prod-0/amp-orb/amp-orb-arm64:latest`.
+A spawn refuses an `ORB_IMAGE` that isn't an image reference, with a `/`.
 
-1. Offer the image as a base on a linux host, pinned by digest:
-
-   ```json
-   "bases": {
-     "amp-orb": "us-central1-docker.pkg.dev/amp-prod-0/amp-orb/amp-orb@sha256:a80a55e6561b2e69f96f73029cc1dfae53f89198465cbc117855a32514aa39be"
-   }
-   ```
-
-2. Copy the package's `recipes/amp-orb/` (under
-   `$(npm root --global)/@gjermundgaraba/clankerbox`) into the profiles
-   directory, write a profile beside it, `amp-orb.json`, whose setup is that
-   copy, and prebuild it: Amp gives each job five minutes, which a setup run
-   from scratch may not fit in.
+1. Write a profile, `amp-orb.json`, in the profiles directory with the orb's
+   sizes and no base:
 
    ```json
-   {
-     "base": "amp-orb",
-     "cpu": 4,
-     "ramMib": 8192,
-     "diskGib": 40,
-     "setup": { "path": "amp-orb" }
-   }
+   { "cpu": 4, "ramMib": 8192, "diskGib": 40 }
    ```
 
-   ```sh
-   clankerbox prebuild --profile amp-orb
-   ```
-
-3. On the machine that runs Amp's provider, with the client config and an SSH
-   key that `authorizedKeys` holds, write the program Amp runs, which takes
-   no arguments, and run the provider with the token from Amp's **Settings →
-   Orbs**:
+2. On the machine that runs Amp's provider, with the client config, write the
+   program Amp runs, which takes no arguments, and run the provider with the
+   token from Amp's **Settings → Orbs**:
 
    ```sh
    printf '#!/bin/sh\nexec clankerbox amp-orb --profile amp-orb\n' >/opt/orbs/dispatch
@@ -518,12 +505,11 @@ machine on a linux host, booted from Amp's orb image.
 - A `spawn` finds the orb's machine on any host in the client config and starts
   it, which resumes it when it is paused. When there is none, it restores the
   newest of the hosts' snapshots of `ORB_SNAPSHOT_ID`, the next when one fails
-  `PinMismatch`, `Capacity` or `NotFound`, or creates the machine from the
-  profile and its prebuild. It then logs in over ssh as
-  `admin` and starts `amp orb bootstrap`, detached, as the image's `user`, in
-  the image's environment, which the recipe records in
-  `/etc/clankerbox/image-env`, with `ORB_TOKEN` and `AMP_URL` sent on stdin. Its
-  log is `~user/.local/state/clankerbox/amp-orb.log`.
+  `PinMismatch`, `Capacity` or `NotFound`, or creates the machine from
+  `ORB_IMAGE`, whatever base the profile names, with the profile's sizes on the
+  first linux host. It then starts `amp orb bootstrap`, detached, as
+  the image's `user`, through `clankerbox exec`, with `ORB_TOKEN` and `AMP_URL`
+  sent on stdin. Its log is `~user/.local/state/clankerbox/amp-orb.log`.
 - A `pause` pauses the machine, so the orb keeps its memory and processes and
   holds no RAM until its next spawn, and leaves a stopped one stopped. With
   `ORB_SNAPSHOT_ID` it stops the machine and starts it again, ending the orb's
@@ -553,10 +539,12 @@ machine on a linux host, booted from Amp's orb image.
   and the next pause of an orb left running stops it. A spawn passes over a
   snapshot captured under another release until the project's next snapshot
   pause on that host replaces it.
-- The base, not `ORB_IMAGE`, picks the image: move its digest to take a new one,
-  then delete the profile's prebuild (`prebuilt-…` in `clankerbox checkpoint
-  list`), which names no image, and prebuild again. The `amp` CLI in the orb
-  updates itself either way.
+- smolvm resolves `ORB_IMAGE`'s tag at each create, so each new orb boots the
+  image the tag names then, and an orb or snapshot keeps the image it was made
+  from. The first create of a new image pulls it within the job's five
+  minutes. Each image stays on the host's disk while an orb made from it does,
+  idle and archived threads' paused orbs included; smolvm drops the oldest
+  unused ones once they pass 20 GiB.
 
 ## License
 

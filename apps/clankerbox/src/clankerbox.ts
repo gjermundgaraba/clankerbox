@@ -13,6 +13,7 @@ import { capacity, hosts } from "./hosts.ts";
 import {
   create,
   deleteMachine,
+  exec,
   fork,
   getMachine,
   machines,
@@ -35,6 +36,7 @@ export const actionCommands = {
   deleteMachine,
   forkMachine: fork,
   restoreMachine: restore,
+  execMachine: exec,
   listCheckpoints,
   getCheckpoint,
   captureCheckpoint: capture,
@@ -61,6 +63,7 @@ export const clankerbox = Command.make("clankerbox").pipe(
     fork,
     checkpoint,
     restore,
+    exec,
     ssh,
     sshProxy,
     sshKnownHosts,

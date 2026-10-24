@@ -7,10 +7,10 @@ import { describeFileError, describeIssues } from "./describe.ts";
 
 /**
  * A client-side file that fills in a create's spec; hosts never see it. `setup.path` is a script
- * file or a recipe directory, relative to the profile file.
+ * file or a recipe directory, relative to the profile file. Without `base`, the create names it.
  */
 export const Profile = Schema.Struct({
-  base: MachineSpec.fields.base,
+  base: Schema.optionalKey(MachineSpec.fields.base),
   cpu: MachineSpec.fields.cpu,
   ramMib: MachineSpec.fields.ramMib,
   diskGib: MachineSpec.fields.diskGib,

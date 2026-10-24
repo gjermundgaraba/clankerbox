@@ -4,27 +4,22 @@ import {
   type Client,
   formatId,
   Invalid,
+  isImageReference,
   type Machine,
   parseId,
-  pinnedSsh,
   Prebuild,
   ScriptFailed,
   type SpecRequest,
-  type SshTarget,
-  sshTarget,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Config, DateTime, Effect, Option, Redacted, Result, Stream } from "effect";
+import { Config, DateTime, Effect, Option, Redacted, Result, Struct } from "effect";
 import { Command } from "effect/cli";
 import { Hex } from "effect/encoding";
-import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { fail, mutationFlags, print, SpawnFailed, withClient } from "./command.ts";
+import { fail, mutationFlags, print, withClient } from "./command.ts";
 import type { LoadedConfig } from "./config.ts";
 import { flagsRequest, specArguments } from "./machines/spec.ts";
 
 const orbUser = "user";
-
-const imageEnvironment = "/etc/clankerbox/image-env";
 
 const operations = ["spawn", "pause", "delete"] as const;
 
@@ -57,6 +52,12 @@ const readBootstrap = inEnvironment(
 );
 
 export type Bootstrap = Effect.Success<typeof readBootstrap>;
+
+const readImage = Effect.filterOrFail(
+  inEnvironment(Config.NonEmptyString("ORB_IMAGE")),
+  isImageReference,
+  (image) => new Invalid({ message: `ORB_IMAGE is an image reference, holding a /: ${image}` }),
+);
 
 const digestDigits = 16;
 
@@ -211,20 +212,7 @@ const spawn = <R>(
 
     const { spec, host } = yield* request;
 
-    if (spec.setup === undefined) {
-      return yield* new Invalid({
-        message:
-          "amp-orb needs a profile with a setup, which leaves the login user whose keys the host installs: see the amp-orb recipe",
-      });
-    }
-
     const placed = yield* client.place(spec.base, { host });
-
-    if (placed.kind !== "linux") {
-      return yield* new Invalid({
-        message: `host ${placed.id} is a ${placed.kind} host, and Amp's orbs run on linux hosts only`,
-      });
-    }
 
     const { machine, prebuild } = yield* Prebuild.create(
       client,
@@ -307,61 +295,38 @@ const remove = (
 
 const quoted = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`;
 
-export const bootstrapScript = (bootstrap: Bootstrap, environment: string) =>
+export const bootstrapScript = (bootstrap: Bootstrap) =>
   [
     "set -eu",
-    `. ${quoted(environment)}`,
     `export ORB_TOKEN=${quoted(Redacted.value(bootstrap.token))}`,
     ...Option.toArray(Option.map(bootstrap.ampUrl, (url) => `export AMP_URL=${quoted(url)}`)),
     `command -v amp >/dev/null 2>&1 || { echo "amp isn't on the image's PATH, $PATH" >&2; exit 127; }`,
     'state="$HOME/.local/state/clankerbox"',
     'mkdir -p "$state"',
     'cd "$HOME"',
-    'setsid amp orb bootstrap </dev/null >>"$state/amp-orb.log" 2>&1 &',
+    'setsid -f amp orb bootstrap </dev/null >>"$state/amp-orb.log" 2>&1',
     "",
   ].join("\n");
 
 const tailCharacters = 4000;
 
-const bootstrapIn = (target: SshTarget, bootstrap: Bootstrap) =>
+const bootstrapIn = (client: Client.Interface, machine: Machine, bootstrap: Bootstrap) =>
   Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const { exitCode, output } = yield* client.execMachine({
+      id: machine.id,
+      argv: ["/bin/sh", "-s"],
+      user: orbUser,
+      stdin: bootstrapScript(bootstrap),
+    });
 
-    const args = yield* pinnedSsh(target, target.login.user, [
-      "-o",
-      "BatchMode=yes",
-      "-o",
-      "ConnectTimeout=30",
-      `sudo -n -u ${orbUser} -H sh -s`,
-    ]);
-
-    const ssh = yield* spawner.spawn(
-      ChildProcess.make("ssh", args, {
-        stdin: Stream.make(new TextEncoder().encode(bootstrapScript(bootstrap, imageEnvironment))),
-        detached: false,
-      }),
-    );
-
-    const [output, code] = yield* Effect.all(
-      [Stream.mkString(Stream.decodeText(ssh.all)), ssh.exitCode],
-      { concurrency: "unbounded" },
-    );
-
-    if (code !== 0) {
+    if (exitCode !== 0) {
       return yield* new ScriptFailed({
-        message: `starting amp orb bootstrap over ssh exited ${code}: ${output.trim().slice(-tailCharacters)}`,
+        message: `starting amp orb bootstrap exited ${exitCode}: ${output.trim().slice(-tailCharacters)}`,
         script: "bootstrap",
-        id: target.id,
+        id: machine.id,
       });
     }
-  }).pipe(
-    Effect.scoped,
-    Effect.catchTag("PlatformError", (error) =>
-      Effect.fail(
-        new SpawnFailed({ message: `couldn't run ssh: ${error.message}`, program: "ssh" }),
-      ),
-    ),
-  );
+  });
 
 const text = ({ operation, orb, result, machine, checkpoint }: Outcome) =>
   [
@@ -375,48 +340,52 @@ const text = ({ operation, orb, result, machine, checkpoint }: Outcome) =>
     .filter((part) => part !== undefined)
     .join(" ");
 
-export const ampOrb = Command.make("amp-orb", { ...mutationFlags, ...specArguments }, (flags) =>
-  Effect.gen(function* () {
-    const job = yield* readJob.pipe(Effect.catch(fail(flags.json)));
+export const ampOrb = Command.make(
+  "amp-orb",
+  { ...mutationFlags, ...Struct.omit(specArguments, ["base"]) },
+  (flags) =>
+    Effect.gen(function* () {
+      const job = yield* readJob.pipe(Effect.catch(fail(flags.json)));
 
-    const report = (done: Outcome) =>
-      print(
-        flags.json,
-        () => done,
-        () => text(done),
+      const report = (done: Outcome) =>
+        print(
+          flags.json,
+          () => done,
+          () => text(done),
+        );
+
+      if (job.operation === "spawn") {
+        const bootstrap = yield* readBootstrap.pipe(Effect.catch(fail(flags.json)));
+        const image = yield* readImage.pipe(Effect.catch(fail(flags.json)));
+
+        const spawned = yield* withClient(flags, (client, config) =>
+          Effect.gen(function* () {
+            const { outcome: done, running } = yield* spawn(
+              client,
+              job,
+              yield* locate(client, config, job),
+              flagsRequest("amp-orb", { ...flags, base: Option.some(image) }, config),
+            );
+
+            yield* bootstrapIn(client, running, bootstrap);
+
+            return done;
+          }),
+        );
+
+        return yield* report(spawned);
+      }
+
+      yield* report(
+        yield* withClient(flags, (client, config) =>
+          job.operation === "delete"
+            ? remove(client, config, job)
+            : Effect.flatMap(locate(client, config, job), (located) => pause(client, job, located)),
+        ),
       );
-
-    if (job.operation === "spawn") {
-      const bootstrap = yield* readBootstrap.pipe(Effect.catch(fail(flags.json)));
-
-      const { outcome: spawned, target } = yield* withClient(flags, (client, config) =>
-        Effect.gen(function* () {
-          const { outcome: done, running } = yield* spawn(
-            client,
-            job,
-            yield* locate(client, config, job),
-            flagsRequest("amp-orb", flags, config),
-          );
-
-          return { outcome: done, target: yield* sshTarget(running) };
-        }),
-      );
-
-      yield* bootstrapIn(target, bootstrap).pipe(Effect.catch(fail(flags.json)));
-
-      return yield* report(spawned);
-    }
-
-    yield* report(
-      yield* withClient(flags, (client, config) =>
-        job.operation === "delete"
-          ? remove(client, config, job)
-          : Effect.flatMap(locate(client, config, job), (located) => pause(client, job, located)),
-      ),
-    );
-  }),
+    }),
 ).pipe(
   Command.withDescription(
-    "Run one job of Amp's self-hosted orbs as amp orb provider's dispatch program, from the ORB_* environment it sets: spawn, pause or delete the orb's machine, a linux machine named as the orb. README's Amp orbs section has the steps.",
+    "Run one job of Amp's self-hosted orbs as amp orb provider's dispatch program, from the ORB_* environment it sets: spawn, pause or delete the orb's machine, a linux machine named as the orb and made from ORB_IMAGE, whatever base the profile names. README's Amp orbs section has the steps.",
   ),
 );

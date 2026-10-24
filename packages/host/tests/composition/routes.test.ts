@@ -66,6 +66,31 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "the client places an image reference on a linux host, and runs a command in the machine it makes",
+    () =>
+      Effect.gen(function* () {
+        const { url, fake } = yield* serve();
+        const reference = "registry.example/team/orb:latest";
+
+        const [made, ran] = yield* withClient(url, (client) =>
+          Effect.all([
+            client.create("orb", { ...spec, base: reference }),
+            client.execMachine({
+              id: "linux_orb",
+              argv: ["/bin/sh", "-c", 'printf "%s %s" "$CLANKERBOX_USER" "$(cat)"'],
+              user: "user",
+              stdin: "secret",
+            }),
+          ]),
+        );
+
+        expect(made).toMatchObject({ id: "linux_orb", base: reference });
+        expect(fake.images.get("orb")).toBe(reference);
+        expect(ran).toEqual({ exitCode: 0, output: "user secret", truncated: false });
+      }),
+  );
+
+  it.effect(
     "a failed restore or fork is about the resource that failed it, and names the machine it makes",
     () =>
       Effect.gen(function* () {

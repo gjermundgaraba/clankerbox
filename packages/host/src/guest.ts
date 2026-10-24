@@ -1,4 +1,11 @@
-import { loginUser, ScriptFailed, type Setup } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  type Executed,
+  type ExecRequest,
+  loginUser,
+  outputLimit,
+  ScriptFailed,
+  type Setup,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Option, Redacted, Schema, Stream } from "effect";
 import {
   type Command,
@@ -12,22 +19,50 @@ const tailLines = 20;
 
 const tailCharacters = 4000;
 
-const keptCharacters = 64 * 1024;
-
 export const lastLines = (text: string): string =>
   text.trimEnd().split("\n").slice(-tailLines).join("\n").slice(-tailCharacters);
 
 const keptOutput = () => {
   const decoder = new TextDecoder();
   let kept = "";
+  let truncated = false;
+
+  const keep = (text: string) => {
+    truncated ||= kept.length + text.length > outputLimit;
+    kept = (kept + text).slice(-outputLimit);
+  };
 
   return {
-    push: (chunk: Uint8Array) => {
-      kept = (kept + decoder.decode(chunk, { stream: true })).slice(-keptCharacters);
+    push: (chunk: Uint8Array) => keep(decoder.decode(chunk, { stream: true })),
+    text: () => {
+      keep(decoder.decode());
+
+      return kept;
     },
-    text: () => kept + decoder.decode(),
+    truncated: () => truncated,
   };
 };
+
+const drained = (
+  runtime: Runtime,
+  machine: MachineRef,
+  command: Command,
+  output: ReturnType<typeof keptOutput>,
+): Effect.Effect<number, RuntimeError> =>
+  Effect.map(
+    Effect.scoped(
+      Effect.flatMap(runtime.exec(machine, command), (execution) =>
+        Effect.all(
+          [
+            Stream.runForEach(execution.output, (chunk) => Effect.sync(() => output.push(chunk))),
+            execution.exitCode,
+          ],
+          { concurrency: "unbounded" },
+        ),
+      ),
+    ),
+    ([, exitCode]) => exitCode,
+  );
 
 const runInGuest = (
   runtime: Runtime,
@@ -39,17 +74,7 @@ const runInGuest = (
   Effect.gen(function* () {
     const output = keptOutput();
 
-    const [, code] = yield* Effect.scoped(
-      Effect.flatMap(runtime.exec(machine, command), (execution) =>
-        Effect.all(
-          [
-            Stream.runForEach(execution.output, (chunk) => Effect.sync(() => output.push(chunk))),
-            execution.exitCode,
-          ],
-          { concurrency: "unbounded" },
-        ),
-      ),
-    ).pipe(
+    const code = yield* drained(runtime, machine, command, output).pipe(
       timeoutFail(
         timeout,
         () =>
@@ -70,6 +95,24 @@ const runInGuest = (
     }
 
     return text;
+  });
+
+export const runCommand = (
+  runtime: Runtime,
+  machine: MachineRef,
+  { argv, user, stdin }: ExecRequest,
+): Effect.Effect<Executed, RuntimeError> =>
+  Effect.gen(function* () {
+    const output = keptOutput();
+
+    const exitCode = yield* drained(
+      runtime,
+      machine,
+      { argv, user, stdin: stdin === undefined ? undefined : new TextEncoder().encode(stdin) },
+      output,
+    );
+
+    return { exitCode, output: output.text(), truncated: output.truncated() };
   });
 
 const setupRunner = [

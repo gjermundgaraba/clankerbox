@@ -1,7 +1,7 @@
-import { ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
+import { type Executed, outputLimit, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { join } from "node:path";
-import { DateTime, Effect, Schema } from "effect";
+import { DateTime, Effect, Schema, Sink, Stdio, Stream } from "effect";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
 import {
@@ -20,6 +20,44 @@ const stubs: Array<StubHost> = [];
 afterEach(() => cleanup(stubs));
 
 const host = hostIn(stubs);
+
+const execOn = (
+  args: ReadonlyArray<string>,
+  answer: Effect.Effect<Executed> = Effect.succeed({
+    exitCode: 3,
+    output: "hi\n",
+    truncated: false,
+  }),
+) =>
+  Effect.gen(function* () {
+    const dir = yield* scratch;
+    const config = yield* writeConfig(dir, ["linux"]);
+    const printed: Array<string> = [];
+
+    const linux = host({
+      id: "linux",
+      bases: ["ubuntu"],
+      machines: [machine("linux_dev")],
+      exec: () => answer,
+    });
+
+    const stdio = Stdio.layerTest({
+      stdin: Stream.make(new TextEncoder().encode("the input")),
+      stdout: () =>
+        Sink.forEach((chunk) =>
+          Effect.sync(() => {
+            printed.push(Buffer.from(chunk).toString());
+          }),
+        ),
+    });
+
+    const run = yield* cli(["exec", "--config", config, ...args], {
+      endpoints: [["linux", linux]],
+      stdio,
+    });
+
+    return { ...run, printed: printed.join(""), execs: linux.execs };
+  });
 
 layer(NodeServices.layer)((it) => {
   it.effect("machines shows each machine's age, and names a host that didn't answer", () =>
@@ -603,6 +641,74 @@ layer(NodeServices.layer)((it) => {
         "machine.fork",
       ]);
       expect(mac.calls).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "exec sends the command, its user and, with --stdin, this stdin, prints its output and exits with its code",
+    () =>
+      Effect.gen(function* () {
+        const { code, printed, execs } = yield* execOn([
+          "--user",
+          "user",
+          "--stdin",
+          "--timeout",
+          "2m",
+          "linux_dev",
+          "--",
+          "/bin/sh",
+          "-c",
+          "cat",
+        ]);
+
+        expect(code).toBe(3);
+        expect(printed).toBe("hi\n");
+        expect(execs).toEqual([
+          {
+            id: "linux_dev",
+            argv: ["/bin/sh", "-c", "cat"],
+            user: "user",
+            stdin: "the input",
+          },
+        ]);
+      }),
+  );
+
+  it.effect("exec --json prints the exit code and output, and sends no stdin unasked", () =>
+    Effect.gen(function* () {
+      const { code, stdout, printed, execs } = yield* execOn(["--json", "linux_dev", "--", "true"]);
+
+      expect(code).toBe(3);
+      expect(JSON.parse(stdout)).toEqual({ exitCode: 3, output: "hi\n", truncated: false });
+      expect(printed).toBe("");
+      expect(execs).toEqual([{ id: "linux_dev", argv: ["true"] }]);
+    }),
+  );
+
+  it.effect("exec says on stderr when the host cut the output short", () =>
+    Effect.gen(function* () {
+      const { code, printed, stderr } = yield* execOn(
+        ["linux_dev", "--", "true"],
+        Effect.succeed({ exitCode: 0, output: "the end\n", truncated: true }),
+      );
+
+      expect(code).toBe(0);
+      expect(printed).toBe("the end\n");
+      expect(stderr).toContain(`only its last ${outputLimit} characters`);
+    }),
+  );
+});
+
+layer(NodeServices.layer, { excludeTestServices: true })((it) => {
+  it.effect("exec past its --timeout ends the call and exits 124", () =>
+    Effect.gen(function* () {
+      const { code, stderr } = yield* execOn(
+        ["--timeout", "1s", "linux_dev", "--", "sleep", "60"],
+        Effect.never,
+      );
+
+      expect(code).toBe(124);
+      expect(stderr).toContain("the command ran past --timeout 1s and was ended");
     }),
   );
 });
