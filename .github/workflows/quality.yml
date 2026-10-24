@@ -1,11 +1,9 @@
 name: Quality
-# A pull request's branch runs once, as the pull request; pushes run on main. The release calls
-# it first.
+# A pull request's branch runs once, as the pull request; pushes run on main.
 on:
   push:
     branches: [main]
   pull_request:
-  workflow_call:
 permissions:
   contents: read
 jobs:
