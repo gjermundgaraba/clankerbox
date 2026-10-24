@@ -23,7 +23,7 @@ production hosts or the operator's Tart, or commit unless asked.
   (`packages/host/tests/platform/tart/tart.test.ts`, whose fake `tart` answers as the tested
   release; `config.test.ts`): `git grep -n '2\.41'`.
 - **Companions** pinned beside it, re-checked only when they change: Softnet
-  0.24.0 (README),
+  0.24.1 (README),
   tart-guest-agent at least 0.15.0 (inside the image), and the Cirrus base,
   `latest`, its only tag, on 2026-10-04:
 
