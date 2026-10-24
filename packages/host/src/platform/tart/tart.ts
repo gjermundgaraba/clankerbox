@@ -5,6 +5,7 @@ import {
   formatGib,
   type HostError,
   Internal,
+  requirements,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -30,8 +31,6 @@ import * as Forwarder from "./forwarder.ts";
 export const TartSettings = Schema.Struct({
   binary: Schema.String,
 });
-
-export const minimumVersion = "2.41.1";
 
 export interface Settings {
   readonly binary: string;
@@ -153,7 +152,7 @@ export const stateOf = (state: typeof VmState.Type): MachineState =>
 
 export const supported = (reported: string): boolean =>
   /^\d+\.\d+\.\d+$/u.test(reported) &&
-  reported.localeCompare(minimumVersion, "en", { numeric: true }) >= 0;
+  reported.localeCompare(requirements.tart.minimumVersion, "en", { numeric: true }) >= 0;
 
 const printed = (output: string, key: string): string | undefined =>
   new RegExp(`^\\t${key} = (.+)$`, "mu").exec(output)?.[1];
@@ -200,7 +199,7 @@ export const make = (
 
     if (!supported(reported)) {
       return yield* new CannotStart({
-        message: `${settings.binary} reports version "${reported}", and this host needs Tart ${minimumVersion} or later`,
+        message: `${settings.binary} reports version "${reported}", and this host needs Tart ${requirements.tart.minimumVersion} or later`,
       });
     }
 

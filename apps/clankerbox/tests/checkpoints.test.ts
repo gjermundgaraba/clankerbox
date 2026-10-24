@@ -23,7 +23,7 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const dir = yield* scratch;
       const config = yield* writeConfig(dir, ["mac", "linux"]);
-      const mac = host({ id: "mac", bases: ["tahoe"] });
+      const mac = host({ id: "mac", bases: ["macos"] });
       const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_dev")] });
 
       const captured = yield* cli(

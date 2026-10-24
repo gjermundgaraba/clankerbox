@@ -14,12 +14,14 @@ separately, and don't deploy, change production hosts, or commit unless asked.
 
 ## Source and scope
 
-- **Pinned in this repo:** `testedVersion` in
-  `packages/host/src/platform/smolvm.ts` is exact: startup refuses any other
-  `smolvm --version`. `pin` derives from it (`smolvm <version>
+- **Pinned in this repo:** `requirements.smolvm.testedVersion` in
+  `packages/sdk/src/requirements.ts`, published for deploy tooling, is exact:
+  startup refuses any other `smolvm --version`. `pin` in
+  `packages/host/src/platform/smolvm.ts` derives from it (`smolvm <version>
   <platform>-<arch>`) and is recorded on every `ram` checkpoint and every paused
-  machine. Tests use `testedVersion` or a neutral `0.0.0-test`; only README
-  repeats the version: `git grep -n '<old version>'` finds every place.
+  machine. Tests use it or a neutral `0.0.0-test`; only README repeats the
+  version, and `requirements.test.ts` fails until it does: `git grep -n '<old
+  version>'` finds every place. `requirements.bases.linux` pins `ubuntu`.
 - **Target:** the latest stable published `smol-machines/smolvm` release (its
   release metadata, such as `gh release view --repo smol-machines/smolvm`),
   unless the user names one. Not upstream main, an installed binary or a cached
@@ -132,7 +134,8 @@ as it is.
   checked after each new seed (`prune`, `DEFAULT_MAX_BYTES`,
   `SMOLVM_IMAGE_SEED_MAX_BYTES`). Bases go through `mirror.gcr.io`, a
   pull-through cache of Docker Hub, to avoid Docker Hub's anonymous pull
-  limit. Ours: bases name `mirror.gcr.io` directly, by digest (README); a
+  limit. Ours: bases name `mirror.gcr.io` directly, by digest
+  (`requirements.bases.linux`, README); a
   create from an image reference, as amp-orb's `ORB_IMAGE` tag, boots what the
   tag names then, with no `--seed-digest-ttl`.
 
@@ -514,7 +517,7 @@ as it is.
 
 ## After
 
-- Set `testedVersion`, the version in README (`git grep` for the old one) and
+- Set `requirements.smolvm.testedVersion`, the version in README (`git grep` for the old one) and
   the release in Notation above. Edit a claim or a `Source: smolvm` comment
   only where the target changed it: check each identifier still finds the
   code, and add claims the new release introduced.

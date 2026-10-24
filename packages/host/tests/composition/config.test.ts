@@ -6,10 +6,10 @@ import { layer } from "@effect/vitest";
 import { expect } from "vite-plus/test";
 import { loadConfig } from "../../src/composition/config.ts";
 import { defaultRecheck } from "../../src/settings.ts";
+import { requirements } from "@gjermundgaraba/clankerbox-sdk";
 import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 
-const image =
-  "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
+const image = requirements.bases.linux.ubuntu;
 
 const config = {
   id: "linux",
@@ -68,7 +68,7 @@ layer(NodeServices.layer)((it) => {
     kind: "mac",
     listen: { address: "100.122.69.11", port: 8484 },
     stateDir: "state",
-    bases: { tahoe: "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3" },
+    bases: { macos: requirements.bases.mac.macos },
     mac: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },
   };
 
@@ -81,7 +81,7 @@ layer(NodeServices.layer)((it) => {
         kind: "mac",
         listen: { address: "100.122.69.11", port: 8484 },
         stateDir: join(file, "..", "state"),
-        bases: new Map([["tahoe", "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3"]]),
+        bases: new Map([["macos", requirements.bases.mac.macos]]),
         machinePorts: { first: 10_000, last: 19_999 },
         recheck: defaultRecheck,
         mac: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },

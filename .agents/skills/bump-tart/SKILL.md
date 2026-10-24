@@ -14,7 +14,8 @@ production hosts or the operator's Tart, or commit unless asked.
 
 ## Source and scope
 
-- **Pinned in this repo:** `minimumVersion` in `packages/host/src/platform/tart/tart.ts` is a
+- **Pinned in this repo:** `requirements.tart.minimumVersion` in
+  `packages/sdk/src/requirements.ts`, published for deploy tooling, is a
   floor: `supported` accepts any `major.minor.patch` at or above it, and startup
   refuses the rest. It carries no comment (no prose comments); why the floor
   is where it is lives in this skill, below, and in the commit that moved it. The tested
@@ -22,12 +23,18 @@ production hosts or the operator's Tart, or commit unless asked.
   and the tests
   (`packages/host/tests/platform/tart/tart.test.ts`, whose fake `tart` answers as the tested
   release; `config.test.ts`): `git grep -n '2\.41'`.
-- **Companions** pinned beside it, re-checked only when they change: Softnet
-  0.24.1 (README),
-  tart-guest-agent at least 0.15.0 (inside the image), and the Cirrus base,
-  `latest`, its only tag, on 2026-10-04:
+- **Companions** pinned beside it in `requirements`, re-checked only when
+  they change: Softnet 0.24.1 (`softnet.checkedVersion`, README),
+  tart-guest-agent at least 0.15.0 (inside the image), and the one mac base,
+  `bases.mac.macos` (README), Cirrus's Xcode image, tag `27`, uploaded
+  2026-09-22, with a 140 GB disk:
 
-      ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3aa5ce21b5c876268f233bdfecf38b4c2a8116fe9bbb718e714cbae187377
+      ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:71d9dc1d6c4614b7ecbb328753124912b43425fc8cf1c4085d7f352026df6601
+
+  `requirements.test.ts` fails until README states each. The claims about the
+  base below were checked on `macos-tahoe-base` (`87f3aa5c…`, 2026-10-04),
+  which Cirrus builds the Xcode image on; they have not been re-checked on the
+  Xcode image itself, which the operator's mac host ran under 0.24.
 - **Target:** the latest stable published `openai/tart` release (the repository
   moved from `cirruslabs/tart`, which redirects; its release
   metadata, such as `gh release view --repo openai/tart`), unless the user
@@ -94,7 +101,8 @@ Each: what Tart does, where, and what of ours depends on it.
   VMDirectory.swift), and a stacked disk grows only its writable
   overlay (`growWritableOverlay`, DiskImageStack.swift). Ours: `diskGb` rounds
   `diskGib` up, `shrinkRefusal` matches that text and makes it `Unsizable`.
-  The pinned Cirrus base has a 50 GB raw disk.
+  The pinned Xcode image has a 140 GB disk, so a `diskGib` below 130 is
+  `Unsizable`.
 - `tart get` opens local VMs only (`VMStorageLocal().open`,
   Commands/Get.swift), not an OCI reference, and `tart list` reports no
   OS (`VMInfo`, Commands/List.swift). Ours: no check of `diskGib` against the
@@ -200,7 +208,7 @@ Each: what Tart does, where, and what of ours depends on it.
   (`targetWindowSize`, GuestAgentChannel.swift), so at most 64 KiB of
   guest output is in flight per stream, against virtio-vsock dropping whole
   blocks of fast output from macOS 12–15 guests (openai/tart#1347). Tahoe
-  guests didn't lose any. Ours: the pinned base is Tahoe; the forwarder's
+  guests didn't lose any. Ours: the pinned base is a Tahoe guest; the forwarder's
   guest-to-host direction (ssh downloads) runs under that window, and its
   throughput at 2.41.1 is unmeasured.
 - An exec before the VM runs fails at once (exit 2); one sent while it boots
@@ -209,7 +217,7 @@ Each: what Tart does, where, and what of ours depends on it.
   Cirrus guest answered 18.5–32.3 s after `tart run`, two booting together
   after about 61 and 93 s. Ours: `bootWait` (3 minutes) retrying every
   `probePause`.
-- tart-guest-agent (0.15.0 on the base) runs as a root LaunchDaemon and as a
+- tart-guest-agent (0.15.0 on `macos-tahoe-base`) runs as a root LaunchDaemon and as a
   per-user LaunchAgent for the auto-login user `admin`, which serves exec;
   `admin` has `NOPASSWD: ALL`. `tart exec -i <vm> sudo -n /bin/bash -c <script>`
   passes exit codes, keeps stdout and stderr apart, runs as uid 0 and sees
@@ -224,7 +232,8 @@ Each: what Tart does, where, and what of ours depends on it.
   `/opt/homebrew/bin`, whose Softnet isn't SUID root), the user's `HOME`, and the host's `TART_HOME` if set,
   so a job's `tart run` finds the VM the host made, in the host's Tart home.
 
-**The Cirrus base** (re-check when the base's digest changes)
+**The Cirrus base** (re-check when the base's digest changes, and on the Xcode
+image before the next bump relies on them)
 
 - Every clone carries the image's SSH host keys; launchd starts sshd per
   connection, so the next connection serves re-minted keys without a restart.

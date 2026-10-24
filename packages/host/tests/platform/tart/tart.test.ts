@@ -404,7 +404,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { mac, runtime } = yield* runtimeOn();
         const machine = machineOn("dev");
         const vm = vmOf(machine);
-        const image = "ghcr.io/cirruslabs/macos-tahoe-base@sha256:87f3";
+        const image = "ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:71d9";
 
         yield* runtime.create(machine, image);
 

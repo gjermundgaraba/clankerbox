@@ -38,7 +38,7 @@ const spec: MachineSpec = { base: "ubuntu", cpu: 1, ramMib: 1024, diskGib: 10 };
 it.effect("a call goes to the host its ID names, and only there", () =>
   Effect.gen(function* () {
     const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_dev")] });
-    const mac = host({ id: "mac", bases: ["tahoe"] });
+    const mac = host({ id: "mac", bases: ["macos"] });
 
     const found = yield* withClient(
       [
@@ -151,7 +151,7 @@ it.effect("a host's error comes back as itself, naming the host, the action and 
 
 it.effect("a placement no host takes names the action, but no host or ID", () =>
   Effect.gen(function* () {
-    const linux = host({ id: "linux", bases: ["tahoe"] });
+    const linux = host({ id: "linux", bases: ["macos"] });
 
     const error = yield* withClient([["linux", linux]], (client) =>
       Effect.flip(client.create("dev", spec)),
@@ -202,7 +202,7 @@ it.effect("a list fans out and names the host that didn't answer", () =>
 
 it.effect("create lands on the first host in list order that offers the base", () =>
   Effect.gen(function* () {
-    const mac = host({ id: "mac", bases: ["tahoe"] });
+    const mac = host({ id: "mac", bases: ["macos"] });
     const first = host({ id: "linux", bases: ["ubuntu"] });
     const second = host({ id: "hetzner", bases: ["ubuntu"] });
 
@@ -318,7 +318,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const first = host({ id: "linux", bases: ["ubuntu"] });
-      const second = host({ id: "mac", bases: ["tahoe"], kind: "mac" });
+      const second = host({ id: "mac", bases: ["macos"], kind: "mac" });
 
       const { placed, named } = yield* withClient(
         [
@@ -327,8 +327,8 @@ it.effect(
         ],
         (client) =>
           Effect.all({
-            placed: client.place("tahoe"),
-            named: client.place("tahoe", { host: "linux" }),
+            placed: client.place("macos"),
+            named: client.place("macos", { host: "linux" }),
           }),
       );
 
@@ -342,7 +342,7 @@ it.effect(
   "place puts an image reference no host names on the first linux host, and a mac host never offers one",
   () =>
     Effect.gen(function* () {
-      const mac = host({ id: "mac", bases: ["tahoe"], kind: "mac" });
+      const mac = host({ id: "mac", bases: ["macos"], kind: "mac" });
       const linux = host({ id: "linux", bases: ["ubuntu"] });
 
       const { placed, refused } = yield* withClient(
@@ -395,7 +395,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const linux = host({ id: "linux", bases: ["ubuntu", "ubuntu-dev"] });
-      const mac = host({ id: "mac", bases: ["tahoe"] });
+      const mac = host({ id: "mac", bases: ["macos"] });
 
       const error = yield* withClient(
         [
@@ -407,7 +407,7 @@ it.effect(
 
       expect(error._tag).toBe("NotOffered");
       expect(error.message).toContain(
-        "linux offers ubuntu, ubuntu-dev, and any image reference; mac offers tahoe",
+        "linux offers ubuntu, ubuntu-dev, and any image reference; mac offers macos",
       );
       expect(linux.creates).toHaveLength(0);
     }),
@@ -424,7 +424,7 @@ it.effect(
           ["linux", linux],
           ["mac", "down"],
         ],
-        (client) => Effect.flip(client.create("dev", { ...spec, base: "tahoe" })),
+        (client) => Effect.flip(client.create("dev", { ...spec, base: "macos" })),
       );
 
       expect(error._tag).toBe("Unavailable");
@@ -448,7 +448,7 @@ it.effect(
           ["linux", linux],
           ["mis", other],
         ],
-        (client) => Effect.flip(client.create("dev", { ...spec, base: "tahoe" })),
+        (client) => Effect.flip(client.create("dev", { ...spec, base: "macos" })),
       );
 
       expect(error._tag).toBe("NotOffered");

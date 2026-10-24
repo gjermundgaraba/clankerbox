@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { totalmem } from "node:os";
 import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { type HostError, Internal, requirements } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Fiber, FileSystem, Layer, Logger, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
@@ -21,7 +21,6 @@ import {
   type Settings,
   stateOf,
   templates,
-  testedVersion,
   ramBudget,
 } from "../../src/platform/smolvm.ts";
 import { mkdir, readDirectory, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
@@ -35,14 +34,16 @@ const scripted = (reply: (call: Call) => Reply | undefined) =>
   scriptedSpawner(
     (call) =>
       reply(call) ??
-      (call.args[0] === "--version" ? { stdout: `smolvm ${testedVersion}\n` } : undefined),
+      (call.args[0] === "--version"
+        ? { stdout: `smolvm ${requirements.smolvm.testedVersion}\n` }
+        : undefined),
   );
 
 const prepared = (expanded: ReadonlyArray<string> = templates) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const dir = yield* scratch;
-    const prefix = join(dir, "smolvm", testedVersion);
+    const prefix = join(dir, "smolvm", requirements.smolvm.testedVersion);
     const stateDir = yield* fs.makeTempDirectoryScoped({ directory: "/tmp", prefix: "cbx-" });
 
     yield* mkdir(prefix);
@@ -123,7 +124,7 @@ layer(NodeServices.layer)((it) => {
 
         const runtime = yield* runtimeOf(settings, spawner);
 
-        expect(runtime.version).toBe(testedVersion);
+        expect(runtime.version).toBe(requirements.smolvm.testedVersion);
         expect(spawner.calls).toEqual([
           {
             file: join(settings.prefix, "smolvm"),
@@ -202,7 +203,7 @@ layer(NodeServices.layer)((it) => {
 
       expect(error._tag).toBe("CannotStart");
       expect(error.message).toBe(
-        `${join(settings.prefix, "smolvm")} reports "smolvm 0.0.0-test", and this host was tested on smolvm ${testedVersion}`,
+        `${join(settings.prefix, "smolvm")} reports "smolvm 0.0.0-test", and this host was tested on smolvm ${requirements.smolvm.testedVersion}`,
       );
     }),
   );
@@ -350,10 +351,7 @@ layer(NodeServices.layer)((it) => {
         const spawner = scripted(() => undefined);
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        const image =
-          "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
-
-        yield* runtime.create(machine, image);
+        yield* runtime.create(machine, requirements.bases.linux.ubuntu);
 
         expect(smolvmArgs(spawner.calls)).toEqual([
           [
@@ -362,7 +360,7 @@ layer(NodeServices.layer)((it) => {
             "--name",
             "dev-01234567",
             "--image",
-            image,
+            requirements.bases.linux.ubuntu,
             "--cpus",
             "2",
             "--mem",

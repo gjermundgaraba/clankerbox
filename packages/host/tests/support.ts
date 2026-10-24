@@ -2,7 +2,12 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { CreateRequest, Kind, Machine } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  type CreateRequest,
+  type Kind,
+  type Machine,
+  requirements,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
 import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
 import { HttpClient, HttpServer } from "effect/http";
@@ -17,8 +22,7 @@ import type { HostSettings } from "../src/settings.ts";
 import * as Store from "../src/store.ts";
 import { type FakeOptions, type FakeRuntime, fakeRuntime } from "./fake-runtime.ts";
 
-export const image =
-  "mirror.gcr.io/library/ubuntu@sha256:f144425ff09be612d6d9ad965196e9cdc23dae1f42110a8a11a3e9a8198759f7";
+export const image = requirements.bases.linux.ubuntu;
 
 const sharedPorts: PortRange = { first: 21_000, last: 21_099 };
 

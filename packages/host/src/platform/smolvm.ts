@@ -1,6 +1,12 @@
 import { totalmem } from "node:os";
 import { join } from "node:path";
-import { type HostError, Internal, Invalid, WrongState } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  type HostError,
+  Internal,
+  Invalid,
+  requirements,
+  WrongState,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import {
@@ -42,8 +48,6 @@ export const ramBudget = (set: number | undefined): Effect.Effect<number, Invali
     : Effect.succeed(ramBudgetMib);
 };
 
-export const testedVersion = "1.32.1";
-
 export interface Settings {
   readonly prefix: string;
   readonly publishAddress: string;
@@ -57,7 +61,7 @@ export const pathsIn = (stateDir: string) => ({
   forks: join(stateDir, "forks"),
 });
 
-export const pin = `smolvm ${testedVersion} ${process.platform}-${process.arch}`;
+export const pin = `smolvm ${requirements.smolvm.testedVersion} ${process.platform}-${process.arch}`;
 
 export const nativeName = (resource: Pick<MachineRef, "name" | "instance">): string =>
   `${resource.name}-${resource.instance.slice(0, 8)}`;
@@ -208,9 +212,9 @@ export const make = (
 
     const reported = (yield* call(["--version"], "--version")).stdout.trim();
 
-    if (reported !== `smolvm ${testedVersion}`) {
+    if (reported !== `smolvm ${requirements.smolvm.testedVersion}`) {
       return yield* new CannotStart({
-        message: `${binary} reports "${reported}", and this host was tested on smolvm ${testedVersion}`,
+        message: `${binary} reports "${reported}", and this host was tested on smolvm ${requirements.smolvm.testedVersion}`,
       });
     }
 
@@ -364,7 +368,7 @@ export const make = (
       });
 
     return {
-      version: testedVersion,
+      version: requirements.smolvm.testedVersion,
       publishAddress: settings.publishAddress,
       pin,
       stopResumes: true,

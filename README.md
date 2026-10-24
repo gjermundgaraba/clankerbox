@@ -53,6 +53,9 @@ done
 
 Softnet, for Tart: `sudo install -o root -g wheel -m 4755 softnet /usr/local/bin/softnet`.
 
+The SDK exports these, with the bases below and the Node range, as
+`requirements`, for deploy tooling to pin from.
+
 ## Run a host
 
 A host process runs one kind from one JSON config file:
@@ -78,7 +81,11 @@ A host process runs one kind from one JSON config file:
   it is at most 52 bytes and outside every home directory, such as
   `/srv/clankerbox/smolvm`.
 - `bases` maps names clients ask for to images, pinned by digest. A name holds
-  no `/`. Hosts offering the same image should use the same name. A linux host also creates
+  no `/`. Hosts offering the same image should use the same name. The release
+  was checked on linux's `ubuntu` above and on mac's `macos`,
+  `ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:71d9dc1d6c4614b7ecbb328753124912b43425fc8cf1c4085d7f352026df6601`,
+  Cirrus's Xcode 27 on macOS 26, whose 140 GB disk takes a `diskGib` of 130 or
+  more. A linux host also creates
   from any image reference a create names as its base, one with a `/`, such as
   `registry.example/team/image:tag`. A prebuild names its base, not the image,
   so one made from a tag keeps the image the tag named then.
@@ -95,6 +102,29 @@ clankerbox host --config /etc/clankerbox/linux.json
 ```
 
 The host exits 130 on SIGINT or SIGTERM and 1 when it fails.
+
+### Upgrading from 0.24
+
+State dirs, prebuilds, checkpoints and client configs are as in 0.24, with
+no migration, so a 0.24 host can still read a 0.25 state dir. Upgrade hosts
+and clients together, as for every release.
+
+- linux: install smolvm 1.32.1 in its own prefix, templates expanded, and
+  start or stop every paused machine before pointing `linux.prefix` at it. Its
+  `ram` checkpoints from 1.31.1 then fail `PinMismatch`, prebuilds rebuild at
+  their next create, and a machine left running across the move can't be
+  forked or captured until it stops and starts again.
+- A host config refuses a base name holding a `/`; a linux host creates from
+  any image reference.
+- mac: the checked base is now `macos`, the Xcode image above, in place of
+  `macos-tahoe-base`. A machine keeps the base name it was made from; a profile
+  naming another base moves to `macos`, and its prebuild runs again.
+- Amp orbs: drop the `amp-orb` base, the `amp-orb` recipe and the profile's
+  base and setup, and run `clankerbox amp-orb` without `--base`; the orb no
+  longer needs SSH. Orb machines and snapshots carry over, and their amp-orb
+  prebuilds can be deleted.
+- The SDK adds `execMachine` and `requirements`; `Machine.base` may be an
+  image reference.
 
 ### Upgrading from 0.23
 
@@ -183,7 +213,7 @@ profile may leave out `base` for each create to name, with `--base`.
 clankerbox hosts                           # every host, its kind, versions and bases
 clankerbox capacity                        # every host's resources and limits
 clankerbox create dev --profile dev        # prints the new ID, linux_dev
-clankerbox create review --host mac --base macos --cpu 4 --ram 8G --disk 60G
+clankerbox create review --host mac --base macos --cpu 4 --ram 8G --disk 150G
 clankerbox prebuild --profile dev          # run dev's setup once; later creates of dev restore it
 clankerbox machines
 clankerbox get linux_dev

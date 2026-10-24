@@ -20,7 +20,7 @@ layer(NodeServices.layer)((it) => {
       const { code, stdout } = yield* cli(["hosts", "--config", config], {
         endpoints: [
           ["linux", host({ id: "linux", bases: ["ubuntu", "ubuntu-dev"] })],
-          ["mac", host({ id: "mac", bases: ["tahoe"], kind: "mac" })],
+          ["mac", host({ id: "mac", bases: ["macos"], kind: "mac" })],
         ],
       });
 
@@ -36,7 +36,7 @@ layer(NodeServices.layer)((it) => {
         ["mac", "mac"],
       ]);
       expect(stdout).toContain("ubuntu,ubuntu-dev");
-      expect(stdout).toContain("tahoe");
+      expect(stdout).toContain("macos");
     }),
   );
 
@@ -63,7 +63,7 @@ layer(NodeServices.layer)((it) => {
             "mac",
             host({
               id: "mac",
-              bases: ["tahoe"],
+              bases: ["macos"],
               kind: "mac",
               capacity: [
                 { resource: "runningVms", limit: 2, used: 1 },
