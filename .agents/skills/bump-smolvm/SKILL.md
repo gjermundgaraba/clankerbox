@@ -426,7 +426,9 @@ as it is.
   across libkrun changes to restored device state, a vCPU's KVM nested state
   among them. Only a branch compares its source VMM's binary with the
   engine's (`source_runs_another_engine`, src/agent/fork.rs). Ours: `pin`, so
-  a RAM state is restored only under the release that saved it. If smolvm starts enforcing
+  a RAM state is restored only under the release that saved it, and a machine
+  is captured or forked only when its VM booted under the host's (`pinnedOn`,
+  `packages/host/src/refs.ts`). If smolvm starts enforcing
   engine and agent identity itself, the pin could go.
 - Store mode: `--store` with `--history 0` (the default keeps 32 generations, so
   deleting older checkpoints frees nothing until the newest goes), then
@@ -503,8 +505,8 @@ as it is.
   resuming, leaving it only `delete`, disk and all: start or stop each paused
   machine before the move (a stop needs room for one at a time). A machine left
   running across the move booted under the old pin, so its next pause stops it,
-  and it pauses after its next start; a capture or fork of it, though, records
-  the new pin on RAM the old VMM saved, so stop and start it before either.
+  and it pauses after its next start; a capture or fork of it is `PinMismatch`
+  until a stop and a start.
 - Report the tag transition, the claims that changed and their fixes, the checks
   actually run, optional opportunities (with touchpoints and the smallest useful
   check), and remaining runtime resources and retained disk separately.

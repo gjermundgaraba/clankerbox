@@ -31,7 +31,8 @@ whole CLI span domains on purpose.
 - `reconcile.ts`: `next`, what a machine does next from what was asked, its
   progress and what the runtime reports.
 - `leases.ts`: the in-memory leases a step holds on what it changes or copies.
-- `refs.ts`: the refs a runtime call takes, and whether a machine is made.
+- `refs.ts`: the refs a runtime call takes, whether a machine is made, and
+  whether its VM booted under the host's pin.
 - `guest.ts`: setup and preparation, run in the guest.
 - `usage.ts`: the machines in use, for the RAM budget and capacity.
 - `startup.ts`: what runs before the actors start (clearing the captures and
@@ -125,7 +126,8 @@ transport. Neither `./testing` export is published.
   and stops its VM, leaving a stopped one stopped, and stops one the runtime
   can't save: a VM booted under another pin, or one Tart can't suspend. A
   paused machine resumes only under the pin it booted under, for a start, and
-  for a stop on a runtime whose stop resumes it. A machine is made by one step
+  for a stop on a runtime whose stop resumes it, and a capture or fork copies
+  only a VM booted under the host's pin. A machine is made by one step
   in the request that creates it, from what only that request holds: a copy or
   setup that fails deletes it and answers the failure, and a delete that fails
   runs again at each recheck. A host that starts deletes every machine the last

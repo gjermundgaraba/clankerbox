@@ -78,7 +78,8 @@ export class Missing extends Schema.TaggedError<Missing>()(
 
 /**
  * The checkpoint or paused machine `id` holds RAM state saved under another runtime pin than the
- * one the host runs, and restores or resumes only under that one.
+ * one the host runs, and restores or resumes only under that one; or machine `id` runs a VM booted
+ * under another one, and is captured or forked only after a stop and a start.
  */
 export class PinMismatch extends Schema.TaggedError<PinMismatch>()(
   "PinMismatch",

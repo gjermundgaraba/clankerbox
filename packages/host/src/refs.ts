@@ -1,4 +1,4 @@
-import { NotMade } from "@gjermundgaraba/clankerbox-sdk";
+import { NotMade, PinMismatch } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
 import { idOn } from "./ids.ts";
 import type { CheckpointRef, MachineRef } from "./runtime.ts";
@@ -30,5 +30,16 @@ export const madeOn =
           new NotMade({
             message: `machine ${idOn(host)(intent.name)} isn't made yet: its create or setup still runs`,
             machine: idOn(host)(intent.name),
+          }),
+        );
+
+export const pinnedOn =
+  (host: string, pin: string | undefined) =>
+  (intent: Intent): Effect.Effect<void, PinMismatch> =>
+    intent.pin === pin
+      ? Effect.void
+      : Effect.fail(
+          new PinMismatch({
+            message: `machine ${idOn(host)(intent.name)}'s VM booted under ${intent.pin ?? "an older host"}, and this host runs ${pin ?? "no pin"}, so a copy of its RAM would restore under the wrong one: stop it and start it again first`,
           }),
         );

@@ -117,7 +117,7 @@ export const Http = ActionHttp.make(
       ...write,
       error: making,
       description:
-        "Copy a machine to a new name on the same host. A copy that fails deletes the new machine.",
+        "Copy a machine to a new name on the same host. A linux machine is copied only when its VM booted under the smolvm build the host runs. A copy that fails deletes the new machine.",
       input: FromMachine,
       success: Machine,
     }),
@@ -151,11 +151,12 @@ export const Http = ActionHttp.make(
         NotMade,
         Missing,
         WrongState,
+        PinMismatch,
         Capacity,
         Internal,
       ] as const,
       description:
-        "Capture a checkpoint of a machine. Its kind follows the host's: ram on linux, which captures only a running machine, and disk on mac, which captures only a stopped one.",
+        "Capture a checkpoint of a machine. Its kind follows the host's: ram on linux, which captures only a running machine whose VM booted under the smolvm build the host runs, and disk on mac, which captures only a stopped one.",
       input: FromMachine,
       success: Checkpoint,
     }),

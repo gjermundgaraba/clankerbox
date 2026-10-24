@@ -12,7 +12,7 @@ import { Hex } from "effect/encoding";
 import { foundOn, idOn, nameOn, newInstance } from "./ids.ts";
 import { Leases } from "./leases.ts";
 import { Machines } from "./machines.ts";
-import { checkpointRef, machineRef, madeOn } from "./refs.ts";
+import { checkpointRef, machineRef, madeOn, pinnedOn } from "./refs.ts";
 import { Runtime } from "./runtime.ts";
 import { checkpointKinds, type HostSettings } from "./settings.ts";
 import { type CheckpointRecord, Store } from "./store.ts";
@@ -51,6 +51,7 @@ export const make = (
     const nameOf = nameOn(config.id);
     const found = foundOn(config.id);
     const made = madeOn(config.id);
+    const pinned = pinnedOn(config.id, runtime.pin);
 
     const detached = <A, E>(what: string, work: Effect.Effect<A, E>): Effect.Effect<A, E> =>
       Effect.flatMap(
@@ -85,6 +86,7 @@ export const make = (
           const intent = yield* found("machine", source, store.findMachine(source));
 
           yield* made(intent);
+          yield* pinned(intent);
 
           const left = (yield* store.unready).find((record) => record.name === name);
 

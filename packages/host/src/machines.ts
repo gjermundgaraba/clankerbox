@@ -46,7 +46,7 @@ import {
   tell,
 } from "./lifecycle.ts";
 import { pickPort, PortProbe } from "./machine-ports.ts";
-import { checkpointRef, machineRef, madeOn } from "./refs.ts";
+import { checkpointRef, machineRef, madeOn, pinnedOn } from "./refs.ts";
 import {
   type Booting,
   type MachineRef,
@@ -145,6 +145,7 @@ export const make = (
     const notFound = notFoundOn(config.id);
     const found = foundOn(config.id);
     const made = madeOn(config.id);
+    const pinned = pinnedOn(config.id, runtime.pin);
     const ref = (intent: Intent) => machineRef(config.id, intent);
 
     const inTime = (what: string) =>
@@ -296,6 +297,7 @@ export const make = (
         }
 
         yield* made(from);
+        yield* pinned(from);
 
         return yield* runtime.fork(ref(from), machine);
       });

@@ -619,6 +619,43 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
+  it.effect(
+    "a machine whose VM booted under another runtime build is captured or forked only after a stop and a start",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* withSource();
+
+        yield* linux.run(linux.store.bootedUnder("dev", "fake 0"));
+
+        const refused = [
+          yield* failure(linux, linux.checkpoints.capture("linux_dev", "hot")),
+          yield* failure(linux, linux.machines.fork("linux_dev", "copy")),
+        ];
+
+        expect(refused).toEqual(
+          Array.from(
+            { length: 2 },
+            () =>
+              new PinMismatch({
+                message:
+                  "machine linux_dev's VM booted under fake 0, and this host runs fake 1, so a copy of its RAM would restore under the wrong one: stop it and start it again first",
+              }),
+          ),
+        );
+        expect(linux.fake.calls.filter((call) => /^(capture|fork) /.test(call))).toEqual([]);
+        expect(yield* names(linux)).toEqual(["dev"]);
+        expect(yield* checkpointNames(linux)).toEqual([]);
+
+        yield* linux.run(linux.machines.stop("linux_dev"));
+        yield* linux.run(linux.machines.start("linux_dev"));
+        yield* linux.run(linux.checkpoints.capture("linux_dev", "hot"));
+        yield* linux.run(linux.machines.fork("linux_dev", "copy"));
+
+        expect(yield* checkpointNames(linux)).toEqual(["hot"]);
+        expect(yield* names(linux)).toEqual(["dev", "copy"]);
+      }),
+  );
+
   it.effect("a capture cut short by the host's end deletes what it began", () =>
     Effect.gen(function* () {
       const linux = yield* withSource();
