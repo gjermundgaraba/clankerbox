@@ -28,7 +28,7 @@ separately, and don't deploy, change production hosts, or commit unless asked.
   Fetch missing tags; read with `git show <tag>:<path>` and
   `git diff <old>..<new>`. Never edit, reset or switch it.
 - **Notation:** a citation is a path in smolvm's source at the tested release,
-  1.31.1, and the identifier beside it (a function, constant, environment
+  1.32.1, and the identifier beside it (a function, constant, environment
   variable or message) finds the code: `git grep -n <identifier> <tag> --
   <path>`. Code comments cite the same way, as `// Source: smolvm <path>
   <identifier>`: `git grep -n 'Source: smolvm'`.
@@ -140,7 +140,10 @@ as it is.
 - A machine's sockets live under `<data root>/.cache/smolvm/vms/<16 hex>/`, so
   the control socket's path depends only on the data root (`vm_data_dir`,
   src/agent/manager.rs; `control_socket_path`, src/agent/fork.rs), and no
-  other socket there is longer. Linux allows 107 bytes
+  other socket there is longer on virtio-net: only a machine without it gets
+  the longer `port-forward.sock`, checked, and left out when too long
+  (`PORT_FORWARD_SOCKET`, src/network/port_forward.rs; `launch_agent_vm`,
+  src/agent/launcher.rs). Linux allows 107 bytes
   (`MAX_UNIX_SOCKET_PATH`, src/agent/launcher_dynamic.rs, which smolvm checks
   for its other sockets but not the control socket). Ours: `controlSocket` and
   `socketPathMax`; the state dir is at most 52 bytes.
@@ -197,7 +200,8 @@ as it is.
   VMM smolvm reads as stopped: the boot spawns it and adopts it into its scope
   before `finalize_launch` writes `agent.pid`, and the record gets `running`
   and the pid only after the start's image setup (`start_via_subprocess`,
-  `start_vm_named_with_db`); re-check whether that window still exists.
+  `start_vm_named_with_db`); the window still exists at the tested release;
+  re-check it.
 - `machine pause --name` saves the machine's RAM, processes and disks to a
   `pause-*.smolcheckpoint` in its data dir and stops its VM; a paused machine
   pauses again as a no-op, a pause cut short leaves `pausing` or a saved file
@@ -209,18 +213,26 @@ as it is.
   machine, recovers a `pausing` one in place, returns at once for a running
   one and refuses any other ("machine is not paused; use start for a fresh
   boot") (`ResumeCmd`; `resume_machine_inner`). `start`, `stop` and
-  `checkpoint` refuse a paused machine, and `delete -f` deletes it. Ours:
+  `checkpoint` refuse a paused machine, and `delete -f` deletes it. A pause
+  hard-links each backing layer another owner holds (the prefix's templates, a
+  seed) into the machine's data dir and packs into its file one it can't link,
+  such as one on another filesystem, and the next layer still pins
+  (`LayerPins`, src/portable_checkpoint.rs). Ours:
   `resumable` (`paused`, `pausing`); `pause` reads `machine status` first,
   leaves `paused` as it is, resumes `pausing` before it pauses and refuses
   anything else not `running` with `WrongState`; the core records the release
   pin a machine boots under and pauses only a machine booted under the host's,
   stopping any other, so a paused machine resumes only under the smolvm build
-  that paused it.
+  that paused it; a pause works with the prefix and the state dir on
+  different filesystems, packing the templates into the pause file.
 - `machine status --name X --json` states are `created`, `running`, `stopped`,
   `paused`, `pausing`, `failed`, `unreachable` and `frozen` (`RecordState`,
   src/config.rs); an unknown name is "machine '<name>' not found"
   (`status_vm_json`). Ours: `RecordState`, `alive` and `stateOf` (`running`,
-  `pausing`, `unreachable`, `frozen` have a live VMM), and the not-found text.
+  `pausing`, `unreachable`, `frozen` have a live VMM), and the not-found text;
+  the host decodes `state` alone. Its `last_exit` is written only where smolvm
+  is the VMM's parent and reaps it, `serve` or an embedder, never after a CLI
+  start (src/vm_exit.rs; `register_vm_child`, src/process.rs).
   It reports a port count (`ports`), and `branchable: false` even after `start
   --branchable`. For a machine whose state resolves `running` and that
   publishes a port, it also runs `cat /proc/net/tcp /proc/net/tcp6` in the VM
@@ -321,13 +333,26 @@ as it is.
   host before any created machine, and a fresh restore or fork before
   anything.
 - The guest's `/dev/shm` is half its RAM (`shm_size`,
-  crates/smolvm-agent/src/oci.rs), inside `--mem`. Ours: the RAM budget counts
-  `--mem` alone.
+  crates/smolvm-agent/src/oci.rs), inside `--mem`. The workload's `/tmp` is a
+  directory on the storage disk, not a tmpfs (`back_tmp_with`,
+  `WORKLOAD_TMP_DIR`, crates/smolvm-agent/src/oci.rs; `ensure_workload_tmp`,
+  crates/smolvm-agent/src/storage.rs), emptied at each boot but a fork
+  clone's (`reset_workload_tmp`). Ours: the RAM budget counts `--mem` alone,
+  and `/tmp` counts against `diskGib`.
+- Every boot adds two live virtio-fs devices, rooted in empty directories in
+  the VM's data dir (`ATTACH_TAG_RW`, `ATTACH_TAG_RO`,
+  crates/smolvm-protocol/src/lib.rs; `launch_agent_vm`,
+  src/agent/launcher.rs); only `machine mount add` shares a host directory
+  through them (src/attach.rs), and libkrun refuses creating anything in a
+  device's root (libkrun's src/devices/src/virtio/fs/live_fs.rs, at the
+  `libkrun` submodule's commit). Ours: the host never runs `machine
+  mount`, so a guest reaches no host directory through them.
 
 **Network**
 
 - `machine create --net` is outbound access, enabled only for `--net` or an
-  allow list (`resolve_egress_flags`, src/cli/machine.rs), a deny list or
+  allow list (`resolve_egress_flags`, src/cli/machine.rs), `--allow-udp`
+  (`append_allow_udp`, src/cli/vm_common.rs), a deny list or
   `--block-private` (`prepend_deny_cidrs`, `apply_block_private`,
   src/cli/vm_common.rs), never for `-p`; a `-p`-only machine is denied all
   egress.
@@ -371,7 +396,9 @@ as it is.
 **Checkpoints, forks and identity**
 
 - Capture refuses a machine that isn't running ("machine '…' must be running",
-  `validated_capture_source`, src/portable_checkpoint.rs). Started
+  `validated_capture_source`, src/portable_checkpoint.rs), but a `frozen`
+  branch base, which it captures only standalone, refusing it with `--store`
+  (`capture_with_completion`). Started
   `--branchable`, a machine's capture defers its RAM save and pauses it only
   briefly, and a restore reads its RAM in place; without it a store capture
   falls back to a synchronous save, pausing it for the whole RAM write
@@ -396,8 +423,10 @@ as it is.
   guest CPU features, clock, state origin and network
   (`validate_compatibility`, src/portable_checkpoint.rs), but not the engine
   build or the agent, and its ABI string (`RUNTIME_ABI`) has stayed the same
-  across libkrun changes to restored device state. Ours: `pin`, so a RAM state
-  is restored only under the release that saved it. If smolvm starts enforcing
+  across libkrun changes to restored device state, a vCPU's KVM nested state
+  among them. Only a branch compares its source VMM's binary with the
+  engine's (`source_runs_another_engine`, src/agent/fork.rs). Ours: `pin`, so
+  a RAM state is restored only under the release that saved it. If smolvm starts enforcing
   engine and agent identity itself, the pin could go.
 - Store mode: `--store` with `--history 0` (the default keeps 32 generations, so
   deleting older checkpoints frees nothing until the newest goes), then
@@ -474,7 +503,8 @@ as it is.
   resuming, leaving it only `delete`, disk and all: start or stop each paused
   machine before the move (a stop needs room for one at a time). A machine left
   running across the move booted under the old pin, so its next pause stops it,
-  and it pauses after its next start.
+  and it pauses after its next start; a capture or fork of it, though, records
+  the new pin on RAM the old VMM saved, so stop and start it before either.
 - Report the tag transition, the claims that changed and their fixes, the checks
   actually run, optional opportunities (with touchpoints and the smallest useful
   check), and remaining runtime resources and retained disk separately.

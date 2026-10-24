@@ -42,7 +42,7 @@ export const ramBudget = (set: number | undefined): Effect.Effect<number, Invali
     : Effect.succeed(ramBudgetMib);
 };
 
-export const testedVersion = "1.31.1";
+export const testedVersion = "1.32.1";
 
 export interface Settings {
   readonly prefix: string;
