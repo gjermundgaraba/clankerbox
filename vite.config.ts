@@ -25,6 +25,9 @@ const adapterBecause =
   "an adapter imports the domain files, platform's shared process.ts and address.ts, and its own subfolder; never composition/ or another adapter";
 
 export default defineConfig({
+  staged: {
+    "*": "vp check --fix",
+  },
   fmt: {
     ignorePatterns: [...agentTooling, "tools/oxlint/anti-slop/**"],
   },

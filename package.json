@@ -6,7 +6,8 @@
     "build": "vp run -r build",
     "check": "vp check",
     "test": "vp run -r test",
-    "ready": "vp run check && vp run -r test && vp run -r build"
+    "ready": "vp run check && vp run -r test && vp run -r build",
+    "prepare": "vp config"
   },
   "devDependencies": {
     "@types/node": "catalog:",
