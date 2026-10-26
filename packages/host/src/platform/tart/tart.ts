@@ -165,6 +165,9 @@ const decodeInfo = Schema.decodeUnknownEffect(
   ),
 );
 
+// Source: tart Commands/Set.swift Set cpu, diskSize
+const maximumFlag = 2 ** 16 - 1;
+
 const sizeFlags = ({ cpu, ramMib, diskGib }: Sizing): ReadonlyArray<string> => [
   ...(cpu === undefined ? [] : ["--cpu", String(cpu)]),
   ...(ramMib === undefined ? [] : ["--memory", String(ramMib)]),
@@ -625,14 +628,7 @@ export const make = (
         }),
       ),
       create: Effect.fn("Tart.create")((machine, image) =>
-        cloneInto(image, machine, [
-          "--cpu",
-          String(machine.cpu),
-          "--memory",
-          String(machine.ramMib),
-          "--disk-size",
-          String(diskGb(machine.diskGib)),
-        ]),
+        cloneInto(image, machine, sizeFlags(machine)),
       ),
       start: Effect.fn("Tart.start")((machine) =>
         Effect.gen(function* () {
@@ -691,7 +687,17 @@ export const make = (
           cloneInto(vmOf(source), machine, sizeFlags(changes(source, machine))),
         ),
       ),
-      sizable: () => Effect.void,
+      sizable: (machine, _from, to) => {
+        if (to.cpu > maximumFlag || diskGb(to.diskGib) > maximumFlag) {
+          return Effect.fail(
+            new Unsizable({
+              message: `tart set takes at most ${maximumFlag} vCPUs and ${maximumFlag} GB of disk, and ${machine.id} would have ${to.cpu} vCPUs and ${diskGb(to.diskGib)} GB`,
+            }),
+          );
+        }
+
+        return Effect.void;
+      },
       resize: Effect.fn("Tart.resize")((machine, to) =>
         Effect.gen(function* () {
           const flags = sizeFlags(to);

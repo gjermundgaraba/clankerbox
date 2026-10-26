@@ -2,13 +2,15 @@ import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Layer, Schema } from "effect";
 import { idOn } from "./ids.ts";
 import { checkpointRef, machineRef } from "./refs.ts";
-import { Runtime, sizedBy, stateReadWait, timeoutFail } from "./runtime.ts";
+import { changes, Runtime, sizedBy, stateReadWait, timeoutFail } from "./runtime.ts";
 import type { HostSettings } from "./settings.ts";
-import { Store } from "./store.ts";
+import { type Intent, Store } from "./store.ts";
 
 export class CannotStart extends Schema.TaggedError<CannotStart>()("CannotStart", {
   message: Schema.String,
 }) {}
+
+const sizeReads = 8;
 
 export const startup = (config: Pick<HostSettings, "id">) =>
   Layer.effectDiscard(
@@ -28,6 +30,7 @@ export const startup = (config: Pick<HostSettings, "id">) =>
       }
 
       const intents = yield* store.machines;
+      const kept: Array<Intent> = [];
 
       for (const intent of intents) {
         if (intent.desired === "deleted") {
@@ -42,14 +45,12 @@ export const startup = (config: Pick<HostSettings, "id">) =>
 
         if (intent.ephemeral || !intent.made) {
           yield* store.desire(intent.name, "deleted");
+        } else {
+          kept.push(intent);
         }
       }
 
       yield* runtime.startup(intents.map((intent) => machineRef(config.id, intent)));
-
-      const kept = intents.filter(
-        (intent) => intent.desired !== "deleted" && intent.made && !intent.ephemeral,
-      );
 
       yield* Effect.forEach(
         kept,
@@ -70,15 +71,13 @@ export const startup = (config: Pick<HostSettings, "id">) =>
               onSuccess: (read) => {
                 const sizes = sizedBy(intent, read);
 
-                return sizes.cpu === intent.cpu &&
-                  sizes.ramMib === intent.ramMib &&
-                  sizes.diskGib === intent.diskGib
+                return Object.values(changes(intent, sizes)).every((size) => size === undefined)
                   ? Effect.void
                   : store.sized(intent.name, sizes);
               },
             }),
           ),
-        { concurrency: "unbounded", discard: true },
+        { concurrency: sizeReads, discard: true },
       );
     }),
   );

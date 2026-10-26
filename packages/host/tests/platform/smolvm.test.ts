@@ -1264,10 +1264,7 @@ layer(NodeServices.layer)((it) => {
 
         expect(refused.map(failure)).toEqual([
           ["Unsizable", "smolvm gives a machine at least 64M of RAM, and linux_dev would have 32M"],
-          [
-            "Unsizable",
-            "smolvm takes at most 255 vCPUs and 4294967295M of RAM, and linux_dev would have 256 vCPUs and 2048M",
-          ],
+          ["Unsizable", "smolvm's CLI takes at most 255 vCPUs, and linux_dev would have 256"],
           [
             "Unsizable",
             "smolvm grows a running machine's RAM in 128M steps, and linux_dev's would grow from 2G to 2100M",

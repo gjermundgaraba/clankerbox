@@ -2232,6 +2232,40 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a host's start reads at most eight machines' sizes at once, each with its own 9 s, so one queued behind reads that hang is still read",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+        const names = ["a", "b", "c", "d", "e", "f", "g", "h", "i"];
+
+        for (const name of names) {
+          yield* linux.run(linux.machines.create(request(name)));
+        }
+
+        yield* linux.dispose;
+        linux.fake.sizes.set("i", { cpu: 1, ramMib: 2048, diskGib: 10 });
+        linux.fake.calls.length = 0;
+
+        const holds = names.slice(0, 8).map(() => linux.fake.holdNext("sizes"));
+        const starting = yield* Effect.forkChild(host({ fake: linux.fake, dir: linux.dir }));
+
+        yield* Effect.all(holds.map(({ entered }) => entered));
+        yield* Effect.yieldNow;
+
+        const whileHung = linux.fake.calls.filter((call) => call.startsWith("sizes "));
+
+        yield* TestClock.adjust(Duration.seconds(10));
+
+        const restarted = yield* Fiber.join(starting);
+
+        expect(whileHung).toHaveLength(8);
+        expect(sizesOf(yield* restarted.run(restarted.machines.get("linux_i")))).toEqual([
+          1, 2048, 10,
+        ]);
+      }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect(
     "a resize whose sizes can't be read back keeps those it asked when it succeeded, and those it had when it failed",
     () =>
       Effect.gen(function* () {

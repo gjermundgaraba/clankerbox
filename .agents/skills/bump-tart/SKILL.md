@@ -110,11 +110,13 @@ Each: what Tart does, where, and what of ours depends on it.
   the disk's size can't be read (`VMInfo`, `run`, Commands/Get.swift). A
   darwin VM's vCPUs or memory below its minimum throw "… at minimum (requested
   N)" before the config is saved (`setCPU`, `setMemory`, VMConfig.swift).
+  `--cpu` and `--disk-size` parse as `UInt16`, `--memory` as `UInt64` (`Set`).
   Ours: `growsLive` is false, so the core resizes only a stopped VM, after it
   refused a smaller disk; `resize` passes the vCPUs, memory and disk the
-  request names, and the `set` after a fork's or restore's clone those that
-  differ from its source's (`sizeFlags`); `set` makes `minimumRefusal`
-  `Unsizable`, for a create too; `sizable` refuses nothing; `sizes` and
+  request names, a create's `set` all three, and the `set` after a fork's or
+  restore's clone those that differ from its source's (`sizeFlags`); `set`
+  makes `minimumRefusal` `Unsizable`, for a create too; `sizable` refuses
+  vCPUs or a disk in GB past `maximumFlag`; `sizes` and
   `decodeInfo` read the VM back after every resize and at each host's start,
   leaving out a null `Disk`, and `diskGibOf` floors the GB to the GiB
   `diskGb` rounded up from.

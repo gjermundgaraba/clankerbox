@@ -1053,6 +1053,34 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
+  it.effect("vCPUs or a disk past what tart set parses are Unsizable before anything native", () =>
+    Effect.gen(function* () {
+      const { mac, runtime } = yield* runtimeOn();
+      const machine = machineOn("dev");
+
+      const refused = [
+        yield* Effect.flip(runtime.sizable(machine, machine, { ...machine, cpu: 65_536 }, false)),
+        yield* Effect.flip(
+          runtime.sizable(machine, machine, { ...machine, diskGib: 61_035 }, false),
+        ),
+      ];
+
+      yield* runtime.sizable(machine, machine, { ...machine, cpu: 65_535, diskGib: 61_034 }, false);
+
+      expect(refused.map(failure)).toEqual([
+        [
+          "Unsizable",
+          "tart set takes at most 65535 vCPUs and 65535 GB of disk, and mac_dev would have 65536 vCPUs and 65 GB",
+        ],
+        [
+          "Unsizable",
+          "tart set takes at most 65535 vCPUs and 65535 GB of disk, and mac_dev would have 4 vCPUs and 65536 GB",
+        ],
+      ]);
+      expect(calls(mac)).toEqual([]);
+    }),
+  );
+
   it.effect(
     "sizes reads tart get, its disk in GiB, leaving the disk out where Tart can't tell it",
     () =>

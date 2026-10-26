@@ -275,7 +275,11 @@ as it is.
   (`MIN_MEMORY_MIB`, src/data/resources.rs), grows the disks, then writes all
   three in one record update (`UpdateCmd`, src/cli/machine.rs). `create`,
   `resize` and `update` parse `--cpus` as a `u8` and `--mem` as a `u32`
-  (`CreateCmd`, `ResizeCmd`, `UpdateCmd`). The status JSON carries `cpus`,
+  (`CreateCmd`, `ResizeCmd`, `UpdateCmd`); above 16 vCPUs `validate` only
+  warns that the VM runs with 16 (`MAX_EFFECTIVE_CPUS`, src/data/resources.rs,
+  documented for Hypervisor.framework), and a live vCPU grow past the VMM's
+  `PROTOTYPE_CPU_STATUS` capacity is refused (`grow_cpus_locked`). The status
+  JSON carries `cpus`,
   `memory_mib` and `storage_gb`, null for the default 20 GiB
   (`machine_status_json`, src/cli/vm_common.rs; `DEFAULT_STORAGE_SIZE_GIB`,
   src/data/storage.rs). Ours: `growsLive` is true, so the core refuses a paused
@@ -286,13 +290,14 @@ as it is.
   the same sizes again finishes a grow cut short: off `x64` it leaves out vCPUs
   the machine keeps, and a size it keeps that `unfinishedRefusal` refuses goes
   on to the next. `sizes` and `decodeSizes` read the record back after every
-  resize and at each host's start, as many at once as `observe` reads, reading
+  resize and at each host's start, which reads eight at once, reading
   a null `storage_gb` as `defaultStorageGib`. A `ram` restore or fork comes up
   with its source's vCPUs and RAM, so the core refuses a copy's smaller ones
   before the copy, and `restoreRam` grows a larger copy live with the sizes
   that differ from its source's once it boots. `sizable`, which the core calls
   before it admits a create, a copy or a resize, refuses as `Unsizable` RAM
-  below `minimumRamMib`, vCPUs or RAM past `maximumCpu` and `maximumRamMib`,
+  below `minimumRamMib`, vCPUs or RAM past what the CLI parses (`maximumCpu`,
+  `maximumRamMib`; the 16-vCPU cap and the VMM's capacity are left to smolvm),
   and for a live grow or a copy's, RAM off `ramStepMib` (from the row's RAM,
   which is the boot memory plus earlier live steps) or more vCPUs on a host
   whose `arch` isn't `x64`.

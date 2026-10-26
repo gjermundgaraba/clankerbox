@@ -201,7 +201,6 @@ export const make = (
     const binary = join(settings.prefix, "smolvm");
     const paths = pathsIn(settings.stateDir);
     const { run, exec } = yield* cliIn(environment(settings));
-    const reads = yield* Semaphore.make(observeConcurrency);
 
     const smolvm = (args: ReadonlyArray<string>, what: string) =>
       run(binary, args, `smolvm ${what}`);
@@ -428,10 +427,18 @@ export const make = (
         );
       }
 
-      if (to.cpu > maximumCpu || to.ramMib > maximumRamMib) {
+      if (to.cpu > maximumCpu) {
         return Effect.fail(
           new Unsizable({
-            message: `smolvm takes at most ${maximumCpu} vCPUs and ${maximumRamMib}M of RAM, and ${machine.id} would have ${to.cpu} vCPUs and ${to.ramMib}M`,
+            message: `smolvm's CLI takes at most ${maximumCpu} vCPUs, and ${machine.id} would have ${to.cpu}`,
+          }),
+        );
+      }
+
+      if (to.ramMib > maximumRamMib) {
+        return Effect.fail(
+          new Unsizable({
+            message: `smolvm's CLI takes at most ${formatMib(maximumRamMib)} of RAM, and ${machine.id} would have ${formatMib(to.ramMib)}`,
           }),
         );
       }
@@ -678,24 +685,22 @@ export const make = (
       sizes: Effect.fn("Smolvm.sizes")((machine) => {
         const native = nativeName(machine);
 
-        return reads.withPermits(1)(
-          Effect.flatMap(
-            call(["machine", "status", "--name", native, "--json"], `machine status ${native}`),
-            (ran) =>
-              decodeSizes(ran.stdout).pipe(
-                Effect.map(({ cpus, memory_mib, storage_gb }) => ({
-                  cpu: cpus,
-                  ramMib: memory_mib,
-                  diskGib: storage_gb ?? defaultStorageGib,
-                })),
-                Effect.mapError(
-                  (error) =>
-                    new Internal({
-                      message: `smolvm machine status ${native} answered something unexpected: ${error.message}`,
-                    }),
-                ),
+        return Effect.flatMap(
+          call(["machine", "status", "--name", native, "--json"], `machine status ${native}`),
+          (ran) =>
+            decodeSizes(ran.stdout).pipe(
+              Effect.map(({ cpus, memory_mib, storage_gb }) => ({
+                cpu: cpus,
+                ramMib: memory_mib,
+                diskGib: storage_gb ?? defaultStorageGib,
+              })),
+              Effect.mapError(
+                (error) =>
+                  new Internal({
+                    message: `smolvm machine status ${native} answered something unexpected: ${error.message}`,
+                  }),
               ),
-          ),
+            ),
         );
       }),
       delete: Effect.fn("Smolvm.delete")(removeVm),
