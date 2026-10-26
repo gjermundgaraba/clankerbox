@@ -5,7 +5,7 @@ import {
   sshTarget,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Console, Context, Effect, type PlatformError, Stdio, Stream } from "effect";
+import { Console, Context, Duration, Effect, type PlatformError, Stdio, Stream } from "effect";
 import { Argument, Command } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { Socket } from "effect/socket";
@@ -32,6 +32,7 @@ const runSsh = (target: SshTarget, user: string, extra: ReadonlyArray<string>) =
         stdout: "inherit",
         stderr: "inherit",
         detached: false,
+        forceKillAfter: Duration.seconds(5),
       }),
     );
 

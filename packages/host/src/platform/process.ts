@@ -1,5 +1,5 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, type PlatformError, type Scope, Stream } from "effect";
+import { Duration, Effect, type PlatformError, type Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { lastLines } from "../guest.ts";
 import type { Execution } from "../runtime.ts";
@@ -34,7 +34,12 @@ export const cliIn = (env: Readonly<Record<string, string | undefined>>) =>
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
     const command = (file: string, args: ReadonlyArray<string>, stdin: ChildProcess.CommandInput) =>
-      ChildProcess.make(file, args, { env, extendEnv: false, stdin });
+      ChildProcess.make(file, args, {
+        env,
+        extendEnv: false,
+        stdin,
+        forceKillAfter: Duration.seconds(5),
+      });
 
     const run = (file: string, args: ReadonlyArray<string>, what: string) =>
       Effect.scoped(
