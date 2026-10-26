@@ -1926,7 +1926,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   ];
 
   it.effect(
-    "a resize gives a stopped machine any vCPUs and RAM and a larger disk, admitting nothing, and keeps the sizes it reads back",
+    "a resize gives a stopped machine any vCPUs and RAM and a larger disk, admitting nothing, and records them",
     () =>
       Effect.gen(function* () {
         const linux = yield* host();
@@ -1994,6 +1994,33 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
+  it.effect("a machine growing live counts at its new RAM for the host's other admissions", () =>
+    Effect.gen(function* () {
+      const linux = yield* host({ runtime: { ramBudgetMib: 3584 } });
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      yield* linux.run(linux.machines.create(request("other")));
+      yield* linux.run(linux.machines.stop("linux_other"));
+
+      const { release, entered } = linux.fake.holdNext("resize");
+
+      const resize = yield* Effect.forkChild(
+        linux.machines.resize({ id: "linux_dev", ramMib: 3072 }),
+      );
+
+      yield* entered;
+
+      const during = yield* linux.run(linux.machines.capacity);
+      const full = yield* failure(linux, linux.machines.start("linux_other"));
+
+      yield* release;
+      yield* Fiber.join(resize);
+
+      expect(during.find(({ resource }) => resource === "ramMib")).toMatchObject({ used: 3072 });
+      expect(full._tag).toBe("Capacity");
+    }),
+  );
+
   it.effect("a live grow past the RAM budget is Capacity, and nothing is resized", () =>
     Effect.gen(function* () {
       const linux = yield* host({ runtime: { ramBudgetMib: 2048 } });
@@ -2014,70 +2041,79 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect(
-    "a smaller disk is Unsizable and a paused machine WrongState, before the runtime resizes anything",
-    () =>
-      Effect.gen(function* () {
-        const linux = yield* host();
-
-        yield* linux.run(linux.machines.create(request("dev")));
-        yield* linux.run(linux.machines.stop("linux_dev"));
-        linux.fake.calls.length = 0;
-
-        const smaller = yield* failure(
-          linux,
-          linux.machines.resize({ id: "linux_dev", diskGib: 5 }),
-        );
-
-        yield* linux.run(linux.machines.start("linux_dev"));
-        yield* linux.run(linux.machines.pause("linux_dev"));
-        linux.fake.calls.length = 0;
-
-        const paused = yield* failure(linux, linux.machines.resize({ id: "linux_dev", cpu: 2 }));
-
-        expect([smaller._tag, smaller.message]).toEqual([
-          "Unsizable",
-          "machine linux_dev's disk is 10G, and a disk only grows",
-        ]);
-        expect(paused).toBeInstanceOf(WrongState);
-        expect(paused.message).toContain("machine linux_dev is paused");
-        expect(linux.fake.calls).toEqual([]);
-      }),
-  );
-
-  it.effect("a refusal the runtime makes, as a running mac machine's, changes no size", () =>
-    Effect.gen(function* () {
-      const mac = yield* host({ kind: "mac" });
-
-      yield* mac.run(mac.machines.create(request("dev", {}, "mac")));
-      mac.fake.calls.length = 0;
-
-      const running = yield* failure(mac, mac.machines.resize({ id: "mac_dev", cpu: 2 }));
-
-      expect(running).toBeInstanceOf(WrongState);
-      expect(mac.fake.calls).toEqual(["resize mac_dev", "sizes mac_dev"]);
-      expect((yield* rows(mac)).map(sizesOf)).toEqual([[1, 1024, 10]]);
-    }),
-  );
-
-  it.effect("a resize that fails part way keeps the sizes the runtime gave", () =>
+  it.effect("a smaller disk is Unsizable from the row, before the runtime reads anything", () =>
     Effect.gen(function* () {
       const linux = yield* host();
 
       yield* linux.run(linux.machines.create(request("dev")));
       yield* linux.run(linux.machines.stop("linux_dev"));
-      linux.fake.giveOnlyRamThenFailNextResize(
-        new Internal({ message: "smolvm resize: no space" }),
-      );
+      linux.fake.calls.length = 0;
+      linux.fake.observed.length = 0;
+
+      const smaller = yield* failure(linux, linux.machines.resize({ id: "linux_dev", diskGib: 5 }));
+
+      expect([smaller._tag, smaller.message]).toEqual([
+        "Unsizable",
+        "machine linux_dev's disk is 10G, and a disk only grows",
+      ]);
+      expect(linux.fake.calls).toEqual([]);
+      expect(linux.fake.observed).toEqual([]);
+    }),
+  );
+
+  it.effect(
+    "a paused machine, a running mac machine and a live shrink, which smolvm makes only on x86_64, are refused before admission and the runtime",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+        const mac = yield* host({ kind: "mac" });
+
+        yield* linux.run(linux.machines.create(request("dev")));
+        yield* linux.run(linux.machines.create(request("paused")));
+        yield* linux.run(linux.machines.pause("linux_paused"));
+        yield* mac.run(mac.machines.create(request("dev", {}, "mac")));
+        linux.fake.calls.length = 0;
+        mac.fake.calls.length = 0;
+
+        const refused = [
+          yield* failure(linux, linux.machines.resize({ id: "linux_paused", cpu: 2 })),
+          yield* failure(mac, mac.machines.resize({ id: "mac_dev", ramMib: 2048 })),
+          yield* failure(linux, linux.machines.resize({ id: "linux_dev", cpu: 2, ramMib: 512 })),
+        ];
+
+        expect(refused.map(({ _tag, message }) => [_tag, message])).toEqual([
+          [
+            "WrongState",
+            "machine linux_paused is paused, and the linux runtime resizes a stopped or running machine: stop it first",
+          ],
+          [
+            "WrongState",
+            "machine mac_dev is running, and the mac runtime resizes only a stopped machine: stop it first",
+          ],
+          [
+            "Unsizable",
+            "a running machine's vCPUs and RAM only grow, and linux_dev has 1 vCPUs and 1G: stop it to shrink them",
+          ],
+        ]);
+        expect([...linux.fake.calls, ...mac.fake.calls]).toEqual([]);
+      }),
+  );
+
+  it.effect("a live resize that fails part way keeps the sizes the runtime gave", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      linux.fake.giveOnlyRamThenFailNextResize(new Internal({ message: "smolvm resize: no CPUs" }));
 
       const failed = yield* failure(
         linux,
-        linux.machines.resize({ id: "linux_dev", cpu: 2, ramMib: 2048, diskGib: 20 }),
+        linux.machines.resize({ id: "linux_dev", cpu: 2, ramMib: 2048 }),
       );
 
       const shown = yield* linux.run(linux.machines.get("linux_dev"));
 
-      expect([failed._tag, failed.message]).toEqual(["Internal", "smolvm resize: no space"]);
+      expect([failed._tag, failed.message]).toEqual(["Internal", "smolvm resize: no CPUs"]);
       expect(sizesOf(shown)).toEqual([1, 2048, 10]);
     }),
   );
@@ -2106,16 +2142,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       }),
   );
 
-  it.effect("a resize waits for a step under way, which owns the machine", () =>
+  it.effect("a resize waits for a step under way, and the next request waits for it", () =>
     Effect.gen(function* () {
       const linux = yield* host();
 
       yield* linux.run(linux.machines.create(request("dev")));
 
-      const { release, entered } = linux.fake.holdNext("stop");
+      const stopping = linux.fake.holdNext("stop");
       const stop = yield* Effect.forkChild(linux.machines.stop("linux_dev"));
 
-      yield* entered;
+      yield* stopping.entered;
 
       const resize = yield* Effect.forkChild(
         linux.machines.resize({ id: "linux_dev", cpu: 2, ramMib: 512 }),
@@ -2124,15 +2160,50 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       yield* pause;
 
       const whileStopping = [...linux.fake.calls];
+      const resizing = linux.fake.holdNext("resize");
 
-      yield* release;
-      yield* Fiber.join(stop);
+      yield* stopping.release;
+      yield* resizing.entered;
+
+      const start = yield* Effect.forkChild(linux.machines.start("linux_dev"));
+
+      yield* pause;
+
+      const whileResizing = [...linux.fake.calls];
+
+      yield* resizing.release;
+
+      yield* Fiber.await(stop);
 
       const resized = yield* Fiber.join(resize);
+      const started = yield* Fiber.join(start);
 
       expect(whileStopping.includes("resize linux_dev")).toBe(false);
+      expect(whileResizing.at(-1)).toBe("resize linux_dev");
       expect(sizesOf(resized)).toEqual([2, 512, 10]);
-      expect(linux.fake.calls.slice(-2)).toEqual(["resize linux_dev", "sizes linux_dev"]);
+      expect(at(resized)[0]).toBe("stopped");
+      expect(started.state).toBe("running");
+      expect(linux.fake.activations.at(-1)?.machine.ramMib).toBe(512);
+    }),
+  );
+
+  it.effect("a resize whose caller leaves still finishes, and records its sizes", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+
+      yield* linux.run(linux.machines.create(request("dev")));
+      yield* linux.run(linux.machines.stop("linux_dev"));
+
+      const { release, entered } = linux.fake.holdNext("resize");
+      const resize = yield* Effect.forkChild(linux.machines.resize({ id: "linux_dev", cpu: 2 }));
+
+      yield* entered;
+      yield* Fiber.interrupt(resize);
+      yield* release;
+
+      const [row] = yield* eventually(rows(linux), ([only]) => only?.cpu === 2);
+
+      expect(row === undefined ? [] : sizesOf(row)).toEqual([2, 1024, 10]);
     }),
   );
 });

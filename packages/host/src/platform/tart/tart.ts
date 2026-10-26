@@ -3,6 +3,7 @@ import { join } from "node:path";
 import {
   Capacity,
   formatGib,
+  formatMib,
   type HostError,
   Internal,
   requirements,
@@ -55,6 +56,9 @@ const limitRefusal = "The number of VMs exceeds the system limit";
 
 // Source: tart VMDirectory.swift resizeRawDisk, resizeASIFDisk
 const shrinkRefusal = "should be larger than the current disk size";
+
+// Source: tart VMConfig.swift setCPU, setMemory
+const minimumRefusal = "at minimum (requested";
 
 const bootWait = Duration.minutes(3);
 
@@ -437,22 +441,33 @@ export const make = (
         }
       });
 
+    const set = (machine: MachineRef, sizes: Sizes, flags: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        const vm = vmOf(machine);
+        const ran = yield* tart(["set", vm, ...flags], `set ${vm}`);
+
+        if (ran.exitCode !== 0 && ran.stderr.includes(shrinkRefusal)) {
+          return yield* new Unsizable({
+            message: `machine ${machine.id}'s disk of ${formatGib(sizes.diskGib)} is below the disk it is copied from, and Tart only grows a disk: ${lastLines(ran.stderr)}`,
+          });
+        }
+
+        if (ran.exitCode !== 0 && ran.stderr.includes(minimumRefusal)) {
+          return yield* new Unsizable({
+            message: `machine ${machine.id}'s ${sizes.cpu} vCPUs and ${formatMib(sizes.ramMib)} are below what its guest takes: ${lastLines(ran.stderr)}`,
+          });
+        }
+
+        yield* expect(ran, `tart set ${vm}`);
+      });
+
     const cloneInto = (from: string, machine: MachineRef, sizes: ReadonlyArray<string>) => {
       const vm = vmOf(machine);
 
       return Effect.gen(function* () {
         yield* listen(machine);
         yield* call(["clone", from, vm], `clone ${from} ${vm}`);
-
-        const set = yield* tart(["set", vm, "--random-serial", ...sizes], `set ${vm}`);
-
-        if (set.exitCode !== 0 && set.stderr.includes(shrinkRefusal)) {
-          return yield* new Unsizable({
-            message: `machine ${machine.id}'s disk of ${formatGib(machine.diskGib)} is below its base's, and Tart only grows a disk: ${lastLines(set.stderr)}`,
-          });
-        }
-
-        yield* expect(set, `tart set ${vm}`);
+        yield* set(machine, machine, ["--random-serial", ...sizes]);
         yield* boot(machine);
       });
     };
@@ -558,6 +573,7 @@ export const make = (
       publishAddress: settings.publishAddress,
       pin: undefined,
       stopResumes: false,
+      growsLive: false,
       startup: Effect.fn("Tart.startup")((machines) =>
         Effect.gen(function* () {
           yield* files(
@@ -668,27 +684,10 @@ export const make = (
         Effect.andThen(copyable("fork", source), cloneInto(vmOf(source), machine, [])),
       ),
       resize: Effect.fn("Tart.resize")((machine, to) =>
-        Effect.gen(function* () {
-          const vm = vmOf(machine);
-          const observed = yield* state(vm);
-
-          if (observed === "missing") {
-            return yield* missing("mac", machine);
-          }
-
-          if (observed !== "stopped") {
-            return yield* new WrongState({
-              message: `Tart resizes only a stopped machine, and ${machine.id} is ${observed}: stop it first`,
-              machine: machine.id,
-              state: observed,
-            });
-          }
-
-          const disk =
-            to.diskGib > machine.diskGib ? ["--disk-size", String(diskGb(to.diskGib))] : [];
-
-          yield* call(["set", vm, ...sizeFlags(to), ...disk], `set ${vm}`);
-        }),
+        set(machine, to, [
+          ...sizeFlags(to),
+          ...(to.diskGib === machine.diskGib ? [] : ["--disk-size", String(diskGb(to.diskGib))]),
+        ]),
       ),
       sizes: Effect.fn("Tart.sizes")((machine) => {
         const vm = vmOf(machine);

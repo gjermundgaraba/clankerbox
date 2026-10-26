@@ -215,6 +215,8 @@ export type MachineSpec = typeof MachineSpec.Type;
 /** The host checks that `id` names it, so a create never lands under another host's ID. */
 export const CreateRequest = Schema.Struct({ id: Id, ...specFields });
 
+export type CreateRequest = typeof CreateRequest.Type;
+
 const resizing = {
   cpu: Schema.optional(Size),
   ramMib: Schema.optional(Size),
@@ -233,8 +235,6 @@ export const ResizeRequest = Schema.Struct({ id: Id, ...resizing }).check(
 );
 
 export type ResizeRequest = typeof ResizeRequest.Type;
-
-export type CreateRequest = typeof CreateRequest.Type;
 
 /**
  * A base holding a `/` is an image reference, such as `registry.example/team/image:tag`, which a

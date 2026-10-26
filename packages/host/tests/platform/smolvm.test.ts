@@ -536,102 +536,53 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a stopped machine's vCPUs and RAM are updated either way, its storage grown after, and only what differs is sent",
+    "a stopped machine is resized in one machine update and a running one in one live machine resize, each sending only the sizes that change",
     () =>
       Effect.gen(function* () {
-        const spawner = scripted((call) =>
-          call.args[1] === "status" ? status("stopped") : undefined,
-        );
-
+        const spawner = scripted(() => undefined);
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        yield* runtime.resize(machine, { cpu: 4, ramMib: 1024, diskGib: 30 });
-        yield* runtime.resize(machine, { cpu: 2, ramMib: 2048, diskGib: 20 });
-        yield* runtime.resize(machine, { cpu: 2, ramMib: 2048, diskGib: 40 });
+        yield* runtime.resize(machine, { cpu: 4, ramMib: 1024, diskGib: 30 }, false);
+        yield* runtime.resize(machine, { cpu: 2, ramMib: 4096, diskGib: 40 }, true);
+        yield* runtime.resize(machine, { cpu: 2, ramMib: 2048, diskGib: 20 }, false);
 
         expect(smolvmArgs(spawner.calls)).toEqual([
-          ["machine", "status", "--name", "dev-01234567", "--json"],
-          ["machine", "update", "--name", "dev-01234567", "--cpus", "4", "--mem", "1024"],
-          ["machine", "resize", "--name", "dev-01234567", "--storage", "30"],
-          ["machine", "status", "--name", "dev-01234567", "--json"],
-          ["machine", "status", "--name", "dev-01234567", "--json"],
-          ["machine", "resize", "--name", "dev-01234567", "--storage", "40"],
+          [
+            "machine",
+            "update",
+            "--name",
+            "dev-01234567",
+            "--cpus",
+            "4",
+            "--mem",
+            "1024",
+            "--storage",
+            "30",
+          ],
+          ["machine", "resize", "--name", "dev-01234567", "--mem", "4096", "--storage", "40"],
         ]);
       }),
   );
 
-  it.effect(
-    "a running machine grows live in one resize, and a shrink of its vCPUs or RAM is Unsizable before anything native",
-    () =>
-      Effect.gen(function* () {
-        const spawner = scripted((call) =>
-          call.args[1] === "status" ? status("running") : undefined,
-        );
+  it.effect("a resize smolvm refuses fails with its last output", () =>
+    Effect.gen(function* () {
+      const spawner = scripted((call) =>
+        call.args[1] === "resize"
+          ? { exitCode: 1, stderr: "Error: not enough host memory for 4096 MiB\n" }
+          : undefined,
+      );
 
-        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+      const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        yield* runtime.resize(machine, { cpu: 3, ramMib: 4096, diskGib: 20 });
+      const refused = yield* Effect.flip(
+        runtime.resize(machine, { ...machine, ramMib: 4096 }, true),
+      );
 
-        const shrunk = yield* Effect.flip(
-          runtime.resize(machine, { cpu: 1, ramMib: 4096, diskGib: 30 }),
-        );
-
-        expect(failure(shrunk)).toEqual([
-          "Unsizable",
-          "smolvm only grows a running machine's vCPUs and RAM, and linux_dev has 2 vCPUs and 2G: stop it to shrink them",
-        ]);
-        expect(smolvmArgs(spawner.calls)).toEqual([
-          ["machine", "status", "--name", "dev-01234567", "--json"],
-          ["machine", "resize", "--name", "dev-01234567", "--cpus", "3", "--mem", "4096"],
-          ["machine", "status", "--name", "dev-01234567", "--json"],
-        ]);
-      }),
-  );
-
-  it.effect(
-    "a resize refuses a paused, part paused, unreachable, frozen or missing machine before anything native",
-    () =>
-      Effect.gen(function* () {
-        let reply = status("paused");
-
-        const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
-        const runtime = yield* runtimeOf(yield* prepared(), spawner);
-        const refusals = [];
-
-        for (const next of [
-          status("paused"),
-          status("pausing"),
-          status("unreachable"),
-          status("frozen"),
-          unknown,
-        ]) {
-          reply = next;
-          refusals.push(
-            failure(yield* Effect.flip(runtime.resize(machine, { ...machine, cpu: 4 }))),
-          );
-        }
-
-        expect(refusals).toEqual([
-          [
-            "WrongState",
-            "smolvm reads machine linux_dev paused, and resizes only a stopped or running machine",
-          ],
-          [
-            "WrongState",
-            "smolvm reads machine linux_dev pausing, and resizes only a stopped or running machine",
-          ],
-          [
-            "WrongState",
-            "smolvm reads machine linux_dev unreachable, and resizes only a stopped or running machine",
-          ],
-          [
-            "WrongState",
-            "smolvm reads machine linux_dev frozen, and resizes only a stopped or running machine",
-          ],
-          ["Missing", "machine linux_dev is missing from the linux runtime; delete it"],
-        ]);
-        expect(smolvmArgs(spawner.calls).every((args) => args[1] === "status")).toBe(true);
-      }),
+      expect(failure(refused)).toEqual([
+        "Internal",
+        "smolvm machine resize dev-01234567 exited 1: Error: not enough host memory for 4096 MiB",
+      ]);
+    }),
   );
 
   it.effect(

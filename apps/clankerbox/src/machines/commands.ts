@@ -144,10 +144,6 @@ export const resize = Command.make(
           const ram = yield* parsed(flags.ram, "--ram", parseMib);
           const disk = yield* parsed(flags.disk, "--disk", parseGib);
 
-          if (Option.isNone(flags.cpu) && Option.isNone(ram) && Option.isNone(disk)) {
-            return yield* new Invalid({ message: "resize takes --cpu, --ram or --disk" });
-          }
-
           return yield* client.resizeMachine({
             id: flags.machine,
             cpu: Option.getOrUndefined(flags.cpu),

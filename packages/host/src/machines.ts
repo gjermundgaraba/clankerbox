@@ -6,6 +6,7 @@ import {
   type ExecRequest,
   formatGib,
   formatId,
+  formatMib,
   type HostError,
   Internal,
   loginUser,
@@ -29,6 +30,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Option,
   Scope,
@@ -803,7 +805,7 @@ export const make = (
         }),
       );
 
-    const sizedAfter = (name: string, machine: MachineRef, to: Sizes, resized: boolean) =>
+    const sizedAfter = (machine: MachineRef, to: Sizes, resized: boolean) =>
       runtime.sizes(machine).pipe(
         inTime(`the ${config.kind} runtime's read of ${machine.id}'s sizes`),
         Effect.catch((error) =>
@@ -814,12 +816,6 @@ export const make = (
             resized ? to : machine,
           ),
         ),
-        Effect.flatMap((sizes) =>
-          store.sized(name, { cpu: sizes.cpu, ramMib: sizes.ramMib, diskGib: sizes.diskGib }),
-        ),
-        Effect.catch((error) =>
-          Effect.logWarning(`resize ${machine.id}: couldn't record its sizes: ${error.message}`),
-        ),
       );
 
     const resized = (name: string, request: ResizeRequest) =>
@@ -827,17 +823,22 @@ export const make = (
         yield* leases.own("machine", name);
 
         const intent = yield* row(name);
-        const id = idOf(name);
+        const machine = ref(intent);
+        const { id } = machine;
 
         yield* made(intent);
-
-        const machine = ref(intent);
 
         const to: Sizes = {
           cpu: request.cpu ?? intent.cpu,
           ramMib: request.ramMib ?? intent.ramMib,
           diskGib: request.diskGib ?? intent.diskGib,
         };
+
+        if (to.diskGib < intent.diskGib) {
+          return yield* new Unsizable({
+            message: `machine ${id}'s disk is ${formatGib(intent.diskGib)}, and a disk only grows`,
+          });
+        }
 
         const [seen = "unknown"] = yield* runtime
           .observe([machine])
@@ -853,40 +854,44 @@ export const make = (
           });
         }
 
-        if (seen === "paused") {
+        const running = seen === "running";
+
+        if (seen === "paused" || (running && !runtime.growsLive)) {
           return yield* new WrongState({
-            message: `machine ${id} is paused, and a resize gives sizes only to a stopped or running machine: stop it first`,
+            message: `machine ${id} is ${seen}, and the ${config.kind} runtime resizes ${runtime.growsLive ? "a stopped or running machine" : "only a stopped machine"}: stop it first`,
             machine: id,
             state: seen,
           });
         }
 
-        if (to.diskGib < intent.diskGib) {
+        if (running && (to.cpu < intent.cpu || to.ramMib < intent.ramMib)) {
           return yield* new Unsizable({
-            message: `machine ${id}'s disk is ${formatGib(intent.diskGib)}, and a disk only grows`,
+            message: `a running machine's vCPUs and RAM only grow, and ${id} has ${intent.cpu} vCPUs and ${formatMib(intent.ramMib)}: stop it to shrink them`,
           });
         }
 
-        if (seen === "running" && to.ramMib > intent.ramMib) {
+        if (running && to.ramMib > intent.ramMib) {
           yield* admitted("resizeMachine", { ...machine, ...to });
         }
 
-        yield* runtime
-          .resize(machine, to)
-          .pipe(Effect.onExit((exit) => sizedAfter(name, machine, to, Exit.isSuccess(exit))));
+        const outcome = yield* Effect.exit(runtime.resize(machine, to, running));
+
+        yield* store.sized(name, yield* sizedAfter(machine, to, Exit.isSuccess(outcome)));
+        yield* outcome;
+
+        return yield* shown(name);
       });
 
     const resize = (request: ResizeRequest) =>
       Effect.gen(function* () {
         const name = yield* nameOf(request.id);
+        const id = idOf(name);
 
-        yield* surviving(`resize ${idOf(name)}`, Effect.scoped(resized(name, request))).pipe(
-          Effect.tapError((error) =>
-            Effect.logWarning(`resize ${idOf(name)} failed: ${error.message}`),
-          ),
+        const work = surviving(`resize ${id}`, Effect.scoped(resized(name, request))).pipe(
+          Effect.tapError((error) => Effect.logWarning(`resize ${id} failed: ${error.message}`)),
         );
 
-        return yield* shown(name);
+        return yield* Effect.flatMap(Effect.forkIn(work, hostScope), Fiber.join);
       });
 
     const capacity = Effect.flatMap(heldMachines, (machines) =>

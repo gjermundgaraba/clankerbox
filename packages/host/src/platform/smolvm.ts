@@ -1,12 +1,10 @@
 import { totalmem } from "node:os";
 import { join } from "node:path";
 import {
-  formatMib,
   type HostError,
   Internal,
   Invalid,
   requirements,
-  Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
@@ -381,6 +379,7 @@ export const make = (
       publishAddress: settings.publishAddress,
       pin,
       stopResumes: true,
+      growsLive: true,
       startup: Effect.fn("Smolvm.startup")(() =>
         Effect.gen(function* () {
           yield* removeAll(paths.forks);
@@ -555,75 +554,28 @@ export const make = (
           yield* call(["machine", "pause", "--name", native], `machine pause ${native}`);
         }),
       ),
-      resize: Effect.fn("Smolvm.resize")((machine, to) =>
-        Effect.gen(function* () {
-          const native = nativeName(machine);
-          const recorded = yield* status(native);
+      resize: Effect.fn("Smolvm.resize")((machine, to, running) => {
+        const native = nativeName(machine);
+        const command = running ? "resize" : "update";
 
-          const grown = (flag: string, from: number, size: number) =>
-            size > from ? [flag, String(size)] : [];
+        const changed = (flag: string, from: number, size: number) =>
+          size === from ? [] : [flag, String(size)];
 
-          const changed = (flag: string, from: number, size: number) =>
-            size === from ? [] : [flag, String(size)];
+        const flags = [
+          ...changed("--cpus", machine.cpu, to.cpu),
+          ...changed("--mem", machine.ramMib, to.ramMib),
+          ...changed("--storage", machine.diskGib, to.diskGib),
+        ];
 
-          const storage = grown("--storage", machine.diskGib, to.diskGib);
-
-          if (recorded === "missing") {
-            return yield* missing("linux", machine);
-          }
-
-          if (recorded === "running") {
-            if (to.cpu < machine.cpu || to.ramMib < machine.ramMib) {
-              return yield* new Unsizable({
-                message: `smolvm only grows a running machine's vCPUs and RAM, and ${machine.id} has ${machine.cpu} vCPUs and ${formatMib(machine.ramMib)}: stop it to shrink them`,
-              });
-            }
-
-            const live = [
-              ...grown("--cpus", machine.cpu, to.cpu),
-              ...grown("--mem", machine.ramMib, to.ramMib),
-              ...storage,
-            ];
-
-            if (live.length > 0) {
-              yield* call(
-                ["machine", "resize", "--name", native, ...live],
-                `machine resize ${native}`,
-              );
-            }
-
-            return;
-          }
-
-          // Source: smolvm src/cli/vm_common.rs resize_vm
-          if (recorded !== "stopped" && recorded !== "created") {
-            return yield* new WrongState({
-              message: `smolvm reads machine ${machine.id} ${recorded}, and resizes only a stopped or running machine`,
-              machine: machine.id,
-              state: recorded,
-            });
-          }
-
-          const settings = [
-            ...changed("--cpus", machine.cpu, to.cpu),
-            ...changed("--mem", machine.ramMib, to.ramMib),
-          ];
-
-          if (settings.length > 0) {
-            yield* call(
-              ["machine", "update", "--name", native, ...settings],
-              `machine update ${native}`,
+        return flags.length === 0
+          ? Effect.void
+          : Effect.asVoid(
+              call(
+                ["machine", command, "--name", native, ...flags],
+                `machine ${command} ${native}`,
+              ),
             );
-          }
-
-          if (storage.length > 0) {
-            yield* call(
-              ["machine", "resize", "--name", native, ...storage],
-              `machine resize ${native}`,
-            );
-          }
-        }),
-      ),
+      }),
       sizes: Effect.fn("Smolvm.sizes")((machine) => {
         const native = nativeName(machine);
 

@@ -1,13 +1,7 @@
 import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  type HostError,
-  Internal,
-  type Kind,
-  Unsizable,
-  WrongState,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { type HostError, Internal, type Kind, WrongState } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
@@ -348,6 +342,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         publishAddress: "127.0.0.1",
         pin: options.pin ?? (kind === "linux" ? "fake 1" : undefined),
         stopResumes: kind === "linux",
+        growsLive: kind === "linux",
         startup: () => Effect.sync(() => calls.push("startup")),
         observe,
         admit: (activation: Activation) =>
@@ -437,28 +432,11 @@ export const fakeRuntime = (options: FakeOptions) => {
           call(
             "resize",
             machine,
-            Effect.suspend((): Effect.Effect<void, RuntimeError | StateError | Unsizable> => {
-              const found = machines.get(machine.name);
+            Effect.suspend(() => {
               const had = sizes.get(machine.name);
 
-              if (found === undefined || had === undefined) {
-                return Effect.fail(missing(kind, machine));
-              }
-
-              const live = found.state === "running" && kind === "linux";
-
-              if (found.state !== "stopped" && !live) {
-                return Effect.fail(
-                  new WrongState({
-                    message: `${machine.id} is ${found.state}: stop it first`,
-                    machine: machine.id,
-                    state: found.state,
-                  }),
-                );
-              }
-
-              if (live && (to.cpu < had.cpu || to.ramMib < had.ramMib)) {
-                return Effect.fail(new Unsizable({ message: `${machine.id} grows only, live` }));
+              if (had === undefined) {
+                return Effect.fail(new Internal({ message: `no machine ${machine.id}` }));
               }
 
               const partial = partialResizes.shift();

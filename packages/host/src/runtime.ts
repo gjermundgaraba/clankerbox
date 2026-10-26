@@ -125,6 +125,11 @@ export interface Interface {
    * it as a boot under the pin it booted under, rather than discarding that execution with no boot.
    */
   readonly stopResumes: boolean;
+  /**
+   * Whether a running machine's vCPUs, RAM and disk grow live; where they don't, the core resizes
+   * only a stopped machine.
+   */
+  readonly growsLive: boolean;
   /** Runs after the failed captures are cleared, before the host serves. */
   readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, RuntimeError>;
   /**
@@ -197,16 +202,16 @@ export interface Interface {
     machine: MachineRef,
   ) => Effect.Effect<void, RoomError | StateError | Unsizable>;
   /**
-   * Gives a made machine the sizes `to` holds, from the sizes `machine` holds: any vCPUs and RAM to
-   * a stopped machine, and to a running one only what the runtime grows live, and a disk only a
-   * larger size. A state it doesn't resize from is `WrongState`, and a size it can't give
-   * `Unsizable`, both before anything native; a failure after may leave part of `to` given, which
-   * `sizes` reads. The core never resizes a paused machine, nor shrinks a disk.
+   * Gives a made machine the sizes `to` holds, from the sizes `machine` holds. The core calls it on
+   * a stopped machine, or, where `growsLive`, on a running one, as `running` says it read, and
+   * never with a smaller disk, nor smaller vCPUs or RAM for a running one. A size the runtime
+   * can't give is `Unsizable`; a failure may leave part of `to` given, which `sizes` reads.
    */
   readonly resize: (
     machine: MachineRef,
     to: Sizes,
-  ) => Effect.Effect<void, RuntimeError | StateError | Unsizable>;
+    running: boolean,
+  ) => Effect.Effect<void, RuntimeError | Unsizable>;
   /** The sizes the runtime holds for a machine it has, as a resize left them. */
   readonly sizes: (machine: MachineRef) => Effect.Effect<Sizes, RuntimeError>;
   /** Removes everything native the checkpoint's row could have made. */

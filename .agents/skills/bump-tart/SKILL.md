@@ -107,11 +107,14 @@ Each: what Tart does, where, and what of ours depends on it.
   resizes its disk (`run`, Commands/Set.swift), so a disk refusal leaves them
   set, and a `--disk-size` of the disk's own size changes nothing. `tart get
   --format json` gives `CPU`, `Memory` in MiB and `Disk` in whole GB, null when
-  the disk's size can't be read (`VMInfo`, `run`, Commands/Get.swift). Ours:
-  `resize` sets a stopped VM only, `--disk-size` only when it grows, after the
-  core refused a smaller disk; `sizes` and `decodeInfo` read the VM back after
-  every resize, and `diskGibOf` floors the GB to the GiB `diskGb` rounded up
-  from.
+  the disk's size can't be read (`VMInfo`, `run`, Commands/Get.swift). A
+  darwin VM's vCPUs or memory below its minimum throw "… at minimum (requested
+  N)" before the config is saved (`setCPU`, `setMemory`, VMConfig.swift).
+  Ours: `growsLive` is false, so the core resizes only a stopped VM, after it
+  refused a smaller disk; `resize` passes `--disk-size` only when it grows;
+  `set` makes `minimumRefusal` `Unsizable`, for a create too; `sizes` and
+  `decodeInfo` read the VM back after every resize, and `diskGibOf` floors
+  the GB to the GiB `diskGb` rounded up from.
 - The base's `tart-guest-agent --run-daemon`, a launch daemon run at load
   (`data/tart-guest-daemon.plist`, installed by `templates/base.pkr.hcl` in
   cirruslabs/macos-image-templates), implies `--resize-disk` and grows the

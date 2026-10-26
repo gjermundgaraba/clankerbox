@@ -675,7 +675,7 @@ layer(NodeServices.layer)((it) => {
       });
 
       expect(code).toBe(1);
-      expect(stderr).toContain("Invalid: resize takes --cpu, --ram or --disk");
+      expect(stderr).toContain("a resize names at least one of cpu, ramMib and diskGib");
       expect(linux.calls).toEqual([]);
     }),
   );

@@ -133,6 +133,14 @@ const scriptedMac = (stateDir: string) => {
       case "set": {
         const at = rest.indexOf("--disk-size");
         const size = at === -1 ? 50 : Number(rest[at + 1]);
+        const cpu = Number(rest[rest.indexOf("--cpu") + 1]);
+
+        if (cpu === 1) {
+          return {
+            exitCode: 1,
+            stderr: "Error: VM should have 2 CPU cores at minimum (requested 1)\n",
+          };
+        }
 
         return size < 50
           ? {
@@ -730,7 +738,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([error._tag, error.message]).toEqual([
           "Unsizable",
-          "machine mac_small's disk of 20G is below its base's, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB",
+          "machine mac_small's disk of 20G is below the disk it is copied from, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB",
         ]);
         expect(calls(mac)).toEqual([
           `tart clone base ${vm}`,
@@ -1012,7 +1020,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   });
 
   it.effect(
-    "a resize sets a stopped VM's vCPUs and memory, and its disk only when it grows, and refuses a running, paused or missing VM before anything native",
+    "a resize sets the VM's vCPUs and memory, its disk only when it grows, and a size below Tart's least is Unsizable",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1021,37 +1029,21 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         mac.vms.set(vm, "stopped");
 
-        yield* runtime.resize(machine, { cpu: 2, ramMib: 4096, diskGib: 60 });
-        yield* runtime.resize(machine, { cpu: 4, ramMib: 8192, diskGib: 100 });
+        yield* runtime.resize(machine, { cpu: 2, ramMib: 4096, diskGib: 60 }, false);
+        yield* runtime.resize(machine, { cpu: 4, ramMib: 8192, diskGib: 100 }, false);
 
-        const refusals = [];
-
-        for (const state of ["running", "suspended", undefined] as const) {
-          if (state === undefined) {
-            mac.vms.delete(vm);
-          } else {
-            mac.vms.set(vm, state);
-          }
-
-          refusals.push(
-            failure(yield* Effect.flip(runtime.resize(machine, { ...machine, cpu: 8 }))),
-          );
-        }
+        const least = yield* Effect.flip(
+          runtime.resize(machine, { cpu: 1, ramMib: 4096, diskGib: 60 }, false),
+        );
 
         expect(calls(mac)).toEqual([
           `tart set ${vm} --cpu 2 --memory 4096`,
           `tart set ${vm} --cpu 4 --memory 8192 --disk-size 108`,
+          `tart set ${vm} --cpu 1 --memory 4096`,
         ]);
-        expect(refusals).toEqual([
-          [
-            "WrongState",
-            "Tart resizes only a stopped machine, and mac_dev is running: stop it first",
-          ],
-          [
-            "WrongState",
-            "Tart resizes only a stopped machine, and mac_dev is paused: stop it first",
-          ],
-          ["Missing", "machine mac_dev is missing from the mac runtime; delete it"],
+        expect(failure(least)).toEqual([
+          "Unsizable",
+          "machine mac_dev's 1 vCPUs and 4G are below what its guest takes: Error: VM should have 2 CPU cores at minimum (requested 1)",
         ]);
       }),
   );

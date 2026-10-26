@@ -255,20 +255,20 @@ as it is.
   so it is never used to read one machine.
 - `machine resize --name X` with `--cpus`, `--mem` (MiB) and `--storage`
   (GiB) resizes a `running` machine live, RAM first, then vCPUs, then disks,
-  each only growing (vCPUs shrink only on compatible x86_64 runtimes; RAM is
-  aligned up to the platform's hot-add), and keeps what it gave before a
-  failure; a stopped or created machine takes only `--storage`, growing, its
-  filesystem expanding at the next boot, and any other state is
-  `InvalidState` (`resize_vm`, src/cli/vm_common.rs; src/agent/live_resize.rs).
-  `machine update --name X --cpus N --mem MiB` sets either, either way, only
-  on a stopped or created machine (`UpdateCmd`, src/cli/machine.rs). The
-  status JSON carries `cpus`, `memory_mib` and `storage_gb`, which can be null
-  (`machine_status_json`, src/cli/vm_common.rs). Ours: `resize` sends a
-  running machine one live `machine resize` and refuses its shrinks as
-  `Unsizable`, a stopped or created one `machine update` and then `machine
-  resize --storage`, and refuses any other state as `WrongState`, each before
-  anything native; `sizes` and `decodeSizes` read the record back after every
-  resize, keeping the row's disk where `storage_gb` is null.
+  each only growing (vCPUs shrink only on compatible x86_64 runtimes), records
+  the asked MiB and vCPUs, and keeps what it gave before a failure
+  (`resize_vm`, src/cli/vm_common.rs; `check_targets`, `grow_memory_locked`,
+  src/agent/live_resize.rs). `machine update --name X` with `--cpus`, `--mem`
+  and `--storage` (only growing) takes a stopped or created machine, else
+  `InvalidState`: it checks the vCPUs and RAM, grows the disks, then writes
+  all three in one record update (`UpdateCmd`, src/cli/machine.rs). The status
+  JSON carries `cpus`, `memory_mib` and `storage_gb`, which can be null
+  (`machine_status_json`, src/cli/vm_common.rs). Ours: `growsLive` is true, so
+  the core refuses a paused machine, a smaller disk and a running machine's
+  shrinks before anything native; `resize` sends a running machine one
+  `machine resize` and a stopped one one `machine update`, each with only the
+  sizes that change; `sizes` and `decodeSizes` read the record back after
+  every resize, keeping the row's disk where `storage_gb` is null.
 - Concurrent CLI calls on different machines need no serializing: an inventory
   database in WAL mode with a 15 s busy timeout (`BUSY_TIMEOUT`, src/db.rs), a
   per-VM `vm.lock`, the uid allocation lock, the store's shared/exclusive lock
