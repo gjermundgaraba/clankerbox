@@ -5,6 +5,7 @@ import { DateTime, Effect, Schema, Sink, Stdio, Stream } from "effect";
 import { layer } from "@effect/vitest";
 import { afterEach, expect } from "vite-plus/test";
 import {
+  checkpoint,
   machine,
   mkdir,
   operatorKey,
@@ -662,6 +663,61 @@ layer(NodeServices.layer)((it) => {
         expect(stdout).toBe("linux_dev 1 CPU, 2G RAM, 30G disk");
         expect(linux.calls).toEqual(["machine.resize"]);
       }),
+  );
+
+  it.effect("fork and restore send the sizes they are given, leaving out the rest", () =>
+    Effect.gen(function* () {
+      const dir = yield* scratch;
+      const config = yield* writeConfig(dir, ["linux"]);
+
+      const linux = host({
+        id: "linux",
+        bases: ["ubuntu"],
+        machines: [machine("linux_dev")],
+        checkpoints: [checkpoint("linux_snap")],
+      });
+
+      const endpoints = [["linux", linux]] as const;
+
+      const runs = [
+        yield* cli(["fork", "linux_dev", "copy", "--ram", "2G", "--json", "--config", config], {
+          endpoints,
+        }),
+        yield* cli(
+          [
+            "restore",
+            "linux_snap",
+            "again",
+            "--cpu",
+            "4",
+            "--disk",
+            "40G",
+            "--json",
+            "--config",
+            config,
+          ],
+          { endpoints },
+        ),
+      ];
+
+      const decodeSizes = Schema.decodeUnknownSync(
+        Schema.fromJsonString(
+          Schema.Struct({ cpu: Schema.Number, ramMib: Schema.Number, diskGib: Schema.Number }),
+        ),
+      );
+
+      const sizes = runs.map(({ stdout }) => {
+        const { cpu, ramMib, diskGib } = decodeSizes(stdout);
+
+        return [cpu, ramMib, diskGib];
+      });
+
+      expect(runs.map(({ code }) => code)).toEqual([0, 0]);
+      expect(sizes).toEqual([
+        [1, 2048, 10],
+        [4, 1024, 40],
+      ]);
+    }),
   );
 
   it.effect("resize with no size to give is refused before any call", () =>

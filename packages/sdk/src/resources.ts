@@ -217,14 +217,17 @@ export const CreateRequest = Schema.Struct({ id: Id, ...specFields });
 
 export type CreateRequest = typeof CreateRequest.Type;
 
-const resizing = {
+/** Sizes to give a machine, each optional: one left out stays as it is, or as its source's. */
+export const Sizing = Schema.Struct({
   cpu: Schema.optional(Size),
   ramMib: Schema.optional(Size),
   diskGib: Schema.optional(Size),
-};
+});
 
-/** The sizes to give machine `id`, at least one: one left out stays as it is. */
-export const ResizeRequest = Schema.Struct({ id: Id, ...resizing }).check(
+export type Sizing = typeof Sizing.Type;
+
+/** The sizes to give machine `id`, at least one. */
+export const ResizeRequest = Schema.Struct({ id: Id, ...Sizing.fields }).check(
   Schema.makeFilter(
     ({ cpu, ramMib, diskGib }) =>
       cpu !== undefined ||

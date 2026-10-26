@@ -268,7 +268,10 @@ as it is.
   shrinks before anything native; `resize` sends a running machine one
   `machine resize` and a stopped one one `machine update`, each with only the
   sizes that change; `sizes` and `decodeSizes` read the record back after
-  every resize, keeping the row's disk where `storage_gb` is null.
+  every resize, keeping the row's disk where `storage_gb` is null. A `ram`
+  restore or fork comes up with its source's vCPUs and RAM, so the core
+  refuses a copy's smaller ones before the copy, and `restoreRam` sends a
+  larger copy one live `machine resize` once it boots.
 - Concurrent CLI calls on different machines need no serializing: an inventory
   database in WAL mode with a 15 s busy timeout (`BUSY_TIMEOUT`, src/db.rs), a
   per-VM `vm.lock`, the uid allocation lock, the store's shared/exclusive lock

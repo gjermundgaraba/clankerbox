@@ -2206,4 +2206,85 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(row === undefined ? [] : sizesOf(row)).toEqual([2, 1024, 10]);
     }),
   );
+
+  it.effect(
+    "a linux fork or restore given larger sizes than its source's is admitted at them and has them",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+        yield* linux.run(linux.checkpoints.capture("linux_dev", "snap"));
+
+        const larger = { cpu: 2, ramMib: 2048, diskGib: 20 };
+        const forked = yield* linux.run(linux.machines.fork("linux_dev", "forked", larger));
+
+        const restored = yield* linux.run(
+          linux.machines.restore("linux_snap", "restored", { ramMib: 4096 }),
+        );
+
+        expect(sizesOf(forked)).toEqual([2, 2048, 20]);
+        expect(sizesOf(restored)).toEqual([1, 4096, 10]);
+        expect(linux.fake.sizes.get("forked")).toEqual(larger);
+        expect(
+          linux.fake.activations.slice(-2).map(({ action, machine }) => [action, machine.ramMib]),
+        ).toEqual([
+          ["forkMachine", 2048],
+          ["restoreMachine", 4096],
+        ]);
+      }),
+  );
+
+  it.effect(
+    "a linux copy's vCPUs or RAM below its source's, and any copy's smaller disk, are Unsizable before a row is written",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+        const mac = yield* host({ kind: "mac" });
+
+        yield* linux.run(linux.machines.create(request("dev", { cpu: 2 })));
+        yield* linux.run(linux.checkpoints.capture("linux_dev", "snap"));
+        yield* mac.run(mac.machines.create(request("dev", {}, "mac")));
+        yield* mac.run(mac.machines.stop("mac_dev"));
+        linux.fake.calls.length = 0;
+        mac.fake.calls.length = 0;
+
+        const refused = [
+          yield* failure(linux, linux.machines.fork("linux_dev", "copy", { cpu: 1 })),
+          yield* failure(linux, linux.machines.restore("linux_snap", "copy", { ramMib: 512 })),
+          yield* failure(mac, mac.machines.fork("mac_dev", "copy", { diskGib: 5 })),
+        ];
+
+        expect(refused.map(({ _tag, message }) => [_tag, message])).toEqual([
+          [
+            "Unsizable",
+            "a linux copy holds its source's RAM, so machine linux_copy's vCPUs and RAM only grow from the source's 2 vCPUs and 1G",
+          ],
+          [
+            "Unsizable",
+            "a linux copy holds its source's RAM, so machine linux_copy's vCPUs and RAM only grow from the source's 2 vCPUs and 1G",
+          ],
+          [
+            "Unsizable",
+            "machine mac_copy's disk of 5G is below its source's 10G, and a disk only grows",
+          ],
+        ]);
+        expect((yield* rows(linux)).map(({ name }) => name)).toEqual(["dev"]);
+        expect((yield* rows(mac)).map(({ name }) => name)).toEqual(["dev"]);
+        expect([...linux.fake.calls, ...mac.fake.calls]).toEqual([]);
+      }),
+  );
+
+  it.effect("a mac fork takes smaller vCPUs and RAM than its source's", () =>
+    Effect.gen(function* () {
+      const mac = yield* host({ kind: "mac" });
+
+      yield* mac.run(mac.machines.create(request("dev", { cpu: 4, ramMib: 8192 }, "mac")));
+      yield* mac.run(mac.machines.stop("mac_dev"));
+
+      const forked = yield* mac.run(mac.machines.fork("mac_dev", "copy", { cpu: 2, ramMib: 4096 }));
+
+      expect(sizesOf(forked)).toEqual([2, 4096, 10]);
+    }),
+  );
 });

@@ -19,6 +19,9 @@ export const checkpointRef = (host: string, record: CheckpointRecord): Checkpoin
   name: record.name,
   instance: record.instance,
   port: record.port,
+  cpu: record.cpu,
+  ramMib: record.ramMib,
+  diskGib: record.diskGib,
 });
 
 export const madeOn =

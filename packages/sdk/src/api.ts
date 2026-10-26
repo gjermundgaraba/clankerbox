@@ -27,6 +27,7 @@ import {
   PrebuildRequest,
   Prebuilt,
   ResizeRequest,
+  Sizing,
   Usage,
 } from "./resources.ts";
 
@@ -137,16 +138,16 @@ export const Http = ActionHttp.make(
       ...write,
       error: making,
       description:
-        "Copy a machine to a new name on the same host. A linux machine is copied only when its VM booted under the smolvm build the host runs. A copy that fails deletes the new machine.",
-      input: FromMachine,
+        "Copy a machine to a new name on the same host, with its sizes or the ones given. A linux machine is copied only when its VM booted under the smolvm build the host runs, and its copy holds the source's RAM, so its vCPUs and RAM only grow, live once it runs; a mac copy takes any. A disk only grows. A copy that fails deletes the new machine.",
+      input: Schema.Struct({ ...FromMachine.fields, ...Sizing.fields }),
       success: Machine,
     }),
     Action.make("restoreMachine", {
       ...write,
       error: making,
       description:
-        "Create a machine on the checkpoint's host from that checkpoint. A restore that fails deletes the new machine.",
-      input: Schema.Struct({ checkpoint: Id, name: Name }),
+        "Create a machine on the checkpoint's host from that checkpoint, with its sizes or the ones given. A linux checkpoint holds RAM, so a restore's vCPUs and RAM only grow, live once it runs; a mac restore takes any. A disk only grows. A restore that fails deletes the new machine.",
+      input: Schema.Struct({ checkpoint: Id, name: Name, ...Sizing.fields }),
       success: Machine,
     }),
     Action.make("execMachine", {

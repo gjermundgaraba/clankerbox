@@ -25,8 +25,8 @@ import {
   table,
   withClient,
 } from "../command.ts";
-import { age, parseGib, parseMib, parseSeconds } from "../units.ts";
-import { flagsRequest, specArguments } from "./spec.ts";
+import { age, parseSeconds } from "../units.ts";
+import { flagSizes, flagsRequest, sizeArguments, specArguments } from "./spec.ts";
 import { encodeMachine, machineFields, machineRows } from "./view.ts";
 
 export const machines = listCommand({
@@ -130,27 +130,13 @@ const sized = (machine: Machine) =>
 
 export const resize = Command.make(
   "resize",
-  {
-    ...mutationFlags,
-    cpu: specArguments.cpu,
-    ram: specArguments.ram,
-    disk: specArguments.disk,
-    machine: machineArgument,
-  },
+  { ...mutationFlags, ...sizeArguments, machine: machineArgument },
   (flags) =>
     printResource(flags, {
       call: (client) =>
-        Effect.gen(function* () {
-          const ram = yield* parsed(flags.ram, "--ram", parseMib);
-          const disk = yield* parsed(flags.disk, "--disk", parseGib);
-
-          return yield* client.resizeMachine({
-            id: flags.machine,
-            cpu: Option.getOrUndefined(flags.cpu),
-            ramMib: Option.getOrUndefined(ram),
-            diskGib: Option.getOrUndefined(disk),
-          });
-        }),
+        Effect.flatMap(flagSizes(flags), (sizes) =>
+          client.resizeMachine({ id: flags.machine, ...sizes }),
+        ),
       encode: encodeMachine,
       text: sized,
     }),
@@ -175,10 +161,13 @@ export const deleteMachine = Command.make(
 
 export const fork = Command.make(
   "fork",
-  { ...mutationFlags, machine: machineArgument, name: nameArgument },
+  { ...mutationFlags, ...sizeArguments, machine: machineArgument, name: nameArgument },
   (flags) =>
     printResource(flags, {
-      call: (client) => client.forkMachine({ machine: flags.machine, name: flags.name }),
+      call: (client) =>
+        Effect.flatMap(flagSizes(flags), (sizes) =>
+          client.forkMachine({ machine: flags.machine, name: flags.name, ...sizes }),
+        ),
       encode: encodeMachine,
       text: newId,
     }),
@@ -186,10 +175,13 @@ export const fork = Command.make(
 
 export const restore = Command.make(
   "restore",
-  { ...mutationFlags, checkpoint: checkpointArgument, name: nameArgument },
+  { ...mutationFlags, ...sizeArguments, checkpoint: checkpointArgument, name: nameArgument },
   (flags) =>
     printResource(flags, {
-      call: (client) => client.restoreMachine({ checkpoint: flags.checkpoint, name: flags.name }),
+      call: (client) =>
+        Effect.flatMap(flagSizes(flags), (sizes) =>
+          client.restoreMachine({ checkpoint: flags.checkpoint, name: flags.name, ...sizes }),
+        ),
       encode: encodeMachine,
       text: newId,
     }),

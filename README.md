@@ -224,6 +224,7 @@ clankerbox stop linux_dev
 clankerbox resize linux_dev --cpu 4 --ram 4G --disk 80G
 clankerbox start linux_dev
 clankerbox fork linux_dev dev2             # linux_dev2
+clankerbox fork linux_dev big --ram 8G     # a copy with more RAM
 clankerbox checkpoint capture linux_dev base
 clankerbox restore linux_base dev3         # linux_dev3
 clankerbox delete linux_dev3
@@ -234,7 +235,10 @@ clankerbox checkpoint delete linux_base
 - Sizes and durations carry their unit: `--ram 8G`, `--disk 60G`,
   `--setup-timeout 15m`.
 - `fork` copies a running linux machine with its RAM, or a stopped mac
-  machine's disk. `checkpoint capture` does the same, so a linux checkpoint is
+  machine's disk. `fork` and `restore` take `--cpu`, `--ram` and `--disk` for
+  the copy, its source's by default: a linux copy, holding its source's RAM,
+  only grows, live once it runs; a mac copy takes any vCPUs and RAM; a disk
+  only grows. `checkpoint capture` does the same, so a linux checkpoint is
   `ram` and a mac one `disk`.
 - `start`, `stop`, `pause` and `delete` ask for a state and wait until the
   machine is there; a request fails `Superseded` when a later one for the same

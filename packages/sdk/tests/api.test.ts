@@ -75,6 +75,8 @@ test("malformed IDs, names and sizes, and a resize that names no size, are refus
     ["forkMachine", { machine: "linux_dev", name: "a.b" }],
     ["resizeMachine", { id: "linux_dev" }],
     ["resizeMachine", { id: "linux_dev", ramMib: 0 }],
+    ["forkMachine", { machine: "linux_dev", name: "copy", cpu: 0 }],
+    ["restoreMachine", { checkpoint: "linux_snap", name: "copy", diskGib: 1.5 }],
   ] as const) {
     const answer = await post(path, body);
 

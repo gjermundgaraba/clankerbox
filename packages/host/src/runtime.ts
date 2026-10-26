@@ -45,6 +45,10 @@ export interface CheckpointRef {
   readonly instance: string;
   /** A `ram` restore comes up on the source's port at capture. */
   readonly port: number;
+  /** The source's, at capture. */
+  readonly cpu: number;
+  readonly ramMib: number;
+  readonly diskGib: number;
 }
 
 export const stateReadWait = Duration.subtract(readTimeout, Duration.seconds(1));
@@ -191,7 +195,11 @@ export interface Interface {
     machine: MachineRef,
     checkpoint: CheckpointRef,
   ) => Effect.Effect<void, RoomError | StateError>;
-  /** Returns once exec works. A checkpoint deleted under it fails it like any runtime failure. */
+  /**
+   * Returns once exec works, with the machine's sizes. A checkpoint deleted under it fails it like
+   * any runtime failure. The core never gives a copy a smaller disk than its source's, nor, for a
+   * `ram` checkpoint, smaller vCPUs or RAM; the same holds for `fork`.
+   */
   readonly restore: (
     checkpoint: CheckpointRef,
     machine: MachineRef,

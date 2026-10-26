@@ -16,6 +16,7 @@ import {
   offers,
   PinMismatch,
   type ResizeRequest,
+  type Sizing,
   Superseded,
   type TailnetStatus,
   Unsizable,
@@ -68,7 +69,7 @@ import {
   stateReadWait,
   timeoutFail,
 } from "./runtime.ts";
-import type { HostSettings } from "./settings.ts";
+import { checkpointKinds, type HostSettings } from "./settings.ts";
 import { type Intent, Store } from "./store.ts";
 import { Tailnet } from "./tailnet.ts";
 
@@ -89,10 +90,15 @@ export interface Interface {
   readonly pause: (id: string) => Effect.Effect<Machine, Declared<"pauseMachine">>;
   readonly resize: (request: ResizeRequest) => Effect.Effect<Machine, Declared<"resizeMachine">>;
   readonly delete: (id: string) => Effect.Effect<void, Declared<"deleteMachine">>;
-  readonly fork: (id: string, name: string) => Effect.Effect<Machine, Declared<"forkMachine">>;
+  readonly fork: (
+    id: string,
+    name: string,
+    sizing?: Sizing,
+  ) => Effect.Effect<Machine, Declared<"forkMachine">>;
   readonly restore: (
     checkpoint: string,
     name: string,
+    sizing?: Sizing,
   ) => Effect.Effect<Machine, Declared<"restoreMachine">>;
   readonly exec: (request: ExecRequest) => Effect.Effect<Executed, Declared<"execMachine">>;
   /**
@@ -732,7 +738,35 @@ export const make = (
         );
       });
 
-    const fork = (sourceId: string, name: string) =>
+    const copySpec = (name: string, from: Spec, sizing: Sizing | undefined) =>
+      Effect.gen(function* () {
+        const spec: Spec = {
+          base: from.base,
+          profile: from.profile,
+          cpu: sizing?.cpu ?? from.cpu,
+          ramMib: sizing?.ramMib ?? from.ramMib,
+          diskGib: sizing?.diskGib ?? from.diskGib,
+        };
+
+        if (spec.diskGib < from.diskGib) {
+          return yield* new Unsizable({
+            message: `machine ${idOf(name)}'s disk of ${formatGib(spec.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`,
+          });
+        }
+
+        if (
+          checkpointKinds[config.kind] === "ram" &&
+          (spec.cpu < from.cpu || spec.ramMib < from.ramMib)
+        ) {
+          return yield* new Unsizable({
+            message: `a ${config.kind} copy holds its source's RAM, so machine ${idOf(name)}'s vCPUs and RAM only grow from the source's ${from.cpu} vCPUs and ${formatMib(from.ramMib)}`,
+          });
+        }
+
+        return spec;
+      });
+
+    const fork = (sourceId: string, name: string, sizing?: Sizing) =>
       Effect.gen(function* () {
         const source = yield* nameOf(sourceId);
 
@@ -744,13 +778,13 @@ export const make = (
 
         return yield* making(
           name,
-          from,
+          yield* copySpec(name, from, sizing),
           { source: { kind: "machine", from }, script: undefined },
           false,
         );
       });
 
-    const restore = (checkpointId: string, name: string) =>
+    const restore = (checkpointId: string, name: string, sizing?: Sizing) =>
       Effect.gen(function* () {
         const source = yield* nameOf(checkpointId);
 
@@ -760,7 +794,7 @@ export const make = (
 
         return yield* making(
           name,
-          record,
+          yield* copySpec(name, record, sizing),
           { source: { kind: "checkpoint", record }, script: undefined },
           false,
         );

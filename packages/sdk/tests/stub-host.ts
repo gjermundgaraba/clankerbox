@@ -16,6 +16,7 @@ import {
   type Prebuilt,
   type Kind,
   type Reading,
+  type Sizing,
   version,
   versionHeader,
 } from "../src/index.ts";
@@ -144,17 +145,17 @@ export const stubHost = (options: StubHostOptions) => {
         )
       : options.create(request);
 
-  const restore = (checkpoint: string, name: string) =>
+  const sized = <A extends Machine | Checkpoint>(found: A, sizes: Sizing) => ({
+    cpu: sizes.cpu ?? found.cpu,
+    ramMib: sizes.ramMib ?? found.ramMib,
+    diskGib: sizes.diskGib ?? found.diskGib,
+  });
+
+  const restore = (checkpoint: string, name: string, sizes: Sizing = {}) =>
     Effect.flatMap(findCheckpoint(checkpoint), (found) =>
       add(
         labelled(
-          machine(`${options.id}_${name}`, {
-            kind,
-            base: found.base,
-            cpu: found.cpu,
-            ramMib: found.ramMib,
-            diskGib: found.diskGib,
-          }),
+          machine(`${options.id}_${name}`, { kind, base: found.base, ...sized(found, sizes) }),
           found.profile,
         ),
       ),
@@ -226,16 +227,11 @@ export const stubHost = (options: StubHostOptions) => {
           settled(found, found.state === "stopped" ? "stopped" : "paused", "paused"),
         ),
       ),
-    resizeMachine: ({ id, cpu, ramMib, diskGib }) =>
+    resizeMachine: ({ id, ...sizes }) =>
       Effect.andThen(
         record("machine.resize"),
         Effect.map(find(id), (found) => {
-          const now: Machine = {
-            ...found,
-            cpu: cpu ?? found.cpu,
-            ramMib: ramMib ?? found.ramMib,
-            diskGib: diskGib ?? found.diskGib,
-          };
+          const now: Machine = { ...found, ...sized(found, sizes) };
 
           machines.set(now.id, now);
 
@@ -250,16 +246,18 @@ export const stubHost = (options: StubHostOptions) => {
           Effect.sync(() => machines.delete(id)),
         ),
       ),
-    forkMachine: ({ machine: source, name }) =>
+    forkMachine: ({ machine: source, name, ...sizes }) =>
       Effect.andThen(
         record("machine.fork"),
-        Effect.flatMap(find(source), (found) => add({ ...found, id: `${options.id}_${name}` })),
+        Effect.flatMap(find(source), (found) =>
+          add({ ...found, id: `${options.id}_${name}`, ...sized(found, sizes) }),
+        ),
       ),
-    restoreMachine: ({ checkpoint, name }) =>
+    restoreMachine: ({ checkpoint, name, ...sizes }) =>
       Effect.andThen(
         record("machine.restore"),
         options.restoreFails === undefined
-          ? restore(checkpoint, name)
+          ? restore(checkpoint, name, sizes)
           : Effect.fail(options.restoreFails),
       ),
     listCheckpoints: () => Effect.as(record("checkpoint.list"), [...checkpoints.values()]),

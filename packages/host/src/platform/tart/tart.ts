@@ -169,6 +169,17 @@ const sizeFlags = (sizes: Sizes): ReadonlyArray<string> => [
   String(sizes.ramMib),
 ];
 
+const changedFlags = (from: Sizes, to: Sizes): ReadonlyArray<string> => {
+  const changed = (flag: string, had: number, size: number, given = size) =>
+    size === had ? [] : [flag, String(given)];
+
+  return [
+    ...changed("--cpu", from.cpu, to.cpu),
+    ...changed("--memory", from.ramMib, to.ramMib),
+    ...changed("--disk-size", from.diskGib, to.diskGib, diskGb(to.diskGib)),
+  ];
+};
+
 export const stateOf = (state: typeof VmState.Type): MachineState =>
   state === "suspended" ? "paused" : state;
 
@@ -678,16 +689,22 @@ export const make = (
         ),
       ),
       restore: Effect.fn("Tart.restore")((checkpoint, machine) =>
-        cloneInto(checkpointVm(checkpoint), machine, []),
+        cloneInto(checkpointVm(checkpoint), machine, changedFlags(checkpoint, machine)),
       ),
       fork: Effect.fn("Tart.fork")((source, machine) =>
-        Effect.andThen(copyable("fork", source), cloneInto(vmOf(source), machine, [])),
+        Effect.andThen(
+          copyable("fork", source),
+          cloneInto(vmOf(source), machine, changedFlags(source, machine)),
+        ),
       ),
       resize: Effect.fn("Tart.resize")((machine, to) =>
-        set(machine, to, [
-          ...sizeFlags(to),
-          ...(to.diskGib === machine.diskGib ? [] : ["--disk-size", String(diskGb(to.diskGib))]),
-        ]),
+        Effect.gen(function* () {
+          const flags = changedFlags(machine, to);
+
+          if (flags.length > 0) {
+            yield* set(machine, to, flags);
+          }
+        }),
       ),
       sizes: Effect.fn("Tart.sizes")((machine) => {
         const vm = vmOf(machine);

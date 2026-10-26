@@ -690,6 +690,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           name: "snap",
           instance: "fedcba9876543210fedcba9876543210",
           port: source.port,
+          cpu: 4,
+          ramMib: 8192,
+          diskGib: 60,
         };
 
         mac.vms.set(vmOf(source), "stopped");
@@ -977,6 +980,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           name: "snap",
           instance: "fedcba9876543210fedcba9876543210",
           port: source.port,
+          cpu: 4,
+          ramMib: 8192,
+          diskGib: 60,
         };
 
         mac.vms.set(vmOf(source), "running");
@@ -1020,7 +1026,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   });
 
   it.effect(
-    "a resize sets the VM's vCPUs and memory, its disk only when it grows, and a size below Tart's least is Unsizable",
+    "a resize sets only the vCPUs, memory and disk that change, and a size below Tart's least is Unsizable",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1031,6 +1037,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* runtime.resize(machine, { cpu: 2, ramMib: 4096, diskGib: 60 }, false);
         yield* runtime.resize(machine, { cpu: 4, ramMib: 8192, diskGib: 100 }, false);
+        yield* runtime.resize(machine, machine, false);
 
         const least = yield* Effect.flip(
           runtime.resize(machine, { cpu: 1, ramMib: 4096, diskGib: 60 }, false),
@@ -1038,7 +1045,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(calls(mac)).toEqual([
           `tart set ${vm} --cpu 2 --memory 4096`,
-          `tart set ${vm} --cpu 4 --memory 8192 --disk-size 108`,
+          `tart set ${vm} --disk-size 108`,
           `tart set ${vm} --cpu 1 --memory 4096`,
         ]);
         expect(failure(least)).toEqual([
@@ -1116,6 +1123,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           name: "snap",
           instance: "fedcba9876543210fedcba9876543210",
           port: source.port,
+          cpu: 4,
+          ramMib: 8192,
+          diskGib: 60,
         };
 
         const snap = checkpointName("mac", checkpoint);
@@ -1140,6 +1150,35 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         ]);
         expect(mac.vms.has(snap)).toBe(false);
       }),
+  );
+
+  it.effect("a fork or restore sets the copy's sizes that differ from its source's", () =>
+    Effect.gen(function* () {
+      const { mac, runtime } = yield* runtimeOn();
+      const source = machineOn("src");
+      const forked = { ...machineOn("forked"), cpu: 6, ramMib: 16_384, diskGib: 100 };
+      const restored = { ...machineOn("restored"), cpu: 2, ramMib: 4096 };
+
+      const checkpoint = {
+        id: "mac_snap",
+        name: "snap",
+        instance: "fedcba9876543210fedcba9876543210",
+        port: source.port,
+        cpu: 4,
+        ramMib: 8192,
+        diskGib: 60,
+      };
+
+      mac.vms.set(vmOf(source), "stopped");
+      mac.vms.set(checkpointName("mac", checkpoint), "stopped");
+      yield* runtime.fork(source, forked);
+      yield* runtime.restore(checkpoint, restored);
+
+      expect(calls(mac).filter((line) => line.startsWith("tart set"))).toEqual([
+        `tart set ${vmOf(forked)} --random-serial --cpu 6 --memory 16384 --disk-size 108`,
+        `tart set ${vmOf(restored)} --random-serial --cpu 2 --memory 4096`,
+      ]);
+    }),
   );
 
   it.effect(

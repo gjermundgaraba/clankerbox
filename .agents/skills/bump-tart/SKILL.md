@@ -111,7 +111,8 @@ Each: what Tart does, where, and what of ours depends on it.
   darwin VM's vCPUs or memory below its minimum throw "… at minimum (requested
   N)" before the config is saved (`setCPU`, `setMemory`, VMConfig.swift).
   Ours: `growsLive` is false, so the core resizes only a stopped VM, after it
-  refused a smaller disk; `resize` passes `--disk-size` only when it grows;
+  refused a smaller disk; `resize`, and the `set` after a fork's or restore's
+  clone, pass only the vCPUs, memory and disk that change (`changedFlags`);
   `set` makes `minimumRefusal` `Unsizable`, for a create too; `sizes` and
   `decodeInfo` read the VM back after every resize, and `diskGibOf` floors
   the GB to the GiB `diskGb` rounded up from.

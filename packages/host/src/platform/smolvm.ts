@@ -16,6 +16,7 @@ import {
   type MachineState,
   missing,
   Runtime,
+  type Sizes,
   type StateError,
   stateReadWait,
   timeoutFail,
@@ -345,7 +346,30 @@ export const make = (
         }
       });
 
-    const restoreRam = (from: string, sourcePort: number, machine: MachineRef) =>
+    const resized = (native: string, from: Sizes, to: Sizes, running: boolean) => {
+      const command = running ? "resize" : "update";
+
+      const changed = (flag: string, had: number, size: number) =>
+        size === had ? [] : [flag, String(size)];
+
+      const flags = [
+        ...changed("--cpus", from.cpu, to.cpu),
+        ...changed("--mem", from.ramMib, to.ramMib),
+        ...changed("--storage", from.diskGib, to.diskGib),
+      ];
+
+      return flags.length === 0
+        ? Effect.void
+        : Effect.asVoid(
+            call(["machine", command, "--name", native, ...flags], `machine ${command} ${native}`),
+          );
+    };
+
+    const restoreRam = (
+      from: string,
+      source: Pick<MachineRef, "port"> & Sizes,
+      machine: MachineRef,
+    ) =>
       Effect.gen(function* () {
         const native = nativeName(machine);
         const { port } = machine;
@@ -355,7 +379,7 @@ export const make = (
           `machine create ${native}`,
         );
 
-        if (sourcePort !== port) {
+        if (source.port !== port) {
           yield* call(
             [
               "machine",
@@ -363,7 +387,7 @@ export const make = (
               "--name",
               native,
               "--remove-port",
-              `${sourcePort}:22`,
+              `${source.port}:22`,
               "-p",
               `${port}:22`,
             ],
@@ -372,6 +396,7 @@ export const make = (
         }
 
         yield* boot(native);
+        yield* resized(native, source, machine, true);
       });
 
     return {
@@ -411,7 +436,7 @@ export const make = (
         ),
       ),
       restore: Effect.fn("Smolvm.restore")((checkpoint, machine) =>
-        restoreRam(checkpointDir(checkpoint), checkpoint.port, machine),
+        restoreRam(checkpointDir(checkpoint), checkpoint, machine),
       ),
       fork: Effect.fn("Smolvm.fork")((source, machine) => {
         const store = join(paths.forks, nativeName(machine));
@@ -424,7 +449,7 @@ export const make = (
           ),
           Effect.andThen(
             captureRam(source, store, output),
-            restoreRam(output, source.port, machine),
+            restoreRam(output, source, machine),
           ).pipe(
             Effect.ensuring(
               removeAll(store).pipe(
@@ -554,28 +579,9 @@ export const make = (
           yield* call(["machine", "pause", "--name", native], `machine pause ${native}`);
         }),
       ),
-      resize: Effect.fn("Smolvm.resize")((machine, to, running) => {
-        const native = nativeName(machine);
-        const command = running ? "resize" : "update";
-
-        const changed = (flag: string, from: number, size: number) =>
-          size === from ? [] : [flag, String(size)];
-
-        const flags = [
-          ...changed("--cpus", machine.cpu, to.cpu),
-          ...changed("--mem", machine.ramMib, to.ramMib),
-          ...changed("--storage", machine.diskGib, to.diskGib),
-        ];
-
-        return flags.length === 0
-          ? Effect.void
-          : Effect.asVoid(
-              call(
-                ["machine", command, "--name", native, ...flags],
-                `machine ${command} ${native}`,
-              ),
-            );
-      }),
+      resize: Effect.fn("Smolvm.resize")((machine, to, running) =>
+        resized(nativeName(machine), machine, to, running),
+      ),
       sizes: Effect.fn("Smolvm.sizes")((machine) => {
         const native = nativeName(machine);
 

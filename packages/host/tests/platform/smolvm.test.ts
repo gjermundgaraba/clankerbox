@@ -998,6 +998,9 @@ layer(NodeServices.layer)((it) => {
     name: "snap",
     instance: "fedcba9876543210fedcba9876543210",
     port: 10_000,
+    cpu: 2,
+    ramMib: 2048,
+    diskGib: 20,
   };
 
   const unknownCopy: Reply = {
@@ -1180,6 +1183,45 @@ layer(NodeServices.layer)((it) => {
 
       expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["create", "start"]);
     }),
+  );
+
+  it.effect(
+    "a ram restore or fork given larger sizes than its source's grows the copy live once it boots",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) =>
+          call.args[1] === "status" ? status("running") : undefined,
+        );
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+        const larger = { ...copy, port: 10_000, cpu: 4, ramMib: 4096, diskGib: 30 };
+
+        yield* runtime.restore(ramCheckpoint, larger);
+        yield* runtime.fork(machine, { ...larger, cpu: 2 });
+
+        const resizes = smolvmArgs(spawner.calls).filter((args) => args[1] === "resize");
+
+        expect(resizes).toEqual([
+          [
+            "machine",
+            "resize",
+            "--name",
+            nativeName(copy),
+            "--cpus",
+            "4",
+            "--mem",
+            "4096",
+            "--storage",
+            "30",
+          ],
+          ["machine", "resize", "--name", nativeName(copy), "--mem", "4096", "--storage", "30"],
+        ]);
+        expect(
+          smolvmArgs(spawner.calls)
+            .slice(0, 3)
+            .map((args) => args[1]),
+        ).toEqual(["create", "start", "resize"]);
+      }),
   );
 
   it.effect(
