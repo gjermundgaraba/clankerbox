@@ -193,6 +193,9 @@ export const make = (options: Options, ssh = "ssh") => {
 
       const { spec, host } = yield* specRequest("create", yield* loadProfile(from.profile), {
         authorizedKeys: options.authorizedKeys,
+        cpu: from.cpu,
+        ramMib: from.ramMib,
+        diskGib: from.diskGib,
       });
 
       const { machine } = yield* Prebuild.create(client, named, spec, {
@@ -245,7 +248,7 @@ export const make = (options: Options, ssh = "ssh") => {
     resize: (id: string, sizes: Sizing) =>
       locked(id, () =>
         Effect.flatMap(Client.Client, (client) => client.resizeMachine({ id, ...sizes })).pipe(
-          Effect.asVoid,
+          Effect.map(({ cpu, ramMib, diskGib }) => ({ cpu, ramMib, diskGib })),
           Effect.catchTag("NotFound", destroyed(id)),
         ),
       ),

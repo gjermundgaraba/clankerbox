@@ -3,7 +3,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type Checkpoint,
-  type Client,
   Conflict,
   Invalid,
   NotFound,
@@ -24,6 +23,7 @@ import {
   listening,
   login,
   reachable,
+  recording,
   runtimeVersion,
   setup,
   until,
@@ -332,69 +332,60 @@ test("a create refused with Conflict, as a name already taken is, deletes nothin
   expect(stub.calls).toEqual(["host.get", "machine.create"]);
 });
 
-test("a fork or restore source's sizes go to the host with the copy's name", async () => {
+test("a source's sizes go to the restore or fork with the copy's name, or override a profile's", async () => {
   const sent: Array<unknown> = [];
-
-  const record = (client: Client.Interface): Client.Interface => ({
-    ...client,
-    forkMachine: (input) =>
-      Effect.andThen(
-        Effect.sync(() => sent.push(input)),
-        client.forkMachine(input),
-      ),
-    restoreMachine: (input) =>
-      Effect.andThen(
-        Effect.sync(() => sent.push(input)),
-        client.restoreMachine(input),
-      ),
-  });
 
   const forked = await setup(
     { machines: [reachable("linux_warm")] },
     { from: { machine: "linux_warm", ramMib: 4096 } },
     undefined,
-    record,
+    recording(sent),
   );
 
   const restored = await setup(
     { checkpoints: [checkpoint("linux_base")] },
     { from: { checkpoint: "linux_base", cpu: 4, diskGib: 40 } },
     undefined,
-    record,
+    recording(sent),
   );
+
+  const dir = await mkdtemp(join(tmpdir(), "clankerbox-profile-"));
+  const profile = join(dir, "big.json");
+
+  cleanups.push(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(profile, JSON.stringify({ base: "ubuntu", cpu: 2, ramMib: 2048, diskGib: 20 }));
+
+  const sized = await setup({}, { from: { profile, ramMib: 8192 } });
 
   const names = [await forked.sandbox.create(), await restored.sandbox.create()].map(
     (id) => id.split("_")[1],
   );
 
+  await sized.sandbox.create();
+
   expect(sent).toEqual([
     { machine: "linux_warm", ramMib: 4096, name: names[0] },
     { checkpoint: "linux_base", cpu: 4, diskGib: 40, name: names[1] },
   ]);
+  expect(sized.stub.creates).toMatchObject([{ cpu: 2, ramMib: 8192, diskGib: 20 }]);
 });
 
-test("resize sends the sandbox's machine its sizes, and a machine that is gone is the SDK's SandboxDestroyedError", async () => {
+test("resize sends the sandbox's machine its sizes and answers those it then has, and a machine that is gone is the SDK's SandboxDestroyedError", async () => {
   const sent: Array<unknown> = [];
 
   const { stub, sandbox } = await setup(
     { machines: [reachable("linux_kept")] },
     {},
     undefined,
-    (client) => ({
-      ...client,
-      resizeMachine: (input) =>
-        Effect.andThen(
-          Effect.sync(() => sent.push(input)),
-          client.resizeMachine(input),
-        ),
-    }),
+    recording(sent),
   );
 
-  await sandbox.resize("linux_kept", { cpu: 4, ramMib: 8192 });
+  const resized = await sandbox.resize("linux_kept", { cpu: 4, ramMib: 8192 });
 
   await expect(sandbox.resize("linux_gone", { cpu: 4 })).rejects.toBeInstanceOf(
     SandboxDestroyedError,
   );
+  expect(resized).toEqual({ cpu: 4, ramMib: 8192, diskGib: 10 });
   expect(sent).toEqual([
     { id: "linux_kept", cpu: 4, ramMib: 8192 },
     { id: "linux_gone", cpu: 4 },

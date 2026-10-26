@@ -496,11 +496,15 @@ await sdk.destroySandbox();
 
 - A sandbox comes from a profile (`{ profile }`), a checkpoint
   (`{ checkpoint }`) or a fork (`{ machine }`), and a profile's prebuild is
-  used when there is one. A checkpoint or fork source may add `cpu`, `ramMib`
-  and `diskGib` for the copy, as `restore` and `fork` take them, and
-  `sandbox.resize(id, sizes)` resizes a sandbox's machine as `resize` does. `authorizedKeys` does what the client config's
+  used when there is one. Any source may add `cpu`, `ramMib` and `diskGib`:
+  over a profile's, as `create`'s flags do, or for the copy, as `restore` and
+  `fork` take them. `authorizedKeys` does what the client config's
   does, for the key the tunnel logs in with, and a profile with a setup needs
   it.
+- `sandbox.resize(id, sizes)` resizes a sandbox's machine as `resize` does,
+  and answers its sizes; `id` is the machine's ID, `sdk.sandboxId` without its
+  `clankerbox/`. For what a running machine can't take, `pauseSandbox`, resize,
+  then `sandbox.ensureServer(id)`.
 - A sandbox's ID is `clankerbox/<machine ID>`; `pauseSandbox` stops the
   machine and `destroySandbox` deletes it. Stop a sandbox's machine rather
   than `clankerbox pause` it: a reconnect resumes a paused one with its old

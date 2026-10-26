@@ -1,14 +1,15 @@
-import type { Client, Sizing } from "@gjermundgaraba/clankerbox-sdk";
+import type { Client, Machine, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import type { SandboxProvider } from "sandbox-agent";
 
 /**
  * A profile whose setup installs the Sandbox Agent, a checkpoint of a machine that has it, or a
  * machine to fork. A fork or `ram` restore carries its source's sessions: take it from an idle one,
- * and not a paused one, which can't be forked. A restore or fork takes `cpu`, `ramMib` and
- * `diskGib` where given, and its source's otherwise: on linux they only grow, and a disk only grows.
+ * and not a paused one, which can't be forked. `cpu`, `ramMib` and `diskGib`, where given, override
+ * the profile's sizes, as `clankerbox create`'s flags do, or the copy's, as `restoreMachine` and
+ * `forkMachine` take them.
  */
 export type Source =
-  | { readonly profile: string }
+  | ({ readonly profile: string } & Sizing)
   | ({ readonly checkpoint: string } & Sizing)
   | ({ readonly machine: string } & Sizing);
 
@@ -42,11 +43,12 @@ export interface Options {
  */
 export interface ClankerboxProvider extends SandboxProvider {
   /**
-   * Gives the sandbox's machine other sizes, as `clankerbox resize` does: a stopped machine takes
-   * any vCPUs and RAM, a running linux one only grows, and a disk only grows; `pause` stops it
-   * first for what a running one can't take.
+   * `resizeMachine` on the sandbox's machine, taking turns with the sandbox's other calls, and the
+   * sizes the host then holds. A machine that is gone is `SandboxDestroyedError`, and the host's
+   * refusals are the SDK's errors. For what a running machine can't take, `pause` it, resize it,
+   * then `ensureServer`.
    */
-  resize(sandboxId: string, sizes: Sizing): Promise<void>;
+  resize(sandboxId: string, sizes: Sizing): Promise<Pick<Machine, "cpu" | "ramMib" | "diskGib">>;
   reconnect(sandboxId: string): Promise<void>;
   pause(sandboxId: string): Promise<void>;
   ensureServer(sandboxId: string): Promise<void>;

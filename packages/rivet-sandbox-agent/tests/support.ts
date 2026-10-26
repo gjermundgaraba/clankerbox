@@ -33,6 +33,27 @@ export const hostKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample root@linux"
 export const reachable = (id: string, fields?: Partial<Machine>) =>
   machine(id, { ssh: login, hostKey, ...fields });
 
+export const recording =
+  (sent: Array<unknown>) =>
+  (client: Client.Interface): Client.Interface => ({
+    ...client,
+    forkMachine: (input) =>
+      Effect.andThen(
+        Effect.sync(() => sent.push(input)),
+        client.forkMachine(input),
+      ),
+    restoreMachine: (input) =>
+      Effect.andThen(
+        Effect.sync(() => sent.push(input)),
+        client.restoreMachine(input),
+      ),
+    resizeMachine: (input) =>
+      Effect.andThen(
+        Effect.sync(() => sent.push(input)),
+        client.resizeMachine(input),
+      ),
+  });
+
 export const cleanups: Array<() => Promise<void>> = [];
 
 export const cleanUp = async () => {
