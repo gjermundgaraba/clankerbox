@@ -660,7 +660,7 @@ layer(NodeServices.layer)((it) => {
 
         expect(stderr).toBe("");
         expect(code).toBe(0);
-        expect(stdout).toBe("linux_dev 1 CPU, 2G RAM, 30G disk");
+        expect(stdout).toBe("linux_dev 1 vCPUs, 2G RAM, 30G disk");
         expect(linux.calls).toEqual(["machine.resize"]);
       }),
   );
@@ -731,7 +731,7 @@ layer(NodeServices.layer)((it) => {
       });
 
       expect(code).toBe(1);
-      expect(stderr).toContain("a resize names at least one of cpu, ramMib and diskGib");
+      expect(stderr).toContain("a resize gives at least one of vCPUs, RAM and disk");
       expect(linux.calls).toEqual([]);
     }),
   );

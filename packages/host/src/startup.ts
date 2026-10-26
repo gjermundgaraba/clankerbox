@@ -1,7 +1,8 @@
-import { Effect, Layer, Schema } from "effect";
+import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Duration, Effect, Layer, Schema } from "effect";
 import { idOn } from "./ids.ts";
 import { checkpointRef, machineRef } from "./refs.ts";
-import { Runtime } from "./runtime.ts";
+import { Runtime, stateReadWait, timeoutFail } from "./runtime.ts";
 import type { HostSettings } from "./settings.ts";
 import { Store } from "./store.ts";
 
@@ -45,5 +46,38 @@ export const startup = (config: Pick<HostSettings, "id">) =>
       }
 
       yield* runtime.startup(intents.map((intent) => machineRef(config.id, intent)));
+
+      const kept = intents.filter(
+        (intent) => intent.desired !== "deleted" && intent.made && !intent.ephemeral,
+      );
+
+      yield* Effect.forEach(
+        kept,
+        (intent) =>
+          runtime.sizes(machineRef(config.id, intent)).pipe(
+            timeoutFail(
+              stateReadWait,
+              () =>
+                new Internal({
+                  message: `the read didn't answer within ${Duration.format(stateReadWait)}`,
+                }),
+            ),
+            Effect.matchEffect({
+              onFailure: (error) =>
+                Effect.logWarning(
+                  `couldn't read the sizes of ${idOn(config.id)(intent.name)}, so the host keeps those it has: ${error.message}`,
+                ),
+              onSuccess: ({
+                cpu = intent.cpu,
+                ramMib = intent.ramMib,
+                diskGib = intent.diskGib,
+              }) =>
+                cpu === intent.cpu && ramMib === intent.ramMib && diskGib === intent.diskGib
+                  ? Effect.void
+                  : store.sized(intent.name, { cpu, ramMib, diskGib }),
+            }),
+          ),
+        { concurrency: "unbounded", discard: true },
+      );
     }),
   );

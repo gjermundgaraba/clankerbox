@@ -270,7 +270,9 @@ clankerbox checkpoint delete linux_base
   mac machine or a paused one is refused, so stop it first. A disk only grows:
   smolvm grows the guest's filesystem, at once when it runs, and on a Mac the
   base's Tart guest agent grows APFS at the next boot. A resize waits for a
-  step under way, and keeps what the runtime gave when it fails part way.
+  step under way, and keeps what the runtime gave when it fails part way, or
+  when the host stops during it; asking for the same sizes again finishes a
+  live grow that failed part way.
 - A create, fork or restore whose copy or setup fails deletes its machine and
   answers the error, and a delete that fails runs again at the next check; a
   host that restarts before it finished deletes the machine too. Only a

@@ -126,7 +126,7 @@ export const pause = Command.make(
 ).pipe(Command.withDescription(actionsByName.pauseMachine.description));
 
 const sized = (machine: Machine) =>
-  `${machine.id} ${machine.cpu} CPU, ${formatMib(machine.ramMib)} RAM, ${formatGib(machine.diskGib)} disk`;
+  `${machine.id} ${machine.cpu} vCPUs, ${formatMib(machine.ramMib)} RAM, ${formatGib(machine.diskGib)} disk`;
 
 export const resize = Command.make(
   "resize",

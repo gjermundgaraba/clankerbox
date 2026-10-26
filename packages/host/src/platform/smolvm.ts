@@ -6,12 +6,14 @@ import {
   Internal,
   Invalid,
   requirements,
+  type Sizing,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 import {
+  changes,
   type CheckpointRef,
   type Interface,
   type MachineRef,
@@ -62,6 +64,12 @@ export interface Settings {
 
 // Source: smolvm src/agent/live_resize.rs target_added_mib
 const ramStepMib = 128;
+
+// Source: smolvm src/data/resources.rs MIN_MEMORY_MIB
+const minimumRamMib = 64;
+
+// Source: smolvm src/data/storage.rs DEFAULT_STORAGE_SIZE_GIB
+const defaultStorageGib = 20;
 
 export const pathsIn = (stateDir: string) => ({
   dataDir: join(stateDir, "smolvm"),
@@ -353,16 +361,16 @@ export const make = (
         }
       });
 
-    const resized = (native: string, from: Sizes, to: Sizes, running: boolean) => {
+    const resized = (native: string, to: Sizing, running: boolean) => {
       const command = running ? "resize" : "update";
 
-      const changed = (flag: string, had: number, size: number) =>
-        size === had ? [] : [flag, String(size)];
+      const given = (flag: string, size: number | undefined) =>
+        size === undefined ? [] : [flag, String(size)];
 
       const flags = [
-        ...changed("--cpus", from.cpu, to.cpu),
-        ...changed("--mem", from.ramMib, to.ramMib),
-        ...changed("--storage", from.diskGib, to.diskGib),
+        ...given("--cpus", to.cpu),
+        ...given("--mem", to.ramMib),
+        ...given("--storage", to.diskGib),
       ];
 
       return flags.length === 0
@@ -373,7 +381,19 @@ export const make = (
     };
 
     // Source: smolvm src/agent/live_resize.rs ensure_live_compute_platform
-    const growable = (machine: Pick<MachineRef, "id">, from: Sizes, to: Sizes) => {
+    const sizable = (machine: Pick<MachineRef, "id">, from: Sizes, to: Sizes, live: boolean) => {
+      if (to.ramMib < minimumRamMib) {
+        return Effect.fail(
+          new Unsizable({
+            message: `smolvm gives a machine at least ${formatMib(minimumRamMib)} of RAM, and ${machine.id} would have ${formatMib(to.ramMib)}`,
+          }),
+        );
+      }
+
+      if (!live) {
+        return Effect.void;
+      }
+
       if ((to.ramMib - from.ramMib) % ramStepMib !== 0) {
         return Effect.fail(
           new Unsizable({
@@ -422,7 +442,7 @@ export const make = (
         }
 
         yield* boot(native);
-        yield* resized(native, source, machine, true);
+        yield* resized(native, changes(source, machine), true);
       });
 
     return {
@@ -462,22 +482,16 @@ export const make = (
         ),
       ),
       restore: Effect.fn("Smolvm.restore")((checkpoint, machine) =>
-        Effect.andThen(
-          growable(machine, checkpoint, machine),
-          restoreRam(checkpointDir(checkpoint), checkpoint, machine),
-        ),
+        restoreRam(checkpointDir(checkpoint), checkpoint, machine),
       ),
       fork: Effect.fn("Smolvm.fork")((source, machine) => {
         const store = join(paths.forks, nativeName(machine));
         const output = join(store, `${nativeName(machine)}.checkpoint`);
 
         return Effect.andThen(
-          Effect.andThen(
-            growable(machine, source, machine),
-            copyable(
-              source,
-              `a fork copies a running machine, RAM included, and ${source.id} is stopped: start it first`,
-            ),
+          copyable(
+            source,
+            `a fork copies a running machine, RAM included, and ${source.id} is stopped: start it first`,
           ),
           Effect.andThen(
             captureRam(source, store, output),
@@ -611,11 +625,9 @@ export const make = (
           yield* call(["machine", "pause", "--name", native], `machine pause ${native}`);
         }),
       ),
+      sizable,
       resize: Effect.fn("Smolvm.resize")((machine, to, running) =>
-        Effect.andThen(
-          running ? growable(machine, machine, to) : Effect.void,
-          resized(nativeName(machine), machine, to, running),
-        ),
+        resized(nativeName(machine), to, running),
       ),
       sizes: Effect.fn("Smolvm.sizes")((machine) => {
         const native = nativeName(machine);
@@ -627,7 +639,7 @@ export const make = (
               Effect.map(({ cpus, memory_mib, storage_gb }) => ({
                 cpu: cpus,
                 ramMib: memory_mib,
-                diskGib: storage_gb ?? machine.diskGib,
+                diskGib: storage_gb ?? defaultStorageGib,
               })),
               Effect.mapError(
                 (error) =>

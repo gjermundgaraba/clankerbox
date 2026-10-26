@@ -1026,7 +1026,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   });
 
   it.effect(
-    "a resize sets only the vCPUs, memory and disk that change, and a size below Tart's least is Unsizable",
+    "a resize sets the vCPUs, memory and disk it is asked, and a size below Tart's least is Unsizable",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1035,28 +1035,26 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         mac.vms.set(vm, "stopped");
 
-        yield* runtime.resize(machine, { cpu: 2, ramMib: 4096, diskGib: 60 }, false);
-        yield* runtime.resize(machine, { cpu: 4, ramMib: 8192, diskGib: 100 }, false);
-        yield* runtime.resize(machine, machine, false);
+        yield* runtime.resize(machine, { cpu: 2, ramMib: 4096 }, false);
+        yield* runtime.resize(machine, { diskGib: 100 }, false);
+        yield* runtime.resize(machine, {}, false);
 
-        const least = yield* Effect.flip(
-          runtime.resize(machine, { cpu: 1, ramMib: 4096, diskGib: 60 }, false),
-        );
+        const least = yield* Effect.flip(runtime.resize(machine, { cpu: 1 }, false));
 
         expect(calls(mac)).toEqual([
           `tart set ${vm} --cpu 2 --memory 4096`,
           `tart set ${vm} --disk-size 108`,
-          `tart set ${vm} --cpu 1 --memory 4096`,
+          `tart set ${vm} --cpu 1`,
         ]);
         expect(failure(least)).toEqual([
           "Unsizable",
-          "machine mac_dev's 1 vCPUs and 4G are below what its guest takes: Error: VM should have 2 CPU cores at minimum (requested 1)",
+          "machine mac_dev's 1 vCPUs and 8G are below what its guest takes: Error: VM should have 2 CPU cores at minimum (requested 1)",
         ]);
       }),
   );
 
   it.effect(
-    "sizes reads tart get, its disk in GiB, keeping the machine's disk where Tart can't tell it",
+    "sizes reads tart get, its disk in GiB, leaving the disk out where Tart can't tell it",
     () =>
       Effect.gen(function* () {
         const { mac, runtime } = yield* runtimeOn();
@@ -1076,7 +1074,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const failed = yield* Effect.flip(runtime.sizes(machine));
 
         expect(read).toEqual({ cpu: 2, ramMib: 4096, diskGib: 100 });
-        expect(unread).toEqual({ cpu: 2, ramMib: 4096, diskGib: 60 });
+        expect(unread).toEqual({ cpu: 2, ramMib: 4096 });
         expect(failed._tag).toBe("Internal");
         expect(calls(mac)[0]).toBe(`tart get ${vmOf(machine)} --format json`);
       }),

@@ -247,7 +247,7 @@ export const make = (options: Options, ssh = "ssh") => {
       ),
     resize: (id: string, sizes: Sizing) =>
       locked(id, () =>
-        Effect.flatMap(Client.Client, (client) => client.resizeMachine({ id, ...sizes })).pipe(
+        Effect.flatMap(Client.Client, (client) => client.resizeMachine({ ...sizes, id })).pipe(
           Effect.map(({ cpu, ramMib, diskGib }) => ({ cpu, ramMib, diskGib })),
           Effect.catchTag("NotFound", destroyed(id)),
         ),

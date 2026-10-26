@@ -317,16 +317,7 @@ export const make = (
           return yield* notFound("machine", name);
         }
 
-        if (
-          from.cpu !== source.from.cpu ||
-          from.ramMib !== source.from.ramMib ||
-          from.diskGib !== source.from.diskGib
-        ) {
-          return yield* new Unsizable({
-            message: `machine ${idOf(name)} was resized while a fork of it waited, so the copy's sizes were checked against others: fork it again`,
-          });
-        }
-
+        yield* copySpec(machine.name, from, machine);
         yield* made(from);
         yield* pinned(from);
 
@@ -740,6 +731,8 @@ export const make = (
 
         const image = config.bases.get(request_.base) ?? request_.base;
 
+        yield* runtime.sizable({ id: idOf(name) }, request_, request_, false);
+
         return yield* making(
           name,
           request_,
@@ -758,14 +751,15 @@ export const make = (
           });
         }
 
-        if (
-          checkpointKinds[config.kind] === "ram" &&
-          (spec.cpu < from.cpu || spec.ramMib < from.ramMib)
-        ) {
+        const live = checkpointKinds[config.kind] === "ram";
+
+        if (live && (spec.cpu < from.cpu || spec.ramMib < from.ramMib)) {
           return yield* new Unsizable({
             message: `a ${config.kind} copy holds its source's RAM, so machine ${idOf(name)}'s vCPUs and RAM only grow from the source's ${from.cpu} vCPUs and ${formatMib(from.ramMib)}`,
           });
         }
+
+        yield* runtime.sizable({ id: idOf(name) }, from, spec, live);
 
         return spec;
       });
@@ -852,6 +846,7 @@ export const make = (
     const sizedAfter = (machine: MachineRef, to: Sizes, resized: boolean) =>
       runtime.sizes(machine).pipe(
         inTime(`the ${config.kind} runtime's read of ${machine.id}'s sizes`),
+        Effect.map((read) => sizedBy(resized ? to : machine, read)),
         Effect.catch((error) =>
           Effect.as(
             Effect.logWarning(
@@ -910,11 +905,17 @@ export const make = (
           });
         }
 
+        yield* runtime.sizable(machine, intent, to, running);
+
         if (running && to.ramMib > intent.ramMib) {
           yield* admitted("resizeMachine", { ...machine, ...to });
         }
 
-        const outcome = yield* Effect.exit(runtime.resize(machine, to, running));
+        const { cpu, ramMib, diskGib } = request;
+
+        const outcome = yield* Effect.exit(
+          runtime.resize(machine, { cpu, ramMib, diskGib }, running),
+        );
 
         yield* store.sized(name, yield* sizedAfter(machine, to, Exit.isSuccess(outcome)));
         yield* outcome;

@@ -370,7 +370,7 @@ test("a source's sizes go to the restore or fork with the copy's name, or overri
   expect(sized.stub.creates).toMatchObject([{ cpu: 2, ramMib: 8192, diskGib: 20 }]);
 });
 
-test("resize sends the sandbox's machine its sizes and answers those it then has, and a machine that is gone is the SDK's SandboxDestroyedError", async () => {
+test("resize sends the sandbox's machine its sizes, whatever id they carry, and answers those it then has, and a machine that is gone is the SDK's SandboxDestroyedError", async () => {
   const sent: Array<unknown> = [];
 
   const { stub, sandbox } = await setup(
@@ -381,6 +381,9 @@ test("resize sends the sandbox's machine its sizes and answers those it then has
   );
 
   const resized = await sandbox.resize("linux_kept", { cpu: 4, ramMib: 8192 });
+  const reused = { id: "linux_other", diskGib: 20 };
+
+  await sandbox.resize("linux_kept", reused);
 
   await expect(sandbox.resize("linux_gone", { cpu: 4 })).rejects.toBeInstanceOf(
     SandboxDestroyedError,
@@ -388,9 +391,10 @@ test("resize sends the sandbox's machine its sizes and answers those it then has
   expect(resized).toEqual({ cpu: 4, ramMib: 8192, diskGib: 10 });
   expect(sent).toEqual([
     { id: "linux_kept", cpu: 4, ramMib: 8192 },
+    { id: "linux_kept", diskGib: 20 },
     { id: "linux_gone", cpu: 4 },
   ]);
-  expect(stub.calls).toEqual(["machine.resize", "machine.resize"]);
+  expect(stub.calls).toEqual(["machine.resize", "machine.resize", "machine.resize"]);
 });
 
 test("reconnecting to a machine that is gone, or ensuring its server, is the SDK's SandboxDestroyedError", async () => {

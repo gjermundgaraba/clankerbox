@@ -7,6 +7,7 @@ import {
   type HostError,
   Internal,
   requirements,
+  type Sizing,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -14,6 +15,7 @@ import { Duration, Effect, FileSystem, Layer, Option, Schedule, Schema, type Sco
 import type { ChildProcessSpawner } from "effect/process";
 import { lastLines } from "../../guest.ts";
 import {
+  changes,
   type CheckpointRef,
   type Held,
   type Interface,
@@ -162,16 +164,11 @@ const decodeInfo = Schema.decodeUnknownEffect(
   ),
 );
 
-const changedFlags = (from: Sizes, to: Sizes): ReadonlyArray<string> => {
-  const changed = (flag: string, had: number, size: number, given = size) =>
-    size === had ? [] : [flag, String(given)];
-
-  return [
-    ...changed("--cpu", from.cpu, to.cpu),
-    ...changed("--memory", from.ramMib, to.ramMib),
-    ...changed("--disk-size", from.diskGib, to.diskGib, diskGb(to.diskGib)),
-  ];
-};
+const sizeFlags = ({ cpu, ramMib, diskGib }: Sizing): ReadonlyArray<string> => [
+  ...(cpu === undefined ? [] : ["--cpu", String(cpu)]),
+  ...(ramMib === undefined ? [] : ["--memory", String(ramMib)]),
+  ...(diskGib === undefined ? [] : ["--disk-size", String(diskGb(diskGib))]),
+];
 
 export const stateOf = (state: typeof VmState.Type): MachineState =>
   state === "suspended" ? "paused" : state;
@@ -685,20 +682,29 @@ export const make = (
         ),
       ),
       restore: Effect.fn("Tart.restore")((checkpoint, machine) =>
-        cloneInto(checkpointVm(checkpoint), machine, changedFlags(checkpoint, machine)),
+        cloneInto(checkpointVm(checkpoint), machine, sizeFlags(changes(checkpoint, machine))),
       ),
       fork: Effect.fn("Tart.fork")((source, machine) =>
         Effect.andThen(
           copyable("fork", source),
-          cloneInto(vmOf(source), machine, changedFlags(source, machine)),
+          cloneInto(vmOf(source), machine, sizeFlags(changes(source, machine))),
         ),
       ),
+      sizable: () => Effect.void,
       resize: Effect.fn("Tart.resize")((machine, to) =>
         Effect.gen(function* () {
-          const flags = changedFlags(machine, to);
+          const flags = sizeFlags(to);
 
           if (flags.length > 0) {
-            yield* set(machine, to, flags);
+            yield* set(
+              machine,
+              {
+                cpu: to.cpu ?? machine.cpu,
+                ramMib: to.ramMib ?? machine.ramMib,
+                diskGib: to.diskGib ?? machine.diskGib,
+              },
+              flags,
+            );
           }
         }),
       ),
@@ -710,7 +716,7 @@ export const make = (
             Effect.map(({ CPU, Memory, Disk }) => ({
               cpu: CPU,
               ramMib: Memory,
-              diskGib: Disk === null ? machine.diskGib : diskGibOf(Disk),
+              diskGib: Disk === null ? undefined : diskGibOf(Disk),
             })),
             Effect.mapError(
               (error) =>

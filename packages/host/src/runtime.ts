@@ -6,6 +6,7 @@ import {
   Missing,
   type Reading,
   readTimeout,
+  type Sizing,
   type Unsizable,
   type WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -37,6 +38,12 @@ export interface MachineRef {
 export type MachineState = Machine["state"];
 
 export type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
+
+export const changes = (from: Sizes, to: Sizes): Sizing => ({
+  cpu: to.cpu === from.cpu ? undefined : to.cpu,
+  ramMib: to.ramMib === from.ramMib ? undefined : to.ramMib,
+  diskGib: to.diskGib === from.diskGib ? undefined : to.diskGib,
+});
 
 export interface CheckpointRef {
   readonly id: string;
@@ -132,10 +139,22 @@ export interface Interface {
    */
   readonly stopResumes: boolean;
   /**
-   * Whether a running machine's vCPUs, RAM and disk grow live; where they don't, the core resizes
-   * only a stopped machine.
+   * Whether a running machine grows live; where it doesn't, the core resizes only a stopped
+   * machine. What of a live grow the runtime can't make, `sizable` refuses.
    */
   readonly growsLive: boolean;
+  /**
+   * Refuses, before anything native, sizes `to` the runtime can't give a machine at `from`:
+   * `live` when a running VM is given them, as on a running machine's resize and, where
+   * checkpoints are `ram`, a copy's. The core calls it before it admits a create, a copy or a
+   * resize, so the calls after it fail only after they reach the runtime.
+   */
+  readonly sizable: (
+    machine: Pick<MachineRef, "id">,
+    from: Sizes,
+    to: Sizes,
+    live: boolean,
+  ) => Effect.Effect<void, Unsizable>;
   /** Runs after the failed captures are cleared, before the host serves. */
   readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, RuntimeError>;
   /**
@@ -216,18 +235,23 @@ export interface Interface {
     machine: MachineRef,
   ) => Effect.Effect<void, RoomError | StateError | Unsizable>;
   /**
-   * Gives a made machine the sizes `to` holds, from the sizes `machine` holds. The core calls it on
-   * a stopped machine, or, where `growsLive`, on a running one, as `running` says it read, and
-   * never with a smaller disk, nor smaller vCPUs or RAM for a running one. A size the runtime
-   * can't give is `Unsizable`; a failure may leave part of `to` given, which `sizes` reads.
+   * Gives a made machine each size `to` names, also one `machine` holds already: a live grow that
+   * failed part way may have recorded its size before the guest took it, and finishes when it is
+   * asked for again. The core calls it on a stopped machine, or, where `growsLive`, on a running
+   * one, as `running` says it read, after `sizable`, and never with a smaller disk, nor smaller
+   * vCPUs or RAM for a running one. A size the runtime can't give is `Unsizable`; a failure may
+   * leave part of `to` given, which `sizes` reads.
    */
   readonly resize: (
     machine: MachineRef,
-    to: Sizes,
+    to: Sizing,
     running: boolean,
   ) => Effect.Effect<void, RuntimeError | Unsizable>;
-  /** The sizes the runtime holds for a machine it has, as a resize left them. */
-  readonly sizes: (machine: MachineRef) => Effect.Effect<Sizes, RuntimeError>;
+  /**
+   * The sizes the runtime holds for a machine it has, as a resize left them. One it can't read is
+   * left out, for the core to keep what it knows.
+   */
+  readonly sizes: (machine: MachineRef) => Effect.Effect<Sizing, RuntimeError>;
   /** Removes everything native the checkpoint's row could have made. */
   readonly deleteCheckpoint: (checkpoint: CheckpointRef) => Effect.Effect<void, RuntimeError>;
   /** As the command's user, in a running guest. */

@@ -233,7 +233,7 @@ export const ResizeRequest = Schema.Struct({ id: Id, ...Sizing.fields }).check(
       cpu !== undefined ||
       ramMib !== undefined ||
       diskGib !== undefined ||
-      "a resize names at least one of cpu, ramMib and diskGib",
+      "a resize gives at least one of vCPUs, RAM and disk",
   ),
 );
 

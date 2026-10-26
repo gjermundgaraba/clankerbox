@@ -614,7 +614,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
             "checkpoint linux_hot holds RAM state saved under fake 1, and this host runs fake 2; it restores only under the same one",
         }),
       );
-      expect(upgraded.fake.calls).toEqual(["startup"]);
+      expect(upgraded.fake.calls).toEqual(["startup", "sizes linux_dev"]);
       expect(yield* names(upgraded)).toEqual(["dev"]);
     }),
   );
@@ -697,7 +697,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
 
-      expect(linux.fake.calls).toEqual(["deleteCheckpoint linux_snap", "startup"]);
+      expect(linux.fake.calls).toEqual([
+        "deleteCheckpoint linux_snap",
+        "startup",
+        "sizes linux_dev",
+      ]);
       expect(yield* checkpointNames(restarted)).toEqual([]);
       expect(yield* restarted.run(restarted.store.unready)).toEqual([]);
 
@@ -729,6 +733,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(linux.fake.calls.filter((call) => !call.startsWith("exec "))).toEqual([
           "deleteCheckpoint linux_snap",
           "startup",
+          "sizes linux_dev",
         ]);
       }),
   );
@@ -774,7 +779,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const restarted = yield* host({ fake: linux.fake, dir: linux.dir });
 
       expect(left).toEqual(["snap"]);
-      expect(linux.fake.calls).toEqual(["deleteCheckpoint linux_snap", "startup"]);
+      expect(linux.fake.calls).toEqual([
+        "deleteCheckpoint linux_snap",
+        "startup",
+        "sizes linux_dev",
+      ]);
       expect(yield* restarted.run(restarted.store.unready)).toEqual([]);
     }),
   );

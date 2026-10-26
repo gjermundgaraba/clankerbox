@@ -537,15 +537,15 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a stopped machine is resized in one machine update and a running one in one live machine resize, each sending only the sizes that change",
+    "a stopped machine is resized in one machine update and a running one in one live machine resize, each sending every size asked, also one it has, so a grow cut short finishes",
     () =>
       Effect.gen(function* () {
         const spawner = scripted(() => undefined);
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
         yield* runtime.resize(machine, { cpu: 4, ramMib: 1024, diskGib: 30 }, false);
-        yield* runtime.resize(machine, { cpu: 2, ramMib: 4096, diskGib: 40 }, true);
-        yield* runtime.resize(machine, { cpu: 2, ramMib: 2048, diskGib: 20 }, false);
+        yield* runtime.resize(machine, { ramMib: 2048, diskGib: 40 }, true);
+        yield* runtime.resize(machine, {}, false);
 
         expect(smolvmArgs(spawner.calls)).toEqual([
           [
@@ -560,7 +560,7 @@ layer(NodeServices.layer)((it) => {
             "--storage",
             "30",
           ],
-          ["machine", "resize", "--name", "dev-01234567", "--mem", "4096", "--storage", "40"],
+          ["machine", "resize", "--name", "dev-01234567", "--mem", "2048", "--storage", "40"],
         ]);
       }),
   );
@@ -575,9 +575,7 @@ layer(NodeServices.layer)((it) => {
 
       const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-      const refused = yield* Effect.flip(
-        runtime.resize(machine, { ...machine, ramMib: 4096 }, true),
-      );
+      const refused = yield* Effect.flip(runtime.resize(machine, { ramMib: 4096 }, true));
 
       expect(failure(refused)).toEqual([
         "Internal",
@@ -587,7 +585,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "sizes reads vCPUs, RAM and storage from smolvm's status, keeping the machine's disk where it records none",
+    "sizes reads vCPUs, RAM and storage from smolvm's status, and smolvm's default storage where it records none",
     () =>
       Effect.gen(function* () {
         let storage: number | null = 30;
@@ -610,7 +608,7 @@ layer(NodeServices.layer)((it) => {
 
         storage = null;
 
-        const unrecorded = yield* runtime.sizes(machine);
+        const unrecorded = yield* runtime.sizes({ ...machine, diskGib: 40 });
 
         expect(recorded).toEqual({ cpu: 3, ramMib: 4096, diskGib: 30 });
         expect(unrecorded).toEqual({ cpu: 3, ramMib: 4096, diskGib: 20 });
@@ -1187,7 +1185,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a live grow smolvm can't make, RAM off its 128M steps or vCPUs off x86_64, is Unsizable before anything native",
+    "sizes smolvm can't give are Unsizable before anything native: RAM below its least, and for a live grow RAM off its 128M steps or vCPUs off x86_64",
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
@@ -1197,33 +1195,26 @@ layer(NodeServices.layer)((it) => {
         const before = spawner.calls.length;
 
         const refused = [
-          yield* Effect.flip(runtime.resize(machine, { ...machine, ramMib: 2100 }, true)),
-          yield* Effect.flip(runtime.restore(ramCheckpoint, { ...copy, ramMib: 2100 })),
-          yield* Effect.flip(arm.resize(machine, { ...machine, cpu: 4 }, true)),
-          yield* Effect.flip(arm.fork(machine, { ...copy, cpu: 4 })),
+          yield* Effect.flip(runtime.sizable(machine, machine, { ...machine, ramMib: 32 }, false)),
+          yield* Effect.flip(runtime.sizable(machine, machine, { ...machine, ramMib: 2100 }, true)),
+          yield* Effect.flip(arm.sizable(machine, machine, { ...machine, cpu: 4 }, true)),
         ];
 
-        yield* arm.resize(machine, { ...machine, cpu: 4 }, false);
+        yield* arm.sizable(machine, machine, { ...machine, cpu: 4, ramMib: 2100 }, false);
+        yield* runtime.sizable(machine, machine, { ...machine, cpu: 4, ramMib: 2176 }, true);
 
         expect(refused.map(failure)).toEqual([
+          ["Unsizable", "smolvm gives a machine at least 64M of RAM, and linux_dev would have 32M"],
           [
             "Unsizable",
             "smolvm grows a running machine's RAM in 128M steps, and linux_dev's would grow from 2G to 2100M",
           ],
           [
             "Unsizable",
-            "smolvm grows a running machine's RAM in 128M steps, and linux_copy's would grow from 2G to 2100M",
-          ],
-          [
-            "Unsizable",
             "smolvm grows a running machine's vCPUs only on x86_64, and this host is arm64: give linux_dev its vCPUs while it is stopped",
           ],
-          [
-            "Unsizable",
-            "smolvm grows a running machine's vCPUs only on x86_64, and this host is arm64: give linux_copy its vCPUs while it is stopped",
-          ],
         ]);
-        expect(spawner.calls.slice(before).map(({ args }) => args[1])).toEqual(["update"]);
+        expect(spawner.calls.length).toBe(before);
       }),
   );
 

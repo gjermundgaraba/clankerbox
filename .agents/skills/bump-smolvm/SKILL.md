@@ -240,9 +240,10 @@ as it is.
   src/config.rs); an unknown name is "machine '<name>' not found"
   (`status_vm_json`). Ours: `RecordState`, `alive` and `stateOf` (`running`,
   `pausing`, `unreachable`, `frozen` have a live VMM), and the not-found text;
-  the host decodes `state` alone, but for a resize's read-back below. Its `last_exit` is written only where smolvm
-  is the VMM's parent and reaps it, `serve` or an embedder, never after a CLI
-  start (src/vm_exit.rs; `register_vm_child`, src/process.rs).
+  the host decodes `state` alone, and the sizes for `sizes` below. Its
+  `last_exit` is written only where smolvm is the VMM's parent and reaps it,
+  `serve` or an embedder, never after a CLI start (src/vm_exit.rs;
+  `register_vm_child`, src/process.rs).
   It reports a port count (`ports`), and `branchable: false` even after `start
   --branchable`. For a machine whose state resolves `running` and that
   publishes a port, it also runs `cat /proc/net/tcp /proc/net/tcp6` in the VM
@@ -257,26 +258,36 @@ as it is.
   (GiB) resizes a `running` machine live, RAM first, then vCPUs, then disks,
   each only growing (vCPUs shrink only on compatible x86_64 runtimes), RAM in
   128 MiB steps above the boot memory (`target_added_mib`) and vCPUs only on
-  Linux x86_64 (`ensure_live_compute_platform`), records
-  the asked MiB and vCPUs, and keeps what it gave before a failure
-  (`resize_vm`, src/cli/vm_common.rs; `check_targets`, `grow_memory_locked`,
-  src/agent/live_resize.rs). `machine update --name X` with `--cpus`, `--mem`
-  and `--storage` (only growing) takes a stopped or created machine, else
-  `InvalidState`: it checks the vCPUs and RAM, grows the disks, then writes
-  all three in one record update (`UpdateCmd`, src/cli/machine.rs). The status
-  JSON carries `cpus`, `memory_mib` and `storage_gb`, which can be null
-  (`machine_status_json`, src/cli/vm_common.rs). Ours: `growsLive` is true, so
-  the core refuses a paused machine, a smaller disk and a running machine's
-  shrinks before anything native; `resize` sends a running machine one
-  `machine resize` and a stopped one one `machine update`, each with only the
-  sizes that change; `sizes` and `decodeSizes` read the record back after
-  every resize, keeping the row's disk where `storage_gb` is null. A `ram`
-  restore or fork comes up with its source's vCPUs and RAM, so the core
-  refuses a copy's smaller ones before the copy, and `restoreRam` sends a
-  larger copy one live `machine resize` once it boots. `growable` refuses, as
-  `Unsizable` and before anything native, a live grow or a copy's grow off
-  `ramStepMib` (from the row's RAM, which is the boot memory plus earlier live
-  steps) or of vCPUs on a host whose `arch` isn't `x64`.
+  Linux x86_64 and macOS aarch64 (`ensure_live_compute_platform`), and keeps
+  what it gave before a failure (`resize_vm`, src/cli/vm_common.rs;
+  `check_targets`, src/agent/live_resize.rs). Each grow records a durable
+  intent, writes the asked size to the record before the guest takes it, and
+  on a later failure says to retry the same target, which finishes the guest's
+  part and clears the intent; an intent left pending refuses a different
+  target, captures and branches (`grow_memory_locked`, `grow_cpus_locked`,
+  `grow_disks_locked`, `begin_resize_intent`, src/agent/live_resize.rs;
+  src/db/resize.rs). `machine update --name X` with `--cpus`, `--mem` and
+  `--storage` (only growing) takes a stopped or created machine, else
+  `InvalidState`: it checks the vCPUs and RAM, at least 64 MiB
+  (`MIN_MEMORY_MIB`, src/data/resources.rs), grows the disks, then writes all
+  three in one record update (`UpdateCmd`, src/cli/machine.rs). The status JSON
+  carries `cpus`, `memory_mib` and `storage_gb`, null for the default 20 GiB
+  (`machine_status_json`, src/cli/vm_common.rs; `DEFAULT_STORAGE_SIZE_GIB`,
+  src/data/storage.rs). Ours: `growsLive` is true, so the core refuses a paused
+  machine, a smaller disk and a running machine's shrinks before anything
+  native; `resize` sends a running machine one `machine resize` and a stopped
+  one one `machine update`, each with every size the request names, also one
+  the record holds, so a retry finishes a grow cut short; `sizes` and
+  `decodeSizes` read the record back after every resize and at each host's
+  start, reading a null `storage_gb` as `defaultStorageGib`. A `ram` restore
+  or fork comes up with its source's vCPUs and RAM, so the core refuses a
+  copy's smaller ones before the copy, and `restoreRam` sends a larger copy
+  one live `machine resize` with the sizes that differ from its source's
+  once it boots. `sizable`, which the core calls before it admits a create, a
+  copy or a resize, refuses as `Unsizable` RAM below `minimumRamMib`, and for a
+  live grow or a copy's, RAM off `ramStepMib` (from the row's RAM, which is the
+  boot memory plus earlier live steps) or more vCPUs on a host whose `arch`
+  isn't `x64`.
 - Concurrent CLI calls on different machines need no serializing: an inventory
   database in WAL mode with a 15 s busy timeout (`BUSY_TIMEOUT`, src/db.rs), a
   per-VM `vm.lock`, the uid allocation lock, the store's shared/exclusive lock

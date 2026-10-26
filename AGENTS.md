@@ -68,7 +68,8 @@ whole CLI span domains on purpose.
 - `guest.ts`: setup and preparation, run in the guest.
 - `usage.ts`: the machines in use, for the RAM budget and capacity.
 - `startup.ts`: what runs before the actors start (clearing the captures and
-  builders the last host's end left), and `CannotStart`.
+  builders the last host's end left, and reading back each machine's sizes),
+  and `CannotStart`.
 - `ids.ts`, `settings.ts`: IDs on this host, and the settings every kind
   shares, with the checkpoints each kind captures.
 - Ports: `Store` (`store.ts`), `Runtime` (`runtime.ts`),
@@ -165,8 +166,9 @@ transport. Neither `./testing` export is published.
   in the request that creates it, from what only that request holds: a copy or
   setup that fails deletes it and answers the failure, and a delete that fails
   runs again at each recheck. A host that starts deletes every machine the last
-  one's end left unmade, clears its failed captures and deletes and lets the
-  actors finish the rest.
+  one's end left unmade, clears its failed captures and deletes, reads each
+  machine's sizes back from the runtime, as a resize it cut off may have
+  given some, and lets the actors finish the rest.
 - **No prose comments.** A reason goes where something can check or show it:
   a type, a test's name, or the commit message. What stays: a one-line
   `// SAFETY:` above a type assertion, a one-line `// Source:` citing the

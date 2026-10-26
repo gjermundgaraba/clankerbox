@@ -1,7 +1,14 @@
 import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { type HostError, Internal, type Kind, WrongState } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  type HostError,
+  Internal,
+  type Kind,
+  type Sizing,
+  type Unsizable,
+  WrongState,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
@@ -191,7 +198,8 @@ export const fakeRuntime = (options: FakeOptions) => {
   const injections = new Map<Operation, Array<Injection>>();
   const observeFailures: Array<RuntimeError | "hang" | "die"> = [];
   const partialResizes: Array<RuntimeError> = [];
-  const sizes = new Map<string, Sizes>();
+  const sizableRefusals: Array<Unsizable> = [];
+  const sizes = new Map<string, Sizing>();
 
   const observeHolds: Array<{
     readonly entered: Deferred.Deferred<void>;
@@ -343,6 +351,11 @@ export const fakeRuntime = (options: FakeOptions) => {
         pin: options.pin ?? (kind === "linux" ? "fake 1" : undefined),
         stopResumes: kind === "linux",
         growsLive: kind === "linux",
+        sizable: () => {
+          const refusal = sizableRefusals.shift();
+
+          return refusal === undefined ? Effect.void : Effect.fail(refusal);
+        },
         startup: () => Effect.sync(() => calls.push("startup")),
         observe,
         admit: (activation: Activation) =>
@@ -441,13 +454,19 @@ export const fakeRuntime = (options: FakeOptions) => {
 
               const partial = partialResizes.shift();
 
+              const given = {
+                cpu: to.cpu ?? had.cpu,
+                ramMib: to.ramMib ?? had.ramMib,
+                diskGib: to.diskGib ?? had.diskGib,
+              };
+
               if (partial !== undefined) {
-                sizes.set(machine.name, { ...had, ramMib: to.ramMib });
+                sizes.set(machine.name, { ...had, ramMib: given.ramMib });
 
                 return Effect.fail(partial);
               }
 
-              sizes.set(machine.name, sizesOf(to));
+              sizes.set(machine.name, given);
 
               return Effect.void;
             }),
@@ -578,6 +597,9 @@ export const fakeRuntime = (options: FakeOptions) => {
     },
     giveOnlyRamThenFailNextResize: (error: RuntimeError) => {
       partialResizes.push(error);
+    },
+    refuseNextSizes: (error: Unsizable) => {
+      sizableRefusals.push(error);
     },
     failNextObserve: (error: RuntimeError) => {
       observeFailures.push(error);
