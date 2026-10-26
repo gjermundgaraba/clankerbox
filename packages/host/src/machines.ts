@@ -317,6 +317,16 @@ export const make = (
           return yield* notFound("machine", name);
         }
 
+        if (
+          from.cpu !== source.from.cpu ||
+          from.ramMib !== source.from.ramMib ||
+          from.diskGib !== source.from.diskGib
+        ) {
+          return yield* new Unsizable({
+            message: `machine ${idOf(name)} was resized while a fork of it waited, so the copy's sizes were checked against others: fork it again`,
+          });
+        }
+
         yield* made(from);
         yield* pinned(from);
 
@@ -740,13 +750,7 @@ export const make = (
 
     const copySpec = (name: string, from: Spec, sizing: Sizing | undefined) =>
       Effect.gen(function* () {
-        const spec: Spec = {
-          base: from.base,
-          profile: from.profile,
-          cpu: sizing?.cpu ?? from.cpu,
-          ramMib: sizing?.ramMib ?? from.ramMib,
-          diskGib: sizing?.diskGib ?? from.diskGib,
-        };
+        const spec: Spec = { base: from.base, profile: from.profile, ...sizedBy(from, sizing) };
 
         if (spec.diskGib < from.diskGib) {
           return yield* new Unsizable({
@@ -839,6 +843,12 @@ export const make = (
         }),
       );
 
+    const sizedBy = (from: Sizes, sizing: Sizing | undefined): Sizes => ({
+      cpu: sizing?.cpu ?? from.cpu,
+      ramMib: sizing?.ramMib ?? from.ramMib,
+      diskGib: sizing?.diskGib ?? from.diskGib,
+    });
+
     const sizedAfter = (machine: MachineRef, to: Sizes, resized: boolean) =>
       runtime.sizes(machine).pipe(
         inTime(`the ${config.kind} runtime's read of ${machine.id}'s sizes`),
@@ -862,11 +872,7 @@ export const make = (
 
         yield* made(intent);
 
-        const to: Sizes = {
-          cpu: request.cpu ?? intent.cpu,
-          ramMib: request.ramMib ?? intent.ramMib,
-          diskGib: request.diskGib ?? intent.diskGib,
-        };
+        const to = sizedBy(intent, request);
 
         if (to.diskGib < intent.diskGib) {
           return yield* new Unsizable({

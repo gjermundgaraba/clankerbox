@@ -255,7 +255,9 @@ as it is.
   so it is never used to read one machine.
 - `machine resize --name X` with `--cpus`, `--mem` (MiB) and `--storage`
   (GiB) resizes a `running` machine live, RAM first, then vCPUs, then disks,
-  each only growing (vCPUs shrink only on compatible x86_64 runtimes), records
+  each only growing (vCPUs shrink only on compatible x86_64 runtimes), RAM in
+  128 MiB steps above the boot memory (`target_added_mib`) and vCPUs only on
+  Linux x86_64 (`ensure_live_compute_platform`), records
   the asked MiB and vCPUs, and keeps what it gave before a failure
   (`resize_vm`, src/cli/vm_common.rs; `check_targets`, `grow_memory_locked`,
   src/agent/live_resize.rs). `machine update --name X` with `--cpus`, `--mem`
@@ -271,7 +273,10 @@ as it is.
   every resize, keeping the row's disk where `storage_gb` is null. A `ram`
   restore or fork comes up with its source's vCPUs and RAM, so the core
   refuses a copy's smaller ones before the copy, and `restoreRam` sends a
-  larger copy one live `machine resize` once it boots.
+  larger copy one live `machine resize` once it boots. `growable` refuses, as
+  `Unsizable` and before anything native, a live grow or a copy's grow off
+  `ramStepMib` (from the row's RAM, which is the boot memory plus earlier live
+  steps) or of vCPUs on a host whose `arch` isn't `x64`.
 - Concurrent CLI calls on different machines need no serializing: an inventory
   database in WAL mode with a 15 s busy timeout (`BUSY_TIMEOUT`, src/db.rs), a
   per-VM `vm.lock`, the uid allocation lock, the store's shared/exclusive lock

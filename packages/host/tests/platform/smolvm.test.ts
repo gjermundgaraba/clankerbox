@@ -57,6 +57,7 @@ const prepared = (expanded: ReadonlyArray<string> = templates) =>
       publishAddress: "100.95.240.37",
       ramBudgetMib: 4096,
       stateDir,
+      arch: "x64",
     };
 
     return settings;
@@ -1186,6 +1187,47 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a live grow smolvm can't make, RAM off its 128M steps or vCPUs off x86_64, is Unsizable before anything native",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
+        const spawner = scripted(() => undefined);
+        const runtime = yield* runtimeOf(settings, spawner);
+        const arm = yield* runtimeOf({ ...settings, arch: "arm64" }, spawner);
+        const before = spawner.calls.length;
+
+        const refused = [
+          yield* Effect.flip(runtime.resize(machine, { ...machine, ramMib: 2100 }, true)),
+          yield* Effect.flip(runtime.restore(ramCheckpoint, { ...copy, ramMib: 2100 })),
+          yield* Effect.flip(arm.resize(machine, { ...machine, cpu: 4 }, true)),
+          yield* Effect.flip(arm.fork(machine, { ...copy, cpu: 4 })),
+        ];
+
+        yield* arm.resize(machine, { ...machine, cpu: 4 }, false);
+
+        expect(refused.map(failure)).toEqual([
+          [
+            "Unsizable",
+            "smolvm grows a running machine's RAM in 128M steps, and linux_dev's would grow from 2G to 2100M",
+          ],
+          [
+            "Unsizable",
+            "smolvm grows a running machine's RAM in 128M steps, and linux_copy's would grow from 2G to 2100M",
+          ],
+          [
+            "Unsizable",
+            "smolvm grows a running machine's vCPUs only on x86_64, and this host is arm64: give linux_dev its vCPUs while it is stopped",
+          ],
+          [
+            "Unsizable",
+            "smolvm grows a running machine's vCPUs only on x86_64, and this host is arm64: give linux_copy its vCPUs while it is stopped",
+          ],
+        ]);
+        expect(spawner.calls.slice(before).map(({ args }) => args[1])).toEqual(["update"]);
+      }),
+  );
+
+  it.effect(
     "a ram restore or fork given larger sizes than its source's grows the copy live once it boots",
     () =>
       Effect.gen(function* () {
@@ -1225,10 +1267,12 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a restore whose port move or boot fails returns its error, and leaves its VM to delete",
+    "a restore whose port move, boot or live grow fails returns its error, and leaves its VM to delete",
     () =>
       Effect.gen(function* () {
-        for (const failing of ["update", "start"]) {
+        const larger = { ...copy, ramMib: 4096 };
+
+        for (const failing of ["update", "start", "resize"]) {
           const spawner = scripted((call) =>
             call.args[1] === failing
               ? { exitCode: 1, stderr: "Error: database is locked\n" }
@@ -1236,13 +1280,14 @@ layer(NodeServices.layer)((it) => {
           );
 
           const runtime = yield* runtimeOf(yield* prepared(), spawner);
-          const error = yield* Effect.flip(runtime.restore(ramCheckpoint, copy));
+          const error = yield* Effect.flip(runtime.restore(ramCheckpoint, larger));
+          const steps = ["create", "update", "start", "resize"];
 
           expect(error.message).toBe(
             `smolvm machine ${failing} copy-abcdefab exited 1: Error: database is locked`,
           );
           expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(
-            failing === "update" ? ["create", "update"] : ["create", "update", "start"],
+            steps.slice(0, steps.indexOf(failing) + 1),
           );
         }
       }),

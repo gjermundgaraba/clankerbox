@@ -1,10 +1,12 @@
 import { totalmem } from "node:os";
 import { join } from "node:path";
 import {
+  formatMib,
   type HostError,
   Internal,
   Invalid,
   requirements,
+  Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
@@ -54,7 +56,12 @@ export interface Settings {
   readonly publishAddress: string;
   readonly ramBudgetMib: number;
   readonly stateDir: string;
+  /** As Node names it: smolvm grows a running machine's vCPUs only on `x64`. */
+  readonly arch: string;
 }
+
+// Source: smolvm src/agent/live_resize.rs target_added_mib
+const ramStepMib = 128;
 
 export const pathsIn = (stateDir: string) => ({
   dataDir: join(stateDir, "smolvm"),
@@ -365,6 +372,25 @@ export const make = (
           );
     };
 
+    // Source: smolvm src/agent/live_resize.rs ensure_live_compute_platform
+    const growable = (machine: Pick<MachineRef, "id">, from: Sizes, to: Sizes) => {
+      if ((to.ramMib - from.ramMib) % ramStepMib !== 0) {
+        return Effect.fail(
+          new Unsizable({
+            message: `smolvm grows a running machine's RAM in ${ramStepMib}M steps, and ${machine.id}'s would grow from ${formatMib(from.ramMib)} to ${formatMib(to.ramMib)}`,
+          }),
+        );
+      }
+
+      return to.cpu > from.cpu && settings.arch !== "x64"
+        ? Effect.fail(
+            new Unsizable({
+              message: `smolvm grows a running machine's vCPUs only on x86_64, and this host is ${settings.arch}: give ${machine.id} its vCPUs while it is stopped`,
+            }),
+          )
+        : Effect.void;
+    };
+
     const restoreRam = (
       from: string,
       source: Pick<MachineRef, "port"> & Sizes,
@@ -436,16 +462,22 @@ export const make = (
         ),
       ),
       restore: Effect.fn("Smolvm.restore")((checkpoint, machine) =>
-        restoreRam(checkpointDir(checkpoint), checkpoint, machine),
+        Effect.andThen(
+          growable(machine, checkpoint, machine),
+          restoreRam(checkpointDir(checkpoint), checkpoint, machine),
+        ),
       ),
       fork: Effect.fn("Smolvm.fork")((source, machine) => {
         const store = join(paths.forks, nativeName(machine));
         const output = join(store, `${nativeName(machine)}.checkpoint`);
 
         return Effect.andThen(
-          copyable(
-            source,
-            `a fork copies a running machine, RAM included, and ${source.id} is stopped: start it first`,
+          Effect.andThen(
+            growable(machine, source, machine),
+            copyable(
+              source,
+              `a fork copies a running machine, RAM included, and ${source.id} is stopped: start it first`,
+            ),
           ),
           Effect.andThen(
             captureRam(source, store, output),
@@ -580,7 +612,10 @@ export const make = (
         }),
       ),
       resize: Effect.fn("Smolvm.resize")((machine, to, running) =>
-        resized(nativeName(machine), machine, to, running),
+        Effect.andThen(
+          running ? growable(machine, machine, to) : Effect.void,
+          resized(nativeName(machine), machine, to, running),
+        ),
       ),
       sizes: Effect.fn("Smolvm.sizes")((machine) => {
         const native = nativeName(machine);
@@ -635,6 +670,7 @@ export const layer = (
           publishAddress: config.listen.address,
           ramBudgetMib,
           stateDir: config.stateDir,
+          arch: process.arch,
         },
         process.getuid?.(),
       ),

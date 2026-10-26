@@ -2225,7 +2225,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(sizesOf(forked)).toEqual([2, 2048, 20]);
         expect(sizesOf(restored)).toEqual([1, 4096, 10]);
-        expect(linux.fake.sizes.get("forked")).toEqual(larger);
         expect(
           linux.fake.activations.slice(-2).map(({ action, machine }) => [action, machine.ramMib]),
         ).toEqual([
@@ -2272,6 +2271,42 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect((yield* rows(linux)).map(({ name }) => name)).toEqual(["dev"]);
         expect((yield* rows(mac)).map(({ name }) => name)).toEqual(["dev"]);
         expect([...linux.fake.calls, ...mac.fake.calls]).toEqual([]);
+      }),
+  );
+
+  it.effect(
+    "a fork whose source is resized while it waits is Unsizable, and its copy is deleted",
+    () =>
+      Effect.gen(function* () {
+        const linux = yield* host();
+
+        yield* linux.run(linux.machines.create(request("dev")));
+
+        const { release, entered } = linux.fake.holdNext("resize");
+
+        const resize = yield* Effect.forkChild(
+          linux.machines.resize({ id: "linux_dev", ramMib: 2048 }),
+        );
+
+        yield* entered;
+
+        const fork = yield* Effect.forkChild(
+          Effect.flip(linux.machines.fork("linux_dev", "copy", { ramMib: 1536 })),
+        );
+
+        yield* pause;
+        yield* release;
+        yield* Fiber.join(resize);
+
+        const refused = yield* Fiber.join(fork);
+        const left = yield* eventually(rows(linux), (all) => all.length === 1);
+
+        expect([refused._tag, refused.message]).toEqual([
+          "Unsizable",
+          "machine linux_dev was resized while a fork of it waited, so the copy's sizes were checked against others: fork it again",
+        ]);
+        expect(left.map(({ name }) => name)).toEqual(["dev"]);
+        expect(linux.fake.calls.includes("fork linux_copy")).toBe(false);
       }),
   );
 

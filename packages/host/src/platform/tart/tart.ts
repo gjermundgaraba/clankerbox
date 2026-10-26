@@ -162,13 +162,6 @@ const decodeInfo = Schema.decodeUnknownEffect(
   ),
 );
 
-const sizeFlags = (sizes: Sizes): ReadonlyArray<string> => [
-  "--cpu",
-  String(sizes.cpu),
-  "--memory",
-  String(sizes.ramMib),
-];
-
 const changedFlags = (from: Sizes, to: Sizes): ReadonlyArray<string> => {
   const changed = (flag: string, had: number, size: number, given = size) =>
     size === had ? [] : [flag, String(given)];
@@ -635,7 +628,10 @@ export const make = (
       ),
       create: Effect.fn("Tart.create")((machine, image) =>
         cloneInto(image, machine, [
-          ...sizeFlags(machine),
+          "--cpu",
+          String(machine.cpu),
+          "--memory",
+          String(machine.ramMib),
           "--disk-size",
           String(diskGb(machine.diskGib)),
         ]),

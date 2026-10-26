@@ -45,9 +45,11 @@ export interface CheckpointRef {
   readonly instance: string;
   /** A `ram` restore comes up on the source's port at capture. */
   readonly port: number;
-  /** The source's, at capture. */
+  /** The source's vCPUs, at capture. */
   readonly cpu: number;
+  /** The source's RAM, at capture. */
   readonly ramMib: number;
+  /** The source's disk, at capture. */
   readonly diskGib: number;
 }
 
@@ -196,15 +198,19 @@ export interface Interface {
     checkpoint: CheckpointRef,
   ) => Effect.Effect<void, RoomError | StateError>;
   /**
-   * Returns once exec works, with the machine's sizes. A checkpoint deleted under it fails it like
-   * any runtime failure. The core never gives a copy a smaller disk than its source's, nor, for a
-   * `ram` checkpoint, smaller vCPUs or RAM; the same holds for `fork`.
+   * Returns once exec works, the machine up at `machine`'s sizes. A checkpoint deleted under it
+   * fails it like any runtime failure. The core never gives the copy a smaller disk than the
+   * checkpoint's, nor, from a `ram` checkpoint, smaller vCPUs or RAM.
    */
   readonly restore: (
     checkpoint: CheckpointRef,
     machine: MachineRef,
   ) => Effect.Effect<void, RoomError | Unsizable>;
-  /** Returns once exec works. A source in a state the runtime doesn't copy is `WrongState`. */
+  /**
+   * Returns once exec works, the copy up at `machine`'s sizes. A source in a state the runtime
+   * doesn't copy is `WrongState`. The core never gives the copy a smaller disk than the source's,
+   * nor, where checkpoints are `ram`, smaller vCPUs or RAM.
+   */
   readonly fork: (
     source: MachineRef,
     machine: MachineRef,

@@ -145,7 +145,7 @@ export const stubHost = (options: StubHostOptions) => {
         )
       : options.create(request);
 
-  const sized = <A extends Machine | Checkpoint>(found: A, sizes: Sizing) => ({
+  const sized = (found: Machine | Checkpoint, sizes: Sizing) => ({
     cpu: sizes.cpu ?? found.cpu,
     ramMib: sizes.ramMib ?? found.ramMib,
     diskGib: sizes.diskGib ?? found.diskGib,
