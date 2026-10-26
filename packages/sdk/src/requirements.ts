@@ -22,6 +22,6 @@ export const requirements = {
   smolvm: { testedVersion: "1.32.1" },
   tart: { minimumVersion: "2.41.1" },
   softnet: { checkedVersion: "0.24.1" },
-  node: { engines: ">=26" },
+  node: { engines: ">=26.12.0" },
   bases,
 } as const;

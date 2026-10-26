@@ -26,7 +26,7 @@ the CLI and the host (`clankerbox host`). The TypeScript SDK is
 
 ## Install
 
-The package needs Node 26 or later, and bundles everything else it runs.
+The package needs Node 26.12 or later, and bundles everything else it runs.
 
 ```sh
 npm install --global @gjermundgaraba/clankerbox
@@ -393,7 +393,7 @@ everything the machine had, credentials too.
 
 Install the package in a versioned prefix; VMs never reference it, so a
 release replaces it while machines run. Its `bin/clankerbox` runs the `node` on
-the service's `PATH`, which must be Node 26 or later.
+the service's `PATH`, which must be Node 26.12 or later.
 
 ```sh
 npm install --global --prefix /opt/clankerbox/<version> @gjermundgaraba/clankerbox@<version>
