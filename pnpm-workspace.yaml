@@ -4,6 +4,7 @@ packages:
   - tools/*
 
 catalogMode: prefer
+saveExact: true
 catalog:
   "@effect/platform-node": 4.0.5
   # The CLI depends on it directly, at effect's version, for npm installs: platform-node takes

@@ -485,7 +485,9 @@ export const make = (
           }
 
           if (resumable.has(recorded)) {
-            return yield* resume(native);
+            yield* resume(native);
+
+            return;
           }
 
           // Source: smolvm src/cli/vm_common.rs start_vm_named_with_db

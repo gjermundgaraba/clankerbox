@@ -27,9 +27,9 @@ import { syncSshConfig } from "./ssh-config.ts";
 import { parseSeconds } from "./units.ts";
 
 export class Exited extends Data.TaggedError("Exited")<{ readonly code: number }> {
-  readonly [Runtime.errorReported] = false;
+  override readonly [Runtime.errorReported] = false;
 
-  get [Runtime.errorExitCode](): number {
+  override get [Runtime.errorExitCode](): number {
     return this.code;
   }
 }

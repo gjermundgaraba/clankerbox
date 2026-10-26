@@ -157,18 +157,7 @@ export const make = (
         );
 
         return yield* Effect.gen(function* () {
-          yield* machines.create(
-            {
-              id: builderId,
-              base: request.base,
-              profile: request.profile,
-              cpu: request.cpu,
-              ramMib: request.ramMib,
-              diskGib: request.diskGib,
-              setup: request.setup,
-            },
-            { ephemeral: true },
-          );
+          yield* machines.create({ ...request, id: builderId }, { ephemeral: true });
 
           if (checkpointKinds[config.kind] === "disk") {
             yield* machines.stop(builderId);

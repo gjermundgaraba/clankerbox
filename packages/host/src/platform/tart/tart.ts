@@ -381,7 +381,9 @@ export const make = (
         const observed = yield* state(vm);
 
         if (observed === "paused") {
-          return yield* call(["stop", vm], `stop ${vm}`);
+          yield* call(["stop", vm], `stop ${vm}`);
+
+          return;
         }
 
         if (observed !== "running") {
@@ -505,7 +507,9 @@ export const make = (
             `pause ${machine.id}: an older host booted it without --suspendable, which Tart can't suspend, so it stops it instead`,
           );
 
-          return yield* stop(machine);
+          yield* stop(machine);
+
+          return;
         }
 
         yield* Effect.uninterruptible(

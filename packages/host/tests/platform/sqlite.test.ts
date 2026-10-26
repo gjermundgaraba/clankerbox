@@ -328,7 +328,7 @@ layer(NodeServices.layer)((it) => {
 
           yield* store.bootedUnder("dev", undefined);
 
-          return [booted, yield* store.findMachine("dev")];
+          return [booted, yield* store.findMachine("dev")] as const;
         }),
       );
 
