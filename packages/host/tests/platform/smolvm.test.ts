@@ -537,15 +537,25 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "a stopped machine is resized in one machine update and a running one in one live machine resize, each sending every size asked, also one it has, so a grow cut short finishes",
+    "a stopped machine is resized in one machine update, and a running one in one live machine resize per size, RAM, then vCPUs, then disk, each sending every size asked, also one it has, so a grow cut short finishes",
     () =>
       Effect.gen(function* () {
         const spawner = scripted(() => undefined);
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
         yield* runtime.resize(machine, { cpu: 4, ramMib: 1024, diskGib: 30 }, false);
-        yield* runtime.resize(machine, { ramMib: 2048, diskGib: 40 }, true);
+        yield* runtime.resize(machine, { cpu: 2, ramMib: 2048, diskGib: 40 }, true);
         yield* runtime.resize(machine, {}, false);
+        yield* runtime.resize(machine, {}, true);
+
+        const live = (flag: string, size: string) => [
+          "machine",
+          "resize",
+          "--name",
+          "dev-01234567",
+          flag,
+          size,
+        ];
 
         expect(smolvmArgs(spawner.calls)).toEqual([
           [
@@ -560,8 +570,56 @@ layer(NodeServices.layer)((it) => {
             "--storage",
             "30",
           ],
-          ["machine", "resize", "--name", "dev-01234567", "--mem", "2048", "--storage", "40"],
+          live("--mem", "2048"),
+          live("--cpus", "2"),
+          live("--storage", "40"),
         ]);
+      }),
+  );
+
+  it.effect(
+    "off x86_64 a live resize leaves out vCPUs it would keep, as smolvm refuses any live vCPU target there",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted(() => undefined);
+        const arm = yield* runtimeOf({ ...(yield* prepared()), arch: "arm64" }, spawner);
+        const before = spawner.calls.length;
+
+        yield* arm.resize(machine, { cpu: 2, ramMib: 4096 }, true);
+
+        expect(smolvmArgs(spawner.calls.slice(before - 1))).toEqual([
+          ["machine", "resize", "--name", "dev-01234567", "--mem", "4096"],
+        ]);
+      }),
+  );
+
+  it.effect(
+    "a size a live resize keeps goes on to the next when smolvm holds another size's grow unfinished, and a size that changes fails",
+    () =>
+      Effect.gen(function* () {
+        const unfinished = {
+          exitCode: 1,
+          stderr:
+            "Error: live resize: an unfinished resize belongs to a different target or VM incarnation; reconcile it before another resize\n",
+        };
+
+        const spawner = scripted((call) =>
+          call.args[1] === "resize" && call.args.includes("--mem") ? unfinished : undefined,
+        );
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+        const before = spawner.calls.length;
+
+        yield* runtime.resize(machine, { cpu: 4, ramMib: 2048 }, true);
+
+        const refused = yield* Effect.flip(runtime.resize(machine, { ramMib: 4096 }, true));
+
+        expect(smolvmArgs(spawner.calls.slice(before - 1)).map((args) => args.slice(4))).toEqual([
+          ["--mem", "2048"],
+          ["--cpus", "4"],
+          ["--mem", "4096"],
+        ]);
+        expect(failure(refused)[0]).toBe("Internal");
       }),
   );
 
@@ -1185,7 +1243,7 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
-    "sizes smolvm can't give are Unsizable before anything native: RAM below its least, and for a live grow RAM off its 128M steps or vCPUs off x86_64",
+    "sizes smolvm can't give are Unsizable before anything native: RAM below its least, vCPUs or RAM past what its CLI takes, and for a live grow RAM off its 128M steps or vCPUs off x86_64",
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
@@ -1196,22 +1254,27 @@ layer(NodeServices.layer)((it) => {
 
         const refused = [
           yield* Effect.flip(runtime.sizable(machine, machine, { ...machine, ramMib: 32 }, false)),
+          yield* Effect.flip(runtime.sizable(machine, machine, { ...machine, cpu: 256 }, false)),
           yield* Effect.flip(runtime.sizable(machine, machine, { ...machine, ramMib: 2100 }, true)),
           yield* Effect.flip(arm.sizable(machine, machine, { ...machine, cpu: 4 }, true)),
         ];
 
         yield* arm.sizable(machine, machine, { ...machine, cpu: 4, ramMib: 2100 }, false);
-        yield* runtime.sizable(machine, machine, { ...machine, cpu: 4, ramMib: 2176 }, true);
+        yield* runtime.sizable(machine, machine, { ...machine, cpu: 255, ramMib: 2176 }, true);
 
         expect(refused.map(failure)).toEqual([
           ["Unsizable", "smolvm gives a machine at least 64M of RAM, and linux_dev would have 32M"],
+          [
+            "Unsizable",
+            "smolvm takes at most 255 vCPUs and 4294967295M of RAM, and linux_dev would have 256 vCPUs and 2048M",
+          ],
           [
             "Unsizable",
             "smolvm grows a running machine's RAM in 128M steps, and linux_dev's would grow from 2G to 2100M",
           ],
           [
             "Unsizable",
-            "smolvm grows a running machine's vCPUs only on x86_64, and this host is arm64: give linux_dev its vCPUs while it is stopped",
+            "smolvm grows a running machine's vCPUs only on x86_64, and this host is arm64: give linux_dev more vCPUs once it is stopped",
           ],
         ]);
         expect(spawner.calls.length).toBe(before);
@@ -1234,20 +1297,21 @@ layer(NodeServices.layer)((it) => {
 
         const resizes = smolvmArgs(spawner.calls).filter((args) => args[1] === "resize");
 
+        const grow = (flag: string, size: string) => [
+          "machine",
+          "resize",
+          "--name",
+          nativeName(copy),
+          flag,
+          size,
+        ];
+
         expect(resizes).toEqual([
-          [
-            "machine",
-            "resize",
-            "--name",
-            nativeName(copy),
-            "--cpus",
-            "4",
-            "--mem",
-            "4096",
-            "--storage",
-            "30",
-          ],
-          ["machine", "resize", "--name", nativeName(copy), "--mem", "4096", "--storage", "30"],
+          grow("--mem", "4096"),
+          grow("--cpus", "4"),
+          grow("--storage", "30"),
+          grow("--mem", "4096"),
+          grow("--storage", "30"),
         ]);
         expect(
           smolvmArgs(spawner.calls)

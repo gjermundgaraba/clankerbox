@@ -2,7 +2,7 @@ import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Layer, Schema } from "effect";
 import { idOn } from "./ids.ts";
 import { checkpointRef, machineRef } from "./refs.ts";
-import { Runtime, stateReadWait, timeoutFail } from "./runtime.ts";
+import { Runtime, sizedBy, stateReadWait, timeoutFail } from "./runtime.ts";
 import type { HostSettings } from "./settings.ts";
 import { Store } from "./store.ts";
 
@@ -67,14 +67,15 @@ export const startup = (config: Pick<HostSettings, "id">) =>
                 Effect.logWarning(
                   `couldn't read the sizes of ${idOn(config.id)(intent.name)}, so the host keeps those it has: ${error.message}`,
                 ),
-              onSuccess: ({
-                cpu = intent.cpu,
-                ramMib = intent.ramMib,
-                diskGib = intent.diskGib,
-              }) =>
-                cpu === intent.cpu && ramMib === intent.ramMib && diskGib === intent.diskGib
+              onSuccess: (read) => {
+                const sizes = sizedBy(intent, read);
+
+                return sizes.cpu === intent.cpu &&
+                  sizes.ramMib === intent.ramMib &&
+                  sizes.diskGib === intent.diskGib
                   ? Effect.void
-                  : store.sized(intent.name, { cpu, ramMib, diskGib }),
+                  : store.sized(intent.name, sizes);
+              },
             }),
           ),
         { concurrency: "unbounded", discard: true },

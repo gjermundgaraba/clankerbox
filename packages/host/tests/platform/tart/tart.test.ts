@@ -741,7 +741,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect([error._tag, error.message]).toEqual([
           "Unsizable",
-          "machine mac_small's disk of 20G is below the disk it is copied from, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB",
+          "machine mac_small's disk of 20G is below the disk Tart holds for it, and Tart only grows a disk: new disk size of 22 GB should be larger than the current disk size of 50 GB",
         ]);
         expect(calls(mac)).toEqual([
           `tart clone base ${vm}`,

@@ -24,6 +24,7 @@ import {
   missing,
   Runtime,
   type Sizes,
+  sizedBy,
   timeoutFail,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
@@ -449,7 +450,7 @@ export const make = (
 
         if (ran.exitCode !== 0 && ran.stderr.includes(shrinkRefusal)) {
           return yield* new Unsizable({
-            message: `machine ${machine.id}'s disk of ${formatGib(sizes.diskGib)} is below the disk it is copied from, and Tart only grows a disk: ${lastLines(ran.stderr)}`,
+            message: `machine ${machine.id}'s disk of ${formatGib(sizes.diskGib)} is below the disk Tart holds for it, and Tart only grows a disk: ${lastLines(ran.stderr)}`,
           });
         }
 
@@ -696,15 +697,7 @@ export const make = (
           const flags = sizeFlags(to);
 
           if (flags.length > 0) {
-            yield* set(
-              machine,
-              {
-                cpu: to.cpu ?? machine.cpu,
-                ramMib: to.ramMib ?? machine.ramMib,
-                diskGib: to.diskGib ?? machine.diskGib,
-              },
-              flags,
-            );
+            yield* set(machine, sizedBy(machine, to), flags);
           }
         }),
       ),

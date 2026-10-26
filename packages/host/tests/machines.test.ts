@@ -2170,6 +2170,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         yield* linux.run(linux.machines.create(request("dev")));
         linux.fake.calls.length = 0;
+        linux.fake.sized.length = 0;
 
         const admitted = linux.fake.activations.length;
         const refusal = new Unsizable({ message: "smolvm grows RAM in 128M steps" });
@@ -2188,7 +2189,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           linux.machines.fork("linux_dev", "copy", { ramMib: 2100 }),
         );
 
+        const held = { cpu: 1, ramMib: 1024, diskGib: 10 };
+        const asked = { ...held, ramMib: 2100 };
+
         expect([resized, forked]).toEqual([refusal, refusal]);
+        expect(linux.fake.sized).toEqual([
+          ["linux_dev", held, asked, true],
+          ["linux_copy", held, asked, true],
+        ]);
         expect(linux.fake.calls).toEqual([]);
         expect(linux.fake.activations.length).toBe(admitted);
         expect((yield* rows(linux)).map(({ name }) => name)).toEqual(["dev"]);

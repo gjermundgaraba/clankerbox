@@ -65,6 +65,7 @@ import {
   missing,
   Runtime,
   type RuntimeError,
+  sizedBy,
   type Sizes,
   stateReadWait,
   timeoutFail,
@@ -836,12 +837,6 @@ export const make = (
           return yield* runCommand(runtime, ref(intent), request);
         }),
       );
-
-    const sizedBy = (from: Sizes, sizing: Sizing | undefined): Sizes => ({
-      cpu: sizing?.cpu ?? from.cpu,
-      ramMib: sizing?.ramMib ?? from.ramMib,
-      diskGib: sizing?.diskGib ?? from.diskGib,
-    });
 
     const sizedAfter = (machine: MachineRef, to: Sizes, resized: boolean) =>
       runtime.sizes(machine).pipe(

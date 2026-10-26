@@ -71,6 +71,15 @@ const minimumRamMib = 64;
 // Source: smolvm src/data/storage.rs DEFAULT_STORAGE_SIZE_GIB
 const defaultStorageGib = 20;
 
+// Source: smolvm src/cli/machine.rs CreateCmd, ResizeCmd, UpdateCmd
+const maximumCpu = 255;
+
+// Source: smolvm src/cli/machine.rs CreateCmd, ResizeCmd, UpdateCmd
+const maximumRamMib = 2 ** 32 - 1;
+
+// Source: smolvm src/db/resize.rs begin_resize
+const unfinishedRefusal = "an unfinished resize belongs to a different target";
+
 export const pathsIn = (stateDir: string) => ({
   dataDir: join(stateDir, "smolvm"),
   store: join(stateDir, "checkpoints"),
@@ -192,6 +201,7 @@ export const make = (
     const binary = join(settings.prefix, "smolvm");
     const paths = pathsIn(settings.stateDir);
     const { run, exec } = yield* cliIn(environment(settings));
+    const reads = yield* Semaphore.make(observeConcurrency);
 
     const smolvm = (args: ReadonlyArray<string>, what: string) =>
       run(binary, args, `smolvm ${what}`);
@@ -361,9 +371,7 @@ export const make = (
         }
       });
 
-    const resized = (native: string, to: Sizing, running: boolean) => {
-      const command = running ? "resize" : "update";
-
+    const updated = (native: string, to: Sizing) => {
       const given = (flag: string, size: number | undefined) =>
         size === undefined ? [] : [flag, String(size)];
 
@@ -376,8 +384,38 @@ export const make = (
       return flags.length === 0
         ? Effect.void
         : Effect.asVoid(
-            call(["machine", command, "--name", native, ...flags], `machine ${command} ${native}`),
+            call(["machine", "update", "--name", native, ...flags], `machine update ${native}`),
           );
+    };
+
+    const grown = (native: string, machine: Sizes, to: Sizing) => {
+      const each: ReadonlyArray<readonly [string, number, number | undefined]> = [
+        ["--mem", machine.ramMib, to.ramMib],
+        [
+          "--cpus",
+          machine.cpu,
+          to.cpu === machine.cpu && settings.arch !== "x64" ? undefined : to.cpu,
+        ],
+        ["--storage", machine.diskGib, to.diskGib],
+      ];
+
+      return Effect.forEach(
+        each,
+        ([flag, had, size]) =>
+          size === undefined
+            ? Effect.void
+            : Effect.flatMap(
+                smolvm(
+                  ["machine", "resize", "--name", native, flag, String(size)],
+                  `machine resize ${native}`,
+                ),
+                (ran) =>
+                  size === had && ran.exitCode !== 0 && ran.stderr.includes(unfinishedRefusal)
+                    ? Effect.void
+                    : Effect.asVoid(expect(ran, `smolvm machine resize ${native}`)),
+              ),
+        { discard: true },
+      );
     };
 
     // Source: smolvm src/agent/live_resize.rs ensure_live_compute_platform
@@ -386,6 +424,14 @@ export const make = (
         return Effect.fail(
           new Unsizable({
             message: `smolvm gives a machine at least ${formatMib(minimumRamMib)} of RAM, and ${machine.id} would have ${formatMib(to.ramMib)}`,
+          }),
+        );
+      }
+
+      if (to.cpu > maximumCpu || to.ramMib > maximumRamMib) {
+        return Effect.fail(
+          new Unsizable({
+            message: `smolvm takes at most ${maximumCpu} vCPUs and ${maximumRamMib}M of RAM, and ${machine.id} would have ${to.cpu} vCPUs and ${to.ramMib}M`,
           }),
         );
       }
@@ -405,7 +451,7 @@ export const make = (
       return to.cpu > from.cpu && settings.arch !== "x64"
         ? Effect.fail(
             new Unsizable({
-              message: `smolvm grows a running machine's vCPUs only on x86_64, and this host is ${settings.arch}: give ${machine.id} its vCPUs while it is stopped`,
+              message: `smolvm grows a running machine's vCPUs only on x86_64, and this host is ${settings.arch}: give ${machine.id} more vCPUs once it is stopped`,
             }),
           )
         : Effect.void;
@@ -442,7 +488,7 @@ export const make = (
         }
 
         yield* boot(native);
-        yield* resized(native, changes(source, machine), true);
+        yield* grown(native, source, changes(source, machine));
       });
 
     return {
@@ -627,27 +673,29 @@ export const make = (
       ),
       sizable,
       resize: Effect.fn("Smolvm.resize")((machine, to, running) =>
-        resized(nativeName(machine), to, running),
+        running ? grown(nativeName(machine), machine, to) : updated(nativeName(machine), to),
       ),
       sizes: Effect.fn("Smolvm.sizes")((machine) => {
         const native = nativeName(machine);
 
-        return Effect.flatMap(
-          call(["machine", "status", "--name", native, "--json"], `machine status ${native}`),
-          (ran) =>
-            decodeSizes(ran.stdout).pipe(
-              Effect.map(({ cpus, memory_mib, storage_gb }) => ({
-                cpu: cpus,
-                ramMib: memory_mib,
-                diskGib: storage_gb ?? defaultStorageGib,
-              })),
-              Effect.mapError(
-                (error) =>
-                  new Internal({
-                    message: `smolvm machine status ${native} answered something unexpected: ${error.message}`,
-                  }),
+        return reads.withPermits(1)(
+          Effect.flatMap(
+            call(["machine", "status", "--name", native, "--json"], `machine status ${native}`),
+            (ran) =>
+              decodeSizes(ran.stdout).pipe(
+                Effect.map(({ cpus, memory_mib, storage_gb }) => ({
+                  cpu: cpus,
+                  ramMib: memory_mib,
+                  diskGib: storage_gb ?? defaultStorageGib,
+                })),
+                Effect.mapError(
+                  (error) =>
+                    new Internal({
+                      message: `smolvm machine status ${native} answered something unexpected: ${error.message}`,
+                    }),
+                ),
               ),
-            ),
+          ),
         );
       }),
       delete: Effect.fn("Smolvm.delete")(removeVm),

@@ -39,6 +39,12 @@ export type MachineState = Machine["state"];
 
 export type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
 
+export const sizedBy = (from: Sizes, sizing: Sizing | undefined): Sizes => ({
+  cpu: sizing?.cpu ?? from.cpu,
+  ramMib: sizing?.ramMib ?? from.ramMib,
+  diskGib: sizing?.diskGib ?? from.diskGib,
+});
+
 export const changes = (from: Sizes, to: Sizes): Sizing => ({
   cpu: to.cpu === from.cpu ? undefined : to.cpu,
   ramMib: to.ramMib === from.ramMib ? undefined : to.ramMib,
@@ -147,7 +153,8 @@ export interface Interface {
    * Refuses, before anything native, sizes `to` the runtime can't give a machine at `from`:
    * `live` when a running VM is given them, as on a running machine's resize and, where
    * checkpoints are `ram`, a copy's. The core calls it before it admits a create, a copy or a
-   * resize, so the calls after it fail only after they reach the runtime.
+   * resize, so the calls after it fail only after they reach the runtime, and again for a fork
+   * under its source's lease, against the source it then copies.
    */
   readonly sizable: (
     machine: Pick<MachineRef, "id">,

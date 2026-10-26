@@ -199,6 +199,7 @@ export const fakeRuntime = (options: FakeOptions) => {
   const observeFailures: Array<RuntimeError | "hang" | "die"> = [];
   const partialResizes: Array<RuntimeError> = [];
   const sizableRefusals: Array<Unsizable> = [];
+  const sized: Array<readonly [string, Sizes, Sizes, boolean]> = [];
   const sizes = new Map<string, Sizing>();
 
   const observeHolds: Array<{
@@ -351,7 +352,9 @@ export const fakeRuntime = (options: FakeOptions) => {
         pin: options.pin ?? (kind === "linux" ? "fake 1" : undefined),
         stopResumes: kind === "linux",
         growsLive: kind === "linux",
-        sizable: () => {
+        sizable: (machine, from, to, live) => {
+          sized.push([machine.id, sizesOf(from), sizesOf(to), live]);
+
           const refusal = sizableRefusals.shift();
 
           return refusal === undefined ? Effect.void : Effect.fail(refusal);
@@ -587,6 +590,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     images,
     machines,
     sizes,
+    sized,
     stubs: () => stubs,
     failNext: <O extends Operation>(operation: O, error: FailureOf<O>) => {
       // SAFETY: every port method fails with host errors.
