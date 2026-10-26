@@ -66,7 +66,6 @@ import {
   Runtime,
   type RuntimeError,
   sizedBy,
-  type Sizes,
   stateReadWait,
   timeoutFail,
 } from "./runtime.ts";
@@ -220,11 +219,11 @@ export const make = (
 
     const heldMachines = Effect.map(store.machines, (intents) =>
       intents.map((intent) => {
-        const admitted = booting.get(intent.name);
+        const boot = booting.get(intent.name);
 
-        return admitted === undefined
+        return boot === undefined
           ? { machine: ref(intent), booting: false }
-          : { machine: admitted, booting: true };
+          : { machine: boot, booting: true };
       }),
     );
 
@@ -838,20 +837,6 @@ export const make = (
         }),
       );
 
-    const sizedAfter = (machine: MachineRef, to: Sizes, resized: boolean) =>
-      runtime.sizes(machine).pipe(
-        inTime(`the ${config.kind} runtime's read of ${machine.id}'s sizes`),
-        Effect.map((read) => sizedBy(resized ? to : machine, read)),
-        Effect.catch((error) =>
-          Effect.as(
-            Effect.logWarning(
-              `resize ${machine.id}: couldn't read its sizes back, so the host keeps ${resized ? "those asked" : "those it had"}: ${error.message}`,
-            ),
-            resized ? to : machine,
-          ),
-        ),
-      );
-
     const resized = (name: string, request: ResizeRequest) =>
       Effect.gen(function* () {
         yield* leases.own("machine", name);
@@ -906,13 +891,24 @@ export const make = (
           yield* admitted("resizeMachine", { ...machine, ...to });
         }
 
-        const { cpu, ramMib, diskGib } = request;
+        const outcome = yield* Effect.exit(runtime.resize(machine, request, running));
+        const given = Exit.isSuccess(outcome);
+        const known = given ? to : intent;
 
-        const outcome = yield* Effect.exit(
-          runtime.resize(machine, { cpu, ramMib, diskGib }, running),
+        const sizes = yield* runtime.sizes(machine).pipe(
+          inTime(`the ${config.kind} runtime's read of ${id}'s sizes`),
+          Effect.map((read) => sizedBy(known, read)),
+          Effect.catch((error) =>
+            Effect.as(
+              Effect.logWarning(
+                `resize ${id}: couldn't read its sizes back, so the host keeps ${given ? "those asked" : "those it had"}: ${error.message}`,
+              ),
+              known,
+            ),
+          ),
         );
 
-        yield* store.sized(name, yield* sizedAfter(machine, to, Exit.isSuccess(outcome)));
+        yield* store.sized(name, sizes);
         yield* outcome;
 
         return yield* shown(name);
