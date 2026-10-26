@@ -1,15 +1,16 @@
-import type { Client } from "@gjermundgaraba/clankerbox-sdk";
+import type { Client, Sizing } from "@gjermundgaraba/clankerbox-sdk";
 import type { SandboxProvider } from "sandbox-agent";
 
 /**
  * A profile whose setup installs the Sandbox Agent, a checkpoint of a machine that has it, or a
  * machine to fork. A fork or `ram` restore carries its source's sessions: take it from an idle one,
- * and not a paused one, which can't be forked.
+ * and not a paused one, which can't be forked. A restore or fork takes `cpu`, `ramMib` and
+ * `diskGib` where given, and its source's otherwise: on linux they only grow, and a disk only grows.
  */
 export type Source =
   | { readonly profile: string }
-  | { readonly checkpoint: string }
-  | { readonly machine: string };
+  | ({ readonly checkpoint: string } & Sizing)
+  | ({ readonly machine: string } & Sizing);
 
 export interface Options {
   /** In placement order, as in the client config. */
@@ -40,6 +41,12 @@ export interface Options {
  * machine's ID, `sdk.sandboxId` without its `clankerbox/`.
  */
 export interface ClankerboxProvider extends SandboxProvider {
+  /**
+   * Gives the sandbox's machine other sizes, as `clankerbox resize` does: a stopped machine takes
+   * any vCPUs and RAM, a running linux one only grows, and a disk only grows; `pause` stops it
+   * first for what a running one can't take.
+   */
+  resize(sandboxId: string, sizes: Sizing): Promise<void>;
   reconnect(sandboxId: string): Promise<void>;
   pause(sandboxId: string): Promise<void>;
   ensureServer(sandboxId: string): Promise<void>;

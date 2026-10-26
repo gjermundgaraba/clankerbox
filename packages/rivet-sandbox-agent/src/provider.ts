@@ -16,6 +16,7 @@ export const provider = <E>(
     create: () => runtime.runPromise(sandboxes.create),
     destroy: (id) => runtime.runPromise(sandboxes.destroy(id)),
     pause: (id) => runtime.runPromise(sandboxes.pause(id)),
+    resize: (id, sizes) => runtime.runPromise(sandboxes.resize(id, sizes)),
     reconnect: (id) => runtime.runPromise(sandboxes.reconnect(id)),
     ensureServer: (id) => runtime.runPromise(sandboxes.ensureServer(id)),
     getUrl: (id) => runtime.runPromise(sandboxes.url(id)),

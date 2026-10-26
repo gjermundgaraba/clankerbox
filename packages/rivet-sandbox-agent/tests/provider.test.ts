@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type Checkpoint,
+  type Client,
   Conflict,
   Invalid,
   NotFound,
@@ -329,6 +330,76 @@ test("a create refused with Conflict, as a name already taken is, deletes nothin
   await expect(creating).rejects.toBeInstanceOf(Conflict);
   await expect(creating).rejects.toMatchObject({ message: refusal.message });
   expect(stub.calls).toEqual(["host.get", "machine.create"]);
+});
+
+test("a fork or restore source's sizes go to the host with the copy's name", async () => {
+  const sent: Array<unknown> = [];
+
+  const record = (client: Client.Interface): Client.Interface => ({
+    ...client,
+    forkMachine: (input) =>
+      Effect.andThen(
+        Effect.sync(() => sent.push(input)),
+        client.forkMachine(input),
+      ),
+    restoreMachine: (input) =>
+      Effect.andThen(
+        Effect.sync(() => sent.push(input)),
+        client.restoreMachine(input),
+      ),
+  });
+
+  const forked = await setup(
+    { machines: [reachable("linux_warm")] },
+    { from: { machine: "linux_warm", ramMib: 4096 } },
+    undefined,
+    record,
+  );
+
+  const restored = await setup(
+    { checkpoints: [checkpoint("linux_base")] },
+    { from: { checkpoint: "linux_base", cpu: 4, diskGib: 40 } },
+    undefined,
+    record,
+  );
+
+  const names = [await forked.sandbox.create(), await restored.sandbox.create()].map(
+    (id) => id.split("_")[1],
+  );
+
+  expect(sent).toEqual([
+    { machine: "linux_warm", ramMib: 4096, name: names[0] },
+    { checkpoint: "linux_base", cpu: 4, diskGib: 40, name: names[1] },
+  ]);
+});
+
+test("resize sends the sandbox's machine its sizes, and a machine that is gone is the SDK's SandboxDestroyedError", async () => {
+  const sent: Array<unknown> = [];
+
+  const { stub, sandbox } = await setup(
+    { machines: [reachable("linux_kept")] },
+    {},
+    undefined,
+    (client) => ({
+      ...client,
+      resizeMachine: (input) =>
+        Effect.andThen(
+          Effect.sync(() => sent.push(input)),
+          client.resizeMachine(input),
+        ),
+    }),
+  );
+
+  await sandbox.resize("linux_kept", { cpu: 4, ramMib: 8192 });
+
+  await expect(sandbox.resize("linux_gone", { cpu: 4 })).rejects.toBeInstanceOf(
+    SandboxDestroyedError,
+  );
+  expect(sent).toEqual([
+    { id: "linux_kept", cpu: 4, ramMib: 8192 },
+    { id: "linux_gone", cpu: 4 },
+  ]);
+  expect(stub.calls).toEqual(["machine.resize", "machine.resize"]);
 });
 
 test("reconnecting to a machine that is gone, or ensuring its server, is the SDK's SandboxDestroyedError", async () => {

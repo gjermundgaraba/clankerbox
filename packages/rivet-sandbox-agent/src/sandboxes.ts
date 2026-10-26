@@ -3,8 +3,10 @@ import {
   Client,
   Conflict,
   loadProfile,
+  type NotFound,
   pinnedSsh,
   Prebuild,
+  type Sizing,
   specRequest,
   sshTarget,
   Superseded,
@@ -165,17 +167,16 @@ export const make = (options: Options, ssh = "ssh") => {
       Effect.catch(() => Effect.succeed(false)),
     );
 
+  const destroyed = (id: string) => (cause: NotFound) =>
+    Effect.fail(new SandboxDestroyedError(id, name, { cause }));
+
   const started = (id: string, known: Sandbox) =>
     Effect.gen(function* () {
       const client = yield* Client.Client;
 
       yield* client.startMachine({ id });
       yield* closed(known);
-    }).pipe(
-      Effect.catchTag("NotFound", (cause) =>
-        Effect.fail(new SandboxDestroyedError(id, name, { cause })),
-      ),
-    );
+    }).pipe(Effect.catchTag("NotFound", destroyed(id)));
 
   const made = (named: string) =>
     Effect.gen(function* () {
@@ -183,11 +184,11 @@ export const make = (options: Options, ssh = "ssh") => {
       const { from } = options;
 
       if ("checkpoint" in from) {
-        return yield* client.restoreMachine({ checkpoint: from.checkpoint, name: named });
+        return yield* client.restoreMachine({ ...from, name: named });
       }
 
       if ("machine" in from) {
-        return yield* client.forkMachine({ machine: from.machine, name: named });
+        return yield* client.forkMachine({ ...from, name: named });
       }
 
       const { spec, host } = yield* specRequest("create", yield* loadProfile(from.profile), {
@@ -240,6 +241,13 @@ export const make = (options: Options, ssh = "ssh") => {
           yield* closed(known);
           yield* client.stopMachine({ id });
         }),
+      ),
+    resize: (id: string, sizes: Sizing) =>
+      locked(id, () =>
+        Effect.flatMap(Client.Client, (client) => client.resizeMachine({ id, ...sizes })).pipe(
+          Effect.asVoid,
+          Effect.catchTag("NotFound", destroyed(id)),
+        ),
       ),
     reconnect: (id: string) => locked(id, (known) => started(id, known)),
     ensureServer: (id: string) =>
