@@ -25,7 +25,6 @@ import {
   Host,
   Machine,
   PrebuildRequest,
-  Prebuilt,
   ResizeRequest,
   Sizing,
   Usage,
@@ -199,9 +198,9 @@ export const Http = ActionHttp.make(
       ...write,
       error: creating,
       description:
-        "Make checkpoint id from a machine the host builds from the spec, setup and all, and deletes after. A checkpoint id that exists is the answer, and two prebuilds of one id share one build.",
+        "Make checkpoint id from a machine the host builds from the spec, setup and all, and deletes after. A checkpoint id that exists is replaced once the build's setup has run.",
       input: PrebuildRequest,
-      success: Prebuilt,
+      success: Checkpoint,
     }),
     Action.make("getHost", {
       ...read,

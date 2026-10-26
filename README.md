@@ -103,6 +103,16 @@ clankerbox host --config /etc/clankerbox/linux.json
 
 The host exits 130 on SIGINT or SIGTERM and 1 when it fails.
 
+### Upgrading from 0.26
+
+State dirs, prebuilds, checkpoints and client configs are as in 0.26, with no
+migration. Upgrade hosts and clients together, as for every release.
+
+- `prebuild` runs the setup again each time, and replaces the prebuild that
+  matches once it has run, in place of answering the one there.
+- The SDK's `prebuildCheckpoint` and `Prebuild.build` answer the `Checkpoint`;
+  `Prebuilt` is gone.
+
 ### Upgrading from 0.24
 
 State dirs, prebuilds, checkpoints and client configs are as in 0.24, with
@@ -214,7 +224,7 @@ clankerbox hosts                           # every host, its kind, versions and 
 clankerbox capacity                        # every host's resources and limits
 clankerbox create dev --profile dev        # prints the new ID, linux_dev
 clankerbox create review --host mac --base macos --cpu 4 --ram 8G --disk 150G
-clankerbox prebuild --profile dev          # run dev's setup once; later creates of dev restore it
+clankerbox prebuild --profile dev          # run dev's setup now; later creates of dev restore it
 clankerbox machines
 clankerbox get linux_dev
 clankerbox ssh linux_dev -- uptime
@@ -285,8 +295,12 @@ clankerbox checkpoint delete linux_base
   behind is cleared by the next delete of it, or when its host next starts.
 - A prebuild matches the profile, its sizes, its setup, the config's
   authorized keys and the host's runtime release; any change runs the setup
-  again until a new `prebuild`. Nothing
-  deletes prebuilds: `checkpoint list` shows them.
+  again until a new `prebuild`. Each `prebuild` runs the setup again and
+  replaces the one that matches once it has run, so a setup that installs
+  latest releases picks up today's; creates restore the old one until then,
+  and run the setup while the new one is captured. A capture that fails
+  leaves none. Prebuilds that match nothing any more stay until deleted:
+  `checkpoint list` shows them.
 - `ssh` pins the machine's host key and logs in as `admin`.
 - Plain OpenSSH reaches machines by ID too, so `ssh linux_dev`, scp, rsync and
   tools that run ssh work. A command on the default client config keeps
@@ -469,7 +483,7 @@ program.pipe(
   what was asked, its `phase` and `error` saying how it got there. One whose
   reply is lost fails `Unavailable`: it may have run, so read the resource.
 - `Prebuild.build` and `Prebuild.create` do what `clankerbox prebuild` and a
-  create of a profile do.
+  create of a profile do. `build` answers the checkpoint it built.
 
 ## Sandbox Agent provider
 

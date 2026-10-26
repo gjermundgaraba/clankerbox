@@ -3,7 +3,7 @@ import { Hex } from "effect/encoding";
 import type * as Client from "./client.ts";
 import type { ClankerboxError } from "./errors.ts";
 import { formatId } from "./ids.ts";
-import type { Checkpoint, Host, Machine, MachineSpec, Prebuilt, Setup } from "./resources.ts";
+import type { Checkpoint, Host, Machine, MachineSpec, Setup } from "./resources.ts";
 
 const prefix = "prebuilt-";
 
@@ -58,7 +58,8 @@ export interface Created {
 
 /**
  * `client.create`, restoring the spec's prebuild when the host it is placed on has one, unless
- * `fresh`. A failed restore is the reply.
+ * `fresh`. A restore that misses the prebuild, as one a rebuild replaced, runs the setup instead;
+ * any other failed restore is the reply.
  */
 export const create = (
   client: Client.Interface,
@@ -75,25 +76,29 @@ export const create = (
     const id = yield* formatId(host.id, yield* nameOf(spec, host));
     const found = yield* lookup(client, id);
 
-    if (Option.isSome(found)) {
-      return {
-        machine: yield* client.restoreMachine({ checkpoint: id, name }),
-        prebuild: found.value,
-      };
+    const created = Effect.map(client.create(name, spec, { host: host.id }), (machine) => ({
+      machine,
+    }));
+
+    if (Option.isNone(found)) {
+      return yield* created;
     }
 
-    return { machine: yield* client.create(name, spec, { host: host.id }) };
+    return yield* client.restoreMachine({ checkpoint: id, name }).pipe(
+      Effect.map((machine): Created => ({ machine, prebuild: found.value })),
+      Effect.catchTag("NotFound", (error) => (error.id === id ? created : Effect.fail(error))),
+    );
   });
 
 /**
- * Asks the host a create of the spec is placed on for the spec's prebuild, which it builds with a
- * machine of its own unless it has it. Two builds of one spec at once share the host's one build.
+ * Asks the host a create of the spec is placed on to build the spec's prebuild with a machine of
+ * its own, replacing the one it has once the setup has run.
  */
 export const build = (
   client: Client.Interface,
   spec: MachineSpec & { readonly setup: Setup },
   options?: Client.CreateOptions,
-): Effect.Effect<Prebuilt, ClankerboxError> =>
+): Effect.Effect<Checkpoint, ClankerboxError> =>
   Effect.gen(function* () {
     const host = yield* client.place(spec.base, options);
     const id = yield* formatId(host.id, yield* nameOf(spec, host));

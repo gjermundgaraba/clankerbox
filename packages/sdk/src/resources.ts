@@ -290,8 +290,3 @@ export type Executed = typeof Executed.Type;
 export const PrebuildRequest = Schema.Struct({ id: Id, ...specFields, setup: Setup });
 
 export type PrebuildRequest = typeof PrebuildRequest.Type;
-
-/** `built` is false when the host already had the checkpoint. */
-export const Prebuilt = Schema.Struct({ checkpoint: Checkpoint, built: Schema.Boolean });
-
-export type Prebuilt = typeof Prebuilt.Type;

@@ -151,8 +151,8 @@ transport. Neither `./testing` export is published.
   the store has it: `Superseded` when a later request asked for something else
   by then. Steps hold leases instead of claims: what changes a resource owns it,
   what copies or reads it shares it, in memory only, so a host's end drops them
-  with the work; a prebuild owns its name's own lease, so two prebuilds of one
-  name build once. A checkpoint exists only from a capture that succeeded until
+  with the work; a prebuild replaces the checkpoint of its name once its setup
+  has run. A checkpoint exists only from a capture that succeeded until
   its delete begins, and never changes; the next delete of its name clears what
   a failed one left. A start starts the machine, also when it runs already, or
   resumes it when it is paused, and prepares it. A pause saves a running machine

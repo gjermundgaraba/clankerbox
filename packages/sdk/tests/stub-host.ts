@@ -13,7 +13,6 @@ import {
   type Machine,
   NotFound,
   type PrebuildRequest,
-  type Prebuilt,
   type Kind,
   type Reading,
   type Sizing,
@@ -29,10 +28,10 @@ export interface StubHostOptions {
   readonly runtimeVersion?: string;
   /** Default: running. */
   readonly create?: (request: CreateRequest) => Effect.Effect<Machine, Declared<"createMachine">>;
-  /** Replaces the default prebuild, which captures a builder of its own unless it has the checkpoint. */
+  /** Replaces the default prebuild, which captures a builder of its own over any checkpoint of its ID. */
   readonly prebuild?: (
     request: PrebuildRequest,
-  ) => Effect.Effect<Prebuilt, Declared<"prebuildCheckpoint">>;
+  ) => Effect.Effect<Checkpoint, Declared<"prebuildCheckpoint">>;
   readonly machines?: ReadonlyArray<Machine>;
   readonly checkpoints?: ReadonlyArray<Checkpoint>;
   /** What every restore fails with. Default: none. */
@@ -163,15 +162,9 @@ export const stubHost = (options: StubHostOptions) => {
 
   const prebuild = (
     request: PrebuildRequest,
-  ): Effect.Effect<Prebuilt, Declared<"prebuildCheckpoint">> => {
+  ): Effect.Effect<Checkpoint, Declared<"prebuildCheckpoint">> => {
     if (options.prebuild !== undefined) {
       return options.prebuild(request);
-    }
-
-    const found = checkpoints.get(request.id);
-
-    if (found !== undefined) {
-      return Effect.succeed({ checkpoint: found, built: false });
     }
 
     return Effect.sync(() => {
@@ -188,7 +181,7 @@ export const stubHost = (options: StubHostOptions) => {
 
       checkpoints.set(made.id, made);
 
-      return { checkpoint: made, built: true };
+      return made;
     });
   };
 

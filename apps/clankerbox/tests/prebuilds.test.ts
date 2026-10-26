@@ -57,12 +57,7 @@ layer(NodeServices.layer)((it) => {
 
         expect(again.code).toBe(0);
         expect(again.stdout).toBe(built.stdout);
-        expect(again.stderr).toMatch(
-          new RegExp(
-            `^clankerbox: ${built.stdout} was already prebuilt, \\d+[smhd] ago; delete it to prebuild again$`,
-            "u",
-          ),
-        );
+        expect(again.stderr).toBe("");
         expect(linux.prebuilds.map(({ id }) => id)).toEqual([built.stdout, built.stdout]);
         expect(linux.creates).toEqual([]);
 

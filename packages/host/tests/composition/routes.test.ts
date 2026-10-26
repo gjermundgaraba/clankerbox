@@ -382,7 +382,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     });
 
   it.effect(
-    "the SDK's client prebuilds a checkpoint on a served host once, and the builder is gone after",
+    "the SDK's client prebuilds a checkpoint on a served host, again on each ask, and the builder is gone after",
     () =>
       Effect.gen(function* () {
         const { url, fake } = yield* serve();
@@ -396,12 +396,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           ]),
         );
 
-        expect(first).toMatchObject({ built: true, checkpoint: { id: "linux_pre", kind: "ram" } });
-        expect(second).toEqual({ built: false, checkpoint: first.checkpoint });
+        expect(first).toMatchObject({ id: "linux_pre", kind: "ram" });
+        expect(second).toMatchObject({ id: "linux_pre", kind: "ram" });
+        expect(second.machine).not.toBe(first.machine);
         expect(machines.answers).toEqual([]);
-        expect(fake.calls.filter((call) => call.startsWith("capture"))).toEqual([
-          "capture linux_pre",
-        ]);
+        expect(
+          fake.calls.filter(
+            (call) => call.startsWith("capture") || call.startsWith("deleteCheckpoint"),
+          ),
+        ).toEqual(["capture linux_pre", "deleteCheckpoint linux_pre", "capture linux_pre"]);
       }),
   );
 

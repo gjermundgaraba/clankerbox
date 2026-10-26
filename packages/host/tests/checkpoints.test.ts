@@ -18,7 +18,7 @@ import type * as Store from "../src/store.ts";
 import { builderName } from "../src/checkpoints.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import { read } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { at, failure, hostOn, pause, request, type TestHost } from "./support.ts";
+import { at, eventually, failure, hostOn, pause, request, type TestHost } from "./support.ts";
 
 const ports = { first: 21_110, last: 21_119 };
 
@@ -819,15 +819,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const built = yield* linux.run(linux.checkpoints.prebuild(prebuild({ profile: "small" })));
 
         expect(built).toMatchObject({
-          built: true,
-          checkpoint: {
-            id: "linux_prebuilt-0123456789ab",
-            kind: "ram",
-            base: "ubuntu",
-            profile: "small",
-          },
+          id: "linux_prebuilt-0123456789ab",
+          kind: "ram",
+          base: "ubuntu",
+          profile: "small",
         });
-        expect(built.checkpoint.machine).toMatch(/^linux_prebuilding-[0-9a-f]{16}$/u);
+        expect(built.machine).toMatch(/^linux_prebuilding-[0-9a-f]{16}$/u);
         expect(linux.fake.calls.map((call) => call.split(" ")[0])).toEqual([
           "startup",
           "admit",
@@ -850,7 +847,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     }),
   );
 
-  it.effect("a prebuild that exists is the answer, built by nothing", () =>
+  it.effect("a prebuild that exists is built again, and replaced once the setup has run", () =>
     Effect.gen(function* () {
       const linux = yield* host();
       const first = yield* linux.run(linux.checkpoints.prebuild(prebuild()));
@@ -859,83 +856,96 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const again = yield* linux.run(linux.checkpoints.prebuild(prebuild()));
 
-      expect(again).toEqual({ checkpoint: first.checkpoint, built: false });
-      expect(linux.fake.calls).toEqual([]);
-    }),
-  );
-
-  it.effect("two prebuilds of one ID at once share one build", () =>
-    Effect.gen(function* () {
-      const linux = yield* host();
-      const { release, entered } = linux.fake.holdNext("capture");
-      const first = yield* Effect.forkChild(linux.run(linux.checkpoints.prebuild(prebuild())));
-
-      yield* entered;
-
-      const second = yield* Effect.forkChild(linux.run(linux.checkpoints.prebuild(prebuild())));
-
-      yield* pause;
-      yield* release;
-
-      const built = yield* Effect.all([Fiber.join(first), Fiber.join(second)]);
-
-      expect(built.map(({ checkpoint }) => checkpoint.id)).toEqual([
-        "linux_prebuilt-0123456789ab",
-        "linux_prebuilt-0123456789ab",
+      expect(again.id).toBe(first.id);
+      expect(again.machine).not.toBe(first.machine);
+      expect(linux.fake.calls.map((call) => call.split(" ")[0])).toEqual([
+        "admit",
+        "create",
+        "exec",
+        "start",
+        "exec",
+        "deleteCheckpoint",
+        "capture",
+        "delete",
       ]);
-      expect(linux.fake.calls.filter((call) => call.startsWith("create"))).toHaveLength(1);
+      expect(yield* linux.run(linux.checkpoints.get(first.id))).toEqual(again);
+      expect(yield* checkpointNames(linux)).toEqual(["prebuilt-0123456789ab"]);
+      expect(yield* names(linux)).toEqual([]);
     }),
   );
 
-  it.effect("two prebuilds of one ID sent together build once, and the later answers with it", () =>
+  it.effect("a rebuild whose setup fails leaves the prebuild it would replace", () =>
     Effect.gen(function* () {
       const linux = yield* host();
+      const first = yield* linux.run(linux.checkpoints.prebuild(prebuild()));
 
-      const built = yield* linux.run(
-        Effect.all(
-          [linux.checkpoints.prebuild(prebuild()), linux.checkpoints.prebuild(prebuild())],
-          {
-            concurrency: "unbounded",
-          },
-        ),
+      const error = yield* failure(
+        linux,
+        linux.checkpoints.prebuild(prebuild({ setup: { script: "#!/bin/sh\nexit 4\n" } })),
       );
 
-      expect(
-        built.map(({ built: fresh }) => fresh).toSorted((a, b) => Number(a) - Number(b)),
-      ).toEqual([false, true]);
-      expect(new Set(built.map(({ checkpoint }) => checkpoint.id)).size).toBe(1);
-      expect(linux.fake.calls.filter((call) => call.startsWith("create"))).toHaveLength(1);
+      expect(error._tag).toBe("ScriptFailed");
+      expect(yield* linux.run(linux.checkpoints.get(first.id))).toEqual(first);
+      expect(linux.fake.calls).not.toContain(`deleteCheckpoint ${first.id}`);
+      expect(yield* names(linux)).toEqual([]);
     }),
   );
 
-  it.effect(
-    "a capture of a prebuild's builder to its name waits for the setup, and the prebuild answers that capture",
-    () =>
-      Effect.gen(function* () {
-        const linux = yield* host();
-        const { release, entered } = linux.fake.holdNext("exec");
-        const building = yield* Effect.forkChild(linux.run(linux.checkpoints.prebuild(prebuild())));
+  it.effect("a rebuild whose capture fails leaves no prebuild, and the next one builds it", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
 
-        yield* entered;
+      yield* linux.run(linux.checkpoints.prebuild(prebuild()));
+      linux.fake.failNext("capture", new Internal({ message: "ENOSPC" }));
 
-        const [builder] = yield* names(linux);
+      const error = yield* failure(linux, linux.checkpoints.prebuild(prebuild()));
 
-        const capturing = yield* Effect.forkChild(
-          linux.run(linux.checkpoints.capture(`linux_${builder}`, "prebuilt-0123456789ab")),
-        );
+      expect(error._tag).toBe("Internal");
+      expect([yield* checkpointNames(linux), yield* linux.run(linux.store.unready)]).toEqual([
+        [],
+        [],
+      ]);
 
-        yield* release;
+      const again = yield* linux.run(linux.checkpoints.prebuild(prebuild()));
 
-        const captured = yield* Fiber.join(capturing);
-        const built = yield* Fiber.join(building);
+      expect(again.id).toBe("linux_prebuilt-0123456789ab");
+      expect(yield* names(linux)).toEqual([]);
+    }),
+  );
 
-        expect([captured.id, captured.machine]).toEqual([
-          "linux_prebuilt-0123456789ab",
-          `linux_${builder}`,
-        ]);
-        expect(built).toEqual({ checkpoint: captured, built: false });
-        expect(yield* names(linux)).toEqual([]);
-      }),
+  it.effect("a rebuild replaces its prebuild only once the restores reading it are done", () =>
+    Effect.gen(function* () {
+      const linux = yield* host();
+      const first = yield* linux.run(linux.checkpoints.prebuild(prebuild()));
+      const { release, entered } = linux.fake.holdNext("restore");
+
+      const restoring = yield* Effect.forkChild(
+        linux.run(linux.machines.restore(first.id, "copy")),
+      );
+
+      yield* entered;
+      linux.fake.calls.length = 0;
+
+      const rebuilding = yield* Effect.forkChild(linux.run(linux.checkpoints.prebuild(prebuild())));
+
+      yield* eventually(
+        Effect.sync(() => linux.fake.calls.filter((call) => call.startsWith("exec"))),
+        (execs) => execs.length === 2,
+      );
+      yield* pause;
+
+      expect(linux.fake.calls.filter((call) => call.startsWith("deleteCheckpoint"))).toEqual([]);
+
+      yield* release;
+
+      const copy = yield* Fiber.join(restoring);
+      const again = yield* Fiber.join(rebuilding);
+      const restored = linux.fake.calls.indexOf("restore linux_copy");
+
+      expect(copy.id).toBe("linux_copy");
+      expect(again.machine).not.toBe(first.machine);
+      expect(linux.fake.calls.indexOf(`deleteCheckpoint ${first.id}`)).toBeGreaterThan(restored);
+    }),
   );
 
   it.effect("a mac prebuild stops its builder before the capture", () =>

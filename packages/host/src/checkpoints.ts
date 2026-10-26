@@ -5,7 +5,6 @@ import {
   type HostError,
   Internal,
   type PrebuildRequest,
-  type Prebuilt,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, DateTime, Effect, Exit, Fiber, Layer, Option, type Scope } from "effect";
 import { Hex } from "effect/encoding";
@@ -27,7 +26,7 @@ export interface Interface {
   readonly delete: (id: string) => Effect.Effect<void, Declared<"deleteCheckpoint">>;
   readonly prebuild: (
     request: PrebuildRequest,
-  ) => Effect.Effect<Prebuilt, Declared<"prebuildCheckpoint">>;
+  ) => Effect.Effect<Checkpoint, Declared<"prebuildCheckpoint">>;
 }
 
 export class Checkpoints extends Context.Service<Checkpoints, Interface>()(
@@ -77,7 +76,7 @@ export const make = (
       return record.profile === undefined ? checkpoint : { ...checkpoint, profile: record.profile };
     };
 
-    const capturing = (source: string, name: string) =>
+    const capturing = (source: string, name: string, replaces = false) =>
       Effect.scoped(
         Effect.gen(function* () {
           yield* leases.share("machine", source);
@@ -88,10 +87,12 @@ export const make = (
           yield* made(intent);
           yield* pinned(intent);
 
-          const left = (yield* store.unready).find((record) => record.name === name);
+          const stale = replaces
+            ? yield* store.anyCheckpoint(name)
+            : Option.fromNullishOr((yield* store.unready).find((record) => record.name === name));
 
-          if (left !== undefined) {
-            yield* discarded(left);
+          if (Option.isSome(stale)) {
+            yield* retired(stale.value);
           }
 
           const record: CheckpointRecord = {
@@ -130,15 +131,15 @@ export const make = (
         store.removeCheckpoint(record.name),
       );
 
+    const retired = (record: CheckpointRecord) =>
+      Effect.andThen(store.retireCheckpoint(record.name), discarded(record));
+
     const remove = (name: string) =>
       Effect.scoped(
         Effect.gen(function* () {
           yield* leases.own("checkpoint", name);
 
-          const record = yield* found("checkpoint", name, store.anyCheckpoint(name));
-
-          yield* store.retireCheckpoint(name);
-          yield* discarded(record);
+          yield* retired(yield* found("checkpoint", name, store.anyCheckpoint(name)));
         }),
       );
 
@@ -163,35 +164,9 @@ export const make = (
             yield* machines.stop(builderId);
           }
 
-          return yield* capturing(builder, name);
+          return yield* capturing(builder, name, true);
         }).pipe(Effect.ensuring(deleted));
       });
-
-    const prebuild = (name: string, request: PrebuildRequest) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          yield* leases.own("prebuild", name);
-
-          const existing = Option.map(yield* store.findCheckpoint(name), resource);
-
-          if (Option.isSome(existing)) {
-            return { checkpoint: existing.value, built: false };
-          }
-
-          return yield* build(name, request).pipe(
-            Effect.map((checkpoint) => ({ checkpoint, built: true })),
-            Effect.catchTag("Conflict", (taken) =>
-              Effect.flatMap(store.findCheckpoint(name), (captured) =>
-                Option.match(captured, {
-                  onNone: () => Effect.fail(taken),
-                  onSome: (record) =>
-                    Effect.succeed({ checkpoint: resource(record), built: false }),
-                }),
-              ),
-            ),
-          );
-        }),
-      );
 
     return {
       list: Effect.map(store.checkpoints, (records) => records.map(resource)).pipe(
@@ -219,7 +194,7 @@ export const make = (
       ),
       prebuild: Effect.fn("Checkpoints.prebuild")((request) =>
         Effect.flatMap(nameOf(request.id), (name) =>
-          detached(`prebuildCheckpoint ${request.id}`, prebuild(name, request)),
+          detached(`prebuildCheckpoint ${request.id}`, build(name, request)),
         ),
       ),
     } satisfies Interface;

@@ -5,6 +5,7 @@ import {
   type Checkpoint,
   Client,
   type MachineSpec,
+  NotFound,
   Prebuild,
   retryable,
   ScriptFailed,
@@ -104,11 +105,8 @@ it.effect(
       const linux = host({ id: "linux", bases: ["ubuntu"] });
       const id = `linux_${yield* nameOf(spec)}`;
 
-      const { checkpoint: made, built } = yield* withClient([other, linux], (client) =>
-        Prebuild.build(client, spec),
-      );
+      const made = yield* withClient([other, linux], (client) => Prebuild.build(client, spec));
 
-      expect(built).toBe(true);
       expect(made).toMatchObject({ id, profile: "dev", cpu: 2 });
       expect(linux.prebuilds).toEqual([{ id, ...spec }]);
       expect(other.prebuilds).toEqual([]);
@@ -121,24 +119,12 @@ it.effect("a build placed on a named host asks that host, whatever the list's or
     const first = host({ id: "first", bases: ["ubuntu"] });
     const second = host({ id: "second", bases: ["ubuntu"] });
 
-    const { checkpoint: made } = yield* withClient([first, second], (client) =>
+    const made = yield* withClient([first, second], (client) =>
       Prebuild.build(client, spec, { host: "second" }),
     );
 
     expect(made.id).toBe(`second_${yield* nameOf(spec)}`);
     expect([first.prebuilds.length, second.prebuilds.length]).toEqual([0, 1]);
-  }),
-);
-
-it.effect("a prebuild the host has is the answer as it is, built by no one", () =>
-  Effect.gen(function* () {
-    const id = `linux_${yield* nameOf(spec)}`;
-    const done = host({ id: "linux", bases: ["ubuntu"], checkpoints: [prebuilt(id)] });
-
-    const found = yield* withClient([done], (client) => Prebuild.build(client, spec));
-
-    expect(found).toMatchObject({ built: false, checkpoint: { id } });
-    expect(done.creates).toEqual([]);
   }),
 );
 
@@ -183,6 +169,48 @@ it.effect("a create restores its spec's prebuild, and runs the setup where there
     expect(fresh.prebuild).toBeUndefined();
     expect(fresh.machine.id).toBe("linux_box");
     expect(none.creates.map(({ id: created }) => created)).toEqual(["linux_box"]);
+  }),
+);
+
+it.effect(
+  "a create whose restore misses its prebuild, as a rebuild replaced it, runs the setup",
+  () =>
+    Effect.gen(function* () {
+      const id = `linux_${yield* nameOf(spec)}`;
+
+      const replaced = host({
+        id: "linux",
+        bases: ["ubuntu"],
+        checkpoints: [prebuilt(id)],
+        restoreFails: new NotFound({ message: `no checkpoint ${id}`, id }),
+      });
+
+      const fresh = yield* withClient([replaced], (client) => Prebuild.create(client, "box", spec));
+
+      expect(fresh.prebuild).toBeUndefined();
+      expect(fresh.machine.id).toBe("linux_box");
+      expect(replaced.creates.map(({ id: created }) => created)).toEqual(["linux_box"]);
+    }),
+);
+
+it.effect("a create whose restore fails NotFound for anything but its prebuild answers that", () =>
+  Effect.gen(function* () {
+    const id = `linux_${yield* nameOf(spec)}`;
+
+    const linux = host({
+      id: "linux",
+      bases: ["ubuntu"],
+      checkpoints: [prebuilt(id)],
+      restoreFails: new NotFound({ message: "no machine linux_box", id: "linux_box" }),
+    });
+
+    const error = yield* withClient([linux], (client) =>
+      Effect.flip(Prebuild.create(client, "box", spec)),
+    );
+
+    expect(error).toBeInstanceOf(NotFound);
+    expect(error).toMatchObject({ id: "linux_box" });
+    expect(linux.creates).toEqual([]);
   }),
 );
 
