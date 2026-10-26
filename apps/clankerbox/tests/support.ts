@@ -2,6 +2,7 @@ import { join } from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import { ConfigProvider, Effect, Layer, Runtime, Schema, Sink, type Stdio, Stream } from "effect";
+import { CliOutput } from "effect/cli";
 import type { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { TestConsole } from "effect/testing";
@@ -119,6 +120,7 @@ export const cli = (args: ReadonlyArray<string>, options?: CliOptions): Effect.E
       Layer.mergeAll(
         NodeServices.layer,
         Layer.fresh(TestConsole.layer),
+        CliOutput.layer(CliOutput.defaultFormatter({ colors: false })),
         dial,
         options?.http ?? transport(network),
         ConfigProvider.layer(ConfigProvider.fromEnv({ env: { ...options?.env } })),

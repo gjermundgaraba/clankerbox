@@ -6,15 +6,15 @@ packages:
 catalogMode: prefer
 saveExact: true
 catalog:
-  "@effect/platform-node": 4.0.5
+  "@effect/platform-node": 4.0.6
   # The CLI depends on it directly, at effect's version, for npm installs: platform-node takes
   # it by caret, and a newer one requires a newer effect, so npm would install a second effect
   # under it. Keep it equal to effect.
-  "@effect/platform-node-shared": 4.0.5
-  "@effect/vitest": 4.0.5
+  "@effect/platform-node-shared": 4.0.6
+  "@effect/vitest": 4.0.6
   "@gjermundgaraba/effect-actions": 0.19.0
   "@types/node": 26.6.5
-  effect: 4.0.5
+  effect: 4.0.6
   sandbox-agent: 0.5.3
   typescript: 7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.4.0
