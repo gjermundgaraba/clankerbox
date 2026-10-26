@@ -20,6 +20,7 @@ import {
   type MachineState,
   missing,
   Runtime,
+  type Sizes,
   timeoutFail,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
@@ -99,6 +100,9 @@ const program = (binary: string, vm: string): ReadonlyArray<string> => [
 // Source: tart VMDirectory.swift resizeRawDisk
 export const diskGb = (diskGib: number): number => Math.ceil((diskGib * 1024 ** 3) / 1e9);
 
+// Source: tart Commands/Get.swift run
+export const diskGibOf = (gb: number): number => Math.floor((gb * 1e9) / 1024 ** 3);
+
 const xml = (text: string): string =>
   text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
@@ -146,6 +150,20 @@ const VmState = Schema.Literals(["running", "suspended", "stopped"]);
 const decodeList = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(Schema.Struct({ Name: Schema.String, State: VmState }))),
 );
+
+// Source: tart Commands/Get.swift VMInfo
+const decodeInfo = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ CPU: Schema.Int, Memory: Schema.Int, Disk: Schema.NullOr(Schema.Int) }),
+  ),
+);
+
+const sizeFlags = (sizes: Sizes): ReadonlyArray<string> => [
+  "--cpu",
+  String(sizes.cpu),
+  "--memory",
+  String(sizes.ramMib),
+];
 
 export const stateOf = (state: typeof VmState.Type): MachineState =>
   state === "suspended" ? "paused" : state;
@@ -590,10 +608,7 @@ export const make = (
       ),
       create: Effect.fn("Tart.create")((machine, image) =>
         cloneInto(image, machine, [
-          "--cpu",
-          String(machine.cpu),
-          "--memory",
-          String(machine.ramMib),
+          ...sizeFlags(machine),
           "--disk-size",
           String(diskGb(machine.diskGib)),
         ]),
@@ -652,6 +667,48 @@ export const make = (
       fork: Effect.fn("Tart.fork")((source, machine) =>
         Effect.andThen(copyable("fork", source), cloneInto(vmOf(source), machine, [])),
       ),
+      resize: Effect.fn("Tart.resize")((machine, to) =>
+        Effect.gen(function* () {
+          const vm = vmOf(machine);
+          const observed = yield* state(vm);
+
+          if (observed === "missing") {
+            return yield* missing("mac", machine);
+          }
+
+          if (observed !== "stopped") {
+            return yield* new WrongState({
+              message: `Tart resizes only a stopped machine, and ${machine.id} is ${observed}: stop it first`,
+              machine: machine.id,
+              state: observed,
+            });
+          }
+
+          const disk =
+            to.diskGib > machine.diskGib ? ["--disk-size", String(diskGb(to.diskGib))] : [];
+
+          yield* call(["set", vm, ...sizeFlags(to), ...disk], `set ${vm}`);
+        }),
+      ),
+      sizes: Effect.fn("Tart.sizes")((machine) => {
+        const vm = vmOf(machine);
+
+        return Effect.flatMap(call(["get", vm, "--format", "json"], `get ${vm}`), (ran) =>
+          decodeInfo(ran.stdout).pipe(
+            Effect.map(({ CPU, Memory, Disk }) => ({
+              cpu: CPU,
+              ramMib: Memory,
+              diskGib: Disk === null ? machine.diskGib : diskGibOf(Disk),
+            })),
+            Effect.mapError(
+              (error) =>
+                new Internal({
+                  message: `tart get ${vm} answered something unexpected: ${error.message}`,
+                }),
+            ),
+          ),
+        );
+      }),
       deleteCheckpoint: Effect.fn("Tart.deleteCheckpoint")((checkpoint) =>
         Effect.asVoid(
           call(["delete", checkpointVm(checkpoint)], `delete ${checkpointVm(checkpoint)}`, [0, 2]),

@@ -36,6 +36,8 @@ export interface MachineRef {
 
 export type MachineState = Machine["state"];
 
+export type Sizes = Pick<MachineRef, "cpu" | "ramMib" | "diskGib">;
+
 export interface CheckpointRef {
   readonly id: string;
   readonly name: string;
@@ -55,20 +57,22 @@ export const timeoutFail =
 export interface Held {
   readonly machine: MachineRef;
   /**
-   * Admitted to a create, start, fork, restore, or a stop that resumes it, still under way: its VM
-   * may not run yet, so admission counts it as running. A fork's source is not booted by it.
+   * Admitted to a create, start, fork, restore, a stop that resumes it, or a resize that grows its
+   * RAM, still under way: its VM may not run yet, so admission counts it as running, at the sizes
+   * it was admitted at. A fork's source is not booted by it.
    */
   readonly booting: boolean;
 }
 
 /**
- * The actions that may boot a machine, as the runtime's refusals name them. A stop boots only a
- * paused machine, on a runtime whose `stopResumes` is true.
+ * The actions that may boot a machine, or grow a running one's RAM, as the runtime's refusals name
+ * them. A stop boots only a paused machine, on a runtime whose `stopResumes` is true.
  */
 export type Booting =
   | "createMachine"
   | "startMachine"
   | "stopMachine"
+  | "resizeMachine"
   | "forkMachine"
   | "restoreMachine";
 
@@ -192,6 +196,19 @@ export interface Interface {
     source: MachineRef,
     machine: MachineRef,
   ) => Effect.Effect<void, RoomError | StateError | Unsizable>;
+  /**
+   * Gives a made machine the sizes `to` holds, from the sizes `machine` holds: any vCPUs and RAM to
+   * a stopped machine, and to a running one only what the runtime grows live, and a disk only a
+   * larger size. A state it doesn't resize from is `WrongState`, and a size it can't give
+   * `Unsizable`, both before anything native; a failure after may leave part of `to` given, which
+   * `sizes` reads. The core never resizes a paused machine, nor shrinks a disk.
+   */
+  readonly resize: (
+    machine: MachineRef,
+    to: Sizes,
+  ) => Effect.Effect<void, RuntimeError | StateError | Unsizable>;
+  /** The sizes the runtime holds for a machine it has, as a resize left them. */
+  readonly sizes: (machine: MachineRef) => Effect.Effect<Sizes, RuntimeError>;
   /** Removes everything native the checkpoint's row could have made. */
   readonly deleteCheckpoint: (checkpoint: CheckpointRef) => Effect.Effect<void, RuntimeError>;
   /** As the command's user, in a running guest. */

@@ -645,6 +645,42 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "resize sends the sizes it is given, in their units, and prints the sizes the machine then has",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* scratch;
+        const config = yield* writeConfig(dir, ["linux"]);
+        const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_dev")] });
+
+        const { code, stdout, stderr } = yield* cli(
+          ["resize", "linux_dev", "--ram", "2G", "--disk", "30G", "--config", config],
+          { endpoints: [["linux", linux]] },
+        );
+
+        expect(stderr).toBe("");
+        expect(code).toBe(0);
+        expect(stdout).toBe("linux_dev 1 CPU, 2G RAM, 30G disk");
+        expect(linux.calls).toEqual(["machine.resize"]);
+      }),
+  );
+
+  it.effect("resize with no size to give is refused before any call", () =>
+    Effect.gen(function* () {
+      const dir = yield* scratch;
+      const config = yield* writeConfig(dir, ["linux"]);
+      const linux = host({ id: "linux", bases: ["ubuntu"], machines: [machine("linux_dev")] });
+
+      const { code, stderr } = yield* cli(["resize", "linux_dev", "--config", config], {
+        endpoints: [["linux", linux]],
+      });
+
+      expect(code).toBe(1);
+      expect(stderr).toContain("Invalid: resize takes --cpu, --ram or --disk");
+      expect(linux.calls).toEqual([]);
+    }),
+  );
+
+  it.effect(
     "exec sends the command, its user and, with --stdin, this stdin, prints its output and exits with its code",
     () =>
       Effect.gen(function* () {

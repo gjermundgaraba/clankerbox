@@ -1,10 +1,12 @@
 import { totalmem } from "node:os";
 import { join } from "node:path";
 import {
+  formatMib,
   type HostError,
   Internal,
   Invalid,
   requirements,
+  Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
@@ -141,6 +143,13 @@ type RecordState = typeof RecordState.Type;
 
 const decodeStatus = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ state: RecordState })),
+);
+
+// Source: smolvm src/cli/vm_common.rs machine_status_json
+const decodeSizes = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({ cpus: Size, memory_mib: Size, storage_gb: Schema.NullOr(Size) }),
+  ),
 );
 
 const alive: ReadonlySet<RecordState> = new Set(["running", "pausing", "unreachable", "frozen"]);
@@ -546,6 +555,96 @@ export const make = (
           yield* call(["machine", "pause", "--name", native], `machine pause ${native}`);
         }),
       ),
+      resize: Effect.fn("Smolvm.resize")((machine, to) =>
+        Effect.gen(function* () {
+          const native = nativeName(machine);
+          const recorded = yield* status(native);
+
+          const grown = (flag: string, from: number, size: number) =>
+            size > from ? [flag, String(size)] : [];
+
+          const changed = (flag: string, from: number, size: number) =>
+            size === from ? [] : [flag, String(size)];
+
+          const storage = grown("--storage", machine.diskGib, to.diskGib);
+
+          if (recorded === "missing") {
+            return yield* missing("linux", machine);
+          }
+
+          if (recorded === "running") {
+            if (to.cpu < machine.cpu || to.ramMib < machine.ramMib) {
+              return yield* new Unsizable({
+                message: `smolvm only grows a running machine's vCPUs and RAM, and ${machine.id} has ${machine.cpu} vCPUs and ${formatMib(machine.ramMib)}: stop it to shrink them`,
+              });
+            }
+
+            const live = [
+              ...grown("--cpus", machine.cpu, to.cpu),
+              ...grown("--mem", machine.ramMib, to.ramMib),
+              ...storage,
+            ];
+
+            if (live.length > 0) {
+              yield* call(
+                ["machine", "resize", "--name", native, ...live],
+                `machine resize ${native}`,
+              );
+            }
+
+            return;
+          }
+
+          // Source: smolvm src/cli/vm_common.rs resize_vm
+          if (recorded !== "stopped" && recorded !== "created") {
+            return yield* new WrongState({
+              message: `smolvm reads machine ${machine.id} ${recorded}, and resizes only a stopped or running machine`,
+              machine: machine.id,
+              state: recorded,
+            });
+          }
+
+          const settings = [
+            ...changed("--cpus", machine.cpu, to.cpu),
+            ...changed("--mem", machine.ramMib, to.ramMib),
+          ];
+
+          if (settings.length > 0) {
+            yield* call(
+              ["machine", "update", "--name", native, ...settings],
+              `machine update ${native}`,
+            );
+          }
+
+          if (storage.length > 0) {
+            yield* call(
+              ["machine", "resize", "--name", native, ...storage],
+              `machine resize ${native}`,
+            );
+          }
+        }),
+      ),
+      sizes: Effect.fn("Smolvm.sizes")((machine) => {
+        const native = nativeName(machine);
+
+        return Effect.flatMap(
+          call(["machine", "status", "--name", native, "--json"], `machine status ${native}`),
+          (ran) =>
+            decodeSizes(ran.stdout).pipe(
+              Effect.map(({ cpus, memory_mib, storage_gb }) => ({
+                cpu: cpus,
+                ramMib: memory_mib,
+                diskGib: storage_gb ?? machine.diskGib,
+              })),
+              Effect.mapError(
+                (error) =>
+                  new Internal({
+                    message: `smolvm machine status ${native} answered something unexpected: ${error.message}`,
+                  }),
+              ),
+            ),
+        );
+      }),
       delete: Effect.fn("Smolvm.delete")(removeVm),
       exec: Effect.fn("Smolvm.exec")((machine, { argv, stdin, user }) => {
         const native = nativeName(machine);

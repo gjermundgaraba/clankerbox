@@ -159,7 +159,9 @@ transport. Neither `./testing` export is published.
   can't save: a VM booted under another pin, or one Tart can't suspend. A
   paused machine resumes only under the pin it booted under, for a start, and
   for a stop on a runtime whose stop resumes it, and a capture or fork copies
-  only a VM booted under the host's pin. A machine is made by one step
+  only a VM booted under the host's pin. A resize runs beside the actor, owning
+  the machine's lease, and the row keeps the sizes the runtime reads after it,
+  also after one that failed part way. A machine is made by one step
   in the request that creates it, from what only that request holds: a copy or
   setup that fails deletes it and answers the failure, and a delete that fails
   runs again at each recheck. A host that starts deletes every machine the last

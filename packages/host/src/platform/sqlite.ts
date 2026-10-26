@@ -304,6 +304,10 @@ export const open = (
 
     const updatePin = db.prepare("UPDATE machines SET pin = $pin WHERE name = $name");
 
+    const updateSizes = db.prepare(
+      "UPDATE machines SET cpu = $cpu, ram_mib = $ram_mib, disk_gib = $disk_gib WHERE name = $name",
+    );
+
     const deleteMachine = db.prepare("DELETE FROM machines WHERE name = ?");
 
     const selectCheckpoints = db.prepare(
@@ -411,6 +415,16 @@ export const open = (
       bootedUnder: Effect.fn("Store.bootedUnder")((name, pin) =>
         sql(`record the pin ${id(name)} boots under`, () => {
           updatePin.run({ name, pin: pin ?? null });
+        }),
+      ),
+      sized: Effect.fn("Store.sized")((name, sizes) =>
+        sql(`record ${id(name)}'s sizes`, () => {
+          updateSizes.run({
+            name,
+            cpu: sizes.cpu,
+            ram_mib: sizes.ramMib,
+            disk_gib: sizes.diskGib,
+          });
         }),
       ),
       removeMachine: Effect.fn("Store.removeMachine")((name) =>

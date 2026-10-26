@@ -94,7 +94,10 @@ export class WrongState extends Schema.TaggedError<WrongState>()(
   { httpApiStatus: 412 },
 ) {}
 
-/** The runtime can't give the requested sizes, such as a disk below the base's. */
+/**
+ * The runtime can't give the requested sizes, such as a disk below the base's or below the
+ * machine's, or a running machine's vCPUs or RAM below what it has.
+ */
 export class Unsizable extends Schema.TaggedError<Unsizable>()(
   "Unsizable",
   { message: Schema.String, ...located },

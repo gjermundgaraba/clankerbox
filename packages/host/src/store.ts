@@ -1,5 +1,6 @@
 import type { Conflict, Desired, Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, type DateTime, type Effect, type Option } from "effect";
+import type { Sizes } from "./runtime.ts";
 
 /** What the store answers a request with: what the row now asks for, and the request's number. */
 export interface Desire {
@@ -76,6 +77,8 @@ export interface Interface {
   readonly made: (name: string) => Effect.Effect<void, Internal>;
   readonly hostKey: (name: string, hostKey: string) => Effect.Effect<void, Internal>;
   readonly bootedUnder: (name: string, pin: string | undefined) => Effect.Effect<void, Internal>;
+  /** The sizes the runtime holds for the machine, as a resize left them. */
+  readonly sized: (name: string, sizes: Sizes) => Effect.Effect<void, Internal>;
   readonly removeMachine: (name: string) => Effect.Effect<void, Internal>;
   readonly checkpoints: Effect.Effect<ReadonlyArray<CheckpointRecord>, Internal>;
   readonly findCheckpoint: (

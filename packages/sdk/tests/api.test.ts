@@ -65,7 +65,7 @@ test("the reads of a machine, a checkpoint and the host refuse undeclared fields
   }
 });
 
-test("malformed IDs, names and sizes are refused with InvalidInput", async () => {
+test("malformed IDs, names and sizes, and a resize that names no size, are refused with InvalidInput", async () => {
   for (const [path, body] of [
     ["getMachine", { id: "nohost" }],
     ["createMachine", { ...create, id: "linux_2dev" }],
@@ -73,6 +73,8 @@ test("malformed IDs, names and sizes are refused with InvalidInput", async () =>
     ["createMachine", { ...create, cpu: 0 }],
     ["createMachine", { ...create, cpu: 1.5 }],
     ["forkMachine", { machine: "linux_dev", name: "a.b" }],
+    ["resizeMachine", { id: "linux_dev" }],
+    ["resizeMachine", { id: "linux_dev", ramMib: 0 }],
   ] as const) {
     const answer = await post(path, body);
 

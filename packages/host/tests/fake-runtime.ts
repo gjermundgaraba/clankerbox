@@ -1,7 +1,13 @@
 import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { type HostError, Internal, type Kind, WrongState } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  type HostError,
+  Internal,
+  type Kind,
+  Unsizable,
+  WrongState,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
@@ -15,6 +21,7 @@ import {
   type Interface,
   Runtime,
   type RuntimeError,
+  type Sizes,
   type StateError,
 } from "../src/runtime.ts";
 
@@ -25,6 +32,8 @@ export type Operation =
   | "start"
   | "stop"
   | "pause"
+  | "resize"
+  | "sizes"
   | "delete"
   | "exec"
   | "capture"
@@ -159,6 +168,8 @@ interface FakeMachine {
   readonly root: string;
 }
 
+const sizesOf = ({ cpu, ramMib, diskGib }: Sizes): Sizes => ({ cpu, ramMib, diskGib });
+
 type Injection =
   | { readonly kind: "fail"; readonly error: HostError }
   | { readonly kind: "die"; readonly message: string }
@@ -185,6 +196,8 @@ export const fakeRuntime = (options: FakeOptions) => {
   const observed: Array<ReadonlyArray<string>> = [];
   const injections = new Map<Operation, Array<Injection>>();
   const observeFailures: Array<RuntimeError | "hang" | "die"> = [];
+  const partialResizes: Array<RuntimeError> = [];
+  const sizes = new Map<string, Sizes>();
 
   const observeHolds: Array<{
     readonly entered: Deferred.Deferred<void>;
@@ -284,6 +297,7 @@ export const fakeRuntime = (options: FakeOptions) => {
         await access(from);
         await cp(from, root, { recursive: true });
         machines.set(machine.name, { state: "running", root });
+        sizes.set(machine.name, sizesOf(machine));
       },
       catch: (cause) => new Internal({ message: `copy into ${machine.id}: ${String(cause)}` }),
     });
@@ -359,6 +373,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               await mkdir(join(root, "dev"), { recursive: true });
               furnish(root, bin);
               machines.set(machine.name, { state: "running", root });
+              sizes.set(machine.name, sizesOf(machine));
             }),
           ),
         start: (machine) =>
@@ -418,6 +433,59 @@ export const fakeRuntime = (options: FakeOptions) => {
               return Effect.void;
             }),
           ),
+        resize: (machine, to) =>
+          call(
+            "resize",
+            machine,
+            Effect.suspend((): Effect.Effect<void, RuntimeError | StateError | Unsizable> => {
+              const found = machines.get(machine.name);
+              const had = sizes.get(machine.name);
+
+              if (found === undefined || had === undefined) {
+                return Effect.fail(missing(kind, machine));
+              }
+
+              const live = found.state === "running" && kind === "linux";
+
+              if (found.state !== "stopped" && !live) {
+                return Effect.fail(
+                  new WrongState({
+                    message: `${machine.id} is ${found.state}: stop it first`,
+                    machine: machine.id,
+                    state: found.state,
+                  }),
+                );
+              }
+
+              if (live && (to.cpu < had.cpu || to.ramMib < had.ramMib)) {
+                return Effect.fail(new Unsizable({ message: `${machine.id} grows only, live` }));
+              }
+
+              const partial = partialResizes.shift();
+
+              if (partial !== undefined) {
+                sizes.set(machine.name, { ...had, ramMib: to.ramMib });
+
+                return Effect.fail(partial);
+              }
+
+              sizes.set(machine.name, sizesOf(to));
+
+              return Effect.void;
+            }),
+          ),
+        sizes: (machine) =>
+          call(
+            "sizes",
+            machine,
+            Effect.suspend(() => {
+              const held = sizes.get(machine.name);
+
+              return held === undefined
+                ? Effect.fail(new Internal({ message: `no machine ${machine.id}` }))
+                : Effect.succeed(held);
+            }),
+          ),
         delete: (machine) =>
           call(
             "delete",
@@ -426,6 +494,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               endCommands(machine),
               Effect.sync(() => {
                 machines.delete(machine.name);
+                sizes.delete(machine.name);
               }),
             ),
           ),
@@ -520,6 +589,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     root: (name: string) => machines.get(name)?.root,
     images,
     machines,
+    sizes,
     stubs: () => stubs,
     failNext: <O extends Operation>(operation: O, error: FailureOf<O>) => {
       // SAFETY: every port method fails with host errors.
@@ -527,6 +597,9 @@ export const fakeRuntime = (options: FakeOptions) => {
     },
     dieNext: (operation: Operation, message: string) => {
       inject(operation, { kind: "die", message });
+    },
+    giveOnlyRamThenFailNextResize: (error: RuntimeError) => {
+      partialResizes.push(error);
     },
     failNextObserve: (error: RuntimeError) => {
       observeFailures.push(error);

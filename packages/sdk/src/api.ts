@@ -26,6 +26,7 @@ import {
   Machine,
   PrebuildRequest,
   Prebuilt,
+  ResizeRequest,
   Usage,
 } from "./resources.ts";
 
@@ -107,6 +108,23 @@ export const Http = ActionHttp.make(
       description:
         "Ask for a machine to stay paused, and wait until it is: the runtime saves its RAM, processes and disks and stops its VM, and a start resumes it. A machine that is stopped stays stopped, and one whose VM the runtime can't save, booted under another smolvm build or by an older mac host, is stopped instead.",
       input: ById,
+      success: Machine,
+    }),
+    Action.make("resizeMachine", {
+      ...write,
+      error: [
+        Invalid,
+        NotFound,
+        NotMade,
+        Missing,
+        WrongState,
+        Unsizable,
+        Capacity,
+        Internal,
+      ] as const,
+      description:
+        "Give a machine other vCPUs, RAM or disk, and answer it with the sizes the runtime then holds. A stopped machine takes any vCPUs and RAM; a running linux machine only grows, live, needing room for its RAM as a start does; a running mac machine and a paused one are refused: stop it first. A disk only grows, and its guest grows its filesystem into it, at once on a running linux machine and at the next boot otherwise. It waits for a step under way, and the next request waits for it; a resize that fails part way keeps what the runtime gave.",
+      input: ResizeRequest,
       success: Machine,
     }),
     Action.make("deleteMachine", {

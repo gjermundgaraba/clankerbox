@@ -536,6 +536,136 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a stopped machine's vCPUs and RAM are updated either way, its storage grown after, and only what differs is sent",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) =>
+          call.args[1] === "status" ? status("stopped") : undefined,
+        );
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        yield* runtime.resize(machine, { cpu: 4, ramMib: 1024, diskGib: 30 });
+        yield* runtime.resize(machine, { cpu: 2, ramMib: 2048, diskGib: 20 });
+        yield* runtime.resize(machine, { cpu: 2, ramMib: 2048, diskGib: 40 });
+
+        expect(smolvmArgs(spawner.calls)).toEqual([
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+          ["machine", "update", "--name", "dev-01234567", "--cpus", "4", "--mem", "1024"],
+          ["machine", "resize", "--name", "dev-01234567", "--storage", "30"],
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+          ["machine", "resize", "--name", "dev-01234567", "--storage", "40"],
+        ]);
+      }),
+  );
+
+  it.effect(
+    "a running machine grows live in one resize, and a shrink of its vCPUs or RAM is Unsizable before anything native",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) =>
+          call.args[1] === "status" ? status("running") : undefined,
+        );
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        yield* runtime.resize(machine, { cpu: 3, ramMib: 4096, diskGib: 20 });
+
+        const shrunk = yield* Effect.flip(
+          runtime.resize(machine, { cpu: 1, ramMib: 4096, diskGib: 30 }),
+        );
+
+        expect(failure(shrunk)).toEqual([
+          "Unsizable",
+          "smolvm only grows a running machine's vCPUs and RAM, and linux_dev has 2 vCPUs and 2G: stop it to shrink them",
+        ]);
+        expect(smolvmArgs(spawner.calls)).toEqual([
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+          ["machine", "resize", "--name", "dev-01234567", "--cpus", "3", "--mem", "4096"],
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+        ]);
+      }),
+  );
+
+  it.effect(
+    "a resize refuses a paused, part paused, unreachable, frozen or missing machine before anything native",
+    () =>
+      Effect.gen(function* () {
+        let reply = status("paused");
+
+        const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+        const refusals = [];
+
+        for (const next of [
+          status("paused"),
+          status("pausing"),
+          status("unreachable"),
+          status("frozen"),
+          unknown,
+        ]) {
+          reply = next;
+          refusals.push(
+            failure(yield* Effect.flip(runtime.resize(machine, { ...machine, cpu: 4 }))),
+          );
+        }
+
+        expect(refusals).toEqual([
+          [
+            "WrongState",
+            "smolvm reads machine linux_dev paused, and resizes only a stopped or running machine",
+          ],
+          [
+            "WrongState",
+            "smolvm reads machine linux_dev pausing, and resizes only a stopped or running machine",
+          ],
+          [
+            "WrongState",
+            "smolvm reads machine linux_dev unreachable, and resizes only a stopped or running machine",
+          ],
+          [
+            "WrongState",
+            "smolvm reads machine linux_dev frozen, and resizes only a stopped or running machine",
+          ],
+          ["Missing", "machine linux_dev is missing from the linux runtime; delete it"],
+        ]);
+        expect(smolvmArgs(spawner.calls).every((args) => args[1] === "status")).toBe(true);
+      }),
+  );
+
+  it.effect(
+    "sizes reads vCPUs, RAM and storage from smolvm's status, keeping the machine's disk where it records none",
+    () =>
+      Effect.gen(function* () {
+        let storage: number | null = 30;
+
+        const spawner = scripted((call) =>
+          call.args[1] === "status"
+            ? {
+                stdout: JSON.stringify({
+                  state: "stopped",
+                  cpus: 3,
+                  memory_mib: 4096,
+                  storage_gb: storage,
+                }),
+              }
+            : undefined,
+        );
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+        const recorded = yield* runtime.sizes(machine);
+
+        storage = null;
+
+        const unrecorded = yield* runtime.sizes(machine);
+
+        expect(recorded).toEqual({ cpu: 3, ramMib: 4096, diskGib: 30 });
+        expect(unrecorded).toEqual({ cpu: 3, ramMib: 4096, diskGib: 20 });
+      }),
+  );
+
+  it.effect(
     "stop resumes a paused machine, or one a pause left part way, to end its saved execution, and leaves a stopped or missing one",
     () =>
       Effect.gen(function* () {

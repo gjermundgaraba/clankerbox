@@ -226,6 +226,22 @@ export const stubHost = (options: StubHostOptions) => {
           settled(found, found.state === "stopped" ? "stopped" : "paused", "paused"),
         ),
       ),
+    resizeMachine: ({ id, cpu, ramMib, diskGib }) =>
+      Effect.andThen(
+        record("machine.resize"),
+        Effect.map(find(id), (found) => {
+          const now: Machine = {
+            ...found,
+            cpu: cpu ?? found.cpu,
+            ramMib: ramMib ?? found.ramMib,
+            diskGib: diskGib ?? found.diskGib,
+          };
+
+          machines.set(now.id, now);
+
+          return now;
+        }),
+      ),
     deleteMachine: ({ id }) =>
       Effect.andThen(
         record("machine.delete"),

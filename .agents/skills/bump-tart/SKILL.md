@@ -103,6 +103,23 @@ Each: what Tart does, where, and what of ours depends on it.
   `diskGib` up, `shrinkRefusal` matches that text and makes it `Unsizable`.
   The pinned Xcode image has a 140 GB disk, so a `diskGib` below 130 is
   `Unsizable`.
+- `tart set` saves `--cpu` and `--memory` (MiB) to the VM's config before it
+  resizes its disk (`run`, Commands/Set.swift), so a disk refusal leaves them
+  set, and a `--disk-size` of the disk's own size changes nothing. `tart get
+  --format json` gives `CPU`, `Memory` in MiB and `Disk` in whole GB, null when
+  the disk's size can't be read (`VMInfo`, `run`, Commands/Get.swift). Ours:
+  `resize` sets a stopped VM only, `--disk-size` only when it grows, after the
+  core refused a smaller disk; `sizes` and `decodeInfo` read the VM back after
+  every resize, and `diskGibOf` floors the GB to the GiB `diskGb` rounded up
+  from.
+- The base's `tart-guest-agent --run-daemon`, a launch daemon run at load
+  (`data/tart-guest-daemon.plist`, installed by `templates/base.pkr.hcl` in
+  cirruslabs/macos-image-templates), implies `--resize-disk` and grows the
+  APFS container into the disk's free space at each boot with `diskutil apfs
+  resizeContainer` (`internal/command/root.go`,
+  `internal/diskresizer/diskresizer.go` in cirruslabs/tart-guest-agent).
+  Ours: preparation grows no filesystem; a disk a resize grew is the guest's
+  from its next boot. Checked from source, not yet on a VM.
 - `tart get` opens local VMs only (`VMStorageLocal().open`,
   Commands/Get.swift), not an OCI reference, and `tart list` reports no
   OS (`VMInfo`, Commands/List.swift). Ours: no check of `diskGib` against the

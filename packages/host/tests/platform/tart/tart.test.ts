@@ -12,6 +12,7 @@ import { type Interface, type MachineRef } from "../../../src/runtime.ts";
 import {
   checkpointName,
   diskGb,
+  diskGibOf,
   environment,
   jobsDir,
   machineName,
@@ -80,6 +81,7 @@ interface Hooks {
   delete?: (vm: string) => Reply | undefined;
   suspend?: (vm: string) => void;
   print?: (vm: string) => Reply | undefined;
+  get?: (vm: string) => Reply;
 }
 
 const programIn = (plistText: string) =>
@@ -140,6 +142,8 @@ const scriptedMac = (stateDir: string) => {
           : undefined;
       }
 
+      case "get":
+        return hooks.get?.(vm) ?? { stdout: JSON.stringify({ CPU: 4, Memory: 8192, Disk: 65 }) };
       case "exec":
         if (vm === "-i") {
           return { exitCode: 0, stdout: "ran\n" };
@@ -998,6 +1002,84 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(calls(mac)).toEqual([]);
         expect(existsSync(join(jobsDir(mac.settings.stateDir), `${vmOf(copy)}.plist`))).toBe(false);
         expect(yield* accepts(copy.port)).toBe(false);
+      }),
+  );
+
+  it("a disk's size in GB, as tart get reads it, gives back the GiB a create or resize asked for", () => {
+    const sizes = Array.from({ length: 4096 }, (_, at) => at + 1);
+
+    expect(sizes.filter((gib) => diskGibOf(diskGb(gib)) !== gib)).toEqual([]);
+  });
+
+  it.effect(
+    "a resize sets a stopped VM's vCPUs and memory, and its disk only when it grows, and refuses a running, paused or missing VM before anything native",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+
+        mac.vms.set(vm, "stopped");
+
+        yield* runtime.resize(machine, { cpu: 2, ramMib: 4096, diskGib: 60 });
+        yield* runtime.resize(machine, { cpu: 4, ramMib: 8192, diskGib: 100 });
+
+        const refusals = [];
+
+        for (const state of ["running", "suspended", undefined] as const) {
+          if (state === undefined) {
+            mac.vms.delete(vm);
+          } else {
+            mac.vms.set(vm, state);
+          }
+
+          refusals.push(
+            failure(yield* Effect.flip(runtime.resize(machine, { ...machine, cpu: 8 }))),
+          );
+        }
+
+        expect(calls(mac)).toEqual([
+          `tart set ${vm} --cpu 2 --memory 4096`,
+          `tart set ${vm} --cpu 4 --memory 8192 --disk-size 108`,
+        ]);
+        expect(refusals).toEqual([
+          [
+            "WrongState",
+            "Tart resizes only a stopped machine, and mac_dev is running: stop it first",
+          ],
+          [
+            "WrongState",
+            "Tart resizes only a stopped machine, and mac_dev is paused: stop it first",
+          ],
+          ["Missing", "machine mac_dev is missing from the mac runtime; delete it"],
+        ]);
+      }),
+  );
+
+  it.effect(
+    "sizes reads tart get, its disk in GiB, keeping the machine's disk where Tart can't tell it",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        let disk: number | null = diskGb(100);
+
+        mac.hooks.get = () => ({ stdout: JSON.stringify({ CPU: 2, Memory: 4096, Disk: disk }) });
+
+        const read = yield* runtime.sizes(machine);
+
+        disk = null;
+
+        const unread = yield* runtime.sizes(machine);
+
+        mac.hooks.get = () => ({ exitCode: 1, stderr: "Error: VM not found\n" });
+
+        const failed = yield* Effect.flip(runtime.sizes(machine));
+
+        expect(read).toEqual({ cpu: 2, ramMib: 4096, diskGib: 100 });
+        expect(unread).toEqual({ cpu: 2, ramMib: 4096, diskGib: 60 });
+        expect(failed._tag).toBe("Internal");
+        expect(calls(mac)[0]).toBe(`tart get ${vmOf(machine)} --format json`);
       }),
   );
 

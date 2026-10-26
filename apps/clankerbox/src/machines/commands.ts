@@ -1,4 +1,12 @@
-import { actionsByName, Invalid, outputLimit, Prebuild } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  actionsByName,
+  formatGib,
+  formatMib,
+  Invalid,
+  type Machine,
+  outputLimit,
+  Prebuild,
+} from "@gjermundgaraba/clankerbox-sdk";
 import { Console, DateTime, Duration, Effect, Option, Stdio, Stream } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import {
@@ -17,7 +25,7 @@ import {
   table,
   withClient,
 } from "../command.ts";
-import { age, parseSeconds } from "../units.ts";
+import { age, parseGib, parseMib, parseSeconds } from "../units.ts";
 import { flagsRequest, specArguments } from "./spec.ts";
 import { encodeMachine, machineFields, machineRows } from "./view.ts";
 
@@ -116,6 +124,45 @@ export const pause = Command.make(
       text: machineState,
     }),
 ).pipe(Command.withDescription(actionsByName.pauseMachine.description));
+
+const sized = (machine: Machine) =>
+  `${machine.id} ${machine.cpu} CPU, ${formatMib(machine.ramMib)} RAM, ${formatGib(machine.diskGib)} disk`;
+
+export const resize = Command.make(
+  "resize",
+  {
+    ...mutationFlags,
+    cpu: specArguments.cpu,
+    ram: specArguments.ram,
+    disk: specArguments.disk,
+    machine: machineArgument,
+  },
+  (flags) =>
+    printResource(flags, {
+      call: (client) =>
+        Effect.gen(function* () {
+          const ram = yield* parsed(flags.ram, "--ram", parseMib);
+          const disk = yield* parsed(flags.disk, "--disk", parseGib);
+
+          if (Option.isNone(flags.cpu) && Option.isNone(ram) && Option.isNone(disk)) {
+            return yield* new Invalid({ message: "resize takes --cpu, --ram or --disk" });
+          }
+
+          return yield* client.resizeMachine({
+            id: flags.machine,
+            cpu: Option.getOrUndefined(flags.cpu),
+            ramMib: Option.getOrUndefined(ram),
+            diskGib: Option.getOrUndefined(disk),
+          });
+        }),
+      encode: encodeMachine,
+      text: sized,
+    }),
+).pipe(
+  Command.withDescription(
+    `${actionsByName.resizeMachine.description} Prints the sizes it then has.`,
+  ),
+);
 
 export const deleteMachine = Command.make(
   "delete",

@@ -4,6 +4,7 @@ import {
   type Desired,
   type Executed,
   type ExecRequest,
+  formatGib,
   formatId,
   type HostError,
   Internal,
@@ -13,8 +14,10 @@ import {
   offered,
   offers,
   PinMismatch,
+  type ResizeRequest,
   Superseded,
   type TailnetStatus,
+  Unsizable,
   type Usage,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
@@ -59,6 +62,7 @@ import {
   missing,
   Runtime,
   type RuntimeError,
+  type Sizes,
   stateReadWait,
   timeoutFail,
 } from "./runtime.ts";
@@ -81,6 +85,7 @@ export interface Interface {
   readonly start: (id: string) => Effect.Effect<Machine, Declared<"startMachine">>;
   readonly stop: (id: string) => Effect.Effect<Machine, Declared<"stopMachine">>;
   readonly pause: (id: string) => Effect.Effect<Machine, Declared<"pauseMachine">>;
+  readonly resize: (request: ResizeRequest) => Effect.Effect<Machine, Declared<"resizeMachine">>;
   readonly delete: (id: string) => Effect.Effect<void, Declared<"deleteMachine">>;
   readonly fork: (id: string, name: string) => Effect.Effect<Machine, Declared<"forkMachine">>;
   readonly restore: (
@@ -143,7 +148,7 @@ export const make = (
     const admission = yield* Semaphore.make(1);
     const inserting = yield* Semaphore.make(1);
 
-    const booting = new Set<string>();
+    const booting = new Map<string, MachineRef>();
     const entries = new Map<string, MachineActor>();
 
     const idOf = idOn(config.id);
@@ -205,27 +210,29 @@ export const make = (
       ).pipe(Effect.catch(() => Effect.succeed<MachineState>("unknown")));
 
     const heldMachines = Effect.map(store.machines, (intents) =>
-      intents.map((intent) => ({ machine: ref(intent), booting: booting.has(intent.name) })),
+      intents.map((intent) => {
+        const admitted = booting.get(intent.name);
+
+        return admitted === undefined
+          ? { machine: ref(intent), booting: false }
+          : { machine: admitted, booting: true };
+      }),
     );
 
-    const admitted = (action: Booting, intent: Intent) =>
+    const admitted = (action: Booting, machine: MachineRef) =>
       admission.withPermits(1)(
         Effect.gen(function* () {
           const machines = (yield* heldMachines).map((held) =>
-            held.machine.name === intent.name ? { ...held, booting: true } : held,
+            held.machine.name === machine.name ? { machine, booting: true } : held,
           );
 
           yield* runtime
-            .admit({ action, machine: ref(intent), machines })
-            .pipe(
-              inTime(
-                `${action} ${idOf(intent.name)}: the ${config.kind} runtime's admission check`,
-              ),
-            );
+            .admit({ action, machine, machines })
+            .pipe(inTime(`${action} ${machine.id}: the ${config.kind} runtime's admission check`));
 
           yield* Effect.acquireRelease(
-            Effect.sync(() => booting.add(intent.name)),
-            () => Effect.sync(() => booting.delete(intent.name)),
+            Effect.sync(() => booting.set(machine.name, machine)),
+            () => Effect.sync(() => booting.delete(machine.name)),
           );
         }),
       );
@@ -323,7 +330,7 @@ export const make = (
 
             yield* Effect.scoped(
               Effect.andThen(
-                admitted(booted[making.source.kind], intent),
+                admitted(booted[making.source.kind], ref(intent)),
                 copied(making.source, ref(intent)),
               ),
             );
@@ -352,7 +359,7 @@ export const make = (
 
             yield* life.seen === "running"
               ? started
-              : Effect.scoped(Effect.andThen(admitted("startMachine", intent), started));
+              : Effect.scoped(Effect.andThen(admitted("startMachine", ref(intent)), started));
 
             const hostKey = yield* prepare(runtime, ref(intent));
 
@@ -416,7 +423,7 @@ export const make = (
 
             if (life.seen === "paused" && runtime.stopResumes) {
               yield* resumable(intent);
-              yield* Effect.scoped(Effect.andThen(admitted("stopMachine", intent), stopped));
+              yield* Effect.scoped(Effect.andThen(admitted("stopMachine", ref(intent)), stopped));
             } else {
               yield* stopped;
             }
@@ -796,6 +803,92 @@ export const make = (
         }),
       );
 
+    const sizedAfter = (name: string, machine: MachineRef, to: Sizes, resized: boolean) =>
+      runtime.sizes(machine).pipe(
+        inTime(`the ${config.kind} runtime's read of ${machine.id}'s sizes`),
+        Effect.catch((error) =>
+          Effect.as(
+            Effect.logWarning(
+              `resize ${machine.id}: couldn't read its sizes back, so the host keeps ${resized ? "those asked" : "those it had"}: ${error.message}`,
+            ),
+            resized ? to : machine,
+          ),
+        ),
+        Effect.flatMap((sizes) =>
+          store.sized(name, { cpu: sizes.cpu, ramMib: sizes.ramMib, diskGib: sizes.diskGib }),
+        ),
+        Effect.catch((error) =>
+          Effect.logWarning(`resize ${machine.id}: couldn't record its sizes: ${error.message}`),
+        ),
+      );
+
+    const resized = (name: string, request: ResizeRequest) =>
+      Effect.gen(function* () {
+        yield* leases.own("machine", name);
+
+        const intent = yield* row(name);
+        const id = idOf(name);
+
+        yield* made(intent);
+
+        const machine = ref(intent);
+
+        const to: Sizes = {
+          cpu: request.cpu ?? intent.cpu,
+          ramMib: request.ramMib ?? intent.ramMib,
+          diskGib: request.diskGib ?? intent.diskGib,
+        };
+
+        const [seen = "unknown"] = yield* runtime
+          .observe([machine])
+          .pipe(inTime(`the ${config.kind} runtime`));
+
+        if (seen === "missing") {
+          return yield* missing(config.kind, { id });
+        }
+
+        if (seen === "unknown") {
+          return yield* new Internal({
+            message: `the ${config.kind} runtime couldn't read machine ${id}, so it isn't resized: try again`,
+          });
+        }
+
+        if (seen === "paused") {
+          return yield* new WrongState({
+            message: `machine ${id} is paused, and a resize gives sizes only to a stopped or running machine: stop it first`,
+            machine: id,
+            state: seen,
+          });
+        }
+
+        if (to.diskGib < intent.diskGib) {
+          return yield* new Unsizable({
+            message: `machine ${id}'s disk is ${formatGib(intent.diskGib)}, and a disk only grows`,
+          });
+        }
+
+        if (seen === "running" && to.ramMib > intent.ramMib) {
+          yield* admitted("resizeMachine", { ...machine, ...to });
+        }
+
+        yield* runtime
+          .resize(machine, to)
+          .pipe(Effect.onExit((exit) => sizedAfter(name, machine, to, Exit.isSuccess(exit))));
+      });
+
+    const resize = (request: ResizeRequest) =>
+      Effect.gen(function* () {
+        const name = yield* nameOf(request.id);
+
+        yield* surviving(`resize ${idOf(name)}`, Effect.scoped(resized(name, request))).pipe(
+          Effect.tapError((error) =>
+            Effect.logWarning(`resize ${idOf(name)} failed: ${error.message}`),
+          ),
+        );
+
+        return yield* shown(name);
+      });
+
     const capacity = Effect.flatMap(heldMachines, (machines) =>
       runtime.capacity(machines).pipe(
         inTime(`the ${config.kind} runtime`),
@@ -859,6 +952,7 @@ export const make = (
       pause: Effect.fn("Machines.pause")((id) =>
         Effect.flatMap(nameOf(id), (name) => settledOn(name, "paused")),
       ),
+      resize: Effect.fn("Machines.resize")(resize),
       delete: Effect.fn("Machines.delete")((id) => Effect.flatMap(nameOf(id), remove)),
       fork: Effect.fn("Machines.fork")(fork),
       restore: Effect.fn("Machines.restore")(restore),

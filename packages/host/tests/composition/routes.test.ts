@@ -27,42 +27,46 @@ const withClient = <A, E>(url: string, use: (client: Client.Interface) => Effect
   Effect.flatMap(Client.Client, use).pipe(Effect.provide(NodeClient.layer([{ id: "linux", url }])));
 
 layer(NodeServices.layer, { excludeTestServices: true })((it) => {
-  it.effect("the SDK's client drives a machine's lifecycle on a served host", () =>
-    Effect.gen(function* () {
-      const { url } = yield* serve();
+  it.effect(
+    "the SDK's client drives a machine's lifecycle, a resize included, on a served host",
+    () =>
+      Effect.gen(function* () {
+        const { url } = yield* serve();
 
-      const [hosts, made, stopped, started, listed] = yield* withClient(url, (client) =>
-        Effect.all([
-          client.hosts,
-          client.create("dev", spec, {}),
-          client.stopMachine({ id: "linux_dev" }),
-          client.startMachine({ id: "linux_dev" }),
-          client.machines,
-        ]),
-      );
+        const [hosts, made, stopped, resized, started, listed] = yield* withClient(url, (client) =>
+          Effect.all([
+            client.hosts,
+            client.create("dev", spec, {}),
+            client.stopMachine({ id: "linux_dev" }),
+            client.resizeMachine({ id: "linux_dev", cpu: 2 }),
+            client.startMachine({ id: "linux_dev" }),
+            client.machines,
+          ]),
+        );
 
-      const gone = yield* withClient(url, (client) =>
-        Effect.andThen(
-          client.deleteMachine({ id: "linux_dev" }),
-          Effect.flip(client.getMachine({ id: "linux_dev" })),
-        ),
-      );
+        const gone = yield* withClient(url, (client) =>
+          Effect.andThen(
+            client.deleteMachine({ id: "linux_dev" }),
+            Effect.flip(client.getMachine({ id: "linux_dev" })),
+          ),
+        );
 
-      expect(hosts.answers).toEqual([
-        {
-          id: "linux",
-          kind: "linux",
-          version,
-          runtimeVersion: "fake",
-          bases: ["ubuntu"],
-        },
-      ]);
-      expect(made).toMatchObject({ id: "linux_dev", state: "running" });
-      expect(stopped.state).toBe("stopped");
-      expect(started.state).toBe("running");
-      expect(listed.answers.map(({ id }) => id)).toEqual(["linux_dev"]);
-      expect(gone._tag).toBe("NotFound");
-    }),
+        expect(hosts.answers).toEqual([
+          {
+            id: "linux",
+            kind: "linux",
+            version,
+            runtimeVersion: "fake",
+            bases: ["ubuntu"],
+          },
+        ]);
+        expect(made).toMatchObject({ id: "linux_dev", state: "running" });
+        expect(stopped.state).toBe("stopped");
+        expect([resized.cpu, resized.ramMib, resized.diskGib]).toEqual([2, 1024, 10]);
+        expect(started.state).toBe("running");
+        expect(listed.answers.map(({ id }) => id)).toEqual(["linux_dev"]);
+        expect(gone._tag).toBe("NotFound");
+      }),
   );
 
   it.effect(

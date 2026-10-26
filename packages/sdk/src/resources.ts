@@ -215,6 +215,25 @@ export type MachineSpec = typeof MachineSpec.Type;
 /** The host checks that `id` names it, so a create never lands under another host's ID. */
 export const CreateRequest = Schema.Struct({ id: Id, ...specFields });
 
+const resizing = {
+  cpu: Schema.optional(Size),
+  ramMib: Schema.optional(Size),
+  diskGib: Schema.optional(Size),
+};
+
+/** The sizes to give machine `id`, at least one: one left out stays as it is. */
+export const ResizeRequest = Schema.Struct({ id: Id, ...resizing }).check(
+  Schema.makeFilter(
+    ({ cpu, ramMib, diskGib }) =>
+      cpu !== undefined ||
+      ramMib !== undefined ||
+      diskGib !== undefined ||
+      "a resize names at least one of cpu, ramMib and diskGib",
+  ),
+);
+
+export type ResizeRequest = typeof ResizeRequest.Type;
+
 export type CreateRequest = typeof CreateRequest.Type;
 
 /**

@@ -3,8 +3,8 @@
 clankerbox runs machines (VMs) for coding agents and reports where each one is
 reachable over SSH.
 
-- Lifecycle: create, start, stop, pause, delete, fork, checkpoint capture and
-  restore.
+- Lifecycle: create, start, stop, pause, resize, delete, fork, checkpoint
+  capture and restore.
 - Two kinds of host: `linux`, Linux guests on a Linux host under smolvm, with
   RAM forks and RAM checkpoints, and `mac`, macOS guests on a Mac under Tart,
   with disk copies.
@@ -221,6 +221,7 @@ clankerbox ssh linux_dev -- uptime
 clankerbox exec linux_dev --user admin -- uname -a   # no SSH; --timeout ends the command
 clankerbox pause linux_dev                 # saves its RAM and frees it
 clankerbox stop linux_dev
+clankerbox resize linux_dev --cpu 4 --ram 4G --disk 80G
 clankerbox start linux_dev
 clankerbox fork linux_dev dev2             # linux_dev2
 clankerbox checkpoint capture linux_dev base
@@ -260,6 +261,12 @@ clankerbox checkpoint delete linux_base
 - On a Mac, macOS restores a VM's state only in the operator's unlocked login
   session: a `start` of a paused machine while it is locked fails and keeps
   the saved state (see Deploy).
+- `resize` gives a stopped machine any vCPUs and RAM, and grows a running
+  linux machine's live, needing room for its RAM as a start does; a running
+  mac machine or a paused one is refused, so stop it first. A disk only grows:
+  smolvm grows the guest's filesystem, at once when it runs, and on a Mac the
+  base's Tart guest agent grows APFS at the next boot. A resize waits for a
+  step under way, and keeps what the runtime gave when it fails part way.
 - A create, fork or restore whose copy or setup fails deletes its machine and
   answers the error, and a delete that fails runs again at the next check; a
   host that restarts before it finished deletes the machine too. Only a

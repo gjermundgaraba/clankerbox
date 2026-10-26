@@ -347,6 +347,28 @@ layer(NodeServices.layer)((it) => {
     }),
   );
 
+  it.effect("a resize's sizes write only that machine's sizes, never what was asked", () =>
+    Effect.gen(function* () {
+      const stateDir = join(yield* scratch, "state");
+
+      const after = yield* withStore(stateDir, (store) =>
+        Effect.gen(function* () {
+          yield* store.insertMachine(intent("dev"));
+          yield* store.insertMachine(intent("other"));
+          yield* store.desire("dev", "stopped");
+          yield* store.sized("dev", { cpu: 4, ramMib: 512, diskGib: 30 });
+
+          return yield* store.machines;
+        }),
+      );
+
+      expect(after).toEqual([
+        intent("dev", { desired: "stopped", generation: 2, cpu: 4, ramMib: 512, diskGib: 30 }),
+        intent("other"),
+      ]);
+    }),
+  );
+
   it.effect(
     "a database the last release left, at schema version 1, gains the pause's pin and keeps its machines",
     () =>

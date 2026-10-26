@@ -240,7 +240,7 @@ as it is.
   src/config.rs); an unknown name is "machine '<name>' not found"
   (`status_vm_json`). Ours: `RecordState`, `alive` and `stateOf` (`running`,
   `pausing`, `unreachable`, `frozen` have a live VMM), and the not-found text;
-  the host decodes `state` alone. Its `last_exit` is written only where smolvm
+  the host decodes `state` alone, but for a resize's read-back below. Its `last_exit` is written only where smolvm
   is the VMM's parent and reaps it, `serve` or an embedder, never after a CLI
   start (src/vm_exit.rs; `register_vm_child`, src/process.rs).
   It reports a port count (`ports`), and `branchable: false` even after `start
@@ -253,6 +253,22 @@ as it is.
   running machine adds a line to its `agent-console.log`. `machine ls` probes
   every running VM, up to about 3 s each (`list_vms`, src/cli/vm_common.rs),
   so it is never used to read one machine.
+- `machine resize --name X` with `--cpus`, `--mem` (MiB) and `--storage`
+  (GiB) resizes a `running` machine live, RAM first, then vCPUs, then disks,
+  each only growing (vCPUs shrink only on compatible x86_64 runtimes; RAM is
+  aligned up to the platform's hot-add), and keeps what it gave before a
+  failure; a stopped or created machine takes only `--storage`, growing, its
+  filesystem expanding at the next boot, and any other state is
+  `InvalidState` (`resize_vm`, src/cli/vm_common.rs; src/agent/live_resize.rs).
+  `machine update --name X --cpus N --mem MiB` sets either, either way, only
+  on a stopped or created machine (`UpdateCmd`, src/cli/machine.rs). The
+  status JSON carries `cpus`, `memory_mib` and `storage_gb`, which can be null
+  (`machine_status_json`, src/cli/vm_common.rs). Ours: `resize` sends a
+  running machine one live `machine resize` and refuses its shrinks as
+  `Unsizable`, a stopped or created one `machine update` and then `machine
+  resize --storage`, and refuses any other state as `WrongState`, each before
+  anything native; `sizes` and `decodeSizes` read the record back after every
+  resize, keeping the row's disk where `storage_gb` is null.
 - Concurrent CLI calls on different machines need no serializing: an inventory
   database in WAL mode with a 15 s busy timeout (`BUSY_TIMEOUT`, src/db.rs), a
   per-VM `vm.lock`, the uid allocation lock, the store's shared/exclusive lock
