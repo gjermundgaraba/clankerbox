@@ -1,17 +1,22 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
 import { Effect } from "effect";
 import { afterEach, expect } from "vite-plus/test";
-import { type StubHost, scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { cleanup, cli, type CliOptions, hostIn, writeConfig } from "./support.ts";
 
-const stubs: Array<StubHost> = [];
+import { cleanup, cli, hostIn, writeConfig } from "./support.ts";
+import type { CliOptions } from "./support.ts";
 
-afterEach(() => cleanup(stubs));
+const stubs: StubHost[] = [];
 
 const host = hostIn(stubs);
 
 layer(NodeServices.layer)((it) => {
+  afterEach(async () => {
+    await cleanup(stubs);
+  });
+
   it.effect("hosts lists every host with its bases", () =>
     Effect.gen(function* () {
       const dir = yield* scratch;
@@ -29,15 +34,15 @@ layer(NodeServices.layer)((it) => {
         stdout
           .trim()
           .split("\n")
-          .map((row) => row.split(/\s+/u).slice(0, 2)),
-      ).toEqual([
+          .map((row) => row.split(/\s+/u).slice(0, 2))
+      ).toStrictEqual([
         ["ID", "KIND"],
         ["linux", "linux"],
         ["mac", "mac"],
       ]);
       expect(stdout).toContain("ubuntu,ubuntu-dev");
       expect(stdout).toContain("macos");
-    }),
+    })
   );
 
   it.effect(
@@ -75,19 +80,24 @@ layer(NodeServices.layer)((it) => {
           ["spare", "down"],
         ];
 
-        const { code, stdout, stderr } = yield* cli(["capacity", "--config", config], {
+        const { code, stdout, stderr } = yield* cli(
+          ["capacity", "--config", config],
+          {
+            endpoints,
+          }
+        );
+
+        const json = yield* cli(["capacity", "--json", "--config", config], {
           endpoints,
         });
-
-        const json = yield* cli(["capacity", "--json", "--config", config], { endpoints });
 
         expect(code).toBe(0);
         expect(
           stdout
             .trim()
             .split("\n")
-            .map((row) => row.split(/\s+/u)),
-        ).toEqual([
+            .map((row) => row.split(/\s+/u))
+        ).toStrictEqual([
           ["HOST", "RESOURCE", "USED", "LIMIT"],
           ["linux", "cpu", "3", "-"],
           ["linux", "ram", "3G", "14G"],
@@ -96,7 +106,9 @@ layer(NodeServices.layer)((it) => {
           ["mac", "ram", "?", "-"],
         ]);
         expect(stderr).toContain("spare");
-        expect(stderr.split("\n").filter((line) => line.includes("couldn't read"))).toEqual([
+        expect(
+          stderr.split("\n").filter((line) => line.includes("couldn't read"))
+        ).toStrictEqual([
           "clankerbox: mac couldn't read the state of mac_review, mac_ci, so it shows ? for what they use",
         ]);
         expect(JSON.parse(json.stdout)).toMatchObject({
@@ -105,10 +117,14 @@ layer(NodeServices.layer)((it) => {
             { host: "linux", resource: "ramMib", limit: 14_336, used: 3072 },
             { host: "mac", resource: "runningVms", limit: 2, used: 1 },
             { host: "mac", resource: "cpu", unread: ["mac_review", "mac_ci"] },
-            { host: "mac", resource: "ramMib", unread: ["mac_review", "mac_ci"] },
+            {
+              host: "mac",
+              resource: "ramMib",
+              unread: ["mac_review", "mac_ci"],
+            },
           ],
           unreachable: [{ host: "spare" }],
         });
-      }),
+      })
   );
 });

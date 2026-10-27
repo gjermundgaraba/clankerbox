@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+
 import { Desired, HostError } from "./errors.ts";
 import { HostId, Id } from "./ids.ts";
 
@@ -62,7 +63,10 @@ export type SshLogin = typeof SshLogin.Type;
  * waiting longer after each failure.
  */
 export const TailnetStatus = Schema.Union([
-  Schema.Struct({ state: Schema.Literal("joined"), name: Schema.optionalKey(Schema.String) }),
+  Schema.Struct({
+    state: Schema.Literal("joined"),
+    name: Schema.optionalKey(Schema.String),
+  }),
   Schema.Struct({ state: Schema.Literal("failed"), error: Schema.String }),
   Schema.Struct({ state: Schema.Literal("missing") }),
 ]).annotate({ identifier: "TailnetStatus" });
@@ -87,7 +91,13 @@ export const Machine = Schema.Struct({
   cpu: Size,
   ramMib: Size,
   diskGib: Size,
-  state: Schema.Literals(["running", "stopped", "paused", "missing", "unknown"]),
+  state: Schema.Literals([
+    "running",
+    "stopped",
+    "paused",
+    "missing",
+    "unknown",
+  ]),
   desired: Desired,
   phase: Phase,
   error: Schema.optionalKey(HostError),
@@ -102,12 +112,15 @@ export type Machine = typeof Machine.Type;
  * The state as people read it: `running` at rest, `running (failed)` where it is but not at rest,
  * and `stopped, wants running (starting)` on the way.
  */
-export const stateLabel = ({ state, desired, phase }: Machine): string =>
-  phase === "settled"
-    ? state
-    : state === desired
-      ? `${state} (${phase})`
-      : `${state}, wants ${desired} (${phase})`;
+export const stateLabel = ({ state, desired, phase }: Machine): string => {
+  if (phase === "settled") {
+    return state;
+  }
+
+  return state === desired
+    ? `${state} (${phase})`
+    : `${state}, wants ${desired} (${phase})`;
+};
 
 /**
  * `kind` follows its host's: `ram` (RAM and disks) on linux, captured from a running machine, and
@@ -166,7 +179,8 @@ type WithoutHost<Row> = Row extends unknown ? Omit<Row, "host"> : never;
 /** A `Usage` row as a runtime reads it, before the host names itself on it. */
 export type Reading = WithoutHost<Usage>;
 
-const publicKeyLine = /^(?:ssh|ecdsa|sk)-[a-z0-9@.-]+ [A-Za-z0-9+/]+={0,3}(?: .*)?$/u;
+const publicKeyLine =
+  /^(?:ssh|ecdsa|sk)-[a-z0-9@.-]+ [A-Za-z0-9+/]+={0,3}(?: .*)?$/u;
 
 const blankLine = /^\s*$/u;
 
@@ -183,7 +197,7 @@ export const PublicKeys = Schema.String.check(
       (lines.length > 0 && lines.every((line) => publicKeyLine.test(line))) ||
       "each line that isn't blank is a public key, <type> <base64> [comment], as a .pub file holds it"
     );
-  }),
+  })
 );
 
 /**
@@ -233,8 +247,8 @@ export const ResizeRequest = Schema.Struct({ id: Id, ...Sizing.fields }).check(
       cpu !== undefined ||
       ramMib !== undefined ||
       diskGib !== undefined ||
-      "a resize gives at least one of vCPUs, RAM and disk",
-  ),
+      "a resize gives at least one of vCPUs, RAM and disk"
+  )
 );
 
 export type ResizeRequest = typeof ResizeRequest.Type;
@@ -246,11 +260,18 @@ export type ResizeRequest = typeof ResizeRequest.Type;
 export const isImageReference = (base: string): boolean => base.includes("/");
 
 /** Whether `host` creates from `base`: a base it names, or an image reference on linux. */
-export const offers = (host: Pick<Host, "kind" | "bases">, base: string): boolean =>
-  host.bases.includes(base) || (host.kind === "linux" && isImageReference(base));
+export const offers = (
+  host: Pick<Host, "kind" | "bases">,
+  base: string
+): boolean =>
+  host.bases.includes(base) ||
+  (host.kind === "linux" && isImageReference(base));
 
 /** What `host` creates from, as a refusal names it. */
-export const offered = ({ kind, bases }: Pick<Host, "kind" | "bases">): string =>
+export const offered = ({
+  kind,
+  bases,
+}: Pick<Host, "kind" | "bases">): string =>
   [
     bases.length > 0 ? bases.join(", ") : "no bases",
     ...(kind === "linux" ? ["and any image reference"] : []),
@@ -287,6 +308,10 @@ export const Executed = Schema.Struct({
 export type Executed = typeof Executed.Type;
 
 /** A prebuild is the checkpoint `id` of a machine made from the spec, setup and all. */
-export const PrebuildRequest = Schema.Struct({ id: Id, ...specFields, setup: Setup });
+export const PrebuildRequest = Schema.Struct({
+  id: Id,
+  ...specFields,
+  setup: Setup,
+});
 
 export type PrebuildRequest = typeof PrebuildRequest.Type;

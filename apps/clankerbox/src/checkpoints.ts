@@ -1,6 +1,13 @@
-import { actionsByName, Checkpoint, formatGib, formatMib } from "@gjermundgaraba/clankerbox-sdk";
-import { DateTime, Schema } from "effect";
+import {
+  actionsByName,
+  Checkpoint,
+  formatGib,
+  formatMib,
+} from "@gjermundgaraba/clankerbox-sdk";
+import type { DateTime } from "effect";
+import { Schema } from "effect";
 import { Command } from "effect/cli";
+
 import {
   checkpointArgument,
   clientFlags,
@@ -17,7 +24,10 @@ import {
 import { age } from "./units.ts";
 
 const checkpointColumns: ReadonlyArray<
-  readonly [label: string, cell: (checkpoint: Checkpoint, now: DateTime.Utc) => string]
+  readonly [
+    label: string,
+    cell: (checkpoint: Checkpoint, now: DateTime.Utc) => string,
+  ]
 > = [
   ["ID", (checkpoint) => checkpoint.id],
   ["KIND", (checkpoint) => checkpoint.kind],
@@ -27,9 +37,14 @@ const checkpointColumns: ReadonlyArray<
   ["AGE", (checkpoint, now) => age(checkpoint.createdAt, now)],
 ];
 
-export const checkpointRows = (checkpoints: ReadonlyArray<Checkpoint>, now: DateTime.Utc) => [
+export const checkpointRows = (
+  checkpoints: readonly Checkpoint[],
+  now: DateTime.Utc
+) => [
   checkpointColumns.map(([label]) => label),
-  ...checkpoints.map((checkpoint) => checkpointColumns.map(([, cell]) => cell(checkpoint, now))),
+  ...checkpoints.map((checkpoint) =>
+    checkpointColumns.map(([, cell]) => cell(checkpoint, now))
+  ),
 ];
 
 export const checkpointFields = (checkpoint: Checkpoint, now: DateTime.Utc) => [
@@ -46,11 +61,16 @@ export const capture = Command.make(
   { ...mutationFlags, machine: machineArgument, name: nameArgument },
   (flags) =>
     printResource(flags, {
-      call: (client) => client.captureCheckpoint({ machine: flags.machine, name: flags.name }),
+      call: (client) =>
+        client.captureCheckpoint({ machine: flags.machine, name: flags.name }),
       encode: encodeCheckpoint,
       text: newId,
-    }),
-).pipe(Command.withDescription(`${actionsByName.captureCheckpoint.description} Prints its ID.`));
+    })
+).pipe(
+  Command.withDescription(
+    `${actionsByName.captureCheckpoint.description} Prints its ID.`
+  )
+);
 
 export const listCheckpoints = listCommand({
   name: "list",
@@ -69,11 +89,11 @@ export const getCheckpoint = Command.make(
       call: (client) => client.getCheckpoint({ id: flags.checkpoint }),
       encode: encodeCheckpoint,
       text: (checkpoint, now) => table(checkpointFields(checkpoint, now)),
-    }),
+    })
 ).pipe(
   Command.withDescription(
-    `${actionsByName.getCheckpoint.description} Prints its machine and the sizes a restore gives.`,
-  ),
+    `${actionsByName.getCheckpoint.description} Prints its machine and the sizes a restore gives.`
+  )
 );
 
 export const deleteCheckpoint = Command.make(
@@ -81,15 +101,24 @@ export const deleteCheckpoint = Command.make(
   { ...mutationFlags, checkpoint: checkpointArgument },
   (flags) =>
     withClient(flags, (client) =>
-      deleted(flags.json, flags.checkpoint, client.deleteCheckpoint({ id: flags.checkpoint })),
-    ),
+      deleted(
+        flags.json,
+        flags.checkpoint,
+        client.deleteCheckpoint({ id: flags.checkpoint })
+      )
+    )
 ).pipe(
   Command.withDescription(
-    `${actionsByName.deleteCheckpoint.description} A checkpoint that is already gone counts as deleted.`,
-  ),
+    `${actionsByName.deleteCheckpoint.description} A checkpoint that is already gone counts as deleted.`
+  )
 );
 
 export const checkpoint = Command.make("checkpoint").pipe(
   Command.withDescription("Capture, list, read and delete checkpoints."),
-  Command.withSubcommands([capture, listCheckpoints, getCheckpoint, deleteCheckpoint]),
+  Command.withSubcommands([
+    capture,
+    listCheckpoints,
+    getCheckpoint,
+    deleteCheckpoint,
+  ])
 );

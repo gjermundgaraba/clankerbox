@@ -11,6 +11,7 @@ catalog:
   # it by caret, and a newer one requires a newer effect, so npm would install a second effect
   # under it. Keep it equal to effect.
   "@effect/platform-node-shared": 4.0.6
+  "@effect/tsgo": 0.57.0
   "@effect/vitest": 4.0.6
   "@gjermundgaraba/effect-actions": 0.20.0
   "@types/node": 26.6.5
@@ -22,6 +23,9 @@ catalog:
   vitest: 5.0.5
   xstate: 6.0.0-alpha.70
   "@xstate/effect": 1.0.0-alpha.9
+  ultracite: 8.0.2
+  oxlint: 1.89.0
+  oxfmt: 0.74.0
 
 # The provider talks to a Sandbox Agent in a guest, so the SDK's own server binary stays out.
 ignoredOptionalDependencies:
@@ -58,3 +62,12 @@ minimumReleaseAgeExclude:
   # the pair lands the day it publishes, as Effect's does.
   - xstate
   - "@xstate/*"
+permissions:
+  ultracite:
+    skills: true
+# Name the directories pnpm links Ultracite's skill into: without one it auto-detects an agent,
+# and where none is installed, as in the Docker build, the install fails.
+skills:
+  dirs:
+    - .agents/skills
+    - .claude/skills

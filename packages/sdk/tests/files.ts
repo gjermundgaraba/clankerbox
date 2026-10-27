@@ -2,7 +2,7 @@ import { Effect, FileSystem, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 export const scratch = Effect.flatMap(FileSystem.FileSystem, (fs) =>
-  fs.makeTempDirectoryScoped({ prefix: "clankerbox-test-" }),
+  fs.makeTempDirectoryScoped({ prefix: "clankerbox-test-" })
 );
 
 export const read = (path: string) =>
@@ -18,7 +18,9 @@ export const writeBytes = (path: string, bytes: Uint8Array) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.writeFile(path, bytes));
 
 export const mkdir = (path: string) =>
-  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.makeDirectory(path, { recursive: true }));
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    fs.makeDirectory(path, { recursive: true })
+  );
 
 export const chmod = (path: string, mode: number) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.chmod(path, mode));
@@ -34,14 +36,18 @@ export const exists = (path: string) =>
 
 export const exitOf = (
   command: string,
-  args: ReadonlyArray<string>,
-  options?: ChildProcess.CommandOptions,
+  args: readonly string[],
+  options?: ChildProcess.CommandOptions
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
     const handle = yield* spawner.spawn(
-      ChildProcess.make(command, args, { stdout: "ignore", stderr: "ignore", ...options }),
+      ChildProcess.make(command, args, {
+        stdout: "ignore",
+        stderr: "ignore",
+        ...options,
+      })
     );
 
     return yield* handle.exitCode;
@@ -49,10 +55,10 @@ export const exitOf = (
 
 export const outputOf = (
   command: string,
-  args: ReadonlyArray<string>,
+  args: readonly string[],
   options?: Omit<ChildProcess.CommandOptions, "stdin" | "stdout" | "stderr"> & {
     readonly input?: Uint8Array;
-  },
+  }
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -63,7 +69,7 @@ export const outputOf = (
         ChildProcess.make(command, args, {
           ...rest,
           stdin: input === undefined ? "ignore" : Stream.make(input),
-        }),
+        })
       );
 
       return yield* Effect.all(
@@ -72,15 +78,18 @@ export const outputOf = (
           stdout: Stream.mkString(Stream.decodeText(handle.stdout)),
           stderr: Stream.mkString(Stream.decodeText(handle.stderr)),
         },
-        { concurrency: "unbounded" },
+        { concurrency: "unbounded" }
       );
-    }),
+    })
   );
 
-export const stat = (path: string) => Effect.flatMap(FileSystem.FileSystem, (fs) => fs.stat(path));
+export const stat = (path: string) =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.stat(path));
 
 export const remove = (path: string) =>
-  Effect.flatMap(FileSystem.FileSystem, (fs) => fs.remove(path, { recursive: true, force: true }));
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    fs.remove(path, { recursive: true, force: true })
+  );
 
 export const readDirectory = (path: string) =>
   Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readDirectory(path));

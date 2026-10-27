@@ -41,7 +41,6 @@ release. Add a tool name to select part of the graph. For example, run
 | `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                              |
 | `apps/clankerbox/`              | The CLI package: its commands and the `host` role                       |
 | `tools/lint-fence/`             | The repository's own lint rules                                         |
-| `tools/oxlint/anti-slop/`       | Vendored lint plugin                                                    |
 
 The app imports the SDK and the host; the host and the provider import the SDK;
 the SDK imports neither. Each package's `package.json` dependencies are that
@@ -112,8 +111,9 @@ dial, and the path that runs it), the app's `host.ts` (the config kind's runtime
 Node's HTTP server, given to `hostLayer`), the SDK's `node.ts` (the client over
 Node's HTTP), and the provider's `index.ts` (the client over its hosts, given
 to `provider`). Tests pass their own: the host's `./testing` export builds a
-host over a fake runtime, and the SDK's serves stub hosts over an in-memory
-transport. Neither `./testing` export is published.
+host over a fake runtime, and the SDK's `./testing/stub-host` serves stub hosts
+over an in-memory transport, beside `./testing/clock`, `./testing/files` and
+`./testing/keys`. None of the `./testing` exports is published.
 
 ## House style
 
@@ -177,9 +177,9 @@ transport. Neither `./testing` export is published.
   directive with its reason after `--`, and a doc block on a type, an
   interface or one of their members, which is how a port states its contract.
   The SDK's and the provider's `src/` also keep a doc block on each export,
-  since it ships to consumers.
+  since it ships to consumers. Review holds this line: no lint rule checks it.
 - **A lint fence** (`tools/lint-fence`, each rule with its tests; settings in
-  `vite.config.ts`): a host domain file imports only its siblings, `effect`,
+  `oxlint.config.ts`): a host domain file imports only its siblings, `effect`,
   `effect/encoding` and the SDK, and `lifecycle.ts` alone also `xstate` and
   `@xstate/effect`; an adapter imports domain files, its own
   folder and `platform/`'s `process.ts` and `address.ts`; an app command
@@ -188,9 +188,8 @@ transport. Neither `./testing` export is published.
   and the host package to `main.ts` and `host.ts`;
   the provider takes Node and `@effect/platform-node` only in `index.ts` and
   `tunnel.ts`; the SDK's `.` entry
-  imports no Node and uses no `Buffer` or `process`; `fence/no-manual-run`
-  keeps hand-run Effect to the files above; and `fence/no-prose-comments`
-  allows only the comments above.
+  imports no Node and uses no `Buffer` or `process`; and `fence/no-manual-run`
+  keeps hand-run Effect to the files above.
 
 Removable packages are not a practice here: the provider package is optional,
 but CI publishes it beside the SDK.
@@ -202,3 +201,9 @@ Before writing or reviewing Effect code, read `node_modules/effect/AGENTS.md` in
 ## xstate
 
 Before writing or reviewing `lifecycle.ts`, read the docs the installed `xstate` ships in `packages/host/node_modules/xstate/docs/`, from `index.md`, and `@xstate/effect`'s `README.md` beside it. Both are v6 alphas whose APIs change between releases, so the installed docs and types are the ones the code compiles against; do not write xstate APIs from memory or from v5 examples. Neither package ships its changelog: a bump reads `packages/core/CHANGELOG.md` and `packages/xstate-effect/CHANGELOG.md` on the `next` branch of `statelyai/xstate`.
+
+## Lint and format
+
+`vp check` formats, lints and type-checks the repository; `vp check --fix` applies the fixes. It reads `oxlint.config.ts` and `oxfmt.config.ts` through `vite.config.ts`. Lint extends Ultracite's core, anti-slop and Vitest presets and `@effect/tsgo`'s recommended preset, type-aware, and fails on warnings; format is Ultracite's. `vp install` patches Oxlint with the Effect rules through the root `prepare` script.
+
+Every departure from the presets lives in `oxlint.config.ts`, each with its reason. The shared block at the top is the same in every Effect repository; the overrides below it are this repository's own, each scoped to its files with its reason. Adding or widening an exception needs the maintainer's approval; otherwise fix the code. There are no inline `oxlint-disable` comments.

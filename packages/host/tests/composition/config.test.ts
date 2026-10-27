@@ -1,13 +1,16 @@
-import { join } from "node:path";
-import * as NodeServices from "@effect/platform-node/NodeServices";
+import path from "node:path";
 import { inspect } from "node:util";
-import { Effect, Redacted, type Schema } from "effect";
+
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { requirements } from "@gjermundgaraba/clankerbox-sdk";
+import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { Effect, Redacted } from "effect";
+import type { Schema } from "effect";
 import { expect } from "vite-plus/test";
+
 import { loadConfig } from "../../src/composition/config.ts";
 import { defaultRecheck } from "../../src/settings.ts";
-import { requirements } from "@gjermundgaraba/clankerbox-sdk";
-import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
 
 const image = requirements.bases.linux.ubuntu;
 
@@ -22,7 +25,7 @@ const config = {
 
 const load = (contents: Schema.Json) =>
   Effect.gen(function* () {
-    const file = join(yield* scratch, "host.json");
+    const file = path.join(yield* scratch, "host.json");
 
     yield* write(file, JSON.stringify(contents));
 
@@ -37,17 +40,17 @@ layer(NodeServices.layer)((it) => {
         const { file, loaded } = yield* load(config);
         const host = yield* loaded;
 
-        expect(host).toEqual({
+        expect(host).toStrictEqual({
           id: "linux",
           kind: "linux",
           listen: { address: "100.95.240.37", port: 8484 },
-          stateDir: join(file, "..", "state"),
+          stateDir: path.join(file, "..", "state"),
           bases: new Map([["ubuntu", image]]),
           machinePorts: { first: 10_000, last: 19_999 },
           recheck: defaultRecheck,
           linux: { prefix: "/opt/smolvm" },
         });
-      }),
+      })
   );
 
   it.effect("a set RAM budget is kept, even above physical RAM", () =>
@@ -60,7 +63,7 @@ layer(NodeServices.layer)((it) => {
       expect(yield* loaded).toMatchObject({
         linux: { ramBudgetMib: 1_000_000 },
       });
-    }),
+    })
   );
 
   const mac = {
@@ -76,17 +79,17 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const { file, loaded } = yield* load(mac);
 
-      expect(yield* loaded).toEqual({
+      expect(yield* loaded).toStrictEqual({
         id: "mac",
         kind: "mac",
         listen: { address: "100.122.69.11", port: 8484 },
-        stateDir: join(file, "..", "state"),
+        stateDir: path.join(file, "..", "state"),
         bases: new Map([["macos", requirements.bases.mac.macos]]),
         machinePorts: { first: 10_000, last: 19_999 },
         recheck: defaultRecheck,
         mac: { binary: "/opt/tart/2.41.1/tart.app/Contents/MacOS/tart" },
       });
-    }),
+    })
   );
 
   it.effect("a mac host config takes only its own settings", () =>
@@ -100,7 +103,7 @@ layer(NodeServices.layer)((it) => {
 
         expect((yield* Effect.flip(loaded))._tag).toBe("Invalid");
       }
-    }),
+    })
   );
 
   const clientSecret = "tskey-client-k1-that-never-prints";
@@ -117,29 +120,40 @@ layer(NodeServices.layer)((it) => {
         const { loaded } = yield* load({ ...config, tailnet });
         const host = yield* loaded;
 
-        expect(host.tailnet?.tags).toEqual(["tag:clankerbox-machine"]);
+        expect(host.tailnet?.tags).toStrictEqual(["tag:clankerbox-machine"]);
         expect(host.tailnet?.oauthClient.id).toBe("k1");
         expect(
-          host.tailnet === undefined ? undefined : Redacted.value(host.tailnet.oauthClient.secret),
+          host.tailnet === undefined
+            ? undefined
+            : Redacted.value(host.tailnet.oauthClient.secret)
         ).toBe(clientSecret);
 
-        for (const printed of [JSON.stringify(host), inspect(host, { depth: 10 })]) {
+        for (const printed of [
+          JSON.stringify(host),
+          inspect(host, { depth: 10 }),
+        ]) {
           expect(printed).not.toContain(clientSecret);
         }
-      }),
+      })
   );
 
   it.effect(
     "a tailnet needs a client and at least one tag, and a refused one doesn't print its secret",
     () =>
       Effect.gen(function* () {
-        const refused: Array<Schema.Json> = [
+        const refused: Schema.Json[] = [
           { ...config, tailnet: { ...tailnet, tags: [] } },
           { ...config, tailnet: { ...tailnet, tags: ["clankerbox-machine"] } },
           { ...config, tailnet: { ...tailnet, tags: ["tag:1st"] } },
           { ...config, tailnet: { ...tailnet, tags: ["tag:-machine"] } },
-          { ...config, tailnet: { ...tailnet, tags: ["tag:clankerbox_machine"] } },
-          { ...config, tailnet: { ...tailnet, oauthClient: { id: "k1", secret: "" } } },
+          {
+            ...config,
+            tailnet: { ...tailnet, tags: ["tag:clankerbox_machine"] },
+          },
+          {
+            ...config,
+            tailnet: { ...tailnet, oauthClient: { id: "k1", secret: "" } },
+          },
           { ...config, tailnet: { tags: tailnet.tags } },
           { ...config, tailnet: { ...tailnet, authKey: clientSecret } },
         ];
@@ -151,22 +165,37 @@ layer(NodeServices.layer)((it) => {
           expect(error._tag).toBe("Invalid");
           expect(error.message).not.toContain(clientSecret);
         }
-      }),
+      })
   );
 
-  it.effect("a tag takes what Tailscale's own check takes, capitals included", () =>
-    Effect.gen(function* () {
-      const tags = ["tag:Dev", "tag:a", "tag:clankerbox-machine-2"];
-      const { loaded } = yield* load({ ...config, tailnet: { ...tailnet, tags } });
+  it.effect(
+    "a tag takes what Tailscale's own check takes, capitals included",
+    () =>
+      Effect.gen(function* () {
+        const tags = ["tag:Dev", "tag:a", "tag:clankerbox-machine-2"];
 
-      expect((yield* loaded).tailnet?.tags).toEqual(tags);
-    }),
+        const { loaded } = yield* load({
+          ...config,
+          tailnet: { ...tailnet, tags },
+        });
+
+        expect((yield* loaded).tailnet?.tags).toStrictEqual(tags);
+      })
   );
 
   it.effect("a host listens only on a tailnet or loopback address", () =>
     Effect.gen(function* () {
-      for (const address of ["127.0.0.1", "127.0.0.2", "::1", "100.64.0.1", "fd7a:115c:a1e0::5"]) {
-        const { loaded } = yield* load({ ...config, listen: { address, port: 8484 } });
+      for (const address of [
+        "127.0.0.1",
+        "127.0.0.2",
+        "::1",
+        "100.64.0.1",
+        "fd7a:115c:a1e0::5",
+      ]) {
+        const { loaded } = yield* load({
+          ...config,
+          listen: { address, port: 8484 },
+        });
 
         expect(yield* loaded, address).toMatchObject({
           listen: { address },
@@ -181,37 +210,55 @@ layer(NodeServices.layer)((it) => {
         "linux.tailnet",
         "100.128.0.1",
       ]) {
-        const { loaded } = yield* load({ ...config, listen: { address, port: 8484 } });
+        const { loaded } = yield* load({
+          ...config,
+          listen: { address, port: 8484 },
+        });
+
         const error = yield* Effect.flip(loaded);
 
         expect(error._tag, address).toBe("Invalid");
         expect(error.message, address).toContain("tailnet address");
       }
-    }),
+    })
   );
 
-  it.effect("a host's API port lies outside the machines' range, 10000-19999", () =>
-    Effect.gen(function* () {
-      for (const port of [9999, 20_000, 65_535]) {
-        const { loaded } = yield* load({ ...config, listen: { ...config.listen, port } });
+  it.effect(
+    "a host's API port lies outside the machines' range, 10000-19999",
+    () =>
+      Effect.gen(function* () {
+        for (const port of [9999, 20_000, 65_535]) {
+          const { loaded } = yield* load({
+            ...config,
+            listen: { ...config.listen, port },
+          });
 
-        expect(yield* loaded, String(port)).toMatchObject({
-          listen: { port },
-        });
-      }
-
-      for (const port of [10_000, 14_000, 19_999]) {
-        const linux = yield* load({ ...config, listen: { ...config.listen, port } });
-        const onMac = yield* load({ ...mac, listen: { ...mac.listen, port } });
-
-        for (const { loaded } of [linux, onMac]) {
-          const error = yield* Effect.flip(loaded);
-
-          expect(error._tag, String(port)).toBe("Invalid");
-          expect(error.message, String(port)).toContain("outside 10000-19999");
+          expect(yield* loaded, String(port)).toMatchObject({
+            listen: { port },
+          });
         }
-      }
-    }),
+
+        for (const port of [10_000, 14_000, 19_999]) {
+          const linux = yield* load({
+            ...config,
+            listen: { ...config.listen, port },
+          });
+
+          const onMac = yield* load({
+            ...mac,
+            listen: { ...mac.listen, port },
+          });
+
+          for (const { loaded } of [linux, onMac]) {
+            const error = yield* Effect.flip(loaded);
+
+            expect(error._tag, String(port)).toBe("Invalid");
+            expect(error.message, String(port)).toContain(
+              "outside 10000-19999"
+            );
+          }
+        }
+      })
   );
 
   it.effect(
@@ -232,15 +279,20 @@ layer(NodeServices.layer)((it) => {
           machinePorts,
         });
 
-        const backwards = yield* load({ ...config, machinePorts: { first: 5099, last: 5000 } });
+        const backwards = yield* load({
+          ...config,
+          machinePorts: { first: 5099, last: 5000 },
+        });
 
         expect(yield* moved.loaded).toMatchObject({
           listen: { port: 15_000 },
           machinePorts,
         });
-        expect((yield* Effect.flip(inside.loaded)).message).toContain("outside 5000-5099");
+        expect((yield* Effect.flip(inside.loaded)).message).toContain(
+          "outside 5000-5099"
+        );
         expect((yield* Effect.flip(backwards.loaded))._tag).toBe("Invalid");
-      }),
+      })
   );
 
   it.effect(
@@ -251,7 +303,10 @@ layer(NodeServices.layer)((it) => {
           [9000, 19_999],
           [32_000, 32_767],
         ] as const) {
-          const { loaded } = yield* load({ ...config, machinePorts: { first, last } });
+          const { loaded } = yield* load({
+            ...config,
+            machinePorts: { first, last },
+          });
 
           expect(yield* loaded, `${first}-${last}`).toMatchObject({
             machinePorts: { first, last },
@@ -266,13 +321,19 @@ layer(NodeServices.layer)((it) => {
           [65_535, 65_535, "49152-65535, macOS's ephemeral ports"],
           [1, 65_535, "20000-31999, smolvm's fork ports"],
         ] as const) {
-          const { loaded } = yield* load({ ...config, machinePorts: { first, last } });
+          const { loaded } = yield* load({
+            ...config,
+            machinePorts: { first, last },
+          });
+
           const error = yield* Effect.flip(loaded);
 
           expect(error._tag, `${first}-${last}`).toBe("Invalid");
-          expect(error.message, `${first}-${last}`).toContain(`must stay out of ${reserved}`);
+          expect(error.message, `${first}-${last}`).toContain(
+            `must stay out of ${reserved}`
+          );
         }
-      }),
+      })
   );
 
   it.effect("an unknown key, another kind or a bad host ID is Invalid", () =>
@@ -287,33 +348,38 @@ layer(NodeServices.layer)((it) => {
 
         expect((yield* Effect.flip(loaded))._tag).toBe("Invalid");
       }
-    }),
+    })
   );
 
-  it.effect("a base name holding a /, which marks an image reference, is Invalid", () =>
-    Effect.gen(function* () {
-      const { loaded } = yield* load({ ...config, bases: { "team/orb": image } });
+  it.effect(
+    "a base name holding a /, which marks an image reference, is Invalid",
+    () =>
+      Effect.gen(function* () {
+        const { loaded } = yield* load({
+          ...config,
+          bases: { "team/orb": image },
+        });
 
-      const error = yield* Effect.flip(loaded);
+        const error = yield* Effect.flip(loaded);
 
-      expect(error._tag).toBe("Invalid");
-      expect(error.message).toContain(
-        "a base name holds no /, which marks an image reference: team/orb",
-      );
-    }),
+        expect(error._tag).toBe("Invalid");
+        expect(error.message).toContain(
+          "a base name holds no /, which marks an image reference: team/orb"
+        );
+      })
   );
 
   it.effect("a missing config file is Invalid, naming it", () =>
     Effect.gen(function* () {
-      const missing = join(yield* scratch, "nope.json");
+      const missing = path.join(yield* scratch, "nope.json");
 
       const error = yield* Effect.flip(loadConfig(missing)).pipe(
-        Effect.provide(NodeServices.layer),
+        Effect.provide(NodeServices.layer)
       );
 
       expect(error._tag).toBe("Invalid");
       expect(error.file).toBe(missing);
       expect(error.message).toContain(missing);
-    }),
+    })
   );
 });

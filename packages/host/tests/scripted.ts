@@ -3,7 +3,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 export interface Call {
   readonly file: string;
-  readonly args: ReadonlyArray<string>;
+  readonly args: readonly string[];
   readonly env: unknown;
   readonly stdin: string | undefined;
 }
@@ -18,7 +18,7 @@ export interface Reply {
 const encoder = new TextEncoder();
 
 export const scripted = (reply: (call: Call) => Reply | undefined) => {
-  const calls: Array<Call> = [];
+  const calls: Call[] = [];
 
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
@@ -50,7 +50,9 @@ export const scripted = (reply: (call: Call) => Reply | undefined) => {
         exitCode:
           answer.hangs === true
             ? Effect.never
-            : Effect.succeed(ChildProcessSpawner.ExitCode(answer.exitCode ?? 0)),
+            : Effect.succeed(
+                ChildProcessSpawner.ExitCode(answer.exitCode ?? 0)
+              ),
         isRunning: Effect.succeed(false),
         kill: () => Effect.void,
         stdin: Sink.drain,
@@ -61,10 +63,13 @@ export const scripted = (reply: (call: Call) => Reply | undefined) => {
         getOutputFd: () => Stream.empty,
         unref: Effect.succeed(Effect.void),
       });
-    }),
+    })
   );
 
-  return { calls, layer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner) };
+  return {
+    calls,
+    layer: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+  };
 };
 
 export type Scripted = ReturnType<typeof scripted>;

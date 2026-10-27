@@ -1,5 +1,6 @@
 import { loginUser } from "@gjermundgaraba/clankerbox-sdk";
 import { Config, Console, Effect, FileSystem, Option, Path } from "effect";
+
 import type { LoadedConfig } from "./config.ts";
 
 export const includeLines = "Match all\nInclude clankerbox\n";
@@ -20,7 +21,10 @@ const block = (shell: string, host: LoadedConfig["hosts"][number]): string =>
     "",
   ].join("\n");
 
-export const renderSshConfig = (shell: string, hosts: LoadedConfig["hosts"]): string =>
+export const renderSshConfig = (
+  shell: string,
+  hosts: LoadedConfig["hosts"]
+): string =>
   [
     "# Managed by clankerbox; do not edit. CLANKERBOX_SSH_CONFIG=false removes it.",
     "",
@@ -32,32 +36,46 @@ export const withInclude = (text: string): string =>
     ? text
     : `${text}${text === "" || text.endsWith("\n") ? "" : "\n"}${includeLines}`;
 
-export const withoutInclude = (text: string): string => text.replace(includeLines, "");
+export const withoutInclude = (text: string): string =>
+  text.replace(includeLines, "");
 
 const readOrEmpty = (fs: FileSystem.FileSystem, file: string) =>
   Effect.flatMap(fs.exists(file), (exists) =>
-    exists ? fs.readFileString(file) : Effect.succeed(""),
+    exists ? fs.readFileString(file) : Effect.succeed("")
   );
 
-const update = (fs: FileSystem.FileSystem, file: string, change: (text: string) => string) =>
+const update = (
+  fs: FileSystem.FileSystem,
+  file: string,
+  change: (text: string) => string
+) =>
   Effect.flatMap(readOrEmpty(fs, file), (before) => {
     const after = change(before);
 
-    return after === before ? Effect.void : fs.writeFileString(file, after, { mode: 0o600 });
+    return after === before
+      ? Effect.void
+      : fs.writeFileString(file, after, { mode: 0o600 });
   });
 
 const warn = (reason: string) =>
   Console.error(
-    `clankerbox: couldn't update the SSH config: ${reason}; CLANKERBOX_SSH_CONFIG=false stops trying`,
+    `clankerbox: couldn't update the SSH config: ${reason}; CLANKERBOX_SSH_CONFIG=false stops trying`
   );
 
 export const syncSshConfig = (config: LoadedConfig) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const enabled = yield* Config.Boolean("CLANKERBOX_SSH_CONFIG").pipe(Config.withDefault(true));
+
+    const enabled = yield* Config.Boolean("CLANKERBOX_SSH_CONFIG").pipe(
+      Config.withDefault(true)
+    );
+
     const home = yield* Config.option(Config.String("HOME"));
-    const shell = yield* Config.String("SHELL").pipe(Config.withDefault("/bin/sh"));
+
+    const shell = yield* Config.String("SHELL").pipe(
+      Config.withDefault("/bin/sh")
+    );
 
     if (Option.isNone(home)) {
       return;
@@ -76,7 +94,7 @@ export const syncSshConfig = (config: LoadedConfig) =>
 
     if (!usableShell.test(shell)) {
       return yield* warn(
-        `SHELL ${JSON.stringify(shell)} isn't an absolute path ssh_config can take`,
+        `SHELL ${JSON.stringify(shell)} isn't an absolute path ssh_config can take`
       );
     }
 

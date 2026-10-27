@@ -1,45 +1,55 @@
+import { setTimeout as sleep } from "node:timers/promises";
+
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { DateTime, Effect, Layer } from "effect";
-import { FetchHttpClient, type HttpClient, HttpRouter, HttpServer } from "effect/http";
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
+import type { HttpClient } from "effect/http";
+
 import {
-  type Checkpoint,
   Conflict,
-  type CreateRequest,
-  type Declared,
-  type Executed,
-  type ExecRequest,
   Http,
-  type Machine,
   NotFound,
-  type PrebuildRequest,
-  type Kind,
-  type Reading,
-  type Sizing,
   version,
   versionHeader,
+} from "../src/index.ts";
+import type {
+  Checkpoint,
+  CreateRequest,
+  Declared,
+  Executed,
+  ExecRequest,
+  Machine,
+  PrebuildRequest,
+  Kind,
+  Reading,
+  Sizing,
 } from "../src/index.ts";
 
 export interface StubHostOptions {
   readonly id: string;
-  readonly bases: ReadonlyArray<string>;
+  readonly bases: readonly string[];
   readonly kind?: Kind;
   /** Default: 0.0.0-test. */
   readonly runtimeVersion?: string;
   /** Default: running. */
-  readonly create?: (request: CreateRequest) => Effect.Effect<Machine, Declared<"createMachine">>;
+  readonly create?: (
+    request: CreateRequest
+  ) => Effect.Effect<Machine, Declared<"createMachine">>;
   /** Replaces the default prebuild, which captures a builder of its own over any checkpoint of its ID. */
   readonly prebuild?: (
-    request: PrebuildRequest,
+    request: PrebuildRequest
   ) => Effect.Effect<Checkpoint, Declared<"prebuildCheckpoint">>;
-  readonly machines?: ReadonlyArray<Machine>;
-  readonly checkpoints?: ReadonlyArray<Checkpoint>;
+  readonly machines?: readonly Machine[];
+  readonly checkpoints?: readonly Checkpoint[];
   /** What every restore fails with. Default: none. */
   readonly restoreFails?: Declared<"restoreMachine">;
   /** Default: none. */
-  readonly capacity?: ReadonlyArray<Reading>;
+  readonly capacity?: readonly Reading[];
   /** Default: exit 0 with no output, in a machine the stub holds. */
-  readonly exec?: (request: ExecRequest) => Effect.Effect<Executed, Declared<"execMachine">>;
+  readonly exec?: (
+    request: ExecRequest
+  ) => Effect.Effect<Executed, Declared<"execMachine">>;
 }
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
@@ -56,7 +66,10 @@ export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
   ...fields,
 });
 
-export const checkpoint = (id: string, fields?: Partial<Checkpoint>): Checkpoint => ({
+export const checkpoint = (
+  id: string,
+  fields?: Partial<Checkpoint>
+): Checkpoint => ({
   id,
   createdAt: DateTime.makeUnsafe("2026-10-01T00:00:00Z"),
   machine: id,
@@ -68,14 +81,30 @@ export const checkpoint = (id: string, fields?: Partial<Checkpoint>): Checkpoint
   ...fields,
 });
 
+const taken = (held: ReadonlyMap<string, unknown>, id: string) =>
+  held.has(id)
+    ? Effect.fail(new Conflict({ message: `${id} exists` }))
+    : Effect.void;
+
+const labelled = <A extends Machine | Checkpoint>(
+  made: A,
+  profile: string | undefined
+): A => (profile === undefined ? made : { ...made, profile });
+
+const sized = (found: Machine | Checkpoint, sizes: Sizing) => ({
+  cpu: sizes.cpu ?? found.cpu,
+  ramMib: sizes.ramMib ?? found.ramMib,
+  diskGib: sizes.diskGib ?? found.diskGib,
+});
+
 export const stubHost = (options: StubHostOptions) => {
   const kind = options.kind ?? "linux";
   const machines = new Map<string, Machine>();
   const checkpoints = new Map<string, Checkpoint>();
-  const creates: Array<CreateRequest> = [];
-  const prebuilds: Array<PrebuildRequest> = [];
-  const execs: Array<ExecRequest> = [];
-  const calls: Array<string> = [];
+  const creates: CreateRequest[] = [];
+  const prebuilds: PrebuildRequest[] = [];
+  const execs: ExecRequest[] = [];
+  const calls: string[] = [];
   const versions: Array<string | null> = [];
 
   for (const held of options.machines ?? []) {
@@ -96,7 +125,11 @@ export const stubHost = (options: StubHostOptions) => {
       : Effect.succeed(found);
   };
 
-  const settled = (found: Machine, state: Machine["state"], desired: Machine["desired"]) => {
+  const settled = (
+    found: Machine,
+    state: Machine["state"],
+    desired: Machine["desired"]
+  ) => {
     const now: Machine = { ...found, state, desired };
 
     machines.set(now.id, now);
@@ -112,9 +145,6 @@ export const stubHost = (options: StubHostOptions) => {
       : Effect.succeed(found);
   };
 
-  const taken = (held: ReadonlyMap<string, unknown>, id: string) =>
-    held.has(id) ? Effect.fail(new Conflict({ message: `${id} exists` })) : Effect.void;
-
   const add = (made: Machine) =>
     Effect.andThen(
       taken(machines, made.id),
@@ -122,11 +152,8 @@ export const stubHost = (options: StubHostOptions) => {
         machines.set(made.id, made);
 
         return made;
-      }),
+      })
     );
-
-  const labelled = <A extends Machine | Checkpoint>(made: A, profile: string | undefined): A =>
-    profile === undefined ? made : { ...made, profile };
 
   const create = (request: CreateRequest) =>
     options.create === undefined
@@ -139,29 +166,27 @@ export const stubHost = (options: StubHostOptions) => {
               ramMib: request.ramMib,
               diskGib: request.diskGib,
             }),
-            request.profile,
-          ),
+            request.profile
+          )
         )
       : options.create(request);
 
-  const sized = (found: Machine | Checkpoint, sizes: Sizing) => ({
-    cpu: sizes.cpu ?? found.cpu,
-    ramMib: sizes.ramMib ?? found.ramMib,
-    diskGib: sizes.diskGib ?? found.diskGib,
-  });
-
-  const restore = (checkpoint: string, name: string, sizes: Sizing = {}) =>
-    Effect.flatMap(findCheckpoint(checkpoint), (found) =>
+  const restore = (source: string, name: string, sizes: Sizing = {}) =>
+    Effect.flatMap(findCheckpoint(source), (found) =>
       add(
         labelled(
-          machine(`${options.id}_${name}`, { kind, base: found.base, ...sized(found, sizes) }),
-          found.profile,
-        ),
-      ),
+          machine(`${options.id}_${name}`, {
+            kind,
+            base: found.base,
+            ...sized(found, sizes),
+          }),
+          found.profile
+        )
+      )
     );
 
   const prebuild = (
-    request: PrebuildRequest,
+    request: PrebuildRequest
   ): Effect.Effect<Checkpoint, Declared<"prebuildCheckpoint">> => {
     if (options.prebuild !== undefined) {
       return options.prebuild(request);
@@ -176,7 +201,7 @@ export const stubHost = (options: StubHostOptions) => {
           ramMib: request.ramMib,
           diskGib: request.diskGib,
         }),
-        request.profile,
+        request.profile
       );
 
       checkpoints.set(made.id, made);
@@ -186,12 +211,13 @@ export const stubHost = (options: StubHostOptions) => {
   };
 
   const app = Action.implement(Http.actions, {
-    listMachines: () => Effect.as(record("machine.list"), [...machines.values()]),
+    listMachines: () =>
+      Effect.as(record("machine.list"), [...machines.values()]),
     getMachine: ({ id }) => Effect.andThen(record("machine.get"), find(id)),
     createMachine: (request) =>
       Effect.andThen(
         Effect.sync(() => creates.push(request)),
-        Effect.andThen(record("machine.create"), create(request)),
+        Effect.andThen(record("machine.create"), create(request))
       ),
     execMachine: (request) =>
       Effect.andThen(
@@ -199,26 +225,34 @@ export const stubHost = (options: StubHostOptions) => {
         Effect.andThen(
           record("machine.exec"),
           options.exec === undefined
-            ? Effect.as(find(request.id), { exitCode: 0, output: "", truncated: false })
-            : options.exec(request),
-        ),
+            ? Effect.as(find(request.id), {
+                exitCode: 0,
+                output: "",
+                truncated: false,
+              })
+            : options.exec(request)
+        )
       ),
     startMachine: ({ id }) =>
       Effect.andThen(
         record("machine.start"),
-        Effect.map(find(id), (found) => settled(found, "running", "running")),
+        Effect.map(find(id), (found) => settled(found, "running", "running"))
       ),
     stopMachine: ({ id }) =>
       Effect.andThen(
         record("machine.stop"),
-        Effect.map(find(id), (found) => settled(found, "stopped", "stopped")),
+        Effect.map(find(id), (found) => settled(found, "stopped", "stopped"))
       ),
     pauseMachine: ({ id }) =>
       Effect.andThen(
         record("machine.pause"),
         Effect.map(find(id), (found) =>
-          settled(found, found.state === "stopped" ? "stopped" : "paused", "paused"),
-        ),
+          settled(
+            found,
+            found.state === "stopped" ? "stopped" : "paused",
+            "paused"
+          )
+        )
       ),
     resizeMachine: ({ id, ...sizes }) =>
       Effect.andThen(
@@ -229,32 +263,34 @@ export const stubHost = (options: StubHostOptions) => {
           machines.set(now.id, now);
 
           return now;
-        }),
+        })
       ),
     deleteMachine: ({ id }) =>
       Effect.andThen(
         record("machine.delete"),
         Effect.andThen(
           find(id),
-          Effect.sync(() => machines.delete(id)),
-        ),
+          Effect.sync(() => machines.delete(id))
+        )
       ),
     forkMachine: ({ machine: source, name, ...sizes }) =>
       Effect.andThen(
         record("machine.fork"),
         Effect.flatMap(find(source), (found) =>
-          add({ ...found, id: `${options.id}_${name}`, ...sized(found, sizes) }),
-        ),
+          add({ ...found, id: `${options.id}_${name}`, ...sized(found, sizes) })
+        )
       ),
-    restoreMachine: ({ checkpoint, name, ...sizes }) =>
+    restoreMachine: ({ checkpoint: source, name, ...sizes }) =>
       Effect.andThen(
         record("machine.restore"),
         options.restoreFails === undefined
-          ? restore(checkpoint, name, sizes)
-          : Effect.fail(options.restoreFails),
+          ? restore(source, name, sizes)
+          : Effect.fail(options.restoreFails)
       ),
-    listCheckpoints: () => Effect.as(record("checkpoint.list"), [...checkpoints.values()]),
-    getCheckpoint: ({ id }) => Effect.andThen(record("checkpoint.get"), findCheckpoint(id)),
+    listCheckpoints: () =>
+      Effect.as(record("checkpoint.list"), [...checkpoints.values()]),
+    getCheckpoint: ({ id }) =>
+      Effect.andThen(record("checkpoint.get"), findCheckpoint(id)),
     captureCheckpoint: ({ machine: source, name }) =>
       Effect.andThen(
         record("checkpoint.capture"),
@@ -273,28 +309,28 @@ export const stubHost = (options: StubHostOptions) => {
                   ramMib: found.ramMib,
                   diskGib: found.diskGib,
                 },
-                found.profile,
+                found.profile
               );
 
               checkpoints.set(made.id, made);
 
               return made;
-            }),
-          ),
-        ),
+            })
+          )
+        )
       ),
     deleteCheckpoint: ({ id }) =>
       Effect.andThen(
         record("checkpoint.delete"),
         Effect.andThen(
           findCheckpoint(id),
-          Effect.sync(() => checkpoints.delete(id)),
-        ),
+          Effect.sync(() => checkpoints.delete(id))
+        )
       ),
     prebuildCheckpoint: (request) =>
       Effect.andThen(
         Effect.sync(() => prebuilds.push(request)),
-        Effect.andThen(record("checkpoint.prebuild"), prebuild(request)),
+        Effect.andThen(record("checkpoint.prebuild"), prebuild(request))
       ),
     getHost: () =>
       Effect.as(record("host.get"), {
@@ -307,15 +343,21 @@ export const stubHost = (options: StubHostOptions) => {
     getCapacity: () =>
       Effect.as(
         record("host.capacity"),
-        (options.capacity ?? []).map((limit) => ({ host: options.id, ...limit })),
+        (options.capacity ?? []).map((limit) => ({
+          host: options.id,
+          ...limit,
+        }))
       ),
   });
 
   const routes = ActionHttp.layer(Http, [app]);
 
-  const web = HttpRouter.toWebHandler(routes.pipe(Layer.provide(HttpServer.layerServices)), {
-    disableLogger: true,
-  });
+  const web = HttpRouter.toWebHandler(
+    routes.pipe(Layer.provide(HttpServer.layerServices)),
+    {
+      disableLogger: true,
+    }
+  );
 
   return {
     id: options.id,
@@ -330,12 +372,14 @@ export const stubHost = (options: StubHostOptions) => {
     held: () => [...machines.keys()],
     heldCheckpoints: () => [...checkpoints.keys()],
     routes,
-    handler: (request: Request) => {
+    handler: async (request: Request) => {
       versions.push(request.headers.get(versionHeader));
 
-      return web.handler(request);
+      return await web.handler(request);
     },
-    dispose: () => web.dispose(),
+    dispose: async () => {
+      await web.dispose();
+    },
   };
 };
 
@@ -343,11 +387,13 @@ export type StubHost = ReturnType<typeof stubHost>;
 
 export class Silent {
   aborted = 0;
-  readonly #reached = Promise.withResolvers<void>();
-  readonly reached = Effect.promise(() => this.#reached.promise);
+  readonly #reached = Promise.withResolvers<undefined>();
+  readonly reached = Effect.promise(async () => {
+    await this.#reached.promise;
+  });
 
   arrive() {
-    this.#reached.resolve();
+    this.#reached.resolve(undefined);
   }
 }
 
@@ -362,44 +408,56 @@ export type Endpoint =
 const requestUrl = (input: string | URL | Request): URL =>
   new URL(input instanceof Request ? input.url : input);
 
-const unanswered = (silent: Silent, signal: AbortSignal | null | undefined) =>
-  new Promise<Response>((_resolve, reject) => {
-    signal?.addEventListener("abort", () => {
-      silent.aborted += 1;
-      reject(new Error("aborted"));
-    });
+const unanswered = async (
+  silent: Silent,
+  signal: AbortSignal | null | undefined
+) => {
+  const { promise, reject } = Promise.withResolvers<Response>();
+
+  signal?.addEventListener("abort", () => {
+    silent.aborted += 1;
+    reject(new Error("aborted"));
   });
 
+  return await promise;
+};
+
 export const transport = (
-  endpoints: ReadonlyMap<string, Endpoint>,
+  endpoints: ReadonlyMap<string, Endpoint>
 ): Layer.Layer<HttpClient.HttpClient> => {
   const fetch: typeof globalThis.fetch = async (input, init) => {
     const endpoint = endpoints.get(requestUrl(input).origin);
 
     if (endpoint === undefined || endpoint === "down") {
-      throw new TypeError("fetch failed", { cause: new Error("connect ECONNREFUSED") });
+      throw new TypeError("fetch failed", {
+        cause: new Error("connect ECONNREFUSED"),
+      });
     }
 
     if (endpoint instanceof Silent) {
       endpoint.arrive();
 
-      return unanswered(endpoint, init?.signal);
+      return await unanswered(endpoint, init?.signal);
     }
 
     if ("slow" in endpoint) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sleep(100);
 
-      return endpoint.slow.handler(new Request(input, init));
+      return await endpoint.slow.handler(new Request(input, init));
     }
 
     if ("lost" in endpoint) {
       await endpoint.lost.handler(new Request(input, init));
 
-      throw new TypeError("fetch failed", { cause: new Error("other side closed") });
+      throw new TypeError("fetch failed", {
+        cause: new Error("other side closed"),
+      });
     }
 
-    return endpoint.handler(new Request(input, init));
+    return await endpoint.handler(new Request(input, init));
   };
 
-  return FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch)));
+  return FetchHttpClient.layer.pipe(
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetch))
+  );
 };

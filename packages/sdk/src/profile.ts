@@ -1,9 +1,10 @@
 import { Effect, FileSystem, Path, Predicate, Record, Schema } from "effect";
+
+import { describeFileError, describeIssues } from "./describe.ts";
 import { Invalid } from "./errors.ts";
 import { HostId } from "./ids.ts";
 import { MachineSpec, Setup } from "./resources.ts";
 import { readAuthorizedKeys, readSetup } from "./setup.ts";
-import { describeFileError, describeIssues } from "./describe.ts";
 
 /**
  * A client-side file that fills in a create's spec; hosts never see it. `setup.path` is a script
@@ -15,7 +16,10 @@ export const Profile = Schema.Struct({
   ramMib: MachineSpec.fields.ramMib,
   diskGib: MachineSpec.fields.diskGib,
   setup: Schema.optionalKey(
-    Schema.Struct({ path: Schema.String, timeoutSeconds: Setup.fields.timeoutSeconds }),
+    Schema.Struct({
+      path: Schema.String,
+      timeoutSeconds: Setup.fields.timeoutSeconds,
+    })
   ),
   host: Schema.optionalKey(HostId),
 });
@@ -27,14 +31,16 @@ export interface LoadedProfile extends Profile {
   readonly label: string;
 }
 
-const decodeProfile = Schema.decodeUnknownEffect(Schema.fromJsonString(Profile));
+const decodeProfile = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Profile)
+);
 
 /**
  * Its file name without `.json` is the machine's `profile` label. Unknown keys are refused. The
  * setup itself is read by whoever sends it, with `readSetup`.
  */
 export const loadProfile = (
-  file: string,
+  file: string
 ): Effect.Effect<LoadedProfile, Invalid, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -46,14 +52,21 @@ export const loadProfile = (
           new Invalid({
             message: `couldn't read profile ${file}: ${describeFileError(error)}`,
             file,
-          }),
-      ),
+          })
+      )
     );
 
-    const profile = yield* decodeProfile(text, { onExcessProperty: "error", errors: "all" }).pipe(
+    const profile = yield* decodeProfile(text, {
+      onExcessProperty: "error",
+      errors: "all",
+    }).pipe(
       Effect.mapError(
-        (error) => new Invalid({ message: `profile ${file}: ${describeIssues(error)}`, file }),
-      ),
+        (error) =>
+          new Invalid({
+            message: `profile ${file}: ${describeIssues(error)}`,
+            file,
+          })
+      )
     );
 
     const label = path.basename(file, ".json");
@@ -62,7 +75,10 @@ export const loadProfile = (
       ? { ...profile, label }
       : {
           ...profile,
-          setup: { ...profile.setup, path: path.resolve(path.dirname(file), profile.setup.path) },
+          setup: {
+            ...profile.setup,
+            path: path.resolve(path.dirname(file), profile.setup.path),
+          },
           label,
         };
   });
@@ -70,7 +86,9 @@ export const loadProfile = (
 type Sizes = Omit<Profile, "setup" | "host">;
 
 /** Each field given replaces the profile's. */
-export type Overrides = { readonly [K in keyof Sizes]?: Sizes[K] | undefined } & {
+export type Overrides = {
+  readonly [K in keyof Sizes]?: Sizes[K] | undefined;
+} & {
   /** A setup script or recipe directory, already resolved. */
   readonly setup?: string | undefined;
   readonly setupTimeoutSeconds?: number | undefined;
@@ -94,11 +112,13 @@ export const specRequest = (
   what: string,
   profile: LoadedProfile | undefined,
   overrides: Overrides,
-  names?: ReadonlyMap<PropertyKey, string>,
+  names?: ReadonlyMap<PropertyKey, string>
 ): Effect.Effect<SpecRequest, Invalid, FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
     const file = overrides.setup ?? profile?.setup?.path;
-    const timeoutSeconds = overrides.setupTimeoutSeconds ?? profile?.setup?.timeoutSeconds;
+
+    const timeoutSeconds =
+      overrides.setupTimeoutSeconds ?? profile?.setup?.timeoutSeconds;
 
     if (file === undefined && overrides.setupTimeoutSeconds !== undefined) {
       return yield* new Invalid({
@@ -111,18 +131,22 @@ export const specRequest = (
     const setup =
       file === undefined
         ? undefined
-        : keys === undefined
-          ? yield* new Invalid({
-              message: `${what}: a setup needs ${names?.get("authorizedKeys") ?? "authorizedKeys"}, the public keys the host installs for the login user after it`,
-            })
-          : Record.filter(
+        : yield* Effect.gen(function* () {
+            if (keys === undefined) {
+              return yield* new Invalid({
+                message: `${what}: a setup needs ${names?.get("authorizedKeys") ?? "authorizedKeys"}, the public keys the host installs for the login user after it`,
+              });
+            }
+
+            return Record.filter(
               {
                 script: yield* readSetup(file),
                 timeoutSeconds,
                 authorizedKeys: yield* readAuthorizedKeys(keys),
               },
-              Predicate.isNotUndefined,
+              Predicate.isNotUndefined
             );
+          });
 
     const fields = {
       base: overrides.base ?? profile?.base,
@@ -133,13 +157,17 @@ export const specRequest = (
       profile: profile?.label,
     } satisfies Record<keyof Sizes | "setup" | "profile", unknown>;
 
-    const spec = yield* decodeSpec(Record.filter(fields, Predicate.isNotUndefined), {
-      onExcessProperty: "error",
-      errors: "all",
-    }).pipe(
+    const spec = yield* decodeSpec(
+      Record.filter(fields, Predicate.isNotUndefined),
+      {
+        onExcessProperty: "error",
+        errors: "all",
+      }
+    ).pipe(
       Effect.mapError(
-        (error) => new Invalid({ message: `${what}: ${describeIssues(error, names)}` }),
-      ),
+        (error) =>
+          new Invalid({ message: `${what}: ${describeIssues(error, names)}` })
+      )
     );
 
     return { spec, host: overrides.host ?? profile?.host };

@@ -1,7 +1,9 @@
-import { Effect, FileSystem, Option, type PlatformError, Predicate, Schema } from "effect";
+import { Effect, FileSystem, Option, Predicate, Schema } from "effect";
+import type { PlatformError } from "effect";
 import { Base64 } from "effect/encoding";
-import { Invalid } from "./errors.ts";
+
 import { describeFileError, describeIssues } from "./describe.ts";
+import { Invalid } from "./errors.ts";
 import { PublicKeys } from "./resources.ts";
 
 const lineLength = 76;
@@ -9,7 +11,7 @@ const lineLength = 76;
 const terminator = "CLANKERBOX_RECIPE";
 
 const wrap = (base64: string): string => {
-  const lines: Array<string> = [];
+  const lines: string[] = [];
 
   for (let at = 0; at < base64.length; at += lineLength) {
     lines.push(base64.slice(at, at + lineLength));
@@ -24,7 +26,7 @@ const argument = (entry: string): string => quote(`./${entry}`);
 
 const executable = 0o111;
 
-const selfExtracting = (steps: ReadonlyArray<string>): string =>
+const selfExtracting = (steps: readonly string[]): string =>
   [
     "#!/bin/sh",
     "set -eu",
@@ -44,7 +46,7 @@ const selfExtracting = (steps: ReadonlyArray<string>): string =>
  * same script, as a prebuild is named after it.
  */
 export const packRecipe = (
-  directory: string,
+  directory: string
 ): Effect.Effect<string, Invalid, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -58,19 +60,23 @@ export const packRecipe = (
       .stat(`${directory}/setup.sh`)
       .pipe(
         Effect.mapError((error) =>
-          Predicate.isTagged(error.reason, "NotFound") ? noSetup : error,
-        ),
+          Predicate.isTagged(error.reason, "NotFound") ? noSetup : error
+        )
       );
 
     if (setup.type !== "File") {
       return yield* noSetup;
     }
 
-    const steps: Array<string> = [];
+    const steps: string[] = [];
 
-    const walk = (under: string): Effect.Effect<void, Invalid | PlatformError.PlatformError> =>
+    const walk = (
+      under: string
+    ): Effect.Effect<void, Invalid | PlatformError.PlatformError> =>
       Effect.gen(function* () {
-        const names = yield* fs.readDirectory(under === "" ? directory : `${directory}/${under}`);
+        const names = yield* fs.readDirectory(
+          under === "" ? directory : `${directory}/${under}`
+        );
 
         for (const name of names.toSorted()) {
           const entry = under === "" ? name : `${under}/${name}`;
@@ -91,7 +97,7 @@ export const packRecipe = (
             steps.push(
               `base64 -d >${argument(entry)} <<'${terminator}'`,
               wrap(Base64.encode(yield* fs.readFile(path))),
-              terminator,
+              terminator
             );
 
             if ((info.mode & executable) !== 0) {
@@ -115,13 +121,15 @@ export const packRecipe = (
         new Invalid({
           message: `couldn't pack recipe ${directory}: ${describeFileError(error)}`,
           file: directory,
-        }),
-      ),
-    ),
+        })
+      )
+    )
   );
 
 /** A script file's text, or a recipe directory packed into one script. */
-export const readSetup = (path: string): Effect.Effect<string, Invalid, FileSystem.FileSystem> =>
+export const readSetup = (
+  path: string
+): Effect.Effect<string, Invalid, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const info = yield* fs.stat(path);
@@ -137,9 +145,9 @@ export const readSetup = (path: string): Effect.Effect<string, Invalid, FileSyst
         new Invalid({
           message: `couldn't read setup ${path}: ${describeFileError(error)}`,
           file: path,
-        }),
-      ),
-    ),
+        })
+      )
+    )
   );
 
 const decodePublicKeys = Schema.decodeUnknownEffect(PublicKeys);
@@ -149,7 +157,7 @@ const decodePublicKeys = Schema.decodeUnknownEffect(PublicKeys);
  * its line endings as `\n`.
  */
 export const readAuthorizedKeys = (
-  path: string,
+  path: string
 ): Effect.Effect<string, Invalid, FileSystem.FileSystem> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -160,14 +168,17 @@ export const readAuthorizedKeys = (
           new Invalid({
             message: `couldn't read authorized keys ${path}: ${describeFileError(error)}`,
             file: path,
-          }),
-      ),
+          })
+      )
     );
 
     return yield* decodePublicKeys(text.replaceAll("\r\n", "\n")).pipe(
       Effect.mapError(
         (error) =>
-          new Invalid({ message: `authorized keys ${path}: ${describeIssues(error)}`, file: path }),
-      ),
+          new Invalid({
+            message: `authorized keys ${path}: ${describeIssues(error)}`,
+            file: path,
+          })
+      )
     );
   });

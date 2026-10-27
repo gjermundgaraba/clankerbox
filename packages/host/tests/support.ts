@@ -1,26 +1,29 @@
 import { createServer } from "node:http";
-import { join } from "node:path";
+import path from "node:path";
+
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  type CreateRequest,
-  type Kind,
-  type Machine,
-  requirements,
+import { requirements } from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  CreateRequest,
+  Kind,
+  Machine,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing";
+import { scratch } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { Context, Duration, Effect, Exit, Layer, Logger, Scope } from "effect";
 import { HttpClient, HttpServer } from "effect/http";
 import { expect } from "vite-plus/test";
+
 import * as Checkpoints from "../src/checkpoints.ts";
 import { hostLayer } from "../src/composition/host.ts";
-import * as Machines from "../src/machines.ts";
 import type { PortRange } from "../src/machine-ports.ts";
+import * as Machines from "../src/machines.ts";
 import type { TailnetSettings } from "../src/platform/tailscale.ts";
-import type { Tailnet } from "../src/tailnet.ts";
 import type { HostSettings } from "../src/settings.ts";
 import * as Store from "../src/store.ts";
-import { type FakeOptions, type FakeRuntime, fakeRuntime } from "./fake-runtime.ts";
+import type { Tailnet } from "../src/tailnet.ts";
+import { fakeRuntime } from "./fake-runtime.ts";
+import type { FakeOptions, FakeRuntime } from "./fake-runtime.ts";
 
 export const image = requirements.bases.linux.ubuntu;
 
@@ -32,7 +35,7 @@ export const hostConfig = (
   stateDir: string,
   machinePorts = sharedPorts,
   recheck = quiet,
-  kind: Kind = "linux",
+  kind: Kind = "linux"
 ): HostSettings => ({
   id: kind,
   kind,
@@ -46,7 +49,7 @@ export const hostConfig = (
 export const request = (
   name: string,
   fields?: Partial<CreateRequest>,
-  host = "linux",
+  host = "linux"
 ): CreateRequest => ({
   id: `${host}_${name}`,
   base: "ubuntu",
@@ -65,7 +68,11 @@ export interface TestHost {
   readonly stateDir: string;
   readonly url: string;
   readonly run: <A, E>(
-    effect: Effect.Effect<A, E, Machines.Machines | Checkpoints.Checkpoints | Store.Store>,
+    effect: Effect.Effect<
+      A,
+      E,
+      Machines.Machines | Checkpoints.Checkpoints | Store.Store
+    >
   ) => Effect.Effect<A, E>;
   readonly machines: Machines.Interface;
   readonly checkpoints: Checkpoints.Interface;
@@ -76,7 +83,9 @@ export interface TestHost {
 
 export const noHttp = Layer.succeed(
   HttpClient.HttpClient,
-  HttpClient.make(() => Effect.die("a test host made an HTTP request it was given no client for")),
+  HttpClient.make(() =>
+    Effect.die("a test host made an HTTP request it was given no client for")
+  )
 );
 
 export const startHost = (
@@ -92,11 +101,14 @@ export const startHost = (
     /** The config's tailnet, which the host's own Tailscale adapter reaches through `http`. */
     readonly tailnetSettings?: TailnetSettings;
     readonly http?: Layer.Layer<HttpClient.HttpClient>;
-  },
+  }
 ) =>
   Effect.gen(function* () {
-    const fake = options?.fake ?? fakeRuntime({ dir, kind: options?.kind, ...options?.runtime });
-    const stateDir = join(dir, "state");
+    const fake =
+      options?.fake ??
+      fakeRuntime({ dir, kind: options?.kind, ...options?.runtime });
+
+    const stateDir = path.join(dir, "state");
     const scope = yield* Scope.make();
 
     yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
@@ -104,25 +116,32 @@ export const startHost = (
     const context = yield* Layer.buildWithScope(
       hostLayer(
         {
-          ...hostConfig(stateDir, options?.ports, options?.recheck, options?.kind),
+          ...hostConfig(
+            stateDir,
+            options?.ports,
+            options?.recheck,
+            options?.kind
+          ),
           tailnet: options?.tailnetSettings,
         },
         fake.layer,
-        loopbackServer(),
+        loopbackServer()
       ).pipe(
         Layer.provide(options?.tailnet ?? Layer.empty),
         Layer.provide(options?.http ?? noHttp),
         Layer.provideMerge(Logger.layer([])),
-        Layer.provide(NodeServices.layer),
+        Layer.provide(NodeServices.layer)
       ),
-      scope,
+      scope
     );
 
     const host: TestHost = {
       dir,
       fake,
       stateDir,
-      url: HttpServer.formatAddress(Context.get(context, HttpServer.HttpServer).address),
+      url: HttpServer.formatAddress(
+        Context.get(context, HttpServer.HttpServer).address
+      ),
       run: (effect) => Effect.provide(effect, context),
       machines: Context.get(context, Machines.Machines),
       checkpoints: Context.get(context, Checkpoints.Checkpoints),
@@ -134,9 +153,13 @@ export const startHost = (
   });
 
 export const hostOn =
-  (ports: PortRange) => (options?: Parameters<typeof startHost>[1] & { readonly dir?: string }) =>
+  (ports: PortRange) =>
+  (options?: Parameters<typeof startHost>[1] & { readonly dir?: string }) =>
     Effect.gen(function* () {
-      return yield* startHost(options?.dir ?? (yield* scratch), { ports, ...options });
+      return yield* startHost(options?.dir ?? (yield* scratch), {
+        ports,
+        ...options,
+      });
     });
 
 export const failure = <A, E>(host: TestHost, effect: Effect.Effect<A, E>) =>
@@ -144,9 +167,12 @@ export const failure = <A, E>(host: TestHost, effect: Effect.Effect<A, E>) =>
 
 export const pause = Effect.sleep(Duration.millis(50));
 
-export const eventually = <A, E>(read: Effect.Effect<A, E>, done: (value: A) => boolean) =>
+export const eventually = <A, E>(
+  read: Effect.Effect<A, E>,
+  done: (value: A) => boolean
+) =>
   Effect.gen(function* () {
-    for (let tries = 0; tries < 100; tries++) {
+    for (let tries = 0; tries < 100; tries += 1) {
       const value = yield* read;
 
       if (done(value)) {
@@ -163,4 +189,8 @@ export const eventually = <A, E>(read: Effect.Effect<A, E>, done: (value: A) => 
     return last;
   });
 
-export const at = ({ state, desired, phase }: Machine) => [state, desired, phase];
+export const at = ({ state, desired, phase }: Machine) => [
+  state,
+  desired,
+  phase,
+];

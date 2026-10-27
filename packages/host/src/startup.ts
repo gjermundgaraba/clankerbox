@@ -1,12 +1,23 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Layer, Schema } from "effect";
+
 import { idOn } from "./ids.ts";
 import { checkpointRef, machineRef } from "./refs.ts";
-import { changes, Runtime, sizedBy, stateReadWait, timeoutFail } from "./runtime.ts";
+import {
+  changes,
+  Runtime,
+  sizedBy,
+  stateReadWait,
+  timeoutFail,
+} from "./runtime.ts";
 import type { HostSettings } from "./settings.ts";
-import { type Intent, Store } from "./store.ts";
+import { Store } from "./store.ts";
+import type { Intent } from "./store.ts";
 
-export class CannotStart extends Schema.TaggedError<CannotStart>()("CannotStart", {
+export class CannotStart extends Schema.TaggedError<
+  CannotStart,
+  { readonly brand: unique symbol }
+>()("CannotStart", {
   message: Schema.String,
 }) {}
 
@@ -23,14 +34,14 @@ export const startup = (config: Pick<HostSettings, "id">) =>
           Effect.andThen(store.removeCheckpoint(record.name)),
           Effect.catch((error) =>
             Effect.logWarning(
-              `couldn't clear the failed capture of ${idOn(config.id)(record.name)}: ${error.message}`,
-            ),
-          ),
+              `couldn't clear the failed capture of ${idOn(config.id)(record.name)}: ${error.message}`
+            )
+          )
         );
       }
 
       const intents = yield* store.machines;
-      const kept: Array<Intent> = [];
+      const kept: Intent[] = [];
 
       for (const intent of intents) {
         if (intent.desired === "deleted") {
@@ -39,7 +50,7 @@ export const startup = (config: Pick<HostSettings, "id">) =>
 
         if (!intent.made) {
           yield* Effect.logWarning(
-            `machine ${idOn(config.id)(intent.name)} of instance ${intent.instance} was cut off before it was made, so it is deleted`,
+            `machine ${idOn(config.id)(intent.name)} of instance ${intent.instance} was cut off before it was made, so it is deleted`
           );
         }
 
@@ -50,7 +61,9 @@ export const startup = (config: Pick<HostSettings, "id">) =>
         }
       }
 
-      yield* runtime.startup(intents.map((intent) => machineRef(config.id, intent)));
+      yield* runtime.startup(
+        intents.map((intent) => machineRef(config.id, intent))
+      );
 
       yield* Effect.forEach(
         kept,
@@ -61,23 +74,25 @@ export const startup = (config: Pick<HostSettings, "id">) =>
               () =>
                 new Internal({
                   message: `the read didn't answer within ${Duration.format(stateReadWait)}`,
-                }),
+                })
             ),
             Effect.matchEffect({
               onFailure: (error) =>
                 Effect.logWarning(
-                  `couldn't read the sizes of ${idOn(config.id)(intent.name)}, so the host keeps those it has: ${error.message}`,
+                  `couldn't read the sizes of ${idOn(config.id)(intent.name)}, so the host keeps those it has: ${error.message}`
                 ),
               onSuccess: (read) => {
                 const sizes = sizedBy(intent, read);
 
-                return Object.values(changes(intent, sizes)).every((size) => size === undefined)
+                return Object.values(changes(intent, sizes)).every(
+                  (size) => size === undefined
+                )
                   ? Effect.void
                   : store.sized(intent.name, sizes);
               },
-            }),
+            })
           ),
-        { concurrency: sizeReads, discard: true },
+        { concurrency: sizeReads, discard: true }
       );
-    }),
+    })
   );

@@ -1,9 +1,19 @@
-import { formatGib, formatMib, Machine, stateLabel } from "@gjermundgaraba/clankerbox-sdk";
-import { DateTime, Schema } from "effect";
+import {
+  formatGib,
+  formatMib,
+  Machine,
+  stateLabel,
+} from "@gjermundgaraba/clankerbox-sdk";
+import type { DateTime } from "effect";
+import { Schema } from "effect";
+
 import { age } from "../units.ts";
 
 const machineColumns: ReadonlyArray<
-  readonly [label: string, cell: (machine: Machine, now: DateTime.Utc) => string]
+  readonly [
+    label: string,
+    cell: (machine: Machine, now: DateTime.Utc) => string,
+  ]
 > = [
   ["ID", (machine) => machine.id],
   ["STATE", stateLabel],
@@ -20,10 +30,37 @@ const listColumns: typeof machineColumns = [
   ["ERROR", (machine) => machine.error?._tag ?? "-"],
 ];
 
-export const machineRows = (machines: ReadonlyArray<Machine>, now: DateTime.Utc) => [
+export const machineRows = (
+  machines: readonly Machine[],
+  now: DateTime.Utc
+) => [
   listColumns.map(([label]) => label),
-  ...machines.map((machine) => listColumns.map(([, cell]) => cell(machine, now))),
+  ...machines.map((machine) =>
+    listColumns.map(([, cell]) => cell(machine, now))
+  ),
 ];
+
+const tailnetLabel = ({ tailnet }: Machine): string => {
+  if (tailnet === undefined) {
+    return "-";
+  }
+
+  switch (tailnet.state) {
+    case "joined": {
+      return tailnet.name ?? "joined, with no MagicDNS name";
+    }
+
+    case "failed": {
+      return `failed: ${tailnet.error}`;
+    }
+
+    case "missing": {
+      return "missing: the guest has no tailscaled";
+    }
+
+    // no default
+  }
+};
 
 export const machineFields = (machine: Machine, now: DateTime.Utc) => {
   const { ssh } = machine;
@@ -35,26 +72,13 @@ export const machineFields = (machine: Machine, now: DateTime.Utc) => {
     ["SSH", ssh === undefined ? "-" : `${ssh.user}@${ssh.host}:${ssh.port}`],
     [
       "ERROR",
-      machine.error === undefined ? "-" : `${machine.error._tag}: ${machine.error.message}`,
+      machine.error === undefined
+        ? "-"
+        : `${machine.error._tag}: ${machine.error.message}`,
     ],
     ["HOST_KEY", machine.hostKey ?? "-"],
     ["TAILNET", tailnetLabel(machine)],
   ];
-};
-
-const tailnetLabel = ({ tailnet }: Machine): string => {
-  if (tailnet === undefined) {
-    return "-";
-  }
-
-  switch (tailnet.state) {
-    case "joined":
-      return tailnet.name ?? "joined, with no MagicDNS name";
-    case "failed":
-      return `failed: ${tailnet.error}`;
-    case "missing":
-      return "missing: the guest has no tailscaled";
-  }
 };
 
 export const encodeMachine = Schema.encodeSync(Machine);

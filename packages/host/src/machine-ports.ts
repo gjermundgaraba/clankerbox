@@ -1,4 +1,5 @@
-import { Capacity, Internal } from "@gjermundgaraba/clankerbox-sdk";
+import type { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import { Capacity } from "@gjermundgaraba/clankerbox-sdk";
 import { Context, Effect } from "effect";
 
 export interface PortRange {
@@ -7,7 +8,9 @@ export interface PortRange {
 }
 
 // Source: smolvm src/agent/fork.rs CLONE_PORT_FLOOR, CLONE_PORT_CEILING
-export const reservedPorts: ReadonlyArray<PortRange & { readonly owner: string }> = [
+export const reservedPorts: ReadonlyArray<
+  PortRange & { readonly owner: string }
+> = [
   { first: 20_000, last: 31_999, owner: "smolvm's fork ports" },
   { first: 32_768, last: 60_999, owner: "Linux's ephemeral ports" },
   { first: 49_152, last: 65_535, owner: "macOS's ephemeral ports" },
@@ -16,19 +19,24 @@ export const reservedPorts: ReadonlyArray<PortRange & { readonly owner: string }
 export const defaultMachinePorts: PortRange = { first: 10_000, last: 19_999 };
 
 export interface Probe {
-  readonly free: (address: string, port: number) => Effect.Effect<boolean, Internal>;
+  readonly free: (
+    address: string,
+    port: number
+  ) => Effect.Effect<boolean, Internal>;
 }
 
-export class PortProbe extends Context.Service<PortProbe, Probe>()("@clankerbox/host/PortProbe") {}
+export class PortProbe extends Context.Service<PortProbe, Probe>()(
+  "@clankerbox/host/PortProbe"
+) {}
 
 export const pickPort = (
   probe: Probe,
   address: string,
   range: PortRange,
-  taken: ReadonlySet<number>,
+  taken: ReadonlySet<number>
 ): Effect.Effect<number, Capacity | Internal> =>
   Effect.gen(function* () {
-    for (let port = range.first; port <= range.last; port++) {
+    for (let port = range.first; port <= range.last; port += 1) {
       if (!taken.has(port) && (yield* probe.free(address, port))) {
         return port;
       }

@@ -1,16 +1,16 @@
-import {
-  type Capacity,
+import { Missing, readTimeout } from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  Capacity,
   Internal,
-  type Kind,
-  type Machine,
-  Missing,
-  type Reading,
-  readTimeout,
-  type Sizing,
-  type Unsizable,
-  type WrongState,
+  Kind,
+  Machine,
+  Reading,
+  Sizing,
+  Unsizable,
+  WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, Duration, Effect, type Scope, type Stream } from "effect";
+import { Context, Duration, Effect } from "effect";
+import type { Scope, Stream } from "effect";
 
 /**
  * What any runtime call fails with: what broke. `NotFound`, `Conflict` and `Invalid` are the
@@ -66,12 +66,18 @@ export interface CheckpointRef {
   readonly diskGib: number;
 }
 
-export const stateReadWait = Duration.subtract(readTimeout, Duration.seconds(1));
+export const stateReadWait = Duration.subtract(
+  readTimeout,
+  Duration.seconds(1)
+);
 
 export const timeoutFail =
   <E2>(duration: Duration.Input, error: () => E2) =>
   <A, E, R>(self: Effect.Effect<A, E, R>): Effect.Effect<A, E | E2, R> =>
-    Effect.timeoutOrElse(self, { duration, orElse: () => Effect.fail(error()) });
+    Effect.timeoutOrElse(self, {
+      duration,
+      orElse: () => Effect.fail(error()),
+    });
 
 export interface Held {
   readonly machine: MachineRef;
@@ -100,11 +106,11 @@ export interface Activation {
   /** Owned by the step that boots it. */
   readonly machine: MachineRef;
   /** The target included. */
-  readonly machines: ReadonlyArray<Held>;
+  readonly machines: readonly Held[];
 }
 
 export interface Command {
-  readonly argv: ReadonlyArray<string>;
+  readonly argv: readonly string[];
   /** Root when it is left out. On linux, the command runs in the image's environment as this user. */
   readonly user?: string | undefined;
   /**
@@ -160,18 +166,20 @@ export interface Interface {
     machine: Pick<MachineRef, "id">,
     from: Sizes,
     to: Sizes,
-    live: boolean,
+    live: boolean
   ) => Effect.Effect<void, Unsizable>;
   /** Runs after the failed captures are cleared, before the host serves. */
-  readonly startup: (machines: ReadonlyArray<MachineRef>) => Effect.Effect<void, RuntimeError>;
+  readonly startup: (
+    machines: readonly MachineRef[]
+  ) => Effect.Effect<void, RuntimeError>;
   /**
    * One state per machine, in their order: callers rely on it without checking. A machine the
    * runtime doesn't know is `missing`, and one whose read fails or doesn't answer in time is
    * `unknown`. Only a read of every machine at once may fail.
    */
   readonly observe: (
-    machines: ReadonlyArray<MachineRef>,
-  ) => Effect.Effect<ReadonlyArray<MachineState>, RuntimeError>;
+    machines: readonly MachineRef[]
+  ) => Effect.Effect<readonly MachineState[], RuntimeError>;
   /**
    * The capacity checks before a machine boots. A failure writes nothing. A running target counts
    * once, as it already runs.
@@ -183,14 +191,14 @@ export interface Interface {
    * not they are limits. Reads state as `observe` does and writes nothing.
    */
   readonly capacity: (
-    machines: ReadonlyArray<Held>,
-  ) => Effect.Effect<ReadonlyArray<Reading>, RuntimeError>;
+    machines: readonly Held[]
+  ) => Effect.Effect<readonly Reading[], RuntimeError>;
   /**
    * Returns once exec works. A create that fails is never called again: the core deletes it.
    */
   readonly create: (
     machine: MachineRef,
-    image: string,
+    image: string
   ) => Effect.Effect<void, RoomError | Unsizable>;
   /**
    * Returns once exec works. The core calls it on every start, also of a machine `observe` reads
@@ -198,7 +206,9 @@ export interface Interface {
    * answers it leaves as it is. A paused machine, or one a pause left part way, resumes its saved
    * execution. A machine it no longer has is `missing`, before anything native.
    */
-  readonly start: (machine: MachineRef) => Effect.Effect<void, RoomError | StateError>;
+  readonly start: (
+    machine: MachineRef
+  ) => Effect.Effect<void, RoomError | StateError>;
   /**
    * Does nothing on a machine that is stopped or that the runtime no longer has, as the core calls
    * it whatever it last read. A paused machine ends its saved execution and keeps its disk.
@@ -209,7 +219,9 @@ export interface Interface {
    * as it is, and one it can't save, as a VM an older host booted, it stops. The core never pauses
    * a stopped one.
    */
-  readonly pause: (machine: MachineRef) => Effect.Effect<void, RuntimeError | StateError>;
+  readonly pause: (
+    machine: MachineRef
+  ) => Effect.Effect<void, RuntimeError | StateError>;
   /**
    * Removes everything native the row could have made, whatever an earlier failure left: a
    * running VM, a VM whose stop failed, or nothing, as after a crash before the first call.
@@ -221,7 +233,7 @@ export interface Interface {
    */
   readonly capture: (
     machine: MachineRef,
-    checkpoint: CheckpointRef,
+    checkpoint: CheckpointRef
   ) => Effect.Effect<void, RoomError | StateError>;
   /**
    * Returns once exec works, the machine up at `machine`'s sizes. A checkpoint deleted under it
@@ -230,7 +242,7 @@ export interface Interface {
    */
   readonly restore: (
     checkpoint: CheckpointRef,
-    machine: MachineRef,
+    machine: MachineRef
   ) => Effect.Effect<void, RoomError | Unsizable>;
   /**
    * Returns once exec works, the copy up at `machine`'s sizes. A source in a state the runtime
@@ -239,7 +251,7 @@ export interface Interface {
    */
   readonly fork: (
     source: MachineRef,
-    machine: MachineRef,
+    machine: MachineRef
   ) => Effect.Effect<void, RoomError | StateError | Unsizable>;
   /**
    * Gives a made machine each size `to` names, also one `machine` holds already: a live grow that
@@ -252,7 +264,7 @@ export interface Interface {
   readonly resize: (
     machine: MachineRef,
     to: Sizing,
-    running: boolean,
+    running: boolean
   ) => Effect.Effect<void, RuntimeError | Unsizable>;
   /**
    * The sizes the runtime holds for a machine it has, as a resize left them. One it can't read is
@@ -260,12 +272,16 @@ export interface Interface {
    */
   readonly sizes: (machine: MachineRef) => Effect.Effect<Sizing, RuntimeError>;
   /** Removes everything native the checkpoint's row could have made. */
-  readonly deleteCheckpoint: (checkpoint: CheckpointRef) => Effect.Effect<void, RuntimeError>;
+  readonly deleteCheckpoint: (
+    checkpoint: CheckpointRef
+  ) => Effect.Effect<void, RuntimeError>;
   /** As the command's user, in a running guest. */
   readonly exec: (
     machine: MachineRef,
-    command: Command,
+    command: Command
   ) => Effect.Effect<Execution, RuntimeError, Scope.Scope>;
 }
 
-export class Runtime extends Context.Service<Runtime, Interface>()("@clankerbox/host/Runtime") {}
+export class Runtime extends Context.Service<Runtime, Interface>()(
+  "@clankerbox/host/Runtime"
+) {}

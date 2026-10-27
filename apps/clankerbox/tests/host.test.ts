@@ -1,11 +1,14 @@
-import { join } from "node:path";
+import path from "node:path";
+
+import { startHost } from "@clankerbox/host/testing";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
+import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
 import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
-import { operatorKey, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { startHost } from "@clankerbox/host/testing";
+
 import { ErrorDocument, UnreachableDocument } from "../src/command.ts";
 import { cli } from "./support.ts";
 
@@ -17,35 +20,48 @@ const refusedUrl = Effect.gen(function* () {
   return gone.url;
 });
 
-const setUp = (down: ReadonlyArray<string> = []) =>
+const setUp = (down: readonly string[] = []) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
     const host = yield* startHost(dir);
-    const config = join(dir, "config.json");
+    const config = path.join(dir, "config.json");
 
     const others = yield* Effect.forEach(down, (id) =>
-      Effect.map(refusedUrl, (url) => ({ id, url })),
+      Effect.map(refusedUrl, (url) => ({ id, url }))
     );
 
-    yield* write(join(dir, "id.pub"), operatorKey);
+    yield* write(path.join(dir, "id.pub"), operatorKey);
     yield* write(
       config,
       JSON.stringify({
         hosts: [{ id: "linux", url: host.url }, ...others],
         authorizedKeys: "id.pub",
-      }),
+      })
     );
 
-    const run = (args: ReadonlyArray<string>) =>
-      cli([...args, "--config", config], { http: NodeHttpClient.layerNodeHttp });
+    const run = (args: readonly string[]) =>
+      cli([...args, "--config", config], {
+        http: NodeHttpClient.layerNodeHttp,
+      });
 
     return { host, run, dir };
   });
 
-const sizes = ["--base", "ubuntu", "--cpu", "1", "--ram", "1G", "--disk", "10G"];
+const sizes = [
+  "--base",
+  "ubuntu",
+  "--cpu",
+  "1",
+  "--ram",
+  "1G",
+  "--disk",
+  "10G",
+];
 
 const decodeFailure = (text: string) =>
-  Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ error: ErrorDocument })))(text, {
+  Schema.decodeSync(
+    Schema.fromJsonString(Schema.Struct({ error: ErrorDocument }))
+  )(text, {
     onExcessProperty: "error",
   });
 
@@ -71,51 +87,67 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(listed.stdout).toContain("linux_dev");
         expect(removed).toMatchObject({ code: 0, stdout: "linux_dev" });
         expect(again.stderr).toContain("already gone");
-        expect(yield* host.run(host.store.machines)).toEqual([]);
-      }),
+        expect(yield* host.run(host.store.machines)).toStrictEqual([]);
+      })
   );
 
-  it.effect("a setup that fails replies with its output, and the machine is gone", () =>
-    Effect.gen(function* () {
-      const { host, run, dir } = yield* setUp();
-      const script = join(dir, "setup.sh");
+  it.effect(
+    "a setup that fails replies with its output, and the machine is gone",
+    () =>
+      Effect.gen(function* () {
+        const { host, run, dir } = yield* setUp();
+        const script = path.join(dir, "setup.sh");
 
-      yield* write(script, "#!/bin/sh\necho installing\necho no network >&2\nexit 7\n");
+        yield* write(
+          script,
+          "#!/bin/sh\necho installing\necho no network >&2\nexit 7\n"
+        );
 
-      const created = yield* run([
-        "create",
-        "dev",
-        ...sizes,
-        "--setup",
-        script,
-        "--setup-timeout",
-        "30s",
-        "--json",
-      ]);
+        const created = yield* run([
+          "create",
+          "dev",
+          ...sizes,
+          "--setup",
+          script,
+          "--setup-timeout",
+          "30s",
+          "--json",
+        ]);
 
-      const { error } = decodeFailure(created.stdout);
+        const { error } = decodeFailure(created.stdout);
 
-      expect(created.code).toBe(1);
-      expect(error.tag).toBe("ScriptFailed");
-      expect(error.message).toContain("setup exited 7");
-      expect(error.message).toContain("installing\nno network");
-      expect(yield* host.run(host.store.machines)).toEqual([]);
-    }),
+        expect(created.code).toBe(1);
+        expect(error.tag).toBe("ScriptFailed");
+        expect(error.message).toContain("setup exited 7");
+        expect(error.message).toContain("installing\nno network");
+        expect(yield* host.run(host.store.machines)).toStrictEqual([]);
+      })
   );
 
-  it.effect("a duplicate name is Conflict, and the hosts listing names the host's bases", () =>
-    Effect.gen(function* () {
-      const { run } = yield* setUp();
+  it.effect(
+    "a duplicate name is Conflict, and the hosts listing names the host's bases",
+    () =>
+      Effect.gen(function* () {
+        const { run } = yield* setUp();
 
-      yield* run(["create", "dev", ...sizes]);
+        yield* run(["create", "dev", ...sizes]);
 
-      const duplicate = yield* run(["create", "dev", ...sizes, "--host", "linux"]);
-      const hosts = yield* run(["hosts"]);
+        const duplicate = yield* run([
+          "create",
+          "dev",
+          ...sizes,
+          "--host",
+          "linux",
+        ]);
 
-      expect(duplicate.code).toBe(1);
-      expect(duplicate.stderr).toContain("Conflict: machine linux_dev exists");
-      expect(hosts.stdout).toContain("ubuntu");
-    }),
+        const hosts = yield* run(["hosts"]);
+
+        expect(duplicate.code).toBe(1);
+        expect(duplicate.stderr).toContain(
+          "Conflict: machine linux_dev exists"
+        );
+        expect(hosts.stdout).toContain("ubuntu");
+      })
   );
 
   it.effect(
@@ -123,75 +155,106 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { host, dir } = yield* setUp();
-        const config = join(dir, "misnamed.json");
+        const config = path.join(dir, "misnamed.json");
 
-        yield* write(config, JSON.stringify({ hosts: [{ id: "mis", url: host.url }] }));
+        yield* write(
+          config,
+          JSON.stringify({ hosts: [{ id: "mis", url: host.url }] })
+        );
 
         const created = yield* cli(
           ["create", "dev", ...sizes, "--host", "mis", "--config", config],
           {
             http: NodeHttpClient.layerNodeHttp,
-          },
+          }
         );
 
         expect(created.code).toBe(1);
-        expect(created.stderr).toContain("Invalid: mis_dev names host mis, and this is host linux");
-        expect(yield* host.run(host.store.machines)).toEqual([]);
-      }),
+        expect(created.stderr).toContain(
+          "Invalid: mis_dev names host mis, and this is host linux"
+        );
+        expect(yield* host.run(host.store.machines)).toStrictEqual([]);
+      })
   );
 
-  it.effect("fork, checkpoint capture/list/get/delete and restore run on the host", () =>
-    Effect.gen(function* () {
-      const { host, run } = yield* setUp();
+  it.effect(
+    "fork, checkpoint capture/list/get/delete and restore run on the host",
+    () =>
+      Effect.gen(function* () {
+        const { host, run } = yield* setUp();
 
-      yield* run(["create", "dev", ...sizes]);
+        yield* run(["create", "dev", ...sizes]);
 
-      const forked = yield* run(["fork", "linux_dev", "copy"]);
-      const captured = yield* run(["checkpoint", "capture", "linux_dev", "snap"]);
-      const listed = yield* run(["checkpoint", "list"]);
-      const got = yield* run(["checkpoint", "get", "linux_snap", "--json"]);
-      const fields = yield* run(["checkpoint", "get", "linux_snap"]);
-      const removed = yield* run(["delete", "linux_dev"]);
-      const restored = yield* run(["restore", "linux_snap", "dev"]);
-      const machines = yield* run(["machines"]);
-      const checkpointRemoved = yield* run(["checkpoint", "delete", "linux_snap", "--json"]);
-      const again = yield* run(["checkpoint", "delete", "linux_snap"]);
-      const checkpointsAfter = yield* run(["checkpoint", "list"]);
+        const forked = yield* run(["fork", "linux_dev", "copy"]);
 
-      expect(forked).toMatchObject({ code: 0, stdout: "linux_copy" });
-      expect(captured).toMatchObject({ code: 0, stdout: "linux_snap" });
-      expect(listed.stdout).toContain("linux_snap");
-      expect(listed.stdout).toContain("ram");
-      expect(
-        Schema.decodeUnknownSync(
-          Schema.fromJsonString(
-            Schema.Struct({ id: Schema.String, machine: Schema.String, kind: Schema.String }),
-          ),
-        )(got.stdout, { onExcessProperty: "ignore" }),
-      ).toEqual({ id: "linux_snap", machine: "linux_dev", kind: "ram" });
-      expect(fields.stdout.split("\n").map((line) => line.split(/\s{2,}/u))).toEqual(
-        expect.arrayContaining([
-          ["ID", "linux_snap"],
-          ["MACHINE", "linux_dev"],
-          ["RAM", "1G"],
-          ["DISK", "10G"],
-        ]),
-      );
-      expect(removed).toMatchObject({ code: 0, stdout: "linux_dev" });
-      expect(restored).toMatchObject({ code: 0, stdout: "linux_dev" });
-      expect(machines.stdout).toContain("linux_copy");
-      expect(machines.stdout).toContain("linux_dev");
-      expect(checkpointRemoved).toMatchObject({
-        code: 0,
-        stdout: JSON.stringify({ deleted: "linux_snap" }),
-      });
-      expect(again.stderr).toContain("already gone");
-      expect(checkpointsAfter).toMatchObject({
-        stdout: "",
-        stderr: "clankerbox: no checkpoints to list",
-      });
-      expect(yield* host.run(host.store.checkpoints)).toEqual([]);
-    }),
+        const captured = yield* run([
+          "checkpoint",
+          "capture",
+          "linux_dev",
+          "snap",
+        ]);
+
+        const listed = yield* run(["checkpoint", "list"]);
+        const got = yield* run(["checkpoint", "get", "linux_snap", "--json"]);
+        const fields = yield* run(["checkpoint", "get", "linux_snap"]);
+        const removed = yield* run(["delete", "linux_dev"]);
+        const restored = yield* run(["restore", "linux_snap", "dev"]);
+        const machines = yield* run(["machines"]);
+
+        const checkpointRemoved = yield* run([
+          "checkpoint",
+          "delete",
+          "linux_snap",
+          "--json",
+        ]);
+
+        const again = yield* run(["checkpoint", "delete", "linux_snap"]);
+        const checkpointsAfter = yield* run(["checkpoint", "list"]);
+
+        expect(forked).toMatchObject({ code: 0, stdout: "linux_copy" });
+        expect(captured).toMatchObject({ code: 0, stdout: "linux_snap" });
+        expect(listed.stdout).toContain("linux_snap");
+        expect(listed.stdout).toContain("ram");
+        expect(
+          yield* Schema.decodeEffect(
+            Schema.fromJsonString(
+              Schema.Struct({
+                id: Schema.String,
+                machine: Schema.String,
+                kind: Schema.String,
+              })
+            )
+          )(got.stdout, { onExcessProperty: "ignore" })
+        ).toStrictEqual({
+          id: "linux_snap",
+          machine: "linux_dev",
+          kind: "ram",
+        });
+        expect(
+          fields.stdout.split("\n").map((line) => line.split(/\s{2,}/u))
+        ).toStrictEqual(
+          expect.arrayContaining([
+            ["ID", "linux_snap"],
+            ["MACHINE", "linux_dev"],
+            ["RAM", "1G"],
+            ["DISK", "10G"],
+          ])
+        );
+        expect(removed).toMatchObject({ code: 0, stdout: "linux_dev" });
+        expect(restored).toMatchObject({ code: 0, stdout: "linux_dev" });
+        expect(machines.stdout).toContain("linux_copy");
+        expect(machines.stdout).toContain("linux_dev");
+        expect(checkpointRemoved).toMatchObject({
+          code: 0,
+          stdout: JSON.stringify({ deleted: "linux_snap" }),
+        });
+        expect(again.stderr).toContain("already gone");
+        expect(checkpointsAfter).toMatchObject({
+          stdout: "",
+          stderr: "clankerbox: no checkpoints to list",
+        });
+        expect(yield* host.run(host.store.checkpoints)).toStrictEqual([]);
+      })
   );
 
   it.effect(
@@ -203,7 +266,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* run(["create", "dev", ...sizes]);
 
         const table = yield* run(["machines"]);
-        const row = table.stdout.split("\n").find((line) => line.startsWith("linux_dev"));
+
+        const row = table.stdout
+          .split("\n")
+          .find((line) => line.startsWith("linux_dev"));
+
         const hosts = yield* run(["hosts", "--json"]);
 
         expect(table.code).toBe(0);
@@ -212,7 +279,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(row).toMatch(/\s\d+[smhd]\s/u);
         expect(table.stderr).toContain("Unavailable: host mac");
         expect(
-          Schema.decodeUnknownSync(
+          yield* Schema.decodeEffect(
             Schema.fromJsonString(
               Schema.Struct({
                 hosts: Schema.Array(
@@ -220,17 +287,17 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
                     id: Schema.String,
                     kind: Schema.String,
                     bases: Schema.Array(Schema.String),
-                  }),
+                  })
                 ),
                 unreachable: Schema.Array(UnreachableDocument),
-              }),
-            ),
-          )(hosts.stdout, { onExcessProperty: "ignore" }),
-        ).toEqual({
+              })
+            )
+          )(hosts.stdout, { onExcessProperty: "ignore" })
+        ).toMatchObject({
           hosts: [{ id: "linux", kind: "linux", bases: ["ubuntu"] }],
-          unreachable: [{ host: "mac", error: expect.objectContaining({ tag: "Unavailable" }) }],
+          unreachable: [{ host: "mac", error: { tag: "Unavailable" } }],
         });
-      }),
+      })
   );
 
   it.effect("--json errors from the host carry their tags", () =>
@@ -255,8 +322,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       expect(decodeFailure(notFound.stdout).error.tag).toBe("NotFound");
       expect(decodeFailure(invalid.stdout).error.tag).toBe("Invalid");
-      expect(decodeFailure(notOffered.stdout).error).toMatchObject({ tag: "NotOffered" });
-      expect(decodeFailure(notOffered.stdout).error.message).toContain("ubuntu");
+      expect(decodeFailure(notOffered.stdout).error).toMatchObject({
+        tag: "NotOffered",
+      });
+      expect(decodeFailure(notOffered.stdout).error.message).toContain(
+        "ubuntu"
+      );
       expect(decodeFailure(unavailable.stdout).error).toMatchObject({
         tag: "Unavailable",
         retryable: false,
@@ -265,6 +336,6 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       for (const ran of [notFound, invalid, notOffered, unavailable]) {
         expect(ran.code).toBe(1);
       }
-    }),
+    })
   );
 });

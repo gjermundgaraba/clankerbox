@@ -11,34 +11,38 @@ import {
   Result,
   Schema,
 } from "effect";
-import { HttpClient, type HttpClientError, HttpClientRequest } from "effect/http";
-import { actionsByName as actions, type Declared, Http, readTimeout } from "./api.ts";
+import { HttpClient, HttpClientRequest } from "effect/http";
+import type { HttpClientError } from "effect/http";
+
+import { actionsByName as actions, Http, readTimeout } from "./api.ts";
+import type { Declared } from "./api.ts";
+import { describeIssues } from "./describe.ts";
 import {
   ClankerboxError,
   Internal,
   Invalid,
-  type NotFound,
   NotOffered,
   Unavailable,
 } from "./errors.ts";
+import type { NotFound } from "./errors.ts";
 import { formatId, HostId, parseId, parseName } from "./ids.ts";
 import { version, versionHeader } from "./release.ts";
-import {
-  type Checkpoint,
-  type Host,
-  type Machine,
-  type MachineSpec,
-  offered,
-  offers,
-  type Usage,
+import { offered, offers } from "./resources.ts";
+import type {
+  Checkpoint,
+  Host,
+  Machine,
+  MachineSpec,
+  Usage,
 } from "./resources.ts";
-import { describeIssues } from "./describe.ts";
 
 /** `id` is the host part of every ID the host holds. */
 export const HostEntry = Schema.Struct({
   id: HostId,
   url: Schema.String.check(
-    Schema.makeFilter((url: string) => URL.canParse(url) || "a URL, such as http://linux:8484"),
+    Schema.makeFilter(
+      (url: string) => URL.canParse(url) || "a URL, such as http://linux:8484"
+    )
   ),
 });
 
@@ -53,7 +57,10 @@ export type HostAction = keyof Actions;
  * What a call of `N` fails with: an error the action declares, which always includes `Invalid`,
  * or no reply, or a reply the client couldn't use.
  */
-export type ErrorOf<N extends HostAction> = Declared<N> | Unavailable | Internal;
+export type ErrorOf<N extends HostAction> =
+  | Declared<N>
+  | Unavailable
+  | Internal;
 
 type Success<N extends HostAction> = Actions[N]["success"]["Type"];
 
@@ -66,8 +73,8 @@ export interface Unreachable {
 
 /** A fan-out's result: a host that fails is named, and fails nothing else. */
 export interface Gathered<A> {
-  readonly answers: ReadonlyArray<A>;
-  readonly unreachable: ReadonlyArray<Unreachable>;
+  readonly answers: readonly A[];
+  readonly unreachable: readonly Unreachable[];
 }
 
 export interface Options {
@@ -106,9 +113,9 @@ export type Routed = {
  * a caller whose answer was lost can find what it left behind.
  */
 export type Calls = {
-  readonly [N in Exclude<Routed, "createMachine" | "deleteMachine" | "deleteCheckpoint">]: (
-    input: Input<N>,
-  ) => Effect.Effect<Success<N>, ErrorOf<N>>;
+  readonly [
+    N in Exclude<Routed, "createMachine" | "deleteMachine" | "deleteCheckpoint">
+  ]: (input: Input<N>) => Effect.Effect<Success<N>, ErrorOf<N>>;
 };
 
 export interface Interface extends Calls {
@@ -124,21 +131,21 @@ export interface Interface extends Calls {
    */
   readonly place: (
     base: string,
-    options?: CreateOptions,
+    options?: CreateOptions
   ) => Effect.Effect<Host, ErrorOf<"getHost"> | NotOffered>;
   /** `createMachine` on `options.host`, or else on the first host that offers the base. */
   readonly create: (
     name: string,
     spec: MachineSpec,
-    options?: CreateOptions,
+    options?: CreateOptions
   ) => Effect.Effect<Machine, ErrorOf<"createMachine">>;
   /** A delete of a resource that is already gone is `absent`: done either way. */
   readonly deleteMachine: (
-    input: Input<"deleteMachine">,
+    input: Input<"deleteMachine">
   ) => Effect.Effect<Deleted, Exclude<ErrorOf<"deleteMachine">, NotFound>>;
   /** A delete of a checkpoint that is already gone is `absent`: done either way. */
   readonly deleteCheckpoint: (
-    input: Input<"deleteCheckpoint">,
+    input: Input<"deleteCheckpoint">
   ) => Effect.Effect<Deleted, Exclude<ErrorOf<"deleteCheckpoint">, NotFound>>;
 }
 
@@ -147,13 +154,15 @@ export interface Interface extends Calls {
  * reads the resource to see what happened.
  */
 export class Client extends Context.Service<Client, Interface>()(
-  "@gjermundgaraba/clankerbox-sdk/Client",
+  "@gjermundgaraba/clankerbox-sdk/Client"
 ) {}
 
 const hostApi = (entry: HostEntry) =>
   ActionHttp.client(Http, {
     baseUrl: entry.url,
-    transformClient: HttpClient.mapRequest(HttpClientRequest.setHeader(versionHeader, version)),
+    transformClient: HttpClient.mapRequest(
+      HttpClientRequest.setHeader(versionHeader, version)
+    ),
   });
 
 type HostApi = Effect.Success<ReturnType<typeof hostApi>>;
@@ -162,7 +171,9 @@ type CallError = ActionHttp.MethodError<Actions[HostAction]>;
 
 /** `HostApi` as one call per name, which a generic name can index. */
 type Methods = {
-  readonly [N in HostAction]: (input: Input<N>) => Effect.Effect<Success<N>, CallError>;
+  readonly [N in HostAction]: (
+    input: Input<N>
+  ) => Effect.Effect<Success<N>, CallError>;
 };
 
 interface Route {
@@ -196,7 +207,7 @@ const unanswered = (context: CallContext, detail: string): Unavailable =>
 
 const bounded = <A>(
   call: Effect.Effect<A, CallError>,
-  context: CallContext,
+  context: CallContext
 ): Effect.Effect<A, CallError | Unavailable> => {
   const { timeout } = context;
 
@@ -205,50 +216,58 @@ const bounded = <A>(
     : Effect.timeoutOrElse(call, {
         duration: timeout,
         orElse: () =>
-          Effect.fail(unanswered(context, `timed out after ${Duration.format(timeout)}`)),
+          Effect.fail(
+            unanswered(context, `timed out after ${Duration.format(timeout)}`)
+          ),
       });
 };
 
-const unexpected = (context: CallContext, error: { readonly message: string }): Internal =>
+const unexpected = (
+  context: CallContext,
+  error: { readonly message: string }
+): Internal =>
   new Internal({
     message: `host ${context.host.id} answered ${context.what} unexpectedly: ${error.message}`,
   });
 
 const settle = <A>(
   call: Effect.Effect<A, CallError>,
-  context: CallContext,
+  context: CallContext
 ): Effect.Effect<A, ClankerboxError> =>
   bounded(call, context).pipe(
     Effect.catchTags({
       HttpClientError: (error) =>
         Effect.fail(
           Match.value(error.reason).pipe(
-            Match.tag("TransportError", () => unanswered(context, causeDetail(error))),
+            Match.tag("TransportError", () =>
+              unanswered(context, causeDetail(error))
+            ),
             Match.when(
               {
                 _tag: "DecodeError",
-                cause: (cause: unknown) => cause !== undefined && !(cause instanceof SyntaxError),
+                cause: (cause: unknown) =>
+                  cause !== undefined && !(cause instanceof SyntaxError),
               },
-              () => unanswered(context, causeDetail(error)),
+              () => unanswered(context, causeDetail(error))
             ),
-            Match.orElse(() => unexpected(context, error)),
-          ),
+            Match.orElse(() => unexpected(context, error))
+          )
         ),
       InvalidInput: (error) =>
         Effect.fail(
           new Invalid({
             message: `${context.what}: the request doesn't match the action's input: ${error.message}`,
-          }),
+          })
         ),
       SchemaError: (error) =>
         Effect.fail(
           new Internal({
             message: `host ${context.host.id}'s reply didn't decode: ${error.message}`,
-          }),
+          })
         ),
       Unauthenticated: (error) => Effect.fail(unexpected(context, error)),
       Forbidden: (error) => Effect.fail(unexpected(context, error)),
-    }),
+    })
   );
 
 interface Where {
@@ -271,56 +290,90 @@ const locate =
       ...encodeError(error),
     }) as E;
 
-const checkHost = (entry: HostEntry, host: Host): Effect.Effect<Host, Invalid> =>
+const naming =
+  (name: HostAction) =>
+  <A, E extends ClankerboxError>(
+    effect: Effect.Effect<A, E>
+  ): Effect.Effect<A, E> =>
+    Effect.mapError(effect, (error) =>
+      error.action === undefined ? locate({ action: name })(error) : error
+    );
+
+const deleting = <E extends { readonly _tag: string }>(
+  removal: Effect.Effect<void, E | NotFound>
+) =>
+  removal.pipe(
+    Effect.as<Deleted>("deleted"),
+    Effect.catchTag("NotFound", () => Effect.succeed<Deleted>("absent"))
+  );
+
+const checkHost = (
+  entry: HostEntry,
+  host: Host
+): Effect.Effect<Host, Invalid> =>
   host.id === entry.id
     ? Effect.succeed(host)
     : Effect.fail(
         new Invalid({
           message: `host ${entry.id} (${entry.url}) calls itself ${host.id}; its entry in the host list must use that ID`,
-        }),
+        })
       );
 
 const decodeHosts = Schema.decodeUnknownEffect(Schema.Array(HostEntry));
 
-const subjectOf = (input: Subject): string =>
-  "id" in input ? input.id : "machine" in input ? input.machine : input.checkpoint;
+const subjectOf = (input: Subject): string => {
+  if ("id" in input) {
+    return input.id;
+  }
+
+  return "machine" in input ? input.machine : input.checkpoint;
+};
 
 /**
  * A client over `hosts`, in placement order. It sends nothing until called. An empty list, a
  * malformed entry or a host ID that appears twice is Invalid.
  */
 export const make = (
-  hosts: ReadonlyArray<HostEntry>,
-  options?: Options,
+  hosts: readonly HostEntry[],
+  options?: Options
 ): Effect.Effect<Interface, Invalid, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     if (hosts.length === 0) {
-      return yield* new Invalid({ message: "the host list is empty: a client needs a host" });
+      return yield* new Invalid({
+        message: "the host list is empty: a client needs a host",
+      });
     }
 
     yield* decodeHosts(hosts, { errors: "all" }).pipe(
-      Effect.mapError((error) => new Invalid({ message: `host list: ${describeIssues(error)}` })),
+      Effect.mapError(
+        (error) =>
+          new Invalid({ message: `host list: ${describeIssues(error)}` })
+      )
     );
 
     const twice = hosts.find(
-      ({ id }, index) => hosts.findIndex((other) => other.id === id) < index,
+      ({ id }, index) => hosts.findIndex((other) => other.id === id) < index
     );
 
     if (twice !== undefined) {
-      return yield* new Invalid({ message: `host ${twice.id} appears twice in the host list` });
+      return yield* new Invalid({
+        message: `host ${twice.id} appears twice in the host list`,
+      });
     }
 
-    const routed: ReadonlyArray<Route> = yield* Effect.forEach(hosts, (entry) =>
-      Effect.map(hostApi(entry), (api) => ({ entry, api })),
+    const routed: readonly Route[] = yield* Effect.forEach(hosts, (entry) =>
+      Effect.map(hostApi(entry), (api) => ({ entry, api }))
     );
 
     const routes = new Map(routed.map((route) => [route.entry.id, route]));
 
-    const route = (host: string) => {
+    const routeTo = (host: string) => {
       const found = routes.get(host);
 
       return found === undefined
-        ? Effect.fail(new Invalid({ message: `host ${host} isn't in the host list` }))
+        ? Effect.fail(
+            new Invalid({ message: `host ${host} isn't in the host list` })
+          )
         : Effect.succeed(found);
     };
 
@@ -329,44 +382,43 @@ export const make = (
       name: N,
       input: Input<N>,
       subject?: string,
-      made?: string,
+      made?: string
     ): Effect.Effect<Success<N>, ErrorOf<N>> => {
       const { readOnly } = actions[name];
 
       const methods: Methods = api;
       const method = methods[name];
 
-      const settled = settle(method(input), {
+      return settle(method(input), {
         host: entry,
-        timeout: readOnly ? (options?.readTimeout ?? readTimeout) : options?.timeout,
+        timeout: readOnly
+          ? (options?.readTimeout ?? readTimeout)
+          : options?.timeout,
         readOnly,
         what: subject === undefined ? name : `${name} ${subject}`,
         target: made ?? subject,
-      }).pipe(Effect.mapError(locate({ action: name, host: entry.id, id: subject, made })));
-
-      // SAFETY: `settle` adds only `Unavailable`, `Internal` and `Invalid`, which every action declares.
-      return settled as Effect.Effect<Success<N>, ErrorOf<N>>;
+      }).pipe(
+        Effect.mapError(
+          locate({ action: name, host: entry.id, id: subject, made })
+        )
+      );
     };
 
-    const naming =
-      <N extends HostAction>(name: N) =>
-      <A, E extends ClankerboxError>(effect: Effect.Effect<A, E>): Effect.Effect<A, E> =>
-        Effect.mapError(effect, (error) =>
-          error.action === undefined ? locate({ action: name })(error) : error,
-        );
-
     const gather = <A>(
-      call: (route: Route) => Effect.Effect<ReadonlyArray<A>, ClankerboxError>,
+      call: (route: Route) => Effect.Effect<readonly A[], ClankerboxError>
     ): Effect.Effect<Gathered<A>> =>
       Effect.forEach(
         routed,
         (route) =>
-          Effect.map(Effect.result(call(route)), (result) => ({ host: route.entry.id, result })),
-        { concurrency: "unbounded" },
+          Effect.map(Effect.result(call(route)), (result) => ({
+            host: route.entry.id,
+            result,
+          })),
+        { concurrency: "unbounded" }
       ).pipe(
         Effect.map((results) => {
-          const answers: Array<A> = [];
-          const unreachable: Array<Unreachable> = [];
+          const answers: A[] = [];
+          const unreachable: Unreachable[] = [];
 
           for (const { host, result } of results) {
             if (Result.isSuccess(result)) {
@@ -377,40 +429,51 @@ export const make = (
           }
 
           return { answers, unreachable };
-        }),
+        })
       );
 
     const readHost = (route: Route) =>
-      Effect.flatMap(send(route, "getHost", {}), (host) => checkHost(route.entry, host)).pipe(
-        Effect.mapError(locate({ action: "getHost", host: route.entry.id })),
+      Effect.flatMap(send(route, "getHost", {}), (host) =>
+        checkHost(route.entry, host)
+      ).pipe(
+        Effect.mapError(locate({ action: "getHost", host: route.entry.id }))
       );
 
-    const onResource = <N extends Routed>(name: N, input: Input<N>, makes?: string) =>
+    const onResource = <N extends Routed>(
+      name: N,
+      input: Input<N>,
+      makes?: string
+    ) =>
       naming(name)(
         Effect.gen(function* () {
           const subject = subjectOf(input);
           const { host } = yield* parseId(subject);
-          const made = makes === undefined ? undefined : yield* formatId(host, makes);
 
-          return yield* send(yield* route(host), name, input, subject, made);
-        }),
+          const made =
+            makes === undefined ? undefined : yield* formatId(host, makes);
+
+          return yield* send(yield* routeTo(host), name, input, subject, made);
+        })
       );
 
     const createOn = (host: string, name: string, spec: MachineSpec) =>
       Effect.flatMap(formatId(host, name), (id) =>
-        onResource("createMachine", { ...spec, id }, name),
+        onResource("createMachine", { ...spec, id }, name)
       );
 
     const offering = (base: string) =>
       Effect.gen(function* () {
         const asked = yield* Effect.forEach(routed, (route) =>
-          Effect.map(Effect.forkScoped(Effect.result(readHost(route))), (fiber) => ({
-            host: route.entry.id,
-            fiber,
-          })),
+          Effect.map(
+            Effect.forkScoped(Effect.result(readHost(route))),
+            (fiber) => ({
+              host: route.entry.id,
+              fiber,
+            })
+          )
         );
 
-        const misses: Array<string> = [];
+        const misses: string[] = [];
         let noReply = false;
 
         for (const { host, fiber } of asked) {
@@ -433,12 +496,16 @@ export const make = (
           : new NotOffered({ message, base });
       }).pipe(Effect.scoped);
 
-    const create = (name: string, spec: MachineSpec, options?: CreateOptions) =>
+    const create = (
+      name: string,
+      spec: MachineSpec,
+      placement?: CreateOptions
+    ) =>
       Effect.gen(function* () {
         yield* parseName(name);
 
-        if (options?.host !== undefined) {
-          return yield* createOn(options.host, name, spec);
+        if (placement?.host !== undefined) {
+          return yield* createOn(placement.host, name, spec);
         }
 
         return yield* createOn((yield* offering(spec.base)).id, name, spec);
@@ -446,25 +513,20 @@ export const make = (
 
     const place = (
       base: string,
-      options?: CreateOptions,
+      placement?: CreateOptions
     ): Effect.Effect<Host, ErrorOf<"getHost"> | NotOffered> =>
-      options?.host === undefined ? offering(base) : Effect.flatMap(route(options.host), readHost);
-
-    const deleting = <E extends { readonly _tag: string }>(
-      removal: Effect.Effect<void, E | NotFound>,
-    ) =>
-      removal.pipe(
-        Effect.as<Deleted>("deleted"),
-        Effect.catchTag("NotFound", () => Effect.succeed<Deleted>("absent")),
-      );
+      placement?.host === undefined
+        ? offering(base)
+        : Effect.flatMap(routeTo(placement.host), readHost);
 
     return {
       hosts: gather((route) => Effect.map(readHost(route), (host) => [host])),
       machines: gather((route) => send(route, "listMachines", {})),
       checkpoints: gather((route) => send(route, "listCheckpoints", {})),
       capacity: gather((route) => send(route, "getCapacity", {})),
-      place: (base, options) => naming("getHost")(place(base, options)),
-      create: (name, spec, options) => naming("createMachine")(create(name, spec, options)),
+      place: (base, placement) => naming("getHost")(place(base, placement)),
+      create: (name, spec, placement) =>
+        naming("createMachine")(create(name, spec, placement)),
       getMachine: (input) => onResource("getMachine", input),
       startMachine: (input) => onResource("startMachine", input),
       stopMachine: (input) => onResource("stopMachine", input),
@@ -472,17 +534,20 @@ export const make = (
       resizeMachine: (input) => onResource("resizeMachine", input),
       deleteMachine: (input) => deleting(onResource("deleteMachine", input)),
       forkMachine: (input) => onResource("forkMachine", input, input.name),
-      restoreMachine: (input) => onResource("restoreMachine", input, input.name),
+      restoreMachine: (input) =>
+        onResource("restoreMachine", input, input.name),
       execMachine: (input) => onResource("execMachine", input),
       getCheckpoint: (input) => onResource("getCheckpoint", input),
-      captureCheckpoint: (input) => onResource("captureCheckpoint", input, input.name),
-      deleteCheckpoint: (input) => deleting(onResource("deleteCheckpoint", input)),
+      captureCheckpoint: (input) =>
+        onResource("captureCheckpoint", input, input.name),
+      deleteCheckpoint: (input) =>
+        deleting(onResource("deleteCheckpoint", input)),
       prebuildCheckpoint: (input) => onResource("prebuildCheckpoint", input),
     } satisfies Interface;
   });
 
 export const layer = (
-  hosts: ReadonlyArray<HostEntry>,
-  options?: Options,
+  hosts: readonly HostEntry[],
+  options?: Options
 ): Layer.Layer<Client, Invalid, HttpClient.HttpClient> =>
   Layer.effect(Client, make(hosts, options));

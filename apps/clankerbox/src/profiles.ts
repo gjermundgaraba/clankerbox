@@ -3,19 +3,21 @@ import {
   formatGib,
   formatMib,
   Invalid,
-  type LoadedProfile,
   loadProfile,
   Profile,
 } from "@gjermundgaraba/clankerbox-sdk";
+import type { LoadedProfile } from "@gjermundgaraba/clankerbox-sdk";
 import { Console, Effect, FileSystem, Path, Schema } from "effect";
 import { Command } from "effect/cli";
+
 import { clientFlags, fail, print, table } from "./command.ts";
-import { configPath, type LoadedConfig, loadConfig } from "./config.ts";
+import { configPath, loadConfig } from "./config.ts";
+import type { LoadedConfig } from "./config.ts";
 import { formatSeconds } from "./units.ts";
 
 export const profileFile = (
   config: LoadedConfig,
-  profile: string,
+  profile: string
 ): Effect.Effect<string, Invalid, Path.Path> =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
@@ -31,13 +33,16 @@ export const profileFile = (
       });
     }
 
-    return path.join(yield* configPath(config, config.profiles), `${profile}.json`);
+    return path.join(
+      yield* configPath(config, config.profiles),
+      `${profile}.json`
+    );
   });
 
 export const profileFiles = (
-  config: LoadedConfig,
+  config: LoadedConfig
 ): Effect.Effect<
-  { readonly directory: string; readonly files: Array<string> },
+  { readonly directory: string; readonly files: string[] },
   Invalid,
   FileSystem.FileSystem | Path.Path
 > =>
@@ -60,21 +65,21 @@ export const profileFiles = (
           new Invalid({
             message: `couldn't read profiles directory ${directory}: ${describeFileError(error)}`,
             file: directory,
-          }),
-      ),
+          })
+      )
     );
 
     const files = entries
       .filter((entry) => entry.endsWith(".json"))
-      .sort()
+      .toSorted()
       .map((entry) => path.join(directory, entry));
 
     return { directory, files };
   });
 
 export const profileRows = (
-  profiles: ReadonlyArray<LoadedProfile>,
-  setupPath: (path: string) => string,
+  profiles: readonly LoadedProfile[],
+  setupPath: (path: string) => string
 ) => [
   ["NAME", "BASE", "CPU", "RAM", "DISK", "SETUP", "TIMEOUT", "HOST"],
   ...profiles.map(({ label, base, cpu, ramMib, diskGib, setup, host }) => [
@@ -84,7 +89,9 @@ export const profileRows = (
     formatMib(ramMib),
     formatGib(diskGib),
     setup === undefined ? "-" : setupPath(setup.path),
-    setup?.timeoutSeconds === undefined ? "-" : formatSeconds(setup.timeoutSeconds),
+    setup?.timeoutSeconds === undefined
+      ? "-"
+      : formatSeconds(setup.timeoutSeconds),
     host ?? "-",
   ]),
 ];
@@ -110,11 +117,12 @@ export const profiles = Command.make("profiles", clientFlags, (flags) =>
     yield* print(
       flags.json,
       () => ({ profiles: loaded.map(encodeProfile) }),
-      () => table(profileRows(loaded, (setup) => path.relative(directory, setup))),
+      () =>
+        table(profileRows(loaded, (setup) => path.relative(directory, setup)))
     );
-  }).pipe(Effect.catch(fail(flags.json))),
+  }).pipe(Effect.catch(fail(flags.json)))
 ).pipe(
   Command.withDescription(
-    "List the profiles in the config's profiles directory, with each one's base, sizes, setup and host.",
-  ),
+    "List the profiles in the config's profiles directory, with each one's base, sizes, setup and host."
+  )
 );

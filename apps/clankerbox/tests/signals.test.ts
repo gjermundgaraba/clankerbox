@@ -1,103 +1,118 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
+import type { Server, Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { createServer, type Server, type Socket } from "node:net";
-import { join } from "node:path";
+import path from "node:path";
+
 import { Schema } from "effect";
-import { afterEach, expect, test } from "vite-plus/test";
+import { afterEach, describe, expect, it } from "vite-plus/test";
 
-const owned: Array<string> = [];
+const owned: string[] = [];
 
-const children: Array<ChildProcess> = [];
+const children: ChildProcess[] = [];
 
-const servers: Array<{ readonly server: Server; readonly sockets: Array<Socket> }> = [];
-
-afterEach(async () => {
-  for (const child of children.splice(0)) {
-    child.kill("SIGKILL");
-  }
-
-  await Promise.all(
-    servers.splice(0).map(
-      ({ server, sockets }) =>
-        new Promise((resolve) => {
-          for (const socket of sockets) {
-            socket.destroy();
-          }
-
-          server.close(resolve);
-        }),
-    ),
-  );
-  await Promise.all(owned.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
+const servers: Array<{ readonly server: Server; readonly sockets: Socket[] }> =
+  [];
 
 const scratch = async () => {
-  const dir = await mkdtemp(join(tmpdir(), "clankerbox-signals-"));
+  const dir = await mkdtemp(path.join(tmpdir(), "clankerbox-signals-"));
 
   owned.push(dir);
 
   return dir;
 };
 
-const run = (file: string, args: ReadonlyArray<string>) => {
+const run = (file: string, args: readonly string[]) => {
   const child = spawn(process.execPath, [file, ...args], { stdio: "ignore" });
 
   children.push(child);
 
-  const exited = new Promise<number | null>((resolve) => {
-    child.once("exit", (code) => resolve(code));
+  const exited = Promise.withResolvers<number | null>();
+
+  child.once("exit", (code) => {
+    exited.resolve(code);
   });
 
-  return { child, exited };
+  return { child, exited: exited.promise };
 };
 
 const silent = async () => {
-  const accepted = Promise.withResolvers<void>();
-  const sockets: Array<Socket> = [];
+  const accepted = Promise.withResolvers<undefined>();
+  const sockets: Socket[] = [];
 
   const server = createServer((socket) => {
     sockets.push(socket);
-    accepted.resolve();
+    accepted.resolve(undefined);
   });
 
   servers.push({ server, sockets });
 
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const listening = Promise.withResolvers<undefined>();
 
-  const { port } = Schema.decodeUnknownSync(Schema.Struct({ port: Schema.Number }))(
-    server.address(),
-    { onExcessProperty: "ignore" },
-  );
+  server.listen(0, "127.0.0.1", () => {
+    listening.resolve(undefined);
+  });
+  await listening.promise;
+
+  const { port } = Schema.decodeUnknownSync(
+    Schema.Struct({ port: Schema.Finite })
+  )(server.address(), { onExcessProperty: "ignore" });
 
   return { port, accepted: accepted.promise };
 };
 
-test.each(["SIGINT", "SIGTERM"] as const)(
-  "the CLI exits 130 when %s stops it mid-call",
-  async (signal) => {
-    const dir = await scratch();
-    const { port, accepted } = await silent();
-    const config = join(dir, "config.json");
+describe("signals", () => {
+  afterEach(async () => {
+    for (const child of children.splice(0)) {
+      child.kill("SIGKILL");
+    }
 
-    await writeFile(
-      config,
-      JSON.stringify({
-        hosts: [{ id: "linux", url: `http://127.0.0.1:${port}` }],
-      }),
+    await Promise.all(
+      servers.splice(0).map(async ({ server, sockets }) => {
+        const closed = Promise.withResolvers<undefined>();
+
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+
+        server.close(() => {
+          closed.resolve(undefined);
+        });
+        await closed.promise;
+      })
     );
+    await Promise.all(
+      owned.splice(0).map(async (dir) => {
+        await rm(dir, { recursive: true, force: true });
+      })
+    );
+  });
 
-    const { child, exited } = run(join(import.meta.dirname, "../src/main.ts"), [
-      "machines",
-      "--config",
-      config,
-    ]);
+  it.each(["SIGINT", "SIGTERM"] as const)(
+    "the CLI exits 130 when %s stops it mid-call",
+    async (signal) => {
+      const dir = await scratch();
+      const { port, accepted } = await silent();
+      const config = path.join(dir, "config.json");
 
-    await accepted;
-    child.kill(signal);
+      await writeFile(
+        config,
+        JSON.stringify({
+          hosts: [{ id: "linux", url: `http://127.0.0.1:${port}` }],
+        })
+      );
 
-    expect(await exited).toBe(130);
-  },
-);
+      const { child, exited } = run(
+        path.join(import.meta.dirname, "../src/main.ts"),
+        ["machines", "--config", config]
+      );
+
+      await accepted;
+      child.kill(signal);
+
+      await expect(exited).resolves.toBe(130);
+    }
+  );
+});

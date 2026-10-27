@@ -1,10 +1,14 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { connect, createServer, Socket } from "node:net";
-import { join } from "node:path";
+import path from "node:path";
+
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Data, Duration, Effect, Predicate, Schedule, type Scope } from "effect";
+import { Data, Duration, Effect, Function, Predicate, Schedule } from "effect";
+import type { Scope } from "effect";
+
 import { agentPort } from "./agent.ts";
 
 const loopback = "127.0.0.1";
@@ -26,27 +30,34 @@ export interface Tunnel {
   readonly running: () => boolean;
 }
 
-export const freePort: Effect.Effect<number, LocalTunnelError> = Effect.callback((resume) => {
-  const server = createServer();
+export const freePort: Effect.Effect<number, LocalTunnelError> =
+  Effect.callback((resume) => {
+    const server = createServer();
 
-  server.once("error", (error) =>
-    resume(
-      Effect.fail(new LocalTunnelError({ message: `couldn't find a free port: ${error.message}` })),
-    ),
-  );
-
-  server.listen(0, loopback, () => {
-    const address = server.address();
-
-    server.close(() =>
+    server.once("error", (error) => {
       resume(
-        address === null || Predicate.isString(address)
-          ? Effect.fail(new LocalTunnelError({ message: "couldn't find a free port" }))
-          : Effect.succeed(address.port),
-      ),
-    );
+        Effect.fail(
+          new LocalTunnelError({
+            message: `couldn't find a free port: ${error.message}`,
+          })
+        )
+      );
+    });
+
+    server.listen(0, loopback, () => {
+      const address = server.address();
+
+      server.close(() => {
+        resume(
+          address === null || Predicate.isString(address)
+            ? Effect.fail(
+                new LocalTunnelError({ message: "couldn't find a free port" })
+              )
+            : Effect.succeed(address.port)
+        );
+      });
+    });
   });
-});
 
 const listening = (port: number): Effect.Effect<boolean> =>
   Effect.callback((resume) => {
@@ -57,7 +68,9 @@ const listening = (port: number): Effect.Effect<boolean> =>
       resume(Effect.succeed(true));
     });
 
-    socket.once("error", () => resume(Effect.succeed(false)));
+    socket.once("error", () => {
+      resume(Effect.succeed(false));
+    });
 
     return Effect.sync(() => socket.destroy());
   });
@@ -66,7 +79,10 @@ const listening = (port: number): Effect.Effect<boolean> =>
  * No connection master, which would outlive the forward, and keepalives that end it when the
  * guest stops answering. These precede `extra`: OpenSSH keeps an option's first value.
  */
-export const forwarding = (port: number, extra: ReadonlyArray<string>): Array<string> => [
+export const forwarding = (
+  port: number,
+  extra: readonly string[]
+): string[] => [
   "-T",
   "-o",
   "BatchMode=yes",
@@ -86,15 +102,20 @@ export const forwarding = (port: number, extra: ReadonlyArray<string>): Array<st
   "cat",
 ];
 
-const over = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
+const over = (child: ChildProcess) =>
+  child.exitCode !== null || child.signalCode !== null;
 
 const exited = (child: ChildProcess): Effect.Effect<void> =>
   Effect.callback((resume) => {
     if (over(child)) {
-      return resume(Effect.void);
+      resume(Effect.void);
+
+      return;
     }
 
-    const done = () => resume(Effect.void);
+    const done = () => {
+      resume(Effect.void);
+    };
 
     child.once("exit", done);
     child.once("error", done);
@@ -107,7 +128,7 @@ const exited = (child: ChildProcess): Effect.Effect<void> =>
 
 export interface Start {
   readonly program: string;
-  readonly args: ReadonlyArray<string>;
+  readonly args: readonly string[];
   readonly directory: string;
   readonly port: number;
   readonly machine: string;
@@ -120,7 +141,7 @@ export interface Start {
  * the event loop alive.
  */
 export const open = (
-  start: Start,
+  start: Start
 ): Effect.Effect<Tunnel, Internal | LocalTunnelError, Scope.Scope> =>
   Effect.gen(function* () {
     if (yield* listening(start.port)) {
@@ -129,11 +150,13 @@ export const open = (
       });
     }
 
-    const log = join(start.directory, "ssh.log");
+    const log = path.join(start.directory, "ssh.log");
 
     const said = Effect.map(
-      Effect.promise(() => readFile(log, "utf8").catch(() => "")),
-      (text) => text.trim().slice(-stderrTail),
+      Effect.tryPromise(async () => await readFile(log, "utf-8")).pipe(
+        Effect.orElseSucceed(() => "")
+      ),
+      (text) => text.trim().slice(-stderrTail)
     );
 
     let unrun: Error | undefined;
@@ -147,8 +170,10 @@ export const open = (
           unrun === undefined
             ? new Internal({ message: reason(text) })
             : new LocalTunnelError({
-                message: reason(`couldn't run ${start.program}: ${unrun.message}`),
-              }),
+                message: reason(
+                  `couldn't run ${start.program}: ${unrun.message}`
+                ),
+              })
         );
       });
 
@@ -172,7 +197,7 @@ export const open = (
             spawned.stdin.unref();
           }
 
-          spawned.stdin?.on("error", () => {});
+          spawned.stdin?.on("error", Function.constVoid);
 
           return spawned;
         },
@@ -189,24 +214,28 @@ export const open = (
             orElse: () =>
               Effect.andThen(
                 Effect.sync(() => spawned.kill("SIGKILL")),
-                exited(spawned),
+                exited(spawned)
               ),
-          }),
-        ),
+          })
+        )
     );
 
     const listens = listening(start.port).pipe(
-      Effect.repeat({ until: (open) => open, schedule: Schedule.spaced(openPause) }),
+      Effect.repeat({
+        until: (opened) => opened,
+        schedule: Schedule.spaced(openPause),
+      })
     );
 
     yield* Effect.raceFirst(
       listens,
-      Effect.andThen(exited(child), failed("ended before it listened")),
+      Effect.andThen(exited(child), failed("ended before it listened"))
     ).pipe(
       Effect.timeoutOrElse({
         duration: openWait,
-        orElse: () => failed(`didn't listen within ${Duration.format(openWait)}`),
-      }),
+        orElse: () =>
+          failed(`didn't listen within ${Duration.format(openWait)}`),
+      })
     );
 
     return { running: () => !over(child) };

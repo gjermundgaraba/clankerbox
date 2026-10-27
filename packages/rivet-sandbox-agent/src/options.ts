@@ -15,7 +15,7 @@ export type Source =
 
 export interface Options {
   /** In placement order, as in the client config. */
-  readonly hosts: ReadonlyArray<Client.HostEntry>;
+  readonly hosts: readonly Client.HostEntry[];
   readonly from: Source;
   /** Runs a profile's setup even when the host has its prebuild, from `clankerbox prebuild`. */
   readonly fresh?: boolean | undefined;
@@ -32,7 +32,7 @@ export interface Options {
    * `-N`, `ForkAfterAuthentication`, `SessionType none`) or give it to a connection master (`-M`,
    * `-S`): the tunnel ends with its ssh, and those would outlive it.
    */
-  readonly sshArguments?: ReadonlyArray<string> | undefined;
+  readonly sshArguments?: readonly string[] | undefined;
   /** `/home/admin` by default, the login user's home, where the Ubuntu recipe runs the server. */
   readonly cwd?: string | undefined;
 }
@@ -48,11 +48,14 @@ export interface ClankerboxProvider extends SandboxProvider {
    * refusals are the SDK's errors. For what a running machine can't take, `pause` it, resize it,
    * then `ensureServer`.
    */
-  resize(sandboxId: string, sizes: Sizing): Promise<Pick<Machine, "cpu" | "ramMib" | "diskGib">>;
-  reconnect(sandboxId: string): Promise<void>;
-  pause(sandboxId: string): Promise<void>;
-  ensureServer(sandboxId: string): Promise<void>;
-  getUrl(sandboxId: string): Promise<string>;
+  resize: (
+    sandboxId: string,
+    sizes: Sizing
+  ) => Promise<Pick<Machine, "cpu" | "ramMib" | "diskGib">>;
+  reconnect: (sandboxId: string) => Promise<void>;
+  pause: (sandboxId: string) => Promise<void>;
+  ensureServer: (sandboxId: string) => Promise<void>;
+  getUrl: (sandboxId: string) => Promise<string>;
   readonly defaultCwd: string;
   readonly dispose: () => Promise<void>;
 }

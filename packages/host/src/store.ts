@@ -1,5 +1,11 @@
-import type { Conflict, Desired, Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Context, type DateTime, type Effect, type Option } from "effect";
+import type {
+  Conflict,
+  Desired,
+  Internal,
+} from "@gjermundgaraba/clankerbox-sdk";
+import { Context } from "effect";
+import type { DateTime, Effect, Option } from "effect";
+
 import type { Sizes } from "./runtime.ts";
 
 /** What the store answers a request with: what the row now asks for, and the request's number. */
@@ -61,41 +67,55 @@ export interface CheckpointRecord {
 }
 
 export interface Interface {
-  readonly machines: Effect.Effect<ReadonlyArray<Intent>, Internal>;
-  readonly findMachine: (name: string) => Effect.Effect<Option.Option<Intent>, Internal>;
+  readonly machines: Effect.Effect<readonly Intent[], Internal>;
+  readonly findMachine: (
+    name: string
+  ) => Effect.Effect<Option.Option<Intent>, Internal>;
   readonly ports: Effect.Effect<ReadonlySet<number>, Internal>;
   /** A taken name is `Conflict`, and then nothing is written. */
-  readonly insertMachine: (intent: Intent) => Effect.Effect<void, Conflict | Internal>;
+  readonly insertMachine: (
+    intent: Intent
+  ) => Effect.Effect<void, Conflict | Internal>;
   /**
    * Numbers the request one past the row's last, in the one write that records it; a deleted row
    * stays deleted. `None` when the row is gone.
    */
   readonly desire: (
     name: string,
-    desired: Desired,
+    desired: Desired
   ) => Effect.Effect<Option.Option<Desire>, Internal>;
   readonly made: (name: string) => Effect.Effect<void, Internal>;
-  readonly hostKey: (name: string, hostKey: string) => Effect.Effect<void, Internal>;
-  readonly bootedUnder: (name: string, pin: string | undefined) => Effect.Effect<void, Internal>;
+  readonly hostKey: (
+    name: string,
+    hostKey: string
+  ) => Effect.Effect<void, Internal>;
+  readonly bootedUnder: (
+    name: string,
+    pin: string | undefined
+  ) => Effect.Effect<void, Internal>;
   /** The sizes the runtime holds for the machine, as a resize left them. */
   readonly sized: (name: string, sizes: Sizes) => Effect.Effect<void, Internal>;
   readonly removeMachine: (name: string) => Effect.Effect<void, Internal>;
-  readonly checkpoints: Effect.Effect<ReadonlyArray<CheckpointRecord>, Internal>;
+  readonly checkpoints: Effect.Effect<readonly CheckpointRecord[], Internal>;
   readonly findCheckpoint: (
-    name: string,
+    name: string
   ) => Effect.Effect<Option.Option<CheckpointRecord>, Internal>;
   /** The row under `name`, also one a capture or a delete that failed left unready. */
   readonly anyCheckpoint: (
-    name: string,
+    name: string
   ) => Effect.Effect<Option.Option<CheckpointRecord>, Internal>;
   /** The row of a capture under way, which no read shows; a taken name is `Conflict`. */
-  readonly beginCheckpoint: (record: CheckpointRecord) => Effect.Effect<void, Conflict | Internal>;
+  readonly beginCheckpoint: (
+    record: CheckpointRecord
+  ) => Effect.Effect<void, Conflict | Internal>;
   readonly readyCheckpoint: (name: string) => Effect.Effect<void, Internal>;
   /** Hides a checkpoint whose delete begins, so a delete that fails leaves it unready for the next. */
   readonly retireCheckpoint: (name: string) => Effect.Effect<void, Internal>;
   readonly removeCheckpoint: (name: string) => Effect.Effect<void, Internal>;
   /** The captures and deletes that failed, or that the last host's end cut off, with what they left. */
-  readonly unready: Effect.Effect<ReadonlyArray<CheckpointRecord>, Internal>;
+  readonly unready: Effect.Effect<readonly CheckpointRecord[], Internal>;
 }
 
-export class Store extends Context.Service<Store, Interface>()("@clankerbox/host/Store") {}
+export class Store extends Context.Service<Store, Interface>()(
+  "@clankerbox/host/Store"
+) {}

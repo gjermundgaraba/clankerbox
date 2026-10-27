@@ -1,10 +1,11 @@
-import { type Duration, Effect, Fiber } from "effect";
+import { Effect, Fiber } from "effect";
+import type { Duration } from "effect";
 import { TestClock } from "effect/testing";
 
 export const elapsing = <A, E>(
   duration: Duration.Input,
   effect: Effect.Effect<A, E>,
-  waiting: Effect.Effect<unknown>,
+  waiting: Effect.Effect<unknown>
 ) =>
   Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(effect);

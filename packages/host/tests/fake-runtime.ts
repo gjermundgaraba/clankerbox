@@ -1,30 +1,25 @@
 import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
-import {
-  type HostError,
-  Internal,
-  type Kind,
-  type Sizing,
-  type Unsizable,
-  WrongState,
-} from "@gjermundgaraba/clankerbox-sdk";
+import path from "node:path";
+
+import { Internal, WrongState } from "@gjermundgaraba/clankerbox-sdk";
+import type { Kind, Sizing, Unsizable } from "@gjermundgaraba/clankerbox-sdk";
 import { Deferred, Effect, Layer, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
-import {
-  type Activation,
-  type CheckpointRef,
-  type Held,
-  type MachineRef,
-  type MachineState,
-  missing,
-  type Interface,
-  Runtime,
-  type RuntimeError,
-  type Sizes,
-  type StateError,
+
+import { missing, Runtime } from "../src/runtime.ts";
+import type {
+  Activation,
+  CheckpointRef,
+  Held,
+  MachineRef,
+  MachineState,
+  Interface,
+  RuntimeError,
+  Sizes,
+  StateError,
 } from "../src/runtime.ts";
+import { allotted, checkRamBudget, inUse } from "../src/usage.ts";
 
 export type Operation =
   | "admit"
@@ -58,14 +53,14 @@ export const loginSetup = [
 ].join("\n");
 
 export const furnish = (root: string, stubs: string): void => {
-  mkdirSync(join(root, "usr", "local"), { recursive: true });
-  symlinkSync(stubs, join(root, "usr", "local", "bin"));
-  symlinkSync("/usr/bin", join(root, "usr", "bin"));
-  symlinkSync("/bin", join(root, "bin"));
+  mkdirSync(path.join(root, "usr", "local"), { recursive: true });
+  symlinkSync(stubs, path.join(root, "usr", "local", "bin"));
+  symlinkSync("/usr/bin", path.join(root, "usr", "bin"));
+  symlinkSync("/bin", path.join(root, "bin"));
 };
 
 export const writeStubs = (dir: string, uname = "Linux"): string => {
-  const bin = join(dir, "bin");
+  const bin = path.join(dir, "bin");
 
   mkdirSync(bin, { recursive: true });
 
@@ -104,7 +99,7 @@ export const writeStubs = (dir: string, uname = "Linux"): string => {
   ];
 
   for (const [name, body] of stubs) {
-    const file = join(bin, name);
+    const file = path.join(bin, name);
 
     writeFileSync(file, `#!/bin/sh\n${body}\n`);
     chmodSync(file, 0o755);
@@ -157,7 +152,7 @@ export const writeTailscaleStubs = (bin: string): void => {
   ];
 
   for (const [name, body] of stubs) {
-    const file = join(bin, name);
+    const file = path.join(bin, name);
 
     writeFileSync(file, `#!/bin/sh\n${body}\n`);
     chmodSync(file, 0o755);
@@ -169,18 +164,24 @@ interface FakeMachine {
   readonly root: string;
 }
 
-const sizesOf = ({ cpu, ramMib, diskGib }: Sizes): Sizes => ({ cpu, ramMib, diskGib });
+const sizesOf = ({ cpu, ramMib, diskGib }: Sizes): Sizes => ({
+  cpu,
+  ramMib,
+  diskGib,
+});
 
-type Injection =
-  | { readonly kind: "fail"; readonly error: HostError }
+type Injection<O extends Operation> =
+  | { readonly kind: "fail"; readonly error: FailureOf<O> }
   | { readonly kind: "die"; readonly message: string }
   | {
       readonly kind: "hold";
-      readonly entered: Deferred.Deferred<void>;
-      readonly until: Deferred.Deferred<void>;
+      readonly entered: Deferred.Deferred<undefined>;
+      readonly until: Deferred.Deferred<undefined>;
       /** As native work does, the call goes on to its end though the caller interrupts it. */
       readonly runsOn: boolean;
     };
+
+type Injections = { readonly [O in Operation]: Array<Injection<O>> };
 
 /** What `operation` may fail with, as the `Runtime` port types it. */
 type FailureOf<O extends Operation> = Interface[O] extends (
@@ -192,38 +193,58 @@ type FailureOf<O extends Operation> = Interface[O] extends (
 export const fakeRuntime = (options: FakeOptions) => {
   const machines = new Map<string, FakeMachine>();
   const images = new Map<string, string>();
-  const calls: Array<string> = [];
-  const activations: Array<Activation> = [];
-  const observed: Array<ReadonlyArray<string>> = [];
-  const injections = new Map<Operation, Array<Injection>>();
+  const calls: string[] = [];
+  const activations: Activation[] = [];
+  const observed: Array<readonly string[]> = [];
+
+  const injections: Injections = {
+    admit: [],
+    capacity: [],
+    create: [],
+    start: [],
+    stop: [],
+    pause: [],
+    resize: [],
+    sizes: [],
+    delete: [],
+    exec: [],
+    capture: [],
+    restore: [],
+    fork: [],
+    deleteCheckpoint: [],
+  };
+
   const observeFailures: Array<RuntimeError | "hang" | "die"> = [];
-  const partialResizes: Array<RuntimeError> = [];
-  const sizableRefusals: Array<Unsizable> = [];
+  const partialResizes: RuntimeError[] = [];
+  const sizableRefusals: Unsizable[] = [];
   const sized: Array<readonly [string, Sizes, Sizes, boolean]> = [];
   const sizes = new Map<string, Sizing>();
 
   const observeHolds: Array<{
-    readonly entered: Deferred.Deferred<void>;
-    readonly until: Deferred.Deferred<void>;
+    readonly entered: Deferred.Deferred<undefined>;
+    readonly until: Deferred.Deferred<undefined>;
   }> = [];
 
   const kind = options.kind ?? "linux";
   let stubs: string | undefined;
 
-  const inject = (operation: Operation, injection: Injection) => {
-    injections.set(operation, [...(injections.get(operation) ?? []), injection]);
+  const inject = <O extends Operation>(
+    operation: O,
+    injection: Injection<O>
+  ) => {
+    injections[operation].push(injection);
   };
 
   const call = <O extends Operation, A, E, R>(
     operation: O,
     resource: { readonly id: string },
-    body: Effect.Effect<A, E, R>,
+    body: Effect.Effect<A, E, R>
   ): Effect.Effect<A, E | FailureOf<O>, R> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.suspend((): Effect.Effect<A, E | FailureOf<O>, R> => {
         calls.push(`${operation} ${resource.id}`);
 
-        const injection = injections.get(operation)?.shift();
+        const injection = injections[operation].shift();
 
         if (injection === undefined) {
           return restore(body);
@@ -233,9 +254,9 @@ export const fakeRuntime = (options: FakeOptions) => {
           const held = Effect.andThen(
             Effect.andThen(
               Deferred.succeed(injection.entered, undefined),
-              Deferred.await(injection.until),
+              Deferred.await(injection.until)
             ),
-            body,
+            body
           );
 
           return injection.runsOn ? held : restore(held);
@@ -245,25 +266,31 @@ export const fakeRuntime = (options: FakeOptions) => {
           return Effect.die(new Error(injection.message));
         }
 
-        // SAFETY: `failNext` queues only a `FailureOf<O>` for `O`.
-        return Effect.fail(injection.error as FailureOf<O>);
-      }),
+        return Effect.fail(injection.error);
+      })
     );
 
-  const states = (refs: ReadonlyArray<MachineRef>): Effect.Effect<ReadonlyArray<MachineState>> =>
+  const states = (
+    refs: readonly MachineRef[]
+  ): Effect.Effect<readonly MachineState[]> =>
     Effect.sync(() => {
       observed.push(refs.map(({ id }) => id));
 
-      return refs.map((machine) => machines.get(machine.name)?.state ?? "missing");
+      return refs.map(
+        (machine) => machines.get(machine.name)?.state ?? "missing"
+      );
     });
 
-  const observe = (refs: ReadonlyArray<MachineRef>) =>
+  const observe = (refs: readonly MachineRef[]) =>
     Effect.suspend(() => {
       const held = observeHolds.shift();
 
       if (held !== undefined) {
         return Effect.tap(states(refs), () =>
-          Effect.andThen(Deferred.succeed(held.entered, undefined), Deferred.await(held.until)),
+          Effect.andThen(
+            Deferred.succeed(held.entered, undefined),
+            Deferred.await(held.until)
+          )
         );
       }
 
@@ -277,32 +304,35 @@ export const fakeRuntime = (options: FakeOptions) => {
         return Effect.never;
       }
 
-      return failure === "die" ? Effect.die(new Error("observe blew up")) : Effect.fail(failure);
+      return failure === "die"
+        ? Effect.die(new Error("observe blew up"))
+        : Effect.fail(failure);
     });
 
-  const capacity = (held: ReadonlyArray<Held>) =>
+  const capacity = (held: readonly Held[]) =>
     call(
       "capacity",
       { id: "host" },
       Effect.map(inUse(held, states), ({ running, unread }) =>
-        allotted(running, unread, options.ramBudgetMib),
-      ),
+        allotted(running, unread, options.ramBudgetMib)
+      )
     );
 
   const checkpointRoot = (checkpoint: CheckpointRef) =>
-    join(options.dir, "checkpoints", checkpoint.instance);
+    path.join(options.dir, "checkpoints", checkpoint.instance);
 
   const copyInto = (from: string, machine: MachineRef) =>
     Effect.tryPromise({
       try: async () => {
-        const root = join(options.dir, "roots", machine.instance);
+        const root = path.join(options.dir, "roots", machine.instance);
 
         await access(from);
         await cp(from, root, { recursive: true });
         machines.set(machine.name, { state: "running", root });
         sizes.set(machine.name, sizesOf(machine));
       },
-      catch: (cause) => new Internal({ message: `copy into ${machine.id}: ${String(cause)}` }),
+      catch: (cause) =>
+        new Internal({ message: `copy into ${machine.id}: ${String(cause)}` }),
     });
 
   const copyable = (machine: MachineRef) => {
@@ -319,7 +349,7 @@ export const fakeRuntime = (options: FakeOptions) => {
             message: `${machine.id} is ${state}: ${kind === "mac" ? "stop" : "start"} it first`,
             machine: machine.id,
             state,
-          }),
+          })
     );
   };
 
@@ -331,12 +361,19 @@ export const fakeRuntime = (options: FakeOptions) => {
       : Effect.succeed(found.root);
   };
 
-  const commands = new Map<string, Set<ChildProcessSpawner.ChildProcessHandle>>();
+  const commands = new Map<
+    string,
+    Set<ChildProcessSpawner.ChildProcessHandle>
+  >();
 
   const endCommands = (machine: MachineRef) =>
-    Effect.forEach(commands.get(machine.name) ?? [], (handle) => Effect.ignore(handle.kill()), {
-      discard: true,
-    });
+    Effect.forEach(
+      commands.get(machine.name) ?? [],
+      (handle) => Effect.ignore(handle.kill()),
+      {
+        discard: true,
+      }
+    );
 
   const layer = Layer.effect(
     Runtime,
@@ -369,8 +406,8 @@ export const fakeRuntime = (options: FakeOptions) => {
               activation.machine,
               options.ramBudgetMib === undefined
                 ? Effect.void
-                : checkRamBudget(options.ramBudgetMib, activation, states),
-            ),
+                : checkRamBudget(options.ramBudgetMib, activation, states)
+            )
           ),
         capacity,
         create: (machine, image) =>
@@ -379,13 +416,13 @@ export const fakeRuntime = (options: FakeOptions) => {
             machine,
             Effect.promise(async () => {
               images.set(machine.name, image);
-              const root = join(options.dir, "roots", machine.instance);
+              const root = path.join(options.dir, "roots", machine.instance);
 
-              await mkdir(join(root, "dev"), { recursive: true });
+              await mkdir(path.join(root, "dev"), { recursive: true });
               furnish(root, bin);
               machines.set(machine.name, { state: "running", root });
               sizes.set(machine.name, sizesOf(machine));
-            }),
+            })
           ),
         start: (machine) =>
           call(
@@ -401,7 +438,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               found.state = "running";
 
               return Effect.void;
-            }),
+            })
           ),
         stop: (machine) =>
           call(
@@ -415,8 +452,8 @@ export const fakeRuntime = (options: FakeOptions) => {
                 if (found !== undefined) {
                   found.state = "stopped";
                 }
-              }),
-            ),
+              })
+            )
           ),
         pause: (machine) =>
           call(
@@ -435,14 +472,14 @@ export const fakeRuntime = (options: FakeOptions) => {
                     message: `${machine.id} is stopped: start it first`,
                     machine: machine.id,
                     state: found.state,
-                  }),
+                  })
                 );
               }
 
               found.state = "paused";
 
               return Effect.void;
-            }),
+            })
           ),
         resize: (machine, to) =>
           call(
@@ -452,7 +489,9 @@ export const fakeRuntime = (options: FakeOptions) => {
               const had = sizes.get(machine.name);
 
               if (had === undefined) {
-                return Effect.fail(new Internal({ message: `no machine ${machine.id}` }));
+                return Effect.fail(
+                  new Internal({ message: `no machine ${machine.id}` })
+                );
               }
 
               const partial = partialResizes.shift();
@@ -472,7 +511,7 @@ export const fakeRuntime = (options: FakeOptions) => {
               sizes.set(machine.name, given);
 
               return Effect.void;
-            }),
+            })
           ),
         sizes: (machine) =>
           call(
@@ -482,9 +521,11 @@ export const fakeRuntime = (options: FakeOptions) => {
               const held = sizes.get(machine.name);
 
               return held === undefined
-                ? Effect.fail(new Internal({ message: `no machine ${machine.id}` }))
+                ? Effect.fail(
+                    new Internal({ message: `no machine ${machine.id}` })
+                  )
                 : Effect.succeed(held);
-            }),
+            })
           ),
         delete: (machine) =>
           call(
@@ -495,8 +536,8 @@ export const fakeRuntime = (options: FakeOptions) => {
               Effect.sync(() => {
                 machines.delete(machine.name);
                 sizes.delete(machine.name);
-              }),
-            ),
+              })
+            )
           ),
         capture: (machine, checkpoint) =>
           call(
@@ -505,26 +546,39 @@ export const fakeRuntime = (options: FakeOptions) => {
             Effect.andThen(
               copyable(machine),
               Effect.flatMap(rootOf(machine), (root) =>
-                Effect.promise(() => cp(root, checkpointRoot(checkpoint), { recursive: true })),
-              ),
-            ),
+                Effect.promise(async () => {
+                  await cp(root, checkpointRoot(checkpoint), {
+                    recursive: true,
+                  });
+                })
+              )
+            )
           ),
         restore: (checkpoint, machine) =>
-          call("restore", machine, copyInto(checkpointRoot(checkpoint), machine)),
+          call(
+            "restore",
+            machine,
+            copyInto(checkpointRoot(checkpoint), machine)
+          ),
         fork: (source, machine) =>
           call(
             "fork",
             machine,
             Effect.andThen(
               copyable(source),
-              Effect.flatMap(rootOf(source), (root) => copyInto(root, machine)),
-            ),
+              Effect.flatMap(rootOf(source), (root) => copyInto(root, machine))
+            )
           ),
         deleteCheckpoint: (checkpoint) =>
           call(
             "deleteCheckpoint",
             checkpoint,
-            Effect.promise(() => rm(checkpointRoot(checkpoint), { recursive: true, force: true })),
+            Effect.promise(async () => {
+              await rm(checkpointRoot(checkpoint), {
+                recursive: true,
+                force: true,
+              });
+            })
           ),
         exec: (machine, command) =>
           call(
@@ -536,7 +590,9 @@ export const fakeRuntime = (options: FakeOptions) => {
               if (found?.state !== "running") {
                 return {
                   output: Stream.make(
-                    new TextEncoder().encode(`exec: ${machine.id} isn't running\n`),
+                    new TextEncoder().encode(
+                      `exec: ${machine.id} isn't running\n`
+                    )
                   ),
                   exitCode: Effect.succeed(1),
                 };
@@ -559,26 +615,32 @@ export const fakeRuntime = (options: FakeOptions) => {
                       command.stdin === undefined
                         ? "ignore"
                         : Stream.make(Uint8Array.from(command.stdin)),
-                  }),
+                  })
                 )
-                .pipe(Effect.mapError((error) => new Internal({ message: error.message })));
+                .pipe(
+                  Effect.mapError(
+                    (error) => new Internal({ message: error.message })
+                  )
+                );
 
               const running = commands.get(machine.name) ?? new Set();
 
               commands.set(machine.name, running.add(handle));
-              yield* Effect.addFinalizer(() => Effect.sync(() => running.delete(handle)));
+              yield* Effect.addFinalizer(() =>
+                Effect.sync(() => running.delete(handle))
+              );
 
               return {
                 output: Stream.mapError(
                   handle.all,
-                  (error) => new Internal({ message: error.message }),
+                  (error) => new Internal({ message: error.message })
                 ),
                 exitCode: Effect.orElseSucceed(handle.exitCode, () => 137),
               };
-            }),
+            })
           ),
       });
-    }),
+    })
   );
 
   return {
@@ -593,8 +655,7 @@ export const fakeRuntime = (options: FakeOptions) => {
     sized,
     stubs: () => stubs,
     failNext: <O extends Operation>(operation: O, error: FailureOf<O>) => {
-      // SAFETY: every port method fails with host errors.
-      inject(operation, { kind: "fail", error: error as HostError });
+      inject(operation, { kind: "fail", error });
     },
     dieNext: (operation: Operation, message: string) => {
       inject(operation, { kind: "die", message });
@@ -615,20 +676,31 @@ export const fakeRuntime = (options: FakeOptions) => {
       observeFailures.push("die");
     },
     holdNextObserve: () => {
-      const until = Deferred.makeUnsafe<void>();
-      const entered = Deferred.makeUnsafe<void>();
+      const until = Deferred.makeUnsafe<undefined>();
+      const entered = Deferred.makeUnsafe<undefined>();
 
       observeHolds.push({ entered, until });
 
-      return { release: Deferred.succeed(until, undefined), entered: Deferred.await(entered) };
+      return {
+        release: Deferred.succeed(until, undefined),
+        entered: Deferred.await(entered),
+      };
     },
-    holdNext: (operation: Operation, options?: { readonly runsOn?: boolean }) => {
-      const until = Deferred.makeUnsafe<void>();
-      const entered = Deferred.makeUnsafe<void>();
+    holdNext: (operation: Operation, hold?: { readonly runsOn?: boolean }) => {
+      const until = Deferred.makeUnsafe<undefined>();
+      const entered = Deferred.makeUnsafe<undefined>();
 
-      inject(operation, { kind: "hold", entered, until, runsOn: options?.runsOn ?? false });
+      inject(operation, {
+        kind: "hold",
+        entered,
+        until,
+        runsOn: hold?.runsOn ?? false,
+      });
 
-      return { release: Deferred.succeed(until, undefined), entered: Deferred.await(entered) };
+      return {
+        release: Deferred.succeed(until, undefined),
+        entered: Deferred.await(entered),
+      };
     },
   };
 };

@@ -1,15 +1,17 @@
 import {
-  type ClankerboxError,
   Client,
   Conflict,
   loadProfile,
-  type NotFound,
   pinnedSsh,
   Prebuild,
-  type Sizing,
   specRequest,
   sshTarget,
   Superseded,
+} from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  ClankerboxError,
+  NotFound,
+  Sizing,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Duration,
@@ -17,17 +19,19 @@ import {
   Exit,
   FileSystem,
   Option,
-  type Path,
   Schema,
   Scope,
   Semaphore,
 } from "effect";
+import type { Path } from "effect";
 import { Hex } from "effect/encoding";
 import type { ChildProcessSpawner } from "effect/process";
 import { SandboxDestroyedError } from "sandbox-agent";
+
 import { healthPath } from "./agent.ts";
 import type { Options } from "./options.ts";
-import { forwarding, freePort, LocalTunnelError, open, type Tunnel } from "./tunnel.ts";
+import { forwarding, freePort, LocalTunnelError, open } from "./tunnel.ts";
+import type { Tunnel } from "./tunnel.ts";
 
 export const name = "clankerbox";
 
@@ -54,6 +58,39 @@ interface Sandbox {
   held: Held | undefined;
 }
 
+const healthy = (port: number): Effect.Effect<boolean> =>
+  Effect.tryPromise(async (signal) => {
+    const reply = await fetch(`http://127.0.0.1:${port}${healthPath}`, {
+      signal,
+    });
+
+    return await reply.json();
+  }).pipe(
+    Effect.map(isHealth),
+    Effect.timeoutOrElse({
+      duration: healthWait,
+      orElse: () => Effect.succeed(false),
+    }),
+    Effect.orElseSucceed(() => false)
+  );
+
+const destroyed = (id: string) => (cause: NotFound) =>
+  Effect.fail(new SandboxDestroyedError(id, name, { cause }));
+
+const discard = (error: ClankerboxError) =>
+  Effect.gen(function* () {
+    const client = yield* Client.Client;
+
+    if (
+      error.made !== undefined &&
+      !(error instanceof Conflict || error instanceof Superseded)
+    ) {
+      yield* Effect.ignore(client.deleteMachine({ id: error.made }));
+    }
+
+    return yield* error;
+  });
+
 export type Services =
   | Client.Client
   | FileSystem.FileSystem
@@ -75,23 +112,27 @@ export const make = (options: Options, ssh = "ssh") => {
     return known;
   };
 
-  const locked = <A, E, R>(id: string, use: (known: Sandbox) => Effect.Effect<A, E, R>) =>
+  const locked = <A, E, R>(
+    id: string,
+    use: (known: Sandbox) => Effect.Effect<A, E, R>
+  ) =>
     Effect.suspend(() => {
       const known = sandbox(id);
 
       return Semaphore.withPermit(
         known.lock,
-        Effect.suspend(() => use(known)),
+        Effect.suspend(() => use(known))
       );
     });
+
+  const taken = (port: number) =>
+    [...sandboxes.values()].some((other) => other.port === port);
 
   const portOf = (known: Sandbox): Effect.Effect<number, LocalTunnelError> =>
     Effect.gen(function* () {
       if (known.port !== undefined) {
         return known.port;
       }
-
-      const taken = (port: number) => [...sandboxes.values()].some((other) => other.port === port);
 
       let port = yield* freePort;
 
@@ -110,12 +151,14 @@ export const make = (options: Options, ssh = "ssh") => {
 
       known.held = undefined;
 
-      return was === undefined ? Effect.void : Scope.close(was.scope, Exit.void);
+      return was === undefined
+        ? Effect.void
+        : Scope.close(was.scope, Exit.void);
     });
 
   const opened = (
     id: string,
-    known: Sandbox,
+    known: Sandbox
   ): Effect.Effect<number, ClankerboxError | LocalTunnelError, Services> =>
     Effect.gen(function* () {
       if (known.held?.tunnel.running() === true) {
@@ -132,43 +175,40 @@ export const make = (options: Options, ssh = "ssh") => {
 
       const tunnel = yield* Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "clankerbox-tunnel-" });
+
+        const directory = yield* fs.makeTempDirectoryScoped({
+          prefix: "clankerbox-tunnel-",
+        });
 
         const args = yield* pinnedSsh(
           target,
           target.login.user,
-          forwarding(port, options.sshArguments ?? []),
+          forwarding(port, options.sshArguments ?? [])
         );
 
-        return yield* open({ program: ssh, args, directory, port, machine: id });
+        return yield* open({
+          program: ssh,
+          args,
+          directory,
+          port,
+          machine: id,
+        });
       }).pipe(
         Effect.catchTag("PlatformError", (error) =>
           Effect.fail(
             new LocalTunnelError({
               message: `couldn't prepare the tunnel to ${id}: ${error.message}`,
-            }),
-          ),
+            })
+          )
         ),
         Scope.provide(scope),
-        Effect.onError(() => Scope.close(scope, Exit.void)),
+        Effect.onError(() => Scope.close(scope, Exit.void))
       );
 
       known.held = { tunnel, scope };
 
       return port;
     });
-
-  const healthy = (port: number): Effect.Effect<boolean> =>
-    Effect.tryPromise((signal) =>
-      fetch(`http://127.0.0.1:${port}${healthPath}`, { signal }).then((reply) => reply.json()),
-    ).pipe(
-      Effect.map(isHealth),
-      Effect.timeoutOrElse({ duration: healthWait, orElse: () => Effect.succeed(false) }),
-      Effect.catch(() => Effect.succeed(false)),
-    );
-
-  const destroyed = (id: string) => (cause: NotFound) =>
-    Effect.fail(new SandboxDestroyedError(id, name, { cause }));
 
   const started = (id: string, known: Sandbox) =>
     Effect.gen(function* () {
@@ -191,12 +231,16 @@ export const make = (options: Options, ssh = "ssh") => {
         return yield* client.forkMachine({ ...from, name: named });
       }
 
-      const { spec, host } = yield* specRequest("create", yield* loadProfile(from.profile), {
-        authorizedKeys: options.authorizedKeys,
-        cpu: from.cpu,
-        ramMib: from.ramMib,
-        diskGib: from.diskGib,
-      });
+      const { spec, host } = yield* specRequest(
+        "create",
+        yield* loadProfile(from.profile),
+        {
+          authorizedKeys: options.authorizedKeys,
+          cpu: from.cpu,
+          ramMib: from.ramMib,
+          diskGib: from.diskGib,
+        }
+      );
 
       const { machine } = yield* Prebuild.create(client, named, spec, {
         host,
@@ -206,24 +250,13 @@ export const make = (options: Options, ssh = "ssh") => {
       return machine;
     });
 
-  const discard = (error: ClankerboxError) =>
-    Effect.gen(function* () {
-      const client = yield* Client.Client;
-
-      if (error.made !== undefined && !(error instanceof Conflict || error instanceof Superseded)) {
-        yield* Effect.ignore(client.deleteMachine({ id: error.made }));
-      }
-
-      return yield* error;
-    });
-
   return {
     create: Effect.suspend(() => {
       const named = `${options.namePrefix ?? "sandbox"}-${Hex.encode(globalThis.crypto.getRandomValues(new Uint8Array(4)))}`;
 
       return made(named).pipe(
         Effect.map((machine) => machine.id),
-        Effect.catch(discard),
+        Effect.catch(discard)
       );
     }),
     destroy: (id: string) =>
@@ -234,7 +267,7 @@ export const make = (options: Options, ssh = "ssh") => {
           yield* closed(known);
           yield* client.deleteMachine({ id });
           known.port = undefined;
-        }),
+        })
       ),
     pause: (id: string) =>
       locked(id, (known) =>
@@ -243,14 +276,16 @@ export const make = (options: Options, ssh = "ssh") => {
 
           yield* closed(known);
           yield* client.stopMachine({ id });
-        }),
+        })
       ),
     resize: (id: string, sizes: Sizing) =>
       locked(id, () =>
-        Effect.flatMap(Client.Client, (client) => client.resizeMachine({ ...sizes, id })).pipe(
+        Effect.flatMap(Client.Client, (client) =>
+          client.resizeMachine({ ...sizes, id })
+        ).pipe(
           Effect.map(({ cpu, ramMib, diskGib }) => ({ cpu, ramMib, diskGib })),
-          Effect.catchTag("NotFound", destroyed(id)),
-        ),
+          Effect.catchTag("NotFound", destroyed(id))
+        )
       ),
     reconnect: (id: string) => locked(id, (known) => started(id, known)),
     ensureServer: (id: string) =>
@@ -260,8 +295,8 @@ export const make = (options: Options, ssh = "ssh") => {
             Effect.asSome,
             Effect.catchIf(
               (error) => !(error instanceof LocalTunnelError),
-              () => Effect.succeedNone,
-            ),
+              () => Effect.succeedNone
+            )
           );
 
           if (Option.isSome(port) && (yield* healthy(port.value))) {
@@ -270,12 +305,16 @@ export const make = (options: Options, ssh = "ssh") => {
 
           yield* started(id, known);
           yield* opened(id, known);
-        }),
+        })
       ),
     url: (id: string) =>
-      locked(id, (known) => Effect.map(opened(id, known), (port) => `http://127.0.0.1:${port}`)),
+      locked(id, (known) =>
+        Effect.map(opened(id, known), (port) => `http://127.0.0.1:${port}`)
+      ),
     closeAll: Effect.suspend(() =>
-      Effect.forEach([...sandboxes.keys()], (id) => locked(id, closed), { discard: true }),
+      Effect.forEach([...sandboxes.keys()], (id) => locked(id, closed), {
+        discard: true,
+      })
     ),
   };
 };

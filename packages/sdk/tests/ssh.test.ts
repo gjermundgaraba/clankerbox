@@ -2,7 +2,14 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import { Effect, FileSystem } from "effect";
 import { expect } from "vite-plus/test";
-import { type Machine, pinnedSsh, ScriptFailed, sshTarget, WrongState } from "../src/index.ts";
+
+import {
+  pinnedSsh,
+  ScriptFailed,
+  sshTarget,
+  WrongState,
+} from "../src/index.ts";
+import type { Machine } from "../src/index.ts";
 import { read } from "./files.ts";
 import { machine } from "./stub-host.ts";
 
@@ -14,14 +21,22 @@ const reachable = machine("linux_dev", { ssh: login, hostKey });
 
 const knownHostsOption = "UserKnownHostsFile=";
 
-const knownHostsIn = (args: ReadonlyArray<string>): string =>
-  args.find((arg) => arg.startsWith(knownHostsOption))?.slice(knownHostsOption.length) ?? "";
+const knownHostsIn = (args: readonly string[]): string =>
+  args
+    .find((arg) => arg.startsWith(knownHostsOption))
+    ?.slice(knownHostsOption.length) ?? "";
 
 layer(NodeServices.layer)((it) => {
-  it.effect("a running, prepared machine is a target with its login and host key", () =>
-    Effect.gen(function* () {
-      expect(yield* sshTarget(reachable)).toEqual({ id: "linux_dev", login, hostKey });
-    }),
+  it.effect(
+    "a running, prepared machine is a target with its login and host key",
+    () =>
+      Effect.gen(function* () {
+        expect(yield* sshTarget(reachable)).toStrictEqual({
+          id: "linux_dev",
+          login,
+          hostKey,
+        });
+      })
   );
 
   it.effect(
@@ -32,7 +47,8 @@ layer(NodeServices.layer)((it) => {
           [
             machine("linux_dev", { state: "stopped", hostKey }),
             new WrongState({
-              message: "linux_dev has no SSH endpoint (stopped): see clankerbox get linux_dev",
+              message:
+                "linux_dev has no SSH endpoint (stopped): see clankerbox get linux_dev",
               machine: "linux_dev",
               state: "stopped",
             }),
@@ -41,7 +57,10 @@ layer(NodeServices.layer)((it) => {
             machine("linux_dev", {
               phase: "failed",
               ssh: login,
-              error: new ScriptFailed({ message: "setup exited 1", script: "setup" }),
+              error: new ScriptFailed({
+                message: "setup exited 1",
+                script: "setup",
+              }),
             }),
             new WrongState({
               message:
@@ -51,7 +70,11 @@ layer(NodeServices.layer)((it) => {
             }),
           ],
           [
-            machine("linux_dev", { state: "stopped", desired: "running", phase: "starting" }),
+            machine("linux_dev", {
+              state: "stopped",
+              desired: "running",
+              phase: "starting",
+            }),
             new WrongState({
               message:
                 "linux_dev has no SSH endpoint (stopped, wants running (starting)): see clankerbox get linux_dev",
@@ -62,9 +85,9 @@ layer(NodeServices.layer)((it) => {
         ];
 
         for (const [held, expected] of said) {
-          expect(yield* Effect.flip(sshTarget(held))).toEqual(expected);
+          expect(yield* Effect.flip(sshTarget(held))).toStrictEqual(expected);
         }
-      }),
+      })
   );
 
   it.effect(
@@ -72,10 +95,16 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const target = yield* sshTarget(reachable);
-        const args = yield* pinnedSsh(target, "dev", ["-L", "8080:localhost:80", "uptime"]);
+
+        const args = yield* pinnedSsh(target, "dev", [
+          "-L",
+          "8080:localhost:80",
+          "uptime",
+        ]);
+
         const knownHosts = knownHostsIn(args);
 
-        expect(args).toEqual([
+        expect(args).toStrictEqual([
           "-l",
           "dev",
           "-o",
@@ -94,9 +123,9 @@ layer(NodeServices.layer)((it) => {
           "uptime",
         ]);
         expect(yield* read(knownHosts)).toBe(
-          "linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n",
+          "linux_dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExample\n"
         );
-      }).pipe(Effect.scoped),
+      }).pipe(Effect.scoped)
   );
 
   it.effect("pinnedSsh's known-hosts file goes when its scope ends", () =>
@@ -105,12 +134,14 @@ layer(NodeServices.layer)((it) => {
 
       const knownHosts = yield* Effect.scoped(
         Effect.map(
-          Effect.flatMap(sshTarget(reachable), (target) => pinnedSsh(target, "user", [])),
-          knownHostsIn,
-        ),
+          Effect.flatMap(sshTarget(reachable), (target) =>
+            pinnedSsh(target, "user", [])
+          ),
+          knownHostsIn
+        )
       );
 
       expect(yield* fs.exists(knownHosts)).toBe(false);
-    }),
+    })
   );
 });

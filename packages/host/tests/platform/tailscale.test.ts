@@ -1,8 +1,11 @@
 import { it } from "@effect/vitest";
 import { Effect, Layer, Redacted, Schema } from "effect";
-import { HttpClient, type HttpClientRequest, HttpClientResponse } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import type { HttpClientRequest } from "effect/http";
 import { expect } from "vite-plus/test";
-import { make, type TailnetSettings } from "../../src/platform/tailscale.ts";
+
+import { make } from "../../src/platform/tailscale.ts";
+import type { TailnetSettings } from "../../src/platform/tailscale.ts";
 
 const secret = "tskey-client-k1-that-never-prints";
 
@@ -30,9 +33,9 @@ const bodyText = (request: HttpClientRequest.HttpClientRequest) =>
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 
 const fakeTailscale = (
-  reply: (sent: Sent) => { readonly status: number; readonly body: string },
+  reply: (sent: Sent) => { readonly status: number; readonly body: string }
 ) => {
-  const sent: Array<Sent> = [];
+  const sent: Sent[] = [];
 
   const client = HttpClient.make((request, requestUrl) =>
     Effect.sync(() => {
@@ -52,9 +55,9 @@ const fakeTailscale = (
         new Response(answer.body, {
           status: answer.status,
           headers: { "content-type": "application/json" },
-        }),
+        })
       );
-    }),
+    })
   );
 
   return { sent, layer: Layer.succeed(HttpClient.HttpClient, client) };
@@ -62,30 +65,48 @@ const fakeTailscale = (
 
 const working = (sent: Sent) =>
   sent.path === "/oauth/token"
-    ? { status: 200, body: JSON.stringify({ access_token: "access-1", token_type: "Bearer" }) }
-    : { status: 200, body: JSON.stringify({ id: "kK1", key: "tskey-auth-minted" }) };
+    ? {
+        status: 200,
+        body: JSON.stringify({
+          access_token: "access-1",
+          token_type: "Bearer",
+        }),
+      }
+    : {
+        status: 200,
+        body: JSON.stringify({ id: "kK1", key: "tskey-auth-minted" }),
+      };
 
 it.effect(
   "a mint asks for a single-use, ephemeral, preauthorized key for the host's tags, expiring in minutes",
   () =>
     Effect.gen(function* () {
       const tailscale = fakeTailscale(working);
-      const tailnet = yield* make(settings, url).pipe(Effect.provide(tailscale.layer));
+
+      const tailnet = yield* make(settings, url).pipe(
+        Effect.provide(tailscale.layer)
+      );
+
       const key = yield* tailnet.mint;
 
       expect(Redacted.value(key)).toBe("tskey-auth-minted");
 
       const [token, keys] = tailscale.sent;
 
-      expect([token?.method, token?.path]).toEqual(["POST", "/oauth/token"]);
+      expect([token?.method, token?.path]).toStrictEqual([
+        "POST",
+        "/oauth/token",
+      ]);
       expect(new URLSearchParams(token?.text).get("client_id")).toBe("k1");
-      expect(new URLSearchParams(token?.text).get("client_secret")).toBe(secret);
-      expect([keys?.method, keys?.path, keys?.authorization]).toEqual([
+      expect(new URLSearchParams(token?.text).get("client_secret")).toBe(
+        secret
+      );
+      expect([keys?.method, keys?.path, keys?.authorization]).toStrictEqual([
         "POST",
         "/tailnet/-/keys",
         "Bearer access-1",
       ]);
-      expect(decodeJson(keys?.text)).toEqual({
+      expect(decodeJson(keys?.text)).toStrictEqual({
         capabilities: {
           devices: {
             create: {
@@ -98,34 +119,39 @@ it.effect(
         },
         expirySeconds: 600,
       });
-    }),
+    })
 );
 
-it.effect("a refused client fails the mint, and the next mint asks for a token again", () =>
-  Effect.gen(function* () {
-    let refusing = true;
+it.effect(
+  "a refused client fails the mint, and the next mint asks for a token again",
+  () =>
+    Effect.gen(function* () {
+      let refusing = true;
 
-    const tailscale = fakeTailscale((sent) =>
-      sent.path === "/oauth/token" && refusing
-        ? { status: 401, body: JSON.stringify({ message: "bad client" }) }
-        : working(sent),
-    );
+      const tailscale = fakeTailscale((sent) =>
+        sent.path === "/oauth/token" && refusing
+          ? { status: 401, body: JSON.stringify({ message: "bad client" }) }
+          : working(sent)
+      );
 
-    const tailnet = yield* make(settings, url).pipe(Effect.provide(tailscale.layer));
-    const refused = yield* Effect.flip(tailnet.mint);
+      const tailnet = yield* make(settings, url).pipe(
+        Effect.provide(tailscale.layer)
+      );
 
-    expect(refused._tag).toBe("Internal");
-    expect(refused.message).toContain("Tailscale refused the OAuth client");
+      const refused = yield* Effect.flip(tailnet.mint);
 
-    refusing = false;
+      expect(refused._tag).toBe("Internal");
+      expect(refused.message).toContain("Tailscale refused the OAuth client");
 
-    expect(Redacted.value(yield* tailnet.mint)).toBe("tskey-auth-minted");
-    expect(tailscale.sent.map((sent) => sent.path)).toEqual([
-      "/oauth/token",
-      "/oauth/token",
-      "/tailnet/-/keys",
-    ]);
-  }),
+      refusing = false;
+
+      expect(Redacted.value(yield* tailnet.mint)).toBe("tskey-auth-minted");
+      expect(tailscale.sent.map((sent) => sent.path)).toStrictEqual([
+        "/oauth/token",
+        "/oauth/token",
+        "/tailnet/-/keys",
+      ]);
+    })
 );
 
 it.effect("a key Tailscale won't mint fails the mint", () =>
@@ -133,12 +159,18 @@ it.effect("a key Tailscale won't mint fails the mint", () =>
     const tailscale = fakeTailscale((sent) =>
       sent.path === "/oauth/token"
         ? working(sent)
-        : { status: 403, body: JSON.stringify({ message: "tags not permitted" }) },
+        : {
+            status: 403,
+            body: JSON.stringify({ message: "tags not permitted" }),
+          }
     );
 
-    const tailnet = yield* make(settings, url).pipe(Effect.provide(tailscale.layer));
+    const tailnet = yield* make(settings, url).pipe(
+      Effect.provide(tailscale.layer)
+    );
+
     const refused = yield* Effect.flip(tailnet.mint);
 
     expect(refused.message).toContain("Tailscale didn't mint a key");
-  }),
+  })
 );

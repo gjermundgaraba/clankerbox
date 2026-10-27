@@ -1,6 +1,8 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, type PlatformError, type Scope, Stream } from "effect";
+import { Duration, Effect, Stream } from "effect";
+import type { PlatformError, Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+
 import { lastLines } from "../guest.ts";
 import type { Execution } from "../runtime.ts";
 
@@ -14,34 +16,45 @@ export interface Ran {
 }
 
 export const failure = (what: string, ran: Ran): Internal =>
-  new Internal({ message: `${what} exited ${ran.exitCode}: ${lastLines(ran.stderr)}` });
+  new Internal({
+    message: `${what} exited ${ran.exitCode}: ${lastLines(ran.stderr)}`,
+  });
 
 export const expect = (
   ran: Ran,
   what: string,
-  ok: ReadonlyArray<number> = [0],
+  ok: readonly number[] = [0]
 ): Effect.Effect<Ran, Internal> =>
-  ok.includes(ran.exitCode) ? Effect.succeed(ran) : Effect.fail(failure(what, ran));
+  ok.includes(ran.exitCode)
+    ? Effect.succeed(ran)
+    : Effect.fail(failure(what, ran));
 
 export const files = <A>(
   what: string,
-  effect: Effect.Effect<A, PlatformError.PlatformError>,
+  effect: Effect.Effect<A, PlatformError.PlatformError>
 ): Effect.Effect<A, Internal> =>
-  Effect.mapError(effect, (error) => new Internal({ message: `${what}: ${describe(error)}` }));
+  Effect.mapError(
+    effect,
+    (error) => new Internal({ message: `${what}: ${describe(error)}` })
+  );
+
+const commandIn =
+  (env: Readonly<Record<string, string | undefined>>) =>
+  (file: string, args: readonly string[], stdin: ChildProcess.CommandInput) =>
+    ChildProcess.make(file, args, {
+      env,
+      extendEnv: false,
+      stdin,
+      forceKillAfter: Duration.seconds(5),
+    });
 
 export const cliIn = (env: Readonly<Record<string, string | undefined>>) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-    const command = (file: string, args: ReadonlyArray<string>, stdin: ChildProcess.CommandInput) =>
-      ChildProcess.make(file, args, {
-        env,
-        extendEnv: false,
-        stdin,
-        forceKillAfter: Duration.seconds(5),
-      });
+    const command = commandIn(env);
 
-    const run = (file: string, args: ReadonlyArray<string>, what: string) =>
+    const run = (file: string, args: readonly string[], what: string) =>
       Effect.scoped(
         Effect.flatMap(spawner.spawn(command(file, args, "ignore")), (handle) =>
           Effect.all(
@@ -50,29 +63,39 @@ export const cliIn = (env: Readonly<Record<string, string | undefined>>) =>
               stdout: Stream.mkString(Stream.decodeText(handle.stdout)),
               stderr: Stream.mkString(Stream.decodeText(handle.stderr)),
             },
-            { concurrency: "unbounded" },
-          ),
-        ),
-      ).pipe(Effect.mapError((error) => new Internal({ message: `${what}: ${describe(error)}` })));
+            { concurrency: "unbounded" }
+          )
+        )
+      ).pipe(
+        Effect.mapError(
+          (error) => new Internal({ message: `${what}: ${describe(error)}` })
+        )
+      );
 
     const exec = (
       file: string,
-      args: ReadonlyArray<string>,
+      args: readonly string[],
       stdin: Uint8Array | undefined,
-      what: string,
+      what: string
     ): Effect.Effect<Execution, Internal, Scope.Scope> => {
       const failed = (error: PlatformError.PlatformError) =>
         new Internal({ message: `${what}: ${describe(error)}` });
 
       return Effect.map(
         Effect.mapError(
-          spawner.spawn(command(file, args, stdin === undefined ? "ignore" : Stream.make(stdin))),
-          failed,
+          spawner.spawn(
+            command(
+              file,
+              args,
+              stdin === undefined ? "ignore" : Stream.make(stdin)
+            )
+          ),
+          failed
         ),
         (handle) => ({
           output: Stream.mapError(handle.all, failed),
           exitCode: Effect.mapError(handle.exitCode, failed),
-        }),
+        })
       );
     };
 

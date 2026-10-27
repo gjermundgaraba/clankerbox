@@ -1,6 +1,7 @@
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Layer, Redacted, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+
 import { Tailnet } from "../tailnet.ts";
 
 export const TailnetSettings = Schema.Struct({
@@ -13,8 +14,8 @@ export const TailnetSettings = Schema.Struct({
       // Source: tailscale/tailscale tailcfg/tailcfg.go, CheckTag
       Schema.isPattern(/^tag:[A-Za-z][A-Za-z0-9-]*$/u, {
         message: "a tag, such as tag:clankerbox-machine",
-      }),
-    ),
+      })
+    )
   ),
 });
 
@@ -28,15 +29,15 @@ const Token = Schema.Struct({ access_token: Schema.String });
 
 const MintedKey = Schema.Struct({ key: Schema.String });
 
+const failed = (what: string) => (error: { readonly message: string }) =>
+  new Internal({ message: `Tailscale ${what}: ${error.message}` });
+
 export const make = (
   settings: TailnetSettings,
-  url = apiUrl,
+  url = apiUrl
 ): Effect.Effect<Tailnet["Service"], never, HttpClient.HttpClient> =>
   Effect.gen(function* () {
     const http = yield* HttpClient.HttpClient;
-
-    const failed = (what: string) => (error: { readonly message: string }) =>
-      new Internal({ message: `Tailscale ${what}: ${error.message}` });
 
     const token = http
       .execute(
@@ -44,13 +45,13 @@ export const make = (
           HttpClientRequest.bodyUrlParams({
             client_id: settings.oauthClient.id,
             client_secret: Redacted.value(settings.oauthClient.secret),
-          }),
-        ),
+          })
+        )
       )
       .pipe(
         Effect.flatMap(HttpClientResponse.filterStatusOk),
         Effect.flatMap(HttpClientResponse.schemaBodyJson(Token)),
-        Effect.mapError(failed("refused the OAuth client")),
+        Effect.mapError(failed("refused the OAuth client"))
       );
 
     const mint = Effect.gen(function* () {
@@ -73,13 +74,13 @@ export const make = (
                 },
               },
               expirySeconds: Duration.toSeconds(keyLifetime),
-            }),
-          ),
+            })
+          )
         )
         .pipe(
           Effect.flatMap(HttpClientResponse.filterStatusOk),
           Effect.flatMap(HttpClientResponse.schemaBodyJson(MintedKey)),
-          Effect.mapError(failed("didn't mint a key")),
+          Effect.mapError(failed("didn't mint a key"))
         );
 
       return Redacted.make(minted.key);
@@ -89,5 +90,6 @@ export const make = (
   });
 
 export const layer = (
-  settings: TailnetSettings,
-): Layer.Layer<Tailnet, never, HttpClient.HttpClient> => Layer.effect(Tailnet, make(settings));
+  settings: TailnetSettings
+): Layer.Layer<Tailnet, never, HttpClient.HttpClient> =>
+  Layer.effect(Tailnet, make(settings));

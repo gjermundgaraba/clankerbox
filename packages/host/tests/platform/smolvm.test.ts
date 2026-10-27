@@ -1,14 +1,30 @@
 import { mkdirSync } from "node:fs";
 import { totalmem } from "node:os";
-import { join } from "node:path";
+import path from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { type HostError, Internal, requirements } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, Fiber, FileSystem, Layer, Logger, Stream } from "effect";
-import { TestClock } from "effect/testing";
+import { layer } from "@effect/vitest";
+import { Internal, requirements } from "@gjermundgaraba/clankerbox-sdk";
+import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  mkdir,
+  readDirectory,
+  scratch,
+  write,
+} from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import {
+  Duration,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Logger,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-import { it, layer } from "@effect/vitest";
+import { TestClock } from "effect/testing";
 import { expect } from "vite-plus/test";
-import { type CheckpointRef, type MachineRef, type MachineState } from "../../src/runtime.ts";
+
 import {
   controlSocket,
   environment,
@@ -18,13 +34,18 @@ import {
   observeEach,
   pathsIn,
   pin,
-  type Settings,
   stateOf,
   templates,
   ramBudget,
 } from "../../src/platform/smolvm.ts";
-import { mkdir, readDirectory, scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing";
-import { type Call, type Reply, scripted as scriptedSpawner } from "../scripted.ts";
+import type { Settings } from "../../src/platform/smolvm.ts";
+import type {
+  CheckpointRef,
+  MachineRef,
+  MachineState,
+} from "../../src/runtime.ts";
+import { scripted as scriptedSpawner } from "../scripted.ts";
+import type { Call, Reply } from "../scripted.ts";
 
 const failure = (error: HostError) => [error._tag, error.message];
 
@@ -36,20 +57,24 @@ const scripted = (reply: (call: Call) => Reply | undefined) =>
       reply(call) ??
       (call.args[0] === "--version"
         ? { stdout: `smolvm ${requirements.smolvm.testedVersion}\n` }
-        : undefined),
+        : undefined)
   );
 
-const prepared = (expanded: ReadonlyArray<string> = templates) =>
+const prepared = (expanded: readonly string[] = templates) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const dir = yield* scratch;
-    const prefix = join(dir, "smolvm", requirements.smolvm.testedVersion);
-    const stateDir = yield* fs.makeTempDirectoryScoped({ directory: "/tmp", prefix: "cbx-" });
+    const prefix = path.join(dir, "smolvm", requirements.smolvm.testedVersion);
+
+    const stateDir = yield* fs.makeTempDirectoryScoped({
+      directory: "/tmp",
+      prefix: "cbx-",
+    });
 
     yield* mkdir(prefix);
 
     for (const template of expanded) {
-      yield* write(join(prefix, template), "");
+      yield* write(path.join(prefix, template), "");
     }
 
     const settings: Settings = {
@@ -63,13 +88,23 @@ const prepared = (expanded: ReadonlyArray<string> = templates) =>
     return settings;
   });
 
-const runtimeOf = (settings: Settings, spawner: ReturnType<typeof scripted>, uid = 0) =>
-  make(settings, uid).pipe(Effect.provide(Layer.merge(NodeServices.layer, spawner.layer)));
+const runtimeOf = (
+  settings: Settings,
+  spawner: ReturnType<typeof scripted>,
+  uid = 0
+) =>
+  make(settings, uid).pipe(
+    Effect.provide(Layer.merge(NodeServices.layer, spawner.layer))
+  );
 
-const startupError = (settings: Settings, spawner: ReturnType<typeof scripted>, uid = 0) =>
+const startupError = (
+  settings: Settings,
+  spawner: ReturnType<typeof scripted>,
+  uid = 0
+) =>
   make(settings, uid).pipe(
     Effect.flip,
-    Effect.provide(Layer.merge(NodeServices.layer, spawner.layer)),
+    Effect.provide(Layer.merge(NodeServices.layer, spawner.layer))
   );
 
 const machine: MachineRef = {
@@ -82,10 +117,12 @@ const machine: MachineRef = {
   port: 10_000,
 };
 
-const smolvmArgs = (calls: ReadonlyArray<Call>) =>
+const smolvmArgs = (calls: readonly Call[]) =>
   calls
     .slice(1)
-    .map((call) => (call.file.endsWith("/smolvm") ? call.args : [call.file, ...call.args]));
+    .map((call) =>
+      call.file.endsWith("/smolvm") ? call.args : [call.file, ...call.args]
+    );
 
 const status = (state: string): Reply => ({
   stdout: JSON.stringify({
@@ -94,26 +131,56 @@ const status = (state: string): Reply => ({
     cpus: 2,
     ports: 1,
     ...(state === "running" && {
-      published_ports: [{ host: 10_000, guest: 22, guest_listening: "listening" }],
+      published_ports: [
+        { host: 10_000, guest: 22, guest_listening: "listening" },
+      ],
     }),
   }),
 });
 
 const unknown: Reply = {
   exitCode: 1,
-  stderr: "Error: config operation failed: machine status: machine 'dev-01234567' not found\n",
+  stderr:
+    "Error: config operation failed: machine status: machine 'dev-01234567' not found\n",
 };
+
+const timed = <A, E>(effect: Effect.Effect<A, E>) =>
+  Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(effect);
+    let waited = Duration.zero;
+
+    while (fiber.pollUnsafe() === undefined) {
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(Duration.seconds(1));
+      waited = Duration.sum(waited, Duration.seconds(1));
+    }
+
+    return { value: yield* Fiber.join(fiber), waited };
+  });
+
+const live = (flag: string, size: string) => [
+  "machine",
+  "resize",
+  "--name",
+  "dev-01234567",
+  flag,
+  size,
+];
 
 layer(NodeServices.layer)((it) => {
   it("a native name is the machine's name and its instance's first 8 characters", () => {
     expect(nativeName(machine)).toBe("dev-01234567");
   });
 
-  it.effect("the RAM budget defaults to physical RAM less 2 GiB, and a set one is kept", () =>
-    Effect.gen(function* () {
-      expect(yield* ramBudget(undefined)).toBe(Math.floor(totalmem() / 1024 / 1024) - 2048);
-      expect(yield* ramBudget(1_000_000)).toBe(1_000_000);
-    }),
+  it.effect(
+    "the RAM budget defaults to physical RAM less 2 GiB, and a set one is kept",
+    () =>
+      Effect.gen(function* () {
+        expect(yield* ramBudget(undefined)).toBe(
+          Math.floor(totalmem() / 1024 / 1024) - 2048
+        );
+        expect(yield* ramBudget(1_000_000)).toBe(1_000_000);
+      })
   );
 
   it.effect(
@@ -121,20 +188,23 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
-        const spawner = scripted(() => undefined);
+        const spawner = scripted(() => {});
 
         const runtime = yield* runtimeOf(settings, spawner);
 
         expect(runtime.version).toBe(requirements.smolvm.testedVersion);
-        expect(spawner.calls).toEqual([
+        expect(spawner.calls).toStrictEqual([
           {
-            file: join(settings.prefix, "smolvm"),
+            file: path.join(settings.prefix, "smolvm"),
             args: ["--version"],
             env: {
               PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-              HOME: join(settings.stateDir, "smolvm"),
-              SMOLVM_DATA_DIR: join(settings.stateDir, "smolvm"),
-              SMOLVM_AGENT_ROOTFS: join(settings.prefix, ".local/share/smolvm/agent-rootfs"),
+              HOME: path.join(settings.stateDir, "smolvm"),
+              SMOLVM_DATA_DIR: path.join(settings.stateDir, "smolvm"),
+              SMOLVM_AGENT_ROOTFS: path.join(
+                settings.prefix,
+                ".local/share/smolvm/agent-rootfs"
+              ),
               SMOLVM_RESTORE_TMPFS: "0",
               SMOLVM_VM_USE_SCOPE: "1",
               SMOLVM_OOM_VICTIM_ORDER: "0",
@@ -147,50 +217,64 @@ layer(NodeServices.layer)((it) => {
           },
         ]);
         expect(environment(settings)).not.toHaveProperty("SMOLVM_BOOT_BINARY");
-      }),
+      })
   );
 
   it.effect("a smolvm host refuses to start unless it runs as root", () =>
     Effect.gen(function* () {
-      const spawner = scripted(() => undefined);
+      const spawner = scripted(() => {});
       const error = yield* startupError(yield* prepared(), spawner, 1000);
 
       expect(error._tag).toBe("CannotStart");
-      expect(error.message).toBe("a smolvm host runs as root, and this one runs as uid 1000");
-      expect(spawner.calls).toEqual([]);
-    }),
-  );
-
-  it.effect("a smolvm host refuses a state dir too deep for smolvm's socket paths", () =>
-    Effect.gen(function* () {
-      const settings = yield* prepared();
-      const deep = { ...settings, stateDir: join("/", "d".repeat(60), "state") };
-
-      expect(Buffer.byteLength(controlSocket(pathsIn(deep.stateDir).dataDir))).toBe(122);
-
-      const error = yield* startupError(
-        deep,
-        scripted(() => undefined),
-      );
-
-      expect(error._tag).toBe("CannotStart");
-      expect(error.message).toContain("past Linux's 107: use a shorter state dir");
-    }),
-  );
-
-  it.effect("a smolvm host refuses a prefix whose disk templates weren't expanded at install", () =>
-    Effect.gen(function* () {
-      const settings = yield* prepared(["storage-template.ext4"]);
-      const spawner = scripted(() => undefined);
-      const error = yield* startupError(settings, spawner);
-      const overlay = join(settings.prefix, "overlay-template.ext4");
-
-      expect(error._tag).toBe("CannotStart");
       expect(error.message).toBe(
-        `smolvm prefix ${settings.prefix} has no overlay-template.ext4: expand it at install with zstd -d --sparse ${overlay}.zst -o ${overlay}`,
+        "a smolvm host runs as root, and this one runs as uid 1000"
       );
-      expect(spawner.calls).toEqual([]);
-    }),
+      expect(spawner.calls).toStrictEqual([]);
+    })
+  );
+
+  it.effect(
+    "a smolvm host refuses a state dir too deep for smolvm's socket paths",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
+
+        const deep = {
+          ...settings,
+          stateDir: path.join("/", "d".repeat(60), "state"),
+        };
+
+        expect(
+          Buffer.byteLength(controlSocket(pathsIn(deep.stateDir).dataDir))
+        ).toBe(122);
+
+        const error = yield* startupError(
+          deep,
+          scripted(() => {})
+        );
+
+        expect(error._tag).toBe("CannotStart");
+        expect(error.message).toContain(
+          "past Linux's 107: use a shorter state dir"
+        );
+      })
+  );
+
+  it.effect(
+    "a smolvm host refuses a prefix whose disk templates weren't expanded at install",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared(["storage-template.ext4"]);
+        const spawner = scripted(() => {});
+        const error = yield* startupError(settings, spawner);
+        const overlay = path.join(settings.prefix, "overlay-template.ext4");
+
+        expect(error._tag).toBe("CannotStart");
+        expect(error.message).toBe(
+          `smolvm prefix ${settings.prefix} has no overlay-template.ext4: expand it at install with zstd -d --sparse ${overlay}.zst -o ${overlay}`
+        );
+        expect(spawner.calls).toStrictEqual([]);
+      })
   );
 
   it.effect("a smolvm host refuses a smolvm release it wasn't tested on", () =>
@@ -199,14 +283,14 @@ layer(NodeServices.layer)((it) => {
 
       const error = yield* startupError(
         settings,
-        scripted(() => ({ stdout: "smolvm 0.0.0-test\n" })),
+        scripted(() => ({ stdout: "smolvm 0.0.0-test\n" }))
       );
 
       expect(error._tag).toBe("CannotStart");
       expect(error.message).toBe(
-        `${join(settings.prefix, "smolvm")} reports "smolvm 0.0.0-test", and this host was tested on smolvm ${requirements.smolvm.testedVersion}`,
+        `${path.join(settings.prefix, "smolvm")} reports "smolvm 0.0.0-test", and this host was tested on smolvm ${requirements.smolvm.testedVersion}`
       );
-    }),
+    })
   );
 
   it("smolvm's paused state is its own, and the rest map onto running and stopped by whether the VMM is alive", () => {
@@ -223,9 +307,9 @@ layer(NodeServices.layer)((it) => {
             "unreachable",
             "frozen",
           ] as const
-        ).map((state) => [state, stateOf(state)]),
-      ),
-    ).toEqual({
+        ).map((state) => [state, stateOf(state)])
+      )
+    ).toStrictEqual({
       created: "stopped",
       running: "running",
       stopped: "stopped",
@@ -253,7 +337,7 @@ layer(NodeServices.layer)((it) => {
       ]);
 
       const spawner = scripted((call) =>
-        call.args[0] === "machine" ? replies.get(call.args[3] ?? "") : undefined,
+        call.args[0] === "machine" ? replies.get(call.args[3] ?? "") : undefined
       );
 
       const runtime = yield* runtimeOf(yield* prepared(), spawner);
@@ -264,67 +348,68 @@ layer(NodeServices.layer)((it) => {
         { ...machine, id: "linux_gone", name: "gone", port: 10_002 },
       ]);
 
-      expect(observed).toEqual(["running", "stopped", "missing"]);
-      expect(smolvmArgs(spawner.calls).map((args) => args[3])).toEqual(
-        expect.arrayContaining(["dev-01234567", "two-01234567", "gone-01234567"]),
+      expect(observed).toStrictEqual(["running", "stopped", "missing"]);
+      expect(smolvmArgs(spawner.calls).map((args) => args[3])).toStrictEqual(
+        expect.arrayContaining([
+          "dev-01234567",
+          "two-01234567",
+          "gone-01234567",
+        ])
       );
       expect(spawner.calls).toHaveLength(4);
-    }),
+    })
   );
 
   it.effect(
     "observe reads a machine whose status fails for another reason unknown, and logs smolvm's last output",
     () =>
       Effect.gen(function* () {
-        const spawner = scripted((call) =>
-          call.args[0] === "machine"
-            ? call.args[3] === "dev-01234567"
-              ? { exitCode: 1, stderr: "Error: database is locked\n" }
-              : status("stopped")
-            : undefined,
-        );
+        const spawner = scripted((call): Reply | undefined => {
+          if (call.args[0] !== "machine") {
+            return undefined;
+          }
+
+          return call.args[3] === "dev-01234567"
+            ? { exitCode: 1, stderr: "Error: database is locked\n" }
+            : status("stopped");
+        });
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
-        const logged: Array<unknown> = [];
+        const logged: unknown[] = [];
 
         const observed = yield* runtime
-          .observe([machine, { ...machine, id: "linux_two", name: "two", port: 10_001 }])
-          .pipe(Effect.provide(Logger.layer([Logger.make(({ message }) => logged.push(message))])));
+          .observe([
+            machine,
+            { ...machine, id: "linux_two", name: "two", port: 10_001 },
+          ])
+          .pipe(
+            Effect.provide(
+              Logger.layer([Logger.make(({ message }) => logged.push(message))])
+            )
+          );
 
-        expect(observed).toEqual(["unknown", "stopped"]);
-        expect(logged).toEqual([
+        expect(observed).toStrictEqual(["unknown", "stopped"]);
+        expect(logged).toStrictEqual([
           [
             "couldn't read linux_dev's state: smolvm machine status dev-01234567 exited 1: Error: database is locked",
           ],
         ]);
-      }),
+      })
   );
-
-  const timed = <A, E>(effect: Effect.Effect<A, E>) =>
-    Effect.gen(function* () {
-      const fiber = yield* Effect.forkChild(effect);
-      let waited = Duration.zero;
-
-      while (fiber.pollUnsafe() === undefined) {
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust(Duration.seconds(1));
-        waited = Duration.sum(waited, Duration.seconds(1));
-      }
-
-      return { value: yield* Fiber.join(fiber), waited };
-    });
 
   it.effect(
     "observe reads a status that doesn't answer unknown within 8 s, its wait for a turn included, and only its own machine",
     () =>
       Effect.gen(function* () {
-        const spawner = scripted((call) =>
-          call.args[0] === "machine"
-            ? call.args[3] === "two-01234567"
-              ? status("stopped")
-              : { hangs: true }
-            : undefined,
-        );
+        const spawner = scripted((call): Reply | undefined => {
+          if (call.args[0] !== "machine") {
+            return undefined;
+          }
+
+          return call.args[3] === "two-01234567"
+            ? status("stopped")
+            : { hangs: true };
+        });
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
@@ -337,24 +422,27 @@ layer(NodeServices.layer)((it) => {
         const { value, waited } = yield* timed(
           runtime
             .observe([{ ...machine, id: "linux_two", name: "two" }, ...hanging])
-            .pipe(Effect.provide(Logger.layer([]))),
+            .pipe(Effect.provide(Logger.layer([])))
         );
 
         expect(Duration.format(waited)).toBe("8s");
-        expect(value).toEqual(["stopped", ...hanging.map(() => "unknown")]);
-      }),
+        expect(value).toStrictEqual([
+          "stopped",
+          ...hanging.map(() => "unknown"),
+        ]);
+      })
   );
 
   it.effect(
     "create makes the machine with its sizes and published port, then boots it branchable",
     () =>
       Effect.gen(function* () {
-        const spawner = scripted(() => undefined);
+        const spawner = scripted(() => {});
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
         yield* runtime.create(machine, requirements.bases.linux.ubuntu);
 
-        expect(smolvmArgs(spawner.calls)).toEqual([
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
           [
             "machine",
             "create",
@@ -376,27 +464,31 @@ layer(NodeServices.layer)((it) => {
           ],
           ["machine", "start", "--name", "dev-01234567", "--branchable"],
         ]);
-      }),
+      })
   );
 
-  it.effect("a failed machine create fails with smolvm's last output and boots nothing", () =>
-    Effect.gen(function* () {
-      const spawner = scripted((call) =>
-        call.args[1] === "create" ? { exitCode: 1, stderr: "Error: image not found\n" } : undefined,
-      );
+  it.effect(
+    "a failed machine create fails with smolvm's last output and boots nothing",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) =>
+          call.args[1] === "create"
+            ? { exitCode: 1, stderr: "Error: image not found\n" }
+            : undefined
+        );
 
-      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-      const error = yield* Effect.flip(
-        runtime.create(machine, "mirror.gcr.io/library/ubuntu@sha256:00"),
-      );
+        const error = yield* Effect.flip(
+          runtime.create(machine, "mirror.gcr.io/library/ubuntu@sha256:00")
+        );
 
-      expect(error._tag).toBe("Internal");
-      expect(error.message).toBe(
-        "smolvm machine create dev-01234567 exited 1: Error: image not found",
-      );
-      expect(smolvmArgs(spawner.calls)).toHaveLength(1);
-    }),
+        expect(error._tag).toBe("Internal");
+        expect(error.message).toBe(
+          "smolvm machine create dev-01234567 exited 1: Error: image not found"
+        );
+        expect(smolvmArgs(spawner.calls)).toHaveLength(1);
+      })
   );
 
   it.effect(
@@ -417,7 +509,8 @@ layer(NodeServices.layer)((it) => {
           return call.args[1] === "stop"
             ? {
                 exitCode: 1,
-                stderr: "Error: guest did not confirm the flush; left the VM alive for retry\n",
+                stderr:
+                  "Error: guest did not confirm the flush; left the VM alive for retry\n",
               }
             : undefined;
         });
@@ -428,15 +521,15 @@ layer(NodeServices.layer)((it) => {
         const error = yield* Effect.flip(runtime.stop(machine));
 
         expect(error.message).toBe(
-          "smolvm machine stop dev-01234567 exited 1: Error: guest did not confirm the flush; left the VM alive for retry",
+          "smolvm machine stop dev-01234567 exited 1: Error: guest did not confirm the flush; left the VM alive for retry"
         );
-        expect(smolvmArgs(spawner.calls)).toEqual([
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "status", "--name", "dev-01234567", "--json"],
           ["machine", "start", "--name", "dev-01234567", "--branchable"],
           ["machine", "status", "--name", "dev-01234567", "--json"],
           ["machine", "stop", "--name", "dev-01234567"],
         ]);
-      }),
+      })
   );
 
   it.effect(
@@ -444,16 +537,19 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         for (const reply of [status("stopped"), unknown]) {
-          const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+          const spawner = scripted((call) =>
+            call.args[1] === "status" ? reply : undefined
+          );
+
           const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
           yield* runtime.stop(machine);
 
-          expect(smolvmArgs(spawner.calls)).toEqual([
+          expect(smolvmArgs(spawner.calls)).toStrictEqual([
             ["machine", "status", "--name", "dev-01234567", "--json"],
           ]);
         }
-      }),
+      })
   );
 
   it.effect(
@@ -462,10 +558,18 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         let reply = status("running");
 
-        const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+        const spawner = scripted((call) =>
+          call.args[1] === "status" ? reply : undefined
+        );
+
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        for (const next of ["running", "unreachable", "paused", "pausing"] as const) {
+        for (const next of [
+          "running",
+          "unreachable",
+          "paused",
+          "pausing",
+        ] as const) {
           reply = status(next);
           yield* runtime.start(machine);
         }
@@ -477,11 +581,19 @@ layer(NodeServices.layer)((it) => {
           refusals.push(yield* Effect.flip(runtime.start(machine)));
         }
 
-        expect(refusals.map(failure)).toEqual([
-          ["WrongState", "smolvm reads machine linux_dev frozen, and doesn't start it from there"],
-          ["Missing", "machine linux_dev is missing from the linux runtime; delete it"],
+        expect(refusals.map(failure)).toStrictEqual([
+          [
+            "WrongState",
+            "smolvm reads machine linux_dev frozen, and doesn't start it from there",
+          ],
+          [
+            "Missing",
+            "machine linux_dev is missing from the linux runtime; delete it",
+          ],
         ]);
-        expect(smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))).toEqual([
+        expect(
+          smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))
+        ).toStrictEqual([
           "status --name dev-01234567",
           "status --name dev-01234567",
           "start --name dev-01234567",
@@ -492,7 +604,7 @@ layer(NodeServices.layer)((it) => {
           "status --name dev-01234567",
           "status --name dev-01234567",
         ]);
-      }),
+      })
   );
 
   it.effect(
@@ -501,7 +613,10 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         let reply = status("running");
 
-        const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+        const spawner = scripted((call) =>
+          call.args[1] === "status" ? reply : undefined
+        );
+
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
         for (const next of ["running", "paused", "pausing"] as const) {
@@ -516,14 +631,19 @@ layer(NodeServices.layer)((it) => {
           refusals.push(yield* Effect.flip(runtime.pause(machine)));
         }
 
-        expect(refusals.map(failure)).toEqual([
+        expect(refusals.map(failure)).toStrictEqual([
           [
             "WrongState",
             "smolvm reads machine linux_dev stopped, and pauses only a running machine",
           ],
-          ["Missing", "machine linux_dev is missing from the linux runtime; delete it"],
+          [
+            "Missing",
+            "machine linux_dev is missing from the linux runtime; delete it",
+          ],
         ]);
-        expect(smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))).toEqual([
+        expect(
+          smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))
+        ).toStrictEqual([
           "status --name dev-01234567",
           "pause --name dev-01234567",
           "status --name dev-01234567",
@@ -533,31 +653,30 @@ layer(NodeServices.layer)((it) => {
           "status --name dev-01234567",
           "status --name dev-01234567",
         ]);
-      }),
+      })
   );
 
   it.effect(
     "a stopped machine is resized in one machine update, and a running one in one live machine resize per size, RAM, then vCPUs, then disk, each sending every size asked, also one it has, so a grow cut short finishes",
     () =>
       Effect.gen(function* () {
-        const spawner = scripted(() => undefined);
+        const spawner = scripted(() => {});
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        yield* runtime.resize(machine, { cpu: 4, ramMib: 1024, diskGib: 30 }, false);
-        yield* runtime.resize(machine, { cpu: 2, ramMib: 2048, diskGib: 40 }, true);
+        yield* runtime.resize(
+          machine,
+          { cpu: 4, ramMib: 1024, diskGib: 30 },
+          false
+        );
+        yield* runtime.resize(
+          machine,
+          { cpu: 2, ramMib: 2048, diskGib: 40 },
+          true
+        );
         yield* runtime.resize(machine, {}, false);
         yield* runtime.resize(machine, {}, true);
 
-        const live = (flag: string, size: string) => [
-          "machine",
-          "resize",
-          "--name",
-          "dev-01234567",
-          flag,
-          size,
-        ];
-
-        expect(smolvmArgs(spawner.calls)).toEqual([
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
           [
             "machine",
             "update",
@@ -574,23 +693,28 @@ layer(NodeServices.layer)((it) => {
           live("--cpus", "2"),
           live("--storage", "40"),
         ]);
-      }),
+      })
   );
 
   it.effect(
     "off x86_64 a live resize leaves out vCPUs it would keep, as smolvm refuses any live vCPU target there",
     () =>
       Effect.gen(function* () {
-        const spawner = scripted(() => undefined);
-        const arm = yield* runtimeOf({ ...(yield* prepared()), arch: "arm64" }, spawner);
+        const spawner = scripted(() => {});
+
+        const arm = yield* runtimeOf(
+          { ...(yield* prepared()), arch: "arm64" },
+          spawner
+        );
+
         const before = spawner.calls.length;
 
         yield* arm.resize(machine, { cpu: 2, ramMib: 4096 }, true);
 
-        expect(smolvmArgs(spawner.calls.slice(before - 1))).toEqual([
+        expect(smolvmArgs(spawner.calls.slice(before - 1))).toStrictEqual([
           ["machine", "resize", "--name", "dev-01234567", "--mem", "4096"],
         ]);
-      }),
+      })
   );
 
   it.effect(
@@ -604,7 +728,9 @@ layer(NodeServices.layer)((it) => {
         };
 
         const spawner = scripted((call) =>
-          call.args[1] === "resize" && call.args.includes("--mem") ? unfinished : undefined,
+          call.args[1] === "resize" && call.args.includes("--mem")
+            ? unfinished
+            : undefined
         );
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
@@ -612,34 +738,45 @@ layer(NodeServices.layer)((it) => {
 
         yield* runtime.resize(machine, { cpu: 4, ramMib: 2048 }, true);
 
-        const refused = yield* Effect.flip(runtime.resize(machine, { ramMib: 4096 }, true));
+        const refused = yield* Effect.flip(
+          runtime.resize(machine, { ramMib: 4096 }, true)
+        );
 
-        expect(smolvmArgs(spawner.calls.slice(before - 1)).map((args) => args.slice(4))).toEqual([
+        expect(
+          smolvmArgs(spawner.calls.slice(before - 1)).map((args) =>
+            args.slice(4)
+          )
+        ).toStrictEqual([
           ["--mem", "2048"],
           ["--cpus", "4"],
           ["--mem", "4096"],
         ]);
         expect(failure(refused)[0]).toBe("Internal");
-      }),
+      })
   );
 
   it.effect("a resize smolvm refuses fails with its last output", () =>
     Effect.gen(function* () {
       const spawner = scripted((call) =>
         call.args[1] === "resize"
-          ? { exitCode: 1, stderr: "Error: not enough host memory for 4096 MiB\n" }
-          : undefined,
+          ? {
+              exitCode: 1,
+              stderr: "Error: not enough host memory for 4096 MiB\n",
+            }
+          : undefined
       );
 
       const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-      const refused = yield* Effect.flip(runtime.resize(machine, { ramMib: 4096 }, true));
+      const refused = yield* Effect.flip(
+        runtime.resize(machine, { ramMib: 4096 }, true)
+      );
 
-      expect(failure(refused)).toEqual([
+      expect(failure(refused)).toStrictEqual([
         "Internal",
         "smolvm machine resize dev-01234567 exited 1: Error: not enough host memory for 4096 MiB",
       ]);
-    }),
+    })
   );
 
   it.effect(
@@ -658,7 +795,7 @@ layer(NodeServices.layer)((it) => {
                   storage_gb: storage,
                 }),
               }
-            : undefined,
+            : undefined
         );
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
@@ -668,9 +805,9 @@ layer(NodeServices.layer)((it) => {
 
         const unrecorded = yield* runtime.sizes({ ...machine, diskGib: 40 });
 
-        expect(recorded).toEqual({ cpu: 3, ramMib: 4096, diskGib: 30 });
-        expect(unrecorded).toEqual({ cpu: 3, ramMib: 4096, diskGib: 20 });
-      }),
+        expect(recorded).toStrictEqual({ cpu: 3, ramMib: 4096, diskGib: 30 });
+        expect(unrecorded).toStrictEqual({ cpu: 3, ramMib: 4096, diskGib: 20 });
+      })
   );
 
   it.effect(
@@ -679,15 +816,25 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         let reply = status("paused");
 
-        const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+        const spawner = scripted((call) =>
+          call.args[1] === "status" ? reply : undefined
+        );
+
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        for (const next of [status("paused"), status("pausing"), status("stopped"), unknown]) {
+        for (const next of [
+          status("paused"),
+          status("pausing"),
+          status("stopped"),
+          unknown,
+        ]) {
           reply = next;
           yield* runtime.stop(machine);
         }
 
-        expect(smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))).toEqual([
+        expect(
+          smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))
+        ).toStrictEqual([
           "status --name dev-01234567",
           "resume --name dev-01234567",
           "stop --name dev-01234567",
@@ -697,40 +844,49 @@ layer(NodeServices.layer)((it) => {
           "status --name dev-01234567",
           "status --name dev-01234567",
         ]);
-      }),
+      })
   );
 
-  it.effect("a start whose status read fails fails with smolvm's output and boots nothing", () =>
-    Effect.gen(function* () {
-      const spawner = scripted((call) =>
-        call.args[1] === "status"
-          ? { exitCode: 1, stderr: "Error: database is locked\n" }
-          : undefined,
-      );
+  it.effect(
+    "a start whose status read fails fails with smolvm's output and boots nothing",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) =>
+          call.args[1] === "status"
+            ? { exitCode: 1, stderr: "Error: database is locked\n" }
+            : undefined
+        );
 
-      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-      const error = yield* Effect.flip(runtime.start(machine));
+        const error = yield* Effect.flip(runtime.start(machine));
 
-      expect(failure(error)).toEqual([
-        "Internal",
-        "smolvm machine status dev-01234567 exited 1: Error: database is locked",
-      ]);
-      expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["status"]);
-    }),
+        expect(failure(error)).toStrictEqual([
+          "Internal",
+          "smolvm machine status dev-01234567 exited 1: Error: database is locked",
+        ]);
+        expect(smolvmArgs(spawner.calls).map((args) => args[1])).toStrictEqual([
+          "status",
+        ]);
+      })
   );
 
-  it.effect("delete of a machine smolvm doesn't know touches nothing native", () =>
-    Effect.gen(function* () {
-      const spawner = scripted((call) => (call.args[1] === "status" ? unknown : undefined));
-      const runtime = yield* runtimeOf(yield* prepared(), spawner);
+  it.effect(
+    "delete of a machine smolvm doesn't know touches nothing native",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) =>
+          call.args[1] === "status" ? unknown : undefined
+        );
 
-      yield* runtime.delete(machine);
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-      expect(smolvmArgs(spawner.calls)).toEqual([
-        ["machine", "status", "--name", "dev-01234567", "--json"],
-      ]);
-    }),
+        yield* runtime.delete(machine);
+
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+        ]);
+      })
   );
 
   it.effect(
@@ -749,31 +905,43 @@ layer(NodeServices.layer)((it) => {
 
         yield* runtime.delete(machine);
 
-        expect(smolvmArgs(spawner.calls)).toEqual([
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "status", "--name", "dev-01234567", "--json"],
           ["machine", "stop", "--name", "dev-01234567", "--timeout", "0"],
-          ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
+          [
+            "systemctl",
+            "show",
+            "--property=LoadState",
+            "--value",
+            "smolvm-vm-dev-01234567.scope",
+          ],
           ["machine", "delete", "--name", "dev-01234567", "--force"],
         ]);
-      }),
+      })
   );
 
   it.effect("delete of a stopped machine deletes it without a stop", () =>
     Effect.gen(function* () {
       const spawner = scripted((call) =>
-        call.args[1] === "status" ? status("stopped") : undefined,
+        call.args[1] === "status" ? status("stopped") : undefined
       );
 
       const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
       yield* runtime.delete(machine);
 
-      expect(smolvmArgs(spawner.calls)).toEqual([
+      expect(smolvmArgs(spawner.calls)).toStrictEqual([
         ["machine", "status", "--name", "dev-01234567", "--json"],
-        ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
+        [
+          "systemctl",
+          "show",
+          "--property=LoadState",
+          "--value",
+          "smolvm-vm-dev-01234567.scope",
+        ],
         ["machine", "delete", "--name", "dev-01234567", "--force"],
       ]);
-    }),
+    })
   );
 
   it.effect(
@@ -792,14 +960,25 @@ layer(NodeServices.layer)((it) => {
 
         yield* runtime.delete(machine);
 
-        expect(smolvmArgs(spawner.calls)).toEqual([
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "status", "--name", "dev-01234567", "--json"],
-          ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
-          ["systemctl", "kill", "--signal=SIGKILL", "smolvm-vm-dev-01234567.scope"],
+          [
+            "systemctl",
+            "show",
+            "--property=LoadState",
+            "--value",
+            "smolvm-vm-dev-01234567.scope",
+          ],
+          [
+            "systemctl",
+            "kill",
+            "--signal=SIGKILL",
+            "smolvm-vm-dev-01234567.scope",
+          ],
           ["machine", "delete", "--name", "dev-01234567", "--force"],
           ["systemctl", "reset-failed", "smolvm-vm-dev-01234567.scope"],
         ]);
-      }),
+      })
   );
 
   it.effect(
@@ -824,15 +1003,26 @@ layer(NodeServices.layer)((it) => {
 
         yield* runtime.delete(machine);
 
-        expect(smolvmArgs(spawner.calls)).toEqual([
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "status", "--name", "dev-01234567", "--json"],
           ["machine", "stop", "--name", "dev-01234567", "--timeout", "0"],
-          ["systemctl", "show", "--property=LoadState", "--value", "smolvm-vm-dev-01234567.scope"],
-          ["systemctl", "kill", "--signal=SIGKILL", "smolvm-vm-dev-01234567.scope"],
+          [
+            "systemctl",
+            "show",
+            "--property=LoadState",
+            "--value",
+            "smolvm-vm-dev-01234567.scope",
+          ],
+          [
+            "systemctl",
+            "kill",
+            "--signal=SIGKILL",
+            "smolvm-vm-dev-01234567.scope",
+          ],
           ["machine", "delete", "--name", "dev-01234567", "--force"],
           ["systemctl", "reset-failed", "smolvm-vm-dev-01234567.scope"],
         ]);
-      }),
+      })
   );
 
   it.effect(
@@ -856,14 +1046,16 @@ layer(NodeServices.layer)((it) => {
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
         const error = yield* Effect.flip(runtime.delete(machine));
 
-        expect(error.message).toBe("systemctl kill smolvm-vm-dev-01234567.scope exited 1: Failed");
-        expect(smolvmArgs(spawner.calls).at(-1)).toEqual([
+        expect(error.message).toBe(
+          "systemctl kill smolvm-vm-dev-01234567.scope exited 1: Failed"
+        );
+        expect(smolvmArgs(spawner.calls).at(-1)).toStrictEqual([
           "systemctl",
           "kill",
           "--signal=SIGKILL",
           "smolvm-vm-dev-01234567.scope",
         ]);
-      }),
+      })
   );
 
   it.effect(
@@ -871,7 +1063,9 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const spawner = scripted((call) =>
-          call.args[1] === "exec" ? { exitCode: 3, stdout: "out\n", stderr: "err\n" } : undefined,
+          call.args[1] === "exec"
+            ? { exitCode: 3, stdout: "out\n", stderr: "err\n" }
+            : undefined
         );
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
@@ -886,11 +1080,11 @@ layer(NodeServices.layer)((it) => {
               Effect.all([
                 Stream.mkString(Stream.decodeText(execution.output)),
                 execution.exitCode,
-              ]),
-          ),
+              ])
+          )
         );
 
-        expect([output, exitCode]).toEqual(["out\nerr\n", 3]);
+        expect([output, exitCode]).toStrictEqual(["out\nerr\n", 3]);
         expect(spawner.calls.at(-1)).toMatchObject({
           args: [
             "machine",
@@ -907,22 +1101,22 @@ layer(NodeServices.layer)((it) => {
           ],
           stdin: "the input",
         });
-      }),
+      })
   );
 
   it.effect("exec runs the command as the user it names", () =>
     Effect.gen(function* () {
-      const spawner = scripted(() => undefined);
+      const spawner = scripted(() => {});
       const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
       yield* Effect.scoped(
         Effect.flatMap(
           runtime.exec(machine, { argv: ["true"], user: "user" }),
-          (execution) => execution.exitCode,
-        ),
+          (execution) => execution.exitCode
+        )
       );
 
-      expect(spawner.calls.at(-1)?.args).toEqual([
+      expect(spawner.calls.at(-1)?.args).toStrictEqual([
         "machine",
         "exec",
         "--name",
@@ -933,7 +1127,7 @@ layer(NodeServices.layer)((it) => {
         "--",
         "true",
       ]);
-    }),
+    })
   );
 
   it.effect(
@@ -941,58 +1135,73 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
-        const spawner = scripted(() => undefined);
-        const missing = join(settings.prefix, "missing");
+        const spawner = scripted(() => {});
+        const missing = path.join(settings.prefix, "missing");
 
         const failing = ChildProcessSpawner.make((command) =>
-          ChildProcess.isStandardCommand(command) && command.args[0] === "machine"
+          ChildProcess.isStandardCommand(command) &&
+          command.args[0] === "machine"
             ? Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (node) =>
-                node.spawn(ChildProcess.make(missing, command.args)),
+                node.spawn(ChildProcess.make(missing, command.args))
               ).pipe(Effect.provide(NodeServices.layer))
             : Effect.flatMap(ChildProcessSpawner.ChildProcessSpawner, (inner) =>
-                inner.spawn(command),
-              ).pipe(Effect.provide(spawner.layer)),
+                inner.spawn(command)
+              ).pipe(Effect.provide(spawner.layer))
         );
 
         const runtime = yield* make(settings, 0).pipe(
           Effect.provide(
             Layer.merge(
               NodeServices.layer,
-              Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, failing),
-            ),
-          ),
+              Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, failing)
+            )
+          )
         );
 
         const error = yield* Effect.flip(
-          Effect.scoped(runtime.exec(machine, { argv: ["/bin/sh", "-c", "the secret script"] })),
+          Effect.scoped(
+            runtime.exec(machine, {
+              argv: ["/bin/sh", "-c", "the secret script"],
+            })
+          )
         );
 
-        expect(error.message).toBe("smolvm machine exec dev-01234567: NotFound: spawn");
-      }),
+        expect(error.message).toBe(
+          "smolvm machine exec dev-01234567: NotFound: spawn"
+        );
+      })
   );
 
-  it.effect("admit refuses with Capacity when running machines would pass the RAM budget", () =>
-    Effect.gen(function* () {
-      const spawner = scripted((call) =>
-        call.args[1] === "status" ? status("running") : undefined,
-      );
+  it.effect(
+    "admit refuses with Capacity when running machines would pass the RAM budget",
+    () =>
+      Effect.gen(function* () {
+        const spawner = scripted((call) =>
+          call.args[1] === "status" ? status("running") : undefined
+        );
 
-      const runtime = yield* runtimeOf(yield* prepared(), spawner);
-      const other = { ...machine, id: "linux_other", name: "other", ramMib: 3072 };
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-      const error = yield* Effect.flip(
-        runtime.admit({
-          action: "startMachine",
-          machine,
-          machines: [
-            { machine, booting: true },
-            { machine: other, booting: false },
-          ],
-        }),
-      );
+        const other = {
+          ...machine,
+          id: "linux_other",
+          name: "other",
+          ramMib: 3072,
+        };
 
-      expect(error._tag).toBe("Capacity");
-    }),
+        const error = yield* Effect.flip(
+          runtime.admit({
+            action: "startMachine",
+            machine,
+            machines: [
+              { machine, booting: true },
+              { machine: other, booting: false },
+            ],
+          })
+        );
+
+        expect(error._tag).toBe("Capacity");
+      })
   );
 
   it.effect(
@@ -1005,18 +1214,31 @@ layer(NodeServices.layer)((it) => {
         ]);
 
         const spawner = scripted((call) =>
-          call.args[0] === "machine" ? replies.get(call.args[3] ?? "") : undefined,
+          call.args[0] === "machine"
+            ? replies.get(call.args[3] ?? "")
+            : undefined
         );
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
         const held = [
           { machine, booting: false },
-          { machine: { ...machine, id: "linux_two", name: "two", ramMib: 1024 }, booting: false },
-          { machine: { ...machine, id: "linux_boot", name: "boot", ramMib: 512 }, booting: true },
+          {
+            machine: { ...machine, id: "linux_two", name: "two", ramMib: 1024 },
+            booting: false,
+          },
+          {
+            machine: {
+              ...machine,
+              id: "linux_boot",
+              name: "boot",
+              ramMib: 512,
+            },
+            booting: true,
+          },
         ];
 
-        const next = (ramMib: number) => {
+        const admitNext = (ramMib: number) => {
           const target = { ...machine, id: "linux_next", name: "next", ramMib };
 
           return runtime.admit({
@@ -1028,26 +1250,29 @@ layer(NodeServices.layer)((it) => {
 
         const capacity = yield* runtime.capacity(held);
 
-        yield* next(4096 - 2560);
+        yield* admitNext(4096 - 2560);
 
-        const refused = yield* Effect.flip(next(4096 - 2560 + 1));
+        const refused = yield* Effect.flip(admitNext(4096 - 2560 + 1));
 
-        replies.set("two-01234567", { exitCode: 1, stderr: "Error: database is locked\n" });
+        replies.set("two-01234567", {
+          exitCode: 1,
+          stderr: "Error: database is locked\n",
+        });
 
         const unread = yield* runtime.capacity(held);
 
-        expect(capacity).toEqual([
+        expect(capacity).toStrictEqual([
           { resource: "cpu", used: 4 },
           { resource: "ramMib", limit: 4096, used: 2560 },
         ]);
         expect(refused.message).toContain(
-          "needs 1537M of RAM, and 1.5G of the host's 4G budget is free",
+          "needs 1537M of RAM, and 1.5G of the host's 4G budget is free"
         );
-        expect(unread).toEqual([
+        expect(unread).toStrictEqual([
           { resource: "cpu", unread: ["linux_two"] },
           { resource: "ramMib", limit: 4096, unread: ["linux_two"] },
         ]);
-      }),
+      })
   );
 
   const ramCheckpoint: CheckpointRef = {
@@ -1062,7 +1287,8 @@ layer(NodeServices.layer)((it) => {
 
   const unknownCopy: Reply = {
     exitCode: 1,
-    stderr: "Error: config operation failed: machine status: machine 'copy-abcdefab' not found\n",
+    stderr:
+      "Error: config operation failed: machine status: machine 'copy-abcdefab' not found\n",
   };
 
   const copy: MachineRef = {
@@ -1077,29 +1303,35 @@ layer(NodeServices.layer)((it) => {
     Effect.gen(function* () {
       const runtime = yield* runtimeOf(
         yield* prepared(),
-        scripted(() => undefined),
+        scripted(() => {})
       );
 
       expect(runtime.pin).toBe(pin);
-    }),
+    })
   );
 
-  it.effect("startup empties the forks area and makes the runtime's directories", () =>
-    Effect.gen(function* () {
-      const settings = yield* prepared();
-      const paths = pathsIn(settings.stateDir);
+  it.effect(
+    "startup empties the forks area and makes the runtime's directories",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
+        const paths = pathsIn(settings.stateDir);
 
-      const runtime = yield* runtimeOf(
-        settings,
-        scripted(() => undefined),
-      );
+        const runtime = yield* runtimeOf(
+          settings,
+          scripted(() => {})
+        );
 
-      yield* mkdir(join(paths.forks, "old-01234567", "old-01234567.checkpoint"));
-      yield* runtime.startup([machine]);
+        yield* mkdir(
+          path.join(paths.forks, "old-01234567", "old-01234567.checkpoint")
+        );
+        yield* runtime.startup([machine]);
 
-      expect(yield* readDirectory(paths.forks)).toEqual([]);
-      expect((yield* readDirectory(settings.stateDir)).sort()).toEqual(["checkpoints", "forks"]);
-    }),
+        expect(yield* readDirectory(paths.forks)).toStrictEqual([]);
+        expect(
+          (yield* readDirectory(settings.stateDir)).toSorted()
+        ).toStrictEqual(["checkpoints", "forks"]);
+      })
   );
 
   it.effect(
@@ -1108,15 +1340,23 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         let reply = status("stopped");
 
-        const spawner = scripted((call) => (call.args[1] === "status" ? reply : undefined));
+        const spawner = scripted((call) =>
+          call.args[1] === "status" ? reply : undefined
+        );
+
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
-        const capture = yield* Effect.flip(runtime.capture(machine, ramCheckpoint));
+        const capture = yield* Effect.flip(
+          runtime.capture(machine, ramCheckpoint)
+        );
+
         const fork = yield* Effect.flip(runtime.fork(machine, copy));
 
         reply = unknown;
 
-        const missing = yield* Effect.flip(runtime.capture(machine, ramCheckpoint));
+        const missing = yield* Effect.flip(
+          runtime.capture(machine, ramCheckpoint)
+        );
 
         reply = status("unreachable");
 
@@ -1124,13 +1364,17 @@ layer(NodeServices.layer)((it) => {
 
         reply = status("frozen");
 
-        const frozen = yield* Effect.flip(runtime.capture(machine, ramCheckpoint));
+        const frozen = yield* Effect.flip(
+          runtime.capture(machine, ramCheckpoint)
+        );
 
         reply = status("paused");
 
         const paused = yield* Effect.flip(runtime.fork(machine, copy));
 
-        expect([capture, fork, missing, unreachable, frozen, paused].map(failure)).toEqual([
+        expect(
+          [capture, fork, missing, unreachable, frozen, paused].map(failure)
+        ).toStrictEqual([
           [
             "WrongState",
             "a smolvm checkpoint holds a running machine's RAM, and linux_dev is stopped: start it first",
@@ -1139,7 +1383,10 @@ layer(NodeServices.layer)((it) => {
             "WrongState",
             "a fork copies a running machine, RAM included, and linux_dev is stopped: start it first",
           ],
-          ["Missing", "machine linux_dev is missing from the linux runtime; delete it"],
+          [
+            "Missing",
+            "machine linux_dev is missing from the linux runtime; delete it",
+          ],
           [
             "WrongState",
             "smolvm reads machine linux_dev unreachable: its VM runs, but its agent doesn't answer; start it to boot it again",
@@ -1153,7 +1400,7 @@ layer(NodeServices.layer)((it) => {
             "smolvm reads machine linux_dev paused, and copies only a running machine",
           ],
         ]);
-        expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual([
+        expect(smolvmArgs(spawner.calls).map((args) => args[1])).toStrictEqual([
           "status",
           "status",
           "status",
@@ -1161,38 +1408,40 @@ layer(NodeServices.layer)((it) => {
           "status",
           "status",
         ]);
-      }),
+      })
   );
 
-  it.effect("a ram capture goes into the host's one store, with no history", () =>
-    Effect.gen(function* () {
-      const settings = yield* prepared();
+  it.effect(
+    "a ram capture goes into the host's one store, with no history",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
 
-      const spawner = scripted((call) =>
-        call.args[1] === "status" ? status("running") : undefined,
-      );
+        const spawner = scripted((call) =>
+          call.args[1] === "status" ? status("running") : undefined
+        );
 
-      const runtime = yield* runtimeOf(settings, spawner);
-      const store = join(settings.stateDir, "checkpoints");
+        const runtime = yield* runtimeOf(settings, spawner);
+        const store = path.join(settings.stateDir, "checkpoints");
 
-      yield* runtime.capture(machine, ramCheckpoint);
+        yield* runtime.capture(machine, ramCheckpoint);
 
-      expect(smolvmArgs(spawner.calls)).toEqual([
-        ["machine", "status", "--name", "dev-01234567", "--json"],
-        [
-          "machine",
-          "checkpoint",
-          "--name",
-          "dev-01234567",
-          "--store",
-          store,
-          "--output",
-          join(store, "snap-fedcba98.checkpoint"),
-          "--history",
-          "0",
-        ],
-      ]);
-    }),
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
+          ["machine", "status", "--name", "dev-01234567", "--json"],
+          [
+            "machine",
+            "checkpoint",
+            "--name",
+            "dev-01234567",
+            "--store",
+            store,
+            "--output",
+            path.join(store, "snap-fedcba98.checkpoint"),
+            "--history",
+            "0",
+          ],
+        ]);
+      })
   );
 
   it.effect(
@@ -1200,19 +1449,23 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
-        const spawner = scripted(() => undefined);
+        const spawner = scripted(() => {});
         const runtime = yield* runtimeOf(settings, spawner);
 
         yield* runtime.restore(ramCheckpoint, copy);
 
-        expect(smolvmArgs(spawner.calls)).toEqual([
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
           [
             "machine",
             "create",
             "--name",
             "copy-abcdefab",
             "--from",
-            join(settings.stateDir, "checkpoints", "snap-fedcba98.checkpoint"),
+            path.join(
+              settings.stateDir,
+              "checkpoints",
+              "snap-fedcba98.checkpoint"
+            ),
             "--restore-cache-entries",
             "0",
           ],
@@ -1228,18 +1481,21 @@ layer(NodeServices.layer)((it) => {
           ],
           ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
         ]);
-      }),
+      })
   );
 
   it.effect("a ram restore that got its source's old port keeps it", () =>
     Effect.gen(function* () {
-      const spawner = scripted(() => undefined);
+      const spawner = scripted(() => {});
       const runtime = yield* runtimeOf(yield* prepared(), spawner);
 
       yield* runtime.restore(ramCheckpoint, { ...copy, port: 10_000 });
 
-      expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(["create", "start"]);
-    }),
+      expect(smolvmArgs(spawner.calls).map((args) => args[1])).toStrictEqual([
+        "create",
+        "start",
+      ]);
+    })
   );
 
   it.effect(
@@ -1247,24 +1503,53 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const settings = yield* prepared();
-        const spawner = scripted(() => undefined);
+        const spawner = scripted(() => {});
         const runtime = yield* runtimeOf(settings, spawner);
         const arm = yield* runtimeOf({ ...settings, arch: "arm64" }, spawner);
         const before = spawner.calls.length;
 
         const refused = [
-          yield* Effect.flip(runtime.sizable(machine, machine, { ...machine, ramMib: 32 }, false)),
-          yield* Effect.flip(runtime.sizable(machine, machine, { ...machine, cpu: 256 }, false)),
-          yield* Effect.flip(runtime.sizable(machine, machine, { ...machine, ramMib: 2100 }, true)),
-          yield* Effect.flip(arm.sizable(machine, machine, { ...machine, cpu: 4 }, true)),
+          yield* Effect.flip(
+            runtime.sizable(machine, machine, { ...machine, ramMib: 32 }, false)
+          ),
+          yield* Effect.flip(
+            runtime.sizable(machine, machine, { ...machine, cpu: 256 }, false)
+          ),
+          yield* Effect.flip(
+            runtime.sizable(
+              machine,
+              machine,
+              { ...machine, ramMib: 2100 },
+              true
+            )
+          ),
+          yield* Effect.flip(
+            arm.sizable(machine, machine, { ...machine, cpu: 4 }, true)
+          ),
         ];
 
-        yield* arm.sizable(machine, machine, { ...machine, cpu: 4, ramMib: 2100 }, false);
-        yield* runtime.sizable(machine, machine, { ...machine, cpu: 255, ramMib: 2176 }, true);
+        yield* arm.sizable(
+          machine,
+          machine,
+          { ...machine, cpu: 4, ramMib: 2100 },
+          false
+        );
+        yield* runtime.sizable(
+          machine,
+          machine,
+          { ...machine, cpu: 255, ramMib: 2176 },
+          true
+        );
 
-        expect(refused.map(failure)).toEqual([
-          ["Unsizable", "smolvm gives a machine at least 64M of RAM, and linux_dev would have 32M"],
-          ["Unsizable", "smolvm's CLI takes at most 255 vCPUs, and linux_dev would have 256"],
+        expect(refused.map(failure)).toStrictEqual([
+          [
+            "Unsizable",
+            "smolvm gives a machine at least 64M of RAM, and linux_dev would have 32M",
+          ],
+          [
+            "Unsizable",
+            "smolvm's CLI takes at most 255 vCPUs, and linux_dev would have 256",
+          ],
           [
             "Unsizable",
             "smolvm grows a running machine's RAM in 128M steps, and linux_dev's would grow from 2G to 2100M",
@@ -1274,8 +1559,8 @@ layer(NodeServices.layer)((it) => {
             "smolvm grows a running machine's vCPUs only on x86_64, and this host is arm64: give linux_dev more vCPUs once it is stopped",
           ],
         ]);
-        expect(spawner.calls.length).toBe(before);
-      }),
+        expect(spawner.calls).toHaveLength(before);
+      })
   );
 
   it.effect(
@@ -1283,16 +1568,25 @@ layer(NodeServices.layer)((it) => {
     () =>
       Effect.gen(function* () {
         const spawner = scripted((call) =>
-          call.args[1] === "status" ? status("running") : undefined,
+          call.args[1] === "status" ? status("running") : undefined
         );
 
         const runtime = yield* runtimeOf(yield* prepared(), spawner);
-        const larger = { ...copy, port: 10_000, cpu: 4, ramMib: 4096, diskGib: 30 };
+
+        const larger = {
+          ...copy,
+          port: 10_000,
+          cpu: 4,
+          ramMib: 4096,
+          diskGib: 30,
+        };
 
         yield* runtime.restore(ramCheckpoint, larger);
         yield* runtime.fork(machine, { ...larger, cpu: 2 });
 
-        const resizes = smolvmArgs(spawner.calls).filter((args) => args[1] === "resize");
+        const resizes = smolvmArgs(spawner.calls).filter(
+          (args) => args[1] === "resize"
+        );
 
         const grow = (flag: string, size: string) => [
           "machine",
@@ -1303,7 +1597,7 @@ layer(NodeServices.layer)((it) => {
           size,
         ];
 
-        expect(resizes).toEqual([
+        expect(resizes).toStrictEqual([
           grow("--mem", "4096"),
           grow("--cpus", "4"),
           grow("--storage", "30"),
@@ -1313,9 +1607,9 @@ layer(NodeServices.layer)((it) => {
         expect(
           smolvmArgs(spawner.calls)
             .slice(0, 3)
-            .map((args) => args[1]),
-        ).toEqual(["create", "start", "resize"]);
-      }),
+            .map((args) => args[1])
+        ).toStrictEqual(["create", "start", "resize"]);
+      })
   );
 
   it.effect(
@@ -1328,33 +1622,41 @@ layer(NodeServices.layer)((it) => {
           const spawner = scripted((call) =>
             call.args[1] === failing
               ? { exitCode: 1, stderr: "Error: database is locked\n" }
-              : undefined,
+              : undefined
           );
 
           const runtime = yield* runtimeOf(yield* prepared(), spawner);
-          const error = yield* Effect.flip(runtime.restore(ramCheckpoint, larger));
+
+          const error = yield* Effect.flip(
+            runtime.restore(ramCheckpoint, larger)
+          );
+
           const steps = ["create", "update", "start", "resize"];
 
           expect(error.message).toBe(
-            `smolvm machine ${failing} copy-abcdefab exited 1: Error: database is locked`,
+            `smolvm machine ${failing} copy-abcdefab exited 1: Error: database is locked`
           );
-          expect(smolvmArgs(spawner.calls).map((args) => args[1])).toEqual(
-            steps.slice(0, steps.indexOf(failing) + 1),
-          );
+          expect(
+            smolvmArgs(spawner.calls).map((args) => args[1])
+          ).toStrictEqual(steps.slice(0, steps.indexOf(failing) + 1));
         }
-      }),
+      })
   );
 
   const forking = (create: Reply) =>
     scripted((call) => {
       if (call.args[1] === "checkpoint") {
-        mkdirSync(call.args[call.args.indexOf("--output") + 1] ?? "", { recursive: true });
+        mkdirSync(call.args[call.args.indexOf("--output") + 1] ?? "", {
+          recursive: true,
+        });
 
         return {};
       }
 
       if (call.args[1] === "status") {
-        return call.args[3] === "dev-01234567" ? status("running") : unknownCopy;
+        return call.args[3] === "dev-01234567"
+          ? status("running")
+          : unknownCopy;
       }
 
       return call.args[1] === "create" ? create : undefined;
@@ -1367,12 +1669,12 @@ layer(NodeServices.layer)((it) => {
         const settings = yield* prepared();
         const spawner = forking({});
         const runtime = yield* runtimeOf(settings, spawner);
-        const store = join(settings.stateDir, "forks", "copy-abcdefab");
+        const store = path.join(settings.stateDir, "forks", "copy-abcdefab");
 
         yield* runtime.startup([machine]);
         yield* runtime.fork(machine, copy);
 
-        expect(smolvmArgs(spawner.calls)).toEqual([
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
           ["machine", "status", "--name", "dev-01234567", "--json"],
           [
             "machine",
@@ -1382,7 +1684,7 @@ layer(NodeServices.layer)((it) => {
             "--store",
             store,
             "--output",
-            join(store, "copy-abcdefab.checkpoint"),
+            path.join(store, "copy-abcdefab.checkpoint"),
             "--history",
             "0",
           ],
@@ -1392,7 +1694,7 @@ layer(NodeServices.layer)((it) => {
             "--name",
             "copy-abcdefab",
             "--from",
-            join(store, "copy-abcdefab.checkpoint"),
+            path.join(store, "copy-abcdefab.checkpoint"),
             "--restore-cache-entries",
             "0",
           ],
@@ -1408,8 +1710,10 @@ layer(NodeServices.layer)((it) => {
           ],
           ["machine", "start", "--name", "copy-abcdefab", "--branchable"],
         ]);
-        expect(yield* readDirectory(join(settings.stateDir, "forks"))).toEqual([]);
-      }),
+        expect(
+          yield* readDirectory(path.join(settings.stateDir, "forks"))
+        ).toStrictEqual([]);
+      })
   );
 
   it.effect("a fork that fails still removes its store", () =>
@@ -1418,47 +1722,55 @@ layer(NodeServices.layer)((it) => {
 
       const runtime = yield* runtimeOf(
         settings,
-        forking({ exitCode: 1, stderr: "Error: no space\n" }),
+        forking({ exitCode: 1, stderr: "Error: no space\n" })
       );
 
       yield* runtime.startup([machine]);
 
       const error = yield* Effect.flip(runtime.fork(machine, copy));
 
-      expect(error.message).toBe("smolvm machine create copy-abcdefab exited 1: Error: no space");
-      expect(yield* readDirectory(join(settings.stateDir, "forks"))).toEqual([]);
-    }),
+      expect(error.message).toBe(
+        "smolvm machine create copy-abcdefab exited 1: Error: no space"
+      );
+      expect(
+        yield* readDirectory(path.join(settings.stateDir, "forks"))
+      ).toStrictEqual([]);
+    })
   );
 
-  it.effect("deleting a ram checkpoint removes its directory, then prunes the store", () =>
-    Effect.gen(function* () {
-      const settings = yield* prepared();
-      const spawner = scripted(() => undefined);
-      const runtime = yield* runtimeOf(settings, spawner);
-      const store = join(settings.stateDir, "checkpoints");
+  it.effect(
+    "deleting a ram checkpoint removes its directory, then prunes the store",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
+        const spawner = scripted(() => {});
+        const runtime = yield* runtimeOf(settings, spawner);
+        const store = path.join(settings.stateDir, "checkpoints");
 
-      yield* mkdir(join(store, "snap-fedcba98.checkpoint", "objects"));
-      yield* mkdir(join(store, "objects"));
-      yield* runtime.deleteCheckpoint(ramCheckpoint);
+        yield* mkdir(path.join(store, "snap-fedcba98.checkpoint", "objects"));
+        yield* mkdir(path.join(store, "objects"));
+        yield* runtime.deleteCheckpoint(ramCheckpoint);
 
-      expect(yield* readDirectory(store)).toEqual(["objects"]);
-      expect(smolvmArgs(spawner.calls)).toEqual([
-        ["machine", "checkpoint-prune", "--store", store],
-      ]);
-    }),
+        expect(yield* readDirectory(store)).toStrictEqual(["objects"]);
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([
+          ["machine", "checkpoint-prune", "--store", store],
+        ]);
+      })
   );
 
-  it.effect("deleting a ram checkpoint from a store no capture has written prunes nothing", () =>
-    Effect.gen(function* () {
-      const settings = yield* prepared();
-      const spawner = scripted(() => undefined);
-      const runtime = yield* runtimeOf(settings, spawner);
+  it.effect(
+    "deleting a ram checkpoint from a store no capture has written prunes nothing",
+    () =>
+      Effect.gen(function* () {
+        const settings = yield* prepared();
+        const spawner = scripted(() => {});
+        const runtime = yield* runtimeOf(settings, spawner);
 
-      yield* runtime.startup([machine]);
-      yield* runtime.deleteCheckpoint(ramCheckpoint);
+        yield* runtime.startup([machine]);
+        yield* runtime.deleteCheckpoint(ramCheckpoint);
 
-      expect(smolvmArgs(spawner.calls)).toEqual([]);
-    }),
+        expect(smolvmArgs(spawner.calls)).toStrictEqual([]);
+      })
   );
 });
 
@@ -1474,79 +1786,106 @@ const observed = (name: string): MachineRef => ({
 
 const machines = ["a", "b", "c", "d"].map(observed);
 
-const logging = (logged: Array<unknown>) =>
+const logging = (logged: unknown[]) =>
   Logger.layer([Logger.make(({ message }) => logged.push(message))]);
 
-it.effect("each machine's state comes back in the machines' order", () =>
-  Effect.gen(function* () {
-    const states: ReadonlyArray<MachineState> = ["running", "stopped", "missing", "running"];
-
-    const read = yield* observeEach(machines, (machine) =>
-      Effect.succeed(states[machines.indexOf(machine)] ?? "unknown"),
-    );
-
-    expect(read).toEqual(states);
-  }),
-);
-
-it.effect("a read that fails reads unknown, warns why, and leaves the others", () =>
-  Effect.gen(function* () {
-    const logged: Array<unknown> = [];
-
-    const read = yield* observeEach(machines, (machine) =>
-      machine.name === "b"
-        ? Effect.fail(new Internal({ message: "smolvm machine status exited 1" }))
-        : Effect.succeed<MachineState>("running"),
-    ).pipe(Effect.provide(logging(logged)));
-
-    expect(read).toEqual(["running", "unknown", "running", "running"]);
-    expect(logged).toEqual([["couldn't read linux_b's state: smolvm machine status exited 1"]]);
-  }),
-);
-
-it.effect(
-  "a read that takes over machineReadWait reads unknown, and the others don't wait on it",
-  () =>
+layer(NodeServices.layer)((it) => {
+  it.effect("each machine's state comes back in the machines' order", () =>
     Effect.gen(function* () {
-      const logged: Array<unknown> = [];
+      const states: readonly MachineState[] = [
+        "running",
+        "stopped",
+        "missing",
+        "running",
+      ];
 
-      const fiber = yield* Effect.forkChild(
-        observeEach(machines, (machine) =>
-          machine.name === "c" ? Effect.never : Effect.succeed<MachineState>("stopped"),
-        ).pipe(Effect.provide(logging(logged))),
+      const read = yield* observeEach(machines, (ref) =>
+        Effect.succeed(states[machines.indexOf(ref)] ?? "unknown")
       );
 
-      yield* TestClock.adjust(machineReadWait);
+      expect(read).toStrictEqual(states);
+    })
+  );
 
-      const read = yield* Fiber.join(fiber);
+  it.effect(
+    "a read that fails reads unknown, warns why, and leaves the others",
+    () =>
+      Effect.gen(function* () {
+        const logged: unknown[] = [];
 
-      expect(read).toEqual(["stopped", "stopped", "unknown", "stopped"]);
-      expect(logged).toEqual([
-        [`couldn't read linux_c's state: no answer within ${Duration.format(machineReadWait)}`],
-      ]);
-    }),
-);
+        const read = yield* observeEach(machines, (ref) =>
+          ref.name === "b"
+            ? Effect.fail(
+                new Internal({ message: "smolvm machine status exited 1" })
+              )
+            : Effect.succeed<MachineState>("running")
+        ).pipe(Effect.provide(logging(logged)));
 
-it.effect("no more than 8 reads run at once", () =>
-  Effect.gen(function* () {
-    let running = 0;
-    let most = 0;
+        expect(read).toStrictEqual([
+          "running",
+          "unknown",
+          "running",
+          "running",
+        ]);
+        expect(logged).toStrictEqual([
+          ["couldn't read linux_b's state: smolvm machine status exited 1"],
+        ]);
+      })
+  );
 
-    yield* observeEach(
-      Array.from({ length: 12 }, (_, index) => observed(`m${index}`)),
-      () =>
-        Effect.gen(function* (): Effect.fn.Return<MachineState> {
-          running += 1;
-          most = Math.max(most, running);
+  it.effect(
+    "a read that takes over machineReadWait reads unknown, and the others don't wait on it",
+    () =>
+      Effect.gen(function* () {
+        const logged: unknown[] = [];
 
-          yield* Effect.yieldNow;
+        const fiber = yield* Effect.forkChild(
+          observeEach(machines, (ref) =>
+            ref.name === "c"
+              ? Effect.never
+              : Effect.succeed<MachineState>("stopped")
+          ).pipe(Effect.provide(logging(logged)))
+        );
 
-          running -= 1;
+        yield* TestClock.adjust(machineReadWait);
 
-          return "running" satisfies MachineState;
-        }),
-    );
+        const read = yield* Fiber.join(fiber);
 
-    expect(most).toBe(8);
-  }),
-);
+        expect(read).toStrictEqual([
+          "stopped",
+          "stopped",
+          "unknown",
+          "stopped",
+        ]);
+        expect(logged).toStrictEqual([
+          [
+            `couldn't read linux_c's state: no answer within ${Duration.format(machineReadWait)}`,
+          ],
+        ]);
+      })
+  );
+
+  it.effect("no more than 8 reads run at once", () =>
+    Effect.gen(function* () {
+      let running = 0;
+      let most = 0;
+
+      yield* observeEach(
+        Array.from({ length: 12 }, (_, index) => observed(`m${index}`)),
+        () =>
+          Effect.gen(function* (): Effect.fn.Return<MachineState> {
+            running += 1;
+            most = Math.max(most, running);
+
+            yield* Effect.yieldNow;
+
+            running -= 1;
+
+            return "running" satisfies MachineState;
+          })
+      );
+
+      expect(most).toBe(8);
+    })
+  );
+});

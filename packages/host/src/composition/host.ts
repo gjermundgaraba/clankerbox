@@ -1,24 +1,28 @@
-import { type HostError, Internal } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, type FileSystem, Layer, type Path } from "effect";
-import {
-  type Etag,
-  type HttpClient,
-  type HttpPlatform,
-  HttpRouter,
-  type HttpServer,
-  type HttpServerError,
+import { Internal } from "@gjermundgaraba/clankerbox-sdk";
+import type { HostError } from "@gjermundgaraba/clankerbox-sdk";
+import { Effect, Layer } from "effect";
+import type { FileSystem, Path } from "effect";
+import { HttpRouter } from "effect/http";
+import type {
+  Etag,
+  HttpClient,
+  HttpPlatform,
+  HttpServer,
+  HttpServerError,
 } from "effect/http";
+
 import * as Checkpoints from "../checkpoints.ts";
 import * as Leases from "../leases.ts";
 import * as Machines from "../machines.ts";
-import type { Runtime } from "../runtime.ts";
 import * as BindProbe from "../platform/bind-probe.ts";
 import * as Sqlite from "../platform/sqlite.ts";
 import * as Tailscale from "../platform/tailscale.ts";
-import { routes } from "./routes.ts";
+import type { Runtime } from "../runtime.ts";
 import type { HostSettings } from "../settings.ts";
-import { type CannotStart, startup } from "../startup.ts";
-import * as Store from "../store.ts";
+import { startup } from "../startup.ts";
+import type { CannotStart } from "../startup.ts";
+import type * as Store from "../store.ts";
+import { routes } from "./routes.ts";
 
 export type ServerLayer = Layer.Layer<
   | HttpServer.HttpServer
@@ -31,7 +35,7 @@ export type ServerLayer = Layer.Layer<
 
 export const servicesLayer = <E, R>(
   config: HostSettings,
-  runtime: Layer.Layer<Runtime, E, R>,
+  runtime: Layer.Layer<Runtime, E, R>
 ): Layer.Layer<
   Machines.Machines | Checkpoints.Checkpoints | Store.Store | Runtime,
   HostError | CannotStart | E,
@@ -41,7 +45,7 @@ export const servicesLayer = <E, R>(
     Layer.provideMerge(Machines.layer(config)),
     Layer.provide(startup(config)),
     Layer.provide(Layer.merge(BindProbe.layer, Leases.layer)),
-    Layer.provideMerge(runtime.pipe(Layer.provideMerge(Sqlite.layer(config)))),
+    Layer.provideMerge(runtime.pipe(Layer.provideMerge(Sqlite.layer(config))))
   );
 
 /** What a host is built from: its settings, and the tailnet it joins its machines to, if any. */
@@ -52,9 +56,12 @@ export interface HostLayerConfig extends HostSettings {
 export const hostLayer = <E, R>(
   config: HostLayerConfig,
   runtime: Layer.Layer<Runtime, E, R>,
-  server: ServerLayer,
+  server: ServerLayer
 ): Layer.Layer<
-  HttpServer.HttpServer | Machines.Machines | Checkpoints.Checkpoints | Store.Store,
+  | HttpServer.HttpServer
+  | Machines.Machines
+  | Checkpoints.Checkpoints
+  | Store.Store,
   HostError | CannotStart | E,
   R | FileSystem.FileSystem | HttpClient.HttpClient
 > =>
@@ -65,11 +72,15 @@ export const hostLayer = <E, R>(
           Effect.fail(
             new Internal({
               message: `couldn't listen on ${config.listen.address}:${config.listen.port}: ${String(error.cause)}`,
-            }),
-          ),
-        ),
-      ),
+            })
+          )
+        )
+      )
     ),
     Layer.provideMerge(servicesLayer(config, runtime)),
-    Layer.provide(config.tailnet === undefined ? Layer.empty : Tailscale.layer(config.tailnet)),
+    Layer.provide(
+      config.tailnet === undefined
+        ? Layer.empty
+        : Tailscale.layer(config.tailnet)
+    )
   );

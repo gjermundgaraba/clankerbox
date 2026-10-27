@@ -1,27 +1,29 @@
 import {
-  type CreateRequest,
-  type Declared,
-  type Desired,
-  type Executed,
-  type ExecRequest,
   formatGib,
   formatId,
   formatMib,
-  type HostError,
   Internal,
   loginUser,
-  type Machine,
   NotOffered,
   offered,
   offers,
   PinMismatch,
-  type ResizeRequest,
-  type Sizing,
   Superseded,
-  type TailnetStatus,
   Unsizable,
-  type Usage,
   WrongState,
+} from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  CreateRequest,
+  Declared,
+  Desired,
+  Executed,
+  ExecRequest,
+  HostError,
+  Machine,
+  ResizeRequest,
+  Sizing,
+  TailnetStatus,
+  Usage,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
   Array as Arr,
@@ -37,40 +39,48 @@ import {
   Scope,
   Semaphore,
 } from "effect";
+
+import { checkTailnet, prepare, runCommand, runSetup } from "./guest.ts";
+import type { TailnetReport } from "./guest.ts";
 import { foundOn, idOn, nameOn, newInstance, notFoundOn } from "./ids.ts";
-import { checkTailnet, prepare, runCommand, runSetup, type TailnetReport } from "./guest.ts";
 import { Leases } from "./leases.ts";
 import {
   answer,
   ask,
-  type Born,
   isResting,
-  type Life,
   lifecycle,
-  type MachineActor,
-  type Making,
   phaseOf,
   removal,
-  type Source,
   spawn,
-  type Steps,
   tell,
+} from "./lifecycle.ts";
+import type {
+  Born,
+  Life,
+  MachineActor,
+  Making,
+  Source,
+  Steps,
 } from "./lifecycle.ts";
 import { pickPort, PortProbe } from "./machine-ports.ts";
 import { checkpointRef, machineRef, madeOn, pinnedOn } from "./refs.ts";
 import {
-  type Booting,
-  type MachineRef,
-  type MachineState,
   missing,
   Runtime,
-  type RuntimeError,
   sizedBy,
   stateReadWait,
   timeoutFail,
 } from "./runtime.ts";
-import { checkpointKinds, type HostSettings } from "./settings.ts";
-import { type Intent, Store } from "./store.ts";
+import type {
+  Booting,
+  MachineRef,
+  MachineState,
+  RuntimeError,
+} from "./runtime.ts";
+import { checkpointKinds } from "./settings.ts";
+import type { HostSettings } from "./settings.ts";
+import { Store } from "./store.ts";
+import type { Intent } from "./store.ts";
 import { Tailnet } from "./tailnet.ts";
 
 export interface CreateOptions {
@@ -79,36 +89,50 @@ export interface CreateOptions {
 }
 
 export interface Interface {
-  readonly list: Effect.Effect<ReadonlyArray<Machine>, Internal>;
+  readonly list: Effect.Effect<readonly Machine[], Internal>;
   readonly get: (id: string) => Effect.Effect<Machine, Declared<"getMachine">>;
   readonly create: (
     request: CreateRequest,
-    options?: CreateOptions,
+    options?: CreateOptions
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
-  readonly start: (id: string) => Effect.Effect<Machine, Declared<"startMachine">>;
-  readonly stop: (id: string) => Effect.Effect<Machine, Declared<"stopMachine">>;
-  readonly pause: (id: string) => Effect.Effect<Machine, Declared<"pauseMachine">>;
-  readonly resize: (request: ResizeRequest) => Effect.Effect<Machine, Declared<"resizeMachine">>;
-  readonly delete: (id: string) => Effect.Effect<void, Declared<"deleteMachine">>;
+  readonly start: (
+    id: string
+  ) => Effect.Effect<Machine, Declared<"startMachine">>;
+  readonly stop: (
+    id: string
+  ) => Effect.Effect<Machine, Declared<"stopMachine">>;
+  readonly pause: (
+    id: string
+  ) => Effect.Effect<Machine, Declared<"pauseMachine">>;
+  readonly resize: (
+    request: ResizeRequest
+  ) => Effect.Effect<Machine, Declared<"resizeMachine">>;
+  readonly delete: (
+    id: string
+  ) => Effect.Effect<void, Declared<"deleteMachine">>;
   readonly fork: (
     id: string,
     name: string,
-    sizing?: Sizing,
+    sizing?: Sizing
   ) => Effect.Effect<Machine, Declared<"forkMachine">>;
   readonly restore: (
     checkpoint: string,
     name: string,
-    sizing?: Sizing,
+    sizing?: Sizing
   ) => Effect.Effect<Machine, Declared<"restoreMachine">>;
-  readonly exec: (request: ExecRequest) => Effect.Effect<Executed, Declared<"execMachine">>;
+  readonly exec: (
+    request: ExecRequest
+  ) => Effect.Effect<Executed, Declared<"execMachine">>;
   /**
    * Unlike a machine's state, this is all the reply holds, so a runtime that can't be read fails
    * it; a machine it can't read makes only the rows that count it `unread`.
    */
-  readonly capacity: Effect.Effect<ReadonlyArray<Usage>, RuntimeError>;
+  readonly capacity: Effect.Effect<readonly Usage[], RuntimeError>;
 }
 
-export class Machines extends Context.Service<Machines, Interface>()("@clankerbox/host/Machines") {}
+export class Machines extends Context.Service<Machines, Interface>()(
+  "@clankerbox/host/Machines"
+) {}
 
 const booted = {
   base: "createMachine",
@@ -120,7 +144,10 @@ const joinTimeout = Duration.minutes(3);
 
 const statusOf = (report: TailnetReport | undefined): TailnetStatus => {
   if (report === undefined) {
-    return { state: "failed", error: "the tailnet script reported nothing readable" };
+    return {
+      state: "failed",
+      error: "the tailnet script reported nothing readable",
+    };
   }
 
   if (report.missing) {
@@ -128,13 +155,22 @@ const statusOf = (report: TailnetReport | undefined): TailnetStatus => {
   }
 
   if (report.backend !== "Running") {
-    return { state: "failed", error: `tailscaled is ${report.backend}, not signed in` };
+    return {
+      state: "failed",
+      error: `tailscaled is ${report.backend}, not signed in`,
+    };
   }
 
-  return report.name === undefined ? { state: "joined" } : { state: "joined", name: report.name };
+  return report.name === undefined
+    ? { state: "joined" }
+    : { state: "joined", name: report.name };
 };
 
-const bornOf = (intent: Intent, making: Making | undefined, seen: MachineState): Born => ({
+const bornOf = (
+  intent: Intent,
+  making: Making | undefined,
+  seen: MachineState
+): Born => ({
   name: intent.name,
   desired: intent.desired,
   generation: intent.generation,
@@ -143,9 +179,35 @@ const bornOf = (intent: Intent, making: Making | undefined, seen: MachineState):
   seen,
 });
 
+const inTime = (what: string) =>
+  timeoutFail(
+    stateReadWait,
+    () =>
+      new Internal({
+        message: `${what} didn't answer within ${Duration.format(stateReadWait)}`,
+      })
+  );
+
+const surviving = <A, E>(what: string, work: Effect.Effect<A, E>) =>
+  Effect.catchCauseFilter(work, Cause.findDefect, (_defect, cause) =>
+    Effect.andThen(
+      Effect.logError(`${what} died:\n${Cause.pretty(cause)}`),
+      Effect.fail(
+        new Internal({ message: `${what} died; the host log has why` })
+      )
+    )
+  );
+
 export const make = (
-  config: Pick<HostSettings, "id" | "kind" | "bases" | "machinePorts" | "recheck">,
-): Effect.Effect<Interface, HostError, Store | Runtime | PortProbe | Leases | Scope.Scope> =>
+  config: Pick<
+    HostSettings,
+    "id" | "kind" | "bases" | "machinePorts" | "recheck"
+  >
+): Effect.Effect<
+  Interface,
+  HostError,
+  Store | Runtime | PortProbe | Leases | Scope.Scope
+> =>
   Effect.gen(function* () {
     const store = yield* Store;
     const runtime = yield* Runtime;
@@ -167,43 +229,34 @@ export const make = (
     const pinned = pinnedOn(config.id, runtime.pin);
     const ref = (intent: Intent) => machineRef(config.id, intent);
 
-    const inTime = (what: string) =>
-      timeoutFail(
-        stateReadWait,
-        () =>
-          new Internal({
-            message: `${what} didn't answer within ${Duration.format(stateReadWait)}`,
-          }),
-      );
-
-    const row = (name: string) => found("machine", name, store.findMachine(name));
+    const row = (name: string) =>
+      found("machine", name, store.findMachine(name));
 
     const held = (name: string) =>
       Effect.catchTag(row(name), "NotFound", (gone) =>
-        Effect.fail(new Internal({ message: `${gone.message}, though its actor runs` })),
-      );
-
-    const surviving = <A, E>(what: string, work: Effect.Effect<A, E>) =>
-      Effect.catchCauseFilter(work, Cause.findDefect, (_defect, cause) =>
-        Effect.andThen(
-          Effect.logError(`${what} died:\n${Cause.pretty(cause)}`),
-          Effect.fail(new Internal({ message: `${what} died; the host log has why` })),
-        ),
+        Effect.fail(
+          new Internal({ message: `${gone.message}, though its actor runs` })
+        )
       );
 
     const observeAll = (
-      intents: ReadonlyArray<Intent>,
-    ): Effect.Effect<ReadonlyArray<MachineState>> =>
+      intents: readonly Intent[]
+    ): Effect.Effect<readonly MachineState[]> =>
       intents.length === 0
         ? Effect.succeed([])
-        : surviving(`the ${config.kind} runtime's read`, runtime.observe(intents.map(ref))).pipe(
+        : surviving(
+            `the ${config.kind} runtime's read`,
+            runtime.observe(intents.map(ref))
+          ).pipe(
             inTime(`the ${config.kind} runtime`),
             Effect.catch((error) =>
               Effect.as(
-                Effect.logWarning(`couldn't read the machines' states: ${error.message}`),
-                intents.map((): MachineState => "unknown"),
-              ),
-            ),
+                Effect.logWarning(
+                  `couldn't read the machines' states: ${error.message}`
+                ),
+                intents.map((): MachineState => "unknown")
+              )
+            )
           );
 
     const observeOne = (name: string) =>
@@ -214,8 +267,8 @@ export const make = (
           const [observed] = yield* observeAll([yield* held(name)]);
 
           return observed ?? "unknown";
-        }),
-      ).pipe(Effect.catch(() => Effect.succeed<MachineState>("unknown")));
+        })
+      ).pipe(Effect.orElseSucceed((): MachineState => "unknown"));
 
     const heldMachines = Effect.map(store.machines, (intents) =>
       intents.map((intent) => {
@@ -224,25 +277,31 @@ export const make = (
         return boot === undefined
           ? { machine: ref(intent), booting: false }
           : { machine: boot, booting: true };
-      }),
+      })
     );
 
     const admitted = (action: Booting, machine: MachineRef) =>
       admission.withPermits(1)(
         Effect.gen(function* () {
-          const machines = (yield* heldMachines).map((held) =>
-            held.machine.name === machine.name ? { machine, booting: true } : held,
+          const machines = (yield* heldMachines).map((entry) =>
+            entry.machine.name === machine.name
+              ? { machine, booting: true }
+              : entry
           );
 
           yield* runtime
             .admit({ action, machine, machines })
-            .pipe(inTime(`${action} ${machine.id}: the ${config.kind} runtime's admission check`));
+            .pipe(
+              inTime(
+                `${action} ${machine.id}: the ${config.kind} runtime's admission check`
+              )
+            );
 
           yield* Effect.acquireRelease(
             Effect.sync(() => booting.set(machine.name, machine)),
-            () => Effect.sync(() => booting.delete(machine.name)),
+            () => Effect.sync(() => booting.delete(machine.name))
           );
-        }),
+        })
       );
 
     const resumable = ({ name, pin }: Intent) =>
@@ -251,13 +310,13 @@ export const make = (
         : Effect.fail(
             new PinMismatch({
               message: `machine ${idOf(name)} was paused under ${pin ?? "no pin"}, and this host runs ${runtime.pin ?? "no pin"}; it resumes only under the same one: delete it, or resume it under that one`,
-            }),
+            })
           );
 
     const owning = <A, E extends { readonly message: string }>(
       what: string,
       life: Life,
-      work: (intent: Intent) => Effect.Effect<A, E, Scope.Scope>,
+      work: (intent: Intent) => Effect.Effect<A, E, Scope.Scope>
     ) =>
       surviving(
         `${what} ${idOf(life.name)}`,
@@ -266,17 +325,23 @@ export const make = (
             yield* leases.own("machine", life.name);
 
             return yield* work(yield* held(life.name));
-          }),
-        ),
+          })
+        )
       ).pipe(
         Effect.tapError((error) =>
-          Effect.logWarning(`${what} ${idOf(life.name)} failed: ${error.message}`),
-        ),
+          Effect.logWarning(
+            `${what} ${idOf(life.name)} failed: ${error.message}`
+          )
+        )
       );
 
     const readyCheckpoint = (name: string) =>
       Effect.gen(function* () {
-        const checkpoint = yield* found("checkpoint", name, store.findCheckpoint(name));
+        const checkpoint = yield* found(
+          "checkpoint",
+          name,
+          store.findCheckpoint(name)
+        );
 
         if (checkpoint.pin !== runtime.pin) {
           return yield* new PinMismatch({
@@ -285,6 +350,33 @@ export const make = (
         }
 
         return checkpoint;
+      });
+
+    const copySpec = (name: string, from: Spec, sizing: Sizing | undefined) =>
+      Effect.gen(function* () {
+        const spec: Spec = {
+          base: from.base,
+          profile: from.profile,
+          ...sizedBy(from, sizing),
+        };
+
+        if (spec.diskGib < from.diskGib) {
+          return yield* new Unsizable({
+            message: `machine ${idOf(name)}'s disk of ${formatGib(spec.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`,
+          });
+        }
+
+        const live = checkpointKinds[config.kind] === "ram";
+
+        if (live && (spec.cpu < from.cpu || spec.ramMib < from.ramMib)) {
+          return yield* new Unsizable({
+            message: `a ${config.kind} copy holds its source's RAM, so machine ${idOf(name)}'s vCPUs and RAM only grow from the source's ${from.cpu} vCPUs and ${formatMib(from.ramMib)}`,
+          });
+        }
+
+        yield* runtime.sizable({ id: idOf(name) }, from, spec, live);
+
+        return spec;
       });
 
     const copied = (source: Source, machine: MachineRef) =>
@@ -304,7 +396,10 @@ export const make = (
             return yield* notFound("checkpoint", name);
           }
 
-          return yield* runtime.restore(checkpointRef(config.id, record), machine);
+          return yield* runtime.restore(
+            checkpointRef(config.id, record),
+            machine
+          );
         }
 
         const { name, instance } = source.from;
@@ -333,15 +428,15 @@ export const make = (
 
             if (making === undefined) {
               return yield* Effect.die(
-                `machine ${idOf(intent.name)} is to be made, but only a deleted one lacks its making`,
+                `machine ${idOf(intent.name)} is to be made, but only a deleted one lacks its making`
               );
             }
 
             yield* Effect.scoped(
               Effect.andThen(
                 admitted(booted[making.source.kind], ref(intent)),
-                copied(making.source, ref(intent)),
-              ),
+                copied(making.source, ref(intent))
+              )
             );
 
             const copy = yield* held(intent.name);
@@ -351,7 +446,7 @@ export const make = (
             }
 
             yield* store.made(intent.name);
-          }),
+          })
         ),
       start: (life) =>
         owning("start", life, (intent) =>
@@ -368,18 +463,20 @@ export const make = (
 
             yield* life.seen === "running"
               ? started
-              : Effect.scoped(Effect.andThen(admitted("startMachine", ref(intent)), started));
+              : Effect.scoped(
+                  Effect.andThen(admitted("startMachine", ref(intent)), started)
+                );
 
             const hostKey = yield* prepare(runtime, ref(intent));
 
             if (hostKey !== undefined) {
               yield* store.hostKey(intent.name, hostKey);
             }
-          }),
+          })
         ),
       join: (life) =>
         Option.match(tailnet, {
-          onNone: () => Effect.succeed(undefined),
+          onNone: () => Effect.undefined,
           onSome: ({ mint }) => {
             const id = idOf(life.name);
             const hostname = id.replaceAll("_", "-");
@@ -393,35 +490,50 @@ export const make = (
                   const intent = yield* held(life.name);
 
                   if (intent.ephemeral) {
-                    return undefined;
+                    return;
                   }
 
                   const machine = ref(intent);
-                  const report = yield* checkTailnet(runtime, machine, hostname);
+
+                  const report = yield* checkTailnet(
+                    runtime,
+                    machine,
+                    hostname
+                  );
 
                   return statusOf(
                     report?.missing === false && report.backend === "NeedsLogin"
-                      ? yield* checkTailnet(runtime, machine, hostname, yield* mint)
-                      : report,
+                      ? yield* checkTailnet(
+                          runtime,
+                          machine,
+                          hostname,
+                          yield* mint
+                        )
+                      : report
                   );
-                }),
-              ),
+                })
+              )
             ).pipe(
               timeoutFail(
                 joinTimeout,
                 () =>
                   new Internal({
                     message: `the join didn't finish within ${Duration.format(joinTimeout)}`,
-                  }),
+                  })
               ),
               Effect.catch((error) =>
-                Effect.succeed<TailnetStatus>({ state: "failed", error: error.message }),
+                Effect.succeed<TailnetStatus>({
+                  state: "failed",
+                  error: error.message,
+                })
               ),
               Effect.tap((status) =>
                 status?.state === "failed"
-                  ? Effect.logWarning(`tailnet join ${id} failed: ${status.error}`)
-                  : Effect.void,
-              ),
+                  ? Effect.logWarning(
+                      `tailnet join ${id} failed: ${status.error}`
+                    )
+                  : Effect.void
+              )
             );
           },
         }),
@@ -432,11 +544,13 @@ export const make = (
 
             if (life.seen === "paused" && runtime.stopResumes) {
               yield* resumable(intent);
-              yield* Effect.scoped(Effect.andThen(admitted("stopMachine", ref(intent)), stopped));
+              yield* Effect.scoped(
+                Effect.andThen(admitted("stopMachine", ref(intent)), stopped)
+              );
             } else {
               yield* stopped;
             }
-          }),
+          })
         ),
       pause: (life) =>
         owning("pause", life, (intent) =>
@@ -444,14 +558,17 @@ export const make = (
             ? runtime.pause(ref(intent))
             : Effect.andThen(
                 Effect.logWarning(
-                  `pause ${idOf(intent.name)}: its VM booted under ${intent.pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`,
+                  `pause ${idOf(intent.name)}: its VM booted under ${intent.pin ?? "an older host"}, and this host runs ${runtime.pin ?? "no pin"}, so it stops it instead`
                 ),
-                runtime.stop(ref(intent)),
-              ),
+                runtime.stop(ref(intent))
+              )
         ),
       remove: (life) =>
         owning("delete", life, (intent) =>
-          Effect.andThen(runtime.delete(ref(intent)), store.removeMachine(intent.name)),
+          Effect.andThen(
+            runtime.delete(ref(intent)),
+            store.removeMachine(intent.name)
+          )
         ),
     };
 
@@ -477,7 +594,7 @@ export const make = (
 
           if (snapshot.status === "error") {
             return yield* Effect.logError(
-              `machine ${idOf(name)}'s lifecycle died, and the host acts on it again only once it starts again: ${String(snapshot.error)}`,
+              `machine ${idOf(name)}'s lifecycle died, and the host acts on it again only once it starts again: ${String(snapshot.error)}`
             );
           }
 
@@ -495,16 +612,18 @@ export const make = (
 
     const actorOf = (name: string) =>
       Effect.suspend(() => {
-        const found = entries.get(name);
+        const actor = entries.get(name);
 
-        return found === undefined ? Effect.fail(notFound("machine", name)) : Effect.succeed(found);
+        return actor === undefined
+          ? Effect.fail(notFound("machine", name))
+          : Effect.succeed(actor);
       });
 
     const resource = (
       intent: Intent,
       life: Life,
       phase: Machine["phase"],
-      observed: MachineState,
+      observed: MachineState
     ) => {
       let machine: Machine = {
         id: idOf(intent.name),
@@ -551,26 +670,30 @@ export const make = (
       return machine;
     };
 
-    const shownAll = (intents: ReadonlyArray<Intent>) =>
+    const shownAll = (intents: readonly Intent[]) =>
       Effect.gen(function* () {
         const live = intents.flatMap((intent) => {
           const actor = entries.get(intent.name);
 
-          return actor === undefined ? [] : [{ intent, snapshot: actor.getSnapshot() }];
+          return actor === undefined
+            ? []
+            : [{ intent, snapshot: actor.getSnapshot() }];
         });
 
         const observed = yield* observeAll(live.map(({ intent }) => intent));
 
         return Arr.zipWith(live, observed, ({ intent, snapshot }, seen) =>
-          resource(intent, snapshot.context, phaseOf(snapshot), seen),
+          resource(intent, snapshot.context, phaseOf(snapshot), seen)
         );
       });
 
     const shown = (name: string) =>
       Effect.flatMap(row(name), (intent) =>
         Effect.flatMap(shownAll([intent]), ([machine]) =>
-          machine === undefined ? Effect.fail(notFound("machine", name)) : Effect.succeed(machine),
-        ),
+          machine === undefined
+            ? Effect.fail(notFound("machine", name))
+            : Effect.succeed(machine)
+        )
       );
 
     const sent = (name: string, actor: MachineActor, desired: Desired) =>
@@ -578,16 +701,17 @@ export const make = (
         Effect.flatMap(store.desire(name, desired), (desire) =>
           Option.match(desire, {
             onNone: () => Effect.fail(notFound("machine", name)),
-            onSome: (recorded) => Effect.as(ask(actor, recorded), recorded.generation),
-          }),
-        ),
+            onSome: (recorded) =>
+              Effect.as(ask(actor, recorded), recorded.generation),
+          })
+        )
       );
 
     const answered = (
       name: string,
       actor: MachineActor,
       desired: Exclude<Desired, "deleted">,
-      generation: number,
+      generation: number
     ) =>
       Effect.gen(function* () {
         const snapshot = yield* answer(actor, generation);
@@ -627,7 +751,8 @@ export const make = (
 
         if (phase === "failed") {
           return yield* (
-            life.error ?? new Internal({ message: `machine ${id} failed, saying nothing` })
+            life.error ??
+              new Internal({ message: `machine ${id} failed, saying nothing` })
           );
         }
 
@@ -649,13 +774,22 @@ export const make = (
           });
         }
 
-        return yield* answered(name, actor, desired, yield* sent(name, actor, desired));
+        return yield* answered(
+          name,
+          actor,
+          desired,
+          yield* sent(name, actor, desired)
+        );
       });
 
     const remove = (name: string) =>
       Effect.gen(function* () {
         const actor = yield* actorOf(name);
-        const snapshot = yield* answer(actor, yield* sent(name, actor, "deleted"));
+
+        const snapshot = yield* answer(
+          actor,
+          yield* sent(name, actor, "deleted")
+        );
 
         if (snapshot.status === "error") {
           return yield* died(name);
@@ -691,7 +825,7 @@ export const make = (
             probe,
             runtime.publishAddress,
             config.machinePorts,
-            yield* store.ports,
+            yield* store.ports
           ),
           desired: "running",
           generation: 1,
@@ -706,12 +840,18 @@ export const make = (
         return intent;
       });
 
-    const making = (name: string, spec: Spec, making: Making, ephemeral: boolean) =>
+    const making = (
+      name: string,
+      spec: Spec,
+      plan: Making,
+      ephemeral: boolean
+    ) =>
       Effect.gen(function* () {
         const actor = yield* Effect.uninterruptible(
-          Effect.flatMap(inserting.withPermits(1)(born(name, spec, ephemeral)), (intent) =>
-            register(bornOf(intent, making, "unknown")),
-          ),
+          Effect.flatMap(
+            inserting.withPermits(1)(born(name, spec, ephemeral)),
+            (intent) => register(bornOf(intent, plan, "unknown"))
+          )
         );
 
         return yield* answered(name, actor, "running", 1);
@@ -737,31 +877,8 @@ export const make = (
           name,
           request_,
           { source: { kind: "base", image }, script: request_.setup },
-          options?.ephemeral ?? false,
+          options?.ephemeral ?? false
         );
-      });
-
-    const copySpec = (name: string, from: Spec, sizing: Sizing | undefined) =>
-      Effect.gen(function* () {
-        const spec: Spec = { base: from.base, profile: from.profile, ...sizedBy(from, sizing) };
-
-        if (spec.diskGib < from.diskGib) {
-          return yield* new Unsizable({
-            message: `machine ${idOf(name)}'s disk of ${formatGib(spec.diskGib)} is below its source's ${formatGib(from.diskGib)}, and a disk only grows`,
-          });
-        }
-
-        const live = checkpointKinds[config.kind] === "ram";
-
-        if (live && (spec.cpu < from.cpu || spec.ramMib < from.ramMib)) {
-          return yield* new Unsizable({
-            message: `a ${config.kind} copy holds its source's RAM, so machine ${idOf(name)}'s vCPUs and RAM only grow from the source's ${from.cpu} vCPUs and ${formatMib(from.ramMib)}`,
-          });
-        }
-
-        yield* runtime.sizable({ id: idOf(name) }, from, spec, live);
-
-        return spec;
       });
 
     const fork = (sourceId: string, name: string, sizing?: Sizing) =>
@@ -778,7 +895,7 @@ export const make = (
           name,
           yield* copySpec(name, from, sizing),
           { source: { kind: "machine", from }, script: undefined },
-          false,
+          false
         );
       });
 
@@ -794,7 +911,7 @@ export const make = (
           name,
           yield* copySpec(name, record, sizing),
           { source: { kind: "checkpoint", record }, script: undefined },
-          false,
+          false
         );
       });
 
@@ -809,12 +926,12 @@ export const make = (
             Effect.gen(function* () {
               yield* leases.share("machine", name);
 
-              const intent = yield* row(name);
+              const current = yield* row(name);
 
-              yield* made(intent);
+              yield* made(current);
 
               const [seen = "unknown"] = yield* runtime
-                .observe([ref(intent)])
+                .observe([ref(current)])
                 .pipe(inTime(`the ${config.kind} runtime`));
 
               if (seen === "missing") {
@@ -829,12 +946,12 @@ export const make = (
                 });
               }
 
-              return intent;
-            }),
+              return current;
+            })
           );
 
           return yield* runCommand(runtime, ref(intent), request);
-        }),
+        })
       );
 
     const resized = (name: string, request: ResizeRequest) =>
@@ -891,7 +1008,10 @@ export const make = (
           yield* admitted("resizeMachine", { ...machine, ...to });
         }
 
-        const outcome = yield* Effect.exit(runtime.resize(machine, request, running));
+        const outcome = yield* Effect.exit(
+          runtime.resize(machine, request, running)
+        );
+
         const given = Exit.isSuccess(outcome);
         const known = given ? to : intent;
 
@@ -901,11 +1021,11 @@ export const make = (
           Effect.catch((error) =>
             Effect.as(
               Effect.logWarning(
-                `resize ${id}: couldn't read its sizes back, so the host keeps ${given ? "those asked" : "those it had"}: ${error.message}`,
+                `resize ${id}: couldn't read its sizes back, so the host keeps ${given ? "those asked" : "those it had"}: ${error.message}`
               ),
-              known,
-            ),
-          ),
+              known
+            )
+          )
         );
 
         yield* store.sized(name, sizes);
@@ -919,20 +1039,28 @@ export const make = (
         const name = yield* nameOf(request.id);
         const id = idOf(name);
 
-        const work = surviving(`resize ${id}`, Effect.scoped(resized(name, request))).pipe(
-          Effect.tapError((error) => Effect.logWarning(`resize ${id} failed: ${error.message}`)),
+        const work = surviving(
+          `resize ${id}`,
+          Effect.scoped(resized(name, request))
+        ).pipe(
+          Effect.tapError((error) =>
+            Effect.logWarning(`resize ${id} failed: ${error.message}`)
+          )
         );
 
-        return yield* Effect.flatMap(Effect.forkIn(work, hostScope), Fiber.join);
+        return yield* Effect.flatMap(
+          Effect.forkIn(work, hostScope),
+          Fiber.join
+        );
       });
 
     const capacity = Effect.flatMap(heldMachines, (machines) =>
       runtime.capacity(machines).pipe(
         inTime(`the ${config.kind} runtime`),
         Effect.map((readings) =>
-          readings.map((reading): Usage => ({ host: config.id, ...reading })),
-        ),
-      ),
+          readings.map((reading): Usage => ({ host: config.id, ...reading }))
+        )
+      )
     );
 
     const recheck = Effect.gen(function* () {
@@ -943,10 +1071,13 @@ export const make = (
           return snapshot.status === "active" && isResting(snapshot)
             ? [[name, { actor, life: snapshot.context }] as const]
             : [];
-        }),
+        })
       );
 
-      const intents = (yield* store.machines).filter((intent) => resting.has(intent.name));
+      const intents = (yield* store.machines).filter((intent) =>
+        resting.has(intent.name)
+      );
+
       const observed = yield* observeAll(intents);
 
       yield* Effect.forEach(
@@ -958,10 +1089,12 @@ export const make = (
             ? Effect.void
             : tell(at.actor, seen);
         },
-        { discard: true },
+        { discard: true }
       );
     }).pipe(
-      Effect.catch((error) => Effect.logWarning(`couldn't recheck the machines: ${error.message}`)),
+      Effect.catch((error) =>
+        Effect.logWarning(`couldn't recheck the machines: ${error.message}`)
+      )
     );
 
     const intents = yield* store.machines;
@@ -973,24 +1106,28 @@ export const make = (
 
     yield* Effect.forkIn(
       Effect.forever(Effect.andThen(Effect.sleep(config.recheck), recheck)),
-      hostScope,
+      hostScope
     );
 
     return {
-      list: Effect.flatMap(store.machines, shownAll).pipe(Effect.withSpan("Machines.list")),
+      list: Effect.flatMap(store.machines, shownAll).pipe(
+        Effect.withSpan("Machines.list")
+      ),
       get: Effect.fn("Machines.get")((id) => Effect.flatMap(nameOf(id), shown)),
       create: Effect.fn("Machines.create")(create),
       start: Effect.fn("Machines.start")((id) =>
-        Effect.flatMap(nameOf(id), (name) => settledOn(name, "running")),
+        Effect.flatMap(nameOf(id), (name) => settledOn(name, "running"))
       ),
       stop: Effect.fn("Machines.stop")((id) =>
-        Effect.flatMap(nameOf(id), (name) => settledOn(name, "stopped")),
+        Effect.flatMap(nameOf(id), (name) => settledOn(name, "stopped"))
       ),
       pause: Effect.fn("Machines.pause")((id) =>
-        Effect.flatMap(nameOf(id), (name) => settledOn(name, "paused")),
+        Effect.flatMap(nameOf(id), (name) => settledOn(name, "paused"))
       ),
       resize: Effect.fn("Machines.resize")(resize),
-      delete: Effect.fn("Machines.delete")((id) => Effect.flatMap(nameOf(id), remove)),
+      delete: Effect.fn("Machines.delete")((id) =>
+        Effect.flatMap(nameOf(id), remove)
+      ),
       fork: Effect.fn("Machines.fork")(fork),
       restore: Effect.fn("Machines.restore")(restore),
       exec: Effect.fn("Machines.exec")(exec),
@@ -999,6 +1136,9 @@ export const make = (
   });
 
 export const layer = (
-  config: Pick<HostSettings, "id" | "kind" | "bases" | "machinePorts" | "recheck">,
+  config: Pick<
+    HostSettings,
+    "id" | "kind" | "bases" | "machinePorts" | "recheck"
+  >
 ): Layer.Layer<Machines, HostError, Store | Runtime | PortProbe | Leases> =>
   Layer.effect(Machines, make(config));

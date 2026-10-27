@@ -1,18 +1,21 @@
 import {
-  type Executed,
-  type ExecRequest,
   loginUser,
   outputLimit,
   ScriptFailed,
-  type Setup,
+} from "@gjermundgaraba/clankerbox-sdk";
+import type {
+  Executed,
+  ExecRequest,
+  Setup,
 } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Option, Redacted, Schema, Stream } from "effect";
-import {
-  type Command,
-  type Interface as Runtime,
-  type MachineRef,
-  type RuntimeError,
-  timeoutFail,
+
+import { timeoutFail } from "./runtime.ts";
+import type {
+  Command,
+  Interface as Runtime,
+  MachineRef,
+  RuntimeError,
 } from "./runtime.ts";
 
 const tailLines = 20;
@@ -20,7 +23,12 @@ const tailLines = 20;
 const tailCharacters = 4000;
 
 export const lastLines = (text: string): string =>
-  text.trimEnd().split("\n").slice(-tailLines).join("\n").slice(-tailCharacters);
+  text
+    .trimEnd()
+    .split("\n")
+    .slice(-tailLines)
+    .join("\n")
+    .slice(-tailCharacters);
 
 const keptOutput = () => {
   const decoder = new TextDecoder();
@@ -33,7 +41,9 @@ const keptOutput = () => {
   };
 
   return {
-    push: (chunk: Uint8Array) => keep(decoder.decode(chunk, { stream: true })),
+    push: (chunk: Uint8Array) => {
+      keep(decoder.decode(chunk, { stream: true }));
+    },
     text: () => {
       keep(decoder.decode());
 
@@ -47,21 +57,25 @@ const drained = (
   runtime: Runtime,
   machine: MachineRef,
   command: Command,
-  output: ReturnType<typeof keptOutput>,
+  output: ReturnType<typeof keptOutput>
 ): Effect.Effect<number, RuntimeError> =>
   Effect.map(
     Effect.scoped(
       Effect.flatMap(runtime.exec(machine, command), (execution) =>
         Effect.all(
           [
-            Stream.runForEach(execution.output, (chunk) => Effect.sync(() => output.push(chunk))),
+            Stream.runForEach(execution.output, (chunk) =>
+              Effect.sync(() => {
+                output.push(chunk);
+              })
+            ),
             execution.exitCode,
           ],
-          { concurrency: "unbounded" },
-        ),
-      ),
+          { concurrency: "unbounded" }
+        )
+      )
     ),
-    ([, exitCode]) => exitCode,
+    ([, exitCode]) => exitCode
   );
 
 const runInGuest = (
@@ -69,7 +83,7 @@ const runInGuest = (
   script: "setup" | "preparation" | "tailnet",
   machine: MachineRef,
   command: Command,
-  timeout: Duration.Duration,
+  timeout: Duration.Duration
 ): Effect.Effect<string, RuntimeError | ScriptFailed> =>
   Effect.gen(function* () {
     const output = keptOutput();
@@ -81,8 +95,8 @@ const runInGuest = (
           new ScriptFailed({
             message: `${script} ran past its ${Duration.format(timeout)} timeout; its last output:\n${lastLines(output.text())}`,
             script,
-          }),
-      ),
+          })
+      )
     );
 
     const text = output.text();
@@ -100,7 +114,7 @@ const runInGuest = (
 export const runCommand = (
   runtime: Runtime,
   machine: MachineRef,
-  { argv, user, stdin }: ExecRequest,
+  { argv, user, stdin }: ExecRequest
 ): Effect.Effect<Executed, RuntimeError> =>
   Effect.gen(function* () {
     const output = keptOutput();
@@ -108,8 +122,13 @@ export const runCommand = (
     const exitCode = yield* drained(
       runtime,
       machine,
-      { argv, user, stdin: stdin === undefined ? undefined : new TextEncoder().encode(stdin) },
-      output,
+      {
+        argv,
+        user,
+        stdin:
+          stdin === undefined ? undefined : new TextEncoder().encode(stdin),
+      },
+      output
     );
 
     return { exitCode, output: output.text(), truncated: output.truncated() };
@@ -140,9 +159,12 @@ const defaultSetupTimeoutSeconds = 600;
 export const runSetup = (
   runtime: Runtime,
   machine: MachineRef,
-  setup: Setup,
+  setup: Setup
 ): Effect.Effect<void, RuntimeError | ScriptFailed> => {
-  const timeout = Duration.seconds(setup.timeoutSeconds ?? defaultSetupTimeoutSeconds);
+  const timeout = Duration.seconds(
+    setup.timeoutSeconds ?? defaultSetupTimeoutSeconds
+  );
+
   const keys = setup.authorizedKeys === undefined ? [] : [setup.authorizedKeys];
 
   return Effect.asVoid(
@@ -151,11 +173,18 @@ export const runSetup = (
       "setup",
       machine,
       {
-        argv: ["/bin/sh", "-c", setupRunner, "clankerbox-setup", loginUser, ...keys],
+        argv: [
+          "/bin/sh",
+          "-c",
+          setupRunner,
+          "clankerbox-setup",
+          loginUser,
+          ...keys,
+        ],
         stdin: new TextEncoder().encode(setup.script),
       },
-      timeout,
-    ),
+      timeout
+    )
   );
 };
 
@@ -212,15 +241,21 @@ export const tailnetScript = [
 /** What the tailnet script reported: no `tailscaled`, or its backend state and MagicDNS name. */
 export type TailnetReport =
   | { readonly missing: true }
-  | { readonly missing: false; readonly backend: string; readonly name: string | undefined };
+  | {
+      readonly missing: false;
+      readonly backend: string;
+      readonly name: string | undefined;
+    };
 
 const TailscaleStatus = Schema.fromJsonString(
   Schema.Struct({
     BackendState: Schema.String,
     Self: Schema.optionalKey(
-      Schema.NullOr(Schema.Struct({ DNSName: Schema.optionalKey(Schema.String) })),
+      Schema.NullOr(
+        Schema.Struct({ DNSName: Schema.optionalKey(Schema.String) })
+      )
     ),
-  }),
+  })
 );
 
 const decodeStatus = Schema.decodeUnknownOption(TailscaleStatus);
@@ -244,14 +279,17 @@ export const tailnetIn = (output: string): TailnetReport | undefined => {
     return { missing: false, backend: "unreachable", name: undefined };
   }
 
-  return Option.match(decodeStatus(line), {
-    onNone: () => undefined,
-    onSome: ({ BackendState, Self }) => ({
-      missing: false,
-      backend: BackendState,
-      name: Self?.DNSName?.replace(/\.$/u, "") || undefined,
-    }),
-  });
+  return Option.getOrUndefined(
+    Option.map(decodeStatus(line), ({ BackendState, Self }): TailnetReport => {
+      const name = Self?.DNSName?.replace(/\.$/u, "");
+
+      return {
+        missing: false,
+        backend: BackendState,
+        name: name === "" ? undefined : name,
+      };
+    })
+  );
 };
 
 export const preparationScript = [
@@ -318,7 +356,7 @@ export const hostKeyIn = (output: string): string | undefined => {
 
 export const prepare = (
   runtime: Runtime,
-  machine: MachineRef,
+  machine: MachineRef
 ): Effect.Effect<string | undefined, RuntimeError | ScriptFailed> =>
   runInGuest(
     runtime,
@@ -335,7 +373,7 @@ export const prepare = (
       ],
       stdin: globalThis.crypto.getRandomValues(new Uint8Array(seedBytes)),
     },
-    preparationTimeout,
+    preparationTimeout
   ).pipe(Effect.map(hostKeyIn));
 
 const tailnetTimeout = Duration.seconds(90);
@@ -344,7 +382,7 @@ export const checkTailnet = (
   runtime: Runtime,
   machine: MachineRef,
   hostname: string,
-  key?: Redacted.Redacted<string>,
+  key?: Redacted.Redacted
 ): Effect.Effect<TailnetReport | undefined, RuntimeError | ScriptFailed> =>
   runInGuest(
     runtime,
@@ -360,7 +398,10 @@ export const checkTailnet = (
         loginUser,
         ...(key === undefined ? [] : ["join"]),
       ],
-      stdin: key === undefined ? undefined : new TextEncoder().encode(Redacted.value(key)),
+      stdin:
+        key === undefined
+          ? undefined
+          : new TextEncoder().encode(Redacted.value(key)),
     },
-    tailnetTimeout,
+    tailnetTimeout
   ).pipe(Effect.map(tailnetIn));

@@ -1,5 +1,6 @@
 import { NotMade, PinMismatch } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
+
 import { idOn } from "./ids.ts";
 import type { CheckpointRef, MachineRef } from "./runtime.ts";
 import type { CheckpointRecord, Intent } from "./store.ts";
@@ -14,7 +15,10 @@ export const machineRef = (host: string, intent: Intent): MachineRef => ({
   port: intent.port,
 });
 
-export const checkpointRef = (host: string, record: CheckpointRecord): CheckpointRef => ({
+export const checkpointRef = (
+  host: string,
+  record: CheckpointRecord
+): CheckpointRef => ({
   id: idOn(host)(record.name),
   name: record.name,
   instance: record.instance,
@@ -33,7 +37,7 @@ export const madeOn =
           new NotMade({
             message: `machine ${idOn(host)(intent.name)} isn't made yet: its create or setup still runs`,
             machine: idOn(host)(intent.name),
-          }),
+          })
         );
 
 export const pinnedOn =
@@ -44,5 +48,5 @@ export const pinnedOn =
       : Effect.fail(
           new PinMismatch({
             message: `machine ${idOn(host)(intent.name)}'s VM booted under ${intent.pin ?? "an older host"}, and this host runs ${pin ?? "no pin"}, so a copy of its RAM would restore under the wrong one: stop it and start it again first`,
-          }),
+          })
         );

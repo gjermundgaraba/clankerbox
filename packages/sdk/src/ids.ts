@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect";
+
 import { Invalid } from "./errors.ts";
 
 const separator = "_";
@@ -9,17 +10,22 @@ const idPattern = /^[A-Za-z0-9_-]{1,62}$/u;
 
 const hostIdPattern = /^[a-z][a-z0-9-]{0,31}$/u;
 
-const hostIdRule = "a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter";
+const hostIdRule =
+  "a host ID is 1 to 32 lowercase letters, digits and '-', starting with a letter";
 
 const namePattern = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*$/u;
 
 const nameRule =
   "a name starts with a letter, then letters, digits and '-', with no '--' and no '-' at the end";
 
-export const HostId = Schema.String.check(Schema.isPattern(hostIdPattern, { message: hostIdRule }));
+export const HostId = Schema.String.check(
+  Schema.isPattern(hostIdPattern, { message: hostIdRule })
+);
 
 /** Unique per host and per resource type. */
-export const Name = Schema.String.check(Schema.isPattern(namePattern, { message: nameRule }));
+export const Name = Schema.String.check(
+  Schema.isPattern(namePattern, { message: nameRule })
+);
 
 export interface IdParts {
   readonly host: string;
@@ -49,7 +55,9 @@ const describeId = (id: string): string | undefined => {
 };
 
 /** `<host>_<name>`: neither part contains `_`, so an ID has exactly one. */
-export const Id = Schema.String.check(Schema.makeFilter((id: string) => describeId(id) ?? true));
+export const Id = Schema.String.check(
+  Schema.makeFilter((id: string) => describeId(id) ?? true)
+);
 
 export const parseId = (id: string): Effect.Effect<IdParts, Invalid> => {
   const problem = describeId(id);
@@ -66,12 +74,19 @@ export const parseId = (id: string): Effect.Effect<IdParts, Invalid> => {
 export const parseName = (name: string): Effect.Effect<string, Invalid> =>
   namePattern.test(name)
     ? Effect.succeed(name)
-    : Effect.fail(new Invalid({ message: `name ${JSON.stringify(name)}: ${nameRule}` }));
+    : Effect.fail(
+        new Invalid({ message: `name ${JSON.stringify(name)}: ${nameRule}` })
+      );
 
 /** Checks both parts and the whole. */
-export const formatId = (host: string, name: string): Effect.Effect<string, Invalid> => {
+export const formatId = (
+  host: string,
+  name: string
+): Effect.Effect<string, Invalid> => {
   if (!hostIdPattern.test(host)) {
-    return Effect.fail(new Invalid({ message: `host ID ${JSON.stringify(host)}: ${hostIdRule}` }));
+    return Effect.fail(
+      new Invalid({ message: `host ID ${JSON.stringify(host)}: ${hostIdRule}` })
+    );
   }
 
   const id = `${host}${separator}${name}`;

@@ -1,9 +1,14 @@
 import { createServer } from "node:net";
+
 import { Internal } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect, Layer } from "effect";
+
 import { PortProbe } from "../machine-ports.ts";
 
-const free = (address: string, port: number): Effect.Effect<boolean, Internal> =>
+const free = (
+  address: string,
+  port: number
+): Effect.Effect<boolean, Internal> =>
   Effect.callback((resume) => {
     const server = createServer();
 
@@ -12,8 +17,10 @@ const free = (address: string, port: number): Effect.Effect<boolean, Internal> =
         error.code === "EADDRINUSE" || error.code === "EACCES"
           ? Effect.succeed(false)
           : Effect.fail(
-              new Internal({ message: `couldn't probe port ${address}:${port}: ${error.message}` }),
-            ),
+              new Internal({
+                message: `couldn't probe port ${address}:${port}: ${error.message}`,
+              })
+            )
       );
     });
 

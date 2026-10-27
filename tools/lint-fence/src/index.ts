@@ -1,7 +1,8 @@
-import { defineRule, eslintCompatPlugin, type ESTree } from "vite-plus/lint/plugins";
+import { defineRule, eslintCompatPlugin } from "vite-plus/lint/plugins";
+import type { ESTree } from "vite-plus/lint/plugins";
 
 interface AllowedImports {
-  readonly allow: ReadonlyArray<string>;
+  readonly allow: readonly string[];
   readonly because: string;
 }
 
@@ -13,7 +14,9 @@ const isAllowedImports = (option: unknown): option is AllowedImports =>
   "because" in option &&
   typeof option.because === "string";
 
-const isStringLiteral = (node: ESTree.Node | undefined): node is ESTree.StringLiteral =>
+const isStringLiteral = (
+  node: ESTree.Node | undefined
+): node is ESTree.StringLiteral =>
   node?.type === "Literal" && typeof node.value === "string";
 
 export const allowedImportsRule = defineRule({
@@ -23,7 +26,10 @@ export const allowedImportsRule = defineRule({
       description:
         "Allow a file to import only the specifiers its folder may depend on, whether static, type-only, re-exported, dynamic or required.",
     },
-    messages: { notAllowed: '"{{specifier}}" is outside what this file may import: {{because}}' },
+    messages: {
+      notAllowed:
+        '"{{specifier}}" is outside what this file may import: {{because}}',
+    },
     schema: [
       {
         type: "object",
@@ -44,7 +50,11 @@ export const allowedImportsRule = defineRule({
         return;
       }
 
-      if (!option.allow.some((pattern) => new RegExp(pattern, "u").test(source.value))) {
+      if (
+        !option.allow.some((pattern) =>
+          new RegExp(pattern, "u").test(source.value)
+        )
+      ) {
         context.report({
           node: source,
           messageId: "notAllowed",
@@ -107,7 +117,10 @@ export const noManualRunRule = defineRule({
   createOnce(context) {
     return {
       MemberExpression(node) {
-        if (node.object.type !== "Identifier" || node.property.type !== "Identifier") {
+        if (
+          node.object.type !== "Identifier" ||
+          node.property.type !== "Identifier"
+        ) {
           return;
         }
 
@@ -136,96 +149,11 @@ export const noManualRunRule = defineRule({
               : specifier.imported.value;
 
           if (isRun(imported) || imported === "ManagedRuntime") {
-            context.report({ node: specifier, messageId: "manualRun", data: { name: imported } });
-          }
-        }
-      },
-    };
-  },
-});
-
-interface ProseComments {
-  readonly publicDocs?: boolean;
-}
-
-const isProseComments = (option: unknown): option is ProseComments =>
-  typeof option === "object" && option !== null;
-
-const markedLine = /^ (?:SAFETY|Source): \S/u;
-
-const directive = /^\s*(?:(?:oxlint|eslint)-\S+ .*\S -- \S|@ts-expect-error \S)/u;
-
-const typeDocs = new Set([
-  "TSPropertySignature",
-  "TSMethodSignature",
-  "TSIndexSignature",
-  "TSInterfaceDeclaration",
-  "TSTypeAliasDeclaration",
-]);
-
-export const noProseCommentsRule = defineRule({
-  meta: {
-    type: "problem",
-    docs: {
-      description:
-        "Allow only a one-line SAFETY: or Source: comment, a tool directive with its reason after --, and a doc block on a type, an interface or a member of one; with publicDocs, a doc block on an export too.",
-    },
-    messages: {
-      prose:
-        "A comment here is prose: carry its reason in a type, a test or the commit, or mark it as SAFETY: or Source:.",
-    },
-    schema: [
-      {
-        type: "object",
-        properties: { publicDocs: { type: "boolean" } },
-        additionalProperties: false,
-      },
-    ],
-  },
-  createOnce(context) {
-    const documented = new Set<number>();
-
-    const document = (node: ESTree.Node) => {
-      for (const comment of context.sourceCode.getCommentsBefore(node)) {
-        if (comment.type === "Block" && comment.value.startsWith("*")) {
-          documented.add(comment.start);
-        }
-      }
-    };
-
-    const exported = (node: ESTree.ExportNamedDeclaration | ESTree.ExportDefaultDeclaration) => {
-      const option = context.options?.[0];
-      const declaration = node.declaration;
-
-      if (
-        (isProseComments(option) && option.publicDocs === true) ||
-        (declaration !== null && declaration !== undefined && typeDocs.has(declaration.type))
-      ) {
-        document(node);
-      }
-    };
-
-    return {
-      before() {
-        documented.clear();
-      },
-      TSPropertySignature: document,
-      TSMethodSignature: document,
-      TSIndexSignature: document,
-      TSInterfaceDeclaration: document,
-      TSTypeAliasDeclaration: document,
-      ExportNamedDeclaration: exported,
-      ExportDefaultDeclaration: exported,
-      after() {
-        for (const comment of context.sourceCode.getAllComments()) {
-          const allowed =
-            comment.type === "Shebang" ||
-            (comment.type === "Line"
-              ? markedLine.test(comment.value) || directive.test(comment.value)
-              : documented.has(comment.start) || directive.test(comment.value));
-
-          if (!allowed) {
-            context.report({ loc: comment.loc, messageId: "prose" });
+            context.report({
+              node: specifier,
+              messageId: "manualRun",
+              data: { name: imported },
+            });
           }
         }
       },
@@ -238,6 +166,5 @@ export default eslintCompatPlugin({
   rules: {
     "allowed-imports": allowedImportsRule,
     "no-manual-run": noManualRunRule,
-    "no-prose-comments": noProseCommentsRule,
   },
 });

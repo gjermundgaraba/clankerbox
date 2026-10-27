@@ -1,5 +1,6 @@
 import { Invalid, NotFound, parseId } from "@gjermundgaraba/clankerbox-sdk";
-import { Effect, Option } from "effect";
+import type { Option } from "effect";
+import { Effect } from "effect";
 import { Hex } from "effect/encoding";
 
 const instanceBytes = 16;
@@ -14,8 +15,10 @@ export const nameOn =
       parts.host === host
         ? Effect.succeed(parts.name)
         : Effect.fail(
-            new Invalid({ message: `${id} names host ${parts.host}, and this is host ${host}` }),
-          ),
+            new Invalid({
+              message: `${id} names host ${parts.host}, and this is host ${host}`,
+            })
+          )
     );
 
 export const idOn =
@@ -28,18 +31,18 @@ export type Resource = "machine" | "checkpoint";
 export const notFoundOn =
   (host: string) =>
   (resource: Resource, name: string): NotFound =>
-    new NotFound({ message: `no ${resource} ${idOn(host)(name)}`, id: idOn(host)(name) });
+    new NotFound({
+      message: `no ${resource} ${idOn(host)(name)}`,
+      id: idOn(host)(name),
+    });
 
 export const foundOn =
   (host: string) =>
   <A, E>(
     resource: Resource,
     name: string,
-    lookup: Effect.Effect<Option.Option<A>, E>,
+    lookup: Effect.Effect<Option.Option<A>, E>
   ): Effect.Effect<A, E | NotFound> =>
     Effect.flatMap(lookup, (found) =>
-      Option.match(found, {
-        onNone: () => Effect.fail(notFoundOn(host)(resource, name)),
-        onSome: Effect.succeed,
-      }),
+      Effect.fromOption(found, () => notFoundOn(host)(resource, name))
     );

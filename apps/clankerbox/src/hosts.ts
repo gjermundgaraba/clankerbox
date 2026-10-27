@@ -1,8 +1,9 @@
 import { Host, mibPerGib, Usage } from "@gjermundgaraba/clankerbox-sdk";
 import { Array as Arr, Schema } from "effect";
+
 import { listCommand } from "./command.ts";
 
-export const hostRows = (hosts: ReadonlyArray<Host>) => [
+export const hostRows = (hosts: readonly Host[]) => [
   ["ID", "KIND", "VERSION", "RUNTIME_VERSION", "BASES"],
   ...hosts.map((host) => [
     host.id,
@@ -19,9 +20,10 @@ const resourceNames = {
   runningVms: "running-vms",
 } satisfies Record<Usage["resource"], string>;
 
-const roughGib = (mib: number): string => `${Math.round((mib * 10) / mibPerGib) / 10}G`;
+const roughGib = (mib: number): string =>
+  `${Math.round((mib * 10) / mibPerGib) / 10}G`;
 
-export const usageRows = (usage: ReadonlyArray<Usage>) => [
+export const usageRows = (usage: readonly Usage[]) => [
   ["HOST", "RESOURCE", "USED", "LIMIT"],
   ...usage.map((row) => {
     const amount = row.resource === "ramMib" ? roughGib : String;
@@ -35,10 +37,12 @@ export const usageRows = (usage: ReadonlyArray<Usage>) => [
   }),
 ];
 
-export const unreadNotes = (usage: ReadonlyArray<Usage>): ReadonlyArray<string> =>
+export const unreadNotes = (usage: readonly Usage[]): readonly string[] =>
   Arr.dedupe(usage.map(({ host }) => host)).flatMap((host) => {
     const unread = Arr.dedupe(
-      usage.flatMap((row) => (row.host === host && "unread" in row ? row.unread : [])),
+      usage.flatMap((row) =>
+        row.host === host && "unread" in row ? row.unread : []
+      )
     );
 
     return unread.length === 0

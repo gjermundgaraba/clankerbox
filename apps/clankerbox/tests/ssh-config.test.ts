@@ -1,48 +1,59 @@
+import path from "node:path";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { join } from "node:path";
-import { Effect } from "effect";
 import { layer } from "@effect/vitest";
-import { afterEach, expect } from "vite-plus/test";
 import {
   chmod,
   exists,
   mkdir,
   read,
   scratch,
-  stubHost,
-  type StubHost,
   write,
-} from "@gjermundgaraba/clankerbox-sdk/testing";
-import { includeLines, renderSshConfig, withInclude, withoutInclude } from "../src/ssh-config.ts";
+} from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import { stubHost } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
+import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
+import { Effect } from "effect";
+import { afterEach, expect } from "vite-plus/test";
+
+import {
+  includeLines,
+  renderSshConfig,
+  withInclude,
+  withoutInclude,
+} from "../src/ssh-config.ts";
 import { cleanup, cli, url } from "./support.ts";
 
-const stubs: Array<StubHost> = [];
-
-afterEach(() => cleanup(stubs));
+const stubs: StubHost[] = [];
 
 const mine = "Host linux_dev\n  User developer\n";
 
-const home = (hosts: ReadonlyArray<object> = [{ id: "linux", url: url("linux") }]) =>
+const home = (
+  hosts: readonly object[] = [{ id: "linux", url: url("linux") }]
+) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
-    const file = join(dir, ".config", "clankerbox", "config.json");
+    const file = path.join(dir, ".config", "clankerbox", "config.json");
     const linux = stubHost({ id: "linux", bases: ["ubuntu"] });
 
     stubs.push(linux);
-    yield* mkdir(join(dir, ".config", "clankerbox"));
+    yield* mkdir(path.join(dir, ".config", "clankerbox"));
     yield* write(file, JSON.stringify({ hosts }));
 
     return {
       dir,
       file,
       env: { HOME: dir },
-      managed: join(dir, ".ssh", "clankerbox"),
-      sshConfig: join(dir, ".ssh", "config"),
+      managed: path.join(dir, ".ssh", "clankerbox"),
+      sshConfig: path.join(dir, ".ssh", "config"),
       endpoints: [["linux", linux]] as const,
     };
   });
 
 layer(NodeServices.layer)((it) => {
+  afterEach(async () => {
+    await cleanup(stubs);
+  });
+
   it("renders one block per host, as the login user, running the clankerbox the login shell finds, since ssh runs a KnownHostsCommand only by absolute path", () => {
     const text = renderSshConfig("/bin/zsh", [
       { id: "linux", url: "http://linux:8484" },
@@ -58,7 +69,7 @@ layer(NodeServices.layer)((it) => {
         "  UserKnownHostsFile /dev/null",
         "  GlobalKnownHostsFile /dev/null",
         "  StrictHostKeyChecking yes",
-      ].join("\n"),
+      ].join("\n")
     );
     expect(text).toContain("Host mac_*\n  User admin\n");
   });
@@ -79,30 +90,39 @@ layer(NodeServices.layer)((it) => {
       Effect.gen(function* () {
         const { dir, env, managed, sshConfig, endpoints } = yield* home();
 
-        yield* mkdir(join(dir, ".ssh"));
+        yield* mkdir(path.join(dir, ".ssh"));
         yield* write(sshConfig, mine);
 
         const { code, stderr } = yield* cli(["machines"], { endpoints, env });
 
         expect(code).toBe(0);
         expect(stderr).not.toContain("SSH config");
-        expect(yield* read(sshConfig)).toBe(`${mine}Match all\nInclude clankerbox\n`);
-        expect(yield* read(managed)).toBe(
-          renderSshConfig("/bin/sh", [{ id: "linux", url: url("linux") }]),
+        expect(yield* read(sshConfig)).toBe(
+          `${mine}Match all\nInclude clankerbox\n`
         );
-      }),
+        expect(yield* read(managed)).toBe(
+          renderSshConfig("/bin/sh", [{ id: "linux", url: url("linux") }])
+        );
+      })
   );
 
-  it.effect("the KnownHostsCommand runs through SHELL, as ssh runs the ProxyCommand", () =>
-    Effect.gen(function* () {
-      const { env, managed, endpoints } = yield* home();
+  it.effect(
+    "the KnownHostsCommand runs through SHELL, as ssh runs the ProxyCommand",
+    () =>
+      Effect.gen(function* () {
+        const { env, managed, endpoints } = yield* home();
 
-      yield* cli(["machines"], { endpoints, env: { ...env, SHELL: "/opt/homebrew/bin/fish" } });
+        yield* cli(["machines"], {
+          endpoints,
+          env: { ...env, SHELL: "/opt/homebrew/bin/fish" },
+        });
 
-      expect(yield* read(managed)).toBe(
-        renderSshConfig("/opt/homebrew/bin/fish", [{ id: "linux", url: url("linux") }]),
-      );
-    }),
+        expect(yield* read(managed)).toBe(
+          renderSshConfig("/opt/homebrew/bin/fish", [
+            { id: "linux", url: url("linux") },
+          ])
+        );
+      })
   );
 
   it.effect(
@@ -118,11 +138,11 @@ layer(NodeServices.layer)((it) => {
 
         expect(code).toBe(0);
         expect(stderr).toContain(
-          `couldn't update the SSH config: SHELL "zsh -i" isn't an absolute path`,
+          `couldn't update the SSH config: SHELL "zsh -i" isn't an absolute path`
         );
         expect(yield* exists(managed)).toBe(false);
         expect(yield* exists(sshConfig)).toBe(false);
-      }),
+      })
   );
 
   it.effect(
@@ -139,7 +159,7 @@ layer(NodeServices.layer)((it) => {
 
         expect(code).toBe(0);
         expect(stderr).not.toContain("SSH config");
-      }),
+      })
   );
 
   it.effect("a command given --config leaves the SSH config alone", () =>
@@ -150,25 +170,27 @@ layer(NodeServices.layer)((it) => {
 
       expect(yield* exists(managed)).toBe(false);
       expect(yield* exists(sshConfig)).toBe(false);
-    }),
+    })
   );
 
-  it.effect("CLANKERBOX_SSH_CONFIG=false removes the managed file and its include", () =>
-    Effect.gen(function* () {
-      const { dir, env, managed, sshConfig, endpoints } = yield* home();
+  it.effect(
+    "CLANKERBOX_SSH_CONFIG=false removes the managed file and its include",
+    () =>
+      Effect.gen(function* () {
+        const { dir, env, managed, sshConfig, endpoints } = yield* home();
 
-      yield* mkdir(join(dir, ".ssh"));
-      yield* write(sshConfig, mine);
-      yield* cli(["machines"], { endpoints, env });
+        yield* mkdir(path.join(dir, ".ssh"));
+        yield* write(sshConfig, mine);
+        yield* cli(["machines"], { endpoints, env });
 
-      const { code } = yield* cli(["machines"], {
-        endpoints,
-        env: { ...env, CLANKERBOX_SSH_CONFIG: "false" },
-      });
+        const { code } = yield* cli(["machines"], {
+          endpoints,
+          env: { ...env, CLANKERBOX_SSH_CONFIG: "false" },
+        });
 
-      expect(code).toBe(0);
-      expect(yield* exists(managed)).toBe(false);
-      expect(yield* read(sshConfig)).toBe(mine);
-    }),
+        expect(code).toBe(0);
+        expect(yield* exists(managed)).toBe(false);
+        expect(yield* read(sshConfig)).toBe(mine);
+      })
   );
 });

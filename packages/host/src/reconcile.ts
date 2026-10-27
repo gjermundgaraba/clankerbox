@@ -1,4 +1,5 @@
 import type { Desired } from "@gjermundgaraba/clankerbox-sdk";
+
 import type { MachineState } from "./runtime.ts";
 
 /** What the host does next about a machine: a step, or a rest. */

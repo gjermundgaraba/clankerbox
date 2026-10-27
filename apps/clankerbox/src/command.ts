@@ -1,32 +1,35 @@
 import {
-  type ClankerboxError,
   Client,
   hostErrors,
   Invalid,
   retryable,
   Unavailable,
 } from "@gjermundgaraba/clankerbox-sdk";
+import type { ClankerboxError } from "@gjermundgaraba/clankerbox-sdk";
+import type { FileSystem, Path } from "effect";
 import {
   Console,
   Data,
   DateTime,
   Duration,
   Effect,
-  FileSystem,
   Match,
   Option,
-  Path,
   Runtime,
   Schema,
 } from "effect";
 import { Argument, Command, Flag } from "effect/cli";
 import type { HttpClient } from "effect/http";
 import type { ChildProcessSpawner } from "effect/process";
-import { type LoadedConfig, loadConfig } from "./config.ts";
+
+import { loadConfig } from "./config.ts";
+import type { LoadedConfig } from "./config.ts";
 import { syncSshConfig } from "./ssh-config.ts";
 import { parseSeconds } from "./units.ts";
 
-export class Exited extends Data.TaggedError("Exited")<{ readonly code: number }> {
+export class Exited extends Data.TaggedError("Exited")<{
+  readonly code: number;
+}> {
   override readonly [Runtime.errorReported] = false;
 
   override get [Runtime.errorExitCode](): number {
@@ -34,7 +37,10 @@ export class Exited extends Data.TaggedError("Exited")<{ readonly code: number }
   }
 }
 
-export class SpawnFailed extends Schema.TaggedError<SpawnFailed>()("SpawnFailed", {
+export class SpawnFailed extends Schema.TaggedError<
+  SpawnFailed,
+  { readonly brand: unique symbol }
+>()("SpawnFailed", {
   message: Schema.String,
   program: Schema.String,
 }) {}
@@ -49,11 +55,14 @@ const encodeFailure = Schema.encodeSync(Failure);
 
 export const ErrorDocument = Schema.Union(
   failures.map(({ fields: { _tag, ...fields } }) =>
-    Schema.Struct({ ...fields, tag: _tag, retryable: Schema.Boolean }),
-  ),
+    Schema.Struct({ ...fields, tag: _tag, retryable: Schema.Boolean })
+  )
 );
 
-export const UnreachableDocument = Schema.Struct({ host: Schema.String, error: ErrorDocument });
+export const UnreachableDocument = Schema.Struct({
+  host: Schema.String,
+  error: ErrorDocument,
+});
 
 const errorDocument = (error: Failure) => {
   const { _tag, ...fields } = encodeFailure(error);
@@ -63,67 +72,72 @@ const errorDocument = (error: Failure) => {
     tag: _tag,
     retryable: Match.value(error).pipe(
       Match.tag("SpawnFailed", () => false),
-      Match.orElse(retryable),
+      Match.orElse(retryable)
     ),
   };
 };
 
-export const failText = (error: { readonly _tag: string; readonly message: string }) =>
+export const failText = (error: {
+  readonly _tag: string;
+  readonly message: string;
+}) =>
   Effect.andThen(
     Console.error(`clankerbox: ${error._tag}: ${error.message}`),
-    Effect.fail(new Exited({ code: 1 })),
+    Effect.fail(new Exited({ code: 1 }))
   );
 
 export const fail = (json: boolean) => (error: Failure) =>
   json
     ? Effect.andThen(
         Console.log(JSON.stringify({ error: errorDocument(error) })),
-        Effect.fail(new Exited({ code: 1 })),
+        Effect.fail(new Exited({ code: 1 }))
       )
     : failText(error);
 
-export const table = (rows: ReadonlyArray<ReadonlyArray<string>>): string => {
-  const widths: Array<number> = [];
+export const table = (rows: ReadonlyArray<readonly string[]>): string => {
+  const widths: number[] = [];
 
   for (const row of rows) {
-    row.forEach((cell, column) => {
+    for (const [column, cell] of row.entries()) {
       widths[column] = Math.max(widths[column] ?? 0, cell.length);
-    });
+    }
   }
 
   return rows
     .map((row) =>
       row
         .map((cell, column) =>
-          column === row.length - 1 ? cell : cell.padEnd(widths[column] ?? 0),
+          column === row.length - 1 ? cell : cell.padEnd(widths[column] ?? 0)
         )
-        .join("  "),
+        .join("  ")
     )
     .join("\n");
 };
 
-export const unreachableDocument = (unreachable: ReadonlyArray<Client.Unreachable>) =>
+export const unreachableDocument = (
+  unreachable: readonly Client.Unreachable[]
+) =>
   unreachable.map(({ host, error }) => ({ host, error: errorDocument(error) }));
 
-export const warnUnreachable = (unreachable: ReadonlyArray<Client.Unreachable>) =>
+export const warnUnreachable = (unreachable: readonly Client.Unreachable[]) =>
   Effect.forEach(
     unreachable,
     ({ error }) => Console.error(`clankerbox: ${error._tag}: ${error.message}`),
-    { discard: true },
+    { discard: true }
   );
 
 export const clientFlags = {
   json: Flag.Boolean("json").pipe(
     Flag.withDescription(
-      "Print JSON: the result, or {error}: the error's fields, its tag and whether it is retryable.",
+      "Print JSON: the result, or {error}: the error's fields, its tag and whether it is retryable."
     ),
-    Flag.withDefault(false),
+    Flag.withDefault(false)
   ),
   config: Flag.String("config").pipe(
     Flag.withDescription(
-      "The client config file. Default: $XDG_CONFIG_HOME/clankerbox/config.json.",
+      "The client config file. Default: $XDG_CONFIG_HOME/clankerbox/config.json."
     ),
-    Flag.optional,
+    Flag.optional
   ),
 };
 
@@ -132,9 +146,9 @@ export const mutationFlags = {
   timeout: Flag.String("timeout").pipe(
     Flag.withMetavar("DURATION"),
     Flag.withDescription(
-      "Stop waiting for the mutation's reply after this long, such as 90s or 10m; unbounded by default. A mutation under way still finishes on the host, except a command an exec runs, which ends with the wait.",
+      "Stop waiting for the mutation's reply after this long, such as 90s or 10m; unbounded by default. A mutation under way still finishes on the host, except a command an exec runs, which ends with the wait."
     ),
-    Flag.optional,
+    Flag.optional
   ),
 };
 
@@ -145,7 +159,7 @@ export type ClientFlags = Command.Command.Config.Infer<typeof clientFlags> & {
 export const parsed = <A>(
   flag: Option.Option<string>,
   name: string,
-  parse: (name: string, text: string) => Effect.Effect<A, Invalid>,
+  parse: (name: string, text: string) => Effect.Effect<A, Invalid>
 ) => Effect.transposeOption(Option.map(flag, (text) => parse(name, text)));
 
 type Services =
@@ -158,16 +172,25 @@ export const withClient = <A, R>(
   flags: ClientFlags,
   body: (
     client: Client.Interface,
-    config: LoadedConfig,
-  ) => Effect.Effect<A, ClankerboxError | Invalid, R>,
+    config: LoadedConfig
+  ) => Effect.Effect<A, ClankerboxError | Invalid, R>
 ): Effect.Effect<A, Exited, R | Services> =>
   Effect.gen(function* () {
-    const timeout = yield* parsed(flags.timeout ?? Option.none(), "--timeout", parseSeconds);
+    const timeout = yield* parsed(
+      flags.timeout ?? Option.none(),
+      "--timeout",
+      parseSeconds
+    );
+
     const config = yield* loadConfig(flags.config);
 
     const client = yield* Client.make(config.hosts, {
       timeout: Option.getOrUndefined(Option.map(timeout, Duration.seconds)),
-    }).pipe(Effect.mapError(({ message }) => new Invalid({ message, file: config.file })));
+    }).pipe(
+      Effect.mapError(
+        ({ message }) => new Invalid({ message, file: config.file })
+      )
+    );
 
     if (Option.isNone(flags.config)) {
       yield* syncSshConfig(config);
@@ -176,34 +199,39 @@ export const withClient = <A, R>(
     return yield* body(client, config);
   }).pipe(Effect.catch(fail(flags.json)));
 
-export const print = (json: boolean, document: () => object, text: () => string) =>
-  json ? Console.log(JSON.stringify(document())) : Console.log(text());
+export const print = (
+  json: boolean,
+  document: () => object,
+  text: () => string
+) => (json ? Console.log(JSON.stringify(document())) : Console.log(text()));
 
 export const machineArgument = Argument.String("machine").pipe(
-  Argument.withDescription("The machine's ID, <host>_<name>."),
+  Argument.withDescription("The machine's ID, <host>_<name>.")
 );
 
 export const checkpointArgument = Argument.String("checkpoint").pipe(
-  Argument.withDescription("The checkpoint's ID, <host>_<name>."),
+  Argument.withDescription("The checkpoint's ID, <host>_<name>.")
 );
 
 export const nameArgument = Argument.String("name").pipe(
-  Argument.withDescription("The new resource's name, on the same host."),
+  Argument.withDescription("The new resource's name, on the same host.")
 );
 
-export const listCommand = <A, Encoded>(options: {
+export const listCommand = <A>(options: {
   readonly name: string;
   readonly description: string;
   readonly key: string;
-  readonly read: (client: Client.Interface) => Effect.Effect<Client.Gathered<A>>;
-  readonly encode: (answer: A) => Encoded;
-  readonly rows: (answers: ReadonlyArray<A>, now: DateTime.Utc) => Array<Array<string>>;
+  readonly read: (
+    client: Client.Interface
+  ) => Effect.Effect<Client.Gathered<A>>;
+  readonly encode: (answer: A) => object;
+  readonly rows: (answers: readonly A[], now: DateTime.Utc) => string[][];
   /** Printed to stderr under the table. */
-  readonly notes?: (answers: ReadonlyArray<A>) => ReadonlyArray<string>;
+  readonly notes?: (answers: readonly A[]) => readonly string[];
 }) =>
   Command.make(options.name, clientFlags, (flags) =>
     Effect.gen(function* () {
-      const failed = yield* withClient(flags, (client, config) =>
+      const everyHostFailed = yield* withClient(flags, (client, config) =>
         Effect.gen(function* () {
           const { answers, unreachable } = yield* options.read(client);
           const now = yield* DateTime.now;
@@ -214,7 +242,7 @@ export const listCommand = <A, Encoded>(options: {
               JSON.stringify({
                 [options.key]: answers.map((answer) => options.encode(answer)),
                 unreachable: unreachableDocument(unreachable),
-              }),
+              })
             );
 
             return failed;
@@ -233,25 +261,25 @@ export const listCommand = <A, Encoded>(options: {
           yield* warnUnreachable(unreachable);
 
           return failed;
-        }),
+        })
       );
 
-      if (failed) {
+      if (everyHostFailed) {
         return yield* new Exited({ code: 1 });
       }
-    }),
+    })
   ).pipe(Command.withDescription(options.description));
 
-export const printResource = <A, Encoded extends object, R>(
+export const printResource = <A, R>(
   flags: ClientFlags,
   resource: {
     readonly call: (
       client: Client.Interface,
-      config: LoadedConfig,
+      config: LoadedConfig
     ) => Effect.Effect<A, ClankerboxError | Invalid, R>;
-    readonly encode: (resource: A) => Encoded;
+    readonly encode: (resource: A) => object;
     readonly text: (resource: A, now: DateTime.Utc) => string;
-  },
+  }
 ) =>
   withClient(flags, (client, config) =>
     Effect.gen(function* () {
@@ -261,9 +289,9 @@ export const printResource = <A, Encoded extends object, R>(
       yield* print(
         flags.json,
         () => resource.encode(replied),
-        () => resource.text(replied, now),
+        () => resource.text(replied, now)
       );
-    }),
+    })
   );
 
 export const newId = ({ id }: { readonly id: string }) => id;
@@ -271,7 +299,7 @@ export const newId = ({ id }: { readonly id: string }) => id;
 export const deleted = (
   json: boolean,
   id: string,
-  removal: Effect.Effect<Client.Deleted, ClankerboxError>,
+  removal: Effect.Effect<Client.Deleted, ClankerboxError>
 ) =>
   removal.pipe(
     Effect.flatMap((outcome) =>
@@ -280,7 +308,7 @@ export const deleted = (
         : print(
             json,
             () => ({ deleted: id }),
-            () => id,
-          ),
-    ),
+            () => id
+          )
+    )
   );

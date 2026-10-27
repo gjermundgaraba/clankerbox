@@ -4,14 +4,17 @@
   "type": "module",
   "scripts": {
     "build": "vp run -r build",
-    "check": "vp check",
     "test": "vp run -r test",
-    "ready": "vp run check && vp run -r test && vp run -r build",
-    "prepare": "vp config"
+    "ready": "vp check && vp run -r test && vp run -r build",
+    "prepare": "vp config && effect-tsgo patch --no-typescript --oxlint"
   },
   "devDependencies": {
+    "@effect/tsgo": "catalog:",
     "@types/node": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
     "typescript": "catalog:",
+    "ultracite": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:"
   },

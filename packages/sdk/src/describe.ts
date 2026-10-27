@@ -1,8 +1,9 @@
-import { Match, type PlatformError, Predicate, type Schema, SchemaIssue } from "effect";
+import { Match, Predicate, SchemaIssue } from "effect";
+import type { PlatformError, Schema } from "effect";
 
 const jsonPath = (
-  path: ReadonlyArray<PropertyKey>,
-  names: ReadonlyMap<PropertyKey, string> | undefined,
+  path: readonly PropertyKey[],
+  names: ReadonlyMap<PropertyKey, string> | undefined
 ): string =>
   path
     .map((key, index) => {
@@ -19,22 +20,24 @@ const flatten = SchemaIssue.makeFormatterStandardSchemaV1({
     Match.value(issue).pipe(
       Match.tag("MissingKey", () => "missing"),
       Match.tag("UnexpectedKey", () => "not a known field"),
-      Match.orElse(SchemaIssue.defaultLeafHook),
+      Match.orElse(SchemaIssue.defaultLeafHook)
     ),
 });
 
 /** On one line: `cpu: missing; ram: not a known field`. `names` renames top-level fields. */
 export const describeIssues = (
   error: Schema.SchemaError,
-  names?: ReadonlyMap<PropertyKey, string>,
+  names?: ReadonlyMap<PropertyKey, string>
 ): string =>
   flatten(error.issue)
     .issues.map(({ path = [], message }) => {
       const keys = path.map((segment) =>
-        Predicate.isPropertyKey(segment) ? segment : segment.key,
+        Predicate.isPropertyKey(segment) ? segment : segment.key
       );
 
-      return keys.length === 0 ? message : `${jsonPath(keys, names)}: ${message}`;
+      return keys.length === 0
+        ? message
+        : `${jsonPath(keys, names)}: ${message}`;
     })
     .join("; ");
 
@@ -42,7 +45,9 @@ export const describeIssues = (
  * Node describes a failure only in its cause, so what has no wording here reads as the system's
  * own.
  */
-export const describeFileError = ({ reason }: PlatformError.PlatformError): string => {
+export const describeFileError = ({
+  reason,
+}: PlatformError.PlatformError): string => {
   if (Predicate.isTagged(reason, "NotFound")) {
     return "no such file or directory";
   }
@@ -51,5 +56,8 @@ export const describeFileError = ({ reason }: PlatformError.PlatformError): stri
     return "permission denied";
   }
 
-  return reason.description ?? (reason.cause instanceof Error ? reason.cause.message : reason._tag);
+  return (
+    reason.description ??
+    (reason.cause instanceof Error ? reason.cause.message : reason._tag)
+  );
 };

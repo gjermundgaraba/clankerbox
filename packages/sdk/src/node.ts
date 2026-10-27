@@ -1,5 +1,6 @@
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import { Layer } from "effect";
+
 import * as Client from "./client.ts";
 import type { Invalid } from "./errors.ts";
 
@@ -9,7 +10,9 @@ import type { Invalid } from "./errors.ts";
  * `@effect/platform-node`.
  */
 export const layer = (
-  hosts: ReadonlyArray<Client.HostEntry>,
-  options?: Client.Options,
+  hosts: readonly Client.HostEntry[],
+  options?: Client.Options
 ): Layer.Layer<Client.Client, Invalid> =>
-  Client.layer(hosts, options).pipe(Layer.provide(NodeHttpClient.layerNodeHttp));
+  Client.layer(hosts, options).pipe(
+    Layer.provide(NodeHttpClient.layerNodeHttp)
+  );

@@ -1,15 +1,18 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { version } from "@gjermundgaraba/clankerbox-sdk";
-import type { Command } from "effect/cli";
 import { layer } from "@effect/vitest";
+import { version } from "@gjermundgaraba/clankerbox-sdk";
 import { Effect } from "effect";
+import type { Command } from "effect/cli";
 import { expect } from "vite-plus/test";
+
 import { actionCommands, clankerbox } from "../src/clankerbox.ts";
 import { cli } from "./support.ts";
 
-const commandsUnder = (command: Command.Command.Any): ReadonlyArray<Command.Command.Any> =>
+const commandsUnder = (
+  command: Command.Command.Any
+): readonly Command.Command.Any[] =>
   command.subcommands.flatMap(({ commands }) =>
-    commands.flatMap((sub) => [sub, ...commandsUnder(sub)]),
+    commands.flatMap((sub) => [sub, ...commandsUnder(sub)])
   );
 
 layer(NodeServices.layer)((it) => {
@@ -27,7 +30,7 @@ layer(NodeServices.layer)((it) => {
 
       expect(code).toBe(0);
       expect(stdout).toBe(`clankerbox v${version}`);
-    }),
+    })
   );
 
   it.effect("--help shows the CLI's usage", () =>
@@ -36,7 +39,7 @@ layer(NodeServices.layer)((it) => {
 
       expect(code).toBe(0);
       expect(stdout).toContain("clankerbox <subcommand> [flags]");
-    }),
+    })
   );
 
   it.effect("host --help shows the host role's usage", () =>
@@ -46,7 +49,7 @@ layer(NodeServices.layer)((it) => {
       expect(code).toBe(0);
       expect(stdout).toContain("clankerbox host [flags]");
       expect(stdout).toContain("--config");
-    }),
+    })
   );
 
   it.effect("host without --config is a usage error", () =>
@@ -55,7 +58,7 @@ layer(NodeServices.layer)((it) => {
 
       expect(code).toBe(1);
       expect(stderr).toContain("--config");
-    }),
+    })
   );
 
   it.effect("host with a config it can't read says so and exits 1", () =>
@@ -68,9 +71,9 @@ layer(NodeServices.layer)((it) => {
 
       expect(code).toBe(1);
       expect(stderr).toContain(
-        "Invalid: couldn't read host config /nonexistent/clankerbox-host.json",
+        "Invalid: couldn't read host config /nonexistent/clankerbox-host.json"
       );
-    }),
+    })
   );
 
   it.effect("an unknown flag exits 1", () =>
@@ -78,6 +81,6 @@ layer(NodeServices.layer)((it) => {
       const { code } = yield* cli(["--bogus"]);
 
       expect(code).toBe(1);
-    }),
+    })
   );
 });

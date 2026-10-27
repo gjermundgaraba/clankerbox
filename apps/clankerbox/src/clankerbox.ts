@@ -1,5 +1,7 @@
-import { type actionsByName, version } from "@gjermundgaraba/clankerbox-sdk";
+import { version } from "@gjermundgaraba/clankerbox-sdk";
+import type { actionsByName } from "@gjermundgaraba/clankerbox-sdk";
 import { Command } from "effect/cli";
+
 import { ampOrb } from "./amp-orb.ts";
 import {
   capture,
@@ -49,7 +51,9 @@ export const actionCommands = {
 } satisfies Record<keyof typeof actionsByName, Command.Command.Any>;
 
 export const clankerbox = Command.make("clankerbox").pipe(
-  Command.withDescription("Run machines on clankerbox hosts. `clankerbox host` runs a host."),
+  Command.withDescription(
+    "Run machines on clankerbox hosts. `clankerbox host` runs a host."
+  ),
   Command.withSubcommands([
     hosts,
     capacity,
@@ -72,7 +76,7 @@ export const clankerbox = Command.make("clankerbox").pipe(
     sshKnownHosts,
     ampOrb,
     host,
-  ]),
+  ])
 );
 
 export const dispatch = Command.runWith(clankerbox, { version });

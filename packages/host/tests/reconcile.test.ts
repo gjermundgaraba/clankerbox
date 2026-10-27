@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Desired, Machine } from "@gjermundgaraba/clankerbox-sdk";
-import { type Decided, type Next, next } from "../src/reconcile.ts";
+
+import { next } from "../src/reconcile.ts";
+import type { Decided, Next } from "../src/reconcile.ts";
 import type { MachineState } from "../src/runtime.ts";
 
 interface State extends Decided {
@@ -9,14 +11,16 @@ interface State extends Decided {
 
 const desires = Desired.literals;
 
-const flags: ReadonlyArray<boolean> = [false, true];
+const flags: readonly boolean[] = [false, true];
 
 const seens = Machine.fields.state.literals;
 
-const states: ReadonlyArray<State> = desires.flatMap((desired) =>
+const states: readonly State[] = desires.flatMap((desired) =>
   flags.flatMap((made) =>
-    flags.flatMap((prepared) => seens.map((seen) => ({ desired, made, prepared, seen }))),
-  ),
+    flags.flatMap((prepared) =>
+      seens.map((seen) => ({ desired, made, prepared, seen }))
+    )
+  )
 );
 
 const decide = (state: State): Next => next(state, state.seen);
@@ -25,23 +29,37 @@ const rests: ReadonlySet<Next> = new Set<Next>(["settled", "lost", "waiting"]);
 
 const succeeded = (state: State, step: Next): State => {
   switch (step) {
-    case "creating":
+    case "creating": {
       return { ...state, made: true, prepared: false, seen: "running" };
-    case "starting":
+    }
+
+    case "starting": {
       return { ...state, prepared: true, seen: "running" };
-    case "stopping":
+    }
+
+    case "stopping": {
       return { ...state, prepared: false, seen: "stopped" };
-    case "pausing":
+    }
+
+    case "pausing": {
       return { ...state, prepared: false, seen: "paused" };
-    default:
+    }
+
+    case "deleting":
+    case "lost":
+    case "settled":
+    case "waiting": {
       return state;
+    }
+
+    // no default
   }
 };
 
 const restsWithin = (state: State, steps: number): boolean => {
   let current = state;
 
-  for (let taken = 0; taken <= steps; taken++) {
+  for (let taken = 0; taken <= steps; taken += 1) {
     const step = decide(current);
 
     if (rests.has(step)) {
@@ -57,8 +75,10 @@ const restsWithin = (state: State, steps: number): boolean => {
 describe("next", () => {
   it("a machine asked to be deleted is deleted, whatever else holds", () => {
     expect(
-      states.filter((state) => state.desired === "deleted" && decide(state) !== "deleting"),
-    ).toEqual([]);
+      states.filter(
+        (state) => state.desired === "deleted" && decide(state) !== "deleting"
+      )
+    ).toStrictEqual([]);
   });
 
   it("a made machine asked to stop is never made or started", () => {
@@ -67,9 +87,9 @@ describe("next", () => {
         (state) =>
           state.made &&
           state.desired === "stopped" &&
-          ["creating", "starting"].includes(decide(state)),
-      ),
-    ).toEqual([]);
+          ["creating", "starting"].includes(decide(state))
+      )
+    ).toStrictEqual([]);
   });
 
   it("a made machine asked to pause is paused only from running, and never made, started or stopped", () => {
@@ -79,9 +99,9 @@ describe("next", () => {
           state.made &&
           state.desired === "paused" &&
           (["creating", "starting", "stopping"].includes(decide(state)) ||
-            (decide(state) === "pausing") !== (state.seen === "running")),
-      ),
-    ).toEqual([]);
+            (decide(state) === "pausing") !== (state.seen === "running"))
+      )
+    ).toStrictEqual([]);
   });
 
   it("a paused machine asked to run or stop is started or stopped, never left at rest", () => {
@@ -91,17 +111,20 @@ describe("next", () => {
           state.made &&
           state.seen === "paused" &&
           ((state.desired === "running" && decide(state) !== "starting") ||
-            (state.desired === "stopped" && decide(state) !== "stopping")),
-      ),
-    ).toEqual([]);
+            (state.desired === "stopped" && decide(state) !== "stopping"))
+      )
+    ).toStrictEqual([]);
   });
 
   it("a machine not made is made, whatever the runtime reads: only a delete stops its making", () => {
     expect(
       states.filter(
-        (state) => !state.made && state.desired !== "deleted" && decide(state) !== "creating",
-      ),
-    ).toEqual([]);
+        (state) =>
+          !state.made &&
+          state.desired !== "deleted" &&
+          decide(state) !== "creating"
+      )
+    ).toStrictEqual([]);
   });
 
   it("a running machine settles only once it is made, runs and is prepared", () => {
@@ -110,20 +133,30 @@ describe("next", () => {
         (state) =>
           state.desired === "running" &&
           decide(state) === "settled" &&
-          !(state.made && state.seen === "running" && state.prepared),
-      ),
-    ).toEqual([]);
+          !(state.made && state.seen === "running" && state.prepared)
+      )
+    ).toStrictEqual([]);
   });
 
   it("against a runtime whose every step succeeds, a machine not deleted rests within two steps", () => {
-    expect(states.filter((state) => state.desired !== "deleted" && !restsWithin(state, 2))).toEqual(
-      [],
-    );
+    expect(
+      states.filter(
+        (state) => state.desired !== "deleted" && !restsWithin(state, 2)
+      )
+    ).toStrictEqual([]);
   });
 
   it("a made machine the runtime no longer has is lost, and one it can't read waits", () => {
-    const made: State = { desired: "running", made: true, prepared: false, seen: "missing" };
+    const made: State = {
+      desired: "running",
+      made: true,
+      prepared: false,
+      seen: "missing",
+    };
 
-    expect([decide(made), decide({ ...made, seen: "unknown" })]).toEqual(["lost", "waiting"]);
+    expect([decide(made), decide({ ...made, seen: "unknown" })]).toStrictEqual([
+      "lost",
+      "waiting",
+    ]);
   });
 });

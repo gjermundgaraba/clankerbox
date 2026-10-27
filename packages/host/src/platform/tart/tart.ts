@@ -1,31 +1,43 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import path from "node:path";
+
 import {
   Capacity,
   formatGib,
   formatMib,
-  type HostError,
   Internal,
   requirements,
-  type Sizing,
   Unsizable,
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, FileSystem, Layer, Option, Schedule, Schema, type Scope } from "effect";
+import type { HostError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
+import {
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Schedule,
+  Schema,
+} from "effect";
+import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/process";
+
 import { lastLines } from "../../guest.ts";
 import {
   changes,
-  type CheckpointRef,
-  type Held,
-  type Interface,
-  type MachineRef,
-  type MachineState,
   missing,
   Runtime,
-  type Sizes,
   sizedBy,
   timeoutFail,
+} from "../../runtime.ts";
+import type {
+  CheckpointRef,
+  Held,
+  Interface,
+  MachineRef,
+  MachineState,
+  Sizes,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
 import { CannotStart } from "../../startup.ts";
@@ -85,17 +97,21 @@ export const environment = (settings: Pick<Settings, "tartHome">) => ({
   TART_HOME: settings.tartHome,
 });
 
-export const machineName = (host: string, machine: Pick<MachineRef, "name" | "instance">): string =>
-  `cbx-${host}-m-${machine.name}-${machine.instance.slice(0, 8)}`;
+export const machineName = (
+  host: string,
+  machine: Pick<MachineRef, "name" | "instance">
+): string => `cbx-${host}-m-${machine.name}-${machine.instance.slice(0, 8)}`;
 
 export const checkpointName = (
   host: string,
-  checkpoint: Pick<CheckpointRef, "name" | "instance">,
-): string => `cbx-${host}-c-${checkpoint.name}-${checkpoint.instance.slice(0, 8)}`;
+  checkpoint: Pick<CheckpointRef, "name" | "instance">
+): string =>
+  `cbx-${host}-c-${checkpoint.name}-${checkpoint.instance.slice(0, 8)}`;
 
-export const jobsDir = (stateDir: string): string => join(stateDir, "launchd");
+export const jobsDir = (stateDir: string): string =>
+  path.join(stateDir, "launchd");
 
-const program = (binary: string, vm: string): ReadonlyArray<string> => [
+const program = (binary: string, vm: string): readonly string[] => [
   binary,
   "run",
   "--no-graphics",
@@ -105,17 +121,19 @@ const program = (binary: string, vm: string): ReadonlyArray<string> => [
 ];
 
 // Source: tart VMDirectory.swift resizeRawDisk
-export const diskGb = (diskGib: number): number => Math.ceil((diskGib * 1024 ** 3) / 1e9);
+export const diskGb = (diskGib: number): number =>
+  Math.ceil((diskGib * 1024 ** 3) / 1e9);
 
 // Source: tart Commands/Get.swift run
-export const diskGibOf = (gb: number): number => Math.floor((gb * 1e9) / 1024 ** 3);
+export const diskGibOf = (gb: number): number =>
+  Math.floor((gb * 1e9) / 1024 ** 3);
 
 const xml = (text: string): string =>
   text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
 export const plist = (job: {
   readonly label: string;
-  readonly program: ReadonlyArray<string>;
+  readonly program: readonly string[];
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly log: string;
 }): string =>
@@ -135,7 +153,7 @@ export const plist = (job: {
     ...Object.entries(job.environment).flatMap(([key, value]) =>
       value === undefined
         ? []
-        : [`    <key>${xml(key)}</key>`, `    <string>${xml(value)}</string>`],
+        : [`    <key>${xml(key)}</key>`, `    <string>${xml(value)}</string>`]
     ),
     `  </dict>`,
     `  <key>RunAtLoad</key>`,
@@ -155,20 +173,26 @@ export const plist = (job: {
 const VmState = Schema.Literals(["running", "suspended", "stopped"]);
 
 const decodeList = Schema.decodeUnknownEffect(
-  Schema.fromJsonString(Schema.Array(Schema.Struct({ Name: Schema.String, State: VmState }))),
+  Schema.fromJsonString(
+    Schema.Array(Schema.Struct({ Name: Schema.String, State: VmState }))
+  )
 );
 
 // Source: tart Commands/Get.swift VMInfo
 const decodeInfo = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
-    Schema.Struct({ CPU: Schema.Int, Memory: Schema.Int, Disk: Schema.NullOr(Schema.Int) }),
-  ),
+    Schema.Struct({
+      CPU: Schema.Int,
+      Memory: Schema.Int,
+      Disk: Schema.NullOr(Schema.Int),
+    })
+  )
 );
 
 // Source: tart Commands/Set.swift Set cpu, diskSize
 const maximumFlag = 2 ** 16 - 1;
 
-const sizeFlags = ({ cpu, ramMib, diskGib }: Sizing): ReadonlyArray<string> => [
+const sizeFlags = ({ cpu, ramMib, diskGib }: Sizing): readonly string[] => [
   ...(cpu === undefined ? [] : ["--cpu", String(cpu)]),
   ...(ramMib === undefined ? [] : ["--memory", String(ramMib)]),
   ...(diskGib === undefined ? [] : ["--disk-size", String(diskGb(diskGib))]),
@@ -179,20 +203,22 @@ export const stateOf = (state: typeof VmState.Type): MachineState =>
 
 export const supported = (reported: string): boolean =>
   /^\d+\.\d+\.\d+$/u.test(reported) &&
-  reported.localeCompare(requirements.tart.minimumVersion, "en", { numeric: true }) >= 0;
+  reported.localeCompare(requirements.tart.minimumVersion, "en", {
+    numeric: true,
+  }) >= 0;
 
 const printed = (output: string, key: string): string | undefined =>
   new RegExp(`^\\t${key} = (.+)$`, "mu").exec(output)?.[1];
 
-const printedArguments = (output: string): ReadonlyArray<string> | undefined =>
-  /^\targuments = \{\n((?:\t\t.*\n)*)\t\}$/mu
-    .exec(output)?.[1]
-    ?.split("\n")
+const printedArguments = (output: string): readonly string[] | undefined =>
+  /^\targuments = \{\n(?<lines>(?:\t\t.*\n)*)\t\}$/mu
+    .exec(output)
+    ?.groups?.["lines"]?.split("\n")
     .filter((line) => line !== "")
     .map((line) => line.slice(2));
 
 export const make = (
-  settings: Settings,
+  settings: Settings
 ): Effect.Effect<
   Interface,
   HostError | CannotStart,
@@ -205,21 +231,31 @@ export const make = (
     const jobs = jobsDir(settings.stateDir);
 
     if (settings.uid === undefined) {
-      return yield* new CannotStart({ message: "a Tart host runs on macOS, as a user" });
+      return yield* new CannotStart({
+        message: "a Tart host runs on macOS, as a user",
+      });
     }
 
     const domain = `gui/${settings.uid}`;
     const forwarder = yield* Forwarder.make(settings.publishAddress);
     const vmOf = (machine: MachineRef) => machineName(settings.hostId, machine);
-    const checkpointVm = (checkpoint: CheckpointRef) => checkpointName(settings.hostId, checkpoint);
 
-    const tart = (args: ReadonlyArray<string>, what: string) =>
+    const checkpointVm = (checkpoint: CheckpointRef) =>
+      checkpointName(settings.hostId, checkpoint);
+
+    const tart = (args: readonly string[], what: string) =>
       run(settings.binary, args, `tart ${what}`);
 
-    const call = (args: ReadonlyArray<string>, what: string, ok?: ReadonlyArray<number>) =>
-      Effect.flatMap(tart(args, what), (ran) => expect(ran, `tart ${what}`, ok));
+    const call = (
+      args: readonly string[],
+      what: string,
+      ok?: readonly number[]
+    ) =>
+      Effect.flatMap(tart(args, what), (ran) =>
+        expect(ran, `tart ${what}`, ok)
+      );
 
-    const launchctl = (args: ReadonlyArray<string>, what: string) =>
+    const launchctl = (args: readonly string[], what: string) =>
       run("/bin/launchctl", args, `launchctl ${what}`);
 
     const reported = (yield* call(["--version"], "--version")).stdout.trim();
@@ -234,19 +270,25 @@ export const make = (
       call(["list", "--source", "local", "--format", "json"], "list"),
       (ran) =>
         decodeList(ran.stdout).pipe(
-          Effect.map((vms) => new Map(vms.map((vm) => [vm.Name, stateOf(vm.State)]))),
+          Effect.map(
+            (vms) => new Map(vms.map((vm) => [vm.Name, stateOf(vm.State)]))
+          ),
           Effect.mapError(
             (error) =>
               new Internal({
                 message: `tart list answered something unexpected: ${error.message}`,
-              }),
-          ),
-        ),
+              })
+          )
+        )
     );
 
-    const state = (vm: string) => Effect.map(list, (vms) => vms.get(vm) ?? "missing");
+    const state = (vm: string) =>
+      Effect.map(list, (vms) => vms.get(vm) ?? "missing");
 
-    const countedIn = (vms: ReadonlyMap<string, MachineState>, machines: ReadonlyArray<Held>) => {
+    const countedIn = (
+      vms: ReadonlyMap<string, MachineState>,
+      machines: readonly Held[]
+    ) => {
       const counted = new Set<string>();
 
       for (const [vm, observed] of vms) {
@@ -266,14 +308,14 @@ export const make = (
 
     const observedIn = (
       vms: ReadonlyMap<string, MachineState>,
-      machines: ReadonlyArray<MachineRef>,
-    ): ReadonlyArray<MachineState> =>
+      machines: readonly MachineRef[]
+    ): readonly MachineState[] =>
       machines.map((machine) => vms.get(vmOf(machine)) ?? "missing");
 
     const job = (vm: string) => ({
       target: `${domain}/${vm}`,
-      plist: join(jobs, `${vm}.plist`),
-      log: join(jobs, `${vm}.log`),
+      plist: path.join(jobs, `${vm}.plist`),
+      log: path.join(jobs, `${vm}.log`),
     });
 
     const writeJob = (vm: string) => {
@@ -283,9 +325,14 @@ export const make = (
         `couldn't write ${file}`,
         fs.writeFileString(
           file,
-          plist({ label: vm, program: program(settings.binary, vm), environment: env, log }),
-          { mode: 0o600 },
-        ),
+          plist({
+            label: vm,
+            program: program(settings.binary, vm),
+            environment: env,
+            log,
+          }),
+          { mode: 0o600 }
+        )
       );
     };
 
@@ -294,7 +341,11 @@ export const make = (
 
     const listen = (machine: MachineRef) =>
       forwarder.listen(machine.port, (input) =>
-        command(settings.binary, ["exec", "-i", vmOf(machine), "nc", "127.0.0.1", "22"], input),
+        command(
+          settings.binary,
+          ["exec", "-i", vmOf(machine), "nc", "127.0.0.1", "22"],
+          input
+        )
       );
 
     const unlisten = (machine: MachineRef) => forwarder.close(machine.port);
@@ -310,7 +361,7 @@ export const make = (
 
         const printedJob = yield* Effect.flatMap(
           launchctl(["print", target], `print ${target}`),
-          (ran) => expect(ran, `launchctl print ${target}`),
+          (ran) => expect(ran, `launchctl print ${target}`)
         );
 
         if (printed(printedJob.stdout, "state") !== "not running") {
@@ -340,9 +391,9 @@ export const make = (
           () =>
             new Internal({
               message: `${machine.id}'s guest agent didn't answer tart exec within ${Duration.format(bootWait)} of its start`,
-            }),
+            })
         ),
-        Effect.asVoid,
+        Effect.asVoid
       );
     };
 
@@ -353,7 +404,7 @@ export const make = (
           schedule: Schedule.spaced(stopPause),
         }),
         Effect.timeoutOption(wait),
-        Effect.map(Option.isSome),
+        Effect.map(Option.isSome)
       );
 
     const forceStop = (vm: string) =>
@@ -372,7 +423,10 @@ export const make = (
         const vm = vmOf(machine);
         const { target, plist: file, log } = job(vm);
 
-        yield* files(`couldn't empty ${log}`, fs.writeFileString(log, "", { mode: 0o600 }));
+        yield* files(
+          `couldn't empty ${log}`,
+          fs.writeFileString(log, "", { mode: 0o600 })
+        );
         yield* writeJob(vm);
 
         const loaded = yield* launchctl(["print", target], `print ${target}`);
@@ -380,24 +434,26 @@ export const make = (
         const stale =
           loaded.exitCode === 0 &&
           printed(loaded.stdout, "state") === "not running" &&
-          printedArguments(loaded.stdout)?.join("\n") !== program(settings.binary, vm).join("\n");
+          printedArguments(loaded.stdout)?.join("\n") !==
+            program(settings.binary, vm).join("\n");
 
         if (stale) {
-          yield* Effect.flatMap(launchctl(["bootout", target], `bootout ${vm}`), (ran) =>
-            expect(ran, `launchctl bootout ${vm}`),
+          yield* Effect.flatMap(
+            launchctl(["bootout", target], `bootout ${vm}`),
+            (ran) => expect(ran, `launchctl bootout ${vm}`)
           );
         }
 
-        if (stale || loaded.exitCode === 113) {
-          yield* Effect.flatMap(launchctl(["bootstrap", domain, file], `bootstrap ${vm}`), (ran) =>
-            expect(ran, `launchctl bootstrap ${vm}`),
-          );
-        } else {
-          yield* expect(loaded, `launchctl print ${target}`);
-        }
+        yield* stale || loaded.exitCode === 113
+          ? Effect.flatMap(
+              launchctl(["bootstrap", domain, file], `bootstrap ${vm}`),
+              (ran) => expect(ran, `launchctl bootstrap ${vm}`)
+            )
+          : expect(loaded, `launchctl print ${target}`);
 
-        yield* Effect.flatMap(launchctl(["kickstart", target], `kickstart ${vm}`), (ran) =>
-          expect(ran, `launchctl kickstart ${vm}`),
+        yield* Effect.flatMap(
+          launchctl(["kickstart", target], `kickstart ${vm}`),
+          (ran) => expect(ran, `launchctl kickstart ${vm}`)
         );
         yield* ready(machine);
       });
@@ -419,16 +475,22 @@ export const make = (
 
         const shutdown = Effect.andThen(
           Effect.ignore(
-            tart(["exec", vm, "sudo", "-n", "/sbin/shutdown", "-h", "now"], `exec ${vm}`),
+            tart(
+              ["exec", vm, "sudo", "-n", "/sbin/shutdown", "-h", "now"],
+              `exec ${vm}`
+            )
           ),
-          Effect.never,
+          Effect.never
         );
 
-        const stopped = yield* Effect.raceFirst(halted(vm, shutdownWait), shutdown);
+        const stopped = yield* Effect.raceFirst(
+          halted(vm, shutdownWait),
+          shutdown
+        );
 
         if (!stopped) {
           yield* Effect.logWarning(
-            `stop ${machine.id}: the guest didn't shut down within ${Duration.format(shutdownWait)}; forcing it off`,
+            `stop ${machine.id}: the guest didn't shut down within ${Duration.format(shutdownWait)}; forcing it off`
           );
           yield* forceStop(vm);
         }
@@ -446,7 +508,7 @@ export const make = (
         }
       });
 
-    const set = (machine: MachineRef, sizes: Sizes, flags: ReadonlyArray<string>) =>
+    const set = (machine: MachineRef, sizes: Sizes, flags: readonly string[]) =>
       Effect.gen(function* () {
         const vm = vmOf(machine);
         const ran = yield* tart(["set", vm, ...flags], `set ${vm}`);
@@ -466,7 +528,11 @@ export const make = (
         yield* expect(ran, `tart set ${vm}`);
       });
 
-    const cloneInto = (from: string, machine: MachineRef, sizes: ReadonlyArray<string>) => {
+    const cloneInto = (
+      from: string,
+      machine: MachineRef,
+      sizes: readonly string[]
+    ) => {
       const vm = vmOf(machine);
 
       return Effect.gen(function* () {
@@ -490,7 +556,7 @@ export const make = (
                 message: `a Tart ${what} copies a stopped machine's disk, and ${machine.id} is ${observed}: stop it first`,
                 machine: machine.id,
                 state: observed,
-              }),
+              })
         );
       });
 
@@ -500,9 +566,9 @@ export const make = (
           Effect.fail(
             new Internal({
               message: `${error.message}; macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start ${machine.id} again: a restore that fails keeps the saved state, and a stop discards it`,
-            }),
-          ),
-        ),
+            })
+          )
+        )
       );
 
     const suspend = (machine: MachineRef) =>
@@ -529,7 +595,7 @@ export const make = (
 
         const loaded = yield* Effect.flatMap(
           launchctl(["print", target], `print ${target}`),
-          (ran) => expect(ran, `launchctl print ${target}`),
+          (ran) => expect(ran, `launchctl print ${target}`)
         );
 
         const loadedArguments = printedArguments(loaded.stdout);
@@ -542,7 +608,7 @@ export const make = (
 
         if (!loadedArguments.includes("--suspendable")) {
           yield* Effect.logWarning(
-            `pause ${machine.id}: an older host booted it without --suspendable, which Tart can't suspend, so it stops it instead`,
+            `pause ${machine.id}: an older host booted it without --suspendable, which Tart can't suspend, so it stops it instead`
           );
 
           yield* stop(machine);
@@ -560,7 +626,10 @@ export const make = (
               });
             }
 
-            const output = yield* files(`couldn't read ${log}`, fs.readFileString(log));
+            const output = yield* files(
+              `couldn't read ${log}`,
+              fs.readFileString(log)
+            );
 
             if (!output.includes(saved)) {
               yield* call(["stop", vm], `stop ${vm}`, [0, 2]);
@@ -569,7 +638,7 @@ export const make = (
                 message: `Tart couldn't save ${machine.id}'s state and powered its VM off, as it does when the first save on a Mac runs while its session is locked: ${lastLines(output)}`,
               });
             }
-          }),
+          })
         );
       });
 
@@ -583,20 +652,22 @@ export const make = (
         Effect.gen(function* () {
           yield* files(
             `couldn't create ${jobs}`,
-            fs.makeDirectory(jobs, { recursive: true, mode: 0o700 }),
+            fs.makeDirectory(jobs, { recursive: true, mode: 0o700 })
           );
 
           for (const machine of machines) {
             yield* listen(machine).pipe(
               Effect.catch((error) =>
-                Effect.logWarning(`startup: no forwarder for ${machine.id}: ${error.message}`),
-              ),
+                Effect.logWarning(
+                  `startup: no forwarder for ${machine.id}: ${error.message}`
+                )
+              )
             );
           }
-        }),
+        })
       ),
       observe: Effect.fn("Tart.observe")((machines) =>
-        Effect.map(list, (vms) => observedIn(vms, machines)),
+        Effect.map(list, (vms) => observedIn(vms, machines))
       ),
       admit: Effect.fn("Tart.admit")(({ action, machine, machines }) =>
         Effect.gen(function* () {
@@ -604,17 +675,17 @@ export const make = (
 
           if (counted.size > vmLimit) {
             return yield* new Capacity({
-              message: `${action} ${machine.id} would run ${counted.size} macOS VMs on this Mac, and Apple allows ${vmLimit}: ${[...counted].sort().join(", ")}`,
+              message: `${action} ${machine.id} would run ${counted.size} macOS VMs on this Mac, and Apple allows ${vmLimit}: ${[...counted].toSorted().join(", ")}`,
             });
           }
-        }),
+        })
       ),
       capacity: Effect.fn("Tart.capacity")((machines) =>
         Effect.gen(function* () {
           const vms = yield* list;
 
           const { running, unread } = yield* inUse(machines, (refs) =>
-            Effect.succeed(observedIn(vms, refs)),
+            Effect.succeed(observedIn(vms, refs))
           );
 
           return [
@@ -625,10 +696,10 @@ export const make = (
             },
             ...allotted(running, unread),
           ];
-        }),
+        })
       ),
       create: Effect.fn("Tart.create")((machine, image) =>
-        cloneInto(image, machine, sizeFlags(machine)),
+        cloneInto(image, machine, sizeFlags(machine))
       ),
       start: Effect.fn("Tart.start")((machine) =>
         Effect.gen(function* () {
@@ -647,7 +718,7 @@ export const make = (
           if (observed === "paused") {
             yield* resume(machine);
           }
-        }),
+        })
       ),
       stop: Effect.fn("Tart.stop")(stop),
       pause: Effect.fn("Tart.pause")(suspend),
@@ -658,41 +729,49 @@ export const make = (
 
           yield* deleteVm(vm);
 
-          yield* Effect.flatMap(launchctl(["bootout", target], `bootout ${vm}`), (ran) =>
-            expect(ran, `launchctl bootout ${vm}`, [0, 3]),
+          yield* Effect.flatMap(
+            launchctl(["bootout", target], `bootout ${vm}`),
+            (ran) => expect(ran, `launchctl bootout ${vm}`, [0, 3])
           );
 
-          for (const path of [file, log]) {
-            yield* files(`couldn't remove ${path}`, fs.remove(path, { force: true }));
+          for (const leftover of [file, log]) {
+            yield* files(
+              `couldn't remove ${leftover}`,
+              fs.remove(leftover, { force: true })
+            );
           }
 
           yield* unlisten(machine);
-        }),
+        })
       ),
       capture: Effect.fn("Tart.capture")((machine, checkpoint) =>
         Effect.andThen(
           copyable("checkpoint", machine),
           call(
             ["clone", vmOf(machine), checkpointVm(checkpoint)],
-            `clone ${checkpointVm(checkpoint)}`,
-          ),
-        ),
+            `clone ${checkpointVm(checkpoint)}`
+          )
+        )
       ),
       restore: Effect.fn("Tart.restore")((checkpoint, machine) =>
-        cloneInto(checkpointVm(checkpoint), machine, sizeFlags(changes(checkpoint, machine))),
+        cloneInto(
+          checkpointVm(checkpoint),
+          machine,
+          sizeFlags(changes(checkpoint, machine))
+        )
       ),
       fork: Effect.fn("Tart.fork")((source, machine) =>
         Effect.andThen(
           copyable("fork", source),
-          cloneInto(vmOf(source), machine, sizeFlags(changes(source, machine))),
-        ),
+          cloneInto(vmOf(source), machine, sizeFlags(changes(source, machine)))
+        )
       ),
       sizable: (machine, _from, to) => {
         if (to.cpu > maximumFlag || diskGb(to.diskGib) > maximumFlag) {
           return Effect.fail(
             new Unsizable({
               message: `tart set takes at most ${maximumFlag} vCPUs and ${maximumFlag} GB of disk, and ${machine.id} would have ${to.cpu} vCPUs and ${diskGb(to.diskGib)} GB`,
-            }),
+            })
           );
         }
 
@@ -705,31 +784,37 @@ export const make = (
           if (flags.length > 0) {
             yield* set(machine, sizedBy(machine, to), flags);
           }
-        }),
+        })
       ),
       sizes: Effect.fn("Tart.sizes")((machine) => {
         const vm = vmOf(machine);
 
-        return Effect.flatMap(call(["get", vm, "--format", "json"], `get ${vm}`), (ran) =>
-          decodeInfo(ran.stdout).pipe(
-            Effect.map(({ CPU, Memory, Disk }) => ({
-              cpu: CPU,
-              ramMib: Memory,
-              diskGib: Disk === null ? undefined : diskGibOf(Disk),
-            })),
-            Effect.mapError(
-              (error) =>
-                new Internal({
-                  message: `tart get ${vm} answered something unexpected: ${error.message}`,
-                }),
-            ),
-          ),
+        return Effect.flatMap(
+          call(["get", vm, "--format", "json"], `get ${vm}`),
+          (ran) =>
+            decodeInfo(ran.stdout).pipe(
+              Effect.map(({ CPU, Memory, Disk }) => ({
+                cpu: CPU,
+                ramMib: Memory,
+                diskGib: Disk === null ? undefined : diskGibOf(Disk),
+              })),
+              Effect.mapError(
+                (error) =>
+                  new Internal({
+                    message: `tart get ${vm} answered something unexpected: ${error.message}`,
+                  })
+              )
+            )
         );
       }),
       deleteCheckpoint: Effect.fn("Tart.deleteCheckpoint")((checkpoint) =>
         Effect.asVoid(
-          call(["delete", checkpointVm(checkpoint)], `delete ${checkpointVm(checkpoint)}`, [0, 2]),
-        ),
+          call(
+            ["delete", checkpointVm(checkpoint)],
+            `delete ${checkpointVm(checkpoint)}`,
+            [0, 2]
+          )
+        )
       ),
       exec: Effect.fn("Tart.exec")((machine, { argv, stdin, user }) => {
         const vm = vmOf(machine);
@@ -739,7 +824,7 @@ export const make = (
           settings.binary,
           ["exec", "-i", vm, "sudo", "-n", ...as, "--", ...argv],
           stdin,
-          `tart exec ${vm}`,
+          `tart exec ${vm}`
         );
       }),
     } satisfies Interface;
@@ -748,7 +833,7 @@ export const make = (
 export const layer = (
   config: Pick<HostSettings, "id" | "stateDir" | "listen"> & {
     readonly mac: typeof TartSettings.Type;
-  },
+  }
 ): Layer.Layer<
   Runtime,
   HostError | CannotStart,
@@ -763,5 +848,5 @@ export const layer = (
       stateDir: config.stateDir,
       uid: process.getuid?.(),
       tartHome: process.env["TART_HOME"],
-    }),
+    })
   );

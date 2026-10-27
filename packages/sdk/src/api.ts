@@ -1,6 +1,7 @@
 import * as Action from "@gjermundgaraba/effect-actions/Action";
 import * as ActionHttp from "@gjermundgaraba/effect-actions/ActionHttp";
 import { Duration, Schema } from "effect";
+
 import {
   Capacity,
   Conflict,
@@ -130,7 +131,8 @@ export const Http = ActionHttp.make(
     Action.make("deleteMachine", {
       ...write,
       error: converging,
-      description: "Delete a machine and everything native it owns, whatever it is doing.",
+      description:
+        "Delete a machine and everything native it owns, whatever it is doing.",
       input: ById,
     }),
     Action.make("forkMachine", {
@@ -151,7 +153,14 @@ export const Http = ActionHttp.make(
     }),
     Action.make("execMachine", {
       ...write,
-      error: [Invalid, NotFound, NotMade, Missing, WrongState, Internal] as const,
+      error: [
+        Invalid,
+        NotFound,
+        NotMade,
+        Missing,
+        WrongState,
+        Internal,
+      ] as const,
       description:
         "Run a command in a running machine, as the user it names or root, with the image's environment on linux, and answer its exit code and output once it exits, whatever the code. It waits for a start or stop under way before it begins, and a stop or delete ends it, as does a pause on linux. It runs as long as the request does: ending the request ends the command, though on mac one that writes nothing runs on until it next writes.",
       input: ExecRequest,
@@ -191,7 +200,8 @@ export const Http = ActionHttp.make(
     Action.make("deleteCheckpoint", {
       ...write,
       error: reading,
-      description: "Delete a checkpoint, once the restores that read it are done.",
+      description:
+        "Delete a checkpoint, once the restores that read it are done.",
       input: ById,
     }),
     Action.make("prebuildCheckpoint", {
@@ -216,7 +226,7 @@ export const Http = ActionHttp.make(
       success: Schema.Array(Usage),
     }),
   ],
-  { prefix: "/api" },
+  { prefix: "/api" }
 );
 
 export const actionsByName = Action.byName(Http.actions);

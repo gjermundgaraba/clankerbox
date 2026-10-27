@@ -9,14 +9,18 @@ import type {
 import {
   createEffectActor,
   createEffectLogic,
-  type EffectActor,
   send,
   setupEffect,
   waitFor,
 } from "@xstate/effect";
-import { Effect, type Scope } from "effect";
-import { type SnapshotFrom, types } from "xstate";
-import { type Decided, next } from "./reconcile.ts";
+import type { EffectActor } from "@xstate/effect";
+import { Effect } from "effect";
+import type { Scope } from "effect";
+import { types } from "xstate";
+import type { SnapshotFrom } from "xstate";
+
+import { next as nextTarget } from "./reconcile.ts";
+import type { Decided } from "./reconcile.ts";
 import type { MachineState, RuntimeError } from "./runtime.ts";
 import type { CheckpointRecord, Desire, Intent } from "./store.ts";
 
@@ -68,7 +72,10 @@ export interface TailnetCheck {
 }
 
 /** What a new actor starts from: its row, what its create holds, and what the runtime last read. */
-export type Born = Pick<Life, "name" | "desired" | "generation" | "made" | "making" | "seen">;
+export type Born = Pick<
+  Life,
+  "name" | "desired" | "generation" | "made" | "making" | "seen"
+>;
 
 /** A step's error, with the generation it worked for: a later request makes it no answer. */
 export interface Failure {
@@ -121,9 +128,16 @@ const joinedWait = 60;
 
 export const longestBackoff = 64;
 
-const unchecked: TailnetCheck = { status: undefined, wait: undefined, backoff: 1 };
+const unchecked: TailnetCheck = {
+  status: undefined,
+  wait: undefined,
+  backoff: 1,
+};
 
-export const checked = (check: TailnetCheck, status: TailnetStatus | undefined): TailnetCheck => {
+export const checked = (
+  check: TailnetCheck,
+  status: TailnetStatus | undefined
+): TailnetCheck => {
   if (status?.state === "joined") {
     return { status, wait: joinedWait, backoff: 1 };
   }
@@ -140,12 +154,16 @@ export const checked = (check: TailnetCheck, status: TailnetStatus | undefined):
 };
 
 const ticked = (check: TailnetCheck): TailnetCheck =>
-  check.wait === undefined || check.wait === 0 ? check : { ...check, wait: check.wait - 1 };
+  check.wait === undefined || check.wait === 0
+    ? check
+    : { ...check, wait: check.wait - 1 };
 
 const decide = (life: Life) => {
-  const target = next(life, life.seen);
+  const target = nextTarget(life, life.seen);
 
-  return target === "settled" && life.seen === "running" && life.tailnet.wait === 0
+  return target === "settled" &&
+    life.seen === "running" &&
+    life.tailnet.wait === 0
     ? "joining"
     : target;
 };
@@ -180,7 +198,10 @@ const failing = (life: Life, failure: Failure) => {
 
   return failure.generation < life.generation
     ? { target: "observing" as const, context: after }
-    : { target: "failed" as const, context: { ...after, error: failure.error } };
+    : {
+        target: "failed" as const,
+        context: { ...after, error: failure.error },
+      };
 };
 
 const interrupting = (life: Life, desire: Desire) => {
@@ -213,20 +234,30 @@ export const lifecycle = (steps: Steps) => {
   const step =
     <A>(run: (life: Life) => Effect.Effect<A, StepError>) =>
     ({ input }: { input: Life }) =>
-      Effect.mapError(run(input), (error): Failure => ({ error, generation: input.generation }));
+      Effect.mapError(run(input), (error): Failure => ({
+        error,
+        generation: input.generation,
+      }));
 
   const setup = setupEffect({
     schemas: {
       input: types<Born>(),
       context: types<Life>(),
-      events: { desire: types<Desire>(), seen: types<{ readonly seen: MachineState }>() },
+      events: {
+        desire: types<Desire>(),
+        seen: types<{ readonly seen: MachineState }>(),
+      },
       tags: types<"resting">(),
     },
     actors: {
-      observe: createEffectLogic(({ input }: { input: Life }) => steps.observe(input)),
+      observe: createEffectLogic(({ input }: { input: Life }) =>
+        steps.observe(input)
+      ),
       make: createEffectLogic(step(steps.make)),
       start: createEffectLogic(step(steps.start)),
-      join: createEffectLogic(({ input }: { input: Life }) => steps.join(input)),
+      join: createEffectLogic(({ input }: { input: Life }) =>
+        steps.join(input)
+      ),
       stop: createEffectLogic(step(steps.stop)),
       pause: createEffectLogic(step(steps.pause)),
       remove: createEffectLogic(step(steps.remove)),
@@ -253,13 +284,16 @@ export const lifecycle = (steps: Steps) => {
   const stepping = (
     src: "make" | "start" | "stop" | "pause",
     desired: (life: Life, desire: Desire) => { readonly context: Life },
-    reached: Partial<Life>,
+    reached: Partial<Life>
   ) =>
     setup.createStateConfig({
       invoke: {
         src,
         input: ({ context }) => context,
-        onDone: ({ context }) => ({ target: "observing", context: { ...context, ...reached } }),
+        onDone: ({ context }) => ({
+          target: "observing",
+          context: { ...context, ...reached },
+        }),
         onError: ({ context, event }) => failing(context, event.error),
       },
       on: { desire: ({ context, event }) => desired(context, event) },
@@ -299,13 +333,18 @@ export const lifecycle = (steps: Steps) => {
           input: ({ context }) => context,
           onDone: ({ context, event }) => ({
             target: "settled",
-            context: { ...context, tailnet: checked(context.tailnet, event.output) },
+            context: {
+              ...context,
+              tailnet: checked(context.tailnet, event.output),
+            },
           }),
         },
         on: {
           desire: ({ context, event }) => again(context, event),
           seen: ({ context, event }) =>
-            event.seen === "running" || event.seen === "unknown" ? {} : reread(context, event.seen),
+            event.seen === "running" || event.seen === "unknown"
+              ? {}
+              : reread(context, event.seen),
         },
       },
       failed: {
@@ -317,7 +356,11 @@ export const lifecycle = (steps: Steps) => {
         },
       },
       lost: resting,
-      creating: stepping("make", cutting, { made: true, making: undefined, prepared: false }),
+      creating: stepping("make", cutting, {
+        made: true,
+        making: undefined,
+        prepared: false,
+      }),
       starting: stepping("start", interrupting, {
         prepared: true,
         tailnet: { ...unchecked, wait: 0 },
@@ -345,24 +388,33 @@ export type Snapshot = SnapshotFrom<Lifecycle>;
 
 export const spawn = (
   logic: Lifecycle,
-  born: Born,
-): Effect.Effect<MachineActor, never, Scope.Scope> => createEffectActor(logic, { input: born });
+  born: Born
+): Effect.Effect<MachineActor, never, Scope.Scope> =>
+  createEffectActor(logic, { input: born });
 
 export const ask = (actor: MachineActor, desire: Desire): Effect.Effect<void> =>
   send(actor, { type: "desire", ...desire });
 
-export const tell = (actor: MachineActor, seen: MachineState): Effect.Effect<void> =>
-  send(actor, { type: "seen", seen });
+export const tell = (
+  actor: MachineActor,
+  seen: MachineState
+): Effect.Effect<void> => send(actor, { type: "seen", seen });
 
-export const isResting = (snapshot: Snapshot): boolean => snapshot.hasTag("resting");
+export const isResting = (snapshot: Snapshot): boolean =>
+  snapshot.hasTag("resting");
 
-export const answer = (actor: MachineActor, generation: number): Effect.Effect<Snapshot> =>
+export const answer = (
+  actor: MachineActor,
+  generation: number
+): Effect.Effect<Snapshot> =>
   waitFor(
     actor,
     (snapshot) =>
       snapshot.status !== "active" ||
-      (isResting(snapshot) && snapshot.context.generation >= generation),
+      (isResting(snapshot) && snapshot.context.generation >= generation)
   ).pipe(Effect.catch(() => Effect.sync(() => actor.getSnapshot())));
 
 export const removal = (actor: MachineActor): Effect.Effect<void> =>
-  waitFor(actor, (snapshot) => snapshot.status !== "active").pipe(Effect.ignore);
+  waitFor(actor, (snapshot) => snapshot.status !== "active").pipe(
+    Effect.ignore
+  );

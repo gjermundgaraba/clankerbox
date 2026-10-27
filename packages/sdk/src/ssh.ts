@@ -1,6 +1,9 @@
-import { Effect, FileSystem, Path, type PlatformError, type Scope } from "effect";
+import { Effect, FileSystem, Path } from "effect";
+import type { PlatformError, Scope } from "effect";
+
 import { WrongState } from "./errors.ts";
-import { type Machine, type SshLogin, stateLabel } from "./resources.ts";
+import { stateLabel } from "./resources.ts";
+import type { Machine, SshLogin } from "./resources.ts";
 
 export interface SshTarget {
   readonly id: string;
@@ -12,7 +15,9 @@ export interface SshTarget {
  * Only a running machine has an endpoint, and only a prepared one a host key; a machine without
  * either is `WrongState`, naming what it lacks and why.
  */
-export const sshTarget = (machine: Machine): Effect.Effect<SshTarget, WrongState> => {
+export const sshTarget = (
+  machine: Machine
+): Effect.Effect<SshTarget, WrongState> => {
   const { id, ssh: login, hostKey } = machine;
 
   if (login !== undefined && hostKey !== undefined) {
@@ -37,8 +42,8 @@ const sshArguments = (
   target: SshTarget,
   user: string,
   knownHosts: string,
-  extra: ReadonlyArray<string>,
-): Array<string> => [
+  extra: readonly string[]
+): string[] => [
   "-l",
   user,
   "-o",
@@ -64,20 +69,26 @@ const sshArguments = (
 export const pinnedSsh = (
   target: SshTarget,
   user: string,
-  extra: ReadonlyArray<string>,
+  extra: readonly string[]
 ): Effect.Effect<
-  Array<string>,
+  string[],
   PlatformError.PlatformError,
   FileSystem.FileSystem | Path.Path | Scope.Scope
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "clankerbox-ssh-" });
+
+    const directory = yield* fs.makeTempDirectoryScoped({
+      prefix: "clankerbox-ssh-",
+    });
 
     const knownHosts = path.join(directory, "known_hosts");
 
-    yield* fs.writeFileString(knownHosts, knownHostsLine(target.id, target.hostKey));
+    yield* fs.writeFileString(
+      knownHosts,
+      knownHostsLine(target.id, target.hostKey)
+    );
 
     return sshArguments(target, user, knownHosts, extra);
   });
