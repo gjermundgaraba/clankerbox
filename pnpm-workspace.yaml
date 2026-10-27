@@ -13,7 +13,7 @@ catalog:
   "@effect/platform-node-shared": 4.0.6
   "@effect/tsgo": 0.57.0
   "@effect/vitest": 4.0.6
-  "@gjermundgaraba/effect-actions": 0.20.0
+  "@gjermundgaraba/effect-actions": 0.21.0
   "@types/node": 26.6.5
   effect: 4.0.6
   sandbox-agent: 0.5.3

@@ -52,9 +52,9 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@effect/platform-node": "~4.0.4",
-    "@gjermundgaraba/effect-actions": "^0.20.0",
-    "effect": "~4.0.4"
+    "@effect/platform-node": "~4.0.5",
+    "@gjermundgaraba/effect-actions": "^0.21.0",
+    "effect": "~4.0.5"
   },
   "peerDependenciesMeta": {
     "@effect/platform-node": {

@@ -177,8 +177,8 @@ catalogs:
       specifier: 4.0.6
       version: 4.0.6
     '@gjermundgaraba/effect-actions':
-      specifier: 0.20.0
-      version: 0.20.0
+      specifier: 0.21.0
+      version: 0.21.0
     '@types/node':
       specifier: 26.6.5
       version: 26.6.5
@@ -259,7 +259,7 @@ importers:
         version: 4.0.6(effect@4.0.6)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.20.0(effect@4.0.6)
+        version: 0.21.0(effect@4.0.6)
       '@xstate/effect':
         specifier: 'catalog:'
         version: 1.0.0-alpha.9(effect@4.0.6)(xstate@6.0.0-alpha.70)
@@ -305,7 +305,7 @@ importers:
         version: link:../sdk
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.20.0(effect@4.0.6)
+        version: 0.21.0(effect@4.0.6)
       '@xstate/effect':
         specifier: 'catalog:'
         version: 1.0.0-alpha.9(effect@4.0.6)(xstate@6.0.0-alpha.70)
@@ -346,7 +346,7 @@ importers:
         version: 4.0.6(effect@4.0.6)(redis@6.3.0)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.20.0(effect@4.0.6)
+        version: 0.21.0(effect@4.0.6)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
@@ -376,7 +376,7 @@ importers:
         version: 4.0.6(effect@4.0.6)(vitest@5.0.5)
       '@gjermundgaraba/effect-actions':
         specifier: 'catalog:'
-        version: 0.20.0(effect@4.0.6)
+        version: 0.21.0(effect@4.0.6)
       '@types/node':
         specifier: 'catalog:'
         version: 26.6.5
@@ -512,11 +512,11 @@ packages:
       effect: ^4.0.6
       vitest: 5.0.5
 
-  '@gjermundgaraba/effect-actions@0.20.0':
-    resolution: {integrity: sha512-yxnswPuBnmEVw42XlPWUiBePV7lENrv/gtB33foPTv/yq9BrpB7S7ti/S7r6OJBUG//v1a1zuS1oQ2JSWGEvIA==}
-    engines: {node: '>=26'}
+  '@gjermundgaraba/effect-actions@0.21.0':
+    resolution: {integrity: sha512-kjoB4fyy32w6mmuTtVmi2FxmRFcodVPSfQUUIEfsyfUhoJR7AUiPs7kv+PvVwkeJe9jWfOkHSpD0KWAwWJM2lA==}
+    engines: {node: '>=26.12.0'}
     peerDependencies:
-      effect: ~4.0.4
+      effect: ~4.0.5
 
   '@jridgewell/resolve-uri@3.1.2':
     resolution: {integrity: sha512-bRISgCIjP20/tbWSPWMEi54QVPRZExkuD9lJL+UIxUKtwVJA8wW1Trb1jMs1RFXo1CBTNZ/5hpC9QvmKWdopKw==}
@@ -2034,7 +2034,7 @@ snapshots:
       effect: 4.0.6
       vitest: 5.0.5(@types/node@26.6.5)(@vitest/browser-preview@5.0.5)(@vitest/ui@5.0.5)(@voidzero-dev/vite-plus-core@1.4.0(@types/node@26.6.5)(typescript@7.0.2)(yaml@2.9.1))
 
-  '@gjermundgaraba/effect-actions@0.20.0(effect@4.0.6)':
+  '@gjermundgaraba/effect-actions@0.21.0(effect@4.0.6)':
     dependencies:
       effect: 4.0.6
 
