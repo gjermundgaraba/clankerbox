@@ -46,10 +46,12 @@ const admits = (
       Effect.sync(() => {
         asked.push(refs);
 
-        return refs.map(
-          (asking) =>
+        return new Map(
+          refs.map((asking) => [
+            asking.id,
             machines.find((held) => held.machine.id === asking.id)?.state ??
-            "missing"
+              "missing",
+          ])
         );
       });
 

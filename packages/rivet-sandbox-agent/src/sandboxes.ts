@@ -48,13 +48,9 @@ interface Held {
   readonly scope: Scope.Closeable;
 }
 
-/**
- * The port is kept from the first tunnel until destroy, since an SDK client asks for a URL only
- * once. A destroyed sandbox keeps its lock, since a call may still be waiting on it.
- */
 interface Sandbox {
   readonly lock: Semaphore.Semaphore;
-  port: number | undefined;
+  urlPort: number | undefined;
   held: Held | undefined;
 }
 
@@ -103,7 +99,7 @@ export const make = (options: Options, ssh = "ssh") => {
   const sandbox = (id: string): Sandbox => {
     const known = sandboxes.get(id) ?? {
       lock: Semaphore.makeUnsafe(1),
-      port: undefined,
+      urlPort: undefined,
       held: undefined,
     };
 
@@ -126,12 +122,12 @@ export const make = (options: Options, ssh = "ssh") => {
     });
 
   const taken = (port: number) =>
-    [...sandboxes.values()].some((other) => other.port === port);
+    [...sandboxes.values()].some((other) => other.urlPort === port);
 
-  const portOf = (known: Sandbox): Effect.Effect<number, LocalTunnelError> =>
+  const urlPortOf = (known: Sandbox): Effect.Effect<number, LocalTunnelError> =>
     Effect.gen(function* () {
-      if (known.port !== undefined) {
-        return known.port;
+      if (known.urlPort !== undefined) {
+        return known.urlPort;
       }
 
       let port = yield* freePort;
@@ -140,7 +136,7 @@ export const make = (options: Options, ssh = "ssh") => {
         port = yield* freePort;
       }
 
-      known.port = port;
+      known.urlPort = port;
 
       return port;
     });
@@ -162,7 +158,7 @@ export const make = (options: Options, ssh = "ssh") => {
   ): Effect.Effect<number, ClankerboxError | LocalTunnelError, Services> =>
     Effect.gen(function* () {
       if (known.held?.tunnel.running() === true) {
-        return yield* portOf(known);
+        return yield* urlPortOf(known);
       }
 
       yield* closed(known);
@@ -170,7 +166,7 @@ export const make = (options: Options, ssh = "ssh") => {
       const client = yield* Client.Client;
       const target = yield* sshTarget(yield* client.getMachine({ id }));
 
-      const port = yield* portOf(known);
+      const port = yield* urlPortOf(known);
       const scope = yield* Scope.make();
 
       const tunnel = yield* Effect.gen(function* () {
@@ -266,7 +262,7 @@ export const make = (options: Options, ssh = "ssh") => {
 
           yield* closed(known);
           yield* client.deleteMachine({ id });
-          known.port = undefined;
+          known.urlPort = undefined;
         })
       ),
     pause: (id: string) =>

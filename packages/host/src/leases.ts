@@ -5,28 +5,22 @@ import type { Resource } from "./ids.ts";
 
 const holders = 1024;
 
-/**
- * In memory only: a host that ends drops every lease with the work that held it. A step takes its
- * machines' leases before its checkpoints', so no two steps wait on each other.
- */
+export interface Lease {
+  readonly mode: "share" | "own";
+  readonly name: string;
+}
+
+export const shared = (name: string): Lease => ({ mode: "share", name });
+
+export const owned = (name: string): Lease => ({ mode: "own", name });
+
+export interface Wanted {
+  readonly machine?: Lease;
+  readonly checkpoint?: Lease;
+}
+
 export interface Interface {
-  /**
-   * Held until the scope closes, beside any other share: what copies a resource shares it, so it
-   * doesn't change under the copy.
-   */
-  readonly share: (
-    leased: Resource,
-    name: string
-  ) => Effect.Effect<void, never, Scope.Scope>;
-  /**
-   * Held alone until the scope closes: what changes a resource owns it. A share asked for while an
-   * owner waits comes after the owner. Either waits interruptibly, so a step cut short while it
-   * waits holds nothing.
-   */
-  readonly own: (
-    leased: Resource,
-    name: string
-  ) => Effect.Effect<void, never, Scope.Scope>;
+  readonly hold: (wanted: Wanted) => Effect.Effect<void, never, Scope.Scope>;
 }
 
 export class Leases extends Context.Service<Leases, Interface>()(
@@ -43,26 +37,34 @@ export const make: Effect.Effect<Interface, never, Scope.Scope> = Effect.gen(
         }),
     });
 
-    const hold =
-      (permits: number) =>
-      (
-        leased: Resource,
-        name: string
-      ): Effect.Effect<void, never, Scope.Scope> =>
-        Effect.flatMap(RcMap.get(locks, `${leased} ${name}`), (lock) =>
-          lock.gate.withPermits(1)(
-            Effect.uninterruptibleMask((restore) =>
-              Effect.andThen(
-                restore(lock.permits.withPermits(permits)(Effect.void)),
-                Effect.acquireRelease(lock.permits.take(permits), () =>
-                  lock.permits.release(permits)
-                )
+    const take = (
+      leased: Resource,
+      { mode, name }: Lease
+    ): Effect.Effect<void, never, Scope.Scope> =>
+      Effect.flatMap(RcMap.get(locks, `${leased} ${name}`), (lock) => {
+        const permits = mode === "share" ? 1 : holders;
+
+        return lock.gate.withPermits(1)(
+          Effect.uninterruptibleMask((restore) =>
+            Effect.andThen(
+              restore(lock.permits.withPermits(permits)(Effect.void)),
+              Effect.acquireRelease(lock.permits.take(permits), () =>
+                lock.permits.release(permits)
               )
             )
           )
         );
+      });
 
-    return { share: hold(1), own: hold(holders) };
+    return {
+      hold: ({ machine, checkpoint }) =>
+        Effect.andThen(
+          machine === undefined ? Effect.void : take("machine", machine),
+          checkpoint === undefined
+            ? Effect.void
+            : take("checkpoint", checkpoint)
+        ),
+    };
   }
 );
 

@@ -515,7 +515,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           })
         );
         expect(yield* accepts(machine.port)).toBe(true);
-        expect(yield* runtime.observe([machine])).toStrictEqual(["running"]);
+        expect(yield* runtime.observe([machine])).toStrictEqual(
+          new Map([[machine.id, "running"]])
+        );
       })
   );
 
@@ -1716,7 +1718,13 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const before = mac.spawner.calls.length;
       const observed = yield* runtime.observe([up, paused, gone]);
 
-      expect(observed).toStrictEqual(["running", "paused", "missing"]);
+      expect(observed).toStrictEqual(
+        new Map([
+          [up.id, "running"],
+          [paused.id, "paused"],
+          [gone.id, "missing"],
+        ])
+      );
       expect(
         mac.spawner.calls.slice(before).map(({ args }) => args)
       ).toStrictEqual([["list", "--source", "local", "--format", "json"]]);
@@ -1741,7 +1749,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `launchctl print gui/501/${vm}`,
           `tart suspend ${vm}`,
         ]);
-        expect(yield* runtime.observe([machine])).toStrictEqual(["paused"]);
+        expect(yield* runtime.observe([machine])).toStrictEqual(
+          new Map([[machine.id, "paused"]])
+        );
       })
   );
 
@@ -1770,7 +1780,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `launchctl print gui/501/${vm}`,
           `tart exec ${vm} sudo -n /sbin/shutdown -h now`,
         ]);
-        expect(yield* runtime.observe([machine])).toStrictEqual(["stopped"]);
+        expect(yield* runtime.observe([machine])).toStrictEqual(
+          new Map([[machine.id, "stopped"]])
+        );
       })
   );
 
@@ -1824,7 +1836,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           `tart suspend ${vm}`,
           `tart stop ${vm}`,
         ]);
-        expect(yield* runtime.observe([machine])).toStrictEqual(["stopped"]);
+        expect(yield* runtime.observe([machine])).toStrictEqual(
+          new Map([[machine.id, "stopped"]])
+        );
       })
   );
 
@@ -1847,7 +1861,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(failure(error)[0]).toBe("Internal");
         expect(failure(error)[1]).toContain(`couldn't read ${mac.logOf(vm)}`);
         expect(calls(mac).slice(-1)).toStrictEqual([`tart suspend ${vm}`]);
-        expect(yield* runtime.observe([machine])).toStrictEqual(["paused"]);
+        expect(yield* runtime.observe([machine])).toStrictEqual(
+          new Map([[machine.id, "paused"]])
+        );
       })
   );
 
@@ -1905,7 +1921,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         `launchctl kickstart gui/501/${vm}`,
         `tart exec ${vm} true`,
       ]);
-      expect(yield* runtime.observe([machine])).toStrictEqual(["running"]);
+      expect(yield* runtime.observe([machine])).toStrictEqual(
+        new Map([[machine.id, "running"]])
+      );
     })
   );
 
@@ -1932,7 +1950,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(failure(error)[1]).toContain(
           "macOS resumes a saved state only while the Mac's session is unlocked, so if it is locked, unlock it and start mac_dev again: a restore that fails keeps the saved state, and a stop discards it"
         );
-        expect(yield* runtime.observe([machine])).toStrictEqual(["paused"]);
+        expect(yield* runtime.observe([machine])).toStrictEqual(
+          new Map([[machine.id, "paused"]])
+        );
       })
   );
 
@@ -1952,7 +1972,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         yield* runtime.stop(machine);
 
         expect(calls(mac).slice(before)).toStrictEqual([`tart stop ${vm}`]);
-        expect(yield* runtime.observe([machine])).toStrictEqual(["stopped"]);
+        expect(yield* runtime.observe([machine])).toStrictEqual(
+          new Map([[machine.id, "stopped"]])
+        );
       })
   );
 });

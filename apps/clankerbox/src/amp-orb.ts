@@ -109,7 +109,6 @@ const spawnSnapshot = (job: Job) =>
 
 interface Located {
   readonly machine: Option.Option<Machine>;
-  /** Each host's snapshot of `ORB_SNAPSHOT_ID`, newest first, listed only for a spawn with one. */
   readonly snapshots: readonly Checkpoint[];
   readonly unreachable: readonly Client.Unreachable[];
 }
@@ -179,7 +178,6 @@ const unread = (
 interface Outcome {
   readonly orb: string;
   readonly operation: Job["operation"];
-  /** What the job did to the orb's machine. */
   readonly result:
     | "started"
     | "resumed"
@@ -190,7 +188,6 @@ interface Outcome {
     | "deleted"
     | "absent";
   readonly machine?: string | undefined;
-  /** The snapshot or prebuild a spawn restored, or the snapshot a pause captured. */
   readonly checkpoint?: string | undefined;
 }
 

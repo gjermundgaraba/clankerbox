@@ -77,7 +77,6 @@ export interface TestHost {
   readonly machines: Machines.Interface;
   readonly checkpoints: Checkpoints.Interface;
   readonly store: Store.Interface;
-  /** Ends the host early; the test's scope ends it otherwise. */
   readonly dispose: Effect.Effect<void>;
 }
 
@@ -92,13 +91,11 @@ export const startHost = (
   dir: string,
   options?: {
     readonly fake?: FakeRuntime;
-    /** `linux` by default: the host's kind and ID, and its fake runtime's kind. */
     readonly kind?: Kind;
     readonly runtime?: Omit<FakeOptions, "dir" | "kind">;
     readonly ports?: PortRange;
     readonly recheck?: Duration.Duration;
     readonly tailnet?: Layer.Layer<Tailnet>;
-    /** The config's tailnet, which the host's own Tailscale adapter reaches through `http`. */
     readonly tailnetSettings?: TailnetSettings;
     readonly http?: Layer.Layer<HttpClient.HttpClient>;
   }

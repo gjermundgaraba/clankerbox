@@ -13,7 +13,6 @@ import { agentPort } from "./agent.ts";
 
 const loopback = "127.0.0.1";
 
-/** A failure on this machine's side, such as a taken port, which no start of the guest changes. */
 export class LocalTunnelError extends Data.TaggedError("LocalTunnelError")<{
   readonly message: string;
 }> {}
@@ -134,21 +133,48 @@ export interface Start {
   readonly machine: string;
 }
 
-/**
- * A port another program holds is refused first: the wait for the port to listen can't tell whose
- * listener it finds. Closing the scope waits for ssh's exit, so the port is free again. The ssh
- * runs `cat` on a pipe this process holds, so it ends however this process ends, and neither keeps
- * the event loop alive.
- */
+const refuseTakenPort = (start: Start): Effect.Effect<void, LocalTunnelError> =>
+  Effect.flatMap(listening(start.port), (taken) =>
+    taken
+      ? Effect.fail(
+          new LocalTunnelError({
+            message: `the tunnel to ${start.machine} can't use port ${start.port}: another program listens on it`,
+          })
+        )
+      : Effect.void
+  );
+
+const spawnTiedToThisProcess = (
+  program: string,
+  args: readonly string[],
+  log: string,
+  onError: (error: Error) => void
+): ChildProcess => {
+  const stderr = openSync(log, "a");
+
+  const spawned = spawn(program, args, {
+    stdio: ["pipe", "ignore", stderr],
+  });
+
+  closeSync(stderr);
+
+  spawned.on("error", onError);
+  spawned.unref();
+
+  if (spawned.stdin instanceof Socket) {
+    spawned.stdin.unref();
+  }
+
+  spawned.stdin?.on("error", Function.constVoid);
+
+  return spawned;
+};
+
 export const open = (
   start: Start
 ): Effect.Effect<Tunnel, Internal | LocalTunnelError, Scope.Scope> =>
   Effect.gen(function* () {
-    if (yield* listening(start.port)) {
-      return yield* new LocalTunnelError({
-        message: `the tunnel to ${start.machine} can't use port ${start.port}: another program listens on it`,
-      });
-    }
+    yield* refuseTakenPort(start);
 
     const log = path.join(start.directory, "ssh.log");
 
@@ -179,28 +205,10 @@ export const open = (
 
     const child: ChildProcess = yield* Effect.acquireRelease(
       Effect.try({
-        try: () => {
-          const stderr = openSync(log, "a");
-
-          const spawned = spawn(start.program, start.args, {
-            stdio: ["pipe", "ignore", stderr],
-          });
-
-          closeSync(stderr);
-
-          spawned.on("error", (error) => {
+        try: () =>
+          spawnTiedToThisProcess(start.program, start.args, log, (error) => {
             unrun = error;
-          });
-          spawned.unref();
-
-          if (spawned.stdin instanceof Socket) {
-            spawned.stdin.unref();
-          }
-
-          spawned.stdin?.on("error", Function.constVoid);
-
-          return spawned;
-        },
+          }),
         catch: (error) =>
           new LocalTunnelError({
             message: `couldn't run ${start.program}: ${error instanceof Error ? error.message : String(error)}`,

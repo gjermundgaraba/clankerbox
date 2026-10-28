@@ -226,7 +226,6 @@ export const listCommand = <A>(options: {
   ) => Effect.Effect<Client.Gathered<A>>;
   readonly encode: (answer: A) => object;
   readonly rows: (answers: readonly A[], now: DateTime.Utc) => string[][];
-  /** Printed to stderr under the table. */
   readonly notes?: (answers: readonly A[]) => readonly string[];
 }) =>
   Command.make(options.name, clientFlags, (flags) =>

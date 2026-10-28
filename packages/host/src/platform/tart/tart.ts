@@ -37,6 +37,7 @@ import type {
   Interface,
   MachineRef,
   MachineState,
+  Observed,
   Sizes,
 } from "../../runtime.ts";
 import type { HostSettings } from "../../settings.ts";
@@ -54,25 +55,26 @@ export interface Settings {
   readonly publishAddress: string;
   readonly hostId: string;
   readonly stateDir: string;
-  /** Node has none off POSIX. */
   readonly uid: number | undefined;
   readonly tartHome: string | undefined;
 }
 
 const softnet = "--net-softnet-block=@host";
 
-// Source: tart Commands/Run.swift run
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Run.swift#L638
 const saved = "snapshot created successfully";
 
-// Source: tart VMStorageHelper.swift VirtualMachineLimitExceeded
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMStorageHelper.swift#L80
 const vmLimit = 2;
 
 const limitRefusal = "The number of VMs exceeds the system limit";
 
-// Source: tart VMDirectory.swift resizeRawDisk, resizeASIFDisk
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L287
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L303
 const shrinkRefusal = "should be larger than the current disk size";
 
-// Source: tart VMConfig.swift setCPU, setMemory
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMConfig.swift#L164
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMConfig.swift#L178
 const minimumRefusal = "at minimum (requested";
 
 const bootWait = Duration.minutes(3);
@@ -83,12 +85,12 @@ const shutdownWait = Duration.minutes(1);
 
 const suspendWait = Duration.minutes(2);
 
-// Source: tart Commands/Stop.swift gracefulWaitDuration
 const forcedStopWait = Duration.seconds(10);
 
 const stopPause = Duration.millis(500);
 
-// Source: tart Network/Softnet.swift softnetExecutableURL, Utils.swift resolveBinaryPath
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/Network/Softnet.swift#L86
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/Utils.swift#L30
 const searchPath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 export const environment = (settings: Pick<Settings, "tartHome">) => ({
@@ -120,11 +122,11 @@ const program = (binary: string, vm: string): readonly string[] => [
   vm,
 ];
 
-// Source: tart VMDirectory.swift resizeRawDisk
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L287
 export const diskGb = (diskGib: number): number =>
   Math.ceil((diskGib * 1024 ** 3) / 1e9);
 
-// Source: tart Commands/Get.swift run
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Get.swift#L36
 export const diskGibOf = (gb: number): number =>
   Math.floor((gb * 1e9) / 1024 ** 3);
 
@@ -169,7 +171,7 @@ export const plist = (job: {
     ``,
   ].join("\n");
 
-// Source: tart VMDirectory.swift State
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/VMDirectory.swift#L6
 const VmState = Schema.Literals(["running", "suspended", "stopped"]);
 
 const decodeList = Schema.decodeUnknownEffect(
@@ -178,7 +180,7 @@ const decodeList = Schema.decodeUnknownEffect(
   )
 );
 
-// Source: tart Commands/Get.swift VMInfo
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Get.swift#L4
 const decodeInfo = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
     Schema.Struct({
@@ -189,7 +191,8 @@ const decodeInfo = Schema.decodeUnknownEffect(
   )
 );
 
-// Source: tart Commands/Set.swift Set cpu, diskSize
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Set.swift#L12
+// https://github.com/openai/tart/blob/2.41.1/Sources/tart/Commands/Set.swift#L41
 const maximumFlag = 2 ** 16 - 1;
 
 const sizeFlags = ({ cpu, ramMib, diskGib }: Sizing): readonly string[] => [
@@ -309,8 +312,13 @@ export const make = (
     const observedIn = (
       vms: ReadonlyMap<string, MachineState>,
       machines: readonly MachineRef[]
-    ): readonly MachineState[] =>
-      machines.map((machine) => vms.get(vmOf(machine)) ?? "missing");
+    ): Observed =>
+      new Map(
+        machines.map((machine) => [
+          machine.id,
+          vms.get(vmOf(machine)) ?? "missing",
+        ])
+      );
 
     const job = (vm: string) => ({
       target: `${domain}/${vm}`,

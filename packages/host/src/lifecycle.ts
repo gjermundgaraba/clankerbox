@@ -24,84 +24,50 @@ import type { Decided } from "./reconcile.ts";
 import type { MachineState, RuntimeError } from "./runtime.ts";
 import type { CheckpointRecord, Desire, Intent } from "./store.ts";
 
-/** What a step fails with: what a request that waits on the steps answers, short of its own checks. */
 export type StepError = Exclude<Declared<"startMachine">, Invalid | Superseded>;
 
-/**
- * Where a new machine's disk comes from, as the request that creates it read it: its base's
- * image, a checkpoint, or another machine, whose `instance` the copy checks again.
- */
 export type Source =
   | { readonly kind: "base"; readonly image: string }
   | { readonly kind: "checkpoint"; readonly record: CheckpointRecord }
   | { readonly kind: "machine"; readonly from: Intent };
 
-/** What only the request that creates a machine holds, and only in memory: a setup can carry secrets. */
 export interface Making {
   readonly source: Source;
   readonly script: Setup | undefined;
 }
 
-/** A machine's actor's context: what it tracks of its row, and what only memory holds. */
 export interface Life extends Decided {
   readonly name: string;
   readonly generation: number;
-  /** Dropped once the machine is made, or its making failed. */
   readonly making: Making | undefined;
   readonly seen: MachineState;
-  /** Why the last step failed, until the next request. */
   readonly error: StepError | undefined;
-  /** Why the machine is being deleted though no request asked: what failed before it was made. */
   readonly undone: StepError | undefined;
   readonly tailnet: TailnetCheck;
 }
 
-/**
- * A machine's place on the tailnet, as this host last checked it since the machine started, and
- * when to check again: never stored, as each start checks again, and shown only while the runtime
- * reads the machine running. A check starts `tailscaled` if it isn't running and joins it if it
- * isn't signed in.
- */
 export interface TailnetCheck {
-  /** What the last check found: `undefined` before the first, or on a host that joins no tailnet. */
   readonly status: TailnetStatus | undefined;
-  /** Rechecks to wait before the next check, while the machine runs: `undefined` for none. */
   readonly wait: number | undefined;
-  /** Rechecks the next failure waits: doubling with each failure in a row, up to `longestBackoff`. */
   readonly backoff: number;
 }
 
-/** What a new actor starts from: its row, what its create holds, and what the runtime last read. */
 export type Born = Pick<
   Life,
   "name" | "desired" | "generation" | "made" | "making" | "seen"
 >;
 
-/** A step's error, with the generation it worked for: a later request makes it no answer. */
 export interface Failure {
   readonly error: StepError;
   readonly generation: number;
 }
 
-/**
- * The runtime work of each phase. A step reads the machine's row and writes its progress there; a
- * step that changes the machine owns its lease for as long as it runs, and a read shares it, so a
- * step cut short by a request ends before anything reads or changes the machine again.
- */
 export interface Steps {
-  /** A runtime that can't be read reads `unknown`. */
   readonly observe: (life: Life) => Effect.Effect<MachineState>;
-  /** Copies the machine's disk and runs its setup: a machine is made by one step or none. */
   readonly make: (life: Life) => Effect.Effect<void, StepError>;
-  /** Starts the machine, also when it runs already, and prepares it. */
   readonly start: (life: Life) => Effect.Effect<void, StepError>;
-  /**
-   * Checks a running machine's place on the host's tailnet, and joins it if it isn't: `undefined`
-   * on a host that joins no tailnet, and a failure is a status, which no request answers.
-   */
   readonly join: (life: Life) => Effect.Effect<TailnetStatus | undefined>;
   readonly stop: (life: Life) => Effect.Effect<void, StepError>;
-  /** Saves a running machine's execution and stops its VM. */
   readonly pause: (life: Life) => Effect.Effect<void, StepError>;
   readonly remove: (life: Life) => Effect.Effect<void, RuntimeError>;
 }

@@ -8,13 +8,11 @@ import type { DateTime, Effect, Option } from "effect";
 
 import type { Sizes } from "./runtime.ts";
 
-/** What the store answers a request with: what the row now asks for, and the request's number. */
 export interface Desire {
   readonly desired: Desired;
   readonly generation: number;
 }
 
-/** A machine's row: what the operator asked for, and the progress toward it. */
 export interface Intent {
   readonly name: string;
   readonly instance: string;
@@ -24,40 +22,21 @@ export interface Intent {
   readonly cpu: number;
   readonly ramMib: number;
   readonly diskGib: number;
-  /** Picked when the row is inserted, and never changes. */
   readonly port: number;
   readonly desired: Desired;
-  /** Raised by every request, so a request can tell its own answer from a later one's. */
   readonly generation: number;
-  /** A prebuild's builder: a host that starts asks for every one to be deleted. */
   readonly ephemeral: boolean;
-  /**
-   * Once its copy and its setup succeeded, in the request that created it; one the host finds
-   * unmade at its start is deleted. After that, a machine the runtime lacks is lost.
-   */
   readonly made: boolean;
-  /** The key the last preparation that printed one printed, which no runtime can tell again. */
   readonly hostKey: string | undefined;
-  /**
-   * The runtime pin the machine's VM last booted under, written as a create makes it and before a
-   * start boots it from stopped: a pause saves only a VM booted under the host's pin, and a paused
-   * one resumes only under it. `undefined` on a row an older host made.
-   */
   readonly pin: string | undefined;
 }
 
-/** Only a capture that succeeded is a checkpoint; the store keeps the rest out of every read. */
 export interface CheckpointRecord {
   readonly name: string;
   readonly instance: string;
   readonly createdAt: DateTime.Utc;
   readonly machine: string;
-  /** A checkpoint restores only under the runtime's pin at capture; mac's is `undefined`. */
   readonly pin: string | undefined;
-  /**
-   * The source's host port at capture: a `ram` restore comes up on it, until the runtime moves
-   * it to the new machine's own.
-   */
   readonly port: number;
   readonly base: string;
   readonly profile: string | undefined;
@@ -72,14 +51,9 @@ export interface Interface {
     name: string
   ) => Effect.Effect<Option.Option<Intent>, Internal>;
   readonly ports: Effect.Effect<ReadonlySet<number>, Internal>;
-  /** A taken name is `Conflict`, and then nothing is written. */
   readonly insertMachine: (
     intent: Intent
   ) => Effect.Effect<void, Conflict | Internal>;
-  /**
-   * Numbers the request one past the row's last, in the one write that records it; a deleted row
-   * stays deleted. `None` when the row is gone.
-   */
   readonly desire: (
     name: string,
     desired: Desired
@@ -93,26 +67,21 @@ export interface Interface {
     name: string,
     pin: string | undefined
   ) => Effect.Effect<void, Internal>;
-  /** The sizes the runtime holds for the machine, as a resize left them. */
   readonly sized: (name: string, sizes: Sizes) => Effect.Effect<void, Internal>;
   readonly removeMachine: (name: string) => Effect.Effect<void, Internal>;
   readonly checkpoints: Effect.Effect<readonly CheckpointRecord[], Internal>;
   readonly findCheckpoint: (
     name: string
   ) => Effect.Effect<Option.Option<CheckpointRecord>, Internal>;
-  /** The row under `name`, also one a capture or a delete that failed left unready. */
   readonly anyCheckpoint: (
     name: string
   ) => Effect.Effect<Option.Option<CheckpointRecord>, Internal>;
-  /** The row of a capture under way, which no read shows; a taken name is `Conflict`. */
   readonly beginCheckpoint: (
     record: CheckpointRecord
   ) => Effect.Effect<void, Conflict | Internal>;
   readonly readyCheckpoint: (name: string) => Effect.Effect<void, Internal>;
-  /** Hides a checkpoint whose delete begins, so a delete that fails leaves it unready for the next. */
   readonly retireCheckpoint: (name: string) => Effect.Effect<void, Internal>;
   readonly removeCheckpoint: (name: string) => Effect.Effect<void, Internal>;
-  /** The captures and deletes that failed, or that the last host's end cut off, with what they left. */
   readonly unready: Effect.Effect<readonly CheckpointRecord[], Internal>;
 }
 

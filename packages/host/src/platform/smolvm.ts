@@ -25,6 +25,7 @@ import type {
   Interface,
   MachineRef,
   MachineState,
+  Observed,
   Sizes,
   StateError,
 } from "../runtime.ts";
@@ -64,26 +65,29 @@ export interface Settings {
   readonly publishAddress: string;
   readonly ramBudgetMib: number;
   readonly stateDir: string;
-  /** As Node names it: smolvm grows a running machine's vCPUs only on `x64`. */
   readonly arch: string;
 }
 
-// Source: smolvm src/agent/live_resize.rs target_added_mib
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/live_resize.rs#L325
 const ramStepMib = 128;
 
-// Source: smolvm src/data/resources.rs MIN_MEMORY_MIB
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/data/resources.rs#L180
 const minimumRamMib = 64;
 
-// Source: smolvm src/data/storage.rs DEFAULT_STORAGE_SIZE_GIB
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/data/storage.rs#L14
 const defaultStorageGib = 20;
 
-// Source: smolvm src/cli/machine.rs CreateCmd, ResizeCmd, UpdateCmd
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L4468
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L6635
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L6708
 const maximumCpu = 255;
 
-// Source: smolvm src/cli/machine.rs CreateCmd, ResizeCmd, UpdateCmd
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L4473
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L6639
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/machine.rs#L6712
 const maximumRamMib = 2 ** 32 - 1;
 
-// Source: smolvm src/db/resize.rs begin_resize
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/db/resize.rs#L179
 const unfinishedRefusal = "an unfinished resize belongs to a different target";
 
 export const pathsIn = (stateDir: string) => ({
@@ -108,7 +112,7 @@ export const machineReadWait = Duration.subtract(
 export const observeEach = (
   machines: readonly MachineRef[],
   read: (machine: MachineRef) => Effect.Effect<MachineState, Internal>
-): Effect.Effect<readonly MachineState[]> =>
+): Effect.Effect<Observed> =>
   Effect.flatMap(Semaphore.make(observeConcurrency), (turns) =>
     Effect.forEach(
       machines,
@@ -130,13 +134,14 @@ export const observeEach = (
                 ),
                 "unknown"
               )
-            )
+            ),
+            Effect.map((state) => [machine.id, state] as const)
           ),
       { concurrency: "unbounded" }
-    )
+    ).pipe(Effect.map((entries): Observed => new Map(entries)))
   );
 
-// Source: smolvm src/systemd_scope.rs scope_name
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/systemd_scope.rs#L151
 const scopeName = (native: string): string => `smolvm-vm-${native}.scope`;
 
 export const templates = [
@@ -144,7 +149,9 @@ export const templates = [
   "overlay-template.ext4",
 ] as const;
 
-// Source: smolvm src/agent/manager.rs vm_data_dir, src/agent/fork.rs control_socket_path, src/agent/launcher_dynamic.rs MAX_UNIX_SOCKET_PATH
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/manager.rs#L381
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/fork.rs#L322
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/launcher_dynamic.rs#L1256
 const socketPathMax = 107;
 
 export const controlSocket = (dataDir: string): string =>
@@ -153,7 +160,10 @@ export const controlSocket = (dataDir: string): string =>
 const searchPath =
   "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-// Source: smolvm src/main.rs apply_system_data_root, src/process.rs oom_score_adj_for, src/usage.rs recording_enabled; tracing-subscriber NO_COLOR
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/process.rs#L1402
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/process.rs#L417
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/usage.rs#L171
+// https://github.com/tokio-rs/tracing/blob/tracing-subscriber-0.3.23/tracing-subscriber/src/fmt/fmt_layer.rs#L743
 export const environment = (settings: Settings) => ({
   PATH: searchPath,
   HOME: pathsIn(settings.stateDir).dataDir,
@@ -174,7 +184,7 @@ export const environment = (settings: Settings) => ({
   NO_COLOR: "1",
 });
 
-// Source: smolvm src/config.rs RecordState
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/config.rs#L39
 const RecordState = Schema.Literals([
   "created",
   "running",
@@ -192,7 +202,7 @@ const decodeStatus = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Struct({ state: RecordState }))
 );
 
-// Source: smolvm src/cli/vm_common.rs machine_status_json
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/vm_common.rs#L3515
 const decodeSizes = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
     Schema.Struct({
@@ -210,7 +220,7 @@ const alive: ReadonlySet<RecordState> = new Set([
   "frozen",
 ]);
 
-// Source: smolvm src/embedded/runtime.rs resume_machine_inner
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/embedded/runtime.rs#L374
 const resumable: ReadonlySet<RecordState> = new Set(["pausing", "paused"]);
 
 export const stateOf = (state: RecordState): MachineState => {
@@ -489,7 +499,7 @@ export const make = (
       );
     };
 
-    // Source: smolvm src/agent/live_resize.rs ensure_live_compute_platform
+    // https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/live_resize.rs#L348
     const sizable = (
       machine: Pick<MachineRef, "id">,
       from: Sizes,
@@ -649,7 +659,7 @@ export const make = (
       deleteCheckpoint: Effect.fn("Smolvm.deleteCheckpoint")((checkpoint) => {
         const objects = path.join(paths.store, "objects");
 
-        // Source: smolvm crates/smolvm-checkpoint/src/store.rs prune
+        // https://github.com/smol-machines/smolvm/blob/v1.32.1/crates/smolvm-checkpoint/src/store.rs#L1529
         return Effect.gen(function* () {
           yield* removeAll(checkpointDir(checkpoint));
 
@@ -710,7 +720,7 @@ export const make = (
             return;
           }
 
-          // Source: smolvm src/cli/vm_common.rs start_vm_named_with_db
+          // https://github.com/smol-machines/smolvm/blob/v1.32.1/src/cli/vm_common.rs#L1693
           if (recorded === "frozen") {
             return yield* new WrongState({
               message: `smolvm reads machine ${machine.id} ${recorded}, and doesn't start it from there`,

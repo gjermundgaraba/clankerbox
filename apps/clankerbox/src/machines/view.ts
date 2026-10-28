@@ -57,8 +57,6 @@ const tailnetLabel = ({ tailnet }: Machine): string => {
     case "missing": {
       return "missing: the guest has no tailscaled";
     }
-
-    // no default
   }
 };
 

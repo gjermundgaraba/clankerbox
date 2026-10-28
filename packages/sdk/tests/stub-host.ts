@@ -30,23 +30,17 @@ export interface StubHostOptions {
   readonly id: string;
   readonly bases: readonly string[];
   readonly kind?: Kind;
-  /** Default: 0.0.0-test. */
   readonly runtimeVersion?: string;
-  /** Default: running. */
   readonly create?: (
     request: CreateRequest
   ) => Effect.Effect<Machine, Declared<"createMachine">>;
-  /** Replaces the default prebuild, which captures a builder of its own over any checkpoint of its ID. */
   readonly prebuild?: (
     request: PrebuildRequest
   ) => Effect.Effect<Checkpoint, Declared<"prebuildCheckpoint">>;
   readonly machines?: readonly Machine[];
   readonly checkpoints?: readonly Checkpoint[];
-  /** What every restore fails with. Default: none. */
   readonly restoreFails?: Declared<"restoreMachine">;
-  /** Default: none. */
   readonly capacity?: readonly Reading[];
-  /** Default: exit 0 with no output, in a machine the stub holds. */
   readonly exec?: (
     request: ExecRequest
   ) => Effect.Effect<Executed, Declared<"execMachine">>;
@@ -397,7 +391,6 @@ export class Silent {
   }
 }
 
-/** `slow` answers 100 ms late, and `lost` loses every reply after running it. */
 export type Endpoint =
   | StubHost
   | "down"

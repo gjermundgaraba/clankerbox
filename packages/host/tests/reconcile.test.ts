@@ -51,8 +51,6 @@ const succeeded = (state: State, step: Next): State => {
     case "waiting": {
       return state;
     }
-
-    // no default
   }
 };
 

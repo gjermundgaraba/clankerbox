@@ -26,7 +26,6 @@ import type {
   Usage,
 } from "@gjermundgaraba/clankerbox-sdk";
 import {
-  Array as Arr,
   Cause,
   Context,
   DateTime,
@@ -43,7 +42,7 @@ import {
 import { checkTailnet, prepare, runCommand, runSetup } from "./guest.ts";
 import type { TailnetReport } from "./guest.ts";
 import { foundOn, idOn, nameOn, newInstance, notFoundOn } from "./ids.ts";
-import { Leases } from "./leases.ts";
+import { Leases, owned, shared } from "./leases.ts";
 import {
   answer,
   ask,
@@ -68,6 +67,7 @@ import {
   missing,
   Runtime,
   sizedBy,
+  stateIn,
   stateReadWait,
   timeoutFail,
 } from "./runtime.ts";
@@ -75,6 +75,7 @@ import type {
   Booting,
   MachineRef,
   MachineState,
+  Observed,
   RuntimeError,
 } from "./runtime.ts";
 import { checkpointKinds } from "./settings.ts";
@@ -84,7 +85,6 @@ import type { Intent } from "./store.ts";
 import { Tailnet } from "./tailnet.ts";
 
 export interface CreateOptions {
-  /** A prebuild's builder, which a host that starts deletes. */
   readonly ephemeral?: boolean | undefined;
 }
 
@@ -123,10 +123,6 @@ export interface Interface {
   readonly exec: (
     request: ExecRequest
   ) => Effect.Effect<Executed, Declared<"execMachine">>;
-  /**
-   * Unlike a machine's state, this is all the reply holds, so a runtime that can't be read fails
-   * it; a machine it can't read makes only the rows that count it `unread`.
-   */
   readonly capacity: Effect.Effect<readonly Usage[], RuntimeError>;
 }
 
@@ -239,11 +235,9 @@ export const make = (
         )
       );
 
-    const observeAll = (
-      intents: readonly Intent[]
-    ): Effect.Effect<readonly MachineState[]> =>
+    const observeAll = (intents: readonly Intent[]): Effect.Effect<Observed> =>
       intents.length === 0
-        ? Effect.succeed([])
+        ? Effect.succeed(new Map())
         : surviving(
             `the ${config.kind} runtime's read`,
             runtime.observe(intents.map(ref))
@@ -254,7 +248,7 @@ export const make = (
                 Effect.logWarning(
                   `couldn't read the machines' states: ${error.message}`
                 ),
-                intents.map((): MachineState => "unknown")
+                new Map()
               )
             )
           );
@@ -262,11 +256,11 @@ export const make = (
     const observeOne = (name: string) =>
       Effect.scoped(
         Effect.gen(function* () {
-          yield* leases.share("machine", name);
+          yield* leases.hold({ machine: shared(name) });
 
-          const [observed] = yield* observeAll([yield* held(name)]);
+          const intent = yield* held(name);
 
-          return observed ?? "unknown";
+          return stateIn(yield* observeAll([intent]), ref(intent));
         })
       ).pipe(Effect.orElseSucceed((): MachineState => "unknown"));
 
@@ -322,7 +316,7 @@ export const make = (
         `${what} ${idOf(life.name)}`,
         Effect.scoped(
           Effect.gen(function* () {
-            yield* leases.own("machine", life.name);
+            yield* leases.hold({ machine: owned(life.name) });
 
             return yield* work(yield* held(life.name));
           })
@@ -388,7 +382,7 @@ export const make = (
         if (source.kind === "checkpoint") {
           const { name, instance } = source.record;
 
-          yield* leases.share("checkpoint", name);
+          yield* leases.hold({ checkpoint: shared(name) });
 
           const record = yield* readyCheckpoint(name);
 
@@ -404,7 +398,7 @@ export const make = (
 
         const { name, instance } = source.from;
 
-        yield* leases.share("machine", name);
+        yield* leases.hold({ machine: shared(name) });
 
         const from = yield* row(name);
 
@@ -485,7 +479,7 @@ export const make = (
               `tailnet join ${id}`,
               Effect.scoped(
                 Effect.gen(function* () {
-                  yield* leases.share("machine", life.name);
+                  yield* leases.hold({ machine: shared(life.name) });
 
                   const intent = yield* held(life.name);
 
@@ -682,8 +676,13 @@ export const make = (
 
         const observed = yield* observeAll(live.map(({ intent }) => intent));
 
-        return Arr.zipWith(live, observed, ({ intent, snapshot }, seen) =>
-          resource(intent, snapshot.context, phaseOf(snapshot), seen)
+        return live.map(({ intent, snapshot }) =>
+          resource(
+            intent,
+            snapshot.context,
+            phaseOf(snapshot),
+            stateIn(observed, ref(intent))
+          )
         );
       });
 
@@ -924,15 +923,18 @@ export const make = (
 
           const intent = yield* Effect.scoped(
             Effect.gen(function* () {
-              yield* leases.share("machine", name);
+              yield* leases.hold({ machine: shared(name) });
 
               const current = yield* row(name);
 
               yield* made(current);
 
-              const [seen = "unknown"] = yield* runtime
-                .observe([ref(current)])
-                .pipe(inTime(`the ${config.kind} runtime`));
+              const seen = stateIn(
+                yield* runtime
+                  .observe([ref(current)])
+                  .pipe(inTime(`the ${config.kind} runtime`)),
+                ref(current)
+              );
 
               if (seen === "missing") {
                 return yield* missing(config.kind, { id });
@@ -956,7 +958,7 @@ export const make = (
 
     const resized = (name: string, request: ResizeRequest) =>
       Effect.gen(function* () {
-        yield* leases.own("machine", name);
+        yield* leases.hold({ machine: owned(name) });
 
         const intent = yield* row(name);
         const machine = ref(intent);
@@ -972,9 +974,12 @@ export const make = (
           });
         }
 
-        const [seen = "unknown"] = yield* runtime
-          .observe([machine])
-          .pipe(inTime(`the ${config.kind} runtime`));
+        const seen = stateIn(
+          yield* runtime
+            .observe([machine])
+            .pipe(inTime(`the ${config.kind} runtime`)),
+          machine
+        );
 
         if (seen === "missing") {
           return yield* missing(config.kind, { id });
@@ -1081,13 +1086,13 @@ export const make = (
       const observed = yield* observeAll(intents);
 
       yield* Effect.forEach(
-        Arr.zip(intents, observed),
-        ([intent, seen]) => {
+        intents,
+        (intent) => {
           const at = resting.get(intent.name);
 
           return at === undefined || at.actor.getSnapshot().context !== at.life
             ? Effect.void
-            : tell(at.actor, seen);
+            : tell(at.actor, stateIn(observed, ref(intent)));
         },
         { discard: true }
       );
@@ -1100,8 +1105,10 @@ export const make = (
     const intents = yield* store.machines;
     const observed = yield* observeAll(intents);
 
-    for (const [intent, seen] of Arr.zip(intents, observed)) {
-      yield* register(bornOf(intent, undefined, seen));
+    for (const intent of intents) {
+      yield* register(
+        bornOf(intent, undefined, stateIn(observed, ref(intent)))
+      );
     }
 
     yield* Effect.forkIn(

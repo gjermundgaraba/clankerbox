@@ -1,29 +1,19 @@
 #!/bin/sh
-# A clankerbox setup that makes a macOS machine (Tart, a Cirrus base) a sandbox for Rivet's
-# Sandbox Agent: the Sandbox Agent's server and Claude Code under `admin`, the login user, for
-# whom the host then installs your keys, a LaunchDaemon that runs the server on the guest's
-# loopback, port 2468, and an /etc/clankerbox/start that keeps it running. Give the provider
-# `cwd: "/Users/admin"`.
-#
-# Name this directory, or a copy, as a profile's `setup.path`. An optional `agent.env` beside
-# it, of `NAME=value` lines such as `ANTHROPIC_API_KEY=…`, becomes the server's environment,
-# which is where the agents it launches find their credentials.
 set -eu
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
-# The pins, each an arm64 macOS download with its sha256. The bump-sandbox-agent skill says
-# where each comes from.
 agent_version=0.5.3
 agent_sha256=b4bf7244a67bd74ed91bef68051717503d3b4db6aad8f76c1ba71fccb9712b48
 node_version=22.23.4
 node_sha256=c9e1dbc748b33ed2d14f42445191ecaf14c56259c7a9a26d0042c49ec2b66428
 
-# Softnet blocks the gateway's DNS, so public resolvers come first.
-networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while IFS= read -r service; do
-  networksetup -setdnsservers "$service" 1.1.1.1 9.9.9.9
-done
+use_public_dns_past_softnet_host_block() {
+  networksetup -listallnetworkservices | tail -n +2 | sed 's/^\*//' | while IFS= read -r service; do
+    networksetup -setdnsservers "$service" 1.1.1.1 9.9.9.9
+  done
+}
+use_public_dns_past_softnet_host_block
 
-# Downloads $1 to $3 and refuses it unless its sha256 is $2.
 fetch() {
   curl -fsSL "$1" -o "$3"
   echo "$2  $3" | shasum -a 256 -c - >/dev/null
@@ -57,7 +47,6 @@ fi
 }
 rm /var/tmp/install-agent.log
 
-# The server listens on loopback alone, with no token: guest port 22 is the only way to it.
 cat >/Library/LaunchDaemons/dev.clankerbox.sandbox-agent.plist <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -92,9 +81,6 @@ chmod 644 /Library/LaunchDaemons/dev.clankerbox.sandbox-agent.plist
 mkdir -p /etc/clankerbox
 cat >/etc/clankerbox/start <<'START'
 #!/bin/sh
-# Runs at every activation: after a create, a start, a fork and a restore. launchd starts the
-# server at boot; this loads its job the first time, starts a server that has ended, and
-# restarts one that hangs: `kickstart -k` ends it first.
 set -eu
 PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
@@ -102,13 +88,10 @@ if ! launchctl print system/dev.clankerbox.sandbox-agent >/dev/null 2>&1; then
   launchctl bootstrap system /Library/LaunchDaemons/dev.clankerbox.sandbox-agent.plist
 fi
 
-# The health check, bounded: on loopback a server answers in milliseconds, so one that takes 2 s
-# is hung or busy beyond use.
 answers() {
   curl -fs -m 2 -o /dev/null http://127.0.0.1:2468/v1/health
 }
 
-# Whether the server answers within $1 seconds.
 answers_within() {
   until=$(($(date +%s) + $1))
   while [ "$(date +%s)" -lt "$until" ]; do
@@ -122,16 +105,12 @@ running() {
   pgrep -u admin -f 'sandbox-agent server' >/dev/null
 }
 
-# A running server gets 10 s to answer, since this runs at every start, a running machine's too,
-# and one launchd just started may still be starting, before it is restarted as hung.
 if running; then
   answers_within 10 || launchctl kickstart -k system/dev.clankerbox.sandbox-agent
 else
   launchctl kickstart system/dev.clankerbox.sandbox-agent
 fi
 
-# 20 s for a server to start, within preparation's 60 s, the grace and the stop above included;
-# it starts in under a second.
 if ! answers_within 20; then
   echo "the Sandbox Agent's server didn't answer its health check within 20 s"
   exit 1

@@ -14,7 +14,6 @@ export type Dial = (input: Stream.Stream<Uint8Array>) => ChildProcess.Command;
 
 export interface Forwarder {
   readonly listen: (port: number, dial: Dial) => Effect.Effect<void, Internal>;
-  /** Connections already open run until their command ends. */
   readonly close: (port: number) => Effect.Effect<void>;
 }
 

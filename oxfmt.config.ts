@@ -6,7 +6,6 @@ export default defineConfig({
   ignorePatterns: [
     ...(ultracite.ignorePatterns ?? []),
     ".agents/**",
-    // `vp config` writes the Vite+ block of AGENTS.md on every install; Ultracite would rewrap it.
     "AGENTS.md",
   ],
 });

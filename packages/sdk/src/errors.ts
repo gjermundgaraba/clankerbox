@@ -1,4 +1,4 @@
-import { Match, Schema } from "effect";
+import { Match, Predicate, Record, Schema } from "effect";
 
 const located = {
   host: Schema.optionalKey(Schema.String),
@@ -6,6 +6,24 @@ const located = {
   id: Schema.optionalKey(Schema.String),
   made: Schema.optionalKey(Schema.String),
 };
+
+export interface Where {
+  readonly host?: string | undefined;
+  readonly action?: string | undefined;
+  readonly id?: string | undefined;
+  readonly made?: string | undefined;
+}
+
+const at = (error: Where, where: Where) =>
+  Record.filter(
+    {
+      host: error.host ?? where.host,
+      action: error.action ?? where.action,
+      id: error.id ?? where.id,
+      made: error.made ?? where.made,
+    },
+    Predicate.isNotUndefined
+  );
 
 /**
  * The request is malformed, or the host list is one a client can't route by, or a config,
@@ -22,7 +40,17 @@ export class Invalid extends Schema.TaggedError<
     file: Schema.optionalKey(Schema.String),
   },
   { httpApiStatus: 400 }
-) {}
+) {
+  located(where: Where): Invalid {
+    const { file } = this;
+
+    return new Invalid({
+      ...at(this, where),
+      ...(file === undefined ? {} : { file }),
+      message: this.message,
+    });
+  }
+}
 
 /** The machine or checkpoint doesn't exist. A `delete` that meets it is done. */
 export class NotFound extends Schema.TaggedError<
@@ -32,7 +60,11 @@ export class NotFound extends Schema.TaggedError<
   "NotFound",
   { message: Schema.String, ...located },
   { httpApiStatus: 404 }
-) {}
+) {
+  located(where: Where): NotFound {
+    return new NotFound({ ...at(this, where), message: this.message });
+  }
+}
 
 /** The name is taken. */
 export class Conflict extends Schema.TaggedError<
@@ -42,7 +74,11 @@ export class Conflict extends Schema.TaggedError<
   "Conflict",
   { message: Schema.String, ...located },
   { httpApiStatus: 409 }
-) {}
+) {
+  located(where: Where): Conflict {
+    return new Conflict({ ...at(this, where), message: this.message });
+  }
+}
 
 /**
  * What the operator asked a machine to be; the host keeps moving the machine toward it. `paused`
@@ -74,7 +110,15 @@ export class Superseded extends Schema.TaggedError<
     by: Desired,
   },
   { httpApiStatus: 409 }
-) {}
+) {
+  located(where: Where): Superseded {
+    return new Superseded({
+      ...at(this, where),
+      by: this.by,
+      message: this.message,
+    });
+  }
+}
 
 /** No host offers `base`: the host a create names, or any in the client's list. */
 export class NotOffered extends Schema.TaggedError<
@@ -84,7 +128,15 @@ export class NotOffered extends Schema.TaggedError<
   "NotOffered",
   { message: Schema.String, ...located, base: Schema.String },
   { httpApiStatus: 412 }
-) {}
+) {
+  located(where: Where): NotOffered {
+    return new NotOffered({
+      ...at(this, where),
+      base: this.base,
+      message: this.message,
+    });
+  }
+}
 
 /** `machine` isn't made yet: its create or setup still runs, so it can't be copied or captured. */
 export class NotMade extends Schema.TaggedError<
@@ -94,7 +146,15 @@ export class NotMade extends Schema.TaggedError<
   "NotMade",
   { message: Schema.String, ...located, machine: Schema.String },
   { httpApiStatus: 412 }
-) {}
+) {
+  located(where: Where): NotMade {
+    return new NotMade({
+      ...at(this, where),
+      machine: this.machine,
+      message: this.message,
+    });
+  }
+}
 
 /** The runtime no longer has `machine`: it can only be deleted. */
 export class Missing extends Schema.TaggedError<
@@ -104,7 +164,15 @@ export class Missing extends Schema.TaggedError<
   "Missing",
   { message: Schema.String, ...located, machine: Schema.String },
   { httpApiStatus: 412 }
-) {}
+) {
+  located(where: Where): Missing {
+    return new Missing({
+      ...at(this, where),
+      machine: this.machine,
+      message: this.message,
+    });
+  }
+}
 
 /**
  * The checkpoint or paused machine `id` holds RAM state saved under another runtime pin than the
@@ -118,7 +186,11 @@ export class PinMismatch extends Schema.TaggedError<
   "PinMismatch",
   { message: Schema.String, ...located },
   { httpApiStatus: 412 }
-) {}
+) {
+  located(where: Where): PinMismatch {
+    return new PinMismatch({ ...at(this, where), message: this.message });
+  }
+}
 
 /** `machine` is in `state`, which the action doesn't act from. */
 export class WrongState extends Schema.TaggedError<
@@ -133,7 +205,16 @@ export class WrongState extends Schema.TaggedError<
     state: Schema.String,
   },
   { httpApiStatus: 412 }
-) {}
+) {
+  located(where: Where): WrongState {
+    return new WrongState({
+      ...at(this, where),
+      machine: this.machine,
+      state: this.state,
+      message: this.message,
+    });
+  }
+}
 
 /**
  * The runtime can't give the requested sizes, such as a disk below the base's or below the
@@ -146,7 +227,11 @@ export class Unsizable extends Schema.TaggedError<
   "Unsizable",
   { message: Schema.String, ...located },
   { httpApiStatus: 422 }
-) {}
+) {
+  located(where: Where): Unsizable {
+    return new Unsizable({ ...at(this, where), message: this.message });
+  }
+}
 
 /**
  * A guest script exited non-zero or ran past its timeout; the message says which, with its
@@ -164,7 +249,15 @@ export class ScriptFailed extends Schema.TaggedError<
     script: Schema.String,
   },
   { httpApiStatus: 422 }
-) {}
+) {
+  located(where: Where): ScriptFailed {
+    return new ScriptFailed({
+      ...at(this, where),
+      script: this.script,
+      message: this.message,
+    });
+  }
+}
 
 /** The host has no room now; room can free up, so a later call may succeed. */
 export class Capacity extends Schema.TaggedError<
@@ -174,7 +267,11 @@ export class Capacity extends Schema.TaggedError<
   "Capacity",
   { message: Schema.String, ...located },
   { httpApiStatus: 503 }
-) {}
+) {
+  located(where: Where): Capacity {
+    return new Capacity({ ...at(this, where), message: this.message });
+  }
+}
 
 /**
  * No reply: only the client library makes it. A mutation's request may have reached the host
@@ -187,7 +284,15 @@ export class Unavailable extends Schema.TaggedError<
   message: Schema.String,
   readOnly: Schema.Boolean,
   ...located,
-}) {}
+}) {
+  located(where: Where): Unavailable {
+    return new Unavailable({
+      ...at(this, where),
+      readOnly: this.readOnly,
+      message: this.message,
+    });
+  }
+}
 
 export class Internal extends Schema.TaggedError<
   Internal,
@@ -196,7 +301,11 @@ export class Internal extends Schema.TaggedError<
   "Internal",
   { message: Schema.String, ...located },
   { httpApiStatus: 500 }
-) {}
+) {
+  located(where: Where): Internal {
+    return new Internal({ ...at(this, where), message: this.message });
+  }
+}
 
 /** What a host may answer with; each action declares its own share. */
 export const hostErrors = [

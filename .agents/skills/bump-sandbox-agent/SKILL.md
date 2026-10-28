@@ -90,8 +90,9 @@ publish, change production hosts, or commit unless asked.
   `SHASUMS256.txt`; move it to the latest 22.x, or to the major the adapters
   then need).
 - `install-agent codex` never returns: its check starts `codex app-server`,
-  which doesn't exit. The recipes install Claude alone and tell whoever adds
-  Codex to bound it. If the target fixes this, drop that note.
+  which doesn't exit. The recipes install Claude alone; whoever adds Codex
+  bounds its install with a timeout and ends what it leaves running. If the
+  target fixes this, drop this claim and the macOS recipe's note on it.
 - As root, Claude Code offers no `bypassPermissions` mode, so the server runs
   as the login user, `admin`. The server keeps its state under
   the user's `~/.local/share/sandbox-agent` (Linux) or

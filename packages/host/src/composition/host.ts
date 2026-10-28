@@ -48,7 +48,6 @@ export const servicesLayer = <E, R>(
     Layer.provideMerge(runtime.pipe(Layer.provideMerge(Sqlite.layer(config))))
   );
 
-/** What a host is built from: its settings, and the tailnet it joins its machines to, if any. */
 export interface HostLayerConfig extends HostSettings {
   readonly tailnet?: Tailscale.TailnetSettings | undefined;
 }

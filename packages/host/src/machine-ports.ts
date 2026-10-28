@@ -7,7 +7,7 @@ export interface PortRange {
   readonly last: number;
 }
 
-// Source: smolvm src/agent/fork.rs CLONE_PORT_FLOOR, CLONE_PORT_CEILING
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/fork.rs#L4250-L4252
 export const reservedPorts: ReadonlyArray<
   PortRange & { readonly owner: string }
 > = [

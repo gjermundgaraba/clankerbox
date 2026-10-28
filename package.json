@@ -9,6 +9,7 @@
     "prepare": "vp config && effect-tsgo patch --no-typescript --oxlint"
   },
   "devDependencies": {
+    "@clanker-stuff/oxlint-config": "catalog:",
     "@effect/tsgo": "catalog:",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",

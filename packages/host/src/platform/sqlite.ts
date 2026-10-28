@@ -146,10 +146,10 @@ const isSqliteError = (
   "errcode" in cause &&
   typeof cause.errcode === "number";
 
-// Source: sqlite3.h SQLITE_BUSY
+// https://www.sqlite.org/rescode.html#busy
 const sqliteBusy = 5;
 
-// Source: sqlite3.h SQLITE_CONSTRAINT_PRIMARYKEY
+// https://www.sqlite.org/rescode.html#constraint_primarykey
 const sqlitePrimaryKey = 1555;
 
 const describe = (cause: unknown): string =>

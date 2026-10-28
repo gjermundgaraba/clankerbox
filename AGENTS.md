@@ -169,15 +169,8 @@ over an in-memory transport, beside `./testing/clock`, `./testing/files` and
   one's end left unmade, clears its failed captures and deletes, reads each
   machine's sizes back from the runtime, as a resize it cut off may have
   given some, and lets the actors finish the rest.
-- **No prose comments.** A reason goes where something can check or show it:
-  a type, a test's name, or the commit message. What stays: a one-line
-  `// SAFETY:` above a type assertion, a one-line `// Source:` citing the
-  upstream, file and identifier a value comes from when a bump must re-check
-  it (`// Source: smolvm src/config.rs RecordState`, no version or lines), a tool
-  directive with its reason after `--`, and a doc block on a type, an
-  interface or one of their members, which is how a port states its contract.
-  The SDK's and the provider's `src/` also keep a doc block on each export,
-  since it ships to consumers. Review holds this line: no lint rule checks it.
+- **Shell comments.** Lint doesn't read the recipes' shell scripts; a comment
+  there states only a platform or upstream fact the script can't show.
 - **A lint fence** (`tools/lint-fence`, each rule with its tests; settings in
   `oxlint.config.ts`): a host domain file imports only its siblings, `effect`,
   `effect/encoding` and the SDK, and `lifecycle.ts` alone also `xstate` and
@@ -204,6 +197,10 @@ Before writing or reviewing `lifecycle.ts`, read the docs the installed `xstate`
 
 ## Lint and format
 
-`vp check` formats, lints and type-checks the repository; `vp check --fix` applies the fixes. It reads `oxlint.config.ts` and `oxfmt.config.ts` through `vite.config.ts`. Lint extends Ultracite's core, anti-slop and Vitest presets and `@effect/tsgo`'s recommended preset, type-aware, and fails on warnings; format is Ultracite's. `vp install` patches Oxlint with the Effect rules through the root `prepare` script.
+`vp check` formats, lints and type-checks the repository; `vp check --fix` applies the fixes. It reads `oxlint.config.ts` and `oxfmt.config.ts` through `vite.config.ts`. Format is Ultracite's, and skips `AGENTS.md`, whose Vite+ block `vp config` rewrites on every install. `vp install` patches Oxlint with the Effect rules through the root `prepare` script.
 
-Every departure from the presets lives in `oxlint.config.ts`, each with its reason. The shared block at the top is the same in every Effect repository; the overrides below it are this repository's own, each scoped to its files with its reason. Adding or widening an exception needs the maintainer's approval; otherwise fix the code. There are no inline `oxlint-disable` comments.
+Lint comes from `@clanker-stuff/oxlint-config` through `config()` in `oxlint.config.ts`, with this repository's overrides there. Fix the code rather than add a lint exception. There are no inline `oxlint-disable` comments.
+
+## Dependencies
+
+npm dependencies move by hand through the pnpm catalog in `pnpm-workspace.yaml`; Dependabot keeps only the SHA-pinned actions in `.github/workflows` current. Registry releases wait a day (`minimumReleaseAge`), except what `minimumReleaseAgeExclude` lists (the toolchain, Effect, our own scopes, and xstate with `@xstate/effect`, alphas released together and pinned by hand), so their bumps land the day they publish.

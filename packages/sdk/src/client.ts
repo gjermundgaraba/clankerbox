@@ -7,7 +7,6 @@ import {
   Layer,
   Match,
   Predicate,
-  Record,
   Result,
   Schema,
 } from "effect";
@@ -17,14 +16,8 @@ import type { HttpClientError } from "effect/http";
 import { actionsByName as actions, Http, readTimeout } from "./api.ts";
 import type { Declared } from "./api.ts";
 import { describeIssues } from "./describe.ts";
-import {
-  ClankerboxError,
-  Internal,
-  Invalid,
-  NotOffered,
-  Unavailable,
-} from "./errors.ts";
-import type { NotFound } from "./errors.ts";
+import { Internal, Invalid, NotOffered, Unavailable } from "./errors.ts";
+import type { ClankerboxError, NotFound } from "./errors.ts";
 import { formatId, HostId, parseId, parseName } from "./ids.ts";
 import { version, versionHeader } from "./release.ts";
 import { offered, offers } from "./resources.ts";
@@ -96,7 +89,6 @@ export interface CreateOptions {
   readonly host?: string | undefined;
 }
 
-/** The resource an input names, whose host the call goes to. */
 type Subject =
   | { readonly id: string }
   | { readonly machine: string }
@@ -169,7 +161,6 @@ type HostApi = Effect.Success<ReturnType<typeof hostApi>>;
 
 type CallError = ActionHttp.MethodError<Actions[HostAction]>;
 
-/** `HostApi` as one call per name, which a generic name can index. */
 type Methods = {
   readonly [N in HostAction]: (
     input: Input<N>
@@ -185,9 +176,7 @@ interface CallContext {
   readonly host: HostEntry;
   readonly timeout: Duration.Duration | undefined;
   readonly readOnly: boolean;
-  /** The action and the ID it was given, as messages name the call. */
   readonly what: string;
-  /** What a lost mutation's reply tells the caller to read. */
   readonly target: string | undefined;
 }
 
@@ -270,34 +259,8 @@ const settle = <A>(
     })
   );
 
-interface Where {
-  readonly action: HostAction;
-  readonly host?: string | undefined;
-  readonly id?: string | undefined;
-  readonly made?: string | undefined;
-}
-
-const encodeError = Schema.encodeSync(ClankerboxError);
-
-const decodeError = Schema.decodeSync(ClankerboxError);
-
-const locate =
-  ({ action, host, id, made }: Where) =>
-  <E extends ClankerboxError>(error: E): E =>
-    // SAFETY: decoding what the same union encoded rebuilds the error's own class.
-    decodeError({
-      ...Record.filter({ action, host, id, made }, Predicate.isNotUndefined),
-      ...encodeError(error),
-    }) as E;
-
-const naming =
-  (name: HostAction) =>
-  <A, E extends ClankerboxError>(
-    effect: Effect.Effect<A, E>
-  ): Effect.Effect<A, E> =>
-    Effect.mapError(effect, (error) =>
-      error.action === undefined ? locate({ action: name })(error) : error
-    );
+const naming = (action: HostAction) => (error: Invalid) =>
+  error.located({ action });
 
 const deleting = <E extends { readonly _tag: string }>(
   removal: Effect.Effect<void, E | NotFound>
@@ -316,6 +279,8 @@ const checkHost = (
     : Effect.fail(
         new Invalid({
           message: `host ${entry.id} (${entry.url}) calls itself ${host.id}; its entry in the host list must use that ID`,
+          host: entry.id,
+          action: "getHost",
         })
       );
 
@@ -398,8 +363,8 @@ export const make = (
         what: subject === undefined ? name : `${name} ${subject}`,
         target: made ?? subject,
       }).pipe(
-        Effect.mapError(
-          locate({ action: name, host: entry.id, id: subject, made })
+        Effect.mapError((error) =>
+          error.located({ action: name, host: entry.id, id: subject, made })
         )
       );
     };
@@ -435,33 +400,31 @@ export const make = (
     const readHost = (route: Route) =>
       Effect.flatMap(send(route, "getHost", {}), (host) =>
         checkHost(route.entry, host)
-      ).pipe(
-        Effect.mapError(locate({ action: "getHost", host: route.entry.id }))
       );
 
     const onResource = <N extends Routed>(
       name: N,
       input: Input<N>,
       makes?: string
-    ) =>
-      naming(name)(
-        Effect.gen(function* () {
-          const subject = subjectOf(input);
-          const { host } = yield* parseId(subject);
+    ) => {
+      const subject = subjectOf(input);
 
-          const made =
-            makes === undefined ? undefined : yield* formatId(host, makes);
+      return Effect.gen(function* () {
+        const { host } = yield* parseId(subject);
 
-          return yield* send(yield* routeTo(host), name, input, subject, made);
-        })
+        const made =
+          makes === undefined ? undefined : yield* formatId(host, makes);
+
+        return { route: yield* routeTo(host), made };
+      }).pipe(
+        Effect.mapError(naming(name)),
+        Effect.flatMap(({ route, made }) =>
+          send(route, name, input, subject, made)
+        )
       );
+    };
 
-    const createOn = (host: string, name: string, spec: MachineSpec) =>
-      Effect.flatMap(formatId(host, name), (id) =>
-        onResource("createMachine", { ...spec, id }, name)
-      );
-
-    const offering = (base: string) =>
+    const offering = (base: string, action: HostAction) =>
       Effect.gen(function* () {
         const asked = yield* Effect.forEach(routed, (route) =>
           Effect.map(
@@ -492,8 +455,8 @@ export const make = (
         const message = `no host offers base ${base}: ${misses.join("; ")}`;
 
         return yield* noReply
-          ? new Unavailable({ message, readOnly: true })
-          : new NotOffered({ message, base });
+          ? new Unavailable({ message, readOnly: true, action })
+          : new NotOffered({ message, base, action });
       }).pipe(Effect.scoped);
 
     const create = (
@@ -502,13 +465,17 @@ export const make = (
       placement?: CreateOptions
     ) =>
       Effect.gen(function* () {
-        yield* parseName(name);
+        yield* Effect.mapError(parseName(name), naming("createMachine"));
 
-        if (placement?.host !== undefined) {
-          return yield* createOn(placement.host, name, spec);
-        }
+        const host =
+          placement?.host ?? (yield* offering(spec.base, "createMachine")).id;
 
-        return yield* createOn((yield* offering(spec.base)).id, name, spec);
+        const id = yield* Effect.mapError(
+          formatId(host, name),
+          naming("createMachine")
+        );
+
+        return yield* onResource("createMachine", { ...spec, id }, name);
       });
 
     const place = (
@@ -516,17 +483,19 @@ export const make = (
       placement?: CreateOptions
     ): Effect.Effect<Host, ErrorOf<"getHost"> | NotOffered> =>
       placement?.host === undefined
-        ? offering(base)
-        : Effect.flatMap(routeTo(placement.host), readHost);
+        ? offering(base, "getHost")
+        : Effect.flatMap(
+            Effect.mapError(routeTo(placement.host), naming("getHost")),
+            readHost
+          );
 
     return {
       hosts: gather((route) => Effect.map(readHost(route), (host) => [host])),
       machines: gather((route) => send(route, "listMachines", {})),
       checkpoints: gather((route) => send(route, "listCheckpoints", {})),
       capacity: gather((route) => send(route, "getCapacity", {})),
-      place: (base, placement) => naming("getHost")(place(base, placement)),
-      create: (name, spec, placement) =>
-        naming("createMachine")(create(name, spec, placement)),
+      place,
+      create,
       getMachine: (input) => onResource("getMachine", input),
       startMachine: (input) => onResource("startMachine", input),
       stopMachine: (input) => onResource("stopMachine", input),

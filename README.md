@@ -339,6 +339,10 @@ await sdk.destroySandbox();
 - A paused orb resumes, and a snapshot restores, only under the smolvm release that paused or captured it. Before moving a host's smolvm, stop its paused orbs' machines with `clankerbox stop`; each spawn then boots its orb again, and the next pause of an orb left running stops it. A spawn passes over a snapshot captured under another release until the project's next snapshot pause on that host replaces it.
 - smolvm resolves `ORB_IMAGE`'s tag at each create, so each new orb boots the image the tag names then, and an orb or snapshot keeps the image it was made from. The first create of a new image pulls it within the job's five minutes. Each image stays on the host's disk while an orb made from it does, idle and archived threads' paused orbs included; smolvm drops the oldest unused ones once they pass 20 GiB.
 
+## Release
+
+A pushed tag publishes. Bump the version of every published package, commit, tag `v<version>`, and push the tag. `.github/workflows/npm.yml` checks that the tag names that version, then publishes each package whose version npm doesn't have yet, through npm trusted publishing. A new package's first version is published by hand with `vp pm publish`, then trusted with `npm trust github <package> --repo <repo> --file npm.yml`.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).

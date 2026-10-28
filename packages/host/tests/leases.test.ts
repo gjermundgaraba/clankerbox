@@ -12,12 +12,15 @@ describe("leases", () => {
         const order = yield* Ref.make<readonly string[]>([]);
         const first = yield* Scope.make();
 
-        yield* Scope.provide(leases.share("checkpoint", "snap"), first);
+        yield* Scope.provide(
+          leases.hold({ checkpoint: Leases.shared("snap") }),
+          first
+        );
 
         const owner = yield* Effect.forkChild(
           Effect.scoped(
             Effect.andThen(
-              leases.own("checkpoint", "snap"),
+              leases.hold({ checkpoint: Leases.owned("snap") }),
               Ref.update(order, (all) => [...all, "own"])
             )
           )
@@ -28,7 +31,7 @@ describe("leases", () => {
         const sharer = yield* Effect.forkChild(
           Effect.scoped(
             Effect.andThen(
-              leases.share("checkpoint", "snap"),
+              leases.hold({ checkpoint: Leases.shared("snap") }),
               Ref.update(order, (all) => [...all, "share"])
             )
           )
@@ -56,10 +59,13 @@ describe("leases", () => {
         const leases = yield* Leases.make;
         const first = yield* Scope.make();
 
-        yield* Scope.provide(leases.share("machine", "dev"), first);
+        yield* Scope.provide(
+          leases.hold({ machine: Leases.shared("dev") }),
+          first
+        );
 
         const waiting = yield* Effect.forkChild(
-          Effect.scoped(leases.own("machine", "dev"))
+          Effect.scoped(leases.hold({ machine: Leases.owned("dev") }))
         );
 
         yield* Effect.yieldNow;
@@ -67,7 +73,7 @@ describe("leases", () => {
         yield* Scope.close(first, Exit.void);
 
         const later = yield* Effect.forkChild(
-          Effect.scoped(leases.own("machine", "dev"))
+          Effect.scoped(leases.hold({ machine: Leases.owned("dev") }))
         );
 
         const owned = yield* Effect.repeat(
@@ -91,10 +97,10 @@ describe("leases", () => {
 
         const holding = yield* Effect.forkChild(
           Effect.all([
-            leases.share("checkpoint", "snap"),
-            leases.share("checkpoint", "snap"),
-            leases.own("checkpoint", "other"),
-            leases.own("machine", "snap"),
+            leases.hold({ checkpoint: Leases.shared("snap") }),
+            leases.hold({ checkpoint: Leases.shared("snap") }),
+            leases.hold({ checkpoint: Leases.owned("other") }),
+            leases.hold({ machine: Leases.owned("snap") }),
           ])
         );
 
@@ -106,6 +112,50 @@ describe("leases", () => {
         );
 
         expect(held === undefined ? "blocked" : held._tag).toBe("Success");
+      }).pipe(Effect.scoped)
+  );
+
+  it.effect(
+    "a hold of a machine and a checkpoint takes the checkpoint only once it has the machine",
+    () =>
+      Effect.gen(function* () {
+        const leases = yield* Leases.make;
+        const first = yield* Scope.make();
+
+        yield* Scope.provide(
+          leases.hold({ machine: Leases.owned("dev") }),
+          first
+        );
+
+        const both = yield* Effect.forkChild(
+          Effect.scoped(
+            leases.hold({
+              machine: Leases.shared("dev"),
+              checkpoint: Leases.owned("snap"),
+            })
+          )
+        );
+
+        yield* Effect.yieldNow;
+
+        const checkpointFree = yield* Effect.forkChild(
+          Effect.scoped(leases.hold({ checkpoint: Leases.owned("snap") }))
+        );
+
+        const meanwhile = yield* Effect.repeat(
+          Effect.flatMap(Effect.yieldNow, () =>
+            Effect.sync(() => checkpointFree.pollUnsafe())
+          ),
+          { until: (exit) => exit !== undefined, times: 100 }
+        );
+
+        yield* Scope.close(first, Exit.void);
+        yield* Fiber.join(both);
+
+        expect([meanwhile?._tag, both.pollUnsafe()?._tag]).toStrictEqual([
+          "Success",
+          "Success",
+        ]);
       }).pipe(Effect.scoped)
   );
 });

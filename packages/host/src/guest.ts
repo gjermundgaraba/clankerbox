@@ -238,7 +238,6 @@ export const tailnetScript = [
   "",
 ].join("\n");
 
-/** What the tailnet script reported: no `tailscaled`, or its backend state and MagicDNS name. */
 export type TailnetReport =
   | { readonly missing: true }
   | {

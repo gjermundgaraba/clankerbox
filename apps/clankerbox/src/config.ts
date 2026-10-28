@@ -19,9 +19,7 @@ const decodeConfig = Schema.decodeUnknownEffect(
 export interface LoadedConfig {
   readonly file: string;
   readonly hosts: readonly Client.HostEntry[];
-  /** As written: `configPath` resolves it where it is used, under `~/` or else beside the config. */
   readonly profiles: string | undefined;
-  /** The public-key file every setup authorizes for the login user, as written, as `profiles`. */
   readonly authorizedKeys: string | undefined;
 }
 

@@ -4,7 +4,8 @@ import { Schema } from "effect";
 
 const reachable = new BlockList();
 
-// Source: tailscale.com/kb/1015, tailscale.com/kb/1033
+// https://tailscale.com/docs/concepts/tailscale-ip-addresses
+// https://tailscale.com/docs/concepts/ip-and-dns-addresses
 const subnets = [
   ["100.64.0.0", 10, "ipv4"],
   ["127.0.0.0", 8, "ipv4"],

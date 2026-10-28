@@ -72,7 +72,6 @@ type Resolved<C> = C extends unknown
   ? Omit<C, Exclude<keyof HostSettings, "kind">> & Omit<HostSettings, "kind">
   : never;
 
-/** One kind's section, beside the settings every kind shares. */
 export type HostConfig = Resolved<HostConfigFile>;
 
 const decodeConfig = Schema.decodeUnknownEffect(

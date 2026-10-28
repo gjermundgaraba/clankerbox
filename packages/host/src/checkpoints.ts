@@ -11,7 +11,7 @@ import type { Scope } from "effect";
 import { Hex } from "effect/encoding";
 
 import { foundOn, idOn, nameOn, newInstance } from "./ids.ts";
-import { Leases } from "./leases.ts";
+import { Leases, owned, shared } from "./leases.ts";
 import { Machines } from "./machines.ts";
 import { checkpointRef, machineRef, madeOn, pinnedOn } from "./refs.ts";
 import { Runtime } from "./runtime.ts";
@@ -107,8 +107,10 @@ export const make = (
     const capturing = (source: string, name: string, replaces = false) =>
       Effect.scoped(
         Effect.gen(function* () {
-          yield* leases.share("machine", source);
-          yield* leases.own("checkpoint", name);
+          yield* leases.hold({
+            machine: shared(source),
+            checkpoint: owned(name),
+          });
 
           const intent = yield* found(
             "machine",
@@ -167,7 +169,7 @@ export const make = (
     const remove = (name: string) =>
       Effect.scoped(
         Effect.gen(function* () {
-          yield* leases.own("checkpoint", name);
+          yield* leases.hold({ checkpoint: owned(name) });
 
           yield* retired(
             yield* found("checkpoint", name, store.anyCheckpoint(name))

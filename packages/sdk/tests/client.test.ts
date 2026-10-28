@@ -562,6 +562,10 @@ describe("client", () => {
         expect(listed.unreachable[0]?.error.message).toContain(
           "calls itself other"
         );
+        expect(listed.unreachable[0]?.error).toMatchObject({
+          host: "mis",
+          action: "getHost",
+        });
         expect(error._tag).toBe("NotOffered");
         expect(error.message).toContain("mis");
         expect(error.message).toContain("other");

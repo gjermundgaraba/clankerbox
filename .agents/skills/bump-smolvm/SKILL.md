@@ -32,8 +32,9 @@ separately, and don't deploy, change production hosts, or commit unless asked.
 - **Notation:** a citation is a path in smolvm's source at the tested release,
   1.32.1, and the identifier beside it (a function, constant, environment
   variable or message) finds the code: `git grep -n <identifier> <tag> --
-  <path>`. Code comments cite the same way, as `// Source: smolvm <path>
-  <identifier>`: `git grep -n 'Source: smolvm'`.
+  <path>`. Code comments cite a permalink at the tested release, as
+  `// https://github.com/smol-machines/smolvm/blob/v1.32.1/<path>#L<line>`:
+  `git grep -n 'github.com/smol-machines/smolvm/blob/'`.
 - Read the release notes and the full changed-file list between the tags first,
   then each claim's file. A changelog or a clean build is not evidence.
 
@@ -566,9 +567,9 @@ as it is.
 ## After
 
 - Set `requirements.smolvm.testedVersion`, the version in README (`git grep` for the old one) and
-  the release in Notation above. Edit a claim or a `Source: smolvm` comment
-  only where the target changed it: check each identifier still finds the
-  code, and add claims the new release introduced.
+  the release in Notation above. Move every smolvm permalink to the target's
+  tag and the line its code now sits on, edit a claim only where the target
+  changed it, and add claims the new release introduced.
 - Tell the operator what the bump does to a running host: the host refuses to
   start until its config names a prefix with the new release (install into a new
   prefix, expand its templates, change `linux.prefix`, restart); running VMs

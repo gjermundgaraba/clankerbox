@@ -1,17 +1,20 @@
 import { Capacity, formatMib } from "@gjermundgaraba/clankerbox-sdk";
 import type { Reading } from "@gjermundgaraba/clankerbox-sdk";
-import { Array as Arr, Effect } from "effect";
+import { Effect } from "effect";
 
-import type { Activation, Held, MachineRef, MachineState } from "./runtime.ts";
+import { stateIn } from "./runtime.ts";
+import type {
+  Activation,
+  Held,
+  MachineRef,
+  MachineState,
+  Observed,
+} from "./runtime.ts";
 
-type Observe = (
-  machines: readonly MachineRef[]
-) => Effect.Effect<readonly MachineState[]>;
+type Observe = (machines: readonly MachineRef[]) => Effect.Effect<Observed>;
 
 interface InUse {
-  /** Running or being booted, each once. */
   readonly running: readonly MachineRef[];
-  /** Whose state couldn't be read: each may run. */
   readonly unread: readonly MachineRef[];
 }
 
@@ -21,17 +24,15 @@ export const inUse = (
 ): Effect.Effect<InUse> =>
   Effect.gen(function* () {
     const booting = machines.filter((held) => held.booting);
-    const others = machines.filter((held) => !held.booting);
 
-    const read = Arr.zip(
-      others,
-      yield* observe(others.map(({ machine }) => machine))
+    const others = machines.flatMap((held) =>
+      held.booting ? [] : [held.machine]
     );
 
+    const read = yield* observe(others);
+
     const inState = (state: MachineState) =>
-      read
-        .filter(([, observed]) => observed === state)
-        .map(([{ machine }]) => machine);
+      others.filter((machine) => stateIn(read, machine) === state);
 
     return {
       running: [

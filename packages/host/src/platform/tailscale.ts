@@ -11,7 +11,7 @@ export const TailnetSettings = Schema.Struct({
   }),
   tags: Schema.NonEmptyArray(
     Schema.String.check(
-      // Source: tailscale/tailscale tailcfg/tailcfg.go, CheckTag
+      // CheckTag in https://github.com/tailscale/tailscale/blob/main/tailcfg/tailcfg.go
       Schema.isPattern(/^tag:[A-Za-z][A-Za-z0-9-]*$/u, {
         message: "a tag, such as tag:clankerbox-machine",
       })

@@ -348,7 +348,13 @@ layer(NodeServices.layer)((it) => {
         { ...machine, id: "linux_gone", name: "gone", port: 10_002 },
       ]);
 
-      expect(observed).toStrictEqual(["running", "stopped", "missing"]);
+      expect(observed).toStrictEqual(
+        new Map([
+          ["linux_dev", "running"],
+          ["linux_two", "stopped"],
+          ["linux_gone", "missing"],
+        ])
+      );
       expect(smolvmArgs(spawner.calls).map((args) => args[3])).toStrictEqual(
         expect.arrayContaining([
           "dev-01234567",
@@ -388,7 +394,12 @@ layer(NodeServices.layer)((it) => {
             )
           );
 
-        expect(observed).toStrictEqual(["unknown", "stopped"]);
+        expect(observed).toStrictEqual(
+          new Map([
+            ["linux_dev", "unknown"],
+            ["linux_two", "stopped"],
+          ])
+        );
         expect(logged).toStrictEqual([
           [
             "couldn't read linux_dev's state: smolvm machine status dev-01234567 exited 1: Error: database is locked",
@@ -426,10 +437,12 @@ layer(NodeServices.layer)((it) => {
         );
 
         expect(Duration.format(waited)).toBe("8s");
-        expect(value).toStrictEqual([
-          "stopped",
-          ...hanging.map(() => "unknown"),
-        ]);
+        expect(value).toStrictEqual(
+          new Map([
+            ["linux_two", "stopped"],
+            ...hanging.map(({ id }) => [id, "unknown"] as const),
+          ])
+        );
       })
   );
 
@@ -1790,7 +1803,7 @@ const logging = (logged: unknown[]) =>
   Logger.layer([Logger.make(({ message }) => logged.push(message))]);
 
 layer(NodeServices.layer)((it) => {
-  it.effect("each machine's state comes back in the machines' order", () =>
+  it.effect("each machine's state comes back under its ID", () =>
     Effect.gen(function* () {
       const states: readonly MachineState[] = [
         "running",
@@ -1803,7 +1816,14 @@ layer(NodeServices.layer)((it) => {
         Effect.succeed(states[machines.indexOf(ref)] ?? "unknown")
       );
 
-      expect(read).toStrictEqual(states);
+      expect(read).toStrictEqual(
+        new Map([
+          ["linux_a", "running"],
+          ["linux_b", "stopped"],
+          ["linux_c", "missing"],
+          ["linux_d", "running"],
+        ])
+      );
     })
   );
 
@@ -1821,12 +1841,14 @@ layer(NodeServices.layer)((it) => {
             : Effect.succeed<MachineState>("running")
         ).pipe(Effect.provide(logging(logged)));
 
-        expect(read).toStrictEqual([
-          "running",
-          "unknown",
-          "running",
-          "running",
-        ]);
+        expect(read).toStrictEqual(
+          new Map([
+            ["linux_a", "running"],
+            ["linux_b", "unknown"],
+            ["linux_c", "running"],
+            ["linux_d", "running"],
+          ])
+        );
         expect(logged).toStrictEqual([
           ["couldn't read linux_b's state: smolvm machine status exited 1"],
         ]);
@@ -1851,12 +1873,14 @@ layer(NodeServices.layer)((it) => {
 
         const read = yield* Fiber.join(fiber);
 
-        expect(read).toStrictEqual([
-          "stopped",
-          "stopped",
-          "unknown",
-          "stopped",
-        ]);
+        expect(read).toStrictEqual(
+          new Map([
+            ["linux_a", "stopped"],
+            ["linux_b", "stopped"],
+            ["linux_c", "unknown"],
+            ["linux_d", "stopped"],
+          ])
+        );
         expect(logged).toStrictEqual([
           [
             `couldn't read linux_c's state: no answer within ${Duration.format(machineReadWait)}`,

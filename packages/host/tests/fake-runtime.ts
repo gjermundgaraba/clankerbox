@@ -1,4 +1,10 @@
-import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { access, cp, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 
@@ -14,6 +20,7 @@ import type {
   Held,
   MachineRef,
   MachineState,
+  Observed,
   Interface,
   RuntimeError,
   Sizes,
@@ -39,10 +46,8 @@ export type Operation =
 
 export interface FakeOptions {
   readonly dir: string;
-  /** `linux` by default, which captures and forks only a running machine. */
   readonly kind?: Kind | undefined;
   readonly ramBudgetMib?: number | undefined;
-  /** `fake 1` by default on linux, where a paused machine resumes under it too; mac has none. */
   readonly pin?: string | undefined;
 }
 
@@ -52,11 +57,46 @@ export const loginSetup = [
   "",
 ].join("\n");
 
+const guestTools = [
+  "cat",
+  "chmod",
+  "cp",
+  "cut",
+  "env",
+  "grep",
+  "ls",
+  "mkdir",
+  "mktemp",
+  "mv",
+  "nohup",
+  "od",
+  "rm",
+  "setsid",
+  "sh",
+  "sleep",
+  "tr",
+];
+
+const hostTool = (tool: string): string | undefined =>
+  ["/usr/bin", "/bin"]
+    .map((dir) => path.join(dir, tool))
+    .find((file) => existsSync(file));
+
 export const furnish = (root: string, stubs: string): void => {
+  const bin = path.join(root, "usr", "bin");
+
   mkdirSync(path.join(root, "usr", "local"), { recursive: true });
+  mkdirSync(bin);
   symlinkSync(stubs, path.join(root, "usr", "local", "bin"));
-  symlinkSync("/usr/bin", path.join(root, "usr", "bin"));
-  symlinkSync("/bin", path.join(root, "bin"));
+  symlinkSync(bin, path.join(root, "bin"));
+
+  for (const tool of guestTools) {
+    const file = hostTool(tool);
+
+    if (file !== undefined) {
+      symlinkSync(file, path.join(bin, tool));
+    }
+  }
 };
 
 export const writeStubs = (dir: string, uname = "Linux"): string => {
@@ -177,13 +217,11 @@ type Injection<O extends Operation> =
       readonly kind: "hold";
       readonly entered: Deferred.Deferred<undefined>;
       readonly until: Deferred.Deferred<undefined>;
-      /** As native work does, the call goes on to its end though the caller interrupts it. */
       readonly runsOn: boolean;
     };
 
 type Injections = { readonly [O in Operation]: Array<Injection<O>> };
 
-/** What `operation` may fail with, as the `Runtime` port types it. */
 type FailureOf<O extends Operation> = Interface[O] extends (
   ...args: never
 ) => Effect.Effect<unknown, infer E, unknown>
@@ -270,14 +308,15 @@ export const fakeRuntime = (options: FakeOptions) => {
       })
     );
 
-  const states = (
-    refs: readonly MachineRef[]
-  ): Effect.Effect<readonly MachineState[]> =>
+  const states = (refs: readonly MachineRef[]): Effect.Effect<Observed> =>
     Effect.sync(() => {
       observed.push(refs.map(({ id }) => id));
 
-      return refs.map(
-        (machine) => machines.get(machine.name)?.state ?? "missing"
+      return new Map(
+        refs.map((machine) => [
+          machine.id,
+          machines.get(machine.name)?.state ?? "missing",
+        ])
       );
     });
 

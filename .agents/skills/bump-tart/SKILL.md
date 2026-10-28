@@ -17,8 +17,8 @@ production hosts or the operator's Tart, or commit unless asked.
 - **Pinned in this repo:** `requirements.tart.minimumVersion` in
   `packages/sdk/src/requirements.ts`, published for deploy tooling, is a
   floor: `supported` accepts any `major.minor.patch` at or above it, and startup
-  refuses the rest. It carries no comment (no prose comments); why the floor
-  is where it is lives in this skill, below, and in the commit that moved it. The tested
+  refuses the rest. Why the floor is where it is lives in this skill, below,
+  and in the commit that moved it. The tested
   release also appears in README (install table, the `tart.binary` example)
   and the tests
   (`packages/host/tests/platform/tart/tart.test.ts`, whose fake `tart` answers as the tested
@@ -47,8 +47,9 @@ production hosts or the operator's Tart, or commit unless asked.
 - **Notation:** a citation is a path under `Sources/tart/` at the tested
   release, 2.41.1, and the identifier beside it (a type, function, case or
   message) finds the code: `git grep -n <identifier> <tag> --
-  Sources/tart/<path>`. Code comments cite the same way, as `// Source: tart
-  <path> <identifier>`: `git grep -n 'Source: tart'`.
+  Sources/tart/<path>`. Code comments cite a permalink at the tested release,
+  as `// https://github.com/openai/tart/blob/2.41.1/Sources/tart/<path>#L<line>`:
+  `git grep -n 'github.com/openai/tart/blob/'`.
 - Read the release notes and the full changed-file list, then each claim's file.
 
 ## Claims to re-check
@@ -284,9 +285,9 @@ image before the next bump relies on them)
   commit message, and the boundary
   versions to `tart.test.ts`'s `supported` cases. Otherwise the floor stays,
   and only the tested release moves (README, the fake's version).
-- Set the tested release in Notation above. Edit a claim or a `Source: tart`
-  comment only where the target changed it: check each identifier still finds
-  the code, and add claims the new release introduced.
+- Set the tested release in Notation above. Move every Tart permalink to the
+  target's tag and the line its code now sits on, edit a claim only where the
+  target changed it, and add claims the new release introduced.
 - Tell the operator how to move: install the new release in its own versioned
   path, change `tart.binary`, restart the host. Every `start` writes the VM's
   job again, and a stopped job launchd still holds whose arguments aren't this

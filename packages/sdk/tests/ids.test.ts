@@ -13,7 +13,7 @@ import {
 
 const parse = (id: string) => Effect.exit(parseId(id));
 
-// Source: smolvm src/data/mod.rs validate_vm_name
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/data/mod.rs#L58
 const smolvmAccepts = (name: string): boolean =>
   name.length <= 128 &&
   /^[A-Za-z0-9][A-Za-z0-9_-]*$/u.test(name) &&
