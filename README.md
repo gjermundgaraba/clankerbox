@@ -73,6 +73,12 @@ clankerbox host --config /etc/clankerbox/linux.json
 
 The host exits 130 on SIGINT or SIGTERM and 1 when it fails.
 
+### Upgrading from 0.29
+
+State dirs, prebuilds, checkpoints and client configs are as in 0.29, with no migration. Upgrade hosts and clients together, as for every release.
+
+- A machine's `tailscaled` runs in kernel mode once the machine boots again, or is forked or restored; until then it keeps the userspace daemon it has, a paused one included. A server a recipe binds to `127.0.0.1` is then no longer reachable on the tailnet: bind it to all addresses or the tailnet address, and prebuild again.
+
 ### Upgrading from 0.26
 
 State dirs, prebuilds, checkpoints and client configs are as in 0.26, with no migration. Upgrade hosts and clients together, as for every release.
@@ -181,9 +187,9 @@ clankerbox checkpoint delete linux_base
 
 A host with `tailnet` joins each machine whose guest has `tailscale` and `tailscaled` in one of `/usr/local/sbin`, `/usr/local/bin`, `/usr/sbin`, `/usr/bin`, `/sbin`, `/bin` or `/opt/homebrew/bin`. Nothing else is searched, not the guest's own `PATH`, `/snap/bin` or Linux Homebrew. Installing them in a recipe is the opt-in:
 
-- clankerbox runs its own `tailscaled`, in userspace networking, from `/var/lib/clankerbox/tailscale`, so no route, netfilter rule or firewall in the guest is touched. Leave the distribution's own `tailscaled` service off.
-- The login user, and no other user but root, may fetch the node's certificates from that `tailscaled`: `/localapi/v0/cert/<domain>` through `/var/lib/clankerbox/tailscale/tailscaled.sock`, granted by `TS_PERMIT_CERT_UID`. No operator is set, so nothing else on the daemon is open to it; reading its status is open to every local user.
-- Tailnet connections arrive on the guest's loopback, so a server bound to `127.0.0.1` is reachable on the tailnet: loopback is no longer private to the guest, and the tailnet policy is what gates it. Keep tokenless services off recipes that join.
+- clankerbox runs its own `tailscaled` from `/var/lib/clankerbox/tailscale`, on its socket there, `tailscaled.sock`; pass it to `tailscale --socket` and to tools that ask the daemon who calls, such as Rex's `--tailscaled-socket`. It runs in kernel mode: the guest gets a tailnet interface and address, so every program in it reaches the tailnet, and only a server listening on that address or on all addresses is reachable there, never one bound to `127.0.0.1`. Leave the distribution's own `tailscaled` service off.
+- It takes over the guest's DNS (`--accept-dns`), so MagicDNS names resolve, and on linux it installs no firewall rules (`--netfilter-mode=off`): smolvm's guest network lies in Tailscale's `100.64.0.0/10`, and Tailscale's rules drop that range on any other interface, the host's SSH included. A check sets both each time it finds the daemon answering.
+- The login user, and no other user but root, may fetch the node's certificates from that `tailscaled`: `/localapi/v0/cert/<domain>` through its socket, granted by `TS_PERMIT_CERT_UID`. No operator is set, so nothing else on the daemon is open to it; reading its status is open to every local user.
 - A check runs in the background once a start settles: it starts `tailscaled` from its saved state if it isn't running, and a node that needs a login gets a key. The host mints one per join: single-use, ephemeral, preauthorized, for the configured tags, expiring in 10 minutes, and passes it on stdin. A request that arrives meanwhile cuts the check short.
 - The node is named after the machine's ID, `_` as `-`. A fork or restore kills the daemon its source left and drops the node first, so it joins as its own node.
 - `get` shows `TAILNET`, while the machine runs: the MagicDNS name Tailscale gave the node, why the last check failed, or that the guest has no `tailscaled`. The status is the host's memory only, never stored. A joined machine is checked again every 60 rechecks (half an hour at the default 30 seconds), which restarts a daemon that died; a failed one after 1 recheck, then 2, 4 and so on up to 64. A guest without `tailscaled` is checked again at its next start. A prebuild's builder joins nothing.

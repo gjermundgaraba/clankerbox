@@ -470,7 +470,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "the check starts tailscaled from its saved state, in userspace networking, with a fresh log, and reports it",
+    "the check starts tailscaled from its saved state, with a fresh log, sets its DNS and firewall preferences, and reports it",
     () =>
       Effect.gen(function* () {
         const where = yield* guest();
@@ -501,7 +501,8 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           name: undefined,
         });
         expect(yield* calls(where.root)).toStrictEqual([
-          `tailscaled --tun=userspace-networking --statedir=${dir}/state --socket=${dir}/tailscaled.sock --port=0`,
+          `tailscaled --statedir=${dir}/state --socket=${dir}/tailscaled.sock --port=0`,
+          `tailscale --socket=${dir}/tailscaled.sock set --accept-dns --netfilter-mode=off`,
         ]);
         expect(yield* isMissing(path.join(dir, "tailscaled.pid"))).toBe(false);
         expect(yield* read(dir, "tailscaled.log")).toBe("");
@@ -528,6 +529,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         expect(
           (yield* read(where.root, "tailscaled.env")).split("\n")
         ).toContain("TS_PERMIT_CERT_UID=admin");
+        expect((yield* calls(where.root)).at(-1)).toMatch(
+          / set --accept-dns$/u
+        );
       })
   );
 
@@ -562,7 +566,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const second = yield* tailnet(where, ["linux-dev", "user"]);
 
         expect(second.code, second.output).toBe(0);
-        expect(yield* calls(where.root)).toHaveLength(1);
+        expect(
+          (yield* calls(where.root)).filter((call) =>
+            call.startsWith("tailscaled ")
+          )
+        ).toHaveLength(1);
         expect((yield* stat(dir)).mode & 0o777).toBe(0o711);
       })
   );
@@ -590,7 +598,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           backend: "Running",
           name: "linux-dev.example.ts.net",
         });
-        expect(yield* calls(where.root)).toStrictEqual([]);
+        expect(yield* calls(where.root)).toStrictEqual([
+          expect.stringMatching(/ set --accept-dns --netfilter-mode=off$/u),
+        ]);
       })
   );
 
@@ -613,7 +623,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         expect(code, output).toBe(0);
         expect(tailnetIn(output)).toMatchObject({ backend: "Stopped" });
-        expect(yield* calls(where.root)).toStrictEqual([]);
+        expect(yield* calls(where.root)).toStrictEqual([
+          expect.stringMatching(/ set --accept-dns --netfilter-mode=off$/u),
+        ]);
       })
   );
 
@@ -652,7 +664,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
         expect(up).toMatch(
           new RegExp(
-            `^tailscale --socket=${dir}/tailscaled\\.sock up --reset --hostname=linux-dev --accept-dns=false --timeout=60s --auth-key=file:${dir}/key\\.\\S+$`,
+            `^tailscale --socket=${dir}/tailscaled\\.sock up --reset --hostname=linux-dev --accept-dns --netfilter-mode=off --timeout=60s --auth-key=file:${dir}/key\\.\\S+$`,
             "u"
           )
         );
