@@ -25,7 +25,6 @@ catalog:
   xstate: 6.0.0-alpha.70
   "@xstate/effect": 1.0.0-alpha.9
   ultracite: 8.0.2
-  oxlint: 1.89.0
   oxfmt: 0.74.0
 
 ignoredOptionalDependencies:

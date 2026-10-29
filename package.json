@@ -13,7 +13,6 @@
     "@effect/tsgo": "catalog:",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
-    "oxlint": "catalog:",
     "typescript": "catalog:",
     "ultracite": "catalog:",
     "vite": "catalog:",
