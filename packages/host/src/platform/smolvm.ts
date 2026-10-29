@@ -10,7 +10,15 @@ import {
   WrongState,
 } from "@gjermundgaraba/clankerbox-sdk";
 import type { HostError, Sizing } from "@gjermundgaraba/clankerbox-sdk";
-import { Duration, Effect, FileSystem, Layer, Schema, Semaphore } from "effect";
+import {
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Schedule,
+  Schema,
+  Semaphore,
+} from "effect";
 import type { ChildProcessSpawner } from "effect/process";
 
 import {
@@ -103,6 +111,13 @@ export const nativeName = (
 ): string => `${resource.name}-${resource.instance.slice(0, 8)}`;
 
 const observeConcurrency = 8;
+
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/manager.rs#L118
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/process.rs#L3553
+// https://github.com/smol-machines/smolvm/blob/v1.32.1/src/agent/state_probe.rs#L41
+const exitWait = Duration.seconds(30);
+
+const exitPause = Duration.millis(500);
 
 export const machineReadWait = Duration.subtract(
   stateReadWait,
@@ -333,6 +348,30 @@ export const make = (
         recorded === "missing" ? recorded : stateOf(recorded)
       );
 
+    const exited = (native: string, error: Internal) =>
+      status(native).pipe(
+        Effect.repeat({
+          until: (recorded) => recorded !== "unreachable",
+          schedule: Schedule.spaced(exitPause),
+        }),
+        Effect.mapError(
+          (read) =>
+            new Internal({ message: `${error.message}; then ${read.message}` })
+        ),
+        timeoutFail(
+          exitWait,
+          () =>
+            new Internal({
+              message: `${error.message}; smolvm still read it unreachable ${Duration.format(exitWait)} later`,
+            })
+        ),
+        Effect.flatMap((recorded) =>
+          recorded === "stopped" || recorded === "missing"
+            ? Effect.void
+            : Effect.fail(error)
+        )
+      );
+
     const observe = (machines: readonly MachineRef[]) =>
       observeEach(machines, (machine) => state(nativeName(machine)));
 
@@ -407,16 +446,14 @@ export const make = (
         }
 
         if (observed === "running") {
-          const stopped = yield* smolvm(
+          yield* call(
             ["machine", "stop", "--name", native, "--timeout", "0"],
             `machine stop ${native}`
+          ).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning(`delete ${machine.id}: ${error.message}`)
+            )
           );
-
-          if (stopped.exitCode !== 0) {
-            yield* Effect.logWarning(
-              `delete ${machine.id}: ${failure(`smolvm machine stop ${native}`, stopped).message}`
-            );
-          }
         }
 
         const loaded = yield* systemctl(
@@ -750,7 +787,7 @@ export const make = (
           yield* call(
             ["machine", "stop", "--name", native],
             `machine stop ${native}`
-          );
+          ).pipe(Effect.catch((error) => exited(native, error)));
         })
       ),
       pause: Effect.fn("Smolvm.pause")((machine) =>

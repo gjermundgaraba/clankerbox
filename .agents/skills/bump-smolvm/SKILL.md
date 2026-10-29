@@ -159,7 +159,7 @@ as it is.
   for its other sockets but not the control socket). Ours: `controlSocket` and
   `socketPathMax`; the state dir is at most 52 bytes.
 
-**Lifecycle and state** (smolvm's exit codes are trusted; nothing polls around them)
+**Lifecycle and state** (smolvm's exit codes are trusted; only a failed stop is polled around)
 
 - `machine start` returns once the agent is ready and kills the child on
   failure (`finalize_launch`, src/agent/manager.rs), then stops the scope that
@@ -193,6 +193,26 @@ as it is.
   crates/smolvm-protocol/src/lib.rs); `machine exec` sessions are never
   registered as workloads. Ours: stop returns that error rather than force
   it; delete's path; setup and `start` scripts' daemons are not signalled.
+- `stop`'s kill gives the VMM 2 s after SIGTERM and 3 s after SIGKILL
+  (`AGENT_STOP_TIMEOUT`, src/agent/manager.rs; `VM_SIGKILL_TIMEOUT`,
+  src/process.rs), then fails with "still alive after stop attempts", after
+  "orphan process still alive, preserving PID/socket files" when a fresh CLI
+  found the VM only through its PID file (`stop_inner`). A large VM is still
+  freeing its RAM then: one of 48 GiB exited 7 s after that failure. The
+  record keeps `running` and the dead PID (`stop_vm_named_with_timeout`,
+  src/cli/vm_common.rs), and `machine status` reads it `stopped` once the PID
+  is gone (`resolve_state`); until then it reads `unreachable`, as the PID
+  is alive and the killed guest's agent silent. A failure that leaves the
+  VM up mostly reads otherwise. A guest left alive for retry answered the
+  stop's own 3 s probe first, as an unreachable machine is killed instead
+  (`cli_recover_if_unreachable`), and the agent answers pings outside its
+  work slots (`needs_work_slot`, crates/smolvm-agent/src/main.rs), so it
+  usually reads `running`; one whose agent goes silent right after reads
+  `unreachable`. The guest's shutdown never powers it off. A refused stop
+  reads `paused` or `frozen`. Ours: after a failed `machine stop`, stop
+  reads `machine status` every 500 ms while it reads `unreachable`, for at
+  most `exitWait`, 30 s; it succeeds once it reads `stopped` or the machine
+  is gone, and otherwise fails with smolvm's output, adding a failed read's.
 - `machine stop` takes `--name` and `-t/--timeout`, the workload's stop
   timeout, 0 to 300 (`parse_stop_timeout_arg`); `machine delete -f` only skips
   the prompt, and its stop gives the workload no time

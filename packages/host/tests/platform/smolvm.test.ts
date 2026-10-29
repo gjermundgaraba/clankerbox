@@ -144,6 +144,17 @@ const unknown: Reply = {
     "Error: config operation failed: machine status: machine 'dev-01234567' not found\n",
 };
 
+const stillAlive: Reply = {
+  exitCode: 1,
+  stderr:
+    "Error: agent operation failed: stop agent: process 4242 still alive after stop attempts\n",
+};
+
+const inTurn =
+  (...replies: Reply[]) =>
+  (): Reply | undefined =>
+    replies.length > 1 ? replies.shift() : replies[0];
+
 const timed = <A, E>(effect: Effect.Effect<A, E>) =>
   Effect.gen(function* () {
     const fiber = yield* Effect.forkChild(effect);
@@ -541,7 +552,135 @@ layer(NodeServices.layer)((it) => {
           ["machine", "start", "--name", "dev-01234567", "--branchable"],
           ["machine", "status", "--name", "dev-01234567", "--json"],
           ["machine", "stop", "--name", "dev-01234567"],
+          ["machine", "status", "--name", "dev-01234567", "--json"],
         ]);
+      })
+  );
+
+  it.effect(
+    "a stop smolvm fails while it reads the machine unreachable, its VMM still exiting, succeeds once it reads it stopped or gone",
+    () =>
+      Effect.gen(function* () {
+        for (const last of [status("stopped"), unknown]) {
+          const statuses = inTurn(
+            status("running"),
+            status("unreachable"),
+            status("unreachable"),
+            last
+          );
+
+          const spawner = scripted((call) => {
+            if (call.args[1] === "status") {
+              return statuses();
+            }
+
+            return call.args[1] === "stop" ? stillAlive : undefined;
+          });
+
+          const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+          const { waited } = yield* timed(runtime.stop(machine));
+
+          expect(Duration.format(waited)).toBe("1s");
+          expect(
+            smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))
+          ).toStrictEqual([
+            "status --name dev-01234567",
+            "stop --name dev-01234567",
+            "status --name dev-01234567",
+            "status --name dev-01234567",
+            "status --name dev-01234567",
+          ]);
+        }
+      })
+  );
+
+  it.effect(
+    "a stop smolvm fails answers its output at once when smolvm then reads the machine running, paused or frozen",
+    () =>
+      Effect.gen(function* () {
+        for (const after of ["running", "paused", "frozen"]) {
+          const statuses = inTurn(status("running"), status(after));
+
+          const spawner = scripted((call) => {
+            if (call.args[1] === "status") {
+              return statuses();
+            }
+
+            return call.args[1] === "stop" ? stillAlive : undefined;
+          });
+
+          const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+          const error = yield* Effect.flip(runtime.stop(machine));
+
+          expect(error.message).toBe(
+            "smolvm machine stop dev-01234567 exited 1: Error: agent operation failed: stop agent: process 4242 still alive after stop attempts"
+          );
+          expect(
+            smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))
+          ).toStrictEqual([
+            "status --name dev-01234567",
+            "stop --name dev-01234567",
+            "status --name dev-01234567",
+          ]);
+        }
+      })
+  );
+
+  it.effect(
+    "a stop smolvm fails whose status read then fails answers both outputs",
+    () =>
+      Effect.gen(function* () {
+        const statuses = inTurn(status("running"), status("unreachable"), {
+          exitCode: 1,
+          stderr: "Error: database is locked\n",
+        });
+
+        const spawner = scripted((call) => {
+          if (call.args[1] === "status") {
+            return statuses();
+          }
+
+          return call.args[1] === "stop" ? stillAlive : undefined;
+        });
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        const { value: error } = yield* timed(
+          Effect.flip(runtime.stop(machine))
+        );
+
+        expect(error.message).toBe(
+          "smolvm machine stop dev-01234567 exited 1: Error: agent operation failed: stop agent: process 4242 still alive after stop attempts; then smolvm machine status dev-01234567 exited 1: Error: database is locked"
+        );
+      })
+  );
+
+  it.effect(
+    "a stop smolvm fails while it reads the machine unreachable for 30 s fails with its output",
+    () =>
+      Effect.gen(function* () {
+        const statuses = inTurn(status("running"), status("unreachable"));
+
+        const spawner = scripted((call) => {
+          if (call.args[1] === "status") {
+            return statuses();
+          }
+
+          return call.args[1] === "stop" ? stillAlive : undefined;
+        });
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+
+        const { value: error, waited } = yield* timed(
+          Effect.flip(runtime.stop(machine))
+        );
+
+        expect(Duration.format(waited)).toBe("30s");
+        expect(error.message).toBe(
+          "smolvm machine stop dev-01234567 exited 1: Error: agent operation failed: stop agent: process 4242 still alive after stop attempts; smolvm still read it unreachable 30s later"
+        );
       })
   );
 
