@@ -22,20 +22,22 @@ if [ ! -r "$jar" ]; then
 fi
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/verify-machine-answers.XXXXXX")
-cp "$model/MachineAnswers.tla" "$work/"
-if [ "${1:-}" = --quick ]; then
-  sed '/^PROPERTIES/,$d' "$model/MachineAnswers.cfg" >"$work/MachineAnswers.cfg"
-else
-  cp "$model/MachineAnswers.cfg" "$work/"
-fi
+cp "$model/MachineAnswers.tla" "$model/MachineAnswers.cfg" "$model/TwoClients.cfg" "$work/"
 
 cd "$work"
 status=0
-java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers auto -noGenerateSpecTE \
-  -metadir "$work/states" -cleanup -dumpTrace json "$work/trace.json" \
-  -config MachineAnswers.cfg MachineAnswers.tla >"$work/tlc.out" 2>&1 || status=$?
+check() {
+  java -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers auto -noGenerateSpecTE \
+    -metadir "$work/states" -cleanup -dumpTrace json "$work/trace.json" \
+    -config "$1" MachineAnswers.tla >"$work/tlc.out" 2>&1 || status=$?
+  echo "$1:"
+  grep -E '^Error: |is violated|were violated|No error has been found|distinct states found|^Finished in' "$work/tlc.out" | tail -4 || true
+}
 
-grep -E '^Error: |is violated|were violated|No error has been found|distinct states found|^Finished in' "$work/tlc.out" || true
+check TwoClients.cfg
+if [ "$status" -eq 0 ] && [ "${1:-}" != --quick ]; then
+  check MachineAnswers.cfg
+fi
 if [ "$status" -eq 0 ]; then
   rm -rf "$work"
   exit 0
