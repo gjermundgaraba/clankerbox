@@ -1,13 +1,5 @@
-import {
-  loginUser,
-  outputLimit,
-  ScriptFailed,
-} from "@gjermundgaraba/clankerbox-sdk";
-import type {
-  Executed,
-  ExecRequest,
-  Setup,
-} from "@gjermundgaraba/clankerbox-sdk";
+import { loginUser, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
+import type { Setup } from "@gjermundgaraba/clankerbox-sdk";
 import { Duration, Effect, Option, Redacted, Schema, Stream } from "effect";
 
 import { timeoutFail } from "./runtime.ts";
@@ -30,14 +22,14 @@ export const lastLines = (text: string): string =>
     .join("\n")
     .slice(-tailCharacters);
 
+const keptCharacters = 65_536;
+
 const keptOutput = () => {
   const decoder = new TextDecoder();
   let kept = "";
-  let truncated = false;
 
   const keep = (text: string) => {
-    truncated ||= kept.length + text.length > outputLimit;
-    kept = (kept + text).slice(-outputLimit);
+    kept = (kept + text).slice(-keptCharacters);
   };
 
   return {
@@ -49,7 +41,6 @@ const keptOutput = () => {
 
       return kept;
     },
-    truncated: () => truncated,
   };
 };
 
@@ -109,29 +100,6 @@ const runInGuest = (
     }
 
     return text;
-  });
-
-export const runCommand = (
-  runtime: Runtime,
-  machine: MachineRef,
-  { argv, user, stdin }: ExecRequest
-): Effect.Effect<Executed, RuntimeError> =>
-  Effect.gen(function* () {
-    const output = keptOutput();
-
-    const exitCode = yield* drained(
-      runtime,
-      machine,
-      {
-        argv,
-        user,
-        stdin:
-          stdin === undefined ? undefined : new TextEncoder().encode(stdin),
-      },
-      output
-    );
-
-    return { exitCode, output: output.text(), truncated: output.truncated() };
   });
 
 const setupRunner = [

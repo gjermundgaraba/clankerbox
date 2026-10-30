@@ -2,8 +2,7 @@ import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, layer } from "@effect/vitest";
-import { outputLimit, ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
-import type { Executed } from "@gjermundgaraba/clankerbox-sdk";
+import { ScriptFailed } from "@gjermundgaraba/clankerbox-sdk";
 import {
   mkdir,
   write,
@@ -15,7 +14,7 @@ import {
   machine,
 } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
 import type { StubHost } from "@gjermundgaraba/clankerbox-sdk/testing/stub-host";
-import { DateTime, Effect, Schema, Sink, Stdio, Stream } from "effect";
+import { DateTime, Effect, Schema } from "effect";
 import { afterEach, expect } from "vite-plus/test";
 
 import { UnreachableDocument } from "../src/command.ts";
@@ -32,46 +31,6 @@ import {
 const stubs: StubHost[] = [];
 
 const host = hostIn(stubs);
-
-const execOn = (
-  args: readonly string[],
-  answer: Effect.Effect<Executed> = Effect.succeed({
-    exitCode: 3,
-    output: "hi\n",
-    truncated: false,
-  })
-) =>
-  Effect.gen(function* () {
-    const dir = yield* scratch;
-    const config = yield* writeConfig(dir, ["linux"]);
-    const printed: string[] = [];
-
-    const linux = host({
-      id: "linux",
-      bases: ["ubuntu"],
-      machines: [machine("linux_dev")],
-      exec: () => answer,
-    });
-
-    const stdio = Stdio.layerTest({
-      stdin: Stream.make(new TextEncoder().encode("the input")),
-      stdout: () =>
-        Sink.forEachArray((chunks) =>
-          Effect.sync(() => {
-            printed.push(
-              ...chunks.map((chunk) => Buffer.from(chunk).toString())
-            );
-          })
-        ),
-    });
-
-    const run = yield* cli(["exec", "--config", config, ...args], {
-      endpoints: [["linux", linux]],
-      stdio,
-    });
-
-    return { ...run, printed: printed.join(""), execs: linux.execs };
-  });
 
 describe("machines", () => {
   afterEach(async () => {
@@ -950,94 +909,6 @@ describe("machines", () => {
           "a resize gives at least one of vCPUs, RAM and disk"
         );
         expect(linux.calls).toStrictEqual([]);
-      })
-    );
-
-    it.effect(
-      "exec sends the command, its user and, with --stdin, this stdin, prints its output and exits with its code",
-      () =>
-        Effect.gen(function* () {
-          const { code, printed, execs } = yield* execOn([
-            "--user",
-            "user",
-            "--stdin",
-            "--timeout",
-            "2m",
-            "linux_dev",
-            "--",
-            "/bin/sh",
-            "-c",
-            "cat",
-          ]);
-
-          expect(code).toBe(3);
-          expect(printed).toBe("hi\n");
-          expect(execs).toStrictEqual([
-            {
-              id: "linux_dev",
-              argv: ["/bin/sh", "-c", "cat"],
-              user: "user",
-              stdin: "the input",
-            },
-          ]);
-        })
-    );
-
-    it.effect(
-      "exec --json prints the exit code and output, and sends no stdin unasked",
-      () =>
-        Effect.gen(function* () {
-          const { code, stdout, printed, execs } = yield* execOn([
-            "--json",
-            "linux_dev",
-            "--",
-            "true",
-          ]);
-
-          expect(code).toBe(3);
-          expect(JSON.parse(stdout)).toStrictEqual({
-            exitCode: 3,
-            output: "hi\n",
-            truncated: false,
-          });
-          expect(printed).toBe("");
-          expect(execs).toStrictEqual([
-            {
-              id: "linux_dev",
-              argv: ["true"],
-              user: undefined,
-              stdin: undefined,
-            },
-          ]);
-        })
-    );
-
-    it.effect("exec says on stderr when the host cut the output short", () =>
-      Effect.gen(function* () {
-        const { code, printed, stderr } = yield* execOn(
-          ["linux_dev", "--", "true"],
-          Effect.succeed({ exitCode: 0, output: "the end\n", truncated: true })
-        );
-
-        expect(code).toBe(0);
-        expect(printed).toBe("the end\n");
-        expect(stderr).toContain(`only its last ${outputLimit} characters`);
-      })
-    );
-  });
-
-  layer(NodeServices.layer, { excludeTestServices: true })((it) => {
-    it.effect("exec past its --timeout ends the call and exits 124", () =>
-      Effect.gen(function* () {
-        const { code, stderr } = yield* execOn(
-          ["--timeout", "1s", "linux_dev", "--", "sleep", "60"],
-          Effect.never
-        );
-
-        expect(code).toBe(124);
-        expect(stderr).toContain(
-          "the command ran past --timeout 1s and was ended"
-        );
       })
     );
   });

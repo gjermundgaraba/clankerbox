@@ -21,8 +21,6 @@ import { Id, Name } from "./ids.ts";
 import {
   Checkpoint,
   CreateRequest,
-  ExecRequest,
-  Executed,
   Host,
   Machine,
   PrebuildRequest,
@@ -150,21 +148,6 @@ export const Http = ActionHttp.make(
         "Create a machine on the checkpoint's host from that checkpoint, with its sizes or the ones given. A linux checkpoint holds RAM, so a restore's vCPUs and RAM only grow, live once it runs; a mac restore takes any. A disk only grows. A restore that fails deletes the new machine.",
       input: Schema.Struct({ checkpoint: Id, name: Name, ...Sizing.fields }),
       success: Machine,
-    }),
-    Action.make("execMachine", {
-      ...write,
-      error: [
-        Invalid,
-        NotFound,
-        NotMade,
-        Missing,
-        WrongState,
-        Internal,
-      ] as const,
-      description:
-        "Run a command in a running machine, as the user it names or root, with the image's environment on linux, and answer its exit code and output once it exits, whatever the code. It waits for a start or stop under way before it begins, and a stop or delete ends it, as does a pause on linux. It runs as long as the request does: ending the request ends the command, though on mac one that writes nothing runs on until it next writes.",
-      input: ExecRequest,
-      success: Executed,
     }),
     Action.make("listCheckpoints", {
       ...read,

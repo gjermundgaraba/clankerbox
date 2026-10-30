@@ -153,7 +153,6 @@ clankerbox prebuild --profile dev          # run dev's setup now; later creates 
 clankerbox machines
 clankerbox get linux_dev
 clankerbox ssh linux_dev -- uptime
-clankerbox exec linux_dev --user admin -- uname -a   # no SSH; --timeout ends the command
 clankerbox pause linux_dev                 # saves its RAM and frees it
 clankerbox stop linux_dev
 clankerbox resize linux_dev --cpu 4 --ram 4G --disk 80G
@@ -317,33 +316,6 @@ await sdk.destroySandbox();
 - `recipes/ubuntu/` (linux) and `recipes/macos/` (mac) install the server, Node and Claude Code, and run the server as the login user, whose home, `/home/admin` on Linux, is the default `cwd`; on macOS, give `cwd: "/Users/admin"`. Each takes an optional `agent.env` beside its `setup.sh`, of `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, so keep a recipe with one private.
 - A tunnel that ends, say because its machine stopped, stays down until `sandbox.ensureServer(id)` or a new `SandboxAgent.start`.
 - `effect`, `@effect/platform-node` and `sandbox-agent` are peer dependencies.
-
-## Amp orbs
-
-`clankerbox amp-orb` is a dispatch program for Amp's [self-hosted orbs](https://ampcode.com/docs/orbs/self-hosted): each orb is a machine on a linux host, booted from the image Amp names in `ORB_IMAGE`: its x64 image, or the provider's own `ORB_IMAGE` when its environment sets one. On an ARM64 host, run the provider with `ORB_IMAGE=us-central1-docker.pkg.dev/amp-prod-0/amp-orb/amp-orb-arm64:latest`. A spawn refuses an `ORB_IMAGE` that isn't an image reference, with a `/`.
-
-1. Write a profile, `amp-orb.json`, in the profiles directory with the orb's sizes and no base:
-
-   ```json
-   { "cpu": 4, "ramMib": 8192, "diskGib": 40 }
-   ```
-
-2. On the machine that runs Amp's provider, with the client config, write the program Amp runs, which takes no arguments, and run the provider with the token from Amp's **Settings → Orbs**:
-
-   ```sh
-   printf '#!/bin/sh\nexec clankerbox amp-orb --profile amp-orb\n' >/opt/orbs/dispatch
-   chmod +x /opt/orbs/dispatch
-   AMP_ORB_PROVIDER_TOKEN=aop_live_… amp orb provider /opt/orbs/dispatch
-   ```
-
-- A `spawn` finds the orb's machine on any host in the client config and starts it, which resumes it when it is paused. When there is none, it restores the newest of the hosts' snapshots of `ORB_SNAPSHOT_ID`, the next when one fails `PinMismatch`, `Capacity` or `NotFound`, or creates the machine from `ORB_IMAGE`, whatever base the profile names, with the profile's sizes on the first linux host. It then starts `amp orb bootstrap`, detached, as the image's `user`, through `clankerbox exec`, with `ORB_TOKEN` and `AMP_URL` sent on stdin. Its log is `~user/.local/state/clankerbox/amp-orb.log`.
-- A `pause` pauses the machine, so the orb keeps its memory and processes and holds no RAM until its next spawn, and leaves a stopped one stopped. With `ORB_SNAPSHOT_ID` it stops the machine and starts it again, ending the orb's processes, so the snapshot carries none, replaces its host's snapshot of that ID with a capture, `snapshot-<ID>`, and stops the machine; later orbs of the project restore it, and the orb's next spawn boots it. Each host keeps the snapshot of an ID its last snapshot pause made. Two orbs of a project on one host paused with one at once may both capture it, and one fails `Conflict`.
-- A `delete` deletes the orb's machine on whichever host holds it. Snapshots stay until `clankerbox checkpoint delete`, since Amp's `amp projects snapshots delete` runs no job, and a project whose snapshot IDs change keeps each one.
-- Each job is safe to repeat, and one cut short is finished by the next. A spawn fails, and changes nothing, when a host it can't read might hold the orb or its snapshot, and a pause when one might hold the orb; a delete fails when no host deleted the machine and one gave no answer.
-- The machine is named `ORB_ID` and a snapshot `snapshot-<ORB_SNAPSHOT_ID>`, each `amp-` and a digest of it instead when it isn't a name on the host: a letter, then letters, digits and single `-`, at most 62 characters with `<host>_`.
-- Amp pauses a thread whenever it goes idle or is archived, and deletes it only when the thread is deleted, so each idle or archived thread keeps a paused machine, its RAM and disk on the host's disk.
-- A paused orb resumes, and a snapshot restores, only under the smolvm release that paused or captured it. Before moving a host's smolvm, stop its paused orbs' machines with `clankerbox stop`; each spawn then boots its orb again, and the next pause of an orb left running stops it. A spawn passes over a snapshot captured under another release until the project's next snapshot pause on that host replaces it.
-- smolvm resolves `ORB_IMAGE`'s tag at each create, so each new orb boots the image the tag names then, and an orb or snapshot keeps the image it was made from. The first create of a new image pulls it within the job's five minutes. Each image stays on the host's disk while an orb made from it does, idle and archived threads' paused orbs included; smolvm drops the oldest unused ones once they pass 20 GiB.
 
 ## Release
 

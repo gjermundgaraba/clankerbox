@@ -76,7 +76,7 @@ deletion. Test files don't count. In either case, launch a new run.
 - IDs are `<host>_<name>`. Flags go before `--`, and the guest's argv after it.
 - Assert on `--json`: the result, or `{"error":{"tag":...,"retryable":...}}`
   with exit 1. Check tags and fields, not wording.
-- Under the fake, setup scripts and `exec` run **on this machine**, as you, with
+- Under the fake, setup scripts run **on this machine**, as you, with
   `CLANKERBOX_ROOT` as the guest's root and your own `HOME`. Only touch paths
   under `$CLANKERBOX_ROOT`.
 - A setup must leave the login user `admin` and `sudo`, as on a real stock
@@ -111,7 +111,7 @@ The fake stands in for the VM, so this proves none of:
 - a VM's boot, pause, resume or stop under smolvm or Tart, or its pin;
 - what a capture, fork or restore copies;
 - setup and preparation in a real guest;
-- `ssh`, `ssh-proxy` and `amp-orb`'s spawn (see the index);
+- `ssh` and `ssh-proxy` (see the index);
 - the tailnet.
 
 Proving those takes a `linux` host with KVM and the pinned smolvm

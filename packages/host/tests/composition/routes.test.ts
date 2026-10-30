@@ -116,35 +116,18 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "the client places an image reference on a linux host, and runs a command in the machine it makes",
+    "the client places an image reference on a linux host, and the machine boots from it",
     () =>
       Effect.gen(function* () {
         const { url, fake } = yield* serve();
         const reference = "registry.example/team/orb:latest";
 
-        const [made, ran] = yield* withClient(url, (client) =>
-          Effect.all([
-            client.create("orb", { ...spec, base: reference }),
-            client.execMachine({
-              id: "linux_orb",
-              argv: [
-                "/bin/sh",
-                "-c",
-                'printf "%s %s" "$CLANKERBOX_USER" "$(cat)"',
-              ],
-              user: "user",
-              stdin: "secret",
-            }),
-          ])
+        const made = yield* withClient(url, (client) =>
+          client.create("orb", { ...spec, base: reference })
         );
 
         expect(made).toMatchObject({ id: "linux_orb", base: reference });
         expect(fake.images.get("orb")).toBe(reference);
-        expect(ran).toStrictEqual({
-          exitCode: 0,
-          output: "user secret",
-          truncated: false,
-        });
       })
   );
 

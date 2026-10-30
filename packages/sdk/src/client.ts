@@ -73,8 +73,7 @@ export interface Gathered<A> {
 export interface Options {
   /**
    * The wait for a mutation's reply, unbounded by default, as a create's setup can take hours. A
-   * mutation that outlasts it fails like a lost reply and still finishes on the host, except
-   * `execMachine`, whose command ends with the wait.
+   * mutation that outlasts it fails like a lost reply and still finishes on the host.
    */
   readonly timeout?: Duration.Duration | undefined;
   /** The wait for a read's reply, `readTimeout` by default; a fan-out bounds each host's own. */
@@ -505,7 +504,6 @@ export const make = (
       forkMachine: (input) => onResource("forkMachine", input, input.name),
       restoreMachine: (input) =>
         onResource("restoreMachine", input, input.name),
-      execMachine: (input) => onResource("execMachine", input),
       getCheckpoint: (input) => onResource("getCheckpoint", input),
       captureCheckpoint: (input) =>
         onResource("captureCheckpoint", input, input.name),

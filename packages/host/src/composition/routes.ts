@@ -41,7 +41,6 @@ const app = (config: Pick<HostSettings, "id" | "kind" | "bases">) =>
           machines.fork(machine, name, sizing),
         restoreMachine: ({ checkpoint, name, ...sizing }) =>
           machines.restore(checkpoint, name, sizing),
-        execMachine: machines.exec,
         listCheckpoints: () => checkpoints.list,
         getCheckpoint: ({ id }) => checkpoints.get(id),
         captureCheckpoint: ({ machine, name }) =>

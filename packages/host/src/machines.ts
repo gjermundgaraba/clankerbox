@@ -16,8 +16,6 @@ import type {
   CreateRequest,
   Declared,
   Desired,
-  Executed,
-  ExecRequest,
   HostError,
   Machine,
   ResizeRequest,
@@ -39,7 +37,7 @@ import {
   Semaphore,
 } from "effect";
 
-import { checkTailnet, prepare, runCommand, runSetup } from "./guest.ts";
+import { checkTailnet, prepare, runSetup } from "./guest.ts";
 import type { TailnetReport } from "./guest.ts";
 import { foundOn, idOn, nameOn, newInstance, notFoundOn } from "./ids.ts";
 import { Leases, owned, shared } from "./leases.ts";
@@ -120,9 +118,6 @@ export interface Interface {
     name: string,
     sizing?: Sizing
   ) => Effect.Effect<Machine, Declared<"restoreMachine">>;
-  readonly exec: (
-    request: ExecRequest
-  ) => Effect.Effect<Executed, Declared<"execMachine">>;
   readonly capacity: Effect.Effect<readonly Usage[], RuntimeError>;
 }
 
@@ -914,48 +909,6 @@ export const make = (
         );
       });
 
-    const exec = (request: ExecRequest) =>
-      surviving(
-        `exec in ${request.id}`,
-        Effect.gen(function* () {
-          const name = yield* nameOf(request.id);
-          const id = idOf(name);
-
-          const intent = yield* Effect.scoped(
-            Effect.gen(function* () {
-              yield* leases.hold({ machine: shared(name) });
-
-              const current = yield* row(name);
-
-              yield* made(current);
-
-              const seen = stateIn(
-                yield* runtime
-                  .observe([ref(current)])
-                  .pipe(inTime(`the ${config.kind} runtime`)),
-                ref(current)
-              );
-
-              if (seen === "missing") {
-                return yield* missing(config.kind, { id });
-              }
-
-              if (seen === "stopped" || seen === "paused") {
-                return yield* new WrongState({
-                  message: `machine ${id} is ${seen}, and a command runs only in a running machine: start it first`,
-                  machine: id,
-                  state: seen,
-                });
-              }
-
-              return current;
-            })
-          );
-
-          return yield* runCommand(runtime, ref(intent), request);
-        })
-      );
-
     const resized = (name: string, request: ResizeRequest) =>
       Effect.gen(function* () {
         yield* leases.hold({ machine: owned(name) });
@@ -1137,7 +1090,6 @@ export const make = (
       ),
       fork: Effect.fn("Machines.fork")(fork),
       restore: Effect.fn("Machines.restore")(restore),
-      exec: Effect.fn("Machines.exec")(exec),
       capacity: capacity.pipe(Effect.withSpan("Machines.capacity")),
     } satisfies Interface;
   });

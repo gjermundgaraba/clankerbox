@@ -137,8 +137,8 @@ as it is.
   pull-through cache of Docker Hub, to avoid Docker Hub's anonymous pull
   limit. Ours: bases name `mirror.gcr.io` directly, by digest
   (`requirements.bases.linux`, README); a
-  create from an image reference, as amp-orb's `ORB_IMAGE` tag, boots what the
-  tag names then, with no `--seed-digest-ttl`.
+  create from an image reference boots what its tag names then, with no
+  `--seed-digest-ttl`.
 
 **Names and paths**
 
@@ -343,10 +343,8 @@ as it is.
   src/portable_checkpoint.rs). An exec runs in the image's environment, with
   `HOME` the user's from `/etc/passwd` when the environment leaves it out
   (`apply_process_env`, `process_env_for`, crates/smolvm-agent/src/oci.rs).
-  Ours: every create passes `--image`, and every exec passes `--user`: root
-  for setup, preparation and the tailnet check, forks and restores included,
-  and an `execMachine` caller's user otherwise, such as amp-orb's bootstrap as
-  the image's `user`, which needs Amp's `PATH` and `HOME`.
+  Ours: every create passes `--image`, and every exec passes `--user root`, for
+  setup, preparation and the tailnet check, forks and restores included.
 - When a `machine exec` client is signalled, smolvm SIGKILLs the guest command
   and every descendant (`kill_child_on_disconnect`,
   crates/smolvm-agent/src/main.rs; `kill_child_tree`,
@@ -355,22 +353,19 @@ as it is.
   `container-init`, which the image's command is exec'd under and which reaps
   such a child. Ours: a setup killed by its timeout or a host crash runs no
   exit trap and may leave its file in `/var/tmp` (`setupRunner` in
-  `packages/host/src/guest.ts`); `start` scripts and amp-orb's bootstrap
-  (`bootstrapScript`) daemonize with `setsid -f`; an `execMachine` request
-  that ends, its caller gone or past the client's `--timeout`, ends the
-  client, so smolvm kills its command.
+  `packages/host/src/guest.ts`); `start` scripts daemonize with `setsid -f`; a
+  guest script that passes its timeout, or a step cut short, ends the client,
+  so smolvm kills its command.
   Live on 1.31.1: a SIGTERM to the client ended it with 143 and the guest
   command with it; a `machine stop` or `machine pause` while an exec ran
   returned at once and ended the exec with exit 1, "io operation failed:
   connection closed", its command gone after a resume; an exec of a stopped
-  machine exits 1, "is not running". Ours: `execMachine`'s contract, and
-  `Executed`'s note that a runtime's failure answers its own exit code.
+  machine exits 1, "is not running". Ours: a guest script ended that way is
+  `ScriptFailed`, with smolvm's message in its last output.
 - A `machine exec` sent while `machine start` is still making the guest's
   container made the start fail ("smolvm-fork-ready: No such file", "`/bin/bash`
-  not found"). Ours: a guest command is sent only after a read under the
-  machine's lease found it running, so never during a start the host runs;
-  `execMachine` releases the lease before its command starts, so only a stop
-  and a whole start in that gap could still race it.
+  not found"). Ours: a guest command runs only in a step holding the machine's
+  lease, so never during a start the host runs.
 - smolvm's log lines, which errors carry, are coloured even into a pipe unless
   `NO_COLOR` is set (tracing-subscriber, `NO_COLOR` in `src/fmt/fmt_layer.rs`,
   at the version in smolvm's `Cargo.lock`). Ours: `NO_COLOR=1`.

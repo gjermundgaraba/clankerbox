@@ -6,12 +6,12 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
 import {
   mkdir,
+  read,
   scratch,
   write,
 } from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Effect, Schema, Sink, Stdio } from "effect";
-import type { Layer } from "effect";
+import { Effect, Schema } from "effect";
 import { expect } from "vite-plus/test";
 
 import { ErrorDocument, UnreachableDocument } from "../src/command.ts";
@@ -51,15 +51,12 @@ const setUp = (options?: {
       })
     );
 
-    const run = (args: readonly string[], stdio?: Layer.Layer<Stdio.Stdio>) => {
+    const run = (args: readonly string[]) => {
       const end = args.includes("--") ? args.indexOf("--") : args.length;
 
       return cli(
         [...args.slice(0, end), "--config", config, ...args.slice(end)],
-        {
-          http: NodeHttpClient.layerNodeHttp,
-          ...(stdio === undefined ? {} : { stdio }),
-        }
+        { http: NodeHttpClient.layerNodeHttp }
       );
     };
 
@@ -354,10 +351,10 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
-    "a setup that succeeds records the host key, ssh-known-hosts prints it, and exec answers output and exit code",
+    "a setup that succeeds runs in the machine, records the host key, and ssh-known-hosts prints it",
     () =>
       Effect.gen(function* () {
-        const { run, dir } = yield* setUp();
+        const { host, run, dir } = yield* setUp();
         const script = path.join(dir, "setup.sh");
 
         yield* write(script, setupScript);
@@ -381,38 +378,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "dev.example",
         ]);
 
-        const printed: string[] = [];
-
-        const ran = yield* run(
-          [
-            "exec",
-            "linux_dev",
-            "--",
-            "sh",
-            "-c",
-            'cat "$CLANKERBOX_ROOT/setup-ran"; exit 3',
-          ],
-          Stdio.layerTest({
-            stdout: () =>
-              Sink.forEachArray((chunks) =>
-                Effect.sync(() => {
-                  printed.push(
-                    ...chunks.map((chunk) => Buffer.from(chunk).toString())
-                  );
-                })
-              ),
-          })
+        const ran = yield* read(
+          path.join(host.fake.root("dev") ?? "", "setup-ran")
         );
-
-        yield* run(["stop", "linux_dev"]);
-
-        const stopped = yield* run([
-          "exec",
-          "linux_dev",
-          "--json",
-          "--",
-          "true",
-        ]);
 
         expect(created).toMatchObject({ code: 0, stdout: "linux_dev" });
         expect(machine.hostKey).toMatch(/^ssh-ed25519 /u);
@@ -420,9 +388,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           code: 0,
           stdout: `dev.example ${machine.hostKey}`,
         });
-        expect(ran.code).toBe(3);
-        expect(printed.join("")).toBe("set-up\n");
-        expect(decodeFailure(stopped.stdout).error.tag).toBe("WrongState");
+        expect(ran).toBe("set-up\n");
       })
   );
 

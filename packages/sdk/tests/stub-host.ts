@@ -17,8 +17,6 @@ import type {
   Checkpoint,
   CreateRequest,
   Declared,
-  Executed,
-  ExecRequest,
   Machine,
   PrebuildRequest,
   Kind,
@@ -41,9 +39,6 @@ export interface StubHostOptions {
   readonly checkpoints?: readonly Checkpoint[];
   readonly restoreFails?: Declared<"restoreMachine">;
   readonly capacity?: readonly Reading[];
-  readonly exec?: (
-    request: ExecRequest
-  ) => Effect.Effect<Executed, Declared<"execMachine">>;
 }
 
 export const machine = (id: string, fields?: Partial<Machine>): Machine => ({
@@ -97,7 +92,6 @@ export const stubHost = (options: StubHostOptions) => {
   const checkpoints = new Map<string, Checkpoint>();
   const creates: CreateRequest[] = [];
   const prebuilds: PrebuildRequest[] = [];
-  const execs: ExecRequest[] = [];
   const calls: string[] = [];
   const versions: Array<string | null> = [];
 
@@ -212,20 +206,6 @@ export const stubHost = (options: StubHostOptions) => {
       Effect.andThen(
         Effect.sync(() => creates.push(request)),
         Effect.andThen(record("machine.create"), create(request))
-      ),
-    execMachine: (request) =>
-      Effect.andThen(
-        Effect.sync(() => execs.push(request)),
-        Effect.andThen(
-          record("machine.exec"),
-          options.exec === undefined
-            ? Effect.as(find(request.id), {
-                exitCode: 0,
-                output: "",
-                truncated: false,
-              })
-            : options.exec(request)
-        )
       ),
     startMachine: ({ id }) =>
       Effect.andThen(
@@ -357,7 +337,6 @@ export const stubHost = (options: StubHostOptions) => {
     id: options.id,
     creates,
     prebuilds,
-    execs,
     calls,
     versions,
     hold: (held: Machine) => {
