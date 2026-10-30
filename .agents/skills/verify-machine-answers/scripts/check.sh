@@ -7,7 +7,6 @@ case ${1:-} in
 esac
 model=$(cd "$(dirname "$0")/../model" && pwd)
 tla_version=1.8.0
-tla_sha256=fc6878c603f0fdc18b9fe3e5bf51860cb90ab5b1154e3c371660c036d6bdd63e
 cache=${XDG_CACHE_HOME:-$HOME/.cache}/clankerbox-tla
 jar=$cache/tla2tools-$tla_version.jar
 
@@ -21,12 +20,6 @@ if [ ! -r "$jar" ]; then
   curl -fsSL -o "$part" "https://github.com/tlaplus/tlaplus/releases/download/v$tla_version/tla2tools.jar"
   mv "$part" "$jar"
 fi
-if command -v sha256sum >/dev/null; then
-  digest=$(sha256sum "$jar" | cut -d ' ' -f 1)
-else
-  digest=$(shasum -a 256 "$jar" | cut -d ' ' -f 1)
-fi
-[ "$digest" = "$tla_sha256" ] || { echo "check: $jar isn't tla2tools $tla_version" >&2; exit 2; }
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/verify-machine-answers.XXXXXX")
 cp "$model/MachineAnswers.tla" "$work/"

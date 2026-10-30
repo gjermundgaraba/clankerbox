@@ -47,8 +47,10 @@ invariants on every reachable state:
 ```
 
 The script needs Java 11 or later on `PATH` and `curl`. It downloads
-`tla2tools.jar` v1.8.0 to `~/.cache/clankerbox-tla/` and checks its sha256. Each
-run copies `model/` into a fresh directory under `$TMPDIR` and runs TLC there,
+`tla2tools.jar` v1.8.0 to `~/.cache/clankerbox-tla/` and keeps it there. That
+tag is a rolling prerelease that TLA+'s CI rebuilds from master on every push,
+so a machine runs the build it first fetched; delete the jar to take the latest.
+Each run copies `model/` into a fresh directory under `$TMPDIR` and runs TLC there,
 so parallel runs never share files and `model/` stays clean. It prints TLC's
 verdict. A pass deletes the directory. Any other result keeps it and prints
 the paths of `tlc.out`, the full output, and of `trace.json`, the
