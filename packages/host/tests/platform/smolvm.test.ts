@@ -596,6 +596,48 @@ layer(NodeServices.layer)((it) => {
   );
 
   it.effect(
+    "a stop cut short while smolvm reads its VMM still exiting waits until it reads it stopped",
+    () =>
+      Effect.gen(function* () {
+        const statuses = inTurn(
+          status("running"),
+          status("unreachable"),
+          status("unreachable"),
+          status("unreachable"),
+          status("stopped")
+        );
+
+        const spawner = scripted((call) => {
+          if (call.args[1] === "status") {
+            return statuses();
+          }
+
+          return call.args[1] === "stop" ? stillAlive : undefined;
+        });
+
+        const runtime = yield* runtimeOf(yield* prepared(), spawner);
+        const stopping = yield* Effect.forkChild(runtime.stop(machine));
+
+        while (smolvmArgs(spawner.calls).length < 3) {
+          yield* Effect.yieldNow;
+        }
+
+        yield* timed(Fiber.interrupt(stopping));
+
+        expect(
+          smolvmArgs(spawner.calls).map((args) => args.slice(1, 4).join(" "))
+        ).toStrictEqual([
+          "status --name dev-01234567",
+          "stop --name dev-01234567",
+          "status --name dev-01234567",
+          "status --name dev-01234567",
+          "status --name dev-01234567",
+          "status --name dev-01234567",
+        ]);
+      })
+  );
+
+  it.effect(
     "a stop smolvm fails answers its output at once when smolvm then reads the machine running, paused or frozen",
     () =>
       Effect.gen(function* () {

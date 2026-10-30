@@ -784,10 +784,12 @@ export const make = (
             return;
           }
 
-          yield* call(
-            ["machine", "stop", "--name", native],
-            `machine stop ${native}`
-          ).pipe(Effect.catch((error) => exited(native, error)));
+          yield* Effect.uninterruptible(
+            call(
+              ["machine", "stop", "--name", native],
+              `machine stop ${native}`
+            ).pipe(Effect.catch((error) => exited(native, error)))
+          );
         })
       ),
       pause: Effect.fn("Smolvm.pause")((machine) =>

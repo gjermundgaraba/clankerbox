@@ -491,17 +491,21 @@ export const make = (
           Effect.never
         );
 
-        const stopped = yield* Effect.raceFirst(
-          halted(vm, shutdownWait),
-          shutdown
-        );
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            const stopped = yield* Effect.raceFirst(
+              halted(vm, shutdownWait),
+              shutdown
+            );
 
-        if (!stopped) {
-          yield* Effect.logWarning(
-            `stop ${machine.id}: the guest didn't shut down within ${Duration.format(shutdownWait)}; forcing it off`
-          );
-          yield* forceStop(vm);
-        }
+            if (!stopped) {
+              yield* Effect.logWarning(
+                `stop ${machine.id}: the guest didn't shut down within ${Duration.format(shutdownWait)}; forcing it off`
+              );
+              yield* forceStop(vm);
+            }
+          })
+        );
       });
 
     const deleteVm = (vm: string) =>

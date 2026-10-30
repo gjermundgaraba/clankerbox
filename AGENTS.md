@@ -149,12 +149,15 @@ over an in-memory transport, beside `./testing/clock`, `./testing/files` and
   when it starts and every resting one at each recheck, one it couldn't read
   included. One actor per machine (`lifecycle.ts`, xstate under
   `@xstate/effect`) moves it toward what was asked a step at a time; a later
-  request cuts a step short. A request answers from where the machine rests once
-  the store has it: `Superseded` when a later request asked for something else
-  by then. Steps hold leases instead of claims: what changes a resource owns it,
-  what copies or reads it shares it, in memory only, so a host's end drops them
-  with the work; a prebuild replaces the checkpoint of its name once its setup
-  has run. A checkpoint exists only from a capture that succeeded until
+  request cuts a step short. A runtime's stop, and Tart's pause, mask
+  interruption from the command that halts a running VM until it has, so a
+  step cut short holds its lease until the VM is where that command takes it. A
+  request answers from where the machine rests once the store has it:
+  `Superseded` when a later request asked for something else by then. Steps
+  hold leases instead of claims: what changes a resource owns it, what copies or reads it
+  shares it, in memory only, so a host's end drops them with the work; a
+  prebuild replaces the checkpoint of its name once its setup has run. A
+  checkpoint exists only from a capture that succeeded until
   its delete begins, and never changes; the next delete of its name clears what
   a failed one left. A start starts the machine, also when it runs already, or
   resumes it when it is paused, and prepares it. A pause saves a running machine

@@ -1450,6 +1450,50 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
   );
 
   it.effect(
+    "a stop cut short once it told the guest to shut down still waits for its VM to stop",
+    () =>
+      Effect.gen(function* () {
+        const { mac, runtime } = yield* runtimeOn();
+        const machine = machineOn("dev");
+        const vm = vmOf(machine);
+        const shutdown = `tart exec ${vm} sudo -n /sbin/shutdown -h now`;
+
+        yield* runtime.create(machine, "base");
+        mac.hooks.shutdown = () => ({ exitCode: 0, stdout: "Shutdown NOW!\n" });
+
+        const cutShort = Effect.gen(function* () {
+          const stopping = yield* Effect.forkChild(runtime.stop(machine));
+
+          while (!calls(mac).includes(shutdown)) {
+            yield* Effect.yieldNow;
+          }
+
+          const interrupting = yield* Effect.forkChild(
+            Fiber.interrupt(stopping)
+          );
+
+          yield* TestClock.adjust(Duration.seconds(5));
+          yield* Effect.yieldNow;
+
+          const whileHalting = interrupting.pollUnsafe();
+
+          mac.vms.set(vm, "stopped");
+
+          while (interrupting.pollUnsafe() === undefined) {
+            yield* TestClock.adjust(Duration.millis(500));
+          }
+
+          return whileHalting;
+        });
+
+        expect(
+          yield* cutShort.pipe(Effect.provide(TestClock.layer()))
+        ).toBeUndefined();
+        expect(calls(mac)).not.toContain(`tart stop --timeout 0 ${vm}`);
+      })
+  );
+
+  it.effect(
     "delete forces a running VM off, then removes it, its job, plist and log",
     () =>
       Effect.gen(function* () {

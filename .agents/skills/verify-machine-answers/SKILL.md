@@ -87,12 +87,14 @@ A pass covers this scope, and only it:
   preparation that fails after the VM started, or a read that answers unknown.
 - **The runtime changes the VM only in steps**, each change atomic. A step cut
   short may make its change or not, but always before it releases its lease.
-  The code doesn't guarantee this: steps are interruptible, `owning` frees the
-  lease as the fiber unwinds, and only Tart's pause masks interruption. A Tart
-  stop cut short leaves the guest halting with the lease free. Adding that
-  order to the model violates `RestTrue`: the machine rests `running` and the
-  guest then halts. So a pass says nothing about it. The VM never dies or
-  changes by itself. Resize, exec and capture, which run beside the actor, are
+  `owning` frees the lease as the step's fiber unwinds, so the runtime holds
+  to this: Tart's and smolvm's stops mask interruption from the command that
+  halts the VM until they read it halted, as Tart's pause does for its save.
+  Starts and smolvm's pause aren't masked; the model assumes a VM one of them
+  left part way reads as where it ends up. A change that runs on with the
+  lease free violates `RestTrue`: the machine rests `running` and the guest
+  then halts. So a runtime call that tells the VM to change and then waits
+  masks the same way. The VM never dies or changes by itself. Resize, exec and capture, which run beside the actor, are
   out, as are the pin checks.
 - **Lease acquisition is any order the lease allows** (owned excludes everyone,
   shared excludes an owner). That includes orders `leases.ts`'s gate forbids,
