@@ -133,8 +133,10 @@ over an in-memory transport, beside `./testing/clock`, `./testing/files` and
 - **Tests are Effects** under `@effect/vitest`, on the test clock, except the
   suites that serve a host or run scripts in real time, which pass
   `excludeTestServices: true`. Effect is run by hand only in the CLI's
-  `main.ts` and the provider's `provider.ts`, and in the provider's tests that
-  drive its Promise API or a child program.
+  `main.ts` and the provider's `provider.ts`, in the provider's tests that
+  drive its Promise API or a child program, and in the host's
+  `tests/serve.ts`, the program that serves a host over the fake runtime for
+  the `verify-clankerbox` skill.
 - **Property and model tests** cover IDs, units, the RAM budget, recipe
   packing, and the store's `desire`, as a model checked against SQLite;
   `next`, small enough, is checked over every state it decides from. Each

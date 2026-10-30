@@ -28,6 +28,7 @@ export default config({
     {
       files: [
         "apps/clankerbox/src/main.ts",
+        "packages/host/tests/serve.ts",
         "packages/rivet-sandbox-agent/src/provider.ts",
         "packages/rivet-sandbox-agent/tests/leave-tunnel.ts",
         "packages/rivet-sandbox-agent/tests/provider.test.ts",

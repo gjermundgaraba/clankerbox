@@ -49,11 +49,13 @@ export interface FakeOptions {
   readonly kind?: Kind | undefined;
   readonly ramBudgetMib?: number | undefined;
   readonly pin?: string | undefined;
+  readonly onCall?: ((call: string) => void) | undefined;
 }
 
 export const loginSetup = [
   'mkdir -p "$CLANKERBOX_ROOT/etc"',
   'echo "admin:x:1000:1000::/home/admin:/bin/sh" >>"$CLANKERBOX_ROOT/etc/passwd"',
+  "ssh-keygen -A",
   "",
 ].join("\n");
 
@@ -267,6 +269,12 @@ export const fakeRuntime = (options: FakeOptions) => {
   }> = [];
 
   const kind = options.kind ?? "linux";
+
+  const record = (entry: string) => {
+    calls.push(entry);
+    options.onCall?.(entry);
+  };
+
   let stubs: string | undefined;
 
   const inject = <O extends Operation>(
@@ -283,7 +291,7 @@ export const fakeRuntime = (options: FakeOptions) => {
   ): Effect.Effect<A, E | FailureOf<O>, R> =>
     Effect.uninterruptibleMask((restore) =>
       Effect.suspend((): Effect.Effect<A, E | FailureOf<O>, R> => {
-        calls.push(`${operation} ${resource.id}`);
+        record(`${operation} ${resource.id}`);
 
         const injection = injections[operation].shift();
 
@@ -438,7 +446,10 @@ export const fakeRuntime = (options: FakeOptions) => {
 
           return refusal === undefined ? Effect.void : Effect.fail(refusal);
         },
-        startup: () => Effect.sync(() => calls.push("startup")),
+        startup: () =>
+          Effect.sync(() => {
+            record("startup");
+          }),
         observe,
         admit: (activation: Activation) =>
           Effect.andThen(

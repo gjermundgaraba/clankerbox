@@ -1,12 +1,17 @@
 import path from "node:path";
 
-import { startHost } from "@clankerbox/host/testing";
+import { loginSetup, startHost } from "@clankerbox/host/testing";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { layer } from "@effect/vitest";
-import { scratch, write } from "@gjermundgaraba/clankerbox-sdk/testing/files";
+import {
+  mkdir,
+  scratch,
+  write,
+} from "@gjermundgaraba/clankerbox-sdk/testing/files";
 import { operatorKey } from "@gjermundgaraba/clankerbox-sdk/testing/keys";
-import { Effect, Schema } from "effect";
+import { Effect, Schema, Sink, Stdio } from "effect";
+import type { Layer } from "effect";
 import { expect } from "vite-plus/test";
 
 import { ErrorDocument, UnreachableDocument } from "../src/command.ts";
@@ -20,13 +25,19 @@ const refusedUrl = Effect.gen(function* () {
   return gone.url;
 });
 
-const setUp = (down: readonly string[] = []) =>
+const setUp = (options?: {
+  readonly down?: readonly string[];
+  readonly ramBudgetMib?: number;
+}) =>
   Effect.gen(function* () {
     const dir = yield* scratch;
-    const host = yield* startHost(dir);
     const config = path.join(dir, "config.json");
 
-    const others = yield* Effect.forEach(down, (id) =>
+    const host = yield* startHost(dir, {
+      runtime: { ramBudgetMib: options?.ramBudgetMib },
+    });
+
+    const others = yield* Effect.forEach(options?.down ?? [], (id) =>
       Effect.map(refusedUrl, (url) => ({ id, url }))
     );
 
@@ -36,13 +47,21 @@ const setUp = (down: readonly string[] = []) =>
       JSON.stringify({
         hosts: [{ id: "linux", url: host.url }, ...others],
         authorizedKeys: "id.pub",
+        profiles: "profiles",
       })
     );
 
-    const run = (args: readonly string[]) =>
-      cli([...args, "--config", config], {
-        http: NodeHttpClient.layerNodeHttp,
-      });
+    const run = (args: readonly string[], stdio?: Layer.Layer<Stdio.Stdio>) => {
+      const end = args.includes("--") ? args.indexOf("--") : args.length;
+
+      return cli(
+        [...args.slice(0, end), "--config", config, ...args.slice(end)],
+        {
+          http: NodeHttpClient.layerNodeHttp,
+          ...(stdio === undefined ? {} : { stdio }),
+        }
+      );
+    };
 
     return { host, run, dir };
   });
@@ -57,6 +76,40 @@ const sizes = [
   "--disk",
   "10G",
 ];
+
+const setupScript = `#!/bin/sh
+set -eu
+${loginSetup}echo set-up >"$CLANKERBOX_ROOT/setup-ran"
+`;
+
+const decodeJson = <S extends Schema.Top>(schema: S, text: string) =>
+  Schema.decodeEffect(Schema.fromJsonString(schema))(text, {
+    onExcessProperty: "ignore",
+  });
+
+const MachineJson = Schema.Struct({
+  id: Schema.String,
+  state: Schema.String,
+  cpu: Schema.Int,
+  ramMib: Schema.Int,
+  diskGib: Schema.Int,
+  hostKey: Schema.optionalKey(Schema.String),
+});
+
+const CapacityJson = Schema.Struct({
+  capacity: Schema.Array(
+    Schema.Struct({
+      resource: Schema.String,
+      used: Schema.Int,
+      limit: Schema.optionalKey(Schema.Int),
+    })
+  ),
+});
+
+const used = (text: string) =>
+  Effect.map(decodeJson(CapacityJson, text), ({ capacity }) =>
+    capacity.map(({ resource, used: amount }) => [resource, amount])
+  );
 
 const decodeFailure = (text: string) =>
   Schema.decodeSync(
@@ -261,7 +314,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     "machines shows each machine's age and names the host that is down; hosts --json names the runtime",
     () =>
       Effect.gen(function* () {
-        const { run } = yield* setUp(["mac"]);
+        const { run } = yield* setUp({ down: ["mac"] });
 
         yield* run(["create", "dev", ...sizes]);
 
@@ -300,9 +353,234 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       })
   );
 
+  it.effect(
+    "a setup that succeeds records the host key, ssh-known-hosts prints it, and exec answers output and exit code",
+    () =>
+      Effect.gen(function* () {
+        const { run, dir } = yield* setUp();
+        const script = path.join(dir, "setup.sh");
+
+        yield* write(script, setupScript);
+
+        const created = yield* run([
+          "create",
+          "dev",
+          ...sizes,
+          "--setup",
+          script,
+        ]);
+
+        const machine = yield* decodeJson(
+          MachineJson,
+          (yield* run(["get", "linux_dev", "--json"])).stdout
+        );
+
+        const known = yield* run([
+          "ssh-known-hosts",
+          "linux_dev",
+          "dev.example",
+        ]);
+
+        const printed: string[] = [];
+
+        const ran = yield* run(
+          [
+            "exec",
+            "linux_dev",
+            "--",
+            "sh",
+            "-c",
+            'cat "$CLANKERBOX_ROOT/setup-ran"; exit 3',
+          ],
+          Stdio.layerTest({
+            stdout: () =>
+              Sink.forEachArray((chunks) =>
+                Effect.sync(() => {
+                  printed.push(
+                    ...chunks.map((chunk) => Buffer.from(chunk).toString())
+                  );
+                })
+              ),
+          })
+        );
+
+        yield* run(["stop", "linux_dev"]);
+
+        const stopped = yield* run([
+          "exec",
+          "linux_dev",
+          "--json",
+          "--",
+          "true",
+        ]);
+
+        expect(created).toMatchObject({ code: 0, stdout: "linux_dev" });
+        expect(machine.hostKey).toMatch(/^ssh-ed25519 /u);
+        expect(known).toMatchObject({
+          code: 0,
+          stdout: `dev.example ${machine.hostKey}`,
+        });
+        expect(ran.code).toBe(3);
+        expect(printed.join("")).toBe("set-up\n");
+        expect(decodeFailure(stopped.stdout).error.tag).toBe("WrongState");
+      })
+  );
+
+  it.effect(
+    "profiles lists the profiles directory, and a prebuild of one is restored by the next create of it",
+    () =>
+      Effect.gen(function* () {
+        const { host, run, dir } = yield* setUp();
+        const profiles = path.join(dir, "profiles");
+
+        yield* mkdir(profiles);
+        yield* write(path.join(profiles, "web-setup.sh"), setupScript);
+        yield* write(
+          path.join(profiles, "web.json"),
+          JSON.stringify({
+            base: "ubuntu",
+            cpu: 1,
+            ramMib: 1024,
+            diskGib: 10,
+            setup: { path: "web-setup.sh", timeoutSeconds: 60 },
+          })
+        );
+
+        const listed = yield* run(["profiles"]);
+        const prebuilt = yield* run(["prebuild", "--profile", "web"]);
+        const restored = yield* run(["create", "fast", "--profile", "web"]);
+
+        const fresh = yield* run([
+          "create",
+          "slow",
+          "--profile",
+          "web",
+          "--fresh",
+        ]);
+
+        expect(listed.stdout).toMatch(
+          /^web\s+ubuntu\s+1\s+1G\s+10G\s+web-setup\.sh/mu
+        );
+        expect(prebuilt.code).toBe(0);
+        expect(prebuilt.stdout).toMatch(/^linux_prebuilt-[0-9a-f]+$/u);
+        expect(restored).toMatchObject({ code: 0, stdout: "linux_fast" });
+        expect(restored.stderr).toContain(
+          `restored from the prebuild ${prebuilt.stdout}`
+        );
+        expect(fresh).toMatchObject({ code: 0, stdout: "linux_slow" });
+        expect(fresh.stderr).not.toContain("restored from the prebuild");
+        expect(host.fake.calls).toStrictEqual(
+          expect.arrayContaining(["restore linux_fast", "create linux_slow"])
+        );
+        expect(host.fake.calls).not.toContain("create linux_fast");
+      })
+  );
+
+  it.effect(
+    "resize grows a running machine live and refuses to shrink it, and capacity counts only running machines",
+    () =>
+      Effect.gen(function* () {
+        const { run } = yield* setUp();
+
+        yield* run(["create", "dev", ...sizes]);
+
+        const grown = yield* run([
+          "resize",
+          "linux_dev",
+          "--ram",
+          "2G",
+          "--disk",
+          "20G",
+        ]);
+
+        const shrunk = yield* run([
+          "resize",
+          "linux_dev",
+          "--ram",
+          "1G",
+          "--json",
+        ]);
+
+        const running = yield* run(["capacity", "--json"]);
+
+        yield* run(["stop", "linux_dev"]);
+
+        const cold = yield* run([
+          "resize",
+          "linux_dev",
+          "--ram",
+          "1G",
+          "--cpu",
+          "2",
+        ]);
+
+        const idle = yield* run(["capacity", "--json"]);
+
+        const disk = yield* run([
+          "resize",
+          "linux_dev",
+          "--disk",
+          "10G",
+          "--json",
+        ]);
+
+        expect(grown).toMatchObject({
+          code: 0,
+          stdout: "linux_dev 1 vCPUs, 2G RAM, 20G disk",
+        });
+        expect(decodeFailure(shrunk.stdout).error.tag).toBe("Unsizable");
+        expect(yield* used(running.stdout)).toStrictEqual([
+          ["cpu", 1],
+          ["ramMib", 2048],
+        ]);
+        expect(cold).toMatchObject({
+          code: 0,
+          stdout: "linux_dev 2 vCPUs, 1G RAM, 20G disk",
+        });
+        expect(yield* used(idle.stdout)).toStrictEqual([
+          ["cpu", 0],
+          ["ramMib", 0],
+        ]);
+        expect(decodeFailure(disk.stdout).error.tag).toBe("Unsizable");
+      })
+  );
+
+  it.effect(
+    "a host's RAM budget refuses a create past it as a retryable Capacity, and capacity shows the limit",
+    () =>
+      Effect.gen(function* () {
+        const { host, run } = yield* setUp({ ramBudgetMib: 2048 });
+
+        const first = yield* run([
+          "create",
+          "big",
+          ...sizes.slice(0, 4),
+          "--ram",
+          "2G",
+          "--disk",
+          "10G",
+        ]);
+
+        const second = yield* run(["create", "small", ...sizes, "--json"]);
+        const capacity = yield* run(["capacity", "--json"]);
+
+        expect(first).toMatchObject({ code: 0, stdout: "linux_big" });
+        expect(decodeFailure(second.stdout).error).toMatchObject({
+          tag: "Capacity",
+          retryable: true,
+        });
+        expect(
+          (yield* decodeJson(CapacityJson, capacity.stdout)).capacity
+        ).toContainEqual({ resource: "ramMib", used: 2048, limit: 2048 });
+        expect(
+          (yield* host.run(host.store.machines)).map(({ name }) => name)
+        ).toStrictEqual(["big"]);
+      })
+  );
+
   it.effect("--json errors from the host carry their tags", () =>
     Effect.gen(function* () {
-      const { run } = yield* setUp(["mac"]);
+      const { run } = yield* setUp({ down: ["mac"] });
 
       const notFound = yield* run(["start", "linux_nope", "--json"]);
       const invalid = yield* run(["create", "bad--name", ...sizes, "--json"]);

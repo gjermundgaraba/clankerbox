@@ -25,6 +25,8 @@ import type { Tailnet } from "../src/tailnet.ts";
 import { fakeRuntime } from "./fake-runtime.ts";
 import type { FakeOptions, FakeRuntime } from "./fake-runtime.ts";
 
+export { loginSetup } from "./fake-runtime.ts";
+
 export const image = requirements.bases.linux.ubuntu;
 
 const sharedPorts: PortRange = { first: 21_000, last: 21_099 };
@@ -92,6 +94,8 @@ export const startHost = (
   options?: {
     readonly fake?: FakeRuntime;
     readonly kind?: Kind;
+    readonly bases?: ReadonlyMap<string, string>;
+    readonly logger?: Logger.Logger<unknown, unknown>;
     readonly runtime?: Omit<FakeOptions, "dir" | "kind">;
     readonly ports?: PortRange;
     readonly recheck?: Duration.Duration;
@@ -119,6 +123,7 @@ export const startHost = (
             options?.recheck,
             options?.kind
           ),
+          ...(options?.bases === undefined ? {} : { bases: options.bases }),
           tailnet: options?.tailnetSettings,
         },
         fake.layer,
@@ -126,7 +131,9 @@ export const startHost = (
       ).pipe(
         Layer.provide(options?.tailnet ?? Layer.empty),
         Layer.provide(options?.http ?? noHttp),
-        Layer.provideMerge(Logger.layer([])),
+        Layer.provideMerge(
+          Logger.layer(options?.logger === undefined ? [] : [options.logger])
+        ),
         Layer.provide(NodeServices.layer)
       ),
       scope
