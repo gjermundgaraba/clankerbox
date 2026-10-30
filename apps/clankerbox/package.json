@@ -1,6 +1,6 @@
 {
   "name": "@gjermundgaraba/clankerbox",
-  "version": "0.30.0",
+  "version": "0.30.1",
   "description": "The clankerbox command line, and the host it runs as `clankerbox host`",
   "license": "MIT",
   "repository": {
