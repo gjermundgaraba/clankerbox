@@ -180,7 +180,8 @@ beside `./testing/clock`, `./testing/files` and `./testing/keys`. None of the
   control plane that restarts finds it by ID and carries on. Delivering an ID
   again returns that operation; a sequence not above the scope's is refused and a
   higher one cuts short what still runs there. `boot`, new with each host
-  process, tells a restart from a delivery that hasn't come: a step its host no
+  process and carried by the step, tells a restart from a delivery that hasn't
+  come: a step its host no
   longer holds is decided afresh, and a make is undone. A step's report is stored
   before its host forgets it. A runtime's stop, and Tart's pause, mask
   interruption from the command that halts a running VM until it has, so a step

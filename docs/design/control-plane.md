@@ -61,8 +61,8 @@ A host keeps no database. Each operation carries the refs it needs, and a host's
 An operation has an ID, a sequence number and a step, and is recorded with its leases in one transaction before it is sent (`store.begin`). The steps are `make`, `start`, `stop`, `pause`, `remove`, `resize`, `capture`, `deleteCheckpoint` and `join`. A create, a fork and a restore are all `make`, from a different source. Reads are plain calls, not operations.
 
 - A host runs an operation to its end, whether or not its caller stays.
-- A host keeps an operation's report until the control plane collects it. The control plane stores the report first (`apps/server/src/operations.ts` `poll`).
-- The same ID sent twice returns the same operation. The sequence comes from one durable counter. A host keeps the latest for each scope in memory, refuses a lower or equal one with `Conflict`, and lets a higher one cut short what runs there.
+- A host keeps an operation's report until the control plane collects it. The control plane stores the report first (`apps/server/src/operations.ts` `finish`).
+- The same ID sent twice returns the same operation. An operation carries the `boot` it was meant for, and another process refuses it. The sequence comes from one durable counter. A host keeps the latest for each scope in memory, refuses a lower or equal one with `Conflict`, and lets a higher one cut short what runs there.
 - `boot` is random per host process. An ID the host doesn't hold is lost when `boot` differs. When `boot` matches the delivery hasn't come, so it is sent again if it can be built, and otherwise it is lost. A lost `make` goes `undoing`.
 - A restarted host answers `adopt`: the control plane tells it which machines exist, once per new `boot`, so a runtime can reattach them.
 - To cut a step short, the control plane cancels the operation. Its lease stays held until the host reports the operation done. A stop's command still masks interruption.
@@ -134,17 +134,18 @@ Each duty has exactly one home. "Before" is the code at `adcacee`. "Deleted" is 
 | Move a machine toward what was asked | `lifecycle.ts`, `reconcile.ts`, `machines.ts:1071` | Server: `server/machines.ts`, `server/reconcile.ts` `next` | The host's actors, store, recheck and `lifecycle.ts` |
 | Hold leases | `packages/host/src/leases.ts`, in memory | Server: the `operations` table, `server/platform/sqlite.ts` `begin` | `leases.ts` |
 | Keep rows | `packages/host/src/store.ts`, `platform/sqlite.ts` | Server: `server/store.ts`, `server/platform/sqlite.ts` | The host's database |
-| Clean up at start | `packages/host/src/startup.ts` | Server: each loop's first pass. Host: `Runtime.startup`, what the runtime alone must do. | `startup.ts` |
+| Pick up what a restart left | `packages/host/src/startup.ts` | Server: each loop's first pass, `server/machines.ts` | `startup.ts` |
+| Clean what only the runtime can see | `packages/host/src/startup.ts` | Host: `Runtime.startup` | `startup.ts` |
 
 ### Duties that had no home
 
 | Duty | Why it appeared | Home |
 | --- | --- | --- |
 | Global name uniqueness | Finding 3. A create must be refused when any host holds the name. | Server: the primary key, `server/platform/sqlite.ts` |
-| Capacity-aware placement | Finding 1. | Server: `server/machines.ts`. A `Capacity` failure moves the create to the next candidate once its VM is gone. The host's refusal stays the truth, and nothing ambiguous moves a create. |
+| Capacity-aware placement | Finding 1. | Server: `server/machines.ts`. A `Capacity` failure moves the create to the next candidate once its VM is gone. The host's refusal stays the truth, and nothing ambiguous moves a create. The hosts left to try are in memory, with the setup, so a restart ends a move: the create rests failed with `Capacity`. |
 | Host membership and draining | Adding or removing a host had no operation. | Server: `hosts` and `draining` in its config |
 | Answering for an unreachable host | `Unavailable` was client-made (`errors.ts:277`). | Server: a synchronous refusal, 503, never on a row. A step that can't begin rests `waiting`. |
-| Waiting for a request to rest | A wait spans restarts now. | Client: `client.ts` `polled`, `answerOf` |
+| Waiting for a client's request to rest | A wait spans restarts now. | Client: `client.ts` `polled`, `answerOf`. A prebuild's wait for its builder is part of building it, above. |
 | Running a step on a host | The loop and the VM are on different machines. | Host: `host/operations.ts` |
 | Refusing a late or repeated operation | A delivery can arrive after the control plane moved on. | Host: by ID, sequence and `boot`, `host/operations.ts` |
 | Telling a host which machines exist | A host keeps no list. | Server: `adoptMachines`, sent when a host's `boot` changes |

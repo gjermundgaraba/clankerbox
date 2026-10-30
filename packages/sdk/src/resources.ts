@@ -19,7 +19,7 @@ export const loginUser = "admin";
 const Size = Schema.Int.check(Schema.isGreaterThan(0));
 
 /**
- * What the control plane is doing about a machine. A client waits for a rest at its generation:
+ * What the control plane is doing about a machine. A client waits for a rest:
  * `settled`, at rest with what was asked; `failed`, after a step failed, until the next request;
  * `lost`, one the runtime no longer has, which can only be deleted; and `waiting`, one the control
  * plane can't read, where the request stays saved and acts when it can. `creating` copies the

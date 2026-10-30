@@ -94,6 +94,9 @@ A pass covers this scope, and only it:
 - **The sequence fence is global.** The model's operation ID is its sequence,
   and the host's `high` stands for the scope's sequence, which is one scope
   here. A fence per scope is the same for one machine.
+- **An unscripted make is out.** The model's make always has a script, so
+  `CanSend` covers only one the process still holds. The code also sends again a
+  make with no script.
 - **Only a definite failure moves a row.** The move to another host on
   `Capacity` is out; the model's create has one host.
 
@@ -112,11 +115,11 @@ for this code:
 | `Collect`, `Failing`, `Done`     | `machines.ts` `follow`, `ended`; `reconcile.ts` `settled`; `store.finish` |
 | `Lost`                           | `operations.ts` `poll`; `reconcile.ts` `lost`                            |
 | `Stall`, `Unstall`               | `machines.ts` `follow`'s `unreachable` and `running` cases               |
-| `Deliver`, `Repeat`, `Lose`      | `apps/host/src/operations.ts` `run`, and the network                     |
-| `HostStep`, `HostFail`           | `apps/host/src/operations.ts` `perform`                                  |
+| `Deliver`, `Repeat`, `Lose`      | `apps/host/src/operations.ts` `run`, its boot and sequence fence         |
+| `HostStep`, `HostFail`           | `apps/host/src/operations.ts` `perform`, and `picking`, `made` for a make |
 | `HostCancel`                     | `apps/host/src/operations.ts` `cancel`, `ended`                          |
 | `HostRestart`                    | a new process: `Operations.boot`, empty `entries` and `scopes`           |
-| `Crash`, `Revive`                | a new process: the store stays, `plans` goes; `machines.ts` start-up     |
+| `Crash`, `Revive`                | a new process: the store stays, `creates` goes; `machines.ts` start-up     |
 | `Answer`                         | `packages/sdk/src/client.ts` `machineRest`, `machineGone`, `answerOf`    |
 
 When a covered function changes, update the matching action so the model still

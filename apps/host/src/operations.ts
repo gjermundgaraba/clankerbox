@@ -625,6 +625,12 @@ export const make = (
             return reported(operation.id, same);
           }
 
+          if (operation.boot !== boot) {
+            return yield* new Conflict({
+              message: `operation ${operation.id} is for boot ${operation.boot}, and this host is ${boot}`,
+            });
+          }
+
           const at = scopes.get(operation.scope);
 
           if (at !== undefined && operation.sequence <= at.sequence) {

@@ -47,7 +47,7 @@ const instance = "0123456789abcdef0123456789abcdef";
 
 const sizes = { cpu: 1, ramMib: 1024, diskGib: 10 };
 
-const make: Operation = {
+const make: Omit<Operation, "boot"> = {
   id: "make",
   scope: "machine dev",
   sequence: 1,
@@ -60,7 +60,7 @@ const make: Operation = {
   },
 };
 
-const join = (port: number): Operation => ({
+const join = (port: number): Omit<Operation, "boot"> => ({
   id: "join",
   scope: "machine dev",
   sequence: 2,
@@ -87,10 +87,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           http: tailscaleApi(minted),
         });
 
-        const { outcome } = yield* operations.run(make);
+        const { outcome } = yield* operations.run({
+          ...make,
+          boot: operations.boot,
+        });
 
         yield* operations.wait("make");
-        yield* operations.run(join(outcome.port ?? 0));
+        yield* operations.run({
+          ...join(outcome.port ?? 0),
+          boot: operations.boot,
+        });
 
         const report = yield* operations.wait("join");
 

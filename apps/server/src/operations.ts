@@ -79,6 +79,7 @@ export const make: Effect.Effect<Interface, never, Store | Hosts> = Effect.gen(
         const sent = yield* hosts.call(op.host, (api) =>
           api.runOperation({
             id: op.id,
+            boot: op.boot,
             scope: scopeOf(op),
             sequence: op.sequence,
             step: built,

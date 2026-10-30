@@ -126,6 +126,7 @@ One process runs from one JSON config file:
 }
 ```
 
+- `listen.address` is a tailnet address or loopback: this API can change every machine, and takes no key.
 - `hosts` is in placement order: a create goes to the first that offers its base and has room, or to one holding the setup's prebuild first.
 - `draining: true` on a host passes it over for new machines, and leaves what it runs alone.
 - `stateDir`, relative to the config, holds `server.db`. One process holds it at a time.

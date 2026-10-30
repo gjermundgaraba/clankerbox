@@ -123,10 +123,12 @@ export type Step = typeof Step.Type;
 /**
  * One whole step for a host to run to its end, whether or not the caller stays. `scope` names the
  * resource it changes. Delivering an `id` again returns that operation, a lower or equal `sequence`
- * in the scope is refused, and a higher one cuts short what still runs there.
+ * in the scope is refused, and a higher one cuts short what still runs there. `boot` is the host
+ * process it was meant for: another process refuses it, as the scopes it would be fenced by are gone.
  */
 export const Operation = Schema.Struct({
   id: Schema.String,
+  boot: Schema.String,
   scope: Schema.String,
   sequence: Schema.Int,
   step: Step,
@@ -224,7 +226,7 @@ export const HostHttp = ActionHttp.make(
       ...write,
       error: [Invalid, Conflict] as const,
       description:
-        "Start an operation and answer at once. Conflict refuses a sequence the scope has seen.",
+        "Start an operation and answer at once. Conflict refuses a sequence the scope has seen, or another host process's operation.",
       input: Operation,
       success: Report,
     }),

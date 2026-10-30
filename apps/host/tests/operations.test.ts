@@ -143,11 +143,14 @@ const scopeOf = (step: Step) =>
     ? `checkpoint ${step.checkpoint.name}`
     : `machine ${step.machine.name}`;
 
-const delivery = (step: Step, sequence = 1): Operation => {
+const delivery = (step: Step, sequence = 1): Omit<Operation, "boot"> => {
   delivered += 1;
 
   return { id: `op-${delivered}`, scope: scopeOf(step), sequence, step };
 };
+
+const deliver = ({ operations }: Runner, operation: Omit<Operation, "boot">) =>
+  operations.run({ ...operation, boot: operations.boot });
 
 const ended = ({ operations }: Runner, id: string) =>
   Effect.gen(function* () {
@@ -168,7 +171,7 @@ const finished = (host: Runner, step: Step, sequence = 1) =>
   Effect.gen(function* () {
     const operation = delivery(step, sequence);
 
-    yield* host.operations.run(operation);
+    yield* deliver(host, operation);
 
     return yield* ended(host, operation.id);
   });
@@ -192,16 +195,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const { release, entered } = host.fake.holdNext("create");
       const operation = delivery(makes("dev"));
 
-      const first = yield* host.operations.run(operation);
+      const first = yield* deliver(host, operation);
 
       yield* entered;
 
-      const again = yield* host.operations.run(operation);
+      const again = yield* deliver(host, operation);
 
       yield* release;
 
       const done = yield* ended(host, operation.id);
-      const late = yield* host.operations.run(operation);
+      const late = yield* deliver(host, operation);
 
       expect(again).toStrictEqual(first);
       expect(first.status).toBe("running");
@@ -222,15 +225,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const calls = [...host.fake.calls];
 
         const equal = yield* Effect.flip(
-          host.operations.run(
-            delivery({ _tag: "remove", machine: ref("dev") }, 5)
-          )
+          deliver(host, delivery({ _tag: "remove", machine: ref("dev") }, 5))
         );
 
         const lower = yield* Effect.flip(
-          host.operations.run(
-            delivery({ _tag: "remove", machine: ref("dev") }, 4)
-          )
+          deliver(host, delivery({ _tag: "remove", machine: ref("dev") }, 4))
         );
 
         expect([equal._tag, lower._tag]).toStrictEqual([
@@ -265,11 +264,11 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const host = yield* runner();
         const operation = delivery(makes("dev"));
 
-        yield* host.operations.run(operation);
+        yield* deliver(host, operation);
         yield* ended(host, operation.id);
         yield* host.operations.collect(operation.id);
 
-        const again = yield* Effect.flip(host.operations.run(operation));
+        const again = yield* Effect.flip(deliver(host, operation));
 
         expect(again._tag).toBe("Conflict");
         expect(counted(host.fake.calls, "create dev")).toBe(1);
@@ -295,9 +294,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const removing = delivery({ _tag: "remove", machine: ref("dev") }, 3);
 
-        yield* host.operations.run(stopping);
+        yield* deliver(host, stopping);
         yield* entered;
-        yield* host.operations.run(removing);
+        yield* deliver(host, removing);
         yield* pause;
 
         expect(host.fake.calls).not.toContain("delete dev");
@@ -335,15 +334,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           machines: [],
         };
 
-        yield* host.operations.run(delivery(stop, 2));
+        yield* deliver(host, delivery(stop, 2));
         yield* entered;
 
         const second = delivery({ _tag: "remove", machine: ref("dev") }, 3);
         const third = delivery({ _tag: "remove", machine: ref("dev") }, 4);
 
-        yield* host.operations.run(second);
+        yield* deliver(host, second);
         yield* pause;
-        yield* host.operations.run(third);
+        yield* deliver(host, third);
         yield* pause;
 
         expect(counted(host.fake.calls, "delete dev")).toBe(0);
@@ -362,7 +361,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const { release, entered } = host.fake.holdNext("create");
       const operation = delivery(makes("dev"));
 
-      yield* host.operations.run(operation);
+      yield* deliver(host, operation);
       yield* entered;
 
       const waiting = yield* Effect.forkChild(
@@ -392,7 +391,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           2
         );
 
-        yield* host.operations.run(pausing);
+        yield* deliver(host, pausing);
         yield* entered;
         yield* host.operations.cancel(pausing.id);
         yield* pause;
@@ -416,7 +415,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       host.fake.holdNext("create");
 
-      yield* host.operations.run(operation);
+      yield* deliver(host, operation);
       yield* host.operations.cancel(operation.id);
 
       expect((yield* ended(host, operation.id)).status).toBe("cancelled");
@@ -428,7 +427,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const host = yield* runner();
       const operation = delivery(makes("dev"));
 
-      yield* host.operations.run(operation);
+      yield* deliver(host, operation);
 
       const done = yield* ended(host, operation.id);
 
@@ -446,7 +445,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const { release, entered } = host.fake.holdNext("create");
       const operation = delivery(makes("dev"));
 
-      yield* host.operations.run(operation);
+      yield* deliver(host, operation);
       yield* entered;
       yield* host.operations.collect(operation.id);
 
@@ -461,6 +460,22 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       expect(yield* host.operations.list).toStrictEqual([]);
       expect((yield* host.operations.wait(operation.id)).status).toBe("absent");
     })
+  );
+
+  it.effect(
+    "an operation meant for another boot is refused and runs nothing",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* runner();
+        const operation = delivery(makes("dev"));
+
+        const refused = yield* Effect.flip(
+          host.operations.run({ ...operation, boot: "an earlier process" })
+        );
+
+        expect(refused._tag).toBe("Conflict");
+        expect(yield* host.operations.list).toStrictEqual([]);
+      })
   );
 
   it.effect("an unknown ID is absent, under this process's boot", () =>
@@ -483,7 +498,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const host = yield* runner();
       const { entered, release } = host.fake.holdNext("create");
       const operation = delivery(makes("dev"));
-      const report = yield* host.operations.run(operation);
+      const report = yield* deliver(host, operation);
 
       yield* entered;
       yield* release;
@@ -501,13 +516,15 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       host.fake.holdNext("create");
 
-      const first = yield* host.operations.run(delivery(makes("one")));
+      const first = yield* deliver(host, delivery(makes("one")));
 
-      const second = yield* host.operations.run(
+      const second = yield* deliver(
+        host,
         delivery(makes("two", { ports: [firstPort + 1, firstPort + 3] }))
       );
 
-      const third = yield* host.operations.run(
+      const third = yield* deliver(
+        host,
         delivery(makes("three", { ports: [firstPort + 1, firstPort + 3] }))
       );
 
@@ -525,7 +542,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         probe: { free: (_, port) => Effect.succeed(port !== firstPort) },
       });
 
-      const report = yield* host.operations.run(delivery(makes("dev")));
+      const report = yield* deliver(host, delivery(makes("dev")));
 
       expect(portOf(report)).toBe(firstPort + 1);
     })
@@ -538,7 +555,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       host.fake.failNext("create", new Internal({ message: "no disk" }));
 
       const failed = yield* finished(host, makes("one"));
-      const next = yield* host.operations.run(delivery(makes("two")));
+      const next = yield* deliver(host, delivery(makes("two")));
 
       expect(errorOf(failed)).toStrictEqual(["failed", "Internal"]);
       expect(portOf(failed)).toBe(firstPort);
@@ -552,12 +569,12 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const { entered } = host.fake.holdNext("create");
       const operation = delivery(makes("one"));
 
-      yield* host.operations.run(operation);
+      yield* deliver(host, operation);
       yield* entered;
       yield* host.operations.cancel(operation.id);
 
       const cancelled = yield* ended(host, operation.id);
-      const next = yield* host.operations.run(delivery(makes("two")));
+      const next = yield* deliver(host, delivery(makes("two")));
 
       expect(cancelled.status).toBe("cancelled");
       expect(portOf(next)).toBe(firstPort);
@@ -571,14 +588,14 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const host = yield* runner();
         const operation = delivery(makes("one"));
 
-        yield* host.operations.run(operation);
+        yield* deliver(host, operation);
         yield* ended(host, operation.id);
 
-        const second = yield* host.operations.run(delivery(makes("two")));
+        const second = yield* deliver(host, delivery(makes("two")));
 
         yield* host.operations.collect(operation.id);
 
-        const third = yield* host.operations.run(delivery(makes("three")));
+        const third = yield* deliver(host, delivery(makes("three")));
 
         expect(portOf(second)).toBe(firstPort + 1);
         expect(portOf(third)).toBe(firstPort);
@@ -595,16 +612,16 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const failed = delivery(makes("one"));
 
-        yield* host.operations.run(failed);
+        yield* deliver(host, failed);
         yield* ended(host, failed.id);
 
         host.fake.holdNext("create");
 
-        const taken = yield* host.operations.run(delivery(makes("two")));
+        const taken = yield* deliver(host, delivery(makes("two")));
 
         yield* host.operations.collect(failed.id);
 
-        const next = yield* host.operations.run(delivery(makes("three")));
+        const next = yield* deliver(host, delivery(makes("three")));
 
         expect(portOf(taken)).toBe(firstPort);
         expect(portOf(next)).toBe(firstPort + 1);
@@ -618,7 +635,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const host = yield* runner({ ports: 1 });
         const operation = delivery(makes("dev", { ports: [firstPort] }));
 
-        const report = yield* host.operations.run(operation);
+        const report = yield* deliver(host, operation);
         const again = yield* host.operations.wait(operation.id);
 
         expect(errorOf(again)).toStrictEqual(["failed", "Capacity"]);
@@ -637,7 +654,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       const operation = delivery(makes("dev"));
 
-      yield* host.operations.run(operation);
+      yield* deliver(host, operation);
 
       const report = yield* ended(host, operation.id);
 
@@ -666,9 +683,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
         const making = delivery(makes("dev"), 3);
 
-        yield* host.operations.run(stopping);
+        yield* deliver(host, stopping);
         yield* entered;
-        yield* host.operations.run(making);
+        yield* deliver(host, making);
         yield* pause;
 
         expect(host.fake.calls).toContain("stop dev");
@@ -708,7 +725,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         });
 
         const operation = delivery(makes("dev"));
-        const leaving = yield* Effect.forkChild(host.operations.run(operation));
+        const leaving = yield* Effect.forkChild(deliver(host, operation));
 
         yield* Deferred.await(probing);
         yield* Fiber.interrupt(leaving);
@@ -717,7 +734,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
           "absent"
         );
 
-        const sent = yield* host.operations.run(operation);
+        const sent = yield* deliver(host, operation);
 
         expect(sent.status).toBe("running");
         expect((yield* ended(host, operation.id)).status).toBe("done");
@@ -768,7 +785,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { entered, release } = host.fake.holdNext("create");
         const booting = delivery(makes("one"));
 
-        yield* host.operations.run(booting);
+        yield* deliver(host, booting);
         yield* entered;
 
         const refused = yield* finished(host, makes("two"));
@@ -1325,7 +1342,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         pin: "fake 1",
       });
 
-      yield* host.operations.run(operation);
+      yield* deliver(host, operation);
       yield* entered;
       yield* host.operations.cancel(operation.id);
 
@@ -1547,7 +1564,7 @@ layer(NodeServices.layer)((it) => {
       const { entered } = host.fake.holdNext("create");
       const operation = delivery(makes("dev"));
 
-      yield* host.operations.run(operation);
+      yield* deliver(host, operation);
       yield* entered;
 
       const waiting = yield* Effect.forkChild(

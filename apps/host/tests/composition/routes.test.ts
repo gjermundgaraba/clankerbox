@@ -45,6 +45,18 @@ const decodeInvalid = Schema.decodeUnknownSync(Schema.fromJsonString(Invalid));
 
 const decodeHost = Schema.decodeUnknownSync(Schema.fromJsonString(HostInfo));
 
+const bootOf = (url: string) =>
+  Effect.map(post(url, "readHost", {}), ({ body }) => decodeHost(body).boot);
+
+const deliver = (
+  url: string,
+  operation: Omit<Operation, "boot">,
+  headers?: Record<string, string>
+) =>
+  Effect.flatMap(bootOf(url), (boot) =>
+    post(url, "runOperation", { ...operation, boot }, headers)
+  );
+
 const dev = {
   name: "dev",
   instance: "0123456789abcdef0123456789abcdef",
@@ -53,7 +65,7 @@ const dev = {
   diskGib: 10,
 };
 
-const made = (id: string, sequence = 1): Operation => ({
+const made = (id: string, sequence = 1): Omit<Operation, "boot"> => ({
   id,
   scope: "machine dev",
   sequence,
@@ -96,7 +108,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     () =>
       Effect.gen(function* () {
         const { url, fake, operations } = yield* serve();
-        const sent = yield* post(url, "runOperation", made("op-1"));
+        const sent = yield* deliver(url, made("op-1"));
         const done = yield* finished(url, "op-1");
 
         const listed = yield* post(url, "listOperations", {});
@@ -120,7 +132,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
 
       fake.failNext("create", new Internal({ message: "no disk" }));
 
-      yield* post(url, "runOperation", made("op-1"));
+      yield* deliver(url, made("op-1"));
 
       const report = yield* finished(url, "op-1");
 
@@ -133,9 +145,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const { url } = yield* serve();
 
-      yield* post(url, "runOperation", made("op-1", 2));
+      yield* deliver(url, made("op-1", 2));
 
-      const lower = yield* post(url, "runOperation", made("op-2", 1));
+      const lower = yield* deliver(url, made("op-2", 1));
 
       expect(lower.status).toBe(409);
       expect(lower.body).toContain('"_tag":"Conflict"');
@@ -147,7 +159,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       const { url, fake } = yield* serve();
       const { entered } = fake.holdNext("create");
 
-      yield* post(url, "runOperation", made("op-1"));
+      yield* deliver(url, made("op-1"));
       yield* entered;
       yield* post(url, "cancelOperation", { id: "op-1" });
 
@@ -161,7 +173,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { url } = yield* serve();
 
-        yield* post(url, "runOperation", made("op-1"));
+        yield* deliver(url, made("op-1"));
 
         const { outcome } = yield* finished(url, "op-1");
         const ref = { ...dev, port: outcome.port ?? 0 };
@@ -246,9 +258,9 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
       Effect.gen(function* () {
         const { url, fake } = yield* serve();
         const older = versioned(bump(1));
-        const run = yield* post(url, "runOperation", made("op-1"), older);
+        const run = yield* deliver(url, made("op-1"), older);
         const read = yield* post(url, "readHost", {}, older);
-        const unversioned = yield* post(url, "runOperation", made("op-1"), {});
+        const unversioned = yield* deliver(url, made("op-1"), {});
 
         const malformed = yield* post(
           url,
@@ -302,12 +314,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
     Effect.gen(function* () {
       const { url } = yield* serve();
 
-      const answer = yield* post(
-        url,
-        "runOperation",
-        made("op-1"),
-        versioned(bump(2))
-      );
+      const answer = yield* deliver(url, made("op-1"), versioned(bump(2)));
 
       expect(answer.status).toBe(200);
     })
@@ -320,7 +327,7 @@ layer(NodeServices.layer, { excludeTestServices: true })((it) => {
         const { url, fake } = yield* serve();
         const { release, entered } = fake.holdNext("create");
 
-        yield* post(url, "runOperation", made("op-1"));
+        yield* deliver(url, made("op-1"));
         yield* entered;
 
         const waiting = yield* Effect.forkChild(
