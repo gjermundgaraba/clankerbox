@@ -324,12 +324,7 @@ export const make = (settings: {
 
             return false;
           },
-        }),
-        Effect.ensuring(
-          Effect.sync(() => {
-            driven.delete(name);
-          })
-        )
+        })
       );
 
     const driving = (name: string) =>
