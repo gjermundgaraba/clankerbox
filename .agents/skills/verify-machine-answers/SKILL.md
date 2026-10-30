@@ -77,10 +77,10 @@ A pass covers this scope, and only it:
 - **`MachineAnswers.cfg`**: one client beside the creator, with one of each
   fault: a step or read that fails, a control plane crash, a partition, a host
   restart and a lost delivery, and nine operations. Every invariant and
-  `AllAnswered` hold over all 9,608,391 distinct states, 5 to 8 minutes.
+  `AllAnswered` hold over all 9,034,147 distinct states, 5 to 8 minutes.
 - **`TwoClients.cfg`**: two clients beside the creator, with a crash and a
   partition and no other fault, and seven operations. Every invariant holds over
-  all 11,466,662 distinct states, about 1 minute. `AllAnswered` is not checked
+  all 11,175,654 distinct states, about 1 minute. `AllAnswered` is not checked
   here.
 - **Both at once is out of reach.** Two clients with every fault passed 152
   million distinct states in about 40 minutes with no violation and its queue

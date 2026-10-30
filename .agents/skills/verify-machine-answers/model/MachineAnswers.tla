@@ -122,15 +122,15 @@ Request(k) ==
        THEN /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
                                                  !.res = "notfound"]]
             /\ UNCHANGED row
+       ELSE IF row.stage \in {"undoing", "undone"} /\ d # "deleted"
+       THEN /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
+                                                 !.res = "notfound"]]
+            /\ UNCHANGED row
        ELSE IF row.stage = "undone" /\ row.op.id = 0
-       THEN IF d = "deleted"
-            THEN /\ row' = Absent
-                 /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
-                                                      !.res = "ok",
-                                                      !.vmAt = vm]]
-            ELSE /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
-                                                      !.res = "notfound"]]
-                 /\ UNCHANGED row
+       THEN /\ row' = Absent
+            /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
+                                                 !.res = "ok",
+                                                 !.vmAt = vm]]
        ELSE IF row.desired = "deleted" /\ d # "deleted"
        THEN /\ cl' = [cl EXCEPT ![k] = [@ EXCEPT !.pc = "done", !.d = d,
                                                  !.res = "superseded",

@@ -4,19 +4,57 @@ clankerbox runs machines (VMs) for coding agents and reports where each one is r
 
 - Lifecycle: create, start, stop, pause, resize, delete, fork, checkpoint capture and restore.
 - Two kinds of host: `linux`, Linux guests on a Linux host under smolvm, with RAM forks and RAM checkpoints, and `mac`, macOS guests on a Mac under Tart, with disk copies.
-- Clients talk to hosts directly; there is no controller. A create goes to the first host in the client's list that offers the requested base, unless it names a host.
-- A profile is a client-side file: a base, sizes, a setup script and, optionally, a host. A prebuild is a checkpoint of a machine whose setup has run, which later creates of the same profile restore.
+- A client talks to one control plane, `clankerbox-server`, by machine name. It never learns which host a machine is on. Adding a host is one line in the control plane's config.
+- A profile is a client-side file: a base, sizes and a setup script. A prebuild is a checkpoint of a machine whose setup has run, which later creates of the same profile restore.
 - Each machine exposes only SSH, reported as a `host:port` with the guest's host key. A host can also join its machines to the tailnet, each as its own node, so their ports are reachable there.
-- Hosts and clients share a Tailscale tailnet, and its policy is the only gate: the API has no keys and no TLS.
+- The control plane, the hosts and the clients share a Tailscale tailnet, and its policy is the only gate: the APIs have no keys and no TLS.
 
-One `clankerbox` command, the npm package `@gjermundgaraba/clankerbox`, is both the CLI and the host (`clankerbox host`). The TypeScript SDK is `@gjermundgaraba/clankerbox-sdk`.
+## How it fits together
+
+```text
+clankerbox CLI / SDK
+        | client contract, HTTP
+        v
+clankerbox-server              one process, one SQLite file
+  a loop per machine           what was asked, how far it got, the leases
+        | host contract, HTTP, control plane calls hosts
+        v
+clankerbox-host  ...           one per Linux box or Mac, keeps no database
+  runs whole operations        on smolvm or Tart
+        |
+        v
+VMs  <---------- SSH, directly from the client to the host's port
+```
+
+The control plane keeps every machine's row and decides what happens next. It gives a host one whole step at a time (make, start, stop, pause, remove, resize, capture), and the host runs that step to its end whether or not the control plane stays. A host holds nothing a restart of the control plane can lose, and the control plane holds nothing a host's restart can lose.
+
+A mutation answers once the control plane has recorded it, and the client waits by reading the row. Nothing but the wait is lost when a client goes away.
+
+What happens when something fails:
+
+| What fails | What you see |
+| --- | --- |
+| The control plane is down | Running machines keep running. Open SSH sessions stay up. A new `ssh` fails, since it asks the control plane where the machine is. Every other command fails `Unavailable`. A step a host already has runs to its end. |
+| The control plane comes back | It finds each step in flight on its host, and carries on. A create whose setup hadn't reached its host is undone and fails, since a setup is never stored. |
+| A host is unreachable | Its machines read `unknown`. A request on one stays saved, and the wait fails fast with `Unavailable`; it acts when the host is back. A create goes to another host, and only fails if no host could take it. |
+| A host restarts | Its VMs stay up. A step it held ends, and the control plane decides afresh from the VM's state. A create it held is undone. |
+| A create fails | The VM is deleted, and the row stays `failed` for a day to say why. `delete` clears it, and a create of the name replaces it. |
+| A host has no room for a create | The create moves to the next host. |
+
+Machines and checkpoints stay on the host they were made on: forks and restores land beside their source, and machines don't move between hosts yet.
+
+The control plane is one instance over one SQLite file. Back up its state directory: it is the only record of what exists.
+
+The npm packages are `@gjermundgaraba/clankerbox` (the CLI), `@gjermundgaraba/clankerbox-server`, `@gjermundgaraba/clankerbox-host`, and the TypeScript SDK `@gjermundgaraba/clankerbox-sdk`. All four share a version, and a control plane refuses a client or host of another `major.minor`, so upgrade them together.
 
 ## Install
 
-The package needs Node 26.12 or later, and bundles everything else it runs.
+Each package needs Node 26.12 or later, and bundles everything else it runs.
 
 ```sh
-npm install --global @gjermundgaraba/clankerbox
+npm install --global @gjermundgaraba/clankerbox          # where you run commands
+npm install --global @gjermundgaraba/clankerbox-server   # on one machine
+npm install --global @gjermundgaraba/clankerbox-host     # on each host
 clankerbox --version
 ```
 
@@ -59,61 +97,49 @@ A host process runs one kind from one JSON config file:
 }
 ```
 
-- `id` is short and lowercase (`linux`, `mac`); it starts every ID the host holds.
-- `listen.address` is a tailnet address or loopback.
-- `stateDir`, relative to the config, holds the database. Keep it with its host ID and kind; the host refuses a config that names others. On linux it is at most 52 bytes and outside every home directory, such as `/srv/clankerbox/smolvm`.
-- `bases` maps names clients ask for to images, pinned by digest. A name holds no `/`. Hosts offering the same image should use the same name. The release was checked on linux's `ubuntu` above and on mac's `macos`, `ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:71d9dc1d6c4614b7ecbb328753124912b43425fc8cf1c4085d7f352026df6601`, Cirrus's Xcode 27 on macOS 26, whose 140 GB disk takes a `diskGib` of 130 or more. A linux host also creates from any image reference a create names as its base, one with a `/`, such as `registry.example/team/image:tag`. A prebuild names its base, not the image, so one made from a tag keeps the image the tag named then.
+- `id` is short and lowercase. The control plane's config names the host by it.
+- `listen.address` is a tailnet address or loopback, and machines' SSH ports are published on it.
+- `stateDir`, relative to the config, holds the runtime's files. On linux it is at most 52 bytes and outside every home directory, such as `/srv/clankerbox/smolvm`.
+- `bases` maps names clients ask for to images, pinned by digest. A name holds no `/`. Hosts offering the same image should use the same name, as a create may land on any of them. The release was checked on linux's `ubuntu` above and on mac's `macos`, `ghcr.io/cirruslabs/macos-tahoe-xcode@sha256:71d9dc1d6c4614b7ecbb328753124912b43425fc8cf1c4085d7f352026df6601`, Cirrus's Xcode 27 on macOS 26, whose 140 GB disk takes a `diskGib` of 130 or more. A linux host also creates from any image reference a create names as its base, one with a `/`, such as `registry.example/team/image:tag`. A prebuild names its base, not the image, so one made from a tag keeps the image the tag named then.
 - The kind's block: `linux: {prefix, ramBudgetMib?}`, smolvm's install, or `mac: {binary}`, the `tart` executable of a versioned install.
 - `machinePorts: {first, last}`, optional, is the range machines' SSH ports come from, 10000–19999 by default; `listen.port` lies outside it.
 - `tailnet: {oauthClient: {id, secret}, tags}`, optional, joins the host's machines to the tailnet (see below). The client needs the `auth_keys` scope and the tags; its secret never leaves the host.
 
 ```sh
-clankerbox host --config /etc/clankerbox/linux.json
+clankerbox-host --config /etc/clankerbox/linux.json
 ```
 
 The host exits 130 on SIGINT or SIGTERM and 1 when it fails.
 
-### Upgrading from 0.29
+## Run the control plane
 
-State dirs, prebuilds, checkpoints and client configs are as in 0.29, with no migration. Upgrade hosts and clients together, as for every release.
+One process runs from one JSON config file:
 
-- A machine's `tailscaled` runs in kernel mode once the machine boots again, or is forked or restored; until then it keeps the userspace daemon it has, a paused one included. A server a recipe binds to `127.0.0.1` is then no longer reachable on the tailnet: bind it to all addresses or the tailnet address, and prebuild again.
+```json
+{
+  "listen": { "address": "100.64.0.1", "port": 8484 },
+  "stateDir": "state",
+  "hosts": [
+    { "id": "linux", "url": "http://100.64.0.10:8484" },
+    { "id": "mac", "url": "http://100.64.0.20:8484" }
+  ]
+}
+```
 
-### Upgrading from 0.26
+- `hosts` is in placement order: a create goes to the first that offers its base and has room, or to one holding the setup's prebuild first.
+- `draining: true` on a host passes it over for new machines, and leaves what it runs alone.
+- `stateDir`, relative to the config, holds `server.db`. One process holds it at a time.
+- To add a host, add its line and restart the control plane. Machines keep running through the restart, and clients need nothing.
 
-State dirs, prebuilds, checkpoints and client configs are as in 0.26, with no migration. Upgrade hosts and clients together, as for every release.
+```sh
+clankerbox-server --config /etc/clankerbox/server.json
+```
 
-- `prebuild` runs the setup again each time, and replaces the prebuild that matches once it has run, in place of answering the one there.
-- The SDK's `prebuildCheckpoint` and `Prebuild.build` answer the `Checkpoint`; `Prebuilt` is gone.
+The control plane exits 130 on SIGINT or SIGTERM and 1 when it fails.
 
-### Upgrading from 0.24
+### Upgrading from 0.30
 
-State dirs, prebuilds, checkpoints and client configs are as in 0.24, with no migration, so a 0.24 host can still read a 0.25 state dir. Upgrade hosts and clients together, as for every release.
-
-- linux: install smolvm 1.32.1 in its own prefix, templates expanded, and start or stop every paused machine before pointing `linux.prefix` at it. Its `ram` checkpoints from 1.31.1 then fail `PinMismatch`, prebuilds rebuild at their next create, and a machine left running across the move can't be forked or captured until it stops and starts again.
-- A host config refuses a base name holding a `/`; a linux host creates from any image reference.
-- mac: the checked base is now `macos`, the Xcode image above, in place of `macos-tahoe-base`. A machine keeps the base name it was made from; a profile naming another base moves to `macos`, and its prebuild runs again.
-- Amp orbs: drop the `amp-orb` base, the `amp-orb` recipe and the profile's base and setup, and run `clankerbox amp-orb` without `--base`; the orb no longer needs SSH. Orb machines and snapshots carry over, and their amp-orb prebuilds can be deleted.
-- The SDK adds `execMachine` and `requirements`; `Machine.base` may be an image reference.
-
-### Upgrading from 0.23
-
-Runtimes, prebuilds, checkpoints, the recipes, and the host and client configs are as in 0.23, so machines carry over. Upgrade hosts and clients together, as for every release.
-
-- A host migrates its state dir on its first start, after which a 0.23 host refuses it: copy its `host.db` first to keep a way back.
-- In the SDK, `PinMismatch` names its checkpoint or machine as `id`, no longer `checkpoint`; `Desired`, `Machine.state` and `Superseded.by` gain `paused`, and `Phase` gains `pausing`.
-- A pause of a machine running since before the upgrade stops it, as the host can't tell what booted it; it pauses after its next start.
-- mac: each Tart job runs `--suspendable`, which drops its audio and entropy devices and its non-Mac input devices. Set the lock screen as Deploy describes and make each Mac's first pause while unlocked: one made while locked powers the VM off and fails.
-- linux: start or stop paused machines before moving `linux.prefix` to another smolvm. Setup, preparation and the tailnet check now run as root whatever the image's USER; prebuilds made under another USER aren't rebuilt.
-
-### Upgrading from 0.20
-
-0.21 reads no 0.20 state dir, and logs in to machines of either kind as `admin`. For each host:
-
-1. While it still runs 0.20, delete its machines and checkpoints (`clankerbox delete`, `clankerbox checkpoint delete`) until `clankerbox machines` and `clankerbox checkpoint list` show none of its own, then stop it. 0.21 never reads a VM it leaves, which keeps running: on mac, `tart stop` then `tart delete` each in `tart list` named `cbx-<host ID>-…`; on linux, `systemctl stop` each of `systemctl list-units 'smolvm-vm-*.scope'` named `smolvm-vm-<machine name>-<8 hex>.scope` for one of the host's machines, leaving any other smolvm VM running.
-2. Point `stateDir` at a new directory, rename `runtime` to `kind`, `smolvm` to `linux` and `tart` to `mac`, and start it on 0.21.
-3. Drop each host's `sshUser` from the client config, and `sshUser` from the Sandbox Agent provider's options.
-4. Rebuild your prebuilds and recreate your machines. A setup of your own must now leave `admin`, not `user`.
+Hosts and the control plane start fresh: 0.30's machines aren't carried over. Before you upgrade, delete each machine and checkpoint with the old release, then stop its host, and remove its `stateDir`. IDs no longer carry a host: `linux_dev` is `dev`, and `ssh dev.cbx` replaces `ssh linux_dev`. Client configs name `server` instead of `hosts`, and profiles lose `host`. `clankerbox host` is now `clankerbox-host`.
 
 ## Use the CLI
 
@@ -121,16 +147,13 @@ The client config is `$XDG_CONFIG_HOME/clankerbox/config.json` (`~/.config` when
 
 ```json
 {
-  "hosts": [
-    { "id": "linux", "url": "http://100.64.0.10:8484" },
-    { "id": "mac", "url": "http://100.64.0.20:8484" }
-  ],
+  "server": "http://100.64.0.1:8484",
   "profiles": "profiles",
   "authorizedKeys": "~/.ssh/id_ed25519.pub"
 }
 ```
 
-The host list is in placement order. Machines of either kind are logged in to as `admin`. `authorizedKeys` is a public-key file, such as an `id_ed25519.pub`, or several concatenated: each line that isn't blank is `<type> <base64> [comment]`, so a private key or any other file is refused. Every create or prebuild with a setup needs it: the host installs its keys for the login user once the setup exits 0, and a create without a setup sends none. Paths in the config, `profiles` and `authorizedKeys`, are under `~/` or else relative to the config. `profiles` is read only by `profiles` and by commands given `--profile NAME`, and `authorizedKeys` only by `create` and `prebuild`. `--profile NAME` reads `NAME.json` from the profiles directory; a value with a `/` or ending in `.json` is a path:
+Machines of either kind are logged in to as `admin`. `authorizedKeys` is a public-key file, such as an `id_ed25519.pub`, or several concatenated: each line that isn't blank is `<type> <base64> [comment]`, so a private key or any other file is refused. Every create or prebuild with a setup needs it: its keys are installed for the login user once the setup exits 0, and a create without a setup sends none. Paths in the config, `profiles` and `authorizedKeys`, are under `~/` or else relative to the config. `profiles` is read only by `profiles` and by commands given `--profile NAME`, and `authorizedKeys` only by `create` and `prebuild`. `--profile NAME` reads `NAME.json` from the profiles directory; a value with a `/` or ending in `.json` is a path:
 
 ```json
 {
@@ -142,44 +165,46 @@ The host list is in placement order. Machines of either kind are logged in to as
 }
 ```
 
-`setup.path`, relative to the profile, is a script or a recipe directory with a `setup.sh`. An optional `host` sends every create from the profile there. A profile may leave out `base` for each create to name, with `--base`.
+`setup.path`, relative to the profile, is a script or a recipe directory with a `setup.sh`. A profile may leave out `base` for each create to name, with `--base`.
 
 ```sh
-clankerbox hosts                           # every host, its kind, versions and bases
-clankerbox capacity                        # every host's resources and limits
-clankerbox create dev --profile dev        # prints the new ID, linux_dev
-clankerbox create review --host mac --base macos --cpu 4 --ram 8G --disk 150G
+clankerbox create dev --profile dev        # waits until it runs, prints dev
+clankerbox create review --base macos --cpu 4 --ram 8G --disk 150G
 clankerbox prebuild --profile dev          # run dev's setup now; later creates of dev restore it
 clankerbox machines
-clankerbox get linux_dev
-clankerbox ssh linux_dev -- uptime
-clankerbox pause linux_dev                 # saves its RAM and frees it
-clankerbox stop linux_dev
-clankerbox resize linux_dev --cpu 4 --ram 4G --disk 80G
-clankerbox start linux_dev
-clankerbox fork linux_dev dev2             # linux_dev2
-clankerbox fork linux_dev big --ram 8G     # a copy with more RAM
-clankerbox checkpoint capture linux_dev base
-clankerbox restore linux_base dev3         # linux_dev3
-clankerbox delete linux_dev3
-clankerbox checkpoint delete linux_base
+clankerbox get dev
+clankerbox ssh dev -- uptime
+ssh dev.cbx                                # plain OpenSSH, scp and rsync work too
+clankerbox pause dev                       # saves its RAM and frees it
+clankerbox stop dev
+clankerbox resize dev --cpu 4 --ram 4G --disk 80G
+clankerbox start dev
+clankerbox fork dev dev2
+clankerbox fork dev big --ram 8G           # a copy with more RAM
+clankerbox checkpoint capture dev base
+clankerbox restore base dev3
+clankerbox delete dev3
+clankerbox checkpoint delete base
+clankerbox hosts                           # for an operator: each host, its state and versions
+clankerbox capacity                        # for an operator: each host's resources and limits
 ```
 
-- IDs are `<host>_<name>`. `create` flags override the profile's fields.
+- A name is unique across every host, per resource type. `create` flags override the profile's fields.
+- A command waits until the machine rests. `--no-wait` answers once the request is recorded, and `--timeout 10m` bounds the wait; either way the request stays saved and acts. A wait goes on through a short restart of the control plane.
 - Sizes and durations carry their unit: `--ram 8G`, `--disk 60G`, `--setup-timeout 15m`.
 - `fork` copies a running linux machine with its RAM, or a stopped mac machine's disk. `fork` and `restore` take `--cpu`, `--ram` and `--disk` for the copy, its source's by default: a linux copy, holding its source's RAM, only grows, live once it runs; a mac copy takes any vCPUs and RAM; a disk only grows. `checkpoint capture` does the same, so a linux checkpoint is `ram` and a mac one `disk`.
-- `start`, `stop`, `pause` and `delete` ask for a state and wait until the machine is there; a request fails `Superseded` when a later one for the same machine asked for something else before it got there. A machine that stops under its host while asked to run is started again at its host's next check, every 30 s.
+- `start`, `stop`, `pause` and `delete` ask for a state and wait until the machine is there; a request fails `Superseded` when a later one for the same machine asked for something else before it got there. A machine that stops by itself while asked to run is started again at the control plane's next check, every 30 s.
 - `pause` saves a running machine's RAM, processes and disks and stops its VM, so it holds no RAM, and on a Mac none of its two VMs, until a `start` resumes it where it was. A `pause` leaves a stopped machine stopped, and a paused machine can't be forked or captured. A `pause` stops a machine it can't save, which then reads `stopped`: on linux one booted under another smolvm build, or before its host recorded which, and on a Mac one an older host booted.
 - On linux a paused machine resumes only under the smolvm build that paused it: after a host moves to another one, a `start` of it fails `PinMismatch`, so start or stop paused machines before upgrading; a stop needs room for one machine at a time, where each start keeps its RAM. A machine left running across the move is stopped by its next pause, and pauses after a start. A Mac tries the resume under any Tart and macOS, and a restore it can't make fails, keeping the saved state: a `stop` discards it, and the next `start` boots from the disk.
 - A `stop` of a paused machine resumes it on linux to end its processes, needing room as a start does, and fails `PinMismatch` after an upgrade too; on a Mac it discards the saved state without booting. Either keeps the disk.
 - On a Mac, macOS restores a VM's state only in the operator's unlocked login session: a `start` of a paused machine while it is locked fails and keeps the saved state (see Deploy).
-- `resize` gives a stopped machine any vCPUs and RAM, and grows a running linux machine's live, needing room for its RAM as a start does; a running mac machine or a paused one is refused, so stop it first. A disk only grows: smolvm grows the guest's filesystem, at once when it runs, and on a Mac the base's Tart guest agent grows APFS at the next boot. A resize waits for a step under way, and keeps what the runtime gave when it fails part way, or when the host stops during it; asking for the same sizes again finishes a live grow that failed part way.
-- A create, fork or restore whose copy or setup fails deletes its machine and answers the error, and a delete that fails runs again at the next check; a host that restarts before it finished deletes the machine too. Only a `delete` stops a machine being made: a `stop` waits for it to be made, then stops it. A `start` on a running machine runs its preparation again, and so does a host that restarts, for each machine it finds running.
-- A request on a machine its runtime can't read fails, and the host reads it again at its next check.
-- A checkpoint is gone once its delete begins; what a delete that fails left behind is cleared by the next delete of it, or when its host next starts.
-- A prebuild matches the profile, its sizes, its setup, the config's authorized keys and the host's runtime release; any change runs the setup again until a new `prebuild`. Each `prebuild` runs the setup again and replaces the one that matches once it has run, so a setup that installs latest releases picks up today's; creates restore the old one until then, and run the setup while the new one is captured. A capture that fails leaves none. Prebuilds that match nothing any more stay until deleted: `checkpoint list` shows them.
+- `resize` gives a stopped machine any vCPUs and RAM, and grows a running linux machine's live, needing room for its RAM as a start does; a running mac machine or a paused one is refused, so stop it first. A disk only grows: smolvm grows the guest's filesystem, at once when it runs, and on a Mac the base's Tart guest agent grows APFS at the next boot. A resize waits for a step under way, and keeps what the runtime gave when it fails part way, or when the host stops during it, which the machine's sizes then show; asking for the same sizes again finishes a live grow that failed part way.
+- A create, fork or restore whose copy or setup fails deletes its VM, keeps its row for a day to say why, and answers the error; a delete that fails runs again at the next check. A create that a host had no room for moves to the next host first. Only a `delete` stops a machine being made: a `stop` waits for it to be made, then stops it. A `start` on a running machine runs its preparation again.
+- A request on a machine whose host can't be reached stays saved and fails `Unavailable`, and acts once the host answers.
+- A checkpoint is `ready` until its delete begins, and a delete that fails runs again.
+- A prebuild matches the profile, its sizes, its setup, the config's authorized keys, and the host it was built on and its runtime release; any change runs the setup again until a new `prebuild`. Each host keeps its own: a create uses a prebuild held by any host that can take it. Each `prebuild` runs the setup again and replaces the one that matches once it has run, so a setup that installs latest releases picks up today's; creates restore the old one until then. A capture that fails leaves none. Prebuilds that match nothing any more stay until deleted: `checkpoint list` shows them.
 - `ssh` pins the machine's host key and logs in as `admin`.
-- Plain OpenSSH reaches machines by ID too, so `ssh linux_dev`, scp, rsync and tools that run ssh work. A command on the default client config keeps `~/.ssh/clankerbox` with one `Host <host>_*` block per host, as `admin`, and ends `~/.ssh/config` with `Match all` and `Include clankerbox`, so your own entries come first and win. Each connection runs `clankerbox ssh-proxy` and `clankerbox ssh-known-hosts` for the machine's current endpoint and host key, so nothing goes stale when a port changes or a machine is recreated. Both run through your login shell, `$SHELL` as of the command that wrote the file (`/bin/sh` without one), so `clankerbox` must be on the `PATH` that shell sets up, even for an app started outside a terminal. `CLANKERBOX_SSH_CONFIG=false` removes both.
+- Plain OpenSSH reaches machines as `<name>.cbx`, so `ssh dev.cbx`, scp, rsync and tools that run ssh work. A command on the default client config keeps `~/.ssh/clankerbox` with one `Host *.cbx` block, as `admin`, and ends `~/.ssh/config` with `Match all` and `Include clankerbox`, so your own entries come first and win. Each connection runs `clankerbox ssh-proxy` and `clankerbox ssh-known-hosts` for the machine's current endpoint and host key, so nothing goes stale when a port changes or a machine is recreated, and the connection goes straight to the machine's host. Both run through your login shell, `$SHELL` as of the command that wrote the file (`/bin/sh` without one), so `clankerbox` must be on the `PATH` that shell sets up, even for an app started outside a terminal. `CLANKERBOX_SSH_CONFIG=false` removes both.
 - `--json` prints the resource or `{"error": {...}}`.
 
 ### Joining machines to the tailnet
@@ -189,9 +214,9 @@ A host with `tailnet` joins each machine whose guest has `tailscale` and `tailsc
 - clankerbox runs its own `tailscaled` from `/var/lib/clankerbox/tailscale`, on its socket there, `tailscaled.sock`; pass it to `tailscale --socket` and to tools that ask the daemon who calls, such as Rex's `--tailscaled-socket`. It runs in kernel mode: the guest gets a tailnet interface and address, so every program in it reaches the tailnet, and only a server listening on that address or on all addresses is reachable there, never one bound to `127.0.0.1`. Leave the distribution's own `tailscaled` service off.
 - It takes over the guest's DNS (`--accept-dns`), so MagicDNS names resolve, and on linux it installs no firewall rules (`--netfilter-mode=off`): smolvm's guest network lies in Tailscale's `100.64.0.0/10`, and Tailscale's rules drop that range on any other interface, the host's SSH included. A check sets both each time it finds the daemon answering.
 - The login user, and no other user but root, may fetch the node's certificates from that `tailscaled`: `/localapi/v0/cert/<domain>` through its socket, granted by `TS_PERMIT_CERT_UID`. No operator is set, so nothing else on the daemon is open to it; reading its status is open to every local user.
-- A check runs in the background once a start settles: it starts `tailscaled` from its saved state if it isn't running, and a node that needs a login gets a key. The host mints one per join: single-use, ephemeral, preauthorized, for the configured tags, expiring in 10 minutes, and passes it on stdin. A request that arrives meanwhile cuts the check short.
-- The node is named after the machine's ID, `_` as `-`. A fork or restore kills the daemon its source left and drops the node first, so it joins as its own node.
-- `get` shows `TAILNET`, while the machine runs: the MagicDNS name Tailscale gave the node, why the last check failed, or that the guest has no `tailscaled`. The status is the host's memory only, never stored. A joined machine is checked again every 60 rechecks (half an hour at the default 30 seconds), which restarts a daemon that died; a failed one after 1 recheck, then 2, 4 and so on up to 64. A guest without `tailscaled` is checked again at its next start. A prebuild's builder joins nothing.
+- The control plane asks for a check once a start settles: it starts `tailscaled` from its saved state if it isn't running, and a node that needs a login gets a key. The host mints one per join: single-use, ephemeral, preauthorized, for the configured tags, expiring in 10 minutes, and passes it on stdin. A request that arrives meanwhile cuts the check short. The tailnet credentials stay on the host.
+- The node is named `cbx-<name>`. A fork or restore kills the daemon its source left and drops the node first, so it joins as its own node.
+- `get` shows `TAILNET`, while the machine runs: the MagicDNS name Tailscale gave the node, why the last check failed, or that the guest has no `tailscaled`. The status is the control plane's memory only, never stored. A joined machine is checked again every 60 rechecks (half an hour at the default 30 seconds), which restarts a daemon that died; a failed one after 1 recheck, then 2, 4 and so on up to 64. A guest without `tailscaled` is checked again at its next start. A prebuild's builder joins nothing.
 - Nodes are ephemeral, so a deleted machine's node goes once it has been offline a while; a machine of the same name made again before then gets a suffixed name.
 
 `clankerbox COMMAND --help` documents each command.
@@ -214,10 +239,10 @@ Linux guests need `perl`. On mac, Softnet blocks gateway DNS, so set public reso
 
 ## Deploy
 
-Install the package in a versioned prefix; VMs never reference it, so a release replaces it while machines run. Its `bin/clankerbox` runs the `node` on the service's `PATH`, which must be Node 26.12 or later.
+Install each package in a versioned prefix; VMs never reference it, so a release replaces it while machines run. Its bin runs the `node` on the service's `PATH`, which must be Node 26.12 or later.
 
 ```sh
-npm install --global --prefix /opt/clankerbox/<version> @gjermundgaraba/clankerbox@<version>
+npm install --global --prefix /opt/clankerbox/<version> @gjermundgaraba/clankerbox-host@<version>
 ```
 
 **linux**, as root, in a system unit:
@@ -230,7 +255,7 @@ After=network-online.target tailscaled.service
 
 [Service]
 Type=exec
-ExecStart=/opt/clankerbox/<version>/bin/clankerbox host --config /etc/clankerbox/linux.json
+ExecStart=/opt/clankerbox/<version>/bin/clankerbox-host --config /etc/clankerbox/linux.json
 KillMode=control-group
 SuccessExitStatus=130
 Restart=on-failure
@@ -242,13 +267,23 @@ WantedBy=multi-user.target
 
 VMs run in their own scopes, so restarting the unit leaves them running.
 
+**The control plane** runs in the same kind of unit, as any user that owns its `stateDir`, with `ExecStart=/opt/clankerbox/<version>/bin/clankerbox-server --config /etc/clankerbox/server.json`. It runs no VMs and can share a box with a host, or sit on anything small on the tailnet. Keep a backup of its `stateDir`: with the file gone, the VMs run on with nothing that knows them.
+
 **mac**, as the operator's user, in a LaunchAgent in its GUI session, with `KeepAlive` set to `{SuccessfulExit: false}`; stop it with `launchctl bootout gui/<uid>/<label>`. Pull each base with `tart pull` as that user before its first create. For `pause`, keep that session unlocked: set **Lock Screen → Require password after screen saver begins or display is turned off** to **Never** (the display can still sleep), and log in once after each reboot, since FileVault rules out automatic login. macOS keeps the key that seals saved VM state in the session's keychain, so a root daemon can't save it at all. The first pause on a Mac creates that key, so make it while you're logged in and unlocked: a save while locked before then powers the VM off, keeping its disk, and fails. Later pauses work while locked, but every resume needs the session unlocked.
 
-**Network:** the tailnet policy opens each host's API port to its clients, and the machines' port range to clients that run `clankerbox ssh`. On a linux host, nothing may listen on a public address: guests can reach those. On macOS with the application firewall on, allow incoming connections for each new `node` binary, which allows them for every program that `node` runs.
+**Network:** three paths cross the tailnet, and its policy is the only gate.
+
+| From | To | Port | For |
+| --- | --- | --- | --- |
+| Clients | The control plane | its `listen.port` | every command |
+| The control plane | Each host | its `listen.port` | steps and reads |
+| Clients that run `ssh` | Each host | its `machinePorts` | SSH straight to machines |
+
+Clients never need a host's API port. On a linux host, nothing may listen on a public address: guests can reach those. On macOS with the application firewall on, allow incoming connections for each new `node` binary, which allows them for every program that `node` runs.
 
 ## SDK
 
-`@gjermundgaraba/clankerbox-sdk` holds the API's schemas, errors and the client. SDK 1.2.3 talks to hosts of release 1.2.x; hosts refuse other releases. `effect` and `@effect/platform-node` (`~4.0.4`) are peer dependencies.
+`@gjermundgaraba/clankerbox-sdk` holds the API's schemas, errors and the client. SDK 1.2.3 talks to a control plane of release 1.2.x, which refuses other releases. `effect` and `@effect/platform-node` (`~4.0.4`) are peer dependencies.
 
 ```ts
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -259,7 +294,7 @@ import { Console, Effect } from "effect";
 const program = Effect.gen(function* () {
   const client = yield* Client.Client;
 
-  // Placed on the first host that offers the base; `{ host: "linux" }` would name the host.
+  // Waits until it runs; the control plane chooses the host.
   const machine = yield* client.create("dev", {
     base: "ubuntu",
     cpu: 2,
@@ -276,17 +311,15 @@ const program = Effect.gen(function* () {
 );
 
 program.pipe(
-  Effect.provide(
-    NodeClient.layer([{ id: "linux", url: "http://100.64.0.10:8484" }])
-  ),
+  Effect.provide(NodeClient.layer("http://100.64.0.1:8484")),
   Effect.provide(NodeServices.layer),
   Effect.runPromise
 );
 ```
 
 - Every action is a method named as in the contract (`api.ts`), such as `client.forkMachine({ machine, name })`, and fails with tagged errors (`errors.ts`); `retryable(error)` says whether to try again.
-- A mutation waits until the host is done with it: a machine at rest with what was asked, its `phase` and `error` saying how it got there. One whose reply is lost fails `Unavailable`: it may have run, so read the resource.
-- `Prebuild.build` and `Prebuild.create` do what `clankerbox prebuild` and a create of a profile do. `build` answers the checkpoint it built.
+- A mutation answers once recorded, and the client waits until the resource rests: a machine with what was asked, its `phase` and `error` saying how it got there. `Client.make(url, { noWait: true })` skips the wait, and `timeout` bounds it. One whose reply is lost fails `Unavailable`: it may have run, so read the resource.
+- `client.prebuild` does what `clankerbox prebuild` does, and answers the `Build`. `client.create` restores a prebuild when a host holds one, unless `{ fresh: true }`, and `machine.prebuild` names it.
 
 ## Sandbox Agent provider
 
@@ -297,7 +330,7 @@ import { clankerbox } from "@gjermundgaraba/clankerbox-rivet-sandbox-agent";
 import { SandboxAgent } from "sandbox-agent";
 
 const sandbox = clankerbox({
-  hosts: [{ id: "linux", url: "http://100.64.0.10:8484" }],
+  server: "http://100.64.0.1:8484",
   from: { profile: "profiles/agent.json" },
   authorizedKeys: "/path/to/key.pub",
   sshArguments: ["-i", "/path/to/key"],
@@ -311,8 +344,8 @@ await sdk.destroySandbox();
 ```
 
 - A sandbox comes from a profile (`{ profile }`), a checkpoint (`{ checkpoint }`) or a fork (`{ machine }`), and a profile's prebuild is used when there is one. Any source may add `cpu`, `ramMib` and `diskGib`: over a profile's, as `create`'s flags do, or for the copy, as `restore` and `fork` take them. `authorizedKeys` does what the client config's does, for the key the tunnel logs in with, and a profile with a setup needs it.
-- `sandbox.resize(id, sizes)` resizes a sandbox's machine as `resize` does, and answers its sizes; `id` is the machine's ID, `sdk.sandboxId` without its `clankerbox/`. For what a running machine can't take, `pauseSandbox`, resize, then `sandbox.ensureServer(id)`.
-- A sandbox's ID is `clankerbox/<machine ID>`; `pauseSandbox` stops the machine and `destroySandbox` deletes it. Stop a sandbox's machine rather than `clankerbox pause` it: a reconnect resumes a paused one with its old agents, which then run beside the sessions the SDK replays into new ones, and a paused one can't be forked. A create that fails deletes the machine it may have made, unless the host answers `Conflict`, as the name is another machine's, or `Superseded`, as a later request owns it.
+- `sandbox.resize(id, sizes)` resizes a sandbox's machine as `resize` does, and answers its sizes; `id` is the machine's name, `sdk.sandboxId` without its `clankerbox/`. For what a running machine can't take, `pauseSandbox`, resize, then `sandbox.ensureServer(id)`.
+- A sandbox's ID is `clankerbox/<machine name>`; `pauseSandbox` stops the machine and `destroySandbox` deletes it. Stop a sandbox's machine rather than `clankerbox pause` it: a reconnect resumes a paused one with its old agents, which then run beside the sessions the SDK replays into new ones, and a paused one can't be forked. A create that fails deletes the row it may have left, unless the answer is `Conflict`, as the name is another machine's, or `Superseded`, as a later request owns it.
 - `recipes/ubuntu/` (linux) and `recipes/macos/` (mac) install the server, Node and Claude Code, and run the server as the login user, whose home, `/home/admin` on Linux, is the default `cwd`; on macOS, give `cwd: "/Users/admin"`. Each takes an optional `agent.env` beside its `setup.sh`, of `NAME=value` lines, such as `ANTHROPIC_API_KEY=…`, so keep a recipe with one private.
 - A tunnel that ends, say because its machine stopped, stays down until `sandbox.ensureServer(id)` or a new `SandboxAgent.start`.
 - `effect`, `@effect/platform-node` and `sandbox-agent` are peer dependencies.
