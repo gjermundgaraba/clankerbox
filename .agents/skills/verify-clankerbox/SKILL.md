@@ -6,13 +6,13 @@ description: Prove a clankerbox change the way a user sees it, by driving the bu
 # Verify clankerbox
 
 The user's surface is the `clankerbox` CLI talking to a host over HTTP.
-`packages/host/tests/serve.ts` serves a real host (store, actors, routes, HTTP)
+`apps/host/tests/serve.ts` serves a real host (store, actors, routes, HTTP)
 through `startHost` over the fake runtime the host's tests use. The CLI is the
-built `apps/clankerbox/dist/clankerbox.mjs`, run with `HOME` set to a scratch
+built `apps/cli/dist/clankerbox.mjs`, run with `HOME` set to a scratch
 directory the host made. It reads its default config path there and keeps its
 SSH config there, as a user's does, and never touches yours.
 
-`apps/clankerbox/tests/host.test.ts` already runs most flows this way in CI,
+`apps/cli/tests/host.test.ts` already runs most flows this way in CI,
 from source and with `--config`. This skill adds the built CLI, the default
 config path with its SSH config sync, and a place to drive the exact change
 you made. [`features/README.md`](features/README.md) maps each feature to its
@@ -92,7 +92,7 @@ A proof is the transcript of your commands, plus:
 - **errors by tag** in `--json`.
 
 Drive only the CLI. Don't call the host's routes or read its database.
-Failures in the runtime itself belong in `packages/host/tests/`. Report the
+Failures in the runtime itself belong in `apps/host/tests/`. Report the
 evidence directory and its `sources` with the result.
 
 ## Cleanup

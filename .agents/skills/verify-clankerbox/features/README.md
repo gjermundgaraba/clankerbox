@@ -1,7 +1,7 @@
 # What to drive, and what CI already proves
 
 CI runs the CLI against a real host over the fake runtime in
-`apps/clankerbox/tests/host.test.ts`. Each row names the test that covers a
+`apps/cli/tests/host.test.ts`. Each row names the test that covers a
 feature, then the commands that drive it here, with `--json` fields to check.
 `cb` is `.agents/skills/verify-clankerbox/scripts/cb.sh "$RUN"`.
 

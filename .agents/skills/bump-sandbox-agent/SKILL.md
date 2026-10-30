@@ -117,7 +117,7 @@ publish, change production hosts, or commit unless asked.
 - Each recipe's downloads against their pins: run `recipes/ubuntu/setup.sh` in
   a throwaway `linux/amd64` `ubuntu:24.04` container. It needs no keys: the
   host installs the operator's after a setup, which the host's tests cover
-  (`packages/host/tests/machines.test.ts`), not this run.
+  (`apps/host/tests/machines.test.ts`), not this run.
 
 ## After
 

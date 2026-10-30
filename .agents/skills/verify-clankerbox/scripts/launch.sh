@@ -16,7 +16,7 @@ fail() {
 sources >"$evidence/sources"
 cd "$repo"
 vp run -r build >"$evidence/build.log" 2>&1 || fail "the build failed" "$evidence/build.log"
-nohup vpx packages/host/tests/serve.ts "$run" "${1:-linux}" ${2:+"$2"} \
+nohup vpx apps/host/tests/serve.ts "$run" "${1:-linux}" ${2:+"$2"} \
   >"$evidence/host.log" 2>&1 </dev/null &
 launched=$!
 

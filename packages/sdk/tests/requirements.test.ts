@@ -22,7 +22,7 @@ layer(NodeServices.layer)((it) => {
     "node's range is the engines range of the root and the CLI packages",
     () =>
       Effect.gen(function* () {
-        for (const file of ["package.json", "apps/clankerbox/package.json"]) {
+        for (const file of ["package.json", "apps/cli/package.json"]) {
           const manifest = yield* decodeManifest(
             yield* read(path.join(root, file))
           );

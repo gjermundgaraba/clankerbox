@@ -1,6 +1,6 @@
 # Sourced by the other helpers.
 repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
-cli=$repo/apps/clankerbox/dist/clankerbox.mjs
+cli=$repo/apps/cli/dist/clankerbox.mjs
 # Vite+'s node shim sets itself up again under any HOME it hasn't seen.
 node=$(node -p process.execPath)
 
@@ -10,8 +10,8 @@ sources() {
   rm "$index"
   (
     cd "$repo" &&
-      GIT_INDEX_FILE=$index git add -A -- apps/clankerbox/src packages/sdk/src \
-        packages/sdk/tests packages/host/src packages/host/tests ':(exclude)*.test.ts' &&
+      GIT_INDEX_FILE=$index git add -A -- apps/cli/src packages/sdk/src \
+        packages/sdk/tests apps/host/src apps/host/tests ':(exclude)*.test.ts' &&
       GIT_INDEX_FILE=$index git write-tree
   )
   status=$?

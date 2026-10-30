@@ -21,7 +21,7 @@ production hosts or the operator's Tart, or commit unless asked.
   and in the commit that moved it. The tested
   release also appears in README (install table, the `tart.binary` example)
   and the tests
-  (`packages/host/tests/platform/tart/tart.test.ts`, whose fake `tart` answers as the tested
+  (`apps/host/tests/platform/tart/tart.test.ts`, whose fake `tart` answers as the tested
   release; `config.test.ts`): `git grep -n '2\.41'`.
 - **Companions** pinned beside it in `requirements`, re-checked only when
   they change: Softnet 0.24.1 (`softnet.checkedVersion`, README),
@@ -274,7 +274,7 @@ image before the next bump relies on them)
 
 ## Verify
 
-- Unit: `vp test` in `packages/host` (`platform/tart/tart.test.ts`, `platform/tart/forwarder.test.ts`,
+- Unit: `vp test` in `apps/host` (`platform/tart/tart.test.ts`, `platform/tart/forwarder.test.ts`,
   `config.test.ts`), then `vp run --no-cache ready`. Change the fake's answers
   only to match Tart's real output at the target.
 

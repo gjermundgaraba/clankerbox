@@ -37,7 +37,7 @@ jobs:
           tar -tzf "$RUNNER_TEMP/cli/"*.tgz | grep -qx package/LICENSE
           npm install --global --prefix "$RUNNER_TEMP/cli-prefix" --ignore-scripts "$RUNNER_TEMP/cli/"*.tgz
           bin="$RUNNER_TEMP/cli-prefix/bin/clankerbox"
-          test "$("$bin" --version)" = "clankerbox v$(jq -r .version apps/clankerbox/package.json)"
+          test "$("$bin" --version)" = "clankerbox v$(jq -r .version apps/cli/package.json)"
           "$bin" --help | grep -qF "clankerbox <subcommand> [flags]"
           "$bin" host --help | grep -qF -- "--config"
           if "$bin" host >/dev/null 2>&1; then exit 1; fi

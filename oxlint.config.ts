@@ -15,10 +15,7 @@ export default config({
   testBlocks: ["it", "it.effect", "it.live", "it.prop", "it.effect.prop"],
   overrides: [
     {
-      files: [
-        "packages/host/src/guest.ts",
-        "packages/host/tests/fake-runtime.ts",
-      ],
+      files: ["apps/host/src/guest.ts", "apps/host/tests/fake-runtime.ts"],
       rules: { "no-template-curly-in-string": "off" },
     },
     {
@@ -27,8 +24,8 @@ export default config({
     },
     {
       files: [
-        "apps/clankerbox/src/main.ts",
-        "packages/host/tests/serve.ts",
+        "apps/cli/src/main.ts",
+        "apps/host/tests/serve.ts",
         "packages/rivet-sandbox-agent/src/provider.ts",
         "packages/rivet-sandbox-agent/tests/leave-tunnel.ts",
         "packages/rivet-sandbox-agent/tests/provider.test.ts",
@@ -36,8 +33,8 @@ export default config({
       rules: { "fence/no-manual-run": "off" },
     },
     {
-      excludeFiles: ["packages/host/src/lifecycle.ts"],
-      files: ["packages/host/src/*.ts"],
+      excludeFiles: ["apps/host/src/lifecycle.ts"],
+      files: ["apps/host/src/*.ts"],
       rules: {
         "fence/allowed-imports": [
           "error",
@@ -55,7 +52,7 @@ export default config({
       },
     },
     {
-      files: ["packages/host/src/lifecycle.ts"],
+      files: ["apps/host/src/lifecycle.ts"],
       rules: {
         "fence/allowed-imports": [
           "error",
@@ -74,7 +71,7 @@ export default config({
       },
     },
     {
-      files: ["packages/host/src/platform/*.ts"],
+      files: ["apps/host/src/platform/*.ts"],
       rules: {
         "fence/allowed-imports": [
           "error",
@@ -90,7 +87,7 @@ export default config({
       },
     },
     {
-      files: ["packages/host/src/platform/*/*.ts"],
+      files: ["apps/host/src/platform/*/*.ts"],
       rules: {
         "fence/allowed-imports": [
           "error",
@@ -107,11 +104,8 @@ export default config({
       },
     },
     {
-      excludeFiles: [
-        "apps/clankerbox/src/main.ts",
-        "apps/clankerbox/src/host.ts",
-      ],
-      files: ["apps/clankerbox/src/**/*.ts"],
+      excludeFiles: ["apps/cli/src/main.ts", "apps/cli/src/host.ts"],
+      files: ["apps/cli/src/**/*.ts"],
       rules: {
         "fence/allowed-imports": [
           "error",

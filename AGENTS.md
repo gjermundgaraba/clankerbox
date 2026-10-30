@@ -37,9 +37,9 @@ release. Add a tool name to select part of the graph. For example, run
 | Path                            | Holds                                                                   |
 | ------------------------------- | ----------------------------------------------------------------------- |
 | `packages/sdk/`                 | The contract, its schemas and errors, the client, profiles, prebuilds   |
-| `packages/host/`                | The host: state, lifecycles, leases, guest scripts and the two runtimes |
+| `apps/host/`                    | The host: state, lifecycles, leases, guest scripts and the two runtimes |
 | `packages/rivet-sandbox-agent/` | The Sandbox Agent provider and its recipes                              |
-| `apps/clankerbox/`              | The CLI package: its commands and the `host` role                       |
+| `apps/cli/`                     | The CLI package: its commands and the `host` role                       |
 | `tools/lint-fence/`             | The repository's own lint rules                                         |
 
 The app imports the SDK and the host; the host and the provider import the SDK;
@@ -52,7 +52,7 @@ Code is grouped by domain, not by mechanism. Tests mirror `src/` under each
 package's `tests/`; suites over a served host (`tests/composition/`) or the
 whole CLI span domains on purpose.
 
-**Host** (`packages/host/src`). Domain files sit flat in `src/`:
+**Host** (`apps/host/src`). Domain files sit flat in `src/`:
 
 - `machines.ts`, `checkpoints.ts`: the `Machines` and `Checkpoints` services,
   one per resource, each with its `make` and `layer`. `Machines` runs an actor
@@ -93,7 +93,7 @@ and bases a host of the release runs on), `sizes.ts`, `describe.ts`. The rest ar
 `client.ts`, `profile.ts`, `setup.ts`, `prebuild.ts` and `ssh.ts`. The `.`
 entry loads no Node; `./node` (`node.ts`) holds what needs it.
 
-**App** (`apps/clankerbox/src`). One file or folder per command group
+**App** (`apps/cli/src`). One file or folder per command group
 (`machines/`, `checkpoints.ts`, `hosts.ts`, `profiles.ts`, `prebuilds.ts`,
 `ssh.ts` and `ssh-config.ts`, the SSH config it keeps, and `host.ts` for the host role) over the CLI's shared kit (`command.ts`),
 the client config (`config.ts`) and flag units (`units.ts`).
@@ -122,7 +122,7 @@ over an in-memory transport, beside `./testing/clock`, `./testing/files` and
 - **Operations are contracts.** The host API is one effect-actions contract,
   `packages/sdk/src/api.ts`. The host's routes, the client's methods and the
   CLI's commands are derived from it; `actionCommands` in
-  `apps/clankerbox/src/clankerbox.ts` fails to type-check when an action has
+  `apps/cli/src/clankerbox.ts` fails to type-check when an action has
   no command, and each service method's errors are the contract's
   `Declared<action>`.
 - **Errors carry context.** Each failure a caller can act on is its own tagged
@@ -197,7 +197,7 @@ Before writing or reviewing Effect code, read `node_modules/effect/AGENTS.md` in
 
 ## xstate
 
-Before writing or reviewing `lifecycle.ts`, read the docs the installed `xstate` ships in `packages/host/node_modules/xstate/docs/`, from `index.md`, and `@xstate/effect`'s `README.md` beside it. Both are v6 alphas whose APIs change between releases, so the installed docs and types are the ones the code compiles against; do not write xstate APIs from memory or from v5 examples. Neither package ships its changelog: a bump reads `packages/core/CHANGELOG.md` and `packages/xstate-effect/CHANGELOG.md` on the `next` branch of `statelyai/xstate`.
+Before writing or reviewing `lifecycle.ts`, read the docs the installed `xstate` ships in `apps/host/node_modules/xstate/docs/`, from `index.md`, and `@xstate/effect`'s `README.md` beside it. Both are v6 alphas whose APIs change between releases, so the installed docs and types are the ones the code compiles against; do not write xstate APIs from memory or from v5 examples. Neither package ships its changelog: a bump reads `packages/core/CHANGELOG.md` and `packages/xstate-effect/CHANGELOG.md` on the `next` branch of `statelyai/xstate`.
 
 ## Lint and format
 

@@ -17,7 +17,7 @@ separately, and don't deploy, change production hosts, or commit unless asked.
 - **Pinned in this repo:** `requirements.smolvm.testedVersion` in
   `packages/sdk/src/requirements.ts`, published for deploy tooling, is exact:
   startup refuses any other `smolvm --version`. `pin` in
-  `packages/host/src/platform/smolvm.ts` derives from it (`smolvm <version>
+  `apps/host/src/platform/smolvm.ts` derives from it (`smolvm <version>
   <platform>-<arch>`) and is recorded on every `ram` checkpoint and every paused
   machine. Tests use it or a neutral `0.0.0-test`; only README repeats the
   version, and `requirements.test.ts` fails until it does: `git grep -n '<old
@@ -353,7 +353,7 @@ as it is.
   `container-init`, which the image's command is exec'd under and which reaps
   such a child. Ours: a setup killed by its timeout or a host crash runs no
   exit trap and may leave its file in `/var/tmp` (`setupRunner` in
-  `packages/host/src/guest.ts`); `start` scripts daemonize with `setsid -f`; a
+  `apps/host/src/guest.ts`); `start` scripts daemonize with `setsid -f`; a
   guest script that passes its timeout, or a step cut short, ends the client,
   so smolvm kills its command.
   Live on 1.31.1: a SIGTERM to the client ended it with 143 and the guest
@@ -518,7 +518,7 @@ as it is.
   engine's (`source_runs_another_engine`, src/agent/fork.rs). Ours: `pin`, so
   a RAM state is restored only under the release that saved it, and a machine
   is captured or forked only when its VM booted under the host's (`pinnedOn`,
-  `packages/host/src/refs.ts`). If smolvm starts enforcing
+  `apps/host/src/refs.ts`). If smolvm starts enforcing
   engine and agent identity itself, the pin could go.
 - Store mode: `--store` with `--history 0` (the default keeps 32 generations, so
   deleting older checkpoints frees nothing until the newest goes), then
@@ -574,7 +574,7 @@ as it is.
 
 ## Verify
 
-- Unit: `vp test` in `packages/host` (`platform/smolvm.test.ts` fakes each smolvm call
+- Unit: `vp test` in `apps/host` (`platform/smolvm.test.ts` fakes each smolvm call
   as the tested release answers it; `platform/sqlite.test.ts`) and `packages/sdk`
   (`ids.test.ts`), then `vp run --no-cache ready`. Update a fake only to match
   smolvm's real behaviour at the target.
